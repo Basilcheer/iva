@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.3.2] - 2026-07-25
+
+Feature: a 🛠 Maintenance screen in `/menu` — the install's technical commands right in chat.
+
+- 🛠 **Maintenance in `/menu`** — 🩺 Doctor (`iva doctor`), 🧹 Vault cleanup (the 0.3.1 streaming cleaner), 🌙 Night memory cycle (runs the nightly doctor unit right now instead of 05:00) and 🔄 Update (hands off to the existing `/update` flow). Confirmation before every run, live progress in the same message — an animated loader from the update flow's emoji pack, one color per command, the current step and elapsed time, a ✖ Cancel button — and a one-line summary with numbers at the end.
+- 🚦 **Safe by construction** — one command at a time, doctor/cleanup refuse to start while an update is running, timeouts on everything, and the night cycle runs as its own systemd unit so a bridge restart can't orphan it.
+
+[0.3.2]: https://github.com/smixs/iva/releases/tag/v0.3.2
+
 ## [0.3.1] - 2026-07-25
 
 Fix: vault memory files no longer grow to gigabytes — and existing installs self-heal.
