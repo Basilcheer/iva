@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.3.1] - 2026-07-25
+
+Fix: vault memory files no longer grow to gigabytes — and existing installs self-heal.
+
+- 🐛 **Root cause fixed** — the frontmatter writer in the vendored autograph scripts kept the old folded `description` line whenever it contained a `:`, doubling the value on every nightly rewrite (2^N growth: a card crossed 100 MB in two weeks and could reach gigabytes). Bloated cards OOM-killed both Iva and the nightly memory doctor. The writer now replaces folded values by indentation, `enforce` collapses any repeated description, and a hard cap keeps descriptions one-line forever.
+- 🧹 **New `cleanup` module in autograph** — a surgical, bounded-memory cleaner: it streams even gigabyte .md files (peak RAM ~25 MB), collapses the duplicated garbage in the description block, copies the card body byte-for-byte and touches nothing else. Dry-run by default, `--apply` to fix; runs automatically as the first step of the nightly doctor and during `iva update`, so bloated vaults shrink back without manual steps.
+- 🔄 **Vendored skill scripts now follow the template** — live vaults are created from `vault-template` once and never used to receive script fixes. `iva update`, the nightly doctor and `init-vault` now sync the skill *code* (never `schema.json`, cards or any user data) from the template into the live vault, so every existing install picks up this fix — and future ones — automatically.
+
+[0.3.1]: https://github.com/smixs/iva/releases/tag/v0.3.1
+
 ## [0.3.0] - 2026-07-23
 
 Feature: a control center in chat — `/menu` configures everything, a button-driven test gives Iva a character, and the whole interface speaks two languages.
