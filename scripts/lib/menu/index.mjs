@@ -8,7 +8,7 @@
 //
 // Грамматика callback_data: "iva_menu:<sid>:<verb>[:<arg>[:<arg>]]" — ASCII, только
 // enum/индексы, <=64 байта (тот же принцип, что m:<index> в /model). Никаких user data.
-// sid: r srch lang chr core ub gws cron sk st (+псевдо mdl/thk — хендофф в визарды).
+// sid: r srch lang chr core ub gws cron sk st svc (+псевдо mdl/thk — хендофф в визарды).
 // verbs: o(навигация) x(закрыть) pg:<n> rf(обновить) + data-вербы экрана (set key rs go
 // q:<i>:<v> skip fin redo apply do).
 
@@ -24,6 +24,7 @@ import gws from "./gws.mjs";
 import crons from "./crons.mjs";
 import skills from "./skills.mjs";
 import status from "./status.mjs";
+import service from "./service.mjs";
 
 // sid → экранный модуль. Псевдо-sid mdl/thk сюда не входят: это хендофф в визарды
 // /model//think (обрабатывается в onCallback ниже до диспатча на экран).
@@ -38,6 +39,7 @@ export const SCREENS = {
   cron: crons,
   sk: skills,
   st: status,
+  svc: service,
 };
 
 const PREFIX = "iva_menu:";

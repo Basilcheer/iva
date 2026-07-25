@@ -674,6 +674,7 @@ const menu = createMenu({
     allowed: ALLOWED,
     handleModelCmd,
     handleThinkCmd,
+    handleUpdateCheck,
   },
 });
 
