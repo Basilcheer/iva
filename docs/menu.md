@@ -13,7 +13,8 @@ The menu lives in the long-poll bridge, not the agent. That has three consequenc
 [🎭 Character] [💾 Memory]
 [📡 Userbot]   [🔗 Google]
 [⏰ Timers]    [🧩 Skills]
-[📊 Status]    [✖ Close]
+[📊 Status]    [🛠 Maintenance]
+[✖ Close]
 ```
 
 **🧠 Model** and **🤔 Thinking** hand off to the existing `/model` and `/think` wizards, rendered into the same message; a **‹ Menu** button walks you back. Every other sub-screen has a **‹ Back** button; **✖ Close** drops the menu and strips the keyboard.
@@ -89,6 +90,17 @@ Three read-only screens.
 - **⏰ Timers** — the `iva-*` (and `xfeed-daily`) systemd timers with their next run, plus the open-task count from `data/tasks.json`.
 - **🧩 Skills** — every installed skill with a one-line description, paged.
 - **📊 Status** — one card: version, provider · model · thinking, search provider and key badge, language, userbot state, Google, and today's token usage (the same figure as `/usage`). **🔄 Refresh** re-reads everything.
+
+## Maintenance
+
+**🛠 Maintenance** gathers the install's technical commands so none of them need SSH:
+
+- **🩺 Doctor** — `iva doctor`: diagnoses and auto-repairs units, timers, port, `.env`, build.
+- **🧹 Vault cleanup** — the streaming cleaner from 0.3.1 (`cleanup.py --apply`): collapses description bloat, never touches card bodies.
+- **🌙 Night memory cycle** — starts the nightly `iva-memory-doctor.service` right now instead of 05:00; it runs as the same systemd unit, so it survives bridge restarts.
+- **🔄 Update** — hands off to the existing `/update` flow (check → confirm buttons → an update that survives its own restart).
+
+Every command asks for confirmation, then shows live progress in the same message — an animated loader from the same custom-emoji pack the update flow uses (red for doctor, yellow for cleanup, purple for the memory cycle; plain ◇ when the bot owner has no Premium), the current step and elapsed time, with a ✖ Cancel button. One command runs at a time, and doctor/cleanup refuse to start while an update is in progress. The final summary is a single line with numbers (files cleaned and MB freed, ok/warn counts) plus the output tail when something failed.
 
 ## When it expires
 
