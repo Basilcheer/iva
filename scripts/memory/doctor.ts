@@ -10,6 +10,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { syncVaultSkills } from "../lib/sync-vault-skills.mjs";
 
 const VAULT = resolve(process.env.ASSISTANT_VAULT_DIR ?? "vault");
 const SCRIPTS = ".claude/skills/autograph/scripts"; // relative to vault
@@ -67,6 +68,13 @@ function readHealthHistory(): Array<{ date?: string; health_score?: number }> {
 const today = localDate();
 console.log(`=== doctor memory for ${today} (vault: ${VAULT}) ===`);
 
+// ── 0. Sync vendored skill code from the template ──
+// Live vaults are created from vault-template once and never updated, so bugfixes in the
+// autograph scripts (e.g. the frontmatter writer that doubled `description` on every
+// rewrite, growing .md files to GBs) would otherwise never reach existing installs.
+const synced = syncVaultSkills({ vaultDir: VAULT, templateDir: resolve("vault-template") });
+if (synced.updated.length) console.log(`doctor: vault skill scripts updated: ${synced.updated.join(", ")}`);
+
 // ── 1. Mechanical maintenance (autograph, no LLM) ──
 // Do NOT ignore failures: otherwise doctor would commit/push and exit 0 even though health/
 // decay/moc did not run (no uv/Python, vault not initialized, etc.).
@@ -75,6 +83,10 @@ function maint(label: string, args: string[]): void {
   const r = run("uv", ["run", ...args]);
   if (r.status !== 0) failures.push(label);
 }
+// cleanup — streaming repair of bug-bloated cards. MUST run before everything else:
+// enforce/graph read files whole and get OOM-killed on gigabyte cards; cleanup streams
+// with bounded memory and shrinks them back to sane sizes first.
+maint("cleanup", [`${SCRIPTS}/cleanup.py`, ".", "--apply"]);
 // enforce — strict-typing backstop: coerce type aliases, fix invalid status, backfill
 // system fields. Runs FIRST (before graph) so the graph is built on canonical frontmatter.
 // This is the deterministic guarantee that cards written outside write_card stay in-schema.
