@@ -50,7 +50,7 @@ CORE.md едет в каждом системном промпте; всё ос�
 
 ## Доктор
 
-В 05:00 `scripts/memory/doctor.ts` проводит механическое обслуживание - без LLM, всё детерминированно - запуская вшитые скрипты [autograph](https://github.com/smixs/autograph) через `uv`:
+В 05:00 `scripts/memory/doctor.ts` проводит механическое обслуживание - без LLM, всё детерминированно - запуская скрипты [autograph](https://github.com/smixs/autograph) из `scripts/autograph/` через `uv`:
 
 1. `enforce` - страховка схемы: приводит алиасы типов к канону, чинит невалидные статусы, дозаполняет системные поля на карточках, записанных мимо `write_card`
 2. `graph.health` - пересобирает граф связей, дописывает в историю health score от 0 до 100
@@ -73,12 +73,14 @@ vault/
 ├── summaries/daily/ # day summaries
 ├── weekly/ monthly/ yearly/
 ├── attachments/     # originals, by date
-├── .graph/          # machine-owned graph + scan results
-└── .claude/         # format rules + vendored skills
+├── schema.json      # схема vault'а - типы, домены, decay
+└── .graph/          # machine-owned graph + scan results
 ```
+
+Vault - это чистые данные: код обслуживания и промпты обработки лежат в репозитории Iva (`scripts/autograph/`, `scripts/memory/instructions/`), поэтому обновление доставляет их сразу во все инсталляции. В vault'ах, созданных до 0.3.3, остаётся legacy-папка `.claude/` - мёртвый груз, её больше никто не читает, можно оставить или удалить.
 
 Всё это обычный markdown. Карточки, сводки и CORE.md можно спокойно править руками - `enforce` следующей же ночью приведёт frontmatter обратно к канону. `MOC.md` и `.graph/` не трогайте (оба перегенерируются), а `daily/` считайте append-only логом. Полистать удобнее всего в [Obsidian](https://obsidian.md) - откройте папку vault'а: вики-ссылки, бэклинки и граф работают из коробки.
 
 ## Предыстория
 
-Над памятью я работаю дольше всего: сначала [agent-second-brain](https://github.com/smixs/agent-second-brain) - пайплайн из Telegram в Obsidian; потом [autograph](https://github.com/smixs/autograph) - движок типизированной граф-схемы, теперь вшитый прямо в vault; Iva собирает оба. Стержневая идея - хранить дословную запись, сжимать вверх и никогда не терять след - идёт из пейпера [LCM: Lossless Context Management](https://arxiv.org/abs/2605.04050) (Ehrlich & Blackman, 2026), а граф карточек, семантика SUPERSEDE и цикл доктора надстроены сверху.
+Над памятью я работаю дольше всего: сначала [agent-second-brain](https://github.com/smixs/agent-second-brain) - пайплайн из Telegram в Obsidian; потом [autograph](https://github.com/smixs/autograph) - движок типизированной граф-схемы, который Iva теперь возит с собой и гоняет по vault'у; Iva собирает оба. Стержневая идея - хранить дословную запись, сжимать вверх и никогда не терять след - идёт из пейпера [LCM: Lossless Context Management](https://arxiv.org/abs/2605.04050) (Ehrlich & Blackman, 2026), а граф карточек, семантика SUPERSEDE и цикл доктора надстроены сверху.

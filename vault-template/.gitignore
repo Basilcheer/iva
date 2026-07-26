@@ -1,5 +1,5 @@
 # Iva memory vault — git-backed (backup + Obsidian)
-# Keep content: daily/, weekly/, monthly/, yearly/, summaries/, cards/, schema.json, .claude/
+# Keep content: daily/, weekly/, monthly/, yearly/, summaries/, cards/, schema.json
 
 # --- autograph runtime caches & derived data (regenerable) ---
 .graph/

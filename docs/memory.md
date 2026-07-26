@@ -47,7 +47,7 @@ For fuzzy or cross-language semantics, switch on hybrid mode (`MEMORY_SEARCH_MOD
 
 ## Doctor
 
-At 05:00 `scripts/memory/doctor.ts` runs mechanical maintenance — no LLM, all deterministic — executing the vendored [autograph](https://github.com/smixs/autograph) scripts via `uv`:
+At 05:00 `scripts/memory/doctor.ts` runs mechanical maintenance — no LLM, all deterministic — executing the [autograph](https://github.com/smixs/autograph) scripts from `scripts/autograph/` via `uv`:
 
 1. `enforce` — schema backstop: coerces type aliases, fixes invalid statuses, backfills system fields on cards written outside `write_card`
 2. `graph.health` — rebuilds the link graph, appends a 0–100 health score to history
@@ -70,12 +70,14 @@ vault/
 ├── summaries/daily/ # day summaries
 ├── weekly/ monthly/ yearly/
 ├── attachments/     # originals, by date
-├── .graph/          # machine-owned graph + scan results
-└── .claude/         # format rules + vendored skills
+├── schema.json      # the vault schema — types, domains, decay
+└── .graph/          # machine-owned graph + scan results
 ```
+
+The vault is pure data: the maintenance code and the processing prompts live in the Iva repo (`scripts/autograph/`, `scripts/memory/instructions/`), so an update ships them to every install at once. Vaults created before 0.3.3 also carry a legacy `.claude/` folder — dead weight, no longer read, safe to keep or delete.
 
 Everything is plain markdown. Cards, summaries and CORE.md are safe to edit by hand — `enforce` re-canonicalizes the frontmatter the next night. Leave `MOC.md` and `.graph/` alone (both are regenerated) and treat `daily/` as an append-only log. To browse, open the vault folder in [Obsidian](https://obsidian.md): wikilinks, backlinks and the graph view work as-is.
 
 ## Background & prior art
 
-Memory is the part I've worked on longest: first [agent-second-brain](https://github.com/smixs/agent-second-brain), a Telegram-to-Obsidian pipeline; then [autograph](https://github.com/smixs/autograph), the typed-graph schema engine now vendored inside the vault; Iva gathers both. The core idea — keep the verbatim record, compress upward, never lose the trail — follows the [LCM: Lossless Context Management](https://arxiv.org/abs/2605.04050) paper (Ehrlich & Blackman, 2026), with the card graph, SUPERSEDE semantics and doctor loop on top.
+Memory is the part I've worked on longest: first [agent-second-brain](https://github.com/smixs/agent-second-brain), a Telegram-to-Obsidian pipeline; then [autograph](https://github.com/smixs/autograph), the typed-graph schema engine Iva now ships and runs over the vault; Iva gathers both. The core idea — keep the verbatim record, compress upward, never lose the trail — follows the [LCM: Lossless Context Management](https://arxiv.org/abs/2605.04050) paper (Ehrlich & Blackman, 2026), with the card graph, SUPERSEDE semantics and doctor loop on top.
