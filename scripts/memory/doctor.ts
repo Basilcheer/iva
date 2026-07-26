@@ -3,17 +3,20 @@
 //
 //   node --env-file=.env scripts/memory/doctor.ts
 //
-// Runs the vendored autograph scripts (graph.health / engine.decay / moc.generate /
+// Runs the autograph scripts (graph.health / engine.decay / moc.generate /
 // dedup / link_cleanup) on the vault via `uv run`, then commits and pushes the vault repo.
 // Guards: no git-remote/credentials → alert admin on Telegram (gh auth login + git remote),
 // push is skipped. Health score drop → alert on Telegram. Plain Node orchestration.
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
-import { syncVaultSkills } from "../lib/sync-vault-skills.mjs";
+import { copyFileSync, existsSync, readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const VAULT = resolve(process.env.ASSISTANT_VAULT_DIR ?? "vault");
-const SCRIPTS = ".claude/skills/autograph/scripts"; // relative to vault
+// The autograph code lives in THIS repo, not in the vault: the vault is user data only.
+// Absolute paths, because every script is spawned with cwd = VAULT (they take "." as the vault).
+const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+const SCRIPTS = resolve(ROOT, "scripts/autograph");
 const BOT = process.env.TELEGRAM_BOT_TOKEN;
 const CHAT = process.env.TELEGRAM_DIGEST_CHAT_ID; // admin chat
 const TZ = process.env.ASSISTANT_TIMEZONE ?? process.env.TZ ?? "UTC";
@@ -68,12 +71,22 @@ function readHealthHistory(): Array<{ date?: string; health_score?: number }> {
 const today = localDate();
 console.log(`=== doctor memory for ${today} (vault: ${VAULT}) ===`);
 
-// ── 0. Sync vendored skill code from the template ──
-// Live vaults are created from vault-template once and never updated, so bugfixes in the
-// autograph scripts (e.g. the frontmatter writer that doubled `description` on every
-// rewrite, growing .md files to GBs) would otherwise never reach existing installs.
-const synced = syncVaultSkills({ vaultDir: VAULT, templateDir: resolve("vault-template") });
-if (synced.updated.length) console.log(`doctor: vault skill scripts updated: ${synced.updated.join(", ")}`);
+// ── 0. Schema location: vault root, with a one-time migration off the legacy path ──
+// Up to 0.3.2 the per-vault schema sat in vault/.claude/skills/autograph/schema.json (a
+// leftover of the Claude-skill layout). It is user config, so it now lives at the vault
+// root; the legacy copy is left in place (never delete user data), just no longer read.
+const VAULT_SCHEMA = resolve(VAULT, "schema.json");
+const LEGACY_SCHEMA = resolve(VAULT, ".claude/skills/autograph/schema.json");
+if (!existsSync(VAULT_SCHEMA) && existsSync(LEGACY_SCHEMA)) {
+  copyFileSync(LEGACY_SCHEMA, VAULT_SCHEMA);
+  console.log(`doctor: schema migrated to the vault root: ${VAULT_SCHEMA}`);
+}
+// Fall back to the shipped example so a vault that never had a schema still gets enforced.
+const SCHEMA = existsSync(VAULT_SCHEMA)
+  ? VAULT_SCHEMA
+  : existsSync(LEGACY_SCHEMA)
+    ? LEGACY_SCHEMA
+    : resolve(SCRIPTS, "schema.example.json");
 
 // ── 1. Mechanical maintenance (autograph, no LLM) ──
 // Do NOT ignore failures: otherwise doctor would commit/push and exit 0 even though health/
@@ -90,7 +103,7 @@ maint("cleanup", [`${SCRIPTS}/cleanup.py`, ".", "--apply"]);
 // enforce — strict-typing backstop: coerce type aliases, fix invalid status, backfill
 // system fields. Runs FIRST (before graph) so the graph is built on canonical frontmatter.
 // This is the deterministic guarantee that cards written outside write_card stay in-schema.
-maint("enforce", [`${SCRIPTS}/enforce.py`, ".", `${SCRIPTS.replace("/scripts", "")}/schema.json`, "--apply"]);
+maint("enforce", [`${SCRIPTS}/enforce.py`, ".", SCHEMA, "--apply"]);
 // graph.health rebuilds the graph and writes health-history.json (for drop detection).
 maint("graph.health", [`${SCRIPTS}/graph.py`, "health", "."]);
 // engine.decay updates card relevance/tiers.
@@ -129,7 +142,7 @@ if (existsSync(corePath)) {
   if (coreLen > CORE_CAP) {
     await telegram(
       `CORE.md is bloated: ${coreLen}/${CORE_CAP} chars (${today}). ` +
-        `The nightly rollup should shrink the core per .claude/rules/core-format.md.`,
+        `The nightly rollup should shrink the core per scripts/memory/instructions/rules/core-format.md.`,
     );
   }
 }

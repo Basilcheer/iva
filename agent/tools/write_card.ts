@@ -19,6 +19,16 @@ const CARD_TYPE_DIR: Record<string, string> = {
   note: "notes",
 };
 
+// Схема vault'а: корень vault'а → легаси `.claude`-путь (vault'ы до 0.3.3) → дефолт из репо.
+function schemaPath(): string {
+  const candidates = [
+    join(VAULT(), "schema.json"),
+    join(VAULT(), ".claude", "skills", "autograph", "schema.json"),
+    join("scripts", "autograph", "schema.example.json"),
+  ];
+  return candidates.find((p) => existsSync(p)) ?? candidates[0];
+}
+
 // Читаем схему на старте: валидные статусы per-type + алиасы. Fallback — зашитый минимум,
 // чтобы тул не падал, если vault ещё не инициализирован.
 function loadSchema(): { status: Record<string, string[]>; aliases: Record<string, string> } {
@@ -33,10 +43,7 @@ function loadSchema(): { status: Record<string, string[]>; aliases: Record<strin
     aliases: { person: "contact", company: "contact", thought: "note", proposal: "idea" },
   };
   try {
-    const raw = readFileSync(
-      join(VAULT(), ".claude", "skills", "autograph", "schema.json"),
-      "utf8",
-    );
+    const raw = readFileSync(schemaPath(), "utf8");
     const s = JSON.parse(raw);
     const status: Record<string, string[]> = {};
     for (const t of Object.keys(CARD_TYPE_DIR)) {

@@ -20,7 +20,6 @@ import {
   createUpdateTransaction,
   releaseUpdateLock,
 } from "../scripts/lib/update-safety.mjs";
-import { syncVaultSkills } from "../scripts/lib/sync-vault-skills.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const ENV_PATH = join(ROOT, ".env");
@@ -391,22 +390,17 @@ async function cmdUpdate(args) {
       }
     }
     migrateEnv({ quiet: true });
-    // Vendored skill code in the live vault must follow the template — existing vaults
-    // otherwise keep running old (buggy) autograph scripts forever. After the sync, the
-    // streaming cleaner repairs cards the old writer bloated to GBs (those OOM-kill the
-    // agent and the nightly doctor, so waiting for the doctor is not an option). Both
-    // steps are best-effort: they never fail an update.
+    // The streaming cleaner repairs cards the old frontmatter writer bloated to GBs (those
+    // OOM-kill the agent and the nightly doctor, so waiting for the doctor is not an option).
+    // The script comes from the freshly updated repo, so it is always the current version —
+    // best-effort: it never fails an update.
     try {
       const vaultRel = readEnv().ASSISTANT_VAULT_DIR || "vault";
       const vaultDir = vaultRel.startsWith("/") ? vaultRel : join(ROOT, vaultRel);
-      const synced = syncVaultSkills({ vaultDir, templateDir: join(ROOT, "vault-template") });
-      if (synced.updated.length) terminal.info(`🩹 vault skill scripts updated (${synced.updated.length})`);
-      const cleanupScript = join(vaultDir, ".claude/skills/autograph/scripts/cleanup.py");
-      if (existsSync(cleanupScript)) {
-        const cleaned = spawnSync("uv", ["run", cleanupScript, ".", "--apply"], { cwd: vaultDir, encoding: "utf8", env: childEnv });
-        if (cleaned.status === 0 && !cleaned.stdout.includes(" 0 file(s)"))
-          terminal.info(`🧹 ${cleaned.stdout.trim().split("\n").pop()}`);
-      }
+      const cleanupScript = join(ROOT, "scripts/autograph/cleanup.py");
+      const cleaned = spawnSync("uv", ["run", cleanupScript, ".", "--apply"], { cwd: vaultDir, encoding: "utf8", env: childEnv });
+      if (cleaned.status === 0 && !cleaned.stdout.includes(" 0 file(s)"))
+        terminal.info(`🧹 ${cleaned.stdout.trim().split("\n").pop()}`);
     } catch {}
     tx.backupOutput();
     const build = await tx.run(NPM, ["run", "build"]);

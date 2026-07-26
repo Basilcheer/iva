@@ -9,7 +9,6 @@
 import { cpSync, existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
-import { syncVaultSkills } from "./lib/sync-vault-skills.mjs";
 
 const VAULT = resolve(process.env.ASSISTANT_VAULT_DIR ?? "vault");
 const TEMPLATE = resolve("vault-template");
@@ -28,7 +27,8 @@ function isEmpty(dir) {
 mkdirSync(VAULT, { recursive: true });
 
 if (isEmpty(VAULT)) {
-  // Copy the skeleton (rules, autograph, dbrain-processor, schema.json, empty directories).
+  // Copy the skeleton (schema.json, CORE/MOC seeds, empty directories). Code and prompts
+  // are NOT part of the vault — they live in the repo (scripts/autograph, scripts/memory).
   cpSync(TEMPLATE, VAULT, { recursive: true });
 
   // Pick the memory core language by AGENT_LANGUAGE: en → CORE.en.md overwrites CORE.md.
@@ -44,11 +44,6 @@ if (isEmpty(VAULT)) {
 } else {
   console.log(`init-vault: vault already has data, skipping template copy → ${VAULT}`);
 }
-
-// Vendored skill CODE always follows the template — existing vaults must receive
-// script bugfixes too (user data is never touched, see sync-vault-skills.mjs).
-const { updated } = syncVaultSkills({ vaultDir: VAULT, templateDir: TEMPLATE });
-if (updated.length) console.log(`init-vault: updated vendored skill scripts: ${updated.join(", ")}`);
 
 // The live vault is its own git repo (backup + Obsidian). doctor.ts then commits/pushes.
 if (!existsSync(resolve(VAULT, ".git"))) {

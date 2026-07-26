@@ -4,8 +4,10 @@
 //
 //   node --env-file=.env scripts/memory/rollup.ts <daily|weekly|monthly|yearly>
 //
-// Requires: a running agent (eve start) and a vault with processing rules
-// (vault/.claude/rules/*-format.md + skills/dbrain-processor). Date is in ASSISTANT_TIMEZONE.
+// Requires: a running agent (eve start) and a vault to write into. The processing rules
+// (scripts/memory/instructions/) ship with the repo. Date is in ASSISTANT_TIMEZONE.
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { Client } from "eve/client";
 import { sendTelegramHtml } from "../lib/telegram-send.mjs";
 
@@ -27,6 +29,10 @@ const BOT = process.env.TELEGRAM_BOT_TOKEN;
 const CHAT = process.env.TELEGRAM_DIGEST_CHAT_ID;
 const VAULT = process.env.ASSISTANT_VAULT_DIR ?? "vault";
 const TZ = process.env.ASSISTANT_TIMEZONE ?? process.env.TZ ?? "UTC";
+// Format rules and the dbrain-processor prompts live in the repo, not in the vault: they
+// are product, and must update with it instead of rotting inside every user's vault.
+// Absolute, so the agent can read them whatever its working directory is.
+const INSTRUCTIONS = resolve(dirname(fileURLToPath(import.meta.url)), "instructions");
 
 // daily/weekly reports go to Telegram; monthly/yearly are silent (vault only).
 const POST_TO_TELEGRAM: Record<Period, boolean> = {
@@ -65,7 +71,8 @@ function buildPrompt(p: Period, now: string): string {
 
   const intro =
     `You are processing long-term memory (vault: ${VAULT}). It is now ${now} (${TZ}). ` +
-    `Work strictly by the vault rules in ${VAULT}/.claude/rules/ and the dbrain-processor skill. ` +
+    `Work strictly by the format rules in ${INSTRUCTIONS}/rules/ and the dbrain-processor ` +
+    `instructions in ${INSTRUCTIONS}/dbrain-processor/. ` +
     `Do not invent facts — take them from the source files. `;
 
   const tail =
@@ -93,7 +100,7 @@ function buildPrompt(p: Period, now: string): string {
         `resolve every listed same-entity conflict by superseding the stale card. ` +
         `Then assemble a daily-summary for ${yesterday} with the day's topics and MOC links down to the cards ` +
         `and to the raw transcript daily/${yesterday}.md. ` +
-        `Then update ${VAULT}/CORE.md per the .claude/rules/core-format.md rule: refresh permanent ` +
+        `Then update ${VAULT}/CORE.md per the ${INSTRUCTIONS}/rules/core-format.md rule: refresh permanent ` +
         `facts about the user, preferences, active goals (≤3), and the pointer to the last day (${yesterday}); ` +
         `keep it ≤~1200 characters — compress on overflow, don't bloat. ` +
         `Separately, reflect on the day's interactions: for each notable exchange judge the outcome — ` +
