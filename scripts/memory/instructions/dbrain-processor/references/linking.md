@@ -16,16 +16,16 @@ Resolve domain from path via schema `domain_inference`:
 | `cards/ideas/` | knowledge | `cards/ideas/_index.md` |
 
 Hubs (`_index.md`) are generated/maintained by
-`uv run .claude/skills/autograph/scripts/moc.py generate .`. Link the hub even if it does
-not exist yet — the mechanical pass materializes it.
+`uv run scripts/autograph/moc.py generate vault vault/schema.json`. Link the hub even if it
+does not exist yet — the mechanical pass materializes it.
 
 ## 2. Neighbors (2–3)
 
 Find siblings of the same type+domain:
 
 ```bash
-grep -rl "type: <type>" cards/<kind>/
-uv run .claude/skills/autograph/scripts/graph.py backlinks . cards/<kind>/_index
+grep -rl "type: <type>" vault/cards/<kind>/
+uv run scripts/autograph/graph.py backlinks vault cards/<kind>/_index
 ```
 
 Link the 2–3 most relevant, each with a context phrase explaining the relationship:
@@ -45,12 +45,12 @@ both directions.
 ## 4. Touch & verify
 
 ```bash
-uv run .claude/skills/autograph/scripts/engine.py touch cards/<kind>/<file>.md
-uv run .claude/skills/autograph/scripts/graph.py health .   # broken links should be 0
+uv run scripts/autograph/engine.py touch vault/cards/<kind>/<file>.md
+uv run scripts/autograph/graph.py health vault   # broken links should be 0
 ```
 
 ## Wiki-link form (Obsidian)
 
 - `[[path/to/card|Display Text]]` — path is vault-relative, no `.md`.
 - Inside tables, escape the pipe: `[[path\|Display]]`.
-- See `.claude/rules/obsidian-markdown.md` if present, or the autograph references.
+- See `scripts/autograph/docs/references/` for the autograph formatting references.

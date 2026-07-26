@@ -9,7 +9,7 @@ most common mistake. This is the contract for keeping one card = one subject.
 Look up before you write:
 
 ```bash
-uv run scripts/search.py "<entity name or key phrase>" --vault <vault-dir> --json
+uv run scripts/autograph/search.py "<entity name or key phrase>" --vault <vault-dir> --json
 # fallback if search index is unavailable:
 grep -ril "<entity name or key phrase>" <vault-dir>
 ```
@@ -70,7 +70,7 @@ schema. `search.py` demotes superseded cards in ranking; they stay findable as h
 The nightly conflict scan surfaces stacked contradictions for you:
 
 ```bash
-uv run scripts/supersede.py <vault-dir>            # dry-run → .graph/supersede-candidates.json
+uv run scripts/autograph/supersede.py <vault-dir>            # dry-run → .graph/supersede-candidates.json
 ```
 
 Read `.graph/supersede-candidates.json` and resolve **every** listed same-entity

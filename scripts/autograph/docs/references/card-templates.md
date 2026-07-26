@@ -91,9 +91,9 @@ Creative director at Globex.
    - Определи домен из path → schema `domain_inference`
    - Hub = _index.md или MEMORY.md домена
 2. **Sibling links:** Найди 2-3 карточки того же type+domain
-   - `python3 scripts/graph.py backlinks <vault> <hub>` → найди siblings
+   - `python3 scripts/autograph/graph.py backlinks <vault> <hub>` → найди siblings
    - Или: прочитай vault-graph.json → filter nodes by type+domain
-3. **Touch:** `python3 scripts/engine.py touch <new-file>`
+3. **Touch:** `python3 scripts/autograph/engine.py touch <new-file>`
 4. **Verify:** Карточка должна иметь ≥2 links в `## Related`
 
 ### Checklist

@@ -38,7 +38,7 @@ No hardcoded domains, types, or paths. The agent discovers structure from data, 
 
 ### Summary (10 phases)
 
-1. **Discover:** `uv run scripts/discover.py <vault-dir> --verbose > /tmp/discovery.json`
+1. **Discover:** `uv run scripts/autograph/discover.py <vault-dir> --verbose > /tmp/discovery.json`
 2. **Generate schema:** Script baseline (`generate_schema.py`) + **agent swarm** (`swarm_prepare.py` → Wave 1 haiku → `swarm_reduce.py` → Wave 2 sonnet). **NEVER skip the swarm.**
 3. **Review:** Human approves schema. Never auto-apply.
 4. **Bootstrap + Enforce:** `engine.py init` + `enforce.py --apply`
@@ -88,13 +88,13 @@ No hardcoded domains, types, or paths. The agent discovers structure from data, 
 ### Commands
 
 ```bash
-uv run scripts/graph.py health <vault-dir>           # health check
-uv run scripts/graph.py fix <vault-dir> --apply       # fix broken links
-uv run scripts/moc.py generate <vault-dir>            # regenerate MOCs
-uv run scripts/engine.py decay <vault-dir>            # decay cycle (Ebbinghaus)
-uv run scripts/engine.py decay <vault-dir> --dry-run  # preview decay changes
-uv run scripts/engine.py stats <vault-dir>            # tier distribution
-uv run scripts/engine.py creative 5 <vault-dir>       # resurface forgotten cards
+uv run scripts/autograph/graph.py health <vault-dir>           # health check
+uv run scripts/autograph/graph.py fix <vault-dir> --apply       # fix broken links
+uv run scripts/autograph/moc.py generate <vault-dir>            # regenerate MOCs
+uv run scripts/autograph/engine.py decay <vault-dir>            # decay cycle (Ebbinghaus)
+uv run scripts/autograph/engine.py decay <vault-dir> --dry-run  # preview decay changes
+uv run scripts/autograph/engine.py stats <vault-dir>            # tier distribution
+uv run scripts/autograph/engine.py creative 5 <vault-dir>       # resurface forgotten cards
 ```
 
 ---
@@ -106,7 +106,7 @@ uv run scripts/engine.py creative 5 <vault-dir>       # resurface forgotten card
 ### Step 0: LOOKUP (mandatory — never skip)
 
 ```bash
-uv run scripts/search.py "<entity / key phrase>" --vault <vault-dir> --json
+uv run scripts/autograph/search.py "<entity / key phrase>" --vault <vault-dir> --json
 # fallback: grep -ril "<name>" <vault-dir>
 ```
 
@@ -135,9 +135,9 @@ Only when the operation is **ADD**, continue:
    a. Add `## Related` section with `[[hub]]` file of the domain
       - Hub = `_index.md` or `MEMORY.md` of that domain
    b. Find 2-3 sibling cards of same type+domain → add `[[links]]`
-      - `uv run scripts/graph.py backlinks <vault> <hub>` → find siblings
+      - `uv run scripts/autograph/graph.py backlinks <vault> <hub>` → find siblings
       - Or: read vault-graph.json → filter nodes by type+domain
-   c. Run `uv run scripts/engine.py touch <new-file>`
+   c. Run `uv run scripts/autograph/engine.py touch <new-file>`
 5. **Verify checklist:**
    - [ ] Hub linked?
    - [ ] 2+ related cards found?
@@ -158,12 +158,12 @@ Templates: `references/card-templates.md`
 1. **Determine domain** from the topic (work, personal, research, etc. — whatever your schema defines)
 2. **Start at hub:** `_index.md` or `MEMORY.md` of that domain
 3. **Follow links** — max 2 hops from hub to target
-4. **Fallback:** `uv run scripts/graph.py backlinks <vault> <target>` for reverse links
+4. **Fallback:** `uv run scripts/autograph/graph.py backlinks <vault> <target>` for reverse links
 
 ### Orphan Rescue
 
 ```bash
-uv run scripts/graph.py orphans <vault-dir>        # find orphans
+uv run scripts/autograph/graph.py orphans <vault-dir>        # find orphans
 # For each orphan: connect to nearest hub or sibling card
 ```
 
@@ -171,8 +171,8 @@ uv run scripts/graph.py orphans <vault-dir>        # find orphans
 
 ```bash
 # Files with <2 links → enrich
-OPENROUTER_API_KEY=sk-... uv run scripts/enrich.py swarm-links <vault-dir> --apply
-uv run scripts/graph.py health <vault-dir>          # verify improvement
+OPENROUTER_API_KEY=sk-... uv run scripts/autograph/enrich.py swarm-links <vault-dir> --apply
+uv run scripts/autograph/graph.py health <vault-dir>          # verify improvement
 ```
 
 ---
@@ -184,8 +184,8 @@ uv run scripts/graph.py health <vault-dir>          # verify improvement
 ### Phase 0: Script sequencing
 
 ```bash
-python3 scripts/orchestrate.py health <vault-dir>      # automated health workflow
-python3 scripts/orchestrate.py bootstrap <vault-dir>    # full bootstrap (one command)
+python3 scripts/autograph/orchestrate.py health <vault-dir>      # automated health workflow
+python3 scripts/autograph/orchestrate.py bootstrap <vault-dir>    # full bootstrap (one command)
 ```
 
 `health` runs: graph check > fix broken links > link cleanup > MOC > decay > verify.
@@ -197,17 +197,17 @@ The agent (you) does the judgment directly — read prepared data, decide, write
 
 ```bash
 # Phase 1: prep dedup clusters for YOUR review
-python3 scripts/orchestrate.py dedup-prepare <vault-dir>
+python3 scripts/autograph/orchestrate.py dedup-prepare <vault-dir>
 # -> writes .graph/dedup-review-input.json
 # -> YOU read clusters, mark approved=true, then: dedup.py --apply-manifest
 
 # Phase 2: prep domain catalogs for YOUR link suggestions
-python3 scripts/orchestrate.py link-prepare <vault-dir>
+python3 scripts/autograph/orchestrate.py link-prepare <vault-dir>
 # -> writes .graph/link-review-input.json
 # -> YOU read catalogs, suggest links per domain, write batch results
 
 # Phase 3: prep graph data for YOUR semantic analysis
-python3 scripts/orchestrate.py graph-prepare <vault-dir>
+python3 scripts/autograph/orchestrate.py graph-prepare <vault-dir>
 # -> writes .graph/graph-analysis-input.json
 # -> YOU analyze contradictions, missing links, stale hubs, write findings
 ```
@@ -283,22 +283,22 @@ Each promotion sets `last_accessed` to a midpoint date, so without re-touch the 
 ## Maintenance Commands
 
 ```bash
-uv run scripts/moc.py generate <vault-dir>                                       # MOC generation
-uv run scripts/engine.py decay <vault-dir>                                       # decay cycle
-uv run scripts/engine.py touch <vault-dir>/path/card.md                          # touch (graduated)
-uv run scripts/engine.py creative 5 <vault-dir>                                  # creative recall
-uv run scripts/engine.py stats <vault-dir>                                       # stats
-uv run scripts/graph.py backlinks <vault-dir> path/to/card                       # backlinks
-uv run scripts/graph.py orphans <vault-dir>                                      # orphans
-uv run scripts/graph.py fix <vault-dir> --apply                                  # fix links
-uv run scripts/search.py "<query>" --vault <vault-dir> --json                    # ranked memory search (dedup-first)
-uv run scripts/supersede.py <vault-dir>                                          # conflict scan (dry-run)
-uv run scripts/supersede.py <vault-dir> --apply                                  # stamp superseded (2-card, newer-by-date)
-uv run scripts/daily.py extract <memory-dir> <vault-dir>                         # entity extraction
-uv run scripts/engine.py init <vault-dir> --dry-run                              # bootstrap bare files
-OPENROUTER_API_KEY=sk-... uv run scripts/enrich.py swarm-links <vault-dir> --apply  # link enrichment
-OPENROUTER_API_KEY=sk-... uv run scripts/enrich.py tags <vault-dir> --apply         # tag enrichment
-uv run scripts/link_cleanup.py <vault-dir> --apply                               # link cleanup
+uv run scripts/autograph/moc.py generate <vault-dir>                                       # MOC generation
+uv run scripts/autograph/engine.py decay <vault-dir>                                       # decay cycle
+uv run scripts/autograph/engine.py touch <vault-dir>/path/card.md                          # touch (graduated)
+uv run scripts/autograph/engine.py creative 5 <vault-dir>                                  # creative recall
+uv run scripts/autograph/engine.py stats <vault-dir>                                       # stats
+uv run scripts/autograph/graph.py backlinks <vault-dir> path/to/card                       # backlinks
+uv run scripts/autograph/graph.py orphans <vault-dir>                                      # orphans
+uv run scripts/autograph/graph.py fix <vault-dir> --apply                                  # fix links
+uv run scripts/autograph/search.py "<query>" --vault <vault-dir> --json                    # ranked memory search (dedup-first)
+uv run scripts/autograph/supersede.py <vault-dir>                                          # conflict scan (dry-run)
+uv run scripts/autograph/supersede.py <vault-dir> --apply                                  # stamp superseded (2-card, newer-by-date)
+uv run scripts/autograph/daily.py extract <memory-dir> <vault-dir>                         # entity extraction
+uv run scripts/autograph/engine.py init <vault-dir> --dry-run                              # bootstrap bare files
+OPENROUTER_API_KEY=sk-... uv run scripts/autograph/enrich.py swarm-links <vault-dir> --apply  # link enrichment
+OPENROUTER_API_KEY=sk-... uv run scripts/autograph/enrich.py tags <vault-dir> --apply         # tag enrichment
+uv run scripts/autograph/link_cleanup.py <vault-dir> --apply                               # link cleanup
 ```
 
 ## Scripts

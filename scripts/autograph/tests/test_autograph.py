@@ -17,7 +17,7 @@ from pathlib import Path
 from datetime import date, timedelta
 
 # ─── SETUP ────────────────────────────────────────────────
-SCRIPTS_DIR = Path(__file__).resolve().parent.parent / 'scripts'
+SCRIPTS_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(SCRIPTS_DIR))
 
 PASS = 0

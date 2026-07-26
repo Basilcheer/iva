@@ -24,8 +24,8 @@ used — you are the enrichment.
 - `vault/daily/YYYY-MM-DD.md` — the day's raw two-sided transcript
   (`## HH:MM [text|voice|video|photo|forward from: …]` for the user,
   `## HH:MM [iva]` for Iva's replies; older days may use legacy `[eva]`).
-  See `.claude/rules/daily-format.md`.
-- `vault/.claude/skills/autograph/schema.json` — the vault schema (types, domains, decay).
+  See `scripts/memory/instructions/rules/daily-format.md`.
+- `vault/schema.json` — the vault schema (types, domains, decay).
 - Existing cards under `vault/cards/**` and prior summaries under
   `vault/summaries/`, `vault/weekly|monthly|yearly/` — for linking and dedup.
 
@@ -63,17 +63,17 @@ Always pick `type` and `status` from `schema.json` → `node_types`. Never inven
 
 ## Mechanical pass (after writing cards & summary)
 
-Run from the vault root. Scripts live under `.claude/skills/autograph/scripts/`
-(reference them by this relative path):
+Run from the project root (Iva's working directory) — the scripts are part of the repo, not
+of the vault, and take the vault directory as an argument (`vault` = `$ASSISTANT_VAULT_DIR`):
 
 ```bash
 # dry-run first, then --apply
-uv run .claude/skills/autograph/scripts/enforce.py . --apply        # schema compliance + autofix
-uv run .claude/skills/autograph/scripts/graph.py fix . --apply      # repair broken wiki-links
-uv run .claude/skills/autograph/scripts/engine.py touch summaries/daily/YYYY-MM-DD.md
-uv run .claude/skills/autograph/scripts/moc.py generate .           # regenerate domain MOCs
-uv run .claude/skills/autograph/scripts/engine.py decay .           # recompute relevance/tiers
-uv run .claude/skills/autograph/scripts/graph.py health .           # confirm score
+uv run scripts/autograph/enforce.py vault vault/schema.json --apply   # schema compliance + autofix
+uv run scripts/autograph/graph.py fix vault --apply                   # repair broken wiki-links
+uv run scripts/autograph/engine.py touch vault/summaries/daily/YYYY-MM-DD.md
+uv run scripts/autograph/moc.py generate vault vault/schema.json      # regenerate domain MOCs
+uv run scripts/autograph/engine.py decay vault                        # recompute relevance/tiers
+uv run scripts/autograph/graph.py health vault                        # confirm score
 ```
 
 If `uv` / Python is unavailable, still produce the cards and summary (they are plain
@@ -82,7 +82,7 @@ Markdown) and let the nightly doctor run the mechanical pass later.
 ## Hard rules
 
 - **Never modify existing transcript entries.** Append only a processing marker (see
-  `.claude/rules/daily-format.md`).
+  `scripts/memory/instructions/rules/daily-format.md`).
 - **No orphans.** Every card created here must link to a hub and ≥2 neighbors before
   you finish (`phases/link.md`).
 - **description is a search snippet, not the title.** One line, what/why, ~150 chars.
@@ -98,5 +98,6 @@ Markdown) and let the nightly doctor run the mechanical pass later.
 - `references/card-templates.md` — frontmatter templates per type.
 - `references/linking.md` — hub + neighbor linking protocol.
 - `references/daily-summary.md` — the daily-summary card spec (topics + MOC).
-- `.claude/skills/autograph/SKILL.md` — the typed vault engine (graph, decay, MOC, dedup).
-- `.claude/rules/{daily,weekly,monthly,yearly}-format.md` — format + DAG navigation rules.
+- `scripts/autograph/docs/SKILL.md` — the typed vault engine (graph, decay, MOC, dedup).
+- `scripts/memory/instructions/rules/{daily,weekly,monthly,yearly}-format.md` — format +
+  DAG navigation rules.

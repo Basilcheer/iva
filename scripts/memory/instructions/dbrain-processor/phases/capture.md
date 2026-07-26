@@ -6,7 +6,7 @@ files yet.
 ## Input
 
 - `daily/YYYY-MM-DD.md` — the two-sided transcript for the day.
-- `.claude/skills/autograph/schema.json` — types and statuses.
+- `vault/schema.json` — types and statuses.
 
 ## Steps
 

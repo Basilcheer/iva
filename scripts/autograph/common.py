@@ -41,26 +41,27 @@ _schema_cache = {}
 
 def load_schema(schema_path: Path | str | None = None) -> dict:
     """Load schema.json. Caches after first load by resolved path.
-    If no path given, looks in: CWD/schema.json → skill dir/schema.local.json → schema.json → schema.example.json"""
+    If no path given, looks in: CWD/schema.json (the vault is the CWD — this is the user's
+    schema) → code dir/schema.local.json → schema.json → schema.example.json"""
     if schema_path is not None:
         schema_path = Path(schema_path)
         key = str(schema_path.resolve())
         if key in _schema_cache:
             return _schema_cache[key]
     else:
-        skill_dir = Path(__file__).parent.parent
+        code_dir = Path(__file__).parent
         candidates = [
-            Path.cwd() / SCHEMA_FILENAME,          # user's schema in CWD
-            skill_dir / 'schema.local.json',        # local override FIRST
-            skill_dir / SCHEMA_FILENAME,            # schema.json in skill dir
-            skill_dir / 'schema.example.json',      # fallback example
+            Path.cwd() / SCHEMA_FILENAME,          # user's schema in CWD (vault root)
+            code_dir / 'schema.local.json',         # local override FIRST
+            code_dir / SCHEMA_FILENAME,             # schema.json next to the scripts
+            code_dir / 'schema.example.json',       # fallback example
         ]
         for c in candidates:
             if c.exists():
                 schema_path = c
                 break
         if schema_path is None:
-            schema_path = skill_dir / SCHEMA_FILENAME  # will raise FileNotFoundError
+            schema_path = code_dir / SCHEMA_FILENAME  # will raise FileNotFoundError
         key = str(schema_path.resolve())
         if key in _schema_cache:
             return _schema_cache[key]

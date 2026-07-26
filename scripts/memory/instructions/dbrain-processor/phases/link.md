@@ -24,14 +24,14 @@ Wire every card created/updated in Phase 2 into the graph. No orphans.
    ```
    Find siblings with:
    ```bash
-   grep -rl "type: <type>" cards/<kind>/
-   uv run .claude/skills/autograph/scripts/graph.py backlinks . cards/<kind>/<hub>
+   grep -rl "type: <type>" vault/cards/<kind>/
+   uv run scripts/autograph/graph.py backlinks vault cards/<kind>/<hub>
    ```
 3. **Back-reference.** When a card relates strongly to another, add the reciprocal link
    on the neighbor too (keep the graph undirected where it makes sense).
 4. **Touch.** Mark the card as freshly accessed so decay treats it as active:
    ```bash
-   uv run .claude/skills/autograph/scripts/engine.py touch cards/<kind>/<file>.md
+   uv run scripts/autograph/engine.py touch vault/cards/<kind>/<file>.md
    ```
 
 ## Checklist per card

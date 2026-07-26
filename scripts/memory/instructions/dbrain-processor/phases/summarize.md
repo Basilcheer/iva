@@ -4,7 +4,7 @@ Write the daily-summary card — the day's node in the DAG. Then run the mechani
 autograph pass and mark the transcript processed.
 
 Full template + MOC contract: `references/daily-summary.md` and
-`.claude/rules/daily-format.md`.
+`scripts/memory/instructions/rules/daily-format.md`.
 
 ## 1. Write `summaries/daily/YYYY-MM-DD.md`
 
@@ -67,15 +67,15 @@ summary: summaries/daily/YYYY-MM-DD.md
 
 ## 3. Mechanical autograph pass
 
-From the vault root (dry-run, then `--apply`):
+From the project root, with the vault as an argument (dry-run, then `--apply`):
 
 ```bash
-uv run .claude/skills/autograph/scripts/enforce.py . --apply
-uv run .claude/skills/autograph/scripts/graph.py fix . --apply
-uv run .claude/skills/autograph/scripts/engine.py touch summaries/daily/YYYY-MM-DD.md
-uv run .claude/skills/autograph/scripts/moc.py generate .
-uv run .claude/skills/autograph/scripts/engine.py decay .
-uv run .claude/skills/autograph/scripts/graph.py health .
+uv run scripts/autograph/enforce.py vault vault/schema.json --apply
+uv run scripts/autograph/graph.py fix vault --apply
+uv run scripts/autograph/engine.py touch vault/summaries/daily/YYYY-MM-DD.md
+uv run scripts/autograph/moc.py generate vault vault/schema.json
+uv run scripts/autograph/engine.py decay vault
+uv run scripts/autograph/graph.py health vault
 ```
 
 ## 4. Hand back

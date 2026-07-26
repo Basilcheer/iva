@@ -21,6 +21,7 @@ import sys
 from pathlib import Path
 
 from common import (
+    SCHEMA_FILENAME,
     load_schema,
     parse_frontmatter,
     write_frontmatter,
@@ -114,9 +115,15 @@ def main():
     # Resolve THIS vault's schema first, then fall back to the shared example / {} so a
     # scan against an arbitrary vault_dir never picks up a different vault's schema and
     # never hard-fails on a fresh vault that ships only schema.example.json.
-    schema_path = vault_dir / ".claude" / "skills" / "autograph" / "schema.json"
+    # Vault root → legacy .claude path (vaults created before 0.3.3) → load_schema defaults.
+    schema_path = next(
+        (p for p in (vault_dir / SCHEMA_FILENAME,
+                     vault_dir / ".claude" / "skills" / "autograph" / SCHEMA_FILENAME)
+         if p.exists()),
+        None,
+    )
     try:
-        schema = load_schema(schema_path if schema_path.exists() else None)
+        schema = load_schema(schema_path)
     except Exception:
         schema = {}
 

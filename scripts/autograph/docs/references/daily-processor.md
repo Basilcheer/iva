@@ -27,8 +27,8 @@ duplicate.
 ## Phase 1 — CAPTURE
 
 ```bash
-uv run scripts/daily.py extract <daily-dir> <vault-dir> [YYYY-MM-DD]   # mechanical candidates → .graph/daily-extract-<date>.json
-uv run scripts/supersede.py <vault-dir>                                # refresh conflict scan
+uv run scripts/autograph/daily.py extract <daily-dir> <vault-dir> [YYYY-MM-DD]   # mechanical candidates → .graph/daily-extract-<date>.json
+uv run scripts/autograph/supersede.py <vault-dir>                                # refresh conflict scan
 ```
 
 Read the day's notes and the extract JSON, read `schema.json` `node_types`, then list the
@@ -66,11 +66,11 @@ phase.
 ## Mechanical pass (after writing cards)
 
 ```bash
-uv run scripts/enforce.py <vault-dir> --apply     # schema compliance + autofix
-uv run scripts/graph.py fix <vault-dir> --apply   # repair broken wikilinks
-uv run scripts/moc.py generate <vault-dir>        # regenerate MOCs
-uv run scripts/engine.py decay <vault-dir>        # recompute relevance/tiers
-uv run scripts/graph.py health <vault-dir>        # confirm score
+uv run scripts/autograph/enforce.py <vault-dir> --apply     # schema compliance + autofix
+uv run scripts/autograph/graph.py fix <vault-dir> --apply   # repair broken wikilinks
+uv run scripts/autograph/moc.py generate <vault-dir>        # regenerate MOCs
+uv run scripts/autograph/engine.py decay <vault-dir>        # recompute relevance/tiers
+uv run scripts/autograph/graph.py health <vault-dir>        # confirm score
 ```
 
 ## Return

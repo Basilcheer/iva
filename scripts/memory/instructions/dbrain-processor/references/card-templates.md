@@ -1,11 +1,11 @@
 # Card templates
 
 Frontmatter per type. `type` and `status` MUST exist in
-`.claude/skills/autograph/schema.json` → `node_types`. `description` is a search snippet
+`vault/schema.json` → `node_types`. `description` is a search snippet
 (what/why), never a title repeat. `tags`: 2–5, lowercase, kebab-case.
 
 The canonical generic templates live in
-`.claude/skills/autograph/references/card-templates.md` — these are the dbrain-specific
+`scripts/autograph/docs/references/card-templates.md` — these are the dbrain-specific
 shapes.
 
 ## note — `cards/notes/<slug>.md`
