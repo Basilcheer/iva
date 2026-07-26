@@ -64,7 +64,9 @@ function progressView(run, ctx) {
   };
 }
 
-// Финальная сводка. Чистка: парсим «cleanup (apply): N file(s), X bytes …» → файлы и МБ.
+// Финальная сводка. Чистка: парсим «cleanup (applied): N file(s), X bytes …» → файлы и МБ.
+// Режим в выводе cleanup.py — applied/dry-run (не apply): ошибёшься — сводка молча
+// деградирует до дежурного «Готово».
 function summaryText(run, ctx) {
   const T = ctx.tr;
   const name = label(run.cmd, T);
@@ -79,7 +81,7 @@ function summaryText(run, ctx) {
   }
   const ok = run.status === "done";
   if (run.cmd === "cln" && ok) {
-    const m = run.tail.join("\n").match(/cleanup \((?:apply|dry-run)\): (\d+) file\(s\), ([\d,]+) bytes/);
+    const m = run.tail.join("\n").match(/cleanup \((?:applied|dry-run)\): (\d+) file\(s\), ([\d,]+) bytes/);
     if (m) {
       const files = Number(m[1]);
       const mb = (Number(m[2].replace(/,/g, "")) / 1e6).toFixed(files ? 1 : 0);

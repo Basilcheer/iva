@@ -129,8 +129,9 @@ test("go:cln: сводка парсит финальную строку cleanup"
   const h = makeCtx({ deps: {
     dataDir, root: "/nonexistent", envPath: join(dataDir, ".env"),
     svcRun: fastRun,
+    // Строка ДОСЛОВНО как её печатает scripts/autograph/cleanup.py (режим — applied).
     svcSpec: () => ({ kind: "proc", argv: [process.execPath, "-e",
-      "console.log('cleanup (apply): 3 file(s), 224,000,000 bytes of bug garbage removed')"] }),
+      "console.log('cleanup (applied): 3 file(s), 224,000,000 bytes of bug garbage')"] }),
   }});
   const st = newState(); h.st = st;
   await service.on("go", ["cln"], st, h.ctx);
