@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.3.3] - 2026-07-26
+
+Fix: the 🧹 Vault cleanup button works on every install — and the vault is now pure data, with all code and prompts shipped in the repo.
+
+- 🧹 **Cleanup button fixed** — in 0.3.2 it pointed at a script *inside the vault* that many installs didn't have yet (the sync that delivered it only ran one release later), failing with "Failed to spawn … (os error 2)". It now runs the repo's own copy by absolute path — present on every install the moment the update lands. Also fixed: the result summary silently degraded to a generic "Done" instead of showing files/MB cleaned.
+- 📦 **The vault is data, the repo is code** — the autograph maintenance scripts, the nightly-memory format rules and the dbrain-processor prompts moved out of `vault/.claude/` into the repo (`scripts/autograph/`, `scripts/memory/instructions/`). They now update with the app instead of rotting inside every vault, and the `.claude` layout — a leftover of the tooling the memory engine was first built with, never a runtime dependency — is gone from new vaults entirely. The per-vault `schema.json` moves to the vault root (a one-time automatic migration copies it; the legacy folder in existing vaults is left untouched).
+- 🧭 **Skills go to `agent/skills/` only** — Iva's always-on instructions now state where skills live, so "install this skill" can never land files in a `.claude` folder.
+
+[0.3.3]: https://github.com/smixs/iva/releases/tag/v0.3.3
+
 ## [0.3.2] - 2026-07-25
 
 Feature: a 🛠 Maintenance screen in `/menu` — the install's technical commands right in chat.
