@@ -11,6 +11,8 @@ Skills are markdown procedures in `agent/skills/` that the model loads on demand
 - 🌐 **agent-browser/** — directory skill wrapping a CLI the model drives through `bash`.
 - 🛡 **security-defense/** — the full shape: `SKILL.md`, bundled scripts, a patterns file.
 
+⚠️ Skills go in `agent/skills/` and nowhere else — never in a `.claude/` directory (`~/.claude/skills/`, `vault/.claude/skills/`). That is a different tool's layout; Iva does not read it, so a skill placed there simply never loads.
+
 If Iva should reach for your skill unprompted, name it in `agent/instructions.md` — that's how all four above get triggered.
 
 ## MCP connections
