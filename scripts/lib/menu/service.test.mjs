@@ -1,10 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
-import service from "./service.mjs";
+import service, { commandSpec } from "./service.mjs";
 import root from "./root.mjs";
 import { SCREENS } from "./index.mjs";
 import { LOADERS, currentRun, resetForTests } from "./svc-run.mjs";
@@ -86,6 +87,21 @@ test("up: хендофф в deps.handleUpdateCheck с chatId", async () => {
   const st = newState(); h.st = st;
   await service.on("up", [], st, h.ctx);
   assert.equal(called, 10);
+});
+
+// Регрессия 0.3.2: кнопка спавнила cleanup.py по пути ВНУТРИ vault'а, куда его клал синк.
+// Юзеры с 0.3.0 прыжком на 0.3.2 получали «Failed to spawn … (os error 2)». Скрипт обязан
+// браться из репо и реально существовать, а vault остаётся только рабочим каталогом.
+test("cln: cleanup.py берётся из репо, cwd — vault", async () => {
+  const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "../../..");
+  const dataDir = mkdtempSync(join(tmpdir(), "iva-data-"));
+  const h = makeCtx({ deps: { root: repoRoot, envPath: join(dataDir, ".env") } });
+  const spec = await commandSpec("cln", h.ctx);
+  assert.deepEqual(spec.argv.slice(0, 2), ["uv", "run"]);
+  assert.equal(spec.argv[2], join(repoRoot, "scripts/autograph/cleanup.py"));
+  assert.ok(existsSync(spec.argv[2]), `нет скрипта: ${spec.argv[2]}`);
+  assert.deepEqual(spec.argv.slice(3), [".", "--apply"]);
+  assert.equal(spec.cwd, join(repoRoot, "vault"));
 });
 
 test("go:doc: прогресс с 🟥-entity, финал ✅ с кнопкой Назад", async () => {

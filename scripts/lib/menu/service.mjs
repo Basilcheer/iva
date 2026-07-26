@@ -31,13 +31,15 @@ const describe = (cmd, T) => ({
     "Проходит по карточкам памяти стримингом и убирает раздутые description из бага 0.3.0. Тела карточек не трогает.\nОбычно меньше минуты; гигабайтные файлы — дольше.",
   ),
   mem: T(
-    "Runs the nightly memory doctor now, without waiting for 05:00: script sync → cleanup → enforce → graph → git push.\nUsually 1–10 minutes.",
-    "Запускает ночной цикл памяти сейчас, не дожидаясь 05:00: синк скриптов → cleanup → enforce → graph → git push.\nОбычно 1–10 минут.",
+    "Runs the nightly memory doctor now, without waiting for 05:00: cleanup → enforce → graph → git push.\nUsually 1–10 minutes.",
+    "Запускает ночной цикл памяти сейчас, не дожидаясь 05:00: cleanup → enforce → graph → git push.\nОбычно 1–10 минут.",
   ),
 }[cmd]);
 
 // Командные строки. deps.svcSpec — тестовая подмена (argv на быстрые node -e).
-async function commandSpec(cmd, ctx) {
+// Экспортируется ради теста: реальный argv кнопки иначе ничем не покрыт (так и уехал
+// в 0.3.2 путь в vault, которого у части юзеров не было).
+export async function commandSpec(cmd, ctx) {
   if (ctx.deps.svcSpec) return ctx.deps.svcSpec(cmd, ctx);
   const root = ctx.deps.root;
   if (cmd === "doc") return { kind: "proc", argv: [process.execPath, join(root, "bin/iva.mjs"), "doctor"], cwd: root };
@@ -45,7 +47,10 @@ async function commandSpec(cmd, ctx) {
     const env = await readEnvValues(ctx.deps.envPath);
     const rel = env.ASSISTANT_VAULT_DIR || "vault";
     const vaultDir = rel.startsWith("/") ? rel : join(root, rel);
-    return { kind: "proc", argv: ["uv", "run", ".claude/skills/autograph/scripts/cleanup.py", ".", "--apply"], cwd: vaultDir };
+    // Скрипт живёт в репо (в vault'е его может не быть — до 0.3.3 его туда клал синк, и
+    // прыжок 0.3.0 → 0.3.2 оставлял кнопку без файла: «Failed to spawn … (os error 2)»).
+    // Путь абсолютный, cwd — vault: скрипты autograph берут vault первым аргументом («.»).
+    return { kind: "proc", argv: ["uv", "run", join(root, "scripts/autograph/cleanup.py"), ".", "--apply"], cwd: vaultDir };
   }
   return { kind: "unit", unit: MEM_UNIT };
 }
