@@ -6,9 +6,10 @@
 //
 // Requires: a running agent (eve start) and a vault to write into. The processing rules
 // (scripts/memory/instructions/) ship with the repo. Date is in ASSISTANT_TIMEZONE.
-import { dirname, resolve } from "node:path";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { Client } from "eve/client";
+import { Client, type SessionState } from "eve/client";
 import { sendTelegramHtml } from "../lib/telegram-send.mjs";
 
 type Period = "daily" | "weekly" | "monthly" | "yearly";
@@ -144,10 +145,48 @@ const client = new Client({
   ...(BEARER ? { auth: { bearer: async () => BEARER } } : {}),
 });
 
+// Session REUSE, not a fresh session per night. eve backs every client session with a
+// workflowEntry run in .eve/.workflow-data that nothing ever closes (the client API has
+// no delete), so a fresh session per rollup leaked one forever-"running" run per night
+// and eve re-enqueued the whole pile on every start. One persistent session per period
+// caps that at one run; rotation caps its transcript. Parked cursor lives in data/.
+const DATA_DIR = process.env.ASSISTANT_DATA_DIR ?? "data";
+const SESSION_FILE = join(DATA_DIR, `rollup-session-${period}.json`);
+const SESSION_TTL_MS = 14 * 24 * 3600 * 1000; // rotate: bounds transcript growth (leaves 1 run, cleared by iva reset)
+
+function loadSession(): { state: SessionState; createdAt: number } | null {
+  try {
+    const j = JSON.parse(readFileSync(SESSION_FILE, "utf8"));
+    if (!j?.state || Date.now() - (j.createdAt ?? 0) > SESSION_TTL_MS) return null;
+    return j;
+  } catch {
+    return null;
+  }
+}
+
+function saveSession(state: SessionState, createdAt: number): void {
+  mkdirSync(DATA_DIR, { recursive: true });
+  writeFileSync(SESSION_FILE, JSON.stringify({ state, createdAt }), "utf8");
+}
+
 const today = localDate();
-const session = client.session();
-const response = await session.send(buildPrompt(period, today));
+const saved = loadSession();
+let sessionCreatedAt = saved?.createdAt ?? Date.now();
+let session = saved ? client.session(saved.state) : client.session();
+let response;
+try {
+  response = await session.send(buildPrompt(period, today));
+} catch (e) {
+  // The parked session may be gone (iva reset quarantined the store) — fall back to a
+  // fresh one once instead of failing the night.
+  if (!saved) throw e;
+  console.error(`rollup ${period}: parked session unusable (${(e as Error).message}) — starting fresh`);
+  session = client.session();
+  sessionCreatedAt = Date.now();
+  response = await session.send(buildPrompt(period, today));
+}
 const result = await response.result();
+saveSession(session.state, sessionCreatedAt);
 
 // An interactive turn ends with status "waiting" (the session is ready for the next message),
 // so we rely on the presence of text rather than a "completed" status.
