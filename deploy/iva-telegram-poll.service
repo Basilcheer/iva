@@ -9,6 +9,8 @@ After=network-online.target iva.service
 Wants=iva.service
 
 [Service]
+# Everything these units create (vault, transcripts, data/) must not be world-readable.
+UMask=0077
 WorkingDirectory=__PROJECT_DIR__
 EnvironmentFile=__PROJECT_DIR__/.env
 Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin

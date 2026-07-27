@@ -2,7 +2,7 @@
 Description=Iva memory rollup (yearly) — Jan 1 ~04:25 local
 
 [Timer]
-OnCalendar=*-01-01 04:25:00
+OnCalendar=*-01-01 04:25:00 __TIMEZONE__
 Persistent=true
 
 [Install]

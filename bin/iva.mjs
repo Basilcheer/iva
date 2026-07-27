@@ -114,6 +114,9 @@ function ivaServiceBody() {
     "After=network-online.target",
     "",
     "[Service]",
+    // Everything eve creates (vault, transcripts, data/) must not be world-readable:
+    // the system umask (022 on Ubuntu) would expose it to every user on the box.
+    "UMask=0077",
     `WorkingDirectory=${ROOT}`,
     `EnvironmentFile=${ROOT}/.env`,
     // Стартуем через `eve start`, а НЕ напрямую `node .output/server/index.mjs`: eve start
@@ -133,8 +136,29 @@ function ivaServiceBody() {
   ].join("\n");
 }
 
+// One-time (idempotent) perms migration for installs created before UMask=0077: the
+// secrets file and the data dir were world-readable under the default umask 022.
+// Runs from writeUnits — i.e. on every install/update — so old installs self-heal.
+function hardenPerms() {
+  // Каждая цель — независимо: сбой на .env не должен отменять миграцию data/ (и наоборот).
+  // Предупреждаем, но установку юнитов не срываем: юниты сами несут UMask=0077, а сорванный
+  // writeUnits оставил бы систему вовсе без юнитов — хуже, чем старые права.
+  try {
+    if (existsSync(ENV_PATH)) chmodSync(ENV_PATH, 0o600);
+  } catch (e) {
+    warn(`perms migration (.env) failed: ${e.message}`);
+  }
+  try {
+    const data = dataDirAbs();
+    if (existsSync(data)) chmodSync(data, 0o700);
+  } catch (e) {
+    warn(`perms migration (data/) failed: ${e.message}`);
+  }
+}
+
 // Writes iva.service + all deploy/iva-*.{service,timer} with placeholder substitution. daemon-reload.
 function writeUnits() {
+  hardenPerms();
   mkdirSync(UNIT_DIR, { recursive: true });
   writeFileSync(join(UNIT_DIR, "iva.service"), ivaServiceBody());
   const written = ["iva.service"];
@@ -693,7 +717,7 @@ function cmdVersion() {
 async function cmdUsage(args) {
   const { readEntries, summarize, formatUsageReport, parseWindow } = await import("../scripts/lib/usage.mjs");
   const env = readEnv();
-  const dataDir = join(ROOT, env.ASSISTANT_DATA_DIR || "data");
+  const dataDir = dataDirAbs(env);
   if (args[0] === "tail") {
     const n = Number(args[1]) || 10;
     for (const e of readEntries(dataDir).slice(-n)) console.log(JSON.stringify(e));

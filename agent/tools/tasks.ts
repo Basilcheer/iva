@@ -1,12 +1,13 @@
 import { defineTool } from "eve/tools";
 import { z } from "zod";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
+import { acquireLock, loadJsonStrict, releaseLock, saveJsonAtomic } from "../lib/json-store.js";
 
 // Хранилище задач — простой JSON-файл на диске app-runtime (на VPS переживает рестарты).
 // Путь настраивается через ASSISTANT_DATA_DIR; по умолчанию ./data рядом с процессом.
 const DATA_DIR = process.env.ASSISTANT_DATA_DIR ?? "data";
 const FILE = join(DATA_DIR, "tasks.json");
+const LOCK = `${FILE}.lock`;
 
 type Priority = "low" | "med" | "high";
 interface Task {
@@ -18,18 +19,10 @@ interface Task {
   createdAt: string;
 }
 
-async function load(): Promise<Task[]> {
-  try {
-    return JSON.parse(await readFile(FILE, "utf8")) as Task[];
-  } catch {
-    return [];
-  }
-}
-
-async function save(tasks: Task[]): Promise<void> {
-  await mkdir(dirname(FILE), { recursive: true });
-  await writeFile(FILE, JSON.stringify(tasks, null, 2), "utf8");
-}
+// Нет файла → []. Битый JSON — НЕ пустой список: loadJsonStrict откладывает бэкап и
+// бросает (иначе следующий save молча уничтожил бы все задачи).
+const load = () => loadJsonStrict<Task[]>(FILE, []);
+const save = (tasks: Task[]) => saveJsonAtomic(FILE, tasks);
 
 export default defineTool({
   description:
@@ -45,9 +38,38 @@ export default defineTool({
     includeDone: z.boolean().optional().describe("Показать и выполненные (для list)"),
   }),
   async execute({ action, text, id, priority, due, includeDone }) {
-    const tasks = await load();
+    // Мутации — под локом: параллельный ход (расписание + живой чат) на голом
+    // load→mutate→save терял записи и дублировал id (id = max+1 от своей копии).
+    if (action !== "list") {
+      try {
+        await acquireLock(LOCK);
+      } catch (e) {
+        return { ok: false, error: `Задачи заняты другим ходом: ${(e as Error).message}` };
+      }
+    }
+    try {
+      return await run({ action, text, id, priority, due, includeDone });
+    } catch (e) {
+      return { ok: false, error: (e as Error).message };
+    } finally {
+      if (action !== "list") releaseLock(LOCK);
+    }
+  },
+});
 
-    switch (action) {
+type Args = {
+  action: "add" | "list" | "done" | "remove";
+  text?: string;
+  id?: number;
+  priority?: Priority;
+  due?: string;
+  includeDone?: boolean;
+};
+
+async function run({ action, text, id, priority, due, includeDone }: Args) {
+  const tasks = await load();
+
+  switch (action) {
       case "add": {
         if (!text) return { ok: false, error: "Для add нужен text" };
         const nextId = tasks.reduce((m, t) => Math.max(m, t.id), 0) + 1;
@@ -83,6 +105,5 @@ export default defineTool({
         await save(tasks);
         return { ok: true, removed, total: tasks.length };
       }
-    }
-  },
-});
+  }
+}

@@ -1,8 +1,8 @@
 [Unit]
-Description=Iva memory rollup (weekly) — Sun ~04:15 local
+Description=Iva memory rollup (weekly) — Mon ~04:15 local
 
 [Timer]
-OnCalendar=Sun *-*-* 04:15:00
+OnCalendar=Mon *-*-* 04:15:00 __TIMEZONE__
 Persistent=true
 
 [Install]
