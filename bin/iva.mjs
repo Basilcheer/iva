@@ -7,12 +7,13 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, readdirSync, chmodSync } from "node:fs";
 import { randomBytes } from "node:crypto";
-import { join, dirname } from "node:path";
+import { join, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 import { createInterface } from "node:readline/promises";
 import { modelSummary } from "../scripts/lib/model-summary.mjs";
 import { createTerminalProgress } from "../scripts/lib/progress.mjs";
+import { quarantineDir } from "../scripts/lib/wf-store.mjs";
 import { createTelegramUpdateReporter, loadTelegramJob, removeTelegramJob } from "../scripts/lib/telegram-status.mjs";
 import {
   acquireUpdateLock,
@@ -198,7 +199,7 @@ function migrateEnv({ quiet = false } = {}) {
 // on the old port (the unit was already baked) while clients read the new one — the same desync.
 function restartServices() {
   writeUnits();
-  sc("restart", ...SERVICES);
+  return sc("restart", ...SERVICES).status === 0;
 }
 
 // ANSI tree like during install. The only source of the art is install.sh (heredoc
@@ -589,24 +590,45 @@ function cmdRestart() {
   restartServices(); // regenerate the unit before restart → PORT stays in sync with IVA_PORT in .env
   ok("Restarted: iva + telegram-poll");
 }
-// Full reset: stop services, wipe .workflow-data, bring it back up. A plain restart
+// Full reset: stop services, wipe the workflow store, bring it back up. A plain restart
 // does NOT cure a stuck/bloated run — on startup eve re-enqueues all pending/running
-// runs from .workflow-data ("Re-enqueued N active run(s) on startup"). We clean while the server
-// is stopped (otherwise we'd delete files out from under a live process). Wipes ALL parked dialogs.
+// runs ("Re-enqueued N active run(s) on startup"). We clean while the server is stopped
+// (otherwise we'd delete files out from under a live process). Wipes ALL parked dialogs.
+// Current eve keeps the store in .eve/.workflow-data; the bare .workflow-data is where
+// older versions kept it — clear both so reset works across eve upgrades.
 function cmdReset() {
   requireSystemd();
   step("Full reset: stopping services…");
-  sc("stop", ...SERVICES);
-  const wf = join(ROOT, ".workflow-data");
-  if (existsSync(wf)) {
+  // Fail closed: quarantining the store under a live eve corrupts state and resurrects
+  // the very runs we're clearing — if stop failed, don't touch anything.
+  if (sc("stop", ...SERVICES).status !== 0) {
+    bad("systemctl stop failed — workflow store left untouched");
+    process.exit(1);
+  }
+  let found = false;
+  let failed = false;
+  for (const wf of [join(ROOT, ".eve", ".workflow-data"), join(ROOT, ".workflow-data")]) {
     try {
-      rmSync(wf, { recursive: true, force: true });
-      ok(".workflow-data cleared — stuck/accumulated workflow runs reset");
+      // Quarantine (rename → *.trash-<stamp>) instead of rm: undo-able until rotated out.
+      const dest = quarantineDir(wf);
+      if (!dest) continue;
+      found = true;
+      ok(`${relative(ROOT, wf)} → ${relative(ROOT, dest)} — stuck/accumulated workflow runs quarantined`);
     } catch (e) {
-      warn(`failed to delete .workflow-data: ${e.message}`);
+      failed = true;
+      warn(`failed to quarantine ${relative(ROOT, wf)}: ${e.message}`);
     }
-  } else ok(".workflow-data already empty");
-  restartServices();
+  }
+  if (!found && !failed) ok("workflow store already empty");
+  const restarted = restartServices();
+  if (failed) {
+    bad("Reset INCOMPLETE — eve will re-enqueue the runs that were not cleared");
+    process.exit(1);
+  }
+  if (!restarted) {
+    bad("systemctl restart failed — services may be down, check: iva logs");
+    process.exit(1);
+  }
   ok("Restarted: iva + telegram-poll");
 }
 function cmdStart() {
