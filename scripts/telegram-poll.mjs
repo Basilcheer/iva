@@ -163,11 +163,12 @@ async function deliver(update) {
 }
 
 // Владелец должен узнать и о выброшенном апдейте, и о конфиг-ошибке (secret/route).
-// Один раз на процесс и класс — чтобы серия ошибок не превратилась в спам.
+// Один раз на процесс и класс — чтобы серия ошибок не превратилась в спам. Класс
+// помечается «уведомлённым» только ПОСЛЕ успешной отправки: упавший sendMessage не
+// должен навсегда лишать владельца алерта.
 const deliverNotified = new Set();
 async function notifyDeliverProblem(kind, status) {
   if (deliverNotified.has(kind)) return;
-  deliverNotified.add(kind);
   const target = process.env.TELEGRAM_DIGEST_CHAT_ID || [...ALLOWED][0];
   if (!target) return;
   const text =
@@ -180,7 +181,12 @@ async function notifyDeliverProblem(kind, status) {
           `⚠️ Iva bridge dropped a Telegram update: eve replied ${status} (permanent). Check the logs: journalctl --user -u iva-telegram-poll`,
           `⚠️ Мост Iva выбросил Telegram-апдейт: eve ответила ${status} (постоянная ошибка). Проверь логи: journalctl --user -u iva-telegram-poll`,
         );
-  await tg("sendMessage", { chat_id: target, text }).catch((e) => log("deliver notification failed:", e.message));
+  try {
+    const res = await tg("sendMessage", { chat_id: target, text });
+    if (res?.ok) deliverNotified.add(kind);
+  } catch (e) {
+    log("deliver notification failed:", e.message);
+  }
 }
 
 // Время последней доставки по chat key — для паузы SETTLE_MS между апдейтами одного чата.

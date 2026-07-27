@@ -154,6 +154,14 @@ function hardenPerms() {
   } catch (e) {
     warn(`perms migration (data/) failed: ${e.message}`);
   }
+  // Стор воркфлоу несёт транскрипты диалогов — те же пути, что чистит cmdReset().
+  for (const wf of [join(ROOT, ".eve"), join(ROOT, ".workflow-data")]) {
+    try {
+      if (existsSync(wf)) chmodSync(wf, 0o700);
+    } catch (e) {
+      warn(`perms migration (${relative(ROOT, wf)}) failed: ${e.message}`);
+    }
+  }
 }
 
 // Writes iva.service + all deploy/iva-*.{service,timer} with placeholder substitution. daemon-reload.
