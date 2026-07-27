@@ -24,7 +24,7 @@ import { inspectUpstream, markVersionNotified, updateOffer } from "./lib/update-
 // ESC-остановка: канал пишет в data/run-status.json, идёт ли сейчас ход по чату;
 // мост по нему буферизует входящие (см. очередь ниже) и обслуживает /stop.
 import { isRunning } from "./lib/run-status.mjs";
-import { isRetryableDeliverStatus } from "./lib/deliver-policy.mjs";
+import { classifyDeliverStatus } from "./lib/deliver-policy.mjs";
 import { alreadyDelivered, parseOffsetFile, serializeOffsetFile } from "./lib/offset-store.mjs";
 // Двуязычие: единый источник языка (getLang) + одна таблица команд (COMMANDS) для /help
 // и синего командного меню Telegram. tr(en, ru) — функция (язык не замораживаем в const).
@@ -117,13 +117,16 @@ async function tg(method, body) {
   return res.json();
 }
 
-// Deliver one update to the local eve (we mimic a webhook). Network errors and retryable
-// statuses (5xx, 408/425/429) are retried forever with backoff — don't drop the update
-// even if the server is still coming up. Any other 4xx is permanent: eve will never accept
-// this update, and retrying it forever would freeze the single getUpdates loop for every
-// chat (offset stops moving). Such an update is dropped: false + one owner notification.
+// Deliver one update to the local eve (we mimic a webhook). Three failure classes (see
+// deliver-policy.mjs): retry — network/5xx/408/425/429, fast backoff, forever; config —
+// 401/403/404 mean the secret/route is broken, messages must NOT be thrown away, so
+// retry forever with a LONG backoff + alert the owner; drop — any other 4xx is a
+// permanently poisoned update that would freeze the single getUpdates loop for every
+// chat. Returns true when eve accepted the update, false when it was dropped.
+const CONFIG_RETRY_MS = 60_000;
 async function deliver(update) {
   for (let attempt = 1; ; attempt++) {
+    let wait = Math.min(15000, 1000 * attempt);
     try {
       const res = await fetch(ROUTE, {
         method: "POST",
@@ -134,35 +137,47 @@ async function deliver(update) {
         body: JSON.stringify(update),
       });
       if (res.ok) return true;
-      if (!isRetryableDeliverStatus(res.status)) {
-        log(`deliver: eve replied ${res.status} — DROPPING update ${update.update_id} (non-retryable)`);
-        await notifyDeliverDrop(update, res.status);
+      const cls = classifyDeliverStatus(res.status);
+      if (cls === "drop") {
+        log(`deliver: eve replied ${res.status} — DROPPING update ${update.update_id} (poisoned)`);
+        await notifyDeliverProblem("drop", res.status);
         return false;
       }
-      log(`deliver: eve replied ${res.status} (attempt ${attempt}) — retrying`);
+      if (cls === "config") {
+        // Не дропаем: это конфигурация сломана, а не апдейт. Длинный бэкофф, чтобы не
+        // молотить, и алерт владельцу — чинить надо руками (secret/route).
+        wait = CONFIG_RETRY_MS;
+        await notifyDeliverProblem("config", res.status);
+        log(`deliver: eve replied ${res.status} (config error, attempt ${attempt}) — retrying in ${wait / 1000}s`);
+      } else {
+        log(`deliver: eve replied ${res.status} (attempt ${attempt}) — retrying`);
+      }
     } catch (e) {
       log(`deliver: eve unavailable (${e.message}, attempt ${attempt}) — waiting for server`);
     }
-    await sleep(Math.min(15000, 1000 * attempt));
+    await sleep(wait);
   }
 }
 
-// Владелец должен узнать о выброшенном апдейте (обычно это симптом рассинхрона
-// секрета/маршрута). Один раз на процесс, не на каждый апдейт — чтобы серия битых
-// апдейтов не превратилась в спам.
-let deliverDropNotified = false;
-async function notifyDeliverDrop(update, status) {
-  if (deliverDropNotified) return;
-  deliverDropNotified = true;
+// Владелец должен узнать и о выброшенном апдейте, и о конфиг-ошибке (secret/route).
+// Один раз на процесс и класс — чтобы серия ошибок не превратилась в спам.
+const deliverNotified = new Set();
+async function notifyDeliverProblem(kind, status) {
+  if (deliverNotified.has(kind)) return;
+  deliverNotified.add(kind);
   const target = process.env.TELEGRAM_DIGEST_CHAT_ID || [...ALLOWED][0];
   if (!target) return;
-  await tg("sendMessage", {
-    chat_id: target,
-    text: tr(
-      `⚠️ Iva bridge dropped a Telegram update: eve replied ${status} (permanent). Check the logs: journalctl --user -u iva-telegram-poll`,
-      `⚠️ Мост Iva выбросил Telegram-апдейт: eve ответила ${status} (постоянная ошибка). Проверь логи: journalctl --user -u iva-telegram-poll`,
-    ),
-  }).catch((e) => log("drop notification failed:", e.message));
+  const text =
+    kind === "config"
+      ? tr(
+          `⚠️ Iva bridge can't deliver to eve: HTTP ${status} — the webhook secret or route looks broken. Messages are queued (retrying every 60s). Check: journalctl --user -u iva-telegram-poll`,
+          `⚠️ Мост Iva не может доставить в eve: HTTP ${status} — похоже, разъехались webhook-секрет или маршрут. Сообщения не теряются (ретрай раз в 60с). Проверь: journalctl --user -u iva-telegram-poll`,
+        )
+      : tr(
+          `⚠️ Iva bridge dropped a Telegram update: eve replied ${status} (permanent). Check the logs: journalctl --user -u iva-telegram-poll`,
+          `⚠️ Мост Iva выбросил Telegram-апдейт: eve ответила ${status} (постоянная ошибка). Проверь логи: journalctl --user -u iva-telegram-poll`,
+        );
+  await tg("sendMessage", { chat_id: target, text }).catch((e) => log("deliver notification failed:", e.message));
 }
 
 // Время последней доставки по chat key — для паузы SETTLE_MS между апдейтами одного чата.
@@ -184,8 +199,9 @@ async function pacedDeliver(update) {
       if (wait > 0) await sleep(wait);
     }
   }
-  await deliver(update); // wait for successful delivery — ordered and lossless
+  const accepted = await deliver(update); // wait for delivery — ordered and lossless
   if (key !== null) lastDeliverAt.set(key, Date.now());
+  return accepted; // false = апдейт выброшен как битый, eve его НЕ получила
 }
 
 async function reply(chatId, text) {
@@ -938,18 +954,25 @@ async function main() {
       // Don't deliver the next update of the same chat until eve has parked the previous turn
       // (pause measured from the last delivery to this chat) — otherwise a burst → HookConflict.
       // pacedDeliver держит lastDeliverAt на модуль-уровне, общую с deps.deliver меню.
-      await pacedDeliver(update);
-      delivered = update.update_id;
-      if (drainedKey !== null) {
-        // Delivered (with the buffer attached) — NOW the buffer can be dropped. A crash in
-        // between redelivers the update; the delivered marker above suppresses the duplicate.
-        const q = await loadQueue();
-        delete q[drainedKey];
-        await saveQueue(q);
-        drainedKey = null;
-      }
+      const accepted = await pacedDeliver(update);
       offset = update.update_id + 1;
-      await saveOffset(offset, delivered);
+      if (accepted) {
+        // Порядок персиста: СНАЧАЛА маркер delivered, ПОТОМ очистка буфера. Краш между
+        // ними оставляет буфер на месте при уже записанном маркере → на переигровке
+        // апдейт пропустится, буфер приклеится к следующему сообщению — дубль возможен,
+        // потеря нет. Обратный порядок (буфер раньше маркера) терял бы очередь.
+        delivered = update.update_id;
+        await saveOffset(offset, delivered);
+        if (drainedKey !== null) {
+          const q = await loadQueue();
+          delete q[drainedKey];
+          await saveQueue(q);
+        }
+      } else {
+        // Апдейт выброшен как битый: буфер НЕ трогаем (приклеится к следующему сообщению),
+        // маркер не ставим — offset двигаем, чтобы не молоть тот же апдейт.
+        await saveOffset(offset, delivered);
+      }
     }
   }
 }

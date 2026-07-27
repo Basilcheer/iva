@@ -18,3 +18,12 @@ test("alreadyDelivered: пропускаем только то, что уже у
   assert.equal(alreadyDelivered(42, 41), false, "новый — доставлять");
   assert.equal(alreadyDelivered(42, null), false, "маркера нет — доставлять");
 });
+
+test("маркер — не вечная граница: далёкое прошлое вне окна доставляется", () => {
+  assert.equal(alreadyDelivered(5, 5_000_000), false, "перевыдача id с другой базы — не глотаем");
+  assert.equal(alreadyDelivered(4_999_999, 5_000_000), true, "в пределах окна — дубль");
+});
+
+test("нецелые и небезопасные значения в файле → null", () => {
+  assert.deepEqual(parseOffsetFile('{"offset":1.5,"delivered":"7"}'), { offset: null, delivered: null });
+});
