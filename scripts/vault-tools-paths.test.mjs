@@ -1,4 +1,5 @@
-// Тесты контракта путей: путь из memory_search открывается read_file без ENOENT.
+// Тесты контрактов файловых тулов: write_file не затирает существующие карточки,
+// но продолжает писать CORE.md; путь из memory_search открывается read_file без ENOENT.
 
 import "./lib/ts-esm-hooks.mjs";
 import { test } from "node:test";
@@ -23,8 +24,30 @@ writeFileSync(
 writeFileSync(join(VAULT, "CORE.md"), "# CORE\n", "utf8");
 
 const load = async (name) => (await import(join(REPO, "agent", "tools", `${name}.ts`))).default;
+const writeFile = await load("write_file");
 const readFileTool = await load("read_file");
 const memorySearch = await load("memory_search");
+
+test("write_file отказывается перезаписать существующую карточку в cards/", async () => {
+  const res = await writeFile.execute({ path: CARD, content: "затёрто" });
+  assert.equal(res.ok, false);
+  assert.match(res.error, /write_card/);
+  assert.ok(readFileSync(CARD, "utf8").includes("Кинолаб"), "карточка всё-таки затёрта");
+});
+
+test("write_file создаёт НОВЫЙ файл в cards/ как обычно", async () => {
+  const fresh = join(VAULT, "cards", "contacts", "новый.md");
+  const res = await writeFile.execute({ path: fresh, content: "# Новый\n" });
+  assert.equal(res.ok, true);
+  assert.equal(readFileSync(fresh, "utf8"), "# Новый\n");
+});
+
+test("write_file по-прежнему пишет vault/CORE.md (см. instructions/10-map.md)", async () => {
+  const core = join(VAULT, "CORE.md");
+  const res = await writeFile.execute({ path: core, content: "# CORE\n- факт\n" });
+  assert.equal(res.ok, true);
+  assert.ok(readFileSync(core, "utf8").includes("факт"));
+});
 
 test("путь из memory_search открывается read_file без ENOENT", async () => {
   const found = await memorySearch.execute({ query: "Иван Петров монтаж", limit: 5 });
