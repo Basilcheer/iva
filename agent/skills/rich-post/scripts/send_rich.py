@@ -93,15 +93,45 @@ def _local_path(raw):
 # Only real media may leave the box: .env, OAuth json, logs, vault .md and any other
 # text/secret file is NOT uploadable even with --allow-upload.
 MEDIA_EXT = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".mp4", ".webm", ".mov", ".mp3", ".ogg", ".m4a"}
+# Любая markdown-картинка (и file:, и https:) — для общего лимита Telegram в 50 медиа.
+ANY_IMG_RE = re.compile(r"!\[[^\]]*\]\(")
+
+
+def _looks_like_media(path):
+    """Magic-bytes check: расширение подделать тривиально (cp .env x.png), заголовок
+    настоящего медиафайла — нет. Проверяем стандартные сигнатуры stdlib-ом."""
+    try:
+        with open(path, "rb") as f:
+            h = f.read(16)
+    except OSError:
+        return False
+    if h.startswith(b"\xff\xd8\xff"):  # jpeg
+        return True
+    if h.startswith(b"\x89PNG\r\n\x1a\n"):  # png
+        return True
+    if h.startswith((b"GIF87a", b"GIF89a")):  # gif
+        return True
+    if h[:4] == b"RIFF" and h[8:12] == b"WEBP":  # webp
+        return True
+    if h[4:8] == b"ftyp":  # mp4 / mov / m4a
+        return True
+    if h.startswith(b"\x1a\x45\xdf\xa3"):  # webm/mkv (EBML)
+        return True
+    if h.startswith(b"OggS"):  # ogg
+        return True
+    if h.startswith(b"ID3") or (len(h) >= 2 and h[0] == 0xFF and (h[1] & 0xE0) == 0xE0):  # mp3
+        return True
+    return False
 
 
 def scan_local_images(md, env_file):
-    """Validate every file: reference. Allowed: an existing REGULAR file with a media
-    extension, under the repo or data dir (realpath - symlink escapes are resolved),
-    with no dot-segment (.env, .config, .eve) anywhere in its path. Everything else is
-    refused: otherwise a message could exfiltrate secrets through a public host."""
+    """Validate every file: reference. Allowed: an existing REGULAR file whose extension
+    AND magic bytes look like media, under the repo or data dir, with no dot-segment
+    (.env, .config, .eve) anywhere in its path. Everything else is refused: otherwise a
+    message could exfiltrate secrets through a public host. Returns the RESOLVED real
+    paths — the upload step must use exactly what was validated (no symlink re-swap)."""
     roots = allowed_image_roots(env_file)
-    paths = []
+    resolved = {}
     for m in IMG_RE.finditer(md):
         path = _local_path(m.group(1))
         if not os.path.exists(path):
@@ -118,10 +148,13 @@ def scan_local_images(md, env_file):
             )
         if any(seg.startswith(".") for seg in real.split(os.sep) if seg):
             sys.exit(f"refusing dot-path (hidden/config file or directory): {path}")
-        paths.append(path)
-    if len(paths) > 50:
-        sys.exit(f"too many media attachments: {len(paths)} > 50 (Telegram rich-message limit)")
-    return paths
+        if not _looks_like_media(real):
+            sys.exit(f"refusing file that does not look like media (magic bytes): {path}")
+        resolved[path] = real
+    total_media = len(ANY_IMG_RE.findall(md))
+    if total_media > 50:
+        sys.exit(f"too many media attachments: {total_media} > 50 (Telegram rich-message limit)")
+    return resolved
 
 
 def upload_tmpfiles(path):
@@ -140,14 +173,18 @@ def upload_tmpfiles(path):
     return url.replace("tmpfiles.org/", "tmpfiles.org/dl/", 1)
 
 
-def resolve_local_images(md):
+def resolve_local_images(md, resolved):
     """Replace ![](file:/path "cap") with ![](public_url "cap"). Upload-bearing:
-    call only after the --allow-upload gate."""
+    call only after the --allow-upload gate. Uploads ONLY the realpath validated by
+    scan_local_images — swapping the symlink after validation changes nothing."""
     def repl(m):
         cap = m.group(2) or ""
         path = _local_path(m.group(1))
-        url = upload_tmpfiles(path)
-        sys.stderr.write(f"uploaded {path} -> {url}\n")
+        real = resolved.get(path)
+        if real is None:
+            sys.exit(f"internal error: unvalidated image reference {path}")
+        url = upload_tmpfiles(real)
+        sys.stderr.write(f"uploaded {real} -> {url}\n")
         return f"![]({url}{cap})"
     return IMG_RE.sub(repl, md)
 
@@ -226,7 +263,7 @@ def main():
             "host - anyone with the link can view them), or switch to already-public URLs."
         )
     if local_images:
-        md = resolve_local_images(md)
+        md = resolve_local_images(md, local_images)
         if len(md) > 32768:
             sys.exit(f"rich message too long after image URL substitution: {len(md)} > 32768 chars")
 

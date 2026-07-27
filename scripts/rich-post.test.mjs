@@ -35,7 +35,7 @@ function runScript(args, ctx = makeCtx()) {
 test("dry-run с локальной картинкой офлайнов: перечисляет, но не грузит", () => {
   const ctx = makeCtx();
   const img = join(ctx.dir, "cover.png");
-  writeFileSync(img, "fake-png");
+  writeFileSync(img, Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from("x")]));
   const r = runScript(["--md", `text ![](file:${img}) more`, "--dry-run"], ctx);
   assert.equal(r.code, 0, r.stderr);
   assert.match(r.stdout + r.stderr, /would upload/, "dry-run обязан лишь перечислить кандидатов");
@@ -46,7 +46,7 @@ test("dry-run с локальной картинкой офлайнов: пер�
 test("локальная картинка без --allow-upload и без dry-run — отказ с подсказкой", () => {
   const ctx = makeCtx();
   const img = join(ctx.dir, "cover.jpg");
-  writeFileSync(img, "fake-jpg");
+  writeFileSync(img, Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00]));
   const r = runScript(["--md", `![](file:${img})`, "--chat", "111"], ctx);
   assert.notEqual(r.code, 0);
   assert.match(r.stderr, /--allow-upload/);
@@ -69,7 +69,7 @@ test("чужой --chat вне allowlist — отказ без отправки"
 test("картинка вне разрешённых корней — отказ (анти-эксфильтрация)", () => {
   const outside = mkdtempSync(join(tmpdir(), "outside-"));
   const img = join(outside, "x.jpg");
-  writeFileSync(img, "fake");
+  writeFileSync(img, Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00]));
   const r = runScript(["--md", `![](file:${img})`, "--dry-run"]);
   assert.notEqual(r.code, 0);
   assert.match(r.stderr, /allowed roots/);
@@ -86,9 +86,25 @@ test("без токена — понятная ошибка ДО каких-ли
 test("порядок: без токена даже --allow-upload не доходит до загрузки", () => {
   const ctx = makeCtx({ token: "" });
   const img = join(ctx.dir, "cover.png");
-  writeFileSync(img, "fake-png");
+  writeFileSync(img, Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from("x")]));
   const r = runScript(["--md", `![](file:${img})`, "--chat", "111", "--allow-upload"], ctx);
   assert.notEqual(r.code, 0);
   assert.match(r.stderr, /no token/, "валидация конфига обязана идти раньше upload-ветки");
   assert.doesNotMatch(r.stdout + r.stderr, /uploaded /, "ни одной загрузки при сломанном конфиге");
+});
+
+test("текстовый секрет, переименованный в .png, не проходит magic-гейт", () => {
+  const ctx = makeCtx();
+  const img = join(ctx.dir, "copied-secret.png");
+  writeFileSync(img, "TELEGRAM_BOT_TOKEN=123:SECRET");
+  const r = runScript(["--md", `![](file:${img})`, "--dry-run"], ctx);
+  assert.notEqual(r.code, 0);
+  assert.match(r.stderr, /magic bytes/, "расширение подделать тривиально — заголовок обязан проверяться");
+});
+
+test("общий лимит 50 медиа считает и удалённые URL", () => {
+  const md = Array.from({ length: 51 }, (_, i) => `![](https://example.com/${i}.jpg)`).join(" ");
+  const r = runScript(["--md", md, "--dry-run"]);
+  assert.notEqual(r.code, 0);
+  assert.match(r.stderr, /too many media/);
 });
