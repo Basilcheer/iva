@@ -24,6 +24,8 @@ import { inspectUpstream, markVersionNotified, updateOffer } from "./lib/update-
 // ESC-остановка: канал пишет в data/run-status.json, идёт ли сейчас ход по чату;
 // мост по нему буферизует входящие (см. очередь ниже) и обслуживает /stop.
 import { isRunning } from "./lib/run-status.mjs";
+import { isRetryableDeliverStatus } from "./lib/deliver-policy.mjs";
+import { alreadyDelivered, parseOffsetFile, serializeOffsetFile } from "./lib/offset-store.mjs";
 // Двуязычие: единый источник языка (getLang) + одна таблица команд (COMMANDS) для /help
 // и синего командного меню Telegram. tr(en, ru) — функция (язык не замораживаем в const).
 import { getLang, tr, helpText, botCommands } from "./lib/i18n.mjs";
@@ -65,13 +67,13 @@ const ALLOWED = new Set(
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const log = (...a) => console.log(new Date().toISOString(), ...a);
 
-// null ⇒ no file (first run) — distinguish from a genuine offset 0.
+// offset: null ⇒ no file (first run) — distinguish from a genuine offset 0.
+// delivered: update_id последнего доставленного в eve апдейта (см. offset-store.mjs).
 async function loadOffset() {
   try {
-    const { offset } = JSON.parse(await readFile(OFFSET_FILE, "utf8"));
-    return typeof offset === "number" ? offset : null;
+    return parseOffsetFile(await readFile(OFFSET_FILE, "utf8"));
   } catch {
-    return null;
+    return { offset: null, delivered: null };
   }
 }
 
@@ -97,10 +99,10 @@ function chatKey(update) {
   const threadId = msg?.message_thread_id;
   return `${chatId}:${threadId ?? ""}`;
 }
-async function saveOffset(offset) {
+async function saveOffset(offset, delivered = null) {
   try {
     await mkdir(DATA_DIR, { recursive: true });
-    await writeFile(OFFSET_FILE, JSON.stringify({ offset }), "utf8");
+    await writeFile(OFFSET_FILE, serializeOffsetFile(offset, delivered), "utf8");
   } catch (e) {
     log("offset save failed:", e.message);
   }
@@ -115,8 +117,11 @@ async function tg(method, body) {
   return res.json();
 }
 
-// Deliver one update to the local eve (we mimic a webhook). Wait for 2xx — don't drop the update,
-// even if the server is still coming up (backoff up to 15s).
+// Deliver one update to the local eve (we mimic a webhook). Network errors and retryable
+// statuses (5xx, 408/425/429) are retried forever with backoff — don't drop the update
+// even if the server is still coming up. Any other 4xx is permanent: eve will never accept
+// this update, and retrying it forever would freeze the single getUpdates loop for every
+// chat (offset stops moving). Such an update is dropped: false + one owner notification.
 async function deliver(update) {
   for (let attempt = 1; ; attempt++) {
     try {
@@ -128,13 +133,36 @@ async function deliver(update) {
         },
         body: JSON.stringify(update),
       });
-      if (res.ok) return;
+      if (res.ok) return true;
+      if (!isRetryableDeliverStatus(res.status)) {
+        log(`deliver: eve replied ${res.status} — DROPPING update ${update.update_id} (non-retryable)`);
+        await notifyDeliverDrop(update, res.status);
+        return false;
+      }
       log(`deliver: eve replied ${res.status} (attempt ${attempt}) — retrying`);
     } catch (e) {
       log(`deliver: eve unavailable (${e.message}, attempt ${attempt}) — waiting for server`);
     }
     await sleep(Math.min(15000, 1000 * attempt));
   }
+}
+
+// Владелец должен узнать о выброшенном апдейте (обычно это симптом рассинхрона
+// секрета/маршрута). Один раз на процесс, не на каждый апдейт — чтобы серия битых
+// апдейтов не превратилась в спам.
+let deliverDropNotified = false;
+async function notifyDeliverDrop(update, status) {
+  if (deliverDropNotified) return;
+  deliverDropNotified = true;
+  const target = process.env.TELEGRAM_DIGEST_CHAT_ID || [...ALLOWED][0];
+  if (!target) return;
+  await tg("sendMessage", {
+    chat_id: target,
+    text: tr(
+      `⚠️ Iva bridge dropped a Telegram update: eve replied ${status} (permanent). Check the logs: journalctl --user -u iva-telegram-poll`,
+      `⚠️ Мост Iva выбросил Telegram-апдейт: eve ответила ${status} (постоянная ошибка). Проверь логи: journalctl --user -u iva-telegram-poll`,
+    ),
+  }).catch((e) => log("drop notification failed:", e.message));
 }
 
 // Время последней доставки по chat key — для паузы SETTLE_MS между апдейтами одного чата.
@@ -827,7 +855,7 @@ async function main() {
   log("deleteWebhook:", dw.ok ? `ok (drop_pending=${firstRun})` : dw.description);
   await registerBotCommands();
 
-  let offset = await loadOffset();
+  let { offset, delivered } = await loadOffset();
   if (offset === null) {
     offset = await fastForwardOffset();
     log("first run — offset past the tail of the queue:", offset);
@@ -859,13 +887,22 @@ async function main() {
       continue;
     }
     for (const update of data.result || []) {
+      // Переигровка после краша (Telegram = at-least-once): этот апдейт уже уходил в eve
+      // в прошлой жизни процесса — второй раз не доставляем, только двигаем offset.
+      if (alreadyDelivered(update.update_id, delivered)) {
+        log(`skip update ${update.update_id} — already delivered before restart`);
+        offset = update.update_id + 1;
+        await saveOffset(offset, delivered);
+        continue;
+      }
       // Control commands (/restart, /help, /new) — the bridge handles them itself, doesn't send to eve.
       if (await handleControl(update)) {
         offset = update.update_id + 1;
-        await saveOffset(offset);
+        await saveOffset(offset, delivered);
         continue;
       }
       const key = chatKey(update);
+      let drainedKey = null; // чей буфер приклеен к этому апдейту — чистится после доставки
       // ESC-stop queue gate (messages only): while a turn is running for this chat, buffer
       // the message instead of delivering. callback_query always passes (eve HITL buttons
       // and ⏹ Стоп must reach a busy agent). Replies to bot messages also pass — that's
@@ -885,24 +922,34 @@ async function main() {
             }).catch((e) => log("reaction failed:", e.message));
           }
           offset = update.update_id + 1;
-          await saveOffset(offset);
+          await saveOffset(offset, delivered);
           continue;
         }
-        // Idle again: the next fresh message carries the queued ones along.
+        // Idle again: the next fresh message carries the queued ones along. The queue is
+        // cleared AFTER successful delivery (below) — clearing it here would lose the
+        // buffered messages if the process dies before deliver() succeeds.
         const q = await loadQueue();
         const pending = q[key];
         if (Array.isArray(pending) && pending.length) {
           update.message.iva_buffered = pending;
-          delete q[key];
-          await saveQueue(q);
+          drainedKey = key;
         }
       }
       // Don't deliver the next update of the same chat until eve has parked the previous turn
       // (pause measured from the last delivery to this chat) — otherwise a burst → HookConflict.
       // pacedDeliver держит lastDeliverAt на модуль-уровне, общую с deps.deliver меню.
       await pacedDeliver(update);
+      delivered = update.update_id;
+      if (drainedKey !== null) {
+        // Delivered (with the buffer attached) — NOW the buffer can be dropped. A crash in
+        // between redelivers the update; the delivered marker above suppresses the duplicate.
+        const q = await loadQueue();
+        delete q[drainedKey];
+        await saveQueue(q);
+        drainedKey = null;
+      }
       offset = update.update_id + 1;
-      await saveOffset(offset);
+      await saveOffset(offset, delivered);
     }
   }
 }
