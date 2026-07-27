@@ -90,10 +90,16 @@ def _local_path(raw):
     return os.path.abspath(raw[len("file://"):] if raw.startswith("file://") else raw[len("file:"):])
 
 
+# Only real media may leave the box: .env, OAuth json, logs, vault .md and any other
+# text/secret file is NOT uploadable even with --allow-upload.
+MEDIA_EXT = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".mp4", ".webm", ".mov", ".mp3", ".ogg", ".m4a"}
+
+
 def scan_local_images(md, env_file):
-    """Validate every file: reference: it must exist and live under an allowed root
-    (repo or data dir) - anything else would let a message exfiltrate arbitrary
-    readable files from the VPS through a public host."""
+    """Validate every file: reference. Allowed: an existing REGULAR file with a media
+    extension, under the repo or data dir (realpath - symlink escapes are resolved),
+    with no dot-segment (.env, .config, .eve) anywhere in its path. Everything else is
+    refused: otherwise a message could exfiltrate secrets through a public host."""
     roots = allowed_image_roots(env_file)
     paths = []
     for m in IMG_RE.finditer(md):
@@ -101,8 +107,17 @@ def scan_local_images(md, env_file):
         if not os.path.exists(path):
             sys.exit(f"local image not found: {path}")
         real = os.path.realpath(path)
+        if not os.path.isfile(real):
+            sys.exit(f"not a regular file: {path}")
         if not any(real == r or real.startswith(r + os.sep) for r in roots):
             sys.exit(f"refusing local image outside the allowed roots ({', '.join(roots)}): {path}")
+        if os.path.splitext(real)[1].lower() not in MEDIA_EXT:
+            sys.exit(
+                f"refusing non-media file (extension not in {sorted(MEDIA_EXT)}): {path} — "
+                "only images/video/audio may be uploaded"
+            )
+        if any(seg.startswith(".") for seg in real.split(os.sep) if seg):
+            sys.exit(f"refusing dot-path (hidden/config file or directory): {path}")
         paths.append(path)
     return paths
 
@@ -195,7 +210,10 @@ def main():
         print(md)
         return
 
+    # Recipient and token are validated BEFORE any upload: local media must not land on
+    # a public host only for the send to fail on config afterwards.
     chat = resolve_chat(a.chat, env_file)
+    token = get_token(env_file)
 
     if local_images and not a.allow_upload:
         sys.exit(
@@ -205,8 +223,9 @@ def main():
         )
     if local_images:
         md = resolve_local_images(md)
+        if len(md) > 32768:
+            sys.exit(f"rich message too long after image URL substitution: {len(md)} > 32768 chars")
 
-    token = get_token(env_file)
     send(token, chat, md, silent=a.silent, thread_id=a.thread_id)
 
 

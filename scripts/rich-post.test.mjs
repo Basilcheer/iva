@@ -1,5 +1,6 @@
 // Интеграционные тесты send_rich.py (subprocess): офлайновый dry-run, гейт --allow-upload,
-// allowlist получателей, отсутствие --token, отказ на путях вне разрешённых корней.
+// media-гейт (только картинки/видео из разрешённых корней), allowlist получателей,
+// отсутствие --token.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -11,23 +12,31 @@ import { fileURLToPath } from "node:url";
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const SCRIPT = join(ROOT, "agent/skills/rich-post/scripts/send_rich.py");
 
-// Чистое окружение: реальные TELEGRAM_*-переменные процесса не должны утекать в тест;
-// RICH_POST_ENV указывает на подставной .env с известным allowlist'ом.
-function runScript(args, { env = {}, allowlist = "111 222", digest = "999" } = {}) {
+// Чистое окружение: реальные TELEGRAM_*-переменные процесса не должны утекать в тест.
+// RICH_POST_ENV указывает на подставной .env; ASSISTANT_DATA_DIR — временная директория,
+// куда тесты кладут «картинки» (media-гейт пускает только разрешённые корни).
+function makeCtx({ allowlist = "111 222", digest = "999", token = "123:FAKE" } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "rich-post-"));
   const envFile = join(dir, ".env");
+  const tokenLine = token ? `TELEGRAM_BOT_TOKEN=${token}\n` : "";
   writeFileSync(
     envFile,
-    `TELEGRAM_ALLOWED_USER_IDS=${allowlist}\nTELEGRAM_DIGEST_CHAT_ID=${digest}\n`,
+    `${tokenLine}TELEGRAM_ALLOWED_USER_IDS=${allowlist}\nTELEGRAM_DIGEST_CHAT_ID=${digest}\nASSISTANT_DATA_DIR=${dir}\n`,
   );
-  const clean = { PATH: process.env.PATH, HOME: process.env.HOME, RICH_POST_ENV: envFile, ...env };
-  const r = spawnSync("python3", [SCRIPT, ...args], { env: clean, encoding: "utf8" });
+  return { dir, envFile };
+}
+
+function runScript(args, ctx = makeCtx()) {
+  const env = { PATH: process.env.PATH, HOME: process.env.HOME, RICH_POST_ENV: ctx.envFile };
+  const r = spawnSync("python3", [SCRIPT, ...args], { env, encoding: "utf8" });
   return { code: r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
 }
 
 test("dry-run с локальной картинкой офлайнов: перечисляет, но не грузит", () => {
-  const img = join(ROOT, "README.md"); // существующий файл внутри репо сойдёт за «картинку»
-  const r = runScript(["--md", `text ![](file:${img}) more`, "--dry-run"]);
+  const ctx = makeCtx();
+  const img = join(ctx.dir, "cover.png");
+  writeFileSync(img, "fake-png");
+  const r = runScript(["--md", `text ![](file:${img}) more`, "--dry-run"], ctx);
   assert.equal(r.code, 0, r.stderr);
   assert.match(r.stdout + r.stderr, /would upload/, "dry-run обязан лишь перечислить кандидатов");
   assert.doesNotMatch(r.stdout + r.stderr, /uploaded /, "никаких реальных загрузок в dry-run");
@@ -35,11 +44,20 @@ test("dry-run с локальной картинкой офлайнов: пер�
 });
 
 test("локальная картинка без --allow-upload и без dry-run — отказ с подсказкой", () => {
-  const img = join(ROOT, "README.md");
-  const r = runScript(["--md", `![](file:${img})`, "--chat", "111"]);
+  const ctx = makeCtx();
+  const img = join(ctx.dir, "cover.jpg");
+  writeFileSync(img, "fake-jpg");
+  const r = runScript(["--md", `![](file:${img})`, "--chat", "111"], ctx);
   assert.notEqual(r.code, 0);
   assert.match(r.stderr, /--allow-upload/);
   assert.match(r.stderr, /tmpfiles\.org/i, "пользователь должен видеть, КУДА уйдёт файл");
+});
+
+test("не-media файл (например .env) не грузится даже из разрешённого корня", () => {
+  const ctx = makeCtx();
+  const r = runScript(["--md", `![](file:${ctx.envFile})`, "--dry-run"], ctx);
+  assert.notEqual(r.code, 0);
+  assert.match(r.stderr, /non-media|dot-path/, "секреты не должны проходить media-гейт");
 });
 
 test("чужой --chat вне allowlist — отказ без отправки", () => {
@@ -57,8 +75,8 @@ test("картинка вне разрешённых корней — отказ
   assert.match(r.stderr, /allowed roots/);
 });
 
-test("без токена — понятная ошибка (и никакого --token в CLI)", () => {
-  const r = runScript(["--md", "hello", "--chat", "111"]);
+test("без токена — понятная ошибка ДО каких-либо загрузок (и никакого --token в CLI)", () => {
+  const r = runScript(["--md", "hello", "--chat", "111"], makeCtx({ token: "" }));
   assert.notEqual(r.code, 0);
   assert.match(r.stderr, /no token/);
   const help = runScript(["--help"]);

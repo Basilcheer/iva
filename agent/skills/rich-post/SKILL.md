@@ -48,11 +48,13 @@ Because of that:
 - uploads happen only with the explicit `--allow-upload` flag; without it,
   local images are an error (and `--dry-run` merely lists what WOULD be
   uploaded);
-- `file:` paths are accepted only from inside the repo or the data dir —
-  anything else is refused (a report must not be able to exfiltrate arbitrary
-  files from the server);
-- never reference private documents (vault cards, transcripts, .env, backups)
-  as images. If in doubt — don't upload; send text instead.
+- only real media passes the gate: regular files with an image/video/audio
+  extension (jpg/png/gif/webp/mp4/webm/mov/mp3/ogg/m4a), located inside the
+  repo or the data dir, with no hidden dot-segment in the path. `.env`, OAuth
+  json, logs, vault `.md` and any other text file are refused even with
+  `--allow-upload` — a report must not be able to exfiltrate server files;
+- never reference private documents as images anyway. If in doubt — don't
+  upload; send text instead.
 
 Telegram fetches and caches the media at send time, so the temp URL expiring
 afterwards is fine.
