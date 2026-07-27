@@ -199,7 +199,7 @@ function migrateEnv({ quiet = false } = {}) {
 // on the old port (the unit was already baked) while clients read the new one — the same desync.
 function restartServices() {
   writeUnits();
-  sc("restart", ...SERVICES);
+  return sc("restart", ...SERVICES).status === 0;
 }
 
 // ANSI tree like during install. The only source of the art is install.sh (heredoc
@@ -620,9 +620,13 @@ function cmdReset() {
     }
   }
   if (!found && !failed) ok("workflow store already empty");
-  restartServices();
+  const restarted = restartServices();
   if (failed) {
     bad("Reset INCOMPLETE — eve will re-enqueue the runs that were not cleared");
+    process.exit(1);
+  }
+  if (!restarted) {
+    bad("systemctl restart failed — services may be down, check: iva logs");
     process.exit(1);
   }
   ok("Restarted: iva + telegram-poll");

@@ -6,7 +6,7 @@
 //
 // Requires: a running agent (eve start) and a vault to write into. The processing rules
 // (scripts/memory/instructions/) ship with the repo. Date is in ASSISTANT_TIMEZONE.
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Client, type SessionState } from "eve/client";
@@ -149,24 +149,49 @@ const client = new Client({
 // workflowEntry run in .eve/.workflow-data that nothing ever closes (the client API has
 // no delete), so a fresh session per rollup leaked one forever-"running" run per night
 // and eve re-enqueued the whole pile on every start. One persistent session per period
-// caps that at one run; rotation caps its transcript. Parked cursor lives in data/.
+// caps that at one run. Rotation is deliberately RARE (90d): every rotation abandons one
+// run in the store (nothing can close it), so frequent rotation would just re-create the
+// leak. Abandoned sessions are logged to data/rollup-abandoned.jsonl for the record;
+// `iva reset` clears them together with the store. Parked cursor lives in data/.
 const DATA_DIR = process.env.ASSISTANT_DATA_DIR ?? "data";
 const SESSION_FILE = join(DATA_DIR, `rollup-session-${period}.json`);
-const SESSION_TTL_MS = 14 * 24 * 3600 * 1000; // rotate: bounds transcript growth (leaves 1 run, cleared by iva reset)
+const SESSION_TTL_MS = 90 * 24 * 3600 * 1000;
 
 function loadSession(): { state: SessionState; createdAt: number } | null {
   try {
     const j = JSON.parse(readFileSync(SESSION_FILE, "utf8"));
-    if (!j?.state || Date.now() - (j.createdAt ?? 0) > SESSION_TTL_MS) return null;
+    if (!j?.state) return null;
+    if (Date.now() - (j.createdAt ?? 0) > SESSION_TTL_MS) {
+      logAbandoned(j.state, "ttl-rotation");
+      return null;
+    }
     return j;
   } catch {
     return null;
   }
 }
 
+// Атомарная запись (tmp + rename): курсор сессии не должен превращаться в полфайла.
 function saveSession(state: SessionState, createdAt: number): void {
   mkdirSync(DATA_DIR, { recursive: true });
-  writeFileSync(SESSION_FILE, JSON.stringify({ state, createdAt }), "utf8");
+  const tmp = `${SESSION_FILE}.tmp-${process.pid}`;
+  writeFileSync(tmp, JSON.stringify({ state, createdAt }), "utf8");
+  renameSync(tmp, SESSION_FILE);
+}
+
+// Брошенные сессии (ротация/несовместимый курсор) — в журнал: их run-обёртки остаются
+// в сторе до ближайшего `iva reset`, и по журналу видно, чьи они.
+function logAbandoned(state: SessionState, reason: string): void {
+  try {
+    mkdirSync(DATA_DIR, { recursive: true });
+    appendFileSync(
+      join(DATA_DIR, "rollup-abandoned.jsonl"),
+      JSON.stringify({ at: new Date().toISOString(), period, reason, sessionId: state.sessionId ?? null }) + "\n",
+      "utf8",
+    );
+  } catch {
+    /* журнал не должен ронять ночь */
+  }
 }
 
 const today = localDate();
@@ -181,6 +206,7 @@ try {
   // fresh one once instead of failing the night.
   if (!saved) throw e;
   console.error(`rollup ${period}: parked session unusable (${(e as Error).message}) — starting fresh`);
+  logAbandoned(saved.state, "unusable-cursor");
   session = client.session();
   sessionCreatedAt = Date.now();
   response = await session.send(buildPrompt(period, today));
@@ -210,10 +236,14 @@ if (POST_TO_TELEGRAM[period]) {
   if (r.fellBack) {
     // HTML didn't parse — the report went out flat. Give the agent feedback in the same
     // session so it formats the next report more simply (one turn, no resend).
-    await session.send(
+    // ВАЖНО: дождаться конца хода и пересохранить курсор — иначе следующий ночной send
+    // поедет со старым continuation-токеном недочитанного хода.
+    const fb = await session.send(
       `The last report failed Telegram parse_mode=HTML (${r.error}) and went out as flat text. ` +
         "Next time format it more simply: **bold**, `code`, lists — no raw HTML.",
     );
+    await fb.result();
+    saveSession(session.state, sessionCreatedAt);
   }
   if (!r.ok) {
     console.error(`rollup ${period}: Telegram send failed:`, r.error);
