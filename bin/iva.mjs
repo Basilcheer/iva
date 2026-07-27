@@ -139,12 +139,19 @@ function ivaServiceBody() {
 // secrets file and the data dir were world-readable under the default umask 022.
 // Runs from writeUnits — i.e. on every install/update — so old installs self-heal.
 function hardenPerms() {
+  // Каждая цель — независимо: сбой на .env не должен отменять миграцию data/ (и наоборот).
+  // Предупреждаем, но установку юнитов не срываем: юниты сами несут UMask=0077, а сорванный
+  // writeUnits оставил бы систему вовсе без юнитов — хуже, чем старые права.
   try {
     if (existsSync(ENV_PATH)) chmodSync(ENV_PATH, 0o600);
+  } catch (e) {
+    warn(`perms migration (.env) failed: ${e.message}`);
+  }
+  try {
     const data = dataDirAbs();
     if (existsSync(data)) chmodSync(data, 0o700);
   } catch (e) {
-    warn(`perms migration failed: ${e.message}`);
+    warn(`perms migration (data/) failed: ${e.message}`);
   }
 }
 
