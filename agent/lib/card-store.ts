@@ -229,6 +229,9 @@ export function acquireLock(file: string, timeoutMs = 5000): () => void {
   const lock = `${file}.lock`;
   const deadline = Date.now() + timeoutMs;
   for (;;) {
+    // Дедлайн проверяется на КАЖДОЙ итерации, включая путь «лок исчез между попыткой
+    // и stat» — иначе мигающий лок зациклил бы захват навсегда.
+    if (Date.now() > deadline) throw new Error(`Карточка занята другим процессом: ${lock}`);
     try {
       const fd = openSync(lock, "wx");
       writeSync(fd, String(process.pid));
@@ -249,10 +252,11 @@ export function acquireLock(file: string, timeoutMs = 5000): () => void {
           rmSync(lock, { force: true });
           continue;
         }
-      } catch {
+      } catch (statErr) {
+        // Лок исчез между попыткой и stat — новая итерация; прочие сбои stat — наружу.
+        if ((statErr as NodeJS.ErrnoException).code !== "ENOENT") throw statErr;
         continue;
       }
-      if (Date.now() > deadline) throw new Error(`Карточка занята другим процессом: ${lock}`);
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
     }
   }

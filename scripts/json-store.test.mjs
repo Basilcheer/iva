@@ -30,9 +30,22 @@ test("битый JSON: бэкап *.corrupt-* и явная ошибка, не �
 test("лок эксклюзивен, снимается, протухший лок отбирается", async () => {
   const dir = mkdtempSync(join(tmpdir(), "json-store-"));
   const lock = join(dir, "tasks.json.lock");
-  await acquireLock(lock);
+  const t1 = await acquireLock(lock);
   await assert.rejects(() => acquireLock(lock), /lock timeout/, "второй захват должен ждать и падать по таймауту");
-  releaseLock(lock);
-  await acquireLock(lock); // после release захватывается снова
-  releaseLock(lock);
+  releaseLock(lock, t1);
+  const t2 = await acquireLock(lock); // после release захватывается снова
+  releaseLock(lock, t2);
+});
+
+test("release с чужим токеном не снимает лок преемника", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "json-store-"));
+  const lock = join(dir, "tasks.json.lock");
+  const stale = await acquireLock(lock);
+  // Имитация staleness-вытеснения: преемник отобрал лок и держит его под своим токеном.
+  releaseLock(lock, stale);
+  const successor = await acquireLock(lock);
+  releaseLock(lock, stale); // запоздавший release вытесненного держателя — no-op
+  assert.equal(existsSync(lock), true, "лок преемника должен остаться на месте");
+  releaseLock(lock, successor);
+  assert.equal(existsSync(lock), false, "владелец снимает свой лок");
 });

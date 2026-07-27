@@ -40,9 +40,10 @@ export default defineTool({
   async execute({ action, text, id, priority, due, includeDone }) {
     // Мутации — под локом: параллельный ход (расписание + живой чат) на голом
     // load→mutate→save терял записи и дублировал id (id = max+1 от своей копии).
+    let lockToken: string | null = null;
     if (action !== "list") {
       try {
-        await acquireLock(LOCK);
+        lockToken = await acquireLock(LOCK);
       } catch (e) {
         return { ok: false, error: `Задачи заняты другим ходом: ${(e as Error).message}` };
       }
@@ -52,7 +53,7 @@ export default defineTool({
     } catch (e) {
       return { ok: false, error: (e as Error).message };
     } finally {
-      if (action !== "list") releaseLock(LOCK);
+      if (lockToken !== null) releaseLock(LOCK, lockToken);
     }
   },
 });
