@@ -4,6 +4,8 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
+# Everything these units create (vault, transcripts, data/) must not be world-readable.
+UMask=0077
 Type=oneshot
 WorkingDirectory=__PROJECT_DIR__
 EnvironmentFile=__PROJECT_DIR__/.env

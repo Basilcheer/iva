@@ -5,7 +5,7 @@
 // No external dependencies.
 import { createInterface } from "node:readline/promises";
 import { createReadStream, existsSync } from "node:fs";
-import { readFile, writeFile, access } from "node:fs/promises";
+import { readFile, writeFile, access, chmod } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -149,7 +149,10 @@ async function writeEnv(out) {
     "ASSISTANT_DATA_DIR", "IVA_PORT", "ASSISTANT_HOST", "ASSISTANT_BEARER",
   ];
   const keys = [...order.filter((k) => out[k] != null), ...Object.keys(out).filter((k) => !order.includes(k))];
-  await writeFile(ENV_PATH, keys.map((k) => `${k}=${out[k]}`).join("\n") + "\n", "utf8");
+  // 0600: .env carries bot/API tokens. mode only applies on creation — chmod covers the
+  // file if an earlier version already created it world-readable.
+  await writeFile(ENV_PATH, keys.map((k) => `${k}=${out[k]}`).join("\n") + "\n", { encoding: "utf8", mode: 0o600 });
+  await chmod(ENV_PATH, 0o600);
 }
 
 async function ollamaModels(key) {

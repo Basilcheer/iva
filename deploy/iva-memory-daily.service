@@ -19,6 +19,8 @@ Description=Iva memory rollup (daily)
 After=network-online.target iva.service
 
 [Service]
+# Everything these units create (vault, transcripts, data/) must not be world-readable.
+UMask=0077
 Type=oneshot
 WorkingDirectory=__PROJECT_DIR__
 EnvironmentFile=__PROJECT_DIR__/.env
