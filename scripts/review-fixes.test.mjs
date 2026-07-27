@@ -1,0 +1,91 @@
+// Регрессии на находки независимого ревью: квалификаторы идентичности, SUPERSEDE через
+// replace_body, ownership-токен card-лока, symlink-обход write_file, права карантина,
+// лок в несуществующем каталоге (свежая установка).
+import "./lib/ts-esm-hooks.mjs";
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, symlinkSync, utimesSync, writeFileSync, chmodSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { quarantineDir } from "./lib/wf-store.mjs";
+
+// TS — только динамическим импортом: resolve-хук (.js→.ts) не действует на статические
+// импорты, слинкованные до его регистрации.
+const { acquireLock: cardLock, mergeCard, resolveCard } = await import("../agent/lib/card-store.ts");
+const { acquireLock: jsonLock, releaseLock: jsonRelease } = await import("../agent/lib/json-store.ts");
+
+function makeCard(dir, name, h1) {
+  writeFileSync(join(dir, `${name}.md`), `---\ntype: contact\nstatus: active\n---\n# ${h1}\n\nтело\n`);
+}
+
+test("голое имя находит квалифицированную карточку, но чужой квалификатор — новая сущность", () => {
+  const dir = mkdtempSync(join(tmpdir(), "cards-"));
+  makeCard(dir, "alex-us", "Alex (US)");
+  // «Alex» без скобок — это та же сущность, что «Alex (US)» (единственный кандидат).
+  assert.equal(resolveCard(dir, "Alex").matchedBy, "title");
+  // «Alex (UK)» — ДРУГАЯ сущность: не должен слиться в alex-us.md.
+  const uk = resolveCard(dir, "Alex (UK)");
+  assert.equal(uk.matchedBy, "new", "квалифицированный промах обязан завести новый файл");
+  assert.ok(uk.file.endsWith("alex-uk.md"), uk.file);
+});
+
+test("replace_body: SUPERSEDE переписывает body, сохраняя неизвестный frontmatter", () => {
+  const existing = "---\ntype: contact\nstatus: active\ntier: cold\ncreated: 2026-01-01\n---\n# Иван\n\nCurrent owner: Alice\n";
+  const r = mergeCard({
+    existing,
+    title: "Иван",
+    fields: { type: "contact", status: "active" },
+    body: "Current owner: Bob\n\n## History\n- 2026-01→07: Alice",
+    date: "2026-07-27",
+    replaceBody: true,
+  });
+  assert.equal(r.action, "replaced");
+  assert.doesNotMatch(r.content.split("## History")[0], /Alice/, "старая истина не должна остаться текущей");
+  assert.match(r.content, /Current owner: Bob/);
+  assert.match(r.content, /tier: cold/, "неизвестные поля frontmatter выживают");
+  assert.match(r.content, /created: 2026-01-01/, "created не трогается");
+});
+
+test("card-лок: запоздавший release вытесненного держателя не снимает лок преемника", () => {
+  const dir = mkdtempSync(join(tmpdir(), "cardlock-"));
+  const file = join(dir, "x.md");
+  const staleRelease = cardLock(file);
+  // Имитация staleness-отбора: лок «протух», преемник его отобрал и держит свой.
+  const past = new Date(Date.now() - 60_000);
+  utimesSync(`${file}.lock`, past, past);
+  const successorRelease = cardLock(file); // отобрал протухший, записал СВОЙ токен
+  staleRelease(); // no-op: на диске чужой токен
+  assert.ok(existsSync(`${file}.lock`), "лок преемника обязан остаться");
+  successorRelease();
+  assert.ok(!existsSync(`${file}.lock`));
+});
+
+test("json-лок работает в ещё не созданном каталоге данных (свежая установка)", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "fresh-"));
+  const lock = join(dir, "data", "tasks.json.lock"); // data/ не существует
+  const token = await jsonLock(lock);
+  assert.ok(existsSync(lock));
+  jsonRelease(lock, token);
+});
+
+test("карантин закрывает права старого world-readable стора", () => {
+  const root = mkdtempSync(join(tmpdir(), "wfq-"));
+  const dir = join(root, ".workflow-data");
+  mkdirSync(dir);
+  chmodSync(dir, 0o755); // стор из эпохи до UMask-фикса
+  const dest = quarantineDir(dir, "2026-01-01");
+  assert.equal(statSync(dest).mode & 0o777, 0o700, "карантин не должен остаться world-readable");
+});
+
+test("write_file: симлинк-алиас на cards/ не обходит гард перезаписи", async () => {
+  const vault = mkdtempSync(join(tmpdir(), "vault-"));
+  const cards = join(vault, "cards", "contacts");
+  mkdirSync(cards, { recursive: true });
+  writeFileSync(join(cards, "ivan.md"), "ORIGINAL CARD");
+  symlinkSync(join(vault, "cards"), join(vault, "card-alias"));
+  process.env.ASSISTANT_VAULT_DIR = vault;
+  const { default: writeFile } = await import("../agent/tools/write_file.ts");
+  const res = await writeFile.execute({ path: join(vault, "card-alias", "contacts", "ivan.md"), content: "OVERWRITTEN" });
+  assert.equal(res.ok, false, JSON.stringify(res));
+  assert.equal(readFileSync(join(cards, "ivan.md"), "utf8"), "ORIGINAL CARD", "карточка не должна быть затёрта");
+});

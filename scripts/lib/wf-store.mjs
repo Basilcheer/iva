@@ -2,7 +2,7 @@
 // *.trash-<штамп> (атомарно в пределах одной ФС) с ротацией старых карантинов.
 // Даёт откат после случайного reset: припаркованные диалоги возвращаются обратным
 // переименованием, пока карантин не вытеснен ротацией.
-import { existsSync, readdirSync, renameSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, readdirSync, renameSync, rmSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
 export const TRASH_KEEP = 2;
@@ -12,6 +12,12 @@ export function quarantineDir(dir, stamp = new Date().toISOString().replace(/[:.
   if (!existsSync(dir)) return null;
   const dest = `${dir}.trash-${stamp}`;
   renameSync(dir, dest);
+  // Стор мог быть создан до UMask-фикса (0755): карантин хранит транскрипты — закрываем.
+  try {
+    chmodSync(dest, 0o700);
+  } catch {
+    /* права не должны срывать сам карантин */
+  }
   pruneTrash(dir);
   return dest;
 }

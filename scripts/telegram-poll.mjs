@@ -123,10 +123,13 @@ async function tg(method, body) {
 // Deliver one update to the local eve (we mimic a webhook). Three failure classes (see
 // deliver-policy.mjs): retry — network/5xx/408/425/429, fast backoff, forever; config —
 // 401/403/404 mean the secret/route is broken, messages must NOT be thrown away, so
-// retry forever with a LONG backoff + alert the owner; drop — any other 4xx is a
-// permanently poisoned update that would freeze the single getUpdates loop for every
-// chat. Returns true when eve accepted the update, false when it was dropped.
+// retry forever with a LONG backoff + alert the owner; drop-class (other 4xx) — eve
+// не даёт надёжного признака «апдейт битый навсегда» (тот же 409 может быть временным
+// конфликтом хука), поэтому и эти статусы ретраятся, но ОГРАНИЧЕННО: DROP_ATTEMPTS
+// попыток (~5 минут), затем апдейт выбрасывается, чтобы не заморозить все чаты.
+// Returns true when eve accepted the update, false when it was dropped.
 const CONFIG_RETRY_MS = 60_000;
+const DROP_ATTEMPTS = 30;
 async function deliver(update) {
   for (let attempt = 1; ; attempt++) {
     let wait = Math.min(15000, 1000 * attempt);
@@ -142,7 +145,12 @@ async function deliver(update) {
       if (res.ok) return true;
       const cls = classifyDeliverStatus(res.status);
       if (cls === "drop") {
-        log(`deliver: eve replied ${res.status} — DROPPING update ${update.update_id} (poisoned)`);
+        if (attempt < DROP_ATTEMPTS) {
+          log(`deliver: eve replied ${res.status} (attempt ${attempt}/${DROP_ATTEMPTS}) — retrying (may be transient)`);
+          await sleep(wait);
+          continue;
+        }
+        log(`deliver: eve replied ${res.status} ${DROP_ATTEMPTS} times — DROPPING update ${update.update_id}`);
         await notifyDeliverProblem("drop", res.status);
         return false;
       }
@@ -264,8 +272,12 @@ async function restartAgent() {
   }
   // Reset wipes the ESC-stop state too: a stale "running" flag would keep buffering
   // messages, and a stale queue would replay pre-reset messages into the fresh dialog.
-  await rm(join(DATA_DIR, "run-status.json"), { force: true }).catch(() => {});
-  await rm(join(DATA_DIR, "telegram-queue.json"), { force: true }).catch(() => {});
+  // ТОЛЬКО при полном карантине: если стор остался, старый ран вернётся — выбрасывать
+  // при этом буфер значило бы потерять сообщения, не вылечив зависание.
+  if (warnings.length === 0) {
+    await rm(join(DATA_DIR, "run-status.json"), { force: true }).catch(() => {});
+    await rm(join(DATA_DIR, "telegram-queue.json"), { force: true }).catch(() => {});
+  }
   const started = await sc("start", "iva.service");
   return { started, warnings };
 }

@@ -154,12 +154,15 @@ function hardenPerms() {
   } catch (e) {
     warn(`perms migration (data/) failed: ${e.message}`);
   }
-  // Стор воркфлоу несёт транскрипты диалогов — те же пути, что чистит cmdReset().
-  for (const wf of [join(ROOT, ".eve"), join(ROOT, ".workflow-data")]) {
+  // Стор воркфлоу несёт транскрипты диалогов, vault — саму память; оба старше UMask-фикса
+  // могли быть созданы world-readable. chmod только верхнего уровня (закрывает traversal).
+  const vaultRel = readEnv().ASSISTANT_VAULT_DIR || "vault";
+  const vaultDir = vaultRel.startsWith("/") ? vaultRel : join(ROOT, vaultRel);
+  for (const p of [join(ROOT, ".eve"), join(ROOT, ".workflow-data"), vaultDir]) {
     try {
-      if (existsSync(wf)) chmodSync(wf, 0o700);
+      if (existsSync(p)) chmodSync(p, 0o700);
     } catch (e) {
-      warn(`perms migration (${relative(ROOT, wf)}) failed: ${e.message}`);
+      warn(`perms migration (${relative(ROOT, p)}) failed: ${e.message}`);
     }
   }
 }

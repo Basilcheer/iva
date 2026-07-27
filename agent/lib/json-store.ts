@@ -17,6 +17,8 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 export async function acquireLock(lockPath: string): Promise<string> {
   const token = randomUUID();
   const deadline = Date.now() + LOCK_TIMEOUT_MS;
+  // Свежая установка: каталога данных может ещё не быть — лок не должен падать ENOENT.
+  await mkdir(dirname(lockPath), { recursive: true });
   for (;;) {
     if (Date.now() > deadline) throw new Error(`lock timeout: ${lockPath}`);
     try {
