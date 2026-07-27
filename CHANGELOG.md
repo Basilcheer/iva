@@ -1,5 +1,13 @@
 # Changelog
 
+## [Unreleased]
+
+Fix: recovery actually recovers — `iva reset` and the /restart, /new, /clear, /compact commands now clear the real eve workflow store.
+
+- 🔧 **Recovery was a silent no-op** — these commands wiped `ROOT/.workflow-data`, a path that doesn't exist; eve keeps its store in `.eve/.workflow-data`, so a stuck run always came back after "successful" recovery (#36, fixed by #35/#42). **Behavior change to be aware of:** now that the wipe works, these commands really do drop ALL parked dialogs — before, they silently left them in place.
+- 🗑️ **Quarantine instead of delete** — the store is renamed to `.workflow-data.trash-<stamp>` (two most recent kept) rather than removed, so an accidental reset can be undone by renaming it back. If stopping the service fails, nothing is touched; if quarantine fails, the bot says so instead of reporting a clean reset.
+- 🌙 **Nightly memory no longer leaks runs** — every rollup opened a fresh eve session whose backing run stayed "running" forever, piling up one zombie per night ("Re-enqueued N active run(s)" on every start). Rollups now park and reuse one session per period (rotated every 14 days). Already-accumulated zombies are cleared by the next `iva reset`.
+
 ## [0.3.3] - 2026-07-26
 
 Fix: the 🧹 Vault cleanup button works on every install — and the vault is now pure data, with all code and prompts shipped in the repo.
