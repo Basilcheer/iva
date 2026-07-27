@@ -69,7 +69,7 @@ afterwards is fine.
 
 ## Markdown syntax (rich_message.markdown)
 
-```
+````
 **bold**  __bold__  *italic*  _italic_  ~~strike~~  `code`  ==marked==  ||spoiler||
 [link](https://t.me/)  [mail](mailto:a@b.c)  [user](tg://user?id=123)
 ![custom emoji](tg://emoji?id=5368324170671202286)
@@ -110,7 +110,7 @@ collapsible content (markdown inside)
 
 HTML-only extras: <u>underline</u> <sub>x</sub> <sup>x</sup>
 <aside>pull quote<cite>Author</cite></aside>
-```
+````
 
 ## Limits
 

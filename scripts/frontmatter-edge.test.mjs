@@ -5,9 +5,13 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { parseFrontmatter, writeFrontmatter } from "../agent/lib/frontmatter.ts";
 
-test("flow-список: запятая внутри кавычек не рвёт элемент (round-trip)", () => {
+test("flow-список: запятая внутри кавычек не рвёт элемент (полный round-trip)", () => {
   const { fields } = parseFrontmatter('---\ntags: [work, "a, b", plain]\n---\nbody');
   assert.deepEqual(fields.tags, ["work", "a, b", "plain"]);
+  // parse → write → parse: значение обязано пережить полный цикл без искажений.
+  const rewritten = writeFrontmatter(fields, []);
+  const again = parseFrontmatter(`---\n${rewritten}\n---\nbody`);
+  assert.deepEqual(again.fields.tags, ["work", "a, b", "plain"]);
 });
 
 test("YAML-неоднозначные скаляры квотируются (PyYAML не превратит их в bool/null)", () => {
@@ -26,6 +30,7 @@ test("одиночный пробел — тоже continuation, а не нов�
 test("пустая строка внутри перезаписываемого folded-блока не воскрешает старый хвост", () => {
   const lines = ["type: contact", "description: >-", "  первый абзац", "", "  второй абзац", "status: active"];
   const out = writeFrontmatter({ description: "новое" }, lines);
+  assert.doesNotMatch(out, /первый абзац/, "начало старого блока не должно остаться");
   assert.doesNotMatch(out, /второй абзац/, "хвост старого блока не должен просочиться");
   assert.match(out, /description: новое/);
   assert.match(out, /status: active/);

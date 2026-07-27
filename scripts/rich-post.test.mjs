@@ -82,3 +82,13 @@ test("без токена — понятная ошибка ДО каких-ли
   const help = runScript(["--help"]);
   assert.doesNotMatch(help.stdout, /--token/, "флага --token быть не должно — argv виден в ps");
 });
+
+test("порядок: без токена даже --allow-upload не доходит до загрузки", () => {
+  const ctx = makeCtx({ token: "" });
+  const img = join(ctx.dir, "cover.png");
+  writeFileSync(img, "fake-png");
+  const r = runScript(["--md", `![](file:${img})`, "--chat", "111", "--allow-upload"], ctx);
+  assert.notEqual(r.code, 0);
+  assert.match(r.stderr, /no token/, "валидация конфига обязана идти раньше upload-ветки");
+  assert.doesNotMatch(r.stdout + r.stderr, /uploaded /, "ни одной загрузки при сломанном конфиге");
+});

@@ -145,6 +145,7 @@ test("tags и domain квотируются, если содержат YAML-сп
     domain: "work: personal",
     body: "тело",
   });
+  assert.equal(res.ok, true, JSON.stringify(res));
   const out = read(res.file);
   // Пробелы в теге схлопываются в дефис, но двоеточие остаётся — элемент обязан быть в кавычках.
   assert.ok(out.includes('tags: ["a:-b", plain]'), out);

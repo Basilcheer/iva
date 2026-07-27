@@ -119,6 +119,8 @@ def scan_local_images(md, env_file):
         if any(seg.startswith(".") for seg in real.split(os.sep) if seg):
             sys.exit(f"refusing dot-path (hidden/config file or directory): {path}")
         paths.append(path)
+    if len(paths) > 50:
+        sys.exit(f"too many media attachments: {len(paths)} > 50 (Telegram rich-message limit)")
     return paths
 
 
@@ -170,6 +172,8 @@ def send(token, chat, md, silent=False, thread_id=None):
         return res
     except urllib.error.HTTPError as e:
         sys.exit(f"send failed {e.code}: {e.read().decode()[:500]}")
+    except (urllib.error.URLError, TimeoutError) as e:
+        sys.exit(f"send failed (network/timeout): {e}")
 
 
 def main():
