@@ -24,6 +24,7 @@ import { inspectUpstream, markVersionNotified, updateOffer } from "./lib/update-
 // ESC-остановка: канал пишет в data/run-status.json, идёт ли сейчас ход по чату;
 // мост по нему буферизует входящие (см. очередь ниже) и обслуживает /stop.
 import { isRunning } from "./lib/run-status.mjs";
+import { quarantineDir } from "./lib/wf-store.mjs";
 // Двуязычие: единый источник языка (getLang) + одна таблица команд (COMMANDS) для /help
 // и синего командного меню Telegram. tr(en, ru) — функция (язык не замораживаем в const).
 import { getLang, tr, helpText, botCommands } from "./lib/i18n.mjs";
@@ -195,19 +196,28 @@ const sc = (...args) =>
 // the store (while the process is stopped — not from under a live one), bring it back up. It wipes ALL
 // parked conversations — for a single-user assistant this is exactly "start over".
 async function restartAgent() {
-  await sc("stop", "iva.service");
+  const warnings = [];
+  // Fail closed: quarantining the store under a live eve corrupts state and resurrects
+  // the very runs we're clearing — if stop failed, don't touch anything.
+  if (!(await sc("stop", "iva.service"))) {
+    log("reset: systemctl stop failed — workflow store left untouched");
+    return { started: false, warnings: ["systemctl stop failed"] };
+  }
   for (const dir of WORKFLOW_DIRS) {
     try {
-      await rm(dir, { recursive: true, force: true });
+      // Quarantine (rename → *.trash-<stamp>) instead of rm: undo-able until rotated out.
+      quarantineDir(dir);
     } catch (e) {
-      log(`reset: failed to clear ${relative(ROOT, dir)}:`, e.message);
+      log(`reset: failed to quarantine ${relative(ROOT, dir)}:`, e.message);
+      warnings.push(`${relative(ROOT, dir)}: ${e.message}`);
     }
   }
   // Reset wipes the ESC-stop state too: a stale "running" flag would keep buffering
   // messages, and a stale queue would replay pre-reset messages into the fresh dialog.
   await rm(join(DATA_DIR, "run-status.json"), { force: true }).catch(() => {});
   await rm(join(DATA_DIR, "telegram-queue.json"), { force: true }).catch(() => {});
-  return sc("start", "iva.service");
+  const started = await sc("start", "iva.service");
+  return { started, warnings };
 }
 
 // ── ESC-stop message queue (Claude Code semantics) ─────────────────────────
@@ -808,13 +818,23 @@ async function handleControl(update) {
   // Fresh .env, not this process's snapshot — see the same note in handleUpdateCheck.
   const resetCopy = resetMessageCopy(cmd, await readEnvFresh(ENV_PATH));
   const status = await reply(chatId, resetCopy.pending);
-  const ok = await restartAgent();
+  const res = await restartAgent();
   if (!status) return true;
-  if (!ok) {
+  if (!res.started) {
     await edit(chatId, status.message_id, tr("⚠️ Couldn't restart Iva", "⚠️ Не удалось перезапустить Iva"));
     return true;
   }
-  await edit(chatId, status.message_id, resetCopy.complete);
+  // Honest completion: a failed quarantine means the stuck run WILL come back after
+  // restart (eve re-enqueues it) — say so instead of reporting a clean reset.
+  let done = resetCopy.complete;
+  if (res.warnings.length) {
+    done +=
+      tr(
+        "\n⚠️ Part of the workflow store was NOT cleared — the stuck turn may come back: ",
+        "\n⚠️ Часть стора ходов НЕ очищена — зависший ход может вернуться: ",
+      ) + res.warnings.join("; ");
+  }
+  await edit(chatId, status.message_id, done);
   return true;
 }
 

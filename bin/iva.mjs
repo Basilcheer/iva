@@ -13,6 +13,7 @@ import { homedir } from "node:os";
 import { createInterface } from "node:readline/promises";
 import { modelSummary } from "../scripts/lib/model-summary.mjs";
 import { createTerminalProgress } from "../scripts/lib/progress.mjs";
+import { quarantineDir } from "../scripts/lib/wf-store.mjs";
 import { createTelegramUpdateReporter, loadTelegramJob, removeTelegramJob } from "../scripts/lib/telegram-status.mjs";
 import {
   acquireUpdateLock,
@@ -598,20 +599,32 @@ function cmdRestart() {
 function cmdReset() {
   requireSystemd();
   step("Full reset: stopping services…");
-  sc("stop", ...SERVICES);
+  // Fail closed: quarantining the store under a live eve corrupts state and resurrects
+  // the very runs we're clearing — if stop failed, don't touch anything.
+  if (sc("stop", ...SERVICES).status !== 0) {
+    bad("systemctl stop failed — workflow store left untouched");
+    process.exit(1);
+  }
   let found = false;
+  let failed = false;
   for (const wf of [join(ROOT, ".eve", ".workflow-data"), join(ROOT, ".workflow-data")]) {
-    if (!existsSync(wf)) continue;
-    found = true;
     try {
-      rmSync(wf, { recursive: true, force: true });
-      ok(`${relative(ROOT, wf)} cleared — stuck/accumulated workflow runs reset`);
+      // Quarantine (rename → *.trash-<stamp>) instead of rm: undo-able until rotated out.
+      const dest = quarantineDir(wf);
+      if (!dest) continue;
+      found = true;
+      ok(`${relative(ROOT, wf)} → ${relative(ROOT, dest)} — stuck/accumulated workflow runs quarantined`);
     } catch (e) {
-      warn(`failed to delete ${relative(ROOT, wf)}: ${e.message}`);
+      failed = true;
+      warn(`failed to quarantine ${relative(ROOT, wf)}: ${e.message}`);
     }
   }
-  if (!found) ok("workflow store already empty");
+  if (!found && !failed) ok("workflow store already empty");
   restartServices();
+  if (failed) {
+    bad("Reset INCOMPLETE — eve will re-enqueue the runs that were not cleared");
+    process.exit(1);
+  }
   ok("Restarted: iva + telegram-poll");
 }
 function cmdStart() {
