@@ -1,7 +1,13 @@
 import { defineTool } from "eve/tools";
 import { z } from "zod";
-import { readFileSync, mkdirSync, writeFileSync, existsSync } from "node:fs";
-import { join } from "node:path";
+import { readFileSync, mkdirSync, existsSync } from "node:fs";
+import { join, relative, sep } from "node:path";
+import {
+  acquireLock,
+  atomicWrite,
+  mergeCard,
+  resolveCard,
+} from "../lib/card-store.js";
 
 // Строго типизированная запись карточки памяти. Заменяет «write_file по наитию» для карточек:
 // zod-enum на type/status берётся из autograph schema.json (единый источник правды), поэтому
@@ -59,14 +65,15 @@ function loadSchema(): { status: Record<string, string[]>; aliases: Record<strin
 const SCHEMA = loadSchema();
 const CARD_TYPES = Object.keys(CARD_TYPE_DIR) as [string, ...string[]];
 
-function slugify(s: string): string {
-  return (
-    s
-      .toLowerCase()
-      .replace(/[^\p{L}\p{N}]+/gu, "-")
-      .replace(/^-+|-+$/g, "")
-      .slice(0, 60) || "card"
-  );
+// Алиасы типов из схемы применяются ДО валидации: описание поля обещает person/company →
+// contact, значит z.enum не должен отклонять их раньше execute. Алиасы, ведущие в типы вне
+// CARD_TYPE_DIR (daily → daily-summary), не разворачиваются — их пишет ночной rollup.
+function normalizeType(v: unknown): unknown {
+  if (typeof v !== "string") return v;
+  const k = v.trim().toLowerCase();
+  if (k in CARD_TYPE_DIR) return k;
+  const mapped = SCHEMA.aliases[k];
+  return mapped && mapped in CARD_TYPE_DIR ? mapped : k;
 }
 
 // Транслитерация не нужна — vault хранит кириллические слаги нормально (см. существующие карточки).
@@ -81,12 +88,16 @@ function today(): string {
 
 export default defineTool({
   description:
-    "Создать/перезаписать типизированную карточку памяти в vault. Используй ЭТО (не write_file) " +
+    "Создать или ДОПОЛНИТЬ типизированную карточку памяти в vault (существующая карточка " +
+    "сливается, а не затирается: неизвестные поля и старый текст сохраняются). " +
+    "Используй ЭТО (не write_file) " +
     "для карточек — гарантирует валидный тип и схему. type строго один из: " +
     Object.keys(CARD_TYPE_DIR).join(", ") +
     ". Поля вне схемы недопустимы. Summary (день/неделя/…) НЕ создавай — их пишет ночной rollup.",
   inputSchema: z.object({
-    type: z.enum(CARD_TYPES).describe("Тип карточки (строго из списка; person/company → contact)"),
+    type: z
+      .preprocess(normalizeType, z.enum(CARD_TYPES))
+      .describe("Тип карточки (строго из списка; алиасы вроде person/company → contact применяются автоматически)"),
     title: z.string().min(1).describe("Имя/заголовок сущности (пойдёт в имя файла и заголовок)"),
     description: z.string().min(1).describe("Краткая выжимка что/зачем (1–2 фразы, для поиска)"),
     tags: z.array(z.string()).min(1).max(6).describe("2–5 тегов, lowercase-kebab"),
@@ -115,29 +126,46 @@ export default defineTool({
 
     const dir = join(VAULT(), "cards", CARD_TYPE_DIR[type]);
     mkdirSync(dir, { recursive: true });
-    const slug = slugify(title);
-    const rel = `cards/${CARD_TYPE_DIR[type]}/${slug}.md`;
-    const file = join(VAULT(), "cards", CARD_TYPE_DIR[type], `${slug}.md`);
-    const existed = existsSync(file);
 
-    const fm: string[] = [
-      "---",
-      `type: ${type}`,
-      `description: ${JSON.stringify(description)}`,
-      `tags: [${tags.map((t) => t.toLowerCase().replace(/\s+/g, "-")).join(", ")}]`,
-      `status: ${st}`,
-      `created: ${today()}`,
-      `source: daily/${today()}.md`,
-      `confidence: ${confidence || "EXTRACTED"}`,
-    ];
-    if (domain) fm.push(`domain: ${domain}`);
-    fm.push("---", "");
-
-    let out = fm.join("\n") + `\n# ${title}\n\n${body.trim()}\n`;
-    if (related && related.length) {
-      out += `\n## Related\n` + related.map((r) => `- [[${r}]]`).join("\n") + "\n";
+    // Идентичность: точный слаг → иначе карточка того же типа с таким же H1/name/aliases
+    // (легаси-файлы с латинским слагом и кириллическим заголовком).
+    const id = resolveCard(dir, title);
+    if (id.candidates && id.candidates.length > 1) {
+      const list = id.candidates.map((f) => relative(VAULT(), f).split(sep).join("/"));
+      return {
+        ok: false,
+        error:
+          `Неоднозначная карточка для "${title}": подходят ${list.length} файлов. ` +
+          "Уточни заголовок или обнови нужный файл явно — ничего не записано.",
+        candidates: list,
+      };
     }
-    writeFileSync(file, out, "utf8");
-    return { ok: true, file: rel, type, status: st, action: existed ? "updated" : "created" };
+    const file = id.file;
+    const rel = relative(VAULT(), file).split(sep).join("/");
+
+    const release = acquireLock(file);
+    try {
+      const existing = existsSync(file) ? readFileSync(file, "utf8") : undefined;
+      const { content, action } = mergeCard({
+        existing,
+        title,
+        fields: {
+          type,
+          description,
+          tags: tags.map((t) => t.toLowerCase().replace(/\s+/g, "-")),
+          status: st,
+          confidence: confidence || "EXTRACTED",
+          ...(domain ? { domain } : {}),
+        },
+        initialFields: { created: today(), source: `daily/${today()}.md` },
+        body,
+        related,
+        date: today(),
+      });
+      atomicWrite(file, content);
+      return { ok: true, file: rel, type, status: st, action, matchedBy: id.matchedBy };
+    } finally {
+      release();
+    }
   },
 });
