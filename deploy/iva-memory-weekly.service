@@ -9,4 +9,6 @@ Type=oneshot
 WorkingDirectory=__PROJECT_DIR__
 EnvironmentFile=__PROJECT_DIR__/.env
 Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
-ExecStart=__NODE_BIN__ --env-file=.env scripts/memory/rollup.ts weekly
+# Один флок на все memory-юниты: роллапы и doctor пишут CORE.md/MOC.md — параллельный
+# запуск (1 января стартуют все четыре) не должен переписывать их одновременно.
+ExecStart=/usr/bin/flock -w 900 __PROJECT_DIR__/data/memory.lock __NODE_BIN__ --env-file=.env scripts/memory/rollup.ts weekly
