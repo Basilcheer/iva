@@ -34,7 +34,8 @@ export function parseFrontmatter(content: string): ParsedFrontmatter {
 
   for (const line of rawLines) {
     const stripped = line.trim();
-    const indented = line.startsWith("  ") || line.startsWith("\t");
+    // ЛЮБОЙ ведущий пробел/таб = continuation: YAML допускает и одиночный пробел.
+    const indented = /^[ \t]/.test(line);
 
     if (multilineKey && indented) {
       if (multilineMode === "pending") {
@@ -107,9 +108,9 @@ export function parseFrontmatter(content: string): ParsedFrontmatter {
       continue;
     }
     if (val.startsWith("[") && val.endsWith("]")) {
-      fields[key] = val
-        .slice(1, -1)
-        .split(",")
+      // Квото-осознанный сплит: formatItem пишет `["a, b", c]` — наивный split(",")
+      // разорвал бы квотированный элемент и сломал round-trip.
+      fields[key] = splitFlowItems(val.slice(1, -1))
         .map((x) => unquote(x.trim()))
         .filter((x) => x.length > 0);
     } else {
@@ -124,6 +125,34 @@ export function parseFrontmatter(content: string): ParsedFrontmatter {
   return { fields: clean, body, lines: rawLines };
 }
 
+/** Элементы flow-списка `[...]` с учётом кавычек и экранированных `\"`. */
+function splitFlowItems(inner: string): string[] {
+  const out: string[] = [];
+  let cur = "";
+  let quote: '"' | "'" | null = null;
+  for (let i = 0; i < inner.length; i++) {
+    const ch = inner[i];
+    if (quote) {
+      cur += ch;
+      if (ch === "\\" && quote === '"' && i + 1 < inner.length) {
+        cur += inner[++i]; // экранированный символ внутри двойных кавычек
+      } else if (ch === quote) {
+        quote = null;
+      }
+    } else if (ch === '"' || ch === "'") {
+      quote = ch;
+      cur += ch;
+    } else if (ch === ",") {
+      out.push(cur);
+      cur = "";
+    } else {
+      cur += ch;
+    }
+  }
+  if (cur.trim().length) out.push(cur);
+  return out;
+}
+
 function unquote(s: string): string {
   if (s.length >= 2 && ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'")))) {
     const inner = s.slice(1, -1);
@@ -133,13 +162,16 @@ function unquote(s: string): string {
 }
 
 // Символы, из-за которых голый скаляр перестаёт быть скаляром (или меняет смысл) в YAML.
-const YAML_SPECIAL = /[:#[\]{}"',|>!&*?\n]/;
+const YAML_SPECIAL = /[:#[\]{}"',|>!&*?\n\r\t]/;
+// Голые скаляры, которые PyYAML (autograph) прочитает как bool/null, а не как строку.
+const YAML_AMBIGUOUS = /^(?:true|false|yes|no|on|off|null|~)$/i;
 
 function needsQuote(s: string): boolean {
   if (s === "") return false;
   if (YAML_SPECIAL.test(s)) return true;
   if (s !== s.trim()) return true;
   if (/^[-?@`%]/.test(s)) return true;
+  if (YAML_AMBIGUOUS.test(s)) return true;
   return false;
 }
 
@@ -169,12 +201,13 @@ export function writeFrontmatter(fields: FmFields, originalLines: string[]): str
 
   for (const line of originalLines) {
     const stripped = line.trim();
-    const indented = line.startsWith("  ") || line.startsWith("\t");
+    const indented = /^[ \t]/.test(line);
     if (skipContinuation && indented) continue;
 
     if (!stripped || stripped.startsWith("#")) {
-      skipContinuation = false;
-      out.push(line);
+      // Пустая строка/коммент ВНУТРИ пропускаемого блока (folded-скаляр с абзацем) —
+      // часть блока, не разделитель: не сбрасываем skip и не выводим.
+      if (!skipContinuation) out.push(line);
       continue;
     }
     if (!stripped.includes(":")) {

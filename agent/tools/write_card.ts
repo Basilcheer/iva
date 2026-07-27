@@ -143,8 +143,11 @@ export default defineTool({
     const file = id.file;
     const rel = relative(VAULT(), file).split(sep).join("/");
 
-    const release = acquireLock(file);
+    // Сбои лока/записи — структурированная ошибка, а не исключение: модель должна
+    // увидеть внятное «занято/не записалось» и решить, что делать, а не уронить ход.
+    let release: (() => void) | null = null;
     try {
+      release = acquireLock(file);
       const existing = existsSync(file) ? readFileSync(file, "utf8") : undefined;
       const { content, action } = mergeCard({
         existing,
@@ -164,8 +167,10 @@ export default defineTool({
       });
       atomicWrite(file, content);
       return { ok: true, file: rel, type, status: st, action, matchedBy: id.matchedBy };
+    } catch (e) {
+      return { ok: false, error: `Не удалось записать карточку ${rel}: ${(e as Error).message}` };
     } finally {
-      release();
+      release?.();
     }
   },
 });
