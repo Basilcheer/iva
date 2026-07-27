@@ -7,7 +7,7 @@
 // client_secret.json — секрет: принимаем текстом только в личке (сообщение удаляет движок,
 // secret:true), содержимое НЕ печатаем/не логируем; пишем файл 0600.
 import { existsSync } from "node:fs";
-import { mkdir, writeFile, chmod } from "node:fs/promises";
+import { mkdir, writeFile, chmod, rm } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { join } from "node:path";
 import { homedir } from "node:os";
@@ -45,6 +45,24 @@ async function authStatus() {
 
 const invalidate = () => (cache = { at: 0, status: null });
 
+// Прибрать detached-процесс `gws auth login` и его temp-лог (в логе — OAuth-URL).
+// Вызывается при повторном «Подключить», при возврате на экран с висящей авторизацией
+// и после завершения обмена. Ограничение: если стейт меню испарился целиком (TTL
+// tg-flow, рестарт моста), pid потерян — процесс доживает до собственного таймаута gws.
+function reapAuth(st) {
+  const a = st.gwsAuth;
+  st.gwsAuth = null;
+  if (!a) return;
+  if (a.pid) {
+    try {
+      process.kill(a.pid);
+    } catch {
+      /* уже завершился */
+    }
+  }
+  if (a.logPath) rm(a.logPath, { force: true }).catch(() => {});
+}
+
 function instructions(ctx) {
   const T = ctx.tr;
   const text = [
@@ -69,6 +87,9 @@ export default {
 
   async render(st, ctx) {
     const T = ctx.tr;
+    // Возврат на экран (отмена, «Назад») с незавершённой авторизацией: awaitText уже снят
+    // движком, код принять некому — приберём процесс и лог, а не оставим их висеть.
+    if (st.gwsAuth && st.awaitText?.kind !== "gwsauthcode") reapAuth(st);
     if (!existsSync(SECRET_PATH)) return instructions(ctx);
 
     const status = await authStatus();
@@ -127,6 +148,7 @@ export default {
 
     if (step === "connect") {
       const T = ctx.tr;
+      reapAuth(st); // повторное «Подключить» не должно оставлять прежний detached-процесс
       const challenge = await startAuth();
       if (!challenge) {
         st.awaitText = null;
@@ -136,7 +158,8 @@ export default {
           [[ctx.btn(T("Connect", "Подключить"), `iva_menu:${SID}:do:connect`)], ctx.backRow(PARENT)],
         );
       }
-      st.gwsAuth = { port: challenge.port };
+      // pid и logPath — чтобы отмена/повтор могли убить процесс и удалить лог с OAuth-URL.
+      st.gwsAuth = { pid: challenge.pid, port: challenge.port, logPath: challenge.logPath };
       // secret:true — движок удалит сообщение с одноразовым code из чата после приёма.
       st.awaitText = { kind: "gwsauthcode", secret: true };
       const text = [
@@ -240,6 +263,8 @@ export default {
       // working indicator makes the process feel under control before the final status lands.
       await ctx.flows.screen(st, T("⏳ Working…", "⏳ Работаю…"), null);
       const relay = await relayCode(auth.port, query);
+      // Обмен завершён (успех или нет): gws выходит сам, а вот temp-лог с OAuth-URL — наш.
+      if (auth.logPath) rm(auth.logPath, { force: true }).catch(() => {});
       if (!relay.ok) {
         return ctx.flows.screen(
           st,
