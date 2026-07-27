@@ -1,7 +1,7 @@
 import { defineTool } from "eve/tools";
 import { z } from "zod";
 import { mkdir, writeFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { dirname, resolve, sep } from "node:path";
 
 // Host-native запись файла. Переопределяет встроенный write_file eve: пишет реальный
@@ -15,11 +15,23 @@ import { dirname, resolve, sep } from "node:path";
 
 const VAULT = () => process.env.ASSISTANT_VAULT_DIR || "vault";
 
+// Сравниваем РЕАЛЬНЫЕ пути (realpath), а не лексические: симлинк vault/alias → cards
+// не должен обходить гард. Несуществующие пути realpath не берёт — резолвим родителя.
+function realOrNull(p: string): string | null {
+  try {
+    return realpathSync(p);
+  } catch {
+    return null;
+  }
+}
+
 function isExistingCard(path: string): boolean {
-  const cards = resolve(VAULT(), "cards");
+  const cards = realOrNull(resolve(VAULT(), "cards"));
+  if (!cards) return false; // cards/ ещё нет — нечего защищать
   const abs = resolve(path);
-  if (abs !== cards && !abs.startsWith(cards + sep)) return false;
-  return existsSync(abs);
+  if (!existsSync(abs)) return false;
+  const real = realOrNull(abs) ?? resolve(realOrNull(dirname(abs)) ?? dirname(abs), abs.split(sep).pop() as string);
+  return real === cards || real.startsWith(cards + sep);
 }
 
 export default defineTool({

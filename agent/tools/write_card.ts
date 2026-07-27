@@ -112,8 +112,15 @@ export default defineTool({
       .enum(["EXTRACTED", "INFERRED", "AMBIGUOUS"])
       .optional()
       .describe("EXTRACTED — прямо сказано; INFERRED — выведено; по умолчанию EXTRACTED"),
+    replace_body: z
+      .boolean()
+      .optional()
+      .describe(
+        "ТОЛЬКО для SUPERSEDE: заменить body целиком (сам перенеси старое значение в ## History). " +
+          "Без флага body дописывается, противоречащие факты так не исправить.",
+      ),
   }),
-  async execute({ type, title, description, tags, status, domain, related, body, confidence }) {
+  async execute({ type, title, description, tags, status, domain, related, body, confidence, replace_body }) {
     // Валидация статуса против схемы типа (жёстко — иначе модель придумает статус).
     const allowed = SCHEMA.status[type] || ["active"];
     const st = status && allowed.includes(status) ? status : allowed[0];
@@ -164,6 +171,7 @@ export default defineTool({
         body,
         related,
         date: today(),
+        replaceBody: replace_body === true,
       });
       atomicWrite(file, content);
       return { ok: true, file: rel, type, status: st, action, matchedBy: id.matchedBy };

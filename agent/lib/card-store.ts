@@ -34,14 +34,20 @@ export function slugify(s: string): string {
   );
 }
 
-/** Нормализация имени для сравнения: без уточнения в скобках, без пунктуации, lowercase. */
+/** Нормализация имени: без пунктуации, lowercase; скобки сохраняют содержимое. */
 export function normalizeName(s: string): string {
   return s
-    .replace(/\([^)]*\)/g, " ")
     .toLowerCase()
     .replace(/[^\p{L}\p{N}]+/gu, " ")
     .trim();
 }
+
+/** Имя без уточнения в скобках — для матча «голое имя ↔ квалифицированная карточка». */
+export function baseName(s: string): string {
+  return normalizeName(s.replace(/\([^)]*\)/g, " "));
+}
+
+const hasQualifier = (s: string) => /\(/.test(s);
 
 export function extractH1(body: string): string | null {
   const m = /^#\s+(.+)$/m.exec(body);
@@ -80,7 +86,12 @@ export function resolveCard(dir: string, title: string): Identity {
   const exact = join(dir, `${slug}.md`);
   if (existsSync(exact)) return { file: exact, matchedBy: "slug" };
 
+  // Правило квалификаторов: «Ясмин» (без скобок) находит «Ясмин (AI Content Creator)»,
+  // но «Alex (UK)» НЕ сливается в «Alex (US)» — квалифицированный запрос матчится только
+  // при полном совпадении (со скобками), иначе это другая сущность и нужен новый файл.
   const wanted = normalizeName(title);
+  const wantedBase = baseName(title);
+  const bareQuery = !hasQualifier(title);
   const hits: string[] = [];
   let names: string[] = [];
   try {
@@ -99,7 +110,10 @@ export function resolveCard(dir: string, title: string): Identity {
     const { fields, body } = parseFrontmatter(text);
     const h1 = extractH1(body);
     const cands = [h1, ...fmNames(fields), name.replace(/\.md$/, "")].filter(Boolean) as string[];
-    if (cands.some((c) => normalizeName(c) === wanted)) hits.push(full);
+    const matched = cands.some(
+      (c) => normalizeName(c) === wanted || (bareQuery && baseName(c) === wantedBase),
+    );
+    if (matched) hits.push(full);
   }
 
   if (hits.length === 1) return { file: hits[0], matchedBy: "title" };
@@ -157,15 +171,17 @@ export interface MergeInput {
   related?: string[];
   /** Дата для маркера дописанного блока. */
   date: string;
+  /** SUPERSEDE: заменить body целиком (frontmatter всё равно сливается). */
+  replaceBody?: boolean;
 }
 
 export interface MergeResult {
   content: string;
-  action: "created" | "updated" | "merged";
+  action: "created" | "updated" | "merged" | "replaced";
 }
 
 export function mergeCard(input: MergeInput): MergeResult {
-  const { existing, title, fields, initialFields, body, related, date } = input;
+  const { existing, title, fields, initialFields, body, related, date, replaceBody } = input;
   const trimmedBody = body.trim();
 
   if (existing === undefined) {
@@ -205,7 +221,12 @@ export function mergeCard(input: MergeInput): MergeResult {
 
   let newBody = oldBody;
   let appended = false;
-  if (!bodyContains(oldBody, trimmedBody)) {
+  if (replaceBody) {
+    // SUPERSEDE: вызывающий сознательно переписывает текущую истину (и обязан сам
+    // перенести старое значение в ## History — см. правила rollup). Merge здесь
+    // невозможен по определению: противоречащие факты нельзя «дописать».
+    newBody = `\n${trimmedBody}\n`;
+  } else if (!bodyContains(oldBody, trimmedBody)) {
     newBody = `${newBody.replace(/\s+$/, "")}\n\n## Обновление ${date}\n\n${trimmedBody}\n`;
     appended = true;
   }
@@ -217,16 +238,18 @@ export function mergeCard(input: MergeInput): MergeResult {
   }
 
   const content = `---\n${fmText}\n---\n${newBody.replace(/\s*$/, "")}\n`;
-  return { content, action: appended ? "merged" : "updated" };
+  return { content, action: replaceBody ? "replaced" : appended ? "merged" : "updated" };
 }
 
 // ─── lock + атомарная запись ───────────────────────────────────────────────
 
 const LOCK_STALE_MS = 15_000;
 
-/** Простой lock-файл (O_EXCL). Достаточно против гонки двух ходов одного агента. */
+/** Lock-файл (O_EXCL) с токеном владения: release снимает лок, только пока на диске
+ * наш токен — вытесненный по staleness держатель не удалит лок преемника. */
 export function acquireLock(file: string, timeoutMs = 5000): () => void {
   const lock = `${file}.lock`;
+  const token = `${process.pid}-${Math.random().toString(36).slice(2)}`;
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     // Дедлайн проверяется на КАЖДОЙ итерации, включая путь «лок исчез между попыткой
@@ -234,10 +257,11 @@ export function acquireLock(file: string, timeoutMs = 5000): () => void {
     if (Date.now() > deadline) throw new Error(`Карточка занята другим процессом: ${lock}`);
     try {
       const fd = openSync(lock, "wx");
-      writeSync(fd, String(process.pid));
+      writeSync(fd, token);
       closeSync(fd);
       return () => {
         try {
+          if (readFileSync(lock, "utf8") !== token) return; // лок уже не наш
           rmSync(lock, { force: true });
         } catch {
           /* лок уже снят */
