@@ -688,7 +688,7 @@ function cmdVersion() {
 async function cmdUsage(args) {
   const { readEntries, summarize, formatUsageReport, parseWindow } = await import("../scripts/lib/usage.mjs");
   const env = readEnv();
-  const dataDir = join(ROOT, env.ASSISTANT_DATA_DIR || "data");
+  const dataDir = dataDirAbs(env);
   if (args[0] === "tail") {
     const n = Number(args[1]) || 10;
     for (const e of readEntries(dataDir).slice(-n)) console.log(JSON.stringify(e));
