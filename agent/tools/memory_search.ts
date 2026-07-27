@@ -22,7 +22,10 @@ const DEFAULT_DIRS = ["cards", "summaries", "weekly", "monthly", "yearly"];
 const MAX_SNIPPET = 240;
 
 interface Doc {
-  path: string; // vault-relative, no leading ./
+  // КОНТРАКТ ПУТЕЙ: vault-relative, без ведущего "./" — ровно в таком виде путь уезжает
+  // в hits[].file. read_file умеет резолвить такие пути от ASSISTANT_VAULT_DIR (см.
+  // agent/tools/read_file.ts); менять формат в одиночку нельзя — иначе ENOENT у модели.
+  path: string;
   title: string;
   meta: string; // ключевые скалярные поля фронтматтера (name/company/role/description/aliases…)
   body: string;
