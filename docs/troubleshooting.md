@@ -29,10 +29,12 @@ iva restart
 Cause: a wedged turn lives in `.workflow-data`, and eve re-enqueues it on every start — plain `iva restart` brings it right back.
 
 ```bash
-iva reset   # stop services, clear .workflow-data, restart
+iva reset   # stop services, quarantine workflow + Telegram busy/queue state, restart
 ```
 
-From Telegram, `/restart` does the same. The poll bridge handles it out-of-band, so it works even while the agent is busy.
+From Telegram, `/new` resets only the current chat or forum topic. `/restart` resets that same conversation and then restarts the agent process. Both are handled out-of-band and work while the agent is busy. Use server-side `iva reset` only when the entire workflow store is damaged.
+
+After upgrading a legacy group with no recorded Eve token, send `/new` as a reply to Iva's latest message once. Future resets use the exact token stored by the new channel events.
 
 ### Model changed in .env but nothing happened
 

@@ -8,10 +8,10 @@
 // so we fetch updates from Telegram ourselves (getUpdates, long-poll) and POST them to
 // the local eve route with the same secret — Telegram sees an ordinary bot, no proxy needed.
 // The channel/agent are unchanged. Webhook and polling are mutually exclusive → deleteWebhook on start.
-import { readFile, writeFile, mkdir, rm, readdir, stat } from "node:fs/promises";
+import { readFile, writeFile, mkdir, rename, rm, readdir, stat } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { execFile } from "node:child_process";
-import { join, dirname, relative } from "node:path";
+import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomBytes } from "node:crypto";
 import { readEntries, summarize, formatUsageReport, parseWindow } from "./lib/usage.mjs";
@@ -21,12 +21,12 @@ import { getAccessToken, runDeviceCodeLogin } from "./lib/codex-oauth.mjs";
 import { compactNumber, modelSummary } from "./lib/model-summary.mjs";
 import { acquireUpdateLock, releaseUpdateLock } from "./lib/update-safety.mjs";
 import { inspectUpstream, markVersionNotified, updateOffer } from "./lib/update-check.mjs";
-// ESC-остановка: канал пишет в data/run-status.json, идёт ли сейчас ход по чату;
+// ESC-остановка: канал пишет в data/run-status.d, идёт ли сейчас ход по чату;
 // мост по нему буферизует входящие (см. очередь ниже) и обслуживает /stop.
-import { isRunning } from "./lib/run-status.mjs";
-import { quarantineDir } from "./lib/wf-store.mjs";
+import { getChatStatus, isRunning, setChatStatus } from "./lib/run-status.mjs";
 import { classifyDeliverStatus } from "./lib/deliver-policy.mjs";
 import { alreadyDelivered, parseOffsetFile, serializeOffsetFile } from "./lib/offset-store.mjs";
+import { continuationTokenForControl, requestTelegramReset } from "./lib/telegram-reset.mjs";
 // Двуязычие: единый источник языка (getLang) + одна таблица команд (COMMANDS) для /help
 // и синего командного меню Telegram. tr(en, ru) — функция (язык не замораживаем в const).
 import { getLang, tr, helpText, botCommands } from "./lib/i18n.mjs";
@@ -36,12 +36,10 @@ import { createFlows } from "./lib/tg-flow.mjs";
 import { createMenu } from "./lib/menu/index.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-// Current eve keeps the workflow store in .eve/.workflow-data; the bare .workflow-data is
-// where older versions kept it — clear both so recovery works across eve upgrades.
-const WORKFLOW_DIRS = [join(ROOT, ".eve", ".workflow-data"), join(ROOT, ".workflow-data")];
 const NODE = process.execPath;
 
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+const BOT_USER_ID = /^(\d+):/.exec(TOKEN ?? "")?.[1] ?? null;
 const SECRET = process.env.TELEGRAM_WEBHOOK_SECRET_TOKEN;
 const PORT = process.env.IVA_PORT ?? "8723";
 const HOST = (process.env.ASSISTANT_HOST ?? `http://127.0.0.1:${PORT}`).replace(/\/$/, "");
@@ -52,6 +50,7 @@ const DATA_DIR = DATA_DIR_RAW.startsWith("/") ? DATA_DIR_RAW : join(ROOT, DATA_D
 const ENV_PATH = join(ROOT, ".env");
 const DATA_DIR_ABS = DATA_DIR;
 const ROUTE = `${HOST}/eve/v1/telegram`;
+const RESET_ROUTE = `${ROUTE}/reset`;
 const API = `https://api.telegram.org/bot${TOKEN}`;
 const OFFSET_FILE = join(DATA_DIR, "telegram-offset.json");
 // Pause between updates of the SAME chat: we give eve time to park the turn and register
@@ -299,40 +298,6 @@ async function edit(chatId, messageId, text, replyMarkup) {
 const sc = (...args) =>
   new Promise((resolve) => execFile("systemctl", ["--user", ...args], (err) => resolve(!err)));
 
-// Recovery commands (/restart, /new, /clear, /compact) = "reset and bring back up".
-// A plain restart doesn't help: on start eve RE-ENQUEUES all pending/running runs from
-// the workflow store, so the stuck/bloated turn comes back. We stop the server, clear
-// the store (while the process is stopped — not from under a live one), bring it back up. It wipes ALL
-// parked conversations — for a single-user assistant this is exactly "start over".
-async function restartAgent() {
-  const warnings = [];
-  // Fail closed: quarantining the store under a live eve corrupts state and resurrects
-  // the very runs we're clearing — if stop failed, don't touch anything.
-  if (!(await sc("stop", "iva.service"))) {
-    log("reset: systemctl stop failed — workflow store left untouched");
-    return { started: false, warnings: ["systemctl stop failed"] };
-  }
-  for (const dir of WORKFLOW_DIRS) {
-    try {
-      // Quarantine (rename → *.trash-<stamp>) instead of rm: undo-able until rotated out.
-      quarantineDir(dir);
-    } catch (e) {
-      log(`reset: failed to quarantine ${relative(ROOT, dir)}:`, e.message);
-      warnings.push(`${relative(ROOT, dir)}: ${e.message}`);
-    }
-  }
-  // Reset wipes the ESC-stop state too: a stale "running" flag would keep buffering
-  // messages, and a stale queue would replay pre-reset messages into the fresh dialog.
-  // ТОЛЬКО при полном карантине: если стор остался, старый ран вернётся — выбрасывать
-  // при этом буфер значило бы потерять сообщения, не вылечив зависание.
-  if (warnings.length === 0) {
-    await rm(join(DATA_DIR, "run-status.json"), { force: true }).catch(() => {});
-    await rm(join(DATA_DIR, "telegram-queue.json"), { force: true }).catch(() => {});
-  }
-  const started = await sc("start", "iva.service");
-  return { started, warnings };
-}
-
 // ── ESC-stop message queue (Claude Code semantics) ─────────────────────────
 // While a turn is running for a chat, ordinary message updates are NOT delivered to eve:
 // they are appended to data/telegram-queue.json and acknowledged with a 👀 reaction.
@@ -343,22 +308,99 @@ async function restartAgent() {
 // (the channel turns it into context lines).
 const QUEUE_FILE = join(DATA_DIR, "telegram-queue.json");
 
-async function loadQueue() {
+export async function loadQueue({ strict = false } = {}) {
+  let raw;
   try {
-    const q = JSON.parse(await readFile(QUEUE_FILE, "utf8"));
-    return typeof q === "object" && q !== null ? q : {};
-  } catch {
+    raw = await readFile(QUEUE_FILE, "utf8");
+  } catch (error) {
+    if (error?.code === "ENOENT") return {};
+    throw error;
+  }
+  try {
+    const queue = JSON.parse(raw);
+    if (typeof queue !== "object" || queue === null || Array.isArray(queue)) {
+      throw new Error(`${QUEUE_FILE} does not contain a JSON object`);
+    }
+    return queue;
+  } catch (error) {
+    if (strict) throw error;
+    const backup = `${QUEUE_FILE}.corrupt-${Date.now()}-${randomBytes(4).toString("hex")}`;
+    // Ordinary polling must stay live, but returning {} before the damaged
+    // bytes are safely moved would let the next save overwrite evidence/data.
+    await rename(QUEUE_FILE, backup);
+    log(`damaged Telegram queue moved to ${backup}:`, error.message);
     return {};
+  }
+}
+
+export async function writeQueueAtomic(
+  queue,
+  {
+    writeFileImpl = writeFile,
+    renameImpl = rename,
+    rmImpl = rm,
+    nonce = randomBytes(8).toString("hex"),
+  } = {},
+) {
+  await mkdir(DATA_DIR, { recursive: true });
+  const tmp = `${QUEUE_FILE}.tmp-${process.pid}-${nonce}`;
+  try {
+    await writeFileImpl(tmp, JSON.stringify(queue), {
+      encoding: "utf8",
+      flag: "wx",
+      mode: 0o600,
+    });
+    await renameImpl(tmp, QUEUE_FILE);
+  } finally {
+    await rmImpl(tmp, { force: true }).catch(() => {});
   }
 }
 
 async function saveQueue(q) {
   try {
-    await mkdir(DATA_DIR, { recursive: true });
-    await writeFile(QUEUE_FILE, JSON.stringify(q), "utf8");
+    await writeQueueAtomic(q);
   } catch (e) {
     log("queue save failed:", e.message);
   }
+}
+
+// A scoped reset intentionally discards only messages queued for this chat/topic.
+// Other conversations keep both their queues and their Eve histories.
+async function clearChatQueue(chatKey) {
+  const q = await loadQueue({ strict: true });
+  if (!(chatKey in q)) return;
+  delete q[chatKey];
+  // Reset cleanup must fail loudly: completeScopedResetState keeps the old
+  // running status until this atomic rename succeeds.
+  await writeQueueAtomic(q);
+}
+
+export async function completeScopedResetState(
+  chatKey,
+  continuationToken,
+  {
+    clearQueue = false,
+    clearQueueImpl = clearChatQueue,
+    setStatusImpl = setChatStatus,
+  } = {},
+) {
+  // For private chats the queue belongs to the reset session, so clear it
+  // before exposing an idle tombstone. A failed cleanup leaves the old running
+  // status in place and lets a repeated /new retry safely.
+  if (clearQueue) await clearQueueImpl(chatKey);
+
+  // Keep an idle token tombstone: Telegram updates are at-least-once. If the
+  // same group /new is replayed after a crash, the second reset remains an
+  // idempotent no_active_session instead of losing the group anchor.
+  setStatusImpl(chatKey, {
+    status: "idle",
+    continuationToken,
+    sessionId: null,
+    turnId: null,
+    statusMessageId: null,
+    wasCancelled: null,
+    resetAt: Date.now(),
+  });
 }
 
 // One queued message → one context line. Media can't be re-fed later (the channel
@@ -893,7 +935,7 @@ async function handleWizardCallback(cq) {
   }
   if (action === "rs:now") {
     await endWizard(st, tr("Restarting the agent… (~30s). The current conversation resumes after the restart.", "Перезапускаю агента… (~30 сек). Текущий диалог продолжится после перезапуска."), menuRow());
-    // Plain restart, NOT restartAgent(): a config change is not a recovery — parked
+    // Plain restart: a config change is not a recovery — parked
     // conversations in .workflow-data survive and resume under the new model.
     const ok = await sc("restart", "iva.service");
     if (ok) {
@@ -1075,7 +1117,7 @@ async function handleControl(update) {
   }
   if (!text.startsWith("/")) return false;
   const cmd = text.split(/\s+/)[0].replace(/@\w+$/, "").toLowerCase();
-  if (!["/menu", "/help", "/stop", "/usage", "/restart", "/new", "/clear", "/compact", "/update", "/model", "/think"].includes(cmd)) return false;
+  if (!["/menu", "/help", "/stop", "/usage", "/restart", "/new", "/update", "/model", "/think"].includes(cmd)) return false;
   const from = String(msg?.from?.id ?? "");
   if (ALLOWED.size === 0 || !ALLOWED.has(from)) return false; // untrusted — let eve drop it
   const chatId = msg?.chat?.id;
@@ -1134,27 +1176,85 @@ async function handleControl(update) {
     await handleThinkCmd(chatId, from).catch((e) => log("wizard /think error:", e.message));
     return true;
   }
-  // /restart, /new, /clear, /compact → process restart (reliable reset/recovery).
-  // Fresh .env, not this process's snapshot — see the same note in handleUpdateCheck.
+  // /new retires only this exact Telegram session. /restart does the same first,
+  // then restarts the agent process; histories and queues of other chats survive.
+  const key = chatKey(update);
+  const continuationToken = key
+    ? continuationTokenForControl(update, getChatStatus(key), BOT_USER_ID)
+    : null;
   const resetCopy = resetMessageCopy(cmd, await readEnvFresh(ENV_PATH));
   const status = await reply(chatId, resetCopy.pending);
-  const res = await restartAgent();
-  if (!status) return true;
-  if (!res.started) {
-    await edit(chatId, status.message_id, tr("⚠️ Couldn't restart Iva", "⚠️ Не удалось перезапустить Iva"));
+  if (!continuationToken || !key) {
+    if (status) {
+      await edit(
+        chatId,
+        status.message_id,
+        tr(
+          "⚠️ I couldn't identify this conversation. In a group, reply /new to Iva's latest message.",
+          "⚠️ Не удалось определить этот диалог. В группе ответьте /new на последнее сообщение Iva.",
+        ),
+      );
+    }
     return true;
   }
-  // Honest completion: a failed quarantine means the stuck run WILL come back after
-  // restart (eve re-enqueues it) — say so instead of reporting a clean reset.
-  let done = resetCopy.complete;
-  if (res.warnings.length) {
-    done +=
-      tr(
-        "\n⚠️ Part of the workflow store was NOT cleared — the stuck turn may come back: ",
-        "\n⚠️ Часть стора ходов НЕ очищена — зависший ход может вернуться: ",
-      ) + res.warnings.join("; ");
+
+  try {
+    await requestTelegramReset({
+      url: RESET_ROUTE,
+      secret: SECRET,
+      continuationToken,
+    });
+  } catch (e) {
+    log(`scoped reset failed for ${key}:`, e.message);
+    if (status) {
+      await edit(
+        chatId,
+        status.message_id,
+        tr(
+          "⚠️ Couldn't reset this conversation. Nothing else was cleared.",
+          "⚠️ Не удалось сбросить этот диалог. Остальные данные не затронуты.",
+        ),
+      );
+    }
+    return true;
   }
-  await edit(chatId, status.message_id, done);
+
+  try {
+    await completeScopedResetState(key, continuationToken, {
+      // Group/forum queues are keyed only by chat/topic while Eve sessions also
+      // include conversationId. Clearing the shared queue here would lose
+      // messages belonging to other group conversation anchors.
+      clearQueue: msg?.chat?.type === "private",
+    });
+  } catch (e) {
+    log(`scoped reset cleanup failed for ${key}:`, e.message);
+    if (status) {
+      await edit(
+        chatId,
+        status.message_id,
+        tr(
+          "⚠️ Conversation reset, but local cleanup failed. Send /new again before sending anything else.",
+          "⚠️ Диалог сброшен, но локальная очистка не завершилась. Отправьте /new ещё раз до новых сообщений.",
+        ),
+      );
+    }
+    return true;
+  }
+
+  if (cmd === "/restart" && !(await sc("restart", "iva.service"))) {
+    if (status) {
+      await edit(
+        chatId,
+        status.message_id,
+        tr(
+          "⚠️ Conversation reset, but Iva couldn't restart.",
+          "⚠️ Диалог сброшен, но перезапустить Iva не удалось.",
+        ),
+      );
+    }
+    return true;
+  }
+  if (status) await edit(chatId, status.message_id, resetCopy.complete);
   return true;
 }
 

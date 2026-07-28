@@ -13,14 +13,17 @@ Iva has two control surfaces: slash commands in Telegram and the `iva` command o
 | `/tasks` | Show the task list |
 | `/digest` | Morning digest built by the morning-digest skill |
 | `/new` | Start over — reset the current conversation |
-| `/restart` | Restart the agent when it's stuck |
-| `/clear` | Same reset as `/new` (`/compact` remains as a legacy alias) |
+| `/restart` | Reset the current conversation, then restart the agent process |
 | `/update` | Check for a new version; if there is one, tap **Update** to install it |
 | `/usage [window]` | Token spend — variants below |
 
 Two kinds here. `/task`, `/tasks` and `/digest` route into the agent and need it running.
 
-Every turn starts with a status message carrying a **⏹ Стоп** button — tap it (or send `/stop`) to abort the turn mid-flight, Claude-Code style: completed work stays in the conversation history, the unfinished step is dropped. Messages sent while a turn is running are not processed immediately: the bridge queues them (you get a 👀 reaction), and they join the context of the next turn — triggered by your next message. `/menu`, `/help`, `/usage`, `/restart`, `/new`, `/clear`, the legacy `/compact` alias and `/update` never reach the agent — the long-poll bridge handles them itself, out-of-band. `/menu` in particular is a whole settings surface that stays responsive even while a turn is running — its map and what applies instantly versus on restart live in [menu.md](menu.md). Reset commands leave one status message, stop `iva.service`, wipe `.workflow-data` (where eve re-enqueues stuck runs on every startup), and start fresh. So recovery works at the exact moment you need it: when the agent is wedged mid-turn. The bridge only obeys user IDs on the allowlist.
+Every turn starts with a status message carrying a **⏹ Стоп** button — tap it (or send `/stop`) to abort the turn mid-flight, Claude-Code style: completed work stays in the conversation history, the unfinished step is dropped. Messages sent while a turn is running are not processed immediately: the bridge queues them (you get a 👀 reaction), and they join the context of the next turn — triggered by your next message. `/menu`, `/help`, `/usage`, `/restart`, `/new` and `/update` never reach the agent — the long-poll bridge handles them itself, out-of-band. `/menu` in particular is a whole settings surface that stays responsive even while a turn is running — its map and what applies instantly versus on restart live in [menu.md](menu.md).
+
+`/new` retires only the exact Eve session for the current private chat, group conversation or forum topic. A private chat's queued messages are cleared with it. A group/topic queue is shared by several reply-anchored conversations, so those messages are preserved. Other chats keep their histories and queues. `/restart` performs the same scoped reset first and then restarts `iva.service`. Both commands work while a turn is running. The server-side `iva reset` remains the explicit break-glass command that quarantines the whole workflow store. The bridge accepts recovery commands only from IDs on the allowlist.
+
+After upgrading a legacy group that has not recorded its Eve token yet, send `/new` as a reply to Iva's latest message once. Private chats and group conversations used after the upgrade need no migration step.
 
 `/update` compares your install with the upstream repo. If a newer version exists, the same message gets **⬆️ Update** and **Later** buttons. After confirmation, that one message is edited through preservation, fetch, build and the final result — no phase messages are left behind. The active phase uses a small animated Telegram loader when the bot can send custom emoji and falls back to a simple `◇` otherwise. Build logs, diffs and commit IDs stay on the server. The detached updater survives the bridge restart. Nothing happens until you tap.
 
@@ -51,7 +54,7 @@ The installer puts `iva` in `~/.local/bin`. Commands that touch systemd need a L
 | `iva doctor` | Checks Node ≥ 24, `.env` keys, build, units, both services, 5 memory timers, vault git origin — auto-repairs what's safe |
 | `iva status` | Status of both services + the memory-timer schedule |
 | `iva restart` | Regenerates units (keeps the port in sync with `IVA_PORT`), restarts agent + bridge |
-| `iva reset` | Stop, wipe `.workflow-data`, restart — cures stuck turns that a plain restart brings right back |
+| `iva reset` | Stop, quarantine workflow plus Telegram busy/queue state, restart — cures stuck turns that a plain restart brings right back |
 | `iva usage [window]` | Same windows as `/usage`, plus `tail [N]` — the last N raw log lines (default 10) |
 | `iva start` / `iva stop` | Start both services and enable at boot / stop them |
 | `iva logs [poll]` | Follow agent logs, last 50 lines; `poll` follows the Telegram bridge instead |

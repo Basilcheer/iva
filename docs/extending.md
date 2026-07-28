@@ -49,14 +49,14 @@ A subagent brings its own provider and model: the planner pins Ollama Cloud (`OL
 
 ## Changing the character
 
-Iva's voice lives in exactly one file: `agent/instructions.md` — tone, rules, tool preferences, hard limits. Edit it directly. It is deliberately language-neutral: the reply language comes from `AGENT_LANGUAGE` in `.env`, read at startup by `agent/instructions/05-language.ts` (changing it needs a rebuild + restart). The other files in `agent/instructions/` are machinery, not character — `10-map.md` (memory protocol), `20-core.ts` (injects the vault's CORE.md), `now.ts` (date/time). The old rule that `05-language.ts` must import only `eve/instructions` and `process.env` came from an eve 0.11.4 dev-mode bug, fixed by eve 0.24.4 (see gotchas below) — cross-imports are safe now; the file simply has no reason to grow.
+Iva's voice lives in exactly one file: `agent/instructions.md` — tone, rules, tool preferences, hard limits. Edit it directly. It is deliberately language-neutral: the reply language comes from `AGENT_LANGUAGE` in `.env`, read at startup by `agent/instructions/05-language.ts` (changing it needs a rebuild + restart). The other files in `agent/instructions/` are machinery, not character — `10-map.md` (memory protocol), `20-core.ts` (injects the vault's CORE.md), `now.ts` (date/time). The old rule that `05-language.ts` must import only `eve/instructions` and `process.env` came from an eve 0.11.4 dev-mode bug, fixed in later Eve releases (see gotchas below) — cross-imports are safe now; the file simply has no reason to grow.
 
 What Iva knows about *you* is memory, not code — that's `CORE.md` in the vault ([memory.md](./memory.md)).
 
 ## Local development
 
 ```bash
-npm ci        # postinstall applies patches/eve+0.24.4.patch
+npm ci        # postinstall applies patches/eve+0.27.8.patch
 npm run dev   # eve dev TUI, server on http://127.0.0.1:2000
 npm exec -- eve dev --no-ui --logs all   # headless
 ```
@@ -70,8 +70,8 @@ const res = await session.send("Add a task: buy coffee, high priority.");
 console.log((await res.result()).message);
 ```
 
-One gotcha — Iva runs eve **0.24.4**:
+One gotcha — Iva runs eve **0.27.8**:
 
-- 🩹 **patch-package** — `patches/eve+0.24.4.patch` makes deterministic model-call errors (invalid prompt, unknown tool) fail fast instead of retrying forever; upstream still classifies them as retryable as of 0.24.4. If you bump eve, regenerate the patch (re-apply the edit to `node_modules/eve/dist/src/harness/model-call-error.js`, then `npx patch-package eve`) or drop it and retest.
+- 🩹 **patch-package** — `patches/eve+0.27.8.patch` makes deterministic model-call errors (invalid prompt, unknown tool) fail fast instead of parking a poisoned session; upstream still classifies them as recoverable in 0.27.8. If you bump Eve, regenerate the patch (re-apply the edit to `node_modules/eve/dist/src/harness/model-call-error.js`, then `npx patch-package eve`) or drop it only after the targeted classification test passes against upstream.
 
-The eve 0.11.4 schedule crash (`eve dev` dying when a schedule handler imported another authored module) is fixed as of 0.24.4 — verified with a probe schedule. The repo still ships no `agent/schedules/*.ts`: on a VPS `defineSchedule` never fires anyway, systemd timers do that job ([deploy.md](./deploy.md)).
+The Eve 0.11.4 schedule crash (`eve dev` dying when a schedule handler imported another authored module) is fixed in 0.27.8 — verified with a probe schedule. The repo still ships no `agent/schedules/*.ts`: on a VPS `defineSchedule` never fires anyway, systemd timers do that job ([deploy.md](./deploy.md)).

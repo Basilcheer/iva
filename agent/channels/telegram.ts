@@ -1,4 +1,5 @@
 import { telegramChannel, type TelegramMessageBody } from "eve/channels/telegram";
+import { POST } from "eve/channels";
 import { appendFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 // Разметка Telegram — ЕДИНЫЙ источник правды (тот же модуль, что у cron-скриптов).
@@ -7,12 +8,18 @@ import { join } from "node:path";
 import { toTelegramHtmlChunks, htmlToPlain, needsRichMessage } from "../../scripts/lib/telegram-format.mjs";
 import { describeImage } from "../vision.js";
 import { sanitizeInbound, scanOutbound } from "../lib/security-gate.js";
-// Состояние «идёт ли ход» — общий файл data/run-status.json с мостом telegram-poll.mjs:
-// мост по нему буферизует входящие, канал хранит sessionId/turnId для отмены.
-import { chatKeyOf, getChatStatus, setChatStatus } from "../../scripts/lib/run-status.mjs";
+// Состояние «идёт ли ход» — per-chat файлы data/run-status.d с мостом telegram-poll.mjs:
+// мост по ним буферизует входящие, канал хранит sessionId/turnId для отмены.
+import {
+  chatKeyOf,
+  getChatStatus,
+  setChatStatus,
+  setChatStatusIf,
+} from "../../scripts/lib/run-status.mjs";
 // Двуязычие: tr(en, ru) отдаёт строку по текущему языку (data/settings.json → env
 // AGENT_LANGUAGE). Тот же кросс-импорт scripts/lib в eve-бандл, что и telegram-format выше.
 import { tr } from "../../scripts/lib/i18n.mjs";
+import { handleTelegramResetRequest } from "../../scripts/lib/telegram-reset-route.mjs";
 import { pathToFileURL } from "node:url";
 
 // Токен (TELEGRAM_BOT_TOKEN) и секрет вебхука (TELEGRAM_WEBHOOK_SECRET_TOKEN)
@@ -283,8 +290,7 @@ async function sendWorkingStatus(tg: {
   return res.ok ? ((res.body as any)?.result?.message_id ?? null) : null;
 }
 
-// resumeHook — ВНУТРЕННИЙ модуль eve: публичного cancel-API в 0.24.4 нет (CHANGELOG:
-// «The HTTP cancellation API ships in a following release»). resumeHook("<sessionId>:cancel")
+// Callback hooks Telegram не получают route-level cancel helper. resumeHook("<sessionId>:cancel")
 // абортит активный ход — сигнал прошит до model.stream и тулзов.
 // Именно ДИНАМИЧЕСКИЙ import по вычисленному пути: статический компилятор authored-модулей
 // eve копирует в свой кэш, где package-internal специфаеры #compiled/* не резолвятся
@@ -302,19 +308,36 @@ function loadResumeHook() {
 // Терминал хода: state → idle (+wasCancelled), статус-сообщение удалить (обычный финал)
 // или переписать на «Остановлено» (отмена). Сбои уборки не критичны — глотаем.
 async function finishStatus(
-  tg: { chatId: string; messageThreadId?: number; request: (m: string, b?: any) => Promise<any> },
+  channel: {
+    continuationToken: string;
+    telegram: { chatId: string; messageThreadId?: number; request: (m: string, b?: any) => Promise<any> };
+  },
+  sessionId: string,
   mode: "completed" | "cancelled" | "failed",
-): Promise<void> {
+): Promise<boolean> {
+  const tg = channel.telegram;
   const key = chatKeyOf(tg.chatId, tg.messageThreadId);
   const st = getChatStatus(key);
-  setChatStatus(key, {
-    status: "idle",
-    turnId: null,
-    statusMessageId: null,
-    ...(mode === "cancelled" ? { wasCancelled: true } : {}),
-  });
+  // Compare and update happen under one per-chat lock. A reset can remove
+  // sessionId after this read; a late terminal event then becomes a no-op.
+  if (
+    !setChatStatusIf(
+      key,
+      { sessionId },
+      {
+        status: "idle",
+        continuationToken: channel.continuationToken,
+        sessionId: null,
+        turnId: null,
+        statusMessageId: null,
+        ...(mode === "cancelled" ? { wasCancelled: true } : {}),
+      },
+    )
+  ) {
+    return false;
+  }
   const msgId = st?.statusMessageId;
-  if (!msgId) return;
+  if (!msgId) return true;
   try {
     if (mode === "cancelled") {
       await tg.request("editMessageText", { chat_id: tg.chatId, message_id: msgId, text: stoppedText() });
@@ -324,9 +347,10 @@ async function finishStatus(
   } catch {
     /* статус-сообщение не убралось — не критично */
   }
+  return true;
 }
 
-export default telegramChannel({
+const telegram = telegramChannel({
   botUsername: process.env.TELEGRAM_BOT_USERNAME ?? "my_bot",
   // Картинку/файл НЕ суём в запрос к модели (это и ломалось: octet-stream → reject, потом
   // инлайн → Bad Request от провайдера, плюс привязка к конкретному vision-API). "disabled" →
@@ -381,24 +405,33 @@ export default telegramChannel({
       }
       setChatStatus(chatKeyOf(tg.chatId, tg.messageThreadId), {
         status: "running",
+        continuationToken: channel.continuationToken,
         sessionId: ctx.session.id,
         turnId: data.turnId,
         statusMessageId,
         wasCancelled: null,
       });
     },
-    async "turn.completed"(_data, channel) {
-      await finishStatus(channel.telegram, "completed");
+    async "turn.completed"(_data, channel, ctx) {
+      await finishStatus(channel, ctx.session.id, "completed");
     },
-    async "turn.cancelled"(_data, channel) {
-      await finishStatus(channel.telegram, "cancelled");
+    async "turn.cancelled"(_data, channel, ctx) {
+      await finishStatus(channel, ctx.session.id, "cancelled");
     },
     // Страховка: если терминальное turn-событие потерялось (краш), парковка сессии
     // всё равно снимает busy-флаг — мост не должен буферизовать вечно.
-    "session.waiting"(_data, channel) {
+    "session.waiting"(_data, channel, ctx) {
       const tg = channel.telegram;
       const key = chatKeyOf(tg.chatId, tg.messageThreadId);
-      if (getChatStatus(key)?.status === "running") setChatStatus(key, { status: "idle", turnId: null });
+      setChatStatusIf(
+        key,
+        { status: "running", sessionId: ctx.session.id },
+        {
+          status: "idle",
+          continuationToken: channel.continuationToken,
+          turnId: null,
+        },
+      );
     },
     // Ответ модели → красивый Telegram-HTML. Переопределяет дефолтную plain-доставку
     // eve. Промежуточный текст перед tool-calls не шлём (зеркалим дефолт). Конвертер
@@ -469,8 +502,8 @@ export default telegramChannel({
       }
     },
     // Ход упал (в т.ч. переполнение контекста / HookConflict) — даём пользователю escape.
-    async "turn.failed"(_data, channel) {
-      await finishStatus(channel.telegram, "failed");
+    async "turn.failed"(_data, channel, ctx) {
+      if (!(await finishStatus(channel, ctx.session.id, "failed"))) return;
       try {
         await channel.telegram.sendMessage(
           tr(
@@ -784,3 +817,15 @@ export default telegramChannel({
     return withPre({ auth: buildAuth(message) });
   },
 });
+
+// The generic eveChannel reset endpoint owns the "eve" continuation namespace,
+// while these sessions belong to "telegram". Keep reset on the same authored
+// channel so Eve prepends the correct channel name before resolving ownership.
+export default {
+  ...telegram,
+  routes: [
+    ...telegram.routes,
+    POST("/eve/v1/telegram/reset", (req, { reset }) =>
+      handleTelegramResetRequest(req, reset, process.env.TELEGRAM_WEBHOOK_SECRET_TOKEN)),
+  ],
+};

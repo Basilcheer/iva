@@ -8,3 +8,8 @@ export function setChatStatus(
   chatKey: string,
   patch: Record<string, unknown>,
 ): Record<string, unknown>;
+export function setChatStatusIf(
+  chatKey: string,
+  expected: Record<string, unknown>,
+  patch: Record<string, unknown>,
+): Record<string, unknown> | null;

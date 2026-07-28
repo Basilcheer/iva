@@ -13,7 +13,7 @@ import { homedir } from "node:os";
 import { createInterface } from "node:readline/promises";
 import { modelSummary } from "../scripts/lib/model-summary.mjs";
 import { createTerminalProgress } from "../scripts/lib/progress.mjs";
-import { quarantineDir } from "../scripts/lib/wf-store.mjs";
+import { quarantinePath, resetStateTargets } from "../scripts/lib/wf-store.mjs";
 import { createTelegramUpdateReporter, loadTelegramJob, removeTelegramJob } from "../scripts/lib/telegram-status.mjs";
 import { generateAssistantBearer, isAssistantBearer } from "../scripts/lib/assistant-auth.mjs";
 import { writeEnvAtomicSync } from "../scripts/lib/env-file.mjs";
@@ -696,39 +696,42 @@ function cmdRestart() {
   restartServices(); // regenerate the unit before restart → PORT stays in sync with IVA_PORT in .env
   ok("Restarted: iva + telegram-poll");
 }
-// Full reset: stop services, wipe the workflow store, bring it back up. A plain restart
+// Full reset: stop services, quarantine workflow + Telegram control state, bring it back up.
+// A plain restart
 // does NOT cure a stuck/bloated run — on startup eve re-enqueues all pending/running
 // runs ("Re-enqueued N active run(s) on startup"). We clean while the server is stopped
 // (otherwise we'd delete files out from under a live process). Wipes ALL parked dialogs.
 // Current eve keeps the store in .eve/.workflow-data; the bare .workflow-data is where
-// older versions kept it — clear both so reset works across eve upgrades.
+// older versions kept it — clear both so reset works across eve upgrades. Busy markers and
+// the bridge queue are part of the same transaction: neither may leak into a fresh workflow.
 function cmdReset() {
   requireSystemd();
   step("Full reset: stopping services…");
   // Fail closed: quarantining the store under a live eve corrupts state and resurrects
   // the very runs we're clearing — if stop failed, don't touch anything.
   if (sc("stop", ...SERVICES).status !== 0) {
-    bad("systemctl stop failed — workflow store left untouched");
+    bad("systemctl stop failed — workflow and Telegram control state left untouched");
     process.exit(1);
   }
   let found = false;
   let failed = false;
-  for (const wf of [join(ROOT, ".eve", ".workflow-data"), join(ROOT, ".workflow-data")]) {
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  for (const target of resetStateTargets(ROOT, dataDirAbs())) {
     try {
       // Quarantine (rename → *.trash-<stamp>) instead of rm: undo-able until rotated out.
-      const dest = quarantineDir(wf);
+      const dest = quarantinePath(target, stamp);
       if (!dest) continue;
       found = true;
-      ok(`${relative(ROOT, wf)} → ${relative(ROOT, dest)} — stuck/accumulated workflow runs quarantined`);
+      ok(`${relative(ROOT, target)} → ${relative(ROOT, dest)} — reset state quarantined`);
     } catch (e) {
       failed = true;
-      warn(`failed to quarantine ${relative(ROOT, wf)}: ${e.message}`);
+      warn(`failed to quarantine ${relative(ROOT, target)}: ${e.message}`);
     }
   }
-  if (!found && !failed) ok("workflow store already empty");
+  if (!found && !failed) ok("workflow and Telegram control state already empty");
   const restarted = restartServices();
   if (failed) {
-    bad("Reset INCOMPLETE — eve will re-enqueue the runs that were not cleared");
+    bad("Reset INCOMPLETE — old workflow or Telegram control state may still be active");
     process.exit(1);
   }
   if (!restarted) {
