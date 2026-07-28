@@ -31,6 +31,8 @@ Note: `getUpdates` — which the setup wizard uses to discover your user ID — 
 
 `bin/iva.mjs` is the single source of truth for every unit. Any restart through the `iva` CLI regenerates them first, so `Environment=PORT` always matches `IVA_PORT` in `.env`. Don't hand-edit `~/.config/systemd/user/iva-*` — edits get overwritten. If you write your own unit instead, bake the port literally (`Environment=PORT=8723`): systemd will not expand `$IVA_PORT` from an `EnvironmentFile`.
 
+The unit starts eve with `--host 127.0.0.1`, and a hand-written one must do the same. eve's `localDev()` auth strategy decides a request is local from the hostname in `request.url` — that is, from the client's own `Host` header — so a server listening on `0.0.0.0` grants local-dev access, and with it a sandbox-free shell on your box, to anyone who reaches the port with `Host: 127.0.0.1`. Setting `HOST` in the environment does not help: `eve start` uses `options.host ?? "0.0.0.0"` and overwrites `HOST`/`NITRO_HOST` for the server process it spawns. Nothing outside the machine needs this port — the Telegram bridge, the sweep and the memory scripts all talk to `127.0.0.1`.
+
 | Unit | When | Job |
 |------|------|-----|
 | `iva.service` | always | the agent (`eve start`), `Restart=always` |

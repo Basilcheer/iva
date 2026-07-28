@@ -124,7 +124,14 @@ function ivaServiceBody() {
     // index.mjs prewarm не делает → первое же вложение падает SandboxTemplateNotProvisionedError
     // (шаблона нет в .eve/sandbox-cache). Ключ шаблона — контент-хеш, после iva update он меняется,
     // поэтому provision обязан идти на каждом старте, а не разово. eve start остаётся foreground.
-    `ExecStart=${NODE} ${ROOT}/node_modules/eve/bin/eve.js start`,
+    // --host: bind to loopback only. eve's auth strategy localDev() treats a request as local
+    // by the hostname of request.url — i.e. by the client's own Host header — so a server bound
+    // to 0.0.0.0 hands local-dev rights (and with them a sandbox-free `bash` on the host) to
+    // anyone who can reach the port and sends `Host: 127.0.0.1`. The port is only ever consumed
+    // locally: telegram-poll, the sweep and the memory scripts all talk to 127.0.0.1.
+    // Env is not enough here — `eve start` takes options.host ?? "0.0.0.0" and overwrites
+    // HOST/NITRO_HOST for the spawned .output/server/index.mjs, so the flag is what binds.
+    `ExecStart=${NODE} ${ROOT}/node_modules/eve/bin/eve.js start --host 127.0.0.1`,
     `Environment=PORT=${port}`,
     `Environment=PATH=${NODE_BIN_DIR}:%h/.local/bin:/usr/local/bin:/usr/bin:/bin`,
     "Environment=AGENT_BROWSER_MAX_OUTPUT=24000",
