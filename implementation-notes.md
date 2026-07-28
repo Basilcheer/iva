@@ -1,5 +1,10 @@
 # Implementation notes
 
+## Aimasters.Me user-feedback backlog (2026-07-28)
+
+- Source evidence, issue triage, source-message links and links to attached screenshots/video are in
+  [`notes/backlog/2026-07-28-aimasters-iva-feedback.md`](notes/backlog/2026-07-28-aimasters-iva-feedback.md).
+
 ## Release 0.3.4
 
 - Patch version only: no dependency or runtime change is introduced by the release commit.
