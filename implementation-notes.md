@@ -1,5 +1,31 @@
 # Implementation notes
 
+## Structured Telegram reply context (IVA-009 / #53)
+
+- Eve keeps quoted text and media only in `raw.reply_to_message`; IVA now adds one
+  bounded JSON item to model context after the normal allowlist gate.
+- The item marks the quote as untrusted and uses JSON escaping rather than
+  prompt-like delimiters. Quotes, Unicode and newlines remain data.
+- Quoted media exposes only its type, bounded filename and caption. Telegram file
+  IDs, unique IDs, MIME metadata and bytes are excluded, and quoted files are
+  never downloaded again.
+- Empty or malformed replies add no context. Oversized content is truncated by
+  Unicode code point and reports that fact through the item's `truncated` field.
+- Reply text and captions pass through the existing inbound security gate.
+  Informational sanitizer signals (for example, Cyrillic lookalikes) preserve
+  normal UX; blocked content, role markers and override attempts get an adjacent
+  untrusted-data warning.
+- User names, usernames, channel titles and media filenames use the same bounded
+  sanitizer path. Invalid IDs and unknown sender-chat types are omitted. Replies
+  from channels and anonymous admins use bounded `sender_chat` metadata, including
+  when Telegram also supplies its `GroupAnonymousBot` placeholder. A malformed
+  sender-chat identity falls back to the validated `from` author.
+- Telegram reply message IDs must be positive safe integers; malformed or
+  oversized values are rejected before serialization.
+- Private/group/topic routing and Eve's existing HITL reply path remain unchanged;
+  the reply item is only additional context for messages that already dispatch.
+  In particular, a quote does not wake a silent sticker or animation.
+
 ## Checked systemd activation (IVA-003 / #54)
 
 - All CLI systemd mutations now go through `scripts/lib/systemd-control.mjs`. A non-zero

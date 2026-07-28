@@ -46,6 +46,26 @@ export interface SanitizeResult {
   flags: string[]; // мягкие сигналы (не блок): invisible/lookalikes/role/override
 }
 
+const INBOUND_ATTACK_FLAG_NAMES = new Set(["role-markers", "overrides"]);
+
+/**
+ * Decide whether sanitized inbound data needs an explicit model-visible warning.
+ *
+ * Some sanitizer flags only describe harmless cleanup/detection, for example
+ * Cyrillic lookalikes. Role markers and override attempts carry instruction-like
+ * semantics even below the hard-block threshold.
+ */
+export function hasInboundAttackSignal(
+  result: Pick<SanitizeResult, "blocked" | "flags">,
+): boolean {
+  if (result.blocked) return true;
+  return result.flags.some((flag) => {
+    const separator = flag.indexOf("=");
+    const name = separator === -1 ? flag : flag.slice(0, separator);
+    return INBOUND_ATTACK_FLAG_NAMES.has(name);
+  });
+}
+
 export function sanitizeInbound(input: string, maxChars = 50000): SanitizeResult {
   const originalLen = input.length;
   const flags: string[] = [];
