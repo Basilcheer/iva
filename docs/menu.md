@@ -63,7 +63,7 @@ Search keys, the userbot's `api_id`/`api_hash`, and the Google OAuth client JSON
 - **Never leaves the bridge.** The value never reaches the model, the logs, or any error text.
 - **Soft validation.** Keys are probed against the provider with a one-result request. A hard rejection (401/403) is refused; a network hiccup is accepted — a real flake shouldn't block you, and a wrong-but-shaped key surfaces later in the tool's own error.
 
-A photo of a key is *not* intercepted — only text. Send secrets as text, in your DM with the bot.
+While a prompt is waiting for a **secret**, nothing you send slips past to the model: a pasted key is captured, and a document or photo is intercepted too (deleted, with a short note on how to send it) — so a secret file like `client_secret.json` can't leak into the vault or the conversation. The Google client secret specifically may be sent as pasted text **or** as the `.json` file (downloaded in the bridge, size-capped, deleted before the download begins). Non-secret prompts (e.g. the memory interview) are unaffected — an attachment there reaches Iva as usual.
 
 ## Search
 
@@ -81,7 +81,7 @@ The userbot is opt-in beta; the full picture, including the anti-ban guardrail: 
 
 ## Google Workspace
 
-The **🔗 Google** screen checks for `~/.config/gws/client_secret.json`. Missing, it walks you through console.cloud.google.com — create an OAuth client of type *Desktop app*, download the JSON, paste it into the chat (it's shape-checked and written `0600`). Present, it probes authorization; if you're not signed in yet it shows a **Connect** button that runs the whole sign-in for you — no SSH. `gws auth login` only supports the loopback flow (it waits for the browser to hit `http://localhost:<port>` on the server), which can't complete from a browser on another machine. So Iva starts `gws` itself, sends you the Google consent link, and when you approve and paste the redirect URL back — the one that lands on a `http://localhost:…` page your browser can't load — it replays that callback against the loopback listener locally, finishing the exchange and storing the token. The pasted URL carries a one-time code, so Iva deletes that message and never logs it, then edits the screen to a final status (connected, or retry). What `gws` reaches: Gmail, Calendar, Drive, Sheets, Docs.
+The **🔗 Google** screen checks for `~/.config/gws/client_secret.json`. Missing, it walks you through console.cloud.google.com — create an OAuth client of type *Desktop app*, download the JSON, and send it into the chat — paste the contents or attach the `.json` file (it's shape-checked and written `0600`). Present, it probes authorization; if you're not signed in yet it shows a **Connect** button that runs the whole sign-in for you — no SSH. `gws auth login` only supports the loopback flow (it waits for the browser to hit `http://localhost:<port>` on the server), which can't complete from a browser on another machine. So Iva starts `gws` itself, sends you the Google consent link, and when you approve and paste the redirect URL back — the one that lands on a `http://localhost:…` page your browser can't load — it replays that callback against the loopback listener locally, finishing the exchange and storing the token. The pasted URL carries a one-time code, so Iva deletes that message and never logs it, then edits the screen to a final status (connected, or retry). What `gws` reaches: Gmail, Calendar, Drive, Sheets, Docs.
 
 ## Timers, Skills, Status
 

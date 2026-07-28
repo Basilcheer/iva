@@ -183,7 +183,11 @@ export function createMenu({ flows, tg, deps, screens = SCREENS }) {
   // (apikey/ubcred/gwsjson) удаляется ДО всего остального — значение не уходит в eve/лог/reply.
   // Отказ secret вне лички — на этапе установки awaitText (обязанность экрана); сюда доходит
   // только уже разрешённый ввод.
-  async function onText(msg, st) {
+  // opts.skipDelete — the caller has ALREADY removed the message and CONFIRMED the deletion succeeded
+  // (the bridge deletes a secret file, checks the result, and only then downloads + delivers the
+  // content here). Callers must never set it without a confirmed deletion — otherwise a still-visible
+  // secret would be processed. When set, we don't try to delete a second time.
+  async function onText(msg, st, opts = {}) {
     ctx.lang = getLang();
     if (!st || !st.awaitText) return true;
     const chatId = msg.chat?.id;
@@ -196,7 +200,7 @@ export function createMenu({ flows, tg, deps, screens = SCREENS }) {
       return true;
     }
     const a = st.awaitText;
-    if (a.secret) {
+    if (a.secret && !opts.skipDelete) {
       // delete-message-FIRST (:512-515). При провале удаления — предупреждение как в мосте;
       // текст ошибки НИКОГДА не содержит значение ключа.
       const del = await tg("deleteMessage", { chat_id: chatId, message_id: msg.message_id });

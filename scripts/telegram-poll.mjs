@@ -111,13 +111,64 @@ async function saveOffset(offset, delivered = null) {
   }
 }
 
-async function tg(method, body) {
+// Every Bot API call carries a deadline — a hung response must never stall the single polling loop.
+// The default suits normal calls; getUpdates overrides it to sit above its own long-poll window.
+async function tg(method, body, { timeoutMs = 30_000 } = {}) {
   const res = await fetch(`${API}/${method}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body ?? {}),
+    signal: AbortSignal.timeout(timeoutMs),
   });
   return res.json();
+}
+
+// Read a web ReadableStream as UTF-8 text with a HARD cap: it stops and cancels the stream the moment
+// the running total exceeds maxBytes, so an oversized (or size-unknown) body is never fully buffered.
+// The caller passes an already time-bounded body (see downloadTelegramFile) so a hung socket mid-read
+// aborts the read too. Returns null on over-size or a read error. Pure — unit-tested off the network.
+export async function readCappedStream(body, maxBytes) {
+  if (!body || typeof body.getReader !== "function") return null;
+  const reader = body.getReader();
+  const chunks = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.length;
+      if (total > maxBytes) {
+        await reader.cancel().catch(() => {});
+        return null;
+      }
+      chunks.push(Buffer.from(value));
+    }
+  } catch {
+    return null;
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+// Download a Telegram file's bytes as UTF-8 text (getFile → file download), hard-capped at maxBytes and
+// deadline-bounded at every step (getFile call, the download connection, and the streamed read — a size
+// cap alone doesn't save the loop from a stalled socket). Returns null on any failure or over-size.
+async function downloadTelegramFile(fileId, maxBytes) {
+  try {
+    const info = await tg("getFile", { file_id: fileId }, { timeoutMs: 10_000 });
+    const filePath = info?.result?.file_path;
+    if (!filePath) return null;
+    const res = await fetch(`https://api.telegram.org/file/bot${TOKEN}/${filePath}`, {
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!res.ok) return null;
+    // Cheap early reject when the server declares an over-size body; the stream reader below is the
+    // hard cap regardless (a missing or lying Content-Length can't get past it).
+    const declared = Number(res.headers.get("content-length"));
+    if (Number.isFinite(declared) && declared > maxBytes) return null;
+    return await readCappedStream(res.body, maxBytes);
+  } catch {
+    return null;
+  }
 }
 
 // Deliver one update to the local eve (we mimic a webhook). Three failure classes (see
@@ -765,6 +816,65 @@ async function registerBotCommands() {
   }
 }
 
+// Delete a message carrying a secret, warning the user if Telegram won't let us — a rejected secret
+// must never silently linger in the chat (mirrors the delete-first path in menu.onText).
+async function deleteSecretMessage(chatId, messageId) {
+  const del = await tg("deleteMessage", { chat_id: chatId, message_id: messageId }).catch(() => ({ ok: false }));
+  if (!del?.ok) {
+    await reply(chatId, tr("Couldn't delete your message — please delete it manually.", "Не смог удалить сообщение — удали его вручную.")).catch(() => {});
+  }
+  return del?.ok === true;
+}
+
+// Default I/O for handleAwaitNonText — injectable so the delete→download ordering and the
+// "never reaches eve" contract can be unit-tested with mocks.
+const nonTextIo = {
+  deleteSecret: (chatId, id) => deleteSecretMessage(chatId, id),
+  reply: (chatId, text) => reply(chatId, text),
+  download: (fileId, max) => downloadTelegramFile(fileId, max),
+  // Run the screen's own text handler on downloaded content WITHOUT re-deleting (already deleted).
+  deliver: (text, msg, st) => menu.onText({ ...msg, text }, st, { skipDelete: true }),
+};
+
+// A non-text message arrived while a menu/wizard awaits a SECRET (the caller gates this to
+// secret/file-capable states — a non-secret interview attachment falls through to eve untouched).
+// It must never reach eve. For a file-capable prompt (gws client_secret) a document is captured;
+// crucially the message is DELETED FIRST, before the download, so the secret doesn't linger in the
+// chat for the download's duration. Anything else is deleted with a clear ack telling the user how
+// to send it. Always returns true (the update is consumed, not delivered).
+export async function handleAwaitNonText(msg, pending, io = nonTextIo) {
+  const chatId = msg.chat?.id;
+  const a = pending.awaitText;
+  const MAX_BYTES = 256 * 1024;
+  if (a?.file && msg.document && pending.flow === "menu") {
+    if ((msg.document.file_size ?? 0) > MAX_BYTES) {
+      await io.deleteSecret(chatId, msg.message_id);
+      await io.reply(chatId, tr("That file is too large — paste the contents as text instead.", "Файл слишком большой — вставь содержимое текстом."));
+      return true;
+    }
+    // Delete FIRST, and only proceed once the secret has actually left the chat. If Telegram
+    // refused the deletion, deleteSecret already told the user to remove it manually — we must NOT
+    // download or deliver a secret that is still visible in the conversation. Consume it either way
+    // so it never reaches eve.
+    const deleted = await io.deleteSecret(chatId, msg.message_id);
+    if (!deleted) return true;
+    const content = await io.download(msg.document.file_id, MAX_BYTES);
+    if (content == null) {
+      await io.reply(chatId, tr("Couldn't read that file — paste the contents as text instead.", "Не смог прочитать файл — вставь содержимое текстом."));
+      return true;
+    }
+    await io.deliver(content, msg, pending); // skipDelete is safe now — the message is confirmed gone
+    return true;
+  }
+  // Secret prompt, but not a capturable file (a photo, or a text-only secret) — delete it so it can't
+  // reach eve, and tell the user how to send it instead of dropping it silently.
+  await io.deleteSecret(chatId, msg.message_id);
+  await io.reply(chatId, a?.file
+    ? tr("Send client_secret.json as text or attach the .json file — not a photo.", "Пришли client_secret.json текстом или прикрепи .json-файл — не фото.")
+    : tr("Send it as text, please.", "Пришли это, пожалуйста, текстом."));
+  return true;
+}
+
 // Control commands are handled by the BRIDGE (out-of-band) — they work even if the agent is stuck.
 // Trusted IDs only. Returns true if the command was handled (we do NOT deliver it to eve).
 async function handleControl(update) {
@@ -790,29 +900,40 @@ async function handleControl(update) {
   }
   const msg = update.message;
   const text = (msg?.text || "").trim();
-  // A pending flow (menu screen or /model wizard) awaiting text claims this user's next
-  // plain-text message (a key must never reach eve); a command aborts the wait — a silently
-  // still-visible prompt would invite pasting the key later, when nothing intercepts it.
-  // This runs BEFORE the busy-buffer gate (below), so a capture works even mid-turn.
-  if (msg?.from && text) {
+  // A pending flow (menu screen or /model wizard) awaiting input claims this user's next message
+  // (a key must never reach eve); a command aborts the wait — a silently still-visible prompt would
+  // invite pasting the key later, when nothing intercepts it. This runs BEFORE the busy-buffer gate
+  // (below), so a capture works even mid-turn. Non-text is intercepted only while awaiting a SECRET
+  // (or a file-capable secret): a document/photo could be the secret itself and must not reach eve.
+  // A non-secret await (e.g. the memory interview) lets a non-text message fall through unchanged.
+  if (msg?.from) {
     const pending = getWizard(msg.chat?.id, String(msg.from.id));
-    if (pending?.awaitText) {
+    const a = pending?.awaitText;
+    if (a) {
       if (text.startsWith("/")) {
         await endWizard(pending, tr("Cancelled — no longer waiting for input.", "Отменено — ожидание ввода снято.")).catch(() => {});
-      } else if (pending.flow === "menu") {
-        // Menu screens own their capture (interview / key intake / gws JSON / ubcred).
-        return menu.onText(msg, pending).catch((e) => {
-          log("menu capture error:", e.message); // e.message never contains a secret value
-          return true;
-        });
-      } else {
+      } else if (text) {
+        if (pending.flow === "menu") {
+          // Menu screens own their capture (interview / key intake / gws JSON / ubcred).
+          return menu.onText(msg, pending).catch((e) => {
+            log("menu capture error:", e.message); // e.message never contains a secret value
+            return true;
+          });
+        }
         // /model wizard key intake — consume the update even on failure (the key must never
         // be re-polled into eve). handleKeyMessage stays the wizard's own handler.
         return handleKeyMessage(msg, pending).catch((e) => {
           log("wizard key error:", e.message); // e.message never contains the key value
           return true;
         });
+      } else if (a.secret || a.file) {
+        // Non-text while awaiting a secret — never let it reach eve (delete-first inside).
+        return handleAwaitNonText(msg, pending).catch((e) => {
+          log("menu attachment capture error:", e.message); // never contains the secret value
+          return true;
+        });
       }
+      // else: non-secret await + non-text → fall through so eve handles it normally.
     }
   }
   if (!text.startsWith("/")) return false;
@@ -929,7 +1050,7 @@ async function main() {
         offset,
         timeout: 30,
         allowed_updates: ["message", "callback_query"],
-      });
+      }, { timeoutMs: 40_000 }); // above the 30s long-poll window
     } catch (e) {
       log("getUpdates network:", e.message);
       await sleep(3000);

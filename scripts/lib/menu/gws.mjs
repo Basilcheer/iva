@@ -135,12 +135,12 @@ export default {
           [ctx.backRow(PARENT)],
         );
       }
-      st.awaitText = { kind: "gwsjson", secret: true, data: {} };
+      st.awaitText = { kind: "gwsjson", secret: true, data: {}, file: true };
       return ctx.flows.screen(
         st,
         ctx.tr(
-          "Paste the contents of client_secret.json as text. I'll delete the message right away and store the file securely.",
-          "Пришли содержимое client_secret.json текстом. Сообщение сразу удалю, файл сохраню безопасно.",
+          "Send client_secret.json — either paste its contents as text, or attach the .json file. I'll delete the message right away and store it securely.",
+          "Пришли client_secret.json — вставь содержимое текстом ИЛИ прикрепи сам .json-файл. Сообщение сразу удалю, файл сохраню безопасно.",
         ),
         [[ctx.btn(ctx.tr("Cancel", "Отмена"), `iva_menu:${SID}:o`)]],
       );
