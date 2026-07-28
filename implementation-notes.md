@@ -47,6 +47,31 @@
   synchronous `Type=simple` start semantics, and timer start jobs return in their active
   waiting state, so a synthetic `activating` transition would not model these units.
 
+## IVA-001 bash process lifecycle
+
+- Host bash runs in its own POSIX process group with stdin closed. Timeout sends `SIGTERM`,
+  waits 400 ms, then sends `SIGKILL` and waits another bounded 400 ms. Timeout classification
+  checks the root process state, so a delayed Node exit event does not produce a false timeout.
+  A per-call worker observes the monotonic deadline and enforces it even while the main Node
+  event loop is blocked. Linux uses `/proc` for root state; macOS uses the POSIX `ps` state
+  so an exited zombie is not reported as timed out. If neither probe can establish state,
+  cleanup fails closed with an explicit error.
+- The schema and runtime accept deadlines from 100 through 2,147,483,647 ms. The lower bound
+  gives a newly started worker time to observe the process; the upper bound matches Node's
+  maximum timer delay and prevents overflow warnings and a hot rescheduling loop.
+- Spawn resource failures are handled before PID, stream, worker or timer setup and return a
+  bounded structured error; an `EMFILE` condition cannot crash the host process.
+- Lifecycle handlers and the main-thread deadline are armed before the optional deadline
+  worker. If worker initialization fails under resource pressure, execution continues with
+  the main-thread deadline fallback and cannot orphan the spawned process group.
+- The same group cleanup runs after a normal shell exit, so background descendants cannot
+  outlive the tool call while they remain in that group. A process which deliberately creates
+  a new session with `setsid`, or a manager-owned job such as `systemd-run`, has its own
+  lifecycle outside this process-group contract.
+- Stdout and stderr are consumed as streams while retaining the existing last-30,000-character
+  result contract, cwd reporting and truncation marker. After bounded group cleanup, inherited
+  output pipes are closed so a process outside the owned group cannot hold the tool call open.
+
 ## Aimasters.Me user-feedback backlog (2026-07-28)
 
 - Source evidence, issue triage, source-message links and links to attached screenshots/video are in
