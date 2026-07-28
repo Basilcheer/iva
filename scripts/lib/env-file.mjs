@@ -1,7 +1,20 @@
 // Surgical .env editor for the Telegram bridge (/model, /think).
 // Unlike setup.mjs's writeEnv (full rewrite in a fixed key order, drops comments),
 // this edits lines in place: comments, blank lines, unknown keys and order survive.
-import { readFile, writeFile, rename, stat, chmod } from "node:fs/promises";
+import {
+  chmodSync,
+  closeSync,
+  existsSync,
+  fchmodSync,
+  fsyncSync,
+  openSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { readFile } from "node:fs/promises";
+import { randomBytes } from "node:crypto";
+import { basename, dirname, join } from "node:path";
 
 // Lazy value capture + trailing \s*: tolerates CRLF files (a greedy .* would keep the \r).
 const LINE_RE = /^\s*([A-Z0-9_]+)\s*=\s*(.*?)\s*$/;
@@ -20,8 +33,9 @@ export function parseEnvText(text) {
 export async function readEnvValues(path) {
   try {
     return parseEnvText(await readFile(path, "utf8"));
-  } catch {
-    return {};
+  } catch (error) {
+    if (error?.code === "ENOENT") return {};
+    throw error;
   }
 }
 
@@ -32,22 +46,71 @@ export async function readEnvFresh(path, base = process.env) {
   return { ...base, ...(await readEnvValues(path)) };
 }
 
+/**
+ * Replace an env file atomically.
+ *
+ * The old file is protected before any secret is staged. The replacement is a
+ * unique 0600 file in the same directory. The file is fsynced before rename,
+ * then the parent directory is fsynced so the rename survives a crash.
+ */
+export function writeEnvAtomicSync(path, text, { beforeRename, beforeDirectorySync } = {}) {
+  if (existsSync(path)) chmodSync(path, 0o600);
+  const parent = dirname(path);
+  const tmp = join(
+    parent,
+    `.${basename(path)}.tmp-${process.pid}-${randomBytes(8).toString("hex")}`,
+  );
+  try {
+    const fileFd = openSync(tmp, "wx", 0o600);
+    try {
+      fchmodSync(fileFd, 0o600);
+      writeFileSync(fileFd, String(text), "utf8");
+      fsyncSync(fileFd);
+    } finally {
+      closeSync(fileFd);
+    }
+    beforeRename?.(tmp);
+    renameSync(tmp, path);
+
+    try {
+      beforeDirectorySync?.(parent);
+      const directoryFd = openSync(parent, "r");
+      try {
+        fsyncSync(directoryFd);
+      } finally {
+        closeSync(directoryFd);
+      }
+    } catch (cause) {
+      const error = new Error(
+        `env file was replaced, but parent directory fsync failed; new bytes are live and crash durability is unconfirmed: ${cause.message}`,
+        { cause },
+      );
+      error.code = "EENV_DURABILITY";
+      throw error;
+    }
+  } catch (error) {
+    try {
+      rmSync(tmp);
+    } catch {}
+    throw error;
+  }
+}
+
 // Upsert keys in .env: updates = {KEY: string | null} (null ⇒ drop the line).
 // First matching line is replaced in place, duplicates are dropped, missing keys are
 // appended at the end. Values must be single-line — a multiline paste (e.g. a mangled
 // API key) must fail loudly here, not corrupt .env. Write is atomic (tmp + rename),
-// preserving the existing file mode (0600 for a brand-new file — .env holds secrets).
+// and every resulting .env is 0600 because it holds secrets.
 export async function upsertEnv(path, updates) {
   for (const [k, v] of Object.entries(updates)) {
     if (v != null && /[\n\r]/.test(String(v))) throw new Error(`env value for ${k} contains a newline`);
   }
   let text = "";
-  let mode = 0o600;
   try {
     text = await readFile(path, "utf8");
-    mode = (await stat(path)).mode & 0o777;
-  } catch {
-    /* no file yet — create from scratch */
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+    /* no file yet - create from scratch */
   }
   const lines = text.length ? text.split("\n") : [];
   if (lines.length && lines[lines.length - 1] === "") lines.pop(); // trailing newline re-added below
@@ -67,8 +130,5 @@ export async function upsertEnv(path, updates) {
     out.push(line);
   }
   for (const [k, v] of pending) if (v !== null) out.push(`${k}=${v}`);
-  const tmp = `${path}.tmp`;
-  await writeFile(tmp, out.join("\n") + "\n", { encoding: "utf8", mode });
-  await chmod(tmp, mode); // writeFile mode is ignored when the tmp file already exists
-  await rename(tmp, path);
+  writeEnvAtomicSync(path, out.join("\n") + "\n");
 }

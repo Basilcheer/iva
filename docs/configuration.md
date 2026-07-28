@@ -88,5 +88,5 @@ The nightly doctor builds the hybrid index; to build it now, run `node --env-fil
 | `ASSISTANT_DATA_DIR` | `data` | Runtime data: `tasks.json`, token log `usage.jsonl`. |
 | `IVA_PORT` | `8723` | Local eve server port. Deliberately unfashionable — 3000/8000/8080 are usually taken on a stock VPS by docker and friends. Change it via `iva config`, not by hand: the systemd unit pins the port literally and must match ([deploy.md](./deploy.md)). |
 | `ASSISTANT_HOST` | `http://127.0.0.1:${IVA_PORT}` | Where the poll bridge and memory scripts reach the server. Change only if the agent runs on another host. |
-| `ASSISTANT_BEARER` | *(empty)* | Only when the eve HTTP channel requires a bearer token — the Vercel variant in [deploy.md](./deploy.md). |
+| `ASSISTANT_BEARER` | *(generated)* | Shared secret required by Eve session routes. Setup/upgrades create it; local clients read it automatically. Keep it private. |
 | `AGENT_BROWSER_MAX_OUTPUT` | `24000` | Character cap on agent-browser output, so one page dump can't eat the context window. |

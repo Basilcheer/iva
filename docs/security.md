@@ -28,13 +28,20 @@ Matches become `[REDACTED]` and the reply still goes out, with the finding logge
 
 ## Access control
 
-The allowlist is the perimeter, and it fails closed. This is the canonical rule:
+Iva has two independent inbound paths, and both fail closed:
+
+- **Telegram** - the webhook secret authenticates the bridge and `TELEGRAM_ALLOWED_USER_IDS` decides which people may start a turn.
+- **Eve HTTP** - the server binds to `127.0.0.1`, and session routes require `ASSISTANT_BEARER` (or Vercel OIDC). `localDev()` exists only under `eve dev`.
+
+The canonical Telegram rule is:
 
 ```bash
 TELEGRAM_ALLOWED_USER_IDS=123456789   # comma-separated; EMPTY = Iva answers nobody
 ```
 
-Not "everyone until configured" — nobody. A stranger who DMs the bot gets one line back with their own Telegram ID so they can ask you to add them (with an empty allowlist the reply just says the bot isn't configured yet); group messages from strangers — and everything else — are dropped before the model ever runs. To change the list, edit `.env` and restart; how the wizard fills it in and the variable itself: [configuration.md](configuration.md).
+Not "everyone until configured" - nobody. A stranger who DMs the bot gets one line back with their own Telegram ID so they can ask you to add them (with an empty allowlist the reply just says the bot isn't configured yet); group messages from strangers - and everything else - are dropped before the model ever runs.
+
+The setup and upgrade paths generate `ASSISTANT_BEARER` automatically and keep `.env` at mode `0600`. Local scripts read the same value. Do not expose port 8723 directly; reverse proxies must keep the bearer requirement. Run `iva doctor` to repair an older unit or configuration.
 
 ## Host access
 
@@ -43,7 +50,7 @@ Iva's tools (`bash`, `read_file`, `write_file`, `glob`, `grep`) run host-native 
 ## Privacy
 
 - 🗄️ **Your vault, your repo** — memory lives in a separate private git repository you own; the nightly doctor commits and pushes it ([memory.md](memory.md)).
-- 🔐 **Keys in `.env`** — credentials stay on your box, read by name at runtime, never shown to the model.
+- 🔐 **Keys in `.env`** - credentials stay on your box in a `0600` file, read by name at runtime, never shown to the model.
 - ☁️ **Honest boundary** — the model and the voice transcription are cloud APIs you chose and pay for yourself. Self-hosted means your code and your memory, not the model weights.
 
 ## What this defends against — and what it doesn't

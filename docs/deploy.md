@@ -31,7 +31,22 @@ Note: `getUpdates` — which the setup wizard uses to discover your user ID — 
 
 `bin/iva.mjs` is the single source of truth for every unit. Any restart through the `iva` CLI regenerates them first, so `Environment=PORT` always matches `IVA_PORT` in `.env`. Don't hand-edit `~/.config/systemd/user/iva-*` — edits get overwritten. If you write your own unit instead, bake the port literally (`Environment=PORT=8723`): systemd will not expand `$IVA_PORT` from an `EnvironmentFile`.
 
-The unit starts eve with `--host 127.0.0.1`, and a hand-written one must do the same. eve's `localDev()` auth strategy decides a request is local from the hostname in `request.url` — that is, from the client's own `Host` header — so a server listening on `0.0.0.0` grants local-dev access, and with it a sandbox-free shell on your box, to anyone who reaches the port with `Host: 127.0.0.1`. Setting `HOST` in the environment does not help: `eve start` uses `options.host ?? "0.0.0.0"` and overwrites `HOST`/`NITRO_HOST` for the server process it spawns. Nothing outside the machine needs this port — the Telegram bridge, the sweep and the memory scripts all talk to `127.0.0.1`.
+The unit starts eve with `--host 127.0.0.1`, and a hand-written one must do the same. Setting `HOST` in the environment is insufficient because `eve start` overwrites `HOST`/`NITRO_HOST` for the process it spawns. Iva also requires the generated `ASSISTANT_BEARER` on Eve session routes. `localDev()` is included only under `eve dev`, which sets `EVE_DEV=1`; production does not use the client-controlled `Host` header as authentication.
+
+The two controls cover different failure modes: loopback binding removes direct network reachability, while the bearer protects against another local process, SSRF, or a reverse proxy reaching the port. `iva doctor` repairs a missing bearer, `.env` permissions, and an old process still listening beyond loopback.
+
+For a direct smoke test, load the secret without printing it and pass the header to curl through stdin rather than the process arguments:
+
+```bash
+ASSISTANT_BEARER="$(node --env-file=.env -p 'process.env.ASSISTANT_BEARER')"
+IVA_PORT="$(node --env-file=.env -p 'process.env.IVA_PORT || 8723')"
+printf 'header = "Authorization: Bearer %s"\n' "$ASSISTANT_BEARER" |
+  curl --fail-with-body --config - \
+  -X POST "http://127.0.0.1:${IVA_PORT}/eve/v1/session" \
+  -H "content-type: application/json" \
+  -d '{"message":"Reply with exactly: auth ok"}'
+unset ASSISTANT_BEARER IVA_PORT
+```
 
 | Unit | When | Job |
 |------|------|-----|
@@ -68,7 +83,9 @@ eve's `defineSchedule` API (`agent/schedules/*.ts`) fires on self-host too: a bu
 
 ## nginx and TLS
 
-You need neither for Telegram — polling is outbound-only. Add an nginx reverse proxy with Let's Encrypt only if you expose the eve HTTP channel (or webhook mode) to the internet.
+You need neither for Telegram - polling is outbound-only. If you expose the Telegram webhook, proxy only `/eve/v1/telegram`; that route verifies `X-Telegram-Bot-Api-Secret-Token` and the Telegram user allowlist.
+
+Exposing the Eve HTTP channel is a separate security decision. Require HTTPS and preserve the `Authorization: Bearer ...` header so Iva can verify `ASSISTANT_BEARER`. Never remove the bearer check merely because the proxy connects to `127.0.0.1`: loopback describes the proxy-to-Iva hop, not the original caller.
 
 ## Moving servers
 
@@ -86,4 +103,4 @@ Iva is built on eve, which deploys to Vercel natively — but self-host is the i
 
 - **Schedules** — `defineSchedule` in `agent/schedules/*.ts` becomes a real Vercel Cron Job (cron times are UTC there).
 - **Storage** — `./data` is ephemeral on Vercel; tasks and usage logs need a real DB or KV store.
-- **Auth** — the scaffold eve channel ships `localDev()` + `placeholderAuth()`. In prod, `localDev` is ignored and `placeholderAuth` admits nobody. Wire a real auth provider, or for a single-user deployment issue a bearer token and pass it to your scripts as `ASSISTANT_BEARER`.
+- **Auth** - Eve routes accept Vercel OIDC or `ASSISTANT_BEARER`. `localDev()` is enabled only by `eve dev`; configure the bearer as a Vercel secret for any non-OIDC caller.

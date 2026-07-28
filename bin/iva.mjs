@@ -5,7 +5,7 @@
 // SINGLE source of truth for systemd units (writeUnits): install.sh delegates here
 // (`iva _install-units`), and update/doctor reuse the same write.
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, readdirSync, chmodSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, readdirSync, chmodSync, statSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { join, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -15,6 +15,9 @@ import { modelSummary } from "../scripts/lib/model-summary.mjs";
 import { createTerminalProgress } from "../scripts/lib/progress.mjs";
 import { quarantineDir } from "../scripts/lib/wf-store.mjs";
 import { createTelegramUpdateReporter, loadTelegramJob, removeTelegramJob } from "../scripts/lib/telegram-status.mjs";
+import { generateAssistantBearer, isAssistantBearer } from "../scripts/lib/assistant-auth.mjs";
+import { writeEnvAtomicSync } from "../scripts/lib/env-file.mjs";
+import { classifyAgentListeners } from "../scripts/lib/listener-security.mjs";
 import {
   acquireUpdateLock,
   createUpdateLog,
@@ -104,6 +107,28 @@ function requireSystemd() {
   }
 }
 
+// Existing installs gain the server-side bearer on their next unit refresh/update.
+// The same migration also repairs .env permissions because it contains every runtime secret.
+function ensureAssistantBearer({ quiet = false } = {}) {
+  if (!existsSync(ENV_PATH)) return false;
+  let changed = false;
+  const bearer = (readEnv().ASSISTANT_BEARER || "").trim();
+  const bearerLines = readFileSync(ENV_PATH, "utf8").match(/^\s*ASSISTANT_BEARER\s*=/gm)?.length || 0;
+  if (!isAssistantBearer(bearer)) {
+    writeEnvVars({ ASSISTANT_BEARER: generateAssistantBearer() });
+    changed = true;
+  } else if (bearerLines !== 1) {
+    writeEnvVars({ ASSISTANT_BEARER: bearer });
+    changed = true;
+  }
+  if ((statSync(ENV_PATH).mode & 0o777) !== 0o600) {
+    chmodSync(ENV_PATH, 0o600);
+    changed = true;
+  }
+  if (changed && !quiet) ok(".env protected and internal bearer configured");
+  return changed;
+}
+
 // ── systemd units: single source of truth ─────────────────────────────────
 function ivaServiceBody() {
   // PATH with the node directory (= npm global bin under nvm), Restart=always.
@@ -177,6 +202,7 @@ function hardenPerms() {
 // Writes iva.service + all deploy/iva-*.{service,timer} with placeholder substitution. daemon-reload.
 function writeUnits() {
   hardenPerms();
+  ensureAssistantBearer({ quiet: true });
   mkdirSync(UNIT_DIR, { recursive: true });
   writeFileSync(join(UNIT_DIR, "iva.service"), ivaServiceBody());
   const written = ["iva.service"];
@@ -231,7 +257,7 @@ function migrateEnv({ quiet = false } = {}) {
   let raw = readFileSync(ENV_PATH, "utf8").replace(/\n*$/, "\n") + `IVA_PORT=${port}\n`;
   // don't leave a stale :3000 in ASSISTANT_HOST — otherwise clients get stuck on the taken port
   if (isOldDefault) raw = raw.replace(/^(\s*ASSISTANT_HOST\s*=).*$/m, `$1http://127.0.0.1:${port}`);
-  writeFileSync(ENV_PATH, raw);
+  writeEnvAtomicSync(ENV_PATH, raw);
   if (!quiet) ok(`.env migrated → IVA_PORT=${port}${isOldDefault ? ", ASSISTANT_HOST moved off :3000" : ""}`);
   return true;
 }
@@ -509,11 +535,13 @@ async function cmdConfig() {
   }
 }
 
-function cmdDoctor() {
+async function cmdDoctor() {
   let okN = 0,
     warnN = 0,
     fixN = 0,
     badN = 0;
+  const bearerChanged = ensureAssistantBearer();
+  if (bearerChanged) fixN++;
   const env = readEnv();
 
   // 1. Node ≥24
@@ -532,7 +560,13 @@ function cmdDoctor() {
       openrouter: ["OPENROUTER_API_KEY", "OPENROUTER_MODEL"],
       codex: ["CODEX_MODEL"],
     };
-    const REQUIRED = [...(PROV_KEYS[prov] || PROV_KEYS.ollama), "DEEPGRAM_API_KEY", "TELEGRAM_BOT_TOKEN", "TELEGRAM_ALLOWED_USER_IDS"];
+    const REQUIRED = [
+      ...(PROV_KEYS[prov] || PROV_KEYS.ollama),
+      "DEEPGRAM_API_KEY",
+      "TELEGRAM_BOT_TOKEN",
+      "TELEGRAM_ALLOWED_USER_IDS",
+      "ASSISTANT_BEARER",
+    ];
     const missing = REQUIRED.filter((k) => !(env[k] || "").trim());
     if (prov === "codex" && !existsSync(join(dataDirAbs(env), "codex-auth.json"))) missing.push("OpenAI sign-in (iva login)");
     if (!missing.length) (ok(`.env filled in (provider: ${prov})`), okN++);
@@ -589,6 +623,36 @@ function cmdDoctor() {
       else (bad(`${svc} won't start — journalctl --user -u ${svc} -e`), badN++);
     }
   }
+  // A newly generated bearer is read only at process start. Without this restart,
+  // doctor would fix the file while leaving the live Eve process unable to accept it.
+  if (bearerChanged) {
+    warn("iva.service needs one restart to load the new internal bearer");
+    sc("restart", "iva.service");
+    if (scQ("is-active", "iva.service").out === "active") (ok("iva.service loaded the internal bearer"), fixN++);
+    else (bad("iva.service did not restart with the internal bearer"), badN++);
+  }
+  // A refreshed unit does not move an already-running old process off 0.0.0.0.
+  // Detect the actual socket and restart once so doctor repairs that upgrade state too.
+  const port = Number((readEnv().IVA_PORT || DEFAULT_PORT).trim());
+  const inspectListener = () => {
+    const r = cap("ss", ["-H", "-ltn", "sport", "=", `:${port}`]);
+    return r.code === 0 ? classifyAgentListeners(r.out, port) : "unknown";
+  };
+  let listener = inspectListener();
+  if (listener === "exposed") {
+    warn(`iva.service is exposed beyond loopback on port ${port} - restarting securely`);
+    sc("restart", "iva.service");
+    for (let attempt = 0; attempt < 30; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      listener = inspectListener();
+      if (listener === "loopback") break;
+    }
+    if (listener === "loopback") (ok(`iva.service bound to loopback:${port}`), fixN++);
+    else (bad(`iva.service still exposed on port ${port}`), badN++);
+  } else if (listener === "loopback") (ok(`iva.service bound to loopback:${port}`), okN++);
+  else if (listener === "absent") (warn(`no listener found on port ${port}`), warnN++);
+  else (warn("could not inspect listener addresses (ss unavailable)"), warnN++);
+
   // Background timers enabled
   for (const t of TIMERS) {
     if (scQ("is-enabled", t).out === "enabled") okN++;
@@ -824,13 +888,26 @@ function ensureUserbotVenv({ quiet = false } = {}) {
 // Update-or-append keys in .env (dedup). Used to write Telegram api_id/api_hash
 // without the agent hand-editing .env or leaking secrets through argv.
 function writeEnvVars(vars) {
-  let raw = existsSync(ENV_PATH) ? readFileSync(ENV_PATH, "utf8") : "";
-  for (const [k, v] of Object.entries(vars)) {
-    const line = `${k}=${v}`;
-    const re = new RegExp(`^\\s*${k}\\s*=.*$`, "m");
-    raw = re.test(raw) ? raw.replace(re, line) : raw.replace(/\n*$/, "\n") + line + "\n";
+  for (const [key, value] of Object.entries(vars)) {
+    if (/[\r\n]/.test(String(value))) throw new Error(`env value for ${key} contains a newline`);
   }
-  writeFileSync(ENV_PATH, raw);
+  const raw = existsSync(ENV_PATH) ? readFileSync(ENV_PATH, "utf8") : "";
+  const pending = new Map(Object.entries(vars).map(([key, value]) => [key, String(value)]));
+  const out = [];
+  for (const line of raw.split(/\r?\n/)) {
+    const key = line.match(/^\s*([A-Z0-9_]+)\s*=/)?.[1];
+    if (key && Object.hasOwn(vars, key)) {
+      if (pending.has(key)) {
+        out.push(`${key}=${pending.get(key)}`);
+        pending.delete(key);
+      }
+      continue; // drop duplicate occurrences
+    }
+    out.push(line);
+  }
+  while (out.length && out.at(-1) === "") out.pop();
+  for (const [key, value] of pending) out.push(`${key}=${value}`);
+  writeEnvAtomicSync(ENV_PATH, `${out.join("\n")}\n`);
 }
 
 // Generate the proxy bearer once, into a 0600 file both sides read at runtime.
