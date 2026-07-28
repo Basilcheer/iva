@@ -451,6 +451,12 @@ export async function completeScopedResetState(
     sessionId: null,
     turnId: null,
     statusMessageId: null,
+    ingressId: null,
+    ingressAt: null,
+    statusAt: null,
+    turnAt: null,
+    firstOutputAt: null,
+    latencyLogged: null,
     wasCancelled: null,
     resetAt: Date.now(),
   });

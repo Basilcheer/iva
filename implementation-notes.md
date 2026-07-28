@@ -17,6 +17,28 @@
   Keeping byte-equivalent existing settings skips that rewrite; any changed keep-path
   value validates the configured model first.
 
+## Early Telegram working status and latency phases (IVA-006 / #57)
+
+- A trusted update publishes one provisional `running` status immediately after
+  the allowlist and message/media dispatch decision. Reply sanitization, media
+  download/transcription/vision and provider work all happen after that request.
+- The provisional record has a random ingress ID and no Eve session ID.
+  `turn.started` adopts it with a per-chat compare-and-set, preserving the same
+  Telegram message. A reset that wins the race changes the record first, so the
+  old turn cannot attach its session or revive running state. Its Stop button is
+  added only after that adoption gives cancellation a real session target.
+- Telegram status send and cleanup errors are logged and swallowed. If authored
+  handling intentionally produces no turn, its still-provisional status is
+  compare-and-set back to idle and its message is removed.
+- The status record carries only monotonic lifecycle timestamps. The first
+  `message.appended` event records first output, and final delivery emits one
+  JSON line with ingress-to-status, ingress-to-turn, ingress-to-first-output and
+  ingress-to-delivery milliseconds only after every Telegram chunk succeeds in
+  HTML or plain fallback. The log schema has no identifiers, prompt,
+  user data, tokens or arbitrary error text.
+- Location, contact and poll data is appended to the daily transcript before the
+  no-turn dispatch gate consumes those silent updates.
+
 ## Structured Telegram reply context (IVA-009 / #53)
 
 - Eve keeps quoted text and media only in `raw.reply_to_message`; IVA now adds one

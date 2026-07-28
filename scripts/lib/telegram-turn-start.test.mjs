@@ -1,7 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { publishTelegramTurnStarted } from "./telegram-turn-start.mjs";
+import {
+  emitTelegramTurnLatency,
+  markTelegramFirstOutput,
+  publishTelegramEarlyStatus,
+  publishTelegramTurnStarted,
+} from "./telegram-turn-start.mjs";
 
 function deferred() {
   let resolve;
@@ -11,81 +16,192 @@ function deferred() {
   return { promise, resolve };
 }
 
-test("turn.started publishes running before the working-status request can block", async () => {
-  const working = deferred();
-  const events = [];
-  let status = { status: "idle" };
+function statusStore(initial = {}) {
+  let value = initial;
+  return {
+    get: () => value,
+    set: (_key, patch) => {
+      value = { ...value, ...patch };
+      for (const key of Object.keys(value)) if (value[key] === null) delete value[key];
+      return value;
+    },
+    cas: (_key, expected, patch) => {
+      if (Object.entries(expected).some(([key, expectedValue]) => !Object.is(value[key], expectedValue))) {
+        return null;
+      }
+      value = { ...value, ...patch };
+      for (const key of Object.keys(value)) if (value[key] === null) delete value[key];
+      return value;
+    },
+  };
+}
 
-  const publishing = publishTelegramTurnStarted({
+test("a trusted dispatch creates one status before a fake 20-second pre-turn delay and turn.started adopts it", async () => {
+  const events = [];
+  const store = statusStore({ status: "idle" });
+  let nowMs = 1_000;
+  let sends = 0;
+  const stopEnabled = [];
+
+  await publishTelegramEarlyStatus({
+    chatKey: "1:",
+    ingressId: "ingress-1",
+    now: () => nowMs++,
+    setStatusImpl: store.set,
+    setStatusIfImpl: store.cas,
+    sendWorkingStatusImpl: async (options) => {
+      sends++;
+      stopEnabled.push(options.canStop);
+      events.push("working-status");
+      return 77;
+    },
+  });
+  events.push("provider-work");
+  nowMs += 20_000;
+
+  const adopted = await publishTelegramTurnStarted({
     chatKey: "1:",
     continuationToken: "1::",
     sessionId: "session-1",
     turnId: "turn-1",
-    setStatusImpl: (_key, patch) => {
-      events.push("running");
-      status = { ...status, ...patch };
-      return status;
-    },
-    setStatusIfImpl: (_key, expected, patch) => {
-      assert.equal(status.status, expected.status);
-      assert.equal(status.sessionId, expected.sessionId);
-      assert.equal(status.turnId, expected.turnId);
-      events.push("status-message");
-      status = { ...status, ...patch };
-      return status;
-    },
-    sendWorkingStatusImpl: async () => {
-      events.push("working-request");
-      return working.promise;
+    now: () => nowMs,
+    getStatusImpl: store.get,
+    setStatusIfImpl: store.cas,
+    enableWorkingStatusStopImpl: async (messageId) => {
+      assert.equal(messageId, 77);
+      stopEnabled.push(true);
     },
   });
 
-  await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(status.status, "running");
-  assert.equal(status.statusMessageId, null);
-  assert.deepEqual(events, ["running", "working-request"]);
-
-  working.resolve(77);
-  await publishing;
-  assert.equal(status.statusMessageId, 77);
-  assert.deepEqual(events, ["running", "working-request", "status-message"]);
+  assert.equal(adopted, true);
+  assert.equal(sends, 1);
+  assert.deepEqual(stopEnabled, [false, true]);
+  assert.deepEqual(events, ["working-status", "provider-work"]);
+  assert.equal(store.get().statusMessageId, 77);
+  assert.equal(store.get().sessionId, "session-1");
+  assert.equal(store.get().turnId, "turn-1");
+  assert.equal(store.get().ingressAt, 1_000);
+  assert.equal(store.get().statusAt, 1_001);
+  assert.equal(store.get().turnAt, 21_002);
 });
 
-test("a late working-status response cannot attach to a completed or newer turn", async () => {
-  const working = deferred();
-  let status = { status: "idle" };
-  const removed = [];
+test("working-status failure never blocks turn adoption", async () => {
+  const store = statusStore({ status: "idle" });
+  const errors = [];
 
-  const publishing = publishTelegramTurnStarted({
+  await publishTelegramEarlyStatus({
+    chatKey: "1:",
+    ingressId: "ingress-1",
+    setStatusImpl: store.set,
+    setStatusIfImpl: store.cas,
+    sendWorkingStatusImpl: async () => {
+      throw new Error("Telegram unavailable");
+    },
+    onWorkingStatusError: (error) => errors.push(error.message),
+  });
+  const adopted = await publishTelegramTurnStarted({
     chatKey: "1:",
     continuationToken: "1::",
     sessionId: "session-1",
     turnId: "turn-1",
-    setStatusImpl: (_key, patch) => {
-      status = { ...status, ...patch };
-      return status;
-    },
-    setStatusIfImpl: (_key, expected, patch) => {
-      if (
-        status.status !== expected.status ||
-        status.sessionId !== expected.sessionId ||
-        status.turnId !== expected.turnId
-      ) {
-        return null;
-      }
-      status = { ...status, ...patch };
-      return status;
-    },
+    getStatusImpl: store.get,
+    setStatusIfImpl: store.cas,
+  });
+
+  assert.equal(adopted, true);
+  assert.deepEqual(errors, ["Telegram unavailable"]);
+  assert.equal(store.get().sessionId, "session-1");
+  assert.equal(store.get().statusMessageId, undefined);
+});
+
+test("a reset racing a late early-status response cannot revive the old session", async () => {
+  const working = deferred();
+  const store = statusStore({ status: "idle" });
+  const removed = [];
+
+  const publishing = publishTelegramEarlyStatus({
+    chatKey: "1:",
+    ingressId: "ingress-1",
+    setStatusImpl: store.set,
+    setStatusIfImpl: store.cas,
     sendWorkingStatusImpl: () => working.promise,
     removeWorkingStatusImpl: async (messageId) => {
       removed.push(messageId);
     },
   });
 
-  status = { status: "idle", sessionId: "session-2", turnId: "turn-2" };
+  await new Promise((resolve) => setImmediate(resolve));
+  store.set("1:", {
+    status: "idle",
+    ingressId: null,
+    sessionId: null,
+    turnId: null,
+    resetAt: 2_000,
+  });
   working.resolve(78);
   await publishing;
+  const adopted = await publishTelegramTurnStarted({
+    chatKey: "1:",
+    continuationToken: "1::",
+    sessionId: "session-old",
+    turnId: "turn-old",
+    getStatusImpl: store.get,
+    setStatusIfImpl: store.cas,
+  });
 
+  assert.equal(adopted, false);
   assert.deepEqual(removed, [78]);
-  assert.equal(status.statusMessageId, undefined);
+  assert.equal(store.get().status, "idle");
+  assert.equal(store.get().sessionId, undefined);
+});
+
+test("latency logging emits one allowlisted JSON record with no sensitive fields", () => {
+  const store = statusStore({
+    status: "running",
+    sessionId: "session-secret",
+    ingressAt: 1_000,
+    statusAt: 1_010,
+    turnAt: 1_100,
+    prompt: "private prompt",
+    userId: "123456",
+    token: "bot-token",
+  });
+  const lines = [];
+  assert.equal(markTelegramFirstOutput({
+    chatKey: "1:",
+    sessionId: "session-secret",
+    now: () => 1_500,
+    getStatusImpl: store.get,
+    setStatusIfImpl: store.cas,
+  }), true);
+  assert.equal(markTelegramFirstOutput({
+    chatKey: "1:",
+    sessionId: "session-secret",
+    now: () => 1_600,
+    getStatusImpl: store.get,
+    setStatusIfImpl: store.cas,
+  }), false);
+  const options = {
+    chatKey: "1:",
+    sessionId: "session-secret",
+    deliveryAt: 1_700,
+    delivered: true,
+    getStatusImpl: store.get,
+    setStatusIfImpl: store.cas,
+    logImpl: (line) => lines.push(line),
+  };
+
+  assert.equal(emitTelegramTurnLatency({ ...options, delivered: false }), false);
+  assert.equal(store.get().latencyLogged, undefined);
+  assert.equal(emitTelegramTurnLatency(options), true);
+  assert.equal(emitTelegramTurnLatency(options), false);
+  assert.equal(lines.length, 1);
+  assert.deepEqual(JSON.parse(lines[0]), {
+    event: "telegram_turn_latency",
+    ingressToStatusMs: 10,
+    ingressToTurnMs: 100,
+    ingressToFirstOutputMs: 500,
+    ingressToDeliveryMs: 700,
+  });
+  assert.doesNotMatch(lines[0], /private prompt|123456|bot-token|session-secret|1:/);
 });

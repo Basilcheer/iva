@@ -30,7 +30,13 @@ import {
   TELEGRAM_ACCEPTANCE_ROUTE,
   wrapTelegramQueueOnMessage,
 } from "../../scripts/lib/telegram-acceptance.mjs";
-import { publishTelegramTurnStarted } from "../../scripts/lib/telegram-turn-start.mjs";
+import {
+  abandonTelegramEarlyStatus,
+  emitTelegramTurnLatency,
+  markTelegramFirstOutput,
+  publishTelegramEarlyStatus,
+  publishTelegramTurnStarted,
+} from "../../scripts/lib/telegram-turn-start.mjs";
 import { pathToFileURL } from "node:url";
 
 // Токен (TELEGRAM_BOT_TOKEN) и секрет вебхука (TELEGRAM_WEBHOOK_SECRET_TOKEN)
@@ -272,15 +278,18 @@ function stoppedText(): string {
 // Telegram вернёт 400 на custom_emoji — тогда навсегда падаем на обычные ⏳.
 const WORK_LOADER = { alt: "🔵", customEmojiId: "5258372840389888502", fallback: "⏳" };
 let workLoaderSupported = true;
+const stopReplyMarkup = () => ({
+  inline_keyboard: [[{ text: tr("⏹ Stop", "⏹ Стоп"), callback_data: STOP_CALLBACK }]],
+});
 
 async function sendWorkingStatus(tg: {
   chatId: string;
   messageThreadId?: number;
   request: (m: string, b?: any) => Promise<any>;
-}): Promise<number | null> {
+}, { canStop = true } = {}): Promise<number | null> {
   const base = {
     chat_id: tg.chatId,
-    reply_markup: { inline_keyboard: [[{ text: tr("⏹ Stop", "⏹ Стоп"), callback_data: STOP_CALLBACK }]] },
+    ...(canStop ? { reply_markup: stopReplyMarkup() } : {}),
     ...(tg.messageThreadId !== undefined ? { message_thread_id: tg.messageThreadId } : {}),
   };
   if (workLoaderSupported) {
@@ -341,6 +350,12 @@ async function finishStatus(
         sessionId: null,
         turnId: null,
         statusMessageId: null,
+        ingressId: null,
+        ingressAt: null,
+        statusAt: null,
+        turnAt: null,
+        firstOutputAt: null,
+        latencyLogged: null,
         ...(mode === "cancelled" ? { wasCancelled: true } : {}),
       },
     )
@@ -413,9 +428,15 @@ const telegram = telegramChannel({
         continuationToken: channel.continuationToken,
         sessionId: ctx.session.id,
         turnId: data.turnId,
-        setStatusImpl: setChatStatus,
+        getStatusImpl: getChatStatus,
         setStatusIfImpl: setChatStatusIf,
-        sendWorkingStatusImpl: () => sendWorkingStatus(tg),
+        sendWorkingStatusImpl: (options) => sendWorkingStatus(tg, options),
+        enableWorkingStatusStopImpl: (messageId) =>
+          tg.request("editMessageReplyMarkup", {
+            chat_id: tg.chatId,
+            message_id: messageId,
+            reply_markup: stopReplyMarkup(),
+          }),
         removeWorkingStatusImpl: (messageId) =>
           tg.request("deleteMessage", { chat_id: tg.chatId, message_id: messageId }),
         onWorkingStatusError: (error) =>
@@ -440,8 +461,22 @@ const telegram = telegramChannel({
           status: "idle",
           continuationToken: channel.continuationToken,
           turnId: null,
+          ingressId: null,
+          ingressAt: null,
+          statusAt: null,
+          turnAt: null,
+          firstOutputAt: null,
+          latencyLogged: null,
         },
       );
+    },
+    "message.appended"(_data, channel, ctx) {
+      markTelegramFirstOutput({
+        chatKey: chatKeyOf(channel.telegram.chatId, channel.telegram.messageThreadId),
+        sessionId: ctx.session.id,
+        getStatusImpl: getChatStatus,
+        setStatusIfImpl: setChatStatusIf,
+      });
     },
     // Ответ модели → красивый Telegram-HTML. Переопределяет дефолтную plain-доставку
     // eve. Промежуточный текст перед tool-calls не шлём (зеркалим дефолт). Конвертер
@@ -449,8 +484,17 @@ const telegram = telegramChannel({
     // если случился, НЕ глотаем молча: логируем и шлём один раз plain (теги срезаны,
     // без parse_mode → по сущностям 400 невозможен). Без повторного хода модели — ход
     // уже закрыт, реформат произойдёт на следующем сообщении (ошибка видна в логе/vault).
-    async "message.completed"(data, channel) {
+    async "message.completed"(data, channel, ctx) {
       if (data.finishReason === "tool-calls" || !data.message) return;
+      const recordDelivery = (delivered: boolean) =>
+        emitTelegramTurnLatency({
+          chatKey: chatKeyOf(channel.telegram.chatId, channel.telegram.messageThreadId),
+          sessionId: ctx.session.id,
+          deliveryAt: Date.now(),
+          delivered,
+          getStatusImpl: getChatStatus,
+          setStatusIfImpl: setChatStatusIf,
+        });
       // Outbound security-гейт: редактим утёкшие секреты/эксфил-URL ДО отправки. Fail-open —
       // если гейт что-то нашёл, шлём отредактированное и громко логируем (блокировать ответ
       // целиком хуже редкой утечки для единственного владельца).
@@ -479,7 +523,10 @@ const telegram = telegramChannel({
               ? { message_thread_id: channel.telegram.messageThreadId }
               : {}),
           });
-          if (res.ok) return;
+          if (res.ok) {
+            recordDelivery(true);
+            return;
+          }
           console.error(
             "[telegram] sendRichMessage отвергнут, фолбэк HTML:",
             res.status,
@@ -490,8 +537,12 @@ const telegram = telegramChannel({
         }
       }
 
+      let attemptedDelivery = false;
+      let allChunksDelivered = true;
       for (const html of toTelegramHtmlChunks(guard.text, 4096)) {
         if (!html) continue;
+        attemptedDelivery = true;
+        let chunkDelivered = false;
         try {
           // eve's TelegramMessageBody type omits parse_mode, но рантайм
           // (normalizeTelegramMessageBody) спредит тело прямо в sendMessage —
@@ -500,16 +551,20 @@ const telegram = telegramChannel({
             text: html,
             parse_mode: "HTML",
           } as TelegramMessageBody & { parse_mode: "HTML" });
+          chunkDelivered = true;
         } catch (err) {
           console.error("[telegram] HTML отвергнут, шлю plain:", err, "| HTML:", html.slice(0, 300));
           try {
             // htmlToPlain декодирует сущности (&amp;→&), иначе они утекли бы литералами.
             await channel.telegram.post(htmlToPlain(html));
+            chunkDelivered = true;
           } catch (e2) {
             console.error("[telegram] plain-фолбэк тоже упал:", e2);
           }
         }
+        if (!chunkDelivered) allChunksDelivered = false;
       }
+      if (attemptedDelivery && allChunksDelivered) recordDelivery(true);
     },
     // Ход упал (в т.ч. переполнение контекста / HookConflict) — даём пользователю escape.
     async "turn.failed"(_data, channel, ctx) {
@@ -551,6 +606,83 @@ const telegram = telegramChannel({
       }
       return null; // дропаем апдейт
     }
+
+    const raw = message.raw as Record<string, any>;
+    let media:
+      | { fileId: string; tag: string; transcribe: boolean; mimeType?: string; fileName?: string }
+      | null = null;
+    if (Array.isArray(raw.photo) && raw.photo.length > 0) {
+      const p = raw.photo[raw.photo.length - 1];
+      if (p?.file_id) media = { fileId: p.file_id, tag: "photo", transcribe: false };
+    }
+    if (!media) {
+      for (const m of RAW_MEDIA) {
+        const obj = raw[m.key] as { file_id?: string; mime_type?: string; file_name?: string } | undefined;
+        if (obj && typeof obj.file_id === "string") {
+          media = {
+            fileId: obj.file_id,
+            tag: m.tag,
+            transcribe: m.transcribe,
+            mimeType: obj.mime_type,
+            fileName: obj.file_name,
+          };
+          break;
+        }
+      }
+    }
+    const nonFile = raw.location
+      ? `[location]\t${raw.location.latitude}, ${raw.location.longitude}`
+      : raw.contact
+        ? `[contact]\t${[raw.contact.first_name, raw.contact.last_name, raw.contact.phone_number]
+            .filter(Boolean)
+            .join(" ")}`
+        : raw.poll
+          ? `[poll]\t${raw.poll.question}`
+          : null;
+    if (nonFile) {
+      const [head, body] = nonFile.split("\t");
+      appendDaily(head, body);
+    }
+
+    // The allowlist and dispatch decision are complete. Publish the one working
+    // status before reply sanitization, media I/O, security scans or providers.
+    if (
+      media
+        ? !shouldDispatchMedia(message, ctx.telegram.botUsername)
+        : !shouldDispatch(message, ctx.telegram.botUsername)
+    ) {
+      return null;
+    }
+    const earlyKey = chatKeyOf(message.chat.id, message.messageThreadId);
+    const earlyIngressId = await publishTelegramEarlyStatus({
+      chatKey: earlyKey,
+      setStatusImpl: setChatStatus,
+      setStatusIfImpl: setChatStatusIf,
+      sendWorkingStatusImpl: (options) => sendWorkingStatus(ctx.telegram, options),
+      removeWorkingStatusImpl: (messageId) =>
+        ctx.telegram.request("deleteMessage", {
+          chat_id: ctx.telegram.chatId,
+          message_id: messageId,
+        }),
+      onWorkingStatusError: (error) =>
+        console.error("[telegram] раннее статус-сообщение не отправилось:", error),
+    });
+    const abandonEarly = () =>
+      typeof earlyIngressId === "string"
+        ? abandonTelegramEarlyStatus({
+            chatKey: earlyKey,
+            ingressId: earlyIngressId,
+            getStatusImpl: getChatStatus,
+            setStatusIfImpl: setChatStatusIf,
+            removeWorkingStatusImpl: (messageId) =>
+              ctx.telegram.request("deleteMessage", {
+                chat_id: ctx.telegram.chatId,
+                message_id: messageId,
+              }),
+            onWorkingStatusError: (error) =>
+              console.error("[telegram] раннее статус-сообщение не удалилось:", error),
+          })
+        : Promise.resolve(false);
 
     // 1a-стоп. Пометка о прерванном ходе + совместимость с апдейтом от старого bridge,
     // который приклеивал busy-time строки в message.raw.iva_buffered. Текущий bridge
@@ -652,34 +784,7 @@ const telegram = telegramChannel({
 
     // 2. Любой присланный файл (фото/документ/голос/аудио/видео/кружок/анимация/стикер).
     // uploadPolicy "disabled" → message.attachments пуст; берём ВСЁ из raw сами.
-    const raw = message.raw as Record<string, any>;
-    let media:
-      | { fileId: string; tag: string; transcribe: boolean; mimeType?: string; fileName?: string }
-      | null = null;
-    if (Array.isArray(raw.photo) && raw.photo.length > 0) {
-      // photo — массив размеров по возрастанию; берём самый крупный (последний).
-      const p = raw.photo[raw.photo.length - 1];
-      if (p?.file_id) media = { fileId: p.file_id, tag: "photo", transcribe: false };
-    }
-    if (!media) {
-      for (const m of RAW_MEDIA) {
-        const obj = raw[m.key] as { file_id?: string; mime_type?: string; file_name?: string } | undefined;
-        if (obj && typeof obj.file_id === "string") {
-          media = {
-            fileId: obj.file_id,
-            tag: m.tag,
-            transcribe: m.transcribe,
-            mimeType: obj.mime_type,
-            fileName: obj.file_name,
-          };
-          break;
-        }
-      }
-    }
-
     if (media) {
-      // Гейтим медиа как обычный диспатч (в группе — только обращённое к боту).
-      if (!shouldDispatchMedia(message, ctx.telegram.botUsername)) return null;
       const tag = `[${media.tag}]`;
       const caption = (message.caption || "").trim();
       const capSuffix = caption ? `\n\n${caption}` : "";
@@ -705,6 +810,7 @@ const telegram = telegramChannel({
           } catch {
             /* молча игнорируем сбой ответа */
           }
+          await abandonEarly();
           return null;
         }
         // null = getFile без file_path (не too-big) либо скачивание !ok — общий диагностический фолбэк.
@@ -751,8 +857,10 @@ const telegram = telegramChannel({
           !transcript &&
           !caption &&
           !operationalPreContext.length
-        )
+        ) {
+          await abandonEarly();
           return null;
+        }
 
         const path = `${process.env.ASSISTANT_VAULT_DIR || "vault"}/${rel}`;
         const isImage = media.tag === "photo" || media.tag === "sticker" || media.tag === "animation";
@@ -797,32 +905,12 @@ const telegram = telegramChannel({
         } catch {
           /* молча игнорируем сбой ответа */
         }
+        await abandonEarly();
         return null;
       }
     }
 
-    // 2b. Не-файловые типы (локация/контакт/опрос) — буквально всё фиксируем в логе дня.
-    // Это чистые данные, файла нет; скачивать нечего, отдельный ход без текста не нужен.
-    const nonFile = raw.location
-      ? `[location]\t${raw.location.latitude}, ${raw.location.longitude}`
-      : raw.contact
-        ? `[contact]\t${[raw.contact.first_name, raw.contact.last_name, raw.contact.phone_number]
-            .filter(Boolean)
-            .join(" ")}`
-        : raw.poll
-          ? `[poll]\t${raw.poll.question}`
-          : null;
-    if (nonFile) {
-      const [head, body] = nonFile.split("\t");
-      appendDaily(head, body);
-      // нет текста — только лог, без ответа (если не едет буфер — его терять нельзя)
-      if (!(message.text || "").trim() && !preContext.length) return null;
-    }
-
-    // 3. Штатное гейтирование диспатча (текст; в группе — только обращённое к боту).
-    if (!shouldDispatch(message, ctx.telegram.botUsername)) return null;
-
-    // 4. Текстовая реплика юзера → daily (verbatim) + inbound security-гейт.
+    // 3. Текстовая реплика юзера → daily (verbatim) + inbound security-гейт.
     const userText = (message.text || "").trim();
     if (userText) appendDaily("[text]", userText);
 

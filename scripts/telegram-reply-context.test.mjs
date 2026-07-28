@@ -1,6 +1,12 @@
 import "./lib/ts-esm-hooks.mjs";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { after } from "node:test";
@@ -70,6 +76,32 @@ function replyItem(sendCall) {
     .map((item) => JSON.parse(item))
     .find((item) => item.type === "telegram_reply");
 }
+
+function dailyText() {
+  const dir = join(vault, "daily");
+  if (!existsSync(dir)) return "";
+  return readdirSync(dir)
+    .sort()
+    .map((file) => readFileSync(join(dir, file), "utf8"))
+    .join("\n");
+}
+
+test("location, contact and poll updates append daily data before the no-turn dispatch gate", async () => {
+  const cases = [
+    [message({ text: undefined, location: { latitude: 41.3, longitude: 69.2 } }), /\[location\]\n41\.3, 69\.2/],
+    [message({
+      text: undefined,
+      contact: { first_name: "Ada", last_name: "Lovelace", phone_number: "+99800" },
+    }), /\[contact\]\nAda Lovelace \+99800/],
+    [message({ text: undefined, poll: { question: "Ship it?" } }), /\[poll\]\nShip it\?/],
+  ];
+
+  for (const [raw, pattern] of cases) {
+    const before = dailyText();
+    assert.equal((await dispatch(raw)).length, 0);
+    assert.match(dailyText().slice(before.length), pattern);
+  }
+});
 
 test("private reply reaches Eve as a separate context item", async () => {
   const sends = await dispatch(message({
