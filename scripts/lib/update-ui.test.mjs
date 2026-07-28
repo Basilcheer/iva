@@ -307,6 +307,26 @@ test("update lock is exclusive and owner-reentrant", () => {
   assert.equal(acquireUpdateLock(dir, "two").ok, true);
 });
 
+test("verified update commits before timer activation and contains a timer failure", async () => {
+  const updateSafety = await import("./update-safety.mjs");
+  assert.equal(typeof updateSafety.commitThenRunPostCommit, "function");
+
+  const calls = [];
+  const timerError = new Error("timer activation failed");
+  const result = await updateSafety.commitThenRunPostCommit({
+    commit: async () => {
+      calls.push("commit");
+    },
+    postCommit: async () => {
+      calls.push("timer");
+      throw timerError;
+    },
+  });
+
+  assert.deepEqual(calls, ["commit", "timer"]);
+  assert.deepEqual(result, { ok: false, error: timerError });
+});
+
 function git(cwd, ...args) {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
 }

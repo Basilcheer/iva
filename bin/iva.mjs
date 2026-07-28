@@ -2,8 +2,8 @@
 // Iva CLI — manage the self-host installation: update / config / doctor / uninstall + wrappers.
 // Self-contained, no external dependencies. Node 24+ (global fetch, spawnSync).
 //
-// SINGLE source of truth for systemd units (writeUnits): install.sh delegates here
-// (`iva _install-units`), and update/doctor reuse the same write.
+// SINGLE source of truth for systemd units and activation: install.sh delegates here
+// (`iva _install-units` + `_activate-units`), and CLI/doctor reuse the same paths.
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, readdirSync, chmodSync, statSync } from "node:fs";
 import { randomBytes } from "node:crypto";
@@ -18,9 +18,11 @@ import { createTelegramUpdateReporter, loadTelegramJob, removeTelegramJob } from
 import { generateAssistantBearer, isAssistantBearer } from "../scripts/lib/assistant-auth.mjs";
 import { writeEnvAtomicSync } from "../scripts/lib/env-file.mjs";
 import { classifyAgentListeners } from "../scripts/lib/listener-security.mjs";
+import { cleanupSystemdUnits, createSystemdControl } from "../scripts/lib/systemd-control.mjs";
 import { userbotSyncArgs } from "../scripts/lib/userbot-deps.mjs";
 import {
   acquireUpdateLock,
+  commitThenRunPostCommit,
   createUpdateLog,
   createUpdateTransaction,
   releaseUpdateLock,
@@ -72,8 +74,8 @@ function cap(cmd, args, opts = {}) {
   return { code: r.status ?? 1, out: (r.stdout || "").trim(), err: (r.stderr || "").trim() };
 }
 const hasSystemd = () => !!cap("sh", ["-c", "command -v systemctl"]).out;
-const sc = (...args) => run("systemctl", ["--user", ...args]);
 const scQ = (...args) => cap("systemctl", ["--user", ...args]);
+const systemd = createSystemdControl({ run: (args) => scQ(...args) });
 const gitHead = () => cap("git", ["rev-parse", "--short", "HEAD"]).out;
 
 function readEnv() {
@@ -220,27 +222,24 @@ function writeUnits() {
     writeFileSync(join(UNIT_DIR, f), tpl);
     written.push(f);
   }
-  if (hasSystemd()) scQ("daemon-reload");
+  if (hasSystemd()) systemd.daemonReload();
   return written;
 }
 
-function enableUnits() {
-  sc("enable", "--now", ...SERVICES);
-  for (const t of TIMERS) sc("enable", "--now", t);
+function activateUnits() {
+  systemd.activate([...SERVICES, ...TIMERS]);
 }
 
 function removeUnits() {
   if (!existsSync(UNIT_DIR)) return [];
   const units = readdirSync(UNIT_DIR).filter((f) => /^iva.*\.(service|timer)$/.test(f));
-  for (const u of units) scQ("disable", "--now", u);
-  for (const u of units) {
-    try {
-      rmSync(join(UNIT_DIR, u));
-    } catch {}
-  }
-  scQ("daemon-reload");
-  scQ("reset-failed");
-  return units;
+  return cleanupSystemdUnits({
+    units,
+    disable: (unit) => systemd.disableNow([unit]),
+    remove: (unit) => rmSync(join(UNIT_DIR, unit)),
+    reload: () => systemd.daemonReload(),
+    reset: () => systemd.resetFailed(),
+  });
 }
 
 // Migrate old installs to IVA_PORT. Idempotent: on the first `iva update`
@@ -268,7 +267,7 @@ function migrateEnv({ quiet = false } = {}) {
 // on the old port (the unit was already baked) while clients read the new one — the same desync.
 function restartServices() {
   writeUnits();
-  return sc("restart", ...SERVICES).status === 0;
+  systemd.restart(SERVICES);
 }
 
 // ANSI tree like during install. The only source of the art is install.sh (heredoc
@@ -384,12 +383,14 @@ async function cmdUpdate(args) {
         protect: ["Сохраняю ваши изменения", "Изменения сохранены", "Не удалось сохранить изменения"],
         fetch: ["Получаю обновление", "Обновление получено", "Не удалось получить обновление"],
         build: ["Собираю Iva", "Iva собрана", "Не удалось собрать Iva"],
+        timerFailure: "Iva готова, но таймер автоматических обновлений не удалось активировать",
         current: "Iva уже обновлена",
       }
     : {
         protect: ["Saving your changes", "Changes saved", "Couldn't save your changes"],
         fetch: ["Getting the update", "Update received", "Couldn't get the update"],
         build: ["Building Iva", "Iva built", "Couldn't build Iva"],
+        timerFailure: "Iva is ready, but the automatic update timer could not be activated",
         current: "Iva is already up to date",
       };
 
@@ -429,8 +430,21 @@ async function cmdUpdate(args) {
   const ensureUpdateTimer = async () => {
     if (!hasSystemd()) return;
     writeUnits();
-    const timer = await tx.run("systemctl", ["--user", "enable", "--now", UPDATE_TIMER]);
-    if (timer.code !== 0) terminal.info(`⚠️ ${UPDATE_TIMER} was not enabled; run: iva doctor`);
+    systemd.activate([UPDATE_TIMER]);
+  };
+  const finalizeUpdate = async () => {
+    const finalized = await commitThenRunPostCommit({
+      commit: () => tx.commit(),
+      postCommit: ensureUpdateTimer,
+    });
+    if (finalized.ok) return true;
+
+    const detail = finalized.error?.message || String(finalized.error);
+    terminal.fail(text.timerFailure);
+    terminal.info(detail);
+    await reporter?.postCommitFailure(detail);
+    process.exitCode = 1;
+    return false;
   };
 
   try {
@@ -445,8 +459,7 @@ async function cmdUpdate(args) {
     await phaseDone("fetch");
 
     if (!update.changed && !force) {
-      await tx.commit();
-      await ensureUpdateTimer();
+      if (!(await finalizeUpdate())) return;
       terminal.info(`✅ ${text.current} (${versions.afterVersion})`);
       await reporter?.complete({ ...versions, changedLocal: tx.hadLocalChanges });
       return;
@@ -483,12 +496,11 @@ async function cmdUpdate(args) {
 
     if (hasSystemd()) {
       writeUnits();
-      const restarted = await tx.run("systemctl", ["--user", "restart", ...SERVICES]);
-      if (restarted.code !== 0) throw new Error("service restart failed");
+      systemd.restart(SERVICES);
       let healthy = false;
       const port = (readEnv().IVA_PORT || DEFAULT_PORT).trim();
       for (let attempt = 0; attempt < 30; attempt++) {
-        const active = SERVICES.every((service) => scQ("is-active", service).out === "active");
+        const active = SERVICES.every((service) => systemd.isActive(service));
         try {
           const response = await fetch(`http://127.0.0.1:${port}/`, { signal: AbortSignal.timeout(2000) });
           if (active && response.ok) { healthy = true; break; }
@@ -496,7 +508,7 @@ async function cmdUpdate(args) {
         await new Promise((resolve) => setTimeout(resolve, 1000));
       }
       if (!healthy) throw new Error("health check failed");
-      if (scQ("is-active", SVC_USERBOT).out === "active") {
+      if (systemd.isActive(SVC_USERBOT)) {
         const frozen = cap("uv", ["pip", "freeze", "--python", VENV_PY], { cwd: USERBOT_DIR });
         if (frozen.code !== 0 || !frozen.out)
           throw new Error("userbot: не удалось сохранить dependency snapshot перед обновлением");
@@ -508,8 +520,7 @@ async function cmdUpdate(args) {
     }
 
     await phaseDone("build");
-    await tx.commit();
-    await ensureUpdateTimer();
+    if (!(await finalizeUpdate())) return;
     const model = modelSummary(readEnv());
     terminal.info(`✅ Iva ${locale === "ru" ? "обновлена" : "updated"}`);
     terminal.info(`${versions.beforeVersion} → ${versions.afterVersion} · ${model.provider}/${model.model}`);
@@ -525,9 +536,12 @@ async function cmdUpdate(args) {
       codeRollbackOk = false;
     }
     if (phase === "build" && hasSystemd()) {
-      writeUnits();
-      const restarted = await tx.run("systemctl", ["--user", "restart", ...SERVICES]);
-      if (restarted.code !== 0) rollbackOk = false;
+      try {
+        writeUnits();
+        systemd.restart(SERVICES);
+      } catch {
+        rollbackOk = false;
+      }
       if (userbotUpdateAttempted && codeRollbackOk) {
         try {
           restartUserbotIfActive({
@@ -631,32 +645,46 @@ async function cmdDoctor() {
   const present = existsSync(UNIT_DIR) && readdirSync(UNIT_DIR).some((f) => /^iva.*\.(service|timer)$/.test(f));
   if (!present) {
     warn("systemd units not installed — installing…");
-    writeUnits();
-    enableUnits();
-    (ok("Units installed and enabled"), fixN++);
+    try {
+      writeUnits();
+      activateUnits();
+      (ok("Units installed, enabled and active"), fixN++);
+    } catch (e) {
+      (bad(e.message), badN++);
+    }
   } else {
-    writeUnits(); // refresh: Environment=PORT syncs with the current IVA_PORT (eliminates drift)
-    (ok("systemd units installed (refreshed)"), okN++);
+    try {
+      writeUnits(); // refresh: Environment=PORT syncs with the current IVA_PORT (eliminates drift)
+      (ok("systemd units installed (refreshed)"), okN++);
+    } catch (e) {
+      (bad(e.message), badN++);
+    }
   }
 
   // 5. Services active
   for (const svc of SERVICES) {
-    if (scQ("is-active", svc).out === "active") (ok(`${svc} active`), okN++);
+    if (systemd.isEnabled(svc) && systemd.isActive(svc)) (ok(`${svc} enabled and active`), okN++);
     else {
-      warn(`${svc} inactive — restarting…`);
-      scQ("reset-failed", svc);
-      sc("restart", svc);
-      if (scQ("is-active", svc).out === "active") (ok(`${svc} brought up`), fixN++);
-      else (bad(`${svc} won't start — journalctl --user -u ${svc} -e`), badN++);
+      warn(`${svc} disabled or inactive — activating…`);
+      try {
+        systemd.resetFailed([svc]);
+        systemd.activate([svc]);
+        (ok(`${svc} enabled and active`), fixN++);
+      } catch (e) {
+        (bad(e.message), badN++);
+      }
     }
   }
   // A newly generated bearer is read only at process start. Without this restart,
   // doctor would fix the file while leaving the live Eve process unable to accept it.
   if (bearerChanged) {
     warn("iva.service needs one restart to load the new internal bearer");
-    sc("restart", "iva.service");
-    if (scQ("is-active", "iva.service").out === "active") (ok("iva.service loaded the internal bearer"), fixN++);
-    else (bad("iva.service did not restart with the internal bearer"), badN++);
+    try {
+      systemd.restart(["iva.service"]);
+      (ok("iva.service loaded the internal bearer"), fixN++);
+    } catch (e) {
+      (bad(e.message), badN++);
+    }
   }
   // A refreshed unit does not move an already-running old process off 0.0.0.0.
   // Detect the actual socket and restart once so doctor repairs that upgrade state too.
@@ -668,28 +696,39 @@ async function cmdDoctor() {
   let listener = inspectListener();
   if (listener === "exposed") {
     warn(`iva.service is exposed beyond loopback on port ${port} - restarting securely`);
-    sc("restart", "iva.service");
-    for (let attempt = 0; attempt < 30; attempt++) {
-      await new Promise((resolve) => setTimeout(resolve, 500));
-      listener = inspectListener();
-      if (listener === "loopback") break;
+    try {
+      systemd.restart(["iva.service"]);
+      for (let attempt = 0; attempt < 30; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        listener = inspectListener();
+        if (listener === "loopback") break;
+      }
+      if (listener === "loopback") (ok(`iva.service bound to loopback:${port}`), fixN++);
+      else (bad(`iva.service still exposed on port ${port}`), badN++);
+    } catch (e) {
+      (bad(e.message), badN++);
     }
-    if (listener === "loopback") (ok(`iva.service bound to loopback:${port}`), fixN++);
-    else (bad(`iva.service still exposed on port ${port}`), badN++);
   } else if (listener === "loopback") (ok(`iva.service bound to loopback:${port}`), okN++);
   else if (listener === "absent") (warn(`no listener found on port ${port}`), warnN++);
   else (warn("could not inspect listener addresses (ss unavailable)"), warnN++);
 
   // Background timers enabled
+  let timerFailed = false;
   for (const t of TIMERS) {
-    if (scQ("is-enabled", t).out === "enabled") okN++;
+    if (systemd.isEnabled(t) && systemd.isActive(t)) okN++;
     else {
-      warn(`${t} disabled — enabling…`);
-      sc("enable", "--now", t);
-      fixN++;
+      warn(`${t} disabled or inactive — enabling…`);
+      try {
+        systemd.activate([t]);
+        fixN++;
+      } catch (e) {
+        timerFailed = true;
+        (bad(e.message), badN++);
+      }
     }
   }
-  ok(`Background timers checked (${TIMERS.length}: ${MEMORY_TIMERS.length} memory + update check)`);
+  if (!timerFailed)
+    ok(`Background timers enabled and active (${TIMERS.length}: ${MEMORY_TIMERS.length} memory + update check)`);
 
   // 6. Vault + git origin (report only — we don't initiate git operations)
   const vaultRel = env.ASSISTANT_VAULT_DIR || "vault";
@@ -736,8 +775,10 @@ function cmdReset() {
   step("Full reset: stopping services…");
   // Fail closed: quarantining the store under a live eve corrupts state and resurrects
   // the very runs we're clearing — if stop failed, don't touch anything.
-  if (sc("stop", ...SERVICES).status !== 0) {
-    bad("systemctl stop failed — workflow and Telegram control state left untouched");
+  try {
+    systemd.stop(SERVICES);
+  } catch (e) {
+    bad(`${e.message} Workflow and Telegram control state left untouched`);
     process.exit(1);
   }
   let found = false;
@@ -756,25 +797,27 @@ function cmdReset() {
     }
   }
   if (!found && !failed) ok("workflow and Telegram control state already empty");
-  const restarted = restartServices();
-  if (failed) {
-    bad("Reset INCOMPLETE — old workflow or Telegram control state may still be active");
-    process.exit(1);
+  let restartError = null;
+  try {
+    restartServices();
+  } catch (e) {
+    restartError = e;
   }
-  if (!restarted) {
-    bad("systemctl restart failed — services may be down, check: iva logs");
-    process.exit(1);
+  if (restartError) {
+    bad(restartError.message);
   }
+  if (failed) bad("Reset INCOMPLETE — old workflow or Telegram control state may still be active");
+  if (failed || restartError) process.exit(1);
   ok("Restarted: iva + telegram-poll");
 }
 function cmdStart() {
   requireSystemd();
-  enableUnits();
+  activateUnits();
   ok("Started and enabled at boot");
 }
 function cmdStop() {
   requireSystemd();
-  sc("stop", ...SERVICES);
+  systemd.stop(SERVICES);
   ok("Stopped");
 }
 function cmdLogs(args) {
@@ -969,12 +1012,10 @@ function restartUserbotIfActive({
   requirementsPath = join(USERBOT_DIR, "requirements.lock"),
   requireHashes = true,
 } = {}) {
-  if (!knownActive && scQ("is-active", SVC_USERBOT).out !== "active") return;
+  if (!knownActive && !systemd.isActive(SVC_USERBOT)) return;
   if (!quiet) step("Обновляю userbot-прокси…");
   ensureUserbotVenv({ quiet, requirementsPath, requireHashes });
-  const restarted = quiet ? scQ("restart", SVC_USERBOT) : sc("restart", SVC_USERBOT);
-  const code = quiet ? restarted.code : (restarted.status ?? 1);
-  if (code !== 0) throw new Error(`${SVC_USERBOT}: restart failed; run: journalctl --user -u ${SVC_USERBOT} -n 100`);
+  systemd.restart([SVC_USERBOT]);
   if (!quiet) ok("userbot-прокси перезапущен на новом коде");
 }
 
@@ -1013,8 +1054,10 @@ function cmdUserbot(args) {
     ensureUserbotToken(); // 0600 token file both the proxy and iva's connection read at runtime
     ensureUserbotVenv(); // throws → dispatch catches → exit 1, service NOT enabled
     writeUnits();
-    sc("enable", SVC_USERBOT);
-    sc("restart", SVC_USERBOT); // restart (not just enable --now) so a rewritten unit / new creds load
+    systemd.activate([SVC_USERBOT]);
+    // enable --now is idempotent and does not reload an already-active proxy.
+    // Restart after syncing deps/writing the unit so fresh credentials and code are live.
+    systemd.restart([SVC_USERBOT]);
     // NOTE: do NOT restart iva here — the agent runs this mid-chat, and iva reads the token
     // from the file at call time, so no restart is needed (Eve retries the MCP connection).
     ok("Userbot-прокси включён. Подключи аккаунт по QR через бота: напиши боту «подключи мой телеграм».");
@@ -1022,7 +1065,7 @@ function cmdUserbot(args) {
     return;
   }
   if (sub === "off") {
-    scQ("disable", "--now", SVC_USERBOT);
+    systemd.disableNow([SVC_USERBOT]);
     ok("Userbot-прокси остановлен и выключен.");
     return;
   }
@@ -1053,8 +1096,13 @@ const cmds = {
   help: cmdHelp,
   "--help": cmdHelp,
   "-h": cmdHelp,
-  // internal subcommand — install.sh delegates unit writing here (DRY)
+  // Internal installer seams: one writer and the same checked activator used by
+  // `iva start` and doctor. Success is printed only after every unit is enabled and active.
   "_install-units": () => ok(`systemd units written: ${writeUnits().length}`),
+  "_activate-units": () => {
+    activateUnits();
+    ok(`systemd units enabled and active: ${SERVICES.length + TIMERS.length}`);
+  },
 };
 
 const fn = cmds[cmd];

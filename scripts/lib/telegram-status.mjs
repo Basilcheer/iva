@@ -15,6 +15,7 @@ const COPY = {
     protect: ["Saving your changes", "Changes saved", "Couldn't save your changes"],
     fetch: ["Getting the update", "Update received", "Couldn't get the update"],
     build: ["Building Iva", "Iva built", "Couldn't build Iva"],
+    timerFailure: "Iva is ready, but the automatic update timer could not be activated",
     final: "✅ Iva updated",
     preserved: "Local changes: preserved",
     failure: (version) => `Iva is still running ${version}.\nYour settings and changes are preserved.\nRetry: /update`,
@@ -23,6 +24,7 @@ const COPY = {
     protect: ["Сохраняю ваши изменения", "Изменения сохранены", "Не удалось сохранить изменения"],
     fetch: ["Получаю обновление", "Обновление получено", "Не удалось получить обновление"],
     build: ["Собираю Iva", "Iva собрана", "Не удалось собрать Iva"],
+    timerFailure: "Iva готова, но таймер автоматических обновлений не удалось активировать",
     final: "✅ Iva обновлена",
     preserved: "Локальные изменения: сохранены",
     failure: (version) => `Iva продолжает работать на ${version}.\nВаши настройки и изменения сохранены.\nПовторить: /update`,
@@ -133,6 +135,10 @@ export function createTelegramUpdateReporter({ token, job, env, fetchImpl = fetc
       const reason = copy[phase][2];
       currentPhase = null;
       await finish(`⚠️ ${reason}\n\n${copy.failure(beforeVersion)}`);
+    },
+    async postCommitFailure(message) {
+      currentPhase = null;
+      await finish(`⚠️ ${copy.timerFailure}\n\n${message}`);
     },
     async complete({ beforeVersion, afterVersion }) {
       const model = modelSummary(env);

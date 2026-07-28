@@ -99,6 +99,16 @@ export function releaseUpdateLock(lock) {
   rmSync(lock.path, { recursive: true, force: true });
 }
 
+export async function commitThenRunPostCommit({ commit, postCommit }) {
+  await commit();
+  try {
+    await postCommit();
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error };
+  }
+}
+
 function parseVersion(text) {
   try {
     return JSON.parse(text).version || null;

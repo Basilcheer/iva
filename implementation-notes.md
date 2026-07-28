@@ -1,5 +1,26 @@
 # Implementation notes
 
+## Checked systemd activation (IVA-003 / #54)
+
+- All CLI systemd mutations now go through `scripts/lib/systemd-control.mjs`. A non-zero
+  command raises a sanitized error with a fixed per-unit journal hint; captured command
+  output and process environment are never copied into diagnostics.
+- Activation is idempotent and succeeds only after every requested unit reports both
+  `enabled` and `active`. Restart also verifies the final active state.
+- `install.sh` keeps unit rendering in `_install-units` and delegates activation to the
+  same checked `_activate-units` seam used by `iva start` and doctor.
+- Doctor records individual activation failures and keeps checking neighboring units.
+  Destructive reset still stops fail-closed and attempts to restart services after a
+  partial quarantine failure.
+- Uninstall cleanup attempts every unit disable and file removal, then daemon reload and
+  failed-state reset. It reports a bounded aggregate error only after all steps run.
+- A verified update commits its transaction before activating the automatic update timer.
+  Timer activation failure keeps the verified build, exits non-zero, and uses a dedicated
+  diagnostic in terminal and Telegram instead of entering the build rollback path.
+- No activation polling was added. The activated long-running services use systemd's
+  synchronous `Type=simple` start semantics, and timer start jobs return in their active
+  waiting state, so a synthetic `activating` transition would not model these units.
+
 ## Aimasters.Me user-feedback backlog (2026-07-28)
 
 - Source evidence, issue triage, source-message links and links to attached screenshots/video are in

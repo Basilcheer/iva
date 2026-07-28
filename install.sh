@@ -593,25 +593,10 @@ elif prompt_yes_no "$(t "Set up autostart via systemd (service + memory timers)?
   # Delegate writing the units to the iva CLI — the single source of truth (see bin/iva.mjs writeUnits).
   step "$(t "Installing systemd units (via the iva CLI)…" "Ставлю systemd-юниты (через iva CLI)…")"
   node "$PROJECT_DIR/bin/iva.mjs" _install-units || die "$(t "couldn't write the systemd units" "не удалось записать systemd-юниты")"
-  poll_installed=1
-  timers_installed=1
-
-  systemctl --user enable --now iva.service
-  if [ "$poll_installed" -eq 1 ]; then
-    systemctl --user enable --now iva-telegram-poll.service \
-      && ok "$(t "Bot enabled and online" "Бот включён и на связи")" \
-      || warn "$(t "couldn't start iva-telegram-poll (manually: npm run poll)" "не удалось запустить iva-telegram-poll (вручную: npm run poll)")"
-  fi
-  if [ "$timers_installed" -eq 1 ]; then
-    for t in "$PROJECT_DIR"/deploy/iva-memory-*.timer; do
-      [ -e "$t" ] || continue
-      tname="$(basename "$t")"
-      systemctl --user enable --now "$tname" || warn "$(t "couldn't enable $tname" "не удалось включить $tname")"
-    done
-    systemctl --user enable --now iva-update-check.timer \
-      || warn "$(t "couldn't enable iva-update-check.timer" "не удалось включить iva-update-check.timer")"
-    ok "$(t "Memory timers enabled: systemctl --user list-timers" "Таймеры памяти включены: systemctl --user list-timers")"
-  fi
+  node "$PROJECT_DIR/bin/iva.mjs" _activate-units \
+    || die "$(t "couldn't enable and start the systemd units; follow the journal hint above" "не удалось включить и запустить systemd-юниты; проверьте подсказку journal выше")"
+  ok "$(t "Bot enabled and online" "Бот включён и на связи")"
+  ok "$(t "Memory timers enabled and active: systemctl --user list-timers" "Таймеры памяти включены и активны: systemctl --user list-timers")"
   loginctl enable-linger "$USER" >/dev/null 2>&1 || warn "$(t "couldn't enable linger (the service won't start before login)" "не удалось включить linger (сервис не стартует до логина)")"
   ok "$(t "Service started: systemctl --user status iva" "Сервис запущен: systemctl --user status iva")"
 
@@ -644,7 +629,7 @@ echo "${c_green}${c_bold}└─────────────────�
 echo
 if [ "$SETUP_DONE" != true ]; then
   echo "  ${c_yellow}${c_bold}$(t "Configure the keys first:" "Сначала настройте ключи:")${c_reset}  cd $PROJECT_DIR && npm run setup"
-  echo "  $(t "Then rebuild and start:" "Затем пересоберите и запустите:") npm run build && (systemctl --user restart iva)"
+  echo "  $(t "Then rebuild and start:" "Затем пересоберите и запустите:") npm run build && iva restart"
   echo
 fi
 echo "  ${c_bold}$(t "Commands (${c_green}iva${c_reset}${c_bold} — from anywhere):" "Команды (${c_green}iva${c_reset}${c_bold} — из любого места):")${c_reset}"
