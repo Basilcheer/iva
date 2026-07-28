@@ -125,6 +125,20 @@ test("conditional update checks sessionId under the same per-chat lock", () => {
   assert.equal(status.getChatStatus("cas:").status, "idle");
 });
 
+test("each accepted status write advances a monotonic per-chat generation", () => {
+  const first = status.setChatStatus("generation:", {
+    status: "running",
+    sessionId: "session-1",
+  });
+  const second = status.setChatStatus("generation:", {
+    status: "idle",
+    sessionId: null,
+  });
+
+  assert.equal(first.generation, 1);
+  assert.equal(second.generation, 2);
+});
+
 test("a stale per-chat lock is reclaimed after a crashed writer", () => {
   const key = "stale-lock:";
   const encoded = Buffer.from(key, "utf8").toString("base64url");

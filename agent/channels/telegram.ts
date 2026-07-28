@@ -1,4 +1,8 @@
-import { telegramChannel, type TelegramMessageBody } from "eve/channels/telegram";
+import {
+  telegramChannel,
+  type TelegramChannelState,
+  type TelegramMessageBody,
+} from "eve/channels/telegram";
 import { POST } from "eve/channels";
 import { appendFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -21,6 +25,12 @@ import {
 import { tr } from "../../scripts/lib/i18n.mjs";
 import { buildTelegramReplyContext } from "../../scripts/lib/telegram-reply-context.mjs";
 import { handleTelegramResetRequest } from "../../scripts/lib/telegram-reset-route.mjs";
+import {
+  handleAcceptedTelegramWebhook,
+  TELEGRAM_ACCEPTANCE_ROUTE,
+  wrapTelegramQueueOnMessage,
+} from "../../scripts/lib/telegram-acceptance.mjs";
+import { publishTelegramTurnStarted } from "../../scripts/lib/telegram-turn-start.mjs";
 import { pathToFileURL } from "node:url";
 
 // Токен (TELEGRAM_BOT_TOKEN) и секрет вебхука (TELEGRAM_WEBHOOK_SECRET_TOKEN)
@@ -394,23 +404,22 @@ const telegram = telegramChannel({
     }
   },
   events: {
-    // Начало хода: статус-сообщение с кнопкой [⏹ Стоп] + запись running в run-status
-    // (по ней мост буферизует новые сообщения до конца хода).
+    // Начало хода: сначала публикуем running, затем отправляем медленное статус-сообщение.
+    // FIFO-мост не должен успеть принять следующую голову, пока Bot API отвечает.
     async "turn.started"(data, channel, ctx) {
       const tg = channel.telegram;
-      let statusMessageId: number | null = null;
-      try {
-        statusMessageId = await sendWorkingStatus(tg);
-      } catch (e) {
-        console.error("[telegram] статус-сообщение не отправилось:", e);
-      }
-      setChatStatus(chatKeyOf(tg.chatId, tg.messageThreadId), {
-        status: "running",
+      await publishTelegramTurnStarted({
+        chatKey: chatKeyOf(tg.chatId, tg.messageThreadId),
         continuationToken: channel.continuationToken,
         sessionId: ctx.session.id,
         turnId: data.turnId,
-        statusMessageId,
-        wasCancelled: null,
+        setStatusImpl: setChatStatus,
+        setStatusIfImpl: setChatStatusIf,
+        sendWorkingStatusImpl: () => sendWorkingStatus(tg),
+        removeWorkingStatusImpl: (messageId) =>
+          tg.request("deleteMessage", { chat_id: tg.chatId, message_id: messageId }),
+        onWorkingStatusError: (error) =>
+          console.error("[telegram] статус-сообщение не отправилось:", error),
       });
     },
     async "turn.completed"(_data, channel, ctx) {
@@ -517,7 +526,7 @@ const telegram = telegramChannel({
       }
     },
   },
-  async onMessage(ctx, message) {
+  onMessage: wrapTelegramQueueOnMessage(async (ctx, message) => {
     const userId = message.from?.id;
 
     // 1. Allowlist — главный барьер доступа.
@@ -543,10 +552,10 @@ const telegram = telegramChannel({
       return null; // дропаем апдейт
     }
 
-    // 1a-стоп. Наследие ESC-остановки: пометка о прерванном ходе + сообщения, которые
-    // мост копил, пока шёл ход (data/telegram-queue.json), и вложил в этот апдейт
-    // строками (message.raw.iva_buffered). Семантика Claude Code: буфер попадает в
-    // контекст, но обрабатывается только вместе со СЛЕДУЮЩИМ сообщением — этим.
+    // 1a-стоп. Пометка о прерванном ходе + совместимость с апдейтом от старого bridge,
+    // который приклеивал busy-time строки в message.raw.iva_buffered. Текущий bridge
+    // хранит исходные апдейты в durable FIFO и доставляет их самостоятельно; этот путь
+    // нужен только для безопасного rolling upgrade уже подготовленного carrier-апдейта.
     const stopKey = chatKeyOf(message.chat.id, message.messageThreadId);
     const operationalPreContext: string[] = [];
     if (getChatStatus(stopKey)?.wasCancelled) {
@@ -837,8 +846,18 @@ const telegram = telegramChannel({
       }
     }
     return withPre({ auth: buildAuth(message) });
-  },
+  }),
 });
+
+const telegramWebhookRoute = telegram.routes.find(
+  (route) =>
+    route.transport !== "websocket" &&
+    route.method === "POST" &&
+    route.path === "/eve/v1/telegram",
+);
+if (!telegramWebhookRoute || telegramWebhookRoute.transport === "websocket") {
+  throw new Error("telegramChannel did not expose its expected webhook route");
+}
 
 // The generic eveChannel reset endpoint owns the "eve" continuation namespace,
 // while these sessions belong to "telegram". Keep reset on the same authored
@@ -847,6 +866,8 @@ export default {
   ...telegram,
   routes: [
     ...telegram.routes,
+    POST<TelegramChannelState>(TELEGRAM_ACCEPTANCE_ROUTE, (request, args) =>
+      handleAcceptedTelegramWebhook(telegramWebhookRoute.handler, request, args)),
     POST("/eve/v1/telegram/reset", (req, { reset }) =>
       handleTelegramResetRequest(req, reset, process.env.TELEGRAM_WEBHOOK_SECRET_TOKEN)),
   ],

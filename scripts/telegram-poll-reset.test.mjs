@@ -9,7 +9,17 @@ process.env.ASSISTANT_DATA_DIR = dataDir;
 process.env.TELEGRAM_BOT_TOKEN = "test-token";
 process.env.TELEGRAM_WEBHOOK_SECRET_TOKEN = "test-secret";
 
-const [{ completeScopedResetState, loadQueue, writeQueueAtomic }, status] = await Promise.all([
+const [{
+  clearPrivateResetIntent,
+  completeScopedResetState,
+  drainReadyQueueHeads,
+  loadPrivateResetIntents,
+  loadQueue,
+  performScopedReset,
+  persistPrivateResetIntent,
+  reconcileScopedResetIntents,
+  writeQueueAtomic,
+}, status] = await Promise.all([
   import(`./telegram-poll.mjs?reset-test=${Date.now()}`),
   import(`./lib/run-status.mjs?reset-test=${Date.now()}`),
 ]);
@@ -48,10 +58,10 @@ test("private reset clears only the target chat status and queue", async () => {
   assert.equal(untouched.sessionId, "session-b");
   assert.equal(untouched.continuationToken, "chat-b:7:reply");
 
-  assert.deepEqual(
-    JSON.parse(readFileSync(join(dataDir, "telegram-queue.json"), "utf8")),
-    { "chat-b:7": ["keep me"] },
-  );
+  const queue = JSON.parse(readFileSync(join(dataDir, "telegram-queue.json"), "utf8"));
+  assert.equal(queue.version, 1);
+  assert.deepEqual(Object.keys(queue.queues), ["chat-b:7"]);
+  assert.equal(queue.queues["chat-b:7"][0].legacyText, "keep me");
 });
 
 test("group reset preserves the shared topic queue", async () => {
@@ -100,6 +110,101 @@ test("failed private queue cleanup does not expose an idle tombstone", async () 
   );
   assert.equal(status.getChatStatus("chat-c:").status, "running");
   assert.equal(status.getChatStatus("chat-c:").sessionId, "session-c");
+});
+
+test("private reset intent is durable before remote reset and clears after local cleanup", async () => {
+  const events = [];
+  await performScopedReset("chat-intent:", "chat-intent::", {
+    clearQueue: true,
+    persistIntentImpl: async () => events.push("intent"),
+    requestResetImpl: async () => events.push("remote"),
+    completeStateImpl: async () => events.push("cleanup"),
+    clearIntentImpl: async () => events.push("clear-intent"),
+  });
+
+  assert.deepEqual(events, ["intent", "remote", "cleanup", "clear-intent"]);
+});
+
+test("startup reconciliation prevents a remotely reset private queue from draining after a crash", async () => {
+  const key = "chat-crash:";
+  const continuationToken = "chat-crash::";
+  status.setChatStatus(key, {
+    status: "running",
+    continuationToken,
+    sessionId: "old-session",
+    turnId: "old-turn",
+  });
+  await writeQueueAtomic({
+    version: 1,
+    queues: {
+      [key]: [{
+        version: 1,
+        updateId: 901,
+        enqueuedAt: 1,
+        update: {
+          update_id: 901,
+          message: {
+            message_id: 901,
+            date: 1,
+            chat: { id: 901, type: "private" },
+            from: { id: 42, is_bot: false, first_name: "Owner" },
+            text: "must be discarded after reset",
+          },
+        },
+      }],
+    },
+  });
+  await persistPrivateResetIntent(key, continuationToken);
+
+  const remoteRetries = [];
+  await reconcileScopedResetIntents({
+    requestResetImpl: async (intent) => {
+      remoteRetries.push(intent);
+    },
+  });
+
+  assert.deepEqual(
+    remoteRetries.map(({ chatKey, continuationToken: token }) => [chatKey, token]),
+    [[key, continuationToken]],
+  );
+  assert.deepEqual(await loadPrivateResetIntents(), []);
+  assert.equal(status.getChatStatus(key).status, "idle");
+  assert.equal(status.getChatStatus(key).sessionId, undefined);
+  assert.equal((await loadQueue()).queues[key], undefined);
+
+  const delivered = [];
+  assert.equal(
+    await drainReadyQueueHeads({
+      deliverImpl: async (update) => {
+        delivered.push(update.update_id);
+        return true;
+      },
+      settleUntil: new Map(),
+      inFlight: new Map(),
+    }),
+    0,
+  );
+  assert.deepEqual(delivered, [], "startup must reconcile reset intent before any old head can drain");
+});
+
+test("failed reset reconciliation keeps its durable intent for the next startup", async () => {
+  const key = "chat-retry:";
+  await persistPrivateResetIntent(key, "chat-retry::");
+
+  await assert.rejects(
+    reconcileScopedResetIntents({
+      requestResetImpl: async () => {
+        throw new Error("eve unavailable");
+      },
+    }),
+    /eve unavailable/,
+  );
+
+  assert.deepEqual(
+    (await loadPrivateResetIntents()).map(({ chatKey }) => chatKey),
+    [key],
+  );
+  await clearPrivateResetIntent(key);
 });
 
 test("queue rename failure keeps the previous whole queue byte-for-byte", async () => {
@@ -154,7 +259,7 @@ test("ordinary queue load quarantines corrupt bytes and continues", async () => 
   const corrupt = '{"chat-g:": ["unfinished"';
   writeFileSync(queueFile, corrupt);
 
-  assert.deepEqual(await loadQueue(), {});
+  assert.deepEqual(await loadQueue(), { version: 1, queues: {} });
 
   const backups = readdirSync(dataDir).filter((name) =>
     name.startsWith("telegram-queue.json.corrupt-"),

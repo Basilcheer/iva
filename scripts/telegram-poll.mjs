@@ -8,7 +8,7 @@
 // so we fetch updates from Telegram ourselves (getUpdates, long-poll) and POST them to
 // the local eve route with the same secret — Telegram sees an ordinary bot, no proxy needed.
 // The channel/agent are unchanged. Webhook and polling are mutually exclusive → deleteWebhook on start.
-import { readFile, writeFile, mkdir, rename, rm, readdir, stat } from "node:fs/promises";
+import { readFile, writeFile, mkdir, rm, readdir, stat } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { execFile } from "node:child_process";
 import { join, dirname } from "node:path";
@@ -30,10 +30,40 @@ import { acquireUpdateLock, releaseUpdateLock } from "./lib/update-safety.mjs";
 import { inspectUpstream, markVersionNotified, updateOffer } from "./lib/update-check.mjs";
 // ESC-остановка: канал пишет в data/run-status.d, идёт ли сейчас ход по чату;
 // мост по нему буферизует входящие (см. очередь ниже) и обслуживает /stop.
-import { getChatStatus, isRunning, setChatStatus } from "./lib/run-status.mjs";
+import {
+  getChatStatus,
+  isRunning,
+  RUN_STALE_MS,
+  setChatStatus,
+} from "./lib/run-status.mjs";
 import { classifyDeliverStatus } from "./lib/deliver-policy.mjs";
 import { alreadyDelivered, parseOffsetFile, serializeOffsetFile } from "./lib/offset-store.mjs";
 import { continuationTokenForControl, requestTelegramReset } from "./lib/telegram-reset.mjs";
+import {
+  clearTelegramResetIntent,
+  loadTelegramResetIntents,
+  persistTelegramResetIntent,
+} from "./lib/telegram-reset-intent.mjs";
+import {
+  addTelegramQueueReceipt,
+  TELEGRAM_ACCEPTANCE_KIND_HEADER,
+  TELEGRAM_ACCEPTANCE_ROUTE,
+} from "./lib/telegram-acceptance.mjs";
+import {
+  acknowledgeQueueHead,
+  clearQueueFileKey,
+  enqueueQueueFile,
+  isReplyToBot,
+  loadQueueFile,
+  materializeQueueItem,
+  migrateQueueFile,
+  queueCount,
+  queueHead,
+  queueKeys,
+  shouldQueueBusyUpdate,
+  TELEGRAM_QUEUE_FATAL_DURABILITY,
+  writeQueueFileAtomic,
+} from "./lib/telegram-queue.mjs";
 // Двуязычие: единый источник языка (getLang) + одна таблица команд (COMMANDS) для /help
 // и синего командного меню Telegram. tr(en, ru) — функция (язык не замораживаем в const).
 import { getLang, tr, helpText, botCommands } from "./lib/i18n.mjs";
@@ -47,6 +77,7 @@ const NODE = process.execPath;
 
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const BOT_USER_ID = /^(\d+):/.exec(TOKEN ?? "")?.[1] ?? null;
+const BOT_USERNAME = process.env.TELEGRAM_BOT_USERNAME ?? "my_bot";
 const SECRET = process.env.TELEGRAM_WEBHOOK_SECRET_TOKEN;
 const PORT = process.env.IVA_PORT ?? "8723";
 const HOST = (process.env.ASSISTANT_HOST ?? `http://127.0.0.1:${PORT}`).replace(/\/$/, "");
@@ -57,6 +88,7 @@ const DATA_DIR = DATA_DIR_RAW.startsWith("/") ? DATA_DIR_RAW : join(ROOT, DATA_D
 const ENV_PATH = join(ROOT, ".env");
 const DATA_DIR_ABS = DATA_DIR;
 const ROUTE = `${HOST}/eve/v1/telegram`;
+const ACCEPTANCE_ROUTE = `${HOST}${TELEGRAM_ACCEPTANCE_ROUTE}`;
 const RESET_ROUTE = `${ROUTE}/reset`;
 const API = `https://api.telegram.org/bot${TOKEN}`;
 const OFFSET_FILE = join(DATA_DIR, "telegram-offset.json");
@@ -184,23 +216,58 @@ async function downloadTelegramFile(fileId, maxBytes) {
 // не даёт надёжного признака «апдейт битый навсегда» (тот же 409 может быть временным
 // конфликтом хука), поэтому и эти статусы ретраятся, но ОГРАНИЧЕННО: DROP_ATTEMPTS
 // попыток (~5 минут), затем апдейт выбрасывается, чтобы не заморозить все чаты.
-// Returns true when eve accepted the update, false when it was dropped.
+// Direct delivery keeps that policy. Durable queue replay opts into one bounded attempt
+// per drain pass: its on-disk head is the retry mechanism, so one bad chat cannot starve
+// other queues or Telegram polling.
+// Returns true when eve accepted the update, false when it was dropped or retained.
 const CONFIG_RETRY_MS = 60_000;
 const DROP_ATTEMPTS = 30;
-async function deliver(update) {
+async function deliver(
+  update,
+  {
+    route = ROUTE,
+    acceptedStatus,
+    queueReceipt = false,
+    retry = true,
+    timeoutMs,
+  } = {},
+) {
+  const outgoing = queueReceipt ? addTelegramQueueReceipt(update) : update;
   for (let attempt = 1; ; attempt++) {
     let wait = Math.min(15000, 1000 * attempt);
     try {
-      const res = await fetch(ROUTE, {
+      const res = await fetch(route, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           "X-Telegram-Bot-Api-Secret-Token": SECRET,
         },
-        body: JSON.stringify(update),
+        body: JSON.stringify(outgoing),
+        ...(timeoutMs === undefined ? {} : { signal: AbortSignal.timeout(timeoutMs) }),
       });
-      if (res.ok) return true;
+      if (res.ok && (acceptedStatus === undefined || res.status === acceptedStatus)) {
+        return queueReceipt && res.headers.get(TELEGRAM_ACCEPTANCE_KIND_HEADER) === "handled"
+          ? "handled"
+          : true;
+      }
+      if (res.ok) {
+        if (!retry) {
+          log(
+            `deliver: acceptance route replied ${res.status}, expected ${acceptedStatus}; queue head retained`,
+          );
+          return false;
+        }
+        log(
+          `deliver: acceptance route replied ${res.status}, expected ${acceptedStatus} (attempt ${attempt}) — retrying`,
+        );
+        await sleep(wait);
+        continue;
+      }
       const cls = classifyDeliverStatus(res.status);
+      if (!retry) {
+        log(`deliver: eve replied ${res.status}; queue head retained for a later pass`);
+        return false;
+      }
       if (cls === "drop") {
         if (attempt < DROP_ATTEMPTS) {
           log(`deliver: eve replied ${res.status} (attempt ${attempt}/${DROP_ATTEMPTS}) — retrying (may be transient)`);
@@ -221,6 +288,10 @@ async function deliver(update) {
         log(`deliver: eve replied ${res.status} (attempt ${attempt}) — retrying`);
       }
     } catch (e) {
+      if (!retry) {
+        log(`deliver: eve unavailable (${e.message}); queue head retained for a later pass`);
+        return false;
+      }
       log(`deliver: eve unavailable (${e.message}, attempt ${attempt}) — waiting for server`);
     }
     await sleep(wait);
@@ -264,16 +335,25 @@ const lastDeliverAt = new Map();
 // Доставка с пейсингом: выдержать SETTLE_MS с последней доставки в этот чат, доставить,
 // отметить время. ЕДИНЫЙ путь для главного цикла и для меню (deps.deliver) — оба делят
 // lastDeliverAt, поэтому доставка из меню сдвигает паузу для следующего реального сообщения.
-async function pacedDeliver(update) {
+async function pacedDeliver(update, options) {
+  const deadline =
+    options?.timeoutMs === undefined ? null : Date.now() + Math.max(0, options.timeoutMs);
   const key = chatKey(update);
   if (key !== null && SETTLE_MS > 0) {
     const prev = lastDeliverAt.get(key);
     if (prev !== undefined) {
       const wait = SETTLE_MS - (Date.now() - prev);
-      if (wait > 0) await sleep(wait);
+      if (wait > 0) {
+        if (deadline !== null && wait >= deadline - Date.now()) return false;
+        await sleep(wait);
+      }
     }
   }
-  const accepted = await deliver(update); // wait for delivery — ordered and lossless
+  const deliverOptions =
+    deadline === null
+      ? options
+      : { ...options, timeoutMs: Math.max(1, Math.floor(deadline - Date.now())) };
+  const accepted = await deliver(update, deliverOptions); // wait for delivery — ordered and lossless
   if (key !== null) lastDeliverAt.set(key, Date.now());
   return accepted; // false = апдейт выброшен как битый, eve его НЕ получила
 }
@@ -305,81 +385,44 @@ async function edit(chatId, messageId, text, replyMarkup) {
 const sc = (...args) =>
   new Promise((resolve) => execFile("systemctl", ["--user", ...args], (err) => resolve(!err)));
 
-// ── ESC-stop message queue (Claude Code semantics) ─────────────────────────
-// While a turn is running for a chat, ordinary message updates are NOT delivered to eve:
-// they are appended to data/telegram-queue.json and acknowledged with a 👀 reaction.
-// eve would otherwise buffer them in-memory and auto-process the batch as soon as the
-// turn parks (its docs call that drain best-effort) — we want the stricter semantics:
-// queued messages enter the context only WITH the next fresh message. When the agent is
-// idle again, the next message carries the queue along as update.message.iva_buffered
-// (the channel turns it into context lines).
+// ── Durable busy-time FIFO ──────────────────────────────────────────────────
+// Each accepted Telegram update is written as a versioned item (including update_id and
+// the untouched raw update) before its Telegram offset advances. The bridge then replays
+// one head per idle chat/topic. It removes that head only after Eve accepts the webhook:
+// a crash can duplicate the head, but cannot lose it or reorder later items around it.
 const QUEUE_FILE = join(DATA_DIR, "telegram-queue.json");
+const RESET_INTENT_DIR = join(DATA_DIR, "telegram-reset-intents");
+const queueSettleUntil = new Map();
+const queueInFlight = new Map();
+const queueDrainRotation = { afterKey: null };
+const undrainableLegacyLogged = new Set();
+const QUEUE_DELIVERY_TIMEOUT_MS = 5_000;
+const QUEUE_DRAIN_BUDGET_MS = 5_000;
+
+function statusGeneration(status) {
+  return Number.isSafeInteger(status?.generation) && status.generation >= 0
+    ? status.generation
+    : 0;
+}
 
 export async function loadQueue({ strict = false } = {}) {
-  let raw;
-  try {
-    raw = await readFile(QUEUE_FILE, "utf8");
-  } catch (error) {
-    if (error?.code === "ENOENT") return {};
-    throw error;
+  const loaded = await loadQueueFile(QUEUE_FILE, { strict });
+  if (loaded.quarantined) {
+    log(`damaged Telegram queue moved to ${loaded.quarantined}:`, loaded.error.message);
   }
-  try {
-    const queue = JSON.parse(raw);
-    if (typeof queue !== "object" || queue === null || Array.isArray(queue)) {
-      throw new Error(`${QUEUE_FILE} does not contain a JSON object`);
-    }
-    return queue;
-  } catch (error) {
-    if (strict) throw error;
-    const backup = `${QUEUE_FILE}.corrupt-${Date.now()}-${randomBytes(4).toString("hex")}`;
-    // Ordinary polling must stay live, but returning {} before the damaged
-    // bytes are safely moved would let the next save overwrite evidence/data.
-    await rename(QUEUE_FILE, backup);
-    log(`damaged Telegram queue moved to ${backup}:`, error.message);
-    return {};
-  }
+  return loaded.document;
 }
 
-export async function writeQueueAtomic(
-  queue,
-  {
-    writeFileImpl = writeFile,
-    renameImpl = rename,
-    rmImpl = rm,
-    nonce = randomBytes(8).toString("hex"),
-  } = {},
-) {
-  await mkdir(DATA_DIR, { recursive: true });
-  const tmp = `${QUEUE_FILE}.tmp-${process.pid}-${nonce}`;
-  try {
-    await writeFileImpl(tmp, JSON.stringify(queue), {
-      encoding: "utf8",
-      flag: "wx",
-      mode: 0o600,
-    });
-    await renameImpl(tmp, QUEUE_FILE);
-  } finally {
-    await rmImpl(tmp, { force: true }).catch(() => {});
-  }
-}
-
-async function saveQueue(q) {
-  try {
-    await writeQueueAtomic(q);
-  } catch (e) {
-    log("queue save failed:", e.message);
-  }
+export async function writeQueueAtomic(queue, options = {}) {
+  await writeQueueFileAtomic(QUEUE_FILE, queue, options);
 }
 
 // A scoped reset intentionally discards only messages queued for this chat/topic.
 // Other conversations keep both their queues and their Eve histories.
 async function clearChatQueue(chatKey) {
-  const q = await loadQueue({ strict: true });
-  if (!(chatKey in q)) return;
-  delete q[chatKey];
   // Reset cleanup must fail loudly: completeScopedResetState keeps the old
-  // running status until this atomic rename succeeds.
-  await writeQueueAtomic(q);
+  // running status until this atomic rewrite succeeds.
+  await clearQueueFileKey(QUEUE_FILE, chatKey);
 }
 
 export async function completeScopedResetState(
@@ -410,23 +453,220 @@ export async function completeScopedResetState(
   });
 }
 
-// One queued message → one context line. Media can't be re-fed later (the channel
-// processes files only on live delivery), so it degrades to a placeholder + caption.
-const MEDIA_KEYS = [
-  "photo", "voice", "audio", "video", "video_note",
-  "animation", "sticker", "document", "location", "contact", "poll",
-];
-function bufferEntryOf(msg) {
-  const text = (msg.text || "").trim();
-  if (text) return text;
-  const kind = MEDIA_KEYS.find((k) => msg[k] !== undefined);
-  const caption = (msg.caption || "").trim();
-  if (!kind) return caption || null;
-  const note = tr(
-    `[${kind} — sent while a turn was running; the attachment wasn't processed, ask to resend it if you need it]`,
-    `[${kind} — прислано пока шёл ход; вложение не обработано, попроси прислать заново, если оно нужно]`,
-  );
-  return caption ? `${note} ${tr("Caption:", "Подпись:")} ${caption}` : note;
+export async function persistPrivateResetIntent(chatKey, continuationToken) {
+  return persistTelegramResetIntent(RESET_INTENT_DIR, chatKey, continuationToken);
+}
+
+export async function loadPrivateResetIntents() {
+  return loadTelegramResetIntents(RESET_INTENT_DIR);
+}
+
+export async function clearPrivateResetIntent(chatKey) {
+  return clearTelegramResetIntent(RESET_INTENT_DIR, chatKey);
+}
+
+const requestResetFromIntent = ({ continuationToken }) =>
+  requestTelegramReset({
+    url: RESET_ROUTE,
+    secret: SECRET,
+    continuationToken,
+  });
+
+export async function performScopedReset(
+  chatKey,
+  continuationToken,
+  {
+    clearQueue = false,
+    persistIntentImpl = persistPrivateResetIntent,
+    requestResetImpl = requestResetFromIntent,
+    completeStateImpl = completeScopedResetState,
+    clearIntentImpl = clearPrivateResetIntent,
+  } = {},
+) {
+  const intent = { chatKey, continuationToken };
+  if (clearQueue) {
+    try {
+      await persistIntentImpl(chatKey, continuationToken);
+    } catch (error) {
+      error.resetPhase = "intent";
+      throw error;
+    }
+  }
+  try {
+    await requestResetImpl(intent);
+  } catch (error) {
+    error.resetPhase = "remote";
+    throw error;
+  }
+  try {
+    await completeStateImpl(chatKey, continuationToken, { clearQueue });
+  } catch (error) {
+    error.resetPhase = "cleanup";
+    throw error;
+  }
+  if (clearQueue) {
+    try {
+      await clearIntentImpl(chatKey);
+    } catch (error) {
+      error.resetPhase = "intent-cleanup";
+      throw error;
+    }
+  }
+}
+
+export async function reconcileScopedResetIntents({
+  loadIntentsImpl = loadPrivateResetIntents,
+  requestResetImpl = requestResetFromIntent,
+  completeStateImpl = completeScopedResetState,
+  clearIntentImpl = clearPrivateResetIntent,
+} = {}) {
+  const intents = await loadIntentsImpl();
+  for (const intent of intents) {
+    await requestResetImpl(intent);
+    await completeStateImpl(intent.chatKey, intent.continuationToken, { clearQueue: true });
+    await clearIntentImpl(intent.chatKey);
+  }
+  return intents.length;
+}
+
+async function acknowledgeQueued(update, count) {
+  const message = update.message;
+  await tg("setMessageReaction", {
+    chat_id: message.chat.id,
+    message_id: message.message_id,
+    reaction: [{ type: "emoji", emoji: "👀" }],
+  }).catch((error) => log("reaction failed:", error.message));
+  await tg("sendMessage", {
+    chat_id: message.chat.id,
+    text: tr(
+      `Queued (${count}). I'll start it automatically when the current task finishes.`,
+      `В очереди: ${count}. Начну автоматически, когда текущая задача завершится.`,
+    ),
+    ...(message.message_thread_id === undefined
+      ? {}
+      : { message_thread_id: message.message_thread_id }),
+  }).catch((error) => log("queue status failed:", error.message));
+}
+
+export async function drainReadyQueueHeads({
+  loadImpl = loadQueue,
+  runningImpl = isRunning,
+  statusImpl = getChatStatus,
+  deliverImpl = (update, { timeoutMs }) =>
+    pacedDeliver(update, {
+      route: ACCEPTANCE_ROUTE,
+      acceptedStatus: 204,
+      queueReceipt: true,
+      retry: false,
+      timeoutMs,
+    }),
+  acknowledgeImpl = (key, updateId) => acknowledgeQueueHead(QUEUE_FILE, key, updateId),
+  legacyAllowedUserIds = ALLOWED,
+  now = Date.now,
+  settleUntil = queueSettleUntil,
+  inFlight = queueInFlight,
+  rotationState = queueDrainRotation,
+  passBudgetMs = QUEUE_DRAIN_BUDGET_MS,
+  deliveryTimeoutMs = QUEUE_DELIVERY_TIMEOUT_MS,
+  gateWaitMs = RUN_STALE_MS,
+} = {}) {
+  const snapshot = await loadImpl();
+  const keys = queueKeys(snapshot);
+  const previousIndex = keys.indexOf(rotationState.afterKey);
+  const orderedKeys =
+    previousIndex < 0
+      ? keys
+      : [...keys.slice(previousIndex + 1), ...keys.slice(0, previousIndex + 1)];
+  const deadline = now() + passBudgetMs;
+  let exhausted = false;
+  let lastAttempted = null;
+
+  for (const key of orderedKeys) {
+    if (now() >= deadline) {
+      exhausted = true;
+      break;
+    }
+    const currentStatus = statusImpl(key);
+    const currentGeneration = statusGeneration(currentStatus);
+    const running = runningImpl(key);
+    const phase = inFlight.get(key);
+    if (phase?.state === "delivering") continue;
+    if (phase?.state === "awaiting-running") {
+      if (running) {
+        inFlight.set(key, { ...phase, state: "running", generation: currentGeneration });
+        continue;
+      }
+      const generationAdvanced = currentGeneration > phase.baselineGeneration;
+      const waitExpired = now() - phase.acceptedAt >= gateWaitMs;
+      if (!generationAdvanced && !waitExpired) continue;
+      inFlight.delete(key);
+    }
+    if (phase?.state === "running") {
+      if (running) continue;
+      inFlight.delete(key);
+    }
+    if (running || (settleUntil.get(key) ?? 0) > now()) continue;
+    const item = queueHead(snapshot, key);
+    const update = materializeQueueItem(key, item, { legacyAllowedUserIds });
+    if (!update) {
+      if (!undrainableLegacyLogged.has(key)) {
+        log(`queued legacy messages for ${key} cannot be replayed because their author is not verifiable`);
+        undrainableLegacyLogged.add(key);
+      }
+      continue;
+    }
+    const timeoutMs = Math.max(1, Math.min(deliveryTimeoutMs, deadline - now()));
+    lastAttempted = key;
+    const baselineGeneration = currentGeneration;
+    inFlight.set(key, { state: "delivering", baselineGeneration });
+    let accepted = false;
+    try {
+      accepted = await deliverImpl(update, { timeoutMs });
+    } catch (error) {
+      log(`queued update ${item.updateId} delivery failed:`, error.message);
+    }
+    if (!accepted) {
+      inFlight.delete(key);
+      continue;
+    }
+    if (accepted === "handled") {
+      inFlight.delete(key);
+    } else {
+      const acceptedStatus = statusImpl(key);
+      const acceptedGeneration = statusGeneration(acceptedStatus);
+      if (runningImpl(key)) {
+        inFlight.set(key, {
+          state: "running",
+          baselineGeneration,
+          generation: acceptedGeneration,
+        });
+      } else if (acceptedGeneration > baselineGeneration) {
+        // A complete running -> idle cycle happened while acceptance was pending.
+        inFlight.delete(key);
+      } else {
+        inFlight.set(key, {
+          state: "awaiting-running",
+          baselineGeneration,
+          acceptedAt: now(),
+        });
+      }
+    }
+    // Keep a just-accepted head until its removal is itself durable. If this write
+    // fails, the next pass deliberately replays the same head (at-least-once).
+    try {
+      await acknowledgeImpl(key, item.updateId);
+      settleUntil.set(key, now() + Math.max(SETTLE_MS, 0));
+    } catch (error) {
+      if (error?.code === TELEGRAM_QUEUE_FATAL_DURABILITY) {
+        inFlight.delete(key);
+        rotationState.afterKey = null;
+        throw error;
+      }
+      log(`queued update ${item.updateId} ack failed; head retained or restored:`, error.message);
+    }
+  }
+  rotationState.afterKey = exhausted ? lastAttempted : null;
+  return queueCount(await loadImpl());
 }
 
 // ── self-update (/update) ──────────────────────────────────────────────────
@@ -1207,46 +1447,35 @@ async function handleControl(update) {
     return true;
   }
 
+  const clearsPrivateQueue = msg?.chat?.type === "private";
   try {
-    await requestTelegramReset({
-      url: RESET_ROUTE,
-      secret: SECRET,
-      continuationToken,
-    });
-  } catch (e) {
-    log(`scoped reset failed for ${key}:`, e.message);
-    if (status) {
-      await edit(
-        chatId,
-        status.message_id,
-        tr(
-          "⚠️ Couldn't reset this conversation. Nothing else was cleared.",
-          "⚠️ Не удалось сбросить этот диалог. Остальные данные не затронуты.",
-        ),
-      );
-    }
-    return true;
-  }
-
-  try {
-    await completeScopedResetState(key, continuationToken, {
+    await performScopedReset(key, continuationToken, {
       // Group/forum queues are keyed only by chat/topic while Eve sessions also
       // include conversationId. Clearing the shared queue here would lose
       // messages belonging to other group conversation anchors.
-      clearQueue: msg?.chat?.type === "private",
+      clearQueue: clearsPrivateQueue,
     });
   } catch (e) {
-    log(`scoped reset cleanup failed for ${key}:`, e.message);
+    log(`scoped reset ${e.resetPhase ?? "unknown"} failed for ${key}:`, e.message);
     if (status) {
       await edit(
         chatId,
         status.message_id,
-        tr(
-          "⚠️ Conversation reset, but local cleanup failed. Send /new again before sending anything else.",
-          "⚠️ Диалог сброшен, но локальная очистка не завершилась. Отправьте /new ещё раз до новых сообщений.",
-        ),
+        e.resetPhase === "remote"
+          ? tr(
+              "⚠️ Couldn't confirm this conversation reset. Recovery will retry automatically.",
+              "⚠️ Не удалось подтвердить сброс диалога. Восстановление повторит его автоматически.",
+            )
+          : tr(
+              "⚠️ Conversation reset recovery is incomplete. Iva will retry it before accepting queued work.",
+              "⚠️ Восстановление после сброса не завершено. Iva повторит его до приёма задач из очереди.",
+            ),
       );
     }
+    // A private reset request is ambiguous after any I/O failure: Eve may have
+    // committed it even when the response was lost. Stop this polling process so
+    // startup reconciliation consumes the durable intent before any old head.
+    if (clearsPrivateQueue) throw e;
     return true;
   }
 
@@ -1272,6 +1501,17 @@ async function main() {
   if (!SECRET) throw new Error("no TELEGRAM_WEBHOOK_SECRET_TOKEN — the channel won't accept updates");
   log(`telegram-poll start → ${ROUTE}`);
   await removeStaleUpdateJobs();
+  // Upgrade the old {chatKey: string[]} queue atomically before polling. A failed
+  // migration stops the bridge, so Telegram retains new updates until the old bytes
+  // are safely represented as versioned FIFO items.
+  await migrateQueueFile(QUEUE_FILE, {
+    onLegacyQuarantine: (path) =>
+      log(`legacy Telegram group messages moved to ${path}; sender identity was unavailable`),
+  });
+  const reconciledResets = await reconcileScopedResetIntents();
+  if (reconciledResets > 0) {
+    log(`reconciled ${reconciledResets} durable private Telegram reset intent(s)`);
+  }
   // First run (no offset file) — drop the accumulated install backlog (drop_pending=true),
   // so old messages don't replay in a batch → parallel sessions on one chat (HookConflict).
   // On subsequent starts we do NOT drop the backlog (don't lose messages that arrived while the bridge was down).
@@ -1290,13 +1530,17 @@ async function main() {
   }
 
   for (;;) {
+    // One head per idle chat/topic per pass. While any queue remains, use a short
+    // Telegram long-poll so terminal/stale run-status changes trigger drain quickly.
+    const pendingQueueCount = await drainReadyQueueHeads();
+    const pollSeconds = pendingQueueCount > 0 ? 1 : 30;
     let data;
     try {
       data = await tg("getUpdates", {
         offset,
-        timeout: 30,
+        timeout: pollSeconds,
         allowed_updates: ["message", "callback_query"],
-      }, { timeoutMs: 40_000 }); // above the 30s long-poll window
+      }, { timeoutMs: pollSeconds > 1 ? 40_000 : 10_000 });
     } catch (e) {
       log("getUpdates network:", e.message);
       await sleep(3000);
@@ -1311,6 +1555,7 @@ async function main() {
       await sleep(3000);
       continue;
     }
+    let queueWriteFailed = false;
     for (const update of data.result || []) {
       // Переигровка после краша (Telegram = at-least-once): этот апдейт уже уходил в eve
       // в прошлой жизни процесса — второй раз не доставляем, только двигаем offset.
@@ -1327,37 +1572,39 @@ async function main() {
         continue;
       }
       const key = chatKey(update);
-      let drainedKey = null; // чей буфер приклеен к этому апдейту — чистится после доставки
-      // ESC-stop queue gate (messages only): while a turn is running for this chat, buffer
-      // the message instead of delivering. callback_query always passes (eve HITL buttons
-      // and ⏹ Стоп must reach a busy agent). Replies to bot messages also pass — that's
-      // how HITL ForceReply answers arrive; queueing one would deadlock the waiting turn.
-      if (update.message && key !== null && update.message.reply_to_message?.from?.is_bot !== true) {
-        if (isRunning(key)) {
-          const entry = bufferEntryOf(update.message);
-          if (entry !== null) {
-            const q = await loadQueue();
-            (q[key] ??= []).push(entry);
-            await saveQueue(q);
-            // Silent ack: a 👀 reaction on the user's message (no extra chat message).
-            await tg("setMessageReaction", {
-              chat_id: update.message.chat.id,
-              message_id: update.message.message_id,
-              reaction: [{ type: "emoji", emoji: "👀" }],
-            }).catch((e) => log("reaction failed:", e.message));
+      // Busy-time queue gate (messages only). callback_query and replies to bot
+      // messages pass immediately because Eve HITL/ForceReply answers would deadlock
+      // in the FIFO. A pre-existing FIFO also captures new eligible updates while an
+      // idle transition is being observed, preserving order around the drain boundary.
+      if (update.message && key !== null && !isReplyToBot(update.message)) {
+        const queue = await loadQueue();
+        const mustQueue =
+          isRunning(key) || queueInFlight.has(key) || queueCount(queue, key) > 0;
+        if (mustQueue) {
+          if (!shouldQueueBusyUpdate(update, {
+            allowedUserIds: ALLOWED,
+            botUsername: BOT_USERNAME,
+          })) {
+            // Untrusted private messages and unaddressed group noise must never enter
+            // the owner's later model context. Consume them exactly once.
+            offset = update.update_id + 1;
+            await saveOffset(offset, delivered);
+            continue;
+          }
+          let queued;
+          try {
+            queued = await enqueueQueueFile(QUEUE_FILE, key, update);
+          } catch (error) {
+            // Do not advance past this update or process later updates in the same
+            // Telegram batch. getUpdates will retry it at the current durable offset.
+            log(`queue enqueue failed for update ${update.update_id}:`, error.message);
+            queueWriteFailed = true;
+            break;
           }
           offset = update.update_id + 1;
           await saveOffset(offset, delivered);
+          await acknowledgeQueued(update, queued.count);
           continue;
-        }
-        // Idle again: the next fresh message carries the queued ones along. The queue is
-        // cleared AFTER successful delivery (below) — clearing it here would lose the
-        // buffered messages if the process dies before deliver() succeeds.
-        const q = await loadQueue();
-        const pending = q[key];
-        if (Array.isArray(pending) && pending.length) {
-          update.message.iva_buffered = pending;
-          drainedKey = key;
         }
       }
       // Don't deliver the next update of the same chat until eve has parked the previous turn
@@ -1366,23 +1613,15 @@ async function main() {
       const accepted = await pacedDeliver(update);
       offset = update.update_id + 1;
       if (accepted) {
-        // Порядок персиста: СНАЧАЛА маркер delivered, ПОТОМ очистка буфера. Краш между
-        // ними оставляет буфер на месте при уже записанном маркере → на переигровке
-        // апдейт пропустится, буфер приклеится к следующему сообщению — дубль возможен,
-        // потеря нет. Обратный порядок (буфер раньше маркера) терял бы очередь.
         delivered = update.update_id;
         await saveOffset(offset, delivered);
-        if (drainedKey !== null) {
-          const q = await loadQueue();
-          delete q[drainedKey];
-          await saveQueue(q);
-        }
       } else {
-        // Апдейт выброшен как битый: буфер НЕ трогаем (приклеится к следующему сообщению),
-        // маркер не ставим — offset двигаем, чтобы не молоть тот же апдейт.
+        // Direct malformed updates retain the existing bounded-drop behavior.
+        // Durable FIFO heads use a separate path and are never removed on false.
         await saveOffset(offset, delivered);
       }
     }
+    if (queueWriteFailed) await sleep(3000);
   }
 }
 

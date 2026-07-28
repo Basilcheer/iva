@@ -1,0 +1,314 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { telegramChannel } from "eve/channels/telegram";
+import {
+  createQueueItem,
+  enqueueItem,
+  queueHead,
+  removeQueueHead,
+} from "./telegram-queue.mjs";
+import {
+  addTelegramQueueReceipt,
+  handleAcceptedTelegramWebhook,
+  TELEGRAM_QUEUE_RECEIPT_FIELD,
+  wrapTelegramQueueOnMessage,
+} from "./telegram-acceptance.mjs";
+
+process.env.TELEGRAM_BOT_TOKEN ??= "999:test-token";
+process.env.TELEGRAM_WEBHOOK_SECRET_TOKEN ??= "test-secret";
+process.env.TELEGRAM_ALLOWED_USER_IDS = "42";
+process.env.TELEGRAM_POLL_SETTLE_MS = "0";
+const { drainReadyQueueHeads } = await import("../telegram-poll.mjs");
+
+const privateUpdate = (updateId, text) => ({
+  update_id: updateId,
+  message: {
+    message_id: updateId,
+    date: 1,
+    chat: { id: 1, type: "private" },
+    from: { id: 42, is_bot: false, first_name: "Owner" },
+    text,
+  },
+});
+
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((yes, no) => {
+    resolve = yes;
+    reject = no;
+  });
+  return { promise, resolve, reject };
+}
+
+function productionTelegramDelivery(
+  sendImpl,
+  {
+    webhookVerifier,
+    onMessage = () => ({ auth: null }),
+    marked = true,
+  } = {},
+) {
+  const channel = telegramChannel({
+    credentials: {
+      webhookVerifier: webhookVerifier ?? (async (_request, rawBody) => rawBody),
+    },
+    onMessage: wrapTelegramQueueOnMessage(onMessage),
+  });
+  const route = channel.routes.find(
+    (candidate) =>
+      candidate.transport !== "websocket" &&
+      candidate.method === "POST" &&
+      candidate.path === "/eve/v1/telegram",
+  );
+  assert.ok(route && route.transport !== "websocket");
+
+  return async (update) => {
+    const response = await handleAcceptedTelegramWebhook(
+      route.handler,
+      new Request("http://iva.test/eve/v1/telegram/accepted", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(marked ? addTelegramQueueReceipt(update) : update),
+      }),
+      {
+        send: (input, options) => sendImpl(update, input, options),
+        resolveActiveSession: async () => undefined,
+        cancel: async () => ({ status: "no_active_turn" }),
+        reset: async () => ({ status: "no_active_session" }),
+        getSession: () => {
+          throw new Error("not used");
+        },
+        receive: async () => {
+          throw new Error("not used");
+        },
+        params: {},
+        waitUntil: () => {},
+        requestIp: "127.0.0.1",
+      },
+    );
+    return response.ok
+      ? response.headers.get("x-iva-telegram-acceptance") === "handled"
+        ? "handled"
+        : true
+      : false;
+  };
+}
+
+test("intentional authored no-send accepts queued location, then the later text keeps FIFO order", async () => {
+  const location = {
+    ...privateUpdate(101, undefined),
+    message: {
+      ...privateUpdate(101, undefined).message,
+      location: { latitude: 41.311, longitude: 69.279 },
+    },
+  };
+  let document = enqueueItem(
+    enqueueItem(
+      { version: 1, queues: {} },
+      "1:",
+      createQueueItem(location, 1),
+    ).document,
+    "1:",
+    createQueueItem(privateUpdate(102, "after location"), 2),
+  ).document;
+  const sent = [];
+  const deliverImpl = productionTelegramDelivery(
+    async (update) => {
+      sent.push(update.update_id);
+      return { id: `session-${update.update_id}` };
+    },
+    {
+      onMessage: (_ctx, message) => {
+        assert.equal(Object.hasOwn(message.raw, TELEGRAM_QUEUE_RECEIPT_FIELD), false);
+        return message.raw.location ? null : { auth: null };
+      },
+    },
+  );
+  const acknowledgeImpl = async (key, updateId) => {
+    document = removeQueueHead(document, key, updateId);
+  };
+  const inFlight = new Map();
+
+  assert.equal(
+    await drainReadyQueueHeads({
+      loadImpl: async () => document,
+      runningImpl: () => false,
+      deliverImpl,
+      acknowledgeImpl,
+      settleUntil: new Map(),
+      inFlight,
+    }),
+    1,
+  );
+  assert.equal(queueHead(document, "1:").updateId, 102);
+  assert.deepEqual(sent, []);
+
+  assert.equal(
+    await drainReadyQueueHeads({
+      loadImpl: async () => document,
+      runningImpl: () => false,
+      deliverImpl,
+      acknowledgeImpl,
+      settleUntil: new Map(),
+      inFlight,
+    }),
+    0,
+  );
+  assert.deepEqual(sent, [102]);
+});
+
+test("intentional silent sticker no-send is accepted, while throw and unmarked null are rejected", async () => {
+  const sticker = {
+    ...privateUpdate(201, undefined),
+    message: {
+      ...privateUpdate(201, undefined).message,
+      sticker: { file_id: "silent-sticker" },
+    },
+  };
+  let sendCalls = 0;
+  const silent = productionTelegramDelivery(
+    async () => {
+      sendCalls++;
+      return { id: "must-not-send" };
+    },
+    { onMessage: () => null },
+  );
+  assert.equal(await silent(sticker), "handled");
+  assert.equal(sendCalls, 0);
+
+  const thrown = productionTelegramDelivery(
+    async () => {
+      sendCalls++;
+      return { id: "must-not-send" };
+    },
+    {
+      onMessage: () => {
+        throw new Error("injected authored handler failure");
+      },
+    },
+  );
+  assert.equal(await thrown(sticker), false);
+  assert.equal(sendCalls, 0);
+
+  const unmarked = productionTelegramDelivery(
+    async () => {
+      sendCalls++;
+      return { id: "must-not-send" };
+    },
+    { onMessage: () => null, marked: false },
+  );
+  assert.equal(await unmarked(sticker), false);
+  assert.equal(sendCalls, 0);
+});
+
+test("acceptance route preserves Telegram auth failure and rejects malformed no-send updates", async () => {
+  let sendCalls = 0;
+  const rejectedByVerifier = productionTelegramDelivery(
+    async () => {
+      sendCalls++;
+      return { id: "must-not-run" };
+    },
+    { webhookVerifier: async () => false },
+  );
+  assert.equal(await rejectedByVerifier(privateUpdate(1, "unauthorized")), false);
+  assert.equal(sendCalls, 0);
+
+  const channel = telegramChannel({
+    credentials: { webhookVerifier: async (_request, rawBody) => rawBody },
+    onMessage: () => ({ auth: null }),
+  });
+  const route = channel.routes.find(
+    (candidate) =>
+      candidate.transport !== "websocket" &&
+      candidate.method === "POST" &&
+      candidate.path === "/eve/v1/telegram",
+  );
+  assert.ok(route && route.transport !== "websocket");
+  const malformed = await handleAcceptedTelegramWebhook(
+    route.handler,
+    new Request("http://iva.test/eve/v1/telegram/accepted", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{broken",
+    }),
+    {
+      send: async () => {
+        sendCalls++;
+        return { id: "must-not-run" };
+      },
+      waitUntil: () => {},
+    },
+  );
+  assert.equal(malformed.ok, false);
+  assert.equal(malformed.status, 503);
+  assert.equal(sendCalls, 0);
+});
+
+test("production Telegram deferred failure retains the head and cannot start the next head", async () => {
+  let document = enqueueItem(
+    enqueueItem(
+      { version: 1, queues: {} },
+      "1:",
+      createQueueItem(privateUpdate(101, "first"), 1),
+    ).document,
+    "1:",
+    createQueueItem(privateUpdate(102, "second"), 2),
+  ).document;
+  const attempts = [];
+
+  const remaining = await drainReadyQueueHeads({
+    loadImpl: async () => document,
+    runningImpl: () => false,
+    deliverImpl: productionTelegramDelivery(async (update) => {
+      attempts.push(update.update_id);
+      throw new Error("injected Eve acceptance failure");
+    }),
+    acknowledgeImpl: async (key, updateId) => {
+      document = removeQueueHead(document, key, updateId);
+    },
+    settleUntil: new Map(),
+    inFlight: new Map(),
+  });
+
+  assert.equal(remaining, 2);
+  assert.equal(queueHead(document, "1:").updateId, 101);
+  assert.deepEqual(attempts, [101]);
+});
+
+test("production Telegram receipt removes exactly one head only after Eve send resolves", async () => {
+  let document = enqueueItem(
+    enqueueItem(
+      { version: 1, queues: {} },
+      "1:",
+      createQueueItem(privateUpdate(101, "first"), 1),
+    ).document,
+    "1:",
+    createQueueItem(privateUpdate(102, "second"), 2),
+  ).document;
+  const acceptance = deferred();
+  const attempts = [];
+
+  const drain = drainReadyQueueHeads({
+    loadImpl: async () => document,
+    runningImpl: () => false,
+    deliverImpl: productionTelegramDelivery(async (update) => {
+      attempts.push(update.update_id);
+      return acceptance.promise;
+    }),
+    acknowledgeImpl: async (key, updateId) => {
+      document = removeQueueHead(document, key, updateId);
+    },
+    settleUntil: new Map(),
+    inFlight: new Map(),
+  });
+
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(queueHead(document, "1:").updateId, 101);
+  assert.deepEqual(attempts, [101]);
+
+  acceptance.resolve({ id: "accepted-session" });
+  assert.equal(await drain, 1);
+  assert.equal(queueHead(document, "1:").updateId, 102);
+  assert.deepEqual(attempts, [101], "one drain pass must keep one in-flight head per chat");
+});

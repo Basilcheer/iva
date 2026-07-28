@@ -72,6 +72,67 @@
   result contract, cwd reporting and truncation marker. After bounded group cleanup, inherited
   output pipes are closed so a process outside the owned group cannot hold the tool call open.
 
+## IVA-008 durable Telegram follow-up FIFO
+
+- Busy-time follow-ups are stored in `data/telegram-queue.json` as schema version 1.
+  Every FIFO item has its own version, the Telegram `update_id`, enqueue time, and the
+  untouched raw update. The bridge does not download files or reconstruct quoted data
+  while queueing.
+- A queue write stages a unique 0600 file, fsyncs it, renames it atomically, and fsyncs
+  the parent directory. Write, rename, and durability failures propagate to the polling
+  loop. The Telegram offset advances only after enqueue succeeds. A duplicate retry also
+  repeats the atomic write, closing the window where rename was visible but directory
+  durability was not yet confirmed.
+- Delivery is at-least-once. Queued replay uses an authenticated authored route which
+  runs Eve's production Telegram handler and returns HTTP 204 only after its deferred
+  `send()` has resolved, or after the authored `onMessage` explicitly resolves to `null`
+  for a marked queue replay (for example a location saved to the daily log or a silent
+  sticker). The random replay marker exists only in the outbound copy and is removed
+  before authored message handling. Throws, malformed input, unmarked no-send paths and
+  rejected `send()` calls do not produce a receipt. The durable head stays present until
+  that receipt; an ordinary webhook HTTP 200 is not acceptance. A crash after acceptance
+  and before the removal write can replay that one head; later items cannot pass it. If
+  Before publishing an acknowledgement removal, the bridge fsyncs the original document
+  as a pending-ack backup beside the queue. Successful acknowledgement durably removes
+  that backup. Startup and every queue load restore any surviving backup first, closing
+  the SIGKILL window between removal rename and directory fsync. A failed rollback raises
+  a fatal durability error and stops polling.
+- The bridge drains one eligible head per idle private chat, group, or forum topic per
+  pass. One five-second budget covers the whole pass, and the next pass rotates past the
+  last attempted key, so many stalled heads cannot multiply polling latency or starve a
+  later chat. A failing head stays durable for a later pass. A short long-poll while
+  queues exist observes terminal events quickly. A stale run-status also becomes
+  drainable through the existing `isRunning()` TTL.
+- `turn.started` publishes `running` before the Bot API working-status request. After an
+  accepted queued turn, an in-memory per-key gate must observe that `running` state and
+  its later idle transition before the next FIFO head can start. Every per-chat status
+  write advances a generation, so a running-to-idle cycle completed between bridge polls
+  also releases the gate. If no status write is observable, the gate uses the same bounded
+  stale-run horizon as `isRunning()` and still refuses release while a run is visible.
+  Intentionally handled no-send updates are identified by the authored acceptance route
+  and bypass this turn gate.
+- Private `/new` and `/restart` write and fsync a per-chat reset intent before asking Eve
+  to reset. Queue cleanup and the idle tombstone happen after remote success, then the
+  intent is durably removed. Startup reconciles every remaining intent before polling or
+  queue draining, so a crash or ambiguous response after remote success cannot release
+  messages from the retired private session.
+- New updates join an existing FIFO even during the idle transition, preserving arrival
+  order. Replies to bot messages and callbacks retain their immediate HITL path.
+- Queue admission is fail-closed on `TELEGRAM_ALLOWED_USER_IDS`. Private owner messages
+  are eligible; group/topic messages additionally need a bot command or mention.
+  Mentions match the exact Telegram username with Unicode-aware token boundaries and
+  validated UTF-16 Telegram entities. Unaddressed group traffic is consumed without
+  entering later model context.
+- Each successful enqueue gets a reaction plus an explicit per-chat/topic queue count.
+  The count is sent after the durable write and offset update.
+- Legacy `{chatKey: string[]}` files migrate atomically. Each string becomes a versioned
+  item with a stable synthetic update id and remains present until accepted by Eve.
+  Group/topic text whose sender was not recorded is published to a unique, fsynced
+  `.legacy-unattributed-*` sidecar through a no-clobber hard link; the exact path is
+  logged and a later migration cannot overwrite an earlier archive.
+- Queue maps use own data properties for every chat key, including `__proto__`, so JSON
+  migration, enqueue, reload, and acknowledgement cannot silently lose that key.
+
 ## Aimasters.Me user-feedback backlog (2026-07-28)
 
 - Source evidence, issue triage, source-message links and links to attached screenshots/video are in

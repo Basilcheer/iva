@@ -176,7 +176,16 @@ function updateChatStatus(chatKey, patch, expected) {
     ) {
       return null;
     }
-    const next = { ...prev, ...patch, updatedAt: Date.now() };
+    const previousGeneration =
+      Number.isSafeInteger(prev.generation) && prev.generation >= 0
+        ? prev.generation
+        : 0;
+    const next = {
+      ...prev,
+      ...patch,
+      generation: previousGeneration + 1,
+      updatedAt: Date.now(),
+    };
     for (const key of Object.keys(next)) if (next[key] === null) delete next[key];
     writeCurrent(file, next);
     return next;
