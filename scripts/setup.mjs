@@ -13,6 +13,11 @@ import { defaultChecker, PortSelector } from "./lib/ports.mjs";
 import { generateAssistantBearer, isAssistantBearer } from "./lib/assistant-auth.mjs";
 import { writeEnvAtomicSync } from "./lib/env-file.mjs";
 import { authFilePath, readAuth, runDeviceCodeLogin, runBrowserLogin, listCodexModels } from "./lib/codex-oauth.mjs";
+import {
+  probeOpenRouterModel,
+  validateModelSelection,
+} from "./lib/model-validation.mjs";
+import { keptSetupWritePlan } from "./lib/setup-keep.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const ENV_PATH = join(ROOT, ".env");
@@ -244,22 +249,18 @@ export function openrouterErrReason(j, status) {
 }
 async function openrouterModelCheck(key, model) {
   try {
-    const res = await fetch(`${OPENROUTER_BASE}/chat/completions`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model,
-        messages: [{ role: "user", content: "Call the ping tool." }],
-        tools: [{ type: "function", function: { name: "ping", description: "health check", parameters: { type: "object", properties: {} } } }],
-        tool_choice: "auto",
-        max_tokens: 32,
-      }),
+    const result = await probeOpenRouterModel({ model, key }, {
+      errorReason: openrouterErrReason,
     });
-    const j = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      const reason = openrouterErrReason(j, res.status);
-      // Совет про function calling — только когда причина реально про инструменты; иначе он вводит
-      // в заблуждение (напр. региональная 403 от провайдера к tool calling отношения не имеет).
+    if (!result.answered) {
+      console.log(
+        `${C.y}${t("(model replied empty — maybe a reasoning model / max_tokens; proceeding)", "(модель ответила пусто — возможно reasoning-модель / max_tokens; продолжаю)")}${C.x}`,
+      );
+    }
+    return null;
+  } catch (e) {
+    if (e?.code === "model_unavailable" || e?.code === "auth_rejected") {
+      const reason = e.message;
       const toolIssue = /tool use|function call|no endpoints found that support tool/i.test(reason);
       const hint = toolIssue
         ? t(
@@ -272,16 +273,6 @@ async function openrouterModelCheck(key, model) {
           );
       return t(`the model can't be used: ${reason}. ${hint}`, `модель не подходит: ${reason}. ${hint}`);
     }
-    // 200 = ключ+слаг+tools ок. «Ответила» = есть content ИЛИ tool_calls (модель могла сразу дёрнуть tool).
-    const msg = j?.choices?.[0]?.message;
-    const answered = (msg?.content && msg.content.trim()) || (Array.isArray(msg?.tool_calls) && msg.tool_calls.length);
-    if (!answered) {
-      console.log(
-        `${C.y}${t("(model replied empty — maybe a reasoning model / max_tokens; proceeding)", "(модель ответила пусто — возможно reasoning-модель / max_tokens; продолжаю)")}${C.x}`,
-      );
-    }
-    return null; // слаг валиден и tool-совместим
-  } catch (e) {
     return t(`request failed: ${e.message}`, `запрос не прошёл: ${e.message}`);
   }
 }
@@ -377,7 +368,15 @@ async function main() {
     console.log(`  • ${t("Access", "Доступ")}:    ${existing.TELEGRAM_ALLOWED_USER_IDS}`);
     console.log(`  • Deepgram:  ${existing.DEEPGRAM_LANGUAGE || "multi"}   ·   TZ: ${existing.ASSISTANT_TIMEZONE || "?"}`);
     if (!(await askYesNo(`\n  ${t("Reconfigure from scratch?", "Перенастроить заново?")}`, false))) {
-      await writeEnv(out); // persist the language choice even when keeping everything else
+      if (keptSetupWritePlan(existing, out) === "validate-and-write") {
+        await validateModelSelection({
+            provider: prov0,
+            model: existing[provModel],
+            key: provKey ? existing[provKey] : undefined,
+            dataDir: dataDirAbs(existing),
+          });
+        await writeEnv(out);
+      }
       console.log(`${C.g}  ${t("Keeping current settings — nothing to enter.", "Оставляю текущие настройки как есть — ничего вводить не нужно.")}${C.x}`);
       rl.close();
       return;
@@ -657,6 +656,20 @@ async function main() {
   const localHost = /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?\/?$/i.test(out.ASSISTANT_HOST || "");
   out.ASSISTANT_HOST = !out.ASSISTANT_HOST || localHost ? `http://127.0.0.1:${out.IVA_PORT}` : out.ASSISTANT_HOST;
   // ── Write .env ────────────────────────────────────────────────────
+  const selected = {
+    ollama: { model: "OLLAMA_MODEL", key: "OLLAMA_API_KEY" },
+    opencode: { model: "OPENCODE_MODEL", key: "OPENCODE_API_KEY" },
+    openrouter: { model: "OPENROUTER_MODEL", key: "OPENROUTER_API_KEY" },
+    codex: { model: "CODEX_MODEL", key: null },
+  }[out.MODEL_PROVIDER];
+  process.stdout.write(`  ${t("validating the selected model again…", "ещё раз проверяю выбранную модель…")} `);
+  await validateModelSelection({
+    provider: out.MODEL_PROVIDER,
+    model: out[selected.model],
+    key: selected.key ? out[selected.key] : undefined,
+    dataDir: dataDirAbs(out),
+  });
+  console.log(`${C.g}${t("ok", "ок")}${C.x}`);
   await writeEnv(out);
 
   const chosenModel =

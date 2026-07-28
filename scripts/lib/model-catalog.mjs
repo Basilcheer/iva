@@ -1,6 +1,6 @@
-// Provider/model/effort catalog for the /model and /think Telegram wizards.
-// Static model lists are the offline fallback. Codex returns model IDs and each
-// model's supported reasoning levels in the same /models response.
+// Provider/model/effort metadata for the /model and /think Telegram wizards.
+// Static lists are suggestions only; selectable catalog providers must come from
+// a successful live response. Codex also returns model-specific reasoning levels.
 import { listCodexModelCatalog } from "./codex-oauth.mjs";
 import {
   CANONICAL_REASONING_EFFORTS,
@@ -15,6 +15,15 @@ export const FALLBACK_EFFORTS = FALLBACK_REASONING_EFFORTS;
 
 // A hung provider endpoint must not stall the bridge's single getUpdates loop.
 const FETCH_TIMEOUT_MS = 10_000;
+
+export class ModelCatalogError extends Error {
+  constructor(code, message, { status, cause } = {}) {
+    super(message, { cause });
+    this.name = "ModelCatalogError";
+    this.code = code;
+    this.status = status;
+  }
+}
 
 export const CATALOG = {
   ollama: {
@@ -93,10 +102,34 @@ const optionsFor = (provider, models) =>
     reasoningLevels: providerFallbackReasoningLevels(provider),
   }));
 
-// Live model options with static fallback. Codex performs exactly one /models request
-// and keeps its model-specific reasoning levels on the in-memory wizard state.
-// 401/403 from key providers remains an actionable auth error; network/format failures
-// use static model buttons and the provider's conservative reasoning fallback.
+const validOptions = (provider, entries) => {
+  if (!Array.isArray(entries)) {
+    throw new ModelCatalogError("catalog_invalid", "provider returned a malformed model catalog");
+  }
+  const seen = new Set();
+  const options = [];
+  for (const entry of entries) {
+    const id = typeof entry?.id === "string" ? entry.id.trim() : "";
+    if (!id) {
+      throw new ModelCatalogError("catalog_invalid", "provider returned a malformed model entry");
+    }
+    if (seen.has(id)) continue;
+    seen.add(id);
+    options.push({
+      id,
+      reasoningLevels: Array.isArray(entry.reasoningLevels)
+        ? [...entry.reasoningLevels]
+        : providerFallbackReasoningLevels(provider),
+    });
+  }
+  if (!options.length) {
+    throw new ModelCatalogError("catalog_invalid", "provider returned an empty model catalog");
+  }
+  return options;
+};
+
+// Selectable options come only from the live provider catalog. Static lists remain
+// display metadata and OpenRouter suggestions; they must never resurrect retired models.
 export async function fetchModelOptions(provider, key, {
   dataDir,
   listCodexCatalog = listCodexModelCatalog,
@@ -107,24 +140,41 @@ export async function fetchModelOptions(provider, key, {
   try {
     if (provider === "codex") {
       const live = await listCodexCatalog(dataDir ? { dataDir } : {});
-      return live.length ? live : optionsFor(provider, cat.models);
+      return validOptions(provider, live);
     }
     if (cat.base && provider !== "openrouter") {
       const res = await fetchFn(`${cat.base}/models`, {
         headers: { Authorization: `Bearer ${key}` },
         signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
       });
-      if (res.status === 401 || res.status === 403) throw Object.assign(new Error("key rejected"), { auth: true });
-      if (!res.ok) return optionsFor(provider, cat.models);
-      const ids = ((await res.json()).data || [])
-        .map((model) => typeof model?.id === "string" ? model.id.trim() : "")
-        .filter(Boolean)
-        .sort();
-      return ids.length ? optionsFor(provider, ids) : optionsFor(provider, cat.models);
+      if (res.status === 401 || res.status === 403) {
+        throw new ModelCatalogError("auth_rejected", `provider rejected credentials (${res.status})`, {
+          status: res.status,
+        });
+      }
+      if (!res.ok) {
+        throw new ModelCatalogError("catalog_unavailable", `model catalog returned HTTP ${res.status}`, {
+          status: res.status,
+        });
+      }
+      let body;
+      try {
+        body = await res.json();
+      } catch (cause) {
+        throw new ModelCatalogError("catalog_invalid", "provider returned invalid catalog JSON", {
+          cause,
+        });
+      }
+      if (!body || typeof body !== "object" || !Array.isArray(body.data)) {
+        throw new ModelCatalogError("catalog_invalid", "provider returned a malformed model catalog");
+      }
+      return validOptions(provider, body.data).sort((a, b) => a.id.localeCompare(b.id));
     }
   } catch (e) {
-    if (e.auth) throw e;
-    return optionsFor(provider, cat.models);
+    if (e instanceof ModelCatalogError) throw e;
+    throw new ModelCatalogError("catalog_unavailable", "couldn't load the live model catalog", {
+      cause: e,
+    });
   }
   return optionsFor(provider, cat.models); // openrouter and anything else: static curated list
 }

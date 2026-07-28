@@ -21,9 +21,12 @@ import {
   EFFORTS,
   fetchModelOptions,
   checkKey,
-  providerFallbackReasoningLevels,
   providerSupportsReasoning,
 } from "./lib/model-catalog.mjs";
+import {
+  ModelValidationError,
+  validateModelSelection,
+} from "./lib/model-validation.mjs";
 import { getAccessToken, runDeviceCodeLogin } from "./lib/codex-oauth.mjs";
 import { compactNumber, modelSummary } from "./lib/model-summary.mjs";
 import { acquireUpdateLock, releaseUpdateLock } from "./lib/update-safety.mjs";
@@ -808,11 +811,13 @@ export function wizardActionAllowed(st, action) {
   if (action.startsWith("prov:")) return st.step === "provider";
   if (action.startsWith("m:")) return st.step === "models";
   if (action.startsWith("eff:")) return st.step === "effort";
+  if (action === "retry" || action === "back") return st.step === "model_error";
   if (action.startsWith("rs:")) return st.step === "saved";
   return false;
 }
 
 export function selectWizardModel(st, rawIndex) {
+  if (!/^(0|[1-9]\d*)$/.test(String(rawIndex))) return null;
   const index = Number(rawIndex);
   if (!Number.isInteger(index) || index < 0) return null;
   const option = st.modelOptions?.[index];
@@ -832,6 +837,15 @@ export function selectWizardEffort(st, value) {
   return true;
 }
 
+export function selectableWizardOptions(options, current, limit = 30) {
+  const live = Array.isArray(options) ? options : [];
+  const currentOption = live.find((option) => option.id === current);
+  return [
+    ...(currentOption ? [currentOption] : []),
+    ...live.filter((option) => option !== currentOption),
+  ].slice(0, limit);
+}
+
 async function currentConfig() {
   const env = await readEnvValues(ENV_PATH);
   const provider = CATALOG[env.MODEL_PROVIDER] ? env.MODEL_PROVIDER : "ollama";
@@ -846,6 +860,10 @@ async function currentConfig() {
 const btn = (text, callback_data) => ({ text, callback_data });
 // cancelRow/menuRow — функции (tr на месте вызова), не module-level const с переведённой строкой.
 const cancelRow = () => [btn(tr("Cancel", "Отмена"), "iva_model:cancel")];
+const retryBackRows = () => [[
+  btn(tr("Retry", "Повторить"), "iva_model:retry"),
+  btn(tr("‹ Back", "‹ Назад"), "iva_model:back"),
+]];
 // Ряд «‹ Меню» на терминальных экранах визарда — возврат в /menu. r:o усыновляет
 // это сообщение даже без живого стейта (движок меню само-чинится после рестарта моста).
 const menuRow = () => [[btn(tr("‹ Menu", "‹ Меню"), "iva_menu:r:o")]];
@@ -887,6 +905,8 @@ async function handleModelCmd(chatId, from, { msgId } = {}) {
 async function handleThinkCmd(chatId, from, { msgId } = {}) {
   const { provider, model, effort } = await currentConfig();
   const st = newWizard(chatId, from, "think");
+  st.provider = provider;
+  st.model = model;
   st.msgId = msgId ?? null;
   if (!providerSupportsReasoning(provider)) {
     await endWizard(st, tr(
@@ -907,14 +927,13 @@ async function handleThinkCmd(chatId, from, { msgId } = {}) {
     st,
     () => fetchModelOptions(provider, cat.keyVar ? env[cat.keyVar] : undefined, { dataDir: DATA_DIR_ABS }),
   );
-  if (loaded.stale) return;
-  if (!loaded.ok) return endWizard(st, tr(
-    "Couldn't load thinking levels. Send /think to try again.",
-    "Не удалось загрузить уровни размышлений. Отправь /think, чтобы попробовать снова.",
-  ), menuRow());
-  const options = loaded.value;
-  const option = options.find((candidate) => candidate.id === model)
-    || { id: model, reasoningLevels: providerFallbackReasoningLevels(provider) };
+  const options = await resolveThinkCatalogLoad(st, loaded);
+  if (options === null) return;
+  const option = options.find((candidate) => candidate.id === model);
+  if (!option) return showModelValidationError(
+    st,
+    new ModelValidationError("model_unavailable", `${model} is not in the live catalog`),
+  );
   st.modelOptions = [option];
   st.model = model;
   st.efforts = [...option.reasoningLevels];
@@ -922,6 +941,19 @@ async function handleThinkCmd(chatId, from, { msgId } = {}) {
   await wizScreen(st,
     tr(`Thinking level for ${model}: ${effortLabel(effort)}.`, `Уровень размышлений для ${model}: ${effortLabel(effort)}.`),
     effortRows("iva_think", true, st.efforts));
+}
+
+export async function resolveThinkCatalogLoad(
+  st,
+  loaded,
+  showErrorImpl = showModelValidationError,
+) {
+  if (loaded.stale) return null;
+  if (!loaded.ok) {
+    await showErrorImpl(st, loaded.error);
+    return null;
+  }
+  return loaded.value;
 }
 
 async function showProviderScreen(st) {
@@ -933,6 +965,7 @@ async function showProviderScreen(st) {
 
 async function pickProvider(st, provider) {
   st.provider = provider;
+  st.pendingKey = null;
   const cat = CATALOG[provider];
   if (cat.auth === "oauth") {
     st.step = "loading";
@@ -951,7 +984,8 @@ async function pickProvider(st, provider) {
   }
   const env = await readEnvValues(ENV_PATH);
   if (!wizardIsCurrent(st)) return;
-  if (!env[cat.keyVar]) {
+  if (!env[cat.keyVar] || st.reenterKey === provider) {
+    st.reenterKey = null;
     // В группе ключ вводить нельзя (его не удалить) — отказ до установки awaitText.
     if (!isPrivateChat(st)) return refuseSecretInGroup(st);
     // awaitText обобщает старый awaitKey (см. handleControl): диспатчер по pending.awaitText
@@ -983,39 +1017,43 @@ async function showModelScreen(st) {
   if (!wizardIsCurrent(st)) return;
   const loaded = await runWizardRequest(
     st,
-    () => fetchModelOptions(st.provider, cat.keyVar ? env[cat.keyVar] : undefined, { dataDir: DATA_DIR_ABS }),
+    () => fetchModelOptions(
+      st.provider,
+      cat.keyVar ? (st.pendingKey ?? env[cat.keyVar]) : undefined,
+      { dataDir: DATA_DIR_ABS },
+    ),
   );
   if (loaded.stale) return;
   if (!loaded.ok) {
-    // fetchModelOptions only throws when the live /models probe rejected the stored key (401/403) —
-    // re-enter the key flow instead of offering a list the dead key can't use.
-    // В группе новый ключ вводить нельзя (его не удалить) — отказ до установки awaitText.
-    if (!isPrivateChat(st)) return refuseSecretInGroup(st);
-    st.awaitText = { kind: "apikey", secret: true, data: {} };
-    st.step = "awaiting_key";
-    await wizScreen(st,
-      tr(
-        `The saved ${cat.label} key was rejected. Send a new key in the next message — I'll delete it from the chat right away.`,
-        `Сохранённый ключ ${cat.label} не принят. Пришли новый ключ следующим сообщением — я сразу удалю его из чата.`,
-      ),
-      [cancelRow()]);
-    return;
+    return showModelValidationError(st, loaded.error);
   }
   const options = loaded.value;
-  // Keep the currently configured model selectable even when the live list is long.
   const current = env[cat.modelVar];
-  const currentOption = current
-    ? options.find((option) => option.id === current)
-      || { id: current, reasoningLevels: providerFallbackReasoningLevels(st.provider) }
-    : null;
-  st.modelOptions = [
-    ...(currentOption ? [currentOption] : []),
-    ...options.filter((option) => option.id !== current),
-  ].slice(0, 30);
+  st.modelOptions = selectableWizardOptions(options, current);
   st.step = "models";
   const rows = st.modelOptions.map((option, i) => [btn(option.id, `iva_model:m:${i}`)]);
   rows.push(cancelRow());
-  await wizScreen(st, tr(`Model (${cat.label}):`, `Модель (${cat.label}):`), rows);
+  const currentLine = current
+    ? tr(`Current (display only): ${current}.`, `Текущая (только для справки): ${current}.`)
+    : "";
+  await wizScreen(st, [
+    currentLine,
+    tr(`Choose a live model (${cat.label}):`, `Выбери модель из живого каталога (${cat.label}):`),
+  ].filter(Boolean).join("\n"), rows);
+}
+
+async function showModelValidationError(st, error) {
+  st.step = "model_error";
+  if (error?.code === "auth_rejected" && CATALOG[st.provider]?.keyVar) {
+    st.reenterKey = st.provider;
+  }
+  const reason = error instanceof ModelValidationError
+    ? error.message
+    : tr("provider validation failed", "проверка провайдера не прошла");
+  await wizScreen(st, tr(
+    `Couldn't validate the live model catalog: ${reason}. Your current configuration was not changed.`,
+    `Не удалось проверить живой каталог моделей: ${reason}. Текущая конфигурация не изменена.`,
+  ), retryBackRows());
 }
 
 // Codex device-link login. runDeviceCodeLogin polls up to 15 min — deliberately NOT
@@ -1085,20 +1123,39 @@ async function handleKeyMessage(msg, st) {
     return true;
   }
   st.awaitText = null;
-  await upsertEnv(ENV_PATH, { [cat.keyVar]: key }); // persist immediately — the chat copy is gone
+  st.pendingKey = key;
   if (!wizardIsCurrent(st)) return true;
   await showModelScreen(st);
   return true;
 }
 
-async function saveWizard(st) {
+export async function validateAndSaveWizard(st, {
+  readEnv = () => readEnvValues(ENV_PATH),
+  validate = validateModelSelection,
+  write = (updates) => upsertEnv(ENV_PATH, updates),
+} = {}) {
+  const env = await readEnv();
+  const cat = CATALOG[st.provider];
+  if (!cat || typeof st.model !== "string") {
+    throw new ModelValidationError("invalid_selection", "invalid wizard selection");
+  }
+  const key = cat.keyVar ? (st.pendingKey ?? env[cat.keyVar]) : undefined;
+  await validate({
+    provider: st.provider,
+    model: st.model,
+    key,
+    dataDir: DATA_DIR_ABS,
+  });
   const updates = { THINKING_EFFORT: st.effort }; // null ⇒ drop the line ("не задан")
   if (st.flow === "model") {
     updates.MODEL_PROVIDER = st.provider;
-    updates[CATALOG[st.provider].modelVar] = st.model;
+    updates[cat.modelVar] = st.model;
+    if (cat.keyVar && st.pendingKey) updates[cat.keyVar] = st.pendingKey;
   }
-  await upsertEnv(ENV_PATH, updates);
+  await write(updates);
 }
+
+const saveWizard = (st) => validateAndSaveWizard(st);
 
 async function showSaved(st) {
   const { provider, model, effort } = await currentConfig();
@@ -1142,6 +1199,22 @@ async function handleWizardCallback(cq) {
     if (CATALOG[p]) await pickProvider(st, p);
     return true;
   }
+  if (action === "retry") {
+    if (st.flow === "think") {
+      await handleThinkCmd(st.chatId, st.userId, { msgId: st.msgId });
+      return true;
+    }
+    await showModelScreen(st);
+    return true;
+  }
+  if (action === "back") {
+    if (st.flow === "think") {
+      await endWizard(st, tr("Kept the current configuration.", "Оставил текущую конфигурацию."), menuRow());
+      return true;
+    }
+    await showProviderScreen(st);
+    return true;
+  }
   if (action.startsWith("m:")) {
     const option = selectWizardModel(st, action.slice("m:".length));
     if (!option) return true;
@@ -1151,6 +1224,10 @@ async function handleWizardCallback(cq) {
         await saveWizard(st);
       } catch (e) {
         if (!wizardIsCurrent(st)) return true;
+        if (e instanceof ModelValidationError) {
+          await showModelValidationError(st, e);
+          return true;
+        }
         await endWizard(st, tr("Couldn't save .env: " + e.message, "Не удалось сохранить .env: " + e.message), menuRow());
         return true;
       }
@@ -1171,6 +1248,10 @@ async function handleWizardCallback(cq) {
       await saveWizard(st);
     } catch (e) {
       if (!wizardIsCurrent(st)) return true;
+      if (e instanceof ModelValidationError) {
+        await showModelValidationError(st, e);
+        return true;
+      }
       await endWizard(st, tr("Couldn't save .env: " + e.message, "Не удалось сохранить .env: " + e.message), menuRow());
       return true;
     }

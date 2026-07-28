@@ -12,6 +12,9 @@ const {
   selectWizardModel,
   selectWizardEffort,
   runWizardRequest,
+  resolveThinkCatalogLoad,
+  selectableWizardOptions,
+  validateAndSaveWizard,
 } = await import("./telegram-poll.mjs");
 
 const enc = new TextEncoder();
@@ -96,6 +99,11 @@ test("stale wizard callbacks are rejected by message and screen step", () => {
   assert.equal(wizardActionAllowed(st, "m:0"), true);
   assert.equal(wizardActionAllowed(st, "eff:high"), false);
   assert.equal(wizardActionAllowed(st, "unknown"), false);
+  assert.equal(selectWizardModel({ modelOptions: [{ id: "safe", reasoningLevels: [] }] }, ""), null);
+  assert.equal(selectWizardModel({ modelOptions: [{ id: "safe", reasoningLevels: [] }] }, "00"), null);
+  assert.equal(selectWizardModel({ modelOptions: [{ id: "safe", reasoningLevels: [] }] }, "99"), null);
+  assert.equal(wizardActionAllowed({ step: "model_error" }, "retry"), true);
+  assert.equal(wizardActionAllowed({ step: "model_error" }, "back"), true);
 });
 
 test("model switch carries that model's levels; unknown effort never clears state", () => {
@@ -119,6 +127,21 @@ test("model switch carries that model's levels; unknown effort never clears stat
   assert.equal(st.effort, null);
 });
 
+test("stale current model stays display-only while a live current remains selectable", () => {
+  const live = [
+    { id: "new-a", reasoningLevels: ["low"] },
+    { id: "current", reasoningLevels: ["high"] },
+  ];
+  assert.deepEqual(selectableWizardOptions(live, "retired").map((item) => item.id), [
+    "new-a",
+    "current",
+  ]);
+  assert.deepEqual(selectableWizardOptions(live, "current").map((item) => item.id), [
+    "current",
+    "new-a",
+  ]);
+});
+
 test("Cancel during a rejected model fetch discards the stale error path", async () => {
   const st = { chatId: 1, userId: "2" };
   let active = st;
@@ -132,4 +155,84 @@ test("Cancel during a rejected model fetch discards the stale error path", async
   active = null; // Cancel removed this object from the flow slot while fetch was pending.
   rejectFetch(Object.assign(new Error("key rejected"), { auth: true }));
   assert.deepEqual(await pending, { stale: true });
+});
+
+test("/think catalog failure keeps the wizard and routes to Retry/Back error state", async () => {
+  const st = { step: "loading", removed: false };
+  const failure = Object.assign(new Error("catalog offline"), {
+    code: "catalog_unavailable",
+  });
+
+  const options = await resolveThinkCatalogLoad(
+    st,
+    { ok: false, error: failure },
+    async (current, error) => {
+      assert.equal(current, st);
+      assert.equal(error, failure);
+      current.step = "model_error";
+      current.buttons = ["retry", "back"];
+    },
+  );
+
+  assert.equal(options, null);
+  assert.equal(st.removed, false);
+  assert.equal(st.step, "model_error");
+  assert.deepEqual(st.buttons, ["retry", "back"]);
+});
+
+test("catalog change before save preserves the old env", async () => {
+  const writes = [];
+  await assert.rejects(
+    validateAndSaveWizard(
+      {
+        flow: "model",
+        provider: "ollama",
+        model: "retired",
+        effort: "high",
+        pendingKey: "new-secret",
+      },
+      {
+        readEnv: async () => ({
+          MODEL_PROVIDER: "codex",
+          CODEX_MODEL: "old-model",
+          OLLAMA_API_KEY: "old-secret",
+        }),
+        validate: async () => {
+          throw Object.assign(new Error("retired"), { code: "model_unavailable" });
+        },
+        write: async (updates) => writes.push(updates),
+      },
+    ),
+    /retired/,
+  );
+  assert.deepEqual(writes, []);
+});
+
+test("provider, model, effort and pending key persist in one atomic write", async () => {
+  const validations = [];
+  const writes = [];
+  await validateAndSaveWizard(
+    {
+      flow: "model",
+      provider: "opencode",
+      model: "live-model",
+      effort: "medium",
+      pendingKey: "new-secret",
+    },
+    {
+      readEnv: async () => ({ MODEL_PROVIDER: "ollama" }),
+      validate: async (selection) => {
+        validations.push(selection);
+        return { id: selection.model, reasoningLevels: ["medium"] };
+      },
+      write: async (updates) => writes.push(updates),
+    },
+  );
+  assert.equal(validations[0].key, "new-secret");
+  assert.deepEqual(writes, [{
+    THINKING_EFFORT: "medium",
+    MODEL_PROVIDER: "opencode",
+    OPENCODE_MODEL: "live-model",
+    OPENCODE_API_KEY: "new-secret",
+  }]);
 });

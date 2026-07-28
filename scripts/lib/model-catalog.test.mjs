@@ -1,19 +1,20 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  CATALOG,
   FALLBACK_EFFORTS,
+  ModelCatalogError,
   fetchModelOptions,
 } from "./model-catalog.mjs";
 
-test("Codex network/malformed failure falls back to models with low/medium/high", async () => {
-  const options = await fetchModelOptions("codex", undefined, {
-    listCodexCatalog: async () => {
-      throw new Error("offline");
-    },
-  });
-  assert.deepEqual(options.map((option) => option.id), CATALOG.codex.models);
-  assert.ok(options.every((option) => JSON.stringify(option.reasoningLevels) === JSON.stringify(FALLBACK_EFFORTS)));
+test("Codex catalog failure cannot create selectable fallback models", async () => {
+  await assert.rejects(
+    fetchModelOptions("codex", undefined, {
+      listCodexCatalog: async () => {
+        throw new Error("offline");
+      },
+    }),
+    (error) => error instanceof ModelCatalogError && error.code === "catalog_unavailable",
+  );
 });
 
 test("Ollama Cloud and OpenCode Go expose their OpenAI-compatible reasoning contract", async () => {

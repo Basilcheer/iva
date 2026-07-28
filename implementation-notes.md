@@ -1,5 +1,22 @@
 # Implementation notes
 
+## Strict live model validation (IVA-005 / #55)
+
+- Ollama Cloud, OpenCode Go and Codex selections come only from a successful, non-empty
+  live catalog. Static IDs remain suggestions and cannot resurrect a retired model.
+- OpenRouter uses the same shared validator with a minimal chat request carrying a
+  `ping` function definition. Any HTTP 200 accepts the key, slug and tools request even
+  when a reasoning model exhausts the small probe budget before visible output.
+- Telegram shows a stale configured model for reference but never as a button, rejects
+  forged indices, and validates again before one atomic provider/model/effort/key update.
+- A newly entered key stays in wizard memory until the model passes validation. Network,
+  authentication, empty/malformed catalog and changed-catalog failures leave `.env`
+  untouched and render Retry/Back controls, including the `/think` catalog path.
+- Interactive setup calls the same validator immediately before its atomic full-file
+  write, so a provider change during later setup steps cannot persist a stale selection.
+  Keeping byte-equivalent existing settings skips that rewrite; any changed keep-path
+  value validates the configured model first.
+
 ## Structured Telegram reply context (IVA-009 / #53)
 
 - Eve keeps quoted text and media only in `raw.reply_to_message`; IVA now adds one
