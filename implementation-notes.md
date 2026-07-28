@@ -1,5 +1,20 @@
 # Implementation notes
 
+## Explicit inbound truncation (IVA-013 / #59)
+
+- `sanitizeInbound()` keeps the 50,000-character safety cap, applies it on
+  Unicode code-point boundaries, and reports the exact number of omitted code
+  points as `truncatedChars`.
+- Telegram model context adds a clear truncation notice for sanitized queued
+  messages, media transcripts, captions, and security-flagged ordinary text.
+  The notice includes the full daily-record path only after that complete source
+  has been appended successfully.
+- Queued compatibility input is appended verbatim before its model copy is
+  sanitized. Media bytes, full transcripts/captions, and ordinary messages keep
+  their existing append-only storage behavior.
+- Clean ordinary Telegram text retains Eve's original pass-through path, so a
+  harmless long message does not gain a synthetic context marker.
+
 ## Strict live model validation (IVA-005 / #55)
 
 - Ollama Cloud, OpenCode Go and Codex selections come only from a successful, non-empty
