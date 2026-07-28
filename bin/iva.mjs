@@ -9,7 +9,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, readdirSync
 import { randomBytes } from "node:crypto";
 import { join, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { createInterface } from "node:readline/promises";
 import { modelSummary } from "../scripts/lib/model-summary.mjs";
 import { createTerminalProgress } from "../scripts/lib/progress.mjs";
@@ -18,6 +18,7 @@ import { createTelegramUpdateReporter, loadTelegramJob, removeTelegramJob } from
 import { generateAssistantBearer, isAssistantBearer } from "../scripts/lib/assistant-auth.mjs";
 import { writeEnvAtomicSync } from "../scripts/lib/env-file.mjs";
 import { classifyAgentListeners } from "../scripts/lib/listener-security.mjs";
+import { userbotSyncArgs } from "../scripts/lib/userbot-deps.mjs";
 import {
   acquireUpdateLock,
   createUpdateLog,
@@ -413,6 +414,8 @@ async function cmdUpdate(args) {
   const logFile = createUpdateLog(dataDir);
   const tx = createUpdateTransaction({ root: ROOT, dataDir, envPath: ENV_PATH, verbose, logFile, env: childEnv });
   let phase = "protect";
+  let userbotUpdateAttempted = false;
+  let userbotRollbackSnapshot = null;
   let versions = { beforeVersion: "the previous version", afterVersion: "the new version" };
   const phaseStart = async (name) => {
     phase = name;
@@ -475,7 +478,7 @@ async function cmdUpdate(args) {
     const build = await tx.run(NPM, ["run", "build"]);
     if (build.code !== 0) throw new Error("build failed");
 
-    // Optional integrations never make a core update fail.
+    // Best-effort helper for an integration that has no active local service.
     await tx.run(NPM, ["i", "-g", "@googleworkspace/cli@latest"]);
 
     if (hasSystemd()) {
@@ -493,7 +496,15 @@ async function cmdUpdate(args) {
         await new Promise((resolve) => setTimeout(resolve, 1000));
       }
       if (!healthy) throw new Error("health check failed");
-      restartUserbotIfActive({ quiet: true });
+      if (scQ("is-active", SVC_USERBOT).out === "active") {
+        const frozen = cap("uv", ["pip", "freeze", "--python", VENV_PY], { cwd: USERBOT_DIR });
+        if (frozen.code !== 0 || !frozen.out)
+          throw new Error("userbot: не удалось сохранить dependency snapshot перед обновлением");
+        userbotRollbackSnapshot = join(tmpdir(), `iva-userbot-before-update-${process.pid}-${Date.now()}.txt`);
+        writeFileSync(userbotRollbackSnapshot, `${frozen.out}\n`, { mode: 0o600 });
+        userbotUpdateAttempted = true;
+        restartUserbotIfActive({ quiet: true, knownActive: true });
+      }
     }
 
     await phaseDone("build");
@@ -506,14 +517,29 @@ async function cmdUpdate(args) {
   } catch (error) {
     terminal.fail(text[phase][2]);
     let rollbackOk = true;
+    let codeRollbackOk = true;
     try {
       await tx.rollback();
     } catch {
       rollbackOk = false;
+      codeRollbackOk = false;
     }
     if (phase === "build" && hasSystemd()) {
       writeUnits();
-      await tx.run("systemctl", ["--user", "restart", ...SERVICES]);
+      const restarted = await tx.run("systemctl", ["--user", "restart", ...SERVICES]);
+      if (restarted.code !== 0) rollbackOk = false;
+      if (userbotUpdateAttempted && codeRollbackOk) {
+        try {
+          restartUserbotIfActive({
+            quiet: true,
+            knownActive: true,
+            requirementsPath: userbotRollbackSnapshot,
+            requireHashes: false,
+          });
+        } catch {
+          rollbackOk = false;
+        }
+      }
     }
     await reporter?.fail(phase, versions.beforeVersion);
     terminal.info(`${error.message}. ${locale === "ru" ? "Откат" : "Rollback"}: ${rollbackOk ? "OK" : "FAILED"}. ${locale === "ru" ? "Лог" : "Log"}: ${logFile}`);
@@ -522,6 +548,7 @@ async function cmdUpdate(args) {
     terminal.dispose();
     reporter?.dispose();
     releaseUpdateLock(lock);
+    if (userbotRollbackSnapshot) rmSync(userbotRollbackSnapshot, { force: true });
     await removeTelegramJob(loadedJob?.path);
   }
 }
@@ -861,27 +888,37 @@ ${C.b}Commands:${C.x}
 // Build the venv if missing and ALWAYS sync deps (idempotent), then verify the
 // critical imports actually resolve. Throws on any failure so the caller aborts
 // BEFORE enabling a service that would restart-loop on a partial install.
-function ensureUserbotVenv({ quiet = false } = {}) {
+function ensureUserbotVenv({
+  quiet = false,
+  requirementsPath = join(USERBOT_DIR, "requirements.lock"),
+  requireHashes = true,
+} = {}) {
   const hasUv = !!cap("sh", ["-c", "command -v uv"]).out;
+  if (!hasUv) throw new Error("userbot: uv не найден — повторно запусти install.sh");
   const opts = { cwd: USERBOT_DIR, ...(quiet ? { stdio: "ignore" } : {}) };
   const must = (r, what) => {
     if ((r?.status ?? 1) !== 0) throw new Error(`userbot: ${what} не удалось`);
   };
   if (!existsSync(VENV_PY)) {
     if (!quiet) step("Создаю venv для userbot-прокси…");
-    must(
-      hasUv ? run("uv", ["venv", "--python", "3.12", ".venv"], opts) : run("python3", ["-m", "venv", ".venv"], opts),
-      "создание venv",
-    );
+    must(run("uv", ["venv", "--python", "3.12", ".venv"], opts), "создание venv");
     if (!existsSync(VENV_PY)) throw new Error("userbot: venv не создан — проверь python3/uv");
   }
   if (!quiet) step("Синхронизирую зависимости userbot-прокси…");
-  if (hasUv) {
-    must(run("uv", ["pip", "install", "--python", VENV_PY, "-r", "requirements.txt"], opts), "установка зависимостей");
-  } else {
-    must(run(VENV_PY, ["-m", "pip", "install", "-q", "-U", "pip"], opts), "обновление pip");
-    must(run(VENV_PY, ["-m", "pip", "install", "-q", "-r", "requirements.txt"], opts), "установка зависимостей");
-  }
+  const requirements = readFileSync(requirementsPath, "utf8");
+  must(
+    run(
+      "uv",
+      userbotSyncArgs({
+        pythonPath: VENV_PY,
+        requirementsFile: requirementsPath,
+        requirementsText: requirements,
+        requireHashes,
+      }),
+      opts,
+    ),
+    "установка зависимостей",
+  );
   // A partial install imports-fails at runtime → the service restart-loops silently.
   const check = cap(VENV_PY, ["-c", "import telethon, telegram_mcp, qrcode, mcp"], opts);
   if (check.code !== 0)
@@ -926,16 +963,18 @@ function ensureUserbotToken() {
 
 // Restart the opt-in proxy onto fresh code/deps, but ONLY if it's already active
 // (never auto-start it for users who didn't opt in). Called from `iva update`.
-function restartUserbotIfActive({ quiet = false } = {}) {
-  if (scQ("is-active", SVC_USERBOT).out !== "active") return;
+function restartUserbotIfActive({
+  quiet = false,
+  knownActive = false,
+  requirementsPath = join(USERBOT_DIR, "requirements.lock"),
+  requireHashes = true,
+} = {}) {
+  if (!knownActive && scQ("is-active", SVC_USERBOT).out !== "active") return;
   if (!quiet) step("Обновляю userbot-прокси…");
-  try {
-    ensureUserbotVenv({ quiet });
-  } catch (e) {
-    if (!quiet) warn(e.message);
-  }
-  if (quiet) scQ("restart", SVC_USERBOT);
-  else sc("restart", SVC_USERBOT); // writeUnits already ran in restartServices()
+  ensureUserbotVenv({ quiet, requirementsPath, requireHashes });
+  const restarted = quiet ? scQ("restart", SVC_USERBOT) : sc("restart", SVC_USERBOT);
+  const code = quiet ? restarted.code : (restarted.status ?? 1);
+  if (code !== 0) throw new Error(`${SVC_USERBOT}: restart failed; run: journalctl --user -u ${SVC_USERBOT} -n 100`);
   if (!quiet) ok("userbot-прокси перезапущен на новом коде");
 }
 
