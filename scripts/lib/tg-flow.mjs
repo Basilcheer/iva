@@ -36,7 +36,8 @@ export function createFlows({ tg, log = () => {} }) {
   function start(chatId, userId, flow, extra = {}) {
     const st = {
       flow, chatId, userId, createdAt: Date.now(),
-      msgId: null, provider: null, models: null, model: null, effort: null,
+      msgId: null, provider: null, modelOptions: null, model: null, efforts: null, effort: null,
+      step: null,
       awaitText: null, // обобщение awaitKey (:388): { kind, secret, data }
       screen: null, page: 0, data: {},
       ...extra,

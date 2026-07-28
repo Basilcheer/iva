@@ -1,12 +1,17 @@
 // Provider/model/effort catalog for the /model and /think Telegram wizards.
-// Static lists are the offline fallback; fetchModels() prefers the provider's live
-// list (same endpoints as scripts/setup.mjs, which cannot be imported — it runs an
-// interactive readline at import). Edit the arrays below to curate what the wizard offers.
-import { listCodexModels } from "./codex-oauth.mjs";
+// Static model lists are the offline fallback. Codex returns model IDs and each
+// model's supported reasoning levels in the same /models response.
+import { listCodexModelCatalog } from "./codex-oauth.mjs";
+import {
+  CANONICAL_REASONING_EFFORTS,
+  FALLBACK_REASONING_EFFORTS,
+} from "./reasoning-levels.mjs";
 
-// Reasoning-effort levels. Shared with agent/provider.ts (THINKING_EFFORT validation),
-// applied natively on codex only.
-export const EFFORTS = ["minimal", "low", "medium", "high"];
+// Runtime accepts the stable protocol vocabulary. Telegram only offers the live
+// model-specific subset; when the response is missing/broken it uses the conservative
+// three-button fallback. `ultra` is intentionally absent from both lists.
+export const EFFORTS = CANONICAL_REASONING_EFFORTS;
+export const FALLBACK_EFFORTS = FALLBACK_REASONING_EFFORTS;
 
 // A hung provider endpoint must not stall the bridge's single getUpdates loop.
 const FETCH_TIMEOUT_MS = 10_000;
@@ -60,31 +65,51 @@ export const CATALOG = {
   },
 };
 
-// Live model list with static fallback. 401/403 → {auth:true} error (stored key is
-// dead — the wizard re-enters the key flow); any other failure (network, format
-// drift) → the static list above.
-export async function fetchModels(provider, key, { dataDir } = {}) {
+const optionsFor = (provider, models) =>
+  models.map((id) => ({
+    id,
+    reasoningLevels: provider === "codex" ? [...FALLBACK_EFFORTS] : [],
+  }));
+
+// Live model options with static fallback. Codex performs exactly one /models request
+// and keeps its model-specific reasoning levels on the in-memory wizard state.
+// 401/403 from key providers remains an actionable auth error; network/format failures
+// use static model buttons and low/medium/high for Codex.
+export async function fetchModelOptions(provider, key, {
+  dataDir,
+  listCodexCatalog = listCodexModelCatalog,
+  fetchFn = fetch,
+} = {}) {
   const cat = CATALOG[provider];
+  if (!cat) return [];
   try {
     if (provider === "codex") {
-      const live = await listCodexModels(dataDir ? { dataDir } : {});
-      return live.length ? live : cat.models;
+      const live = await listCodexCatalog(dataDir ? { dataDir } : {});
+      return live.length ? live : optionsFor(provider, cat.models);
     }
     if (cat.base && provider !== "openrouter") {
-      const res = await fetch(`${cat.base}/models`, {
+      const res = await fetchFn(`${cat.base}/models`, {
         headers: { Authorization: `Bearer ${key}` },
         signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
       });
       if (res.status === 401 || res.status === 403) throw Object.assign(new Error("key rejected"), { auth: true });
-      if (!res.ok) return cat.models;
-      const ids = ((await res.json()).data || []).map((m) => m.id).sort();
-      return ids.length ? ids : cat.models;
+      if (!res.ok) return optionsFor(provider, cat.models);
+      const ids = ((await res.json()).data || [])
+        .map((model) => typeof model?.id === "string" ? model.id.trim() : "")
+        .filter(Boolean)
+        .sort();
+      return ids.length ? optionsFor(provider, ids) : optionsFor(provider, cat.models);
     }
   } catch (e) {
     if (e.auth) throw e;
-    return cat.models;
+    return optionsFor(provider, cat.models);
   }
-  return cat.models; // openrouter and anything else: static curated list
+  return optionsFor(provider, cat.models); // openrouter and anything else: static curated list
+}
+
+// Compatibility for setup or future CLI consumers that only need IDs.
+export async function fetchModels(provider, key, opts = {}) {
+  return (await fetchModelOptions(provider, key, opts)).map((option) => option.id);
 }
 
 // Cheap key validity probe (same lenient policy as setup.mjs: network flake ⇒ accept).

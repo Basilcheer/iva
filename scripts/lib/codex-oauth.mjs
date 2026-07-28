@@ -13,6 +13,10 @@ import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "n
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
 import { dirname, join } from "node:path";
+import {
+  CANONICAL_REASONING_EFFORTS,
+  FALLBACK_REASONING_EFFORTS,
+} from "./reasoning-levels.mjs";
 
 export const ISSUER = "https://auth.openai.com";
 export const CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"; // публичный client_id Codex CLI
@@ -31,6 +35,7 @@ const FALLBACK_PORT = 1457;
 
 const b64url = (buf) => Buffer.from(buf).toString("base64url");
 const defaultDir = () => process.env.ASSISTANT_DATA_DIR || "data";
+const MODELS_FETCH_TIMEOUT_MS = 10_000;
 // Язык подсказок входа (en по умолчанию — как у codex CLI). Мастер/CLI прокидывают lang.
 const tr = (lang, en, ru) => (lang === "ru" ? ru : en);
 
@@ -305,37 +310,105 @@ export async function login(mode = "device", opts = {}) {
   return mode === "browser" ? runBrowserLogin(opts) : runDeviceCodeLogin(opts);
 }
 
-// ── список моделей подписки (для мастера) ──────────────────────────────────
-// Форма ответа (codex protocol): { models: [ { model: "gpt-5.1", id, display_name, ... } ] }.
-// Идентификатор для запроса — поле `model` (slug), НЕ `id` (id пресета). Берём его, с фолбэками.
-// Сортируем «новые сверху» (gpt-5.5 > gpt-5.1 > gpt-5). При 0 распознанных — бросаем ошибку
-// с сырым телом, чтобы мастер показал реальную форму ответа (а не молча свалился в ручной ввод).
-export async function listCodexModels({ dataDir = defaultDir() } = {}) {
-  const headers = await codexAuthHeaders(dataDir);
-  const res = await fetch(`${CODEX_BASE_URL}/models?client_version=${CLIENT_VERSION}`, { headers });
-  if (!res.ok) throw new Error(`list models failed: ${res.status} ${(await res.text()).slice(0, 300)}`);
-  const json = await res.json();
-  const arr = Array.isArray(json) ? json : json.models || json.data || json.model_presets || [];
-  let slugs = arr.map((m) => (typeof m === "string" ? m : m?.model || m?.slug || m?.id || m?.name)).filter(Boolean);
-  // Форма ответа могла измениться — рекурсивно ищем любой вложенный массив моделей.
-  if (!slugs.length) slugs = deepFindModels(json);
-  const uniq = [...new Set(slugs)];
-  if (!uniq.length) throw new Error(`models endpoint returned no usable models — raw: ${JSON.stringify(json).slice(0, 500)}`);
-  return uniq.sort(compareModelDesc);
+// ── модели подписки и их reasoning levels (один запрос /models) ────────────
+// Telegram строит оба экрана из одного ответа. setup.mjs использует тонкий
+// listCodexModels() ниже и не платит вторым запросом за тот же каталог.
+const MODEL_LIST_KEYS = /^(models?|model_presets|presets|items|data)$/i;
+const CANONICAL_REASONING_LEVELS = new Set(CANONICAL_REASONING_EFFORTS);
+
+function cleanString(value) {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
-// Рекурсивно собирает slug'и из любого вложенного массива объектов с полем model/slug
-// (устойчиво к смене ключа-обёртки в ответе бэкенда).
-function deepFindModels(node, out = []) {
-  if (Array.isArray(node)) {
-    for (const it of node) {
-      if (it && typeof it === "object" && (it.model || it.slug)) out.push(it.model || it.slug);
-      else deepFindModels(it, out);
-    }
-  } else if (node && typeof node === "object") {
-    for (const k of Object.keys(node)) deepFindModels(node[k], out);
+function modelId(node, parentKey) {
+  if (!node || typeof node !== "object" || Array.isArray(node)) return null;
+  const primary = cleanString(node.model) || cleanString(node.slug);
+  if (primary) return primary;
+  // `id`/`name` are documented fallbacks, but only inside a model-list wrapper:
+  // arbitrary metadata such as tiers:[{id:"flex"}] must not become a model button.
+  if (MODEL_LIST_KEYS.test(parentKey || "")) return cleanString(node.id) || cleanString(node.name);
+  return null;
+}
+
+function reasoningLevels(node) {
+  if (!Array.isArray(node?.supported_reasoning_levels)) {
+    return { levels: [...FALLBACK_REASONING_EFFORTS], live: false };
   }
-  return out;
+  const levels = node.supported_reasoning_levels
+    .map((level) => {
+      if (typeof level === "string") return cleanString(level)?.toLowerCase() || null;
+      return cleanString(level?.effort)?.toLowerCase()
+        || cleanString(level?.level)?.toLowerCase()
+        || cleanString(level?.id)?.toLowerCase()
+        || cleanString(level?.name)?.toLowerCase()
+        || null;
+    })
+    .filter((level) => level && CANONICAL_REASONING_LEVELS.has(level));
+  const unique = [...new Set(levels)];
+  return unique.length
+    ? { levels: unique, live: true }
+    : { levels: [...FALLBACK_REASONING_EFFORTS], live: false };
+}
+
+// Pure parser kept separate from auth/network so malformed and future wrapper
+// shapes can be covered without credentials. Quotes and Unicode in IDs remain
+// untouched; buttons carry only their numeric index.
+export function parseCodexModelCatalog(json) {
+  const found = new Map();
+  function walk(node, parentKey = "") {
+    if (Array.isArray(node)) {
+      for (const item of node) {
+        const stringId = MODEL_LIST_KEYS.test(parentKey) ? cleanString(item) : null;
+        if (stringId && !found.has(stringId)) {
+          found.set(stringId, {
+            id: stringId,
+            reasoningLevels: [...FALLBACK_REASONING_EFFORTS],
+            live: false,
+          });
+        } else {
+          walk(item, parentKey);
+        }
+      }
+      return;
+    }
+    if (!node || typeof node !== "object") return;
+    const id = modelId(node, parentKey);
+    if (id) {
+      const { levels, live } = reasoningLevels(node);
+      const previous = found.get(id);
+      if (!previous || (!previous.live && live)) {
+        found.set(id, { id, reasoningLevels: levels, live });
+      }
+    }
+    for (const [key, value] of Object.entries(node)) {
+      if (key !== "supported_reasoning_levels") walk(value, key);
+    }
+  }
+  walk(json, Array.isArray(json) ? "models" : "");
+  return [...found.values()]
+    .map(({ id, reasoningLevels }) => ({ id, reasoningLevels }))
+    .sort((a, b) => compareModelDesc(a.id, b.id));
+}
+
+export async function listCodexModelCatalog({
+  dataDir = defaultDir(),
+  fetchFn = fetch,
+  authHeadersFn = codexAuthHeaders,
+} = {}) {
+  const headers = await authHeadersFn(dataDir);
+  const res = await fetchFn(`${CODEX_BASE_URL}/models?client_version=${CLIENT_VERSION}`, {
+    headers,
+    signal: AbortSignal.timeout(MODELS_FETCH_TIMEOUT_MS),
+  });
+  if (!res.ok) throw new Error(`list models failed: ${res.status} ${(await res.text()).slice(0, 300)}`);
+  const json = await res.json();
+  const catalog = parseCodexModelCatalog(json);
+  if (!catalog.length) throw new Error(`models endpoint returned no usable models — raw: ${JSON.stringify(json).slice(0, 500)}`);
+  return catalog;
+}
+
+export async function listCodexModels(opts = {}) {
+  return (await listCodexModelCatalog(opts)).map((entry) => entry.id);
 }
 
 // «Новые сверху»: сравниваем числовую версию в slug (gpt-5.1 → 5.1), при равенстве — по имени.
@@ -361,14 +434,14 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   assert(accountFromIdToken(jwt).accountId === "acc_1", "accountId");
   assert(accountFromIdToken(jwt).planType === "pro", "planType");
   assert(accountFromIdToken("garbage").accountId === null, "bad id_token → null");
-  // Разбор списка моделей: slug из поля `model`, сортировка «новые сверху».
-  const models = [{ model: "gpt-5" }, { model: "gpt-5.1" }, { id: "preset-x", model: "gpt-5.1-codex" }];
-  const parsed = [...new Set(models.map((m) => m.model || m.slug || m.id || m.name).filter(Boolean))].sort(compareModelDesc);
-  assert(parsed[0].startsWith("gpt-5.1"), `newest first, got ${parsed[0]}`);
-  assert(parsed.includes("gpt-5"), "keeps gpt-5");
-  // deepFindModels: устойчивость к смене ключа-обёртки.
-  assert(deepFindModels({ result: { items: [{ model: "gpt-5.1" }, { slug: "gpt-6" }] } }).length === 2, "deepFindModels nested");
-  assert(deepFindModels({ tiers: [{ id: "flex" }] }).length === 0, "deepFind ignores non-model arrays");
+  // Разбор списка моделей: model/slug/id/name, сортировка и защита от metadata id.
+  const parsed = parseCodexModelCatalog({
+    result: { items: [{ model: "gpt-5" }, { slug: "gpt-5.1" }, { id: "preset-x" }, { name: "gpt-6" }] },
+    tiers: [{ id: "flex" }],
+  });
+  assert(parsed[0].id === "gpt-6", `newest first, got ${parsed[0]?.id}`);
+  assert(parsed.some((entry) => entry.id === "gpt-5"), "keeps gpt-5");
+  assert(!parsed.some((entry) => entry.id === "flex"), "ignores non-model metadata arrays");
   assert(tr("ru", "en", "ру") === "ру" && tr("en", "en", "ру") === "en", "tr lang");
   console.log("codex-oauth self-check ok");
 }

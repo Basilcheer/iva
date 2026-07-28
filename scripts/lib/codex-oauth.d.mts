@@ -15,6 +15,17 @@ export interface LoginOptions {
   lang?: string;
 }
 
+export interface CodexModelCatalogEntry {
+  id: string;
+  reasoningLevels: string[];
+}
+
+export interface CodexModelCatalogOptions {
+  dataDir?: string;
+  fetchFn?: typeof fetch;
+  authHeadersFn?: (dataDir?: string) => Promise<Record<string, string>>;
+}
+
 export const ISSUER: string;
 export const CLIENT_ID: string;
 export const CODEX_BASE_URL: string;
@@ -30,4 +41,6 @@ export function codexAuthHeaders(dataDir?: string): Promise<Record<string, strin
 export function runDeviceCodeLogin(opts?: LoginOptions): Promise<CodexAuth>;
 export function runBrowserLogin(opts?: LoginOptions): Promise<CodexAuth>;
 export function login(mode?: "device" | "browser", opts?: LoginOptions): Promise<CodexAuth>;
-export function listCodexModels(opts?: { dataDir?: string }): Promise<string[]>;
+export function listCodexModels(opts?: CodexModelCatalogOptions): Promise<string[]>;
+export function parseCodexModelCatalog(json: unknown): CodexModelCatalogEntry[];
+export function listCodexModelCatalog(opts?: CodexModelCatalogOptions): Promise<CodexModelCatalogEntry[]>;

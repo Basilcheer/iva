@@ -4,7 +4,15 @@ import assert from "node:assert/strict";
 // telegram-poll.mjs reads env at import and guards its poll loop behind a direct-execution check,
 // so importing it here is side-effect-free. A dummy token keeps the API base a harmless string.
 process.env.TELEGRAM_BOT_TOKEN ??= "test:token";
-const { readCappedStream, handleAwaitNonText } = await import("./telegram-poll.mjs");
+const {
+  readCappedStream,
+  handleAwaitNonText,
+  isStaleWizard,
+  wizardActionAllowed,
+  selectWizardModel,
+  selectWizardEffort,
+  runWizardRequest,
+} = await import("./telegram-poll.mjs");
 
 const enc = new TextEncoder();
 function streamOf(...parts) {
@@ -78,4 +86,50 @@ test("secret prompt + non-file attachment (photo) → deleted with an ack, not d
   const consumed = await handleAwaitNonText(msg, pending, r.io);
   assert.equal(consumed, true);
   assert.deepEqual(r.names(), ["delete", "reply"]); // deleted + told how to send; never reaches eve
+});
+
+test("stale wizard callbacks are rejected by message and screen step", () => {
+  const st = { msgId: 42, step: "models" };
+  assert.equal(isStaleWizard(st, 41), true);
+  assert.equal(isStaleWizard(st, 42), false);
+  assert.equal(isStaleWizard(null, 42), true);
+  assert.equal(wizardActionAllowed(st, "m:0"), true);
+  assert.equal(wizardActionAllowed(st, "eff:high"), false);
+  assert.equal(wizardActionAllowed(st, "unknown"), false);
+});
+
+test("model switch carries that model's levels; unknown effort never clears state", () => {
+  const st = {
+    model: "old",
+    effort: "low",
+    efforts: ["low"],
+    modelOptions: [
+      { id: "gpt-a", reasoningLevels: ["low", "medium"] },
+      { id: "gpt-b", reasoningLevels: ["high", "max"] },
+    ],
+  };
+  assert.deepEqual(selectWizardModel(st, "1"), st.modelOptions[1]);
+  assert.equal(st.model, "gpt-b");
+  assert.deepEqual(st.efforts, ["high", "max"]);
+  assert.equal(selectWizardEffort(st, "bogus"), false);
+  assert.equal(st.effort, "low");
+  assert.equal(selectWizardEffort(st, "max"), true);
+  assert.equal(st.effort, "max");
+  assert.equal(selectWizardEffort(st, "unset"), true);
+  assert.equal(st.effort, null);
+});
+
+test("Cancel during a rejected model fetch discards the stale error path", async () => {
+  const st = { chatId: 1, userId: "2" };
+  let active = st;
+  let rejectFetch;
+  const pending = runWizardRequest(
+    st,
+    () => new Promise((_resolve, reject) => { rejectFetch = reject; }),
+    (candidate) => active === candidate,
+  );
+
+  active = null; // Cancel removed this object from the flow slot while fetch was pending.
+  rejectFetch(Object.assign(new Error("key rejected"), { auth: true }));
+  assert.deepEqual(await pending, { stale: true });
 });

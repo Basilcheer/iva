@@ -11,8 +11,21 @@ export interface ProviderCatalogEntry {
   models: string[];
 }
 
-export const EFFORTS: string[];
+export interface ModelOption {
+  id: string;
+  reasoningLevels: string[];
+}
+
+export interface FetchModelOptions {
+  dataDir?: string;
+  listCodexCatalog?: (opts?: { dataDir?: string }) => Promise<ModelOption[]>;
+  fetchFn?: typeof fetch;
+}
+
+export const EFFORTS: readonly string[];
+export const FALLBACK_EFFORTS: readonly string[];
 export const CATALOG: Record<string, ProviderCatalogEntry>;
 
-export function fetchModels(provider: string, key?: string, opts?: { dataDir?: string }): Promise<string[]>;
+export function fetchModels(provider: string, key?: string, opts?: FetchModelOptions): Promise<string[]>;
+export function fetchModelOptions(provider: string, key?: string, opts?: FetchModelOptions): Promise<ModelOption[]>;
 export function checkKey(provider: string, key: string): Promise<string | null>;
