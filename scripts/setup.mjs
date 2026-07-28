@@ -8,8 +8,12 @@ import { createReadStream, existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
-import { defaultChecker, PortSelector } from "./lib/ports.mjs";
+import { dirname, join, resolve } from "node:path";
+import {
+  confirmOccupiedCurrentPort,
+  defaultChecker,
+  PortSelector,
+} from "./lib/ports.mjs";
 import { generateAssistantBearer, isAssistantBearer } from "./lib/assistant-auth.mjs";
 import { writeEnvAtomicSync } from "./lib/env-file.mjs";
 import { authFilePath, readAuth, runDeviceCodeLogin, runBrowserLogin, listCodexModels } from "./lib/codex-oauth.mjs";
@@ -20,7 +24,13 @@ import {
 import { keptSetupWritePlan } from "./lib/setup-keep.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const ENV_PATH = join(ROOT, ".env");
+const SOURCE_ENV_PATH = join(ROOT, ".env");
+// `iva config` stages a complete candidate outside the live .env, then applies it
+// transactionally. Direct setup/install keeps the historical live path.
+const ENV_PATH = process.env.IVA_CONFIG_OUTPUT
+  ? resolve(process.env.IVA_CONFIG_OUTPUT)
+  : SOURCE_ENV_PATH;
+const STAGING_CONFIG = ENV_PATH !== SOURCE_ENV_PATH;
 // Абсолютный каталог data (тот же, что видит агент из cwd=ROOT). Хранит codex-auth.json (OAuth).
 const dataDirAbs = (env) => {
   const d = (env && env.ASSISTANT_DATA_DIR) || "data";
@@ -79,14 +89,26 @@ async function pickPort(def) {
     }
     const { occupied, holders } = await checker.check(port);
     if (!occupied) return String(port);
-    // Reconfiguring a live Iva: the current (unchanged) port reads as "busy" —
-    // it's held by Iva's OWN server. Don't offer to move: that would steer IVA_PORT away from
-    // clients (bridge/cron on ASSISTANT_HOST) → the bot would go mute. Keep the port as is.
-    // ponytail: assume the holder of an unchanged port is our own server (the typical case).
-    if (port === Number(def)) {
-      console.log(`  ${C.y}${t(`Port ${port} is busy — looks like Iva itself (the running server). Keeping it.`, `Порт ${port} занят — похоже, это сам Iva (текущий сервер). Оставляю.`)}${C.x}`);
-      return String(port);
-    }
+    const reuse = await confirmOccupiedCurrentPort({
+      port,
+      currentPort: def,
+      holders,
+      confirm: async ({ port: current, holders: found }) => {
+        const who = found.length ? ` (${found.join("; ")})` : "";
+        console.log(`  ${C.y}${t(
+          `Port ${current} is already occupied${who}. Ownership cannot be verified.`,
+          `Порт ${current} уже занят${who}. Проверить владельца надёжно нельзя.`,
+        )}${C.x}`);
+        return askYesNo(
+          `  ${t(
+            `Keep occupied port ${current}? Only confirm if it is the running Iva`,
+            `Оставить занятый порт ${current}? Подтверди, только если это запущенная Iva`,
+          )}`,
+          false,
+        );
+      },
+    });
+    if (reuse) return String(port);
     const free = await new PortSelector(checker).firstFree(port + 1);
     const who = holders.length ? ` (${holders.join("; ")})` : "";
     console.log(`  ${C.y}${t(`Port ${port} is busy${who}.`, `Порт ${port} занят${who}.`)}${C.x}${free ? ` ${t("Nearest free", "Ближайший свободный")}: ${C.g}${free}${C.x}.` : ""}`);
@@ -132,7 +154,7 @@ function parseEnv(text) {
 }
 async function loadExistingEnv() {
   try {
-    return parseEnv(await readFile(ENV_PATH, "utf8"));
+    return parseEnv(await readFile(SOURCE_ENV_PATH, "utf8"));
   } catch (error) {
     if (error?.code === "ENOENT") return {};
     throw error;
@@ -676,7 +698,9 @@ async function main() {
     { opencode: out.OPENCODE_MODEL, openrouter: out.OPENROUTER_MODEL, codex: out.CODEX_MODEL }[provider] || out.OLLAMA_MODEL;
   console.log();
   hr();
-  console.log(`${C.g}${C.b}  ✓ ${t("Done — everything written to .env", "Готово — всё записано в .env")}${C.x}`);
+  console.log(`${C.g}${C.b}  ✓ ${STAGING_CONFIG
+    ? t("Ready — settings validated for apply", "Готово к применению — настройки проверены")
+    : t("Done — everything written to .env", "Готово — всё записано в .env")}${C.x}`);
   console.log(`  ${t("Provider", "Провайдер")}: ${provider} · ${t("Model", "Модель")}: ${C.g}${chosenModel}${C.x} · Deepgram: ${out.DEEPGRAM_LANGUAGE} · ${t("Bot", "Бот")}: ${C.g}@${out.TELEGRAM_BOT_USERNAME}${C.x}`);
   console.log(`  ${t("Access", "Доступ")}: ${out.TELEGRAM_ALLOWED_USER_IDS} · TZ: ${out.ASSISTANT_TIMEZONE} · vault: ${out.ASSISTANT_VAULT_DIR} · ${t("lang", "язык")}: ${out.AGENT_LANGUAGE}`);
   hr();

@@ -100,6 +100,20 @@ export class PortSelector {
   }
 }
 
+// An unchanged port can be occupied by Iva or by an unrelated process that took
+// the socket while Iva was down. Holder heuristics cannot prove ownership, so
+// reuse is allowed only after an explicit user confirmation.
+export async function confirmOccupiedCurrentPort({
+  port,
+  currentPort,
+  holders = [],
+  confirm,
+}) {
+  if (Number(port) !== Number(currentPort)) return false;
+  if (typeof confirm !== "function") throw new TypeError("occupied port reuse requires confirm(details)");
+  return Boolean(await confirm({ port: Number(port), holders }));
+}
+
 // Готовый чекер со всеми доступными способами детекта.
 export function defaultChecker() {
   return new PortChecker([bindProbe, procProbe, dockerProbe]);

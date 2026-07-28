@@ -5,7 +5,7 @@
 // SINGLE source of truth for systemd units and activation: install.sh delegates here
 // (`iva _install-units` + `_activate-units`), and CLI/doctor reuse the same paths.
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, readdirSync, chmodSync, statSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, mkdtempSync, rmSync, readdirSync, chmodSync, statSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { join, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -16,9 +16,14 @@ import { createTerminalProgress } from "../scripts/lib/progress.mjs";
 import { quarantinePath, resetStateTargets } from "../scripts/lib/wf-store.mjs";
 import { createTelegramUpdateReporter, loadTelegramJob, removeTelegramJob } from "../scripts/lib/telegram-status.mjs";
 import { generateAssistantBearer, isAssistantBearer } from "../scripts/lib/assistant-auth.mjs";
-import { writeEnvAtomicSync } from "../scripts/lib/env-file.mjs";
+import { parseEnvText, writeEnvAtomicSync } from "../scripts/lib/env-file.mjs";
 import { classifyAgentListeners } from "../scripts/lib/listener-security.mjs";
 import { cleanupSystemdUnits, createSystemdControl } from "../scripts/lib/systemd-control.mjs";
+import {
+  applyConfigTransaction,
+  probeEveHealth,
+  recoverConfigTransaction,
+} from "../scripts/lib/config-transaction.mjs";
 import { userbotSyncArgs } from "../scripts/lib/userbot-deps.mjs";
 import {
   acquireUpdateLock,
@@ -203,9 +208,9 @@ function hardenPerms() {
 }
 
 // Writes iva.service + all deploy/iva-*.{service,timer} with placeholder substitution. daemon-reload.
-function writeUnits() {
+function writeUnits({ ensureBearer = true } = {}) {
   hardenPerms();
-  ensureAssistantBearer({ quiet: true });
+  if (ensureBearer) ensureAssistantBearer({ quiet: true });
   mkdirSync(UNIT_DIR, { recursive: true });
   writeFileSync(join(UNIT_DIR, "iva.service"), ivaServiceBody());
   const written = ["iva.service"];
@@ -567,12 +572,75 @@ async function cmdUpdate(args) {
   }
 }
 
-async function cmdConfig() {
-  const r = run(NODE, ["scripts/setup.mjs"]);
-  if (r.status !== 0) process.exit(r.status ?? 1);
-  if (hasSystemd() && (await confirm("Restart services to apply the settings?", true))) {
-    restartServices(); // setup may have changed IVA_PORT → regenerate the unit, otherwise the server stays on the old port
-    ok("Services restarted");
+async function cmdConfig(args = []) {
+  requireSystemd();
+  const restartConfiguredServices = () => {
+    // Units embed IVA_PORT, so both apply and rollback must regenerate them from
+    // whichever .env is currently live before the checked restart. The candidate
+    // already carries a valid bearer; skipping its migration here also keeps a
+    // rollback snapshot byte-exact for older installations.
+    writeUnits({ ensureBearer: false });
+    systemd.restart(SERVICES);
+  };
+
+  const recovered = await recoverConfigTransaction(
+    { envPath: ENV_PATH, services: SERVICES },
+    { restart: restartConfiguredServices },
+  );
+  if (recovered) ok("Recovered the previous configuration and restarted services");
+  if (args.includes("--recover")) {
+    if (!recovered) ok("No pending configuration recovery");
+    return;
+  }
+
+  const candidateDir = mkdtempSync(join(tmpdir(), "iva-config-"));
+  const candidatePath = join(candidateDir, ".env");
+  try {
+    const r = run(NODE, ["scripts/setup.mjs"], {
+      env: { ...childEnv, IVA_CONFIG_OUTPUT: candidatePath },
+    });
+    if (r.status !== 0) {
+      process.exitCode = r.status ?? 1;
+      return;
+    }
+    if (!(await confirm("Apply settings and restart services now?", true))) {
+      warn("Configuration unchanged");
+      return;
+    }
+
+    const nextText = readFileSync(candidatePath, "utf8");
+    const nextEnv = parseEnvText(nextText);
+    const provider = nextEnv.MODEL_PROVIDER;
+    const selected = {
+      ollama: ["OLLAMA_MODEL", "OLLAMA_API_KEY"],
+      opencode: ["OPENCODE_MODEL", "OPENCODE_API_KEY"],
+      openrouter: ["OPENROUTER_MODEL", "OPENROUTER_API_KEY"],
+      codex: ["CODEX_MODEL", null],
+    }[provider];
+    if (!selected) throw new Error("candidate configuration has an invalid model provider");
+    const port = Number(nextEnv.IVA_PORT || DEFAULT_PORT);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+      throw new Error("candidate configuration has an invalid IVA_PORT");
+    }
+
+    await applyConfigTransaction({
+      envPath: ENV_PATH,
+      nextText,
+      selection: {
+        provider,
+        model: nextEnv[selected[0]],
+        key: selected[1] ? nextEnv[selected[1]] : undefined,
+        dataDir: dataDirAbs(nextEnv),
+      },
+      services: SERVICES,
+      healthUrl: `http://127.0.0.1:${port}/eve/v1/health`,
+    }, {
+      restart: restartConfiguredServices,
+      health: (url) => probeEveHealth(url),
+    });
+    ok("Configuration applied; agent and Telegram bridge are active");
+  } finally {
+    rmSync(candidateDir, { recursive: true, force: true });
   }
 }
 

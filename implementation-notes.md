@@ -172,6 +172,23 @@
 - Old callbacks are rejected by both Telegram message ID and wizard step, so an earlier screen cannot mutate a later screen in the same edited message.
 - Every wizard-owned network result checks object identity on both success and error; a cancelled/replaced flow cannot resurrect itself with a late response.
 
+## Transactional configuration apply
+
+- `iva config` writes the interactive result to a private temporary candidate. The live
+  `.env` remains untouched until the user confirms apply and the shared live model
+  validator accepts the final provider/model selection again.
+- Apply persists a versioned 0600 rollback snapshot, atomically replaces `.env`,
+  regenerates the port-bearing units, restarts both the agent and Telegram poller through
+  the checked systemd adapter, and waits for local `GET /eve/v1/health`.
+- Any write, restart, health, or commit failure restores the exact previous bytes and
+  restarts the old setup. A failed rollback keeps the durable snapshot and reports
+  `iva config --recover`; the next `iva config` also reconciles it before showing setup.
+- Snapshot and provider errors are redacted using secret-bearing env keys. Temporary
+  candidate data is mode-protected and removed when the config command returns.
+- An occupied unchanged port is no longer attributed to Iva heuristically. The setup
+  requires an explicit negative-default confirmation before reusing it, otherwise it
+  offers the nearest free port.
+
 ## Eve 0.27.8 scoped reset
 
 - Scope: upgrade Eve to 0.27.8, preserve deterministic prompt-error terminal classification,
