@@ -1,6 +1,6 @@
 // Экран «Userbot» меню (/menu → 📡). Статус личного userbot-прокси (Telegram) + подключение.
-// Статус — systemctl --user is-active/is-enabled iva-telegram-userbot.service (execFile,
-// таймаут 1.5с, кэш 60с: единственный getUpdates-цикл моста нельзя блокировать дольше).
+// Общая CLI/Telegram-проба проверяет systemd, health endpoint и авторизацию Telethon.
+// Общий таймаут 1.5с: getUpdates-цикл нельзя блокировать дольше.
 // Наличие creds — булевы TELEGRAM_API_ID/TELEGRAM_API_HASH из .env (значения не показываем).
 //
 // Секреты (api_id/api_hash) принимаются только в личке; сообщение с ними удаляет движок
@@ -10,12 +10,11 @@
 import { execFile } from "node:child_process";
 import { join } from "node:path";
 import { readEnvValues, upsertEnv } from "../env-file.mjs";
+import { probeUserbotHealth } from "../userbot-health.mjs";
 
 const SID = "ub";
 const PARENT = "r";
 const SVC = "iva-telegram-userbot.service";
-const CACHE_TTL_MS = 60_000;
-let cache = { at: 0, data: null };
 
 const isPrivate = (st) => Number(st.chatId) > 0;
 
@@ -27,41 +26,49 @@ function run(cmd, args, timeout = 1500) {
   });
 }
 
-// Статус юнита: {active, enabled}. is-active даёт код 0/«active»; is-enabled печатает
-// enabled/disabled/static… (код != 0 у disabled — берём stdout как метку). Кэш 60с.
-async function probeStatus() {
-  if (cache.data && Date.now() - cache.at < CACHE_TTL_MS) return cache.data;
-  // Параллельно: две последовательные пробы по 1.5с дали бы worst-case 3с блокировки
-  // единственного getUpdates-цикла — параллель возвращает бюджет к 1.5с.
-  const [a, e] = await Promise.all([
-    run("systemctl", ["--user", "is-active", SVC]),
-    run("systemctl", ["--user", "is-enabled", SVC]),
-  ]);
-  const data = {
-    active: a.code === 0 || a.stdout.trim() === "active",
-    enabled: e.stdout.trim() || (e.code === 0 ? "enabled" : "—"),
-  };
-  cache = { at: Date.now(), data };
-  return data;
+export function runSetupCommand(bin, { exec = execFile, timeoutMs = 180_000 } = {}) {
+  return new Promise((resolve, reject) => {
+    exec(process.execPath, [bin, "userbot", "setup"], { timeout: timeoutMs, encoding: "utf8" }, (error) => {
+      if (error) {
+        const code = typeof error.code === "number" ? error.code : 1;
+        reject(new Error(`userbot setup failed (exit ${code})`));
+        return;
+      }
+      resolve();
+    });
+  });
 }
 
-const invalidate = () => (cache = { at: 0, data: null });
+async function probeStatus(ctx, env) {
+  const probe = ctx.deps.probeUserbotHealth || probeUserbotHealth;
+  return probe({ root: ctx.deps.root, port: env.TELEGRAM_MCP_PORT || "8724" });
+}
 
 // Единая сборка карты — используется и render(), и async-перерисовкой после setup.
 async function buildScreen(st, ctx) {
   const T = ctx.tr;
   const env = await readEnvValues(ctx.deps.envPath);
   const hasCreds = Boolean(env.TELEGRAM_API_ID && env.TELEGRAM_API_HASH);
-  const status = await probeStatus();
+  const status = await probeStatus(ctx, env);
   const head = T("📡 Telegram userbot", "📡 Telegram-userbot");
-  const statusLine = T(
-    `Service: ${status.active ? "active" : "inactive"} (${status.enabled})`,
-    `Сервис: ${status.active ? "активен" : "неактивен"} (${status.enabled})`,
+  const beta = T(
+    "🧪 Beta: personal-account automation can misbehave and carries account-ban risk.",
+    "🧪 Бета: автоматизация личного аккаунта может сбоить и несёт риск блокировки.",
   );
+  const stateLabel = {
+    off: T("off", "выкл"),
+    starting: T("starting", "запускается"),
+    unreachable: T("unreachable", "недоступен"),
+    unauthorized: T("login required", "нужен вход"),
+    ready: T("ready", "готов"),
+  }[status.state] || T("unreachable", "недоступен");
+  const statusLine = `${T("Status", "Статус")}: ${stateLabel}`;
 
   if (!hasCreds) {
     const text = [
       head,
+      "",
+      beta,
       "",
       statusLine,
       "",
@@ -73,9 +80,11 @@ async function buildScreen(st, ctx) {
     return { text, rows: [[ctx.btn(T("Enter credentials", "Ввести ключи"), `iva_menu:${SID}:do:creds`)], ctx.backRow(PARENT)] };
   }
 
-  if (!status.active) {
+  if (status.state === "off") {
     const text = [
       head,
+      "",
+      beta,
       "",
       statusLine,
       "",
@@ -91,16 +100,62 @@ async function buildScreen(st, ctx) {
     };
   }
 
-  // Активен: подключение аккаунта — через QR у бота (флоу на стороне агента, не моста).
+  if (status.state === "starting") {
+    return {
+      text: [
+        head,
+        "",
+        beta,
+        "",
+        statusLine,
+        "",
+        T("The proxy service is still starting. Refresh in a moment.", "Прокси ещё запускается. Обнови через несколько секунд."),
+      ].join("\n"),
+      rows: [
+        [ctx.btn(T("Turn off", "Выключить"), `iva_menu:${SID}:do:off`), ctx.btn(T("🔄 Refresh", "🔄 Обновить"), `iva_menu:${SID}:rf`)],
+        ctx.backRow(PARENT),
+      ],
+    };
+  }
+
+  if (status.state === "unreachable") {
+    return {
+      text: [
+        head,
+        "",
+        beta,
+        "",
+        statusLine,
+        "",
+        T(
+          "The service is active, but its health endpoint did not answer. Run `iva userbot diagnose --json` for the fixed diagnostic.",
+          "Сервис активен, но health endpoint не ответил. Запусти `iva userbot diagnose --json` для точной диагностики.",
+        ),
+      ].join("\n"),
+      rows: [
+        [ctx.btn(T("Turn off", "Выключить"), `iva_menu:${SID}:do:off`), ctx.btn(T("🔄 Refresh", "🔄 Обновить"), `iva_menu:${SID}:rf`)],
+        ctx.backRow(PARENT),
+      ],
+    };
+  }
+
+  const accountHint = status.state === "unauthorized"
+    ? T(
+      "Proxy is on, but the Telegram account is not connected. Message the bot: «connect my telegram» to scan a QR.",
+      "Прокси включён, но аккаунт Telegram не подключён. Напиши боту: «подключи мой телеграм», чтобы отсканировать QR.",
+    )
+    : T(
+      "Proxy and Telegram account are ready.",
+      "Прокси и аккаунт Telegram готовы.",
+    );
   const text = [
     head,
     "",
+    beta,
+    "",
     statusLine,
     "",
-    T(
-      "Proxy is on. To connect your account, message the bot: «connect my telegram» — it replies with a QR to scan.",
-      "Прокси включён. Чтобы подключить аккаунт — напиши боту: «подключи мой телеграм», он пришлёт QR для входа.",
-    ),
+    accountHint,
   ].join("\n");
   return {
     text,
@@ -148,25 +203,42 @@ export default {
       const bin = join(ctx.deps.root, "bin/iva.mjs");
       // Отсоединённо: НЕ ждём (venv-сборка до 3 мин заблокировала бы poll-цикл). Перерисуем
       // экран по завершении — только если пользователь всё ещё на нём.
-      run(process.execPath, [bin, "userbot", "setup"], 180_000)
+      const setup = ctx.deps.runUserbotSetup || (() => runSetupCommand(bin));
+      setup()
         .then(async () => {
-          invalidate();
           if (ctx.flows.get(st.chatId, st.userId) === st && st.screen === SID) {
             const v = await buildScreen(st, ctx);
             await ctx.flows.screen(st, v.text, v.rows);
           }
         })
-        .catch((e) => ctx.deps.log?.("userbot setup error:", e.message));
+        .catch(async () => {
+          ctx.deps.log?.("userbot setup failed");
+          if (ctx.flows.get(st.chatId, st.userId) === st && st.screen === SID) {
+            await ctx.flows.screen(
+              st,
+              ctx.tr(
+                "🧪 Beta\n\nSetup failed. Check the service logs, then try again.",
+                "🧪 Бета\n\nНастройка завершилась с ошибкой. Проверь логи сервиса и повтори.",
+              ),
+              [
+                [ctx.btn(ctx.tr("Try again", "Повторить"), `iva_menu:${SID}:do:setup`)],
+                ctx.backRow(PARENT),
+              ],
+            );
+          }
+        });
       return ctx.flows.screen(
         st,
-        ctx.tr("◇ Setting up the userbot proxy…", "◇ Собираю userbot-прокси…"),
+        ctx.tr(
+          "🧪 Beta\n\n◇ Setting up the userbot proxy…",
+          "🧪 Бета\n\n◇ Собираю userbot-прокси…",
+        ),
         [ctx.backRow(PARENT)],
       );
     }
 
     if (step === "off") {
       await run("systemctl", ["--user", "disable", "--now", SVC]);
-      invalidate();
       return ctx.show(st, SID);
     }
     return ctx.show(st, SID);
@@ -208,7 +280,6 @@ export default {
           [ctx.backRow(PARENT)],
         );
       }
-      invalidate();
       // Ключи есть — экран покажет [Включить].
       return ctx.show(st, SID);
     },

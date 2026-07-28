@@ -86,6 +86,7 @@ jobs:
             --strict \
             services/telegram-userbot/requirements.lock
           .venv-userbot/bin/python services/telegram-userbot/test_guardrails.py
+          .venv-userbot/bin/python services/telegram-userbot/test_health.py
           .venv-userbot/bin/python -m py_compile \
             services/telegram-userbot/guardrails.py \
             services/telegram-userbot/onboarding.py \

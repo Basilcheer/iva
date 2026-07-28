@@ -37,9 +37,16 @@ for you, in chat:
 ```bash
 iva userbot creds    # read api_id + api_hash from stdin → .env (two lines)
 iva userbot setup    # build venv, generate the token, enable + start the proxy (idempotent)
-iva userbot status   # service running? venv built? token present?
+iva userbot status   # shared service, proxy and Telegram-login health
+iva userbot diagnose --json  # read-only machine-readable health
 iva userbot off      # stop and disable the proxy
 ```
+
+The health state is one of `off`, `starting`, `unreachable`, `unauthorized` or
+`ready`. CLI and Telegram use the same 1.5-second probe. It checks the existing
+proxy's `/healthz` route, which reads authorization from the proxy's one live
+Telethon client and never opens another session. Diagnostics expose only fixed
+state/reason values; bearer tokens and transport errors are not returned.
 
 ## Safety knobs
 

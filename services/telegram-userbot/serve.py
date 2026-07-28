@@ -31,6 +31,11 @@ import sys
 from pathlib import Path
 
 
+async def _health_payload(client) -> dict[str, str]:
+    """Report authorization from the proxy's existing Telethon client."""
+    return {"state": "ready" if await client.is_user_authorized() else "unauthorized"}
+
+
 def _fail(msg: str) -> None:
     print(f"telegram-userbot: {msg}", file=sys.stderr)
     sys.exit(1)
@@ -145,6 +150,9 @@ def main() -> None:
                 print(f"telegram-userbot: reconnect failed: {exc}", file=sys.stderr)
             return await call_next(request)
 
+    async def health(_request):
+        return JSONResponse(await _health_payload(client))
+
     async def amain() -> None:
         await client.connect()  # NOT .start() — that would prompt for interactive login
         authorized = await client.is_user_authorized()
@@ -165,6 +173,7 @@ def main() -> None:
         )
 
         app = mcp.streamable_http_app()
+        app.add_route("/healthz", health, methods=["GET"])
         # add_middleware stacks outermost-last: BearerAuth runs first (reject before
         # we bother reconnecting), then EnsureConnected.
         app.add_middleware(EnsureConnectedMiddleware)

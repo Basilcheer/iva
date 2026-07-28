@@ -1,32 +1,16 @@
 // Экран статуса: одна карта — версия, провайдер·модель·размышления, поиск+ключ, язык,
 // userbot, Google, расход за сегодня. Быстрые поля (env/файлы) читаются синхронно в первом
-// рендере; медленная проба (systemctl is-active userbot) НЕ ждётся синхронно — сначала
+// рендере; общая userbot-проба systemd/HTTP/Telethon НЕ ждётся синхронно — сначала
 // заглушка «…», затем async-edit по завершении. Так единственный getUpdates-цикл моста не
-// блокируется дольше ~1.5с. Проба кэшируется на 60с.
+// блокируется дольше ~1.5с.
 import { readFileSync, existsSync } from "node:fs";
-import { execFile } from "node:child_process";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { readEnvValues } from "../env-file.mjs";
 import { CATALOG } from "../model-catalog.mjs";
 import { SEARCH_CATALOG } from "../search-catalog.mjs";
 import { readEntries, summarize } from "../usage.mjs";
-
-const PROBE_TTL_MS = 60_000;
-let probeCache = { at: 0, ubActive: null };
-
-function run(cmd, args, timeout = 1500) {
-  return new Promise((resolve) => {
-    execFile(cmd, args, { timeout, encoding: "utf8" }, (err, stdout = "") =>
-      resolve({ failed: Boolean(err), code: typeof err?.code === "number" ? err.code : err ? 1 : 0, stdout: String(stdout) }),
-    );
-  });
-}
-
-async function probeUserbot() {
-  const r = await run("systemctl", ["--user", "is-active", "iva-telegram-userbot.service"]);
-  return r.code === 0 || r.stdout.trim() === "active";
-}
+import { probeUserbotHealth } from "../userbot-health.mjs";
 
 function version(root) {
   try {
@@ -68,9 +52,16 @@ function fastFields(env, ctx) {
   };
 }
 
-function buildView(d, ubActive, ctx) {
+function buildView(d, health, ctx) {
   const T = ctx.tr;
-  const ub = ubActive === null ? "…" : ubActive ? T("active", "активен") : T("off", "выкл");
+  const labels = {
+    off: T("off", "выкл"),
+    starting: T("starting", "запускается"),
+    unreachable: T("unreachable", "недоступен"),
+    unauthorized: T("login required", "нужен вход"),
+    ready: T("ready", "готов"),
+  };
+  const ub = health === null ? "…" : labels[health.state] || labels.unreachable;
   const lines = [
     T("📊 Status", "📊 Статус"),
     "",
@@ -92,23 +83,19 @@ export default {
   async render(st, ctx) {
     const env = await readEnvValues(ctx.deps.envPath);
     const d = fastFields(env, ctx);
-    const fresh = probeCache.ubActive !== null && Date.now() - probeCache.at < PROBE_TTL_MS;
-    const ubActive = fresh ? probeCache.ubActive : null;
 
-    if (!fresh) {
-      // Медленную пробу гоним ОТДЕЛЬНО и правим сообщение по готовности — только если экран
-      // всё ещё текущий (пользователь не ушёл в другой раздел / не закрыл меню).
-      probeUserbot()
-        .then((active) => {
-          probeCache = { at: Date.now(), ubActive: active };
-          if (ctx.flows.get(st.chatId, st.userId) === st && st.screen === "st") {
-            const v = buildView(d, active, ctx);
-            return ctx.flows.screen(st, v.text, v.rows);
-          }
-        })
-        .catch(() => {});
-    }
-    return buildView(d, ubActive, ctx);
+    // Медленную пробу гоним ОТДЕЛЬНО и правим сообщение по готовности — только если экран
+    // всё ещё текущий (пользователь не ушёл в другой раздел / не закрыл меню).
+    const probe = ctx.deps.probeUserbotHealth || probeUserbotHealth;
+    probe({ root: ctx.deps.root, port: env.TELEGRAM_MCP_PORT || "8724" })
+      .then((result) => {
+        if (ctx.flows.get(st.chatId, st.userId) === st && st.screen === "st") {
+          const v = buildView(d, result, ctx);
+          return ctx.flows.screen(st, v.text, v.rows);
+        }
+      })
+      .catch(() => {});
+    return buildView(d, null, ctx);
   },
   on() {},
 };

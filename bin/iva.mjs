@@ -25,6 +25,7 @@ import {
   recoverConfigTransaction,
 } from "../scripts/lib/config-transaction.mjs";
 import { userbotSyncArgs } from "../scripts/lib/userbot-deps.mjs";
+import { probeUserbotHealth } from "../scripts/lib/userbot-health.mjs";
 import {
   acquireUpdateLock,
   commitThenRunPostCommit,
@@ -985,7 +986,7 @@ ${C.b}Commands:${C.x}
   ${C.c}iva reset${C.x}          full reset: clear stuck workflows and restart
   ${C.c}iva start${C.x} / ${C.c}stop${C.x}    start / stop
   ${C.c}iva usage${C.x} [win]      token usage (last|today|week|month|by-model|by-source|tail)
-  ${C.c}iva userbot${C.x} [creds|setup|status|off]  personal-account userbot proxy (Telegram, opt-in)
+  ${C.c}iva userbot${C.x} [creds|setup|status|diagnose --json|off]  personal-account userbot proxy
   ${C.c}iva logs${C.x} [poll]     agent logs (or the Telegram bridge) -f
   ${C.c}iva uninstall${C.x}       remove units and the command (--purge — delete code+vault)
   ${C.c}iva version${C.x}         version and git commit
@@ -1087,7 +1088,7 @@ function restartUserbotIfActive({
   if (!quiet) ok("userbot-прокси перезапущен на новом коде");
 }
 
-function cmdUserbot(args) {
+async function cmdUserbot(args) {
   const sub = args[0] || "status";
   if (sub === "creds") {
     // Read api_id + api_hash from STDIN (two lines) — keeps secrets out of argv/ps.
@@ -1137,9 +1138,29 @@ function cmdUserbot(args) {
     ok("Userbot-прокси остановлен и выключен.");
     return;
   }
-  const active = scQ("is-active", SVC_USERBOT).out || "не установлен";
-  const enabled = scQ("is-enabled", SVC_USERBOT).out || "-";
-  console.log(`${SVC_USERBOT}: ${active} (${enabled})`);
+  if (sub === "diagnose") {
+    if (args[1] !== "--json") {
+      bad("Использование: iva userbot diagnose --json");
+      process.exit(1);
+    }
+    const env = readEnv();
+    const health = await probeUserbotHealth({
+      root: ROOT,
+      port: env.TELEGRAM_MCP_PORT || "8724",
+    });
+    console.log(JSON.stringify(health));
+    return;
+  }
+  if (sub !== "status") {
+    bad(`Неизвестная команда userbot: ${sub}`);
+    process.exit(1);
+  }
+  const env = readEnv();
+  const health = await probeUserbotHealth({
+    root: ROOT,
+    port: env.TELEGRAM_MCP_PORT || "8724",
+  });
+  console.log(`${SVC_USERBOT}: ${health.state}`);
   console.log(`venv: ${existsSync(VENV_PY) ? "собран" : "нет — будет собран при setup"}`);
   console.log(`токен: ${existsSync(TOKEN_FILE) ? "есть" : "нет — создастся при setup"}`);
 }

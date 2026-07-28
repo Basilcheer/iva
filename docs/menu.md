@@ -71,13 +71,18 @@ The **🔍 Search** screen lists the four providers — Tavily, Brave, Exa, Para
 
 ## Userbot
 
-A status card built from `systemctl --user` plus the presence of your Telegram API credentials, then the next step in context:
+A status card built from the shared CLI/Telegram health probe plus the presence of your Telegram API credentials, then the next step in context:
 
 - **No credentials** → instructions for my.telegram.org and a button to enter `api_id` / `api_hash`.
 - **Credentials, not running** → **Enable**, which launches `iva userbot setup` detached (the venv build is slow, so the screen shows a spinner and refreshes when it's done).
-- **Running** → a hint to connect by QR — just tell the bot "connect my telegram" — plus **Disable** and **Refresh**.
+- **Starting** → a bounded waiting state with **Disable** and **Refresh**.
+- **Unreachable** → the service is active but the bearer-gated proxy health route did not answer.
+- **Login required** → the existing proxy session is reachable but Telethon is not authorized yet.
+- **Ready** → both the proxy and the personal Telegram account are healthy.
 
-The userbot is opt-in beta; the full picture, including the anti-ban guardrail: [userbot.md](userbot.md).
+Setup failures are shown in the menu instead of collapsing back to an inactive card. The
+userbot remains opt-in beta; the full picture, including the anti-ban guardrail:
+[userbot.md](userbot.md).
 
 ## Google Workspace
 
