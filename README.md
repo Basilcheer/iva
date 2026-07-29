@@ -30,12 +30,28 @@ curl -fsSL https://raw.githubusercontent.com/smixs/iva/main/install.sh | bash
 
 ### 28.07.2026
 
-- **v0.3.5** 📬 Busy messages survive restarts, the working status appears sooner, and quoted or truncated input keeps its context
-- **v0.3.5** ⚙️ Model changes use live validation and rollback; systemd and userbot errors are now explicit
-- **v0.3.5** 🛡️ Shell children are reaped, self-restarts are blocked, DoS bugs are patched, and Kimi K3 plus working vision defaults are here
-- **v0.3.4** 🧠 Thinking controls now follow the model: the existing Telegram buttons offer the supported levels, and `low` / `medium` / `high` actually reach Ollama Cloud and OpenCode Go as well as OpenAI subscriptions
-- **v0.3.4** ♻️ `/new` now resets only the current private chat, group conversation or forum topic; `/restart` does the same precise reset and restarts the process. Eve is upgraded to 0.27.8, while `iva reset` remains the explicit whole-agent recovery command
-- **v0.3.4** 🛡️ Memory-card updates merge safely instead of overwriting unknown fields and old content; the Eve API is loopback-only with bearer auth, secret files no longer fall through to the model, and the bundled rich-post skill cannot upload vault notes, logs or `.env`
+#### v0.3.5
+
+- 📬 Messages are saved even after a restart.
+- ⚡ The “Working” status appears sooner.
+- 💬 Iva understands when you quote a previous message.
+- ✂️ Iva tells you when a long message had to be shortened.
+- ↩️ If setup fails, your previous provider and model settings are restored.
+- 📱 The menu shows whether your personal Telegram account is connected. If it is not working, Iva shows why.
+- ⏭️ If you message Iva while she is replying, your next message is handled automatically. You do not need to send another message.
+- 🧹 If a command gets stuck, Iva stops it and keeps working.
+- 🛑 Iva does not restart herself while replying.
+- 🤖 Kimi K3 is now available.
+- 🖼️ Image recognition works again.
+- 🔒 Security bugs are fixed.
+
+#### v0.3.4
+
+- 🧠 You can set the reasoning level for your selected model.
+- 🆕 `/new` clears only the current chat or topic.
+- 🔄 `/restart` clears the current chat or topic and restarts Iva.
+- 📝 Existing memory entries are preserved when updated.
+- 🔐 Personal files and settings are better protected.
 
 ### 23.07.2026
 
