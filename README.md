@@ -28,6 +28,14 @@ curl -fsSL https://raw.githubusercontent.com/smixs/iva/main/install.sh | bash
 
 ## What's New 🔥
 
+### 31.07.2026
+
+#### v0.3.7
+
+- 🛡️ Updates are safer: a broken update no longer touches your working Iva.
+- 🌙 Nightly memory survives a server restart — the morning report arrives even after a reboot.
+- 🧪 Every release goes through a full test install from scratch before it ships.
+
 ### 30.07.2026
 
 #### v0.3.6
@@ -43,31 +51,6 @@ curl -fsSL https://raw.githubusercontent.com/smixs/iva/main/install.sh | bash
 
 - 🖼️ An album of photos with a caption, a forwarded post, or a long split message is understood as one message — one reply instead of several.
 - 📬 The first message after Iva's reply is delivered right away, without a false "queued" notice.
-
-### 28.07.2026
-
-#### v0.3.5
-
-- 📬 Messages are saved even after a restart.
-- ⚡ The “Working” status appears sooner.
-- 💬 Iva understands when you quote a previous message.
-- ✂️ Iva tells you when a long message had to be shortened.
-- ↩️ If setup fails, your previous provider and model settings are restored.
-- 📱 The menu shows whether your personal Telegram account is connected. If it is not working, Iva shows why.
-- ⏭️ If you message Iva while she is replying, your next message is handled automatically. You do not need to send another message.
-- 🧹 If a command gets stuck, Iva stops it and keeps working.
-- 🛑 Iva does not restart herself while replying.
-- 🤖 Kimi K3 is now available.
-- 🖼️ Image recognition works again.
-- 🔒 Security bugs are fixed.
-
-#### v0.3.4
-
-- 🧠 You can set the reasoning level for your selected model.
-- 🆕 `/new` clears only the current chat or topic.
-- 🔄 `/restart` clears the current chat or topic and restarts Iva.
-- 📝 Existing memory entries are preserved when updated.
-- 🔐 Personal files and settings are better protected.
 
 Full history — [CHANGELOG.md](CHANGELOG.md).
 
