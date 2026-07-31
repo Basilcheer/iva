@@ -1,5 +1,5 @@
 import { defineHook } from "eve/hooks";
-import { appendUsage } from "../../scripts/lib/usage.mjs";
+import { appendUsage, subagentTurnId } from "../../scripts/lib/usage.mjs";
 
 // Учёт фактического расхода токенов. ОДИН хук ловит весь расход одного eve-агента без
 // двойного счёта: основной чат (channel.kind="telegram") и фоновые джобы через eve/client —
@@ -64,10 +64,25 @@ export default defineHook({
       record(event.data, ctx.session.id, ctx.channel.kind ?? "unknown");
     },
     // Шаги инлайн-субагента (planner) — иначе его токены потерялись бы.
+    //
+    // turnId субагента брать НЕЛЬЗЯ: eve нумерует ходы как turn_<sequence> внутри каждой
+    // сессии, у ребёнка счётчик начинается заново, а sessionId мы пишем родительский —
+    // значит ключ sessionId:turnId столкнулся бы с каким-то ходом родителя (сразу после
+    // /new — с его же текущим turn_0, позже — с давним одноимённым). Пишем ход РОДИТЕЛЯ
+    // с суффиксом: ключ уникален по построению, а привязка к ходу сохраняется, поэтому
+    // расход субагента продолжает попадать в «итого за ход» (scripts/lib/usage.mjs).
     "subagent.event": (event, ctx) => {
       const inner = event.data.event;
       if (inner.type === "step.completed") {
-        record(inner.data, ctx.session.id, ctx.channel.kind ?? "unknown", event.data.subagentName);
+        record(
+          {
+            ...inner.data,
+            turnId: subagentTurnId(ctx.session.turn, event.data.subagentName, inner.data.turnId),
+          },
+          ctx.session.id,
+          ctx.channel.kind ?? "unknown",
+          event.data.subagentName,
+        );
       }
     },
   },

@@ -6,6 +6,11 @@ export interface UsageRecord {
   provider: string;
   model: string;
   sessionId: string;
+  /**
+   * Ход, к которому относится шаг. Шаг субагента пишется с sessionId родителя и turnId
+   * вида "<ход родителя>#<субагент>" — ключ уникален, а часть до "#" сохраняет привязку
+   * к ходу (agent/hooks/usage.ts, scripts/lib/usage.mjs).
+   */
   turnId: string;
   step: number;
   subagent?: string;
@@ -16,6 +21,11 @@ export interface UsageRecord {
   total: number;
 }
 
+export function subagentTurnId(
+  turn: { id?: string; sequence?: number } | undefined,
+  subagentName: string | undefined,
+  childTurnId?: string,
+): string;
 export function usageFilePath(dataDir?: string): string;
 export function appendUsage(record: UsageRecord, dataDir?: string): void;
 export function readEntries(dataDir?: string): UsageRecord[];

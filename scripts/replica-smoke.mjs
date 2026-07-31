@@ -15,6 +15,7 @@ import { startMockOpenAiServer } from "./lib/mock-openai-server.mjs";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const MARKER = "CEDAR-4729";
+const RESET_MARKER = "CEDAR-5533";
 const HEALTH_TIMEOUT_MS = 90_000;
 const TURN_TIMEOUT_MS = 120_000;
 
@@ -226,6 +227,28 @@ async function main() {
       if (strictResume) throw err;
       console.warn(`replica smoke: KNOWN ISSUE — session resume across restart failed (${err?.message ?? err})`);
     }
+
+    // Канарейка reset: контракт eve — «reset retires a session so its continuation
+    // starts fresh». Проверяем именно его: сеем маркер, ресетим сессию и приходим
+    // с тем же continuationToken (мост в Telegram пересобирает токен детерминированно
+    // и другого прислать не может). Если история пережила reset — маркер вернётся,
+    // и /new врёт пользователю про «контекст очищен» (issue #110).
+    setPhase("reset-canary");
+    const canary = client.session();
+    const seeded = await turn(canary, `Remember this code: ${RESET_MARKER}`);
+    if (seeded !== "REMEMBERED") throw new Error(`unexpected canary seed reply: ${JSON.stringify(seeded)}`);
+    const beforeReset = canary.state;
+    if (!beforeReset?.continuationToken) throw new Error("canary session parked without a continuation token");
+    const resetResult = await canary.reset();
+    if (resetResult?.status !== "reset") throw new Error(`unexpected reset status: ${JSON.stringify(resetResult)}`);
+    const afterReset = await turn(
+      client.session(beforeReset),
+      "What code did I ask you to remember? Reply with the code only.",
+    );
+    if (afterReset.includes(RESET_MARKER)) {
+      throw new Error(`reset did not retire the session: history survived (${JSON.stringify(afterReset)})`);
+    }
+    console.log(`replica smoke: reset retires the session OK (post-reset reply: ${afterReset})`);
 
     if (mock.requests.length < 3) throw new Error(`provider was barely exercised: ${mock.requests.length} requests`);
     console.log(`replica smoke: OK (provider requests: ${mock.requests.length})`);

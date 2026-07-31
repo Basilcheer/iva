@@ -72,6 +72,26 @@ function inWindow(e, window, now, tz) {
   return true; // lifetime — by-model/by-source
 }
 
+// Ход субагента пишется как "<ход родителя>#<субагент>" (agent/hooks/usage.ts): ключ
+// уникален, но принадлежит ходу родителя — для группировки берём часть до "#".
+const baseTurnId = (turnId) => String(turnId ?? "").split("#")[0];
+const turnKey = (e) => `${e.sessionId}:${baseTurnId(e.turnId)}`;
+
+/**
+ * Ключ хода для записи инлайн-субагента: ход РОДИТЕЛЯ плюс суффикс с именем субагента.
+ * Живёт здесь, а не в хуке, чтобы правило и его чтение не разъезжались.
+ *
+ * Фолбэки повторяют канон самого eve (`turnId.length > 0 ? turnId : turn_<sequence>`):
+ * `ctx.session.turn.id` бывает ПУСТОЙ строкой между ходами, поэтому `??` тут не годится —
+ * пустая строка дала бы ключ "#planner" и склеила бы разные ходы в один.
+ */
+export function subagentTurnId(turn, subagentName, childTurnId) {
+  const bySequence =
+    typeof turn?.sequence === "number" ? `turn_${turn.sequence}` : "";
+  const parentTurnId = turn?.id || bySequence || childTurnId || "";
+  return `${parentTurnId}#${subagentName || "subagent"}`;
+}
+
 const blank = () => ({ in: 0, out: 0, cacheRead: 0, cacheWrite: 0, total: 0, steps: 0, turns: new Set() });
 function add(acc, e) {
   acc.in += e.in || 0;
@@ -80,7 +100,7 @@ function add(acc, e) {
   acc.cacheWrite += e.cacheWrite || 0;
   acc.total += e.total || 0;
   acc.steps += 1;
-  acc.turns.add(`${e.sessionId}:${e.turnId}`);
+  acc.turns.add(turnKey(e));
 }
 const finalize = (a) => ({
   in: a.in, out: a.out, cacheRead: a.cacheRead, cacheWrite: a.cacheWrite,
@@ -94,16 +114,50 @@ export function summarize(entries, { window = "last", now = Date.now(), tz } = {
   if (window === "last") {
     if (!entries.length) return { window, last: null };
     const lastE = entries[entries.length - 1];
-    const key = `${lastE.sessionId}:${lastE.turnId}`;
+    const key = turnKey(lastE);
     const acc = blank();
     let model = lastE.model, source = lastE.source, subagent = null, when = lastE.ts;
+    // Вход по шагам хода складывать нельзя: каждый шаг заново отправляет весь контекст,
+    // и сумма (104 632 + 105 537 = 210 169) выглядит как «контекст вырос вдвое». Решение
+    // «пора ли /new» принимают по актуальному размеру контекста — это вход ПОСЛЕДНЕГО
+    // шага основной сессии. Выход суммируется честно: эти токены сгенерированы все.
+    //
+    // Инвариант ключа (agent/hooks/usage.ts): запись субагента несёт turnId вида
+    // "<ход родителя>#<субагент>". Поэтому ход собирается по части до "#" (расход субагента
+    // входит в итог хода), а контекст берётся из записи БЕЗ суффикса — это шаг основной
+    // сессии. Поле subagent проверяем заодно, но лечит оно не всё: довинвариантная запись
+    // субагента несла turnId ребёнка, и если ИМЕННО она оказалась последней, ход определится
+    // по её номеру — то есть, возможно, по давнему одноимённому ходу родителя. Поле спасает
+    // только когда шаг основной сессии попал в ту же группу. В проде таких записей нет.
+    //
+    // Оговорка про кэш: у провайдеров с anthropic-семантикой cacheRead не входит в inputTokens,
+    // и тогда context занижен на величину cacheRead. Оба живых провайдера ивы включают кэш в in,
+    // надёжно отличить одну семантику от другой по логу нельзя — не усложняем.
+    let mainContext;
+    let anyContext;
     for (const e of entries) {
-      if (`${e.sessionId}:${e.turnId}` !== key) continue;
+      if (turnKey(e) !== key) continue;
       add(acc, e);
       model = e.model;
-      if (e.subagent) subagent = e.subagent;
+      anyContext = e.in || 0;
+      if (e.subagent || String(e.turnId ?? "").includes("#")) subagent = e.subagent ?? subagent;
+      else mainContext = e.in || 0;
     }
-    return { window, last: { ...finalize(acc), model, source, subagent, when } };
+    // Ход целиком из субагентских записей (шаг основной сессии не дошёл до лога) — показываем
+    // что есть, но помечаем: это не размер контекста основной сессии.
+    const context = mainContext ?? anyContext ?? 0;
+    return {
+      window,
+      last: {
+        ...finalize(acc),
+        in: context,
+        contextFromSubagent: mainContext === undefined && anyContext !== undefined,
+        model,
+        source,
+        subagent,
+        when,
+      },
+    };
   }
   if (window === "by-model" || window === "by-source") {
     const keyFn = window === "by-model" ? (e) => e.model || "?" : (e) => e.source || "?";
@@ -153,7 +207,8 @@ export function formatUsageReport(agg) {
     const sub = l.subagent ? ` (+subagent ${l.subagent})` : "";
     return [
       `Last turn: ${num(l.total)} tokens${sub}`,
-      `in ${num(l.in)} · out ${num(l.out)}${l.cacheRead ? ` · cached ${num(l.cacheRead)}` : ""}`,
+      `context ${l.contextFromSubagent ? "~" : ""}${num(l.in)}${l.contextFromSubagent ? " (subagent step)" : ""}` +
+        ` · out ${num(l.out)}${l.cacheRead ? ` · cached ${num(l.cacheRead)}` : ""}`,
       `${plural(l.steps, "step")} · ${l.model} · ${src(l.source)}`,
     ].join("\n");
   }

@@ -4,6 +4,7 @@ import {
   continuationTokenForControl,
   requestTelegramReset,
 } from "./telegram-reset.mjs";
+import { toChannelLocalToken } from "./telegram-continuation-token.mjs";
 import { handleTelegramResetRequest } from "./telegram-reset-route.mjs";
 
 test("stored Eve token wins for groups and forum topics", () => {
@@ -187,4 +188,73 @@ test("Telegram reset route rejects bad auth and bad input before reset", async (
   );
   assert.equal(malformed.status, 400);
   assert.equal(called, false);
+});
+
+test("namespaced stored token is normalized before reset (#110)", () => {
+  // Реальная запись с прода: обработчики событий eve отдают токен с именем канала
+  // впереди, и он попадал в data/run-status.d как есть. Reset-роут клеил "telegram:"
+  // второй раз → no_active_session, мост печатал «контекст очищен» вхолостую.
+  const privateUpdate = { message: { chat: { id: 7091451031, type: "private" }, message_id: 5 } };
+  assert.equal(
+    continuationTokenForControl(privateUpdate, { continuationToken: "telegram:7091451031::" }, "777"),
+    "7091451031::",
+  );
+
+  const groupUpdate = {
+    message: { chat: { id: -1001, type: "supergroup" }, message_thread_id: 77, message_id: 91 },
+  };
+  assert.equal(
+    continuationTokenForControl(groupUpdate, { continuationToken: "telegram:-1001:77:42" }, "777"),
+    "-1001:77:42",
+  );
+
+  const callbackOnly = { callback_query: { id: "cb" } };
+  assert.equal(
+    continuationTokenForControl(callbackOnly, { continuationToken: "telegram:7091451031::" }, "777"),
+    "7091451031::",
+  );
+});
+
+test("normalization strips the channel prefix and nothing else", () => {
+  // Срезается ровно известное имя канала. Числовую проверку первого сегмента делать
+  // нельзя: у групп chatId отрицательный, и форма токена — контракт eve, не наша догадка.
+  assert.equal(toChannelLocalToken("telegram:7091451031::"), "7091451031::");
+  assert.equal(toChannelLocalToken("telegram:-1001:77:42"), "-1001:77:42");
+
+  // Уже локальные токены не трогаем — в том числе групповые с минусом.
+  assert.equal(toChannelLocalToken("7091451031::"), "7091451031::");
+  assert.equal(toChannelLocalToken("-1001:77:42"), "-1001:77:42");
+  assert.equal(toChannelLocalToken("123::"), "123::");
+  assert.equal(toChannelLocalToken(""), "");
+
+  // Срезается ровно ОДИН префикс. Двойной "telegram:telegram:…" в персисте невозможен —
+  // eve неймспейсит токен ровно один раз, а довфиксные значения одинарные, — но именно
+  // такую строку собирал reset-роут из нашего токена, и она обязана схлопываться в один
+  // проход, а не превращаться в "telegram:…" от повторной нормализации.
+  const warnings = [];
+  assert.equal(
+    toChannelLocalToken("telegram:telegram:7091451031::", { warn: (m) => warnings.push(m) }),
+    "telegram:7091451031::",
+  );
+  assert.equal(warnings.length, 1, "нераспознанная форма обязана попасть в журнал");
+});
+
+test("an unexpected token shape is reported instead of silently passed on", () => {
+  // Не throw: поведение не меняем, но следующая смена формы токена станет громкой
+  // строкой в journalctl, а не тихим повторением #110.
+  const warnings = [];
+  const warn = (message) => warnings.push(message);
+
+  assert.equal(toChannelLocalToken("slack:C123:456", { warn }), "slack:C123:456");
+  assert.equal(toChannelLocalToken("telegram:not-a-chat-id", { warn }), "not-a-chat-id");
+  assert.equal(warnings.length, 2);
+  assert.match(warnings[0], /unexpected shape: "slack:C123:456"/);
+  assert.match(warnings[1], /unexpected shape: "telegram:not-a-chat-id"/);
+
+  // Нормальные токены молчат, включая групповые с минусом и пустое значение.
+  const quiet = [];
+  for (const token of ["7091451031::", "-1001:77:42", "telegram:-1001:77:42", "123", ""]) {
+    toChannelLocalToken(token, { warn: (m) => quiet.push(m) });
+  }
+  assert.deepEqual(quiet, []);
 });

@@ -44,6 +44,7 @@ import {
 import { classifyDeliverStatus } from "./lib/deliver-policy.mjs";
 import { alreadyDelivered, parseOffsetFile, serializeOffsetFile } from "./lib/offset-store.mjs";
 import { continuationTokenForControl, requestTelegramReset } from "./lib/telegram-reset.mjs";
+import { toChannelLocalToken } from "./lib/telegram-continuation-token.mjs";
 import {
   clearTelegramResetIntent,
   loadTelegramResetIntents,
@@ -536,7 +537,7 @@ async function clearChatQueue(chatKey) {
 
 export async function completeScopedResetState(
   chatKey,
-  continuationToken,
+  rawContinuationToken,
   {
     clearQueue = false,
     clearQueueImpl = clearChatQueue,
@@ -547,6 +548,9 @@ export async function completeScopedResetState(
   // before exposing an idle tombstone. A failed cleanup leaves the old running
   // status in place and lets a repeated /new retry safely.
   if (clearQueue) await clearQueueImpl(chatKey);
+
+  // Надгробие переживает рестарты и потом уходит в reset как есть — только channel-local.
+  const continuationToken = toChannelLocalToken(rawContinuationToken);
 
   // Keep an idle token tombstone: Telegram updates are at-least-once. If the
   // same group /new is replayed after a crash, the second reset remains an
@@ -590,13 +594,32 @@ const requestResetFromIntent = ({ continuationToken }) =>
 export async function releaseScopedContinuation(
   chatKey,
   continuationToken,
-  { requestResetImpl = requestResetFromIntent } = {},
+  { requestResetImpl = requestResetFromIntent, logImpl = log } = {},
 ) {
+  // Наружу уходит только channel-local токен: reset-роут клеит имя канала сам (#110).
+  const token = toChannelLocalToken(continuationToken);
+  let result;
   try {
-    await requestResetImpl({ chatKey, continuationToken });
+    result = await requestResetImpl({ chatKey, continuationToken: token });
   } catch (error) {
     error.resetPhase = "remote";
     throw error;
+  }
+  // Ответ no_active_session идемпотентен и для реплея апдейта нормален, но именно он
+  // маскировал #110: сброс «удавался», ничего не сбрасывая. В журнале исход виден.
+  logResetOutcome(logImpl, chatKey, token, result);
+  return result;
+}
+
+function logResetOutcome(logImpl, chatKey, continuationToken, result) {
+  try {
+    // chatKey сам оканчивается двоеточием (chat:topic) — отделяем явным словом, иначе
+    // строка читается как «reset 7091451031:: …» и ключ путается с токеном.
+    logImpl(
+      `reset for chat ${chatKey} -> ${result?.status ?? "unknown"} (token ${continuationToken})`,
+    );
+  } catch {
+    // Журналирование не должно ронять сброс.
   }
 }
 
@@ -609,6 +632,7 @@ export async function performScopedReset(
     requestResetImpl = requestResetFromIntent,
     completeStateImpl = completeScopedResetState,
     clearIntentImpl = clearPrivateResetIntent,
+    logImpl = log,
   } = {},
 ) {
   const intent = { chatKey, continuationToken };
@@ -621,7 +645,7 @@ export async function performScopedReset(
     }
   }
   try {
-    await releaseScopedContinuation(chatKey, continuationToken, { requestResetImpl });
+    await releaseScopedContinuation(chatKey, continuationToken, { requestResetImpl, logImpl });
   } catch (error) {
     throw error;
   }
@@ -646,11 +670,15 @@ export async function reconcileScopedResetIntents({
   requestResetImpl = requestResetFromIntent,
   completeStateImpl = completeScopedResetState,
   clearIntentImpl = clearPrivateResetIntent,
+  logImpl = log,
 } = {}) {
   const intents = await loadIntentsImpl();
   for (const intent of intents) {
-    await requestResetImpl(intent);
-    await completeStateImpl(intent.chatKey, intent.continuationToken, { clearQueue: true });
+    // Интент мог быть записан версией до фикса #110 — с именем канала в токене.
+    const continuationToken = toChannelLocalToken(intent.continuationToken);
+    const result = await requestResetImpl({ ...intent, continuationToken });
+    logResetOutcome(logImpl, intent.chatKey, continuationToken, result);
+    await completeStateImpl(intent.chatKey, continuationToken, { clearQueue: true });
     await clearIntentImpl(intent.chatKey);
   }
   return intents.length;
@@ -824,7 +852,8 @@ export async function reapStaleRuns({
       status.continuationToken.length > 0
     ) {
       try {
-        await resetImpl(key, status.continuationToken);
+        // Статусы, записанные до фикса #110, хранят токен с именем канала впереди.
+        await resetImpl(key, toChannelLocalToken(status.continuationToken));
       } catch (error) {
         safeLog(`stale run reset failed for ${key}:`, error.message);
       }

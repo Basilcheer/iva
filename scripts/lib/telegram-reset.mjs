@@ -1,4 +1,13 @@
 import { telegramContinuationToken } from "eve/channels/telegram";
+import { toChannelLocalToken } from "./telegram-continuation-token.mjs";
+
+function storedToken(status) {
+  const token = status?.continuationToken;
+  if (typeof token !== "string" || token.length === 0) return null;
+  // Статусы, записанные до фикса #110, хранят токен с именем канала впереди.
+  // Нормализация на чтении лечит их без ожидания следующей перезаписи.
+  return toChannelLocalToken(token);
+}
 
 /**
  * Returns the exact channel-local token Eve assigned to this chat/topic.
@@ -7,12 +16,7 @@ import { telegramContinuationToken } from "eve/channels/telegram";
  */
 export function continuationTokenForControl(update, status, botUserId) {
   const message = update?.message ?? update?.callback_query?.message;
-  if (!message) {
-    return typeof status?.continuationToken === "string" &&
-      status.continuationToken.length > 0
-      ? status.continuationToken
-      : null;
-  }
+  if (!message) return storedToken(status);
   const chatId = message?.chat?.id;
   if (chatId === undefined) return null;
   const messageThreadId = message?.message_thread_id;
@@ -38,9 +42,8 @@ export function continuationTokenForControl(update, status, botUserId) {
     return null;
   }
 
-  if (typeof status?.continuationToken === "string" && status.continuationToken.length > 0) {
-    return status.continuationToken;
-  }
+  const stored = storedToken(status);
+  if (stored !== null) return stored;
 
   if (message.chat?.type === "private") {
     return telegramContinuationToken({ chatId, messageThreadId });

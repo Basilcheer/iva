@@ -291,3 +291,64 @@
 - Legacy private chats can reconstruct their stable token immediately. A legacy group with
   no stored event token must send `/new` as a reply to Iva's latest message once; future
   events persist the exact token automatically.
+
+## Continuation-token namespace on reset (#110)
+
+- Eve exposes the same continuation token in two shapes, and only a real reset tells them
+  apart. Event `data` for `session.waiting` carries the channel-local token
+  (`<chatId>:<thread>:<conv>`); `channel.continuationToken` inside event handlers carries the
+  namespaced one (`telegram:<chatId>:<thread>:<conv>`), because Eve builds it from
+  `ctx.session.continuationToken`.
+- The channel-owned reset route prepends the channel name itself. A namespaced token reaching
+  `/eve/v1/telegram/reset` therefore resolves as `telegram:telegram:…`, finds no owner and
+  returns the idempotent `no_active_session` — which the bridge correctly treats as success.
+  That is how `/new` reported a cleared context while the session kept its whole history.
+- Everything Iva persists in `data/run-status.d/` and sends to reset must be channel-local.
+  `toChannelLocalToken()` strips exactly the known `telegram:` prefix — not a guessed leading
+  segment, because group chat ids are negative and the token shape is Eve's contract, not our
+  heuristic. It is idempotent, so it can be applied at every boundary:
+  - on write — `agent/channels/telegram.ts` (turn start, turn finish, `session.waiting`),
+    `scripts/lib/telegram-turn-start.mjs` (both the claim and the adoption path) and the
+    reset tombstone in `completeScopedResetState`;
+  - on read — `continuationTokenForControl`, the stale-run reaper (which reads
+    `status.continuationToken` directly) and `reconcileScopedResetIntents` (a durable intent
+    may have been written by an older version).
+  Statuses poisoned by earlier versions therefore heal on the next turn or `/new` instead of
+  needing a migration.
+- On an Eve bump: re-check what `channel.continuationToken` yields in event handlers. If Eve
+  ever hands out the channel-local token there, the helper stays correct (it is idempotent),
+  but `scripts/lib/telegram-reset.test.mjs` is the place that pins the expectation. If the
+  channel name ever changes, `NAMESPACE` in `scripts/lib/telegram-continuation-token.mjs`
+  must change with it.
+- The reaper fixture in `scripts/telegram-poll.test.mjs` deliberately keeps a namespaced
+  `continuationToken`: that is what pre-fix versions wrote, and the assertion pins that a
+  reset goes out channel-local anyway.
+- A token that does not look channel-local after the strip (`^-?\d+(:|$)`) is reported to the
+  bridge log instead of throwing, so the next change of token shape shows up in `journalctl`
+  rather than repeating #110 silently. `CHANNEL_LOCAL_SHAPE` and `NAMESPACE` describe the same
+  contract — change them together.
+- The bridge logs every reset outcome (`reset for chat <key> -> <status> (token <token>)`) on
+  both the `/new` path and intent reconciliation. `reset` and `no_active_session` deliberately
+  share one user-facing message — the second status is the legitimate idempotent repeat — so
+  the log is where the two are told apart.
+
+## Usage accounting keys (#110)
+
+- One line per model step in `data/usage.jsonl`, grouped into turns. `sessionId:turnId` is not
+  unique on its own: Eve numbers turns per session as `turn_<sequence>`, so a week-old `turn_0`
+  and today's `turn_0` look identical, and an inline subagent restarts the counter while the
+  hook records its steps under the *parent* `sessionId`.
+- The write side removes the ambiguity: a subagent step is logged with the parent's turn id and
+  a suffix, `<parent turnId>#<subagentName>` (`agent/hooks/usage.ts`). The key is unique by
+  construction, and the part before `#` keeps the step attached to the parent turn, so the
+  subagent's spend still counts towards that turn's total.
+- The reader groups by the part before `#` and takes the context from the last record without a
+  suffix — the main session's own step. The `subagent` field is checked too, as defence in depth
+  for records written before this invariant (there are none in production).
+- `contextFromSubagent` marks the honest fallback: a turn made only of subagent records (the
+  outer turn was cancelled or failed) renders as `context ~19 800 (subagent step)` instead of
+  passing a subagent's input off as the chat context.
+- `scripts/replica-smoke.mjs` runs a reset canary against the real framework: seed a marker,
+  `session.reset()`, return with the same continuation token and assert the marker is gone.
+  It guards Eve's documented contract ("reset retires a session so its continuation starts
+  fresh"), which 0.27.13 honours — the `/new` failure was Iva's token shape, not Eve's reset.

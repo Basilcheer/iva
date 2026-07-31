@@ -382,6 +382,9 @@ test("routeMessageUpdate reports enqueue failure without acknowledging", async (
 });
 
 const reaperNow = 2_000_000;
+// Токен намеренно оставлен namespaced: ровно так его писали версии до фикса #110, и жнец
+// обязан лечить такие статусы — reset-роут клеит имя канала сам, а "telegram:telegram:1::"
+// не находит владельца и молча отвечает no_active_session.
 const staleStatus = {
   status: "running",
   generation: 7,
@@ -433,7 +436,8 @@ test("reapStaleRuns flips one stale run, resets Eve, notifies, and removes worki
   assert.equal(calls[0][3].status, "idle");
   assert.equal(calls[0][3].resetAt, reaperNow);
   assert.deepEqual(calls.slice(1), [
-    ["reset", "1:", "telegram:1::"],
+    // Сброс уходит channel-local, хотя в статусе лежит namespaced-токен.
+    ["reset", "1:", "1::"],
     ["send", "1:", "Предыдущий ход оборвался - повтори запрос или /new"],
     ["delete", "1:", 77],
   ]);

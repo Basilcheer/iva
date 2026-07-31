@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { toChannelLocalToken } from "./telegram-continuation-token.mjs";
 
 const durationFromIngress = (ingressAt, at) =>
   Number.isFinite(ingressAt) && Number.isFinite(at) && at >= ingressAt
@@ -61,7 +62,7 @@ export async function publishTelegramEarlyStatus({
 
 export async function publishTelegramTurnStarted({
   chatKey,
-  continuationToken,
+  continuationToken: rawContinuationToken,
   sessionId,
   turnId,
   now = Date.now,
@@ -72,6 +73,9 @@ export async function publishTelegramTurnStarted({
   removeWorkingStatusImpl = async () => {},
   onWorkingStatusError = () => {},
 }) {
+  // Обработчики событий eve отдают токен с именем канала впереди. В статусе он должен
+  // лежать только channel-local: reset-роут клеит имя канала сам (#110).
+  const continuationToken = toChannelLocalToken(rawContinuationToken);
   const current = getStatusImpl(chatKey);
   if (
     current?.status !== "running" ||

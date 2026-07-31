@@ -205,3 +205,43 @@ test("latency logging emits one allowlisted JSON record with no sensitive fields
   });
   assert.doesNotMatch(lines[0], /private prompt|123456|bot-token|session-secret|1:/);
 });
+
+test("a namespaced token from Eve is stored channel-local (#110)", async () => {
+  // Реальное значение с прода: обработчики событий eve отдают токен с именем канала
+  // впереди. Если сохранить его как есть, /new сбрасывает "telegram:telegram:…" —
+  // владельца нет, ответ no_active_session, история продолжается.
+  const claimed = statusStore({ status: "idle" });
+  assert.equal(
+    await publishTelegramTurnStarted({
+      chatKey: "7091451031:",
+      continuationToken: "telegram:7091451031::",
+      sessionId: "session-1",
+      turnId: "turn-1",
+      getStatusImpl: claimed.get,
+      setStatusIfImpl: claimed.cas,
+    }),
+    true,
+  );
+  assert.equal(claimed.get().continuationToken, "7091451031::");
+
+  // Второй путь записи — усыновление хода, начатого ранним статусом моста.
+  const adopted = statusStore({ status: "idle" });
+  await publishTelegramEarlyStatus({
+    chatKey: "-1001:77",
+    ingressId: "ingress-1",
+    setStatusImpl: adopted.set,
+    setStatusIfImpl: adopted.cas,
+  });
+  assert.equal(
+    await publishTelegramTurnStarted({
+      chatKey: "-1001:77",
+      continuationToken: "telegram:-1001:77:42",
+      sessionId: "session-2",
+      turnId: "turn-2",
+      getStatusImpl: adopted.get,
+      setStatusIfImpl: adopted.cas,
+    }),
+    true,
+  );
+  assert.equal(adopted.get().continuationToken, "-1001:77:42");
+});
