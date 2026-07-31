@@ -11,13 +11,14 @@ import { mkdir, writeFile, chmod, rm } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { join } from "node:path";
 import { homedir } from "node:os";
-import { startAuth, relayCode, extractCallbackQuery, gwsBin, childEnv } from "./gws-auth.mjs";
+import { startAuth, relayCode, extractCallbackQuery, gwsBin, childEnv, AUTH_SERVICES } from "./gws-auth.mjs";
 
 const SID = "gws";
 const PARENT = "r";
 const CONFIG_DIR = join(homedir(), ".config/gws");
 const SECRET_PATH = join(CONFIG_DIR, "client_secret.json");
 const CACHE_TTL_MS = 60_000;
+const SCOPES = AUTH_SERVICES.split(",").join(", ");
 let cache = { at: 0, status: null };
 
 const isPrivate = (st) => Number(st.chatId) > 0;
@@ -115,10 +116,22 @@ export default {
         rows: [[ctx.btn(T("Connect", "Подключить"), `iva_menu:${SID}:do:connect`)], checkRow, ctx.backRow(PARENT)],
       };
     }
-    // ok
+    // ok. Probing only proves the token works, not which scopes it carries — a token issued before
+    // a service was added to AUTH_SERVICES still probes as connected. So name the services the
+    // login asks for and keep a re-login button here, the only way to pick up newly added ones.
+    const text = [
+      head,
+      "",
+      T(`✅ Google account connected. Login requests: ${SCOPES}.`, `✅ Google-аккаунт подключён. При входе запрашиваются: ${SCOPES}.`),
+      "",
+      T(
+        "Connected before a service was added? Tap «Reconnect» to grant it.",
+        "Подключался раньше, чем в список добавился сервис? Нажми «Переподключить», чтобы выдать права.",
+      ),
+    ].join("\n");
     return {
-      text: `${head}\n\n${T("✅ Google account connected. Scopes: gmail, calendar, drive.", "✅ Google-аккаунт подключён. Права: gmail, calendar, drive.")}`,
-      rows: [checkRow, ctx.backRow(PARENT)],
+      text,
+      rows: [[ctx.btn(T("Reconnect", "Переподключить"), `iva_menu:${SID}:do:connect`)], checkRow, ctx.backRow(PARENT)],
     };
   },
 
@@ -279,7 +292,7 @@ export default {
       if ((await authStatus()) === "ok") {
         return ctx.flows.screen(
           st,
-          T("✅ Google account connected. Scopes: gmail, calendar, drive.", "✅ Google-аккаунт подключён. Права: gmail, calendar, drive."),
+          T(`✅ Google account connected. Scopes: ${SCOPES}.`, `✅ Google-аккаунт подключён. Права: ${SCOPES}.`),
           [ctx.backRow(PARENT)],
         );
       }
