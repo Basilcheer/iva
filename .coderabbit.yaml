@@ -1,0 +1,40 @@
+# CodeRabbit — https://docs.coderabbit.ai/reference/configuration
+language: "ru-RU"
+
+reviews:
+  profile: "assertive"
+  request_changes_workflow: true
+  high_level_summary: true
+  poem: false
+  auto_review:
+    enabled: true
+    auto_incremental_review: true
+    drafts: false
+  path_filters:
+    - "!node_modules/**"
+    - "!package-lock.json"
+    - "!attachments/**"
+    - "!assets/**"
+    - "!data/**"
+    - "!**/*.ans"
+  path_instructions:
+    - path: "agent/**"
+      instructions: |
+        Ядро агента: eve-приложение, TypeScript ESM, алиасы импортов "#*" → "./agent/*".
+        Проверять: корректность zod-схем, обработку ошибок в тулзах/хуках/каналах,
+        отсутствие захардкоженных секретов, токенов и путей конкретной машины.
+        Изменения в agent/* требуют пересборки (eve build) — флагать PR, меняющие
+        рантайм-поведение без упоминания этого в описании.
+    - path: "scripts/**"
+      instructions: |
+        Node-скрипты (ESM). Тесты — *.test.mjs через node --test. Проверять обработку
+        ошибок, аккуратность работы с файлами vault и внешними процессами, отсутствие
+        секретов в коде.
+    - path: "README.md"
+      instructions: |
+        Секция What's New хранит ровно три последние даты: при добавлении новой даты
+        самая старая должна быть удалена. Полная история — только в CHANGELOG.md.
+    - path: "README.ru.md"
+      instructions: |
+        Секция «Что нового» хранит ровно три последние даты: при добавлении новой даты
+        самая старая должна быть удалена. Полная история — только в CHANGELOG.md.
