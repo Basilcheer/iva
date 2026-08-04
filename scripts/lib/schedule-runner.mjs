@@ -207,17 +207,30 @@ export async function runScheduledJob({
       };
 
       let settled = false;
+      let hardTimer;
       const settle = (result) => {
         if (settled) return;
         settled = true;
         clearTimeout(killTimer);
+        // Only cancel a still-pending hard-kill when "child" exiting is proof the actual
+        // TARGET process is gone — true for the direct (no lockPath) spawn, where child
+        // literally is the schedule's own script, so leaving hardTimer dangling there would
+        // risk it firing later against a since-reused pid. NOT true for the flock-wrapped
+        // case: there "child" is flock itself, which — unlike the target it forks — has no
+        // custom SIGTERM handler, so flock dying from the very SIGTERM we just sent proves
+        // nothing about whether the grandchild node process (which still holds the lock) is
+        // dead too. Canceling hardTimer there would orphan exactly the process this whole
+        // group-kill exists to reach. (Caught this the hard way: an earlier, lockPath-blind
+        // version of this cancellation left a real, unkillable orphan behind in this file's
+        // own test suite.)
+        if (!lockPath) clearTimeout(hardTimer);
         resolve(result);
       };
 
       const killTimer = setTimeout(() => {
         log(`schedule-runner: ${name} exceeded ${timeoutMs}ms — sending SIGTERM to its process group`);
         killGroup("SIGTERM");
-        const hardTimer = setTimeout(() => {
+        hardTimer = setTimeout(() => {
           log(`schedule-runner: ${name} still running after SIGTERM — sending SIGKILL to its process group`);
           killGroup("SIGKILL");
         }, killGraceMs);

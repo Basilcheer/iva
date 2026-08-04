@@ -365,3 +365,38 @@ test("a stale inProgressSince (older than timeoutMs — a presumed crash) does n
   assert.equal(result.skipped, false, "a stale in-progress marker (older than timeoutMs) must not block a new attempt");
   assert.equal(result.ok, true);
 });
+
+test("no lockPath: a clean exit right after SIGTERM cancels the pending hard-kill (no stale SIGKILL later)", async () => {
+  // The direct-spawn case (digest has no lockPath): "child" IS the actual target, so its
+  // exit really does mean the process is gone, and any still-pending hard-kill timer must
+  // be canceled — left dangling, it would risk firing later against a since-reused pid.
+  const root = await scaffold();
+  await writeFile(
+    join(root, "graceful.mjs"),
+    "process.on('SIGTERM', () => { process.exit(0); });\nsetInterval(() => {}, 1000);\n",
+  );
+  const statusPath = join(root, "data/rollup-status.json");
+  const signals = [];
+
+  const result = await runScheduledJob({
+    name: "digest",
+    argv: ["graceful.mjs"],
+    root,
+    nodeBin: process.execPath,
+    statusPath,
+    log: () => {},
+    timeoutMs: 100,
+    killGraceMs: 150,
+    killImpl: (pid, signal) => {
+      signals.push(signal);
+      process.kill(pid, signal);
+    },
+  });
+
+  assert.equal(result.code, 0);
+  assert.equal(result.signal, null);
+  // Give the (should-be-canceled) hard-kill window a chance to elapse and confirm no
+  // second, stale SIGKILL followed the graceful exit.
+  await new Promise((resolve) => setTimeout(resolve, 250));
+  assert.deepEqual(signals, ["SIGTERM"], "the pending SIGKILL escalation must be canceled once the direct target exits cleanly");
+});
