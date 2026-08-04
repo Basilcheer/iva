@@ -2,7 +2,7 @@
 // settings.json подхватывают свежим чтением оба процесса (мост и канал). Плюс дублируем в
 // .env AGENT_LANGUAGE, чтобы node --env-file потребители (cron-скрипты, init-vault) были
 // согласованы на своём следующем запуске без правок.
-import { writeSettings } from "../settings.mjs";
+import { writeSettings } from "#lib/settings.mjs";
 import { upsertEnv } from "../env-file.mjs";
 
 export default {

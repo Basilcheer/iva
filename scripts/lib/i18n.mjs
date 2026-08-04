@@ -8,7 +8,7 @@
 
 import { statSync } from "node:fs";
 import { join } from "node:path";
-import { readSettings } from "./settings.mjs";
+import { readSettings } from "#lib/settings.mjs";
 
 // Тот же путь, что в settings.mjs (от cwd, не от import.meta.url — см. там про
 // authored-modules-кэш eve). Нужен для statSync-дросселя ниже.
