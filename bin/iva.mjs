@@ -262,21 +262,35 @@ function writeUnits({ ensureBearer = true } = {}) {
 // `iva update` pulled this change (writeUnits() runs before the build step in some
 // call paths). Without this check, a stale build would lose its memory rollups
 // entirely (old timers gone, new eve schedules not actually in the bundle) until the
-// next successful build. A shallow recursive text scan for a marker unique to the
-// COMPILED schedule is enough — bare "memory-daily" is NOT unique enough: instrumentation.ts
+// next successful build. A shallow recursive text scan for markers unique to the
+// COMPILED schedules is enough — bare "memory-daily" is NOT unique enough: instrumentation.ts
 // always imports schedule-migration.mjs, whose LEGACY_MEMORY_UNITS array contains the
 // string "iva-memory-daily.service", which itself contains "memory-daily" as a substring
 // — that would make the marker match on every build regardless of whether the schedules
 // themselves actually compiled. Nitro's schedule-task wrapper embeds each schedule's own
 // source path ("schedules/memory-daily.ts") in its description string, which cannot
 // appear anywhere else.
-const BUILD_SCHEDULE_MARKER = "schedules/memory-daily.ts";
+//
+// ALL FOUR memory-* markers are required, not just one: a partial build (e.g. one
+// schedule file failed to compile, or a build got interrupted mid-write) could contain
+// memory-daily.ts's marker while missing weekly/monthly/yearly — a single-marker check
+// would then let removeLegacyMemoryUnits() tear down the OLD systemd timers for periods
+// that have no working in-process replacement in THIS build, losing those rollups
+// entirely rather than just delaying the migration one more boot.
+const BUILD_SCHEDULE_MARKERS = [
+  "schedules/memory-daily.ts",
+  "schedules/memory-weekly.ts",
+  "schedules/memory-monthly.ts",
+  "schedules/memory-yearly.ts",
+];
 const BUILD_SCAN_MAX_FILE_BYTES = 15_000_000;
 function buildHasSchedules() {
   const outputServer = join(ROOT, ".output/server");
   if (!existsSync(outputServer)) return false;
+  const remaining = new Set(BUILD_SCHEDULE_MARKERS);
   try {
     for (const rel of readdirSync(outputServer, { recursive: true })) {
+      if (remaining.size === 0) break;
       const full = join(outputServer, rel);
       let stat;
       try {
@@ -287,7 +301,7 @@ function buildHasSchedules() {
       if (!stat.isFile() || stat.size > BUILD_SCAN_MAX_FILE_BYTES) continue;
       // .output/server is the WHOLE server bundle plus every vendored dependency — a
       // miss (the common case: doctor/writeUnits runs on every `iva update`) would
-      // otherwise mean synchronously reading tens to hundreds of MB. The marker can only
+      // otherwise mean synchronously reading tens to hundreds of MB. The markers can only
       // ever land in Nitro's own compiled JS/JSON output, never in a vendored asset.
       if (!/\.(mjs|cjs|js|json)$/.test(rel)) continue;
       let content;
@@ -296,12 +310,17 @@ function buildHasSchedules() {
       } catch {
         continue; // unreadable — not where a schedule name would live anyway
       }
-      if (content.includes(BUILD_SCHEDULE_MARKER)) return true;
+      // Markers can land in different files (each schedule may compile to its own
+      // _virtual/*.schedule.mjs, or all get inlined into one bundle) — check every
+      // still-missing marker against every file rather than stopping at the first hit.
+      for (const marker of remaining) {
+        if (content.includes(marker)) remaining.delete(marker);
+      }
     }
   } catch {
     return false;
   }
-  return false;
+  return remaining.size === 0;
 }
 
 function removeLegacyMemoryUnits() {

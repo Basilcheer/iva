@@ -323,28 +323,54 @@ test("a build that only bundles LEGACY_MEMORY_UNITS strings (not the compiled sc
   assert.equal(existsSync(join(unitDir, "iva-memory-daily.timer")), true);
 });
 
-test("legacy memory-timer cleanup proceeds once the build actually contains the eve schedules", async (t) => {
+// Mirrors the actual shape Nitro's schedule-task wrapper compiles (see a real
+// `.output/server/_virtual/*.schedule.mjs`) — the description string embeds the
+// schedule's own source path, which is what BUILD_SCHEDULE_MARKERS looks for.
+const scheduleDescriptionMjs = (period) =>
+  `var eve_schedule_default = { meta: { description: 'Run eve schedule "memory-${period}" from "schedules/memory-${period}.ts".' } };\n`;
+
+test("legacy memory-timer cleanup proceeds once the build actually contains ALL FOUR memory schedules", async (t) => {
   const { calls, home, project, runCommand } = await fixture(t);
   const unitDir = join(home, ".config/systemd/user");
   await mkdir(unitDir, { recursive: true });
   await writeFile(join(unitDir, "iva-memory-daily.timer"), "[Unit]\n");
   await mkdir(join(project, ".output/server/_virtual"), { recursive: true });
-  // Mirrors the actual shape Nitro's schedule-task wrapper compiles (see a real
-  // `.output/server/_virtual/*.schedule.mjs`) — the description string embeds the
-  // schedule's own source path, which is what BUILD_SCHEDULE_MARKER now looks for.
-  await writeFile(
-    join(project, ".output/server/_virtual/eve.schedule.mjs"),
-    'var eve_schedule_default = { meta: { description: \'Run eve schedule "memory-daily" from "schedules/memory-daily.ts".\' } };\n',
-  );
+  for (const period of ["daily", "weekly", "monthly", "yearly"]) {
+    await writeFile(join(project, `.output/server/_virtual/eve-${period}.schedule.mjs`), scheduleDescriptionMjs(period));
+  }
 
   const result = runCommand("_install-units");
   const output = `${result.stdout}\n${result.stderr}`;
 
   assert.equal(result.status, 0, output);
   assert.doesNotMatch(output, /skipping legacy memory-timer cleanup/);
-  assert.equal(existsSync(join(unitDir, "iva-memory-daily.timer")), false, "a build that has the schedules lets cleanup proceed");
+  assert.equal(existsSync(join(unitDir, "iva-memory-daily.timer")), false, "a build that has all four schedules lets cleanup proceed");
   const systemctlCalls = (await readFile(calls, "utf8")).trim().split("\n");
   assert.ok(systemctlCalls.some((c) => c === "--user disable --now iva-memory-daily.timer"));
+});
+
+test("a PARTIAL build (only memory-daily compiled) still counts as stale — legacy units are preserved", async (t) => {
+  // Regression test: a build that's missing weekly/monthly/yearly (interrupted build,
+  // one schedule file failed to compile, etc.) must NOT let removeLegacyMemoryUnits()
+  // tear down systemd timers for periods that have no working in-process replacement in
+  // THIS build — that would lose those rollups entirely, not just delay the migration.
+  const { home, project, runCommand } = await fixture(t);
+  const unitDir = join(home, ".config/systemd/user");
+  await mkdir(unitDir, { recursive: true });
+  for (const period of ["daily", "weekly", "monthly", "yearly"]) {
+    await writeFile(join(unitDir, `iva-memory-${period}.timer`), "[Unit]\n");
+  }
+  await mkdir(join(project, ".output/server/_virtual"), { recursive: true });
+  await writeFile(join(project, ".output/server/_virtual/eve.schedule.mjs"), scheduleDescriptionMjs("daily"));
+
+  const result = runCommand("_install-units");
+  const output = `${result.stdout}\n${result.stderr}`;
+
+  assert.equal(result.status, 0, output);
+  assert.match(output, /skipping legacy memory-timer cleanup/, "one marker out of four must not be treated as a complete build");
+  for (const period of ["daily", "weekly", "monthly", "yearly"]) {
+    assert.equal(existsSync(join(unitDir, `iva-memory-${period}.timer`)), true, `${period}'s legacy unit survives a partial build`);
+  }
 });
 
 test("doctor surfaces problems from a fresh nightly memory report", async (t) => {
