@@ -10,6 +10,7 @@
 import { readFileSync } from "node:fs";
 import { execFile } from "node:child_process";
 import { join } from "node:path";
+import { readSettings } from "#lib/settings.mjs";
 
 const PER_PAGE = 8;
 const CACHE_TTL_MS = 60_000;
@@ -38,15 +39,38 @@ function loadRollupStatus(dataDir) {
 
 function formatLastSuccess(entry, T) {
   const at = entry?.lastSuccessAt;
-  if (typeof at !== "number") return T("never", "никогда");
-  return new Date(at).toISOString().replace("T", " ").replace(/\.\d{3}Z$/, "Z");
+  // typeof === "number" alone lets Infinity/-Infinity and other out-of-range values
+  // through; new Date(at).toISOString() throws a RangeError on those and would take
+  // the whole menu render down with it. Number.isFinite() plus a getTime() NaN check
+  // (an out-of-range-but-finite value, e.g. beyond ±8.64e15) both fall back to "never".
+  if (!Number.isFinite(at)) return T("never", "никогда");
+  const date = new Date(at);
+  if (Number.isNaN(date.getTime())) return T("never", "никогда");
+  return date.toISOString().replace("T", " ").replace(/\.\d{3}Z$/, "Z");
+}
+
+function digestEnabled() {
+  // readSettings() resolves data/settings.json from ASSISTANT_DATA_DIR/cwd itself (see
+  // agent/lib/settings.mjs) — same file agent/schedules/digest.ts reads at fire time,
+  // so this always reflects the toggle digest.ts itself would see on its next tick.
+  try {
+    return readSettings()?.digestSchedule?.enabled === true;
+  } catch {
+    return false;
+  }
 }
 
 function schedulesBlock(dataDir, T) {
   const status = loadRollupStatus(dataDir);
-  const lines = EVE_SCHEDULES.map(
-    (s) => `• ${s.name} (${s.cron}) → ${formatLastSuccess(status[s.name], T)}`,
-  );
+  const digestOn = digestEnabled();
+  const lines = EVE_SCHEDULES.map((s) => {
+    // digest fires off by default (agent/schedules/digest.ts) — "never" would be
+    // indistinguishable from "enabled but hasn't run yet"; say so explicitly instead.
+    if (s.name === "digest" && !digestOn) {
+      return `• ${s.name} (${s.cron}) → ${T("disabled", "выключен")}`;
+    }
+    return `• ${s.name} (${s.cron}) → ${formatLastSuccess(status[s.name], T)}`;
+  });
   return `${T("📅 Schedules (inside Iva)", "📅 Расписания (внутри Ивы)")}\n${lines.join("\n")}`;
 }
 
