@@ -230,47 +230,70 @@ export async function runScheduleMigration({
           log,
         }));
 
-    // First-boot detection AND the seed write both happen inside the SAME lock
-    // runScheduledJob's own admission check uses — a real run's own read-modify-write
-    // (recording inProgressSince/lastStartedAt) could otherwise race this one and get
-    // silently overwritten by (or silently overwrite) the seed.
-    const seedResult = await withStatusLock(statusPath, () => {
+    // First-boot detection, the seed write, AND the due-check all happen inside the
+    // SAME single lock acquisition runScheduledJob's own admission check uses — never
+    // decided from a status snapshot read outside any critical section. Two things this
+    // closes: (1) a real run's own read-modify-write (recording inProgressSince/
+    // lastStartedAt) racing the seed write and one silently clobbering the other; (2) the
+    // due-or-not decision for each period being made from a stale snapshot that could
+    // already be out of date by the time it's used. If the lock can't be acquired at
+    // all, this whole pass is deferred rather than deciding anything from an unlocked
+    // read — the next boot (or, for a period a Nitro tick fires in the meantime, that
+    // tick itself) retries cleanly.
+    const decision = await withStatusLock(statusPath, (acquired) => {
+      if (!acquired) {
+        log("schedule-migration: could not acquire the status lock in time — deferring this pass (retried on the next boot)");
+        return { action: "defer" };
+      }
       const current = readStatus(statusPath);
       const isFirstBoot = Object.keys(current).length === 0;
-      if (!isFirstBoot) return { seeded: false, status: current };
-      const nowMs = now();
-      const seeded = { ...current };
-      // seededAt, deliberately NOT lastSuccessAt: this is a storm-protection baseline,
-      // not a real run — /menu → crons and formatLastSuccess() must keep showing "never"
-      // for a period that has only ever been seeded, never actually executed. It still
-      // suppresses first-boot catch-up below exactly the way lastSuccessAt used to (see
-      // the effective-baseline comparison in the loop), just under its own field name.
-      for (const period of PERIODS) {
-        seeded[statusKey(period)] = { ...seeded[statusKey(period)], seededAt: nowMs };
+      if (isFirstBoot) {
+        const nowMs = now();
+        const seeded = { ...current };
+        // seededAt, deliberately NOT lastSuccessAt: this is a storm-protection baseline,
+        // not a real run — /menu → crons and formatLastSuccess() must keep showing
+        // "never" for a period that has only ever been seeded, never actually executed.
+        // It still suppresses first-boot catch-up below exactly the way
+        // lastSuccessAt-as-seed used to (see the effective-baseline comparison), just
+        // under its own field name.
+        for (const period of PERIODS) {
+          seeded[statusKey(period)] = { ...seeded[statusKey(period)], seededAt: nowMs };
+        }
+        writeStatusAtomic(statusPath, seeded);
+        return { action: "seeded" };
       }
-      writeStatusAtomic(statusPath, seeded);
-      return { seeded: true, status: seeded };
+
+      const nowMs = now();
+      const due = [];
+      for (const period of PERIODS) {
+        const { graceMs } = PERIOD_SCHEDULE[period];
+        const dueAt = lastDueMs(period, nowMs, tz);
+        const entry = current[statusKey(period)];
+        // A real success always wins; otherwise fall back to the seeded baseline (if
+        // any) so a freshly-seeded period doesn't immediately look "due" the moment
+        // it's due relative to real time — same suppression the old
+        // lastSuccessAt-as-seed did.
+        const recorded = typeof entry?.lastSuccessAt === "number" ? entry.lastSuccessAt : entry?.seededAt;
+        const effectiveBaseline = typeof recorded === "number" ? recorded : -Infinity;
+        const alreadyCaughtUp = effectiveBaseline >= dueAt;
+        const withinGrace = nowMs - dueAt <= graceMs;
+        if (!alreadyCaughtUp && withinGrace) due.push({ period, dueAt, effectiveBaseline });
+      }
+      return { action: "run", due };
     });
-    if (seedResult.seeded) {
+
+    if (decision.action === "defer") return;
+    if (decision.action === "seeded") {
       log("schedule-migration: first boot — seeded catch-up baseline, running nothing (storm protection)");
       return;
     }
-    const status = seedResult.status;
 
-    const nowMs = now();
-    for (const period of PERIODS) {
-      const { graceMs } = PERIOD_SCHEDULE[period];
-      const due = lastDueMs(period, nowMs, tz);
-      const entry = status[statusKey(period)];
-      // A real success always wins; otherwise fall back to the seeded baseline (if any)
-      // so a freshly-seeded period doesn't immediately look "due" the moment it's due
-      // relative to real time — same suppression the old lastSuccessAt-as-seed did.
-      const recorded = typeof entry?.lastSuccessAt === "number" ? entry.lastSuccessAt : entry?.seededAt;
-      const effectiveBaseline = typeof recorded === "number" ? recorded : -Infinity;
-      const alreadyCaughtUp = effectiveBaseline >= due;
-      const withinGrace = nowMs - due <= graceMs;
-      if (alreadyCaughtUp || !withinGrace) continue;
-      log(`schedule-migration: catching up ${period} (due ${new Date(due).toISOString()}, last success ${Number.isFinite(effectiveBaseline) ? new Date(effectiveBaseline).toISOString() : "never"})`);
+    // The actual catch-up run (and ITS OWN reservation, under its own fresh lock
+    // acquisition inside runScheduledJob) happens outside this critical section — it can
+    // take up to the job's full timeoutMs, and holding the status lock for that entire
+    // duration would block every other schedule's admission check in the meantime.
+    for (const { period, dueAt, effectiveBaseline } of decision.due) {
+      log(`schedule-migration: catching up ${period} (due ${new Date(dueAt).toISOString()}, last success ${Number.isFinite(effectiveBaseline) ? new Date(effectiveBaseline).toISOString() : "never"})`);
       try {
         await runPeriod(period);
       } catch (error) {

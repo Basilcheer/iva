@@ -449,3 +449,33 @@ test("no lockPath: a clean exit right after SIGTERM cancels the pending hard-kil
   await new Promise((resolve) => setTimeout(resolve, 600));
   assert.deepEqual(signals, ["SIGTERM"], "the pending SIGKILL escalation must be canceled once the direct target exits cleanly");
 });
+
+test("if the status lock can't be acquired, the run is deferred: no unlocked reservation write, nothing spawned", async () => {
+  const root = await scaffold();
+  await writeFile(join(root, "boom.mjs"), "process.exit(1);\n"); // would fail loudly if actually spawned
+  const statusPath = join(root, "data/rollup-status.json");
+  await mkdir(join(root, "data"), { recursive: true });
+  // Pre-hold the lock file with a FRESH mtime so withStatusLock's staleness-steal never
+  // kicks in during this test — it must genuinely exhaust its retries and give up.
+  await writeFile(`${statusPath}.lock`, "999999");
+
+  let spawned = false;
+  const { log, lines } = collectLogs();
+  const result = await runScheduledJob({
+    name: "memory-daily",
+    argv: ["boom.mjs"],
+    root,
+    nodeBin: process.execPath,
+    statusPath,
+    log,
+    spawnImpl: (...args) => {
+      spawned = true;
+      return realSpawn(...args);
+    },
+  });
+
+  assert.equal(result.skipped, true, "must defer, never proceed with an unlocked read-decide-write");
+  assert.equal(spawned, false, "must never spawn without having safely reserved first");
+  assert.ok(lines.some((l) => l.toLowerCase().includes("defer")), "the deferral must be logged, not silent");
+  assert.equal(existsSync(statusPath), false, "no status write at all — not even an unlocked reservation");
+});

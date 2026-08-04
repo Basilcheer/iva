@@ -125,7 +125,14 @@ export async function runScheduledJob({
     if (statusPath) {
       const admitted = await withStatusLock(statusPath, (acquired) => {
         if (!acquired) {
-          log(`schedule-runner: ${name} could not acquire the status lock in time — proceeding without the admission guard this once`);
+          // Could not get exclusive access to the read-decide-write critical section in
+          // time. Proceeding anyway would defeat the entire point of the lock — two
+          // concurrent callers could both read the same pre-reservation snapshot and
+          // both admit themselves, exactly the race this lock exists to close. Defer
+          // instead: skip this attempt with no status write at all, and let the next
+          // Nitro tick or migration boot retry — nothing unsafe happens meanwhile.
+          log(`schedule-runner: ${name} could not acquire the status lock in time — deferring this attempt (retried on the next tick/boot)`);
+          return false;
         }
         const existing = readStatus(statusPath);
         const prior = existing[name];

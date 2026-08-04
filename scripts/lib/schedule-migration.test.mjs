@@ -297,3 +297,30 @@ test("style-matched integration: a real fake systemctl on PATH, tmpdir HOME, via
   assert.match(calls, /disable --now iva-memory-yearly\.timer/);
   assert.match(calls, /daemon-reload/);
 });
+
+test("if the status lock can't be acquired, the whole pass is deferred: no seed, no due-check write, no catch-up run", async () => {
+  const homedir = await scaffoldHome();
+  const dataDir = join(homedir, "..", "data");
+  const statusPath = join(dataDir, "rollup-status.json");
+  await mkdir(dataDir, { recursive: true });
+  // Pre-hold the lock file with a FRESH mtime so withStatusLock's staleness-steal never
+  // kicks in during this test — it must genuinely exhaust its retries and give up.
+  await writeFile(`${statusPath}.lock`, "999999");
+
+  const { execImpl } = fakeExecImpl();
+  let runJobCalled = false;
+  const lines = [];
+
+  await runScheduleMigration({
+    homedir,
+    execImpl,
+    statusPath,
+    tz: "UTC",
+    log: (...a) => lines.push(a.join(" ")),
+    runJob: async () => { runJobCalled = true; },
+  });
+
+  assert.equal(runJobCalled, false, "no catch-up may run off an undecided (lock-less) pass");
+  assert.equal(existsSync(statusPath), false, "no status write at all — not a seed, not anything else — without the lock");
+  assert.ok(lines.some((l) => l.toLowerCase().includes("defer")), "the deferral must be logged, not silent");
+});
