@@ -36,4 +36,8 @@ export default defineAgent({
   // Защита от overflow: компактуем заранее (0.7 вместо дефолтных 0.9), оставляя запас на
   // summary-вызов и следующий ход. eve сам саммаризирует старые ходы, сохраняя todo и read-tracking.
   compaction: { thresholdPercent: 0.7 },
+  // Дефолт eve 0.28 автозавершает durable-сессии через 30 дней от создания (переживает
+  // рестарты) — сломало бы долгоживущие Telegram/rollup-сессии у self-host юзеров.
+  // У iva свой lifecycle сессий, отключаем автотаймаут явно.
+  limits: { sessionTimeoutMs: false },
 });
