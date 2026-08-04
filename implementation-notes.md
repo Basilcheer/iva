@@ -362,5 +362,7 @@
   were removed and no patterns were added to `bash.ts`.
 - Runtime topology, Eve version, schedule cadence, skill count, Google Tasks support and
   open-task menu counting are synchronized across the requested documentation surfaces.
+- CLI documentation keeps topology distinct from command coverage: `iva doctor` reads the
+  four memory-schedule status records, while `iva status` reports systemd units only.
 - PHILOSOPHY.md now records the project boundary rules and explicit removal points for
   local workarounds.
