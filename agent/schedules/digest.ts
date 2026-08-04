@@ -5,9 +5,9 @@
 // applies on the very next tick without a restart) and returns immediately unless
 // digestSchedule.enabled is explicitly true. No lockPath: the digest doesn't touch
 // vault/CORE.md or MOC.md, so it doesn't need to serialize with the memory rollups.
-import { join } from "node:path";
 import { defineSchedule } from "eve/schedules";
 import { readSettings } from "../lib/settings.mjs";
+import { resolvePaths } from "../lib/schedule-paths.mjs";
 import { runScheduledJob } from "../../scripts/lib/schedule-runner.mjs";
 
 export default defineSchedule({
@@ -16,16 +16,14 @@ export default defineSchedule({
     const settings = readSettings() as { digestSchedule?: { enabled?: boolean } };
     if (settings.digestSchedule?.enabled !== true) return;
 
-    const root = process.cwd();
-    const dataDirRaw = process.env.ASSISTANT_DATA_DIR ?? "data";
-    const dataDir = dataDirRaw.startsWith("/") ? dataDirRaw : join(root, dataDirRaw);
+    const { root, statusPath } = resolvePaths();
     waitUntil(
       runScheduledJob({
         name: "digest",
         argv: ["scripts/daily-digest.ts"],
         root,
         nodeBin: process.execPath,
-        statusPath: join(dataDir, "rollup-status.json"),
+        statusPath,
       }),
     );
   },

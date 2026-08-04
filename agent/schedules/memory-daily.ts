@@ -7,25 +7,13 @@
 // (flock -w 900 .memory.lock node --env-file=.env scripts/memory/rollup.ts daily), under
 // the same lock the doctor script also takes, so a parallel monthly/yearly rollup on
 // Jan 1 still serializes instead of racing on CORE.md/MOC.md.
-import { join } from "node:path";
 import { defineSchedule } from "eve/schedules";
+import { memoryRollupJob } from "../lib/schedule-paths.mjs";
 import { runScheduledJob } from "../../scripts/lib/schedule-runner.mjs";
 
 export default defineSchedule({
   cron: "0 4 * * *",
   run({ waitUntil }) {
-    const root = process.cwd();
-    const dataDirRaw = process.env.ASSISTANT_DATA_DIR ?? "data";
-    const dataDir = dataDirRaw.startsWith("/") ? dataDirRaw : join(root, dataDirRaw);
-    waitUntil(
-      runScheduledJob({
-        name: "memory-daily",
-        argv: ["scripts/memory/rollup.ts", "daily"],
-        root,
-        nodeBin: process.execPath,
-        lockPath: join(root, ".memory.lock"),
-        statusPath: join(dataDir, "rollup-status.json"),
-      }),
-    );
+    waitUntil(runScheduledJob(memoryRollupJob("daily")));
   },
 });
