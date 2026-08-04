@@ -361,6 +361,8 @@
   CLI unit generator. Runtime TZ is always assigned a validated zone or UTC.
 - Per-chat run-status quarantines only JSON/schema corruption. Filesystem failures remain
   visible to callers and leave the original status path untouched.
+- The real chmod-based EACCES regression is skipped under UID 0 because root bypasses
+  discretionary permission bits; ordinary users and CI still exercise the filesystem path.
 - CORE truncation removes a mutable bullet when fewer than two marker characters survive;
   a complete `-` plus its following space may still receive the ellipsis. Pointers remain
   immutable.

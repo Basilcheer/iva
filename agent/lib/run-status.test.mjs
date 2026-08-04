@@ -224,7 +224,9 @@ test("one corrupt per-chat file is quarantined without blocking neighbors", () =
   assert.equal(readFileSync(join(dir, backups[0]), "utf8"), corrupt);
 });
 
-test("an operational read error is rethrown and the status file is not quarantined", () => {
+test("an operational read error is rethrown and the status file is not quarantined", {
+  skip: process.getuid?.() === 0 ? "root bypasses file permission bits" : false,
+}, () => {
   const key = "unreadable:";
   status.setChatStatus(key, { status: "running", sessionId: "keep" });
   const dir = join(dataDir, "run-status.d");
