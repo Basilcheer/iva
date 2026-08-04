@@ -34,7 +34,7 @@ import { buildTelegramReplyContext } from "../../scripts/lib/telegram-reply-cont
 import { handleTelegramResetRequest } from "../../scripts/lib/telegram-reset-route.mjs";
 // Eve отдаёт обработчикам событий токен с именем канала впереди, а reset-роут клеит его
 // сам. Сохраняем только channel-local вид, иначе /new сбрасывает несуществующий токен (#110).
-import { toChannelLocalToken } from "../../scripts/lib/telegram-continuation-token.mjs";
+import { toChannelLocalToken } from "../lib/telegram-continuation-token.mjs";
 import {
   handleAcceptedTelegramWebhook,
   TELEGRAM_ACCEPTANCE_ROUTE,

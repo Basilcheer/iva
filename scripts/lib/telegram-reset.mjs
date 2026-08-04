@@ -1,5 +1,5 @@
 import { telegramContinuationToken } from "eve/channels/telegram";
-import { toChannelLocalToken } from "./telegram-continuation-token.mjs";
+import { toChannelLocalToken } from "#lib/telegram-continuation-token.mjs";
 
 function storedToken(status) {
   const token = status?.continuationToken;

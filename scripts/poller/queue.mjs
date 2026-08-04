@@ -4,7 +4,7 @@ import {
   loadQueueFile,
   writeQueueFileAtomic,
 } from "../lib/telegram-queue.mjs";
-import { toChannelLocalToken } from "../lib/telegram-continuation-token.mjs";
+import { toChannelLocalToken } from "#lib/telegram-continuation-token.mjs";
 import {
   clearTelegramResetIntent,
   loadTelegramResetIntents,

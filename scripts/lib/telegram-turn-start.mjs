@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { toChannelLocalToken } from "./telegram-continuation-token.mjs";
+import { toChannelLocalToken } from "#lib/telegram-continuation-token.mjs";
 
 const durationFromIngress = (ingressAt, at) =>
   Number.isFinite(ingressAt) && Number.isFinite(at) && at >= ingressAt
