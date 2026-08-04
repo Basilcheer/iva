@@ -7,7 +7,7 @@
 // vault/CORE.md or MOC.md, so it doesn't need to serialize with the memory rollups.
 import { join } from "node:path";
 import { defineSchedule } from "eve/schedules";
-import { readSettings } from "../../scripts/lib/settings.mjs";
+import { readSettings } from "../lib/settings.mjs";
 import { runScheduledJob } from "../../scripts/lib/schedule-runner.mjs";
 
 export default defineSchedule({
