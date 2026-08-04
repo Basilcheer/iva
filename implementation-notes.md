@@ -356,7 +356,8 @@
 ## Telegram offset durability (v0.3.11)
 
 - Only ENOENT represents first run. Existing JSON, schema, permission, and I/O failures stop
-  the bridge before `getUpdates(-1)`, preserving Telegram's backlog for the systemd restart.
+  the bridge before `deleteWebhook(drop_pending=true)` or `getUpdates(-1)`, preserving
+  Telegram's backlog for the systemd restart.
 - Offset publication uses a private same-directory tmp file and one rename. Any save failure
   reaches the top-level fatal handler; the bridge never reports an unsaved cursor as durable.
 - The first-run tail lookup also fails closed on Telegram or response-shape errors; falling
