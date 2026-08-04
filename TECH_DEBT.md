@@ -84,3 +84,15 @@ grows a native catch-up story.
 `scripts/memory/rollup.ts` work around an open upstream bug
 ([vercel/eve#1450](https://github.com/vercel/eve/issues/1450)). Once that's fixed
 upstream, remove the workarounds rather than leaving them as permanent scaffolding.
+
+## 11. Cron/name metadata duplicated across schedules, migration, and the menu
+
+The same 5 schedule names + cron expressions are hand-maintained in three places:
+`agent/schedules/*.ts` (the actual cron strings), `scripts/lib/schedule-migration.mjs`'s
+`PERIOD_SCHEDULE` (hour/minute per period, for catch-up math), and
+`scripts/lib/menu/crons.mjs`'s `EVE_SCHEDULES` (for the /menu → ⏰ display). Changing one
+schedule's cadence means remembering to update up to three files by hand; a missed one
+would make the menu display (or the catch-up math) silently wrong. Fixing this properly
+means either introducing a single shared schedule-metadata source all three read from, or
+adding a CI check that parses and cross-validates the three copies — both a heavier lift
+than the rest of this pass, so deferred rather than done here.
