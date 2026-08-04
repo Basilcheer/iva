@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -221,4 +222,24 @@ test("one corrupt per-chat file is quarantined without blocking neighbors", () =
   // Compare after the healthy replacement exists: returning {} and overwriting
   // the damaged file would lose these bytes.
   assert.equal(readFileSync(join(dir, backups[0]), "utf8"), corrupt);
+});
+
+test("an operational read error is rethrown and the status file is not quarantined", () => {
+  const key = "unreadable:";
+  status.setChatStatus(key, { status: "running", sessionId: "keep" });
+  const dir = join(dataDir, "run-status.d");
+  const encoded = Buffer.from(key, "utf8").toString("base64url");
+  const file = join(dir, `${encoded}.json`);
+  chmodSync(file, 0o000);
+
+  try {
+    assert.throws(() => status.getChatStatus(key), (error) => error?.code === "EACCES");
+    assert.equal(existsSync(file), true);
+    assert.equal(
+      readdirSync(dir).some((name) => name.startsWith(`${encoded}.json.corrupt-`)),
+      false,
+    );
+  } finally {
+    chmodSync(file, 0o600);
+  }
 });

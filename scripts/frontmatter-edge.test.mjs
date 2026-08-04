@@ -35,3 +35,23 @@ test("пустая строка внутри перезаписываемого 
   assert.match(out, /description: новое/);
   assert.match(out, /status: active/);
 });
+
+test("folded >- сохраняет абзацы через parse → write → parse", () => {
+  const source = "---\ndescription: >-\n  Первый абзац\n\n  Второй абзац\n\n\n  Третий абзац\nstatus: active\n---\nbody";
+  const first = parseFrontmatter(source);
+  assert.equal(first.fields.description, "Первый абзац\nВторой абзац\n\nТретий абзац");
+  const written = writeFrontmatter(first.fields, first.lines);
+  const second = parseFrontmatter(`---\n${written}\n---\nbody`);
+  assert.equal(second.fields.description, first.fields.description);
+  assert.equal(second.fields.status, "active");
+});
+
+test("literal |- сохраняет пустую строку между абзацами через round-trip", () => {
+  const source = "---\nnote: |-\n  Строка один\n\n  Строка два\nkind: note\n---\nbody";
+  const first = parseFrontmatter(source);
+  assert.equal(first.fields.note, "Строка один\n\nСтрока два");
+  const written = writeFrontmatter(first.fields, first.lines);
+  const second = parseFrontmatter(`---\n${written}\n---\nbody`);
+  assert.equal(second.fields.note, first.fields.note);
+  assert.equal(second.fields.kind, "note");
+});

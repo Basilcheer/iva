@@ -352,3 +352,15 @@
   `session.reset()`, return with the same continuation token and assert the marker is gone.
   It guards Eve's documented contract ("reset retires a session so its continuation starts
   fresh"), which 0.27.13 honours — the `/new` failure was Iva's token shape, not Eve's reset.
+
+## Memory and configuration integrity (v0.3.11)
+
+- TypeScript and Python frontmatter parsers keep blank lines inside block scalars. Strings
+  containing newlines are serialized as literal blocks so parse-write-parse is lossless.
+- One Intl-backed timezone validator is shared by setup, startup instrumentation, and the
+  CLI unit generator. Runtime TZ is always assigned a validated zone or UTC.
+- Per-chat run-status quarantines only JSON/schema corruption. Filesystem failures remain
+  visible to callers and leave the original status path untouched.
+- CORE truncation removes a mutable bullet when fewer than two marker characters survive;
+  a complete `-` plus its following space may still receive the ellipsis. Pointers remain
+  immutable.
