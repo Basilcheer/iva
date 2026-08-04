@@ -11,8 +11,8 @@ import { compactNumber, modelSummary } from "../lib/model-summary.mjs";
 import { getLang, tr } from "../lib/i18n.mjs";
 import { readEnvValues, upsertEnv } from "../lib/env-file.mjs";
 import { createFlows } from "../lib/tg-flow.mjs";
-import { DATA_DIR_ABS, ENV_PATH, log } from "./config.mjs";
-import { reply, tg } from "./transport.mjs";
+import { ALLOWED, DATA_DIR_ABS, ENV_PATH, log } from "./config.mjs";
+import { reply, sc, tg } from "./transport.mjs";
 
 // ── /model & /think wizard (out-of-band, inline keyboards) ─────────────────
 // State lives in memory keyed by `${chatId}:${userId}`; each flow edits ONE message
