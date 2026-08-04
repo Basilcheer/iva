@@ -17,14 +17,16 @@ hand-rolled multi-step wizards predating eve's native human-in-the-loop primitiv
 They should eventually move onto the same mechanism as item 1 instead of maintaining
 a parallel bespoke UI layer.
 
-## 3. Cross-imports from `agent/` into the Telegram channel
+## 3. Cross-imports from `scripts/lib` into `agent/`
 
-Several files under the channel currently reach back into `agent/` in ways that
-blur the module boundary: `telegram-format`, `telegram-reply-context`,
-`telegram-reset-route`, `telegram-turn-start`, plus `provider.ts` and
-`hooks/usage.ts` (both consumed from `instructions/20-core.ts`). These should move
-into `agent/lib` so the channel depends on a stable published surface rather than
-reaching into agent internals.
+The Telegram channel (`agent/channels/telegram.ts`) and other files under `agent/`
+currently reach into `scripts/lib` in ways that blur the module boundary:
+`telegram-format`, `telegram-reply-context`, `telegram-reset-route`,
+`telegram-turn-start`, plus `provider.ts` and `hooks/usage.ts` (both consumed from
+`instructions/20-core.ts`) pull in further `scripts/lib` modules. This drags
+`scripts` code into the eve bundle. These shared modules should move into
+`agent/lib` so the dependency direction becomes `scripts` → `agent`, not the other
+way around.
 
 ## 4. Evals
 
