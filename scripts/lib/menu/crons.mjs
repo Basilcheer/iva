@@ -1,5 +1,8 @@
 // Экран кронов: read-only. systemctl --user list-timers (фильтр iva-* + xfeed-daily):
-// «имя → следующий запуск», плюс счётчик задач из data/tasks.json. Пагинация по 8.
+// «имя → следующий запуск», плюс счётчик задач из data/tasks.json, плюс блок расписаний
+// внутри самой Ивы (agent/schedules/*.ts — Nitro scheduled tasks, не systemd) из
+// data/rollup-status.json (scripts/lib/schedule-runner.mjs). Пагинация systemd-списка по 8;
+// блок расписаний Ивы всегда ровно 5 строк — не пагинируется.
 //
 // execFile ограничен таймаутом 1.5с и кэшируется на 60с — единственный getUpdates-цикл
 // моста нельзя блокировать дольше (список таймеров редко висит, одной ограниченной пробы
@@ -11,6 +14,41 @@ import { join } from "node:path";
 const PER_PAGE = 8;
 const CACHE_TTL_MS = 60_000;
 let cache = { at: 0, timers: null };
+
+// Cron strings mirrored by hand from agent/schedules/*.ts — same tradeoff as
+// scripts/lib/schedule-migration.mjs's PERIOD_SCHEDULE, there is no single shared source
+// at the cron-string level. Status-file keys match the `name` each schedule passes to
+// runScheduledJob (see scripts/lib/schedule-runner.mjs), not the bare period.
+const EVE_SCHEDULES = [
+  { name: "memory-daily", cron: "0 4 * * *" },
+  { name: "memory-weekly", cron: "15 4 * * 1" },
+  { name: "memory-monthly", cron: "20 4 1 * *" },
+  { name: "memory-yearly", cron: "25 4 1 1 *" },
+  { name: "digest", cron: "0 8 * * *" },
+];
+
+function loadRollupStatus(dataDir) {
+  try {
+    const raw = JSON.parse(readFileSync(join(dataDir, "rollup-status.json"), "utf8"));
+    return typeof raw === "object" && raw !== null ? raw : {};
+  } catch {
+    return {};
+  }
+}
+
+function formatLastSuccess(entry, T) {
+  const at = entry?.lastSuccessAt;
+  if (typeof at !== "number") return T("never", "никогда");
+  return new Date(at).toISOString().replace("T", " ").replace(/\.\d{3}Z$/, "Z");
+}
+
+function schedulesBlock(dataDir, T) {
+  const status = loadRollupStatus(dataDir);
+  const lines = EVE_SCHEDULES.map(
+    (s) => `• ${s.name} (${s.cron}) → ${formatLastSuccess(status[s.name], T)}`,
+  );
+  return `${T("📅 Schedules (inside Iva)", "📅 Расписания (внутри Ивы)")}\n${lines.join("\n")}`;
+}
 
 function run(cmd, args, timeout = 1500) {
   return new Promise((resolve) => {
@@ -59,9 +97,10 @@ export default {
     const timers = await loadTimers();
     const taskLine = T(`Tasks in queue: ${taskCount(ctx.deps.dataDir)}`, `Задач в очереди: ${taskCount(ctx.deps.dataDir)}`);
     const head = T("⏰ Timers & tasks", "⏰ Кроны и задачи");
+    const schedules = schedulesBlock(ctx.deps.dataDir, T);
     if (timers.length === 0) {
       return {
-        text: `${head}\n\n${T("No Iva timers found.", "Таймеров Iva не найдено.")}\n${taskLine}`,
+        text: `${head}\n\n${T("No Iva timers found.", "Таймеров Iva не найдено.")}\n${taskLine}\n\n${schedules}`,
         rows: [ctx.backRow("r")],
       };
     }
@@ -81,7 +120,7 @@ export default {
       ]);
     }
     rows.push(ctx.backRow("r"));
-    return { text: `${head}\n\n${body}\n\n${taskLine}`, rows };
+    return { text: `${head}\n\n${body}\n\n${taskLine}\n\n${schedules}`, rows };
   },
   on() {},
 };
