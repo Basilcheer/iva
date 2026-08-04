@@ -18,7 +18,8 @@ import {
 } from "./telegram-acceptance.mjs";
 
 const WEBHOOK_SECRET = "test-secret";
-process.env.TELEGRAM_BOT_TOKEN = "999:test-token";
+const fakeBotToken = (id, label) => `${id}:${Buffer.from(label).toString("base64url")}`;
+process.env.TELEGRAM_BOT_TOKEN = fakeBotToken(999, "acceptance-default");
 process.env.TELEGRAM_WEBHOOK_SECRET_TOKEN = WEBHOOK_SECRET;
 process.env.TELEGRAM_ALLOWED_USER_IDS = "42";
 process.env.TELEGRAM_POLL_SETTLE_MS = "0";
@@ -455,9 +456,9 @@ test("a completed-update ledger is isolated by Telegram bot id", async () => {
     { completedUpdatesFile },
   );
 
-  process.env.TELEGRAM_BOT_TOKEN = "111:first-token";
+  process.env.TELEGRAM_BOT_TOKEN = fakeBotToken(111, "first-bot");
   assert.equal(await delivery(privateUpdate(701, "first bot")), true);
-  process.env.TELEGRAM_BOT_TOKEN = "222:second-token";
+  process.env.TELEGRAM_BOT_TOKEN = fakeBotToken(222, "second-bot");
   assert.equal(await delivery(privateUpdate(701, "second bot")), true);
   assert.equal(await delivery(privateUpdate(701, "second bot duplicate")), "handled");
   assert.equal(sends, 2);
@@ -465,7 +466,7 @@ test("a completed-update ledger is isolated by Telegram bot id", async () => {
     botId: "222",
     updates: [701],
   });
-  process.env.TELEGRAM_BOT_TOKEN = "999:test-token";
+  process.env.TELEGRAM_BOT_TOKEN = fakeBotToken(999, "acceptance-default");
 });
 
 test("an invalid completed-update schema is recovered after acceptance", async () => {
