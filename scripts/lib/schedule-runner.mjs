@@ -5,7 +5,7 @@
 // can see it. Never throws: eve's schedule runner and the fire-and-forget migration hook
 // both need a promise that always settles.
 import { spawn } from "node:child_process";
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 
 // A repeat within this window is almost certainly a double-fire (a Nitro schedule tick
@@ -15,6 +15,14 @@ const GUARD_MS = 2 * 60 * 60 * 1000;
 const DEFAULT_TIMEOUT_MS = 3600_000;
 const DEFAULT_KILL_GRACE_MS = 10_000;
 const TAIL_MAX = 4000;
+// The admission critical section below is a handful of synchronous fs calls — always
+// microseconds. A lock still held after this long almost certainly means its owner
+// crashed mid-section without cleanup, so it gets stolen once instead of wedging every
+// future run of every schedule forever (this lock guards the shared status FILE, not
+// one job — every name's admission check and finish-write goes through it).
+const LOCK_STALE_MS = 30_000;
+const LOCK_RETRY_ATTEMPTS = 25;
+const LOCK_RETRY_DELAY_MS = 20;
 
 function readStatus(statusPath) {
   try {
@@ -36,6 +44,49 @@ function tailLines(tail, n = 5) {
   return tail.split("\n").map((l) => l.trim()).filter(Boolean).slice(-n).join(" | ");
 }
 
+// True mutual exclusion around a read-modify-write of the shared status file. Two
+// runScheduledJob calls — a Nitro schedule tick and schedule-migration.mjs's catch-up
+// firing at nearly the same instant is the concrete case this guards against — could
+// otherwise both read the same pre-reservation status and both decide to proceed before
+// either's write lands, since the tmp+rename write above is atomic per-write but doesn't
+// by itself serialize the READ-THEN-DECIDE-THEN-WRITE sequence across two callers.
+// O_EXCL (the "wx" flag) makes lock *acquisition* itself atomic. `fn` receives whether
+// the lock was actually acquired — on the rare exhausted-retries path we still run `fn`
+// (best-effort, logged by the caller) rather than leaving admission unchecked forever.
+async function withStatusLock(statusPath, fn) {
+  const lockPath = `${statusPath}.lock`;
+  let acquired = false;
+  for (let attempt = 0; attempt < LOCK_RETRY_ATTEMPTS && !acquired; attempt++) {
+    try {
+      mkdirSync(dirname(lockPath), { recursive: true });
+      writeFileSync(lockPath, String(process.pid), { flag: "wx" });
+      acquired = true;
+    } catch (error) {
+      if (error.code !== "EEXIST") throw error;
+      try {
+        if (Date.now() - statSync(lockPath).mtimeMs >= LOCK_STALE_MS) {
+          rmSync(lockPath, { force: true });
+          continue; // retry the create immediately, no delay needed
+        }
+      } catch {
+        continue; // lock vanished between our failed create and the stat — retry now
+      }
+      await new Promise((resolve) => setTimeout(resolve, LOCK_RETRY_DELAY_MS));
+    }
+  }
+  try {
+    return await fn(acquired);
+  } finally {
+    if (acquired) {
+      try {
+        rmSync(lockPath, { force: true });
+      } catch {
+        // already gone — nothing to clean up
+      }
+    }
+  }
+}
+
 export async function runScheduledJob({
   name,
   argv,
@@ -52,19 +103,46 @@ export async function runScheduledJob({
   now = () => Date.now(),
   log = (...a) => console.log(new Date().toISOString(), ...a),
 } = {}) {
+  let reserved = false;
+  let startedAt = now();
   try {
-    const existing = statusPath ? readStatus(statusPath) : {};
-    const prior = existing[name];
-    if (typeof prior?.lastSuccessAt === "number" && now() - prior.lastSuccessAt < guardMs) {
-      const ageMin = Math.round((now() - prior.lastSuccessAt) / 60000);
-      log(`schedule-runner: ${name} skipped — last success ${ageMin}m ago (< ${Math.round(guardMs / 60000)}m guard)`);
-      return { skipped: true, ok: true };
+    if (statusPath) {
+      const admitted = await withStatusLock(statusPath, (acquired) => {
+        if (!acquired) {
+          log(`schedule-runner: ${name} could not acquire the status lock in time — proceeding without the admission guard this once`);
+        }
+        const existing = readStatus(statusPath);
+        const prior = existing[name];
+
+        // Genuinely still running (started less than our own hard timeout ago) — a run
+        // that hasn't succeeded OR failed yet, so the lastSuccessAt guard below can't
+        // see it. Without this, a Nitro tick and a migration catch-up landing on the
+        // same period at nearly the same instant would both read the same stale
+        // lastSuccessAt and both pass that guard.
+        if (typeof prior?.inProgressSince === "number" && now() - prior.inProgressSince < timeoutMs) {
+          const ageS = Math.round((now() - prior.inProgressSince) / 1000);
+          log(`schedule-runner: ${name} skipped — already in progress (started ${ageS}s ago)`);
+          return false;
+        }
+        if (typeof prior?.lastSuccessAt === "number" && now() - prior.lastSuccessAt < guardMs) {
+          const ageMin = Math.round((now() - prior.lastSuccessAt) / 60000);
+          log(`schedule-runner: ${name} skipped — last success ${ageMin}m ago (< ${Math.round(guardMs / 60000)}m guard)`);
+          return false;
+        }
+
+        startedAt = now();
+        writeStatusAtomic(statusPath, {
+          ...existing,
+          [name]: { ...prior, lastStartedAt: startedAt, inProgressSince: startedAt },
+        });
+        reserved = true;
+        return true;
+      });
+      if (!admitted) return { skipped: true, ok: true };
+    } else {
+      startedAt = now();
     }
 
-    const startedAt = now();
-    if (statusPath) {
-      writeStatusAtomic(statusPath, { ...existing, [name]: { ...prior, lastStartedAt: startedAt } });
-    }
     log(`schedule-runner: ${name} start`);
 
     const cmd = lockPath ? "flock" : nodeBin;
@@ -144,17 +222,21 @@ export async function runScheduledJob({
     if (outcome.error) log(`schedule-runner: ${name} spawn error: ${outcome.error.message}`);
 
     if (statusPath) {
-      const current = readStatus(statusPath);
-      writeStatusAtomic(statusPath, {
-        ...current,
-        [name]: {
-          ...current[name],
-          lastStartedAt: startedAt,
-          lastFinishedAt: finishedAt,
-          lastExitCode: outcome.code,
-          ...(ok ? { lastSuccessAt: finishedAt } : {}),
-        },
+      await withStatusLock(statusPath, () => {
+        const current = readStatus(statusPath);
+        const { inProgressSince: _drop, ...rest } = current[name] ?? {};
+        writeStatusAtomic(statusPath, {
+          ...current,
+          [name]: {
+            ...rest,
+            lastStartedAt: startedAt,
+            lastFinishedAt: finishedAt,
+            lastExitCode: outcome.code,
+            ...(ok ? { lastSuccessAt: finishedAt } : {}),
+          },
+        });
       });
+      reserved = false;
     }
 
     return { skipped: false, ok, code: outcome.code, signal: outcome.signal };
@@ -165,5 +247,23 @@ export async function runScheduledJob({
       // logging itself must never be able to throw out of this function
     }
     return { skipped: false, ok: false, error };
+  } finally {
+    // Belt-and-suspenders: if something threw between reserving and the normal
+    // finish-write above (which already clears inProgressSince on every ordinary path),
+    // don't leave the reservation stuck for the rest of timeoutMs for no reason.
+    if (reserved && statusPath) {
+      try {
+        await withStatusLock(statusPath, () => {
+          const current = readStatus(statusPath);
+          if (typeof current[name]?.inProgressSince === "number") {
+            const { inProgressSince: _drop, ...rest } = current[name];
+            writeStatusAtomic(statusPath, { ...current, [name]: rest });
+          }
+        });
+      } catch {
+        // best-effort cleanup only — a stuck reservation still self-heals via the
+        // inProgressSince/timeoutMs staleness check above on the next attempt.
+      }
+    }
   }
 }

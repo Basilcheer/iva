@@ -297,3 +297,67 @@ test("timeout kills the WHOLE process group, not just flock's own pid: the lock 
   const probe = spawnSync("flock", ["-n", lockPath, "-c", "true"], { encoding: "utf8" });
   assert.equal(probe.status, 0, "the lock must be released once the whole group is dead, not just flock's own pid");
 });
+
+test("double entry: two concurrent calls for the same name only run once (inProgressSince admission guard)", async () => {
+  const root = await scaffold();
+  await writeFile(
+    join(root, "slow.mjs"),
+    "await new Promise((r) => setTimeout(r, 250)); process.exit(0);\n",
+  );
+  const statusPath = join(root, "data/rollup-status.json");
+
+  const call = () =>
+    runScheduledJob({
+      name: "memory-daily",
+      argv: ["slow.mjs"],
+      root,
+      nodeBin: process.execPath,
+      statusPath,
+      log: () => {},
+    });
+
+  // Promise.all([call(), call()]) invokes both async functions synchronously back to
+  // back — the first call's admission check + reservation write (readStatus, guard
+  // checks, writeStatusAtomic) all run to completion before the JS engine yields at
+  // its first genuine await, so by the time the second call's own admission check
+  // runs, it reads the first call's already-written inProgressSince.
+  const [r1, r2] = await Promise.all([call(), call()]);
+
+  const results = [r1, r2];
+  const skipped = results.filter((r) => r.skipped);
+  const ran = results.filter((r) => !r.skipped);
+  assert.equal(skipped.length, 1, "exactly one of the two concurrent calls must be skipped");
+  assert.equal(ran.length, 1, "exactly one must actually run");
+  assert.equal(ran[0].ok, true);
+
+  const status = JSON.parse(await readFile(statusPath, "utf8"));
+  assert.equal(
+    Object.hasOwn(status["memory-daily"], "inProgressSince"),
+    false,
+    "inProgressSince is cleared once the run finishes, not left dangling",
+  );
+  assert.ok(status["memory-daily"].lastSuccessAt > 0);
+  assert.equal(existsSync(`${statusPath}.lock`), false, "the reservation lock file never lingers after use");
+});
+
+test("a stale inProgressSince (older than timeoutMs — a presumed crash) does not block a new run forever", async () => {
+  const root = await scaffold();
+  await writeFile(join(root, "ok.mjs"), "process.exit(0);\n");
+  const statusPath = join(root, "data/rollup-status.json");
+  await mkdir(join(root, "data"), { recursive: true });
+  const staleStart = Date.now() - 10_000; // "started" 10s ago
+  await writeFile(statusPath, JSON.stringify({ "memory-daily": { inProgressSince: staleStart } }), "utf8");
+
+  const result = await runScheduledJob({
+    name: "memory-daily",
+    argv: ["ok.mjs"],
+    root,
+    nodeBin: process.execPath,
+    statusPath,
+    log: () => {},
+    timeoutMs: 5_000, // shorter than the 10s-old inProgressSince above -> stale, not "still running"
+  });
+
+  assert.equal(result.skipped, false, "a stale in-progress marker (older than timeoutMs) must not block a new attempt");
+  assert.equal(result.ok, true);
+});

@@ -13,6 +13,7 @@ export interface RunScheduledJobOptions {
   readonly statusPath?: string;
   readonly env?: NodeJS.ProcessEnv;
   readonly spawnImpl?: (...args: unknown[]) => unknown;
+  readonly killImpl?: (pid: number, signal: string) => void;
   readonly now?: () => number;
   readonly log?: (...args: unknown[]) => void;
 }
