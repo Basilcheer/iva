@@ -11,7 +11,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { INTERVIEW, saveInterview, buildDistillMessage } from "../core-interview.mjs";
-import { isRunning, chatKeyOf } from "../run-status.mjs";
+import { isRunning, chatKeyOf } from "#lib/run-status.mjs";
 
 const SID = "core";
 const PARENT = "r";

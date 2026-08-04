@@ -26,7 +26,7 @@ import {
   getChatStatus,
   setChatStatus,
   setChatStatusIf,
-} from "../../scripts/lib/run-status.mjs";
+} from "../lib/run-status.mjs";
 // Двуязычие: tr(en, ru) отдаёт строку по текущему языку (data/settings.json → env
 // AGENT_LANGUAGE). Тот же кросс-импорт scripts/lib в eve-бандл, что и telegram-format выше.
 import { tr } from "../../scripts/lib/i18n.mjs";

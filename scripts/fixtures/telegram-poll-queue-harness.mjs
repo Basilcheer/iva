@@ -23,7 +23,7 @@ if (!existsSync(offsetFile)) writeFileSync(offsetFile, JSON.stringify({ offset: 
 let queueDirSyncAttempts = 0;
 let queueDirSyncSuccesses = 0;
 
-const status = await import("../lib/run-status.mjs");
+const status = await import("#lib/run-status.mjs");
 const privateKey = "1:";
 const groupKey = "-100:";
 const topicKey = "-100:7";
