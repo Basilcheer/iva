@@ -876,7 +876,9 @@ async function cmdDoctor() {
   // 26h gives the 04:00 daily slot a full day of slack before doctor complains.
   try {
     const rollupStatus = JSON.parse(readFileSync(join(dataDirAbs(env), "rollup-status.json"), "utf8"));
-    const dailySuccessAt = rollupStatus?.daily?.lastSuccessAt;
+    // "memory-daily" — the `name` agent/schedules/memory-daily.ts passes to
+    // runScheduledJob, not the bare period (see scripts/lib/schedule-runner.mjs).
+    const dailySuccessAt = rollupStatus?.["memory-daily"]?.lastSuccessAt;
     if (typeof dailySuccessAt === "number") {
       const ageHours = (Date.now() - dailySuccessAt) / (60 * 60 * 1000);
       if (ageHours > 26) {

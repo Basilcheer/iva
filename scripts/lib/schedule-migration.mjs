@@ -40,6 +40,12 @@ const PERIOD_SCHEDULE = {
 };
 const PERIODS = Object.keys(PERIOD_SCHEDULE);
 
+// The status-file key a real run is recorded under — must match the `name` each
+// agent/schedules/memory-*.ts passes to runScheduledJob, not the bare period.
+function statusKey(period) {
+  return `memory-${period}`;
+}
+
 function defaultExecImpl(args) {
   const r = spawnSync("systemctl", args, { encoding: "utf8" });
   return { code: r.status ?? (r.error ? 127 : 1), out: (r.stdout || "").trim(), err: (r.stderr || "").trim(), error: r.error };
@@ -222,7 +228,11 @@ export async function runScheduleMigration({
     if (isFirstBoot) {
       const nowMs = now();
       const seeded = { ...status };
-      for (const period of PERIODS) seeded[period] = { ...seeded[period], lastSuccessAt: nowMs };
+      // Keyed the same way schedule-runner.mjs actually records a run (the `name` each
+      // agent/schedules/memory-*.ts passes to runScheduledJob is "memory-<period>", not
+      // the bare period) — otherwise this seed would never be touched by a real run ever
+      // again, and the migration would think every period is permanently stale.
+      for (const period of PERIODS) seeded[statusKey(period)] = { ...seeded[statusKey(period)], lastSuccessAt: nowMs };
       writeStatusAtomic(statusPath, seeded);
       log("schedule-migration: first boot — seeded catch-up baseline, running nothing (storm protection)");
       return;
@@ -232,7 +242,8 @@ export async function runScheduleMigration({
     for (const period of PERIODS) {
       const { graceMs } = PERIOD_SCHEDULE[period];
       const due = lastDueMs(period, nowMs, tz);
-      const lastSuccessAt = typeof status[period]?.lastSuccessAt === "number" ? status[period].lastSuccessAt : -Infinity;
+      const recorded = status[statusKey(period)]?.lastSuccessAt;
+      const lastSuccessAt = typeof recorded === "number" ? recorded : -Infinity;
       const alreadyCaughtUp = lastSuccessAt >= due;
       const withinGrace = nowMs - due <= graceMs;
       if (alreadyCaughtUp || !withinGrace) continue;

@@ -114,8 +114,10 @@ test("first boot (no status file): seeds lastSuccessAt for all four periods and 
 
   assert.deepEqual(ranPeriods, [], "first boot must never run a catch-up job (storm protection)");
   const status = JSON.parse(await readFile(statusPath, "utf8"));
+  // Keyed "memory-<period>" — the same name schedule-runner.mjs actually records a real
+  // run under (the `name` each agent/schedules/memory-*.ts passes), not the bare period.
   for (const period of ["daily", "weekly", "monthly", "yearly"]) {
-    assert.equal(status[period]?.lastSuccessAt, fixedNow, `${period} is seeded to now`);
+    assert.equal(status[`memory-${period}`]?.lastSuccessAt, fixedNow, `${period} is seeded to now`);
   }
 });
 
@@ -135,10 +137,10 @@ test("legacy units: disabled and deleted by exact name; unrelated xfeed-daily.ti
   // for this test (it only cares about the legacy-unit teardown).
   await mkdir(join(homedir, "..", "data"), { recursive: true });
   await writeFile(statusPath, JSON.stringify({
-    daily: { lastSuccessAt: Date.now() },
-    weekly: { lastSuccessAt: Date.now() },
-    monthly: { lastSuccessAt: Date.now() },
-    yearly: { lastSuccessAt: Date.now() },
+    "memory-daily": { lastSuccessAt: Date.now() },
+    "memory-weekly": { lastSuccessAt: Date.now() },
+    "memory-monthly": { lastSuccessAt: Date.now() },
+    "memory-yearly": { lastSuccessAt: Date.now() },
   }));
 
   const { execImpl, calls } = fakeExecImpl();
@@ -173,10 +175,10 @@ test("a partial systemctl failure does not throw, and the next boot retries clea
   const statusPath = join(homedir, "..", "data/rollup-status.json");
   await mkdir(join(homedir, "..", "data"), { recursive: true });
   await writeFile(statusPath, JSON.stringify({
-    daily: { lastSuccessAt: Date.now() },
-    weekly: { lastSuccessAt: Date.now() },
-    monthly: { lastSuccessAt: Date.now() },
-    yearly: { lastSuccessAt: Date.now() },
+    "memory-daily": { lastSuccessAt: Date.now() },
+    "memory-weekly": { lastSuccessAt: Date.now() },
+    "memory-monthly": { lastSuccessAt: Date.now() },
+    "memory-yearly": { lastSuccessAt: Date.now() },
   }));
 
   const { execImpl, calls } = fakeExecImpl({ failUnits: new Set(["iva-memory-daily.timer"]) });
@@ -215,10 +217,10 @@ test("catch-up math: due-and-in-grace periods run, an already-succeeded period d
   const statusPath = join(dataDir, "rollup-status.json");
   await mkdir(dataDir, { recursive: true });
   await writeFile(statusPath, JSON.stringify({
-    daily: { lastSuccessAt: dailyDue - 60_000 },       // stale by 1 minute -> due, in grace -> RUNS
-    weekly: { lastSuccessAt: weeklyDue + 60_000 },      // already succeeded AFTER due -> does NOT run
-    monthly: { lastSuccessAt: monthlyDue - 60_000 },    // stale, in grace -> RUNS
-    yearly: { lastSuccessAt: 0 },                       // ancient, but due point itself is out of grace -> does NOT run
+    "memory-daily": { lastSuccessAt: dailyDue - 60_000 },       // stale by 1 minute -> due, in grace -> RUNS
+    "memory-weekly": { lastSuccessAt: weeklyDue + 60_000 },      // already succeeded AFTER due -> does NOT run
+    "memory-monthly": { lastSuccessAt: monthlyDue - 60_000 },    // stale, in grace -> RUNS
+    "memory-yearly": { lastSuccessAt: 0 },                       // ancient, but due point itself is out of grace -> does NOT run
   }));
 
   const { execImpl } = fakeExecImpl();
