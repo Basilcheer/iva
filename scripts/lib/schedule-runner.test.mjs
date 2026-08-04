@@ -209,29 +209,73 @@ test("full flock integration (real /usr/bin/flock): success path end to end", { 
 
 test("timeout: SIGTERM first, escalates to SIGKILL after the grace window", async () => {
   const root = await scaffold();
-  // Ignores SIGTERM and spins forever — forces the SIGKILL escalation.
+  const sigtermMarker = join(root, "got-sigterm");
+  // Ignores SIGTERM and spins forever — forces the SIGKILL escalation. Writes a marker
+  // file the INSTANT it receives SIGTERM: that's the real proof the process was still
+  // alive and actively ignoring the signal, as opposed to dying from the *default*
+  // (unhandled) SIGTERM action because process.on('SIGTERM', ...) hadn't finished
+  // registering yet — a genuine race for a freshly-spawned node process under heavy CPU
+  // contention (the full suite running many workers at once), where a too-tight
+  // timeoutMs can fire before the child has even finished starting up. That race, not
+  // "grace-window drift", is what made this test flaky in the full suite while passing
+  // reliably in isolation: on an unlucky schedule the child died from the FIRST SIGTERM
+  // (code=null, signal="SIGTERM") instead of ever needing the SIGKILL escalation this
+  // test exists to exercise.
   await writeFile(
     join(root, "stubborn.mjs"),
-    "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);\n",
+    [
+      "import { writeFileSync } from 'node:fs';",
+      `process.on('SIGTERM', () => { writeFileSync(${JSON.stringify(sigtermMarker)}, 'x'); });`,
+      "setInterval(() => {}, 1000);",
+    ].join("\n"),
   );
   const statusPath = join(root, "data/rollup-status.json");
+  const marker = `iva-schedule-runner-sigkill-test-${randomBytes(6).toString("hex")}`;
 
   const { log, lines } = collectLogs();
+  // Generous on purpose (was 150/150): under load, spawning and starting up a fresh node
+  // process can itself take longer than that, well before the timeout/grace logic even
+  // becomes relevant. Production uses 3600_000/10_000 by default, so this is still a
+  // tiny fraction of that — plenty of margin without meaningfully slowing the suite.
   const result = await runScheduledJob({
     name: "memory-daily",
-    argv: ["stubborn.mjs"],
+    argv: ["stubborn.mjs", marker],
     root,
     nodeBin: process.execPath,
     statusPath,
     log,
-    timeoutMs: 150,
-    killGraceMs: 150,
+    timeoutMs: 1000,
+    killGraceMs: 1000,
   });
 
+  // Semantic checks, in order, rather than trusting exact timing:
+  //   1. the child really did receive and handle SIGTERM (not killed by the default action);
+  //   2. SIGTERM was logged before SIGKILL, never the other way round;
+  //   3. given (1), the only way the job could still have ended is the SIGKILL escalation;
+  //   4. nothing survives afterward.
+  assert.equal(existsSync(sigtermMarker), true, "the child must have actually received and handled SIGTERM");
+
+  const sigtermLine = lines.findIndex((l) => l.includes("SIGTERM"));
+  const sigkillLine = lines.findIndex((l) => l.includes("SIGKILL"));
+  assert.notEqual(sigtermLine, -1, "SIGTERM must be logged");
+  assert.notEqual(sigkillLine, -1, "SIGKILL must be logged");
+  assert.ok(sigtermLine < sigkillLine, "SIGTERM must be sent before SIGKILL, not the other way round");
+
   assert.equal(result.ok, false);
-  assert.notEqual(result.code, 0);
-  assert.ok(lines.some((l) => l.includes("SIGTERM")));
-  assert.ok(lines.some((l) => l.includes("SIGKILL")));
+  assert.equal(result.signal, "SIGKILL", "with SIGTERM confirmed handled (not fatal), only the escalation can have ended it");
+  assert.equal(result.code, null);
+
+  // No survivors after the escalation — same proof-of-death pattern as the group-kill test.
+  const noLingeringProcess = async () => {
+    const until = Date.now() + 3000;
+    while (Date.now() < until) {
+      const r = spawnSync("pgrep", ["-f", marker], { encoding: "utf8" });
+      if ((r.stdout || "").trim() === "") return true;
+      await new Promise((res) => setTimeout(res, 50));
+    }
+    return false;
+  };
+  assert.equal(await noLingeringProcess(), true, "no process must survive the SIGKILL escalation");
 });
 
 test("spawn failure (bad nodeBin) never throws and records the error", async () => {
@@ -378,6 +422,11 @@ test("no lockPath: a clean exit right after SIGTERM cancels the pending hard-kil
   const statusPath = join(root, "data/rollup-status.json");
   const signals = [];
 
+  // Generous margins for the same reason as the SIGTERM/SIGKILL escalation test above
+  // (was 100/150): too tight a timeoutMs risks the first SIGTERM arriving before a
+  // freshly-spawned node process has even finished registering its handler under load,
+  // which would make it die from the *default* SIGTERM action (code=null, signal=
+  // "SIGTERM") instead of the handler's process.exit(0) this test actually checks for.
   const result = await runScheduledJob({
     name: "digest",
     argv: ["graceful.mjs"],
@@ -385,8 +434,8 @@ test("no lockPath: a clean exit right after SIGTERM cancels the pending hard-kil
     nodeBin: process.execPath,
     statusPath,
     log: () => {},
-    timeoutMs: 100,
-    killGraceMs: 150,
+    timeoutMs: 800,
+    killGraceMs: 500,
     killImpl: (pid, signal) => {
       signals.push(signal);
       process.kill(pid, signal);
@@ -396,7 +445,7 @@ test("no lockPath: a clean exit right after SIGTERM cancels the pending hard-kil
   assert.equal(result.code, 0);
   assert.equal(result.signal, null);
   // Give the (should-be-canceled) hard-kill window a chance to elapse and confirm no
-  // second, stale SIGKILL followed the graceful exit.
-  await new Promise((resolve) => setTimeout(resolve, 250));
+  // second, stale SIGKILL followed the graceful exit. Must outlast killGraceMs above.
+  await new Promise((resolve) => setTimeout(resolve, 600));
   assert.deepEqual(signals, ["SIGTERM"], "the pending SIGKILL escalation must be canceled once the direct target exits cleanly");
 });
