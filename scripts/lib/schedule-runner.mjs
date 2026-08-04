@@ -7,6 +7,7 @@
 import { spawn } from "node:child_process";
 import { mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
+import { randomBytes } from "node:crypto";
 
 // A repeat within this window is almost certainly a double-fire (a Nitro schedule tick
 // racing a catch-up run, or a manual retrigger) rather than a genuine second cron slot —
@@ -24,7 +25,9 @@ const LOCK_STALE_MS = 30_000;
 const LOCK_RETRY_ATTEMPTS = 25;
 const LOCK_RETRY_DELAY_MS = 20;
 
-function readStatus(statusPath) {
+// Shared with schedule-migration.mjs — one status file, one implementation of how it's
+// safely read/written/locked, rather than two copies that could drift.
+export function readStatus(statusPath) {
   try {
     const parsed = JSON.parse(readFileSync(statusPath, "utf8"));
     return typeof parsed === "object" && parsed !== null ? parsed : {};
@@ -33,11 +36,24 @@ function readStatus(statusPath) {
   }
 }
 
-function writeStatusAtomic(statusPath, data) {
+export function writeStatusAtomic(statusPath, data) {
   mkdirSync(dirname(statusPath), { recursive: true });
-  const tmp = `${statusPath}.tmp`;
-  writeFileSync(tmp, JSON.stringify(data, null, 2), "utf8");
-  renameSync(tmp, statusPath);
+  // Unique per call (pid + random), not a single shared "<statusPath>.tmp": two
+  // concurrent writers (this schedule-runner call and, in principle, another one
+  // whose withStatusLock retries were exhausted and proceeded unlocked) could
+  // otherwise clobber each other's temp file mid-write, or one could unlink the
+  // other's tmp file out from under an in-flight renameSync (ENOENT).
+  const tmp = `${statusPath}.tmp-${process.pid}-${randomBytes(4).toString("hex")}`;
+  try {
+    writeFileSync(tmp, JSON.stringify(data, null, 2), "utf8");
+    renameSync(tmp, statusPath);
+  } finally {
+    try {
+      rmSync(tmp, { force: true });
+    } catch {
+      // renameSync already consumed it on the success path — nothing left to remove
+    }
+  }
 }
 
 function tailLines(tail, n = 5) {
@@ -53,7 +69,7 @@ function tailLines(tail, n = 5) {
 // O_EXCL (the "wx" flag) makes lock *acquisition* itself atomic. `fn` receives whether
 // the lock was actually acquired — on the rare exhausted-retries path we still run `fn`
 // (best-effort, logged by the caller) rather than leaving admission unchecked forever.
-async function withStatusLock(statusPath, fn) {
+export async function withStatusLock(statusPath, fn) {
   const lockPath = `${statusPath}.lock`;
   let acquired = false;
   for (let attempt = 0; attempt < LOCK_RETRY_ATTEMPTS && !acquired; attempt++) {

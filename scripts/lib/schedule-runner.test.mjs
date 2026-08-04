@@ -2,9 +2,9 @@ import { strict as assert } from "node:assert";
 import test from "node:test";
 import { spawn as realSpawn, spawnSync } from "node:child_process";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { randomBytes } from "node:crypto";
 
 import { runScheduledJob } from "./schedule-runner.mjs";
@@ -48,7 +48,11 @@ test("direct run (no lockPath): success writes lastSuccessAt and does not touch 
   assert.equal(status["memory-daily"].lastExitCode, 0);
   assert.ok(status["memory-daily"].lastStartedAt <= status["memory-daily"].lastFinishedAt);
   assert.ok(lines.some((l) => l.includes("memory-daily") && l.includes("start")), "logs a start line");
-  assert.ok(!existsSync(`${statusPath}.tmp`), "no stray tmp file left behind");
+  // Unique per call (pid + random suffix), not a single "<statusPath>.tmp" — check the
+  // whole prefix family, not one exact stale name.
+  const statusFileName = statusPath.split("/").pop();
+  const strayTmp = readdirSync(dirname(statusPath)).filter((f) => f.startsWith(`${statusFileName}.tmp-`));
+  assert.deepEqual(strayTmp, [], "no stray tmp file left behind");
 });
 
 test("non-zero exit: lastExitCode recorded, lastSuccessAt left untouched", async () => {
