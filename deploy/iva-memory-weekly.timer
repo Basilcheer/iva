@@ -1,9 +1,0 @@
-[Unit]
-Description=Iva memory rollup (weekly) — Mon ~04:15 local
-
-[Timer]
-OnCalendar=Mon *-*-* 04:15:00 __TIMEZONE__
-Persistent=true
-
-[Install]
-WantedBy=timers.target

@@ -53,9 +53,10 @@ session-retirement story, rather than leaving the override in place indefinitely
 
 ## 7. Opt-in UI for the digest cron
 
-The daily-digest cron has no menu-driven opt-in/opt-out; enabling or disabling it is
-a config/file-level operation. Worth exposing in `/menu` alongside the other
-settings.
+`agent/schedules/digest.ts` exists now (off by default, reads `digestSchedule.enabled`
+from `data/settings.json` at fire time), but there's still no menu-driven opt-in/opt-out
+— enabling or disabling it is a raw `settings.json` edit. Worth exposing in `/menu`
+alongside the other settings.
 
 ## 8. Future `.mjs` → TypeScript conversion
 
@@ -68,9 +69,30 @@ If the box is down when an eve schedule would have fired, the run is simply skip
 — there's no catch-up on next start, unlike systemd's `Persistent=true` timers. Worth
 filing as a feature request against `vercel/eve`.
 
+**Workaround implemented here**: `scripts/lib/schedule-migration.mjs`, run fire-and-forget
+from `agent/instrumentation.ts` on every server start, replaces `Persistent=true` for the
+four memory-rollup schedules (`agent/schedules/memory-*.ts`). It compares each period's
+last recorded success (`data/rollup-status.json`) against its most recent
+timezone-aware scheduled point and runs it once if stale and still within a grace window
+(20h daily / 3d weekly / 7d monthly / 14d yearly) — home-grown, and specific to this app's
+four schedules, not a general answer other eve apps could reuse. Superseded if/when eve
+grows a native catch-up story.
+
 ## 10. Rollup-turn workarounds for vercel/eve#1450
 
 `scripts/lib/rollup-turn.mjs` and the timeout/safety-net logic in
 `scripts/memory/rollup.ts` work around an open upstream bug
 ([vercel/eve#1450](https://github.com/vercel/eve/issues/1450)). Once that's fixed
 upstream, remove the workarounds rather than leaving them as permanent scaffolding.
+
+## 11. Cron/name metadata duplicated across schedules, migration, and the menu
+
+The same 5 schedule names + cron expressions are hand-maintained in three places:
+`agent/schedules/*.ts` (the actual cron strings), `scripts/lib/schedule-migration.mjs`'s
+`PERIOD_SCHEDULE` (hour/minute per period, for catch-up math), and
+`scripts/lib/menu/crons.mjs`'s `EVE_SCHEDULES` (for the /menu → ⏰ display). Changing one
+schedule's cadence means remembering to update up to three files by hand; a missed one
+would make the menu display (or the catch-up math) silently wrong. Fixing this properly
+means either introducing a single shared schedule-metadata source all three read from, or
+adding a CI check that parses and cross-validates the three copies — both a heavier lift
+than the rest of this pass, so deferred rather than done here.

@@ -1,6 +1,7 @@
 import { strict as assert } from "node:assert";
 import test from "node:test";
 import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import {
   chmod,
   copyFile,
@@ -128,6 +129,7 @@ async function fixture(t) {
   return {
     calls,
     envPath,
+    home,
     project,
     runStart: (exit = 0) => runCommand("start", { exit }),
     runCommand,
@@ -220,8 +222,10 @@ test("doctor reports checked activation failures and keeps its summary", async (
 });
 
 test("doctor checks installed memory services and reports failed ones with a journal hint", async (t) => {
+  // daily/weekly/monthly/yearly moved to in-process eve schedules (agent/schedules/memory-*.ts,
+  // see scripts/lib/schedule-migration.mjs) — doctor stays the only external systemd watchdog.
   const { calls, runCommand } = await fixture(t);
-  const result = runCommand("doctor", { failedUnit: "iva-memory-weekly.service" });
+  const result = runCommand("doctor", { failedUnit: "iva-memory-doctor.service" });
   const output = `${result.stdout}\n${result.stderr}`;
   const systemctlCalls = (await readFile(calls, "utf8")).trim().split("\n");
   const checked = systemctlCalls
@@ -229,15 +233,144 @@ test("doctor checks installed memory services and reports failed ones with a jou
     .map((call) => call.split(" ").at(-1));
 
   assert.equal(result.status, 1, output);
-  assert.deepEqual(checked, [
-    "iva-memory-daily.service",
-    "iva-memory-weekly.service",
-    "iva-memory-monthly.service",
-    "iva-memory-yearly.service",
-    "iva-memory-doctor.service",
-  ]);
-  assert.match(output, /iva-memory-weekly\.service failed/);
-  assert.match(output, /journalctl --user -u iva-memory-weekly\.service -n 100 --no-pager/);
+  assert.deepEqual(checked, ["iva-memory-doctor.service"]);
+  assert.match(output, /iva-memory-doctor\.service failed/);
+  assert.match(output, /journalctl --user -u iva-memory-doctor\.service -n 100 --no-pager/);
+});
+
+test("doctor checks all four rollup periods against their own staleness threshold", async (t) => {
+  const { project, runCommand } = await fixture(t);
+  const now = Date.now();
+  await mkdir(join(project, "data"), { recursive: true });
+  await writeFile(
+    join(project, "data/rollup-status.json"),
+    JSON.stringify({
+      "memory-daily": { lastSuccessAt: now - 27 * 60 * 60 * 1000 },       // > 26h -> stale
+      "memory-weekly": { lastSuccessAt: now - 2 * 24 * 60 * 60 * 1000 },  // < 8d -> fresh
+      "memory-monthly": { lastSuccessAt: now - 33 * 24 * 60 * 60 * 1000 }, // > 32d -> stale
+      "memory-yearly": { lastSuccessAt: now - 10 * 24 * 60 * 60 * 1000 }, // < 370d -> fresh
+    }),
+  );
+
+  const result = runCommand("doctor");
+  const output = `${result.stdout}\n${result.stderr}`;
+
+  assert.match(output, /memory-daily schedule hasn't succeeded/);
+  assert.match(output, /memory-monthly schedule hasn't succeeded/);
+  assert.doesNotMatch(output, /memory-weekly schedule hasn't succeeded/);
+  assert.doesNotMatch(output, /memory-yearly schedule hasn't succeeded/);
+  assert.match(output, /memory-weekly schedule last succeeded/);
+  assert.match(output, /memory-yearly schedule last succeeded/);
+});
+
+test("doctor warns on a non-zero last exit code even right after a fresh success", async (t) => {
+  const { project, runCommand } = await fixture(t);
+  const now = Date.now();
+  await mkdir(join(project, "data"), { recursive: true });
+  await writeFile(
+    join(project, "data/rollup-status.json"),
+    JSON.stringify({
+      // Recently succeeded (well inside the 26h daily threshold)...
+      "memory-daily": { lastSuccessAt: now - 60 * 60 * 1000, lastExitCode: 1 },
+      // ...but the run recorded here is the LATEST attempt, and it failed after that
+      // success (e.g. a retry). The staleness check alone would call this fine.
+    }),
+  );
+
+  const result = runCommand("doctor");
+  const output = `${result.stdout}\n${result.stderr}`;
+
+  assert.match(output, /memory-daily schedule last succeeded/);
+  assert.match(output, /memory-daily schedule's last run exited 1/);
+});
+
+test("legacy memory-timer cleanup is skipped when the current build doesn't contain the eve schedules yet", async (t) => {
+  const { home, project, runCommand } = await fixture(t);
+  const unitDir = join(home, ".config/systemd/user");
+  await mkdir(unitDir, { recursive: true });
+  await writeFile(join(unitDir, "iva-memory-daily.timer"), "[Unit]\n");
+  // The fixture's stub .output/server/index.mjs is empty — no schedule names in it,
+  // i.e. exactly what a build made before this migration landed looks like.
+  await writeFile(join(project, ".output/server/index.mjs"), "");
+
+  const result = runCommand("_install-units");
+  const output = `${result.stdout}\n${result.stderr}`;
+
+  assert.equal(result.status, 0, output);
+  assert.match(output, /skipping legacy memory-timer cleanup/);
+  assert.equal(existsSync(join(unitDir, "iva-memory-daily.timer")), true, "the legacy unit is left alone on a stale build");
+});
+
+test("a build that only bundles LEGACY_MEMORY_UNITS strings (not the compiled schedules) still counts as stale", async (t) => {
+  // Regression test: instrumentation.ts always imports schedule-migration.mjs, whose
+  // LEGACY_MEMORY_UNITS array contains "iva-memory-daily.service" — which itself
+  // contains "memory-daily" as a substring. A marker that was just the bare string
+  // "memory-daily" would match THIS text and wrongly conclude the schedules compiled.
+  const { home, project, runCommand } = await fixture(t);
+  const unitDir = join(home, ".config/systemd/user");
+  await mkdir(unitDir, { recursive: true });
+  await writeFile(join(unitDir, "iva-memory-daily.timer"), "[Unit]\n");
+  await writeFile(
+    join(project, ".output/server/index.mjs"),
+    'const LEGACY_MEMORY_UNITS = ["iva-memory-daily.service", "iva-memory-daily.timer"];\n',
+  );
+
+  const result = runCommand("_install-units");
+  const output = `${result.stdout}\n${result.stderr}`;
+
+  assert.equal(result.status, 0, output);
+  assert.match(output, /skipping legacy memory-timer cleanup/, "the legacy-units array text must not be mistaken for a compiled schedule");
+  assert.equal(existsSync(join(unitDir, "iva-memory-daily.timer")), true);
+});
+
+// Mirrors the actual shape Nitro's schedule-task wrapper compiles (see a real
+// `.output/server/_virtual/*.schedule.mjs`) — the description string embeds the
+// schedule's own source path, which is what BUILD_SCHEDULE_MARKERS looks for.
+const scheduleDescriptionMjs = (period) =>
+  `var eve_schedule_default = { meta: { description: 'Run eve schedule "memory-${period}" from "schedules/memory-${period}.ts".' } };\n`;
+
+test("legacy memory-timer cleanup proceeds once the build actually contains ALL FOUR memory schedules", async (t) => {
+  const { calls, home, project, runCommand } = await fixture(t);
+  const unitDir = join(home, ".config/systemd/user");
+  await mkdir(unitDir, { recursive: true });
+  await writeFile(join(unitDir, "iva-memory-daily.timer"), "[Unit]\n");
+  await mkdir(join(project, ".output/server/_virtual"), { recursive: true });
+  for (const period of ["daily", "weekly", "monthly", "yearly"]) {
+    await writeFile(join(project, `.output/server/_virtual/eve-${period}.schedule.mjs`), scheduleDescriptionMjs(period));
+  }
+
+  const result = runCommand("_install-units");
+  const output = `${result.stdout}\n${result.stderr}`;
+
+  assert.equal(result.status, 0, output);
+  assert.doesNotMatch(output, /skipping legacy memory-timer cleanup/);
+  assert.equal(existsSync(join(unitDir, "iva-memory-daily.timer")), false, "a build that has all four schedules lets cleanup proceed");
+  const systemctlCalls = (await readFile(calls, "utf8")).trim().split("\n");
+  assert.ok(systemctlCalls.some((c) => c === "--user disable --now iva-memory-daily.timer"));
+});
+
+test("a PARTIAL build (only memory-daily compiled) still counts as stale — legacy units are preserved", async (t) => {
+  // Regression test: a build that's missing weekly/monthly/yearly (interrupted build,
+  // one schedule file failed to compile, etc.) must NOT let removeLegacyMemoryUnits()
+  // tear down systemd timers for periods that have no working in-process replacement in
+  // THIS build — that would lose those rollups entirely, not just delay the migration.
+  const { home, project, runCommand } = await fixture(t);
+  const unitDir = join(home, ".config/systemd/user");
+  await mkdir(unitDir, { recursive: true });
+  for (const period of ["daily", "weekly", "monthly", "yearly"]) {
+    await writeFile(join(unitDir, `iva-memory-${period}.timer`), "[Unit]\n");
+  }
+  await mkdir(join(project, ".output/server/_virtual"), { recursive: true });
+  await writeFile(join(project, ".output/server/_virtual/eve.schedule.mjs"), scheduleDescriptionMjs("daily"));
+
+  const result = runCommand("_install-units");
+  const output = `${result.stdout}\n${result.stderr}`;
+
+  assert.equal(result.status, 0, output);
+  assert.match(output, /skipping legacy memory-timer cleanup/, "one marker out of four must not be treated as a complete build");
+  for (const period of ["daily", "weekly", "monthly", "yearly"]) {
+    assert.equal(existsSync(join(unitDir, `iva-memory-${period}.timer`)), true, `${period}'s legacy unit survives a partial build`);
+  }
 });
 
 test("doctor surfaces problems from a fresh nightly memory report", async (t) => {

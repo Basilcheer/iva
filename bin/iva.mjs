@@ -20,6 +20,7 @@ import { parseEnvText, writeEnvAtomicSync } from "../scripts/lib/env-file.mjs";
 import { classifyAgentListeners } from "../scripts/lib/listener-security.mjs";
 import { readMemoryMaintenanceReport } from "../scripts/lib/memory-maintenance.mjs";
 import { cleanupSystemdUnits, createSystemdControl } from "../scripts/lib/systemd-control.mjs";
+import { LEGACY_MEMORY_UNITS } from "../scripts/lib/schedule-migration.mjs";
 import {
   applyConfigTransaction,
   probeEveHealth,
@@ -45,7 +46,12 @@ const NPM = existsSync(join(NODE_BIN_DIR, "npm")) ? join(NODE_BIN_DIR, "npm") : 
 const childEnv = { ...process.env, PATH: `${NODE_BIN_DIR}:${process.env.PATH || ""}` };
 
 const SERVICES = ["iva.service", "iva-telegram-poll.service"];
-const MEMORY_PERIODS = ["daily", "weekly", "monthly", "yearly", "doctor"];
+// daily/weekly/monthly/yearly moved to in-process eve schedules (agent/schedules/memory-*.ts,
+// migrated by scripts/lib/schedule-migration.mjs on server start) — only doctor stays an
+// external systemd watchdog, on purpose: it must keep running even if the server itself is
+// wedged. LEGACY_MEMORY_UNITS (imported above) is the single source of truth for the 8 exact
+// retired unit names both this file and the schedule migration tear down.
+const MEMORY_PERIODS = ["doctor"];
 const MEMORY_SERVICES = MEMORY_PERIODS.map((n) => `iva-memory-${n}.service`);
 const MEMORY_TIMERS = MEMORY_PERIODS.map((n) => `iva-memory-${n}.timer`);
 const UPDATE_TIMER = "iva-update-check.timer";
@@ -141,10 +147,20 @@ function ensureAssistantBearer({ quiet = false } = {}) {
   return changed;
 }
 
+// Same regex-validated timezone both writeUnits() (substituted into the deploy/ timer
+// templates' __TIMEZONE__) and ivaServiceBody() (Environment=TZ=, since the eve schedules
+// in agent/schedules/memory-*.ts carry no timezone of their own and fire in the process's
+// local time) need — one place so the fallback/validation rule can't drift between them.
+function configuredTimezone() {
+  const raw = (readEnv().ASSISTANT_TIMEZONE || "UTC").trim();
+  return /^[A-Za-z0-9_+\/-]+$/.test(raw) ? raw : "UTC";
+}
+
 // ── systemd units: single source of truth ─────────────────────────────────
 function ivaServiceBody() {
   // PATH with the node directory (= npm global bin under nvm), Restart=always.
   const port = (readEnv().IVA_PORT || DEFAULT_PORT).trim();
+  const timezone = configuredTimezone();
   return [
     "[Unit]",
     "Description=Iva",
@@ -170,6 +186,7 @@ function ivaServiceBody() {
     // HOST/NITRO_HOST for the spawned .output/server/index.mjs, so the flag is what binds.
     `ExecStart=${NODE} ${ROOT}/node_modules/eve/bin/eve.js start --host 127.0.0.1`,
     `Environment=PORT=${port}`,
+    `Environment=TZ=${timezone}`,
     `Environment=PATH=${NODE_BIN_DIR}:%h/.local/bin:/usr/local/bin:/usr/bin:/bin`,
     "Environment=AGENT_BROWSER_MAX_OUTPUT=24000",
     "Restart=always",
@@ -219,8 +236,7 @@ function writeUnits({ ensureBearer = true } = {}) {
   writeFileSync(join(UNIT_DIR, "iva.service"), ivaServiceBody());
   const written = ["iva.service"];
   const deploy = join(ROOT, "deploy");
-  const configuredTimezone = (readEnv().ASSISTANT_TIMEZONE || "UTC").trim();
-  const timezone = /^[A-Za-z0-9_+\/-]+$/.test(configuredTimezone) ? configuredTimezone : "UTC";
+  const timezone = configuredTimezone();
   for (const f of readdirSync(deploy)) {
     if (!/^iva-.*\.(service|timer)$/.test(f)) continue;
     const tpl = readFileSync(join(deploy, f), "utf8")
@@ -232,7 +248,101 @@ function writeUnits({ ensureBearer = true } = {}) {
     written.push(f);
   }
   if (hasSystemd()) systemd.daemonReload();
+  removeLegacyMemoryUnits();
   return written;
+}
+
+// Existing installs may still carry the 8 retired iva-memory-{daily,weekly,monthly,yearly}
+// unit files (deploy/ no longer ships them, so the copy loop above never overwrites or
+// removes them on its own). `iva update`/`iva doctor` both call writeUnits() on every run,
+// so this self-heals every existing install onto eve schedules without a dedicated
+// migration command — by exact name only, so an unrelated self-host timer is never touched.
+// Guards against tearing down the old systemd safety net while running a BUILD that
+// predates the eve-schedules migration — e.g. .output/ wasn't rebuilt yet after an
+// `iva update` pulled this change (writeUnits() runs before the build step in some
+// call paths). Without this check, a stale build would lose its memory rollups
+// entirely (old timers gone, new eve schedules not actually in the bundle) until the
+// next successful build. A shallow recursive text scan for markers unique to the
+// COMPILED schedules is enough — bare "memory-daily" is NOT unique enough: instrumentation.ts
+// always imports schedule-migration.mjs, whose LEGACY_MEMORY_UNITS array contains the
+// string "iva-memory-daily.service", which itself contains "memory-daily" as a substring
+// — that would make the marker match on every build regardless of whether the schedules
+// themselves actually compiled. Nitro's schedule-task wrapper embeds each schedule's own
+// source path ("schedules/memory-daily.ts") in its description string, which cannot
+// appear anywhere else.
+//
+// ALL FOUR memory-* markers are required, not just one: a partial build (e.g. one
+// schedule file failed to compile, or a build got interrupted mid-write) could contain
+// memory-daily.ts's marker while missing weekly/monthly/yearly — a single-marker check
+// would then let removeLegacyMemoryUnits() tear down the OLD systemd timers for periods
+// that have no working in-process replacement in THIS build, losing those rollups
+// entirely rather than just delaying the migration one more boot.
+const BUILD_SCHEDULE_MARKERS = [
+  "schedules/memory-daily.ts",
+  "schedules/memory-weekly.ts",
+  "schedules/memory-monthly.ts",
+  "schedules/memory-yearly.ts",
+];
+const BUILD_SCAN_MAX_FILE_BYTES = 15_000_000;
+function buildHasSchedules() {
+  const outputServer = join(ROOT, ".output/server");
+  if (!existsSync(outputServer)) return false;
+  const remaining = new Set(BUILD_SCHEDULE_MARKERS);
+  try {
+    for (const rel of readdirSync(outputServer, { recursive: true })) {
+      if (remaining.size === 0) break;
+      const full = join(outputServer, rel);
+      let stat;
+      try {
+        stat = statSync(full);
+      } catch {
+        continue;
+      }
+      if (!stat.isFile() || stat.size > BUILD_SCAN_MAX_FILE_BYTES) continue;
+      // .output/server is the WHOLE server bundle plus every vendored dependency — a
+      // miss (the common case: doctor/writeUnits runs on every `iva update`) would
+      // otherwise mean synchronously reading tens to hundreds of MB. The markers can only
+      // ever land in Nitro's own compiled JS/JSON output, never in a vendored asset.
+      if (!/\.(mjs|cjs|js|json)$/.test(rel)) continue;
+      let content;
+      try {
+        content = readFileSync(full); // Buffer — no need to decode as UTF-8 just to substring-search
+      } catch {
+        continue; // unreadable — not where a schedule name would live anyway
+      }
+      // Markers can land in different files (each schedule may compile to its own
+      // _virtual/*.schedule.mjs, or all get inlined into one bundle) — check every
+      // still-missing marker against every file rather than stopping at the first hit.
+      for (const marker of remaining) {
+        if (content.includes(marker)) remaining.delete(marker);
+      }
+    }
+  } catch {
+    return false;
+  }
+  return remaining.size === 0;
+}
+
+function removeLegacyMemoryUnits() {
+  if (!hasSystemd()) return [];
+  const units = LEGACY_MEMORY_UNITS.filter((u) => existsSync(join(UNIT_DIR, u)));
+  if (!units.length) return [];
+  if (!buildHasSchedules()) {
+    warn("skipping legacy memory-timer cleanup — the current build doesn't contain the eve schedules yet (rebuild with `iva doctor` or `npm run build`, then it will run automatically)");
+    return [];
+  }
+  try {
+    return cleanupSystemdUnits({
+      units,
+      disable: (unit) => systemd.disableNow([unit]),
+      remove: (unit) => rmSync(join(UNIT_DIR, unit)),
+      reload: () => systemd.daemonReload(),
+      reset: () => systemd.resetFailed(),
+    });
+  } catch (e) {
+    warn(`legacy memory-timer cleanup incomplete: ${e.message}`);
+    return units;
+  }
 }
 
 function activateUnits() {
@@ -831,6 +941,47 @@ async function cmdDoctor() {
   if (installedMemoryServices.length && failedMemoryServices === 0) {
     ok(`Memory units have no failed state (${installedMemoryServices.length})`);
     okN++;
+  }
+
+  // daily/weekly/monthly/yearly now run as in-process eve schedules (no systemd unit of
+  // their own to query for a failed state, unlike doctor above) — data/rollup-status.json
+  // (scripts/lib/schedule-runner.mjs) is the only record of whether they're actually firing.
+  // Threshold gives each cadence a full extra cycle of slack before doctor complains:
+  // 26h for the 04:00 daily slot, 8d/32d/370d for weekly/monthly/yearly respectively.
+  let rollupStatus = null;
+  try {
+    rollupStatus = JSON.parse(readFileSync(join(dataDirAbs(env), "rollup-status.json"), "utf8"));
+  } catch {
+    // No rollup-status.json yet (fresh install, or nothing has fired yet) — not an error.
+  }
+  if (rollupStatus) {
+    const STALE_AFTER_H = { daily: 26, weekly: 8 * 24, monthly: 32 * 24, yearly: 370 * 24 };
+    for (const period of ["daily", "weekly", "monthly", "yearly"]) {
+      // "memory-<period>" — the `name` each agent/schedules/memory-*.ts passes to
+      // runScheduledJob, not the bare period (see scripts/lib/schedule-runner.mjs).
+      const entry = rollupStatus?.[`memory-${period}`];
+      if (!entry) continue; // hasn't fired yet on this install (e.g. yearly, on most installs)
+      if (typeof entry.lastSuccessAt === "number") {
+        const ageHours = (Date.now() - entry.lastSuccessAt) / (60 * 60 * 1000);
+        const thresholdH = STALE_AFTER_H[period];
+        if (ageHours > thresholdH) {
+          warn(`memory-${period} schedule hasn't succeeded in ${Math.round(ageHours)}h (> ${thresholdH}h) — check: journalctl --user -u iva.service | grep schedule-runner`);
+          warnN++;
+        } else {
+          (ok(`memory-${period} schedule last succeeded ${Math.round(ageHours)}h ago`), okN++);
+        }
+      } else {
+        warn(`memory-${period} schedule has never succeeded — check: journalctl --user -u iva.service | grep schedule-runner`);
+        warnN++;
+      }
+      // A recent success doesn't mean the MOST RECENT attempt was clean — e.g. it
+      // succeeded, then a later catch-up retry failed and hasn't run again since.
+      // Surface that even when the staleness check above is satisfied.
+      if (typeof entry.lastExitCode === "number" && entry.lastExitCode !== 0) {
+        warn(`memory-${period} schedule's last run exited ${entry.lastExitCode} — check: journalctl --user -u iva.service | grep schedule-runner`);
+        warnN++;
+      }
+    }
   }
 
   // 6. Vault + git origin (report only — we don't initiate git operations)
