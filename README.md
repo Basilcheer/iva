@@ -30,6 +30,12 @@ curl -fsSL https://raw.githubusercontent.com/smixs/iva/main/install.sh | bash
 
 ### 04.08.2026
 
+#### v0.3.10
+
+- 🕰️ Nightly memory now runs inside Iva itself (eve schedules) — four systemd timers removed automatically, nothing to do on your side.
+- 🩹 If the server was down at rollup time, the missed run now catches up on the next start.
+- 🌅 Optional morning digest on a schedule — off by default, enable with `digestSchedule.enabled` in `data/settings.json`.
+
 #### v0.3.9
 
 - ⚙️ The eve engine is updated (0.29.5) — more reliable turn cancellation and message delivery around restarts.
