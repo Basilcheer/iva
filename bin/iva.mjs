@@ -873,23 +873,39 @@ async function cmdDoctor() {
   // daily/weekly/monthly/yearly now run as in-process eve schedules (no systemd unit of
   // their own to query for a failed state, unlike doctor above) — data/rollup-status.json
   // (scripts/lib/schedule-runner.mjs) is the only record of whether they're actually firing.
-  // 26h gives the 04:00 daily slot a full day of slack before doctor complains.
+  // Threshold gives each cadence a full extra cycle of slack before doctor complains:
+  // 26h for the 04:00 daily slot, 8d/32d/370d for weekly/monthly/yearly respectively.
   try {
     const rollupStatus = JSON.parse(readFileSync(join(dataDirAbs(env), "rollup-status.json"), "utf8"));
-    // "memory-daily" — the `name` agent/schedules/memory-daily.ts passes to
-    // runScheduledJob, not the bare period (see scripts/lib/schedule-runner.mjs).
-    const dailySuccessAt = rollupStatus?.["memory-daily"]?.lastSuccessAt;
-    if (typeof dailySuccessAt === "number") {
-      const ageHours = (Date.now() - dailySuccessAt) / (60 * 60 * 1000);
-      if (ageHours > 26) {
-        warn(`memory-daily schedule hasn't succeeded in ${Math.round(ageHours)}h — check: journalctl --user -u iva.service | grep schedule-runner`);
-        warnN++;
+    const STALE_AFTER_H = { daily: 26, weekly: 8 * 24, monthly: 32 * 24, yearly: 370 * 24 };
+    for (const period of ["daily", "weekly", "monthly", "yearly"]) {
+      // "memory-<period>" — the `name` each agent/schedules/memory-*.ts passes to
+      // runScheduledJob, not the bare period (see scripts/lib/schedule-runner.mjs).
+      const entry = rollupStatus?.[`memory-${period}`];
+      if (!entry) continue; // hasn't fired yet on this install (e.g. yearly, on most installs)
+      if (typeof entry.lastSuccessAt === "number") {
+        const ageHours = (Date.now() - entry.lastSuccessAt) / (60 * 60 * 1000);
+        const thresholdH = STALE_AFTER_H[period];
+        if (ageHours > thresholdH) {
+          warn(`memory-${period} schedule hasn't succeeded in ${Math.round(ageHours)}h (> ${thresholdH}h) — check: journalctl --user -u iva.service | grep schedule-runner`);
+          warnN++;
+        } else {
+          (ok(`memory-${period} schedule last succeeded ${Math.round(ageHours)}h ago`), okN++);
+        }
       } else {
-        (ok(`memory-daily schedule last succeeded ${Math.round(ageHours)}h ago`), okN++);
+        warn(`memory-${period} schedule has never succeeded — check: journalctl --user -u iva.service | grep schedule-runner`);
+        warnN++;
+      }
+      // A recent success doesn't mean the MOST RECENT attempt was clean — e.g. it
+      // succeeded, then a later catch-up retry failed and hasn't run again since.
+      // Surface that even when the staleness check above is satisfied.
+      if (typeof entry.lastExitCode === "number" && entry.lastExitCode !== 0) {
+        warn(`memory-${period} schedule's last run exited ${entry.lastExitCode} — check: journalctl --user -u iva.service | grep schedule-runner`);
+        warnN++;
       }
     }
   } catch {
-    // No rollup-status.json yet (fresh install, or the first daily slot hasn't fired) — not an error.
+    // No rollup-status.json yet (fresh install, or nothing has fired yet) — not an error.
   }
 
   // 6. Vault + git origin (report only — we don't initiate git operations)

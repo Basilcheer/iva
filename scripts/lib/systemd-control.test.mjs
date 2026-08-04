@@ -236,6 +236,52 @@ test("doctor checks installed memory services and reports failed ones with a jou
   assert.match(output, /journalctl --user -u iva-memory-doctor\.service -n 100 --no-pager/);
 });
 
+test("doctor checks all four rollup periods against their own staleness threshold", async (t) => {
+  const { project, runCommand } = await fixture(t);
+  const now = Date.now();
+  await mkdir(join(project, "data"), { recursive: true });
+  await writeFile(
+    join(project, "data/rollup-status.json"),
+    JSON.stringify({
+      "memory-daily": { lastSuccessAt: now - 27 * 60 * 60 * 1000 },       // > 26h -> stale
+      "memory-weekly": { lastSuccessAt: now - 2 * 24 * 60 * 60 * 1000 },  // < 8d -> fresh
+      "memory-monthly": { lastSuccessAt: now - 33 * 24 * 60 * 60 * 1000 }, // > 32d -> stale
+      "memory-yearly": { lastSuccessAt: now - 10 * 24 * 60 * 60 * 1000 }, // < 370d -> fresh
+    }),
+  );
+
+  const result = runCommand("doctor");
+  const output = `${result.stdout}\n${result.stderr}`;
+
+  assert.match(output, /memory-daily schedule hasn't succeeded/);
+  assert.match(output, /memory-monthly schedule hasn't succeeded/);
+  assert.doesNotMatch(output, /memory-weekly schedule hasn't succeeded/);
+  assert.doesNotMatch(output, /memory-yearly schedule hasn't succeeded/);
+  assert.match(output, /memory-weekly schedule last succeeded/);
+  assert.match(output, /memory-yearly schedule last succeeded/);
+});
+
+test("doctor warns on a non-zero last exit code even right after a fresh success", async (t) => {
+  const { project, runCommand } = await fixture(t);
+  const now = Date.now();
+  await mkdir(join(project, "data"), { recursive: true });
+  await writeFile(
+    join(project, "data/rollup-status.json"),
+    JSON.stringify({
+      // Recently succeeded (well inside the 26h daily threshold)...
+      "memory-daily": { lastSuccessAt: now - 60 * 60 * 1000, lastExitCode: 1 },
+      // ...but the run recorded here is the LATEST attempt, and it failed after that
+      // success (e.g. a retry). The staleness check alone would call this fine.
+    }),
+  );
+
+  const result = runCommand("doctor");
+  const output = `${result.stdout}\n${result.stderr}`;
+
+  assert.match(output, /memory-daily schedule last succeeded/);
+  assert.match(output, /memory-daily schedule's last run exited 1/);
+});
+
 test("doctor surfaces problems from a fresh nightly memory report", async (t) => {
   const { project, runCommand } = await fixture(t);
   const graph = join(project, "vault/.graph");
