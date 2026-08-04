@@ -285,11 +285,16 @@ function buildHasSchedules() {
         continue;
       }
       if (!stat.isFile() || stat.size > BUILD_SCAN_MAX_FILE_BYTES) continue;
+      // .output/server is the WHOLE server bundle plus every vendored dependency — a
+      // miss (the common case: doctor/writeUnits runs on every `iva update`) would
+      // otherwise mean synchronously reading tens to hundreds of MB. The marker can only
+      // ever land in Nitro's own compiled JS/JSON output, never in a vendored asset.
+      if (!/\.(mjs|cjs|js|json)$/.test(rel)) continue;
       let content;
       try {
-        content = readFileSync(full, "utf8");
+        content = readFileSync(full); // Buffer — no need to decode as UTF-8 just to substring-search
       } catch {
-        continue; // binary or unreadable — not where a schedule name would live anyway
+        continue; // unreadable — not where a schedule name would live anyway
       }
       if (content.includes(BUILD_SCHEDULE_MARKER)) return true;
     }
