@@ -455,18 +455,22 @@ test("a completed-update ledger is isolated by Telegram bot id", async () => {
     async () => ({ id: `accepted-${++sends}` }),
     { completedUpdatesFile },
   );
-
-  process.env.TELEGRAM_BOT_TOKEN = fakeBotToken(111, "first-bot");
-  assert.equal(await delivery(privateUpdate(701, "first bot")), true);
-  process.env.TELEGRAM_BOT_TOKEN = fakeBotToken(222, "second-bot");
-  assert.equal(await delivery(privateUpdate(701, "second bot")), true);
-  assert.equal(await delivery(privateUpdate(701, "second bot duplicate")), "handled");
-  assert.equal(sends, 2);
-  assert.deepEqual(JSON.parse(readFileSync(completedUpdatesFile, "utf8")), {
-    botId: "222",
-    updates: [701],
-  });
-  process.env.TELEGRAM_BOT_TOKEN = fakeBotToken(999, "acceptance-default");
+  const priorToken = process.env.TELEGRAM_BOT_TOKEN;
+  try {
+    process.env.TELEGRAM_BOT_TOKEN = fakeBotToken(111, "first-bot");
+    assert.equal(await delivery(privateUpdate(701, "first bot")), true);
+    process.env.TELEGRAM_BOT_TOKEN = fakeBotToken(222, "second-bot");
+    assert.equal(await delivery(privateUpdate(701, "second bot")), true);
+    assert.equal(await delivery(privateUpdate(701, "second bot duplicate")), "handled");
+    assert.equal(sends, 2);
+    assert.deepEqual(JSON.parse(readFileSync(completedUpdatesFile, "utf8")), {
+      botId: "222",
+      updates: [701],
+    });
+  } finally {
+    if (priorToken === undefined) delete process.env.TELEGRAM_BOT_TOKEN;
+    else process.env.TELEGRAM_BOT_TOKEN = priorToken;
+  }
 });
 
 test("an invalid completed-update schema is recovered after acceptance", async () => {
