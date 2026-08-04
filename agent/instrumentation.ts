@@ -45,9 +45,21 @@ export default defineInstrumentation({
     if (!process.env.TZ && process.env.ASSISTANT_TIMEZONE) {
       process.env.TZ = process.env.ASSISTANT_TIMEZONE;
     }
-    const tz =
+    const rawTz =
       process.env.ASSISTANT_TIMEZONE ||
       (process.env.TZ && process.env.TZ !== "undefined" ? process.env.TZ : "UTC");
+    // bin/iva.mjs validates ASSISTANT_TIMEZONE with a regex before ever writing it into a
+    // unit file; this is the other consumer of the same raw env value, so it needs the
+    // same defense — an invalid zone would otherwise reach Intl.DateTimeFormat inside
+    // schedule-migration.mjs's zonedParts(), which throws, which the outer catch below
+    // swallows, silently skipping catch-up on every boot.
+    let tz = "UTC";
+    try {
+      new Intl.DateTimeFormat("en-US", { timeZone: rawTz });
+      tz = rawTz;
+    } catch {
+      log(`schedule-migration: invalid timezone ${rawTz} — falling back to UTC`);
+    }
 
     // Never let this block or fail server startup: wrap synchronously, and treat the
     // whole async chain below as fire-and-forget with its own catch.
@@ -55,9 +67,14 @@ export default defineInstrumentation({
       const root = process.cwd();
       const dataDirRaw = process.env.ASSISTANT_DATA_DIR ?? "data";
       const dataDir = dataDirRaw.startsWith("/") ? dataDirRaw : join(root, dataDirRaw);
+      // Always loopback, deliberately NOT derived from ASSISTANT_HOST: the listener is
+      // bound to 127.0.0.1 by iva.service (`eve start --host 127.0.0.1`) regardless of
+      // what ASSISTANT_HOST says, and probeEveHealth only accepts loopback hostnames. A
+      // self-host ASSISTANT_HOST pointed at a public domain or LAN address would
+      // otherwise make the probe reject instantly on every boot, permanently disabling
+      // catch-up — the exact Persistent=true replacement this file exists to provide.
       const port = process.env.IVA_PORT ?? "8723";
-      const host = (process.env.ASSISTANT_HOST ?? `http://127.0.0.1:${port}`).replace(/\/$/, "");
-      const healthUrl = `${host}/eve/v1/health`;
+      const healthUrl = `http://127.0.0.1:${port}/eve/v1/health`;
 
       (async () => {
         try {
