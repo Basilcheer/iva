@@ -254,10 +254,50 @@ function writeUnits({ ensureBearer = true } = {}) {
 // removes them on its own). `iva update`/`iva doctor` both call writeUnits() on every run,
 // so this self-heals every existing install onto eve schedules without a dedicated
 // migration command — by exact name only, so an unrelated self-host timer is never touched.
+// Guards against tearing down the old systemd safety net while running a BUILD that
+// predates the eve-schedules migration — e.g. .output/ wasn't rebuilt yet after an
+// `iva update` pulled this change (writeUnits() runs before the build step in some
+// call paths). Without this check, a stale build would lose its memory rollups
+// entirely (old timers gone, new eve schedules not actually in the bundle) until the
+// next successful build. A shallow recursive text scan for one schedule's name is
+// enough — it can only appear there once the schedules actually compiled into it.
+const BUILD_SCHEDULE_MARKER = "memory-daily";
+const BUILD_SCAN_MAX_FILE_BYTES = 15_000_000;
+function buildHasSchedules() {
+  const outputServer = join(ROOT, ".output/server");
+  if (!existsSync(outputServer)) return false;
+  try {
+    for (const rel of readdirSync(outputServer, { recursive: true })) {
+      const full = join(outputServer, rel);
+      let stat;
+      try {
+        stat = statSync(full);
+      } catch {
+        continue;
+      }
+      if (!stat.isFile() || stat.size > BUILD_SCAN_MAX_FILE_BYTES) continue;
+      let content;
+      try {
+        content = readFileSync(full, "utf8");
+      } catch {
+        continue; // binary or unreadable — not where a schedule name would live anyway
+      }
+      if (content.includes(BUILD_SCHEDULE_MARKER)) return true;
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
 function removeLegacyMemoryUnits() {
   if (!hasSystemd()) return [];
   const units = LEGACY_MEMORY_UNITS.filter((u) => existsSync(join(UNIT_DIR, u)));
   if (!units.length) return [];
+  if (!buildHasSchedules()) {
+    warn("skipping legacy memory-timer cleanup — the current build doesn't contain the eve schedules yet (rebuild with `iva doctor` or `npm run build`, then it will run automatically)");
+    return [];
+  }
   try {
     return cleanupSystemdUnits({
       units,

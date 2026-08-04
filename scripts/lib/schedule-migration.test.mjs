@@ -167,7 +167,7 @@ test("legacy units: disabled and deleted by exact name; unrelated xfeed-daily.ti
   assert.equal(calls.filter((c) => c === "--user reset-failed").length, 1);
 });
 
-test("a partial systemctl failure does not throw, and the next boot retries cleanly", async () => {
+test("a partial systemctl failure does not throw, leaves the file for a retry, and the next boot cleans it up", async () => {
   const homedir = await scaffoldHome();
   const unitDir = join(homedir, UNIT_DIR_REL);
   await writeFile(join(unitDir, "iva-memory-daily.timer"), "[Unit]\n");
@@ -189,16 +189,22 @@ test("a partial systemctl failure does not throw, and the next boot retries clea
   );
   assert.ok(calls.some((c) => c === "--user disable --now iva-memory-daily.timer"), "the failing disable was actually attempted");
   assert.ok(logged.some((l) => l.includes("disable --now iva-memory-daily.timer") && l.includes("failed")), "the failure was logged, not swallowed silently");
-  // Even though its `disable` failed, the file is still removed (best-effort, independent step)
-  // so the unit cannot linger and get re-picked-up by daemon-reload forever.
-  assert.equal(existsSync(join(unitDir, "iva-memory-daily.timer")), false);
+  // The file must survive a failed disable: deleting it anyway would leave a unit that
+  // systemd still considers enabled/active with no file behind it — invisible to a
+  // human, but not actually gone. It's deleted only once disable actually succeeds.
+  assert.equal(existsSync(join(unitDir, "iva-memory-daily.timer")), true, "the unit file is kept when disable failed");
+  assert.ok(logged.some((l) => l.includes("iva-memory-daily.timer") && l.includes("next boot will retry")));
+  // Its sibling .service file (whose disable did NOT fail) is removed as normal.
+  assert.equal(existsSync(join(unitDir, "iva-memory-daily.service")), false);
 
-  // "Next boot" — calling it again must still not throw, and is a clean no-op now.
+  // "Next boot" — systemctl behaves normally this time, so the retry succeeds and the
+  // file is finally removed.
   const second = fakeExecImpl();
   await assert.doesNotReject(() =>
     runScheduleMigration({ homedir, execImpl: second.execImpl, statusPath, tz: "UTC", log: () => {} }),
   );
-  assert.equal(second.calls.filter((c) => c.includes("disable --now")).length, 0, "nothing left to disable");
+  assert.ok(second.calls.some((c) => c === "--user disable --now iva-memory-daily.timer"), "the retry actually re-attempts disable");
+  assert.equal(existsSync(join(unitDir, "iva-memory-daily.timer")), false, "the retry succeeds and the file is finally removed");
 });
 
 test("catch-up math: due-and-in-grace periods run, an already-succeeded period does not, and a period whose due point is past its grace window is skipped", async () => {

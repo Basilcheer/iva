@@ -156,11 +156,25 @@ function removeLegacyUnits({ homedir, execImpl, log }) {
     const path = join(unitDir, unit);
     if (!existsSync(path)) continue;
     touchedAny = true;
+    let disabled = false;
     try {
       const result = execImpl(["--user", "disable", "--now", unit]);
-      if (result.code !== 0) log(`schedule-migration: disable --now ${unit} failed (best-effort): ${result.err || result.out}`);
+      if (result.code !== 0) {
+        log(`schedule-migration: disable --now ${unit} failed (best-effort): ${result.err || result.out}`);
+      } else {
+        disabled = true;
+      }
     } catch (error) {
       log(`schedule-migration: disable --now ${unit} threw (best-effort): ${error.message}`);
+    }
+    // Only remove the file once systemd has actually let go of the unit. Deleting it
+    // after a failed disable would leave a still-enabled/active unit with no file behind
+    // — invisible to a human, but still running (or still armed to run again). Leaving
+    // the file in place means this boot's cleanup is simply retried on the next one,
+    // same as a partial systemctl failure anywhere else in this function.
+    if (!disabled) {
+      log(`schedule-migration: leaving ${unit} in place — disable failed, the next boot will retry`);
+      continue;
     }
     try {
       rmSync(path, { force: true });

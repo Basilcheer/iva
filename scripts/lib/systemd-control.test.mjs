@@ -1,6 +1,7 @@
 import { strict as assert } from "node:assert";
 import test from "node:test";
 import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import {
   chmod,
   copyFile,
@@ -128,6 +129,7 @@ async function fixture(t) {
   return {
     calls,
     envPath,
+    home,
     project,
     runStart: (exit = 0) => runCommand("start", { exit }),
     runCommand,
@@ -280,6 +282,44 @@ test("doctor warns on a non-zero last exit code even right after a fresh success
 
   assert.match(output, /memory-daily schedule last succeeded/);
   assert.match(output, /memory-daily schedule's last run exited 1/);
+});
+
+test("legacy memory-timer cleanup is skipped when the current build doesn't contain the eve schedules yet", async (t) => {
+  const { home, project, runCommand } = await fixture(t);
+  const unitDir = join(home, ".config/systemd/user");
+  await mkdir(unitDir, { recursive: true });
+  await writeFile(join(unitDir, "iva-memory-daily.timer"), "[Unit]\n");
+  // The fixture's stub .output/server/index.mjs is empty — no schedule names in it,
+  // i.e. exactly what a build made before this migration landed looks like.
+  await writeFile(join(project, ".output/server/index.mjs"), "");
+
+  const result = runCommand("_install-units");
+  const output = `${result.stdout}\n${result.stderr}`;
+
+  assert.equal(result.status, 0, output);
+  assert.match(output, /skipping legacy memory-timer cleanup/);
+  assert.equal(existsSync(join(unitDir, "iva-memory-daily.timer")), true, "the legacy unit is left alone on a stale build");
+});
+
+test("legacy memory-timer cleanup proceeds once the build actually contains the eve schedules", async (t) => {
+  const { calls, home, project, runCommand } = await fixture(t);
+  const unitDir = join(home, ".config/systemd/user");
+  await mkdir(unitDir, { recursive: true });
+  await writeFile(join(unitDir, "iva-memory-daily.timer"), "[Unit]\n");
+  await mkdir(join(project, ".output/server/_virtual"), { recursive: true });
+  await writeFile(
+    join(project, ".output/server/_virtual/eve.schedule.mjs"),
+    'export const scheduleId = "memory-daily";\n',
+  );
+
+  const result = runCommand("_install-units");
+  const output = `${result.stdout}\n${result.stderr}`;
+
+  assert.equal(result.status, 0, output);
+  assert.doesNotMatch(output, /skipping legacy memory-timer cleanup/);
+  assert.equal(existsSync(join(unitDir, "iva-memory-daily.timer")), false, "a build that has the schedules lets cleanup proceed");
+  const systemctlCalls = (await readFile(calls, "utf8")).trim().split("\n");
+  assert.ok(systemctlCalls.some((c) => c === "--user disable --now iva-memory-daily.timer"));
 });
 
 test("doctor surfaces problems from a fresh nightly memory report", async (t) => {
