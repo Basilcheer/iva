@@ -147,16 +147,20 @@ function ensureAssistantBearer({ quiet = false } = {}) {
   return changed;
 }
 
+// Same regex-validated timezone both writeUnits() (substituted into the deploy/ timer
+// templates' __TIMEZONE__) and ivaServiceBody() (Environment=TZ=, since the eve schedules
+// in agent/schedules/memory-*.ts carry no timezone of their own and fire in the process's
+// local time) need — one place so the fallback/validation rule can't drift between them.
+function configuredTimezone() {
+  const raw = (readEnv().ASSISTANT_TIMEZONE || "UTC").trim();
+  return /^[A-Za-z0-9_+\/-]+$/.test(raw) ? raw : "UTC";
+}
+
 // ── systemd units: single source of truth ─────────────────────────────────
 function ivaServiceBody() {
   // PATH with the node directory (= npm global bin under nvm), Restart=always.
   const port = (readEnv().IVA_PORT || DEFAULT_PORT).trim();
-  // Same regex-validated timezone writeUnits() substitutes into the deploy/ timer templates
-  // (__TIMEZONE__) — the eve schedules (agent/schedules/memory-*.ts) carry no timezone of
-  // their own and fire in the process's local time, so this is what makes "0 4 * * *" mean
-  // 04:00 ASSISTANT_TIMEZONE instead of the host's system TZ.
-  const configuredTimezone = (readEnv().ASSISTANT_TIMEZONE || "UTC").trim();
-  const timezone = /^[A-Za-z0-9_+\/-]+$/.test(configuredTimezone) ? configuredTimezone : "UTC";
+  const timezone = configuredTimezone();
   return [
     "[Unit]",
     "Description=Iva",
@@ -232,8 +236,7 @@ function writeUnits({ ensureBearer = true } = {}) {
   writeFileSync(join(UNIT_DIR, "iva.service"), ivaServiceBody());
   const written = ["iva.service"];
   const deploy = join(ROOT, "deploy");
-  const configuredTimezone = (readEnv().ASSISTANT_TIMEZONE || "UTC").trim();
-  const timezone = /^[A-Za-z0-9_+\/-]+$/.test(configuredTimezone) ? configuredTimezone : "UTC";
+  const timezone = configuredTimezone();
   for (const f of readdirSync(deploy)) {
     if (!/^iva-.*\.(service|timer)$/.test(f)) continue;
     const tpl = readFileSync(join(deploy, f), "utf8")
