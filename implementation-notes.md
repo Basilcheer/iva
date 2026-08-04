@@ -352,3 +352,9 @@
   `session.reset()`, return with the same continuation token and assert the marker is gone.
   It guards Eve's documented contract ("reset retires a session so its continuation starts
   fresh"), which 0.27.13 honours — the `/new` failure was Iva's token shape, not Eve's reset.
+
+## Rollup writer safety (v0.3.11)
+
+- База ветки: `origin/main` (`b464b74a22eb4f2c0dce4ab888d2a9b62bad0658`).
+- Fresh retry сохраняет прежнюю единственную попытку только для непринятого хода или подтверждённой отмены.
+- При неподтверждённой отмене сохранённый курсор остаётся на диске, а исходная ошибка выходит наверх.

@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
 import { Client, type SessionState } from "eve/client";
 import { CORE_CAP } from "../lib/core-cap.mjs";
 import { notificationChat } from "../lib/notification-chat.mjs";
-import { cancelTurnQuietly, resolveTurnTimeoutMs, withTurnTimeout } from "../lib/rollup-turn.mjs";
+import { canRetryFresh, cancelTurnQuietly, resolveTurnTimeoutMs, withTurnTimeout } from "../lib/rollup-turn.mjs";
 import { sendTelegramHtml } from "../lib/telegram-send.mjs";
 
 type Period = "daily" | "weekly" | "monthly" | "yearly";
@@ -202,10 +202,16 @@ function logAbandoned(state: SessionState, reason: string): void {
 const TURN_TIMEOUT_MS = resolveTurnTimeoutMs(process.env.ROLLUP_TURN_TIMEOUT_MS, {
   warn: (message) => console.error(`rollup ${period}: ${message}`),
 });
-const guardedTurn = (session: ReturnType<typeof client.session>, prompt: string, label: string) =>
+const guardedTurn = (
+  session: ReturnType<typeof client.session>,
+  prompt: string,
+  label: string,
+  onAccepted: () => void = () => {},
+) =>
   withTurnTimeout(
     async () => {
       const response = await session.send(prompt);
+      onAccepted();
       return await response.result();
     },
     { timeoutMs: TURN_TIMEOUT_MS, label },
@@ -229,11 +235,14 @@ const saved = loadSession();
 let sessionCreatedAt = saved?.createdAt ?? Date.now();
 let session = saved ? client.session(saved.state) : client.session();
 let result;
+let accepted = false;
 try {
-  result = await guardedTurn(session, buildPrompt(period, today), "main-turn");
+  result = await guardedTurn(session, buildPrompt(period, today), "main-turn", () => {
+    accepted = true;
+  });
 } catch (e) {
   // The parked session may be gone (iva reset quarantined the store) or hung on resume —
-  // fall back to a fresh one once instead of failing the night.
+  // fall back to a fresh one once only after proving the old turn cannot keep writing.
   const hung = (e as { code?: string }).code === "ROLLUP_TURN_TIMEOUT";
   // Выход наверх роняет процесс и отпускает .memory.lock, а зависший ход продолжает писать
   // в vault — уже без всякой защиты от параллельного роллапа. Гасим и на терминальных путях.
@@ -241,17 +250,18 @@ try {
     if (hung) await cancelTurnQuietly(session);
     throw e;
   }
+  // «Медленный», а не мёртвый ход продолжил бы писать в vault параллельно с retry — гасим его
+  // до создания второго писателя (оба идут под одним флоком, конфликт не поймать иначе).
+  const cancelConfirmed = accepted ? await cancelTurnQuietly(session) : false;
+  if (!canRetryFresh({ accepted, cancelConfirmed })) {
+    console.error(`rollup ${period}: could not confirm cancellation of the accepted turn — refusing fresh retry`);
+    logAbandoned(saved.state, "cancel-unconfirmed");
+    throw e;
+  }
   console.error(
     `rollup ${period}: parked session ${hung ? "hung" : "unusable"} (${(e as Error).message}) — starting fresh`,
   );
   logAbandoned(saved.state, hung ? "resume-timeout" : "unusable-cursor");
-  // «Медленный», а не мёртвый ход продолжил бы писать в vault параллельно с retry — гасим его
-  // до создания второго писателя (оба идут под одним флоком, конфликт не поймать иначе).
-  if (!(await cancelTurnQuietly(session))) {
-    // Отмена — best-effort: у заклинившей сессии она сама может не подтвердиться. Retry всё
-    // равно делаем (иначе ночь без роллапа), но след для разбора полётов оставляем.
-    console.error(`rollup ${period}: could not confirm cancellation of the timed-out turn — retrying anyway`);
-  }
   session = client.session();
   sessionCreatedAt = Date.now();
   // Ровно одна попытка: второй сбой уходит наверх и роняет юнит с ненулевым кодом.

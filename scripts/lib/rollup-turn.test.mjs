@@ -1,12 +1,60 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  canRetryFresh,
   cancelTurnQuietly,
   DEFAULT_TURN_TIMEOUT_MS,
   RollupTurnTimeoutError,
   resolveTurnTimeoutMs,
   withTurnTimeout,
 } from "./rollup-turn.mjs";
+
+test("fresh retry requires an unaccepted turn or confirmed cancellation", () => {
+  assert.equal(canRetryFresh({ accepted: false, cancelConfirmed: false }), true);
+  assert.equal(canRetryFresh({ accepted: false, cancelConfirmed: true }), true);
+  assert.equal(canRetryFresh({ accepted: true, cancelConfirmed: false }), false);
+  assert.equal(canRetryFresh({ accepted: true, cancelConfirmed: true }), true);
+});
+
+async function countSendsThroughRetryPolicy({ firstSend, cancel }) {
+  let sends = 0;
+  let accepted = false;
+  try {
+    const response = await firstSend(() => {
+      sends += 1;
+    });
+    accepted = true;
+    await withTurnTimeout(() => response.result(), { timeoutMs: 20, label: "main-turn" });
+  } catch {
+    const cancelConfirmed = accepted ? await cancel() : false;
+    if (canRetryFresh({ accepted, cancelConfirmed })) sends += 1;
+  }
+  return sends;
+}
+
+test("an accepted hung turn with refused cancellation never sends a fresh retry", async () => {
+  const sends = await countSendsThroughRetryPolicy({
+    firstSend: async (recordSend) => {
+      recordSend();
+      return { result: () => new Promise(() => {}) };
+    },
+    cancel: async () => false,
+  });
+  assert.equal(sends, 1);
+});
+
+test("a rejected send gets exactly one fresh retry", async () => {
+  const sends = await countSendsThroughRetryPolicy({
+    firstSend: async (recordSend) => {
+      recordSend();
+      throw new Error("session gone");
+    },
+    cancel: async () => {
+      throw new Error("cancel must not be called for an unaccepted turn");
+    },
+  });
+  assert.equal(sends, 2);
+});
 
 test("a turn that finishes in time returns its result", async () => {
   const result = await withTurnTimeout(async () => "report", { timeoutMs: 50, label: "main-turn" });

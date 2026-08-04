@@ -41,6 +41,12 @@ export class RollupTurnTimeoutError extends Error {
 
 export const DEFAULT_CANCEL_TIMEOUT_MS = 30_000;
 
+// Свежая сессия безопасна, только когда первый ход не был принят сервером либо
+// сервер явно подтвердил его отмену. Иначе старый ход всё ещё может писать в vault.
+export function canRetryFresh({ accepted, cancelConfirmed }) {
+  return !accepted || cancelConfirmed === true;
+}
+
 // Отмена проигравшего гонку хода. Таймаут не останавливает ход на сервере — тот продолжает
 // писать в vault, — поэтому перед retry в свежей сессии старый ход надо погасить, иначе два
 // писателя правят одни и те же карточки и CORE.md под одним флоком.
