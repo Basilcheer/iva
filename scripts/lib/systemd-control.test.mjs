@@ -301,15 +301,40 @@ test("legacy memory-timer cleanup is skipped when the current build doesn't cont
   assert.equal(existsSync(join(unitDir, "iva-memory-daily.timer")), true, "the legacy unit is left alone on a stale build");
 });
 
+test("a build that only bundles LEGACY_MEMORY_UNITS strings (not the compiled schedules) still counts as stale", async (t) => {
+  // Regression test: instrumentation.ts always imports schedule-migration.mjs, whose
+  // LEGACY_MEMORY_UNITS array contains "iva-memory-daily.service" — which itself
+  // contains "memory-daily" as a substring. A marker that was just the bare string
+  // "memory-daily" would match THIS text and wrongly conclude the schedules compiled.
+  const { home, project, runCommand } = await fixture(t);
+  const unitDir = join(home, ".config/systemd/user");
+  await mkdir(unitDir, { recursive: true });
+  await writeFile(join(unitDir, "iva-memory-daily.timer"), "[Unit]\n");
+  await writeFile(
+    join(project, ".output/server/index.mjs"),
+    'const LEGACY_MEMORY_UNITS = ["iva-memory-daily.service", "iva-memory-daily.timer"];\n',
+  );
+
+  const result = runCommand("_install-units");
+  const output = `${result.stdout}\n${result.stderr}`;
+
+  assert.equal(result.status, 0, output);
+  assert.match(output, /skipping legacy memory-timer cleanup/, "the legacy-units array text must not be mistaken for a compiled schedule");
+  assert.equal(existsSync(join(unitDir, "iva-memory-daily.timer")), true);
+});
+
 test("legacy memory-timer cleanup proceeds once the build actually contains the eve schedules", async (t) => {
   const { calls, home, project, runCommand } = await fixture(t);
   const unitDir = join(home, ".config/systemd/user");
   await mkdir(unitDir, { recursive: true });
   await writeFile(join(unitDir, "iva-memory-daily.timer"), "[Unit]\n");
   await mkdir(join(project, ".output/server/_virtual"), { recursive: true });
+  // Mirrors the actual shape Nitro's schedule-task wrapper compiles (see a real
+  // `.output/server/_virtual/*.schedule.mjs`) — the description string embeds the
+  // schedule's own source path, which is what BUILD_SCHEDULE_MARKER now looks for.
   await writeFile(
     join(project, ".output/server/_virtual/eve.schedule.mjs"),
-    'export const scheduleId = "memory-daily";\n',
+    'var eve_schedule_default = { meta: { description: \'Run eve schedule "memory-daily" from "schedules/memory-daily.ts".\' } };\n',
   );
 
   const result = runCommand("_install-units");

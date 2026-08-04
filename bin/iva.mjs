@@ -262,9 +262,15 @@ function writeUnits({ ensureBearer = true } = {}) {
 // `iva update` pulled this change (writeUnits() runs before the build step in some
 // call paths). Without this check, a stale build would lose its memory rollups
 // entirely (old timers gone, new eve schedules not actually in the bundle) until the
-// next successful build. A shallow recursive text scan for one schedule's name is
-// enough — it can only appear there once the schedules actually compiled into it.
-const BUILD_SCHEDULE_MARKER = "memory-daily";
+// next successful build. A shallow recursive text scan for a marker unique to the
+// COMPILED schedule is enough — bare "memory-daily" is NOT unique enough: instrumentation.ts
+// always imports schedule-migration.mjs, whose LEGACY_MEMORY_UNITS array contains the
+// string "iva-memory-daily.service", which itself contains "memory-daily" as a substring
+// — that would make the marker match on every build regardless of whether the schedules
+// themselves actually compiled. Nitro's schedule-task wrapper embeds each schedule's own
+// source path ("schedules/memory-daily.ts") in its description string, which cannot
+// appear anywhere else.
+const BUILD_SCHEDULE_MARKER = "schedules/memory-daily.ts";
 const BUILD_SCAN_MAX_FILE_BYTES = 15_000_000;
 function buildHasSchedules() {
   const outputServer = join(ROOT, ".output/server");
