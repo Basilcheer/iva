@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.3.10] - 2026-08-04
+
 - 🕰️ **Память переехала с systemd-таймеров на нативные eve-schedules** — `iva-memory-{daily,weekly,monthly,yearly}.{service,timer}` сняты (по точному имени, чужие таймеры не трогаются); ролловеры теперь тикают внутри `iva.service` через `agent/schedules/memory-*.ts` (`defineSchedule`), тем же `flock -w 900 .memory.lock node scripts/memory/rollup.ts <period>`, что раньше запускал таймер. Doctor и update-check остаются на systemd как внешние вотчдоги — они должны жить, даже если сам агент завис. Персистентность (`Persistent=true`) systemd-таймеров теряется вместе с ними — заменена собственным catch-up: на каждом старте сервера `scripts/lib/schedule-migration.mjs` сверяет последний успешный запуск периода с его расчётной точкой в `ASSISTANT_TIMEZONE` и, если пропуск укладывается в грейс-окно (20ч/3д/7д/14д), запускает период один раз; свежая установка засеивает базовую точку и ничего не запускает (защита от шторма на первом буте). Статус — `data/rollup-status.json`, виден в `iva doctor` (warn при простое >26ч) и в /menu → ⏰. Добавлен (выключенный по умолчанию) `digest`-schedule — включается `digestSchedule.enabled` в `data/settings.json`.
 
 ## [0.3.9] - 2026-08-04
