@@ -10,7 +10,7 @@ import {
   TELEGRAM_QUEUE_FATAL_DURABILITY,
 } from "../lib/telegram-queue.mjs";
 import { getChatStatus, isRunning, RUN_STALE_MS, setChatStatusIf } from "#lib/run-status.mjs";
-import { tr } from "../lib/i18n.mjs";
+import { tr } from "#lib/i18n.mjs";
 import {
   ACCEPTANCE_ROUTE,
   ALLOWED,
