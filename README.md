@@ -88,7 +88,7 @@ The rest — for business owners, specialists, executives and everyday life: **[
 - 🧭 **Decision cards** — what you chose, when and why; old versions stay in a dated History.
 - ⏰ **Tasks & reminders** — priorities, due dates and a morning digest.
 - 🌐 **Web search** — four pluggable providers: Tavily, Exa, Parallel or Brave.
-- 📮 **Google Workspace** — Gmail, Calendar, Drive, Sheets and Docs from chat via the `gws` CLI; installed for you, with a guided key setup right in the conversation.
+- 📮 **Google Workspace** — Gmail, Calendar, Drive, Sheets, Docs and Tasks from chat via the `gws` CLI; installed for you, with a guided key setup right in the conversation.
 - 🧩 **Skills & MCP** — drop one file to add a procedure or connect an MCP server; keys stay in `.env`.
 - 🧪 **Personal Telegram — userbot (beta)** — read and send from your *own* account, not just the bot; connect by chat (QR, no terminal). Rough and buggy — opt-in, **at your own risk**. A server-side anti-ban guardrail (FloodWait compliance + randomized pacing + circuit-breaker) is enforced, not just advised. [Details](docs/userbot.md).
 - 🛡️ **Safe to forward** — links, PDFs and other people's messages are screened before the model reads them.
@@ -116,7 +116,7 @@ Headless installs take `--skip-setup` or `--non-interactive`. Wizard walkthrough
 
 <img src="assets/iva-flow.webp" alt="Dataflow: Telegram to long-poll bridge to security gate to agent to vault, with a nightly rollup and doctor loop" width="100%">
 
-The bridge long-polls Telegram, so no public HTTPS, domain or webhook is needed. The agent, the bridge and five memory timers run as systemd user units on your box — operations live in [docs/deploy.md](docs/deploy.md).
+The bridge long-polls Telegram, so no public HTTPS, domain or webhook is needed. Iva runs as two systemd user services, two systemd watchdog timers and five in-process eve schedules — operations live in [docs/deploy.md](docs/deploy.md).
 
 ## Providers & cost
 
@@ -155,7 +155,7 @@ Full reference, including `/usage` breakdowns by model and by source: [docs/cli.
 
 ## Built on
 
-[eve](https://eve.dev/docs/introduction) 0.27.8, Vercel's agent framework, runs the agent; Node 24's built-in SQLite runs the search index — no separate database. Iva grew out of [agent-second-brain](https://github.com/smixs/agent-second-brain) and [autograph](https://github.com/smixs/autograph) — that story is in [docs/memory.md](docs/memory.md).
+[eve](https://eve.dev/docs/introduction) 0.29.5, Vercel's agent framework, runs the agent; Node 24's built-in SQLite runs the search index — no separate database. Iva grew out of [agent-second-brain](https://github.com/smixs/agent-second-brain) and [autograph](https://github.com/smixs/autograph) — that story is in [docs/memory.md](docs/memory.md).
 
 ## License
 

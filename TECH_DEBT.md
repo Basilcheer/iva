@@ -33,9 +33,10 @@ eve bundle for that remainder. These are the next wave to move into `agent/lib`.
 
 ## 4. Evals
 
-`evals.json` exists for three skills but there's no runner wired up, and the
+One file, `scripts/autograph/docs/evals/evals.json`, contains Autograph documentation
+evals; it is not attached to Iva's bundled skills and has no runner wired up. The
 `#evals/*` import alias is declared in `package.json` but unused. eve ships a native
-`eve/evals` module — adopt it instead of building a custom runner.
+`eve/evals` module — adopt it before adding product-level skill evals.
 
 ## 5. CI discovery guardrails
 

@@ -1,7 +1,5 @@
-// VPS cron-runner: asks the agent for a morning digest and sends it to Telegram.
-// Launched from system cron (see README/implementation-notes).
-//
-//   0 5 * * *  cd /srv/assistant && node --env-file=.env scripts/daily-digest.ts >> /var/log/assistant-cron.log 2>&1
+// The opt-in in-process eve schedule in agent/schedules/digest.ts asks the agent for a
+// morning digest and sends it to Telegram. It is disabled by default in data/settings.json.
 //
 // Requires: a running agent (eve start) and the TELEGRAM_BOT_TOKEN, TELEGRAM_DIGEST_CHAT_ID variables.
 import { Client } from "eve/client";

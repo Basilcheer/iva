@@ -426,8 +426,8 @@ async function processMediaPart(
     try {
       await ctx.telegram.sendMessage(
         tr(
-          `Couldn't process the entry: ${detail}`,
-          `Не смог обработать запись: ${detail}`,
+          `Couldn't process the entry: ${contextDetail}`,
+          `Не смог обработать запись: ${contextDetail}`,
         ),
       );
     } catch {

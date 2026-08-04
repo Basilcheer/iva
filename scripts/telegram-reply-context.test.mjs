@@ -14,13 +14,14 @@ import test, { after } from "node:test";
 const vault = mkdtempSync(join(tmpdir(), "iva-reply-context-"));
 process.env.ASSISTANT_VAULT_DIR = vault;
 process.env.TELEGRAM_ALLOWED_USER_IDS = "9";
-process.env.TELEGRAM_BOT_TOKEN = "test-token";
+process.env.TELEGRAM_BOT_TOKEN = Buffer.from("reply-context-bot").toString("base64url");
 process.env.TELEGRAM_WEBHOOK_SECRET_TOKEN = "test-secret";
 process.env.TELEGRAM_BOT_USERNAME = "my_bot";
 process.env.AGENT_LANGUAGE = "en";
 
 const apiCalls = [];
 let deepgramTranscript = "";
+let getFileFailure = "";
 globalThis.fetch = async (url, init) => {
   apiCalls.push({ url: String(url), init });
   if (String(url).startsWith("https://api.deepgram.com/")) {
@@ -33,6 +34,7 @@ globalThis.fetch = async (url, init) => {
     });
   }
   if (String(url).endsWith("/getFile")) {
+    if (getFileFailure) throw new Error(getFileFailure);
     return Response.json({ ok: true, result: { file_path: "stickers/silent.webp" } });
   }
   if (String(url).includes("/file/bot")) {
@@ -516,6 +518,36 @@ test("silent stickers and animations stay silent with and without a quote", asyn
       assert.equal(sends.length, 0);
     }
   }
+});
+
+test("media failure replies redact the exact Telegram bot token", async () => {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  const before = apiCalls.length;
+  getFileFailure = `request failed with ${token}`;
+  try {
+    const sends = await dispatch(message({
+      text: undefined,
+      document: {
+        file_id: "redaction-failure",
+        file_unique_id: "redaction-failure-unique",
+        file_size: 3,
+        mime_type: "text/plain",
+        file_name: "failure.txt",
+      },
+    }));
+    assert.equal(sends.length, 0);
+  } finally {
+    getFileFailure = "";
+  }
+
+  const call = apiCalls.slice(before).find(({ url, init }) => {
+    if (!url.endsWith("/sendMessage")) return false;
+    return JSON.parse(init.body).text.includes("Couldn't process the entry");
+  });
+  assert.ok(call, "the user receives a media failure message");
+  const body = JSON.parse(call.init.body);
+  assert.equal(body.text.includes(token), false);
+  assert.match(body.text, /\*\*\*/u);
 });
 
 test("queued context marks truncation and points to the byte-complete daily record", async () => {

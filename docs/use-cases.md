@@ -65,7 +65,7 @@ Voice notes and shopping lists. People and dates she actually remembers. Search 
 
 ## Iva grows around you
 
-Out of the box Iva ships with six skills: web research, a browser, Google Workspace, a morning digest, a personal-account userbot (beta) and injection defense. The rest is yours to add — and adding is cheap:
+Out of the box Iva ships with seven skills: web research, a browser, Google Workspace, a morning digest, rich Telegram posts, a personal-account userbot (beta) and injection defense. The rest is yours to add — and adding is cheap:
 
 - a **skill** is one markdown file with a procedure;
 - an **MCP connector** to your CRM, database or internal service is one config file;

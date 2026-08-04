@@ -352,3 +352,15 @@
   `session.reset()`, return with the same continuation token and assert the marker is gone.
   It guards Eve's documented contract ("reset retires a session so its continuation starts
   fresh"), which 0.27.13 honours — the `/new` failure was Iva's token shape, not Eve's reset.
+
+## Security honesty and documentation sync (v0.3.11)
+
+- Media-processing errors use the same token-redacted detail in user messages and model
+  context. A regression drives the real Telegram webhook path and inspects Bot API output.
+- The security skill now names only `security-gate.ts` as runtime enforcement. Its Python
+  utilities and JSON patterns are documented as manual tools; reminder-related patterns
+  were removed and no patterns were added to `bash.ts`.
+- Runtime topology, Eve version, schedule cadence, skill count, Google Tasks support and
+  open-task menu counting are synchronized across the requested documentation surfaces.
+- PHILOSOPHY.md now records the project boundary rules and explicit removal points for
+  local workarounds.
