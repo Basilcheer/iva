@@ -61,8 +61,10 @@ The doctor and update-check timers stay on systemd on purpose: they're watchdogs
 ```bash
 # Optional — the generated units and the eve schedules already carry ASSISTANT_TIMEZONE
 # themselves, so this only affects OTHER things that read the system clock (log
-# timestamps, cron jobs you add yourself, etc.).
-source <(grep -E '^ASSISTANT_TIMEZONE=' .env)
+# timestamps, cron jobs you add yourself, etc.). `node --env-file` parses .env as plain
+# KEY=VALUE pairs — unlike `source`, it never shell-interprets its contents, so a stray
+# `$(...)` or backtick sitting in .env can't execute anything.
+ASSISTANT_TIMEZONE="$(node --env-file=.env -p 'process.env.ASSISTANT_TIMEZONE || ""')"
 [ -n "$ASSISTANT_TIMEZONE" ] && sudo timedatectl set-timezone "$ASSISTANT_TIMEZONE"
 ```
 
