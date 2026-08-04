@@ -48,6 +48,7 @@ export async function runScheduledJob({
   statusPath,
   env = process.env,
   spawnImpl = spawn,
+  killImpl = (pid, signal) => process.kill(pid, signal),
   now = () => Date.now(),
   log = (...a) => console.log(new Date().toISOString(), ...a),
 } = {}) {
@@ -74,7 +75,14 @@ export async function runScheduledJob({
     const outcome = await new Promise((resolve) => {
       let child;
       try {
-        child = spawnImpl(cmd, args, { cwd: root, env, stdio: ["ignore", "pipe", "pipe"] });
+        // detached: true makes the child the leader of its OWN process group (POSIX
+        // setpgid) instead of sharing ours. That matters specifically for the flock-
+        // wrapped case: flock fork()s node as its child, and that fork inherits the
+        // flock()'d file descriptor — the lock is held by the OPEN FILE DESCRIPTION,
+        // not by whichever process id we happen to signal. Killing only flock's own
+        // pid on timeout left node (and the lock) alive. Signaling the whole process
+        // group (killImpl(-pid, ...) below) reaches flock AND the node it forked.
+        child = spawnImpl(cmd, args, { cwd: root, env, stdio: ["ignore", "pipe", "pipe"], detached: true });
       } catch (error) {
         resolve({ code: null, signal: null, tail: "", error });
         return;
@@ -87,6 +95,23 @@ export async function runScheduledJob({
       child.stdout?.on("data", onData);
       child.stderr?.on("data", onData);
 
+      // Signal the process GROUP (negative pid), not just this one pid — see the
+      // detached:true comment above. Falls back to a direct child.kill if the group
+      // signal fails for any reason (e.g. the child already reaped its own group).
+      const killGroup = (signal) => {
+        const pid = child.pid;
+        try {
+          if (pid) killImpl(-pid, signal);
+          else child.kill(signal);
+        } catch {
+          try {
+            child.kill(signal);
+          } catch {
+            // process may have exited between the timer firing and the kill call
+          }
+        }
+      };
+
       let settled = false;
       const settle = (result) => {
         if (settled) return;
@@ -96,19 +121,11 @@ export async function runScheduledJob({
       };
 
       const killTimer = setTimeout(() => {
-        log(`schedule-runner: ${name} exceeded ${timeoutMs}ms — sending SIGTERM`);
-        try {
-          child.kill("SIGTERM");
-        } catch {
-          // process may have exited between the timer firing and the kill call
-        }
+        log(`schedule-runner: ${name} exceeded ${timeoutMs}ms — sending SIGTERM to its process group`);
+        killGroup("SIGTERM");
         const hardTimer = setTimeout(() => {
-          log(`schedule-runner: ${name} still running after SIGTERM — sending SIGKILL`);
-          try {
-            child.kill("SIGKILL");
-          } catch {
-            // same race as above
-          }
+          log(`schedule-runner: ${name} still running after SIGTERM — sending SIGKILL to its process group`);
+          killGroup("SIGKILL");
         }, killGraceMs);
         if (hardTimer.unref) hardTimer.unref();
       }, timeoutMs);

@@ -1,10 +1,11 @@
 import { strict as assert } from "node:assert";
 import test from "node:test";
-import { spawn as realSpawn } from "node:child_process";
+import { spawn as realSpawn, spawnSync } from "node:child_process";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { randomBytes } from "node:crypto";
 
 import { runScheduledJob } from "./schedule-runner.mjs";
 
@@ -250,4 +251,49 @@ test("spawn failure (bad nodeBin) never throws and records the error", async () 
 
   assert.equal(threw, false, "runScheduledJob must never throw");
   assert.equal(result.ok, false);
+});
+
+test("timeout kills the WHOLE process group, not just flock's own pid: the lock is released and no grandchild lingers", { skip: !existsSync("/usr/bin/flock") }, async () => {
+  const root = await scaffold();
+  const marker = `iva-schedule-runner-test-${randomBytes(6).toString("hex")}`;
+  // Ignores SIGTERM (forces the SIGKILL escalation) and never exits on its own — a stand-in
+  // for a wedged rollup that would otherwise keep the flock lock held via its inherited fd.
+  await writeFile(
+    join(root, "stubborn.mjs"),
+    "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);\n",
+  );
+  const lockPath = join(root, ".memory.lock");
+  const statusPath = join(root, "data/rollup-status.json");
+
+  const result = await runScheduledJob({
+    name: "memory-daily",
+    argv: ["stubborn.mjs", marker],
+    root,
+    nodeBin: process.execPath,
+    lockPath,
+    statusPath,
+    log: () => {},
+    timeoutMs: 150,
+    killGraceMs: 150,
+  });
+
+  assert.equal(result.ok, false);
+
+  // No process (flock, or the node it forked) still carries the marker in its command line.
+  // Zombies can briefly remain visible to pgrep right after SIGKILL until their parent (or
+  // init, once re-parented) reaps them, so poll for a moment rather than asserting instantly.
+  const noLingeringProcess = async () => {
+    const until = Date.now() + 3000;
+    while (Date.now() < until) {
+      const r = spawnSync("pgrep", ["-f", marker], { encoding: "utf8" });
+      if ((r.stdout || "").trim() === "") return true;
+      await new Promise((res) => setTimeout(res, 50));
+    }
+    return false;
+  };
+  assert.equal(await noLingeringProcess(), true, "flock's forked node child must not survive the group kill");
+
+  // The strongest proof the lock itself is free: a non-blocking flock probe succeeds.
+  const probe = spawnSync("flock", ["-n", lockPath, "-c", "true"], { encoding: "utf8" });
+  assert.equal(probe.status, 0, "the lock must be released once the whole group is dead, not just flock's own pid");
 });
