@@ -18,6 +18,10 @@ import {
   type TelegramRawMedia,
   type TelegramRawMessage,
 } from "../lib/telegram-parts.js";
+import {
+  getTelegramMediaCacheEntry,
+  saveTelegramMediaCacheEntry,
+} from "../lib/telegram-media-cache.js";
 import { humanizeProviderError } from "../lib/error-humanizer.js";
 // Состояние «идёт ли ход» — per-chat файлы data/run-status.d с мостом telegram-poll.mjs:
 // мост по ним буферизует входящие, канал хранит sessionId/turnId для отмены.
@@ -301,62 +305,80 @@ async function processMediaPart(
   const caption = (raw.caption || "").trim();
   const capSuffix = caption ? `\n\n${caption}` : "";
   try {
-    const file = await fetchTelegramFile(
-      (method, body) => ctx.telegram.request(method, body),
-      media.fileId,
-    );
-    if (file && "tooBig" in file) {
-      appendDaily(
-        tag,
-        `${tr("(file >20MB — Telegram won't hand it to bots)", "(файл >20MB — Telegram не отдаёт его ботам)")}${capSuffix}`,
+    const cached = media.fileUniqueId
+      ? await getTelegramMediaCacheEntry(media.fileUniqueId)
+      : null;
+    let rel = cached?.path;
+    let vision = cached?.vision ?? "";
+    let transcript = cached?.transcript ?? "";
+    if (!rel) {
+      const file = await fetchTelegramFile(
+        (method, body) => ctx.telegram.request(method, body),
+        media.fileId,
       );
-      try {
-        await ctx.telegram.sendMessage(
-          tr(
-            "The file is over 20 MB — Telegram won't hand such files to bots. " +
-              "I saved the caption; send the file another way (a link or in parts).",
-            "Файл больше 20 МБ — Telegram не отдаёт такие ботам. " +
-              "Подпись сохранил; перешли файл иначе (ссылкой/частями).",
-          ),
+      if (file && "tooBig" in file) {
+        appendDaily(
+          tag,
+          `${tr("(file >20MB — Telegram won't hand it to bots)", "(файл >20MB — Telegram не отдаёт его ботам)")}${capSuffix}`,
         );
-      } catch {
-        /* молча игнорируем сбой ответа */
+        try {
+          await ctx.telegram.sendMessage(
+            tr(
+              "The file is over 20 MB — Telegram won't hand such files to bots. " +
+                "I saved the caption; send the file another way (a link or in parts).",
+              "Файл больше 20 МБ — Telegram не отдаёт такие ботам. " +
+                "Подпись сохранил; перешли файл иначе (ссылкой/частями).",
+            ),
+          );
+        } catch {
+          /* молча игнорируем сбой ответа */
+        }
+        const context = [
+          tr(
+            `${tag} the file was over 20 MB and Telegram did not provide it to the bot.`,
+            `${tag} файл был больше 20 МБ, и Telegram не отдал его боту.`,
+          ),
+        ];
+        if (caption) {
+          const sanitized = sanitizeInbound(caption);
+          context.push(sanitized.text);
+        }
+        return { kind: "too-big", context };
       }
-      const context = [
-        tr(
-          `${tag} the file was over 20 MB and Telegram did not provide it to the bot.`,
-          `${tag} файл был больше 20 МБ, и Telegram не отдал его боту.`,
-        ),
-      ];
-      if (caption) {
-        const sanitized = sanitizeInbound(caption);
-        context.push(sanitized.text);
-      }
-      return { kind: "too-big", context };
-    }
-    if (!file) throw new Error(tr("getFile/download failed", "getFile/скачивание не удалось"));
+      if (!file) throw new Error(tr("getFile/download failed", "getFile/скачивание не удалось"));
 
-    const stamp = localStamp();
-    const rel = saveBlob(file.bytes, media.fileName, media.tag, media.mimeType, stamp);
-    const isStillImage =
-      media.tag === "photo" ||
-      media.tag === "sticker" ||
-      (media.tag === "document" && (media.mimeType || "").startsWith("image/"));
-    let vision = "";
-    if (isStillImage) {
-      try {
-        vision = await describeImage(file.bytes, media.mimeType);
-      } catch (error) {
-        console.error("[telegram] vision упал, оставляю файл без описания:", error);
+      const stamp = localStamp();
+      rel = saveBlob(file.bytes, media.fileName, media.tag, media.mimeType, stamp);
+      const isStillImage =
+        media.tag === "photo" ||
+        media.tag === "sticker" ||
+        (media.tag === "document" && (media.mimeType || "").startsWith("image/"));
+      if (isStillImage) {
+        try {
+          vision = await describeImage(file.bytes, media.mimeType);
+        } catch (error) {
+          console.error("[telegram] vision упал, оставляю файл без описания:", error);
+        }
       }
-    }
 
-    let transcript = "";
-    if (media.transcribe) {
-      try {
-        transcript = (await transcribe(file.bytes)).trim();
-      } catch (error) {
-        console.error("[telegram] Deepgram упал, оставляю только файл:", error);
+      if (media.transcribe) {
+        try {
+          transcript = (await transcribe(file.bytes)).trim();
+        } catch (error) {
+          console.error("[telegram] Deepgram упал, оставляю только файл:", error);
+        }
+      }
+      if (media.fileUniqueId) {
+        try {
+          await saveTelegramMediaCacheEntry(media.fileUniqueId, {
+            path: rel,
+            vision,
+            transcript,
+            at: Date.now(),
+          });
+        } catch (error) {
+          console.error("[telegram] не смог записать кэш медиа:", error);
+        }
       }
     }
 

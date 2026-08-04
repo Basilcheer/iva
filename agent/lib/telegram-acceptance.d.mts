@@ -32,4 +32,5 @@ export declare function handleAcceptedTelegramWebhook<TArgs extends AcceptanceAr
   handler: (request: Request, args: TArgs) => Promise<Response>,
   request: Request,
   args: TArgs,
+  options?: { completedUpdatesFile?: string },
 ): Promise<Response>;

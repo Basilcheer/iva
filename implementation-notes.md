@@ -352,3 +352,20 @@
   `session.reset()`, return with the same continuation token and assert the marker is gone.
   It guards Eve's documented contract ("reset retires a session so its continuation starts
   fresh"), which 0.27.13 honours — the `/new` failure was Iva's token shape, not Eve's reset.
+
+## Telegram event identity (v0.3.11)
+
+- `file_unique_id` keys only the reusable blob and derived vision/transcript data. A new
+  `update_id` still appends a new daily reference and starts a new turn.
+- The completed-update ledger is written after authored `turn` or `handled` acceptance.
+  The narrow crash window before that atomic write remains intentionally at-least-once.
+  Deduplication requires the configured webhook secret and a matching
+  `x-telegram-bot-api-secret-token`. The ledger keeps the latest 200 ids; an older replay
+  starts a new turn. A simultaneous duplicate can also run before either acceptance is
+  recorded; the normal durable queue serializes deliveries, and exactly-once is out of scope.
+- Invalid JSON is quarantined and rejected by `loadJsonStrict`; parsed content that is not an
+  integer array fails closed in `validCompletedUpdates`. A post-acceptance ledger-write failure
+  is logged while the 204 receipt is preserved, preventing a successful turn from entering a
+  deterministic retry loop.
+- Both stores use the existing JSON-store primitives and bounded JSON files under
+  `ASSISTANT_DATA_DIR`; no delivery timeout or direct-delivery policy changed.

@@ -2,6 +2,7 @@ export type TelegramRawMessage = Record<string, any>;
 
 export type TelegramRawMedia = {
   fileId: string;
+  fileUniqueId?: string;
   tag: string;
   transcribe: boolean;
   mimeType?: string;
@@ -22,16 +23,22 @@ export function mediaFromRaw(raw: TelegramRawMessage): TelegramRawMedia | null {
   if (Array.isArray(raw.photo) && raw.photo.length > 0) {
     const photo = raw.photo[raw.photo.length - 1];
     if (photo?.file_id) {
-      return { fileId: photo.file_id, tag: "photo", transcribe: false };
+      return {
+        fileId: photo.file_id,
+        ...(typeof photo.file_unique_id === "string" ? { fileUniqueId: photo.file_unique_id } : {}),
+        tag: "photo",
+        transcribe: false,
+      };
     }
   }
   for (const media of RAW_MEDIA) {
     const item = raw[media.key] as
-      | { file_id?: string; mime_type?: string; file_name?: string }
+      | { file_id?: string; file_unique_id?: string; mime_type?: string; file_name?: string }
       | undefined;
     if (item && typeof item.file_id === "string") {
       return {
         fileId: item.file_id,
+        ...(typeof item.file_unique_id === "string" ? { fileUniqueId: item.file_unique_id } : {}),
         tag: media.tag,
         transcribe: media.transcribe,
         mimeType: item.mime_type,
