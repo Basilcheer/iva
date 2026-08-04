@@ -929,8 +929,13 @@ async function cmdDoctor() {
   // (scripts/lib/schedule-runner.mjs) is the only record of whether they're actually firing.
   // Threshold gives each cadence a full extra cycle of slack before doctor complains:
   // 26h for the 04:00 daily slot, 8d/32d/370d for weekly/monthly/yearly respectively.
+  let rollupStatus = null;
   try {
-    const rollupStatus = JSON.parse(readFileSync(join(dataDirAbs(env), "rollup-status.json"), "utf8"));
+    rollupStatus = JSON.parse(readFileSync(join(dataDirAbs(env), "rollup-status.json"), "utf8"));
+  } catch {
+    // No rollup-status.json yet (fresh install, or nothing has fired yet) — not an error.
+  }
+  if (rollupStatus) {
     const STALE_AFTER_H = { daily: 26, weekly: 8 * 24, monthly: 32 * 24, yearly: 370 * 24 };
     for (const period of ["daily", "weekly", "monthly", "yearly"]) {
       // "memory-<period>" — the `name` each agent/schedules/memory-*.ts passes to
@@ -958,8 +963,6 @@ async function cmdDoctor() {
         warnN++;
       }
     }
-  } catch {
-    // No rollup-status.json yet (fresh install, or nothing has fired yet) — not an error.
   }
 
   // 6. Vault + git origin (report only — we don't initiate git operations)
