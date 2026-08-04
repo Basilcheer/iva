@@ -20,6 +20,7 @@ import { parseEnvText, writeEnvAtomicSync } from "../scripts/lib/env-file.mjs";
 import { classifyAgentListeners } from "../scripts/lib/listener-security.mjs";
 import { readMemoryMaintenanceReport } from "../scripts/lib/memory-maintenance.mjs";
 import { cleanupSystemdUnits, createSystemdControl } from "../scripts/lib/systemd-control.mjs";
+import { LEGACY_MEMORY_UNITS } from "../scripts/lib/schedule-migration.mjs";
 import {
   applyConfigTransaction,
   probeEveHealth,
@@ -45,7 +46,12 @@ const NPM = existsSync(join(NODE_BIN_DIR, "npm")) ? join(NODE_BIN_DIR, "npm") : 
 const childEnv = { ...process.env, PATH: `${NODE_BIN_DIR}:${process.env.PATH || ""}` };
 
 const SERVICES = ["iva.service", "iva-telegram-poll.service"];
-const MEMORY_PERIODS = ["daily", "weekly", "monthly", "yearly", "doctor"];
+// daily/weekly/monthly/yearly moved to in-process eve schedules (agent/schedules/memory-*.ts,
+// migrated by scripts/lib/schedule-migration.mjs on server start) — only doctor stays an
+// external systemd watchdog, on purpose: it must keep running even if the server itself is
+// wedged. LEGACY_MEMORY_UNITS (imported above) is the single source of truth for the 8 exact
+// retired unit names both this file and the schedule migration tear down.
+const MEMORY_PERIODS = ["doctor"];
 const MEMORY_SERVICES = MEMORY_PERIODS.map((n) => `iva-memory-${n}.service`);
 const MEMORY_TIMERS = MEMORY_PERIODS.map((n) => `iva-memory-${n}.timer`);
 const UPDATE_TIMER = "iva-update-check.timer";
@@ -145,6 +151,12 @@ function ensureAssistantBearer({ quiet = false } = {}) {
 function ivaServiceBody() {
   // PATH with the node directory (= npm global bin under nvm), Restart=always.
   const port = (readEnv().IVA_PORT || DEFAULT_PORT).trim();
+  // Same regex-validated timezone writeUnits() substitutes into the deploy/ timer templates
+  // (__TIMEZONE__) — the eve schedules (agent/schedules/memory-*.ts) carry no timezone of
+  // their own and fire in the process's local time, so this is what makes "0 4 * * *" mean
+  // 04:00 ASSISTANT_TIMEZONE instead of the host's system TZ.
+  const configuredTimezone = (readEnv().ASSISTANT_TIMEZONE || "UTC").trim();
+  const timezone = /^[A-Za-z0-9_+\/-]+$/.test(configuredTimezone) ? configuredTimezone : "UTC";
   return [
     "[Unit]",
     "Description=Iva",
@@ -170,6 +182,7 @@ function ivaServiceBody() {
     // HOST/NITRO_HOST for the spawned .output/server/index.mjs, so the flag is what binds.
     `ExecStart=${NODE} ${ROOT}/node_modules/eve/bin/eve.js start --host 127.0.0.1`,
     `Environment=PORT=${port}`,
+    `Environment=TZ=${timezone}`,
     `Environment=PATH=${NODE_BIN_DIR}:%h/.local/bin:/usr/local/bin:/usr/bin:/bin`,
     "Environment=AGENT_BROWSER_MAX_OUTPUT=24000",
     "Restart=always",
@@ -232,7 +245,31 @@ function writeUnits({ ensureBearer = true } = {}) {
     written.push(f);
   }
   if (hasSystemd()) systemd.daemonReload();
+  removeLegacyMemoryUnits();
   return written;
+}
+
+// Existing installs may still carry the 8 retired iva-memory-{daily,weekly,monthly,yearly}
+// unit files (deploy/ no longer ships them, so the copy loop above never overwrites or
+// removes them on its own). `iva update`/`iva doctor` both call writeUnits() on every run,
+// so this self-heals every existing install onto eve schedules without a dedicated
+// migration command — by exact name only, so an unrelated self-host timer is never touched.
+function removeLegacyMemoryUnits() {
+  if (!hasSystemd()) return [];
+  const units = LEGACY_MEMORY_UNITS.filter((u) => existsSync(join(UNIT_DIR, u)));
+  if (!units.length) return [];
+  try {
+    return cleanupSystemdUnits({
+      units,
+      disable: (unit) => systemd.disableNow([unit]),
+      remove: (unit) => rmSync(join(UNIT_DIR, unit)),
+      reload: () => systemd.daemonReload(),
+      reset: () => systemd.resetFailed(),
+    });
+  } catch (e) {
+    warn(`legacy memory-timer cleanup incomplete: ${e.message}`);
+    return units;
+  }
 }
 
 function activateUnits() {
@@ -831,6 +868,26 @@ async function cmdDoctor() {
   if (installedMemoryServices.length && failedMemoryServices === 0) {
     ok(`Memory units have no failed state (${installedMemoryServices.length})`);
     okN++;
+  }
+
+  // daily/weekly/monthly/yearly now run as in-process eve schedules (no systemd unit of
+  // their own to query for a failed state, unlike doctor above) — data/rollup-status.json
+  // (scripts/lib/schedule-runner.mjs) is the only record of whether they're actually firing.
+  // 26h gives the 04:00 daily slot a full day of slack before doctor complains.
+  try {
+    const rollupStatus = JSON.parse(readFileSync(join(dataDirAbs(env), "rollup-status.json"), "utf8"));
+    const dailySuccessAt = rollupStatus?.daily?.lastSuccessAt;
+    if (typeof dailySuccessAt === "number") {
+      const ageHours = (Date.now() - dailySuccessAt) / (60 * 60 * 1000);
+      if (ageHours > 26) {
+        warn(`memory-daily schedule hasn't succeeded in ${Math.round(ageHours)}h — check: journalctl --user -u iva.service | grep schedule-runner`);
+        warnN++;
+      } else {
+        (ok(`memory-daily schedule last succeeded ${Math.round(ageHours)}h ago`), okN++);
+      }
+    }
+  } catch {
+    // No rollup-status.json yet (fresh install, or the first daily slot hasn't fired) — not an error.
   }
 
   // 6. Vault + git origin (report only — we don't initiate git operations)

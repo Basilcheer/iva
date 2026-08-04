@@ -220,8 +220,10 @@ test("doctor reports checked activation failures and keeps its summary", async (
 });
 
 test("doctor checks installed memory services and reports failed ones with a journal hint", async (t) => {
+  // daily/weekly/monthly/yearly moved to in-process eve schedules (agent/schedules/memory-*.ts,
+  // see scripts/lib/schedule-migration.mjs) — doctor stays the only external systemd watchdog.
   const { calls, runCommand } = await fixture(t);
-  const result = runCommand("doctor", { failedUnit: "iva-memory-weekly.service" });
+  const result = runCommand("doctor", { failedUnit: "iva-memory-doctor.service" });
   const output = `${result.stdout}\n${result.stderr}`;
   const systemctlCalls = (await readFile(calls, "utf8")).trim().split("\n");
   const checked = systemctlCalls
@@ -229,15 +231,9 @@ test("doctor checks installed memory services and reports failed ones with a jou
     .map((call) => call.split(" ").at(-1));
 
   assert.equal(result.status, 1, output);
-  assert.deepEqual(checked, [
-    "iva-memory-daily.service",
-    "iva-memory-weekly.service",
-    "iva-memory-monthly.service",
-    "iva-memory-yearly.service",
-    "iva-memory-doctor.service",
-  ]);
-  assert.match(output, /iva-memory-weekly\.service failed/);
-  assert.match(output, /journalctl --user -u iva-memory-weekly\.service -n 100 --no-pager/);
+  assert.deepEqual(checked, ["iva-memory-doctor.service"]);
+  assert.match(output, /iva-memory-doctor\.service failed/);
+  assert.match(output, /journalctl --user -u iva-memory-doctor\.service -n 100 --no-pager/);
 });
 
 test("doctor surfaces problems from a fresh nightly memory report", async (t) => {
