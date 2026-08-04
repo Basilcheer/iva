@@ -1,22 +1,26 @@
 // One-shot, idempotent migration from the old systemd memory-rollup timers to the
 // in-process eve schedules (agent/schedules/memory-*.ts). Called fire-and-forget from
-// agent/instrumentation.ts on every server start. Two independent jobs:
+// agent/instrumentation.ts on every server start. Two INDEPENDENT jobs — independent
+// enough that only one of them needs systemd at all:
 //
 //   1. tear down the 8 retired iva-memory-{daily,weekly,monthly,yearly}.{service,timer}
 //      units, by exact name only — self-host users may have their own unrelated timers
-//      (e.g. xfeed-daily.timer) sitting in the same directory, never touch those;
+//      (e.g. xfeed-daily.timer) sitting in the same directory, never touch those. Skipped
+//      entirely wherever there is no user systemd at all (containers, this repo's own
+//      `npm run replica` sandbox, CI) — there is nothing to tear down there.
 //   2. catch up a period whose last systemd-timer success predates its most recent
 //      scheduled point, bounded by a grace window so a months-old miss doesn't fire late.
-//      Persistent=true is gone with the timers, so this replaces it.
+//      Persistent=true is gone with the timers, so this replaces it — and runs on every
+//      boot REGARDLESS of systemd availability, since a missed rollup is worth catching
+//      up whether or not this host ever had systemd units to retire in the first place.
 //
 // Must NEVER throw: a broken systemctl or a corrupt status file must not stop the server
-// from starting, and the whole thing quietly no-ops wherever there is no user systemd at
-// all (containers, this repo's own `npm run replica` sandbox, CI).
-import { existsSync, readFileSync, renameSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+// from starting.
+import { existsSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 
-import { runScheduledJob } from "./schedule-runner.mjs";
+import { readStatus, runScheduledJob, withStatusLock, writeStatusAtomic } from "./schedule-runner.mjs";
 
 export const LEGACY_MEMORY_UNITS = [
   "iva-memory-daily.service",
@@ -49,22 +53,6 @@ function statusKey(period) {
 function defaultExecImpl(args) {
   const r = spawnSync("systemctl", args, { encoding: "utf8" });
   return { code: r.status ?? (r.error ? 127 : 1), out: (r.stdout || "").trim(), err: (r.stderr || "").trim(), error: r.error };
-}
-
-function readStatus(statusPath) {
-  try {
-    const parsed = JSON.parse(readFileSync(statusPath, "utf8"));
-    return typeof parsed === "object" && parsed !== null ? parsed : {};
-  } catch {
-    return {};
-  }
-}
-
-function writeStatusAtomic(statusPath, data) {
-  mkdirSync(dirname(statusPath), { recursive: true });
-  const tmp = `${statusPath}.tmp`;
-  writeFileSync(tmp, JSON.stringify(data, null, 2), "utf8");
-  renameSync(tmp, statusPath);
 }
 
 // ── timezone-aware "most recent due point" math ─────────────────────────────
@@ -210,17 +198,22 @@ export async function runScheduleMigration({
   runJob,
 } = {}) {
   try {
-    if (!homedir || !existsSync(join(homedir, ".config/systemd/user"))) return;
-
-    let probe;
-    try {
-      probe = execImpl(["--version"]);
-    } catch (error) {
-      probe = { code: 127, error };
+    // Legacy-unit teardown genuinely needs systemd — catch-up does not. These used to
+    // share one early-return, which meant ANY environment without a user systemd
+    // (containers, this repo's own `npm run replica` sandbox, CI) silently never caught
+    // up a missed rollup either, contradicting the "runs on every start" contract
+    // documented in docs/deploy.md and TECH_DEBT.md.
+    if (homedir && existsSync(join(homedir, ".config/systemd/user"))) {
+      let probe;
+      try {
+        probe = execImpl(["--version"]);
+      } catch (error) {
+        probe = { code: 127, error };
+      }
+      if (probe?.error?.code !== "ENOENT") {
+        removeLegacyUnits({ homedir, execImpl, log });
+      }
     }
-    if (probe?.error?.code === "ENOENT") return; // no systemctl binary — nothing to do here
-
-    removeLegacyUnits({ homedir, execImpl, log });
 
     if (!statusPath) return; // nowhere to read/write catch-up state — nothing more to do
 
@@ -237,31 +230,47 @@ export async function runScheduleMigration({
           log,
         }));
 
-    const status = readStatus(statusPath);
-    const isFirstBoot = !existsSync(statusPath);
-    if (isFirstBoot) {
+    // First-boot detection AND the seed write both happen inside the SAME lock
+    // runScheduledJob's own admission check uses — a real run's own read-modify-write
+    // (recording inProgressSince/lastStartedAt) could otherwise race this one and get
+    // silently overwritten by (or silently overwrite) the seed.
+    const seedResult = await withStatusLock(statusPath, () => {
+      const current = readStatus(statusPath);
+      const isFirstBoot = Object.keys(current).length === 0;
+      if (!isFirstBoot) return { seeded: false, status: current };
       const nowMs = now();
-      const seeded = { ...status };
-      // Keyed the same way schedule-runner.mjs actually records a run (the `name` each
-      // agent/schedules/memory-*.ts passes to runScheduledJob is "memory-<period>", not
-      // the bare period) — otherwise this seed would never be touched by a real run ever
-      // again, and the migration would think every period is permanently stale.
-      for (const period of PERIODS) seeded[statusKey(period)] = { ...seeded[statusKey(period)], lastSuccessAt: nowMs };
+      const seeded = { ...current };
+      // seededAt, deliberately NOT lastSuccessAt: this is a storm-protection baseline,
+      // not a real run — /menu → crons and formatLastSuccess() must keep showing "never"
+      // for a period that has only ever been seeded, never actually executed. It still
+      // suppresses first-boot catch-up below exactly the way lastSuccessAt used to (see
+      // the effective-baseline comparison in the loop), just under its own field name.
+      for (const period of PERIODS) {
+        seeded[statusKey(period)] = { ...seeded[statusKey(period)], seededAt: nowMs };
+      }
       writeStatusAtomic(statusPath, seeded);
+      return { seeded: true, status: seeded };
+    });
+    if (seedResult.seeded) {
       log("schedule-migration: first boot — seeded catch-up baseline, running nothing (storm protection)");
       return;
     }
+    const status = seedResult.status;
 
     const nowMs = now();
     for (const period of PERIODS) {
       const { graceMs } = PERIOD_SCHEDULE[period];
       const due = lastDueMs(period, nowMs, tz);
-      const recorded = status[statusKey(period)]?.lastSuccessAt;
-      const lastSuccessAt = typeof recorded === "number" ? recorded : -Infinity;
-      const alreadyCaughtUp = lastSuccessAt >= due;
+      const entry = status[statusKey(period)];
+      // A real success always wins; otherwise fall back to the seeded baseline (if any)
+      // so a freshly-seeded period doesn't immediately look "due" the moment it's due
+      // relative to real time — same suppression the old lastSuccessAt-as-seed did.
+      const recorded = typeof entry?.lastSuccessAt === "number" ? entry.lastSuccessAt : entry?.seededAt;
+      const effectiveBaseline = typeof recorded === "number" ? recorded : -Infinity;
+      const alreadyCaughtUp = effectiveBaseline >= due;
       const withinGrace = nowMs - due <= graceMs;
       if (alreadyCaughtUp || !withinGrace) continue;
-      log(`schedule-migration: catching up ${period} (due ${new Date(due).toISOString()}, last success ${Number.isFinite(lastSuccessAt) ? new Date(lastSuccessAt).toISOString() : "never"})`);
+      log(`schedule-migration: catching up ${period} (due ${new Date(due).toISOString()}, last success ${Number.isFinite(effectiveBaseline) ? new Date(effectiveBaseline).toISOString() : "never"})`);
       try {
         await runPeriod(period);
       } catch (error) {

@@ -46,7 +46,10 @@ test("LEGACY_MEMORY_UNITS lists exactly the 8 retired unit names", () => {
   );
 });
 
-test("no ~/.config/systemd/user: full no-op, nothing called, nothing thrown", async () => {
+test("no ~/.config/systemd/user: legacy-unit cleanup is skipped, but catch-up (first-boot seeding) still runs", async () => {
+  // Catch-up must not depend on systemd being present at all — a container, this repo's
+  // own `npm run replica` sandbox, or CI has no ~/.config/systemd/user (nothing to tear
+  // down) but should still track and eventually catch up a missed rollup.
   const homedir = await scaffoldHome({ withUnitDir: false });
   const statusPath = join(homedir, "..", "data/rollup-status.json");
   const { execImpl, calls } = fakeExecImpl();
@@ -63,21 +66,22 @@ test("no ~/.config/systemd/user: full no-op, nothing called, nothing thrown", as
     }),
   );
 
-  assert.equal(calls.length, 0);
-  assert.equal(runJobCalled, false);
-  assert.equal(existsSync(statusPath), false, "no-op must not create a status file either");
+  assert.equal(calls.length, 0, "no systemd -> no systemctl calls of any kind");
+  assert.equal(runJobCalled, false, "first boot still suppresses catch-up (storm protection), regardless of systemd");
+  assert.equal(existsSync(statusPath), true, "catch-up bookkeeping (the first-boot seed) proceeds even without systemd");
 });
 
-test("systemctl binary missing (ENOENT): full no-op even though the unit dir exists", async () => {
+test("systemctl binary missing (ENOENT): legacy-unit cleanup is skipped, but catch-up still runs", async () => {
   const homedir = await scaffoldHome();
   const statusPath = join(homedir, "..", "data/rollup-status.json");
-  let called = false;
-  const execImpl = () => {
-    called = true;
+  const calls = [];
+  const execImpl = (args) => {
+    calls.push(args);
     const error = new Error("spawnSync systemctl ENOENT");
     error.code = "ENOENT";
     return { code: 127, out: "", err: "", error };
   };
+  let runJobCalled = false;
 
   await runScheduleMigration({
     homedir,
@@ -85,16 +89,18 @@ test("systemctl binary missing (ENOENT): full no-op even though the unit dir exi
     statusPath,
     tz: "UTC",
     log: () => {},
-    runJob: async () => { throw new Error("must not be called"); },
+    runJob: async () => { runJobCalled = true; },
   });
 
   // The very first probe call may legitimately happen (to discover ENOENT), but no
-  // mutating systemctl calls or catch-up runs may follow it.
-  assert.ok(called === true || called === false); // probe is allowed either way
-  assert.equal(existsSync(statusPath), false);
+  // mutating systemctl calls may follow it — actually verify the call log, not a
+  // tautology.
+  assert.ok(calls.length <= 1, `no mutating systemctl calls followed the probe: ${JSON.stringify(calls)}`);
+  assert.equal(runJobCalled, false, "first boot suppresses catch-up regardless of systemctl availability");
+  assert.equal(existsSync(statusPath), true, "catch-up bookkeeping proceeds even when systemctl itself is missing");
 });
 
-test("first boot (no status file): seeds lastSuccessAt for all four periods and runs nothing", async () => {
+test("first boot (no status file): seeds a baseline (seededAt, NOT lastSuccessAt) for all four periods and runs nothing", async () => {
   const homedir = await scaffoldHome();
   const dataDir = join(homedir, "..", "data");
   const statusPath = join(dataDir, "rollup-status.json");
@@ -117,7 +123,11 @@ test("first boot (no status file): seeds lastSuccessAt for all four periods and 
   // Keyed "memory-<period>" — the same name schedule-runner.mjs actually records a real
   // run under (the `name` each agent/schedules/memory-*.ts passes), not the bare period.
   for (const period of ["daily", "weekly", "monthly", "yearly"]) {
-    assert.equal(status[`memory-${period}`]?.lastSuccessAt, fixedNow, `${period} is seeded to now`);
+    const entry = status[`memory-${period}`];
+    assert.equal(entry?.seededAt, fixedNow, `${period} is seeded to now`);
+    // The seed is a storm-protection baseline, not a real run — /menu → crons and
+    // iva doctor must not report it as one.
+    assert.equal(entry?.lastSuccessAt, undefined, `${period}'s seed must not read as a real success`);
   }
 });
 
