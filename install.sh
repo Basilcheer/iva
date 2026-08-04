@@ -7,7 +7,9 @@
 # Installs system dependencies (git, gh, python3, ffmpeg, pandoc, poppler), uv, Node 24+ (nvm),
 # npm dependencies, runs an interactive setup (Ollama + model + Telegram +
 # Deepgram + timezone + vault), builds the agent and sets up a systemd user service plus
-# memory timers. The live vault is initialized as a separate git repo for backup.
+# watchdog timers (memory doctor, update check). Memory rollups (daily/weekly/monthly/yearly)
+# run as in-process eve schedules, not systemd. The live vault is initialized as a separate
+# git repo for backup.
 #
 # The interactive setup reads input from /dev/tty — so it works with `curl | bash` too
 # (over SSH with a real terminal). If there's no terminal (Docker/CI), setup is skipped,
@@ -583,20 +585,24 @@ case ":$PATH:" in
 esac
 
 # ─────────────────────────────────────────────────────────────────────────
-# 9. systemd: the main service + memory timers (Linux). Requires a configured .env.
+# 9. systemd: the main service + doctor/update-check timers (Linux). Requires a
+#    configured .env. Memory rollups (daily/weekly/monthly/yearly) no longer have
+#    systemd units of their own — they run as in-process eve schedules
+#    (agent/schedules/memory-*.ts), migrated automatically on the server's first
+#    start by scripts/lib/schedule-migration.mjs.
 # ─────────────────────────────────────────────────────────────────────────
 if ! command -v systemctl >/dev/null 2>&1; then
   : # not Linux/systemd — skip silently
 elif [ ! -f .env ]; then
   warn "$(t "No .env — not setting up autostart. First: npm run setup, then re-run install.sh." "Нет .env — автозапуск не настраиваю. Сначала: npm run setup, потом перезапустите install.sh.")"
-elif prompt_yes_no "$(t "Set up autostart via systemd (service + memory timers)?" "Завести автозапуск через systemd (сервис + таймеры памяти)?")" yes; then
+elif prompt_yes_no "$(t "Set up autostart via systemd (service + watchdog timers)?" "Завести автозапуск через systemd (сервис + сторожевые таймеры)?")" yes; then
   # Delegate writing the units to the iva CLI — the single source of truth (see bin/iva.mjs writeUnits).
   step "$(t "Installing systemd units (via the iva CLI)…" "Ставлю systemd-юниты (через iva CLI)…")"
   node "$PROJECT_DIR/bin/iva.mjs" _install-units || die "$(t "couldn't write the systemd units" "не удалось записать systemd-юниты")"
   node "$PROJECT_DIR/bin/iva.mjs" _activate-units \
     || die "$(t "couldn't enable and start the systemd units; follow the journal hint above" "не удалось включить и запустить systemd-юниты; проверьте подсказку journal выше")"
   ok "$(t "Bot enabled and online" "Бот включён и на связи")"
-  ok "$(t "Memory timers enabled and active: systemctl --user list-timers" "Таймеры памяти включены и активны: systemctl --user list-timers")"
+  ok "$(t "Background timers enabled and active: systemctl --user list-timers" "Фоновые таймеры включены и активны: systemctl --user list-timers")"
   loginctl enable-linger "$USER" >/dev/null 2>&1 || warn "$(t "couldn't enable linger (the service won't start before login)" "не удалось включить linger (сервис не стартует до логина)")"
   ok "$(t "Service started: systemctl --user status iva" "Сервис запущен: systemctl --user status iva")"
 

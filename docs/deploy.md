@@ -1,6 +1,6 @@
 # Deploy
 
-Iva runs on one VPS as two systemd user services and five timers. `install.sh` sets all of it up ([install](./install.md)); this page is what's actually running and how to operate it.
+Iva runs on one VPS as two systemd user services, two systemd watchdog timers, and five in-process eve schedules. `install.sh` sets all of it up ([install](./install.md)); this page is what's actually running and how to operate it.
 
 ## Transport: long polling
 
@@ -53,33 +53,44 @@ unset ASSISTANT_BEARER IVA_PORT
 | `iva.service` | always | the agent (`eve start`), `Restart=always` |
 | `iva-telegram-poll.service` | always | the long-polling bridge |
 | `iva-telegram-userbot.service` | opt-in (`iva userbot setup`) | Telethon userbot MCP proxy — see [userbot.md](userbot.md) |
-| `iva-memory-daily.timer` | 04:00 nightly | transcript → cards + daily summary, report to Telegram |
-| `iva-memory-weekly.timer` | Sun 04:15 | 7 dailies → weekly summary, report to Telegram |
-| `iva-memory-monthly.timer` | 1st, 04:20 | weeklies → monthly summary (silent) |
-| `iva-memory-yearly.timer` | Jan 1, 04:25 | monthlies → yearly summary (silent) |
 | `iva-memory-doctor.timer` | 05:00 nightly | schema/health/decay/MOC checks + vault `git push` |
 | `iva-update-check.timer` | 10:00 daily | check for a newer stable Iva version; notify once per version |
 
-Memory timers fire in the server's **local time**. The update timer embeds `ASSISTANT_TIMEZONE` directly, so its 10:00 schedule remains correct even when the server clock uses UTC. All timers carry `Persistent=true`, so a run missed during downtime fires after reboot. Keeping the server clock aligned is still recommended:
+The doctor and update-check timers stay on systemd on purpose: they're watchdogs that must keep running even if the agent process itself is wedged. `iva-memory-doctor.timer` embeds `ASSISTANT_TIMEZONE` directly, so its 05:00 schedule remains correct even when the server clock uses UTC. Both carry `Persistent=true`, so a run missed during downtime fires after reboot. Keeping the server clock aligned is still recommended:
 
 ```bash
 sudo timedatectl set-timezone "$ASSISTANT_TIMEZONE"
 ```
+
+### Memory rollups and the digest: in-process eve schedules
+
+The four memory-rollup cadences moved off systemd and run as `agent/schedules/*.ts` — eve's native `defineSchedule` API — inside the `iva.service` process itself:
+
+| Schedule | Cron (local time) | Job |
+|----------|--------------------|-----|
+| `memory-daily` | `0 4 * * *` (04:00 nightly) | transcript → cards + daily summary, report to Telegram |
+| `memory-weekly` | `15 4 * * 1` (Mon 04:15) | 7 dailies → weekly summary, report to Telegram |
+| `memory-monthly` | `20 4 1 * *` (1st, 04:20) | weeklies → monthly summary (silent) |
+| `memory-yearly` | `25 4 1 1 *` (Jan 1, 04:25) | monthlies → yearly summary (silent) |
+| `digest` | `0 8 * * *` (08:00 daily) | morning digest — **off by default**, enable via `digestSchedule.enabled` in `data/settings.json` |
+
+Each one is a thin spawner (`scripts/lib/schedule-runner.mjs`): it runs the exact same command the old timer did (`flock -w 900 .memory.lock node --env-file=.env scripts/memory/rollup.ts <period>`), under a hard timeout, and records the outcome to `data/rollup-status.json`. `iva.service` sets `Environment=TZ` from `ASSISTANT_TIMEZONE` (`ivaServiceBody()` in `bin/iva.mjs`), so cron expressions above tick in the configured local time, not the host's system TZ — Nitro's schedule runner carries no timezone of its own otherwise.
+
+Nitro's scheduled-task runner has no `Persistent=true` equivalent, so a period missed while the server was down does **not** auto-fire on its own. `scripts/lib/schedule-migration.mjs` replaces that: on every server start it compares each period's last recorded success against its most recent scheduled point and, if it's stale and still within a grace window (20h daily / 3d weekly / 7d monthly / 14d yearly), runs it once. A brand-new install seeds a baseline and runs nothing on its first boot, so installing never triggers an immediate storm of catch-up jobs. The same start-up hook also retires the old `iva-memory-{daily,weekly,monthly,yearly}.{service,timer}` units on any existing install, by exact name only — any unrelated timer you've set up yourself is left alone.
 
 Manual runs and status:
 
 ```bash
 npm run memory -- daily   # or weekly | monthly | yearly
 npm run doctor
-systemctl --user list-timers
+systemctl --user list-timers                       # iva.service, iva-telegram-poll, doctor, update-check
+cat data/rollup-status.json                         # last run per eve schedule (or: /menu → ⏰ in Telegram)
 iva logs                  # agent; `iva logs poll` for the bridge
 ```
 
 The update check fetches the configured Git upstream without calling the model. It stays silent when the installed stable version is current, when the same version was already offered, or when Telegram is not configured. A newer `MAJOR.MINOR.PATCH` release produces one message in `TELEGRAM_DIGEST_CHAT_ID` (falling back to the first trusted user) with **Update** and **Later** buttons. Errors are journal-only and retry on the next timer run.
 
 Full CLI reference: [cli](./cli.md). What the rollups actually write: [memory](./memory.md).
-
-eve's `defineSchedule` API (`agent/schedules/*.ts`) fires on self-host too: a built app served with `eve start` runs Nitro's schedule runner, so cron expressions tick inside the iva.service process (they need `npx eve build` + restart to register, and `eve dev` never fires them). Memory runs on systemd timers anyway — they survive agent restarts and keep history in the journal — but for reminders and recurring digests Iva can use either path: an eve schedule, or a plain crontab/`systemd-run` entry that sends via `scripts/lib/telegram-send.mjs`.
 
 ## nginx and TLS
 
