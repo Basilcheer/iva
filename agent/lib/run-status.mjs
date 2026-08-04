@@ -26,7 +26,7 @@ import { join } from "node:path";
 
 // Путь от cwd, как в usage.mjs, а НЕ от import.meta.url: канал инлайнится в кэш
 // authored-modules eve, откуда «две папки вверх» указывают в node_modules/.cache.
-// Оба процесса (iva.service и мост) стартуют с WorkingDirectory=/home/shima/iva.
+// Оба процесса (iva.service и мост) стартуют из одного WorkingDirectory (корень установки Ивы).
 const DATA_DIR_RAW = process.env.ASSISTANT_DATA_DIR ?? "data";
 const DATA_DIR = DATA_DIR_RAW.startsWith("/") ? DATA_DIR_RAW : join(process.cwd(), DATA_DIR_RAW);
 const LEGACY_STATUS_FILE = join(DATA_DIR, "run-status.json");
