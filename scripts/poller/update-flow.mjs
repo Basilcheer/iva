@@ -6,7 +6,7 @@ import { readEnvFresh } from "../lib/env-file.mjs";
 import { inspectUpstream, markVersionNotified, updateOffer } from "../lib/update-check.mjs";
 import { modelSummary } from "../lib/model-summary.mjs";
 import { acquireUpdateLock, releaseUpdateLock } from "../lib/update-safety.mjs";
-import { getLang, tr } from "../lib/i18n.mjs";
+import { getLang, tr } from "#lib/i18n.mjs";
 import { ALLOWED, DATA_DIR, ENV_PATH, NODE, ROOT, UPDATE_JOB_TTL_MS, log } from "./config.mjs";
 import { edit, reply, tg } from "./transport.mjs";
 

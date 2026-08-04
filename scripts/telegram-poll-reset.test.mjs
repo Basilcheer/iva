@@ -21,7 +21,7 @@ const [{
   writeQueueAtomic,
 }, status] = await Promise.all([
   import(`./telegram-poll.mjs?reset-test=${Date.now()}`),
-  import(`./lib/run-status.mjs?reset-test=${Date.now()}`),
+  import(`#lib/run-status.mjs?reset-test=${Date.now()}`),
 ]);
 
 test("private reset clears only the target chat status and queue", async () => {

@@ -39,7 +39,7 @@ process.env.TELEGRAM_POLL_SETTLE_MS = "0";
 const statusDataDir = mkdtempSync(join(tmpdir(), "iva-telegram-queue-status-"));
 process.env.ASSISTANT_DATA_DIR = statusDataDir;
 after(() => rmSync(statusDataDir, { recursive: true, force: true }));
-const status = await import("./run-status.mjs");
+const status = await import("#lib/run-status.mjs");
 const { drainReadyQueueHeads, routeMessageUpdate } = await import("../telegram-poll.mjs");
 
 const privateUpdate = (updateId, text) => ({

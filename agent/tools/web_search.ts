@@ -7,6 +7,9 @@ import { z } from "zod";
 // PROVIDERS, а execute() диспетчеризует по нему, не зная реализаций (DIP). Новый бэкенд =
 // добавить элемент в массив, плита fetch/normalize не трогается (OCP). Паттерн scripts/lib/ports.mjs.
 // САМОДОСТАТОЧНО: только eve/tools, zod, node fetch (без cross-authored import — иначе ломается eve dev).
+// УСТАРЕЛО (см. перенос scripts/lib → agent/lib): гоча про поломку eve dev на cross-authored
+// import не подтвердилась — typecheck/build/replica проходят чисто и с #lib/-алиасом, и с
+// относительными agent/-импортами. Оставлено как есть — просто not-invented-here самодостаточность.
 // Чтение страницы — web_fetch; интерактив/логин/JS — agent-browser.
 
 const SNIPPET_MAX = 500; // усечение сниппета, чтобы поиск не раздувал контекст

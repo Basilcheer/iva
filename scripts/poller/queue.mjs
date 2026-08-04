@@ -4,7 +4,7 @@ import {
   loadQueueFile,
   writeQueueFileAtomic,
 } from "../lib/telegram-queue.mjs";
-import { toChannelLocalToken } from "../lib/telegram-continuation-token.mjs";
+import { toChannelLocalToken } from "#lib/telegram-continuation-token.mjs";
 import {
   clearTelegramResetIntent,
   loadTelegramResetIntents,
@@ -17,8 +17,8 @@ import {
   RUN_STALE_MS,
   setChatStatus,
   setChatStatusIf,
-} from "../lib/run-status.mjs";
-import { tr } from "../lib/i18n.mjs";
+} from "#lib/run-status.mjs";
+import { tr } from "#lib/i18n.mjs";
 import { DATA_DIR, SECRET, RESET_ROUTE, log } from "./config.mjs";
 import { tg } from "./transport.mjs";
 

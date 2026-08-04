@@ -6,7 +6,7 @@ import {
   enqueueItem,
   queueHead,
   removeQueueHead,
-} from "./telegram-queue.mjs";
+} from "../../scripts/lib/telegram-queue.mjs";
 import {
   addTelegramQueueReceipt,
   handleAcceptedTelegramWebhook,
@@ -18,7 +18,7 @@ process.env.TELEGRAM_BOT_TOKEN ??= "999:test-token";
 process.env.TELEGRAM_WEBHOOK_SECRET_TOKEN ??= "test-secret";
 process.env.TELEGRAM_ALLOWED_USER_IDS = "42";
 process.env.TELEGRAM_POLL_SETTLE_MS = "0";
-const { drainReadyQueueHeads } = await import("../telegram-poll.mjs");
+const { drainReadyQueueHeads } = await import("../../scripts/telegram-poll.mjs");
 
 const privateUpdate = (updateId, text) => ({
   update_id: updateId,

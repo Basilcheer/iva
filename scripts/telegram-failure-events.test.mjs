@@ -40,7 +40,7 @@ const [
   { SessionKey },
 ] = await Promise.all([
   import("../agent/channels/telegram.ts?failure-events-test"),
-  import("./lib/run-status.mjs"),
+  import("#lib/run-status.mjs"),
   import("../node_modules/eve/dist/src/context/container.js"),
   import("../node_modules/eve/dist/src/context/keys.js"),
 ]);

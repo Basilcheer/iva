@@ -1,6 +1,6 @@
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { TELEGRAM_ACCEPTANCE_ROUTE } from "../lib/telegram-acceptance.mjs";
+import { TELEGRAM_ACCEPTANCE_ROUTE } from "#lib/telegram-acceptance.mjs";
 
 export const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 export const NODE = process.execPath;

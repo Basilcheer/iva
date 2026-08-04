@@ -26,20 +26,21 @@ import {
   getChatStatus,
   setChatStatus,
   setChatStatusIf,
-} from "../../scripts/lib/run-status.mjs";
+} from "../lib/run-status.mjs";
 // Двуязычие: tr(en, ru) отдаёт строку по текущему языку (data/settings.json → env
-// AGENT_LANGUAGE). Тот же кросс-импорт scripts/lib в eve-бандл, что и telegram-format выше.
-import { tr } from "../../scripts/lib/i18n.mjs";
+// AGENT_LANGUAGE). i18n.mjs живёт в agent/lib — это уже не кросс-импорт, в отличие от
+// telegram-format выше.
+import { tr } from "../lib/i18n.mjs";
 import { buildTelegramReplyContext } from "../../scripts/lib/telegram-reply-context.mjs";
 import { handleTelegramResetRequest } from "../../scripts/lib/telegram-reset-route.mjs";
 // Eve отдаёт обработчикам событий токен с именем канала впереди, а reset-роут клеит его
 // сам. Сохраняем только channel-local вид, иначе /new сбрасывает несуществующий токен (#110).
-import { toChannelLocalToken } from "../../scripts/lib/telegram-continuation-token.mjs";
+import { toChannelLocalToken } from "../lib/telegram-continuation-token.mjs";
 import {
   handleAcceptedTelegramWebhook,
   TELEGRAM_ACCEPTANCE_ROUTE,
   wrapTelegramQueueOnMessage,
-} from "../../scripts/lib/telegram-acceptance.mjs";
+} from "../lib/telegram-acceptance.mjs";
 import {
   abandonTelegramEarlyStatus,
   emitTelegramTurnLatency,

@@ -9,7 +9,7 @@ import { join } from "node:path";
 // turn.started, как в 20-core.ts. Персона в instructions.md остаётся языково-нейтральной —
 // это по-прежнему единственный источник правды о языке вывода.
 //
-// Разрешение языка продублировано инлайн, а НЕ импортом scripts/lib/i18n.mjs:
+// Разрешение языка продублировано инлайн, а НЕ импортом agent/lib/i18n.mjs:
 // инструкции самодостаточны — только eve + node fs/path (гоча eve 0.11.4: authored-
 // модули проекта тут не резолвятся при сборке).
 const DATA_DIR = process.env.ASSISTANT_DATA_DIR ?? "data";
