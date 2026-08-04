@@ -56,10 +56,14 @@ unset ASSISTANT_BEARER IVA_PORT
 | `iva-memory-doctor.timer` | 05:00 nightly | schema/health/decay/MOC checks + vault `git push` |
 | `iva-update-check.timer` | 10:00 daily | check for a newer stable Iva version; notify once per version |
 
-The doctor and update-check timers stay on systemd on purpose: they're watchdogs that must keep running even if the agent process itself is wedged. `iva-memory-doctor.timer` embeds `ASSISTANT_TIMEZONE` directly, so its 05:00 schedule remains correct even when the server clock uses UTC. Both carry `Persistent=true`, so a run missed during downtime fires after reboot. Keeping the server clock aligned is still recommended:
+The doctor and update-check timers stay on systemd on purpose: they're watchdogs that must keep running even if the agent process itself is wedged. `iva-memory-doctor.timer` embeds `ASSISTANT_TIMEZONE` directly, so its 05:00 schedule remains correct even when the server clock uses UTC — as do the eve schedules below (`Environment=TZ` in `iva.service`). Setting the server's own system timezone to match is therefore optional, not required for anything in this doc to work correctly:
 
 ```bash
-sudo timedatectl set-timezone "$ASSISTANT_TIMEZONE"
+# Optional — the generated units and the eve schedules already carry ASSISTANT_TIMEZONE
+# themselves, so this only affects OTHER things that read the system clock (log
+# timestamps, cron jobs you add yourself, etc.).
+source <(grep -E '^ASSISTANT_TIMEZONE=' .env)
+[ -n "$ASSISTANT_TIMEZONE" ] && sudo timedatectl set-timezone "$ASSISTANT_TIMEZONE"
 ```
 
 ### Memory rollups and the digest: in-process eve schedules
@@ -83,8 +87,9 @@ Manual runs and status:
 ```bash
 npm run memory -- daily   # or weekly | monthly | yearly
 npm run doctor
-systemctl --user list-timers                       # iva.service, iva-telegram-poll, doctor, update-check
-cat data/rollup-status.json                         # last run per eve schedule (or: /menu → ⏰ in Telegram)
+systemctl --user list-timers                             # doctor, update-check (the only two systemd timers left)
+systemctl --user status iva.service iva-telegram-poll.service  # the two always-on services
+cat data/rollup-status.json                               # last run per eve schedule (or: /menu → ⏰ in Telegram)
 iva logs                  # agent; `iva logs poll` for the bridge
 ```
 
