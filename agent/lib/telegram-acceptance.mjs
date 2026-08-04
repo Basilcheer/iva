@@ -9,7 +9,9 @@ export const TELEGRAM_ACCEPTANCE_KIND_HEADER = "x-iva-telegram-acceptance";
 
 const receiptContext = new AsyncLocalStorage();
 const RECEIPT_PATTERN = /^[a-f0-9]{32}$/u;
+const BOT_ID_PATTERN = /^(?<id>[1-9]\d*):/u;
 const COMPLETED_UPDATES_LIMIT = 200;
+let missingWebhookSecretReported = false;
 
 function validReceipt(value) {
   return typeof value === "string" && RECEIPT_PATTERN.test(value);
@@ -17,11 +19,24 @@ function validReceipt(value) {
 
 function hasValidWebhookSecret(request) {
   const expected = process.env.TELEGRAM_WEBHOOK_SECRET_TOKEN;
+  if (!expected) {
+    if (!missingWebhookSecretReported) {
+      console.error(
+        "[telegram] TELEGRAM_WEBHOOK_SECRET_TOKEN не задан: durable deduplication отключена",
+      );
+      missingWebhookSecretReported = true;
+    }
+    return false;
+  }
   const supplied = request.headers.get("x-telegram-bot-api-secret-token");
-  if (!expected || !supplied) return false;
+  if (!supplied) return false;
   const left = Buffer.from(expected);
   const right = Buffer.from(supplied);
   return left.length === right.length && timingSafeEqual(left, right);
+}
+
+function configuredBotId() {
+  return BOT_ID_PATTERN.exec(process.env.TELEGRAM_BOT_TOKEN ?? "")?.groups?.id ?? null;
 }
 
 export function addTelegramQueueReceipt(
@@ -87,11 +102,39 @@ async function metadataFromRequest(request) {
   }
 }
 
-function validCompletedUpdates(value) {
-  if (!Array.isArray(value) || !value.every((id) => Number.isSafeInteger(id))) {
+function validCompletedLedger(value) {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    Array.isArray(value) ||
+    typeof value.botId !== "string" ||
+    !Array.isArray(value.updates) ||
+    !value.updates.every((id) => Number.isSafeInteger(id) && id >= 0)
+  ) {
     throw new Error("completed Telegram update ledger has invalid schema");
   }
   return value;
+}
+
+async function loadCompletedLedger(file, botId) {
+  try {
+    return {
+      ledger: validCompletedLedger(
+        await loadJsonStrict(file, { botId, updates: [] }),
+      ),
+      recovered: false,
+    };
+  } catch (error) {
+    const message = String(error?.message ?? error);
+    if (
+      !message.includes("damaged (invalid JSON)") &&
+      !message.includes("ledger has invalid schema")
+    ) {
+      throw error;
+    }
+    console.error(`[telegram] ledger завершённых update пересоздан: ${message}`);
+    return { ledger: { botId, updates: [] }, recovered: true };
+  }
 }
 
 async function withCompletedLedger(file, fn) {
@@ -104,18 +147,24 @@ async function withCompletedLedger(file, fn) {
   }
 }
 
-async function hasCompletedUpdate(file, updateId) {
-  return withCompletedLedger(file, async () =>
-    validCompletedUpdates(await loadJsonStrict(file, [])).includes(updateId));
+async function hasCompletedUpdate(file, botId, updateId) {
+  return withCompletedLedger(file, async () => {
+    const { ledger, recovered } = await loadCompletedLedger(file, botId);
+    if (recovered) await saveJsonAtomic(file, ledger);
+    return ledger.botId === botId && ledger.updates.includes(updateId);
+  });
 }
 
-async function recordCompletedUpdate(file, updateId) {
+async function recordCompletedUpdate(file, botId, updateId) {
   return withCompletedLedger(file, async () => {
-    const current = validCompletedUpdates(await loadJsonStrict(file, []));
-    const next = current.includes(updateId)
+    const { ledger, recovered } = await loadCompletedLedger(file, botId);
+    const current = ledger.botId === botId ? ledger.updates : [];
+    const updates = current.includes(updateId)
       ? current
       : [...current, updateId].slice(-COMPLETED_UPDATES_LIMIT);
-    if (next !== current) await saveJsonAtomic(file, next);
+    if (recovered || ledger.botId !== botId || updates !== current) {
+      await saveJsonAtomic(file, { botId, updates });
+    }
   });
 }
 
@@ -131,14 +180,17 @@ async function recordCompletedUpdate(file, updateId) {
  */
 export async function handleAcceptedTelegramWebhook(handler, request, args, options = {}) {
   const { receipt, updateId } = await metadataFromRequest(request);
+  const authenticated = hasValidWebhookSecret(request);
+  const botId = configuredBotId();
   const completedFile =
     options.completedUpdatesFile ??
     join(process.env.ASSISTANT_DATA_DIR ?? "data", "completed-updates.json");
   // Старые/нестандартные payload без update_id сохраняют прежний путь обработки.
   if (
     updateId !== null &&
-    hasValidWebhookSecret(request) &&
-    await hasCompletedUpdate(completedFile, updateId)
+    authenticated &&
+    botId !== null &&
+    await hasCompletedUpdate(completedFile, botId, updateId)
   ) {
     return new Response(null, {
       status: 204,
@@ -166,9 +218,9 @@ export async function handleAcceptedTelegramWebhook(handler, request, args, opti
     await Promise.allSettled(background);
     const handled = receiptContext.getStore()?.handled === true;
     if (accepted || handled) {
-      if (updateId !== null) {
+      if (updateId !== null && authenticated && botId !== null) {
         try {
-          await recordCompletedUpdate(completedFile, updateId);
+          await recordCompletedUpdate(completedFile, botId, updateId);
         } catch (error) {
           // Ход уже принят: ошибка ledger не должна вернуть 5xx и запустить тот же ход снова.
           console.error("[telegram] не смог записать завершённый update:", error);

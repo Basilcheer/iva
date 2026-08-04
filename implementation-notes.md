@@ -360,12 +360,18 @@
 - The completed-update ledger is written after authored `turn` or `handled` acceptance.
   The narrow crash window before that atomic write remains intentionally at-least-once.
   Deduplication requires the configured webhook secret and a matching
-  `x-telegram-bot-api-secret-token`. The ledger keeps the latest 200 ids; an older replay
-  starts a new turn. A simultaneous duplicate can also run before either acceptance is
-  recorded; the normal durable queue serializes deliveries, and exactly-once is out of scope.
-- Invalid JSON is quarantined and rejected by `loadJsonStrict`; parsed content that is not an
-  integer array fails closed in `validCompletedUpdates`. A post-acceptance ledger-write failure
-  is logged while the 204 receipt is preserved, preventing a successful turn from entering a
-  deterministic retry loop.
+  `x-telegram-bot-api-secret-token`. A missing configured secret disables deduplication and is
+  reported once. The ledger is scoped to the numeric, non-secret bot id from the bot token, so
+  replacing a bot cannot suppress an unrelated update with the same id. It keeps the latest
+  200 ids; an older replay starts a new turn. A simultaneous duplicate can also run before
+  either acceptance is recorded; the normal durable queue serializes deliveries, and
+  exactly-once is out of scope.
+- Invalid JSON is quarantined; invalid parsed schema is logged. Both cases recover to an empty
+  bot-scoped ledger and rewrite a clean file. Operational read failures still propagate. A
+  post-acceptance ledger-write failure is logged while the 204 receipt is preserved, preventing
+  a successful turn from entering a deterministic retry loop.
+- Media-cache reads are optional at the processing boundary. An operational read failure is
+  logged and treated as a miss, while the incoming media continues through download and
+  derivation.
 - Both stores use the existing JSON-store primitives and bounded JSON files under
   `ASSISTANT_DATA_DIR`; no delivery timeout or direct-delivery policy changed.

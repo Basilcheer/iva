@@ -305,9 +305,15 @@ async function processMediaPart(
   const caption = (raw.caption || "").trim();
   const capSuffix = caption ? `\n\n${caption}` : "";
   try {
-    const cached = media.fileUniqueId
-      ? await getTelegramMediaCacheEntry(media.fileUniqueId)
-      : null;
+    let cached = null;
+    if (media.fileUniqueId) {
+      try {
+        cached = await getTelegramMediaCacheEntry(media.fileUniqueId);
+      } catch (error) {
+        // Кэш факультативен: сбой чтения не должен блокировать обработку медиа.
+        console.error("[telegram] не смог прочитать кэш медиа:", error);
+      }
+    }
     let rel = cached?.path;
     let vision = cached?.vision ?? "";
     let transcript = cached?.transcript ?? "";
