@@ -1,4 +1,4 @@
-import { addTelegramQueueReceipt, TELEGRAM_ACCEPTANCE_KIND_HEADER } from "../lib/telegram-acceptance.mjs";
+import { addTelegramQueueReceipt, TELEGRAM_ACCEPTANCE_KIND_HEADER } from "#lib/telegram-acceptance.mjs";
 import { classifyDeliverStatus } from "../lib/deliver-policy.mjs";
 import { tr } from "../lib/i18n.mjs";
 import { ROUTE, ACCEPTANCE_ROUTE, SECRET, ALLOWED, SETTLE_MS, sleep, log } from "./config.mjs";

@@ -39,7 +39,7 @@ import {
   handleAcceptedTelegramWebhook,
   TELEGRAM_ACCEPTANCE_ROUTE,
   wrapTelegramQueueOnMessage,
-} from "../../scripts/lib/telegram-acceptance.mjs";
+} from "../lib/telegram-acceptance.mjs";
 import {
   abandonTelegramEarlyStatus,
   emitTelegramTurnLatency,
