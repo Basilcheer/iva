@@ -104,7 +104,7 @@ The rest — for business owners, specialists, executives and everyday life: **[
 - 🛡️ **Safe to forward** — links, PDFs and other people's messages are screened before the model reads them.
 - 📊 **Token accounting** — every model step is logged; `/usage` reports it for free.
 
-## Memory — the best part
+## The Memory Tree
 
 <img src="assets/iva-memory-tree.webp" alt="How Iva remembers: a leaf is a day, branches are weeks and months, tree rings are years around CORE.md" width="100%">
 
