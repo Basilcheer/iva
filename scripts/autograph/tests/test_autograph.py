@@ -2106,6 +2106,44 @@ def main():
                  f"'{section}' not found in prompt")
 
         # ═══════════════════════════════════════════════════════
+        # GOLDEN FIXTURES — те же файлы читает scripts/golden-parsers.test.mjs;
+        # оба раннера сверяются с одним ожиданием, чтобы TS/Python-диалекты
+        # frontmatter и fence-сканера не разъезжались молча (TECH_DEBT §13)
+        # ═══════════════════════════════════════════════════════
+        print("\n--- golden fixtures (dual-language parser pairs) ---")
+        import re as _re
+        from enforce import _outside_fences, _sections
+
+        golden = Path(__file__).resolve().parent / 'golden'
+
+        fm_cases = sorted((golden / 'frontmatter').glob('*.md'))
+        test("golden frontmatter fixtures present", len(fm_cases) >= 7,
+             f"found {len(fm_cases)}")
+        for md_file in fm_cases:
+            expected = json.loads(md_file.with_suffix('.json').read_text())
+            fields, body, _ = parse_frontmatter(md_file.read_text())
+            test(f"golden fm fields: {md_file.stem}",
+                 fields == expected['fields'],
+                 f"{fields!r} != {expected['fields']!r}")
+            test(f"golden fm body: {md_file.stem}", body == expected['body'],
+                 f"{body!r} != {expected['body']!r}")
+
+        sec_cases = sorted((golden / 'sections').glob('*.md'))
+        test("golden section fixtures present", len(sec_cases) >= 7,
+             f"found {len(sec_cases)}")
+        for md_file in sec_cases:
+            expected = json.loads(md_file.with_suffix('.json').read_text())
+            lines = md_file.read_text().split('\n')
+            test(f"golden outside: {md_file.stem}",
+                 _outside_fences(lines) == expected['outside'])
+            for heading, ranges in expected['sections'].items():
+                matcher = _re.compile(
+                    rf'^##\s+{_re.escape(heading)}\s*$', _re.IGNORECASE)
+                got = [[s, e] for s, e, _m in _sections(lines, matcher)]
+                test(f"golden sections: {md_file.stem} ## {heading}",
+                     got == ranges, f"{got} != {ranges}")
+
+        # ═══════════════════════════════════════════════════════
         # SUMMARY
         # ═══════════════════════════════════════════════════════
         total = PASS + FAIL
