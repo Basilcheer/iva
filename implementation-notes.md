@@ -442,3 +442,11 @@
   while old ownerless markers keep the time-based compatibility rule.
 - Completion and cleanup mutate status only while holding the status lock and keep a
   reservation marked locally until its removal write succeeds.
+
+## fix/reminder-node-runtime
+
+- Kept the security gate deterministic and dependency-free.
+- Made the pure JavaScript module canonical so operational `.mjs` scripts work
+  with stock Node runtimes that do not load TypeScript.
+- Preserved the agent import contract through a thin TypeScript re-export.
+- Reminder persistence across reboot remains tracked separately in issue #117.

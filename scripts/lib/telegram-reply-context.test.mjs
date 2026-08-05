@@ -1,4 +1,3 @@
-import "./ts-esm-hooks.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
@@ -9,7 +8,7 @@ import {
 const {
   hasInboundAttackSignal,
   sanitizeInbound,
-} = await import("../../agent/lib/security-gate.ts");
+} = await import("./security-gate.mjs");
 
 function buildTelegramReplyContext(rawMessage) {
   return buildReplyResult(
