@@ -24,6 +24,12 @@ Iva - self-hosted AI-ассистент в Telegram с многослойной 
 curl -fsSL https://raw.githubusercontent.com/smixs/iva/main/install.sh | bash
 ```
 
+## Как это работает
+
+<img src="assets/iva-flow.webp" alt="Как работает Iva: голосовые, тексты, фото и PDF летят из Telegram в агента-иву, вокруг - память, ночная сборка, cron, напоминания, поиск, веб, workspace и документы" width="100%">
+
+Мост опрашивает Telegram через long-poll, так что публичный HTTPS, домен и webhook не нужны. Ива работает как два systemd user service, два systemd watchdog-таймера и пять внутрипроцессных eve schedules - эксплуатация описана в [docs/deploy.md](docs/deploy.md).
+
 **Зачем вам это** → [25+ живых сценариев - бизнес, работа, жизнь](docs/ru/use-cases.md).
 
 <img src="assets/iva-use-cases.webp" alt="Что просят у Ивы: восемь бытовых запросов - от голосового, ставшего задачами, до ресёрча с источниками и сказки на ночь с продолжением" width="100%">
@@ -151,12 +157,6 @@ cd ~/iva && bash install.sh
 Установщик переиспользует существующий чекаут вместо повторного клонирования, не трогает `.env` и vault и ставит те же зависимости. Форк или ветка задаются переменными, которые скрипт читает на старте: `REPO_URL=…`, `BRANCH=…`, `INSTALL_DIR=…` (по умолчанию: этот репозиторий, `main`, `~/iva`). Подробности: [docs/ru/install.md](docs/ru/install.md).
 
 </details>
-
-## Как это работает
-
-<img src="assets/iva-flow.webp" alt="Как работает Iva: голосовые, тексты, фото и PDF летят из Telegram в агента-иву, вокруг - память, ночная сборка, cron, напоминания, поиск, веб, workspace и документы" width="100%">
-
-Мост опрашивает Telegram через long-poll, так что публичный HTTPS, домен и webhook не нужны. Ива работает как два systemd user service, два systemd watchdog-таймера и пять внутрипроцессных eve schedules - эксплуатация описана в [docs/deploy.md](docs/deploy.md).
 
 ## Секретарь в Telegram
 
