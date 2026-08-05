@@ -25,7 +25,7 @@ Find siblings of the same type+domain:
 
 ```bash
 grep -rl "type: <type>" vault/cards/<kind>/
-uv run scripts/autograph/graph.py backlinks vault cards/<kind>/_index
+uv run scripts/autograph/graph.py backlinks vault cards/<kind>/_index vault/schema.json
 ```
 
 Link the 2–3 most relevant, each with a context phrase explaining the relationship:
@@ -46,7 +46,7 @@ both directions.
 
 ```bash
 uv run scripts/autograph/engine.py touch vault/cards/<kind>/<file>.md
-uv run scripts/autograph/graph.py health vault   # broken links should be 0
+uv run scripts/autograph/graph.py health vault vault/schema.json   # broken links should be 0
 ```
 
 ## Wiki-link form (Obsidian)

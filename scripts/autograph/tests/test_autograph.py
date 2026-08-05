@@ -702,6 +702,137 @@ def main():
              f"expected {len(VAULT_FILES)}, got '{file_count_str}'")
         test("graph health shows Health Score", 'Health Score' in out)
 
+        # Health is defined over schema-managed cards. Raw transcripts and roots remain
+        # graph nodes, but adding them cannot decay card-quality metrics.
+        from graph import build_graph, expected_future_link, fix_broken_links
+        health_schema = {
+            "node_types": {
+                "note": {},
+                "daily-summary": {},
+                "weekly-summary": {},
+                "monthly-summary": {},
+                "yearly-summary": {},
+            },
+            "path_type_hints": {
+                "cards/notes/": "note",
+                "summaries/daily/": "daily-summary",
+                "weekly/": "weekly-summary",
+                "monthly/": "monthly-summary",
+                "yearly/": "yearly-summary",
+            },
+            "domain_inference": {
+                "cards/": "knowledge",
+                "daily/": "personal",
+                "summaries/": "personal",
+                "weekly/": "personal",
+                "monthly/": "personal",
+                "yearly/": "personal",
+            },
+        }
+        health_vault = tmp / 'managed-health-vault'
+        (health_vault / 'cards/notes').mkdir(parents=True)
+        (health_vault / 'cards/notes/alpha.md').write_text(
+            "---\ntype: note\ndescription: Alpha\n---\n# Alpha\n"
+            "[[cards/notes/alpha]] [[cards/notes/alpha]] [[cards/notes/alpha]]\n"
+        )
+        baseline = build_graph(health_vault, health_schema, today=date(2026, 8, 5))
+        (health_vault / 'daily').mkdir()
+        for day in range(100):
+            (health_vault / 'daily' / f'raw-{day:03d}.md').write_text(
+                f"# Raw {day}\nNo frontmatter or description.\n"
+            )
+        (health_vault / 'CORE.md').write_text('# Core\n')
+        (health_vault / 'MOC.md').write_text('# MOC\n')
+        with_raw = build_graph(health_vault, health_schema, today=date(2026, 8, 5))
+        for metric in ('health_score', 'desc_coverage', 'managed_avg_links'):
+            test(f"100 raw transcripts leave {metric} unchanged",
+                 with_raw['stats'][metric] == baseline['stats'][metric],
+                 f"baseline={baseline['stats'][metric]} raw={with_raw['stats'][metric]}")
+        test("raw transcripts and CORE/MOC remain graph nodes",
+             with_raw['stats']['total_files'] == 103)
+        test("raw transcripts and CORE/MOC are outside managed health",
+             with_raw['stats']['managed_files'] == 1)
+
+        (health_vault / 'cards/notes/no-description.md').write_text(
+            "# Missing description but managed through path_type_hints\n"
+        )
+        missing_desc = build_graph(health_vault, health_schema, today=date(2026, 8, 5))
+        test("managed path without description lowers coverage",
+             missing_desc['stats']['desc_coverage'] < with_raw['stats']['desc_coverage'])
+
+        # Exact rollup parents stay future only through their scheduled creation day.
+        test("ISO-year daily parent accepts W53 on creation day",
+             expected_future_link('summaries/daily/2021-01-01', 'weekly/2020-W53',
+                                  date(2021, 1, 4)))
+        test("ISO-year daily parent becomes broken after creation day",
+             not expected_future_link('summaries/daily/2021-01-01', 'weekly/2020-W53',
+                                      date(2021, 1, 5)))
+        test("W53 belongs to month containing its Thursday",
+             expected_future_link('weekly/2020-W53', 'monthly/2020-12', date(2021, 1, 1)))
+        test("leap-day Thursday selects February",
+             expected_future_link('weekly/2024-W09', 'monthly/2024-02', date(2024, 3, 1)))
+        test("monthly parent year expires after Jan 1",
+             expected_future_link('monthly/2024-12', 'yearly/2024', date(2025, 1, 1))
+             and not expected_future_link('monthly/2024-12', 'yearly/2024', date(2025, 1, 2)))
+        test("wrong rollup period is never future",
+             not expected_future_link('weekly/2024-W09', 'monthly/2024-03', date(2024, 3, 1)))
+
+        rollup_vault = tmp / 'rollup-health-vault'
+        (rollup_vault / 'summaries/daily').mkdir(parents=True)
+        daily_summary = rollup_vault / 'summaries/daily/2021-01-01.md'
+        daily_summary.write_text(
+            "---\ntype: daily-summary\ndescription: Boundary day\n---\n"
+            "# Boundary\nUp: [[weekly/2020-W53]]\n"
+        )
+        future_graph = build_graph(rollup_vault, health_schema, today=date(2021, 1, 4))
+        test("exact absent parent is reported separately as future",
+             future_graph['stats']['future_links'] == 1
+             and future_graph['stats']['broken_links'] == 0,
+             str(future_graph['stats']))
+        fixes, applied = fix_broken_links(rollup_vault, future_graph, apply=False)
+        test("graph fix ignores an expected future parent", fixes == [] and applied == 0)
+        overdue_graph = build_graph(rollup_vault, health_schema, today=date(2021, 1, 5))
+        test("overdue parent becomes managed broken link",
+             overdue_graph['stats']['future_links'] == 0
+             and overdue_graph['stats']['managed_broken_links'] == 1,
+             str(overdue_graph['stats']))
+        daily_summary.write_text(
+            "---\ntype: daily-summary\ndescription: Boundary day\n---\n"
+            "# Boundary\nUp: [[weekly/2021-W01]]\n"
+        )
+        wrong_graph = build_graph(rollup_vault, health_schema, today=date(2021, 1, 1))
+        test("wrong missing parent is immediately broken",
+             wrong_graph['stats']['future_links'] == 0
+             and wrong_graph['stats']['managed_broken_links'] == 1)
+        (rollup_vault / 'weekly').mkdir()
+        (rollup_vault / 'weekly/2020-W53.md').write_text(
+            "---\ntype: weekly-summary\ndescription: Week 53\n---\n# Week 53\n"
+        )
+        daily_summary.write_text(
+            "---\ntype: daily-summary\ndescription: Boundary day\n---\n"
+            "# Boundary\nUp: [[weekly/2020-W53]]\n"
+        )
+        resolved_graph = build_graph(rollup_vault, health_schema, today=date(2021, 1, 5))
+        test("existing parent is an ordinary resolved link",
+             resolved_graph['stats']['future_links'] == 0
+             and resolved_graph['stats']['broken_links'] == 0)
+
+        audio_vault = tmp / 'audio-embed-vault'
+        (audio_vault / 'cards/notes').mkdir(parents=True)
+        (audio_vault / 'cards/notes/audio.md').write_text(
+            "---\ntype: note\ndescription: Audio embeds\n---\n# Audio\n"
+            "![[voice.ogg]] ![[voice.OPUS]] ![[voice.m4a]] ![[voice.WAV]] "
+            "[[voice.ogg.md]]\n"
+        )
+        audio_graph = build_graph(audio_vault, health_schema, today=date(2026, 8, 5))
+        test("audio attachment extensions are not broken wiki-links",
+             audio_graph['stats']['broken_links'] == 1,
+             str(audio_graph['broken_link_list']))
+        test("Markdown filename ending in .ogg.md is still checked",
+             audio_graph['broken_link_list'] == [
+                 {'source': 'cards/notes/audio', 'target': 'voice.ogg'}
+             ], str(audio_graph['broken_link_list']))
+
         # graph orphans
         code, out, _ = run([py, str(SCRIPTS_DIR / 'graph.py'), 'orphans',
                             str(vault_dir), str(schema_path)])

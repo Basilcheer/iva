@@ -15,7 +15,7 @@ import json
 import re
 import sys
 from pathlib import Path
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from collections import defaultdict
 
 from common import (
@@ -24,10 +24,81 @@ from common import (
     build_link_index, normalize_link_target, resolve_link_target, is_hub_path
 )
 
-EMBED_EXTS = {'.jpg', '.jpeg', '.png', '.gif', '.svg', '.pdf', '.mp3', '.mp4', '.webp'}
+EMBED_EXTS = {'.jpg', '.jpeg', '.png', '.gif', '.svg', '.pdf', '.mp3', '.mp4', '.webp',
+              '.ogg', '.opus', '.m4a', '.wav'}
 
 
-def build_graph(vault_dir: Path, schema: dict) -> dict:
+def _matches_path_hint(file_rel_path: str, pattern: str) -> bool:
+    """Match a schema path hint on directory boundaries."""
+    path = file_rel_path.lower().strip('/')
+    hint = str(pattern).lower().strip('/')
+    if not hint:
+        return False
+    return path == hint or path.startswith(f'{hint}/') or f'/{hint}/' in f'/{path}'
+
+
+def is_managed_card(file_rel_path: str, frontmatter: dict, schema: dict) -> bool:
+    """Return whether a Markdown node belongs to the schema-managed card set."""
+    valid_types = set((schema.get('node_types') or {}).keys())
+    if frontmatter.get('type') in valid_types:
+        return True
+    for pattern, hinted_type in (schema.get('path_type_hints') or {}).items():
+        if pattern == '_comment' or hinted_type not in valid_types:
+            continue
+        if _matches_path_hint(file_rel_path, pattern):
+            return True
+    return False
+
+
+def _next_month(year: int, month: int) -> date:
+    if month == 12:
+        return date(year + 1, 1, 1)
+    return date(year, month + 1, 1)
+
+
+def expected_future_link(source: str, target: str, today: date | None = None) -> bool:
+    """Classify an absent, exact Iva rollup parent that is not overdue yet.
+
+    The scheduled creation day is included. Starting the next calendar day an
+    absent parent is a real broken link.
+    """
+    today = today or date.today()
+
+    daily_match = re.fullmatch(r'summaries/daily/(\d{4})-(\d{2})-(\d{2})', source)
+    if daily_match:
+        try:
+            child_date = date(*(int(value) for value in daily_match.groups()))
+        except ValueError:
+            return False
+        iso_year, iso_week, _ = child_date.isocalendar()
+        expected = f'weekly/{iso_year:04d}-W{iso_week:02d}'
+        creation_day = date.fromisocalendar(iso_year, iso_week, 1) + timedelta(days=7)
+        return target == expected and today <= creation_day
+
+    weekly_match = re.fullmatch(r'weekly/(\d{4})-W(\d{2})', source)
+    if weekly_match:
+        iso_year, iso_week = (int(value) for value in weekly_match.groups())
+        try:
+            thursday = date.fromisocalendar(iso_year, iso_week, 4)
+        except ValueError:
+            return False
+        expected = f'monthly/{thursday.year:04d}-{thursday.month:02d}'
+        return target == expected and today <= _next_month(thursday.year, thursday.month)
+
+    monthly_match = re.fullmatch(r'monthly/(\d{4})-(\d{2})', source)
+    if monthly_match:
+        year, month = (int(value) for value in monthly_match.groups())
+        try:
+            date(year, month, 1)
+        except ValueError:
+            return False
+        expected = f'yearly/{year:04d}'
+        return target == expected and today <= date(year + 1, 1, 1)
+
+    return False
+
+
+def build_graph(vault_dir: Path, schema: dict, today: date | None = None) -> dict:
     """Scan vault, build full graph structure."""
     vault_dir = Path(vault_dir)
     files = walk_vault(vault_dir)
@@ -37,6 +108,7 @@ def build_graph(vault_dir: Path, schema: dict) -> dict:
     nodes = {}
     all_links = []      # (source, raw_target, resolved_target)
     broken_links = []   # (source, raw_target)
+    future_links = []   # (source, raw_target)
 
     for md in files:
         rp = rel_path(md, vault_dir)
@@ -53,6 +125,7 @@ def build_graph(vault_dir: Path, schema: dict) -> dict:
         domain = infer_domain(rp, schema)
         has_desc = bool(fm.get('description', ''))
         card_type = fm.get('type', 'unknown')
+        managed = is_managed_card(rp, fm, schema)
 
         outgoing = []
         links = extract_wikilinks(body if body else content)
@@ -65,6 +138,8 @@ def build_graph(vault_dir: Path, schema: dict) -> dict:
             if resolved:
                 outgoing.append(resolved)
                 all_links.append((rp_noext, target_clean, resolved))
+            elif managed and expected_future_link(rp_noext, target_clean, today=today):
+                future_links.append((rp_noext, target_clean))
             else:
                 broken_links.append((rp_noext, target_clean))
 
@@ -75,6 +150,7 @@ def build_graph(vault_dir: Path, schema: dict) -> dict:
             'outgoing': outgoing,
             'incoming': [],  # filled below
             'link_count': len(outgoing),
+            'managed': managed,
         }
 
     # Build incoming links
@@ -90,15 +166,27 @@ def build_graph(vault_dir: Path, schema: dict) -> dict:
     orphans = [p for p, n in nodes.items() if not n['incoming'] and not is_hub_path(p)]
     dead_ends = [p for p, n in nodes.items() if not n['outgoing'] and n['incoming']]
     desc_count = sum(1 for n in nodes.values() if n['has_description'])
-    desc_ratio = desc_count / max(total, 1)
+    all_desc_ratio = desc_count / max(total, 1)
 
-    orphan_ratio = len(orphans) / max(total, 1)
-    broken_ratio = len(broken_links) / max(total, 1)
+    managed_nodes = {path: node for path, node in nodes.items() if node['managed']}
+    managed_total = len(managed_nodes)
+    managed_orphans = [path for path, node in managed_nodes.items()
+                       if not node['incoming'] and not is_hub_path(path)]
+    managed_broken_links = [(source, target) for source, target in broken_links
+                            if nodes.get(source, {}).get('managed')]
+    managed_resolved_links = sum(node['link_count'] for node in managed_nodes.values())
+    managed_link_count = managed_resolved_links + len(future_links)
+    managed_avg_links = managed_link_count / max(managed_total, 1)
+    managed_desc_count = sum(1 for node in managed_nodes.values() if node['has_description'])
+    desc_ratio = managed_desc_count / max(managed_total, 1)
+
+    orphan_ratio = len(managed_orphans) / max(managed_total, 1)
+    broken_ratio = len(managed_broken_links) / max(managed_total, 1)
 
     health = 100.0
     health -= orphan_ratio * 30
     health -= broken_ratio * 30
-    health -= max(0, (3 - avg_links) * 15)
+    health -= max(0, (3 - managed_avg_links) * 15)
     health -= (1 - desc_ratio) * 10
     health = max(0, round(health, 1))
 
@@ -117,8 +205,12 @@ def build_graph(vault_dir: Path, schema: dict) -> dict:
             domain_stats[nodes[o]['domain']]['orphans'] += 1
 
     nonstandard_count = sum(len(v) for v in nonstandard_domains.values())
-    nonstandard_ratio = nonstandard_count / max(total, 1)
-    health -= nonstandard_ratio * 5  # small penalty for domain inconsistency
+    managed_nonstandard_count = sum(
+        1 for node in managed_nodes.values()
+        if valid_domains and node['domain'] not in valid_domains
+    )
+    managed_nonstandard_ratio = managed_nonstandard_count / max(managed_total, 1)
+    health -= managed_nonstandard_ratio * 5  # small penalty for domain inconsistency
     health = max(0, round(health, 1))
 
     return {
@@ -131,7 +223,15 @@ def build_graph(vault_dir: Path, schema: dict) -> dict:
             'dead_ends': len(dead_ends),
             'broken_links': len(broken_links),
             'desc_coverage': round(desc_ratio * 100, 1),
+            'all_desc_coverage': round(all_desc_ratio * 100, 1),
             'nonstandard_domains': nonstandard_count,
+            'managed_files': managed_total,
+            'managed_links': managed_link_count,
+            'managed_avg_links': round(managed_avg_links, 2),
+            'managed_orphans': len(managed_orphans),
+            'managed_broken_links': len(managed_broken_links),
+            'managed_nonstandard_domains': managed_nonstandard_count,
+            'future_links': len(future_links),
             'health_score': health,
         },
         'domains': dict(domain_stats),
@@ -139,8 +239,9 @@ def build_graph(vault_dir: Path, schema: dict) -> dict:
         'orphan_list': sorted(orphans),
         'dead_end_list': sorted(dead_ends),
         'broken_link_list': [{'source': s, 'target': t} for s, t in broken_links],
+        'future_link_list': [{'source': s, 'target': t} for s, t in future_links],
         'nodes': {k: {'domain': v['domain'], 'type': v['type'], 'has_description': v['has_description'],
-                       'outgoing': v['outgoing'], 'incoming': v['incoming']}
+                       'managed': v['managed'], 'outgoing': v['outgoing'], 'incoming': v['incoming']}
                   for k, v in nodes.items()},
     }
 
@@ -175,9 +276,14 @@ def generate_report(stats: dict, domains: dict) -> str:
         f"| Total files | {s['total_files']} |",
         f"| Total links | {s['total_links']} |",
         f"| Avg links/file | {s['avg_links']} |",
+        f"| Managed files | {s['managed_files']} |",
+        f"| Managed avg links/file | {s['managed_avg_links']} |",
         f"| Orphans | {s['orphans']} |",
+        f"| Managed orphans | {s['managed_orphans']} |",
         f"| Dead-ends | {s['dead_ends']} |",
         f"| Broken links | {s['broken_links']} |",
+        f"| Managed broken links | {s['managed_broken_links']} |",
+        f"| Expected future links | {s['future_links']} |",
         f"| Desc coverage | {s['desc_coverage']}% |",
         f"",
         f"## Domains",
@@ -351,9 +457,14 @@ def main():
         print(f"Total files:      {stats['total_files']}")
         print(f"Total links:      {stats['total_links']}")
         print(f"Avg links/file:   {stats['avg_links']}")
+        print(f"Managed files:    {stats['managed_files']}")
+        print(f"Managed avg links:{stats['managed_avg_links']:>7}")
         print(f"Orphan files:     {stats['orphans']}")
+        print(f"Managed orphans:  {stats['managed_orphans']}")
         print(f"Dead-ends:        {stats['dead_ends']}")
         print(f"Broken links:     {stats['broken_links']}")
+        print(f"Managed broken:   {stats['managed_broken_links']}")
+        print(f"Future links:     {stats['future_links']}")
         print(f"Desc coverage:    {stats['desc_coverage']}%")
         ns_count = stats.get('nonstandard_domains', 0)
         if ns_count > 0:

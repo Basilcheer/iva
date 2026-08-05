@@ -25,7 +25,7 @@ Wire every card created/updated in Phase 2 into the graph. No orphans.
    Find siblings with:
    ```bash
    grep -rl "type: <type>" vault/cards/<kind>/
-   uv run scripts/autograph/graph.py backlinks vault cards/<kind>/<hub>
+   uv run scripts/autograph/graph.py backlinks vault cards/<kind>/<hub> vault/schema.json
    ```
 3. **Back-reference.** When a card relates strongly to another, add the reciprocal link
    on the neighbor too (keep the graph undirected where it makes sense).

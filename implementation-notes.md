@@ -450,3 +450,15 @@
   with stock Node runtimes that do not load TypeScript.
 - Preserved the agent import contract through a thin TypeScript re-export.
 - Reminder persistence across reboot remains tracked separately in issue #117.
+
+## fix/memory-health-contract
+
+- Health quality is scoped by the existing `node_types` and `path_type_hints`; raw
+  transcripts remain append-only graph nodes and require no schema migration.
+- Existing structural totals remain visible. Managed-card counters drive the score,
+  while the general description ratio is exposed separately as `all_desc_coverage`.
+- Future parents are recognized only for exact daily-to-weekly, weekly-to-monthly,
+  and monthly-to-yearly relationships, including their scheduled creation day.
+- An absent parent becomes broken the day after its rollup was scheduled to run.
+- Audio embeds accepted by Telegram (`.ogg`, `.opus`, `.m4a`, `.wav`) are excluded
+  from broken-link checks; similarly named Markdown files remain graph targets.
