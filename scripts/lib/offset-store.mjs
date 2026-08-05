@@ -4,15 +4,20 @@
 // Маркер delivered сужает окно двойной доставки до единственного апдейта «в полёте»:
 // свежепереигранное (<= delivered, в пределах окна) пропускается — offset двигаем,
 // в eve не шлём.
-const asInt = (v) => (Number.isSafeInteger(v) ? v : null);
+const asInt = (v) => (Number.isSafeInteger(v) && v >= 0 ? v : null);
 
 export function parseOffsetFile(raw) {
-  try {
-    const j = JSON.parse(raw);
-    return { offset: asInt(j?.offset), delivered: asInt(j?.delivered) };
-  } catch {
-    return { offset: null, delivered: null };
+  const j = JSON.parse(raw);
+  if (
+    typeof j !== "object" ||
+    j === null ||
+    Array.isArray(j) ||
+    asInt(j.offset) === null ||
+    (j.delivered !== undefined && j.delivered !== null && asInt(j.delivered) === null)
+  ) {
+    throw new Error("Telegram offset file has invalid schema");
   }
+  return { offset: j.offset, delivered: j.delivered ?? null };
 }
 
 export function serializeOffsetFile(offset, delivered) {

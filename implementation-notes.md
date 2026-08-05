@@ -353,6 +353,16 @@
   It guards Eve's documented contract ("reset retires a session so its continuation starts
   fresh"), which 0.27.13 honours — the `/new` failure was Iva's token shape, not Eve's reset.
 
+## Telegram offset durability (v0.3.11)
+
+- Only ENOENT represents first run. Existing JSON, schema, permission, and I/O failures stop
+  the bridge before `deleteWebhook(drop_pending=true)` or `getUpdates(-1)`, preserving
+  Telegram's backlog for the systemd restart.
+- Offset publication uses a private same-directory tmp file and one rename. Any save failure
+  reaches the top-level fatal handler; the bridge never reports an unsaved cursor as durable.
+- The first-run tail lookup also fails closed on Telegram or response-shape errors; falling
+  back to offset 0 after such an error could replay the installation backlog. An actually empty
+  Telegram result still stores offset 0. Per-call tmp suffixes avoid overlap.
 ## Schedule migration durability (v0.3.11)
 
 - Memory catch-up baselines are seeded per key under the shared status lock. Existing
