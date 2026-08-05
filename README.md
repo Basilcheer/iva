@@ -23,6 +23,7 @@ Iva is a self-hosted Telegram AI assistant with layered memory that turns your m
 ```bash
 curl -fsSL https://raw.githubusercontent.com/smixs/iva/main/install.sh | bash
 ```
+
 ## What's New 🔥
 
 <details>
@@ -73,7 +74,6 @@ curl -fsSL https://raw.githubusercontent.com/smixs/iva/main/install.sh | bash
 </details>
 
 Full history — [CHANGELOG.md](CHANGELOG.md).
-
 
 ## How it works
 
