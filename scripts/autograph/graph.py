@@ -3,8 +3,8 @@
 autograph graph — vault graph analysis, link repair, backlinks, orphans.
 
 Commands:
-  graph.py health <vault-dir> [schema.json]        — health score + report
-  graph.py fix <vault-dir> [schema.json] [--apply]  — fix broken links
+  graph.py health <vault-dir> [schema.json] [--as-of YYYY-MM-DD] — health score + report
+  graph.py fix <vault-dir> [schema.json] [--apply] [--as-of YYYY-MM-DD] — fix broken links
   graph.py backlinks <vault-dir> <target>           — incoming links
   graph.py orphans <vault-dir>                      — files with no incoming links
 
@@ -12,10 +12,12 @@ All domain/type logic from schema.json. No hardcoded values.
 """
 
 import json
+import os
 import re
 import sys
 from pathlib import Path
 from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from collections import defaultdict
 
 from common import (
@@ -40,6 +42,8 @@ def _matches_path_hint(file_rel_path: str, pattern: str) -> bool:
 def is_managed_card(file_rel_path: str, frontmatter: dict, schema: dict) -> bool:
     """Return whether a Markdown node belongs to the schema-managed card set."""
     valid_types = set((schema.get('node_types') or {}).keys())
+    if not valid_types:
+        return True  # backward-compatible all-node health when no schema exists
     if frontmatter.get('type') in valid_types:
         return True
     for pattern, hinted_type in (schema.get('path_type_hints') or {}).items():
@@ -56,13 +60,23 @@ def _next_month(year: int, month: int) -> date:
     return date(year, month + 1, 1)
 
 
+def _local_today() -> date:
+    timezone = os.environ.get('ASSISTANT_TIMEZONE') or os.environ.get('TZ')
+    if not timezone:
+        return date.today()
+    try:
+        return datetime.now(ZoneInfo(timezone)).date()
+    except (ZoneInfoNotFoundError, ValueError):
+        return date.today()
+
+
 def expected_future_link(source: str, target: str, today: date | None = None) -> bool:
     """Classify an absent, exact Iva rollup parent that is not overdue yet.
 
     The scheduled creation day is included. Starting the next calendar day an
     absent parent is a real broken link.
     """
-    today = today or date.today()
+    today = today or _local_today()
 
     daily_match = re.fullmatch(r'summaries/daily/(\d{4})-(\d{2})-(\d{2})', source)
     if daily_match:
@@ -138,7 +152,7 @@ def build_graph(vault_dir: Path, schema: dict, today: date | None = None) -> dic
             if resolved:
                 outgoing.append(resolved)
                 all_links.append((rp_noext, target_clean, resolved))
-            elif managed and expected_future_link(rp_noext, target_clean, today=today):
+            elif expected_future_link(rp_noext, target_clean, today=today):
                 future_links.append((rp_noext, target_clean))
             else:
                 broken_links.append((rp_noext, target_clean))
@@ -175,7 +189,10 @@ def build_graph(vault_dir: Path, schema: dict, today: date | None = None) -> dic
     managed_broken_links = [(source, target) for source, target in broken_links
                             if nodes.get(source, {}).get('managed')]
     managed_resolved_links = sum(node['link_count'] for node in managed_nodes.values())
-    managed_link_count = managed_resolved_links + len(future_links)
+    managed_future_links = sum(
+        1 for source, _ in future_links if nodes.get(source, {}).get('managed')
+    )
+    managed_link_count = managed_resolved_links + managed_future_links
     managed_avg_links = managed_link_count / max(managed_total, 1)
     managed_desc_count = sum(1 for node in managed_nodes.values() if node['has_description'])
     desc_ratio = managed_desc_count / max(managed_total, 1)
@@ -412,15 +429,30 @@ def find_backlinks(graph: dict, target: str, vault_dir: Path = None) -> tuple[li
 
 
 # ─── CLI ───────────────────────────────────────────────────
-def find_schema(args: list) -> Path | None:
+def find_schema(args: list, vault_dir: Path) -> Path | None:
     """Find schema.json in args or default location."""
     for a in args:
         if a.endswith('.json') and Path(a).exists():
             return Path(a)
+    vault_schema = vault_dir / 'schema.json'
+    if vault_schema.exists():
+        return vault_schema
     default = Path(__file__).parent.parent / 'schema.json'
     if default.exists():
         return default
     return None
+
+
+def find_as_of(args: list) -> date | None:
+    if '--as-of' not in args:
+        return None
+    index = args.index('--as-of')
+    if index + 1 >= len(args):
+        raise ValueError('--as-of requires YYYY-MM-DD')
+    try:
+        return date.fromisoformat(args[index + 1])
+    except ValueError as error:
+        raise ValueError('--as-of requires a valid YYYY-MM-DD') from error
 
 
 def main():
@@ -436,11 +468,16 @@ def main():
         print(f"Error: vault directory required", file=sys.stderr)
         sys.exit(1)
 
-    schema_path = find_schema(args)
+    schema_path = find_schema(args, vault_dir)
     schema = load_schema(schema_path) if schema_path else {}
+    try:
+        as_of = find_as_of(args)
+    except ValueError as error:
+        print(f"Error: {error}", file=sys.stderr)
+        sys.exit(1)
 
     if cmd == 'health':
-        graph = build_graph(vault_dir, schema)
+        graph = build_graph(vault_dir, schema, today=as_of)
         stats = graph['stats']
 
         # Save outputs
@@ -479,7 +516,7 @@ def main():
                 print(f"    '{domain}' ({len(files)} files): {', '.join(files[:5])}")
 
     elif cmd == 'fix':
-        graph = build_graph(vault_dir, schema)
+        graph = build_graph(vault_dir, schema, today=as_of)
         apply = '--apply' in args
         fixes, applied = fix_broken_links(vault_dir, graph, apply=apply)
         mode = 'APPLIED' if apply else 'DRY RUN'
@@ -495,7 +532,7 @@ def main():
         if not target:
             print("Usage: graph.py backlinks <vault> <target>", file=sys.stderr)
             sys.exit(1)
-        graph = build_graph(vault_dir, schema)
+        graph = build_graph(vault_dir, schema, today=as_of)
         wikilinks, mentions = find_backlinks(graph, target, vault_dir)
         print(f"Backlinks to '{target}': {len(wikilinks)} wikilinks, {len(mentions)} text mentions")
         if wikilinks:
@@ -508,7 +545,7 @@ def main():
                 print(f"    ~ {m}")
 
     elif cmd == 'orphans':
-        graph = build_graph(vault_dir, schema)
+        graph = build_graph(vault_dir, schema, today=as_of)
         orphans = graph['orphan_list']
         print(f"Orphans: {len(orphans)}")
         for o in orphans:

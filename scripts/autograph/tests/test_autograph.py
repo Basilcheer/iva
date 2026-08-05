@@ -753,6 +753,31 @@ def main():
         test("raw transcripts and CORE/MOC are outside managed health",
              with_raw['stats']['managed_files'] == 1)
 
+        auto_schema_vault = tmp / 'auto-schema-health-vault'
+        (auto_schema_vault / 'cards/notes').mkdir(parents=True)
+        (auto_schema_vault / 'schema.json').write_text(json.dumps(health_schema))
+        (auto_schema_vault / 'cards/notes/hinted.md').write_text(
+            "# Managed through the discovered path hint\n"
+        )
+        code, _, err = run([py, str(SCRIPTS_DIR / 'graph.py'), 'health',
+                            str(auto_schema_vault), '--as-of', '2026-08-05'])
+        auto_stats = json.loads(
+            (auto_schema_vault / '.graph/vault-graph.json').read_text()
+        )['stats']
+        test("CLI auto-discovers vault/schema.json",
+             code == 0 and auto_stats['managed_files'] == 1, err[:200])
+
+        no_schema_vault = tmp / 'no-schema-health-vault'
+        no_schema_vault.mkdir()
+        (no_schema_vault / 'plain.md').write_text('# Plain node\n')
+        code, _, err = run([py, str(SCRIPTS_DIR / 'graph.py'), 'health',
+                            str(no_schema_vault), '--as-of', '2026-08-05'])
+        no_schema_stats = json.loads(
+            (no_schema_vault / '.graph/vault-graph.json').read_text()
+        )['stats']
+        test("CLI without any schema keeps all-node health fallback",
+             code == 0 and no_schema_stats['managed_files'] == 1, err[:200])
+
         (health_vault / 'cards/notes/no-description.md').write_text(
             "# Missing description but managed through path_type_hints\n"
         )
@@ -791,6 +816,33 @@ def main():
              str(future_graph['stats']))
         fixes, applied = fix_broken_links(rollup_vault, future_graph, apply=False)
         test("graph fix ignores an expected future parent", fixes == [] and applied == 0)
+        legacy_graph = build_graph(
+            rollup_vault,
+            {"node_types": {"note": {}}, "path_type_hints": {}},
+            today=date(2021, 1, 4),
+        )
+        test("future parent classification does not depend on managed schema types",
+             legacy_graph['stats']['future_links'] == 1
+             and legacy_graph['stats']['broken_links'] == 0
+             and legacy_graph['stats']['managed_files'] == 0,
+             str(legacy_graph['stats']))
+
+        (rollup_vault / 'schema.json').write_text(json.dumps(health_schema))
+        code, _, err = run([py, str(SCRIPTS_DIR / 'graph.py'), 'health',
+                            str(rollup_vault), '--as-of', '2021-01-04'])
+        cli_future = json.loads(
+            (rollup_vault / '.graph/vault-graph.json').read_text()
+        )['stats']
+        test("CLI --as-of keeps parent future on scheduled creation day",
+             code == 0 and cli_future['future_links'] == 1, err[:200])
+        code, _, err = run([py, str(SCRIPTS_DIR / 'graph.py'), 'health',
+                            str(rollup_vault), '--as-of', '2021-01-05'])
+        cli_overdue = json.loads(
+            (rollup_vault / '.graph/vault-graph.json').read_text()
+        )['stats']
+        test("CLI --as-of makes parent broken the following day",
+             code == 0 and cli_overdue['future_links'] == 0
+             and cli_overdue['managed_broken_links'] == 1, err[:200])
         overdue_graph = build_graph(rollup_vault, health_schema, today=date(2021, 1, 5))
         test("overdue parent becomes managed broken link",
              overdue_graph['stats']['future_links'] == 0
