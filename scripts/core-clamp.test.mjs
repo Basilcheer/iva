@@ -15,6 +15,17 @@ function pointers(text, heading = "## Указатели") {
   return text.slice(text.indexOf(heading));
 }
 
+function tinyPrefixFixture(prefixLength) {
+  const before = "# CORE — ядро памяти\n\n## Custom\n";
+  const between = "\n## Пользователь\n";
+  const after = "\n\n## Указатели\n- pointer stays exact\n";
+  const bullet = `- ${"x".repeat(78)}`;
+  const fixedWithoutPadding = before.length + between.length + after.length;
+  const protectedPaddingLength = CORE_CAP - prefixLength - 1 - fixedWithoutPadding;
+  assert.ok(protectedPaddingLength > 0);
+  return `${before}${"p".repeat(protectedPaddingLength)}${between}${bullet}${after}`;
+}
+
 test("under-cap input is returned byte-identically", () => {
   const input =
     "# CORE — ядро памяти\r\n\r\n" +
@@ -120,6 +131,22 @@ test("clamp is idempotent", () => {
   );
   const once = clampCore(input);
   assert.equal(clampCore(once), once);
+});
+
+test("prefix 0/1 removes the mutable bullet; prefix 2 keeps a complete bullet marker", () => {
+  for (const prefixLength of [0, 1, 2]) {
+    const input = tinyPrefixFixture(prefixLength);
+    const output = clampCore(input);
+    assert.ok(output.length <= CORE_CAP);
+    assert.equal(pointers(output), pointers(input));
+    if (prefixLength < 2) {
+      assert.doesNotMatch(output, /- x/u);
+      assert.doesNotMatch(output, /…/u);
+    } else {
+      assert.match(output, /## Пользователь\n- …\n/u);
+    }
+    assert.equal(clampCore(output), output);
+  }
 });
 
 test("all H1/H2 headings and their formatting are preserved", () => {

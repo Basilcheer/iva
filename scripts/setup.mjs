@@ -22,6 +22,7 @@ import {
   validateModelSelection,
 } from "./lib/model-validation.mjs";
 import { keptSetupWritePlan } from "./lib/setup-keep.mjs";
+import { validateTimeZone } from "./lib/timezone.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const SOURCE_ENV_PATH = join(ROOT, ".env");
@@ -662,10 +663,18 @@ async function main() {
   // ── Step 5: timezone, vault, port ─────────────────────────────────
   head(5, t("Timezone and memory storage", "Часовой пояс и хранилище памяти"));
   console.log(`  ${t("The timezone lets Iva use your real local time, not the server's.", "Часовой пояс нужен, чтобы Iva понимала ваше реальное время, а не время сервера.")}`);
-  out.ASSISTANT_TIMEZONE = await ask(
-    `  ${t("Timezone (IANA, e.g. Asia/Almaty, Asia/Tashkent, Europe/Berlin)", "Часовой пояс (IANA, напр. Asia/Almaty, Asia/Tashkent, Europe/Moscow)")}`,
-    out.ASSISTANT_TIMEZONE || "Asia/Almaty",
-  );
+  for (;;) {
+    const candidate = await ask(
+      `  ${t("Timezone (IANA, e.g. Asia/Almaty, Asia/Tashkent, Europe/Berlin)", "Часовой пояс (IANA, напр. Asia/Almaty, Asia/Tashkent, Europe/Moscow)")}`,
+      out.ASSISTANT_TIMEZONE || "Asia/Almaty",
+    );
+    const timezone = validateTimeZone(candidate);
+    if (timezone) {
+      out.ASSISTANT_TIMEZONE = timezone;
+      break;
+    }
+    console.log(`${C.r}  ${t("Unknown IANA timezone. Try again.", "Неизвестный часовой пояс IANA. Введите ещё раз.")}${C.x}`);
+  }
   out.ASSISTANT_VAULT_DIR = await ask(`  ${t("Vault directory (memory + git backup)", "Каталог vault (память + git-бэкап)")}`, out.ASSISTANT_VAULT_DIR || "vault");
   out.ASSISTANT_DATA_DIR = out.ASSISTANT_DATA_DIR || "data";
   // Off-the-beaten-path port: 3000/8000/8080 are often taken on a typical VPS (docker etc.). The server

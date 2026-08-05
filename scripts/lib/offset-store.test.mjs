@@ -7,9 +7,13 @@ test("round-trip offset + delivered", () => {
   assert.deepEqual(parseOffsetFile(raw), { offset: 42, delivered: 41 });
 });
 
-test("легаси-файл без delivered и битый JSON", () => {
+test("легаси-файл без delivered читается, битый JSON отвергается", () => {
   assert.deepEqual(parseOffsetFile('{"offset":7}'), { offset: 7, delivered: null });
-  assert.deepEqual(parseOffsetFile("garbage"), { offset: null, delivered: null });
+  assert.deepEqual(parseOffsetFile('{"offset":7,"delivered":null}'), {
+    offset: 7,
+    delivered: null,
+  });
+  assert.throws(() => parseOffsetFile("garbage"), SyntaxError);
 });
 
 test("alreadyDelivered: пропускаем только то, что уже уходило в eve", () => {
@@ -24,6 +28,14 @@ test("маркер — не вечная граница: далёкое прош
   assert.equal(alreadyDelivered(4_999_999, 5_000_000), true, "в пределах окна — дубль");
 });
 
-test("нецелые и небезопасные значения в файле → null", () => {
-  assert.deepEqual(parseOffsetFile('{"offset":1.5,"delivered":"7"}'), { offset: null, delivered: null });
+test("невалидные значения делают существующий файл невалидным", () => {
+  for (const raw of [
+    '{"offset":1.5}',
+    '{"offset":9007199254740992}',
+    '{"offset":-1}',
+    '{"offset":7,"delivered":"7"}',
+    '{"offset":7,"delivered":-1}',
+  ]) {
+    assert.throws(() => parseOffsetFile(raw), /invalid schema/u);
+  }
 });

@@ -192,10 +192,16 @@ def parse_frontmatter(content: str) -> tuple[dict, str, list[str]]:
     multiline_key = None
     multiline_mode = None  # fold | literal | list | pending
     multiline_sep = ' '  # >- fold (space), |- literal (newline)
+    multiline_blank_lines = 0
 
     for line in raw_lines:
         stripped = line.strip()
         indented = line.startswith((' ', '\t'))
+
+        # Пустая строка внутри block scalar разделяет абзацы и не завершает ключ.
+        if multiline_key and not stripped:
+            multiline_blank_lines += 1
+            continue
 
         # Multi-line continuation
         if multiline_key and indented:
@@ -214,7 +220,11 @@ def parse_frontmatter(content: str) -> tuple[dict, str, list[str]]:
                     fields[multiline_key].append(item.strip("'\""))
             else:
                 prev = fields.get(multiline_key, '') or ''
-                fields[multiline_key] = (prev + multiline_sep + stripped).strip()
+                sep = multiline_sep
+                if multiline_blank_lines:
+                    sep = '\n' * (multiline_blank_lines + (1 if multiline_mode == 'literal' else 0))
+                fields[multiline_key] = (prev + sep + stripped).strip()
+            multiline_blank_lines = 0
             continue
 
         if multiline_key and not indented:
@@ -223,6 +233,7 @@ def parse_frontmatter(content: str) -> tuple[dict, str, list[str]]:
             multiline_key = None
             multiline_mode = None
             multiline_sep = ' '
+            multiline_blank_lines = 0
 
         if not stripped or stripped.startswith('#'):
             continue
@@ -366,6 +377,9 @@ def format_field(key: str, val) -> str:
     if isinstance(val, (int, float)):
         return f"{key}: {val}"
     s = str(val)
+    if '\n' in s:
+        indented = '\n'.join(f'  {line}' for line in s.split('\n'))
+        return f'{key}: |-\n{indented}'
     if key == 'description' and s and len(s) > 80:
         return f'{key}: >-\n  {s}'
     if YAML_SPECIAL.search(s):

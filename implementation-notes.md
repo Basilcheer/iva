@@ -378,3 +378,36 @@
   four memory-schedule status records, while `iva status` reports systemd units only.
 - PHILOSOPHY.md now records the project boundary rules and explicit removal points for
   local workarounds.
+## Memory and configuration integrity (v0.3.11)
+
+- TypeScript and Python frontmatter parsers keep blank lines inside block scalars. Strings
+  containing newlines are serialized as literal blocks so parse-write-parse is lossless.
+- One Intl-backed timezone validator is shared by setup, startup instrumentation, and the
+  CLI unit generator. Runtime TZ is always assigned a validated zone or UTC.
+- Per-chat run-status quarantines only JSON/schema corruption. Filesystem failures remain
+  visible to callers and leave the original status path untouched.
+- The real chmod-based EACCES regression is skipped under UID 0 because root bypasses
+  discretionary permission bits; ordinary users and CI still exercise the filesystem path.
+- CORE truncation removes a mutable bullet when fewer than two marker characters survive;
+  a complete `-` plus its following space may still receive the ellipsis. Pointers remain
+  immutable.
+## Telegram offset durability (v0.3.11)
+
+- Only ENOENT represents first run. Existing JSON, schema, permission, and I/O failures stop
+  the bridge before `deleteWebhook(drop_pending=true)` or `getUpdates(-1)`, preserving
+  Telegram's backlog for the systemd restart.
+- Offset publication uses a private same-directory tmp file and one rename. Any save failure
+  reaches the top-level fatal handler; the bridge never reports an unsaved cursor as durable.
+- The first-run tail lookup also fails closed on Telegram or response-shape errors; falling
+  back to offset 0 after such an error could replay the installation backlog. An actually empty
+  Telegram result still stores offset 0. Per-call tmp suffixes avoid overlap.
+## Schedule migration durability (v0.3.11)
+
+- Memory catch-up baselines are seeded per key under the shared status lock. Existing
+  digest state can no longer disable first-run storm protection for memory schedules.
+- The seed transaction commits before legacy timer teardown; a failed seed leaves the
+  retired persistent units available for another boot.
+- Reservations record the owner process. A confirmed-dead owner is recovered immediately,
+  while old ownerless markers keep the time-based compatibility rule.
+- Completion and cleanup mutate status only while holding the status lock and keep a
+  reservation marked locally until its removal write succeeds.

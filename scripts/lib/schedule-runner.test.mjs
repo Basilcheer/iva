@@ -410,6 +410,94 @@ test("a stale inProgressSince (older than timeoutMs — a presumed crash) does n
   assert.equal(result.ok, true);
 });
 
+test("a fresh reservation owned by a dead process is recovered immediately", async () => {
+  const root = await scaffold();
+  await writeFile(join(root, "ok.mjs"), "process.exit(0);\n");
+  const statusPath = join(root, "data/rollup-status.json");
+  await mkdir(join(root, "data"), { recursive: true });
+  await writeFile(statusPath, JSON.stringify({
+    "memory-daily": {
+      inProgressSince: Date.now(),
+      ownerPid: 2_147_483_647,
+      ownerStartedAt: Date.now(),
+    },
+  }));
+
+  const result = await runScheduledJob({
+    name: "memory-daily",
+    argv: ["ok.mjs"],
+    root,
+    nodeBin: process.execPath,
+    statusPath,
+    log: () => {},
+  });
+
+  assert.equal(result.skipped, false);
+  assert.equal(result.ok, true);
+});
+
+test("a fresh reservation owned by a live process still blocks duplicate entry", async () => {
+  const root = await scaffold();
+  await writeFile(join(root, "boom.mjs"), "process.exit(1);\n");
+  const statusPath = join(root, "data/rollup-status.json");
+  await mkdir(join(root, "data"), { recursive: true });
+  await writeFile(statusPath, JSON.stringify({
+    "memory-daily": {
+      inProgressSince: Date.now(),
+      ownerPid: process.pid,
+      ownerStartedAt: Date.now(),
+    },
+  }));
+  let spawned = false;
+
+  const result = await runScheduledJob({
+    name: "memory-daily",
+    argv: ["boom.mjs"],
+    root,
+    nodeBin: process.execPath,
+    statusPath,
+    log: () => {},
+    spawnImpl: (...args) => {
+      spawned = true;
+      return realSpawn(...args);
+    },
+  });
+
+  assert.equal(result.skipped, true);
+  assert.equal(spawned, false);
+});
+
+test("completion and finally do not modify status when their lock acquisition fails", async () => {
+  const root = await scaffold();
+  const statusPath = join(root, "data/rollup-status.json");
+  await mkdir(join(root, "data"), { recursive: true });
+  await writeFile(
+    join(root, "hold-status-lock.mjs"),
+    [
+      "import { writeFileSync } from 'node:fs';",
+      `writeFileSync(${JSON.stringify(`${statusPath}.lock`)}, 'held');`,
+      "process.exit(0);",
+    ].join("\n"),
+  );
+  const { log, lines } = collectLogs();
+
+  const result = await runScheduledJob({
+    name: "memory-daily",
+    argv: ["hold-status-lock.mjs"],
+    root,
+    nodeBin: process.execPath,
+    statusPath,
+    log,
+  });
+
+  assert.equal(result.ok, true, "the child outcome remains successful");
+  const status = JSON.parse(await readFile(statusPath, "utf8"));
+  assert.equal(typeof status["memory-daily"].inProgressSince, "number");
+  assert.equal(status["memory-daily"].lastFinishedAt, undefined);
+  assert.ok(lines.some((line) => line.includes("record completion")));
+  assert.ok(lines.some((line) => line.includes("clear its reservation")));
+});
+
 test("no lockPath: a clean exit right after SIGTERM cancels the pending hard-kill (no stale SIGKILL later)", async () => {
   // The direct-spawn case (digest has no lockPath): "child" IS the actual target, so its
   // exit really does mean the process is gone, and any still-pending hard-kill timer must

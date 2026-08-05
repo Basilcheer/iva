@@ -28,6 +28,7 @@ import { homedir } from "node:os";
 import { defineInstrumentation } from "eve/instrumentation";
 import { probeEveHealth } from "../scripts/lib/config-transaction.mjs";
 import { runScheduleMigration } from "../scripts/lib/schedule-migration.mjs";
+import { validateTimeZone } from "../scripts/lib/timezone.mjs";
 
 const log = (...args: unknown[]) => console.log(new Date().toISOString(), ...args);
 
@@ -37,29 +38,18 @@ export default defineInstrumentation({
   recordInputs: false,
   recordOutputs: false,
   setup() {
-    // Same fallback the poller/rollup scripts use — see scripts/poller/config.mjs — kept
-    // here too because Nitro's schedule runner (unlike those) reads no .env of its own.
-    // Plain `||=` would coerce a genuinely unset ASSISTANT_TIMEZONE into the literal
-    // string "undefined" (process.env assignments always stringify), which then makes
-    // Intl.DateTimeFormat throw — so only assign when there is an actual value to assign.
-    if (!process.env.TZ && process.env.ASSISTANT_TIMEZONE) {
-      process.env.TZ = process.env.ASSISTANT_TIMEZONE;
-    }
+    // Nitro's schedule runner reads the process timezone. Validate before assigning TZ:
+    // process.env stringifies every value, and an unknown zone would make every Intl
+    // consumer throw a RangeError.
     const rawTz =
       process.env.ASSISTANT_TIMEZONE ||
       (process.env.TZ && process.env.TZ !== "undefined" ? process.env.TZ : "UTC");
-    // bin/iva.mjs validates ASSISTANT_TIMEZONE with a regex before ever writing it into a
-    // unit file; this is the other consumer of the same raw env value, so it needs the
-    // same defense — an invalid zone would otherwise reach Intl.DateTimeFormat inside
-    // schedule-migration.mjs's zonedParts(), which throws, which the outer catch below
-    // swallows, silently skipping catch-up on every boot.
-    let tz = "UTC";
-    try {
-      new Intl.DateTimeFormat("en-US", { timeZone: rawTz });
-      tz = rawTz;
-    } catch {
+    const validatedTz = validateTimeZone(rawTz);
+    const tz = validatedTz ?? "UTC";
+    if (validatedTz === null) {
       log(`schedule-migration: invalid timezone ${rawTz} — falling back to UTC`);
     }
+    process.env.TZ = tz;
 
     // Never let this block or fail server startup: wrap synchronously, and treat the
     // whole async chain below as fire-and-forget with its own catch.
