@@ -145,7 +145,7 @@ interface NamedH2Section extends H2Section {
   key: string;
 }
 
-function outsideFences(lines: string[]): boolean[] {
+export function outsideFences(lines: string[]): boolean[] {
   const outside = Array(lines.length).fill(true) as boolean[];
   let fence: { marker: "`" | "~"; length: number } | null = null;
   for (let index = 0; index < lines.length; index++) {
@@ -164,7 +164,7 @@ function outsideFences(lines: string[]): boolean[] {
   return outside;
 }
 
-function h2Sections(lines: string[], heading: string): H2Section[] {
+export function h2Sections(lines: string[], heading: string): H2Section[] {
   const escaped = heading.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const wanted = new RegExp(`^ {0,3}##\\s+${escaped}\\s*$`, "i");
   const outside = outsideFences(lines);

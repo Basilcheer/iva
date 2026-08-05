@@ -119,8 +119,12 @@ vs `scripts/autograph/common.py`; (b) the fence-aware H1/H2 section scanner adde
 0.3.12 — `agent/lib/card-store.ts` (`outsideFences`/`h2Sections`) vs
 `scripts/autograph/enforce.py` (`_outside_fences`/`_sections`). Pair (a) already broke
 once in both parsers simultaneously (blank line inside a folded block, fixed in 0.3.11).
-Neither pair is tested against shared fixtures today. Planned fix: a directory of golden
-fixture files (input Markdown + expected normalized JSON) that both the Node test suite
-and `scripts/autograph/tests/test_autograph.py` read and assert against, for both
-contracts. Note the result shapes differ (TS returns fields, Python returns a tuple), so
-fixtures should compare a normalized field dictionary only.
+RESOLVED after 0.3.12: shared golden fixtures live in
+`scripts/autograph/tests/golden/` (input Markdown + expected normalized JSON per case);
+both `scripts/golden-parsers.test.mjs` (CI node glob) and
+`scripts/autograph/tests/test_autograph.py` assert against the same expectations. The
+result shapes differ (TS returns fields, Python returns a tuple), so fixtures compare a
+normalized form only: fields+body for frontmatter, outside[] plus [start,end) section
+ranges for the scanner. Known dialect divergences deliberately NOT covered (quoted commas
+inside flow-list items, mixed-quote stripping) — fixtures encode the shared contract;
+extending it means adding a fixture first.

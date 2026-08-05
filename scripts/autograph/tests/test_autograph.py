@@ -920,6 +920,57 @@ def main():
         test("moc creates MOC files", len(moc_files) > 0,
              f"found {len(moc_files)}")
 
+        # Hub MOC.md regenerated from actually generated domain MOCs (issue #113)
+        hub = vault_dir / 'MOC.md'
+        test("moc writes hub MOC.md", hub.exists())
+        hub_text = hub.read_text() if hub.exists() else ''
+        for f in moc_files:
+            test(f"hub links {f.stem}", f'[[MOC/{f.stem}]]' in hub_text,
+                 hub_text[:200])
+
+        # Stale domain disappears from the hub on the next full generate
+        stale = moc_dir / 'MOC-staledomain.md'
+        stale.write_text('# MOC: staledomain\n')
+        hub.write_text(hub_text.replace(
+            '\n', '\n- [[MOC/MOC-staledomain]] — карточек: 1\n', 1))
+        _schema_cache.clear()
+        code, out, err = run([py, str(SCRIPTS_DIR / 'moc.py'), 'generate',
+                              str(vault_dir), str(schema_path)])
+        test("moc regenerate exits 0", code == 0, err[:300])
+        test("hub drops stale domain",
+             'MOC-staledomain' not in hub.read_text())
+        stale.unlink(missing_ok=True)
+
+        # --domain run: only that domain's file rewritten, hub still lists all
+        first_domain = moc_files[0].stem.replace('MOC-', '')
+        hub.unlink()
+        _schema_cache.clear()
+        code, out, err = run([py, str(SCRIPTS_DIR / 'moc.py'), 'generate',
+                              str(vault_dir), str(schema_path),
+                              '--domain', first_domain])
+        test("moc --domain exits 0", code == 0, err[:300])
+        hub_text = hub.read_text() if hub.exists() else ''
+        test("moc --domain rebuilds full hub",
+             all(f'[[MOC/{f.stem}]]' in hub_text for f in moc_files),
+             hub_text[:200])
+
+        # Hub links only domains whose MOC file actually exists: a missing
+        # domain file must not become a broken wikilink after a --domain run
+        if len(moc_files) >= 2:
+            missing = moc_files[-1]
+            missing.unlink()
+            _schema_cache.clear()
+            code, out, err = run([py, str(SCRIPTS_DIR / 'moc.py'), 'generate',
+                                  str(vault_dir), str(schema_path),
+                                  '--domain', first_domain])
+            test("moc --domain skips missing domain file in hub",
+                 code == 0 and f'[[MOC/{missing.stem}]]' not in hub.read_text(),
+                 hub.read_text()[:200])
+            # restore for the checks below
+            _schema_cache.clear()
+            run([py, str(SCRIPTS_DIR / 'moc.py'), 'generate',
+                 str(vault_dir), str(schema_path)])
+
         # --- engine.py ---
         print("\n--- engine.py ---")
         _schema_cache.clear()
@@ -2070,6 +2121,44 @@ def main():
             test(f"swarm_reduce prompt mentions {section}",
                  section in WAVE2_PROMPT_TEMPLATE,
                  f"'{section}' not found in prompt")
+
+        # ═══════════════════════════════════════════════════════
+        # GOLDEN FIXTURES — те же файлы читает scripts/golden-parsers.test.mjs;
+        # оба раннера сверяются с одним ожиданием, чтобы TS/Python-диалекты
+        # frontmatter и fence-сканера не разъезжались молча (TECH_DEBT §13)
+        # ═══════════════════════════════════════════════════════
+        print("\n--- golden fixtures (dual-language parser pairs) ---")
+        import re as _re
+        from enforce import _outside_fences, _sections
+
+        golden = Path(__file__).resolve().parent / 'golden'
+
+        fm_cases = sorted((golden / 'frontmatter').glob('*.md'))
+        test("golden frontmatter fixtures present", len(fm_cases) >= 7,
+             f"found {len(fm_cases)}")
+        for md_file in fm_cases:
+            expected = json.loads(md_file.with_suffix('.json').read_text())
+            fields, body, _ = parse_frontmatter(md_file.read_text())
+            test(f"golden fm fields: {md_file.stem}",
+                 fields == expected['fields'],
+                 f"{fields!r} != {expected['fields']!r}")
+            test(f"golden fm body: {md_file.stem}", body == expected['body'],
+                 f"{body!r} != {expected['body']!r}")
+
+        sec_cases = sorted((golden / 'sections').glob('*.md'))
+        test("golden section fixtures present", len(sec_cases) >= 7,
+             f"found {len(sec_cases)}")
+        for md_file in sec_cases:
+            expected = json.loads(md_file.with_suffix('.json').read_text())
+            lines = md_file.read_text().split('\n')
+            test(f"golden outside: {md_file.stem}",
+                 _outside_fences(lines) == expected['outside'])
+            for heading, ranges in expected['sections'].items():
+                matcher = _re.compile(
+                    rf'^##\s+{_re.escape(heading)}\s*$', _re.IGNORECASE)
+                got = [[s, e] for s, e, _m in _sections(lines, matcher)]
+                test(f"golden sections: {md_file.stem} ## {heading}",
+                     got == ranges, f"{got} != {ranges}")
 
         # ═══════════════════════════════════════════════════════
         # SUMMARY

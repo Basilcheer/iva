@@ -158,6 +158,29 @@ def generate_moc(domain: str, cards: list, schema: dict) -> str:
     return '\n'.join(lines)
 
 
+def generate_hub(data: dict) -> str:
+    """Единый хаб vault/MOC.md: ссылки на фактически сгенерированные доменные MOC.
+
+    Пересобирается при каждом generate, чтобы первый шаг цепочки
+    CORE → MOC.md → MOC/MOC-{domain} → карточка не протухал при
+    добавлении/удалении домена (issue #113).
+    """
+    lines = [
+        '# MOC — оглавление памяти',
+        '',
+        'Хабы графа: темы → карточки. На вопрос «что я знаю про X» начни отсюда и иди по ссылкам.',
+        'Регенерится ночью (autograph `moc.py generate`) — может слегка отставать; если пусто, ищи через `grep`.',
+        '',
+    ]
+    for domain in sorted(data):
+        cards = data[domain]
+        if not cards:
+            continue
+        lines.append(f'- [[MOC/MOC-{domain}]] — карточек: {len(cards)}')
+    lines.append('')
+    return '\n'.join(lines)
+
+
 def main():
     args = sys.argv[1:]
     if not args or args[0] in ('-h', '--help'):
@@ -211,6 +234,21 @@ def main():
                 total_links += link_count
                 print(f"✓ Generated: {outpath.relative_to(vault_dir)}")
                 print(f"  {link_count} wikilinks")
+
+        # Хаб собирается из ПОЛНОГО скана: прогон с --domain обновляет один доменный
+        # файл, но оглавление всё равно должно перечислять все домены vault'а.
+        # Ссылки — только на реально существующие MOC-файлы: домен, чей файл ещё
+        # не сгенерирован, попадёт в хаб при первом же полном прогоне (ночь).
+        hub_data = build_moc_data(vault_dir, schema, None) if domain_filter else data
+        hub_data = {
+            d: cards for d, cards in hub_data.items()
+            if cards and (moc_dir / f'MOC-{d}.md').exists()
+        }
+        if any(hub_data.values()):
+            hub_text = generate_hub(hub_data)
+            (vault_dir / 'MOC.md').write_text(hub_text)
+            total_links += hub_text.count('[[')
+            print("✓ Generated: MOC.md")
 
         print(f"\nTotal: {total_links} wikilinks across {len(data)} domains")
     else:
