@@ -249,7 +249,7 @@ test("явные UPDATE складываются в единственный Log
   assert.equal(read(created.file), before, "повтор факта должен быть byte-stable");
 });
 
-test("ADD не перезаписывает, UPDATE не создаёт, NOOP не пишет", async () => {
+test("ADD не перезаписывает, UPDATE не создаёт, NOOP не пишет и требует карточку", async () => {
   const base = {
     type: "note",
     title: "Границы операции",
@@ -288,8 +288,13 @@ test("ADD не перезаписывает, UPDATE не создаёт, NOOP н
     title: "NOOP без каталога",
     status: "active",
   });
-  assert.equal(noop.action, "noop");
+  assert.equal(noop.ok, false);
+  assert.match(noop.error, /NOOP требует существующую/);
   assert.equal(existsSync(projectDir), false, "NOOP не должен создавать даже каталог");
+
+  const existingNoop = await call({ ...base, operation: "NOOP" });
+  assert.equal(existingNoop.action, "noop");
+  assert.equal(read(created.file), before, "NOOP существующей карточки не меняет файл");
 });
 
 test("body с Related отклоняется без записи", async () => {
@@ -383,8 +388,9 @@ test("SUPERSEDE требует history_entry, заменяет truth и сохр
     description: "текущий владелец Alice",
     tags: ["note", "owner"],
     body:
-      "Current owner: Alice\n\n## Log\n- 2026-07-01: Ownership confirmed\n\n" +
-      "## History\n- 2025: Initial owner Carol",
+      "Current owner: Alice\n\n## Evidence\n\n```text\nowner: Alice\n```\n\n" +
+      "## Log\n- 2026-07-01: Ownership confirmed\n\n" +
+      "## History\n\n- 2025: Initial owner Carol\n  Continued detail\n",
     related: ["cards/contacts/alice"],
   };
   const created = await call(base);
@@ -397,6 +403,16 @@ test("SUPERSEDE требует history_entry, заменяет truth и сохр
   });
   assert.equal(rejected.ok, false);
   assert.match(rejected.error, /требует history_entry/);
+  assert.equal(read(created.file), before);
+
+  const fencedLegacy = await call({
+    ...base,
+    operation: undefined,
+    replace_body: true,
+    body: "Current owner: Bob\n\n```markdown\n## History\n- example only\n```",
+  });
+  assert.equal(fencedLegacy.ok, false);
+  assert.match(fencedLegacy.error, /legacy replace_body должен содержать ## History/);
   assert.equal(read(created.file), before);
 
   const replaced = await call({
@@ -416,10 +432,39 @@ test("SUPERSEDE требует history_entry, заменяет truth и сохр
   assert.equal(out.match(/^## Log$/gm).length, 1);
   assert.equal(out.match(/^## Related$/gm).length, 1);
   assert.match(out, /Initial owner Carol/);
+  assert.ok(
+    out.includes("## History\n\n- 2025: Initial owner Carol\n  Continued detail\n"),
+    "existing History must remain byte-for-byte before the appended entry",
+  );
   assert.match(out, /Current owner Alice/);
   assert.match(out, /Ownership confirmed/);
+  assert.match(out, /## Evidence\n\n```text\nowner: Alice\n```/);
   assert.match(out, /\[\[cards\/contacts\/alice\]\]/);
   assert.match(out, /\[\[cards\/contacts\/bob\]\]/);
+});
+
+test("SUPERSEDE заменяет явно названную custom-секцию и сохраняет остальные", async () => {
+  const base = {
+    operation: "ADD",
+    type: "note",
+    title: "Явная замена секции",
+    description: "проверка preserve replace semantics",
+    tags: ["note", "supersede"],
+    body: "Truth v1\n\n## Evidence\nold evidence\n\n## Notes\nkeep me",
+  };
+  const created = await call(base);
+  const result = await call({
+    ...base,
+    operation: "SUPERSEDE",
+    body: "Truth v2\n\n## Evidence\nnew evidence",
+    history_entry: "Truth v1",
+  });
+  assert.equal(result.action, "replaced");
+  const out = read(created.file);
+  assert.match(out, /Truth v2/);
+  assert.doesNotMatch(out, /old evidence/);
+  assert.match(out, /## Evidence\nnew evidence/);
+  assert.match(out, /## Notes\nkeep me/);
 });
 
 // ─── лок и атомарная запись ────────────────────────────────────────────────

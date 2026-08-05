@@ -5,6 +5,7 @@ import { join, relative, sep } from "node:path";
 import {
   acquireLock,
   atomicWrite,
+  hasH2Section,
   mergeCard,
   resolveCard,
 } from "../lib/card-store.js";
@@ -185,6 +186,9 @@ export default defineTool({
       if (replace_body || history_entry) {
         return { ok: false, error: "NOOP не принимает replace_body или history_entry." };
       }
+      if (!existsSync(file)) {
+        return { ok: false, error: `NOOP требует существующую карточку ${rel}.` };
+      }
       return { ok: true, file: rel, type, status: st, action: "noop", matchedBy: id.matchedBy };
     }
     if (replace_body && operation && operation !== "SUPERSEDE") {
@@ -215,7 +219,7 @@ export default defineTool({
       if ((effectiveOperation === "UPDATE" || effectiveOperation === "SUPERSEDE") && existing === undefined) {
         return { ok: false, error: `${effectiveOperation} требует существующую карточку ${rel}.` };
       }
-      const legacyHistoryInBody = /^##\s+History\s*$/im.test(body);
+      const legacyHistoryInBody = hasH2Section(body, "History");
       if (effectiveOperation === "SUPERSEDE" && !history_entry && !legacyHistoryInBody) {
         return {
           ok: false,

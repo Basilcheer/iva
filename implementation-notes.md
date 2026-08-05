@@ -482,10 +482,12 @@
 - Related identity ignores aliases and anchors. Links elsewhere in prose do not
   suppress a relation, and `body` cannot provide its own Related heading.
 - SUPERSEDE replaces only Compiled Truth: old Log, History and Related content
-  survives, and newly supplied relations merge into that preserved graph structure.
+  survives, newly supplied relations merge into that preserved graph structure, and
+  custom H2 sections survive unless the replacement explicitly supplies the same heading.
 - `enforce.py` repairs only unambiguous drift under `cards/`: dated update blocks
   migrate into Log, empty update headings disappear, and link-only Related blocks
-  merge idempotently. Prose-bearing duplicates are reported as compile candidates.
+  merge idempotently. Non-empty dated updates and ambiguous Markdown structures are
+  reported as semantic compile candidates; complex/fenced blocks remain byte-identical.
 - Raw daily transcripts and rollup summaries stay outside this cleanup scope.
 - TypeScript and Python section scanners ignore fenced code, so documentation
   examples containing structural headings remain byte-identical.

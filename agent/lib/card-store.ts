@@ -140,6 +140,11 @@ interface H2Section {
   end: number;
 }
 
+interface NamedH2Section extends H2Section {
+  heading: string;
+  key: string;
+}
+
 function outsideFences(lines: string[]): boolean[] {
   const outside = Array(lines.length).fill(true) as boolean[];
   let fence: { marker: "`" | "~"; length: number } | null = null;
@@ -173,6 +178,29 @@ function h2Sections(lines: string[], heading: string): H2Section[] {
       }
     }
     return { start, end };
+  });
+}
+
+export function hasH2Section(body: string, heading: string): boolean {
+  return h2Sections(body.split("\n"), heading).length > 0;
+}
+
+function namedH2Sections(lines: string[]): NamedH2Section[] {
+  const outside = outsideFences(lines);
+  const starts = lines.flatMap((line, index) => {
+    if (!outside[index]) return [];
+    const match = /^ {0,3}##\s+(.+?)\s*$/.exec(line);
+    return match ? [{ start: index, heading: match[1].trim(), key: norm(match[1]) }] : [];
+  });
+  return starts.map(({ start, heading, key }) => {
+    let end = lines.length;
+    for (let index = start + 1; index < lines.length; index++) {
+      if (outside[index] && /^ {0,3}#{1,2}\s+/.test(lines[index])) {
+        end = index;
+        break;
+      }
+    }
+    return { start, end, heading, key };
   });
 }
 
@@ -299,28 +327,72 @@ function replaceCompiledTruth(
   historyEntry: string | undefined,
   date: string,
 ): string {
-  const history = [...sectionContent(oldBody, "History"), ...sectionContent(replacement, "History")];
-  const log = [...sectionContent(oldBody, "Log"), ...sectionContent(replacement, "Log")];
-  const related = [...sectionContent(oldBody, "Related"), ...sectionContent(replacement, "Related")];
+  const structural = new Set(["log", "history", "related"]);
+  const oldLines = oldBody.split("\n");
+  const replacementLines = replacement.split("\n");
+  const oldSections = namedH2Sections(oldLines);
+  const replacementSections = namedH2Sections(replacementLines);
+  const replacementKeys = new Set(replacementSections.map((section) => section.key));
+
+  // The replacement owns Compiled Truth. Structural archives remain append-only,
+  // and an old custom H2 survives unless the replacement explicitly names it.
+  const replacementStructuralStarts = new Map(
+    replacementSections
+      .filter((section) => structural.has(section.key))
+      .map((section) => [section.start, section.end]),
+  );
+  const truthLines: string[] = [];
+  for (let index = 0; index < replacementLines.length;) {
+    const end = replacementStructuralStarts.get(index);
+    if (end !== undefined) {
+      index = end;
+      continue;
+    }
+    truthLines.push(replacementLines[index]);
+    index++;
+  }
+
+  const blocks = oldSections
+    .filter((section) => structural.has(section.key) || !replacementKeys.has(section.key))
+    .map((section) => ({
+      key: section.key,
+      heading: section.heading,
+      lines: oldLines.slice(section.start, section.end),
+    }));
+
+  const additions = new Map<string, string[]>();
+  for (const section of replacementSections.filter((candidate) => structural.has(candidate.key))) {
+    const content = replacementLines.slice(section.start + 1, section.end);
+    if (content.some((line) => line.length)) {
+      additions.set(section.key, [...(additions.get(section.key) ?? []), ...content]);
+    }
+  }
   if (historyEntry?.trim()) {
     const entry = historyEntry.trim();
-    history.push(/^[-*]\s+/.test(entry) ? entry : `- ${date}: ${entry}`);
+    const dated = /^[-*]\s+\d{4}-\d{2}-\d{2}:/.test(entry)
+      ? entry
+      : `- ${date}: ${entry.replace(/^[-*]\s+/, "")}`;
+    additions.set("history", [...(additions.get("history") ?? []), dated]);
   }
-  const deduped: string[] = [];
-  const seen = new Set<string>();
-  for (const line of history) {
-    const key = norm(line);
-    if (!key || seen.has(key)) continue;
-    seen.add(key);
-    deduped.push(line);
+
+  for (const [key, lines] of additions) {
+    let block = [...blocks].reverse().find((candidate) => candidate.key === key);
+    if (!block) {
+      const heading = key === "history" ? "History" : key === "log" ? "Log" : "Related";
+      block = { key, heading, lines: [`## ${heading}`] };
+      blocks.push(block);
+    }
+    if (block.lines.at(-1)?.trim()) block.lines.push("");
+    block.lines.push(...lines);
   }
-  let truth = removeH2Sections(replacement, "History");
-  truth = removeH2Sections(truth, "Log");
-  truth = removeH2Sections(truth, "Related");
-  if (log.length) truth = replaceH2Sections(truth, "Log", log);
-  if (deduped.length) truth = replaceH2Sections(truth, "History", deduped);
-  if (related.length) truth = replaceH2Sections(truth, "Related", related);
-  return truth;
+
+  const output = [...truthLines];
+  while (output.length && !output.at(-1)?.trim()) output.pop();
+  for (const block of blocks) {
+    if (output.length && output.at(-1)?.trim()) output.push("");
+    output.push(...block.lines);
+  }
+  return output.join("\n").replace(/\s+$/, "") + "\n";
 }
 
 export type CardOperation = "ADD" | "UPDATE" | "SUPERSEDE" | "NOOP";

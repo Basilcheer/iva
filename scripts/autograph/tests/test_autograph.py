@@ -1036,6 +1036,16 @@ def main():
             "## Log\n## Update 2026-07-31\n```\n"
         )
         fenced_card.write_text(fenced_before)
+        complex_card = cleanup_vault / 'cards/notes/complex-log.md'
+        complex_before = (
+            "---\ntype: note\nstatus: active\ntags: [note, cleanup]\n"
+            "description: Complex Log fixture\n" + system_fields + "---\n"
+            "# Complex Log\n\nCurrent truth stays byte-identical.\n\n"
+            "## Log\n- 2026-07-20:\n  - nested item\n\n"
+            "```markdown\n## Update 2020-01-01\nexample only\n```\n\n"
+            "## Update 2026-08-01\nParagraph one.\n\nParagraph two.\n"
+        )
+        complex_card.write_text(complex_before)
         raw_file = cleanup_vault / 'daily/2026-07-31.md'
         raw_before = "# Raw\n\n## Обновление 2026-07-31\n\n## Related\n- [[hub]]\n"
         raw_file.write_text(raw_before)
@@ -1051,6 +1061,7 @@ def main():
                               str(cleanup_vault), str(schema_path), '--apply'])
         safe_after = safe_card.read_text()
         ambiguous_after = ambiguous_card.read_text()
+        complex_after = complex_card.read_text()
         cleanup_report = json.loads(
             (cleanup_vault / '.graph/enforce-report.json').read_text()
         )
@@ -1072,9 +1083,15 @@ def main():
              ambiguous_after.count('\n## Related\n') == 2
              and 'Keep this prose explanation' in ambiguous_after,
              ambiguous_after)
-        test("enforce reports prose-bearing card as compile candidate",
-             cleanup_report.get('compile_candidates') == ['cards/notes/ambiguous.md'],
+        test("enforce queues migrated updates and ambiguous structures for compile",
+             cleanup_report.get('compile_candidates') == [
+                 'cards/notes/ambiguous.md',
+                 'cards/notes/complex-log.md',
+                 'cards/notes/safe.md',
+             ],
              str(cleanup_report))
+        test("enforce leaves complex and fenced Log/Update sections byte-identical",
+             complex_after == complex_before, complex_after)
         test("enforce card cleanup never touches raw transcripts or summaries",
              raw_file.read_text() == raw_before and summary_file.read_text() == summary_before)
         test("enforce preserves structural headings inside fenced code byte-for-byte",
@@ -1082,11 +1099,13 @@ def main():
 
         safe_snapshot = safe_after
         ambiguous_snapshot = ambiguous_after
+        complex_snapshot = complex_after
         code, _, err = run([py, str(SCRIPTS_DIR / 'enforce.py'),
                             str(cleanup_vault), str(schema_path), '--apply'])
         test("second enforce card cleanup is byte-stable",
              code == 0 and safe_card.read_text() == safe_snapshot
-             and ambiguous_card.read_text() == ambiguous_snapshot,
+             and ambiguous_card.read_text() == ambiguous_snapshot
+             and complex_card.read_text() == complex_snapshot,
              err[:300])
 
         # --- discover.py ---

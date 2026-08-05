@@ -96,6 +96,30 @@ def _related_target(raw: str) -> str:
     return raw.split('|', 1)[0].split('#', 1)[0].strip().lower()
 
 
+def _simple_log_update_sections(
+        lines: list[str], sections: list[tuple[int, int, str, re.Match]]) -> bool:
+    """True only when Log/Update sections can be flattened without losing layout."""
+    outside = _outside_fences(lines)
+    markdown_block = re.compile(r'^(?:[-*+] |\d+[.)] |>|#{1,6}\s|\||`{3,}|~{3,})')
+    for start, end, kind, _ in sections:
+        indexes = list(range(start + 1, end))
+        while indexes and not lines[indexes[0]].strip():
+            indexes.pop(0)
+        while indexes and not lines[indexes[-1]].strip():
+            indexes.pop()
+        if any(not outside[index] for index in indexes):
+            return False
+        content = [lines[index] for index in indexes]
+        if any(not line.strip() for line in content):
+            return False
+        if kind == 'log':
+            if any(not re.match(r'^-\s+\S', line) for line in content):
+                return False
+        elif any(line != line.strip() or markdown_block.match(line) for line in content):
+            return False
+    return True
+
+
 def cleanup_card_body(body: str) -> tuple[str, dict, bool]:
     """Repair only unambiguous structural drift in a cards/** body."""
     fixes = defaultdict(int)
@@ -112,30 +136,44 @@ def cleanup_card_body(body: str) -> tuple[str, dict, bool]:
             + [(start, end, 'log', match) for start, end, match in logs],
             key=lambda item: item[0],
         )
-        content = []
-        for start, end, kind, match in combined:
-            section_lines = [line for line in lines[start + 1:end] if line.strip()]
-            if kind == 'log':
-                content.extend(section_lines)
-                continue
-            if not section_lines:
-                fixes['empty_updates_removed'] += 1
-                continue
-            day = match.group(1)
-            if len(section_lines) == 1:
-                content.append(f'- {day}: {section_lines[0].strip()}')
-            else:
-                content.append(f'- {day}:')
-                content.extend(f'  {line}' for line in section_lines)
-            fixes['updates_migrated_to_log'] += 1
+        nonempty_update = any(
+            any(line.strip() for line in lines[start + 1:end])
+            for start, end, kind, _ in combined if kind == 'update'
+        )
+        if nonempty_update:
+            # Moving chronology into Log cannot repair stale Compiled Truth. Queue
+            # the card for a semantic dbrain pass even when migration is safe.
+            compile_candidate = True
 
-        ranges = [(start, end) for start, end, _, _ in combined]
-        insert_at = combined[0][0]
-        keep_log = bool(content) or bool(logs)
-        replacement = ['## Log', *content] if keep_log else []
-        if len(logs) > 1:
-            fixes['log_sections_merged'] += len(logs) - 1
-        lines = _replace_ranges(lines, ranges, replacement, insert_at)
+        if not _simple_log_update_sections(lines, combined):
+            # Fences, nested blocks, indentation and paragraph breaks carry layout
+            # semantics. Leave the whole Log/Update cluster byte-identical.
+            compile_candidate = True
+        else:
+            content = []
+            for start, end, kind, match in combined:
+                section_lines = [line for line in lines[start + 1:end] if line.strip()]
+                if kind == 'log':
+                    content.extend(section_lines)
+                    continue
+                if not section_lines:
+                    fixes['empty_updates_removed'] += 1
+                    continue
+                day = match.group(1)
+                if len(section_lines) == 1:
+                    content.append(f'- {day}: {section_lines[0].strip()}')
+                else:
+                    content.append(f'- {day}:')
+                    content.extend(f'  {line}' for line in section_lines)
+                fixes['updates_migrated_to_log'] += 1
+
+            ranges = [(start, end) for start, end, _, _ in combined]
+            insert_at = combined[0][0]
+            keep_log = bool(content) or bool(logs)
+            replacement = ['## Log', *content] if keep_log else []
+            if len(logs) > 1:
+                fixes['log_sections_merged'] += len(logs) - 1
+            lines = _replace_ranges(lines, ranges, replacement, insert_at)
 
     # Duplicate Related blocks are merged only when every non-empty line is a
     # link-only list item. Prose-bearing duplicates stay byte-identical and are
@@ -222,7 +260,7 @@ def enforce(vault_dir: Path, schema: dict, apply=False, verbose=False):
                 stats['fixes'][name] += count
             if compile_candidate:
                 stats['compile_candidates'].append(rp)
-                issues.append('ambiguous duplicate Related sections')
+                issues.append('semantic card compile required')
 
         # --- TYPE ---
         t = fields.get('type', '')
