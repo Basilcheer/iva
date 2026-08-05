@@ -114,7 +114,7 @@ maint("cleanup", [`${SCRIPTS}/cleanup.py`, ".", "--apply"]);
 // This is the deterministic guarantee that cards written outside write_card stay in-schema.
 maint("enforce", [`${SCRIPTS}/enforce.py`, ".", SCHEMA, "--apply"]);
 // graph.health rebuilds the graph and writes health-history.json (for drop detection).
-maint("graph.health", [`${SCRIPTS}/graph.py`, "health", "."]);
+maint("graph.health", [`${SCRIPTS}/graph.py`, "health", ".", SCHEMA, "--as-of", today]);
 // engine.decay updates card relevance/tiers.
 maint("engine.decay", [`${SCRIPTS}/engine.py`, "decay", "."]);
 // moc.generate rebuilds the MOC indexes.

@@ -69,11 +69,11 @@ of the vault, and take the vault directory as an argument (`vault` = `$ASSISTANT
 ```bash
 # dry-run first, then --apply
 uv run scripts/autograph/enforce.py vault vault/schema.json --apply   # schema compliance + autofix
-uv run scripts/autograph/graph.py fix vault --apply                   # repair broken wiki-links
+uv run scripts/autograph/graph.py fix vault vault/schema.json --apply # repair broken wiki-links
 uv run scripts/autograph/engine.py touch vault/summaries/daily/YYYY-MM-DD.md
 uv run scripts/autograph/moc.py generate vault vault/schema.json      # regenerate domain MOCs
 uv run scripts/autograph/engine.py decay vault                        # recompute relevance/tiers
-uv run scripts/autograph/graph.py health vault                        # confirm score
+uv run scripts/autograph/graph.py health vault vault/schema.json      # confirm score
 ```
 
 If `uv` / Python is unavailable, still produce the cards and summary (they are plain

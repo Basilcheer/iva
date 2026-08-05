@@ -71,11 +71,11 @@ From the project root, with the vault as an argument (dry-run, then `--apply`):
 
 ```bash
 uv run scripts/autograph/enforce.py vault vault/schema.json --apply
-uv run scripts/autograph/graph.py fix vault --apply
+uv run scripts/autograph/graph.py fix vault vault/schema.json --apply
 uv run scripts/autograph/engine.py touch vault/summaries/daily/YYYY-MM-DD.md
 uv run scripts/autograph/moc.py generate vault vault/schema.json
 uv run scripts/autograph/engine.py decay vault
-uv run scripts/autograph/graph.py health vault
+uv run scripts/autograph/graph.py health vault vault/schema.json
 ```
 
 ## 4. Hand back
