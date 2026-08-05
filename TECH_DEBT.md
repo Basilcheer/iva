@@ -97,3 +97,30 @@ would make the menu display (or the catch-up math) silently wrong. Fixing this p
 means either introducing a single shared schedule-metadata source all three read from, or
 adding a CI check that parses and cross-validates the three copies — both a heavier lift
 than the rest of this pass, so deferred rather than done here.
+
+## 12. scripts/autograph is a deliberate fork of smixs/autograph
+
+Since the 0.3.12 round the bundled engine (`scripts/autograph/`) and the standalone
+[smixs/autograph](https://github.com/smixs/autograph) skill have intentionally diverged:
+iva's copy resolves wiki-links before the embed exemption and knows the rollup calendar
+(managed-card health, `expected_future_link`, `--as-of`), while the standalone skill got a
+generic `raw_dirs` mechanism and its own newer `cleanup.py` (schema-driven
+`description_max_chars`, symlink guard, mtime race check). Owner's decision: this is a
+fork under iva's vault contract, not drift to be merged back. Consequence to remember:
+a contributor fix landing in one repo does NOT automatically apply to the other — when
+touching graph/enforce/cleanup in either repo, check whether the sibling needs the same
+fix by hand.
+
+## 13. Two dual-language parser pairs lack shared golden fixtures
+
+Two Markdown-parsing contracts are implemented twice, once in TypeScript and once in
+Python, and must stay semantically identical: (a) frontmatter — `agent/lib/frontmatter.ts`
+vs `scripts/autograph/common.py`; (b) the fence-aware H1/H2 section scanner added in
+0.3.12 — `agent/lib/card-store.ts` (`outsideFences`/`h2Sections`) vs
+`scripts/autograph/enforce.py` (`_outside_fences`/`_sections`). Pair (a) already broke
+once in both parsers simultaneously (blank line inside a folded block, fixed in 0.3.11).
+Neither pair is tested against shared fixtures today. Planned fix: a directory of golden
+fixture files (input Markdown + expected normalized JSON) that both the Node test suite
+and `scripts/autograph/tests/test_autograph.py` read and assert against, for both
+contracts. Note the result shapes differ (TS returns fields, Python returns a tuple), so
+fixtures should compare a normalized field dictionary only.
