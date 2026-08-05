@@ -370,6 +370,8 @@
   frontmatter through the existing `formatField` helper, including hostile scalar edge cases.
 - Telegram error redaction runs before the 200-character bound, and the acceptance test checks
   both the user reply and model context when a token crosses that boundary in a multipart update.
+- Media error reporting also handles arbitrary JavaScript throw values, including `null` and
+  `undefined`, without replacing the original failure with a secondary property-access error.
 - Owner-explicit local paths remain supported as required by the document-skill contract. A
   vault-only path allowlist was rejected because it would remove that requested capability.
 - CLI documentation keeps topology distinct from command coverage: `iva doctor` reads the

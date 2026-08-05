@@ -24,7 +24,8 @@ process.env.AGENT_LANGUAGE = "en";
 
 const apiCalls = [];
 let deepgramTranscript = "";
-let getFileFailure = "";
+const noGetFileFailure = Symbol("no getFile failure");
+let getFileFailure = noGetFileFailure;
 globalThis.fetch = async (url, init) => {
   apiCalls.push({ url: String(url), init });
   if (String(url).startsWith("https://api.deepgram.com/")) {
@@ -37,7 +38,7 @@ globalThis.fetch = async (url, init) => {
     });
   }
   if (String(url).endsWith("/getFile")) {
-    if (getFileFailure) throw new Error(getFileFailure);
+    if (getFileFailure !== noGetFileFailure) throw getFileFailure;
     return Response.json({ ok: true, result: { file_path: "stickers/silent.webp" } });
   }
   if (String(url).includes("/file/bot")) {
@@ -527,7 +528,7 @@ test("media failure replies redact the exact Telegram bot token", async () => {
   const token = telegramBotToken;
   const tokenPrefix = token.slice(0, 5);
   const before = apiCalls.length;
-  getFileFailure = `${"x".repeat(195)}${token} tail`;
+  getFileFailure = new Error(`${"x".repeat(195)}${token} tail`);
   try {
     const failedDocument = message({
       text: undefined,
@@ -550,7 +551,7 @@ test("media failure replies redact the exact Telegram bot token", async () => {
     assert.equal(modelContext.includes(tokenPrefix), false);
     assert.match(modelContext, /\*\*\*/u);
   } finally {
-    getFileFailure = "";
+    getFileFailure = noGetFileFailure;
   }
 
   const call = apiCalls.slice(before).find(({ url, init }) => {
@@ -562,6 +563,27 @@ test("media failure replies redact the exact Telegram bot token", async () => {
   assert.equal(body.text.includes(token), false);
   assert.equal(body.text.includes(tokenPrefix), false);
   assert.match(body.text, /\*\*\*/u);
+});
+
+test("media failure handles null and undefined thrown values", async () => {
+  try {
+    for (const [index, thrown] of [null, undefined].entries()) {
+      getFileFailure = thrown;
+      const sends = await dispatch(message({
+        text: undefined,
+        document: {
+          file_id: `non-error-failure-${index}`,
+          file_unique_id: `non-error-failure-unique-${index}`,
+          file_size: 3,
+          mime_type: "text/plain",
+          file_name: `failure-${index}.txt`,
+        },
+      }));
+      assert.equal(sends.length, 0);
+    }
+  } finally {
+    getFileFailure = noGetFileFailure;
+  }
 });
 
 test("queued context marks truncation and points to the byte-complete daily record", async () => {

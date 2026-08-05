@@ -418,7 +418,7 @@ async function processMediaPart(
     }
     return { kind: "context", context };
   } catch (error) {
-    const detail = String((error as Error).message ?? error);
+    const detail = error instanceof Error ? error.message : String(error);
     const token = process.env.TELEGRAM_BOT_TOKEN;
     const contextDetail = (token ? detail.replaceAll(token, "***") : detail).slice(0, 200);
     try {
