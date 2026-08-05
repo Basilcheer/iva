@@ -998,6 +998,116 @@ def main():
              oversize_report.get('skipped_oversize') == 1,
              f"got: {oversize_report!r}")
 
+        _schema_cache.clear()
+        cleanup_vault = tmp / 'card-structure-vault'
+        (cleanup_vault / 'cards/notes').mkdir(parents=True)
+        (cleanup_vault / 'daily').mkdir()
+        (cleanup_vault / 'summaries/daily').mkdir(parents=True)
+        system_fields = (
+            f"domain: personal\nlast_accessed: {date.today().isoformat()}\n"
+            "tier: warm\nrelevance: 0.5\n"
+        )
+        safe_card = cleanup_vault / 'cards/notes/safe.md'
+        safe_card.write_text(
+            "---\ntype: note\nstatus: active\ntags: [note, cleanup]\n"
+            "description: Structural cleanup fixture\n" + system_fields + "---\n"
+            "# Safe card\n\nCurrent truth.\n\n"
+            "## Log\n- 2026-07-20: Earlier fact\n\n"
+            "## Обновление 2026-07-29\n\n"
+            "## Обновление 2026-07-30\nNew fact one.\n\n"
+            "## Update 2026-07-31\nNew fact two.\nSecond line.\n\n"
+            + "\n\n".join(
+                f"## Related\n- [[hub#part|Hub]]\n- [[sibling-{index}]]"
+                for index in range(8)
+            ) + "\n"
+        )
+        ambiguous_card = cleanup_vault / 'cards/notes/ambiguous.md'
+        ambiguous_card.write_text(
+            "---\ntype: note\nstatus: active\ntags: [note, cleanup]\n"
+            "description: Ambiguous Related fixture\n" + system_fields + "---\n"
+            "# Ambiguous\n\n## Related\n- [[hub]]\n\n"
+            "## Related\nKeep this prose explanation with [[other]].\n"
+        )
+        fenced_card = cleanup_vault / 'cards/notes/fenced.md'
+        fenced_before = (
+            "---\ntype: note\nstatus: active\ntags: [note, cleanup]\n"
+            "description: Fenced headings fixture\n" + system_fields + "---\n"
+            "# Fenced\n\n```markdown\n## Related\n- [[example]]\n"
+            "## Log\n## Update 2026-07-31\n```\n"
+        )
+        fenced_card.write_text(fenced_before)
+        complex_card = cleanup_vault / 'cards/notes/complex-log.md'
+        complex_before = (
+            "---\ntype: note\nstatus: active\ntags: [note, cleanup]\n"
+            "description: Complex Log fixture\n" + system_fields + "---\n"
+            "# Complex Log\n\nCurrent truth stays byte-identical.\n\n"
+            "## Log\n- 2026-07-20:\n  - nested item\n\n"
+            "```markdown\n## Update 2020-01-01\nexample only\n```\n\n"
+            "## Update 2026-08-01\nParagraph one.\n\nParagraph two.\n"
+        )
+        complex_card.write_text(complex_before)
+        raw_file = cleanup_vault / 'daily/2026-07-31.md'
+        raw_before = "# Raw\n\n## Обновление 2026-07-31\n\n## Related\n- [[hub]]\n"
+        raw_file.write_text(raw_before)
+        summary_file = cleanup_vault / 'summaries/daily/2026-07-31.md'
+        summary_before = (
+            "---\ntype: note\nstatus: active\ntags: [summary]\n"
+            "description: Summary scope fixture\n" + system_fields + "---\n"
+            "# Summary\n\n## Обновление 2026-07-31\nStill a summary section.\n"
+        )
+        summary_file.write_text(summary_before)
+
+        code, out, err = run([py, str(SCRIPTS_DIR / 'enforce.py'),
+                              str(cleanup_vault), str(schema_path), '--apply'])
+        safe_after = safe_card.read_text()
+        ambiguous_after = ambiguous_card.read_text()
+        complex_after = complex_card.read_text()
+        cleanup_report = json.loads(
+            (cleanup_vault / '.graph/enforce-report.json').read_text()
+        )
+        test("enforce card cleanup exits 0", code == 0, err[:300])
+        test("enforce merges eight link-only Related sections",
+             safe_after.count('\n## Related\n') == 1, safe_after)
+        test("enforce deduplicates alias/anchor targets and keeps distinct links",
+             safe_after.count('[[hub#part|Hub]]') == 1
+             and all(f'[[sibling-{index}]]' in safe_after for index in range(8)),
+             safe_after)
+        test("enforce removes empty updates and migrates non-empty updates to one Log",
+             '## Обновление' not in safe_after and '## Update ' not in safe_after
+             and safe_after.count('\n## Log\n') == 1
+             and '- 2026-07-30: New fact one.' in safe_after
+             and '- 2026-07-31:' in safe_after
+             and '  Second line.' in safe_after,
+             safe_after)
+        test("enforce leaves prose-bearing duplicate Related untouched",
+             ambiguous_after.count('\n## Related\n') == 2
+             and 'Keep this prose explanation' in ambiguous_after,
+             ambiguous_after)
+        test("enforce queues migrated updates and ambiguous structures for compile",
+             cleanup_report.get('compile_candidates') == [
+                 'cards/notes/ambiguous.md',
+                 'cards/notes/complex-log.md',
+                 'cards/notes/safe.md',
+             ],
+             str(cleanup_report))
+        test("enforce leaves complex and fenced Log/Update sections byte-identical",
+             complex_after == complex_before, complex_after)
+        test("enforce card cleanup never touches raw transcripts or summaries",
+             raw_file.read_text() == raw_before and summary_file.read_text() == summary_before)
+        test("enforce preserves structural headings inside fenced code byte-for-byte",
+             fenced_card.read_text() == fenced_before, fenced_card.read_text())
+
+        safe_snapshot = safe_after
+        ambiguous_snapshot = ambiguous_after
+        complex_snapshot = complex_after
+        code, _, err = run([py, str(SCRIPTS_DIR / 'enforce.py'),
+                            str(cleanup_vault), str(schema_path), '--apply'])
+        test("second enforce card cleanup is byte-stable",
+             code == 0 and safe_card.read_text() == safe_snapshot
+             and ambiguous_card.read_text() == ambiguous_snapshot
+             and complex_card.read_text() == complex_snapshot,
+             err[:300])
+
         # --- discover.py ---
         print("\n--- discover.py ---")
         _schema_cache.clear()

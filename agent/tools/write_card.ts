@@ -5,6 +5,7 @@ import { join, relative, sep } from "node:path";
 import {
   acquireLock,
   atomicWrite,
+  hasH2Section,
   mergeCard,
   resolveCard,
 } from "../lib/card-store.js";
@@ -89,13 +90,20 @@ function today(): string {
 
 export default defineTool({
   description:
-    "Создать или ДОПОЛНИТЬ типизированную карточку памяти в vault (существующая карточка " +
-    "сливается, а не затирается: неизвестные поля и старый текст сохраняются). " +
+    "Создать или обновить типизированную карточку памяти в vault. Явно выбери " +
+    "ADD, UPDATE, SUPERSEDE или NOOP; без operation старые вызовы определяются автоматически. " +
     "Используй ЭТО (не write_file) " +
     "для карточек — гарантирует валидный тип и схему. type строго один из: " +
     Object.keys(CARD_TYPE_DIR).join(", ") +
     ". Поля вне схемы недопустимы. Summary (день/неделя/…) НЕ создавай — их пишет ночной rollup.",
   inputSchema: z.object({
+    operation: z
+      .enum(["ADD", "UPDATE", "SUPERSEDE", "NOOP"])
+      .optional()
+      .describe(
+        "ADD создаёт новую карточку; UPDATE добавляет непротиворечивый факт в ## Log; " +
+          "SUPERSEDE заменяет текущую истину; NOOP ничего не пишет.",
+      ),
     type: z
       .preprocess(normalizeType, z.enum(CARD_TYPES))
       .describe("Тип карточки (строго из списка; алиасы вроде person/company → contact применяются автоматически)"),
@@ -116,6 +124,12 @@ export default defineTool({
       .optional()
       .describe("Вики-цели связей [[...]] (vault-пути или слаги), опционально"),
     body: z.string().min(1).describe("Тело карточки в markdown (контекст, факты)"),
+    history_entry: z
+      .string()
+      .min(1)
+      .refine((value) => !/[\r\n]/.test(value), "history_entry должен быть одной строкой")
+      .optional()
+      .describe("Для SUPERSEDE: датированная строка о прежней истине, переносимая в ## History"),
     confidence: z
       .enum(["EXTRACTED", "INFERRED", "AMBIGUOUS"])
       .optional()
@@ -128,7 +142,20 @@ export default defineTool({
           "Без флага body дописывается, противоречащие факты так не исправить.",
       ),
   }),
-  async execute({ type, title, description, tags, status, domain, related, body, confidence, replace_body }) {
+  async execute({
+    operation,
+    type,
+    title,
+    description,
+    tags,
+    status,
+    domain,
+    related,
+    body,
+    history_entry,
+    confidence,
+    replace_body,
+  }) {
     // Валидация статуса против схемы типа (жёстко — иначе модель придумает статус).
     const allowed = SCHEMA.status[type] || ["active"];
     const st = status && allowed.includes(status) ? status : allowed[0];
@@ -140,8 +167,6 @@ export default defineTool({
     }
 
     const dir = join(VAULT(), "cards", CARD_TYPE_DIR[type]);
-    mkdirSync(dir, { recursive: true });
-
     // Идентичность: точный слаг → иначе карточка того же типа с таким же H1/name/aliases
     // (легаси-файлы с латинским слагом и кириллическим заголовком).
     const id = resolveCard(dir, title);
@@ -158,12 +183,50 @@ export default defineTool({
     const file = id.file;
     const rel = relative(VAULT(), file).split(sep).join("/");
 
+    if (operation === "NOOP") {
+      if (replace_body || history_entry) {
+        return { ok: false, error: "NOOP не принимает replace_body или history_entry." };
+      }
+      if (!existsSync(file)) {
+        return { ok: false, error: `NOOP требует существующую карточку ${rel}.` };
+      }
+      return { ok: true, file: rel, type, status: st, action: "noop", matchedBy: id.matchedBy };
+    }
+    if (replace_body && operation && operation !== "SUPERSEDE") {
+      return { ok: false, error: "replace_body допустим только для SUPERSEDE." };
+    }
+    if (history_entry && operation && operation !== "SUPERSEDE") {
+      return { ok: false, error: "history_entry допустим только для SUPERSEDE." };
+    }
+    if (operation === "SUPERSEDE" && !history_entry) {
+      return { ok: false, error: "SUPERSEDE требует history_entry с прежней истиной." };
+    }
+
+    mkdirSync(dir, { recursive: true });
+
     // Сбои лока/записи — структурированная ошибка, а не исключение: модель должна
     // увидеть внятное «занято/не записалось» и решить, что делать, а не уронить ход.
     let release: (() => void) | null = null;
     try {
       release = acquireLock(file);
       const existing = existsSync(file) ? readFileSync(file, "utf8") : undefined;
+      const effectiveOperation = operation ?? (replace_body ? "SUPERSEDE" : existing ? "UPDATE" : "ADD");
+      if (history_entry && effectiveOperation !== "SUPERSEDE") {
+        return { ok: false, error: "history_entry допустим только для SUPERSEDE." };
+      }
+      if (effectiveOperation === "ADD" && existing !== undefined) {
+        return { ok: false, error: `ADD отказан: карточка ${rel} уже существует.` };
+      }
+      if ((effectiveOperation === "UPDATE" || effectiveOperation === "SUPERSEDE") && existing === undefined) {
+        return { ok: false, error: `${effectiveOperation} требует существующую карточку ${rel}.` };
+      }
+      const legacyHistoryInBody = hasH2Section(body, "History");
+      if (effectiveOperation === "SUPERSEDE" && !history_entry && !legacyHistoryInBody) {
+        return {
+          ok: false,
+          error: "SUPERSEDE требует history_entry; legacy replace_body должен содержать ## History.",
+        };
+      }
       const { content, action } = mergeCard({
         existing,
         title,
@@ -180,8 +243,10 @@ export default defineTool({
         related,
         date: today(),
         replaceBody: replace_body === true,
+        operation: effectiveOperation,
+        historyEntry: history_entry,
       });
-      atomicWrite(file, content);
+      if (action !== "noop") atomicWrite(file, content);
       return { ok: true, file: rel, type, status: st, action, matchedBy: id.matchedBy };
     } catch (e) {
       return { ok: false, error: `Не удалось записать карточку ${rel}: ${(e as Error).message}` };

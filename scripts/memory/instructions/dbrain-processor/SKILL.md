@@ -55,7 +55,8 @@ Always pick `type` and `status` from `schema.json` → `node_types`. Never inven
 1. **CAPTURE** (`phases/capture.md`) — read the transcript, segment it, and decide
    what is noteworthy: which entities, decisions, ideas, and topics the day produced.
 2. **PROCESS** (`phases/process.md`) — create / update cards for the noteworthy items,
-   choosing type + description-snippet + tags + status; dedup against existing cards.
+   choosing exactly one `ADD | UPDATE | SUPERSEDE | NOOP` operation, then type +
+   description-snippet + tags + status; dedup against existing cards.
 3. **LINK** (`phases/link.md`) — wire every new card to its domain hub + 2–3 neighbors.
 4. **SUMMARIZE** (`phases/summarize.md`) — write the daily-summary card: the day's
    TOPICS plus a MOC linking up to the week, down to the created cards, and down to
@@ -76,6 +77,12 @@ uv run scripts/autograph/engine.py decay vault                        # recomput
 uv run scripts/autograph/graph.py health vault vault/schema.json      # confirm score
 ```
 
+Read `.graph/enforce-report.json` after `enforce.py`. Every path in
+`compile_candidates` needs semantic repair during the next dbrain pass: reread the
+card, decide its current truth, and use `write_card` to leave one coherent card.
+The mechanical pass deliberately refuses to guess when duplicate `## Related`
+sections contain prose.
+
 If `uv` / Python is unavailable, still produce the cards and summary (they are plain
 Markdown) and let the nightly doctor run the mechanical pass later.
 
@@ -89,6 +96,12 @@ Markdown) and let the nightly doctor run the mechanical pass later.
 - **tags:** 2–5, lowercase, kebab-case.
 - **Idempotent.** If the daily file already carries a processing marker and a
   `summaries/daily/YYYY-MM-DD.md` exists, only reconcile new entries; do not duplicate cards.
+- **One structure per card.** Exactly one `## Log` and one `## Related`; never emit
+  dated `## Обновление` / `## Update` headings. Pass relations only through the
+  `write_card.related` argument, never inside `body`.
+- **Verify writes.** Reread every created or updated card before finishing. Confirm
+  one Log, one Related, no empty/dated update headings, and that Compiled Truth says
+  what is true now. A failed invariant keeps the rollup unfinished.
 - **Quiet days are fine.** No noteworthy entities → still write a short daily-summary
   with topics and the MOC down to the raw transcript. Do not manufacture cards.
 

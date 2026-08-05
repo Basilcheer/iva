@@ -40,12 +40,15 @@ same person, same project, same decision being refined. Append a dated line unde
 `## Log` section and sharpen the `description`. Creating a near-duplicate is the most
 common mistake — grep first.
 
-## ADD / SUPERSEDE / NOOP (temporal conflict)
+## ADD / UPDATE / SUPERSEDE / NOOP (temporal conflict)
 
 For every fact, pick one operation:
 
 - **ADD** — genuinely new subject → create a card (prefer the `write_card` tool; it enforces
   the schema so you can't invent a type or field).
+- **UPDATE** — existing subject, new fact compatible with current truth → add it to
+  the card's single dated `## Log`. UPDATE never creates a card and never carries a
+  contradictory former/current pair.
 - **NOOP** — already captured and unchanged → do nothing.
 - **SUPERSEDE** — the new fact *contradicts* a current value on an existing card (job changed,
   moved city, status flipped). Do NOT just append: **rewrite** the card's current value
@@ -58,6 +61,10 @@ For every fact, pick one operation:
 
 The deterministic scan `.graph/supersede-candidates.json` lists same-entity cards with
 conflicting fields — resolve each by superseding the stale one.
+
+The mechanical report `.graph/enforce-report.json` may list `compile_candidates`
+whose duplicate Related sections contain prose. Reread and repair those cards
+semantically on the next dbrain pass; deterministic cleanup will not discard prose.
 
 ## Confidence
 
