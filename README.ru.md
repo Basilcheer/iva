@@ -154,6 +154,10 @@ curl -fsSL https://raw.githubusercontent.com/smixs/iva/main/install.sh | bash
 
 Агента запускает [eve](https://eve.dev/docs/introduction) 0.29.5, агентный фреймворк Vercel; поисковый индекс живёт на SQLite, встроенном в Node 24, — без отдельной базы. Iva выросла из [agent-second-brain](https://github.com/smixs/agent-second-brain) и [autograph](https://github.com/smixs/autograph) — эта история рассказана в [docs/ru/memory.md](docs/ru/memory.md).
 
+## Спасибо
+
+Ива становится лучше, потому что люди гоняют её по-настоящему и сообщают о том, что реально ломается. Отдельное спасибо [@litrokol](https://github.com/litrokol), [@shamulin-hamnoi](https://github.com/shamulin-hamnoi), [@snjrusmn](https://github.com/snjrusmn), [@mamysh](https://github.com/mamysh) и [@neproger](https://github.com/neproger) — их репорты и предложения сформировали последние релизы. Нашли что-то? [Заводите issue](https://github.com/smixs/iva/issues).
+
 ## Лицензия
 
 [MIT](LICENSE) — берите, меняйте, ставьте хоть на сто серверов; только не вините никого, если что-то сломается.

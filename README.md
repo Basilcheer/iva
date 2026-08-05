@@ -155,6 +155,10 @@ Full reference, including `/usage` breakdowns by model and by source: [docs/cli.
 
 [eve](https://eve.dev/docs/introduction) 0.29.5, Vercel's agent framework, runs the agent; Node 24's built-in SQLite runs the search index — no separate database. Iva grew out of [agent-second-brain](https://github.com/smixs/agent-second-brain) and [autograph](https://github.com/smixs/autograph) — that story is in [docs/memory.md](docs/memory.md).
 
+## Thanks
+
+Iva gets better because people run it for real and report what actually breaks. Special thanks to [@litrokol](https://github.com/litrokol), [@shamulin-hamnoi](https://github.com/shamulin-hamnoi), [@snjrusmn](https://github.com/snjrusmn), [@mamysh](https://github.com/mamysh) and [@neproger](https://github.com/neproger) — their reports and proposals shaped recent releases. Found something? [Open an issue](https://github.com/smixs/iva/issues).
+
 ## License
 
 [MIT](LICENSE) — take it, change it, run it on a hundred servers; just don't blame anyone if something breaks.
