@@ -954,6 +954,23 @@ def main():
              all(f'[[MOC/{f.stem}]]' in hub_text for f in moc_files),
              hub_text[:200])
 
+        # Hub links only domains whose MOC file actually exists: a missing
+        # domain file must not become a broken wikilink after a --domain run
+        if len(moc_files) >= 2:
+            missing = moc_files[-1]
+            missing.unlink()
+            _schema_cache.clear()
+            code, out, err = run([py, str(SCRIPTS_DIR / 'moc.py'), 'generate',
+                                  str(vault_dir), str(schema_path),
+                                  '--domain', first_domain])
+            test("moc --domain skips missing domain file in hub",
+                 code == 0 and f'[[MOC/{missing.stem}]]' not in hub.read_text(),
+                 hub.read_text()[:200])
+            # restore for the checks below
+            _schema_cache.clear()
+            run([py, str(SCRIPTS_DIR / 'moc.py'), 'generate',
+                 str(vault_dir), str(schema_path)])
+
         # --- engine.py ---
         print("\n--- engine.py ---")
         _schema_cache.clear()

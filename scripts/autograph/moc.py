@@ -237,7 +237,13 @@ def main():
 
         # Хаб собирается из ПОЛНОГО скана: прогон с --domain обновляет один доменный
         # файл, но оглавление всё равно должно перечислять все домены vault'а.
+        # Ссылки — только на реально существующие MOC-файлы: домен, чей файл ещё
+        # не сгенерирован, попадёт в хаб при первом же полном прогоне (ночь).
         hub_data = build_moc_data(vault_dir, schema, None) if domain_filter else data
+        hub_data = {
+            d: cards for d, cards in hub_data.items()
+            if cards and (moc_dir / f'MOC-{d}.md').exists()
+        }
         if any(hub_data.values()):
             hub_text = generate_hub(hub_data)
             (vault_dir / 'MOC.md').write_text(hub_text)
