@@ -1,0 +1,10 @@
+.output/
+node_modules/
+patches/
+assets/
+vault-template/
+.eve/
+services/telegram-userbot/
+data/
+CHANGELOG.md
+notes/plans/2026-08-06-ts-migration.md
