@@ -41,10 +41,11 @@ export class RollupTurnTimeoutError extends Error {
 
 export const DEFAULT_CANCEL_TIMEOUT_MS = 30_000;
 
-// Свежая сессия безопасна, только когда первый ход не был принят сервером либо
-// сервер явно подтвердил его отмену. Иначе старый ход всё ещё может писать в vault.
-export function canRetryFresh({ accepted, cancelConfirmed }) {
-  return !accepted || cancelConfirmed === true;
+// Свежая сессия безопасна, когда send явно отклонён до принятия хода либо сервер
+// подтвердил отмену. Неразрешившийся send мог быть принят сервером и требует cancel.
+export function canRetryFresh({ accepted, sendRejected, cancelConfirmed }) {
+  if (accepted) return cancelConfirmed === true;
+  return sendRejected === true || cancelConfirmed === true;
 }
 
 // Отмена проигравшего гонку хода. Таймаут не останавливает ход на сервере — тот продолжает

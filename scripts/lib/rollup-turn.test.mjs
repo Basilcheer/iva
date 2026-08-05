@@ -9,25 +9,37 @@ import {
   withTurnTimeout,
 } from "./rollup-turn.mjs";
 
-test("fresh retry requires an unaccepted turn or confirmed cancellation", () => {
-  assert.equal(canRetryFresh({ accepted: false, cancelConfirmed: false }), true);
-  assert.equal(canRetryFresh({ accepted: false, cancelConfirmed: true }), true);
-  assert.equal(canRetryFresh({ accepted: true, cancelConfirmed: false }), false);
-  assert.equal(canRetryFresh({ accepted: true, cancelConfirmed: true }), true);
+test("fresh retry requires an explicitly rejected send or confirmed cancellation", () => {
+  assert.equal(canRetryFresh({ accepted: false, sendRejected: false, cancelConfirmed: false }), false);
+  assert.equal(canRetryFresh({ accepted: false, sendRejected: false, cancelConfirmed: true }), true);
+  assert.equal(canRetryFresh({ accepted: false, sendRejected: true, cancelConfirmed: false }), true);
+  assert.equal(canRetryFresh({ accepted: true, sendRejected: false, cancelConfirmed: false }), false);
+  assert.equal(canRetryFresh({ accepted: true, sendRejected: false, cancelConfirmed: true }), true);
 });
 
 async function countSendsThroughRetryPolicy({ firstSend, cancel }) {
   let sends = 0;
   let accepted = false;
+  let sendRejected = false;
   try {
-    const response = await firstSend(() => {
-      sends += 1;
-    });
-    accepted = true;
-    await withTurnTimeout(() => response.result(), { timeoutMs: 20, label: "main-turn" });
-  } catch {
-    const cancelConfirmed = accepted ? await cancel() : false;
-    if (canRetryFresh({ accepted, cancelConfirmed })) sends += 1;
+    await withTurnTimeout(async () => {
+      let response;
+      try {
+        response = await firstSend(() => {
+          sends += 1;
+        });
+      } catch (error) {
+        sendRejected = true;
+        throw error;
+      }
+      accepted = true;
+      return await response.result();
+    }, { timeoutMs: 20, label: "main-turn" });
+  } catch (error) {
+    // Это точная модель catch-флоу rollup.ts, а не выполнение самого rollup.ts.
+    const hung = error?.code === "ROLLUP_TURN_TIMEOUT";
+    const cancelConfirmed = accepted || hung ? await cancel() : false;
+    if (canRetryFresh({ accepted, sendRejected, cancelConfirmed })) sends += 1;
   }
   return sends;
 }
@@ -41,6 +53,33 @@ test("an accepted hung turn with refused cancellation never sends a fresh retry"
     cancel: async () => false,
   });
   assert.equal(sends, 1);
+});
+
+test("a hung send with refused cancellation never sends a fresh retry", async () => {
+  let cancels = 0;
+  const sends = await countSendsThroughRetryPolicy({
+    firstSend: async (recordSend) => {
+      recordSend();
+      return await new Promise(() => {});
+    },
+    cancel: async () => {
+      cancels += 1;
+      return false;
+    },
+  });
+  assert.equal(sends, 1);
+  assert.equal(cancels, 1);
+});
+
+test("a hung send gets one fresh retry only after confirmed cancellation", async () => {
+  const sends = await countSendsThroughRetryPolicy({
+    firstSend: async (recordSend) => {
+      recordSend();
+      return await new Promise(() => {});
+    },
+    cancel: async () => true,
+  });
+  assert.equal(sends, 2);
 });
 
 test("a rejected send gets exactly one fresh retry", async () => {

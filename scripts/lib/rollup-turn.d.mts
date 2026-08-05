@@ -21,6 +21,7 @@ export const DEFAULT_CANCEL_TIMEOUT_MS: number;
 
 export function canRetryFresh(options: {
   accepted: boolean;
+  sendRejected: boolean;
   cancelConfirmed: boolean;
 }): boolean;
 

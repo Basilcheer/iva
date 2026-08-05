@@ -207,10 +207,17 @@ const guardedTurn = (
   prompt: string,
   label: string,
   onAccepted: () => void = () => {},
+  onSendRejected: () => void = () => {},
 ) =>
   withTurnTimeout(
     async () => {
-      const response = await session.send(prompt);
+      let response;
+      try {
+        response = await session.send(prompt);
+      } catch (error) {
+        onSendRejected();
+        throw error;
+      }
       onAccepted();
       return await response.result();
     },
@@ -236,10 +243,19 @@ let sessionCreatedAt = saved?.createdAt ?? Date.now();
 let session = saved ? client.session(saved.state) : client.session();
 let result;
 let accepted = false;
+let sendRejected = false;
 try {
-  result = await guardedTurn(session, buildPrompt(period, today), "main-turn", () => {
-    accepted = true;
-  });
+  result = await guardedTurn(
+    session,
+    buildPrompt(period, today),
+    "main-turn",
+    () => {
+      accepted = true;
+    },
+    () => {
+      sendRejected = true;
+    },
+  );
 } catch (e) {
   // The parked session may be gone (iva reset quarantined the store) or hung on resume —
   // fall back to a fresh one once only after proving the old turn cannot keep writing.
@@ -250,11 +266,11 @@ try {
     if (hung) await cancelTurnQuietly(session);
     throw e;
   }
-  // «Медленный», а не мёртвый ход продолжил бы писать в vault параллельно с retry — гасим его
-  // до создания второго писателя (оба идут под одним флоком, конфликт не поймать иначе).
-  const cancelConfirmed = accepted ? await cancelTurnQuietly(session) : false;
-  if (!canRetryFresh({ accepted, cancelConfirmed })) {
-    console.error(`rollup ${period}: could not confirm cancellation of the accepted turn — refusing fresh retry`);
+  // Принятый ход и зависший send могли продолжить писать после локального таймаута. Перед retry
+  // оба требуют подтверждённого cancel; только явно отклонённый send безопасен сам по себе.
+  const cancelConfirmed = accepted || hung ? await cancelTurnQuietly(session) : false;
+  if (!canRetryFresh({ accepted, sendRejected, cancelConfirmed })) {
+    console.error(`rollup ${period}: could not confirm cancellation of the unresolved turn — refusing fresh retry`);
     logAbandoned(saved.state, "cancel-unconfirmed");
     throw e;
   }
