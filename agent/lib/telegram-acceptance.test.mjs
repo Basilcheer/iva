@@ -1,5 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { telegramChannel } from "eve/channels/telegram";
 import {
   createQueueItem,
@@ -14,8 +17,10 @@ import {
   wrapTelegramQueueOnMessage,
 } from "./telegram-acceptance.mjs";
 
-process.env.TELEGRAM_BOT_TOKEN ??= "999:test-token";
-process.env.TELEGRAM_WEBHOOK_SECRET_TOKEN ??= "test-secret";
+const WEBHOOK_SECRET = "test-secret";
+const fakeBotToken = (id, label) => `${id}:${Buffer.from(label).toString("base64url")}`;
+process.env.TELEGRAM_BOT_TOKEN = fakeBotToken(999, "acceptance-default");
+process.env.TELEGRAM_WEBHOOK_SECRET_TOKEN = WEBHOOK_SECRET;
 process.env.TELEGRAM_ALLOWED_USER_IDS = "42";
 process.env.TELEGRAM_POLL_SETTLE_MS = "0";
 const { drainReadyQueueHeads } = await import("../../scripts/telegram-poll.mjs");
@@ -41,12 +46,25 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
+async function waitFor(predicate, label) {
+  for (let attempt = 0; attempt < 100; attempt++) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  assert.fail(`timed out waiting for ${label}`);
+}
+
 function productionTelegramDelivery(
   sendImpl,
   {
     webhookVerifier,
     onMessage = () => ({ auth: null }),
     marked = true,
+    webhookSecretHeader = WEBHOOK_SECRET,
+    completedUpdatesFile = join(
+      mkdtempSync(join(tmpdir(), "iva-completed-updates-test-")),
+      "completed-updates.json",
+    ),
   } = {},
 ) {
   const channel = telegramChannel({
@@ -68,7 +86,10 @@ function productionTelegramDelivery(
       route.handler,
       new Request("http://iva.test/eve/v1/telegram/accepted", {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: {
+          "content-type": "application/json",
+          "x-telegram-bot-api-secret-token": webhookSecretHeader,
+        },
         body: JSON.stringify(marked ? addTelegramQueueReceipt(update) : update),
       }),
       {
@@ -86,6 +107,7 @@ function productionTelegramDelivery(
         waitUntil: () => {},
         requestIp: "127.0.0.1",
       },
+      { completedUpdatesFile },
     );
     return response.ok
       ? response.headers.get("x-iva-telegram-acceptance") === "handled"
@@ -303,7 +325,7 @@ test("production Telegram receipt removes exactly one head only after Eve send r
     inFlight: new Map(),
   });
 
-  await new Promise((resolve) => setImmediate(resolve));
+  await waitFor(() => attempts.length === 1, "the first delivery attempt");
   assert.equal(queueHead(document, "1:").updateId, 101);
   assert.deepEqual(attempts, [101]);
 
@@ -311,4 +333,185 @@ test("production Telegram receipt removes exactly one head only after Eve send r
   assert.equal(await drain, 1);
   assert.equal(queueHead(document, "1:").updateId, 102);
   assert.deepEqual(attempts, [101], "one drain pass must keep one in-flight head per chat");
+});
+
+test("a completed update is handled from disk without invoking the authored handler", async () => {
+  const root = mkdtempSync(join(tmpdir(), "iva-completed-ledger-test-"));
+  const completedUpdatesFile = join(root, "completed-updates.json");
+  let handlerCalls = 0;
+  const first = productionTelegramDelivery(
+    async () => ({ id: "accepted-session" }),
+    {
+      completedUpdatesFile,
+      onMessage: () => {
+        handlerCalls++;
+        return { auth: null };
+      },
+    },
+  );
+  assert.equal(await first(privateUpdate(501, "first")), true);
+
+  handlerCalls = 0;
+  const afterReload = productionTelegramDelivery(
+    async () => {
+      throw new Error("duplicate must not send");
+    },
+    {
+      completedUpdatesFile,
+      onMessage: () => {
+        handlerCalls++;
+        return { auth: null };
+      },
+    },
+  );
+  assert.equal(await afterReload(privateUpdate(501, "duplicate")), "handled");
+  assert.equal(handlerCalls, 0);
+  assert.deepEqual(JSON.parse(readFileSync(completedUpdatesFile, "utf8")), {
+    botId: "999",
+    updates: [501],
+  });
+
+  const unauthorized = productionTelegramDelivery(
+    async () => {
+      throw new Error("unauthorized duplicate must not send");
+    },
+    {
+      completedUpdatesFile,
+      webhookSecretHeader: "wrong-secret",
+      webhookVerifier: async (request) =>
+        request.headers.get("x-telegram-bot-api-secret-token") ===
+        WEBHOOK_SECRET,
+      onMessage: () => {
+        handlerCalls++;
+        return { auth: null };
+      },
+    },
+  );
+  assert.equal(await unauthorized(privateUpdate(501, "unauthorized duplicate")), false);
+  assert.equal(handlerCalls, 0);
+});
+
+test("an update is recorded only after successful acceptance", async () => {
+  const root = mkdtempSync(join(tmpdir(), "iva-completed-ledger-reject-test-"));
+  const completedUpdatesFile = join(root, "completed-updates.json");
+  let handlerCalls = 0;
+  const rejected = productionTelegramDelivery(
+    async () => {
+      throw new Error("injected rejection");
+    },
+    {
+      completedUpdatesFile,
+      onMessage: () => {
+        handlerCalls++;
+        return { auth: null };
+      },
+    },
+  );
+  assert.equal(await rejected(privateUpdate(601, "retry me")), false);
+
+  const accepted = productionTelegramDelivery(
+    async () => ({ id: "accepted-session" }),
+    {
+      completedUpdatesFile,
+      onMessage: () => {
+        handlerCalls++;
+        return { auth: null };
+      },
+    },
+  );
+  assert.equal(await accepted(privateUpdate(601, "retry me")), true);
+  assert.equal(handlerCalls, 2);
+  assert.deepEqual(JSON.parse(readFileSync(completedUpdatesFile, "utf8")), {
+    botId: "999",
+    updates: [601],
+  });
+});
+
+test("the completed-update ledger keeps the latest 200 ids", async () => {
+  const root = mkdtempSync(join(tmpdir(), "iva-completed-ledger-bound-test-"));
+  const completedUpdatesFile = join(root, "completed-updates.json");
+  writeFileSync(
+    completedUpdatesFile,
+    JSON.stringify({ botId: "999", updates: Array.from({ length: 200 }, (_, id) => id) }),
+  );
+  const delivery = productionTelegramDelivery(
+    async () => ({ id: "accepted-session" }),
+    { completedUpdatesFile },
+  );
+
+  assert.equal(await delivery(privateUpdate(999, "newest")), true);
+  const completed = JSON.parse(readFileSync(completedUpdatesFile, "utf8"));
+  assert.equal(completed.botId, "999");
+  assert.equal(completed.updates.length, 200);
+  assert.equal(completed.updates.includes(0), false);
+  assert.equal(completed.updates.includes(999), true);
+});
+
+test("a completed-update ledger is isolated by Telegram bot id", async () => {
+  const root = mkdtempSync(join(tmpdir(), "iva-completed-ledger-bot-test-"));
+  const completedUpdatesFile = join(root, "completed-updates.json");
+  let sends = 0;
+  const delivery = productionTelegramDelivery(
+    async () => ({ id: `accepted-${++sends}` }),
+    { completedUpdatesFile },
+  );
+  const priorToken = process.env.TELEGRAM_BOT_TOKEN;
+  try {
+    process.env.TELEGRAM_BOT_TOKEN = fakeBotToken(111, "first-bot");
+    assert.equal(await delivery(privateUpdate(701, "first bot")), true);
+    process.env.TELEGRAM_BOT_TOKEN = fakeBotToken(222, "second-bot");
+    assert.equal(await delivery(privateUpdate(701, "second bot")), true);
+    assert.equal(await delivery(privateUpdate(701, "second bot duplicate")), "handled");
+    assert.equal(sends, 2);
+    assert.deepEqual(JSON.parse(readFileSync(completedUpdatesFile, "utf8")), {
+      botId: "222",
+      updates: [701],
+    });
+  } finally {
+    if (priorToken === undefined) delete process.env.TELEGRAM_BOT_TOKEN;
+    else process.env.TELEGRAM_BOT_TOKEN = priorToken;
+  }
+});
+
+test("an invalid completed-update schema is recovered after acceptance", async () => {
+  const root = mkdtempSync(join(tmpdir(), "iva-completed-ledger-schema-test-"));
+  const completedUpdatesFile = join(root, "completed-updates.json");
+  writeFileSync(completedUpdatesFile, JSON.stringify({ updates: "broken" }));
+  let sends = 0;
+  const delivery = productionTelegramDelivery(
+    async () => ({ id: `accepted-${++sends}` }),
+    { completedUpdatesFile },
+  );
+
+  assert.equal(await delivery(privateUpdate(801, "recover")), true);
+  assert.equal(await delivery(privateUpdate(801, "duplicate")), "handled");
+  assert.equal(sends, 1);
+  assert.deepEqual(JSON.parse(readFileSync(completedUpdatesFile, "utf8")), {
+    botId: "999",
+    updates: [801],
+  });
+});
+
+test("missing webhook secret disables deduplication and reports it once", async () => {
+  const root = mkdtempSync(join(tmpdir(), "iva-completed-ledger-secret-test-"));
+  const completedUpdatesFile = join(root, "completed-updates.json");
+  const priorSecret = process.env.TELEGRAM_WEBHOOK_SECRET_TOKEN;
+  const priorError = console.error;
+  const logs = [];
+  let sends = 0;
+  delete process.env.TELEGRAM_WEBHOOK_SECRET_TOKEN;
+  console.error = (...parts) => logs.push(parts.join(" "));
+  try {
+    const delivery = productionTelegramDelivery(
+      async () => ({ id: `accepted-${++sends}` }),
+      { completedUpdatesFile },
+    );
+    assert.equal(await delivery(privateUpdate(901, "first")), true);
+    assert.equal(await delivery(privateUpdate(901, "repeat")), true);
+  } finally {
+    console.error = priorError;
+    process.env.TELEGRAM_WEBHOOK_SECRET_TOKEN = priorSecret;
+  }
+  assert.equal(sends, 2);
+  assert.equal(logs.filter((line) => line.includes("durable deduplication")).length, 1);
 });

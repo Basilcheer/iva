@@ -5,9 +5,12 @@ import { mediaFromRaw, messageParts } from "./telegram-parts.ts";
 test("mediaFromRaw selects the largest Telegram photo size", () => {
   assert.deepEqual(
     mediaFromRaw({
-      photo: [{ file_id: "small" }, { file_id: "large" }],
+      photo: [
+        { file_id: "small", file_unique_id: "small-photo" },
+        { file_id: "large", file_unique_id: "large-photo" },
+      ],
     }),
-    { fileId: "large", tag: "photo", transcribe: false },
+    { fileId: "large", fileUniqueId: "large-photo", tag: "photo", transcribe: false },
   );
 });
 
@@ -16,12 +19,14 @@ test("mediaFromRaw preserves file metadata and transcription policy", () => {
     mediaFromRaw({
       voice: {
         file_id: "voice-id",
+        file_unique_id: "unique-voice",
         mime_type: "audio/ogg",
         file_name: "note.ogg",
       },
     }),
     {
       fileId: "voice-id",
+      fileUniqueId: "unique-voice",
       tag: "voice",
       transcribe: true,
       mimeType: "audio/ogg",
