@@ -1,5 +1,5 @@
 // Memory consolidation (DAG): one parameterized script for all periods.
-// Run by a systemd timer (see deploy/iva-memory-*.{service,timer}), drives Iva
+// Run by the in-process eve schedules in agent/schedules/memory-*.ts, drives Iva
 // via eve/client (like scripts/daily-digest.ts), and posts a report to Telegram for daily/weekly.
 //
 //   node --env-file=.env scripts/memory/rollup.ts <daily|weekly|monthly|yearly>
@@ -46,7 +46,7 @@ const POST_TO_TELEGRAM: Record<Period, boolean> = {
   yearly: false,
 };
 
-// Current date in the user's timezone (systemd sets TZ from .env, but we hedge anyway).
+// Current date in the user's timezone (iva.service sets TZ from .env, but we hedge anyway).
 function localDate(): string {
   return new Intl.DateTimeFormat("en-CA", {
     timeZone: TZ,
@@ -64,8 +64,8 @@ function shiftDate(iso: string, deltaDays: number): string {
   return dt.toISOString().slice(0, 10);
 }
 
-// We take the target period as COMPLETED: timers fire at the start of a new period
-// (daily ≈04:00, weekly on Sun, monthly on the 1st, yearly on Jan 1), so we process
+// We take the target period as COMPLETED: schedules fire at the start of a new period
+// (daily ≈04:00, weekly on Mon, monthly on the 1st, yearly on Jan 1), so we process
 // the PREVIOUS period, not the empty current one (now is the current local date).
 function buildPrompt(p: Period, now: string): string {
   const [y, m] = now.split("-").map(Number);

@@ -167,6 +167,14 @@ function splitFlowItems(inner: string): string[] {
 
 function unquote(s: string): string {
   if (s.length >= 2 && ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'")))) {
+    if (s.startsWith('"')) {
+      try {
+        const parsed: unknown = JSON.parse(s);
+        if (typeof parsed === "string") return parsed;
+      } catch {
+        /* старый повреждённый скаляр разбираем прежним best-effort путём ниже */
+      }
+    }
     const inner = s.slice(1, -1);
     return s.startsWith('"') ? inner.replace(/\\"/g, '"').replace(/\\\\/g, "\\") : inner;
   }

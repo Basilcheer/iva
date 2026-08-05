@@ -1,7 +1,7 @@
 {
-  "description": "Blocked command patterns - these are NEVER allowed (leak secrets, DoS, etc.)",
+  "description": "Reference patterns for manual command review; not loaded by the Iva runtime",
   "version": "1.0.0",
-  "lastUpdated": "2026-02-02",
+  "lastUpdated": "2026-08-04",
   "patterns": [
     {
       "id": "env-direct-1",
@@ -1195,22 +1195,10 @@
       "reason": "BLOCKED: mknod pipe (shell redirect)"
     },
     {
-      "id": "crontab-edit",
-      "category": "persistence",
-      "pattern": "\\bcrontab\\s+-[eir]",
-      "reason": "BLOCKED: crontab modification"
-    },
-    {
       "id": "at-schedule",
       "category": "persistence",
       "pattern": "\\bat\\s+",
       "reason": "BLOCKED: at scheduler"
-    },
-    {
-      "id": "systemd-run",
-      "category": "persistence",
-      "pattern": "\\bsystemd-run\\b",
-      "reason": "BLOCKED: systemd-run (service creation)"
     },
     {
       "id": "awk-system",

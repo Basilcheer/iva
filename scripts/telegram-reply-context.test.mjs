@@ -1,5 +1,6 @@
 import "./lib/ts-esm-hooks.mjs";
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import {
   existsSync,
   mkdtempSync,
@@ -12,15 +13,19 @@ import { join } from "node:path";
 import test, { after } from "node:test";
 
 const vault = mkdtempSync(join(tmpdir(), "iva-reply-context-"));
+const telegramBotToken = `bot-${randomUUID()}`;
+const telegramWebhookSecret = `webhook-${randomUUID()}`;
 process.env.ASSISTANT_VAULT_DIR = vault;
 process.env.TELEGRAM_ALLOWED_USER_IDS = "9";
-process.env.TELEGRAM_BOT_TOKEN = "test-token";
-process.env.TELEGRAM_WEBHOOK_SECRET_TOKEN = "test-secret";
+process.env.TELEGRAM_BOT_TOKEN = telegramBotToken;
+process.env.TELEGRAM_WEBHOOK_SECRET_TOKEN = telegramWebhookSecret;
 process.env.TELEGRAM_BOT_USERNAME = "my_bot";
 process.env.AGENT_LANGUAGE = "en";
 
 const apiCalls = [];
 let deepgramTranscript = "";
+const noGetFileFailure = Symbol("no getFile failure");
+let getFileFailure = noGetFileFailure;
 globalThis.fetch = async (url, init) => {
   apiCalls.push({ url: String(url), init });
   if (String(url).startsWith("https://api.deepgram.com/")) {
@@ -33,6 +38,7 @@ globalThis.fetch = async (url, init) => {
     });
   }
   if (String(url).endsWith("/getFile")) {
+    if (getFileFailure !== noGetFileFailure) throw getFileFailure;
     return Response.json({ ok: true, result: { file_path: "stickers/silent.webp" } });
   }
   if (String(url).includes("/file/bot")) {
@@ -64,7 +70,7 @@ async function dispatch(rawMessage) {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        "x-telegram-bot-api-secret-token": "test-secret",
+        "x-telegram-bot-api-secret-token": telegramWebhookSecret,
       },
       body: JSON.stringify({ update_id: 1, message: rawMessage }),
     }),
@@ -515,6 +521,68 @@ test("silent stickers and animations stay silent with and without a quote", asyn
       }));
       assert.equal(sends.length, 0);
     }
+  }
+});
+
+test("media failure replies redact the exact Telegram bot token", async () => {
+  const token = telegramBotToken;
+  const tokenPrefix = token.slice(0, 5);
+  const before = apiCalls.length;
+  getFileFailure = new Error(`${"x".repeat(195)}${token} tail`);
+  try {
+    const failedDocument = message({
+      text: undefined,
+      document: {
+        file_id: "redaction-failure",
+        file_unique_id: "redaction-failure-unique",
+        file_size: 3,
+        mime_type: "text/plain",
+        file_name: "failure.txt",
+      },
+    });
+    const followup = message({ message_id: 101, text: "continue after the failed file" });
+    const sends = await dispatch(message({
+      text: undefined,
+      iva_parts: [failedDocument, followup],
+    }));
+    assert.equal(sends.length, 1);
+    const modelContext = sends[0][0].context.join("\n");
+    assert.equal(modelContext.includes(token), false);
+    assert.equal(modelContext.includes(tokenPrefix), false);
+    assert.match(modelContext, /\*\*\*/u);
+  } finally {
+    getFileFailure = noGetFileFailure;
+  }
+
+  const call = apiCalls.slice(before).find(({ url, init }) => {
+    if (!url.endsWith("/sendMessage")) return false;
+    return JSON.parse(init.body).text.includes("Couldn't process the entry");
+  });
+  assert.ok(call, "the user receives a media failure message");
+  const body = JSON.parse(call.init.body);
+  assert.equal(body.text.includes(token), false);
+  assert.equal(body.text.includes(tokenPrefix), false);
+  assert.match(body.text, /\*\*\*/u);
+});
+
+test("media failure handles null and undefined thrown values", async () => {
+  try {
+    for (const [index, thrown] of [null, undefined].entries()) {
+      getFileFailure = thrown;
+      const sends = await dispatch(message({
+        text: undefined,
+        document: {
+          file_id: `non-error-failure-${index}`,
+          file_unique_id: `non-error-failure-unique-${index}`,
+          file_size: 3,
+          mime_type: "text/plain",
+          file_name: `failure-${index}.txt`,
+        },
+      }));
+      assert.equal(sends.length, 0);
+    }
+  } finally {
+    getFileFailure = noGetFileFailure;
   }
 });
 

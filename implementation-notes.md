@@ -353,6 +353,31 @@
   It guards Eve's documented contract ("reset retires a session so its continuation starts
   fresh"), which 0.27.13 honours — the `/new` failure was Iva's token shape, not Eve's reset.
 
+## Security honesty and documentation sync (v0.3.11)
+
+- Media-processing errors use the same token-redacted detail in user messages and model
+  context. A regression drives the real Telegram webhook path and inspects Bot API output.
+- The security skill now names only `security-gate.ts` as runtime enforcement. Its Python
+  utilities and JSON patterns are documented as manual tools; reminder-related patterns
+  were removed and no patterns were added to `bash.ts`.
+- Runtime topology, Eve version, schedule cadence, skill count, Google Tasks support and
+  open-task menu counting are synchronized across the requested documentation surfaces.
+- The flat `documents` skill uses only installed system tools and an ephemeral `openpyxl`
+  environment. Failed PDF text extraction is reported honestly; optional library imports are
+  split into searchable chunks capped at 8000 characters.
+- Telegram's automatic `attachments` and `daily` ingress archive is now distinguished from an
+  explicit library import. The skill pins ephemeral `openpyxl` 3.1.5 and serializes document
+  frontmatter through the existing `formatField` helper, including hostile scalar edge cases.
+- Telegram error redaction runs before the 200-character bound, and the acceptance test checks
+  both the user reply and model context when a token crosses that boundary in a multipart update.
+- Media error reporting also handles arbitrary JavaScript throw values, including `null` and
+  `undefined`, without replacing the original failure with a secondary property-access error.
+- Owner-explicit local paths remain supported as required by the document-skill contract. A
+  vault-only path allowlist was rejected because it would remove that requested capability.
+- CLI documentation keeps topology distinct from command coverage: `iva doctor` reads the
+  four memory-schedule status records, while `iva status` reports systemd units only.
+- PHILOSOPHY.md now records the project boundary rules and explicit removal points for
+  local workarounds.
 ## Memory and configuration integrity (v0.3.11)
 
 - TypeScript and Python frontmatter parsers keep blank lines inside block scalars. Strings

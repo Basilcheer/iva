@@ -21,6 +21,21 @@ test("YAML-неоднозначные скаляры квотируются (PyY
   assert.match(text, /ok: обычное/);
 });
 
+test("кавычки, переводы строк и разделитель frontmatter проходят безопасный round-trip", () => {
+  const fields = {
+    source: 'report "yes".pdf',
+    page: "null",
+    section: "Итоги\n---\nyes",
+  };
+  const text = writeFrontmatter(fields, []);
+  assert.match(text, /source: "report \\"yes\\"\.pdf"/);
+  assert.match(text, /page: "null"/);
+  assert.equal(text.split("\n---\n").length, 1, "escaped data must not create a frontmatter delimiter");
+  const parsed = parseFrontmatter(`---\n${text}\n---\nbody`);
+  assert.deepEqual(parsed.fields, fields);
+  assert.equal(parsed.body, "body");
+});
+
 test("одиночный пробел — тоже continuation, а не новый ключ", () => {
   const { fields } = parseFrontmatter("---\ndescription: >-\n line one\n line two\nstatus: active\n---\nb");
   assert.equal(fields.description, "line one line two");

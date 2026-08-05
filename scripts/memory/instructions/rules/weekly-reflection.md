@@ -5,7 +5,7 @@ type: note
 
 # Weekly summary (DAG level 2)
 
-Rules for weekly rollup cards. Triggered by the weekly rollup (Sunday night) over the
+Rules for weekly rollup cards. Triggered by the weekly rollup (Monday 04:15) over the
 seven daily-summaries of the ISO week.
 
 - File: `weekly/YYYY-Www.md` (ISO-8601 week, e.g. `weekly/2026-W25.md`).

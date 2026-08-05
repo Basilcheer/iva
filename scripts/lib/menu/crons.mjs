@@ -104,11 +104,11 @@ async function loadTimers() {
   return timers;
 }
 
-function taskCount(dataDir) {
+export function openTaskCount(dataDir) {
   try {
     const raw = JSON.parse(readFileSync(join(dataDir, "tasks.json"), "utf8"));
     const arr = Array.isArray(raw) ? raw : Array.isArray(raw?.tasks) ? raw.tasks : [];
-    return arr.length;
+    return arr.filter((task) => !task?.done).length;
   } catch {
     return 0;
   }
@@ -119,7 +119,8 @@ export default {
   async render(st, ctx) {
     const T = ctx.tr;
     const timers = await loadTimers();
-    const taskLine = T(`Tasks in queue: ${taskCount(ctx.deps.dataDir)}`, `Задач в очереди: ${taskCount(ctx.deps.dataDir)}`);
+    const taskCount = openTaskCount(ctx.deps.dataDir);
+    const taskLine = T(`Tasks in queue: ${taskCount}`, `Задач в очереди: ${taskCount}`);
     const head = T("⏰ Timers & tasks", "⏰ Кроны и задачи");
     const schedules = schedulesBlock(ctx.deps.dataDir, T);
     if (timers.length === 0) {
