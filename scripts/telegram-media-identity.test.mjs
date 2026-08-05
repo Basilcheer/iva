@@ -26,8 +26,11 @@ process.env.AGENT_LANGUAGE = "en";
 process.env.MODEL_PROVIDER = "openrouter";
 process.env.OPENROUTER_API_KEY = "test-provider-key";
 
-const counts = { download: 0, vision: 0, turns: 0 };
+const counts = { download: 0, vision: 0, transcript: 0, turns: 0 };
 let visionText = "derived once";
+let visionStatus = 200;
+let transcriptText = "transcribed once";
+let transcriptStatus = 200;
 globalThis.fetch = async (input) => {
   const url = input instanceof Request ? input.url : String(input);
   if (url.endsWith("/getFile")) {
@@ -39,7 +42,15 @@ globalThis.fetch = async (input) => {
   }
   if (url.endsWith("/chat/completions")) {
     counts.vision++;
+    if (visionStatus !== 200) return new Response("provider unavailable", { status: visionStatus });
     return Response.json({ choices: [{ message: { content: visionText } }] });
+  }
+  if (url.startsWith("https://api.deepgram.com/v1/listen")) {
+    counts.transcript++;
+    if (transcriptStatus !== 200) return new Response("provider unavailable", { status: transcriptStatus });
+    return Response.json({
+      results: { channels: [{ alternatives: [{ transcript: transcriptText }] }] },
+    });
   }
   return Response.json({ ok: true, result: { message_id: 1000 } });
 };
@@ -59,6 +70,25 @@ function mediaUpdate(updateId, fileUniqueId) {
       chat: { id: 7, type: "private" },
       from: { id: 9, is_bot: false, first_name: "Owner" },
       photo: [{ file_id: `file-${updateId}`, file_unique_id: fileUniqueId }],
+    },
+  };
+}
+
+function voiceUpdate(updateId, fileUniqueId) {
+  return {
+    update_id: updateId,
+    message: {
+      message_id: updateId,
+      date: 1,
+      chat: { id: 7, type: "private" },
+      from: { id: 9, is_bot: false, first_name: "Owner" },
+      voice: {
+        file_id: `voice-${updateId}`,
+        file_unique_id: fileUniqueId,
+        duration: 1,
+        mime_type: "audio/ogg",
+        file_size: 3,
+      },
     },
   };
 }
@@ -134,4 +164,56 @@ test("an empty vision result is cached and does not trigger another provider cal
 
   const cache = JSON.parse(readFileSync(join(dataDir, "media-cache.json"), "utf8"));
   assert.equal(cache["empty-vision-photo"].vision, "");
+});
+
+test("a failed vision result is not cached and the next delivery retries the provider", async () => {
+  const before = { ...counts, daily: dailyEntries() };
+  visionStatus = 503;
+  assert.equal(await deliver(mediaUpdate(705, "failed-vision-photo")), "turn");
+
+  let cache = JSON.parse(readFileSync(join(dataDir, "media-cache.json"), "utf8"));
+  assert.equal(cache["failed-vision-photo"].vision, undefined);
+
+  visionStatus = 200;
+  visionText = "derived after retry";
+  assert.equal(await deliver(mediaUpdate(706, "failed-vision-photo")), "turn");
+  assert.equal(counts.download - before.download, 1);
+  assert.equal(counts.vision - before.vision, 2);
+  assert.equal(counts.turns - before.turns, 2);
+  assert.equal(dailyEntries() - before.daily, 2);
+
+  cache = JSON.parse(readFileSync(join(dataDir, "media-cache.json"), "utf8"));
+  assert.equal(cache["failed-vision-photo"].vision, "derived after retry");
+});
+
+test("an empty transcript result is cached and does not trigger another provider call", async () => {
+  const before = { ...counts, daily: dailyEntries() };
+  transcriptText = "";
+  assert.equal(await deliver(voiceUpdate(707, "empty-transcript-voice")), "turn");
+  assert.equal(await deliver(voiceUpdate(708, "empty-transcript-voice")), "turn");
+  assert.equal(counts.download - before.download, 1);
+  assert.equal(counts.transcript - before.transcript, 1);
+  assert.equal(counts.turns - before.turns, 2);
+
+  const cache = JSON.parse(readFileSync(join(dataDir, "media-cache.json"), "utf8"));
+  assert.equal(cache["empty-transcript-voice"].transcript, "");
+});
+
+test("a failed transcript result reuses the blob and retries the provider", async () => {
+  const before = { ...counts, daily: dailyEntries() };
+  transcriptStatus = 503;
+  assert.equal(await deliver(voiceUpdate(709, "failed-transcript-voice")), "turn");
+
+  let cache = JSON.parse(readFileSync(join(dataDir, "media-cache.json"), "utf8"));
+  assert.equal(cache["failed-transcript-voice"].transcript, undefined);
+
+  transcriptStatus = 200;
+  transcriptText = "transcribed after retry";
+  assert.equal(await deliver(voiceUpdate(710, "failed-transcript-voice")), "turn");
+  assert.equal(counts.download - before.download, 1);
+  assert.equal(counts.transcript - before.transcript, 2);
+  assert.equal(counts.turns - before.turns, 2);
+
+  cache = JSON.parse(readFileSync(join(dataDir, "media-cache.json"), "utf8"));
+  assert.equal(cache["failed-transcript-voice"].transcript, "transcribed after retry");
 });

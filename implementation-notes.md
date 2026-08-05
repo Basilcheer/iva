@@ -373,5 +373,8 @@
 - Media-cache reads are optional at the processing boundary. An operational read failure is
   logged and treated as a miss, while the incoming media continues through download and
   derivation.
+- A thrown vision or transcription derivation stores the reusable blob path without that
+  derivation field. A later delivery reuses the blob and retries the provider, while the
+  presence of an empty string records a successful empty result.
 - Both stores use the existing JSON-store primitives and bounded JSON files under
   `ASSISTANT_DATA_DIR`; no delivery timeout or direct-delivery policy changed.
