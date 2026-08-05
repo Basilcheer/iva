@@ -28,6 +28,15 @@ curl -fsSL https://raw.githubusercontent.com/smixs/iva/main/install.sh | bash
 
 ## What's New 🔥
 
+### 05.08.2026
+
+#### v0.3.11
+
+- 📸 Re-sent and queued photos/files are no longer processed twice — one message, one blob, one reply, even while Iva is busy (and no repeated paid vision/transcription calls).
+- 📄 New `documents` skill — send a PDF, DOCX or XLSX and Iva reads it and answers on its content; on request it files the document into your vault library, searchable by meaning.
+- 🌙 Nightly memory and the Telegram queue are hardened against rare failures: a corrupted service file or an unlucky restart no longer loses a night of memory or your queued messages.
+- 🛡️ File-processing errors never leak service details into the chat anymore.
+
 ### 04.08.2026
 
 #### v0.3.10
@@ -54,17 +63,6 @@ curl -fsSL https://raw.githubusercontent.com/smixs/iva/main/install.sh | bash
 - 🛡️ Updates are safer: a broken update no longer touches your working Iva.
 - 🌙 Nightly memory survives a server restart — the morning report arrives even after a reboot.
 - 🧪 Every release goes through a full test install from scratch before it ships.
-
-### 30.07.2026
-
-#### v0.3.6
-
-- 🩹 When a turn breaks, Iva frees the chat and says so - no more half-hour silence or manual /restart.
-- 💬 Provider errors are explained in plain words: limit with its reset time, balance, key, or a provider-side failure - instead of "context overflowed".
-- 🧠 The memory core no longer bloats - the nightly service keeps it within the cap without touching the important pointers.
-- 📣 Service alerts (nightly memory, backup) arrive without extra configuration.
-- 🛡️ The memory backup no longer breaks on huge files, and failures state their real cause.
-- ⚙️ The eve engine is updated - more resilient to provider stream drops.
 
 Full history — [CHANGELOG.md](CHANGELOG.md).
 
