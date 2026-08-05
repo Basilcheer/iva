@@ -41,8 +41,32 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Lint
+        run: npm run lint
+
+      - name: Check formatting
+        run: npm run format:check
+
+      - name: Enforce mjs migration budget
+        run: |
+          actual=$(git ls-files '*.mjs' | wc -l | tr -d '[:space:]')
+          budget=$(tr -d '[:space:]' < .mjs-budget)
+          case "$budget" in
+            ''|*[!0-9]*)
+              echo "Invalid .mjs-budget: expected a non-negative integer"
+              exit 1
+              ;;
+          esac
+          if [ "$actual" -gt "$budget" ]; then
+            echo "Tracked .mjs count $actual exceeds budget $budget"
+            exit 1
+          fi
+
       - name: Run Node.js tests
-        run: node --test agent/lib/*.test.mjs scripts/lib/*.test.mjs scripts/lib/menu/*.test.mjs scripts/*.test.mjs
+        run: npm test
+
+      - name: Enforce test coverage baseline
+        run: npm run test:coverage
 
       - name: Type-check
         run: npm run typecheck
