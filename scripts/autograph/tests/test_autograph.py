@@ -920,6 +920,40 @@ def main():
         test("moc creates MOC files", len(moc_files) > 0,
              f"found {len(moc_files)}")
 
+        # Hub MOC.md regenerated from actually generated domain MOCs (issue #113)
+        hub = vault_dir / 'MOC.md'
+        test("moc writes hub MOC.md", hub.exists())
+        hub_text = hub.read_text() if hub.exists() else ''
+        for f in moc_files:
+            test(f"hub links {f.stem}", f'[[MOC/{f.stem}]]' in hub_text,
+                 hub_text[:200])
+
+        # Stale domain disappears from the hub on the next full generate
+        stale = moc_dir / 'MOC-staledomain.md'
+        stale.write_text('# MOC: staledomain\n')
+        hub.write_text(hub_text.replace(
+            '\n', '\n- [[MOC/MOC-staledomain]] — карточек: 1\n', 1))
+        _schema_cache.clear()
+        code, out, err = run([py, str(SCRIPTS_DIR / 'moc.py'), 'generate',
+                              str(vault_dir), str(schema_path)])
+        test("moc regenerate exits 0", code == 0, err[:300])
+        test("hub drops stale domain",
+             'MOC-staledomain' not in hub.read_text())
+        stale.unlink(missing_ok=True)
+
+        # --domain run: only that domain's file rewritten, hub still lists all
+        first_domain = moc_files[0].stem.replace('MOC-', '')
+        hub.unlink()
+        _schema_cache.clear()
+        code, out, err = run([py, str(SCRIPTS_DIR / 'moc.py'), 'generate',
+                              str(vault_dir), str(schema_path),
+                              '--domain', first_domain])
+        test("moc --domain exits 0", code == 0, err[:300])
+        hub_text = hub.read_text() if hub.exists() else ''
+        test("moc --domain rebuilds full hub",
+             all(f'[[MOC/{f.stem}]]' in hub_text for f in moc_files),
+             hub_text[:200])
+
         # --- engine.py ---
         print("\n--- engine.py ---")
         _schema_cache.clear()
