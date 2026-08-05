@@ -467,6 +467,42 @@ test("SUPERSEDE заменяет явно названную custom-секцию
   assert.match(out, /## Notes\nkeep me/);
 });
 
+test("legacy replace_body требует непустой History prefix и добавляет только suffix", async () => {
+  const base = {
+    operation: "ADD",
+    type: "note",
+    title: "Legacy History prefix",
+    description: "проверка безопасной совместимости replace body",
+    tags: ["note", "legacy"],
+    body: "Truth v1\n\n## History\n\n- 2025-01-01: Truth v0",
+  };
+  const created = await call(base);
+  const before = read(created.file);
+
+  for (const body of [
+    "Truth v2\n\n## History\n",
+    "Truth v2\n\n## History\n\n- 2025-01-01: Different history\n- 2026-08-05: Truth v1",
+    "Truth v2\n\n## History\n\n- 2025-01-01: Truth v0",
+  ]) {
+    const rejected = await call({ ...base, operation: undefined, replace_body: true, body });
+    assert.equal(rejected.ok, false);
+    assert.equal(read(created.file), before);
+  }
+
+  const replaced = await call({
+    ...base,
+    operation: undefined,
+    replace_body: true,
+    body:
+      "Truth v2\n\n## History\n\n- 2025-01-01: Truth v0\n- 2026-08-05: Truth v1",
+  });
+  assert.equal(replaced.action, "replaced");
+  const out = read(created.file);
+  assert.equal(out.match(/2025-01-01: Truth v0/g).length, 1);
+  assert.equal(out.match(/2026-08-05: Truth v1/g).length, 1);
+  assert.match(out, /Truth v2/);
+});
+
 // ─── лок и атомарная запись ────────────────────────────────────────────────
 const { acquireLock, atomicWrite } = await import(join(REPO, "agent", "lib", "card-store.ts"));
 

@@ -362,7 +362,30 @@ function replaceCompiledTruth(
 
   const additions = new Map<string, string[]>();
   for (const section of replacementSections.filter((candidate) => structural.has(candidate.key))) {
-    const content = replacementLines.slice(section.start + 1, section.end);
+    let content = replacementLines.slice(section.start + 1, section.end);
+    while (content.length && !content.at(-1)?.trim()) content.pop();
+    if (section.key === "history") {
+      const oldHistory = oldSections.filter((candidate) => candidate.key === "history");
+      const newHistory = replacementSections.filter((candidate) => candidate.key === "history");
+      if (oldHistory.length > 1 || newHistory.length > 1) {
+        throw new Error("SUPERSEDE requires exactly one unambiguous ## History section");
+      }
+      if (!content.some((line) => line.trim())) {
+        throw new Error("SUPERSEDE replacement ## History must contain the displaced fact");
+      }
+      if (oldHistory.length === 1) {
+        const oldContent = oldLines.slice(oldHistory[0].start + 1, oldHistory[0].end);
+        while (oldContent.length && !oldContent.at(-1)?.trim()) oldContent.pop();
+        const prefixMatches = oldContent.every((line, index) => content[index] === line);
+        if (!prefixMatches) {
+          throw new Error("SUPERSEDE replacement ## History must preserve existing History as an exact prefix");
+        }
+        content = content.slice(oldContent.length);
+        if (!content.some((line) => line.trim()) && !historyEntry?.trim()) {
+          throw new Error("SUPERSEDE replacement ## History must append the displaced fact");
+        }
+      }
+    }
     if (content.some((line) => line.length)) {
       additions.set(section.key, [...(additions.get(section.key) ?? []), ...content]);
     }
