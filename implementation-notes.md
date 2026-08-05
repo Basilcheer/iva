@@ -365,6 +365,13 @@
 - The flat `documents` skill uses only installed system tools and an ephemeral `openpyxl`
   environment. Failed PDF text extraction is reported honestly; optional library imports are
   split into searchable chunks capped at 8000 characters.
+- Telegram's automatic `attachments` and `daily` ingress archive is now distinguished from an
+  explicit library import. The skill pins ephemeral `openpyxl` 3.1.5 and serializes document
+  frontmatter through the existing `formatField` helper, including hostile scalar edge cases.
+- Telegram error redaction runs before the 200-character bound, and the acceptance test checks
+  both the user reply and model context when a token crosses that boundary in a multipart update.
+- Owner-explicit local paths remain supported as required by the document-skill contract. A
+  vault-only path allowlist was rejected because it would remove that requested capability.
 - CLI documentation keeps topology distinct from command coverage: `iva doctor` reads the
   four memory-schedule status records, while `iva status` reports systemd units only.
 - PHILOSOPHY.md now records the project boundary rules and explicit removal points for

@@ -1,5 +1,6 @@
 import "./lib/ts-esm-hooks.mjs";
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import {
   existsSync,
   mkdtempSync,
@@ -12,10 +13,12 @@ import { join } from "node:path";
 import test, { after } from "node:test";
 
 const vault = mkdtempSync(join(tmpdir(), "iva-reply-context-"));
+const telegramBotToken = `bot-${randomUUID()}`;
+const telegramWebhookSecret = `webhook-${randomUUID()}`;
 process.env.ASSISTANT_VAULT_DIR = vault;
 process.env.TELEGRAM_ALLOWED_USER_IDS = "9";
-process.env.TELEGRAM_BOT_TOKEN = Buffer.from("reply-context-bot").toString("base64url");
-process.env.TELEGRAM_WEBHOOK_SECRET_TOKEN = "test-secret";
+process.env.TELEGRAM_BOT_TOKEN = telegramBotToken;
+process.env.TELEGRAM_WEBHOOK_SECRET_TOKEN = telegramWebhookSecret;
 process.env.TELEGRAM_BOT_USERNAME = "my_bot";
 process.env.AGENT_LANGUAGE = "en";
 
@@ -66,7 +69,7 @@ async function dispatch(rawMessage) {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        "x-telegram-bot-api-secret-token": "test-secret",
+        "x-telegram-bot-api-secret-token": telegramWebhookSecret,
       },
       body: JSON.stringify({ update_id: 1, message: rawMessage }),
     }),
@@ -521,11 +524,12 @@ test("silent stickers and animations stay silent with and without a quote", asyn
 });
 
 test("media failure replies redact the exact Telegram bot token", async () => {
-  const token = process.env.TELEGRAM_BOT_TOKEN;
+  const token = telegramBotToken;
+  const tokenPrefix = token.slice(0, 5);
   const before = apiCalls.length;
-  getFileFailure = `request failed with ${token}`;
+  getFileFailure = `${"x".repeat(195)}${token} tail`;
   try {
-    const sends = await dispatch(message({
+    const failedDocument = message({
       text: undefined,
       document: {
         file_id: "redaction-failure",
@@ -534,8 +538,17 @@ test("media failure replies redact the exact Telegram bot token", async () => {
         mime_type: "text/plain",
         file_name: "failure.txt",
       },
+    });
+    const followup = message({ message_id: 101, text: "continue after the failed file" });
+    const sends = await dispatch(message({
+      text: undefined,
+      iva_parts: [failedDocument, followup],
     }));
-    assert.equal(sends.length, 0);
+    assert.equal(sends.length, 1);
+    const modelContext = sends[0][0].context.join("\n");
+    assert.equal(modelContext.includes(token), false);
+    assert.equal(modelContext.includes(tokenPrefix), false);
+    assert.match(modelContext, /\*\*\*/u);
   } finally {
     getFileFailure = "";
   }
@@ -547,6 +560,7 @@ test("media failure replies redact the exact Telegram bot token", async () => {
   assert.ok(call, "the user receives a media failure message");
   const body = JSON.parse(call.init.body);
   assert.equal(body.text.includes(token), false);
+  assert.equal(body.text.includes(tokenPrefix), false);
   assert.match(body.text, /\*\*\*/u);
 });
 

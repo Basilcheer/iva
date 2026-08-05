@@ -119,7 +119,8 @@ export default {
   async render(st, ctx) {
     const T = ctx.tr;
     const timers = await loadTimers();
-    const taskLine = T(`Tasks in queue: ${openTaskCount(ctx.deps.dataDir)}`, `Задач в очереди: ${openTaskCount(ctx.deps.dataDir)}`);
+    const taskCount = openTaskCount(ctx.deps.dataDir);
+    const taskLine = T(`Tasks in queue: ${taskCount}`, `Задач в очереди: ${taskCount}`);
     const head = T("⏰ Timers & tasks", "⏰ Кроны и задачи");
     const schedules = schedulesBlock(ctx.deps.dataDir, T);
     if (timers.length === 0) {

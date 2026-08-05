@@ -6,7 +6,9 @@ description: Use for every local PDF, DOCX, or XLSX attachment or path. Any ment
 # Documents
 
 Обрабатывай локальные PDF, DOCX и XLSX существующими утилитами Iva. Для разового вопроса
-не сохраняй документ в память. Импорт в `vault/library/` делай только по явной просьбе.
+не создавай дополнительную копию в долговременной памяти. Telegram уже сохраняет входящий
+файл в служебном архиве `vault/attachments/` и запись о нём в `vault/daily/`; это не импорт
+в библиотеку. Импорт в `vault/library/` делай только по явной просьбе.
 
 ## 1. Определи формат
 
@@ -61,7 +63,7 @@ pandoc "$input" -t gfm -o "$tmp_text" || { rm -f "$tmp_text"; exit 1; }
 Значения формул читай как сохранённые результаты, не вычисляй их заново.
 
 ```bash
-uv run --with openpyxl python -c '
+uv run --with 'openpyxl==3.1.5' python -c '
 import sys
 from openpyxl import load_workbook
 
@@ -85,8 +87,8 @@ for sheet in book.worksheets:
 ' "$input" > "$tmp_text" || { rm -f "$tmp_text"; exit 1; }
 ```
 
-`uv` устанавливается `install.sh`; `openpyxl` запускается во временном окружении и не становится
-зависимостью проекта.
+`uv` устанавливается `install.sh`; зафиксированный `openpyxl` запускается во временном окружении
+и не становится зависимостью проекта.
 
 ## 3. Ответь или импортируй
 
@@ -115,7 +117,26 @@ section: "Quarterly results"
 ---
 ```
 
-5. Проверь размеры файлов и выборочно сравни части с извлечённым текстом. После импорта ищи
+Значения frontmatter не вставляй в YAML вручную. Сформируй строки через существующий
+`formatField` из `agent/lib/frontmatter.ts`, чтобы кавычки, переводы строк, `---`, `yes` и
+`null` оставались строковыми данными. Передай выведенный блок в начало содержимого для
+`write_file`:
+
+```bash
+SOURCE="$source" PAGE="$page" SECTION="$section" node --input-type=module - <<'NODE'
+import { formatField } from "./agent/lib/frontmatter.ts";
+
+console.log([
+  "---",
+  formatField("source", process.env.SOURCE ?? ""),
+  formatField("page", process.env.PAGE ?? ""),
+  formatField("section", process.env.SECTION ?? ""),
+  "---",
+].join("\n"));
+NODE
+```
+
+1. Проверь размеры файлов и выборочно сравни части с извлечённым текстом. После импорта ищи
    по ним через `memory_search` со `scope: ["library"]`.
 
 ## Безопасность

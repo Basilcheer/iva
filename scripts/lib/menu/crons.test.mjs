@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -12,7 +12,11 @@ test("openTaskCount reports only open tasks for array and wrapped storage shapes
     { tasks: [{ text: "open" }, { text: "done", done: true }] },
   ]) {
     const dataDir = mkdtempSync(join(tmpdir(), "iva-menu-task-count-"));
-    writeFileSync(join(dataDir, "tasks.json"), JSON.stringify(value));
-    assert.equal(openTaskCount(dataDir), value.tasks ? 1 : 2);
+    try {
+      writeFileSync(join(dataDir, "tasks.json"), JSON.stringify(value));
+      assert.equal(openTaskCount(dataDir), value.tasks ? 1 : 2);
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
   }
 });
