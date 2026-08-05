@@ -28,6 +28,7 @@ import {
 } from "../scripts/lib/config-transaction.mjs";
 import { userbotSyncArgs } from "../scripts/lib/userbot-deps.mjs";
 import { probeUserbotHealth } from "../scripts/lib/userbot-health.mjs";
+import { validateTimeZone } from "../scripts/lib/timezone.mjs";
 import {
   acquireUpdateLock,
   commitThenRunPostCommit,
@@ -153,7 +154,12 @@ function ensureAssistantBearer({ quiet = false } = {}) {
 // local time) need — one place so the fallback/validation rule can't drift between them.
 function configuredTimezone() {
   const raw = (readEnv().ASSISTANT_TIMEZONE || "UTC").trim();
-  return /^[A-Za-z0-9_+\/-]+$/.test(raw) ? raw : "UTC";
+  if (/^[A-Za-z0-9_+\/-]+$/.test(raw)) {
+    const timezone = validateTimeZone(raw);
+    if (timezone) return timezone;
+  }
+  warn(`invalid ASSISTANT_TIMEZONE=${JSON.stringify(raw)}; using UTC`);
+  return "UTC";
 }
 
 // ── systemd units: single source of truth ─────────────────────────────────

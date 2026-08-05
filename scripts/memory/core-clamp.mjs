@@ -137,6 +137,10 @@ function truncateToCap(lines) {
   ) {
     prefixLength -= 1;
   }
+  if (prefixLength < 2) {
+    line.removed = true;
+    return render(lines);
+  }
   line.replacement = `${line.content.slice(0, prefixLength)}…${line.ending}`;
   return render(lines);
 }
