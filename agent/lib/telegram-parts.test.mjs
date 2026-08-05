@@ -58,3 +58,14 @@ test("messageParts returns the synthetic collector parts in order", () => {
     second,
   ]);
 });
+
+test("messageParts drops malformed synthetic collector entries", () => {
+  const valid = { message_id: 1, text: "valid" };
+
+  assert.deepEqual(
+    messageParts({
+      iva_parts: [null, "text", 42, [], valid],
+    }),
+    [valid],
+  );
+});
