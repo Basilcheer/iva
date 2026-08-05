@@ -6,12 +6,18 @@ import { tg } from "./transport.mjs";
 
 // offset: null ⇒ no file (first run) — distinguish from a genuine offset 0.
 // delivered: update_id последнего доставленного в eve апдейта (см. offset-store.mjs).
-async function loadOffset({ file = OFFSET_FILE, readFileImpl = readFile } = {}) {
+async function loadOffset({
+  file = OFFSET_FILE,
+  readFileImpl = readFile,
+} = {}) {
   try {
     return parseOffsetFile(await readFileImpl(file, "utf8"));
   } catch (error) {
     if (error?.code === "ENOENT") return { offset: null, delivered: null };
-    throw new Error(`failed to load Telegram offset ${file}: ${error.message}`, { cause: error });
+    throw new Error(
+      `failed to load Telegram offset ${file}: ${error.message}`,
+      { cause: error },
+    );
   }
 }
 
@@ -38,9 +44,12 @@ async function fastForwardOffset({ tgImpl = tg, logImpl = log } = {}) {
     return updateId + 1;
   } catch (error) {
     logImpl("fast-forward offset failed:", error.message);
-    throw new Error(`failed to fast-forward Telegram offset: ${error.message}`, {
-      cause: error,
-    });
+    throw new Error(
+      `failed to fast-forward Telegram offset: ${error.message}`,
+      {
+        cause: error,
+      },
+    );
   }
 }
 
@@ -82,7 +91,10 @@ async function saveOffset(
     } catch {
       /* исходная ошибка записи важнее ошибки уборки tmp */
     }
-    throw new Error(`failed to save Telegram offset ${file}: ${error.message}`, { cause: error });
+    throw new Error(
+      `failed to save Telegram offset ${file}: ${error.message}`,
+      { cause: error },
+    );
   }
 }
 

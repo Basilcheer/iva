@@ -23,18 +23,19 @@ const validationError = (error) => {
       cause: error,
     });
   }
-  return new ModelValidationError("catalog_unavailable", "provider validation failed", {
-    cause: error,
-  });
+  return new ModelValidationError(
+    "catalog_unavailable",
+    "provider validation failed",
+    {
+      cause: error,
+    },
+  );
 };
 
-export async function probeOpenRouterModel({
-  model,
-  key,
-}, {
-  fetchFn = fetch,
-  errorReason,
-} = {}) {
+export async function probeOpenRouterModel(
+  { model, key },
+  { fetchFn = fetch, errorReason } = {},
+) {
   let response;
   try {
     response = await fetchFn(`${CATALOG.openrouter.base}/chat/completions`, {
@@ -46,40 +47,55 @@ export async function probeOpenRouterModel({
       body: JSON.stringify({
         model,
         messages: [{ role: "user", content: "Call the ping tool." }],
-        tools: [{
-          type: "function",
-          function: {
-            name: "ping",
-            description: "health check",
-            parameters: { type: "object", properties: {} },
+        tools: [
+          {
+            type: "function",
+            function: {
+              name: "ping",
+              description: "health check",
+              parameters: { type: "object", properties: {} },
+            },
           },
-        }],
+        ],
         tool_choice: "auto",
         max_tokens: 32,
       }),
       signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     });
   } catch (cause) {
-    throw new ModelValidationError("catalog_unavailable", "OpenRouter request failed", {
-      cause,
-    });
+    throw new ModelValidationError(
+      "catalog_unavailable",
+      "OpenRouter request failed",
+      {
+        cause,
+      },
+    );
   }
   if (response.status === 401 || response.status === 403) {
-    throw new ModelValidationError("auth_rejected", `OpenRouter rejected credentials (${response.status})`, {
-      status: response.status,
-    });
+    throw new ModelValidationError(
+      "auth_rejected",
+      `OpenRouter rejected credentials (${response.status})`,
+      {
+        status: response.status,
+      },
+    );
   }
   let body;
   try {
     body = await response.json();
   } catch (cause) {
-    throw new ModelValidationError("catalog_invalid", "OpenRouter returned invalid JSON", {
-      status: response.status,
-      cause,
-    });
+    throw new ModelValidationError(
+      "catalog_invalid",
+      "OpenRouter returned invalid JSON",
+      {
+        status: response.status,
+        cause,
+      },
+    );
   }
   if (!response.ok) {
-    const detail = errorReason?.(body, response.status) ??
+    const detail =
+      errorReason?.(body, response.status) ??
       (typeof body?.error?.message === "string" ? body.error.message : "");
     const reason = detail ? `: ${detail}` : "";
     throw new ModelValidationError(
@@ -99,15 +115,10 @@ export async function probeOpenRouterModel({
   return { id: model, reasoningLevels: [], answered };
 }
 
-export async function validateModelSelection({
-  provider,
-  model,
-  key,
-  dataDir,
-}, {
-  fetchFn = fetch,
-  listCodexCatalog,
-} = {}) {
+export async function validateModelSelection(
+  { provider, model, key, dataDir },
+  { fetchFn = fetch, listCodexCatalog } = {},
+) {
   if (
     typeof provider !== "string" ||
     !Object.hasOwn(CATALOG, provider) ||
@@ -115,7 +126,10 @@ export async function validateModelSelection({
     !model.trim() ||
     /[\r\n]/.test(model)
   ) {
-    throw new ModelValidationError("invalid_selection", "invalid provider or model selection");
+    throw new ModelValidationError(
+      "invalid_selection",
+      "invalid provider or model selection",
+    );
   }
   const selected = model.trim();
   if (provider === "openrouter") {

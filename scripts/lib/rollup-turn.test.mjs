@@ -11,11 +11,46 @@ import {
 } from "./rollup-turn.mjs";
 
 test("fresh retry requires an explicitly rejected send or confirmed cancellation", () => {
-  assert.equal(canRetryFresh({ accepted: false, sendRejected: false, cancelConfirmed: false }), false);
-  assert.equal(canRetryFresh({ accepted: false, sendRejected: false, cancelConfirmed: true }), true);
-  assert.equal(canRetryFresh({ accepted: false, sendRejected: true, cancelConfirmed: false }), true);
-  assert.equal(canRetryFresh({ accepted: true, sendRejected: false, cancelConfirmed: false }), false);
-  assert.equal(canRetryFresh({ accepted: true, sendRejected: false, cancelConfirmed: true }), true);
+  assert.equal(
+    canRetryFresh({
+      accepted: false,
+      sendRejected: false,
+      cancelConfirmed: false,
+    }),
+    false,
+  );
+  assert.equal(
+    canRetryFresh({
+      accepted: false,
+      sendRejected: false,
+      cancelConfirmed: true,
+    }),
+    true,
+  );
+  assert.equal(
+    canRetryFresh({
+      accepted: false,
+      sendRejected: true,
+      cancelConfirmed: false,
+    }),
+    true,
+  );
+  assert.equal(
+    canRetryFresh({
+      accepted: true,
+      sendRejected: false,
+      cancelConfirmed: false,
+    }),
+    false,
+  );
+  assert.equal(
+    canRetryFresh({
+      accepted: true,
+      sendRejected: false,
+      cancelConfirmed: true,
+    }),
+    true,
+  );
 });
 
 async function countSendsThroughRetryPolicy({ firstSend, cancel }) {
@@ -24,26 +59,32 @@ async function countSendsThroughRetryPolicy({ firstSend, cancel }) {
   let sendRejected = false;
   let acceptedTurnResult;
   try {
-    await withTurnTimeout(async () => {
-      let response;
-      try {
-        response = await firstSend(() => {
-          sends += 1;
-        });
-      } catch (error) {
-        sendRejected = true;
-        throw error;
-      }
-      accepted = true;
-      acceptedTurnResult = response.result();
-      return await acceptedTurnResult;
-    }, { timeoutMs: 20, label: "main-turn" });
+    await withTurnTimeout(
+      async () => {
+        let response;
+        try {
+          response = await firstSend(() => {
+            sends += 1;
+          });
+        } catch (error) {
+          sendRejected = true;
+          throw error;
+        }
+        accepted = true;
+        acceptedTurnResult = response.result();
+        return await acceptedTurnResult;
+      },
+      { timeoutMs: 20, label: "main-turn" },
+    );
   } catch (error) {
     // Это точная модель catch-флоу rollup.ts, а не выполнение самого rollup.ts.
     const hung = error?.code === "ROLLUP_TURN_TIMEOUT";
-    const cancelConfirmed = accepted || hung
-      ? await cancelTurnAndConfirmQuietly({ cancel }, acceptedTurnResult, { timeoutMs: 20 })
-      : false;
+    const cancelConfirmed =
+      accepted || hung
+        ? await cancelTurnAndConfirmQuietly({ cancel }, acceptedTurnResult, {
+            timeoutMs: 20,
+          })
+        : false;
     if (canRetryFresh({ accepted, sendRejected, cancelConfirmed })) sends += 1;
   }
   return sends;
@@ -79,13 +120,16 @@ test("an accepted hung turn retries after the stream confirms turn.cancelled", a
     firstSend: async (recordSend) => {
       recordSend();
       return {
-        result: () => new Promise((resolve) => {
-          finishTurn = resolve;
-        }),
+        result: () =>
+          new Promise((resolve) => {
+            finishTurn = resolve;
+          }),
       };
     },
     cancel: async () => {
-      finishTurn({ events: [{ type: "turn.cancelled" }, { type: "session.waiting" }] });
+      finishTurn({
+        events: [{ type: "turn.cancelled" }, { type: "session.waiting" }],
+      });
       return { status: "accepted" };
     },
   });
@@ -133,13 +177,19 @@ test("a rejected send gets exactly one fresh retry", async () => {
 });
 
 test("a turn that finishes in time returns its result", async () => {
-  const result = await withTurnTimeout(async () => "report", { timeoutMs: 50, label: "main-turn" });
+  const result = await withTurnTimeout(async () => "report", {
+    timeoutMs: 50,
+    label: "main-turn",
+  });
   assert.equal(result, "report");
 });
 
 test("a hung turn rejects with a labelled timeout error", async () => {
   await assert.rejects(
-    withTurnTimeout(() => new Promise(() => {}), { timeoutMs: 20, label: "main-turn" }),
+    withTurnTimeout(() => new Promise(() => {}), {
+      timeoutMs: 20,
+      label: "main-turn",
+    }),
     (e) => {
       assert.ok(e instanceof RollupTurnTimeoutError);
       assert.equal(e.code, "ROLLUP_TURN_TIMEOUT");
@@ -150,8 +200,20 @@ test("a hung turn rejects with a labelled timeout error", async () => {
 });
 
 test("the timer is cleared, so the next turn runs right after a win", async () => {
-  assert.equal(await withTurnTimeout(async () => 1, { timeoutMs: DEFAULT_TURN_TIMEOUT_MS, label: "first" }), 1);
-  assert.equal(await withTurnTimeout(async () => 2, { timeoutMs: DEFAULT_TURN_TIMEOUT_MS, label: "second" }), 2);
+  assert.equal(
+    await withTurnTimeout(async () => 1, {
+      timeoutMs: DEFAULT_TURN_TIMEOUT_MS,
+      label: "first",
+    }),
+    1,
+  );
+  assert.equal(
+    await withTurnTimeout(async () => 2, {
+      timeoutMs: DEFAULT_TURN_TIMEOUT_MS,
+      label: "second",
+    }),
+    2,
+  );
   // Файл теста завершается сам: незачищенный 10-минутный таймер держал бы event loop.
 });
 
@@ -165,8 +227,16 @@ test("a malformed timeout falls back to the default and warns", () => {
   // то есть мгновенно «зависший» ход на каждой ночи.
   for (const raw of ["", "  ", "abc", "0", "-1", "1.5", String(2 ** 31)]) {
     const warnings = [];
-    assert.equal(resolveTurnTimeoutMs(raw, { warn: (m) => warnings.push(m) }), DEFAULT_TURN_TIMEOUT_MS);
-    if (raw.trim() !== "") assert.equal(warnings.length, 1, `expected a warning for ${JSON.stringify(raw)}`);
+    assert.equal(
+      resolveTurnTimeoutMs(raw, { warn: (m) => warnings.push(m) }),
+      DEFAULT_TURN_TIMEOUT_MS,
+    );
+    if (raw.trim() !== "")
+      assert.equal(
+        warnings.length,
+        1,
+        `expected a warning for ${JSON.stringify(raw)}`,
+      );
   }
 });
 
@@ -177,8 +247,16 @@ test("a hung cancel is swallowed instead of blocking the retry", async () => {
 
 test("a refused cancel is swallowed too", async () => {
   // Не начатая сессия бросает синхронно, заклинившая может ответить 500 — оба исхода не наши.
-  const throws = { cancel: () => { throw new Error("session has not started"); } };
-  const rejects = { cancel: async () => { throw new Error("500 cancel-turn"); } };
+  const throws = {
+    cancel: () => {
+      throw new Error("session has not started");
+    },
+  };
+  const rejects = {
+    cancel: async () => {
+      throw new Error("500 cancel-turn");
+    },
+  };
   assert.equal(await cancelTurnQuietly(throws, { timeoutMs: 30 }), false);
   assert.equal(await cancelTurnQuietly(rejects, { timeoutMs: 30 }), false);
 });

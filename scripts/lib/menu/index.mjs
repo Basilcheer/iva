@@ -69,7 +69,10 @@ export function createMenu({ flows, tg, deps, screens = SCREENS }) {
     // Ряд «назад»: в корень — «‹ Меню», иначе «‹ Назад». Кнопка статическая (o-верб) —
     // возврат работает даже когда стейт потерян (усыновление в onCallback).
     backRow: (sid) => [
-      ctx.btn(sid === "r" ? ctx.tr("‹ Menu", "‹ Меню") : ctx.tr("‹ Back", "‹ Назад"), `${PREFIX}${sid}:o`),
+      ctx.btn(
+        sid === "r" ? ctx.tr("‹ Menu", "‹ Меню") : ctx.tr("‹ Back", "‹ Назад"),
+        `${PREFIX}${sid}:o`,
+      ),
     ],
   };
 
@@ -93,7 +96,9 @@ export function createMenu({ flows, tg, deps, screens = SCREENS }) {
     const userId = String(cq.from?.id ?? "");
     const messageId = cq.message?.message_id;
     // Гасим спиннер кнопки СРАЗУ (mirror handleWizardCallback :562) — дальше можно не спешить.
-    await tg("answerCallbackQuery", { callback_query_id: cq.id }).catch(() => {});
+    await tg("answerCallbackQuery", { callback_query_id: cq.id }).catch(
+      () => {},
+    );
     // Не-allowlisted тап глотаем ПОСЛЕ ack (mirror :563): флоу существует только у того,
     // кто прошёл гейт /menu, поэтому чужой тап и так не имеет стейта — но глушим явно.
     const allowed = deps.allowed;
@@ -124,7 +129,11 @@ export function createMenu({ flows, tg, deps, screens = SCREENS }) {
       } else {
         // Закрывают старое/протухшее сообщение (msgId не совпал): правим именно его, а
         // активный menu-стейт в другом сообщении не трогаем.
-        await tg("editMessageText", { chat_id: chatId, message_id: messageId, text: closed }).catch(() => {});
+        await tg("editMessageText", {
+          chat_id: chatId,
+          message_id: messageId,
+          text: closed,
+        }).catch(() => {});
       }
       return true;
     }
@@ -134,14 +143,21 @@ export function createMenu({ flows, tg, deps, screens = SCREENS }) {
     if (!fresh) {
       if (NAV_VERBS.has(verb)) {
         // Усыновить сообщение: создать стейт, привязанный к тапнутому message_id, и отрендерить.
-        st = flows.start(chatId, userId, "menu", { screen: sid, page: 0, msgId: messageId });
+        st = flows.start(chatId, userId, "menu", {
+          screen: sid,
+          page: 0,
+          msgId: messageId,
+        });
       } else {
         // Data-верб без живого стейта (рестарт моста / тап по старому меню): мид-флоу данные
         // потеряны — честно говорим «устарело» (mirror :567-570).
         await tg("editMessageText", {
           chat_id: chatId,
           message_id: messageId,
-          text: ctx.tr("Menu expired — send /menu", "Меню устарело — отправь /menu заново"),
+          text: ctx.tr(
+            "Menu expired — send /menu",
+            "Меню устарело — отправь /menu заново",
+          ),
         }).catch(() => {});
         return true;
       }
@@ -196,24 +212,42 @@ export function createMenu({ flows, tg, deps, screens = SCREENS }) {
     // Команда прерывает ожидание: молча висящий промпт пригласил бы вставить ключ позже,
     // когда его уже некому перехватить (:666-668). Команду не удаляем — это не секрет.
     if (text.startsWith("/")) {
-      await flows.end(st, ctx.tr("Cancelled — no longer waiting for input.", "Отменено — ожидание ввода снято."));
+      await flows.end(
+        st,
+        ctx.tr(
+          "Cancelled — no longer waiting for input.",
+          "Отменено — ожидание ввода снято.",
+        ),
+      );
       return true;
     }
     const a = st.awaitText;
     if (a.secret && !opts.skipDelete) {
       // delete-message-FIRST (:512-515). При провале удаления — предупреждение как в мосте;
       // текст ошибки НИКОГДА не содержит значение ключа.
-      const del = await tg("deleteMessage", { chat_id: chatId, message_id: msg.message_id });
+      const del = await tg("deleteMessage", {
+        chat_id: chatId,
+        message_id: msg.message_id,
+      });
       if (!del.ok) {
-        await deps.reply(chatId, ctx.tr(
-          "Couldn't delete your message — please delete it manually.",
-          "Не смог удалить сообщение — удали его вручную.",
-        ));
+        await deps.reply(
+          chatId,
+          ctx.tr(
+            "Couldn't delete your message — please delete it manually.",
+            "Не смог удалить сообщение — удали его вручную.",
+          ),
+        );
       }
     }
     const handler = screens[st.screen]?.texts?.[a.kind];
     if (typeof handler !== "function") {
-      await flows.end(st, ctx.tr("Input handler is unavailable — flow reset.", "Обработчик ввода недоступен — флоу сброшен."));
+      await flows.end(
+        st,
+        ctx.tr(
+          "Input handler is unavailable — flow reset.",
+          "Обработчик ввода недоступен — флоу сброшен.",
+        ),
+      );
       return true;
     }
     await handler(text, msg, st, ctx);
@@ -234,7 +268,11 @@ export function createMenu({ flows, tg, deps, screens = SCREENS }) {
         reply_markup: { inline_keyboard: [] },
       }).catch(() => {});
     }
-    const st = flows.start(chatId, uid, "menu", { screen: "r", page: 0, msgId: opts.msgId ?? null });
+    const st = flows.start(chatId, uid, "menu", {
+      screen: "r",
+      page: 0,
+      msgId: opts.msgId ?? null,
+    });
     await renderScreen(st);
     return st;
   }

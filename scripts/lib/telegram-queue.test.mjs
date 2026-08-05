@@ -40,7 +40,8 @@ const statusDataDir = mkdtempSync(join(tmpdir(), "iva-telegram-queue-status-"));
 process.env.ASSISTANT_DATA_DIR = statusDataDir;
 after(() => rmSync(statusDataDir, { recursive: true, force: true }));
 const status = await import("#lib/run-status.mjs");
-const { drainReadyQueueHeads, routeMessageUpdate } = await import("../telegram-poll.mjs");
+const { drainReadyQueueHeads, routeMessageUpdate } =
+  await import("../telegram-poll.mjs");
 
 const privateUpdate = (updateId, text) => ({
   update_id: updateId,
@@ -70,18 +71,31 @@ async function waitForFile(file, timeoutMs = 2_000) {
 
 test("versioned FIFO items preserve update ids, order and duplicate retries across reload", async (t) => {
   const file = await queueFile(t);
-  await enqueueQueueFile(file, "1:", privateUpdate(101, "first"), { now: () => 1 });
-  await enqueueQueueFile(file, "1:", privateUpdate(102, "second"), { now: () => 2 });
-  const duplicate = await enqueueQueueFile(file, "1:", privateUpdate(101, "first"), {
-    now: () => 3,
+  await enqueueQueueFile(file, "1:", privateUpdate(101, "first"), {
+    now: () => 1,
   });
+  await enqueueQueueFile(file, "1:", privateUpdate(102, "second"), {
+    now: () => 2,
+  });
+  const duplicate = await enqueueQueueFile(
+    file,
+    "1:",
+    privateUpdate(101, "first"),
+    {
+      now: () => 3,
+    },
+  );
 
   assert.equal(duplicate.added, false);
   const { document } = await loadQueueFile(file, { strict: true });
   assert.equal(document.version, 1);
   assert.equal(queueCount(document, "1:"), 2);
   assert.deepEqual(
-    document.queues["1:"].map((item) => [item.version, item.updateId, item.enqueuedAt]),
+    document.queues["1:"].map((item) => [
+      item.version,
+      item.updateId,
+      item.enqueuedAt,
+    ]),
     [
       [1, 101, 1],
       [1, 102, 2],
@@ -123,7 +137,8 @@ test("ack directory-sync failure durably rolls back the original FIFO head", asy
         return {
           sync: async () => {
             directorySyncs++;
-            if (directorySyncs === 2) throw new Error("injected ack directory sync failure");
+            if (directorySyncs === 2)
+              throw new Error("injected ack directory sync failure");
             await handle.sync();
           },
           close: () => handle.close(),
@@ -153,7 +168,10 @@ test("SIGKILL after acknowledgement rename restores the pending original queue o
   const child = spawn(
     process.execPath,
     [
-      join(import.meta.dirname, "../fixtures/telegram-queue-ack-crash-child.mjs"),
+      join(
+        import.meta.dirname,
+        "../fixtures/telegram-queue-ack-crash-child.mjs",
+      ),
       file,
       marker,
     ],
@@ -165,7 +183,8 @@ test("SIGKILL after acknowledgement rename restores the pending original queue o
     stderr += chunk;
   });
   t.after(() => {
-    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    if (child.exitCode === null && child.signalCode === null)
+      child.kill("SIGKILL");
   });
 
   await waitForFile(marker);
@@ -281,7 +300,11 @@ test("drain keeps the head before acceptance and advances exactly one item after
   });
   assert.equal(acceptedCount, 1);
   assert.equal(queueHead(document, "1:").updateId, 102);
-  assert.deepEqual(delivered, [101, 101], "a retry may duplicate only the durable head");
+  assert.deepEqual(
+    delivered,
+    [101, 101],
+    "a retry may duplicate only the durable head",
+  );
 });
 
 test("an accepted head must observe its turn running and then idle before the next FIFO head", async () => {
@@ -315,11 +338,19 @@ test("an accepted head must observe its turn running and then idle before the ne
   assert.deepEqual(delivered, [101]);
 
   await drainReadyQueueHeads(options);
-  assert.deepEqual(delivered, [101], "idle before turn.started must keep the next head gated");
+  assert.deepEqual(
+    delivered,
+    [101],
+    "idle before turn.started must keep the next head gated",
+  );
 
   running = true;
   await drainReadyQueueHeads(options);
-  assert.deepEqual(delivered, [101], "the accepted turn itself must keep the next head gated");
+  assert.deepEqual(
+    delivered,
+    [101],
+    "the accepted turn itself must keep the next head gated",
+  );
 
   running = false;
   assert.equal(await drainReadyQueueHeads(options), 0);
@@ -355,7 +386,11 @@ test("drain removes an orphaned running gate after the last queued turn becomes 
   assert.equal(inFlight.get(key)?.state, "running");
 
   await drainReadyQueueHeads(options);
-  assert.equal(inFlight.get(key)?.state, "running", "the active turn must keep its gate");
+  assert.equal(
+    inFlight.get(key)?.state,
+    "running",
+    "the active turn must keep its gate",
+  );
   assert.deepEqual(delivered, [101]);
 
   running = false;
@@ -480,7 +515,8 @@ test("a drain pass has one global delivery budget and rotates a stalled first ke
       nowMs += timeoutMs;
       return false;
     },
-    acknowledgeImpl: async () => assert.fail("a stalled head must remain durable"),
+    acknowledgeImpl: async () =>
+      assert.fail("a stalled head must remain durable"),
     now: () => nowMs,
     settleUntil: new Map(),
     inFlight: new Map(),
@@ -503,14 +539,11 @@ test("a drain pass has one global delivery budget and rotates a stalled first ke
   );
 
   await drainReadyQueueHeads(options);
-  assert.deepEqual(
-    attempts,
-    [
-      [1, 5_000],
-      [2, 5_000],
-      [3, 5_000],
-    ],
-  );
+  assert.deepEqual(attempts, [
+    [1, 5_000],
+    [2, 5_000],
+    [3, 5_000],
+  ]);
 });
 
 test("a missing terminal event becomes drainable after the run-status TTL", async () => {
@@ -583,8 +616,11 @@ test("legacy string arrays preserve private owner text but never invent a group 
   assert.equal(persisted.version, 1);
   assert.equal(queueCount(persisted), 2);
   const [quarantineName] = (await readdir(dirname(file))).filter((name) =>
-    name.includes(".legacy-unattributed-"));
-  const quarantined = JSON.parse(await readFile(join(dirname(file), quarantineName), "utf8"));
+    name.includes(".legacy-unattributed-"),
+  );
+  const quarantined = JSON.parse(
+    await readFile(join(dirname(file), quarantineName), "utf8"),
+  );
   assert.equal(queueCount(quarantined), 1);
   assert.equal(quarantined.queues["-100:7"][0].legacyText, "topic follow-up");
 });
@@ -611,7 +647,9 @@ test("legacy group quarantine failure leaves the original queue active for retry
 
   assert.equal(await readFile(file, "utf8"), original);
   assert.deepEqual(
-    (await readdir(dirname(file))).filter((name) => name.includes(".legacy-unattributed-")),
+    (await readdir(dirname(file))).filter((name) =>
+      name.includes(".legacy-unattributed-"),
+    ),
     [],
   );
 });
@@ -636,9 +674,15 @@ test("failed active migration keeps both the old queue and its group quarantine"
 
   assert.equal(await readFile(file, "utf8"), original);
   const [quarantineName] = (await readdir(dirname(file))).filter((name) =>
-    name.includes(".legacy-unattributed-"));
-  const quarantined = JSON.parse(await readFile(join(dirname(file), quarantineName), "utf8"));
-  assert.equal(quarantined.queues["-100:"][0].legacyText, "group text with unknown author");
+    name.includes(".legacy-unattributed-"),
+  );
+  const quarantined = JSON.parse(
+    await readFile(join(dirname(file), quarantineName), "utf8"),
+  );
+  assert.equal(
+    quarantined.queues["-100:"][0].legacyText,
+    "group text with unknown author",
+  );
 });
 
 test("separate legacy migrations never overwrite an earlier group quarantine", async (t) => {
@@ -695,7 +739,10 @@ test("drain leaves legacy group text with unknown author undelivered", async () 
   assert.deepEqual(delivered, []);
   assert.deepEqual(acknowledged, []);
   assert.equal(remaining, 1);
-  assert.equal(queueHead(document, "-100:").legacyText, "unaddressed group text");
+  assert.equal(
+    queueHead(document, "-100:").legacyText,
+    "unaddressed group text",
+  );
 });
 
 test("queued media and quoted metadata replay from the durable update without transformation", async (t) => {
@@ -719,7 +766,10 @@ test("queued media and quoted metadata replay from the durable update without tr
   await enqueueQueueFile(file, "1:", update);
   const { document } = await loadQueueFile(file, { strict: true });
 
-  assert.deepEqual(materializeQueueItem("1:", queueHead(document, "1:")), update);
+  assert.deepEqual(
+    materializeQueueItem("1:", queueHead(document, "1:")),
+    update,
+  );
 });
 
 test("busy routing is fail-closed and keeps addressed private, group and topic updates", () => {
@@ -737,7 +787,10 @@ test("busy routing is fail-closed and keeps addressed private, group and topic u
     },
   });
 
-  assert.equal(shouldQueueBusyUpdate(privateUpdate(1, "private"), options), true);
+  assert.equal(
+    shouldQueueBusyUpdate(privateUpdate(1, "private"), options),
+    true,
+  );
   assert.equal(
     shouldQueueBusyUpdate(
       {
@@ -749,10 +802,19 @@ test("busy routing is fail-closed and keeps addressed private, group and topic u
     false,
   );
   assert.equal(shouldQueueBusyUpdate(group("group noise"), options), false);
-  assert.equal(shouldQueueBusyUpdate(group("@my_bot addressed"), options), true);
+  assert.equal(
+    shouldQueueBusyUpdate(group("@my_bot addressed"), options),
+    true,
+  );
   assert.equal(shouldQueueBusyUpdate(group("/task topic", 7), options), true);
-  assert.equal(shouldQueueBusyUpdate(group("@my_bot untrusted", 7, 7), options), false);
-  assert.equal(shouldQueueBusyUpdate(group("x@my_botany.example"), options), false);
+  assert.equal(
+    shouldQueueBusyUpdate(group("@my_bot untrusted", 7, 7), options),
+    false,
+  );
+  assert.equal(
+    shouldQueueBusyUpdate(group("x@my_botany.example"), options),
+    false,
+  );
   assert.equal(shouldQueueBusyUpdate(group("@my_bot_suffix"), options), false);
 });
 
@@ -785,9 +847,18 @@ test("busy group routing sees mentions and commands in collected iva_parts", () 
     },
   });
 
-  assert.equal(shouldQueueBusyUpdate(collected("@my_bot see album"), options), true);
-  assert.equal(shouldQueueBusyUpdate(collected("/task save album"), options), true);
-  assert.equal(shouldQueueBusyUpdate(collected("unaddressed caption"), options), false);
+  assert.equal(
+    shouldQueueBusyUpdate(collected("@my_bot see album"), options),
+    true,
+  );
+  assert.equal(
+    shouldQueueBusyUpdate(collected("/task save album"), options),
+    true,
+  );
+  assert.equal(
+    shouldQueueBusyUpdate(collected("unaddressed caption"), options),
+    false,
+  );
   const malformed = collected("unaddressed caption");
   malformed.message.iva_parts.splice(1, 0, null, "broken");
   assert.doesNotThrow(() => shouldQueueBusyUpdate(malformed, options));
@@ -811,16 +882,21 @@ test("group routing validates exact Telegram entities across Unicode and malform
   const unicodeText = "🙂 ask @my_bot now";
   assert.equal(
     shouldQueueBusyUpdate(
-      group(unicodeText, [{
-        type: "mention",
-        offset: unicodeText.indexOf("@my_bot"),
-        length: "@my_bot".length,
-      }]),
+      group(unicodeText, [
+        {
+          type: "mention",
+          offset: unicodeText.indexOf("@my_bot"),
+          length: "@my_bot".length,
+        },
+      ]),
       options,
     ),
     true,
   );
-  assert.equal(shouldQueueBusyUpdate(group("İ @MY_BOT", undefined), options), true);
+  assert.equal(
+    shouldQueueBusyUpdate(group("İ @MY_BOT", undefined), options),
+    true,
+  );
   assert.equal(
     shouldQueueBusyUpdate(
       group("Ж@my_bot", [{ type: "mention", offset: 1, length: 7 }]),
@@ -844,28 +920,33 @@ test("group routing validates exact Telegram entities across Unicode and malform
   );
   assert.equal(
     shouldQueueBusyUpdate(
-      group("/task@my_bot", [{
-        type: "bot_command",
-        offset: 0,
-        length: "/task@my_bot".length,
-      }]),
+      group("/task@my_bot", [
+        {
+          type: "bot_command",
+          offset: 0,
+          length: "/task@my_bot".length,
+        },
+      ]),
       options,
     ),
     true,
   );
   assert.equal(
     shouldQueueBusyUpdate(
-      group("/task@my_bot_suffix", [{
-        type: "bot_command",
-        offset: 0,
-        length: "/task@my_bot".length,
-      }]),
+      group("/task@my_bot_suffix", [
+        {
+          type: "bot_command",
+          offset: 0,
+          length: "/task@my_bot".length,
+        },
+      ]),
       options,
     ),
     false,
   );
   assert.doesNotThrow(() =>
-    shouldQueueBusyUpdate(group("@my_bot", { offset: 0, length: 7 }), options));
+    shouldQueueBusyUpdate(group("@my_bot", { offset: 0, length: 7 }), options),
+  );
   assert.equal(
     shouldQueueBusyUpdate(group("@my_bot", { offset: 0, length: 7 }), options),
     false,
@@ -874,7 +955,11 @@ test("group routing validates exact Telegram entities across Unicode and malform
 
 test("__proto__ is persisted as a queue data key without prototype mutation or loss", async (t) => {
   const file = await queueFile(t);
-  await enqueueQueueFile(file, "__proto__", privateUpdate(401, "prototype-safe"));
+  await enqueueQueueFile(
+    file,
+    "__proto__",
+    privateUpdate(401, "prototype-safe"),
+  );
 
   const { document } = await loadQueueFile(file, { strict: true });
   assert.equal(Object.hasOwn(document.queues, "__proto__"), true);

@@ -36,7 +36,13 @@ function globToRegExp(pattern: string): RegExp {
 }
 
 // Игнорируем тяжёлые/мусорные директории при обходе.
-const IGNORE_DIRS = new Set([".git", "node_modules", ".next", "dist", ".cache"]);
+const IGNORE_DIRS = new Set([
+  ".git",
+  "node_modules",
+  ".next",
+  "dist",
+  ".cache",
+]);
 
 async function walk(root: string, dir: string, out: string[]): Promise<void> {
   let entries;
@@ -63,8 +69,14 @@ export default defineTool({
     "(по умолчанию текущая рабочая директория процесса). Возвращает массив путей " +
     "(относительно cwd). Директории .git/node_modules/dist и т.п. пропускаются.",
   inputSchema: z.object({
-    pattern: z.string().min(1).describe("Glob-паттерн, напр. **/*.ts или vault/daily/*.md"),
-    cwd: z.string().optional().describe("Базовая директория поиска (абсолютный путь)"),
+    pattern: z
+      .string()
+      .min(1)
+      .describe("Glob-паттерн, напр. **/*.ts или vault/daily/*.md"),
+    cwd: z
+      .string()
+      .optional()
+      .describe("Базовая директория поиска (абсолютный путь)"),
   }),
   async execute({ pattern, cwd }) {
     const root = cwd ?? process.cwd();

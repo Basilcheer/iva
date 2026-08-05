@@ -19,7 +19,11 @@ import {
   writeSync,
 } from "node:fs";
 import { join } from "node:path";
-import { parseFrontmatter, writeFrontmatter, type FmFields } from "./frontmatter.js";
+import {
+  parseFrontmatter,
+  writeFrontmatter,
+  type FmFields,
+} from "./frontmatter.js";
 
 // ─── identity ──────────────────────────────────────────────────────────────
 
@@ -52,7 +56,9 @@ const hasQualifier = (s: string) => /\(/.test(s);
 export function extractH1(body: string): string | null {
   const lines = body.split("\n");
   const outside = outsideFences(lines);
-  const line = lines.find((candidate, index) => outside[index] && /^ {0,3}#\s+/.test(candidate));
+  const line = lines.find(
+    (candidate, index) => outside[index] && /^ {0,3}#\s+/.test(candidate),
+  );
   const m = line ? /^ {0,3}#\s+(.+)$/.exec(line) : null;
   return m ? m[1].trim() : null;
 }
@@ -64,7 +70,12 @@ function fmNames(fields: FmFields | null): string[] {
     const v = fields[key];
     if (!v) continue;
     if (Array.isArray(v)) out.push(...v);
-    else out.push(...String(v).split(",").map((x) => x.trim()));
+    else
+      out.push(
+        ...String(v)
+          .split(",")
+          .map((x) => x.trim()),
+      );
   }
   return out.filter(Boolean);
 }
@@ -96,7 +107,7 @@ export function resolveCard(dir: string, title: string): Identity {
   const wantedBase = baseName(title);
   const bareQuery = !hasQualifier(title);
   const hits: string[] = [];
-  let names: string[] = [];
+  let names: string[];
   try {
     names = readdirSync(dir).filter((n) => n.endsWith(".md"));
   } catch {
@@ -112,15 +123,20 @@ export function resolveCard(dir: string, title: string): Identity {
     }
     const { fields, body } = parseFrontmatter(text);
     const h1 = extractH1(body);
-    const cands = [h1, ...fmNames(fields), name.replace(/\.md$/, "")].filter(Boolean) as string[];
+    const cands = [h1, ...fmNames(fields), name.replace(/\.md$/, "")].filter(
+      Boolean,
+    ) as string[];
     const matched = cands.some(
-      (c) => normalizeName(c) === wanted || (bareQuery && baseName(c) === wantedBase),
+      (c) =>
+        normalizeName(c) === wanted ||
+        (bareQuery && baseName(c) === wantedBase),
     );
     if (matched) hits.push(full);
   }
 
   if (hits.length === 1) return { file: hits[0], matchedBy: "title" };
-  if (hits.length > 1) return { file: exact, matchedBy: "new", candidates: hits };
+  if (hits.length > 1)
+    return { file: exact, matchedBy: "new", candidates: hits };
   return { file: exact, matchedBy: "new" };
 }
 
@@ -153,7 +169,12 @@ export function outsideFences(lines: string[]): boolean[] {
     if (fence) {
       outside[index] = false;
       const close = /^ {0,3}(`{3,}|~{3,})\s*$/.exec(line);
-      if (close && close[1][0] === fence.marker && close[1].length >= fence.length) fence = null;
+      if (
+        close &&
+        close[1][0] === fence.marker &&
+        close[1].length >= fence.length
+      )
+        fence = null;
       continue;
     }
     const open = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
@@ -168,7 +189,9 @@ export function h2Sections(lines: string[], heading: string): H2Section[] {
   const escaped = heading.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const wanted = new RegExp(`^ {0,3}##\\s+${escaped}\\s*$`, "i");
   const outside = outsideFences(lines);
-  const starts = lines.flatMap((line, index) => (outside[index] && wanted.test(line) ? [index] : []));
+  const starts = lines.flatMap((line, index) =>
+    outside[index] && wanted.test(line) ? [index] : [],
+  );
   return starts.map((start) => {
     let end = lines.length;
     for (let index = start + 1; index < lines.length; index++) {
@@ -196,7 +219,9 @@ function namedH2Sections(lines: string[]): NamedH2Section[] {
   const starts = lines.flatMap((line, index) => {
     if (!outside[index]) return [];
     const match = /^ {0,3}##\s+(.+?)\s*$/.exec(line);
-    return match ? [{ start: index, heading: match[1].trim(), key: norm(match[1]) }] : [];
+    return match
+      ? [{ start: index, heading: match[1].trim(), key: norm(match[1]) }]
+      : [];
   });
   return starts.map(({ start, heading, key }) => {
     let end = lines.length;
@@ -220,7 +245,11 @@ function normalizeRelatedTarget(raw: string): string {
     .toLowerCase();
 }
 
-function replaceH2Sections(body: string, heading: string, content: string[]): string {
+function replaceH2Sections(
+  body: string,
+  heading: string,
+  content: string[],
+): string {
   const lines = body.split("\n");
   const sections = h2Sections(lines, heading);
   const canonical = [`## ${heading}`, ...content];
@@ -229,7 +258,9 @@ function replaceH2Sections(body: string, heading: string, content: string[]): st
   }
 
   const first = sections[0].start;
-  const byStart = new Map(sections.map((section) => [section.start, section.end]));
+  const byStart = new Map(
+    sections.map((section) => [section.start, section.end]),
+  );
   const output: string[] = [];
   for (let index = 0; index < lines.length;) {
     const end = byStart.get(index);
@@ -297,7 +328,9 @@ function removeH2Sections(body: string, heading: string): string {
   const lines = body.split("\n");
   const sections = h2Sections(lines, heading);
   if (!sections.length) return body;
-  const byStart = new Map(sections.map((section) => [section.start, section.end]));
+  const byStart = new Map(
+    sections.map((section) => [section.start, section.end]),
+  );
   const output: string[] = [];
   for (let index = 0; index < lines.length;) {
     const end = byStart.get(index);
@@ -315,9 +348,10 @@ function appendLog(body: string, incoming: string, date: string): string {
   const oldEntries = sectionContent(body, "Log");
   const withoutLogs = removeH2Sections(body, "Log");
   const incomingLines = incoming.trim().split("\n");
-  const entry = incomingLines.length === 1
-    ? `- ${date}: ${incomingLines[0]}`
-    : [`- ${date}:`, ...incomingLines.map((line) => `  ${line}`)].join("\n");
+  const entry =
+    incomingLines.length === 1
+      ? `- ${date}: ${incomingLines[0]}`
+      : [`- ${date}:`, ...incomingLines.map((line) => `  ${line}`)].join("\n");
   return replaceH2Sections(withoutLogs, "Log", [...oldEntries, entry]);
 }
 
@@ -338,7 +372,9 @@ function replaceCompiledTruth(
   const replacementLines = replacement.split("\n");
   const oldSections = namedH2Sections(oldLines);
   const replacementSections = namedH2Sections(replacementLines);
-  const replacementKeys = new Set(replacementSections.map((section) => section.key));
+  const replacementKeys = new Set(
+    replacementSections.map((section) => section.key),
+  );
 
   // The replacement owns Compiled Truth. Structural archives remain append-only,
   // and an old custom H2 survives unless the replacement explicitly names it.
@@ -359,7 +395,10 @@ function replaceCompiledTruth(
   }
 
   const blocks = oldSections
-    .filter((section) => structural.has(section.key) || !replacementKeys.has(section.key))
+    .filter(
+      (section) =>
+        structural.has(section.key) || !replacementKeys.has(section.key),
+    )
     .map((section) => ({
       key: section.key,
       heading: section.heading,
@@ -367,33 +406,56 @@ function replaceCompiledTruth(
     }));
 
   const additions = new Map<string, string[]>();
-  for (const section of replacementSections.filter((candidate) => structural.has(candidate.key))) {
+  for (const section of replacementSections.filter((candidate) =>
+    structural.has(candidate.key),
+  )) {
     let content = replacementLines.slice(section.start + 1, section.end);
     while (content.length && !content.at(-1)?.trim()) content.pop();
     if (section.key === "history") {
-      const oldHistory = oldSections.filter((candidate) => candidate.key === "history");
-      const newHistory = replacementSections.filter((candidate) => candidate.key === "history");
+      const oldHistory = oldSections.filter(
+        (candidate) => candidate.key === "history",
+      );
+      const newHistory = replacementSections.filter(
+        (candidate) => candidate.key === "history",
+      );
       if (oldHistory.length > 1 || newHistory.length > 1) {
-        throw new Error("SUPERSEDE requires exactly one unambiguous ## History section");
+        throw new Error(
+          "SUPERSEDE requires exactly one unambiguous ## History section",
+        );
       }
       if (!content.some((line) => line.trim())) {
-        throw new Error("SUPERSEDE replacement ## History must contain the displaced fact");
+        throw new Error(
+          "SUPERSEDE replacement ## History must contain the displaced fact",
+        );
       }
       if (oldHistory.length === 1) {
-        const oldContent = oldLines.slice(oldHistory[0].start + 1, oldHistory[0].end);
-        while (oldContent.length && !oldContent.at(-1)?.trim()) oldContent.pop();
-        const prefixMatches = oldContent.every((line, index) => content[index] === line);
+        const oldContent = oldLines.slice(
+          oldHistory[0].start + 1,
+          oldHistory[0].end,
+        );
+        while (oldContent.length && !oldContent.at(-1)?.trim())
+          oldContent.pop();
+        const prefixMatches = oldContent.every(
+          (line, index) => content[index] === line,
+        );
         if (!prefixMatches) {
-          throw new Error("SUPERSEDE replacement ## History must preserve existing History as an exact prefix");
+          throw new Error(
+            "SUPERSEDE replacement ## History must preserve existing History as an exact prefix",
+          );
         }
         content = content.slice(oldContent.length);
         if (!content.some((line) => line.trim()) && !historyEntry?.trim()) {
-          throw new Error("SUPERSEDE replacement ## History must append the displaced fact");
+          throw new Error(
+            "SUPERSEDE replacement ## History must append the displaced fact",
+          );
         }
       }
     }
     if (content.some((line) => line.length)) {
-      additions.set(section.key, [...(additions.get(section.key) ?? []), ...content]);
+      additions.set(section.key, [
+        ...(additions.get(section.key) ?? []),
+        ...content,
+      ]);
     }
   }
   if (historyEntry?.trim()) {
@@ -405,9 +467,12 @@ function replaceCompiledTruth(
   }
 
   for (const [key, lines] of additions) {
-    let block = [...blocks].reverse().find((candidate) => candidate.key === key);
+    let block = [...blocks]
+      .reverse()
+      .find((candidate) => candidate.key === key);
     if (!block) {
-      const heading = key === "history" ? "History" : key === "log" ? "Log" : "Related";
+      const heading =
+        key === "history" ? "History" : key === "log" ? "Log" : "Related";
       block = { key, heading, lines: [`## ${heading}`] };
       blocks.push(block);
     }
@@ -451,12 +516,26 @@ export interface MergeResult {
 }
 
 export function mergeCard(input: MergeInput): MergeResult {
-  const { existing, title, fields, initialFields, body, related, date, replaceBody, historyEntry } = input;
+  const {
+    existing,
+    title,
+    fields,
+    initialFields,
+    body,
+    related,
+    date,
+    replaceBody,
+    historyEntry,
+  } = input;
   const trimmedBody = body.trim();
-  const operation = input.operation ?? (replaceBody ? "SUPERSEDE" : existing === undefined ? "ADD" : "UPDATE");
+  const operation =
+    input.operation ??
+    (replaceBody ? "SUPERSEDE" : existing === undefined ? "ADD" : "UPDATE");
 
   if (h2Sections(trimmedBody.split("\n"), "Related").length) {
-    throw new Error("body must not contain ## Related; pass links through related");
+    throw new Error(
+      "body must not contain ## Related; pass links through related",
+    );
   }
   if (replaceBody && operation !== "SUPERSEDE") {
     throw new Error("replaceBody is valid only for SUPERSEDE");
@@ -464,7 +543,10 @@ export function mergeCard(input: MergeInput): MergeResult {
   if (historyEntry && /[\r\n]/.test(historyEntry)) {
     throw new Error("historyEntry must be a single line");
   }
-  if (operation === "UPDATE" && hasOutsideHeading(trimmedBody, /^ {0,3}#{1,2}\s+/)) {
+  if (
+    operation === "UPDATE" &&
+    hasOutsideHeading(trimmedBody, /^ {0,3}#{1,2}\s+/)
+  ) {
     throw new Error("UPDATE body must be a fact without H1/H2 headings");
   }
   if (operation === "NOOP") {
@@ -473,7 +555,10 @@ export function mergeCard(input: MergeInput): MergeResult {
   if (operation === "ADD" && existing !== undefined) {
     throw new Error("ADD refuses to overwrite an existing card");
   }
-  if ((operation === "UPDATE" || operation === "SUPERSEDE") && existing === undefined) {
+  if (
+    (operation === "UPDATE" || operation === "SUPERSEDE") &&
+    existing === undefined
+  ) {
     throw new Error(`${operation} requires an existing card`);
   }
 
@@ -489,9 +574,14 @@ export function mergeCard(input: MergeInput): MergeResult {
   const oldBody = parsed.body;
   if (
     operation === "UPDATE" &&
-    hasOutsideHeading(oldBody, /^ {0,3}##\s+(?:Обновление|Update)\s+\d{4}-\d{2}-\d{2}\s*$/i)
+    hasOutsideHeading(
+      oldBody,
+      /^ {0,3}##\s+(?:Обновление|Update)\s+\d{4}-\d{2}-\d{2}\s*$/i,
+    )
   ) {
-    throw new Error("existing card has legacy dated update headings; run semantic cleanup before UPDATE");
+    throw new Error(
+      "existing card has legacy dated update headings; run semantic cleanup before UPDATE",
+    );
   }
   // Обновляем ТОЛЬКО известные ключи; created/source и любые неизвестные поля
   // (tier, relevance, last_accessed, phone, telegram, priority…) остаются как были.
@@ -526,13 +616,18 @@ export function mergeCard(input: MergeInput): MergeResult {
     newBody = appendLog(newBody, trimmedBody, date);
     appended = true;
   }
-  if (!extractH1(newBody)) newBody = `# ${title}\n\n${newBody.replace(/^\s+/, "")}`;
+  if (!extractH1(newBody))
+    newBody = `# ${title}\n\n${newBody.replace(/^\s+/, "")}`;
   const beforeRelated = newBody;
   newBody = mergeRelated(newBody, related ?? []);
   if (beforeRelated !== newBody) appended = true;
 
   const content = `---\n${fmText}\n---\n${newBody.replace(/\s*$/, "")}\n`;
-  return { content, action: operation === "SUPERSEDE" ? "replaced" : appended ? "merged" : "updated" };
+  return {
+    content,
+    action:
+      operation === "SUPERSEDE" ? "replaced" : appended ? "merged" : "updated",
+  };
 }
 
 // ─── lock + атомарная запись ───────────────────────────────────────────────
@@ -548,7 +643,8 @@ export function acquireLock(file: string, timeoutMs = 5000): () => void {
   for (;;) {
     // Дедлайн проверяется на КАЖДОЙ итерации, включая путь «лок исчез между попыткой
     // и stat» — иначе мигающий лок зациклил бы захват навсегда.
-    if (Date.now() > deadline) throw new Error(`Карточка занята другим процессом: ${lock}`);
+    if (Date.now() > deadline)
+      throw new Error(`Карточка занята другим процессом: ${lock}`);
     try {
       const fd = openSync(lock, "wx");
       writeSync(fd, token);

@@ -19,14 +19,14 @@ No hardcoded domains, types, or paths. The agent discovers structure from data, 
 
 ## Quick Reference: 6 Workflows
 
-| Workflow | When to use | Entry point |
-|----------|-------------|-------------|
-| **BOOTSTRAP** | New vault / after import / first setup | `discover.py` → `enforce.py` → `graph.py health` |
-| **HEALTH** | Daily maintenance / on request | `graph.py health` → fix → moc → decay |
+| Workflow            | When to use                                           | Entry point                                             |
+| ------------------- | ----------------------------------------------------- | ------------------------------------------------------- |
+| **BOOTSTRAP**       | New vault / after import / first setup                | `discover.py` → `enforce.py` → `graph.py health`        |
+| **HEALTH**          | Daily maintenance / on request                        | `graph.py health` → fix → moc → decay                   |
 | **CREATE / UPDATE** | New knowledge card, or new info about an existing one | `search.py` dedup → ADD/UPDATE/SUPERSEDE → link → touch |
-| **SEARCH & LINK** | Find info + strengthen connections | Hub → links → target; `graph.py orphans` → connect |
-| **ORCHESTRATE** | Automated multi-agent workflows (no API keys) | `orchestrate.py health\|bootstrap` |
-| **DAILY → CARDS** | Turn a day's raw notes into linked cards | `daily.py extract` → dedup-first process → link |
+| **SEARCH & LINK**   | Find info + strengthen connections                    | Hub → links → target; `graph.py orphans` → connect      |
+| **ORCHESTRATE**     | Automated multi-agent workflows (no API keys)         | `orchestrate.py health\|bootstrap`                      |
+| **DAILY → CARDS**   | Turn a day's raw notes into linked cards              | `daily.py extract` → dedup-first process → link         |
 
 ---
 
@@ -77,13 +77,13 @@ No hardcoded domains, types, or paths. The agent discovers structure from data, 
 
 ### Thresholds & Action Triggers
 
-| Metric | Good | Action needed |
-|--------|------|---------------|
-| Health score | ≥90 | <90: investigate broken links, orphans |
-| Broken links | 0 | >0: `graph.py fix --apply` |
-| Orphan files | <5 | ≥5: connect to hubs (Workflow 4) |
-| Description coverage | ≥80% | <70%: add descriptions |
-| Stale cards (>90d) | <20% | >30%: `engine.py creative` to resurface |
+| Metric               | Good | Action needed                           |
+| -------------------- | ---- | --------------------------------------- |
+| Health score         | ≥90  | <90: investigate broken links, orphans  |
+| Broken links         | 0    | >0: `graph.py fix --apply`              |
+| Orphan files         | <5   | ≥5: connect to hubs (Workflow 4)        |
+| Description coverage | ≥80% | <70%: add descriptions                  |
+| Stale cards (>90d)   | <20% | >30%: `engine.py creative` to resurface |
 
 ### Commands
 
@@ -115,7 +115,7 @@ Pick the operation (full rules: `references/update-in-place.md`):
 - **ADD** — no existing card → create it (steps 1–5 below).
 - **NOOP** — already captured, unchanged → stop.
 - **UPDATE** — same subject, new enrichment → open the card, sharpen `description`, append a dated line under `## Log`, re-`touch`.
-- **SUPERSEDE** — new fact *contradicts* a current value → rewrite the current value (frontmatter field + top of description = "Compiled Truth"), move the OLD value to append-only `## History` (`- 2026-03→2026-06 · company: TDI Group`), set `updated:`. Whole card obsolete → `status: superseded` + `superseded_by: [[new-card]]`.
+- **SUPERSEDE** — new fact _contradicts_ a current value → rewrite the current value (frontmatter field + top of description = "Compiled Truth"), move the OLD value to append-only `## History` (`- 2026-03→2026-06 · company: TDI Group`), set `updated:`. Whole card obsolete → `status: superseded` + `superseded_by: [[new-card]]`.
 
 Only when the operation is **ADD**, continue:
 
@@ -133,11 +133,11 @@ Only when the operation is **ADD**, continue:
 3. **Frontmatter:** Write description (search snippet, not title repeat), tags (2-5, lowercase, kebab-case), status from type's enum
 4. **LINKING PROTOCOL (mandatory):**
    a. Add `## Related` section with `[[hub]]` file of the domain
-      - Hub = `_index.md` or `MEMORY.md` of that domain
-   b. Find 2-3 sibling cards of same type+domain → add `[[links]]`
-      - `uv run scripts/autograph/graph.py backlinks <vault> <hub>` → find siblings
-      - Or: read vault-graph.json → filter nodes by type+domain
-   c. Run `uv run scripts/autograph/engine.py touch <new-file>`
+   - Hub = `_index.md` or `MEMORY.md` of that domain
+     b. Find 2-3 sibling cards of same type+domain → add `[[links]]`
+   - `uv run scripts/autograph/graph.py backlinks <vault> <hub>` → find siblings
+   - Or: read vault-graph.json → filter nodes by type+domain
+     c. Run `uv run scripts/autograph/engine.py touch <new-file>`
 5. **Verify checklist:**
    - [ ] Hub linked?
    - [ ] 2+ related cards found?
@@ -253,14 +253,14 @@ Example: a card touched 5 times has `strength = 1 + ln(5) ≈ 2.6`, decaying ~2.
 
 Different content types decay at different rates. Configure in schema `decay.domain_rates`:
 
-| Type | Rate | Half-life (~) | Rationale |
-|------|------|---------------|-----------|
-| contact | 0.005 | 100 days | People don't become irrelevant quickly |
-| crm | 0.008 | 62 days | Deals have medium lifecycle |
-| learning | 0.010 | 50 days | Knowledge fades moderately |
-| project | 0.012 | 42 days | Projects have defined timelines |
-| daily | 0.020 | 25 days | Daily notes lose relevance fast |
-| (default) | 0.015 | 33 days | Fallback for unlisted types |
+| Type      | Rate  | Half-life (~) | Rationale                              |
+| --------- | ----- | ------------- | -------------------------------------- |
+| contact   | 0.005 | 100 days      | People don't become irrelevant quickly |
+| crm       | 0.008 | 62 days       | Deals have medium lifecycle            |
+| learning  | 0.010 | 50 days       | Knowledge fades moderately             |
+| project   | 0.012 | 42 days       | Projects have defined timelines        |
+| daily     | 0.020 | 25 days       | Daily notes lose relevance fast        |
+| (default) | 0.015 | 33 days       | Fallback for unlisted types            |
 
 ### 3. Graduated recall
 
@@ -303,61 +303,61 @@ uv run scripts/autograph/link_cleanup.py <vault-dir> --apply                    
 
 ## Scripts
 
-| Script | Purpose |
-|--------|---------|
-| common.py | Shared: parse FM, walk, domain, decay (Ebbinghaus), wikilinks |
-| discover.py | Workflow 1: scan vault, output enum candidates |
-| generate_schema.py | Workflow 1: turn discovery JSON into draft schema |
-| swarm_prepare.py | Workflow 1: bin-pack vault into agent batches |
-| swarm_reduce.py | Workflow 1: consolidate + validate schema |
-| enforce.py | Workflow 1: validate + autofix against schema |
-| link_cleanup.py | Workflow 1/4: remove phantom wikilinks from ## Related |
-| enrich.py | Workflow 1/4: tags + swarm-links (catalog-oriented link enrichment) |
-| dedup.py | Workflow 1: safe merge + .trash/ |
-| graph.py | Workflow 2/4: health score, link repair, backlinks, orphans |
-| moc.py | Workflow 2: MOC generation per domain |
-| orchestrate.py | Workflow 5: multi-agent orchestration (health, bootstrap, dedup-review, link-enrich, graph-analyze) |
-| engine.py | Workflow 2/3: decay (Ebbinghaus), touch (graduated), creative, stats, init |
-| search.py | Workflow 3/4: ranked memory search (BM25 FTS5 + link-graph rerank) — dedup-first lookup |
-| supersede.py | Workflow 3: deterministic same-entity conflict scan → `.graph/supersede-candidates.json` |
-| daily.py | Entity extraction from memory files |
-| tests/test_autograph.py | Self-contained tests (temp fixtures) |
+| Script                  | Purpose                                                                                             |
+| ----------------------- | --------------------------------------------------------------------------------------------------- |
+| common.py               | Shared: parse FM, walk, domain, decay (Ebbinghaus), wikilinks                                       |
+| discover.py             | Workflow 1: scan vault, output enum candidates                                                      |
+| generate_schema.py      | Workflow 1: turn discovery JSON into draft schema                                                   |
+| swarm_prepare.py        | Workflow 1: bin-pack vault into agent batches                                                       |
+| swarm_reduce.py         | Workflow 1: consolidate + validate schema                                                           |
+| enforce.py              | Workflow 1: validate + autofix against schema                                                       |
+| link_cleanup.py         | Workflow 1/4: remove phantom wikilinks from ## Related                                              |
+| enrich.py               | Workflow 1/4: tags + swarm-links (catalog-oriented link enrichment)                                 |
+| dedup.py                | Workflow 1: safe merge + .trash/                                                                    |
+| graph.py                | Workflow 2/4: health score, link repair, backlinks, orphans                                         |
+| moc.py                  | Workflow 2: MOC generation per domain                                                               |
+| orchestrate.py          | Workflow 5: multi-agent orchestration (health, bootstrap, dedup-review, link-enrich, graph-analyze) |
+| engine.py               | Workflow 2/3: decay (Ebbinghaus), touch (graduated), creative, stats, init                          |
+| search.py               | Workflow 3/4: ranked memory search (BM25 FTS5 + link-graph rerank) — dedup-first lookup             |
+| supersede.py            | Workflow 3: deterministic same-entity conflict scan → `.graph/supersede-candidates.json`            |
+| daily.py                | Entity extraction from memory files                                                                 |
+| tests/test_autograph.py | Self-contained tests (temp fixtures)                                                                |
 
 ## Files
 
-| File | In package? | Purpose |
-|------|------------|---------|
-| schema.example.json | Yes | Template — copy and customize (includes domain_rates) |
-| schema.json | No | Your vault's schema (generated) |
-| schema.local.json | No | Local override (gitignored) |
-| references/ | Yes | Bootstrap workflow, schema docs, card templates, linking protocol |
+| File                | In package? | Purpose                                                           |
+| ------------------- | ----------- | ----------------------------------------------------------------- |
+| schema.example.json | Yes         | Template — copy and customize (includes domain_rates)             |
+| schema.json         | No          | Your vault's schema (generated)                                   |
+| schema.local.json   | No          | Local override (gitignored)                                       |
+| references/         | Yes         | Bootstrap workflow, schema docs, card templates, linking protocol |
 
 ## Common Mistakes
 
-| Mistake | Fix |
-|---------|-----|
-| **Skipping agent swarm in Phase 2** | **CRITICAL: always run Step 2B. Script alone cannot classify unstructured content. No exceptions.** |
-| **Using deprecated `links` subcommand** | **`links` was removed (0.3% match rate). Only `swarm-links` is available — 81.6% match rate.** |
-| **Creating cards without linking** | **Always follow Workflow 3 — link to hub + 2 siblings immediately. Orphan cards are wasted knowledge.** |
-| **Creating a near-duplicate instead of updating** | **Workflow 3 Step 0 — `search.py`/grep first. Same subject → UPDATE or SUPERSEDE the existing card, never a second one.** |
+| Mistake                                             | Fix                                                                                                                                 |
+| --------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| **Skipping agent swarm in Phase 2**                 | **CRITICAL: always run Step 2B. Script alone cannot classify unstructured content. No exceptions.**                                 |
+| **Using deprecated `links` subcommand**             | **`links` was removed (0.3% match rate). Only `swarm-links` is available — 81.6% match rate.**                                      |
+| **Creating cards without linking**                  | **Always follow Workflow 3 — link to hub + 2 siblings immediately. Orphan cards are wasted knowledge.**                             |
+| **Creating a near-duplicate instead of updating**   | **Workflow 3 Step 0 — `search.py`/grep first. Same subject → UPDATE or SUPERSEDE the existing card, never a second one.**           |
 | **Two contradictory current values on one subject** | **SUPERSEDE: rewrite the current value (Compiled Truth), move the old one to append-only `## History`. Never leave both standing.** |
-| **Touching archive cards to active directly** | **Use graduated recall — touch promotes one tier at a time (archive→cold→warm→active).** |
-| Sending full vault to one agent | Use `swarm_prepare.py` — bin-packs into ~50K token batches. |
-| Running Wave 2 without Wave 1 | `swarm_reduce.py prepare` needs JSONL in `.graph/swarm/classifications/`. |
-| Using schema.example.json directly | Run discover → generate your own schema.json |
-| Description = title repeat | Write specific search snippet |
-| Status not in enum | Check schema's node_types |
-| Skip dry run | Always run without --apply first |
-| Running link enrich before dedup | Creates links to files that get merged/trashed. Dedup first. |
-| Missing OPENROUTER_API_KEY | `enrich.py` reads from `OPENROUTER_API_KEY` env var. |
-| Only running swarm-links once | Run again with `--force` to enrich ALL files. |
+| **Touching archive cards to active directly**       | **Use graduated recall — touch promotes one tier at a time (archive→cold→warm→active).**                                            |
+| Sending full vault to one agent                     | Use `swarm_prepare.py` — bin-packs into ~50K token batches.                                                                         |
+| Running Wave 2 without Wave 1                       | `swarm_reduce.py prepare` needs JSONL in `.graph/swarm/classifications/`.                                                           |
+| Using schema.example.json directly                  | Run discover → generate your own schema.json                                                                                        |
+| Description = title repeat                          | Write specific search snippet                                                                                                       |
+| Status not in enum                                  | Check schema's node_types                                                                                                           |
+| Skip dry run                                        | Always run without --apply first                                                                                                    |
+| Running link enrich before dedup                    | Creates links to files that get merged/trashed. Dedup first.                                                                        |
+| Missing OPENROUTER_API_KEY                          | `enrich.py` reads from `OPENROUTER_API_KEY` env var.                                                                                |
+| Only running swarm-links once                       | Run again with `--force` to enrich ALL files.                                                                                       |
 
 ## Default Models
 
-| Command | Default model | Override |
-|---------|--------------|----------|
-| tags | google/gemini-3-flash-preview | `--model` flag |
-| swarm-links | google/gemini-2.0-flash-001 | `--model` flag |
+| Command     | Default model                 | Override       |
+| ----------- | ----------------------------- | -------------- |
+| tags        | google/gemini-3-flash-preview | `--model` flag |
+| swarm-links | google/gemini-2.0-flash-001   | `--model` flag |
 
 Both are production-tested. Do not change defaults without benchmarking.
 

@@ -14,20 +14,31 @@ import { probeUserbotHealth } from "../userbot-health.mjs";
 
 function version(root) {
   try {
-    return JSON.parse(readFileSync(join(root, "package.json"), "utf8")).version || "?";
+    return (
+      JSON.parse(readFileSync(join(root, "package.json"), "utf8")).version ||
+      "?"
+    );
   } catch {
     return "?";
   }
 }
 
-const groupThousands = (n) => String(n ?? 0).replace(/\B(?=(\d{3})+(?!\d))/g, " ");
+const groupThousands = (n) =>
+  String(n ?? 0).replace(/\B(?=(\d{3})+(?!\d))/g, " ");
 
 function usageToday(dataDir, tz, T) {
   try {
-    const agg = summarize(readEntries(dataDir), { window: "today", now: Date.now(), tz });
+    const agg = summarize(readEntries(dataDir), {
+      window: "today",
+      now: Date.now(),
+      tz,
+    });
     const total = agg?.totals?.total || 0;
     const turns = agg?.totals?.turns || 0;
-    return T(`${groupThousands(total)} tokens · ${turns} turns`, `${groupThousands(total)} токенов · ${turns} ходов`);
+    return T(
+      `${groupThousands(total)} tokens · ${turns} turns`,
+      `${groupThousands(total)} токенов · ${turns} ходов`,
+    );
   } catch {
     return T("n/a", "н/д");
   }
@@ -66,15 +77,26 @@ function buildView(d, health, ctx) {
     T("📊 Status", "📊 Статус"),
     "",
     `Iva v${d.version}`,
-    T(`Model: ${d.provider} · ${d.model}${d.effort ? ` · think ${d.effort}` : ""}`,
-      `Модель: ${d.provider} · ${d.model}${d.effort ? ` · размышления ${d.effort}` : ""}`),
-    T(`Search: ${d.searchProv} ${d.hasKey ? "🔑" : "🔒"}`, `Поиск: ${d.searchProv} ${d.hasKey ? "🔑" : "🔒"}`),
+    T(
+      `Model: ${d.provider} · ${d.model}${d.effort ? ` · think ${d.effort}` : ""}`,
+      `Модель: ${d.provider} · ${d.model}${d.effort ? ` · размышления ${d.effort}` : ""}`,
+    ),
+    T(
+      `Search: ${d.searchProv} ${d.hasKey ? "🔑" : "🔒"}`,
+      `Поиск: ${d.searchProv} ${d.hasKey ? "🔑" : "🔒"}`,
+    ),
     T(`Language: ${d.lang}`, `Язык: ${d.lang}`),
     `Userbot: ${ub}`,
-    T(`Google: ${d.gws ? "configured" : "not set"}`, `Google: ${d.gws ? "настроен" : "не настроен"}`),
+    T(
+      `Google: ${d.gws ? "configured" : "not set"}`,
+      `Google: ${d.gws ? "настроен" : "не настроен"}`,
+    ),
     T(`Usage today: ${d.usage}`, `Расход за сегодня: ${d.usage}`),
   ];
-  const rows = [[ctx.btn(T("🔄 Refresh", "🔄 Обновить"), "iva_menu:st:rf")], ctx.backRow("r")];
+  const rows = [
+    [ctx.btn(T("🔄 Refresh", "🔄 Обновить"), "iva_menu:st:rf")],
+    ctx.backRow("r"),
+  ];
   return { text: lines.join("\n"), rows };
 }
 

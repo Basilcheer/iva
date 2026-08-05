@@ -22,15 +22,21 @@ function statusStore(initial = {}) {
     get: () => value,
     set: (_key, patch) => {
       value = { ...value, ...patch };
-      for (const key of Object.keys(value)) if (value[key] === null) delete value[key];
+      for (const key of Object.keys(value))
+        if (value[key] === null) delete value[key];
       return value;
     },
     cas: (_key, expected, patch) => {
-      if (Object.entries(expected).some(([key, expectedValue]) => !Object.is(value[key], expectedValue))) {
+      if (
+        Object.entries(expected).some(
+          ([key, expectedValue]) => !Object.is(value[key], expectedValue),
+        )
+      ) {
         return null;
       }
       value = { ...value, ...patch };
-      for (const key of Object.keys(value)) if (value[key] === null) delete value[key];
+      for (const key of Object.keys(value))
+        if (value[key] === null) delete value[key];
       return value;
     },
   };
@@ -167,20 +173,26 @@ test("latency logging emits one allowlisted JSON record with no sensitive fields
     token: "bot-token",
   });
   const lines = [];
-  assert.equal(markTelegramFirstOutput({
-    chatKey: "1:",
-    sessionId: "session-secret",
-    now: () => 1_500,
-    getStatusImpl: store.get,
-    setStatusIfImpl: store.cas,
-  }), true);
-  assert.equal(markTelegramFirstOutput({
-    chatKey: "1:",
-    sessionId: "session-secret",
-    now: () => 1_600,
-    getStatusImpl: store.get,
-    setStatusIfImpl: store.cas,
-  }), false);
+  assert.equal(
+    markTelegramFirstOutput({
+      chatKey: "1:",
+      sessionId: "session-secret",
+      now: () => 1_500,
+      getStatusImpl: store.get,
+      setStatusIfImpl: store.cas,
+    }),
+    true,
+  );
+  assert.equal(
+    markTelegramFirstOutput({
+      chatKey: "1:",
+      sessionId: "session-secret",
+      now: () => 1_600,
+      getStatusImpl: store.get,
+      setStatusIfImpl: store.cas,
+    }),
+    false,
+  );
   const options = {
     chatKey: "1:",
     sessionId: "session-secret",
@@ -191,7 +203,10 @@ test("latency logging emits one allowlisted JSON record with no sensitive fields
     logImpl: (line) => lines.push(line),
   };
 
-  assert.equal(emitTelegramTurnLatency({ ...options, delivered: false }), false);
+  assert.equal(
+    emitTelegramTurnLatency({ ...options, delivered: false }),
+    false,
+  );
   assert.equal(store.get().latencyLogged, undefined);
   assert.equal(emitTelegramTurnLatency(options), true);
   assert.equal(emitTelegramTurnLatency(options), false);
@@ -203,7 +218,10 @@ test("latency logging emits one allowlisted JSON record with no sensitive fields
     ingressToFirstOutputMs: 500,
     ingressToDeliveryMs: 700,
   });
-  assert.doesNotMatch(lines[0], /private prompt|123456|bot-token|session-secret|1:/);
+  assert.doesNotMatch(
+    lines[0],
+    /private prompt|123456|bot-token|session-secret|1:/,
+  );
 });
 
 test("a namespaced token from Eve is stored channel-local (#110)", async () => {

@@ -21,7 +21,10 @@ function fixture() {
 
 test("media cache misses, then reuses a valid attachment and derived text", async () => {
   const { dataDir, vaultDir } = fixture();
-  assert.equal(await getTelegramMediaCacheEntry("photo-1", { dataDir, vaultDir }), null);
+  assert.equal(
+    await getTelegramMediaCacheEntry("photo-1", { dataDir, vaultDir }),
+    null,
+  );
 
   const entry = {
     path: "attachments/2026-08-04/photo.jpg",
@@ -50,7 +53,10 @@ test("invalid entries, missing files and paths outside attachments are cache mis
   writeFileSync(join(root, "secret.txt"), "secret");
 
   for (const key of ["malformed", "outside", "missing"]) {
-    assert.equal(await getTelegramMediaCacheEntry(key, { dataDir, vaultDir }), null);
+    assert.equal(
+      await getTelegramMediaCacheEntry(key, { dataDir, vaultDir }),
+      null,
+    );
   }
   assert.equal(readFileSync(attachment, "utf8"), "image");
 });
@@ -62,7 +68,11 @@ test("corrupt media cache is quarantined and recreated without blocking processi
   const logs = [];
 
   assert.equal(
-    await getTelegramMediaCacheEntry("photo-1", { dataDir, vaultDir, log: (line) => logs.push(line) }),
+    await getTelegramMediaCacheEntry("photo-1", {
+      dataDir,
+      vaultDir,
+      log: (line) => logs.push(line),
+    }),
     null,
   );
   await saveTelegramMediaCacheEntry(
@@ -71,9 +81,12 @@ test("corrupt media cache is quarantined and recreated without blocking processi
     { dataDir, log: (line) => logs.push(line) },
   );
   assert.ok(logs.some((line) => line.includes("media-cache")));
-  assert.deepEqual(JSON.parse(readFileSync(join(dataDir, "media-cache.json"), "utf8")), {
-    "photo-1": { path: "attachments/2026-08-04/photo.jpg", at: 10 },
-  });
+  assert.deepEqual(
+    JSON.parse(readFileSync(join(dataDir, "media-cache.json"), "utf8")),
+    {
+      "photo-1": { path: "attachments/2026-08-04/photo.jpg", at: 10 },
+    },
+  );
 });
 
 test("media cache keeps only the 500 newest entries", async () => {
@@ -92,7 +105,9 @@ test("media cache keeps only the 500 newest entries", async () => {
     { path: "attachments/2026-08-04/photo.jpg", at: 10_000 },
     { dataDir },
   );
-  const stored = JSON.parse(readFileSync(join(dataDir, "media-cache.json"), "utf8"));
+  const stored = JSON.parse(
+    readFileSync(join(dataDir, "media-cache.json"), "utf8"),
+  );
   assert.equal(Object.keys(stored).length, TELEGRAM_MEDIA_CACHE_LIMIT);
   assert.ok(stored.newest);
   assert.equal(stored["old-0"], undefined);

@@ -44,12 +44,19 @@ export async function readCappedStream(body, maxBytes) {
 // cap alone doesn't save the loop from a stalled socket). Returns null on any failure or over-size.
 async function downloadTelegramFile(fileId, maxBytes) {
   try {
-    const info = await tg("getFile", { file_id: fileId }, { timeoutMs: 10_000 });
+    const info = await tg(
+      "getFile",
+      { file_id: fileId },
+      { timeoutMs: 10_000 },
+    );
     const filePath = info?.result?.file_path;
     if (!filePath) return null;
-    const res = await fetch(`https://api.telegram.org/file/bot${TOKEN}/${filePath}`, {
-      signal: AbortSignal.timeout(15_000),
-    });
+    const res = await fetch(
+      `https://api.telegram.org/file/bot${TOKEN}/${filePath}`,
+      {
+        signal: AbortSignal.timeout(15_000),
+      },
+    );
     if (!res.ok) return null;
     // Cheap early reject when the server declares an over-size body; the stream reader below is the
     // hard cap regardless (a missing or lying Content-Length can't get past it).
@@ -79,12 +86,15 @@ async function edit(chatId, messageId, text, replyMarkup) {
     if (!data.ok) throw new Error(data.description || "editMessageText failed");
     return data.result;
   } catch (e) {
-    if (!/message is not modified/i.test(e.message)) log("edit failed:", e.message);
+    if (!/message is not modified/i.test(e.message))
+      log("edit failed:", e.message);
     return null;
   }
 }
 
 const sc = (...args) =>
-  new Promise((resolve) => execFile("systemctl", ["--user", ...args], (err) => resolve(!err)));
+  new Promise((resolve) =>
+    execFile("systemctl", ["--user", ...args], (err) => resolve(!err)),
+  );
 
 export { tg, downloadTelegramFile, reply, edit, sc };

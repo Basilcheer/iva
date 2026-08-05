@@ -53,7 +53,11 @@ export async function readEnvFresh(path, base = process.env) {
  * unique 0600 file in the same directory. The file is fsynced before rename,
  * then the parent directory is fsynced so the rename survives a crash.
  */
-export function writeEnvAtomicSync(path, text, { beforeRename, beforeDirectorySync } = {}) {
+export function writeEnvAtomicSync(
+  path,
+  text,
+  { beforeRename, beforeDirectorySync } = {},
+) {
   if (existsSync(path)) chmodSync(path, 0o600);
   const parent = dirname(path);
   const tmp = join(
@@ -91,7 +95,9 @@ export function writeEnvAtomicSync(path, text, { beforeRename, beforeDirectorySy
   } catch (error) {
     try {
       rmSync(tmp);
-    } catch {}
+    } catch {
+      // Failure to remove a missing or inaccessible temp file must preserve the original error.
+    }
     throw error;
   }
 }
@@ -103,7 +109,8 @@ export function writeEnvAtomicSync(path, text, { beforeRename, beforeDirectorySy
 // and every resulting .env is 0600 because it holds secrets.
 export async function upsertEnv(path, updates) {
   for (const [k, v] of Object.entries(updates)) {
-    if (v != null && /[\n\r]/.test(String(v))) throw new Error(`env value for ${k} contains a newline`);
+    if (v != null && /[\n\r]/.test(String(v)))
+      throw new Error(`env value for ${k} contains a newline`);
   }
   let text = "";
   try {
@@ -114,7 +121,12 @@ export async function upsertEnv(path, updates) {
   }
   const lines = text.length ? text.split("\n") : [];
   if (lines.length && lines[lines.length - 1] === "") lines.pop(); // trailing newline re-added below
-  const pending = new Map(Object.entries(updates).map(([k, v]) => [k, v == null ? null : String(v).trim()]));
+  const pending = new Map(
+    Object.entries(updates).map(([k, v]) => [
+      k,
+      v == null ? null : String(v).trim(),
+    ]),
+  );
   const out = [];
   for (const line of lines) {
     const m = line.match(LINE_RE);

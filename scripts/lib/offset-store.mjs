@@ -13,7 +13,9 @@ export function parseOffsetFile(raw) {
     j === null ||
     Array.isArray(j) ||
     asInt(j.offset) === null ||
-    (j.delivered !== undefined && j.delivered !== null && asInt(j.delivered) === null)
+    (j.delivered !== undefined &&
+      j.delivered !== null &&
+      asInt(j.delivered) === null)
   ) {
     throw new Error("Telegram offset file has invalid schema");
   }
@@ -21,7 +23,9 @@ export function parseOffsetFile(raw) {
 }
 
 export function serializeOffsetFile(offset, delivered) {
-  return JSON.stringify(delivered === null ? { offset } : { offset, delivered });
+  return JSON.stringify(
+    delivered === null ? { offset } : { offset, delivered },
+  );
 }
 
 // Маркер — НЕ вечная верхняя граница: Telegram может (редко) перевыдать update_id с
@@ -30,5 +34,9 @@ export function serializeOffsetFile(offset, delivered) {
 export const DEDUPE_WINDOW = 100_000;
 
 export function alreadyDelivered(updateId, delivered) {
-  return delivered !== null && updateId <= delivered && delivered - updateId < DEDUPE_WINDOW;
+  return (
+    delivered !== null &&
+    updateId <= delivered &&
+    delivered - updateId < DEDUPE_WINDOW
+  );
 }

@@ -65,13 +65,20 @@ function replicaEnv({ sandbox, app, port, mockBaseUrl, bearer }) {
 
 function run(cmd, args, { cwd, env }) {
   return new Promise((resolve, reject) => {
-    const child = spawn(cmd, args, { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
-    const capture = (buf) => String(buf).split("\n").filter(Boolean).forEach(note);
+    const child = spawn(cmd, args, {
+      cwd,
+      env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const capture = (buf) =>
+      String(buf).split("\n").filter(Boolean).forEach(note);
     child.stdout.on("data", capture);
     child.stderr.on("data", capture);
     child.on("error", reject);
     child.on("exit", (code) =>
-      code === 0 ? resolve() : reject(new Error(`${cmd} ${args.join(" ")} exited with ${code}`)),
+      code === 0
+        ? resolve()
+        : reject(new Error(`${cmd} ${args.join(" ")} exited with ${code}`)),
     );
   });
 }
@@ -79,10 +86,18 @@ function run(cmd, args, { cwd, env }) {
 function startEve({ app, env, port }) {
   const child = spawn(
     process.execPath,
-    [join(app, "node_modules/eve/bin/eve.js"), "start", "--host", "127.0.0.1", "--port", String(port)],
+    [
+      join(app, "node_modules/eve/bin/eve.js"),
+      "start",
+      "--host",
+      "127.0.0.1",
+      "--port",
+      String(port),
+    ],
     { cwd: app, env, detached: true, stdio: ["ignore", "pipe", "pipe"] },
   );
-  const capture = (buf) => String(buf).split("\n").filter(Boolean).forEach(note);
+  const capture = (buf) =>
+    String(buf).split("\n").filter(Boolean).forEach(note);
   child.stdout.on("data", capture);
   child.stderr.on("data", capture);
   return child;
@@ -112,16 +127,23 @@ async function stopEve(child) {
 async function waitForHealth(port, child) {
   const deadline = Date.now() + HEALTH_TIMEOUT_MS;
   while (Date.now() < deadline) {
-    if (child.exitCode !== null) throw new Error(`eve exited with ${child.exitCode} before becoming healthy`);
+    if (child.exitCode !== null)
+      throw new Error(
+        `eve exited with ${child.exitCode} before becoming healthy`,
+      );
     try {
-      const res = await fetch(`http://127.0.0.1:${port}/`, { signal: AbortSignal.timeout(2000) });
+      const res = await fetch(`http://127.0.0.1:${port}/`, {
+        signal: AbortSignal.timeout(2000),
+      });
       if (res.ok) return;
     } catch {
       /* ещё не поднялся */
     }
     await new Promise((r) => setTimeout(r, 250));
   }
-  throw new Error(`eve did not become healthy within ${HEALTH_TIMEOUT_MS / 1000}s`);
+  throw new Error(
+    `eve did not become healthy within ${HEALTH_TIMEOUT_MS / 1000}s`,
+  );
 }
 
 async function turn(session, prompt, timeoutMs = TURN_TIMEOUT_MS) {
@@ -130,11 +152,17 @@ async function turn(session, prompt, timeoutMs = TURN_TIMEOUT_MS) {
   try {
     result = await Promise.race([
       session.send(prompt).then((r) => {
-        note(`[smoke] send accepted (session ${session.state?.sessionId ?? "new"})`);
+        note(
+          `[smoke] send accepted (session ${session.state?.sessionId ?? "new"})`,
+        );
         return r.result();
       }),
       new Promise((_, reject) => {
-        timer = setTimeout(reject, timeoutMs, new Error(`turn timed out after ${timeoutMs / 1000}s`));
+        timer = setTimeout(
+          reject,
+          timeoutMs,
+          new Error(`turn timed out after ${timeoutMs / 1000}s`),
+        );
       }),
     ]);
   } finally {
@@ -142,7 +170,9 @@ async function turn(session, prompt, timeoutMs = TURN_TIMEOUT_MS) {
   }
   note(`[smoke] turn done: ${JSON.stringify(result?.status)}`);
   if (result.status === "failed" || !result.message) {
-    throw new Error(`turn failed: status=${result.status} message=${JSON.stringify(result.message ?? "")}`);
+    throw new Error(
+      `turn failed: status=${result.status} message=${JSON.stringify(result.message ?? "")}`,
+    );
   }
   return result.message.trim();
 }
@@ -171,14 +201,29 @@ async function main() {
     const app = await prepareReplica(sandbox);
     const port = await freePort();
     const bearer = randomBytes(24).toString("hex");
-    const env = replicaEnv({ sandbox, app, port, mockBaseUrl: mock.baseUrl, bearer });
-    await writeFile(join(app, ".env"), `ASSISTANT_BEARER=${bearer}\n`, { mode: 0o600 });
+    const env = replicaEnv({
+      sandbox,
+      app,
+      port,
+      mockBaseUrl: mock.baseUrl,
+      bearer,
+    });
+    await writeFile(join(app, ".env"), `ASSISTANT_BEARER=${bearer}\n`, {
+      mode: 0o600,
+    });
 
     setPhase("vault");
-    await run(process.execPath, [join(app, "scripts/init-vault.mjs")], { cwd: app, env });
+    await run(process.execPath, [join(app, "scripts/init-vault.mjs")], {
+      cwd: app,
+      env,
+    });
 
     setPhase("build");
-    await run(process.execPath, [join(app, "node_modules/eve/bin/eve.js"), "build"], { cwd: app, env });
+    await run(
+      process.execPath,
+      [join(app, "node_modules/eve/bin/eve.js"), "build"],
+      { cwd: app, env },
+    );
 
     setPhase("start");
     eve = startEve({ app, env, port });
@@ -186,16 +231,21 @@ async function main() {
 
     // Тот же экземпляр eve, что и у реплики: её node_modules — симлинк на ROOT/node_modules.
     const { Client } = await import("eve/client");
-    const client = new Client({ host: `http://127.0.0.1:${port}`, auth: { bearer: async () => bearer } });
+    const client = new Client({
+      host: `http://127.0.0.1:${port}`,
+      auth: { bearer: async () => bearer },
+    });
 
     setPhase("first-reply");
     const session = client.session();
     const first = await turn(session, "Reply with a status word.");
-    if (first !== "REPLICA_OK") throw new Error(`unexpected first reply: ${JSON.stringify(first)}`);
+    if (first !== "REPLICA_OK")
+      throw new Error(`unexpected first reply: ${JSON.stringify(first)}`);
 
     setPhase("seed-marker");
     const remembered = await turn(session, `Remember this code: ${MARKER}`);
-    if (remembered !== "REMEMBERED") throw new Error(`unexpected seed reply: ${JSON.stringify(remembered)}`);
+    if (remembered !== "REMEMBERED")
+      throw new Error(`unexpected seed reply: ${JSON.stringify(remembered)}`);
     const savedState = session.state;
 
     setPhase("restart");
@@ -205,7 +255,10 @@ async function main() {
 
     setPhase("post-restart");
     const fresh = await turn(client.session(), "Reply with a status word.");
-    if (fresh !== "REPLICA_OK") throw new Error(`unexpected post-restart reply: ${JSON.stringify(fresh)}`);
+    if (fresh !== "REPLICA_OK")
+      throw new Error(
+        `unexpected post-restart reply: ${JSON.stringify(fresh)}`,
+      );
 
     // Строгий резюм припаркованной сессии через рестарт: на eve 0.27.13 сервер принимает
     // continue-POST (200), но молча теряет сообщение — re-enqueued run не просыпается,
@@ -221,11 +274,14 @@ async function main() {
         "What code did I ask you to remember? Reply with the code only.",
         strictResume ? TURN_TIMEOUT_MS : 45_000,
       );
-      if (echo !== MARKER) throw new Error(`resume lost the marker: got ${JSON.stringify(echo)}`);
+      if (echo !== MARKER)
+        throw new Error(`resume lost the marker: got ${JSON.stringify(echo)}`);
       console.log("replica smoke: session resume across restart OK");
     } catch (err) {
       if (strictResume) throw err;
-      console.warn(`replica smoke: KNOWN ISSUE — session resume across restart failed (${err?.message ?? err})`);
+      console.warn(
+        `replica smoke: KNOWN ISSUE — session resume across restart failed (${err?.message ?? err})`,
+      );
     }
 
     // Канарейка reset: контракт eve — «reset retires a session so its continuation
@@ -236,24 +292,42 @@ async function main() {
     setPhase("reset-canary");
     const canary = client.session();
     const seeded = await turn(canary, `Remember this code: ${RESET_MARKER}`);
-    if (seeded !== "REMEMBERED") throw new Error(`unexpected canary seed reply: ${JSON.stringify(seeded)}`);
+    if (seeded !== "REMEMBERED")
+      throw new Error(
+        `unexpected canary seed reply: ${JSON.stringify(seeded)}`,
+      );
     const beforeReset = canary.state;
-    if (!beforeReset?.continuationToken) throw new Error("canary session parked without a continuation token");
+    if (!beforeReset?.continuationToken)
+      throw new Error("canary session parked without a continuation token");
     const resetResult = await canary.reset();
-    if (resetResult?.status !== "reset") throw new Error(`unexpected reset status: ${JSON.stringify(resetResult)}`);
+    if (resetResult?.status !== "reset")
+      throw new Error(
+        `unexpected reset status: ${JSON.stringify(resetResult)}`,
+      );
     const afterReset = await turn(
       client.session(beforeReset),
       "What code did I ask you to remember? Reply with the code only.",
     );
     if (afterReset.includes(RESET_MARKER)) {
-      throw new Error(`reset did not retire the session: history survived (${JSON.stringify(afterReset)})`);
+      throw new Error(
+        `reset did not retire the session: history survived (${JSON.stringify(afterReset)})`,
+      );
     }
-    console.log(`replica smoke: reset retires the session OK (post-reset reply: ${afterReset})`);
+    console.log(
+      `replica smoke: reset retires the session OK (post-reset reply: ${afterReset})`,
+    );
 
-    if (mock.requests.length < 3) throw new Error(`provider was barely exercised: ${mock.requests.length} requests`);
-    console.log(`replica smoke: OK (provider requests: ${mock.requests.length})`);
+    if (mock.requests.length < 3)
+      throw new Error(
+        `provider was barely exercised: ${mock.requests.length} requests`,
+      );
+    console.log(
+      `replica smoke: OK (provider requests: ${mock.requests.length})`,
+    );
   } catch (err) {
-    console.error(`replica smoke FAILED at phase "${phase}": ${err?.message ?? err}`);
+    console.error(
+      `replica smoke FAILED at phase "${phase}": ${err?.message ?? err}`,
+    );
     console.error(`provider requests so far: ${mock.requests.length}`);
     console.error("--- last child output ---");
     for (const line of logs.slice(-120)) console.error(line);
@@ -261,7 +335,8 @@ async function main() {
   } finally {
     await stopEve(eve);
     await mock.close();
-    if (process.env.REPLICA_KEEP === "1") console.error(`sandbox kept: ${sandbox}`);
+    if (process.env.REPLICA_KEEP === "1")
+      console.error(`sandbox kept: ${sandbox}`);
     else await rm(sandbox, { recursive: true, force: true });
   }
 }

@@ -79,6 +79,7 @@ updated: 2026-06-01
 Creative director at Globex.
 
 ## History
+
 - 2026-03→2026-06 · company: TDI Group
 - 2026-01→2026-06 · role: Art Director
 ```
@@ -97,6 +98,7 @@ Creative director at Globex.
 4. **Verify:** Карточка должна иметь ≥2 links в `## Related`
 
 ### Checklist
+
 - [ ] Hub linked?
 - [ ] 2+ related cards found?
 - [ ] description ≠ title repeat?

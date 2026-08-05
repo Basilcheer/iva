@@ -29,7 +29,9 @@ import { defineMcpClientConnection } from "eve/connections";
 export default defineMcpClientConnection({
   url: "https://mcp.example.com/sse", // Streamable HTTP or SSE endpoint
   description: "What this server does — the model reads this.",
-  auth: { getToken: async () => ({ token: process.env.EXAMPLE_MCP_TOKEN ?? "" }) },
+  auth: {
+    getToken: async () => ({ token: process.env.EXAMPLE_MCP_TOKEN ?? "" }),
+  },
   // tools: { allow: ["search", "get_item"] },  // optional: restrict, add approval
 });
 ```
@@ -55,7 +57,7 @@ A subagent brings its own provider and model: the planner pins Ollama Cloud (`OL
 
 Iva's voice lives in exactly one file: `agent/instructions.md` — tone, rules, tool preferences, hard limits. Edit it directly. It is deliberately language-neutral: the reply language comes from `AGENT_LANGUAGE` in `.env`, read at startup by `agent/instructions/05-language.ts` (changing it needs a rebuild + restart). The other files in `agent/instructions/` are machinery, not character — `10-map.md` (memory protocol), `20-core.ts` (injects the vault's CORE.md), `now.ts` (date/time). The old rule that `05-language.ts` must import only `eve/instructions` and `process.env` came from an eve 0.11.4 dev-mode bug, fixed in later Eve releases (see gotchas below) — cross-imports are safe now; the file simply has no reason to grow.
 
-What Iva knows about *you* is memory, not code — that's `CORE.md` in the vault ([memory.md](./memory.md)).
+What Iva knows about _you_ is memory, not code — that's `CORE.md` in the vault ([memory.md](./memory.md)).
 
 ## Local development
 

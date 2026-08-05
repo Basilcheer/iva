@@ -16,7 +16,10 @@ export function createCollector(options = {}) {
   return {
     entries: new Map(),
     quietMs: finiteNonNegative(options.quietMs, COLLECT_QUIET_MS),
-    mediaQuietMs: finiteNonNegative(options.mediaQuietMs, COLLECT_MEDIA_QUIET_MS),
+    mediaQuietMs: finiteNonNegative(
+      options.mediaQuietMs,
+      COLLECT_MEDIA_QUIET_MS,
+    ),
     maxParts: finitePositiveInteger(options.maxParts, COLLECT_MAX_PARTS),
     maxChars: finitePositiveInteger(options.maxChars, COLLECT_MAX_CHARS),
     maxAgeMs: finiteNonNegative(options.maxAgeMs, COLLECT_MAX_AGE_MS),
@@ -46,7 +49,11 @@ function mergeParts(updates) {
     .sort((a, b) => {
       const aId = a.update.message?.message_id;
       const bId = b.update.message?.message_id;
-      if (Number.isSafeInteger(aId) && Number.isSafeInteger(bId) && aId !== bId) {
+      if (
+        Number.isSafeInteger(aId) &&
+        Number.isSafeInteger(bId) &&
+        aId !== bId
+      ) {
         return aId - bId;
       }
       return a.index - b.index;
@@ -55,7 +62,9 @@ function mergeParts(updates) {
   const first = ordered[0];
   const updateId = ordered.reduce(
     (max, update) =>
-      Number.isSafeInteger(update.update_id) ? Math.max(max, update.update_id) : max,
+      Number.isSafeInteger(update.update_id)
+        ? Math.max(max, update.update_id)
+        : max,
     Number.MIN_SAFE_INTEGER,
   );
 

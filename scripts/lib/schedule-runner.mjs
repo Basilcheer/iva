@@ -5,7 +5,14 @@
 // can see it. Never throws: eve's schedule runner and the fire-and-forget migration hook
 // both need a promise that always settles.
 import { spawn } from "node:child_process";
-import { mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname } from "node:path";
 import { randomBytes } from "node:crypto";
 
@@ -82,7 +89,12 @@ export function writeStatusAtomic(statusPath, data) {
 }
 
 function tailLines(tail, n = 5) {
-  return tail.split("\n").map((l) => l.trim()).filter(Boolean).slice(-n).join(" | ");
+  return tail
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .slice(-n)
+    .join(" | ");
 }
 
 // True mutual exclusion around a read-modify-write of the shared status file. Two
@@ -156,7 +168,9 @@ export async function runScheduledJob({
           // both admit themselves, exactly the race this lock exists to close. Defer
           // instead: skip this attempt with no status write at all, and let the next
           // Nitro tick or migration boot retry — nothing unsafe happens meanwhile.
-          log(`schedule-runner: ${name} could not acquire the status lock in time — deferring this attempt (retried on the next tick/boot)`);
+          log(
+            `schedule-runner: ${name} could not acquire the status lock in time — deferring this attempt (retried on the next tick/boot)`,
+          );
           return false;
         }
         const existing = readStatus(statusPath);
@@ -173,12 +187,19 @@ export async function runScheduledJob({
           !reservationOwnerIsDead(prior)
         ) {
           const ageS = Math.round((now() - prior.inProgressSince) / 1000);
-          log(`schedule-runner: ${name} skipped — already in progress (started ${ageS}s ago)`);
+          log(
+            `schedule-runner: ${name} skipped — already in progress (started ${ageS}s ago)`,
+          );
           return false;
         }
-        if (typeof prior?.lastSuccessAt === "number" && now() - prior.lastSuccessAt < guardMs) {
+        if (
+          typeof prior?.lastSuccessAt === "number" &&
+          now() - prior.lastSuccessAt < guardMs
+        ) {
           const ageMin = Math.round((now() - prior.lastSuccessAt) / 60000);
-          log(`schedule-runner: ${name} skipped — last success ${ageMin}m ago (< ${Math.round(guardMs / 60000)}m guard)`);
+          log(
+            `schedule-runner: ${name} skipped — last success ${ageMin}m ago (< ${Math.round(guardMs / 60000)}m guard)`,
+          );
           return false;
         }
 
@@ -218,7 +239,12 @@ export async function runScheduledJob({
         // not by whichever process id we happen to signal. Killing only flock's own
         // pid on timeout left node (and the lock) alive. Signaling the whole process
         // group (killImpl(-pid, ...) below) reaches flock AND the node it forked.
-        child = spawnImpl(cmd, args, { cwd: root, env, stdio: ["ignore", "pipe", "pipe"], detached: true });
+        child = spawnImpl(cmd, args, {
+          cwd: root,
+          env,
+          stdio: ["ignore", "pipe", "pipe"],
+          detached: true,
+        });
       } catch (error) {
         resolve({ code: null, signal: null, tail: "", error });
         return;
@@ -270,17 +296,23 @@ export async function runScheduledJob({
       };
 
       const killTimer = setTimeout(() => {
-        log(`schedule-runner: ${name} exceeded ${timeoutMs}ms — sending SIGTERM to its process group`);
+        log(
+          `schedule-runner: ${name} exceeded ${timeoutMs}ms — sending SIGTERM to its process group`,
+        );
         killGroup("SIGTERM");
         hardTimer = setTimeout(() => {
-          log(`schedule-runner: ${name} still running after SIGTERM — sending SIGKILL to its process group`);
+          log(
+            `schedule-runner: ${name} still running after SIGTERM — sending SIGKILL to its process group`,
+          );
           killGroup("SIGKILL");
         }, killGraceMs);
         if (hardTimer.unref) hardTimer.unref();
       }, timeoutMs);
       if (killTimer.unref) killTimer.unref();
 
-      child.on("error", (error) => settle({ code: null, signal: null, tail, error }));
+      child.on("error", (error) =>
+        settle({ code: null, signal: null, tail, error }),
+      );
       child.on("exit", (code, signal) => settle({ code, signal, tail }));
     });
 
@@ -289,18 +321,24 @@ export async function runScheduledJob({
     const codeDesc = outcome.code ?? "n/a";
     const signalDesc = outcome.signal ? `, signal=${outcome.signal}` : "";
     log(`schedule-runner: ${name} finished (code=${codeDesc}${signalDesc})`);
-    if (outcome.tail) log(`schedule-runner: ${name} tail: ${tailLines(outcome.tail)}`);
-    if (outcome.error) log(`schedule-runner: ${name} spawn error: ${outcome.error.message}`);
+    if (outcome.tail)
+      log(`schedule-runner: ${name} tail: ${tailLines(outcome.tail)}`);
+    if (outcome.error)
+      log(`schedule-runner: ${name} spawn error: ${outcome.error.message}`);
 
     if (statusPath) {
       const completed = await withStatusLock(statusPath, (acquired) => {
         if (!acquired) {
-          log(`schedule-runner: ${name} could not acquire the status lock to record completion`);
+          log(
+            `schedule-runner: ${name} could not acquire the status lock to record completion`,
+          );
           return false;
         }
         const current = readStatus(statusPath);
         if (!ownsReservation(current[name], startedAt)) {
-          log(`schedule-runner: ${name} completion ignored because its reservation changed owner`);
+          log(
+            `schedule-runner: ${name} completion ignored because its reservation changed owner`,
+          );
           return false;
         }
         const {
@@ -309,6 +347,9 @@ export async function runScheduledJob({
           ownerStartedAt: _ownerStartedAt,
           ...rest
         } = current[name] ?? {};
+        void _drop;
+        void _ownerPid;
+        void _ownerStartedAt;
         writeStatusAtomic(statusPath, {
           ...current,
           [name]: {
@@ -340,7 +381,9 @@ export async function runScheduledJob({
       try {
         const cleaned = await withStatusLock(statusPath, (acquired) => {
           if (!acquired) {
-            log(`schedule-runner: ${name} could not acquire the status lock to clear its reservation`);
+            log(
+              `schedule-runner: ${name} could not acquire the status lock to clear its reservation`,
+            );
             return false;
           }
           const current = readStatus(statusPath);
@@ -351,9 +394,14 @@ export async function runScheduledJob({
               ownerStartedAt: _ownerStartedAt,
               ...rest
             } = current[name];
+            void _drop;
+            void _ownerPid;
+            void _ownerStartedAt;
             writeStatusAtomic(statusPath, { ...current, [name]: rest });
           } else {
-            log(`schedule-runner: ${name} cleanup ignored because its reservation changed owner`);
+            log(
+              `schedule-runner: ${name} cleanup ignored because its reservation changed owner`,
+            );
             return false;
           }
           return true;

@@ -23,13 +23,13 @@ The menu lives in the long-poll bridge, not the agent. That has three consequenc
 
 Most changes take effect the moment you tap. A few reach into the running agent and need a restart, which the menu offers you on the spot — a plain `iva.service` restart that leaves parked conversations intact (never the full agent reset).
 
-| Screen | When it applies |
-|---|---|
-| 🌐 Language | Instantly — both processes re-read `data/settings.json` every turn |
-| 🎭 Character | From Iva's next message — the persona file is read each turn |
-| 💾 Memory | From Iva's next message — she distills your answers into `CORE.md` |
-| 🧠 Model / 🤔 Thinking | On restart — the wizard offers it |
-| 🔍 Search (provider or key) | On restart — the tool reads keys from the environment |
+| Screen                      | When it applies                                                    |
+| --------------------------- | ------------------------------------------------------------------ |
+| 🌐 Language                 | Instantly — both processes re-read `data/settings.json` every turn |
+| 🎭 Character                | From Iva's next message — the persona file is read each turn       |
+| 💾 Memory                   | From Iva's next message — she distills your answers into `CORE.md` |
+| 🧠 Model / 🤔 Thinking      | On restart — the wizard offers it                                  |
+| 🔍 Search (provider or key) | On restart — the tool reads keys from the environment              |
 
 ## Language
 
@@ -86,7 +86,7 @@ userbot remains opt-in beta; the full picture, including the anti-ban guardrail:
 
 ## Google Workspace
 
-The **🔗 Google** screen checks for `~/.config/gws/client_secret.json`. Missing, it walks you through console.cloud.google.com — create an OAuth client of type *Desktop app*, download the JSON, and send it into the chat — paste the contents or attach the `.json` file (it's shape-checked and written `0600`). Present, it probes authorization; if you're not signed in yet it shows a **Connect** button that runs the whole sign-in for you — no SSH. `gws auth login` only supports the loopback flow (it waits for the browser to hit `http://localhost:<port>` on the server), which can't complete from a browser on another machine. So Iva starts `gws` itself, sends you the Google consent link, and when you approve and paste the redirect URL back — the one that lands on a `http://localhost:…` page your browser can't load — it replays that callback against the loopback listener locally, finishing the exchange and storing the token. The pasted URL carries a one-time code, so Iva deletes that message and never logs it, then edits the screen to a final status (connected, or retry). What `gws` reaches: Gmail, Calendar, Tasks, Drive, Sheets, Docs.
+The **🔗 Google** screen checks for `~/.config/gws/client_secret.json`. Missing, it walks you through console.cloud.google.com — create an OAuth client of type _Desktop app_, download the JSON, and send it into the chat — paste the contents or attach the `.json` file (it's shape-checked and written `0600`). Present, it probes authorization; if you're not signed in yet it shows a **Connect** button that runs the whole sign-in for you — no SSH. `gws auth login` only supports the loopback flow (it waits for the browser to hit `http://localhost:<port>` on the server), which can't complete from a browser on another machine. So Iva starts `gws` itself, sends you the Google consent link, and when you approve and paste the redirect URL back — the one that lands on a `http://localhost:…` page your browser can't load — it replays that callback against the loopback listener locally, finishing the exchange and storing the token. The pasted URL carries a one-time code, so Iva deletes that message and never logs it, then edits the screen to a final status (connected, or retry). What `gws` reaches: Gmail, Calendar, Tasks, Drive, Sheets, Docs.
 
 ## Timers, Skills, Status
 

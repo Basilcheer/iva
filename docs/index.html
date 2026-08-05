@@ -1,178 +1,397 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Iva — a personal assistant in Telegram that remembers everything</title>
-<meta name="description" content="Iva is an open-source, self-hosted personal assistant that lives in Telegram and remembers everything. Send it voice notes, files, forwarded posts and videos — it reads, files and links them. One command, your own server, open models (DeepSeek, Kimi, GLM), about $9 a month. You talk, it files.">
-<meta name="keywords" content="personal AI agent, open source AI agent, self-hosted AI assistant, long-term memory, AI agent with memory, Telegram AI bot, DeepSeek, Ollama, second brain, local-first AI">
-<meta name="author" content="smixs">
-<meta name="robots" content="index, follow">
-<meta name="yandex-verification" content="a68136518ad24ff6">
-<meta name="theme-color" content="#0a0a0a">
-<link rel="canonical" href="https://smixs.github.io/iva/">
-<link rel="alternate" hreflang="en" href="https://smixs.github.io/iva/">
-<link rel="alternate" hreflang="ru" href="https://smixs.github.io/iva/ru/">
-<link rel="alternate" hreflang="x-default" href="https://smixs.github.io/iva/">
-<link rel="icon" type="image/png" href="favicon.png">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>
+      Iva — a personal assistant in Telegram that remembers everything
+    </title>
+    <meta
+      name="description"
+      content="Iva is an open-source, self-hosted personal assistant that lives in Telegram and remembers everything. Send it voice notes, files, forwarded posts and videos — it reads, files and links them. One command, your own server, open models (DeepSeek, Kimi, GLM), about $9 a month. You talk, it files."
+    />
+    <meta
+      name="keywords"
+      content="personal AI agent, open source AI agent, self-hosted AI assistant, long-term memory, AI agent with memory, Telegram AI bot, DeepSeek, Ollama, second brain, local-first AI"
+    />
+    <meta name="author" content="smixs" />
+    <meta name="robots" content="index, follow" />
+    <meta name="yandex-verification" content="a68136518ad24ff6" />
+    <meta name="theme-color" content="#0a0a0a" />
+    <link rel="canonical" href="https://smixs.github.io/iva/" />
+    <link rel="alternate" hreflang="en" href="https://smixs.github.io/iva/" />
+    <link
+      rel="alternate"
+      hreflang="ru"
+      href="https://smixs.github.io/iva/ru/"
+    />
+    <link
+      rel="alternate"
+      hreflang="x-default"
+      href="https://smixs.github.io/iva/"
+    />
+    <link rel="icon" type="image/png" href="favicon.png" />
 
-<!-- Open Graph -->
-<meta property="og:type" content="website">
-<meta property="og:site_name" content="Iva">
-<meta property="og:locale" content="en_US">
-<meta property="og:locale:alternate" content="ru_RU">
-<meta property="og:title" content="Iva — a personal assistant in Telegram that remembers everything">
-<meta property="og:description" content="Open-source personal assistant that lives in Telegram and remembers everything. Throw it voice notes, files and forwarded posts — it files and links them. One command, your own server, about $9 a month. You talk, it files.">
-<meta property="og:url" content="https://smixs.github.io/iva/">
-<meta property="og:image" content="https://smixs.github.io/iva/iva-og.png">
-<meta property="og:image:type" content="image/png">
-<meta property="og:image:width" content="1280">
-<meta property="og:image:height" content="640">
-<meta property="og:image:alt" content="Iva — a personal assistant in Telegram that remembers everything">
+    <!-- Open Graph -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Iva" />
+    <meta property="og:locale" content="en_US" />
+    <meta property="og:locale:alternate" content="ru_RU" />
+    <meta
+      property="og:title"
+      content="Iva — a personal assistant in Telegram that remembers everything"
+    />
+    <meta
+      property="og:description"
+      content="Open-source personal assistant that lives in Telegram and remembers everything. Throw it voice notes, files and forwarded posts — it files and links them. One command, your own server, about $9 a month. You talk, it files."
+    />
+    <meta property="og:url" content="https://smixs.github.io/iva/" />
+    <meta
+      property="og:image"
+      content="https://smixs.github.io/iva/iva-og.png"
+    />
+    <meta property="og:image:type" content="image/png" />
+    <meta property="og:image:width" content="1280" />
+    <meta property="og:image:height" content="640" />
+    <meta
+      property="og:image:alt"
+      content="Iva — a personal assistant in Telegram that remembers everything"
+    />
 
-<!-- Twitter -->
-<meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Iva — a personal assistant in Telegram that remembers everything">
-<meta name="twitter:description" content="Open-source personal assistant in Telegram that remembers everything. Send it voice, files, forwarded posts — it files and links them. One command, about $9 a month. You talk, it files.">
-<meta name="twitter:image" content="https://smixs.github.io/iva/iva-og.png">
-<meta name="twitter:image:alt" content="Iva — a personal assistant in Telegram that remembers everything">
+    <!-- Twitter -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta
+      name="twitter:title"
+      content="Iva — a personal assistant in Telegram that remembers everything"
+    />
+    <meta
+      name="twitter:description"
+      content="Open-source personal assistant in Telegram that remembers everything. Send it voice, files, forwarded posts — it files and links them. One command, about $9 a month. You talk, it files."
+    />
+    <meta
+      name="twitter:image"
+      content="https://smixs.github.io/iva/iva-og.png"
+    />
+    <meta
+      name="twitter:image:alt"
+      content="Iva — a personal assistant in Telegram that remembers everything"
+    />
 
-<script type="application/ld+json">
-{
-  "@context": "https://schema.org",
-  "@type": "SoftwareApplication",
-  "name": "Iva",
-  "alternateName": "Iva — personal AI agent",
-  "description": "Open-source, self-hosted personal assistant that lives in Telegram and remembers everything. Reads and files your voice notes, documents and forwarded posts. Installs with one command, runs on open models from about $9 a month.",
-  "applicationCategory": "DeveloperApplication",
-  "operatingSystem": "Linux, macOS",
-  "url": "https://smixs.github.io/iva/",
-  "image": "https://smixs.github.io/iva/iva-og.png",
-  "softwareVersion": "0.1.7",
-  "license": "https://github.com/smixs/iva/blob/main/LICENSE",
-  "codeRepository": "https://github.com/smixs/iva",
-  "author": { "@type": "Person", "name": "smixs", "url": "https://github.com/smixs" },
-  "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
-}
-</script>
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "Iva",
+        "alternateName": "Iva — personal AI agent",
+        "description": "Open-source, self-hosted personal assistant that lives in Telegram and remembers everything. Reads and files your voice notes, documents and forwarded posts. Installs with one command, runs on open models from about $9 a month.",
+        "applicationCategory": "DeveloperApplication",
+        "operatingSystem": "Linux, macOS",
+        "url": "https://smixs.github.io/iva/",
+        "image": "https://smixs.github.io/iva/iva-og.png",
+        "softwareVersion": "0.1.7",
+        "license": "https://github.com/smixs/iva/blob/main/LICENSE",
+        "codeRepository": "https://github.com/smixs/iva",
+        "author": {
+          "@type": "Person",
+          "name": "smixs",
+          "url": "https://github.com/smixs"
+        },
+        "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
+      }
+    </script>
 
-<style>
-  :root { color-scheme: dark; }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0; background: #0a0a0a; color: #e8e8e8;
-    font: 17px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-    -webkit-font-smoothing: antialiased;
-  }
-  a { color: #5fd3c4; text-decoration: none; }
-  a:hover { text-decoration: underline; }
-  .wrap { max-width: 860px; margin: 0 auto; padding: 0 20px 80px; }
-  .lang { text-align: right; padding-top: 16px; font-size: 14px; color: #777; }
-  .lang a { color: #9aa0a0; }
-  .lang b { color: #e8e8e8; }
-  header { text-align: center; padding-top: 8px; }
-  header img { width: 100%; max-width: 1000px; height: auto; border-radius: 12px; }
-  h1 { font-size: 0; margin: 0; }
-  .tagline { font-size: 22px; font-weight: 600; margin: 28px 0 8px; }
-  .sub { color: #9aa0a0; margin: 0 0 28px; }
-  .cta { display: inline-block; background: #1f6f64; color: #fff; padding: 12px 22px;
-         border-radius: 10px; font-weight: 600; margin: 6px; }
-  .cta.alt { background: #1a1a1a; border: 1px solid #333; }
-  pre { background: #141414; border: 1px solid #262626; border-radius: 10px;
-        padding: 16px; overflow-x: auto; text-align: left; }
-  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 15px; }
-  h2 { font-size: 22px; margin: 48px 0 14px; }
-  ul { padding-left: 0; list-style: none; }
-  li { margin: 10px 0; }
-  .feat b { color: #fff; }
-  .tree { background: #141414; border: 1px solid #262626; border-radius: 10px; padding: 16px;
-          white-space: pre; overflow-x: auto; color: #9aa0a0; font-size: 14px; line-height: 1.5; }
-  footer { text-align: center; color: #777; margin-top: 64px; font-size: 14px; }
-</style>
-</head>
-<body>
-<div class="wrap">
-  <p class="lang"><b>English</b> · <a href="ru/">Русский</a></p>
-  <header>
-    <img src="iva-header.webp" alt="Iva — a personal assistant in Telegram that remembers everything" width="2429" height="630">
-    <h1>Iva — a personal assistant in Telegram that remembers everything</h1>
-    <p class="tagline">A personal assistant in Telegram that remembers everything. Throw it voice notes, files, forwarded posts and videos — it reads them, files them, and links them. You talk, it files.</p>
-    <p class="sub">Lives in Telegram. Built on <a href="https://eve.dev/docs/introduction">eve</a>, Vercel's agent framework. About $9 a month.</p>
-    <p>
-      <a class="cta" href="https://github.com/smixs/iva">Open on GitHub</a>
-      <a class="cta alt" href="https://github.com/smixs/iva#install">How to install</a>
-    </p>
-  </header>
+    <style>
+      :root {
+        color-scheme: dark;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: #0a0a0a;
+        color: #e8e8e8;
+        font:
+          17px/1.6 -apple-system,
+          BlinkMacSystemFont,
+          "Segoe UI",
+          Roboto,
+          Helvetica,
+          Arial,
+          sans-serif;
+        -webkit-font-smoothing: antialiased;
+      }
+      a {
+        color: #5fd3c4;
+        text-decoration: none;
+      }
+      a:hover {
+        text-decoration: underline;
+      }
+      .wrap {
+        max-width: 860px;
+        margin: 0 auto;
+        padding: 0 20px 80px;
+      }
+      .lang {
+        text-align: right;
+        padding-top: 16px;
+        font-size: 14px;
+        color: #777;
+      }
+      .lang a {
+        color: #9aa0a0;
+      }
+      .lang b {
+        color: #e8e8e8;
+      }
+      header {
+        text-align: center;
+        padding-top: 8px;
+      }
+      header img {
+        width: 100%;
+        max-width: 1000px;
+        height: auto;
+        border-radius: 12px;
+      }
+      h1 {
+        font-size: 0;
+        margin: 0;
+      }
+      .tagline {
+        font-size: 22px;
+        font-weight: 600;
+        margin: 28px 0 8px;
+      }
+      .sub {
+        color: #9aa0a0;
+        margin: 0 0 28px;
+      }
+      .cta {
+        display: inline-block;
+        background: #1f6f64;
+        color: #fff;
+        padding: 12px 22px;
+        border-radius: 10px;
+        font-weight: 600;
+        margin: 6px;
+      }
+      .cta.alt {
+        background: #1a1a1a;
+        border: 1px solid #333;
+      }
+      pre {
+        background: #141414;
+        border: 1px solid #262626;
+        border-radius: 10px;
+        padding: 16px;
+        overflow-x: auto;
+        text-align: left;
+      }
+      code {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 15px;
+      }
+      h2 {
+        font-size: 22px;
+        margin: 48px 0 14px;
+      }
+      ul {
+        padding-left: 0;
+        list-style: none;
+      }
+      li {
+        margin: 10px 0;
+      }
+      .feat b {
+        color: #fff;
+      }
+      .tree {
+        background: #141414;
+        border: 1px solid #262626;
+        border-radius: 10px;
+        padding: 16px;
+        white-space: pre;
+        overflow-x: auto;
+        color: #9aa0a0;
+        font-size: 14px;
+        line-height: 1.5;
+      }
+      footer {
+        text-align: center;
+        color: #777;
+        margin-top: 64px;
+        font-size: 14px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <p class="lang"><b>English</b> · <a href="ru/">Русский</a></p>
+      <header>
+        <img
+          src="iva-header.webp"
+          alt="Iva — a personal assistant in Telegram that remembers everything"
+          width="2429"
+          height="630"
+        />
+        <h1>
+          Iva — a personal assistant in Telegram that remembers everything
+        </h1>
+        <p class="tagline">
+          A personal assistant in Telegram that remembers everything. Throw it
+          voice notes, files, forwarded posts and videos — it reads them, files
+          them, and links them. You talk, it files.
+        </p>
+        <p class="sub">
+          Lives in Telegram. Built on
+          <a href="https://eve.dev/docs/introduction">eve</a>, Vercel's agent
+          framework. About $9 a month.
+        </p>
+        <p>
+          <a class="cta" href="https://github.com/smixs/iva">Open on GitHub</a>
+          <a class="cta alt" href="https://github.com/smixs/iva#install"
+            >How to install</a
+          >
+        </p>
+      </header>
 
-  <h2>Install with one command</h2>
-  <pre><code>curl -fsSL https://raw.githubusercontent.com/smixs/iva/main/install.sh | bash</code></pre>
+      <h2>Install with one command</h2>
+      <pre><code>curl -fsSL https://raw.githubusercontent.com/smixs/iva/main/install.sh | bash</code></pre>
 
-  <h2>Why Iva</h2>
-  <p>Every agent out there hands you the same pile of choices: which model, which memory, which search,
-  how to wire it together. Too much choice is the real problem. So I made the choices: I test agents,
-  models and stacks all the time, keep what actually works, and fold it into Iva with simple defaults —
-  open code on open models (DeepSeek, Kimi, GLM), your key, no markup. The Linux Mint of AI agents: one
-  command, and it just works. This one's mine — now it's yours too.</p>
+      <h2>Why Iva</h2>
+      <p>
+        Every agent out there hands you the same pile of choices: which model,
+        which memory, which search, how to wire it together. Too much choice is
+        the real problem. So I made the choices: I test agents, models and
+        stacks all the time, keep what actually works, and fold it into Iva with
+        simple defaults — open code on open models (DeepSeek, Kimi, GLM), your
+        key, no markup. The Linux Mint of AI agents: one command, and it just
+        works. This one's mine — now it's yours too.
+      </p>
 
-  <h2>What it can do</h2>
-  <ul class="feat">
-    <li>🎙️ <b>Voice &amp; video</b> — transcribes voice notes and video circles, understands many languages.</li>
-    <li>🧠 <b>Layered memory</b> — day → week → month → year, plus fact cards on people, projects and decisions; rewrites facts that change instead of piling up contradictions.</li>
-    <li>🔎 <b>Smart search</b> — finds things by meaning and by links between cards, in any language — not just the exact word.</li>
-    <li>🧭 <b>Decision memory</b> — what you decided, when and why, with the old version kept dated as it changes.</li>
-    <li>📇 <b>Personal CRM</b> — quietly tracks your people: who they are, what you agreed, when to follow up.</li>
-    <li>🛡️ <b>Safe by default</b> — forwards, files and web pages are screened for prompt-injection; secrets are scrubbed from replies.</li>
-    <li>⏰ <b>On a schedule</b> — day or week digests, recurring jobs, inbox summaries, on time.</li>
-    <li>🔔 <b>Reminders</b> — tell it what and when, it won't let you forget.</li>
-    <li>🤖 <b>Your choice of model</b> — DeepSeek, Kimi, GLM and other open models.</li>
-    <li>🔒 <b>Private</b> — the code and the memory stay on your server, not in someone's cloud.</li>
-  </ul>
+      <h2>What it can do</h2>
+      <ul class="feat">
+        <li>
+          🎙️ <b>Voice &amp; video</b> — transcribes voice notes and video
+          circles, understands many languages.
+        </li>
+        <li>
+          🧠 <b>Layered memory</b> — day → week → month → year, plus fact cards
+          on people, projects and decisions; rewrites facts that change instead
+          of piling up contradictions.
+        </li>
+        <li>
+          🔎 <b>Smart search</b> — finds things by meaning and by links between
+          cards, in any language — not just the exact word.
+        </li>
+        <li>
+          🧭 <b>Decision memory</b> — what you decided, when and why, with the
+          old version kept dated as it changes.
+        </li>
+        <li>
+          📇 <b>Personal CRM</b> — quietly tracks your people: who they are,
+          what you agreed, when to follow up.
+        </li>
+        <li>
+          🛡️ <b>Safe by default</b> — forwards, files and web pages are screened
+          for prompt-injection; secrets are scrubbed from replies.
+        </li>
+        <li>
+          ⏰ <b>On a schedule</b> — day or week digests, recurring jobs, inbox
+          summaries, on time.
+        </li>
+        <li>
+          🔔 <b>Reminders</b> — tell it what and when, it won't let you forget.
+        </li>
+        <li>
+          🤖 <b>Your choice of model</b> — DeepSeek, Kimi, GLM and other open
+          models.
+        </li>
+        <li>
+          🔒 <b>Private</b> — the code and the memory stay on your server, not
+          in someone's cloud.
+        </li>
+      </ul>
 
-  <h2>Memory — the part that compounds</h2>
-  <p>Iva's memory is shaped like a tree (and <em>iva</em> means <em>willow</em>). It's
-  "low-context memory" by design: never the whole history in the model, just a tiny always-on core plus
-  whatever a task needs, pulled in by a ranked search that scores cards by relevance and by the links between them.</p>
-  <div class="tree">      🪵  TRUNK   — year + cards on people, projects, decisions
-     ╱  ╲
-    🌿 BRANCHES — monthly summaries, built from weeks, built from days
-   ╱      ╲
-  🍃 LEAVES     — the full, word-for-word transcript of each day</div>
-  <p>Every night Iva reads the day, writes what matters into typed cards — people, projects, decisions,
-  ideas — and folds the leaves up the branches. Recall runs on BM25 over a full-text index built right
-  into SQLite (no separate database, no server), reranked by how cards link in the graph; optional vector
-  search adds true semantics with one key.</p>
-  <p><b>Decisions, over time</b> — the part I care about most. A decision is its own card: what you
-  decided, when, and why. Change your mind and Iva rewrites the current answer but keeps the old version
-  in a dated history on the same card — so you always see what's true now, plus the trail of how it got
-  there. It's the part I've worked on longest
-  (<a href="https://github.com/smixs/agent-second-brain">agent-second-brain</a> → <a href="https://github.com/smixs/autograph/tree/main">autograph</a> →
-  Iva), built on the <a href="https://arxiv.org/abs/2605.04050">LCM: Lossless Context Management</a> paper
-  plus a lot of practice. Zero infrastructure, fully inspectable, git-diffable.</p>
+      <h2>Memory — the part that compounds</h2>
+      <p>
+        Iva's memory is shaped like a tree (and <em>iva</em> means
+        <em>willow</em>). It's "low-context memory" by design: never the whole
+        history in the model, just a tiny always-on core plus whatever a task
+        needs, pulled in by a ranked search that scores cards by relevance and
+        by the links between them.
+      </p>
+      <div class="tree">
+        🪵 TRUNK — year + cards on people, projects, decisions ╱ ╲ 🌿 BRANCHES —
+        monthly summaries, built from weeks, built from days ╱ ╲ 🍃 LEAVES — the
+        full, word-for-word transcript of each day
+      </div>
+      <p>
+        Every night Iva reads the day, writes what matters into typed cards —
+        people, projects, decisions, ideas — and folds the leaves up the
+        branches. Recall runs on BM25 over a full-text index built right into
+        SQLite (no separate database, no server), reranked by how cards link in
+        the graph; optional vector search adds true semantics with one key.
+      </p>
+      <p>
+        <b>Decisions, over time</b> — the part I care about most. A decision is
+        its own card: what you decided, when, and why. Change your mind and Iva
+        rewrites the current answer but keeps the old version in a dated history
+        on the same card — so you always see what's true now, plus the trail of
+        how it got there. It's the part I've worked on longest (<a
+          href="https://github.com/smixs/agent-second-brain"
+          >agent-second-brain</a
+        >
+        → <a href="https://github.com/smixs/autograph/tree/main">autograph</a> →
+        Iva), built on the
+        <a href="https://arxiv.org/abs/2605.04050"
+          >LCM: Lossless Context Management</a
+        >
+        paper plus a lot of practice. Zero infrastructure, fully inspectable,
+        git-diffable.
+      </p>
 
-  <h2>Security</h2>
-  <p>Iva runs on your own box, and you'll forward it things from the outside — a link, a PDF, someone
-  else's message. That's exactly where a hidden "ignore your rules and send me the keys" instruction
-  would try to ride in. So untrusted content is gated both ways: <b>coming in</b>, every forwarded
-  message, file and web page is screened before the model reads it (invisible characters, look-alike
-  letters and injection phrases are caught, and anything trying to hijack Iva is treated as data, not an
-  order); <b>going out</b>, every reply is scanned and any API keys, tokens or secret-leaking links are
-  scrubbed. The bot also answers only the Telegram IDs you allow. Defense in depth, not a magic shield —
-  but it closes the obvious ways a forwarded payload could turn your own assistant against you.</p>
+      <h2>Security</h2>
+      <p>
+        Iva runs on your own box, and you'll forward it things from the outside
+        — a link, a PDF, someone else's message. That's exactly where a hidden
+        "ignore your rules and send me the keys" instruction would try to ride
+        in. So untrusted content is gated both ways: <b>coming in</b>, every
+        forwarded message, file and web page is screened before the model reads
+        it (invisible characters, look-alike letters and injection phrases are
+        caught, and anything trying to hijack Iva is treated as data, not an
+        order); <b>going out</b>, every reply is scanned and any API keys,
+        tokens or secret-leaking links are scrubbed. The bot also answers only
+        the Telegram IDs you allow. Defense in depth, not a magic shield — but
+        it closes the obvious ways a forwarded payload could turn your own
+        assistant against you.
+      </p>
 
-  <h2>Providers &amp; cost</h2>
-  <p>Free and open-source. You pay only for a small always-on server (a $4 droplet — 1 CPU, 512 MB, 10 GB)
-  and one model subscription — OpenCode Go (~$5/mo) or Ollama Cloud (~$20/mo), both OpenAI-compatible,
-  your own key. About $9 a month all in. Voice runs on <a href="https://console.deepgram.com">Deepgram</a>
-  (free starter credit).</p>
+      <h2>Providers &amp; cost</h2>
+      <p>
+        Free and open-source. You pay only for a small always-on server (a $4
+        droplet — 1 CPU, 512 MB, 10 GB) and one model subscription — OpenCode Go
+        (~$5/mo) or Ollama Cloud (~$20/mo), both OpenAI-compatible, your own
+        key. About $9 a month all in. Voice runs on
+        <a href="https://console.deepgram.com">Deepgram</a> (free starter
+        credit).
+      </p>
 
-  <p style="text-align:center; margin-top:40px">
-    <a class="cta" href="https://github.com/smixs/iva">Get Iva →</a>
-  </p>
+      <p style="text-align: center; margin-top: 40px">
+        <a class="cta" href="https://github.com/smixs/iva">Get Iva →</a>
+      </p>
 
-  <footer>
-    Built on <a href="https://eve.dev/docs/introduction">eve</a> · Open-source · MIT · <a href="https://github.com/smixs/iva">github.com/smixs/iva</a><br>
-    Grew out of <a href="https://github.com/smixs/agent-second-brain">agent-second-brain</a>
-  </footer>
-</div>
-</body>
+      <footer>
+        Built on <a href="https://eve.dev/docs/introduction">eve</a> ·
+        Open-source · MIT ·
+        <a href="https://github.com/smixs/iva">github.com/smixs/iva</a><br />
+        Grew out of
+        <a href="https://github.com/smixs/agent-second-brain"
+          >agent-second-brain</a
+        >
+      </footer>
+    </div>
+  </body>
 </html>

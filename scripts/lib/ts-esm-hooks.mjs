@@ -9,7 +9,11 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 registerHooks({
   resolve(specifier, context, nextResolve) {
-    if (specifier.startsWith(".") && specifier.endsWith(".js") && context.parentURL) {
+    if (
+      specifier.startsWith(".") &&
+      specifier.endsWith(".js") &&
+      context.parentURL
+    ) {
       try {
         const url = new URL(specifier, context.parentURL);
         if (url.protocol === "file:") {

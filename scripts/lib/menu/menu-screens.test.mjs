@@ -1,6 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, readFileSync, existsSync, statSync } from "node:fs";
+import {
+  mkdtempSync,
+  writeFileSync,
+  readFileSync,
+  existsSync,
+  statSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -35,7 +41,12 @@ function makeCtx({ lang = "ru", deps = {}, screens = {} } = {}) {
     tr: (en, ru) => (lang === "ru" ? ru : en),
     getLang: () => lang,
     btn: (text, data) => ({ text, callback_data: data }),
-    backRow: (sid) => [{ text: sid === "r" ? "‹ Меню" : "‹ Назад", callback_data: `iva_menu:${sid}:o` }],
+    backRow: (sid) => [
+      {
+        text: sid === "r" ? "‹ Меню" : "‹ Назад",
+        callback_data: `iva_menu:${sid}:o`,
+      },
+    ],
     show: async (st, sid) => {
       st.screen = sid;
       const mod = screens[sid];
@@ -50,7 +61,15 @@ function makeCtx({ lang = "ru", deps = {}, screens = {} } = {}) {
 }
 
 const newState = (over = {}) => ({
-  flow: "menu", chatId: 10, userId: "20", screen: "r", page: 0, awaitText: null, data: {}, msgId: 1, ...over,
+  flow: "menu",
+  chatId: 10,
+  userId: "20",
+  screen: "r",
+  page: 0,
+  awaitText: null,
+  data: {},
+  msgId: 1,
+  ...over,
 });
 
 // ── 1. character: полный проход 10 ответов через scoreQuiz + apply пишет PERSONA.md ─────
@@ -75,13 +94,18 @@ test("character: 10 ответов скорятся через scoreQuiz, apply 
   assert.equal(st.data.quiz.i, 0);
 
   // Все 10 ответов «да» (индекс 0 = +2) → детерминированно WVPF (Старшая сестра).
-  for (let i = 0; i < 10; i++) await character.on("q", [String(i), "0"], st, h.ctx);
+  for (let i = 0; i < 10; i++)
+    await character.on("q", [String(i), "0"], st, h.ctx);
   assert.equal(st.data.quiz.i, 10);
   assert.equal(st.data.quiz.code, "WVPF");
 
   // Последний рендер — портрет с именем архетипа и кнопками Принять/Заново.
   assert.match(st._last.text, /Старшая сестра/);
-  assert.ok(st._last.rows.some((r) => r.some((b) => b.callback_data === "iva_menu:chr:apply")));
+  assert.ok(
+    st._last.rows.some((r) =>
+      r.some((b) => b.callback_data === "iva_menu:chr:apply"),
+    ),
+  );
 
   // apply пишет vault/PERSONA.md: <=800 симв., самодостаточная инструкция с кодом.
   await character.on("apply", [], st, h.ctx);
@@ -98,7 +122,8 @@ test("character: другой набор ответов даёт другой к
   h.st = st;
   await character.on("go", [], st, h.ctx);
   // Все «нет» (индекс 3 = -2): с реверс-вопросами → DVRF (Эксперт), не зеркало WVPF.
-  for (let i = 0; i < 10; i++) await character.on("q", [String(i), "3"], st, h.ctx);
+  for (let i = 0; i < 10; i++)
+    await character.on("q", [String(i), "3"], st, h.ctx);
   assert.equal(st.data.quiz.code, "DVRF");
 });
 
@@ -107,14 +132,23 @@ test("search: render ✓ текущий провайдер и 🔑 наличи�
   const dir = mkdtempSync(join(tmpdir(), "iva-env-"));
   const envPath = join(dir, ".env");
   // brave — текущий (без ключа); tavily — ключ есть, но не текущий.
-  writeFileSync(envPath, "SEARCH_PROVIDER=brave\nTAVILY_API_KEY=tvly-abc12345\n");
-  const h = makeCtx({ lang: "ru", deps: { envPath }, screens: { srch: search } });
+  writeFileSync(
+    envPath,
+    "SEARCH_PROVIDER=brave\nTAVILY_API_KEY=tvly-abc12345\n",
+  );
+  const h = makeCtx({
+    lang: "ru",
+    deps: { envPath },
+    screens: { srch: search },
+  });
   const st = newState({ screen: "srch" });
   h.st = st;
 
   const view = await search.render(st, h.ctx);
   const labelOf = (id) =>
-    view.rows.map((r) => r[0]).find((b) => b.callback_data === `iva_menu:srch:set:${id}`)?.text;
+    view.rows
+      .map((r) => r[0])
+      .find((b) => b.callback_data === `iva_menu:srch:set:${id}`)?.text;
 
   const brave = labelOf("brave");
   const tavily = labelOf("tavily");
@@ -123,9 +157,14 @@ test("search: render ✓ текущий провайдер и 🔑 наличи�
   assert.ok(!brave.includes("🔑"), `у brave ключа нет: ${brave}`);
   assert.ok(tavily.includes("🔑"), `у tavily ключ есть: ${tavily}`);
   assert.ok(!tavily.startsWith("✓"), `tavily не текущий: ${tavily}`);
-  assert.ok(exa && !exa.includes("🔑") && !exa.startsWith("✓"), `exa без бейджей: ${exa}`);
+  assert.ok(
+    exa && !exa.includes("🔑") && !exa.startsWith("✓"),
+    `exa без бейджей: ${exa}`,
+  );
   // «Сменить ключ» указывает на текущего провайдера.
-  assert.ok(view.rows.some((r) => r[0].callback_data === "iva_menu:srch:key:brave"));
+  assert.ok(
+    view.rows.some((r) => r[0].callback_data === "iva_menu:srch:key:brave"),
+  );
   // Значения ключей нигде в тексте/кнопках.
   assert.ok(!JSON.stringify(view).includes("tvly-abc12345"));
 });
@@ -134,7 +173,11 @@ test("search: тап по провайдеру без ключа ставит с
   const dir = mkdtempSync(join(tmpdir(), "iva-env2-"));
   const envPath = join(dir, ".env");
   writeFileSync(envPath, "SEARCH_PROVIDER=tavily\n");
-  const h = makeCtx({ lang: "ru", deps: { envPath }, screens: { srch: search } });
+  const h = makeCtx({
+    lang: "ru",
+    deps: { envPath },
+    screens: { srch: search },
+  });
   const st = newState({ screen: "srch", chatId: 555 }); // положительный chatId = личка
   h.st = st;
   await search.on("set", ["brave"], st, h.ctx);
@@ -151,7 +194,10 @@ test("gws.gwsjson: bad JSON и неверная форма отвергаютс�
   process.env.HOME = home; // до импорта — SECRET_PATH возьмёт этот homedir
   const gws = (await import("./gws.mjs")).default;
   const h = makeCtx({ lang: "ru", screens: { gws } });
-  const st = newState({ screen: "gws", awaitText: { kind: "gwsjson", secret: true, data: {} } });
+  const st = newState({
+    screen: "gws",
+    awaitText: { kind: "gwsjson", secret: true, data: {} },
+  });
   h.st = st;
   const fakeMsg = (id) => ({ chat: { id: 10 }, message_id: id });
 

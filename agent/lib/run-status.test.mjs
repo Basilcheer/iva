@@ -21,7 +21,9 @@ process.env.ASSISTANT_DATA_DIR = dataDir;
 process.env.IVA_RUN_STATUS_LOCK_STALE_MS = "300";
 process.env.IVA_RUN_STATUS_LOCK_TIMEOUT_MS = "150";
 const modulePath = fileURLToPath(new URL("./run-status.mjs", import.meta.url));
-const status = await import(`${pathToFileURL(modulePath).href}?test=${Date.now()}`);
+const status = await import(
+  `${pathToFileURL(modulePath).href}?test=${Date.now()}`
+);
 
 test("legacy whole-map is read and each touched key migrates independently", () => {
   const legacy = join(dataDir, "run-status.json");
@@ -64,27 +66,35 @@ test("distinct chats survive bounded concurrent writers", async () => {
       });
     }
   `;
-  const runs = Array.from({ length: workers }, (_, worker) =>
-    new Promise((resolve, reject) => {
-      const child = spawn(
-        process.execPath,
-        ["--input-type=module", "-e", workerSource, String(worker), String(keysPerWorker)],
-        {
-          env: { ...process.env, ASSISTANT_DATA_DIR: dataDir },
-          stdio: ["ignore", "ignore", "pipe"],
-        },
-      );
-      let stderr = "";
-      child.stderr.setEncoding("utf8");
-      child.stderr.on("data", (chunk) => {
-        stderr += chunk;
-      });
-      child.once("error", reject);
-      child.once("exit", (code) => {
-        if (code === 0) resolve();
-        else reject(new Error(`worker ${worker} exited ${code}: ${stderr}`));
-      });
-    }),
+  const runs = Array.from(
+    { length: workers },
+    (_, worker) =>
+      new Promise((resolve, reject) => {
+        const child = spawn(
+          process.execPath,
+          [
+            "--input-type=module",
+            "-e",
+            workerSource,
+            String(worker),
+            String(keysPerWorker),
+          ],
+          {
+            env: { ...process.env, ASSISTANT_DATA_DIR: dataDir },
+            stdio: ["ignore", "ignore", "pipe"],
+          },
+        );
+        let stderr = "";
+        child.stderr.setEncoding("utf8");
+        child.stderr.on("data", (chunk) => {
+          stderr += chunk;
+        });
+        child.once("error", reject);
+        child.once("exit", (code) => {
+          if (code === 0) resolve();
+          else reject(new Error(`worker ${worker} exited ${code}: ${stderr}`));
+        });
+      }),
   );
   await Promise.all(runs);
 
@@ -155,7 +165,10 @@ test("per-chat status enumeration returns decoded keys and records", () => {
   const listed = records.find(({ chatKey }) => chatKey === "listed:-7");
   assert.equal(listed?.status.status, "running");
   assert.equal(listed?.status.sessionId, "listed-session");
-  assert.equal(records.some(({ chatKey }) => chatKey === ""), false);
+  assert.equal(
+    records.some(({ chatKey }) => chatKey === ""),
+    false,
+  );
 });
 
 test("a stale per-chat lock is reclaimed after a crashed writer", () => {
@@ -224,24 +237,34 @@ test("one corrupt per-chat file is quarantined without blocking neighbors", () =
   assert.equal(readFileSync(join(dir, backups[0]), "utf8"), corrupt);
 });
 
-test("an operational read error is rethrown and the status file is not quarantined", {
-  skip: process.getuid?.() === 0 ? "root bypasses file permission bits" : false,
-}, () => {
-  const key = "unreadable:";
-  status.setChatStatus(key, { status: "running", sessionId: "keep" });
-  const dir = join(dataDir, "run-status.d");
-  const encoded = Buffer.from(key, "utf8").toString("base64url");
-  const file = join(dir, `${encoded}.json`);
-  chmodSync(file, 0o000);
+test(
+  "an operational read error is rethrown and the status file is not quarantined",
+  {
+    skip:
+      process.getuid?.() === 0 ? "root bypasses file permission bits" : false,
+  },
+  () => {
+    const key = "unreadable:";
+    status.setChatStatus(key, { status: "running", sessionId: "keep" });
+    const dir = join(dataDir, "run-status.d");
+    const encoded = Buffer.from(key, "utf8").toString("base64url");
+    const file = join(dir, `${encoded}.json`);
+    chmodSync(file, 0o000);
 
-  try {
-    assert.throws(() => status.getChatStatus(key), (error) => error?.code === "EACCES");
-    assert.equal(existsSync(file), true);
-    assert.equal(
-      readdirSync(dir).some((name) => name.startsWith(`${encoded}.json.corrupt-`)),
-      false,
-    );
-  } finally {
-    chmodSync(file, 0o600);
-  }
-});
+    try {
+      assert.throws(
+        () => status.getChatStatus(key),
+        (error) => error?.code === "EACCES",
+      );
+      assert.equal(existsSync(file), true);
+      assert.equal(
+        readdirSync(dir).some((name) =>
+          name.startsWith(`${encoded}.json.corrupt-`),
+        ),
+        false,
+      );
+    } finally {
+      chmodSync(file, 0o600);
+    }
+  },
+);

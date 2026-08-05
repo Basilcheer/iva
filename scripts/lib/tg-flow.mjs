@@ -14,6 +14,7 @@ const TTL_MS = 15 * 60 * 1000; // как WIZARD_TTL_MS — совпадает с
 // log принимается по контракту для будущих обработчиков; примитивы ниже не логируют —
 // поведение обязано остаться дословным (тихий фолбэк при неудачной правке).
 export function createFlows({ tg, log = () => {} }) {
+  void log;
   const flows = new Map(); // был `wizards`; ключ `${chatId}:${userId}`
 
   const key = (chatId, userId) => `${chatId}:${userId}`;
@@ -35,11 +36,21 @@ export function createFlows({ tg, log = () => {} }) {
   // сами себя отбрасывают. extra подмешивает поля в свежий стейт (напр. msgId меню).
   function start(chatId, userId, flow, extra = {}) {
     const st = {
-      flow, chatId, userId, createdAt: Date.now(),
-      msgId: null, provider: null, modelOptions: null, model: null, efforts: null, effort: null,
+      flow,
+      chatId,
+      userId,
+      createdAt: Date.now(),
+      msgId: null,
+      provider: null,
+      modelOptions: null,
+      model: null,
+      efforts: null,
+      effort: null,
       step: null,
       awaitText: null, // обобщение awaitKey (:388): { kind, secret, data }
-      screen: null, page: 0, data: {},
+      screen: null,
+      page: 0,
+      data: {},
       ...extra,
     };
     flows.set(key(chatId, userId), st);
@@ -57,12 +68,21 @@ export function createFlows({ tg, log = () => {} }) {
   async function screen(st, text, rows) {
     const reply_markup = rows ? { inline_keyboard: rows } : undefined;
     if (st.msgId) {
-      const r = await tg("editMessageText", { chat_id: st.chatId, message_id: st.msgId, text, reply_markup });
+      const r = await tg("editMessageText", {
+        chat_id: st.chatId,
+        message_id: st.msgId,
+        text,
+        reply_markup,
+      });
       // «message is not modified» = двойной тап перерисовал тот же экран — это успех, не сбой.
       if (r.ok || /not modified/i.test(r.description || "")) return;
       // правка не удалась (сообщение слишком старое / удалено) — падаем на свежее сообщение
     }
-    const r = await tg("sendMessage", { chat_id: st.chatId, text, reply_markup });
+    const r = await tg("sendMessage", {
+      chat_id: st.chatId,
+      text,
+      reply_markup,
+    });
     if (r.ok) st.msgId = r.result.message_id;
   }
 

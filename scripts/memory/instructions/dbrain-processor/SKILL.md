@@ -37,16 +37,16 @@ used — you are the enrichment.
 
 ## Layout & types (from schema.json)
 
-| What | Folder | type |
-|------|--------|------|
-| Raw transcript (read-only log) | `daily/YYYY-MM-DD.md` | — (not a card) |
-| Daily summary | `summaries/daily/YYYY-MM-DD.md` | `daily-summary` |
-| Weekly / monthly / yearly summary | `weekly/`, `monthly/`, `yearly/` | `*-summary` |
-| Knowledge note / thought | `cards/notes/` | `note` |
-| Person / org | `cards/contacts/` | `contact` |
-| Project | `cards/projects/` | `project` |
-| Idea / proposal | `cards/ideas/` | `idea` |
-| Decision | `cards/decisions/` | `decision` |
+| What                              | Folder                           | type            |
+| --------------------------------- | -------------------------------- | --------------- |
+| Raw transcript (read-only log)    | `daily/YYYY-MM-DD.md`            | — (not a card)  |
+| Daily summary                     | `summaries/daily/YYYY-MM-DD.md`  | `daily-summary` |
+| Weekly / monthly / yearly summary | `weekly/`, `monthly/`, `yearly/` | `*-summary`     |
+| Knowledge note / thought          | `cards/notes/`                   | `note`          |
+| Person / org                      | `cards/contacts/`                | `contact`       |
+| Project                           | `cards/projects/`                | `project`       |
+| Idea / proposal                   | `cards/ideas/`                   | `idea`          |
+| Decision                          | `cards/decisions/`               | `decision`      |
 
 Always pick `type` and `status` from `schema.json` → `node_types`. Never invent a status.
 

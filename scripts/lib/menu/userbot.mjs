@@ -21,21 +21,33 @@ const isPrivate = (st) => Number(st.chatId) > 0;
 function run(cmd, args, timeout = 1500) {
   return new Promise((resolve) => {
     execFile(cmd, args, { timeout, encoding: "utf8" }, (err, stdout = "") =>
-      resolve({ failed: Boolean(err), code: typeof err?.code === "number" ? err.code : err ? 1 : 0, stdout: String(stdout) }),
+      resolve({
+        failed: Boolean(err),
+        code: typeof err?.code === "number" ? err.code : err ? 1 : 0,
+        stdout: String(stdout),
+      }),
     );
   });
 }
 
-export function runSetupCommand(bin, { exec = execFile, timeoutMs = 180_000 } = {}) {
+export function runSetupCommand(
+  bin,
+  { exec = execFile, timeoutMs = 180_000 } = {},
+) {
   return new Promise((resolve, reject) => {
-    exec(process.execPath, [bin, "userbot", "setup"], { timeout: timeoutMs, encoding: "utf8" }, (error) => {
-      if (error) {
-        const code = typeof error.code === "number" ? error.code : 1;
-        reject(new Error(`userbot setup failed (exit ${code})`));
-        return;
-      }
-      resolve();
-    });
+    exec(
+      process.execPath,
+      [bin, "userbot", "setup"],
+      { timeout: timeoutMs, encoding: "utf8" },
+      (error) => {
+        if (error) {
+          const code = typeof error.code === "number" ? error.code : 1;
+          reject(new Error(`userbot setup failed (exit ${code})`));
+          return;
+        }
+        resolve();
+      },
+    );
   });
 }
 
@@ -55,13 +67,14 @@ async function buildScreen(st, ctx) {
     "🧪 Beta: personal-account automation can misbehave and carries account-ban risk.",
     "🧪 Бета: автоматизация личного аккаунта может сбоить и несёт риск блокировки.",
   );
-  const stateLabel = {
-    off: T("off", "выкл"),
-    starting: T("starting", "запускается"),
-    unreachable: T("unreachable", "недоступен"),
-    unauthorized: T("login required", "нужен вход"),
-    ready: T("ready", "готов"),
-  }[status.state] || T("unreachable", "недоступен");
+  const stateLabel =
+    {
+      off: T("off", "выкл"),
+      starting: T("starting", "запускается"),
+      unreachable: T("unreachable", "недоступен"),
+      unauthorized: T("login required", "нужен вход"),
+      ready: T("ready", "готов"),
+    }[status.state] || T("unreachable", "недоступен");
   const statusLine = `${T("Status", "Статус")}: ${stateLabel}`;
 
   if (!hasCreds) {
@@ -77,7 +90,18 @@ async function buildScreen(st, ctx) {
         "Ключей ещё нет. Создай приложение на https://my.telegram.org (API development tools) — получишь api_id и api_hash.",
       ),
     ].join("\n");
-    return { text, rows: [[ctx.btn(T("Enter credentials", "Ввести ключи"), `iva_menu:${SID}:do:creds`)], ctx.backRow(PARENT)] };
+    return {
+      text,
+      rows: [
+        [
+          ctx.btn(
+            T("Enter credentials", "Ввести ключи"),
+            `iva_menu:${SID}:do:creds`,
+          ),
+        ],
+        ctx.backRow(PARENT),
+      ],
+    };
   }
 
   if (status.state === "off") {
@@ -88,7 +112,10 @@ async function buildScreen(st, ctx) {
       "",
       statusLine,
       "",
-      T("Credentials are set. Turn the proxy on — it builds a venv (up to ~3 min).", "Ключи заданы. Включи прокси — соберётся venv (до ~3 мин)."),
+      T(
+        "Credentials are set. Turn the proxy on — it builds a venv (up to ~3 min).",
+        "Ключи заданы. Включи прокси — соберётся venv (до ~3 мин).",
+      ),
     ].join("\n");
     return {
       text,
@@ -109,10 +136,16 @@ async function buildScreen(st, ctx) {
         "",
         statusLine,
         "",
-        T("The proxy service is still starting. Refresh in a moment.", "Прокси ещё запускается. Обнови через несколько секунд."),
+        T(
+          "The proxy service is still starting. Refresh in a moment.",
+          "Прокси ещё запускается. Обнови через несколько секунд.",
+        ),
       ].join("\n"),
       rows: [
-        [ctx.btn(T("Turn off", "Выключить"), `iva_menu:${SID}:do:off`), ctx.btn(T("🔄 Refresh", "🔄 Обновить"), `iva_menu:${SID}:rf`)],
+        [
+          ctx.btn(T("Turn off", "Выключить"), `iva_menu:${SID}:do:off`),
+          ctx.btn(T("🔄 Refresh", "🔄 Обновить"), `iva_menu:${SID}:rf`),
+        ],
         ctx.backRow(PARENT),
       ],
     };
@@ -133,34 +166,33 @@ async function buildScreen(st, ctx) {
         ),
       ].join("\n"),
       rows: [
-        [ctx.btn(T("Turn off", "Выключить"), `iva_menu:${SID}:do:off`), ctx.btn(T("🔄 Refresh", "🔄 Обновить"), `iva_menu:${SID}:rf`)],
+        [
+          ctx.btn(T("Turn off", "Выключить"), `iva_menu:${SID}:do:off`),
+          ctx.btn(T("🔄 Refresh", "🔄 Обновить"), `iva_menu:${SID}:rf`),
+        ],
         ctx.backRow(PARENT),
       ],
     };
   }
 
-  const accountHint = status.state === "unauthorized"
-    ? T(
-      "Proxy is on, but the Telegram account is not connected. Message the bot: «connect my telegram» to scan a QR.",
-      "Прокси включён, но аккаунт Telegram не подключён. Напиши боту: «подключи мой телеграм», чтобы отсканировать QR.",
-    )
-    : T(
-      "Proxy and Telegram account are ready.",
-      "Прокси и аккаунт Telegram готовы.",
-    );
-  const text = [
-    head,
-    "",
-    beta,
-    "",
-    statusLine,
-    "",
-    accountHint,
-  ].join("\n");
+  const accountHint =
+    status.state === "unauthorized"
+      ? T(
+          "Proxy is on, but the Telegram account is not connected. Message the bot: «connect my telegram» to scan a QR.",
+          "Прокси включён, но аккаунт Telegram не подключён. Напиши боту: «подключи мой телеграм», чтобы отсканировать QR.",
+        )
+      : T(
+          "Proxy and Telegram account are ready.",
+          "Прокси и аккаунт Telegram готовы.",
+        );
+  const text = [head, "", beta, "", statusLine, "", accountHint].join("\n");
   return {
     text,
     rows: [
-      [ctx.btn(T("Turn off", "Выключить"), `iva_menu:${SID}:do:off`), ctx.btn(T("🔄 Refresh", "🔄 Обновить"), `iva_menu:${SID}:rf`)],
+      [
+        ctx.btn(T("Turn off", "Выключить"), `iva_menu:${SID}:do:off`),
+        ctx.btn(T("🔄 Refresh", "🔄 Обновить"), `iva_menu:${SID}:rf`),
+      ],
       ctx.backRow(PARENT),
     ],
   };
@@ -169,10 +201,19 @@ async function buildScreen(st, ctx) {
 // Приглашение ввести api_id или api_hash (двухшаговый секретный приём).
 function promptCred(st, ctx, step) {
   st.awaitText = { kind: "ubcred", secret: true, data: { step } };
-  const text = step === "api_id"
-    ? ctx.tr("Send your api_id (a number). I'll delete the message right away.", "Пришли api_id (число). Сообщение сразу удалю.")
-    : ctx.tr("Now send your api_hash. I'll delete the message right away.", "Теперь пришли api_hash. Сообщение сразу удалю.");
-  return ctx.flows.screen(st, text, [[ctx.btn(ctx.tr("Cancel", "Отмена"), `iva_menu:${SID}:o`)]]);
+  const text =
+    step === "api_id"
+      ? ctx.tr(
+          "Send your api_id (a number). I'll delete the message right away.",
+          "Пришли api_id (число). Сообщение сразу удалю.",
+        )
+      : ctx.tr(
+          "Now send your api_hash. I'll delete the message right away.",
+          "Теперь пришли api_hash. Сообщение сразу удалю.",
+        );
+  return ctx.flows.screen(st, text, [
+    [ctx.btn(ctx.tr("Cancel", "Отмена"), `iva_menu:${SID}:o`)],
+  ]);
 }
 
 export default {
@@ -191,7 +232,10 @@ export default {
         st.awaitText = null;
         return ctx.flows.screen(
           st,
-          ctx.tr("Credentials are secrets — open a private chat and enter them there.", "Ключи — это секрет. Открой личный чат и введи их там."),
+          ctx.tr(
+            "Credentials are secrets — open a private chat and enter them there.",
+            "Ключи — это секрет. Открой личный чат и введи их там.",
+          ),
           [ctx.backRow(PARENT)],
         );
       }
@@ -221,7 +265,12 @@ export default {
                 "🧪 Бета\n\nНастройка завершилась с ошибкой. Проверь логи сервиса и повтори.",
               ),
               [
-                [ctx.btn(ctx.tr("Try again", "Повторить"), `iva_menu:${SID}:do:setup`)],
+                [
+                  ctx.btn(
+                    ctx.tr("Try again", "Повторить"),
+                    `iva_menu:${SID}:do:setup`,
+                  ),
+                ],
                 ctx.backRow(PARENT),
               ],
             );
@@ -253,7 +302,10 @@ export default {
         if (!/^\d+$/.test(value)) {
           return ctx.flows.screen(
             st,
-            ctx.tr("api_id must be a number. Send it again or cancel.", "api_id должен быть числом. Пришли ещё раз или отмени."),
+            ctx.tr(
+              "api_id must be a number. Send it again or cancel.",
+              "api_id должен быть числом. Пришли ещё раз или отмени.",
+            ),
             [[ctx.btn(ctx.tr("Cancel", "Отмена"), `iva_menu:${SID}:o`)]],
           );
         }
@@ -264,7 +316,10 @@ export default {
       if (!/^\S{8,}$/.test(value)) {
         return ctx.flows.screen(
           st,
-          ctx.tr("That doesn't look like an api_hash. Send it again or cancel.", "Это не похоже на api_hash. Пришли ещё раз или отмени."),
+          ctx.tr(
+            "That doesn't look like an api_hash. Send it again or cancel.",
+            "Это не похоже на api_hash. Пришли ещё раз или отмени.",
+          ),
           [[ctx.btn(ctx.tr("Cancel", "Отмена"), `iva_menu:${SID}:o`)]],
         );
       }
@@ -272,11 +327,17 @@ export default {
       st.awaitText = null;
       st.data.ub = null;
       try {
-        await upsertEnv(ctx.deps.envPath, { TELEGRAM_API_ID: apiId, TELEGRAM_API_HASH: value });
+        await upsertEnv(ctx.deps.envPath, {
+          TELEGRAM_API_ID: apiId,
+          TELEGRAM_API_HASH: value,
+        });
       } catch (e) {
         return ctx.flows.screen(
           st,
-          ctx.tr(`Couldn't write .env: ${e.message}`, `Не удалось записать .env: ${e.message}`),
+          ctx.tr(
+            `Couldn't write .env: ${e.message}`,
+            `Не удалось записать .env: ${e.message}`,
+          ),
           [ctx.backRow(PARENT)],
         );
       }

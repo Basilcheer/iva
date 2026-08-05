@@ -10,7 +10,11 @@
 // честно говорим сохранить и повторить, когда ива освободится.
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { INTERVIEW, saveInterview, buildDistillMessage } from "../core-interview.mjs";
+import {
+  INTERVIEW,
+  saveInterview,
+  buildDistillMessage,
+} from "../core-interview.mjs";
 import { isRunning, chatKeyOf } from "#lib/run-status.mjs";
 
 const SID = "core";
@@ -26,7 +30,9 @@ async function coreExcerpt() {
   try {
     const text = (await readFile(join(vaultDir(), "CORE.md"), "utf8")).trim();
     if (!text) return null;
-    return text.length > EXCERPT_LIMIT ? `${text.slice(0, EXCERPT_LIMIT).trimEnd()}…` : text;
+    return text.length > EXCERPT_LIMIT
+      ? `${text.slice(0, EXCERPT_LIMIT).trimEnd()}…`
+      : text;
   } catch {
     return null; // файла нет / нет доступа — ядро считаем пустым
   }
@@ -41,11 +47,17 @@ function renderInterviewQuestion(st, ctx) {
   const q = INTERVIEW[i];
   st.awaitText = { kind: "interview", secret: false, data: {} };
   const text = [
-    ctx.tr(`💾 Core memory · ${i + 1}/${INTERVIEW.length}`, `💾 Память · ${i + 1}/${INTERVIEW.length}`),
+    ctx.tr(
+      `💾 Core memory · ${i + 1}/${INTERVIEW.length}`,
+      `💾 Память · ${i + 1}/${INTERVIEW.length}`,
+    ),
     "",
     q.text[lang] ?? q.text.ru,
     "",
-    ctx.tr("Reply with text, or skip / finish below.", "Ответь текстом, или пропусти / заверши кнопкой ниже."),
+    ctx.tr(
+      "Reply with text, or skip / finish below.",
+      "Ответь текстом, или пропусти / заверши кнопкой ниже.",
+    ),
   ].join("\n");
   const rows = [
     [
@@ -61,7 +73,10 @@ function renderInterviewQuestion(st, ctx) {
 function advance(st, ctx, answer) {
   const i = st.data.iv.i;
   const lang = ctx.getLang();
-  st.data.iv.qa.push({ q: INTERVIEW[i].text[lang] ?? INTERVIEW[i].text.ru, a: answer });
+  st.data.iv.qa.push({
+    q: INTERVIEW[i].text[lang] ?? INTERVIEW[i].text.ru,
+    a: answer,
+  });
   st.data.iv.i = i + 1;
   if (st.data.iv.i < INTERVIEW.length) return renderInterviewQuestion(st, ctx);
   return finish(st, ctx);
@@ -78,7 +93,10 @@ async function finish(st, ctx) {
   } catch (e) {
     return ctx.flows.screen(
       st,
-      ctx.tr(`Couldn't save the interview: ${e.message}`, `Не удалось сохранить интервью: ${e.message}`),
+      ctx.tr(
+        `Couldn't save the interview: ${e.message}`,
+        `Не удалось сохранить интервью: ${e.message}`,
+      ),
       [ctx.backRow(PARENT)],
     );
   }
@@ -101,7 +119,10 @@ async function finish(st, ctx) {
   // Синтетическое сообщение «от имени юзера» (как /stop синтезирует callback, telegram-poll.mjs:697-706).
   // Реальные chat/from стэшим из ответа интервью; при пустом интервью синтезируем из st.
   const from = iv.from ?? { id: Number(st.userId), is_bot: false };
-  const chat = iv.chat ?? { id: st.chatId, type: Number(st.chatId) > 0 ? "private" : "supergroup" };
+  const chat = iv.chat ?? {
+    id: st.chatId,
+    type: Number(st.chatId) > 0 ? "private" : "supergroup",
+  };
   const message = {
     message_id: Date.now(),
     date: Math.floor(Date.now() / 1000),
@@ -140,7 +161,15 @@ export default {
     );
     return {
       text: `${head}\n\n${body}\n\n${hint}`,
-      rows: [[ctx.btn(ctx.tr("Take the interview", "Пройти интервью"), `iva_menu:${SID}:go`)], ctx.backRow(PARENT)],
+      rows: [
+        [
+          ctx.btn(
+            ctx.tr("Take the interview", "Пройти интервью"),
+            `iva_menu:${SID}:go`,
+          ),
+        ],
+        ctx.backRow(PARENT),
+      ],
     };
   },
 

@@ -49,14 +49,14 @@ Flags pass through the pipe with `bash -s --`:
 curl -fsSL https://raw.githubusercontent.com/smixs/iva/main/install.sh | bash -s -- --skip-setup
 ```
 
-| Option | Effect |
-|---|---|
-| `--skip-setup` | install everything, don't run the wizard |
-| `--non-interactive` | no questions at all — defaults only, wizard skipped |
-| `-h`, `--help` | show the built-in help and exit |
-| `REPO_URL=…` | install from a fork (default `https://github.com/smixs/iva.git`) |
-| `BRANCH=…` | install and keep updating from this branch (default `main`) |
-| `INSTALL_DIR=…` | where the code goes (default `~/iva`) |
+| Option              | Effect                                                           |
+| ------------------- | ---------------------------------------------------------------- |
+| `--skip-setup`      | install everything, don't run the wizard                         |
+| `--non-interactive` | no questions at all — defaults only, wizard skipped              |
+| `-h`, `--help`      | show the built-in help and exit                                  |
+| `REPO_URL=…`        | install from a fork (default `https://github.com/smixs/iva.git`) |
+| `BRANCH=…`          | install and keep updating from this branch (default `main`)      |
+| `INSTALL_DIR=…`     | where the code goes (default `~/iva`)                            |
 
 The last three are environment variables, read by the script at startup.
 

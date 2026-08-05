@@ -17,7 +17,10 @@ export default {
       ],
       ctx.backRow("r"),
     ];
-    return { text: ctx.tr("🌐 Interface language", "🌐 Язык интерфейса"), rows };
+    return {
+      text: ctx.tr("🌐 Interface language", "🌐 Язык интерфейса"),
+      rows,
+    };
   },
   async on(verb, args, st, ctx) {
     if (verb !== "set") return;

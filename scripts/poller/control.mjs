@@ -3,8 +3,20 @@ import { botCommands, helpText, tr } from "#lib/i18n.mjs";
 import { continuationTokenForControl } from "../lib/telegram-reset.mjs";
 import { getChatStatus, isRunning } from "#lib/run-status.mjs";
 import { readEnvFresh } from "../lib/env-file.mjs";
-import { formatUsageReport, parseWindow, readEntries, summarize } from "../lib/usage.mjs";
-import { ALLOWED, BOT_USER_ID, DATA_DIR, ENV_PATH, ROOT, log } from "./config.mjs";
+import {
+  formatUsageReport,
+  parseWindow,
+  readEntries,
+  summarize,
+} from "../lib/usage.mjs";
+import {
+  ALLOWED,
+  BOT_USER_ID,
+  DATA_DIR,
+  ENV_PATH,
+  ROOT,
+  log,
+} from "./config.mjs";
 import { downloadTelegramFile, edit, reply, sc, tg } from "./transport.mjs";
 import { chatKey } from "./offset.mjs";
 import { deliver } from "./deliver.mjs";
@@ -35,7 +47,8 @@ const menu = createMenu({
     reply,
     // Синтетическая дистилляция делит acceptance, пейсинг и уборку failed-ingress
     // с обычной прямой доставкой, но намеренно не проходит busy-time FIFO.
-    deliver: (update) => deliverDirectUpdate(update).then((result) => result === "delivered"),
+    deliver: (update) =>
+      deliverDirectUpdate(update).then((result) => result === "delivered"),
     log,
     allowed: ALLOWED,
     handleModelCmd,
@@ -49,7 +62,10 @@ const menu = createMenu({
 async function registerBotCommands() {
   try {
     await tg("setMyCommands", { commands: botCommands("en") });
-    await tg("setMyCommands", { commands: botCommands("ru"), language_code: "ru" });
+    await tg("setMyCommands", {
+      commands: botCommands("ru"),
+      language_code: "ru",
+    });
   } catch (e) {
     log("setMyCommands failed:", e.message);
   }
@@ -58,9 +74,18 @@ async function registerBotCommands() {
 // Delete a message carrying a secret, warning the user if Telegram won't let us — a rejected secret
 // must never silently linger in the chat (mirrors the delete-first path in menu.onText).
 async function deleteSecretMessage(chatId, messageId) {
-  const del = await tg("deleteMessage", { chat_id: chatId, message_id: messageId }).catch(() => ({ ok: false }));
+  const del = await tg("deleteMessage", {
+    chat_id: chatId,
+    message_id: messageId,
+  }).catch(() => ({ ok: false }));
   if (!del?.ok) {
-    await reply(chatId, tr("Couldn't delete your message — please delete it manually.", "Не смог удалить сообщение — удали его вручную.")).catch(() => {});
+    await reply(
+      chatId,
+      tr(
+        "Couldn't delete your message — please delete it manually.",
+        "Не смог удалить сообщение — удали его вручную.",
+      ),
+    ).catch(() => {});
   }
   return del?.ok === true;
 }
@@ -72,7 +97,8 @@ const nonTextIo = {
   reply: (chatId, text) => reply(chatId, text),
   download: (fileId, max) => downloadTelegramFile(fileId, max),
   // Run the screen's own text handler on downloaded content WITHOUT re-deleting (already deleted).
-  deliver: (text, msg, st) => menu.onText({ ...msg, text }, st, { skipDelete: true }),
+  deliver: (text, msg, st) =>
+    menu.onText({ ...msg, text }, st, { skipDelete: true }),
 };
 
 // A non-text message arrived while a menu/wizard awaits a SECRET (the caller gates this to
@@ -88,7 +114,13 @@ export async function handleAwaitNonText(msg, pending, io = nonTextIo) {
   if (a?.file && msg.document && pending.flow === "menu") {
     if ((msg.document.file_size ?? 0) > MAX_BYTES) {
       await io.deleteSecret(chatId, msg.message_id);
-      await io.reply(chatId, tr("That file is too large — paste the contents as text instead.", "Файл слишком большой — вставь содержимое текстом."));
+      await io.reply(
+        chatId,
+        tr(
+          "That file is too large — paste the contents as text instead.",
+          "Файл слишком большой — вставь содержимое текстом.",
+        ),
+      );
       return true;
     }
     // Delete FIRST, and only proceed once the secret has actually left the chat. If Telegram
@@ -99,7 +131,13 @@ export async function handleAwaitNonText(msg, pending, io = nonTextIo) {
     if (!deleted) return true;
     const content = await io.download(msg.document.file_id, MAX_BYTES);
     if (content == null) {
-      await io.reply(chatId, tr("Couldn't read that file — paste the contents as text instead.", "Не смог прочитать файл — вставь содержимое текстом."));
+      await io.reply(
+        chatId,
+        tr(
+          "Couldn't read that file — paste the contents as text instead.",
+          "Не смог прочитать файл — вставь содержимое текстом.",
+        ),
+      );
       return true;
     }
     await io.deliver(content, msg, pending); // skipDelete is safe now — the message is confirmed gone
@@ -108,9 +146,15 @@ export async function handleAwaitNonText(msg, pending, io = nonTextIo) {
   // Secret prompt, but not a capturable file (a photo, or a text-only secret) — delete it so it can't
   // reach eve, and tell the user how to send it instead of dropping it silently.
   await io.deleteSecret(chatId, msg.message_id);
-  await io.reply(chatId, a?.file
-    ? tr("Send client_secret.json as text or attach the .json file — not a photo.", "Пришли client_secret.json текстом или прикрепи .json-файл — не фото.")
-    : tr("Send it as text, please.", "Пришли это, пожалуйста, текстом."));
+  await io.reply(
+    chatId,
+    a?.file
+      ? tr(
+          "Send client_secret.json as text or attach the .json file — not a photo.",
+          "Пришли client_secret.json текстом или прикрепи .json-файл — не фото.",
+        )
+      : tr("Send it as text, please.", "Пришли это, пожалуйста, текстом."),
+  );
   return true;
 }
 
@@ -150,7 +194,13 @@ async function handleControl(update) {
     const a = pending?.awaitText;
     if (a) {
       if (text.startsWith("/")) {
-        await endWizard(pending, tr("Cancelled — no longer waiting for input.", "Отменено — ожидание ввода снято.")).catch(() => {});
+        await endWizard(
+          pending,
+          tr(
+            "Cancelled — no longer waiting for input.",
+            "Отменено — ожидание ввода снято.",
+          ),
+        ).catch(() => {});
       } else if (text) {
         if (pending.flow === "menu") {
           // Menu screens own their capture (interview / key intake / gws JSON / ubcred).
@@ -177,7 +227,20 @@ async function handleControl(update) {
   }
   if (!text.startsWith("/")) return false;
   const cmd = text.split(/\s+/)[0].replace(/@\w+$/, "").toLowerCase();
-  if (!["/menu", "/help", "/stop", "/usage", "/restart", "/new", "/update", "/model", "/think"].includes(cmd)) return false;
+  if (
+    ![
+      "/menu",
+      "/help",
+      "/stop",
+      "/usage",
+      "/restart",
+      "/new",
+      "/update",
+      "/model",
+      "/think",
+    ].includes(cmd)
+  )
+    return false;
   const from = String(msg?.from?.id ?? "");
   if (ALLOWED.size === 0 || !ALLOWED.has(from)) return false; // untrusted — let eve drop it
   const chatId = msg?.chat?.id;
@@ -197,7 +260,10 @@ async function handleControl(update) {
   if (cmd === "/stop") {
     const key = chatKey(update);
     if (!key || !isRunning(key)) {
-      await reply(chatId, tr("Nothing is running right now.", "Сейчас ничего не выполняется."));
+      await reply(
+        chatId,
+        tr("Nothing is running right now.", "Сейчас ничего не выполняется."),
+      );
       return true;
     }
     await deliver({
@@ -215,7 +281,11 @@ async function handleControl(update) {
   if (cmd === "/usage") {
     const arg = text.split(/\s+/).slice(1).join(" ");
     try {
-      const agg = summarize(readEntries(), { window: parseWindow(arg), now: Date.now(), tz: process.env.ASSISTANT_TIMEZONE });
+      const agg = summarize(readEntries(), {
+        window: parseWindow(arg),
+        now: Date.now(),
+        tz: process.env.ASSISTANT_TIMEZONE,
+      });
       await reply(chatId, formatUsageReport(agg));
     } catch (e) {
       await reply(chatId, "Couldn't read the usage log: " + e.message);
@@ -229,11 +299,15 @@ async function handleControl(update) {
   }
   // /model, /think — provider/model/effort wizard (writes .env; applied on restart).
   if (cmd === "/model") {
-    await handleModelCmd(chatId, from).catch((e) => log("wizard /model error:", e.message));
+    await handleModelCmd(chatId, from).catch((e) =>
+      log("wizard /model error:", e.message),
+    );
     return true;
   }
   if (cmd === "/think") {
-    await handleThinkCmd(chatId, from).catch((e) => log("wizard /think error:", e.message));
+    await handleThinkCmd(chatId, from).catch((e) =>
+      log("wizard /think error:", e.message),
+    );
     return true;
   }
   // /new retires only this exact Telegram session. /restart does the same first,
@@ -267,7 +341,10 @@ async function handleControl(update) {
       clearQueue: clearsPrivateQueue,
     });
   } catch (e) {
-    log(`scoped reset ${e.resetPhase ?? "unknown"} failed for ${key}:`, e.message);
+    log(
+      `scoped reset ${e.resetPhase ?? "unknown"} failed for ${key}:`,
+      e.message,
+    );
     if (status) {
       await edit(
         chatId,

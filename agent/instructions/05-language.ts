@@ -20,8 +20,13 @@ const DATA_DIR = process.env.ASSISTANT_DATA_DIR ?? "data";
 // молча падаем в env-фолбэк.
 function resolveLang(): string {
   try {
-    const parsed = JSON.parse(readFileSync(join(DATA_DIR, "settings.json"), "utf8"));
-    const language = parsed?.language;
+    const parsed: unknown = JSON.parse(
+      readFileSync(join(DATA_DIR, "settings.json"), "utf8"),
+    );
+    const language =
+      typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+        ? (parsed as Record<string, unknown>).language
+        : undefined;
     if (language === "ru" || language === "en") return language;
   } catch {
     // нет файла (меню ни разу не меняло язык) / нет доступа / битый JSON.

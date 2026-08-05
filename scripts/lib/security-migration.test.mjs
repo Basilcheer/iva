@@ -52,15 +52,19 @@ test("old install migration deduplicates a stable bearer and writes a loopback u
   await chmod(fakeSystemctl, 0o755);
 
   const runMigration = () =>
-    spawnSync(process.execPath, [join(project, "bin/iva.mjs"), "_install-units"], {
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        HOME: home,
-        NO_COLOR: "1",
-        PATH: `${fakeBin}:/usr/bin:/bin`,
+    spawnSync(
+      process.execPath,
+      [join(project, "bin/iva.mjs"), "_install-units"],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          HOME: home,
+          NO_COLOR: "1",
+          PATH: `${fakeBin}:/usr/bin:/bin`,
+        },
       },
-    });
+    );
 
   const first = runMigration();
   assert.equal(first.status, 0, first.stderr || first.stdout);
@@ -70,13 +74,23 @@ test("old install migration deduplicates a stable bearer and writes a loopback u
     1,
     "duplicate bearer entries are collapsed",
   );
-  assert.match(migrated, new RegExp(`^ASSISTANT_BEARER=${STABLE_BEARER}$`, "m"));
+  assert.match(
+    migrated,
+    new RegExp(`^ASSISTANT_BEARER=${STABLE_BEARER}$`, "m"),
+  );
   assert.equal((await stat(envPath)).mode & 0o777, 0o600);
 
-  const unit = await readFile(join(home, ".config/systemd/user/iva.service"), "utf8");
+  const unit = await readFile(
+    join(home, ".config/systemd/user/iva.service"),
+    "utf8",
+  );
   assert.match(unit, /eve\.js start --host 127\.0\.0\.1/);
 
   const second = runMigration();
   assert.equal(second.status, 0, second.stderr || second.stdout);
-  assert.equal(await readFile(envPath, "utf8"), migrated, "a second migration is byte-stable");
+  assert.equal(
+    await readFile(envPath, "utf8"),
+    migrated,
+    "a second migration is byte-stable",
+  );
 });

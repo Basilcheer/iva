@@ -13,21 +13,29 @@ test("Codex catalog failure cannot create selectable fallback models", async () 
         throw new Error("offline");
       },
     }),
-    (error) => error instanceof ModelCatalogError && error.code === "catalog_unavailable",
+    (error) =>
+      error instanceof ModelCatalogError &&
+      error.code === "catalog_unavailable",
   );
 });
 
 test("Ollama Cloud and OpenCode Go expose their OpenAI-compatible reasoning contract", async () => {
   for (const provider of ["ollama", "opencode"]) {
     const options = await fetchModelOptions(provider, "test", {
-      fetchFn: async () => new Response(JSON.stringify({
-        data: [{ id: "reasoning-model" }],
-      }), { status: 200 }),
+      fetchFn: async () =>
+        new Response(
+          JSON.stringify({
+            data: [{ id: "reasoning-model" }],
+          }),
+          { status: 200 },
+        ),
     });
-    assert.deepEqual(options, [{
-      id: "reasoning-model",
-      reasoningLevels: [...FALLBACK_EFFORTS],
-    }]);
+    assert.deepEqual(options, [
+      {
+        id: "reasoning-model",
+        reasoningLevels: [...FALLBACK_EFFORTS],
+      },
+    ]);
   }
 });
 

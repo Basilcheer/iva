@@ -37,6 +37,7 @@ python3 scripts/autograph/swarm_prepare.py <vault-dir> /tmp/discovery.json [--bu
 Walks vault, estimates tokens per file (~4 bytes/token), greedy bin-packs into batches of ~50K tokens. Writes manifests to `.graph/swarm/manifests/batch-NNN.json`. Each batch contains a non-overlapping file list + seed types extracted from discovery + generate_schema.
 
 **Key guarantees:**
+
 - Files are never duplicated across batches
 - Each batch stays within token budget
 - Seed types minimize novel type proliferation
@@ -51,8 +52,16 @@ For each manifest in `.graph/swarm/manifests/`:
 4. Save output to `.graph/swarm/classifications/batch-NNN.jsonl`
 
 JSONL format per line:
+
 ```json
-{"path":"<path>","proposed_type":"<type>","proposed_domain":"<domain>","summary":"<120 chars>","seed_match":true,"confidence":"high|medium|low"}
+{
+  "path": "<path>",
+  "proposed_type": "<type>",
+  "proposed_domain": "<domain>",
+  "summary": "<120 chars>",
+  "seed_match": true,
+  "confidence": "high|medium|low"
+}
 ```
 
 #### Consolidation
@@ -88,6 +97,7 @@ Validates the schema: all 11 sections present, each node_type has description/re
 ```
 
 **Why this step is critical:**
+
 - Script works on enum frequency only — if vault has no frontmatter, it produces nothing useful
 - Agents actually READ file content and understand what type of note it is
 - A vault with 1000 imported notes and zero frontmatter needs intelligent classification, not pattern matching
@@ -95,6 +105,7 @@ Validates the schema: all 11 sections present, each node_type has description/re
 - **Map-reduce prevents context overflow: each agent sees only its batch (~50K tokens)**
 
 **Schema structure (11 required sections):**
+
 - `node_types` — valid types with status enums per type
 - `type_aliases` — old→new type mappings (auto-fixed on enforce)
 - `field_fixes` — typo corrections per field
@@ -177,19 +188,20 @@ OPENROUTER_API_KEY=sk-... python3 scripts/autograph/enrich.py swarm-links <vault
 
 ### Defaults
 
-| Parameter | Value | Why |
-|-----------|-------|-----|
-| Model | `google/gemini-2.0-flash-001` | Cheap, fast, follows catalog instructions well |
-| Files per batch | 8 | Catalog takes ~5K tokens, leave room for files |
-| Workers | 5 | Flash handles high parallelism |
-| Delay | 0.3s | Lower latency, Flash is cheap |
-| Validation | Strict set membership | Zero phantom links — only exact stems pass |
+| Parameter       | Value                         | Why                                            |
+| --------------- | ----------------------------- | ---------------------------------------------- |
+| Model           | `google/gemini-2.0-flash-001` | Cheap, fast, follows catalog instructions well |
+| Files per batch | 8                             | Catalog takes ~5K tokens, leave room for files |
+| Workers         | 5                             | Flash handles high parallelism                 |
+| Delay           | 0.3s                          | Lower latency, Flash is cheap                  |
+| Validation      | Strict set membership         | Zero phantom links — only exact stems pass     |
 
 ### Why NOT `links` (legacy)
 
 The old `enrich.py links` approach asks LLM to "generate natural, descriptive names" WITHOUT providing a stem catalog. Then Python fuzzy-matches suggestions against real vault stems (SequenceMatcher + Jaccard, threshold 0.75).
 
 **Results in practice:**
+
 - `links`: **10 out of 3260 suggestions matched (0.3%)** — catastrophic failure
 - `swarm-links`: **3488 out of 4277 matched (81.6%)** — works
 
@@ -200,6 +212,7 @@ The root cause: LLM invents names like "machine learning fundamentals" but the v
 ### Key lesson: path-to-stem extraction
 
 LLMs sometimes return full paths (`Inbox/imports/DESCRIBE`) instead of bare stems (`DESCRIBE`). The validation layer handles this:
+
 1. Try raw value against stems set
 2. If no match, extract `Path(s).stem` and try again
 3. If `.md` suffix present, strip it and retry
@@ -248,14 +261,14 @@ Target: 90+/100 on both scores.
 
 ## Proven Results (production run, 864 files)
 
-| Metric | Before enrichment | After swarm-links |
-|--------|------------------|-------------------|
-| Health Score | 66.4 | **80.6** |
-| Total links | ~1750 | **4963** |
-| Avg links/file | 2.03 | **5.74** |
-| Dead-ends | 164+ | **55** |
-| Orphan files | 9 | **7** |
-| Files with ## Related | ~200 | **777 (90%)** |
-| Match rate (links) | 0.3% | N/A (deprecated) |
-| Match rate (swarm-links) | N/A | **81.6%** |
-| API cost (Gemini Flash) | — | ~$0.10 total |
+| Metric                   | Before enrichment | After swarm-links |
+| ------------------------ | ----------------- | ----------------- |
+| Health Score             | 66.4              | **80.6**          |
+| Total links              | ~1750             | **4963**          |
+| Avg links/file           | 2.03              | **5.74**          |
+| Dead-ends                | 164+              | **55**            |
+| Orphan files             | 9                 | **7**             |
+| Files with ## Related    | ~200              | **777 (90%)**     |
+| Match rate (links)       | 0.3%              | N/A (deprecated)  |
+| Match rate (swarm-links) | N/A               | **81.6%**         |
+| API cost (Gemini Flash)  | —                 | ~$0.10 total      |

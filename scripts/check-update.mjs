@@ -31,14 +31,22 @@ export async function runDailyUpdateCheck({
   if (!token || !chatId) return { status: "not-configured" };
 
   const storage = dataDir(root, env);
-  const lock = acquireUpdateLock(storage, `daily-check-${process.pid}-${Date.now()}`);
+  const lock = acquireUpdateLock(
+    storage,
+    `daily-check-${process.pid}-${Date.now()}`,
+  );
   if (!lock.ok) return { status: "update-running" };
   try {
     const info = await inspectImpl({ root });
     if (!info.hasVersionUpdate) return { status: "current", info };
-    if (await readStateImpl(storage) === info.remoteVersion) return { status: "already-notified", info };
+    if ((await readStateImpl(storage)) === info.remoteVersion)
+      return { status: "already-notified", info };
 
-    const offer = updateOffer(info.localVersion, info.remoteVersion, env.AGENT_LANGUAGE === "ru" ? "ru" : "en");
+    const offer = updateOffer(
+      info.localVersion,
+      info.remoteVersion,
+      env.AGENT_LANGUAGE === "ru" ? "ru" : "en",
+    );
     await sendImpl({ token, chatId, offer });
     await writeStateImpl(storage, info.remoteVersion);
     return { status: "notified", info };
@@ -47,11 +55,14 @@ export async function runDailyUpdateCheck({
   }
 }
 
-const isMain = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+const isMain =
+  process.argv[1] &&
+  resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 if (isMain) {
   runDailyUpdateCheck()
     .then((result) => {
-      if (result.status === "notified") console.log(`Update notification sent: v${result.info.remoteVersion}`);
+      if (result.status === "notified")
+        console.log(`Update notification sent: v${result.info.remoteVersion}`);
     })
     .catch((error) => {
       console.error(`Update check failed: ${error.message}`);

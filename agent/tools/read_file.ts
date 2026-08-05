@@ -22,7 +22,12 @@ function resolvePath(path: string): string {
 const MAX_CHARS = 24000;
 const cap = (s: string) =>
   s.length > MAX_CHARS
-    ? { content: s.slice(0, MAX_CHARS) + "\n…(усечено; используй offset/limit для остального)", capped: true }
+    ? {
+        content:
+          s.slice(0, MAX_CHARS) +
+          "\n…(усечено; используй offset/limit для остального)",
+        capped: true,
+      }
     : { content: s, capped: false };
 
 export default defineTool({
@@ -36,7 +41,9 @@ export default defineTool({
     path: z
       .string()
       .min(1)
-      .describe("Абсолютный путь к файлу на хосте либо путь относительно корня vault (hits[].file)"),
+      .describe(
+        "Абсолютный путь к файлу на хосте либо путь относительно корня vault (hits[].file)",
+      ),
     offset: z
       .number()
       .int()

@@ -36,7 +36,15 @@ export const CATALOG = {
     // Mirrors the live GET /models list (checked 2026-07-28). Ollama Cloud retires tags without
     // notice — gemma3:12b went 410 on 2026-07-15 — so keep only IDs seen in the live response.
     // kimi-k3 is billed as "extra usage" on top of the plan (402 with an empty extra balance).
-    models: ["deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3", "glm-5.2", "minimax-m3", "gemma4:31b", "gpt-oss:120b"],
+    models: [
+      "deepseek-v4-pro",
+      "deepseek-v4-flash",
+      "kimi-k3",
+      "glm-5.2",
+      "minimax-m3",
+      "gemma4:31b",
+      "gpt-oss:120b",
+    ],
   },
   opencode: {
     label: "OpenCode Go",
@@ -92,7 +100,8 @@ export const CATALOG = {
 // catalog carries a model-specific subset.
 const REASONING_PROVIDERS = new Set(["ollama", "opencode", "codex"]);
 
-export const providerSupportsReasoning = (provider) => REASONING_PROVIDERS.has(provider);
+export const providerSupportsReasoning = (provider) =>
+  REASONING_PROVIDERS.has(provider);
 export const providerFallbackReasoningLevels = (provider) =>
   providerSupportsReasoning(provider) ? [...FALLBACK_EFFORTS] : [];
 
@@ -104,14 +113,20 @@ const optionsFor = (provider, models) =>
 
 const validOptions = (provider, entries) => {
   if (!Array.isArray(entries)) {
-    throw new ModelCatalogError("catalog_invalid", "provider returned a malformed model catalog");
+    throw new ModelCatalogError(
+      "catalog_invalid",
+      "provider returned a malformed model catalog",
+    );
   }
   const seen = new Set();
   const options = [];
   for (const entry of entries) {
     const id = typeof entry?.id === "string" ? entry.id.trim() : "";
     if (!id) {
-      throw new ModelCatalogError("catalog_invalid", "provider returned a malformed model entry");
+      throw new ModelCatalogError(
+        "catalog_invalid",
+        "provider returned a malformed model entry",
+      );
     }
     if (seen.has(id)) continue;
     seen.add(id);
@@ -123,18 +138,21 @@ const validOptions = (provider, entries) => {
     });
   }
   if (!options.length) {
-    throw new ModelCatalogError("catalog_invalid", "provider returned an empty model catalog");
+    throw new ModelCatalogError(
+      "catalog_invalid",
+      "provider returned an empty model catalog",
+    );
   }
   return options;
 };
 
 // Selectable options come only from the live provider catalog. Static lists remain
 // display metadata and OpenRouter suggestions; they must never resurrect retired models.
-export async function fetchModelOptions(provider, key, {
-  dataDir,
-  listCodexCatalog = listCodexModelCatalog,
-  fetchFn = fetch,
-} = {}) {
+export async function fetchModelOptions(
+  provider,
+  key,
+  { dataDir, listCodexCatalog = listCodexModelCatalog, fetchFn = fetch } = {},
+) {
   const cat = CATALOG[provider];
   if (!cat) return [];
   try {
@@ -148,40 +166,63 @@ export async function fetchModelOptions(provider, key, {
         signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
       });
       if (res.status === 401 || res.status === 403) {
-        throw new ModelCatalogError("auth_rejected", `provider rejected credentials (${res.status})`, {
-          status: res.status,
-        });
+        throw new ModelCatalogError(
+          "auth_rejected",
+          `provider rejected credentials (${res.status})`,
+          {
+            status: res.status,
+          },
+        );
       }
       if (!res.ok) {
-        throw new ModelCatalogError("catalog_unavailable", `model catalog returned HTTP ${res.status}`, {
-          status: res.status,
-        });
+        throw new ModelCatalogError(
+          "catalog_unavailable",
+          `model catalog returned HTTP ${res.status}`,
+          {
+            status: res.status,
+          },
+        );
       }
       let body;
       try {
         body = await res.json();
       } catch (cause) {
-        throw new ModelCatalogError("catalog_invalid", "provider returned invalid catalog JSON", {
-          cause,
-        });
+        throw new ModelCatalogError(
+          "catalog_invalid",
+          "provider returned invalid catalog JSON",
+          {
+            cause,
+          },
+        );
       }
       if (!body || typeof body !== "object" || !Array.isArray(body.data)) {
-        throw new ModelCatalogError("catalog_invalid", "provider returned a malformed model catalog");
+        throw new ModelCatalogError(
+          "catalog_invalid",
+          "provider returned a malformed model catalog",
+        );
       }
-      return validOptions(provider, body.data).sort((a, b) => a.id.localeCompare(b.id));
+      return validOptions(provider, body.data).sort((a, b) =>
+        a.id.localeCompare(b.id),
+      );
     }
   } catch (e) {
     if (e instanceof ModelCatalogError) throw e;
-    throw new ModelCatalogError("catalog_unavailable", "couldn't load the live model catalog", {
-      cause: e,
-    });
+    throw new ModelCatalogError(
+      "catalog_unavailable",
+      "couldn't load the live model catalog",
+      {
+        cause: e,
+      },
+    );
   }
   return optionsFor(provider, cat.models); // openrouter and anything else: static curated list
 }
 
 // Compatibility for setup or future CLI consumers that only need IDs.
 export async function fetchModels(provider, key, opts = {}) {
-  return (await fetchModelOptions(provider, key, opts)).map((option) => option.id);
+  return (await fetchModelOptions(provider, key, opts)).map(
+    (option) => option.id,
+  );
 }
 
 // Cheap key validity probe (same lenient policy as setup.mjs: network flake ⇒ accept).
@@ -190,13 +231,15 @@ export async function checkKey(provider, key) {
   const cat = CATALOG[provider];
   if (!cat?.base) return null;
   // OpenRouter has a dedicated auth-only endpoint; the others validate via /models.
-  const url = provider === "openrouter" ? `${cat.base}/key` : `${cat.base}/models`;
+  const url =
+    provider === "openrouter" ? `${cat.base}/key` : `${cat.base}/models`;
   try {
     const res = await fetch(url, {
       headers: { Authorization: `Bearer ${key}` },
       signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     });
-    if (res.status === 401 || res.status === 403) return `провайдер отверг ключ (${res.status})`;
+    if (res.status === 401 || res.status === 403)
+      return `провайдер отверг ключ (${res.status})`;
     return null;
   } catch {
     return null;

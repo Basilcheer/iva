@@ -4,18 +4,36 @@
 import "./lib/ts-esm-hooks.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, symlinkSync, utimesSync, writeFileSync, chmodSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  statSync,
+  symlinkSync,
+  utimesSync,
+  writeFileSync,
+  chmodSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { quarantineDir } from "./lib/wf-store.mjs";
 
 // TS — только динамическим импортом: resolve-хук (.js→.ts) не действует на статические
 // импорты, слинкованные до его регистрации.
-const { acquireLock: cardLock, mergeCard, resolveCard } = await import("../agent/lib/card-store.ts");
-const { acquireLock: jsonLock, releaseLock: jsonRelease } = await import("../agent/lib/json-store.ts");
+const {
+  acquireLock: cardLock,
+  mergeCard,
+  resolveCard,
+} = await import("../agent/lib/card-store.ts");
+const { acquireLock: jsonLock, releaseLock: jsonRelease } =
+  await import("../agent/lib/json-store.ts");
 
 function makeCard(dir, name, h1) {
-  writeFileSync(join(dir, `${name}.md`), `---\ntype: contact\nstatus: active\n---\n# ${h1}\n\nтело\n`);
+  writeFileSync(
+    join(dir, `${name}.md`),
+    `---\ntype: contact\nstatus: active\n---\n# ${h1}\n\nтело\n`,
+  );
 }
 
 test("голое имя находит квалифицированную карточку, но чужой квалификатор — новая сущность", () => {
@@ -25,12 +43,17 @@ test("голое имя находит квалифицированную кар
   assert.equal(resolveCard(dir, "Alex").matchedBy, "title");
   // «Alex (UK)» — ДРУГАЯ сущность: не должен слиться в alex-us.md.
   const uk = resolveCard(dir, "Alex (UK)");
-  assert.equal(uk.matchedBy, "new", "квалифицированный промах обязан завести новый файл");
+  assert.equal(
+    uk.matchedBy,
+    "new",
+    "квалифицированный промах обязан завести новый файл",
+  );
   assert.ok(uk.file.endsWith("alex-uk.md"), uk.file);
 });
 
 test("replace_body: SUPERSEDE переписывает body, сохраняя неизвестный frontmatter", () => {
-  const existing = "---\ntype: contact\nstatus: active\ntier: cold\ncreated: 2026-01-01\n---\n# Иван\n\nCurrent owner: Alice\n";
+  const existing =
+    "---\ntype: contact\nstatus: active\ntier: cold\ncreated: 2026-01-01\n---\n# Иван\n\nCurrent owner: Alice\n";
   const r = mergeCard({
     existing,
     title: "Иван",
@@ -40,9 +63,17 @@ test("replace_body: SUPERSEDE переписывает body, сохраняя н
     replaceBody: true,
   });
   assert.equal(r.action, "replaced");
-  assert.doesNotMatch(r.content.split("## History")[0], /Alice/, "старая истина не должна остаться текущей");
+  assert.doesNotMatch(
+    r.content.split("## History")[0],
+    /Alice/,
+    "старая истина не должна остаться текущей",
+  );
   assert.match(r.content, /Current owner: Bob/);
-  assert.match(r.content, /tier: cold/, "неизвестные поля frontmatter выживают");
+  assert.match(
+    r.content,
+    /tier: cold/,
+    "неизвестные поля frontmatter выживают",
+  );
   assert.match(r.content, /created: 2026-01-01/, "created не трогается");
 });
 
@@ -74,7 +105,11 @@ test("карантин закрывает права старого world-readab
   mkdirSync(dir);
   chmodSync(dir, 0o755); // стор из эпохи до UMask-фикса
   const dest = quarantineDir(dir, "2026-01-01");
-  assert.equal(statSync(dest).mode & 0o777, 0o700, "карантин не должен остаться world-readable");
+  assert.equal(
+    statSync(dest).mode & 0o777,
+    0o700,
+    "карантин не должен остаться world-readable",
+  );
 });
 
 test("write_file: симлинк-алиас на cards/ не обходит гард перезаписи", async () => {
@@ -85,7 +120,14 @@ test("write_file: симлинк-алиас на cards/ не обходит га
   symlinkSync(join(vault, "cards"), join(vault, "card-alias"));
   process.env.ASSISTANT_VAULT_DIR = vault;
   const { default: writeFile } = await import("../agent/tools/write_file.ts");
-  const res = await writeFile.execute({ path: join(vault, "card-alias", "contacts", "ivan.md"), content: "OVERWRITTEN" });
+  const res = await writeFile.execute({
+    path: join(vault, "card-alias", "contacts", "ivan.md"),
+    content: "OVERWRITTEN",
+  });
   assert.equal(res.ok, false, JSON.stringify(res));
-  assert.equal(readFileSync(join(cards, "ivan.md"), "utf8"), "ORIGINAL CARD", "карточка не должна быть затёрта");
+  assert.equal(
+    readFileSync(join(cards, "ivan.md"), "utf8"),
+    "ORIGINAL CARD",
+    "карточка не должна быть затёрта",
+  );
 });

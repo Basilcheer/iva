@@ -13,7 +13,8 @@ function makeTg() {
   let auto = 100;
   const tg = async (method, params) => {
     calls.push({ method, params });
-    if (method === "sendMessage") return { ok: true, result: { message_id: auto++ } };
+    if (method === "sendMessage")
+      return { ok: true, result: { message_id: auto++ } };
     return { ok: true, result: {} };
   };
   return { tg, calls };
@@ -28,7 +29,7 @@ function fakeScreens() {
       log.render.push(st.screen);
       return { text: `[${st.screen}#${st.page}]`, rows: [ctx.backRow("r")] };
     },
-    on(verb, args, st) {
+    on(verb, args) {
       log.on.push({ sid, verb, args: [...args] });
     },
     texts: {
@@ -41,8 +42,16 @@ function fakeScreens() {
   });
   const screens = {};
   for (const [sid, parent] of [
-    ["r", null], ["srch", "r"], ["lang", "r"], ["chr", "r"], ["core", "r"],
-    ["ub", "r"], ["gws", "r"], ["cron", "r"], ["sk", "r"], ["st", "r"],
+    ["r", null],
+    ["srch", "r"],
+    ["lang", "r"],
+    ["chr", "r"],
+    ["core", "r"],
+    ["ub", "r"],
+    ["gws", "r"],
+    ["cron", "r"],
+    ["sk", "r"],
+    ["st", "r"],
   ]) {
     screens[sid] = mk(sid, parent);
   }
@@ -65,15 +74,33 @@ function setup({ allowed = new Set(["20"]) } = {}) {
     deliver: async () => {},
     log: () => {},
     allowed,
-    handleModelCmd: async (chatId, from, opts) => modelCalls.push({ chatId, from, opts }),
-    handleThinkCmd: async (chatId, from, opts) => thinkCalls.push({ chatId, from, opts }),
+    handleModelCmd: async (chatId, from, opts) =>
+      modelCalls.push({ chatId, from, opts }),
+    handleThinkCmd: async (chatId, from, opts) =>
+      thinkCalls.push({ chatId, from, opts }),
   };
   const menu = createMenu({ flows, tg, deps, screens });
-  return { menu, flows, tg, calls, screens, log, modelCalls, thinkCalls, replies };
+  return {
+    menu,
+    flows,
+    tg,
+    calls,
+    screens,
+    log,
+    modelCalls,
+    thinkCalls,
+    replies,
+  };
 }
 
-const cb = (data, { from = "20", chat = 10, messageId = 100, id = "cq" } = {}) => ({
-  id, from: { id: from }, message: { chat: { id: chat }, message_id: messageId }, data,
+const cb = (
+  data,
+  { from = "20", chat = 10, messageId = 100, id = "cq" } = {},
+) => ({
+  id,
+  from: { id: from },
+  message: { chat: { id: chat }, message_id: messageId },
+  data,
 });
 
 test("open рисует root, заводит menu-стейт и шлёт новое сообщение", async () => {
@@ -89,8 +116,14 @@ test("open рисует root, заводит menu-стейт и шлёт нов�
 test("грамматика: одноаргументный data-верб уходит в screen.on(verb, args)", async () => {
   const { menu, log } = setup();
   const st = await menu.open(10, "20");
-  await menu.onCallback(cb("iva_menu:srch:set:tavily", { messageId: st.msgId }));
-  assert.deepEqual(log.on.at(-1), { sid: "srch", verb: "set", args: ["tavily"] });
+  await menu.onCallback(
+    cb("iva_menu:srch:set:tavily", { messageId: st.msgId }),
+  );
+  assert.deepEqual(log.on.at(-1), {
+    sid: "srch",
+    verb: "set",
+    args: ["tavily"],
+  });
 });
 
 test("грамматика: многоаргументный верб q:<i>:<v> разбирается в args=[i,v]", async () => {
@@ -133,7 +166,15 @@ test("после NAV-верба обычное сообщение НЕ пере�
   st.screen = "ub";
   st.awaitText = { kind: "demo", secret: true, data: {} };
   await menu.onCallback(cb("iva_menu:ub:o", { messageId: st.msgId })); // «Отмена»/«Назад» = o
-  await menu.onText({ chat: { id: 10 }, from: { id: 20 }, message_id: 950, text: "обычный вопрос" }, st);
+  await menu.onText(
+    {
+      chat: { id: 10 },
+      from: { id: 20 },
+      message_id: 950,
+      text: "обычный вопрос",
+    },
+    st,
+  );
   assert.ok(!calls.some((c) => c.method === "deleteMessage")); // secret-удаление не сработало
 });
 
@@ -150,7 +191,9 @@ test("stale: нет стейта, o-верб УСЫНОВЛЯЕТ тапнуто
 
 test("stale: нет стейта, data-верб -> «устарело» (editMessageText), без диспатча в on", async () => {
   const { menu, flows, calls, log } = setup();
-  const r = await menu.onCallback(cb("iva_menu:srch:set:tavily", { messageId: 555 }));
+  const r = await menu.onCallback(
+    cb("iva_menu:srch:set:tavily", { messageId: 555 }),
+  );
   assert.equal(r, true);
   assert.equal(flows.get(10, "20"), null); // стейт не создан
   assert.equal(log.on.length, 0); // экран не тронут
@@ -161,9 +204,17 @@ test("stale: нет стейта, data-верб -> «устарело» (editMes
 test("stale: msgId mismatch на data-верб -> «устарело», экран не тронут", async () => {
   const { menu, log, calls } = setup();
   const st = await menu.open(10, "20");
-  await menu.onCallback(cb("iva_menu:srch:set:tavily", { messageId: st.msgId + 1 }));
+  await menu.onCallback(
+    cb("iva_menu:srch:set:tavily", { messageId: st.msgId + 1 }),
+  );
   assert.equal(log.on.length, 0);
-  assert.ok(calls.some((c) => c.method === "editMessageText" && /устарело|expired/i.test(c.params.text)));
+  assert.ok(
+    calls.some(
+      (c) =>
+        c.method === "editMessageText" &&
+        /устарело|expired/i.test(c.params.text),
+    ),
+  );
 });
 
 test("stale: msgId mismatch на o-верб -> усыновляет новое сообщение (новый msgId)", async () => {
@@ -178,7 +229,9 @@ test("stale: msgId mismatch на o-верб -> усыновляет новое �
 test("allowlist: чужой тап ack-нут и проглочен — без диспатча, стейт не тронут", async () => {
   const { menu, flows, calls, log } = setup();
   const st = await menu.open(10, "20");
-  const r = await menu.onCallback(cb("iva_menu:srch:set:tavily", { from: "999", messageId: st.msgId }));
+  const r = await menu.onCallback(
+    cb("iva_menu:srch:set:tavily", { from: "999", messageId: st.msgId }),
+  );
   assert.equal(r, true);
   assert.equal(log.on.length, 0);
   assert.ok(calls.some((c) => c.method === "answerCallbackQuery")); // спиннер всё же погашен
@@ -207,16 +260,28 @@ test("close без стейта: правит тапнутое сообщени�
   const r = await menu.onCallback(cb("iva_menu:r:x", { messageId: 42 }));
   assert.equal(r, true);
   assert.equal(flows.get(10, "20"), null);
-  assert.ok(calls.some((c) => c.method === "editMessageText" && c.params.message_id === 42));
+  assert.ok(
+    calls.some(
+      (c) => c.method === "editMessageText" && c.params.message_id === 42,
+    ),
+  );
 });
 
 test("handoff mdl/thk зовёт визарды с msgId текущего меню", async () => {
   const { menu, modelCalls, thinkCalls } = setup();
   const st = await menu.open(10, "20");
   await menu.onCallback(cb("iva_menu:mdl", { messageId: st.msgId }));
-  assert.deepEqual(modelCalls.at(-1), { chatId: 10, from: "20", opts: { msgId: st.msgId } });
+  assert.deepEqual(modelCalls.at(-1), {
+    chatId: 10,
+    from: "20",
+    opts: { msgId: st.msgId },
+  });
   await menu.onCallback(cb("iva_menu:thk", { messageId: st.msgId }));
-  assert.deepEqual(thinkCalls.at(-1), { chatId: 10, from: "20", opts: { msgId: st.msgId } });
+  assert.deepEqual(thinkCalls.at(-1), {
+    chatId: 10,
+    from: "20",
+    opts: { msgId: st.msgId },
+  });
 });
 
 test("onText secret: удаляет сообщение ПЕРВЫМ, затем зовёт texts-обработчик экрана", async () => {
@@ -224,8 +289,18 @@ test("onText secret: удаляет сообщение ПЕРВЫМ, затем 
   const st = await menu.open(10, "20");
   st.screen = "srch";
   st.awaitText = { kind: "demo", secret: true, data: {} };
-  await menu.onText({ chat: { id: 10 }, from: { id: 20 }, message_id: 900, text: "SECRETKEY123" }, st);
-  const delIdx = calls.findIndex((c) => c.method === "deleteMessage" && c.params.message_id === 900);
+  await menu.onText(
+    {
+      chat: { id: 10 },
+      from: { id: 20 },
+      message_id: 900,
+      text: "SECRETKEY123",
+    },
+    st,
+  );
+  const delIdx = calls.findIndex(
+    (c) => c.method === "deleteMessage" && c.params.message_id === 900,
+  );
   assert.ok(delIdx >= 0);
   assert.deepEqual(log.texts.at(-1), { sid: "srch", text: "SECRETKEY123" });
 });
@@ -235,7 +310,10 @@ test("onText не-secret: сообщение НЕ удаляется, обраб
   const st = await menu.open(10, "20");
   st.screen = "core";
   st.awaitText = { kind: "demo", secret: false, data: {} };
-  await menu.onText({ chat: { id: 10 }, from: { id: 20 }, message_id: 902, text: "мой ответ" }, st);
+  await menu.onText(
+    { chat: { id: 10 }, from: { id: 20 }, message_id: 902, text: "мой ответ" },
+    st,
+  );
   assert.ok(!calls.some((c) => c.method === "deleteMessage"));
   assert.equal(log.texts.at(-1).text, "мой ответ");
 });
@@ -245,7 +323,10 @@ test("onText: команда прерывает ожидание (flows.end), о
   const st = await menu.open(10, "20");
   st.screen = "srch";
   st.awaitText = { kind: "demo", secret: true, data: {} };
-  await menu.onText({ chat: { id: 10 }, from: { id: 20 }, message_id: 903, text: "/help" }, st);
+  await menu.onText(
+    { chat: { id: 10 }, from: { id: 20 }, message_id: 903, text: "/help" },
+    st,
+  );
   assert.equal(flows.get(10, "20"), null); // стейт снят
   assert.equal(log.texts.length, 0);
 });

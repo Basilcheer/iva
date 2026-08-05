@@ -6,7 +6,14 @@
 //
 // Requires: a running agent (eve start) and a vault to write into. The processing rules
 // (scripts/memory/instructions/) ship with the repo. Date is in ASSISTANT_TIMEZONE.
-import { appendFileSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Client, type MessageResult, type SessionState } from "eve/client";
@@ -42,7 +49,10 @@ const TZ = process.env.ASSISTANT_TIMEZONE ?? process.env.TZ ?? "UTC";
 // Format rules and the dbrain-processor prompts live in the repo, not in the vault: they
 // are product, and must update with it instead of rotting inside every user's vault.
 // Absolute, so the agent can read them whatever its working directory is.
-const INSTRUCTIONS = resolve(dirname(fileURLToPath(import.meta.url)), "instructions");
+const INSTRUCTIONS = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  "instructions",
+);
 
 // daily/weekly reports go to Telegram; monthly/yearly are silent (vault only).
 const POST_TO_TELEGRAM: Record<Period, boolean> = {
@@ -76,7 +86,8 @@ function shiftDate(iso: string, deltaDays: number): string {
 function buildPrompt(p: Period, now: string): string {
   const [y, m] = now.split("-").map(Number);
   const yesterday = shiftDate(now, -1);
-  const prevMonth = m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, "0")}`;
+  const prevMonth =
+    m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, "0")}`;
   const prevYear = String(y - 1);
 
   const intro =
@@ -151,7 +162,7 @@ function buildPrompt(p: Period, now: string): string {
 
 const client = new Client({
   host: HOST,
-  ...(BEARER ? { auth: { bearer: async () => BEARER } } : {}),
+  ...(BEARER ? { auth: { bearer: () => Promise.resolve(BEARER) } } : {}),
 });
 
 // Session REUSE, not a fresh session per night. eve backs every client session with a
@@ -166,15 +177,34 @@ const DATA_DIR = process.env.ASSISTANT_DATA_DIR ?? "data";
 const SESSION_FILE = join(DATA_DIR, `rollup-session-${period}.json`);
 const SESSION_TTL_MS = 90 * 24 * 3600 * 1000;
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function isSessionState(value: unknown): value is SessionState {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.streamIndex === "number" &&
+    Number.isFinite(value.streamIndex) &&
+    (value.sessionId === undefined || typeof value.sessionId === "string") &&
+    (value.continuationToken === undefined ||
+      typeof value.continuationToken === "string")
+  );
+}
+
 function loadSession(): { state: SessionState; createdAt: number } | null {
   try {
-    const j = JSON.parse(readFileSync(SESSION_FILE, "utf8"));
-    if (!j?.state) return null;
-    if (Date.now() - (j.createdAt ?? 0) > SESSION_TTL_MS) {
-      logAbandoned(j.state, "ttl-rotation");
+    const parsed: unknown = JSON.parse(readFileSync(SESSION_FILE, "utf8"));
+    if (!isRecord(parsed) || !isSessionState(parsed.state)) return null;
+    const createdAt =
+      typeof parsed.createdAt === "number" && Number.isFinite(parsed.createdAt)
+        ? parsed.createdAt
+        : 0;
+    if (Date.now() - createdAt > SESSION_TTL_MS) {
+      logAbandoned(parsed.state, "ttl-rotation");
       return null;
     }
-    return j;
+    return { state: parsed.state, createdAt };
   } catch {
     return null;
   }
@@ -195,7 +225,12 @@ function logAbandoned(state: SessionState, reason: string): void {
     mkdirSync(DATA_DIR, { recursive: true });
     appendFileSync(
       join(DATA_DIR, "rollup-abandoned.jsonl"),
-      JSON.stringify({ at: new Date().toISOString(), period, reason, sessionId: state.sessionId ?? null }) + "\n",
+      JSON.stringify({
+        at: new Date().toISOString(),
+        period,
+        reason,
+        sessionId: state.sessionId ?? null,
+      }) + "\n",
       "utf8",
     );
   } catch {
@@ -205,9 +240,12 @@ function logAbandoned(state: SessionState, reason: string): void {
 
 // Ход целиком (send + result) под таймаутом: резюм припаркованной сессии после рестарта
 // сервера умеет виснуть молча (#104), и без гонки с таймером ночь просто не заканчивается.
-const TURN_TIMEOUT_MS = resolveTurnTimeoutMs(process.env.ROLLUP_TURN_TIMEOUT_MS, {
-  warn: (message) => console.error(`rollup ${period}: ${message}`),
-});
+const TURN_TIMEOUT_MS = resolveTurnTimeoutMs(
+  process.env.ROLLUP_TURN_TIMEOUT_MS,
+  {
+    warn: (message) => console.error(`rollup ${period}: ${message}`),
+  },
+);
 const guardedTurn = (
   session: ReturnType<typeof client.session>,
   prompt: string,
@@ -278,11 +316,14 @@ try {
   // Принятый ход и зависший send могли продолжить писать после локального таймаута. Перед retry
   // оба требуют терминального подтверждения: no_active_turn либо turn.cancelled в дочитанном
   // потоке. Успешный ответ cancel со статусом accepted сам по себе второго писателя не разрешает.
-  const cancelConfirmed = accepted || hung
-    ? await cancelTurnAndConfirmQuietly(session, acceptedTurnResult)
-    : false;
+  const cancelConfirmed =
+    accepted || hung
+      ? await cancelTurnAndConfirmQuietly(session, acceptedTurnResult)
+      : false;
   if (!canRetryFresh({ accepted, sendRejected, cancelConfirmed })) {
-    console.error(`rollup ${period}: could not confirm cancellation of the unresolved turn — refusing fresh retry`);
+    console.error(
+      `rollup ${period}: could not confirm cancellation of the unresolved turn — refusing fresh retry`,
+    );
     logAbandoned(saved.state, "cancel-unconfirmed");
     throw e;
   }
@@ -294,9 +335,14 @@ try {
   sessionCreatedAt = Date.now();
   // Ровно одна попытка: второй сбой уходит наверх и роняет юнит с ненулевым кодом.
   try {
-    result = await guardedTurn(session, buildPrompt(period, today), "main-turn");
+    result = await guardedTurn(
+      session,
+      buildPrompt(period, today),
+      "main-turn",
+    );
   } catch (retryError) {
-    if ((retryError as { code?: string }).code === "ROLLUP_TURN_TIMEOUT") await cancelTurnQuietly(session);
+    if ((retryError as { code?: string }).code === "ROLLUP_TURN_TIMEOUT")
+      await cancelTurnQuietly(session);
     throw retryError;
   }
 }
@@ -305,7 +351,9 @@ saveSession(session.state, sessionCreatedAt);
 // An interactive turn ends with status "waiting" (the session is ready for the next message),
 // so we rely on the presence of text rather than a "completed" status.
 if (result.status === "failed" || !result.message) {
-  console.error(`rollup ${period}: agent returned no report (status=${result.status})`);
+  console.error(
+    `rollup ${period}: agent returned no report (status=${result.status})`,
+  );
   process.exit(1);
 }
 
@@ -332,8 +380,11 @@ if (period === "daily") {
       );
       saveSession(session.state, sessionCreatedAt);
     } catch (e) {
-      console.error(`rollup daily: CORE.md correction turn failed (${(e as Error).message})`);
-      if ((e as { code?: string }).code === "ROLLUP_TURN_TIMEOUT") await dropHungSession("core-correction");
+      console.error(
+        `rollup daily: CORE.md correction turn failed (${(e as Error).message})`,
+      );
+      if ((e as { code?: string }).code === "ROLLUP_TURN_TIMEOUT")
+        await dropHungSession("core-correction");
     }
     core = readFileSync(corePath, "utf8");
     if (core.length > CORE_CAP) {
@@ -343,7 +394,9 @@ if (period === "daily") {
       );
       process.exit(1);
     }
-    console.log(`rollup daily: CORE.md compressed ${oldLength} → ${core.length} chars`);
+    console.log(
+      `rollup daily: CORE.md compressed ${oldLength} → ${core.length} chars`,
+    );
   }
 }
 
@@ -375,8 +428,11 @@ if (POST_TO_TELEGRAM[period]) {
       );
       saveSession(session.state, sessionCreatedAt);
     } catch (e) {
-      console.error(`rollup ${period}: format-feedback turn failed (${(e as Error).message})`);
-      if ((e as { code?: string }).code === "ROLLUP_TURN_TIMEOUT") await dropHungSession("format-feedback");
+      console.error(
+        `rollup ${period}: format-feedback turn failed (${(e as Error).message})`,
+      );
+      if ((e as { code?: string }).code === "ROLLUP_TURN_TIMEOUT")
+        await dropHungSession("format-feedback");
     }
   }
   if (!r.ok) {

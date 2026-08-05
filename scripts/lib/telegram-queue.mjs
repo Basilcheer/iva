@@ -14,7 +14,8 @@ export const TELEGRAM_QUEUE_VERSION = 1;
 export const TELEGRAM_QUEUE_ITEM_VERSION = 1;
 export const TELEGRAM_QUEUE_DURABILITY = "ETELEGRAM_QUEUE_DURABILITY";
 export const TELEGRAM_QUEUE_ACK_ROLLED_BACK = "ETELEGRAM_QUEUE_ACK_ROLLED_BACK";
-export const TELEGRAM_QUEUE_FATAL_DURABILITY = "ETELEGRAM_QUEUE_FATAL_DURABILITY";
+export const TELEGRAM_QUEUE_FATAL_DURABILITY =
+  "ETELEGRAM_QUEUE_FATAL_DURABILITY";
 export const TELEGRAM_QUEUE_ACK_PENDING_SUFFIX = ".ack-pending";
 
 const MEDIA_KEYS = [
@@ -71,7 +72,9 @@ function normalizeItem(item, chatKey, index) {
     item.update.update_id === item.updateId;
   const hasLegacyText = typeof item.legacyText === "string";
   if (!hasUpdate && !hasLegacyText) {
-    throw new Error(`Telegram queue item ${chatKey}[${index}] has no replayable payload`);
+    throw new Error(
+      `Telegram queue item ${chatKey}[${index}] has no replayable payload`,
+    );
   }
   return cloneJson(item);
 }
@@ -82,13 +85,19 @@ function normalizeQueues(queues, { legacy = false } = {}) {
   }
   const entries = [];
   for (const [chatKey, items] of Object.entries(queues)) {
-    if (!Array.isArray(items)) throw new Error(`Telegram queue ${chatKey} is not an array`);
-    const next = items.map((item, index) => normalizeItem(item, chatKey, index));
+    if (!Array.isArray(items))
+      throw new Error(`Telegram queue ${chatKey} is not an array`);
+    const next = items.map((item, index) =>
+      normalizeItem(item, chatKey, index),
+    );
     if (next.length) entries.push([chatKey, next]);
   }
   return {
     // Object.fromEntries defines "__proto__" as an ordinary own data property.
-    document: { version: TELEGRAM_QUEUE_VERSION, queues: Object.fromEntries(entries) },
+    document: {
+      version: TELEGRAM_QUEUE_VERSION,
+      queues: Object.fromEntries(entries),
+    },
     migrated: legacy,
   };
 }
@@ -97,7 +106,10 @@ export function normalizeQueueDocument(value) {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new Error("Telegram queue does not contain an object");
   }
-  if (value.version === TELEGRAM_QUEUE_VERSION && Object.hasOwn(value, "queues")) {
+  if (
+    value.version === TELEGRAM_QUEUE_VERSION &&
+    Object.hasOwn(value, "queues")
+  ) {
     return normalizeQueues(value.queues);
   }
   // Pre-IVA-008 format: { "<chat>:<topic>": ["text", ...] }.
@@ -113,7 +125,9 @@ export function createQueueItem(update, now = Date.now()) {
     Array.isArray(update) ||
     !Number.isSafeInteger(update.update_id)
   ) {
-    throw new Error("queued Telegram update must have a safe integer update_id");
+    throw new Error(
+      "queued Telegram update must have a safe integer update_id",
+    );
   }
   return {
     version: TELEGRAM_QUEUE_ITEM_VERSION,
@@ -125,17 +139,26 @@ export function createQueueItem(update, now = Date.now()) {
 
 export function queueCount(document, chatKey) {
   if (chatKey !== undefined) {
-    return Object.hasOwn(document.queues, chatKey) ? document.queues[chatKey].length : 0;
+    return Object.hasOwn(document.queues, chatKey)
+      ? document.queues[chatKey].length
+      : 0;
   }
-  return Object.values(document.queues).reduce((sum, items) => sum + items.length, 0);
+  return Object.values(document.queues).reduce(
+    (sum, items) => sum + items.length,
+    0,
+  );
 }
 
 export function queueKeys(document) {
-  return Object.keys(document.queues).filter((key) => document.queues[key]?.length);
+  return Object.keys(document.queues).filter(
+    (key) => document.queues[key]?.length,
+  );
 }
 
 export function queueHead(document, chatKey) {
-  return Object.hasOwn(document.queues, chatKey) ? document.queues[chatKey][0] ?? null : null;
+  return Object.hasOwn(document.queues, chatKey)
+    ? (document.queues[chatKey][0] ?? null)
+    : null;
 }
 
 function cloneQueueMap(queues) {
@@ -154,7 +177,9 @@ function defineQueue(queues, chatKey, items) {
 export function enqueueItem(document, chatKey, item) {
   const queues = cloneQueueMap(document.queues);
   const current = Object.hasOwn(queues, chatKey) ? queues[chatKey] : [];
-  const duplicate = current.some((candidate) => candidate.updateId === item.updateId);
+  const duplicate = current.some(
+    (candidate) => candidate.updateId === item.updateId,
+  );
   if (duplicate) {
     return { document, added: false, count: current.length };
   }
@@ -167,9 +192,13 @@ export function enqueueItem(document, chatKey, item) {
 }
 
 export function removeQueueHead(document, chatKey, updateId) {
-  const current = Object.hasOwn(document.queues, chatKey) ? document.queues[chatKey] : [];
+  const current = Object.hasOwn(document.queues, chatKey)
+    ? document.queues[chatKey]
+    : [];
   if (!current.length || current[0].updateId !== updateId) {
-    throw new Error(`Telegram queue head changed for ${chatKey}; expected update ${updateId}`);
+    throw new Error(
+      `Telegram queue head changed for ${chatKey}; expected update ${updateId}`,
+    );
   }
   const queues = cloneQueueMap(document.queues);
   if (current.length === 1) delete queues[chatKey];
@@ -178,7 +207,8 @@ export function removeQueueHead(document, chatKey, updateId) {
 }
 
 export function clearQueueKey(document, chatKey) {
-  if (!Object.hasOwn(document.queues, chatKey)) return { document, changed: false };
+  if (!Object.hasOwn(document.queues, chatKey))
+    return { document, changed: false };
   const queues = cloneQueueMap(document.queues);
   delete queues[chatKey];
   return {
@@ -201,7 +231,11 @@ function splitChatKey(chatKey) {
   };
 }
 
-export function materializeQueueItem(chatKey, item, { legacyAllowedUserIds } = {}) {
+export function materializeQueueItem(
+  chatKey,
+  item,
+  { legacyAllowedUserIds } = {},
+) {
   if (item.update) return cloneJson(item.update);
   const route = splitChatKey(chatKey);
   const allowed =
@@ -285,10 +319,12 @@ function hasExactMention(text, entities, username) {
   if (!username) return false;
   if (entities !== undefined) {
     if (!Array.isArray(entities)) return false;
-    return entities.some((entity) =>
-      entity?.type === "mention" &&
-      validEntityRange(text, entity) &&
-      mentionAt(text, entity.offset, entity.offset + entity.length, username));
+    return entities.some(
+      (entity) =>
+        entity?.type === "mention" &&
+        validEntityRange(text, entity) &&
+        mentionAt(text, entity.offset, entity.offset + entity.length, username),
+    );
   }
 
   const needleLength = username.length + 1;
@@ -345,8 +381,7 @@ function messageTextAndEntities(message) {
 function hasMessagePayload(message) {
   const { text } = messageTextAndEntities(message);
   return Boolean(
-    text.trim() ||
-    MEDIA_KEYS.some((key) => message[key] !== undefined),
+    text.trim() || MEDIA_KEYS.some((key) => message[key] !== undefined),
   );
 }
 
@@ -354,15 +389,11 @@ export function isReplyToBot(message) {
   return message.reply_to_message?.from?.is_bot === true;
 }
 
-export function shouldQueueBusyUpdate(
-  update,
-  {
-    allowedUserIds,
-    botUsername,
-  },
-) {
+export function shouldQueueBusyUpdate(update, { allowedUserIds, botUsername }) {
   const message = update?.message;
-  const parts = Array.isArray(message?.iva_parts) ? message.iva_parts : [message];
+  const parts = Array.isArray(message?.iva_parts)
+    ? message.iva_parts
+    : [message];
   if (
     !message ||
     message.from?.is_bot === true ||
@@ -370,7 +401,10 @@ export function shouldQueueBusyUpdate(
   ) {
     return false;
   }
-  const allowed = allowedUserIds instanceof Set ? allowedUserIds : new Set(allowedUserIds ?? []);
+  const allowed =
+    allowedUserIds instanceof Set
+      ? allowedUserIds
+      : new Set(allowedUserIds ?? []);
   const from = String(message.from?.id ?? "");
   if (!allowed.size || !allowed.has(from)) return false;
   if (message.chat?.type === "private") return true;
@@ -386,10 +420,7 @@ export function shouldQueueBusyUpdate(
   });
 }
 
-export async function loadQueueFile(
-  file,
-  options = {},
-) {
+export async function loadQueueFile(file, options = {}) {
   const {
     strict = false,
     readFileImpl = readFile,
@@ -411,7 +442,8 @@ export async function loadQueueFile(
     // before any caller can observe the possibly published removal.
     const recovered = normalizeQueueDocument(JSON.parse(pendingRaw)).document;
     const recoveryOptions = { ...options };
-    if (typeof recoveryOptions.nonce === "function") delete recoveryOptions.nonce;
+    if (typeof recoveryOptions.nonce === "function")
+      delete recoveryOptions.nonce;
     await writeQueueFileAtomic(file, recovered, recoveryOptions);
     await removeFileDurable(pendingFile, options);
     return {
@@ -427,7 +459,11 @@ export async function loadQueueFile(
     raw = await readFileImpl(file, "utf8");
   } catch (error) {
     if (error?.code === "ENOENT") {
-      return { document: emptyQueueDocument(), migrated: false, quarantined: null };
+      return {
+        document: emptyQueueDocument(),
+        migrated: false,
+        quarantined: null,
+      };
     }
     throw error;
   }
@@ -438,17 +474,16 @@ export async function loadQueueFile(
     if (strict) throw error;
     const backup = `${file}.corrupt-${Date.now()}-${quarantineNonce()}`;
     await renameImpl(file, backup);
-    return { document: emptyQueueDocument(), migrated: false, quarantined: backup, error };
+    return {
+      document: emptyQueueDocument(),
+      migrated: false,
+      quarantined: backup,
+      error,
+    };
   }
 }
 
-async function removeFileDurable(
-  file,
-  {
-    rmImpl = rm,
-    openImpl = open,
-  } = {},
-) {
+async function removeFileDurable(file, { rmImpl = rm, openImpl = open } = {}) {
   await rmImpl(file, { force: true });
   const directory = await openImpl(dirname(file), "r");
   try {
@@ -523,13 +558,18 @@ async function writeLegacyQuarantine(file, document, options) {
     try {
       // A hard link publishes the fully fsynced staging inode and fails with
       // EEXIST instead of replacing an earlier migration's evidence.
-      await writeQueueFileAtomic(path, document, { ...options, replace: false });
+      await writeQueueFileAtomic(path, document, {
+        ...options,
+        replace: false,
+      });
       return path;
     } catch (error) {
       if (error?.code !== "EEXIST") throw error;
     }
   }
-  throw new Error(`could not reserve a unique legacy Telegram quarantine path for ${file}`);
+  throw new Error(
+    `could not reserve a unique legacy Telegram quarantine path for ${file}`,
+  );
 }
 
 export async function migrateQueueFile(file, options = {}) {
@@ -581,10 +621,19 @@ export async function enqueueQueueFile(file, chatKey, update, options = {}) {
   // Rewrite duplicate retries too, so offset advancement always follows a write
   // whose file and directory durability were both confirmed in this attempt.
   await writeQueueFileAtomic(file, result.document, options);
-  return { ...result, document: result.document, quarantined: loaded.quarantined };
+  return {
+    ...result,
+    document: result.document,
+    quarantined: loaded.quarantined,
+  };
 }
 
-export async function acknowledgeQueueHead(file, chatKey, updateId, options = {}) {
+export async function acknowledgeQueueHead(
+  file,
+  chatKey,
+  updateId,
+  options = {},
+) {
   const loaded = await loadQueueFile(file, { ...options, strict: true });
   const document = removeQueueHead(loaded.document, chatKey, updateId);
   const pendingFile = `${file}${TELEGRAM_QUEUE_ACK_PENDING_SUFFIX}`;

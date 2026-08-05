@@ -18,12 +18,14 @@ import {
 } from "./telegram-acceptance.mjs";
 
 const WEBHOOK_SECRET = "test-secret";
-const fakeBotToken = (id, label) => `${id}:${Buffer.from(label).toString("base64url")}`;
+const fakeBotToken = (id, label) =>
+  `${id}:${Buffer.from(label).toString("base64url")}`;
 process.env.TELEGRAM_BOT_TOKEN = fakeBotToken(999, "acceptance-default");
 process.env.TELEGRAM_WEBHOOK_SECRET_TOKEN = WEBHOOK_SECRET;
 process.env.TELEGRAM_ALLOWED_USER_IDS = "42";
 process.env.TELEGRAM_POLL_SETTLE_MS = "0";
-const { drainReadyQueueHeads } = await import("../../scripts/telegram-poll.mjs");
+const { drainReadyQueueHeads } =
+  await import("../../scripts/telegram-poll.mjs");
 
 const privateUpdate = (updateId, text) => ({
   update_id: updateId,
@@ -69,7 +71,8 @@ function productionTelegramDelivery(
 ) {
   const channel = telegramChannel({
     credentials: {
-      webhookVerifier: webhookVerifier ?? (async (_request, rawBody) => rawBody),
+      webhookVerifier:
+        webhookVerifier ?? (async (_request, rawBody) => rawBody),
     },
     onMessage: wrapTelegramQueueOnMessage(onMessage),
   });
@@ -126,11 +129,8 @@ test("intentional authored no-send accepts queued location, then the later text 
     },
   };
   let document = enqueueItem(
-    enqueueItem(
-      { version: 1, queues: {} },
-      "1:",
-      createQueueItem(location, 1),
-    ).document,
+    enqueueItem({ version: 1, queues: {} }, "1:", createQueueItem(location, 1))
+      .document,
     "1:",
     createQueueItem(privateUpdate(102, "after location"), 2),
   ).document;
@@ -142,7 +142,10 @@ test("intentional authored no-send accepts queued location, then the later text 
     },
     {
       onMessage: (_ctx, message) => {
-        assert.equal(Object.hasOwn(message.raw, TELEGRAM_QUEUE_RECEIPT_FIELD), false);
+        assert.equal(
+          Object.hasOwn(message.raw, TELEGRAM_QUEUE_RECEIPT_FIELD),
+          false,
+        );
         return message.raw.location ? null : { auth: null };
       },
     },
@@ -233,7 +236,10 @@ test("acceptance route preserves Telegram auth failure and rejects malformed no-
     },
     { webhookVerifier: async () => false },
   );
-  assert.equal(await rejectedByVerifier(privateUpdate(1, "unauthorized")), false);
+  assert.equal(
+    await rejectedByVerifier(privateUpdate(1, "unauthorized")),
+    false,
+  );
   assert.equal(sendCalls, 0);
 
   const channel = telegramChannel({
@@ -332,7 +338,11 @@ test("production Telegram receipt removes exactly one head only after Eve send r
   acceptance.resolve({ id: "accepted-session" });
   assert.equal(await drain, 1);
   assert.equal(queueHead(document, "1:").updateId, 102);
-  assert.deepEqual(attempts, [101], "one drain pass must keep one in-flight head per chat");
+  assert.deepEqual(
+    attempts,
+    [101],
+    "one drain pass must keep one in-flight head per chat",
+  );
 });
 
 test("a completed update is handled from disk without invoking the authored handler", async () => {
@@ -387,7 +397,10 @@ test("a completed update is handled from disk without invoking the authored hand
       },
     },
   );
-  assert.equal(await unauthorized(privateUpdate(501, "unauthorized duplicate")), false);
+  assert.equal(
+    await unauthorized(privateUpdate(501, "unauthorized duplicate")),
+    false,
+  );
   assert.equal(handlerCalls, 0);
 });
 
@@ -432,7 +445,10 @@ test("the completed-update ledger keeps the latest 200 ids", async () => {
   const completedUpdatesFile = join(root, "completed-updates.json");
   writeFileSync(
     completedUpdatesFile,
-    JSON.stringify({ botId: "999", updates: Array.from({ length: 200 }, (_, id) => id) }),
+    JSON.stringify({
+      botId: "999",
+      updates: Array.from({ length: 200 }, (_, id) => id),
+    }),
   );
   const delivery = productionTelegramDelivery(
     async () => ({ id: "accepted-session" }),
@@ -461,7 +477,10 @@ test("a completed-update ledger is isolated by Telegram bot id", async () => {
     assert.equal(await delivery(privateUpdate(701, "first bot")), true);
     process.env.TELEGRAM_BOT_TOKEN = fakeBotToken(222, "second-bot");
     assert.equal(await delivery(privateUpdate(701, "second bot")), true);
-    assert.equal(await delivery(privateUpdate(701, "second bot duplicate")), "handled");
+    assert.equal(
+      await delivery(privateUpdate(701, "second bot duplicate")),
+      "handled",
+    );
     assert.equal(sends, 2);
     assert.deepEqual(JSON.parse(readFileSync(completedUpdatesFile, "utf8")), {
       botId: "222",
@@ -513,5 +532,8 @@ test("missing webhook secret disables deduplication and reports it once", async 
     process.env.TELEGRAM_WEBHOOK_SECRET_TOKEN = priorSecret;
   }
   assert.equal(sends, 2);
-  assert.equal(logs.filter((line) => line.includes("durable deduplication")).length, 1);
+  assert.equal(
+    logs.filter((line) => line.includes("durable deduplication")).length,
+    1,
+  );
 });

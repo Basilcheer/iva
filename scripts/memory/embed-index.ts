@@ -5,16 +5,35 @@
 // Эмбеддит карточки/саммари через один внешний ключ (Jina/DeepInfra, см. agent/lib/embeddings.ts),
 // пишет { model, vectors: { "<vault-rel-path>": number[] } }. Локальной модели/RAM нет.
 // Индекс — производный, не в vault (markdown остаётся портируемым); потерялся — пересобери.
-import { readdirSync, readFileSync, mkdirSync, writeFileSync, statSync } from "node:fs";
+import {
+  readdirSync,
+  readFileSync,
+  mkdirSync,
+  writeFileSync,
+  statSync,
+} from "node:fs";
 import { join, relative, sep } from "node:path";
-import { embedTexts, embeddingProviderName, hasEmbeddingKey } from "../../agent/lib/embeddings.ts";
+import {
+  embedTexts,
+  embeddingProviderName,
+  hasEmbeddingKey,
+} from "../../agent/lib/embeddings.ts";
 
 const VAULT = process.env.ASSISTANT_VAULT_DIR || "vault";
 const SCOPE = ["cards", "summaries", "weekly", "monthly", "yearly"];
-const IGNORE = new Set([".git", "node_modules", ".graph", ".index", ".trash", "attachments"]);
+const IGNORE = new Set([
+  ".git",
+  "node_modules",
+  ".graph",
+  ".index",
+  ".trash",
+  "attachments",
+]);
 
 if (!hasEmbeddingKey()) {
-  console.error("embed-index: no JINA_API_KEY / DEEPINFRA_API_KEY — nothing to build (base mode uses BM25).");
+  console.error(
+    "embed-index: no JINA_API_KEY / DEEPINFRA_API_KEY — nothing to build (base mode uses BM25).",
+  );
   process.exit(0);
 }
 
@@ -44,7 +63,10 @@ function embedText(file: string): string {
       const fm = raw.slice(3, end);
       body = raw.slice(end + 4);
       for (const line of fm.split("\n")) {
-        const m = /^(name|company|role|description|tags|handle|aliases|title):\s*(.+)$/.exec(line);
+        const m =
+          /^(name|company|role|description|tags|handle|aliases|title):\s*(.+)$/.exec(
+            line,
+          );
         if (m) fmMeta += m[2] + " ";
       }
     }
@@ -68,20 +90,33 @@ if (files.length === 0) {
   process.exit(0);
 }
 
-console.log(`embed-index: ${files.length} docs via ${embeddingProviderName()} …`);
+console.log(
+  `embed-index: ${files.length} docs via ${embeddingProviderName()} …`,
+);
 const texts = files.map(embedText);
 const vectors = await embedTexts(texts);
 
-const index: { model: string; count: number; vectors: Record<string, number[]> } = {
+const index: {
+  model: string;
+  count: number;
+  vectors: Record<string, number[]>;
+} = {
   model: embeddingProviderName(),
   count: files.length,
   vectors: {},
 };
 files.forEach((f, i) => {
-  if (vectors[i]) index.vectors[relative(VAULT, f).split(sep).join("/")] = vectors[i];
+  if (vectors[i])
+    index.vectors[relative(VAULT, f).split(sep).join("/")] = vectors[i];
 });
 
 mkdirSync(join(VAULT, ".index"), { recursive: true });
-writeFileSync(join(VAULT, ".index", "embeddings.json"), JSON.stringify(index), "utf8");
-console.log(`embed-index: wrote ${Object.keys(index.vectors).length} vectors → ${VAULT}/.index/embeddings.json`);
+writeFileSync(
+  join(VAULT, ".index", "embeddings.json"),
+  JSON.stringify(index),
+  "utf8",
+);
+console.log(
+  `embed-index: wrote ${Object.keys(index.vectors).length} vectors → ${VAULT}/.index/embeddings.json`,
+);
 process.exit(0);

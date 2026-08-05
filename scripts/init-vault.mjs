@@ -14,7 +14,9 @@ const VAULT = resolve(process.env.ASSISTANT_VAULT_DIR ?? "vault");
 const TEMPLATE = resolve("vault-template");
 
 if (!existsSync(TEMPLATE)) {
-  console.error(`init-vault: template ${TEMPLATE} not found (run from the project root)`);
+  console.error(
+    `init-vault: template ${TEMPLATE} not found (run from the project root)`,
+  );
   process.exit(1);
 }
 
@@ -40,9 +42,13 @@ if (isEmpty(VAULT)) {
     rmSync(coreEn);
   }
 
-  console.log(`init-vault: vault created from template → ${VAULT} (CORE: ${lang})`);
+  console.log(
+    `init-vault: vault created from template → ${VAULT} (CORE: ${lang})`,
+  );
 } else {
-  console.log(`init-vault: vault already has data, skipping template copy → ${VAULT}`);
+  console.log(
+    `init-vault: vault already has data, skipping template copy → ${VAULT}`,
+  );
 }
 
 // The live vault is its own git repo (backup + Obsidian). doctor.ts then commits/pushes.
@@ -50,10 +56,19 @@ if (!existsSync(resolve(VAULT, ".git"))) {
   execFileSync("git", ["-C", VAULT, "init", "-q"]);
   execFileSync("git", ["-C", VAULT, "add", "-A"]);
   try {
-    execFileSync("git", ["-C", VAULT, "commit", "-q", "-m", "chore: init memory vault from template"]);
+    execFileSync("git", [
+      "-C",
+      VAULT,
+      "commit",
+      "-q",
+      "-m",
+      "chore: init memory vault from template",
+    ]);
   } catch {
     // No git identity — not critical: doctor.ts will commit later.
-    console.warn("init-vault: first commit failed (configure git user.name/email) — continuing");
+    console.warn(
+      "init-vault: first commit failed (configure git user.name/email) — continuing",
+    );
   }
   console.log("init-vault: vault git repo initialized.");
   console.log(

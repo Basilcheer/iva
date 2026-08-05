@@ -14,13 +14,20 @@ const genModel = withReasoningStripped(
     doGenerate: async () => ({
       finishReason: "stop",
       usage,
-      content: [{ type: "reasoning", text: "" }, { type: "text", text: "привет" }],
+      content: [
+        { type: "reasoning", text: "" },
+        { type: "text", text: "привет" },
+      ],
       warnings: [],
     }),
   }),
 );
 const gen = await generateText({ model: genModel, prompt: "hi" });
-assert.equal(gen.reasoningText ?? "", "", "generate: reasoning не должен дойти до результата");
+assert.equal(
+  gen.reasoningText ?? "",
+  "",
+  "generate: reasoning не должен дойти до результата",
+);
 assert.equal(gen.text, "привет", "generate: текст должен сохраниться");
 
 // stream: reasoning-* части не должны попасть в стрим, текст — должен
@@ -47,7 +54,11 @@ for await (const part of res.fullStream) {
   if (part.type === "text-delta") text += part.text;
   if (part.type.startsWith("reasoning")) reasoningSeen = true;
 }
-assert.equal(reasoningSeen, false, "stream: reasoning-части должны быть вырезаны");
+assert.equal(
+  reasoningSeen,
+  false,
+  "stream: reasoning-части должны быть вырезаны",
+);
 assert.equal(text, "ответ", "stream: текст должен сохраниться");
 
 console.log("OK reasoning-strip: generate + stream");

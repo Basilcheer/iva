@@ -16,10 +16,12 @@ test("an occupied current port is never assumed to belong to Iva", async () => {
     }),
     false,
   );
-  assert.deepEqual(prompts, [{
-    port: 8723,
-    holders: ["bind: port occupied", "docker:foreign"],
-  }]);
+  assert.deepEqual(prompts, [
+    {
+      port: 8723,
+      holders: ["bind: port occupied", "docker:foreign"],
+    },
+  ]);
 });
 test("the current occupied port is reused only after explicit confirmation", async () => {
   assert.equal(

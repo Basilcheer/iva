@@ -7,11 +7,15 @@ description: Браузерная автоматизация для интера
 У тебя есть браузер через CLI `agent-browser` (запускай через bash). Headless, работает на сервере.
 
 ## ВАЖНО — начни отсюда
+
 ПЕРЕД любой работой с браузером загрузи актуальные воркфлоу (всегда под версию CLI):
+
 ```
 agent-browser skills get core
 ```
+
 Для задач вне обычных веб-страниц:
+
 ```
 agent-browser skills get electron   # десктоп-приложения (VS Code, Slack, Discord…)
 agent-browser skills get slack       # Slack
@@ -20,6 +24,7 @@ agent-browser skills list            # всё доступное на устан
 ```
 
 ## Базовый цикл
+
 ```
 agent-browser open https://example.com
 agent-browser snapshot -i            # интерактивные элементы с refs @eN
@@ -30,13 +35,17 @@ agent-browser close
 ```
 
 ## Сессии и логины
+
 Сохраняй вход между запусками через имя сессии (персист в ~/.agent-browser/sessions/, vault шифрован):
+
 ```
 agent-browser --session-name <имя> open https://site.com
 ```
+
 Тот же `--session-name` переиспользует уже залогиненную сессию — не логинься заново.
 
 ## Если сломалось
+
 ```
 agent-browser doctor --fix
 ```

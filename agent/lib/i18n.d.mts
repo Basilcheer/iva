@@ -9,4 +9,6 @@ export const COMMANDS: ReadonlyArray<{
   args?: { en: string; ru: string };
 }>;
 export function helpText(): string;
-export function botCommands(lang: string): Array<{ command: string; description: string }>;
+export function botCommands(
+  lang: string,
+): Array<{ command: string; description: string }>;

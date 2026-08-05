@@ -16,7 +16,11 @@ export interface RunScheduleMigrationOptions {
   readonly now?: () => number;
   readonly root?: string;
   readonly nodeBin?: string;
-  readonly runJob?: (period: "daily" | "weekly" | "monthly" | "yearly") => Promise<unknown>;
+  readonly runJob?: (
+    period: "daily" | "weekly" | "monthly" | "yearly",
+  ) => Promise<unknown>;
 }
 
-export function runScheduleMigration(options?: RunScheduleMigrationOptions): Promise<void>;
+export function runScheduleMigration(
+  options?: RunScheduleMigrationOptions,
+): Promise<void>;

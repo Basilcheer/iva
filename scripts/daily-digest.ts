@@ -18,7 +18,7 @@ if (!BOT || !CHAT) {
 
 const client = new Client({
   host: HOST,
-  ...(BEARER ? { auth: { bearer: async () => BEARER } } : {}),
+  ...(BEARER ? { auth: { bearer: () => Promise.resolve(BEARER) } } : {}),
 });
 
 const session = client.session();

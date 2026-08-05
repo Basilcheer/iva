@@ -10,7 +10,7 @@ Covers two file kinds at the bottom of the DAG:
 - **Daily-summary** — `summaries/daily/YYYY-MM-DD.md` (type `daily-summary`).
 
 Navigation flows `yearly → monthly → weekly → daily-summary → raw transcript`.
-The daily-summary is the only thing that links *into* the raw transcript.
+The daily-summary is the only thing that links _into_ the raw transcript.
 
 ## Raw transcript — `daily/YYYY-MM-DD.md`
 
@@ -19,19 +19,20 @@ live by the Telegram channel and Iva's transcript hook.
 
 ```markdown
 ## HH:MM [type]
+
 Content of the entry
 ```
 
 ### Entry types
 
-| Type | Side | Description |
-|------|------|-------------|
-| `[text]` | user | Direct text message |
-| `[voice]` | user | Transcribed voice message |
-| `[video]` | user | Transcribed video / video-note |
-| `[photo]` | user | Image (Obsidian embed + any caption) |
-| `[forward from: Name]` | user | Forwarded message with source |
-| `[iva]` | Iva | Iva's final reply (older days may use legacy `[eva]`) |
+| Type                   | Side | Description                                           |
+| ---------------------- | ---- | ----------------------------------------------------- |
+| `[text]`               | user | Direct text message                                   |
+| `[voice]`              | user | Transcribed voice message                             |
+| `[video]`              | user | Transcribed video / video-note                        |
+| `[photo]`              | user | Image (Obsidian embed + any caption)                  |
+| `[forward from: Name]` | user | Forwarded message with source                         |
+| `[iva]`                | Iva  | Iva's final reply (older days may use legacy `[eva]`) |
 
 ### Append-only rules
 
@@ -40,7 +41,9 @@ Content of the entry
 3. The processor appends **only** a processing marker at the very end:
    ```markdown
    <!-- processed: YYYY-MM-DDTHH:MM -->
+
    ---
+
    processed: YYYY-MM-DDTHH:MM
    cards: <N>
    summary: summaries/daily/YYYY-MM-DD.md
@@ -66,17 +69,21 @@ source: daily/YYYY-MM-DD.md
 # YYYY-MM-DD
 
 ## Topics
+
 - **Topic A** — one line.
 - **Topic B** — one line.
 
 ## Highlights
+
 - The few things that mattered.
 
 ## Cards created today
+
 - [[cards/<kind>/<slug>|Card title]]
 - (none)
 
 ## Navigation
+
 - Raw transcript: [[daily/YYYY-MM-DD|Full transcript]]
 - Up: [[weekly/YYYY-Www|Week WW]]
 ```

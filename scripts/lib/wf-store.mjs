@@ -18,12 +18,16 @@ function pathStat(path) {
 
 // file/dir → path.trash-<stamp>. Одна операция reset передаёт общий stamp; если такой
 // карантин уже есть, суффикс не даёт затереть предыдущую копию.
-export function quarantinePath(path, stamp = new Date().toISOString().replace(/[:.]/g, "-")) {
+export function quarantinePath(
+  path,
+  stamp = new Date().toISOString().replace(/[:.]/g, "-"),
+) {
   const stat = pathStat(path);
   if (!stat) return null;
   const base = `${path}.trash-${stamp}`;
   let dest = base;
-  for (let collision = 1; pathStat(dest); collision++) dest = `${base}-${collision}`;
+  for (let collision = 1; pathStat(dest); collision++)
+    dest = `${base}-${collision}`;
 
   // Права едут вместе с inode после rename. Закрываем источник заранее: при сбое chmod
   // исходник остаётся на месте, а вызывающий reset честно отмечает incomplete.
@@ -55,7 +59,9 @@ export function pruneTrash(path, keep = TRASH_KEEP) {
   const prefix = `${basename(path)}.trash-`;
   let names;
   try {
-    names = readdirSync(dirname(path)).filter((n) => n.startsWith(prefix)).sort();
+    names = readdirSync(dirname(path))
+      .filter((n) => n.startsWith(prefix))
+      .sort();
   } catch {
     return;
   }

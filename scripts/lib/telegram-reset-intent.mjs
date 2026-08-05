@@ -1,11 +1,22 @@
 import { randomBytes } from "node:crypto";
-import { mkdir, open, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  open,
+  readFile,
+  readdir,
+  rename,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 export const TELEGRAM_RESET_INTENT_VERSION = 1;
 
 function intentPath(directory, chatKey) {
-  return join(directory, `${Buffer.from(chatKey, "utf8").toString("base64url")}.json`);
+  return join(
+    directory,
+    `${Buffer.from(chatKey, "utf8").toString("base64url")}.json`,
+  );
 }
 
 function normalizeIntent(value, source) {
@@ -97,15 +108,21 @@ export async function loadTelegramResetIntents(directory) {
   for (const entry of entries) {
     if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
     const path = join(directory, entry.name);
-    const intent = normalizeIntent(JSON.parse(await readFile(path, "utf8")), path);
+    const intent = normalizeIntent(
+      JSON.parse(await readFile(path, "utf8")),
+      path,
+    );
     if (intentPath(directory, intent.chatKey) !== path) {
-      throw new Error(`Telegram reset intent filename does not match its chat key: ${path}`);
+      throw new Error(
+        `Telegram reset intent filename does not match its chat key: ${path}`,
+      );
     }
     intents.push(intent);
   }
   return intents.sort(
     (left, right) =>
-      left.requestedAt - right.requestedAt || left.chatKey.localeCompare(right.chatKey),
+      left.requestedAt - right.requestedAt ||
+      left.chatKey.localeCompare(right.chatKey),
   );
 }
 

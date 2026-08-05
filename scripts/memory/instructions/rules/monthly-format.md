@@ -26,7 +26,7 @@ the weekly-summaries of the previous month.
 ---
 type: monthly-summary
 period: YYYY-MM
-date: YYYY-MM-DD            # last day of the month
+date: YYYY-MM-DD # last day of the month
 description: >-
   One-line arc of the month.
 tags: [monthly, <theme>, <theme>]
@@ -37,21 +37,26 @@ topics: [theme-a, theme-b]
 # Month MM, YYYY
 
 ## Arc
+
 - How the month developed; the throughline.
 
 ## Milestones & decisions
+
 - [[cards/decisions/<slug>|Decision]] — impact.
 - [[cards/projects/<slug>|Project]] — status change this month.
 
 ## Ideas worth keeping
+
 - [[cards/ideas/<slug>|Idea]] — why it survived the month.
 
 ## Weeks (MOC down)
+
 - [[weekly/YYYY-Www|Week WW]]
 - [[weekly/YYYY-Www|Week WW]]
 - … (all weeks that exist)
 
 ## Navigation
+
 - Up: [[yearly/YYYY|Year YYYY]]
 ```
 

@@ -22,7 +22,10 @@ test("oversize scan checks modified and untracked non-ignored files before stagi
     vaultPath: "/vault",
     runGit(nextArgs) {
       args = nextArgs;
-      return { status: 0, stdout: "cards/large.md\0cards/small.md\0cards/large.md\0" };
+      return {
+        status: 0,
+        stdout: "cards/large.md\0cards/small.md\0cards/large.md\0",
+      };
     },
     stat(path) {
       return {
@@ -33,8 +36,16 @@ test("oversize scan checks modified and untracked non-ignored files before stagi
     },
   });
 
-  assert.deepEqual(args, ["ls-files", "--others", "--modified", "--exclude-standard", "-z"]);
-  assert.deepEqual(files, [{ path: "cards/large.md", size: GITHUB_BLOB_GUARD_BYTES + 1 }]);
+  assert.deepEqual(args, [
+    "ls-files",
+    "--others",
+    "--modified",
+    "--exclude-standard",
+    "-z",
+  ]);
+  assert.deepEqual(files, [
+    { path: "cards/large.md", size: GITHUB_BLOB_GUARD_BYTES + 1 },
+  ]);
 });
 
 test("oversize scan fails closed when git cannot enumerate the working tree", () => {
@@ -42,7 +53,10 @@ test("oversize scan fails closed when git cannot enumerate the working tree", ()
     () =>
       scanOversizeWorkingTreeFiles({
         vaultPath: "/vault",
-        runGit: () => ({ status: 128, stderr: "fatal: not a git repository\n" }),
+        runGit: () => ({
+          status: 128,
+          stderr: "fatal: not a git repository\n",
+        }),
       }),
     /git ls-files failed: fatal: not a git repository/,
   );
@@ -54,7 +68,9 @@ test("git push errors distinguish oversize history, credentials, and other failu
     "oversize",
   );
   assert.equal(
-    classifyGitPushError("remote: error: File cards/x.md exceeds GitHub's file size limit").kind,
+    classifyGitPushError(
+      "remote: error: File cards/x.md exceeds GitHub's file size limit",
+    ).kind,
     "oversize",
   );
   for (const stderr of [
@@ -64,10 +80,13 @@ test("git push errors distinguish oversize history, credentials, and other failu
   ]) {
     assert.equal(classifyGitPushError(stderr).kind, "auth");
   }
-  assert.deepEqual(classifyGitPushError("\nerror: failed to push some refs\nmore detail"), {
-    kind: "other",
-    firstLine: "error: failed to push some refs",
-  });
+  assert.deepEqual(
+    classifyGitPushError("\nerror: failed to push some refs\nmore detail"),
+    {
+      kind: "other",
+      firstLine: "error: failed to push some refs",
+    },
+  );
 });
 
 test("memory report surfaces known non-zero problem counters and tolerates other shapes", () => {

@@ -27,7 +27,9 @@ function defaultRunSystemctl(args, { signal } = {}) {
 
 async function defaultReadToken(root) {
   try {
-    return (await readFile(join(root, "data", "telegram-userbot.token"), "utf8")).trim();
+    return (
+      await readFile(join(root, "data", "telegram-userbot.token"), "utf8")
+    ).trim();
   } catch {
     return "";
   }
@@ -51,7 +53,8 @@ async function runProbe({
   const isEnabled = enabled?.code === 0 && enabledLabel === "enabled";
 
   if (!isActive) {
-    if (activeLabel === "activating" || isEnabled) return fixed("starting", "service_starting");
+    if (activeLabel === "activating" || isEnabled)
+      return fixed("starting", "service_starting");
     return fixed("off", "service_off");
   }
 
@@ -64,12 +67,14 @@ async function runProbe({
     headers: { authorization: `Bearer ${token}` },
     signal,
   });
-  if (response.status === 401) return fixed("unreachable", "proxy_auth_rejected");
+  if (response.status === 401)
+    return fixed("unreachable", "proxy_auth_rejected");
   if (!response.ok) return fixed("unreachable", "proxy_unreachable");
 
   const payload = await response.json();
   if (payload?.state === "ready") return fixed("ready", "ok");
-  if (payload?.state === "unauthorized") return fixed("unauthorized", "telegram_login_required");
+  if (payload?.state === "unauthorized")
+    return fixed("unauthorized", "telegram_login_required");
   return fixed("unreachable", "invalid_proxy_response");
 }
 

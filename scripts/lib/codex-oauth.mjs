@@ -9,7 +9,13 @@
 // Токен (access_token — JWT, живёт ~1 ч) кладём в data/codex-auth.json (0600, gitignored).
 // Перед каждым запросом getAccessToken() рефрешит токен при подходе к exp (refresh_token одноразовый).
 import { createHash, randomBytes } from "node:crypto";
-import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  writeFileSync,
+} from "node:fs";
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
 import { dirname, join } from "node:path";
@@ -87,7 +93,10 @@ export function accountFromIdToken(idToken) {
   } catch {
     /* нет клейма — вернём пустое */
   }
-  return { accountId: auth.chatgpt_account_id || null, planType: auth.chatgpt_plan_type || null };
+  return {
+    accountId: auth.chatgpt_account_id || null,
+    planType: auth.chatgpt_plan_type || null,
+  };
 }
 
 function pkce() {
@@ -110,7 +119,10 @@ async function exchangeCode({ code, verifier, redirectUri }) {
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: body.toString(),
   });
-  if (!res.ok) throw new Error(`token exchange failed: ${res.status} ${(await res.text()).slice(0, 300)}`);
+  if (!res.ok)
+    throw new Error(
+      `token exchange failed: ${res.status} ${(await res.text()).slice(0, 300)}`,
+    );
   return res.json(); // { id_token, access_token, refresh_token }
 }
 
@@ -118,16 +130,25 @@ async function refresh(refreshToken) {
   const res = await fetch(TOKEN_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ client_id: CLIENT_ID, grant_type: "refresh_token", refresh_token: refreshToken }),
+    body: JSON.stringify({
+      client_id: CLIENT_ID,
+      grant_type: "refresh_token",
+      refresh_token: refreshToken,
+    }),
   });
-  if (!res.ok) throw new Error(`token refresh failed: ${res.status} ${(await res.text()).slice(0, 300)}`);
+  if (!res.ok)
+    throw new Error(
+      `token refresh failed: ${res.status} ${(await res.text()).slice(0, 300)}`,
+    );
   return res.json(); // { id_token?, access_token, refresh_token? }
 }
 
 // Собирает объект хранилища из ответа токен-эндпоинта.
 function toAuth(tokens, prev = {}) {
   const idToken = tokens.id_token || prev.id_token;
-  const { accountId, planType } = idToken ? accountFromIdToken(idToken) : { accountId: prev.accountId, planType: prev.planType };
+  const { accountId, planType } = idToken
+    ? accountFromIdToken(idToken)
+    : { accountId: prev.accountId, planType: prev.planType };
   return {
     id_token: idToken,
     access_token: tokens.access_token,
@@ -145,8 +166,10 @@ let refreshInFlight = null;
 export async function getAccessToken(dataDir = defaultDir()) {
   let auth = readAuth(dataDir);
   if (!auth?.access_token) throw new Error("not logged in — run `iva login`");
-  const fresh = jwtExp(auth.access_token) - REFRESH_SKEW_S > Math.floor(Date.now() / 1000);
-  if (fresh) return { accessToken: auth.access_token, accountId: auth.accountId };
+  const fresh =
+    jwtExp(auth.access_token) - REFRESH_SKEW_S > Math.floor(Date.now() / 1000);
+  if (fresh)
+    return { accessToken: auth.access_token, accountId: auth.accountId };
 
   if (!refreshInFlight) {
     refreshInFlight = (async () => {
@@ -156,7 +179,12 @@ export async function getAccessToken(dataDir = defaultDir()) {
         return next;
       } catch (err) {
         const reread = readAuth(dataDir); // мог обновить другой процесс
-        if (reread?.access_token && jwtExp(reread.access_token) - REFRESH_SKEW_S > Math.floor(Date.now() / 1000)) return reread;
+        if (
+          reread?.access_token &&
+          jwtExp(reread.access_token) - REFRESH_SKEW_S >
+            Math.floor(Date.now() / 1000)
+        )
+          return reread;
         throw err;
       } finally {
         refreshInFlight = null;
@@ -180,24 +208,36 @@ export async function codexAuthHeaders(dataDir = defaultDir()) {
 }
 
 // ── device-code flow (headless-friendly, по ссылке) ────────────────────────
-export async function runDeviceCodeLogin({ dataDir = defaultDir(), log = console.log, lang = "en" } = {}) {
+export async function runDeviceCodeLogin({
+  dataDir = defaultDir(),
+  log = console.log,
+  lang = "en",
+} = {}) {
   const api = `${ISSUER}/api/accounts`;
   const uc = await fetch(`${api}/deviceauth/usercode`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ client_id: CLIENT_ID }),
   });
-  if (!uc.ok) throw new Error(`device usercode failed: ${uc.status} ${(await uc.text()).slice(0, 200)}`);
+  if (!uc.ok)
+    throw new Error(
+      `device usercode failed: ${uc.status} ${(await uc.text()).slice(0, 200)}`,
+    );
   const { device_auth_id, user_code, interval } = await uc.json();
 
-  log(`\n  1. ${tr(lang, "Open this link in a browser (any device):", "Открой в браузере (на любом устройстве):")}  ${ISSUER}/codex/device`);
-  log(`  2. ${tr(lang, "Enter this one-time code (expires in 15 min):", "Введи одноразовый код (живёт 15 минут):")}   ${user_code}\n`);
+  log(
+    `\n  1. ${tr(lang, "Open this link in a browser (any device):", "Открой в браузере (на любом устройстве):")}  ${ISSUER}/codex/device`,
+  );
+  log(
+    `  2. ${tr(lang, "Enter this one-time code (expires in 15 min):", "Введи одноразовый код (живёт 15 минут):")}   ${user_code}\n`,
+  );
   log(`  ${tr(lang, "Waiting for confirmation…", "Жду подтверждения…")}`);
 
   const pollMs = Math.max(Number(interval) || 5, 1) * 1000;
   const deadline = Date.now() + 15 * 60 * 1000;
   for (;;) {
-    if (Date.now() > deadline) throw new Error("device auth timed out (15 min)");
+    if (Date.now() > deadline)
+      throw new Error("device auth timed out (15 min)");
     const r = await fetch(`${api}/deviceauth/token`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -214,7 +254,8 @@ export async function runDeviceCodeLogin({ dataDir = defaultDir(), log = console
       writeAuth(auth, dataDir);
       return auth;
     }
-    if (r.status !== 403 && r.status !== 404) throw new Error(`device auth failed: ${r.status}`);
+    if (r.status !== 403 && r.status !== 404)
+      throw new Error(`device auth failed: ${r.status}`);
     await new Promise((res) => setTimeout(res, pollMs));
   }
 }
@@ -222,7 +263,8 @@ export async function runDeviceCodeLogin({ dataDir = defaultDir(), log = console
 // ── browser-PKCE flow (локальный сервер + авто-открытие браузера) ───────────
 function openBrowser(url) {
   const win = process.platform === "win32";
-  const cmd = process.platform === "darwin" ? "open" : win ? "start" : "xdg-open";
+  const cmd =
+    process.platform === "darwin" ? "open" : win ? "start" : "xdg-open";
   // win32: `start` берёт первый аргумент как заголовок окна, а в authorize-URL есть `&` →
   // передаём пустой заголовок "" перед URL, иначе cmd.exe не откроет ссылку.
   const args = win ? ["", url] : [url];
@@ -233,7 +275,12 @@ function openBrowser(url) {
   }
 }
 
-export async function runBrowserLogin({ dataDir = defaultDir(), log = console.log, open = true, lang = "en" } = {}) {
+export async function runBrowserLogin({
+  dataDir = defaultDir(),
+  log = console.log,
+  open = true,
+  lang = "en",
+} = {}) {
   const { verifier, challenge } = pkce();
   const state = b64url(randomBytes(32));
   const port = await listenFirstFree([DEVICE_PORT, FALLBACK_PORT]);
@@ -253,14 +300,19 @@ export async function runBrowserLogin({ dataDir = defaultDir(), log = console.lo
       originator: ORIGINATOR,
     }).toString();
 
-  log(`\n  ${tr(lang, "Open this in a browser and sign in to OpenAI:", "Открой в браузере и войди в OpenAI:")}\n  ${authorizeUrl}\n`);
+  log(
+    `\n  ${tr(lang, "Open this in a browser and sign in to OpenAI:", "Открой в браузере и войди в OpenAI:")}\n  ${authorizeUrl}\n`,
+  );
   if (open) openBrowser(authorizeUrl);
 
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      port.server.close();
-      reject(new Error("browser login timed out (10 min)"));
-    }, 10 * 60 * 1000);
+    const timer = setTimeout(
+      () => {
+        port.server.close();
+        reject(new Error("browser login timed out (10 min)"));
+      },
+      10 * 60 * 1000,
+    );
 
     port.server.on("request", async (req, res) => {
       const url = new URL(req.url, `http://localhost:${port.port}`);
@@ -269,17 +321,29 @@ export async function runBrowserLogin({ dataDir = defaultDir(), log = console.lo
         return;
       }
       const done = (code, msg) => {
-        res.writeHead(code, { "Content-Type": "text/html; charset=utf-8" }).end(`<h3>${msg}</h3>`);
+        res
+          .writeHead(code, { "Content-Type": "text/html; charset=utf-8" })
+          .end(`<h3>${msg}</h3>`);
       };
       try {
-        if (url.searchParams.get("state") !== state) throw new Error("state mismatch");
+        if (url.searchParams.get("state") !== state)
+          throw new Error("state mismatch");
         const err = url.searchParams.get("error");
         if (err) throw new Error(`OAuth error: ${err}`);
         const code = url.searchParams.get("code");
         if (!code) throw new Error("missing authorization code");
-        const auth = toAuth(await exchangeCode({ code, verifier, redirectUri }));
+        const auth = toAuth(
+          await exchangeCode({ code, verifier, redirectUri }),
+        );
         writeAuth(auth, dataDir);
-        done(200, tr(lang, "Signed in — you can close this tab and return to the terminal.", "Готово — вход выполнен. Можно закрыть вкладку и вернуться в терминал."));
+        done(
+          200,
+          tr(
+            lang,
+            "Signed in — you can close this tab and return to the terminal.",
+            "Готово — вход выполнен. Можно закрыть вкладку и вернуться в терминал.",
+          ),
+        );
         clearTimeout(timer);
         port.server.close();
         resolve(auth);
@@ -297,10 +361,13 @@ export async function runBrowserLogin({ dataDir = defaultDir(), log = console.lo
 function listenFirstFree(ports) {
   return new Promise((resolve, reject) => {
     const tryPort = (i) => {
-      if (i >= ports.length) return reject(new Error("no free login port (1455/1457 busy)"));
+      if (i >= ports.length)
+        return reject(new Error("no free login port (1455/1457 busy)"));
       const server = createServer();
       server.once("error", () => tryPort(i + 1));
-      server.listen(ports[i], "127.0.0.1", () => resolve({ server, port: ports[i] }));
+      server.listen(ports[i], "127.0.0.1", () =>
+        resolve({ server, port: ports[i] }),
+      );
     };
     tryPort(0);
   });
@@ -326,7 +393,8 @@ function modelId(node, parentKey) {
   if (primary) return primary;
   // `id`/`name` are documented fallbacks, but only inside a model-list wrapper:
   // arbitrary metadata such as tiers:[{id:"flex"}] must not become a model button.
-  if (MODEL_LIST_KEYS.test(parentKey || "")) return cleanString(node.id) || cleanString(node.name);
+  if (MODEL_LIST_KEYS.test(parentKey || ""))
+    return cleanString(node.id) || cleanString(node.name);
   return null;
 }
 
@@ -336,12 +404,15 @@ function reasoningLevels(node) {
   }
   const levels = node.supported_reasoning_levels
     .map((level) => {
-      if (typeof level === "string") return cleanString(level)?.toLowerCase() || null;
-      return cleanString(level?.effort)?.toLowerCase()
-        || cleanString(level?.level)?.toLowerCase()
-        || cleanString(level?.id)?.toLowerCase()
-        || cleanString(level?.name)?.toLowerCase()
-        || null;
+      if (typeof level === "string")
+        return cleanString(level)?.toLowerCase() || null;
+      return (
+        cleanString(level?.effort)?.toLowerCase() ||
+        cleanString(level?.level)?.toLowerCase() ||
+        cleanString(level?.id)?.toLowerCase() ||
+        cleanString(level?.name)?.toLowerCase() ||
+        null
+      );
     })
     .filter((level) => level && CANONICAL_REASONING_LEVELS.has(level));
   const unique = [...new Set(levels)];
@@ -358,7 +429,9 @@ export function parseCodexModelCatalog(json) {
   function walk(node, parentKey = "") {
     if (Array.isArray(node)) {
       for (const item of node) {
-        const stringId = MODEL_LIST_KEYS.test(parentKey) ? cleanString(item) : null;
+        const stringId = MODEL_LIST_KEYS.test(parentKey)
+          ? cleanString(item)
+          : null;
         if (stringId && !found.has(stringId)) {
           found.set(stringId, {
             id: stringId,
@@ -396,14 +469,23 @@ export async function listCodexModelCatalog({
   authHeadersFn = codexAuthHeaders,
 } = {}) {
   const headers = await authHeadersFn(dataDir);
-  const res = await fetchFn(`${CODEX_BASE_URL}/models?client_version=${CLIENT_VERSION}`, {
-    headers,
-    signal: AbortSignal.timeout(MODELS_FETCH_TIMEOUT_MS),
-  });
-  if (!res.ok) throw new Error(`list models failed: ${res.status} ${(await res.text()).slice(0, 300)}`);
+  const res = await fetchFn(
+    `${CODEX_BASE_URL}/models?client_version=${CLIENT_VERSION}`,
+    {
+      headers,
+      signal: AbortSignal.timeout(MODELS_FETCH_TIMEOUT_MS),
+    },
+  );
+  if (!res.ok)
+    throw new Error(
+      `list models failed: ${res.status} ${(await res.text()).slice(0, 300)}`,
+    );
   const json = await res.json();
   const catalog = parseCodexModelCatalog(json);
-  if (!catalog.length) throw new Error(`models endpoint returned no usable models — raw: ${JSON.stringify(json).slice(0, 500)}`);
+  if (!catalog.length)
+    throw new Error(
+      `models endpoint returned no usable models — raw: ${JSON.stringify(json).slice(0, 500)}`,
+    );
   return catalog;
 }
 
@@ -413,7 +495,8 @@ export async function listCodexModels(opts = {}) {
 
 // «Новые сверху»: сравниваем числовую версию в slug (gpt-5.1 → 5.1), при равенстве — по имени.
 function compareModelDesc(a, b) {
-  const ver = (s) => parseFloat((String(s).match(/(\d+(?:\.\d+)?)/) || [])[1] || "0");
+  const ver = (s) =>
+    parseFloat((String(s).match(/(\d+(?:\.\d+)?)/) || [])[1] || "0");
   return ver(b) - ver(a) || String(a).localeCompare(String(b));
 }
 
@@ -424,24 +507,54 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   };
   // PKCE: challenge = base64url(sha256(verifier))
   const { verifier, challenge } = pkce();
-  assert(challenge === b64url(createHash("sha256").update(verifier).digest()), "pkce S256");
+  assert(
+    challenge === b64url(createHash("sha256").update(verifier).digest()),
+    "pkce S256",
+  );
   assert(!/[+/=]/.test(challenge), "challenge is base64url");
   // JWT parse: собираем фейковый id_token с клеймом auth
   const header = b64url(JSON.stringify({ alg: "none" }));
-  const payload = b64url(JSON.stringify({ exp: 9999999999, "https://api.openai.com/auth": { chatgpt_account_id: "acc_1", chatgpt_plan_type: "pro" } }));
+  const payload = b64url(
+    JSON.stringify({
+      exp: 9999999999,
+      "https://api.openai.com/auth": {
+        chatgpt_account_id: "acc_1",
+        chatgpt_plan_type: "pro",
+      },
+    }),
+  );
   const jwt = `${header}.${payload}.sig`;
   assert(jwtExp(jwt) === 9999999999, "jwtExp");
   assert(accountFromIdToken(jwt).accountId === "acc_1", "accountId");
   assert(accountFromIdToken(jwt).planType === "pro", "planType");
-  assert(accountFromIdToken("garbage").accountId === null, "bad id_token → null");
+  assert(
+    accountFromIdToken("garbage").accountId === null,
+    "bad id_token → null",
+  );
   // Разбор списка моделей: model/slug/id/name, сортировка и защита от metadata id.
   const parsed = parseCodexModelCatalog({
-    result: { items: [{ model: "gpt-5" }, { slug: "gpt-5.1" }, { id: "preset-x" }, { name: "gpt-6" }] },
+    result: {
+      items: [
+        { model: "gpt-5" },
+        { slug: "gpt-5.1" },
+        { id: "preset-x" },
+        { name: "gpt-6" },
+      ],
+    },
     tiers: [{ id: "flex" }],
   });
   assert(parsed[0].id === "gpt-6", `newest first, got ${parsed[0]?.id}`);
-  assert(parsed.some((entry) => entry.id === "gpt-5"), "keeps gpt-5");
-  assert(!parsed.some((entry) => entry.id === "flex"), "ignores non-model metadata arrays");
-  assert(tr("ru", "en", "ру") === "ру" && tr("en", "en", "ру") === "en", "tr lang");
+  assert(
+    parsed.some((entry) => entry.id === "gpt-5"),
+    "keeps gpt-5",
+  );
+  assert(
+    !parsed.some((entry) => entry.id === "flex"),
+    "ignores non-model metadata arrays",
+  );
+  assert(
+    tr("ru", "en", "ру") === "ру" && tr("en", "en", "ру") === "en",
+    "tr lang",
+  );
   console.log("codex-oauth self-check ok");
 }

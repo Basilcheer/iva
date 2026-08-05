@@ -1,6 +1,11 @@
 import { existsSync, statSync } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
-import { acquireLock, loadJsonStrict, releaseLock, saveJsonAtomic } from "./json-store.ts";
+import {
+  acquireLock,
+  loadJsonStrict,
+  releaseLock,
+  saveJsonAtomic,
+} from "./json-store.ts";
 
 export const TELEGRAM_MEDIA_CACHE_LIMIT = 500;
 
@@ -23,7 +28,8 @@ const cacheFile = (dataDir = process.env.ASSISTANT_DATA_DIR ?? "data") =>
   join(dataDir, "media-cache.json");
 
 function isEntry(value: unknown): value is TelegramMediaCacheEntry {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    return false;
   const entry = value as Record<string, unknown>;
   return (
     typeof entry.path === "string" &&
@@ -34,13 +40,19 @@ function isEntry(value: unknown): value is TelegramMediaCacheEntry {
 }
 
 function normalizeCache(value: unknown): TelegramMediaCache {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return {};
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    return {};
   return Object.fromEntries(
-    Object.entries(value).filter(([key, entry]) => key.length > 0 && isEntry(entry)),
+    Object.entries(value).filter(
+      ([key, entry]) => key.length > 0 && isEntry(entry),
+    ),
   );
 }
 
-async function loadCache(file: string, log: (message: string) => void): Promise<TelegramMediaCache> {
+async function loadCache(
+  file: string,
+  log: (message: string) => void,
+): Promise<TelegramMediaCache> {
   try {
     return normalizeCache(await loadJsonStrict<unknown>(file, {}));
   } catch (error) {
@@ -51,7 +63,10 @@ async function loadCache(file: string, log: (message: string) => void): Promise<
   }
 }
 
-function resolvesToAttachment(entry: TelegramMediaCacheEntry, vaultDir: string): boolean {
+function resolvesToAttachment(
+  entry: TelegramMediaCacheEntry,
+  vaultDir: string,
+): boolean {
   const attachments = resolve(vaultDir, "attachments");
   const target = resolve(vaultDir, entry.path);
   const inside = relative(attachments, target);

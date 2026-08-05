@@ -31,8 +31,7 @@ function runHarness(
         ...(directAcceptanceTimeoutMs === undefined
           ? {}
           : {
-              TELEGRAM_DIRECT_ACCEPTANCE_TIMEOUT_MS:
-                directAcceptanceTimeoutMs,
+              TELEGRAM_DIRECT_ACCEPTANCE_TIMEOUT_MS: directAcceptanceTimeoutMs,
             }),
       },
       encoding: "utf8",
@@ -44,7 +43,9 @@ function runHarness(
     0,
     `harness failed (${mode}/${fault})\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
   );
-  return JSON.parse(readFileSync(join(dataDir, "queue-harness-result.json"), "utf8"));
+  return JSON.parse(
+    readFileSync(join(dataDir, "queue-harness-result.json"), "utf8"),
+  );
 }
 
 for (const fault of ["write", "rename"]) {
@@ -112,12 +113,17 @@ test("queued follow-ups auto-drain in FIFO order when the current turn becomes i
 
 test("collector merges a two-text burst into one durable queue item and delivery", (t) => {
   const dataDir = makeDataDir(t, "collect-burst");
-  const result = runHarness("collect-burst", dataDir, "none", { collectQuietMs: "75" });
+  const result = runHarness("collect-burst", dataDir, "none", {
+    collectQuietMs: "75",
+  });
 
   assert.equal(result.deliveries.length, 1);
   assert.equal(result.deliveries[0].update_id, 102);
   assert.deepEqual(
-    result.deliveries[0].message.iva_parts.map((part) => [part.message_id, part.text]),
+    result.deliveries[0].message.iva_parts.map((part) => [
+      part.message_id,
+      part.text,
+    ]),
     [
       [101, "first"],
       [102, "second"],
@@ -143,7 +149,10 @@ test("a restarted bridge recovers and drains the persisted FIFO without a third 
 
   const afterRestart = runHarness("restart-drain", dataDir);
   assert.deepEqual(
-    afterRestart.deliveries.map((update) => [update.update_id, update.message?.text]),
+    afterRestart.deliveries.map((update) => [
+      update.update_id,
+      update.message?.text,
+    ]),
     [
       [101, "first"],
       [102, "second"],
@@ -157,7 +166,10 @@ test("a persistently failing queue head does not block other chats or Telegram p
   const result = runHarness("fair-drain", dataDir);
 
   assert.deepEqual(
-    result.deliveries.map((update) => [update.message.chat.id, update.update_id]),
+    result.deliveries.map((update) => [
+      update.message.chat.id,
+      update.update_id,
+    ]),
     [
       [1, 101],
       [2, 102],
@@ -188,7 +200,11 @@ test("unaddressed group noise is excluded from a busy conversation FIFO", (t) =>
   assert.equal(result.queue.queues?.["-100:"], undefined);
   assert.deepEqual(result.deliveries, []);
   assert.deepEqual(result.reactions, []);
-  assert.equal(result.offset.offset, 103, "ignored group noise is consumed exactly once");
+  assert.equal(
+    result.offset.offset,
+    103,
+    "ignored group noise is consumed exactly once",
+  );
 });
 
 test("busy FIFO routes private, group and forum-topic updates without absorbing group noise", (t) => {
@@ -200,7 +216,11 @@ test("busy FIFO routes private, group and forum-topic updates without absorbing 
     Object.fromEntries(
       Object.entries(queues).map(([key, items]) => [
         key,
-        items.map((item) => [item.version, item.updateId, item.update.message?.text]),
+        items.map((item) => [
+          item.version,
+          item.updateId,
+          item.update.message?.text,
+        ]),
       ]),
     ),
     {

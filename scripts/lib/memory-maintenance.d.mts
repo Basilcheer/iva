@@ -39,4 +39,7 @@ export function readMemoryMaintenanceReport(
   | { status: "missing" | "stale" | "invalid"; problems: [] }
   | { status: "fresh"; problems: Array<{ key: string; count: number }> };
 
-export function recordSkippedOversize(reportPath: string, count: number): boolean;
+export function recordSkippedOversize(
+  reportPath: string,
+  count: number,
+): boolean;

@@ -18,7 +18,8 @@ const reporter = {
     const sug = suggestion ? `\n  free alternative → ${suggestion}` : "";
     return `✗ Port ${port} is occupied.${who}${sug}`;
   },
-  json: (result, suggestion) => JSON.stringify({ ...result, suggestion }, null, 2),
+  json: (result, suggestion) =>
+    JSON.stringify({ ...result, suggestion }, null, 2),
 };
 
 async function main(argv) {
@@ -37,10 +38,16 @@ async function main(argv) {
 
   let suggestion = null;
   if (suggest || result.occupied) {
-    suggestion = await new PortSelector(checker).firstFree(result.occupied ? port + 1 : port);
+    suggestion = await new PortSelector(checker).firstFree(
+      result.occupied ? port + 1 : port,
+    );
   }
 
-  console.log(asJson ? reporter.json(result, suggestion) : reporter.human(result, suggestion));
+  console.log(
+    asJson
+      ? reporter.json(result, suggestion)
+      : reporter.human(result, suggestion),
+  );
   process.exit(result.occupied ? 1 : 0);
 }
 

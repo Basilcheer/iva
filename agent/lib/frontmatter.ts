@@ -56,12 +56,16 @@ export function parseFrontmatter(content: string): ParsedFrontmatter {
         }
       }
       if (multilineMode === "list") {
-        const item = stripped.startsWith("- ") ? stripped.slice(2).trim() : stripped;
+        const item = stripped.startsWith("- ")
+          ? stripped.slice(2).trim()
+          : stripped;
         if (item) (fields[multilineKey] as string[]).push(unquote(item));
       } else {
         const prev = (fields[multilineKey] as string) || "";
         const separator = multilineBlankLines
-          ? "\n".repeat(multilineBlankLines + (multilineMode === "literal" ? 1 : 0))
+          ? "\n".repeat(
+              multilineBlankLines + (multilineMode === "literal" ? 1 : 0),
+            )
           : multilineSep;
         fields[multilineKey] = (prev + separator + stripped).trim();
       }
@@ -166,7 +170,11 @@ function splitFlowItems(inner: string): string[] {
 }
 
 function unquote(s: string): string {
-  if (s.length >= 2 && ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'")))) {
+  if (
+    s.length >= 2 &&
+    ((s.startsWith('"') && s.endsWith('"')) ||
+      (s.startsWith("'") && s.endsWith("'")))
+  ) {
     if (s.startsWith('"')) {
       try {
         const parsed: unknown = JSON.parse(s);
@@ -176,7 +184,9 @@ function unquote(s: string): string {
       }
     }
     const inner = s.slice(1, -1);
-    return s.startsWith('"') ? inner.replace(/\\"/g, '"').replace(/\\\\/g, "\\") : inner;
+    return s.startsWith('"')
+      ? inner.replace(/\\"/g, '"').replace(/\\\\/g, "\\")
+      : inner;
   }
   return s;
 }
@@ -198,7 +208,9 @@ function needsQuote(s: string): boolean {
 /** Скаляр для flow-списка: `[work, "a: b"]` — элементы тоже квотируются при нужде. */
 export function formatItem(v: string): string {
   const s = String(v);
-  return needsQuote(s) || s.includes(",") || s.includes(" ") ? JSON.stringify(s) : s;
+  return needsQuote(s) || s.includes(",") || s.includes(" ")
+    ? JSON.stringify(s)
+    : s;
 }
 
 export function formatField(key: string, val: FmValue): string {
@@ -206,7 +218,10 @@ export function formatField(key: string, val: FmValue): string {
   const s = String(val);
   if (s === "") return `${key}:`;
   if (s.includes("\n")) {
-    return `${key}: |-\n${s.split("\n").map((line) => `  ${line}`).join("\n")}`;
+    return `${key}: |-\n${s
+      .split("\n")
+      .map((line) => `  ${line}`)
+      .join("\n")}`;
   }
   return needsQuote(s) ? `${key}: ${JSON.stringify(s)}` : `${key}: ${s}`;
 }
@@ -217,7 +232,10 @@ export function formatField(key: string, val: FmValue): string {
  * в конец. Continuation-строки перезаписанного ключа пропускаются ПО ОТСТУПУ (не по
  * наличию двоеточия) — иначе `description: >-` дублируется на каждой перезаписи.
  */
-export function writeFrontmatter(fields: FmFields, originalLines: string[]): string {
+export function writeFrontmatter(
+  fields: FmFields,
+  originalLines: string[],
+): string {
   const written = new Set<string>();
   const out: string[] = [];
   let skipContinuation = false;
@@ -247,7 +265,13 @@ export function writeFrontmatter(fields: FmFields, originalLines: string[]): str
       out.push(formatField(key, fields[key]));
       // '' покрывает блочные списки и pending-значения: их отступные строки тоже
       // заменяются целиком.
-      if (valPart === ">-" || valPart === ">" || valPart === "|-" || valPart === "|" || valPart === "") {
+      if (
+        valPart === ">-" ||
+        valPart === ">" ||
+        valPart === "|-" ||
+        valPart === "|" ||
+        valPart === ""
+      ) {
         skipContinuation = true;
       }
     } else {

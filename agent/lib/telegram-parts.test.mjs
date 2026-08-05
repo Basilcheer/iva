@@ -10,7 +10,12 @@ test("mediaFromRaw selects the largest Telegram photo size", () => {
         { file_id: "large", file_unique_id: "large-photo" },
       ],
     }),
-    { fileId: "large", fileUniqueId: "large-photo", tag: "photo", transcribe: false },
+    {
+      fileId: "large",
+      fileUniqueId: "large-photo",
+      tag: "photo",
+      transcribe: false,
+    },
   );
 });
 
@@ -52,4 +57,15 @@ test("messageParts returns the synthetic collector parts in order", () => {
     first,
     second,
   ]);
+});
+
+test("messageParts drops malformed synthetic collector entries", () => {
+  const valid = { message_id: 1, text: "valid" };
+
+  assert.deepEqual(
+    messageParts({
+      iva_parts: [null, "text", 42, [], valid],
+    }),
+    [valid],
+  );
 });

@@ -26,7 +26,7 @@ seven daily-summaries of the ISO week.
 ---
 type: weekly-summary
 period: YYYY-Www
-date: YYYY-MM-DD            # the Sunday (week end)
+date: YYYY-MM-DD # the Sunday (week end)
 description: >-
   One-line arc of the week.
 tags: [weekly, <theme>, <theme>]
@@ -37,22 +37,27 @@ topics: [theme-a, theme-b]
 # Week WW, YYYY
 
 ## Themes
+
 - **Theme A** — what it was, how it developed across the week.
 - **Theme B** — …
 
 ## Decisions & ideas
+
 - [[cards/decisions/<slug>|Decision]] — one line.
 - [[cards/ideas/<slug>|Idea]] — one line.
 
 ## Open loops
+
 - Carried into next week: …
 
 ## Days (MOC down)
+
 - [[summaries/daily/YYYY-MM-DD|Mon DD]]
 - [[summaries/daily/YYYY-MM-DD|Tue DD]]
 - … (all seven days that exist)
 
 ## Navigation
+
 - Up: [[monthly/YYYY-MM|Month MM]]
 ```
 

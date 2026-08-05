@@ -20,10 +20,12 @@ function commandStatus(result) {
 }
 
 function firstNonEmptyLine(text) {
-  return String(text ?? "")
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .find(Boolean) ?? "";
+  return (
+    String(text ?? "")
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find(Boolean) ?? ""
+  );
 }
 
 export function scanOversizeWorkingTreeFiles({
@@ -32,13 +34,25 @@ export function scanOversizeWorkingTreeFiles({
   stat = lstatSync,
   limitBytes = GITHUB_BLOB_GUARD_BYTES,
 }) {
-  const listed = runGit(["ls-files", "--others", "--modified", "--exclude-standard", "-z"]);
+  const listed = runGit([
+    "ls-files",
+    "--others",
+    "--modified",
+    "--exclude-standard",
+    "-z",
+  ]);
   if (commandStatus(listed) !== 0) {
     const detail = firstNonEmptyLine(listed?.stderr);
     throw new Error(`git ls-files failed${detail ? `: ${detail}` : ""}`);
   }
 
-  const paths = [...new Set(String(listed.stdout ?? "").split("\0").filter(Boolean))];
+  const paths = [
+    ...new Set(
+      String(listed.stdout ?? "")
+        .split("\0")
+        .filter(Boolean),
+    ),
+  ];
   const oversized = [];
   for (const path of paths) {
     let info;
@@ -65,7 +79,11 @@ export function classifyGitPushError(stderr) {
   if (/GH001|exceeds\s+GitHub(?:\.com)?['’]s\s+file size limit/i.test(text)) {
     return { kind: "oversize", firstLine };
   }
-  if (/Authentication failed|could not read (?:Username|Password)|Permission denied/i.test(text)) {
+  if (
+    /Authentication failed|could not read (?:Username|Password)|Permission denied/i.test(
+      text,
+    )
+  ) {
     return { kind: "auth", firstLine };
   }
   return { kind: "other", firstLine };
@@ -104,11 +122,16 @@ export function recordSkippedOversize(reportPath, count) {
   } catch {
     return false;
   }
-  if (!report || typeof report !== "object" || Array.isArray(report)) return false;
+  if (!report || typeof report !== "object" || Array.isArray(report))
+    return false;
 
   const tmp = `${reportPath}.tmp-${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
   try {
-    writeFileSync(tmp, `${JSON.stringify({ ...report, skipped_oversize: count }, null, 2)}\n`, "utf8");
+    writeFileSync(
+      tmp,
+      `${JSON.stringify({ ...report, skipped_oversize: count }, null, 2)}\n`,
+      "utf8",
+    );
     chmodSync(tmp, statSync(reportPath).mode & 0o777);
     renameSync(tmp, reportPath);
     return true;

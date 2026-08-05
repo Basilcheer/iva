@@ -47,7 +47,10 @@ export function readEntries(dataDir = defaultDir()) {
 
 // Нормализуем аргумент команды → допустимое окно (дефолт last).
 export function parseWindow(arg) {
-  const a = (arg || "").trim().toLowerCase().replace(/^by[ -]/, "by-");
+  const a = (arg || "")
+    .trim()
+    .toLowerCase()
+    .replace(/^by[ -]/, "by-");
   const ok = ["last", "today", "week", "month", "by-model", "by-source"];
   return ok.includes(a) ? a : "last";
 }
@@ -67,7 +70,8 @@ function inWindow(e, window, now, tz) {
   const t = Date.parse(e.ts);
   if (Number.isNaN(t)) return false;
   if (window === "today") return localDate(e.ts, tz) === localDate(now, tz);
-  if (window === "month") return localDate(e.ts, tz).slice(0, 7) === localDate(now, tz).slice(0, 7);
+  if (window === "month")
+    return localDate(e.ts, tz).slice(0, 7) === localDate(now, tz).slice(0, 7);
   if (window === "week") return t >= now - 7 * 86400000;
   return true; // lifetime — by-model/by-source
 }
@@ -92,7 +96,15 @@ export function subagentTurnId(turn, subagentName, childTurnId) {
   return `${parentTurnId}#${subagentName || "subagent"}`;
 }
 
-const blank = () => ({ in: 0, out: 0, cacheRead: 0, cacheWrite: 0, total: 0, steps: 0, turns: new Set() });
+const blank = () => ({
+  in: 0,
+  out: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+  total: 0,
+  steps: 0,
+  turns: new Set(),
+});
 function add(acc, e) {
   acc.in += e.in || 0;
   acc.out += e.out || 0;
@@ -103,20 +115,33 @@ function add(acc, e) {
   acc.turns.add(turnKey(e));
 }
 const finalize = (a) => ({
-  in: a.in, out: a.out, cacheRead: a.cacheRead, cacheWrite: a.cacheWrite,
-  total: a.total, steps: a.steps, turns: a.turns.size,
+  in: a.in,
+  out: a.out,
+  cacheRead: a.cacheRead,
+  cacheWrite: a.cacheWrite,
+  total: a.total,
+  steps: a.steps,
+  turns: a.turns.size,
 });
 function rowsOf(map) {
-  return [...map].map(([key, acc]) => ({ key, ...finalize(acc) })).sort((x, y) => y.total - x.total);
+  return [...map]
+    .map(([key, acc]) => ({ key, ...finalize(acc) }))
+    .sort((x, y) => y.total - x.total);
 }
 
-export function summarize(entries, { window = "last", now = Date.now(), tz } = {}) {
+export function summarize(
+  entries,
+  { window = "last", now = Date.now(), tz } = {},
+) {
   if (window === "last") {
     if (!entries.length) return { window, last: null };
     const lastE = entries[entries.length - 1];
     const key = turnKey(lastE);
     const acc = blank();
-    let model = lastE.model, source = lastE.source, subagent = null, when = lastE.ts;
+    let model = lastE.model,
+      source = lastE.source,
+      subagent = null,
+      when = lastE.ts;
     // Вход по шагам хода складывать нельзя: каждый шаг заново отправляет весь контекст,
     // и сумма (104 632 + 105 537 = 210 169) выглядит как «контекст вырос вдвое». Решение
     // «пора ли /new» принимают по актуальному размеру контекста — это вход ПОСЛЕДНЕГО
@@ -140,7 +165,8 @@ export function summarize(entries, { window = "last", now = Date.now(), tz } = {
       add(acc, e);
       model = e.model;
       anyContext = e.in || 0;
-      if (e.subagent || String(e.turnId ?? "").includes("#")) subagent = e.subagent ?? subagent;
+      if (e.subagent || String(e.turnId ?? "").includes("#"))
+        subagent = e.subagent ?? subagent;
       else mainContext = e.in || 0;
     }
     // Ход целиком из субагентских записей (шаг основной сессии не дошёл до лога) — показываем
@@ -151,7 +177,8 @@ export function summarize(entries, { window = "last", now = Date.now(), tz } = {
       last: {
         ...finalize(acc),
         in: context,
-        contextFromSubagent: mainContext === undefined && anyContext !== undefined,
+        contextFromSubagent:
+          mainContext === undefined && anyContext !== undefined,
         model,
         source,
         subagent,
@@ -160,7 +187,8 @@ export function summarize(entries, { window = "last", now = Date.now(), tz } = {
     };
   }
   if (window === "by-model" || window === "by-source") {
-    const keyFn = window === "by-model" ? (e) => e.model || "?" : (e) => e.source || "?";
+    const keyFn =
+      window === "by-model" ? (e) => e.model || "?" : (e) => e.source || "?";
     const groups = new Map();
     const tot = blank();
     for (const e of entries) {
@@ -173,7 +201,9 @@ export function summarize(entries, { window = "last", now = Date.now(), tz } = {
   }
   // today / week / month — итог + разбивка по источникам и моделям
   const win = entries.filter((e) => inWindow(e, window, now, tz));
-  const tot = blank(), bySrc = new Map(), byMod = new Map();
+  const tot = blank(),
+    bySrc = new Map(),
+    byMod = new Map();
   for (const e of win) {
     add(tot, e);
     const s = e.source || "?";
@@ -183,14 +213,27 @@ export function summarize(entries, { window = "last", now = Date.now(), tz } = {
     if (!byMod.has(m)) byMod.set(m, blank());
     add(byMod.get(m), e);
   }
-  return { window, totals: finalize(tot), bySource: rowsOf(bySrc), byModel: rowsOf(byMod) };
+  return {
+    window,
+    totals: finalize(tot),
+    bySource: rowsOf(bySrc),
+    byModel: rowsOf(byMod),
+  };
 }
 
 const WINDOW_LABEL = {
-  last: "Last turn", today: "Today", week: "Last 7 days", month: "This month",
-  "by-model": "By model", "by-source": "By source",
+  last: "Last turn",
+  today: "Today",
+  week: "Last 7 days",
+  month: "This month",
+  "by-model": "By model",
+  "by-source": "By source",
 };
-const SOURCE_LABEL = { telegram: "chat", http: "background (cron/digest)", unknown: "other" };
+const SOURCE_LABEL = {
+  telegram: "chat",
+  http: "background (cron/digest)",
+  unknown: "other",
+};
 // channel.kind приходит как "channel:telegram" (канал) или "http" (eve/client) — нормализуем.
 const src = (k) => {
   const key = String(k ?? "").replace(/^channel:/, "");
@@ -215,13 +258,19 @@ export function formatUsageReport(agg) {
   if (w === "by-model" || w === "by-source") {
     if (!agg.rows.length) return "No usage logged yet.";
     const lines = agg.rows.map(
-      (r) => `• ${w === "by-source" ? src(r.key) : r.key}: ${num(r.total)} tokens (${plural(r.turns, "turn")})`,
+      (r) =>
+        `• ${w === "by-source" ? src(r.key) : r.key}: ${num(r.total)} tokens (${plural(r.turns, "turn")})`,
     );
-    return [`${WINDOW_LABEL[w]} (total ${num(agg.totals.total)} tokens):`, ...lines].join("\n");
+    return [
+      `${WINDOW_LABEL[w]} (total ${num(agg.totals.total)} tokens):`,
+      ...lines,
+    ].join("\n");
   }
   const t = agg.totals;
   if (!t.steps) return `${WINDOW_LABEL[w]}: no usage.`;
-  const out = [`${WINDOW_LABEL[w]}: ${num(t.total)} tokens (in ${num(t.in)} / out ${num(t.out)}) · ${plural(t.turns, "turn")}`];
+  const out = [
+    `${WINDOW_LABEL[w]}: ${num(t.total)} tokens (in ${num(t.in)} / out ${num(t.out)}) · ${plural(t.turns, "turn")}`,
+  ];
   if (agg.bySource.length > 1) {
     out.push("Sources:");
     for (const r of agg.bySource) out.push(`• ${src(r.key)}: ${num(r.total)}`);

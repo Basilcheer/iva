@@ -170,7 +170,9 @@ function signalRootExists(pid: number): RootProcessState {
     process.kill(pid, 0);
     return "live";
   } catch (error) {
-    return (error as NodeJS.ErrnoException)?.code === "ESRCH" ? "exited" : "unknown";
+    return (error as NodeJS.ErrnoException)?.code === "ESRCH"
+      ? "exited"
+      : "unknown";
   }
 }
 
@@ -196,7 +198,9 @@ function rootProcessState(pid: number): RootProcessState {
       const stateOffset = stat.lastIndexOf(") ") + 2;
       if (stateOffset >= 2) {
         const state = stat[stateOffset];
-        return state === "Z" || state === "X" || state === "x" ? "exited" : "live";
+        return state === "Z" || state === "X" || state === "x"
+          ? "exited"
+          : "live";
       }
     } catch (error) {
       if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return "exited";
@@ -205,7 +209,10 @@ function rootProcessState(pid: number): RootProcessState {
   return portableRootProcessState(pid);
 }
 
-async function waitForGroupExit(groupPid: number, timeoutMs: number): Promise<boolean> {
+async function waitForGroupExit(
+  groupPid: number,
+  timeoutMs: number,
+): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (!processGroupExists(groupPid)) return true;
@@ -255,7 +262,10 @@ export default defineTool({
     "systemctl … restart iva, pkill node), заблокированы — перезапуск инициирует " +
     "только пользователь: /restart или /update в чате, iva restart в терминале.",
   inputSchema: z.object({
-    command: z.string().min(1).describe("Shell-команда для выполнения на хосте"),
+    command: z
+      .string()
+      .min(1)
+      .describe("Shell-команда для выполнения на хосте"),
     cwd: z
       .string()
       .optional()
@@ -266,8 +276,14 @@ export default defineTool({
     timeoutMs: z
       .number()
       .int()
-      .min(MIN_TIMEOUT_MS, `timeoutMs должен быть не меньше ${MIN_TIMEOUT_MS} ms`)
-      .max(MAX_TIMEOUT_MS, `timeoutMs должен быть не больше ${MAX_TIMEOUT_MS} ms`)
+      .min(
+        MIN_TIMEOUT_MS,
+        `timeoutMs должен быть не меньше ${MIN_TIMEOUT_MS} ms`,
+      )
+      .max(
+        MAX_TIMEOUT_MS,
+        `timeoutMs должен быть не больше ${MAX_TIMEOUT_MS} ms`,
+      )
       .optional()
       .describe(
         `Таймаут в миллисекундах, от ${MIN_TIMEOUT_MS} до ${MAX_TIMEOUT_MS} ms ` +
@@ -361,7 +377,9 @@ export default defineTool({
       if (childPid === undefined || !childStdout || !childStderr) return;
 
       const deadlineNs = process.hrtime.bigint() + BigInt(timeout) * 1_000_000n;
-      const deadlineState = new Int32Array(new SharedArrayBuffer(2 * Int32Array.BYTES_PER_ELEMENT));
+      const deadlineState = new Int32Array(
+        new SharedArrayBuffer(2 * Int32Array.BYTES_PER_ELEMENT),
+      );
 
       const append = (current: string, chunk: string): string => {
         const next = truncate(current + chunk);
@@ -416,7 +434,7 @@ export default defineTool({
               }, PIPE_DRAIN_GRACE_MS);
             }
             finish();
-        });
+          });
         return cleanup;
       };
       const cancelDeadline = () => {
@@ -444,7 +462,7 @@ export default defineTool({
         if (pipeDrainTimer) clearTimeout(pipeDrainTimer);
         cancelDeadline();
         timedOut ||= Atomics.load(deadlineState, 0) === DEADLINE_EXPIRED;
-        startCleanup();
+        void startCleanup();
         finish();
       });
 
@@ -461,17 +479,17 @@ export default defineTool({
         const deadlineResult = Atomics.load(deadlineState, 0);
         if (deadlineResult === DEADLINE_EXPIRED) {
           timedOut = true;
-          startCleanup();
+          void startCleanup();
           return;
         }
         if (deadlineResult === DEADLINE_PROBE_FAILED) {
-          startCleanup();
+          void startCleanup();
           return;
         }
         const observedRootState = rootProcessState(childPid);
         if (observedRootState === "exited") {
           cancelDeadline();
-          startCleanup();
+          void startCleanup();
           return;
         }
         if (observedRootState === "unknown") {
@@ -485,7 +503,7 @@ export default defineTool({
           ) {
             Atomics.notify(deadlineState, 0);
           }
-          startCleanup();
+          void startCleanup();
           return;
         }
         if (
@@ -498,7 +516,7 @@ export default defineTool({
         ) {
           Atomics.notify(deadlineState, 0);
           timedOut = true;
-          startCleanup();
+          void startCleanup();
         }
       };
       initialized = true;

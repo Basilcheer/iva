@@ -25,7 +25,10 @@ test("recognizes limits from prose, structured statusCode details and reset text
   assert.equal(
     humanizeProviderError({
       message: "Request rejected",
-      details: { statusCode: 429, upstreamMessage: "Rate limit. Resets in 12 min" },
+      details: {
+        statusCode: 429,
+        upstreamMessage: "Rate limit. Resets in 12 min",
+      },
     }).ru,
     "Лимит провайдера исчерпан - сброс через 12 min; подожди или смени модель: /model",
   );
@@ -121,7 +124,8 @@ test("masks the configured Telegram bot token in a default gist", () => {
   process.env.TELEGRAM_BOT_TOKEN = "123456:secret-token";
   try {
     const result = humanizeProviderError({
-      message: "Request URL https://api.telegram.org/bot123456:secret-token/getMe failed",
+      message:
+        "Request URL https://api.telegram.org/bot123456:secret-token/getMe failed",
     });
     assert.equal(
       result.ru,

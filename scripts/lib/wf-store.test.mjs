@@ -26,7 +26,10 @@ test("quarantineDir переименовывает стор в *.trash-<штам
   const dest = quarantineDir(dir, "2026-01-01T00-00-00-000Z");
   assert.equal(dest, `${dir}.trash-2026-01-01T00-00-00-000Z`);
   assert.ok(!existsSync(dir), "исходная директория должна исчезнуть");
-  assert.ok(existsSync(join(dest, "run.json")), "содержимое должно переехать в карантин");
+  assert.ok(
+    existsSync(join(dest, "run.json")),
+    "содержимое должно переехать в карантин",
+  );
   assert.equal(statSync(dest).mode & 0o777, 0o700);
 });
 
@@ -57,7 +60,10 @@ test("старые directory-карантины ротируются, свежи
     mkdirSync(dir);
     quarantineDir(dir, stamp);
   }
-  assert.deepEqual(readdirSync(root).sort(), ["store.trash-2026-01-02", "store.trash-2026-01-03"]);
+  assert.deepEqual(readdirSync(root).sort(), [
+    "store.trash-2026-01-02",
+    "store.trash-2026-01-03",
+  ]);
 });
 
 test("старые file-карантины ротируются по тому же правилу", () => {
@@ -67,10 +73,10 @@ test("старые file-карантины ротируются по тому ж
     writeFileSync(file, stamp);
     quarantinePath(file, stamp);
   }
-  assert.deepEqual(
-    readdirSync(root).sort(),
-    ["run-status.json.trash-2026-01-02", "run-status.json.trash-2026-01-03"],
-  );
+  assert.deepEqual(readdirSync(root).sort(), [
+    "run-status.json.trash-2026-01-02",
+    "run-status.json.trash-2026-01-03",
+  ]);
 });
 
 test("одинаковый operation stamp не перезаписывает существующий карантин", () => {

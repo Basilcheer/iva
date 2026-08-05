@@ -16,12 +16,14 @@
 
 ---
 
-Iva is a self-hosted Telegram AI assistant with layered memory that turns your messages into an Obsidian-compatible vault. You talk, it files: voice notes, photos, forwarded posts and decisions become plain-markdown cards it actually remembers. Everything runs on your own server, with your keys and your data. 
+Iva is a self-hosted Telegram AI assistant with layered memory that turns your messages into an Obsidian-compatible vault. You talk, it files: voice notes, photos, forwarded posts and decisions become plain-markdown cards it actually remembers. Everything runs on your own server, with your keys and your data.
 
 **One command installs it:**
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/smixs/iva/main/install.sh | bash
 ```
+
 ## What's New 🔥
 
 <details>
@@ -73,7 +75,6 @@ curl -fsSL https://raw.githubusercontent.com/smixs/iva/main/install.sh | bash
 
 Full history — [CHANGELOG.md](CHANGELOG.md).
 
-
 ## How it works
 
 <img src="assets/iva-flow.webp" alt="How Iva works: voice, text, photos and PDFs fly from Telegram into the willow-tree agent, wired to memory, nightly rollup, cron, reminders, search, web, workspace and docs" width="100%">
@@ -109,7 +110,7 @@ The rest — for business owners, specialists, executives and everyday life: **[
 - 🌐 **Web search** — four pluggable providers: Tavily, Exa, Parallel or Brave.
 - 📮 **Google Workspace** — Gmail, Calendar, Drive, Sheets, Docs and Tasks from chat via the `gws` CLI; installed for you, with a guided key setup right in the conversation.
 - 🧩 **Skills & MCP** — drop one file to add a procedure or connect an MCP server; keys stay in `.env`.
-- 🧪 **Personal Telegram — userbot (beta)** — read and send from your *own* account, not just the bot; connect by chat (QR, no terminal). Rough and buggy — opt-in, **at your own risk**. A server-side anti-ban guardrail (FloodWait compliance + randomized pacing + circuit-breaker) is enforced, not just advised. [Details](docs/userbot.md).
+- 🧪 **Personal Telegram — userbot (beta)** — read and send from your _own_ account, not just the bot; connect by chat (QR, no terminal). Rough and buggy — opt-in, **at your own risk**. A server-side anti-ban guardrail (FloodWait compliance + randomized pacing + circuit-breaker) is enforced, not just advised. [Details](docs/userbot.md).
 - 🛡️ **Safe to forward** — links, PDFs and other people's messages are screened before the model reads them.
 - 📊 **Token accounting** — every model step is logged; `/usage` reports it for free.
 
@@ -119,11 +120,11 @@ The rest — for business owners, specialists, executives and everyday life: **[
 
 <img src="assets/iva-memory-tree.webp" alt="How Iva remembers: a leaf is a day, branches are weeks and months, tree rings are years around CORE.md" width="100%">
 
-| Layer | What lives there | Path |
-|---|---|---|
-| 🍃 Leaves | the word-for-word transcript of each day, Iva's replies included | `daily/YYYY-MM-DD.md` |
-| 🌿 Branches | summaries folded upward: day → week → month → year | `summaries/daily/`, `weekly/`, `monthly/`, `yearly/` |
-| 🪵 Trunk | `CORE.md` (≤1200 chars, in every prompt) + typed cards: contacts, projects, decisions, ideas, notes | `CORE.md`, `cards/` |
+| Layer       | What lives there                                                                                    | Path                                                 |
+| ----------- | --------------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
+| 🍃 Leaves   | the word-for-word transcript of each day, Iva's replies included                                    | `daily/YYYY-MM-DD.md`                                |
+| 🌿 Branches | summaries folded upward: day → week → month → year                                                  | `summaries/daily/`, `weekly/`, `monthly/`, `yearly/` |
+| 🪵 Trunk    | `CORE.md` (≤1200 chars, in every prompt) + typed cards: contacts, projects, decisions, ideas, notes | `CORE.md`, `cards/`                                  |
 
 - Every message lands verbatim in a daily markdown log — nothing is paraphrased on arrival.
 - A nightly rollup at 04:00 distills day → week → month → year into schema-validated cards; facts that change get rewritten, not piled up.
@@ -180,11 +181,11 @@ The installer reuses the existing checkout instead of re-cloning, keeps `.env` a
 
 Four model providers. Pick one and fill its block in `.env`:
 
-| Provider | How you pay |
-|---|---|
-| OpenCode Go | API key, ~$5/mo |
-| Ollama Cloud | API key, ~$20/mo |
-| OpenRouter | API key, pay-as-you-go, 300+ models |
+| Provider         | How you pay                            |
+| ---------------- | -------------------------------------- |
+| OpenCode Go      | API key, ~$5/mo                        |
+| Ollama Cloud     | API key, ~$20/mo                       |
+| OpenRouter       | API key, pay-as-you-go, 300+ models    |
 | OpenAI (ChatGPT) | your Plus/Pro subscription, no API key |
 
 Default model is deepseek-v4-pro, 131k context. On Go it runs about $9/mo all-in ($5 model + $4–5 VPS), no markup; voice rides Deepgram's free starter credit. Model lists, limits and the search matrix: [docs/providers.md](docs/providers.md).

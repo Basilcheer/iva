@@ -48,13 +48,13 @@ printf 'header = "Authorization: Bearer %s"\n' "$ASSISTANT_BEARER" |
 unset ASSISTANT_BEARER IVA_PORT
 ```
 
-| Unit | When | Job |
-|------|------|-----|
-| `iva.service` | always | the agent (`eve start`), `Restart=always` |
-| `iva-telegram-poll.service` | always | the long-polling bridge |
-| `iva-telegram-userbot.service` | opt-in (`iva userbot setup`) | Telethon userbot MCP proxy — see [userbot.md](userbot.md) |
-| `iva-memory-doctor.timer` | 05:00 nightly | schema/health/decay/MOC checks + vault `git push` |
-| `iva-update-check.timer` | 10:00 daily | check for a newer stable Iva version; notify once per version |
+| Unit                           | When                         | Job                                                           |
+| ------------------------------ | ---------------------------- | ------------------------------------------------------------- |
+| `iva.service`                  | always                       | the agent (`eve start`), `Restart=always`                     |
+| `iva-telegram-poll.service`    | always                       | the long-polling bridge                                       |
+| `iva-telegram-userbot.service` | opt-in (`iva userbot setup`) | Telethon userbot MCP proxy — see [userbot.md](userbot.md)     |
+| `iva-memory-doctor.timer`      | 05:00 nightly                | schema/health/decay/MOC checks + vault `git push`             |
+| `iva-update-check.timer`       | 10:00 daily                  | check for a newer stable Iva version; notify once per version |
 
 The doctor and update-check timers stay on systemd on purpose: they're watchdogs that must keep running even if the agent process itself is wedged. `iva-memory-doctor.timer` embeds `ASSISTANT_TIMEZONE` directly, so its 05:00 schedule remains correct even when the server clock uses UTC — as do the eve schedules below (`Environment=TZ` in `iva.service`). Setting the server's own system timezone to match is therefore optional, not required for anything in this doc to work correctly:
 
@@ -72,13 +72,13 @@ ASSISTANT_TIMEZONE="$(node --env-file=.env -p 'process.env.ASSISTANT_TIMEZONE ||
 
 The four memory-rollup cadences moved off systemd and run as `agent/schedules/*.ts` — eve's native `defineSchedule` API — inside the `iva.service` process itself:
 
-| Schedule | Cron (local time) | Job |
-|----------|--------------------|-----|
-| `memory-daily` | `0 4 * * *` (04:00 nightly) | transcript → cards + daily summary, report to Telegram |
-| `memory-weekly` | `15 4 * * 1` (Mon 04:15) | 7 dailies → weekly summary, report to Telegram |
-| `memory-monthly` | `20 4 1 * *` (1st, 04:20) | weeklies → monthly summary (silent) |
-| `memory-yearly` | `25 4 1 1 *` (Jan 1, 04:25) | monthlies → yearly summary (silent) |
-| `digest` | `0 8 * * *` (08:00 daily) | morning digest — **off by default**, enable via `digestSchedule.enabled` in `data/settings.json` |
+| Schedule         | Cron (local time)           | Job                                                                                              |
+| ---------------- | --------------------------- | ------------------------------------------------------------------------------------------------ |
+| `memory-daily`   | `0 4 * * *` (04:00 nightly) | transcript → cards + daily summary, report to Telegram                                           |
+| `memory-weekly`  | `15 4 * * 1` (Mon 04:15)    | 7 dailies → weekly summary, report to Telegram                                                   |
+| `memory-monthly` | `20 4 1 * *` (1st, 04:20)   | weeklies → monthly summary (silent)                                                              |
+| `memory-yearly`  | `25 4 1 1 *` (Jan 1, 04:25) | monthlies → yearly summary (silent)                                                              |
+| `digest`         | `0 8 * * *` (08:00 daily)   | morning digest — **off by default**, enable via `digestSchedule.enabled` in `data/settings.json` |
 
 Each one is a thin spawner (`scripts/lib/schedule-runner.mjs`): it runs the exact same command the old timer did (`flock -w 900 .memory.lock node --env-file=.env scripts/memory/rollup.ts <period>`), under a hard timeout, and records the outcome to `data/rollup-status.json`. `iva.service` sets `Environment=TZ` from `ASSISTANT_TIMEZONE` (`ivaServiceBody()` in `bin/iva.mjs`), so cron expressions above tick in the configured local time, not the host's system TZ — Nitro's schedule runner carries no timezone of its own otherwise.
 

@@ -17,7 +17,16 @@ const nodeRequire = createRequire(import.meta.url);
 // подстрочный fallback, ход НЕ падает.
 
 const VAULT = () => process.env.ASSISTANT_VAULT_DIR || "vault";
-const IGNORE_DIRS = new Set([".git", "node_modules", ".next", "dist", ".cache", ".graph", ".index", ".trash"]);
+const IGNORE_DIRS = new Set([
+  ".git",
+  "node_modules",
+  ".next",
+  "dist",
+  ".cache",
+  ".graph",
+  ".index",
+  ".trash",
+]);
 const DEFAULT_DIRS = ["cards", "summaries", "weekly", "monthly", "yearly"];
 const MAX_SNIPPET = 240;
 
@@ -39,8 +48,17 @@ interface Doc {
 // Индексируем их отдельной колонкой с высоким весом — иначе поиск по имени/компании из
 // фронтматтера промахивается (в body их может не быть).
 const META_FIELDS = [
-  "name", "company", "role", "description", "handle", "aliases", "aka", "title", "platform",
-  "industry", "domain",
+  "name",
+  "company",
+  "role",
+  "description",
+  "handle",
+  "aliases",
+  "aka",
+  "title",
+  "platform",
+  "industry",
+  "domain",
 ];
 
 async function walk(dir: string, out: string[]): Promise<void> {
@@ -62,7 +80,10 @@ async function walk(dir: string, out: string[]): Promise<void> {
 }
 
 // Крошечный парсер frontmatter — нужны только несколько скалярных полей. Не тянем YAML-либу.
-function parseFrontmatter(text: string): { fm: Record<string, string>; body: string } {
+function parseFrontmatter(text: string): {
+  fm: Record<string, string>;
+  body: string;
+} {
   if (!text.startsWith("---")) return { fm: {}, body: text };
   const end = text.indexOf("\n---", 3);
   if (end === -1) return { fm: {}, body: text };
@@ -132,12 +153,47 @@ function toFtsQuery(tokens: string[]): string {
 
 type GraphNodes = Record<string, { incoming?: string[]; outgoing?: string[] }>;
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return (
+    Array.isArray(value) && value.every((item) => typeof item === "string")
+  );
+}
+
+function isGraphNodes(value: unknown): value is GraphNodes {
+  if (!isRecord(value)) return false;
+  return Object.values(value).every(
+    (node) =>
+      isRecord(node) &&
+      (node.incoming === undefined || isStringArray(node.incoming)) &&
+      (node.outgoing === undefined || isStringArray(node.outgoing)),
+  );
+}
+
+function isVectorIndex(value: unknown): value is Record<string, number[]> {
+  if (!isRecord(value)) return false;
+  return Object.values(value).every(
+    (vector) =>
+      Array.isArray(vector) &&
+      vector.every(
+        (component) =>
+          typeof component === "number" && Number.isFinite(component),
+      ),
+  );
+}
+
 // Читаем ночной adjacency-граф (autograph graph.py). ASSISTANT_GRAPH_PATH — override для тестов.
 function loadGraph(): GraphNodes {
-  const path = process.env.ASSISTANT_GRAPH_PATH || join(VAULT(), ".graph", "vault-graph.json");
+  const path =
+    process.env.ASSISTANT_GRAPH_PATH ||
+    join(VAULT(), ".graph", "vault-graph.json");
   try {
-    const j = JSON.parse(readFileSync(path, "utf8"));
-    return (j.nodes || {}) as GraphNodes;
+    const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
+    if (!isRecord(parsed)) return {};
+    return isGraphNodes(parsed.nodes) ? parsed.nodes : {};
   } catch {
     return {};
   }
@@ -145,7 +201,11 @@ function loadGraph(): GraphNodes {
 
 // Link-distance (node_distance-реранк): min число хопов от каждого узла до ближайшего якоря.
 // Якоря — топ-BM25-хиты (сущности, о которых запрос). BFS по обе стороны рёбер, кап maxHops.
-function bfsDistances(graph: GraphNodes, anchors: string[], maxHops: number): Map<string, number> {
+function bfsDistances(
+  graph: GraphNodes,
+  anchors: string[],
+  maxHops: number,
+): Map<string, number> {
   const dist = new Map<string, number>();
   let frontier: string[] = [];
   for (const a of anchors) {
@@ -176,16 +236,24 @@ function bfsDistances(graph: GraphNodes, anchors: string[], maxHops: number): Ma
 // Персистентный индекс эмбеддингов (сайдкар vault/.index/embeddings.json), строит embed-index.ts.
 function loadEmbedIndex(): Record<string, number[]> | null {
   try {
-    const raw = readFileSync(join(VAULT(), ".index", "embeddings.json"), "utf8");
-    const j = JSON.parse(raw);
-    return (j.vectors || null) as Record<string, number[]> | null;
+    const raw = readFileSync(
+      join(VAULT(), ".index", "embeddings.json"),
+      "utf8",
+    );
+    const parsed: unknown = JSON.parse(raw);
+    if (!isRecord(parsed)) return null;
+    return isVectorIndex(parsed.vectors) ? parsed.vectors : null;
   } catch {
     return null;
   }
 }
 
 // Dense-ранжирование: эмбеддинг ЗАПРОСА (1 вызов) + косинус к закэшированным векторам карточек.
-async function denseRanked(query: string, docs: Doc[], limit: number): Promise<string[] | null> {
+async function denseRanked(
+  query: string,
+  docs: Doc[],
+  limit: number,
+): Promise<string[] | null> {
   const index = loadEmbedIndex();
   if (!index) return null;
   const [qvec] = await embedTexts([query]);
@@ -204,9 +272,14 @@ async function denseRanked(query: string, docs: Doc[], limit: number): Promise<s
 function rrfFuse(lists: string[][], limit: number, K = 60): string[] {
   const score = new Map<string, number>();
   for (const list of lists) {
-    list.forEach((path, i) => score.set(path, (score.get(path) ?? 0) + 1 / (K + i)));
+    list.forEach((path, i) =>
+      score.set(path, (score.get(path) ?? 0) + 1 / (K + i)),
+    );
   }
-  return [...score.entries()].sort((a, b) => b[1] - a[1]).slice(0, limit).map((e) => e[0]);
+  return [...score.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, limit)
+    .map((e) => e[0]);
 }
 
 function snippet(body: string, tokens: string[]): string {
@@ -217,7 +290,10 @@ function snippet(body: string, tokens: string[]): string {
     if (i !== -1 && (at === -1 || i < at)) at = i;
   }
   const start = at === -1 ? 0 : Math.max(0, at - 60);
-  return body.slice(start, start + MAX_SNIPPET).replace(/\s+/g, " ").trim();
+  return body
+    .slice(start, start + MAX_SNIPPET)
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 interface Hit {
@@ -235,15 +311,24 @@ interface Hit {
 // BM25 через node:sqlite FTS5. Бросает — вызывающий ловит и уходит в fallback.
 function bm25Search(docs: Doc[], ftsQuery: string, limit: number): string[] {
   // node:sqlite встроен в Node 24+, грузится без флага (проверено). createRequire — т.к. ESM.
-  const { DatabaseSync } = nodeRequire("node:sqlite") as typeof import("node:sqlite");
+  const { DatabaseSync } = nodeRequire(
+    "node:sqlite",
+  ) as typeof import("node:sqlite");
   const db = new DatabaseSync(":memory:");
   try {
-    db.exec("CREATE VIRTUAL TABLE d USING fts5(path UNINDEXED, title, meta, tags, body)");
-    const ins = db.prepare("INSERT INTO d(path, title, meta, tags, body) VALUES (?, ?, ?, ?, ?)");
-    for (const doc of docs) ins.run(doc.path, doc.title, doc.meta, doc.tags, doc.body);
+    db.exec(
+      "CREATE VIRTUAL TABLE d USING fts5(path UNINDEXED, title, meta, tags, body)",
+    );
+    const ins = db.prepare(
+      "INSERT INTO d(path, title, meta, tags, body) VALUES (?, ?, ?, ?, ?)",
+    );
+    for (const doc of docs)
+      ins.run(doc.path, doc.title, doc.meta, doc.tags, doc.body);
     // Веса колонок: title/meta важнее tags важнее body (bm25 меньше = релевантнее → ORDER BY asc).
     const rows = db
-      .prepare("SELECT path FROM d WHERE d MATCH ? ORDER BY bm25(d, 5.0, 5.0, 2.0, 1.0) LIMIT ?")
+      .prepare(
+        "SELECT path FROM d WHERE d MATCH ? ORDER BY bm25(d, 5.0, 5.0, 2.0, 1.0) LIMIT ?",
+      )
       .all(ftsQuery, limit * 4) as Array<{ path: string }>;
     return rows.map((r) => r.path);
   } finally {
@@ -255,7 +340,15 @@ function bm25Search(docs: Doc[], ftsQuery: string, limit: number): string[] {
 function naiveSearch(docs: Doc[], tokens: string[]): string[] {
   const scored: Array<{ path: string; s: number }> = [];
   for (const doc of docs) {
-    const hay = (doc.title + " " + doc.meta + " " + doc.tags + " " + doc.body).toLowerCase();
+    const hay = (
+      doc.title +
+      " " +
+      doc.meta +
+      " " +
+      doc.tags +
+      " " +
+      doc.body
+    ).toLowerCase();
     let s = 0;
     for (const t of tokens) {
       let idx = hay.indexOf(t);
@@ -283,7 +376,8 @@ export async function searchMemory({
     const topN = limit ?? 12;
     const tokens = contentTokens(query);
     const docs = await loadDocs(scope && scope.length ? scope : DEFAULT_DIRS);
-    if (docs.length === 0) return { count: 0, hits: [] as Hit[], note: "vault пуст или недоступен" };
+    if (docs.length === 0)
+      return { count: 0, hits: [] as Hit[], note: "vault пуст или недоступен" };
 
     // BM25 (FTS5) → пути в порядке релевантности, с мягкой деградацией в наивный поиск.
     let ranked: string[];
@@ -329,14 +423,26 @@ export async function searchMemory({
     // маленьким базовым скором, чтобы граф давал recall, а не только реранкил.
     const NEIGHBOR_BASE = 1 / (K + ranked.length + 5);
     for (const [noext, d] of dist) {
-      if (d === 1 && !baseScore.has(noext + ".md")) baseScore.set(noext + ".md", NEIGHBOR_BASE);
+      if (d === 1 && !baseScore.has(noext + ".md"))
+        baseScore.set(noext + ".md", NEIGHBOR_BASE);
     }
 
     // Язык-агностичное взвешивание: вес термина = его IDF в самом вольте (частое слово на ЛЮБОМ
     // языке — the/с/的/und — редкое → большое). Считаем haystack по каждой карточке один раз.
     const hayByPath = new Map<string, string>();
     for (const dd of docs)
-      hayByPath.set(dd.path, (dd.title + " " + dd.meta + " " + dd.tags + " " + dd.body).toLowerCase());
+      hayByPath.set(
+        dd.path,
+        (
+          dd.title +
+          " " +
+          dd.meta +
+          " " +
+          dd.tags +
+          " " +
+          dd.body
+        ).toLowerCase(),
+      );
     const idf = new Map<string, number>();
     for (const t of tokens) {
       let dfc = 0;
@@ -356,7 +462,13 @@ export async function searchMemory({
       return s / idfTotal;
     }
 
-    const STALE = new Set(["superseded", "archived", "cancelled", "inactive", "reverted"]);
+    const STALE = new Set([
+      "superseded",
+      "archived",
+      "cancelled",
+      "inactive",
+      "reverted",
+    ]);
     const byPath = new Map(docs.map((d) => [d.path, d]));
     const scored: Hit[] = [];
     for (const [path, s0] of baseScore) {
@@ -365,7 +477,8 @@ export async function searchMemory({
       const noext = path.replace(/\.md$/, "");
       const d = dist.get(noext);
       // Близость к якорю: 0 хопов ×1.5, 1 хоп ×1.3, 2 хопа ×1.15, недостижим ×1.
-      const proximity = d === undefined ? 1 : d === 0 ? 1.5 : d === 1 ? 1.3 : 1.15;
+      const proximity =
+        d === undefined ? 1 : d === 0 ? 1.5 : d === 1 ? 1.3 : 1.15;
       const incoming = graph[noext]?.incoming?.length ?? 0;
       // Coverage — сильный множитель (0.3..1.3): покрыл весь смысл запроса → буст, один из многих → штраф.
       const cov = 0.3 + coverage(doc.path);
@@ -391,12 +504,23 @@ export default defineTool({
     "grep. Возвращает топ-совпадения { file, score, status, confidence, snippet }; затем открывай " +
     "1–3 лучших через read_file. status: superseded и confidence: INFERRED — читай осторожно (см. MAP).",
   inputSchema: z.object({
-    query: z.string().min(1).describe("Запрос в свободной форме (слова/имена/темы)"),
-    limit: z.number().int().min(1).max(20).optional().describe("Сколько хитов вернуть (по умолчанию 8)"),
+    query: z
+      .string()
+      .min(1)
+      .describe("Запрос в свободной форме (слова/имена/темы)"),
+    limit: z
+      .number()
+      .int()
+      .min(1)
+      .max(20)
+      .optional()
+      .describe("Сколько хитов вернуть (по умолчанию 8)"),
     scope: z
       .array(z.string())
       .optional()
-      .describe("Поддиректории vault для поиска (по умолчанию cards+summaries+weekly/monthly/yearly)"),
+      .describe(
+        "Поддиректории vault для поиска (по умолчанию cards+summaries+weekly/monthly/yearly)",
+      ),
   }),
   execute: searchMemory,
 });

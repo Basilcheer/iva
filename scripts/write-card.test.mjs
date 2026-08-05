@@ -31,7 +31,8 @@ cpSync(join(REPO, "vault-template", "schema.json"), join(VAULT, "schema.json"));
 process.on("exit", () => rmSync(VAULT, { recursive: true, force: true }));
 
 // Модуль читает схему на импорте — env выставлен выше.
-const writeCard = (await import(join(REPO, "agent", "tools", "write_card.ts"))).default;
+const writeCard = (await import(join(REPO, "agent", "tools", "write_card.ts")))
+  .default;
 const call = (args) => writeCard.execute(writeCard.inputSchema.parse(args));
 
 const read = (rel) => readFileSync(join(VAULT, rel), "utf8");
@@ -92,11 +93,17 @@ test("повторный write_card сливает карточку: поля в
   }
   assert.ok(out.includes('phone: "+998 90 000 00 00"'), "потерян phone");
   assert.ok(out.includes("Портфолио"), "потерян старый body");
-  assert.ok(out.includes("холодным предложением услуг"), "потерян старый текст");
+  assert.ok(
+    out.includes("холодным предложением услуг"),
+    "потерян старый текст",
+  );
   assert.ok(out.includes("400 USD"), "новый текст не дописан");
   // description обновлён и не задвоен (исторический баг свёрнутых скаляров).
   assert.equal(out.match(/^description:/gm).length, 1);
-  assert.ok(!out.includes("Связалась через Telegram с предложением услуг."), "старый description остался");
+  assert.ok(
+    !out.includes("Связалась через Telegram с предложением услуг."),
+    "старый description остался",
+  );
   // Теги слиты, а не заменены.
   const tags = /^tags: \[(.*)\]$/m.exec(out)[1];
   assert.ok(tags.includes("freelancer") && tags.includes("ai-content"));
@@ -136,13 +143,15 @@ test("алиас типа person → contact применяется до вал�
 });
 
 test("алиас в тип вне тула (daily) по-прежнему отклоняется", () => {
-  assert.throws(() => writeCard.inputSchema.parse({
-    type: "daily",
-    title: "x",
-    description: "x",
-    tags: ["x"],
-    body: "x",
-  }));
+  assert.throws(() =>
+    writeCard.inputSchema.parse({
+      type: "daily",
+      title: "x",
+      description: "x",
+      tags: ["x"],
+      body: "x",
+    }),
+  );
 });
 
 test("description длиннее 500 символов отклоняется с просьбой сократить", () => {
@@ -193,7 +202,8 @@ test("tags и domain квотируются, если содержат YAML-сп
 
 test("несколько кандидатов по заголовку → отказ без записи", async () => {
   const dir = join(VAULT, "cards", "notes");
-  const card = (h1) => `---\ntype: note\nstatus: active\n---\n\n# ${h1}\n\nтекст\n`;
+  const card = (h1) =>
+    `---\ntype: note\nstatus: active\n---\n\n# ${h1}\n\nтекст\n`;
   writeFileSync(join(dir, "dup-a.md"), card("Дубль Тема"), "utf8");
   writeFileSync(join(dir, "dup-b.md"), card("Дубль Тема (второй)"), "utf8");
 
@@ -206,8 +216,12 @@ test("несколько кандидатов по заголовку → отк
   });
   assert.equal(res.ok, false);
   assert.equal(res.candidates.length, 2);
-  assert.ok(!readFileSync(join(dir, "dup-a.md"), "utf8").includes("новый текст"));
-  assert.ok(!readFileSync(join(dir, "dup-b.md"), "utf8").includes("новый текст"));
+  assert.ok(
+    !readFileSync(join(dir, "dup-a.md"), "utf8").includes("новый текст"),
+  );
+  assert.ok(
+    !readFileSync(join(dir, "dup-b.md"), "utf8").includes("новый текст"),
+  );
 });
 
 test("related дописываются в существующую секцию без дублей", async () => {
@@ -220,7 +234,11 @@ test("related дописываются в существующую секцию 
     related: ["majento"],
   };
   const first = await call(base);
-  await call({ ...base, body: "второй текст", related: ["majento", "aimasters"] });
+  await call({
+    ...base,
+    body: "второй текст",
+    related: ["majento", "aimasters"],
+  });
   const out = read(first.file);
   assert.equal(out.match(/^## Related$/gm).length, 1);
   assert.equal(out.match(/\[\[majento\]\]/g).length, 1);
@@ -262,7 +280,11 @@ test("явные UPDATE складываются в единственный Log
     body: "Добавлен второй непротиворечивый факт.",
   });
   assert.equal(repeated.action, "updated");
-  assert.equal(read(created.file), before, "повтор факта должен быть byte-stable");
+  assert.equal(
+    read(created.file),
+    before,
+    "повтор факта должен быть byte-stable",
+  );
 });
 
 test("ADD не перезаписывает, UPDATE не создаёт, NOOP не пишет и требует карточку", async () => {
@@ -275,7 +297,11 @@ test("ADD не перезаписывает, UPDATE не создаёт, NOOP н
   };
   const created = await call({ ...base, operation: "ADD" });
   const before = read(created.file);
-  const duplicate = await call({ ...base, operation: "ADD", body: "Нельзя записать." });
+  const duplicate = await call({
+    ...base,
+    operation: "ADD",
+    body: "Нельзя записать.",
+  });
   assert.equal(duplicate.ok, false);
   assert.match(duplicate.error, /ADD отказан/);
   assert.equal(read(created.file), before);
@@ -306,11 +332,19 @@ test("ADD не перезаписывает, UPDATE не создаёт, NOOP н
   });
   assert.equal(noop.ok, false);
   assert.match(noop.error, /NOOP требует существующую/);
-  assert.equal(existsSync(projectDir), false, "NOOP не должен создавать даже каталог");
+  assert.equal(
+    existsSync(projectDir),
+    false,
+    "NOOP не должен создавать даже каталог",
+  );
 
   const existingNoop = await call({ ...base, operation: "NOOP" });
   assert.equal(existingNoop.action, "noop");
-  assert.equal(read(created.file), before, "NOOP существующей карточки не меняет файл");
+  assert.equal(
+    read(created.file),
+    before,
+    "NOOP существующей карточки не меняет файл",
+  );
 });
 
 test("body с Related отклоняется без записи", async () => {
@@ -356,7 +390,11 @@ test("UPDATE отклоняет H1/H2 и существующие legacy dated-�
 
   const legacy = `${before.trimEnd()}\n\n## Обновление 2026-08-01\nСтарый факт.\n`;
   writeFileSync(join(VAULT, created.file), legacy);
-  const dated = await call({ ...base, operation: "UPDATE", body: "Ещё один факт." });
+  const dated = await call({
+    ...base,
+    operation: "UPDATE",
+    body: "Ещё один факт.",
+  });
   assert.equal(dated.ok, false);
   assert.match(dated.error, /run semantic cleanup before UPDATE/);
   assert.equal(read(created.file), legacy);
@@ -383,7 +421,11 @@ test("fenced структурные заголовки остаются кодо
   assert.equal(created.ok, true);
   const out = read(created.file);
   assert.ok(out.includes(fenced), "code example must remain byte-identical");
-  assert.equal(out.match(/^## Related$/gm).length, 2, "one fenced example plus one real section");
+  assert.equal(
+    out.match(/^## Related$/gm).length,
+    2,
+    "one fenced example plus one real section",
+  );
 
   await call({
     operation: "UPDATE",
@@ -396,7 +438,11 @@ test("fenced структурные заголовки остаются кодо
   });
   const updated = read(created.file);
   assert.ok(updated.includes(fenced));
-  assert.equal(updated.match(/^## Log$/gm).length, 2, "one fenced example plus one real section");
+  assert.equal(
+    updated.match(/^## Log$/gm).length,
+    2,
+    "one fenced example plus one real section",
+  );
   assert.match(updated, /^- \d{4}-\d{2}-\d{2}: Совместимый новый факт\.$/m);
 });
 
@@ -420,7 +466,11 @@ test("Related дедуплицирует target по alias/anchor и не счи
   const out = read(created.file);
   assert.equal(out.match(/^## Related$/gm).length, 1);
   assert.equal(out.match(/\[\[cards\/notes\/hub#/g).length, 1);
-  assert.equal(out.match(/\[\[cards\/notes\/hub\]\]/g).length, 1, "prose link remains separate");
+  assert.equal(
+    out.match(/\[\[cards\/notes\/hub\]\]/g).length,
+    1,
+    "prose link remains separate",
+  );
   assert.equal(out.match(/\[\[cards\/notes\/sibling\]\]/g).length, 1);
 });
 
@@ -456,7 +506,10 @@ test("SUPERSEDE требует history_entry, заменяет truth и сохр
     body: "Current owner: Bob\n\n```markdown\n## History\n- example only\n```",
   });
   assert.equal(fencedLegacy.ok, false);
-  assert.match(fencedLegacy.error, /legacy replace_body должен содержать ## History/);
+  assert.match(
+    fencedLegacy.error,
+    /legacy replace_body должен содержать ## History/,
+  );
   assert.equal(read(created.file), before);
 
   const replaced = await call({
@@ -477,7 +530,9 @@ test("SUPERSEDE требует history_entry, заменяет truth и сохр
   assert.equal(out.match(/^## Related$/gm).length, 1);
   assert.match(out, /Initial owner Carol/);
   assert.ok(
-    out.includes("## History\n\n- 2025: Initial owner Carol\n  Continued detail\n"),
+    out.includes(
+      "## History\n\n- 2025: Initial owner Carol\n  Continued detail\n",
+    ),
     "existing History must remain byte-for-byte before the appended entry",
   );
   assert.match(out, /Current owner Alice/);
@@ -528,7 +583,12 @@ test("legacy replace_body требует непустой History prefix и до
     "Truth v2\n\n## History\n\n- 2025-01-01: Different history\n- 2026-08-05: Truth v1",
     "Truth v2\n\n## History\n\n- 2025-01-01: Truth v0",
   ]) {
-    const rejected = await call({ ...base, operation: undefined, replace_body: true, body });
+    const rejected = await call({
+      ...base,
+      operation: undefined,
+      replace_body: true,
+      body,
+    });
     assert.equal(rejected.ok, false);
     assert.equal(read(created.file), before);
   }
@@ -537,8 +597,7 @@ test("legacy replace_body требует непустой History prefix и до
     ...base,
     operation: undefined,
     replace_body: true,
-    body:
-      "Truth v2\n\n## History\n\n- 2025-01-01: Truth v0\n- 2026-08-05: Truth v1",
+    body: "Truth v2\n\n## History\n\n- 2025-01-01: Truth v0\n- 2026-08-05: Truth v1",
   });
   assert.equal(replaced.action, "replaced");
   const out = read(created.file);
@@ -548,7 +607,9 @@ test("legacy replace_body требует непустой History prefix и до
 });
 
 // ─── лок и атомарная запись ────────────────────────────────────────────────
-const { acquireLock, atomicWrite } = await import(join(REPO, "agent", "lib", "card-store.ts"));
+const { acquireLock, atomicWrite } = await import(
+  join(REPO, "agent", "lib", "card-store.ts")
+);
 
 test("лок сериализует запись: второй захват ждёт и падает по таймауту", () => {
   const file = join(VAULT, "cards", "notes", "lock-probe.md");

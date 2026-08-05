@@ -61,7 +61,8 @@ export const INTERVIEW = [
 
 // Пусто/скип показываем прочерком, чтобы архив читался и не рвал разметку.
 const orDash = (v) => {
-  const s = typeof v === "string" ? v.trim() : v == null ? "" : String(v).trim();
+  const s =
+    typeof v === "string" ? v.trim() : v == null ? "" : String(v).trim();
   return s === "" ? "—" : s;
 };
 

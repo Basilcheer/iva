@@ -14,7 +14,8 @@ import { validateModelSelection } from "./model-validation.mjs";
 const JOURNAL_VERSION = 1;
 const SECRET_KEY_RE = /(KEY|TOKEN|SECRET|BEARER|PASSWORD|HASH)$/;
 
-export const pendingConfigPath = (envPath) => `${envPath}.iva-config-transaction`;
+export const pendingConfigPath = (envPath) =>
+  `${envPath}.iva-config-transaction`;
 
 function digest(text) {
   return createHash("sha256").update(text).digest("hex");
@@ -61,7 +62,9 @@ function parseSnapshot(raw) {
   try {
     value = JSON.parse(raw);
   } catch (cause) {
-    throw new Error("pending configuration snapshot is invalid JSON", { cause });
+    throw new Error("pending configuration snapshot is invalid JSON", {
+      cause,
+    });
   }
   if (
     value?.version !== JOURNAL_VERSION ||
@@ -100,7 +103,13 @@ export class ConfigTransactionError extends Error {
 
 export async function probeEveHealth(
   url,
-  { fetchFn = fetch, timeoutMs = 15_000, intervalMs = 250, now = Date.now, sleep } = {},
+  {
+    fetchFn = fetch,
+    timeoutMs = 15_000,
+    intervalMs = 250,
+    now = Date.now,
+    sleep,
+  } = {},
 ) {
   const parsed = new URL(url);
   if (
@@ -109,7 +118,8 @@ export async function probeEveHealth(
   ) {
     throw new Error("health check must use the local /eve/v1/health route");
   }
-  const wait = sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+  const wait =
+    sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
   const deadline = now() + timeoutMs;
   let lastStatus = null;
   do {
@@ -121,11 +131,18 @@ export async function probeEveHealth(
       });
       lastStatus = response.status;
       if (response.ok) return;
-    } catch {}
-    if (now() < deadline) await wait(Math.min(intervalMs, Math.max(1, deadline - now())));
+    } catch {
+      // Connection failures are retried until the health-check deadline.
+    }
+    if (now() < deadline)
+      await wait(Math.min(intervalMs, Math.max(1, deadline - now())));
   } while (now() < deadline);
   throw Object.assign(
-    new Error(lastStatus === null ? "local Eve health check timed out" : `local Eve health returned ${lastStatus}`),
+    new Error(
+      lastStatus === null
+        ? "local Eve health check timed out"
+        : `local Eve health returned ${lastStatus}`,
+    ),
     { code: "EHEALTH" },
   );
 }
@@ -140,7 +157,8 @@ export async function recoverConfigTransaction(
 ) {
   const journalPath = pendingConfigPath(envPath);
   if (!existsSync(journalPath)) return false;
-  if (typeof restart !== "function") throw new TypeError("config recovery requires restart(services)");
+  if (typeof restart !== "function")
+    throw new TypeError("config recovery requires restart(services)");
   const snapshot = parseSnapshot(readFileSync(journalPath, "utf8"));
   const secrets = secretValues(snapshot.oldText);
   try {
@@ -157,13 +175,7 @@ export async function recoverConfigTransaction(
 }
 
 export async function applyConfigTransaction(
-  {
-    envPath,
-    nextText,
-    selection,
-    healthUrl,
-    services,
-  },
+  { envPath, nextText, selection, healthUrl, services },
   {
     validate = validateModelSelection,
     restart,
@@ -173,23 +185,23 @@ export async function applyConfigTransaction(
     removeJournal = durableRemove,
   } = {},
 ) {
-  if (typeof restart !== "function") throw new TypeError("config transaction requires restart(services)");
+  if (typeof restart !== "function")
+    throw new TypeError("config transaction requires restart(services)");
   if (!Array.isArray(services) || services.length === 0) {
     throw new TypeError("config transaction requires at least one service");
   }
-  if (typeof nextText !== "string") throw new TypeError("config transaction requires nextText");
+  if (typeof nextText !== "string")
+    throw new TypeError("config transaction requires nextText");
 
-  let phase = "validate";
   await validate(selection);
 
   const snapshot = snapshotOf(envPath);
   const secrets = secretValues(snapshot.oldText, nextText);
   const journalPath = pendingConfigPath(envPath);
-  phase = "snapshot";
   writeJournal(journalPath, `${JSON.stringify(snapshot)}\n`);
 
+  let phase = "write";
   try {
-    phase = "write";
     writeEnv(envPath, nextText);
     phase = "restart";
     await checkedRestart(restart, services);

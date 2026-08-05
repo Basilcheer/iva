@@ -10,9 +10,13 @@ export const BOT_USER_ID = /^(\d+):/.exec(TOKEN ?? "")?.[1] ?? null;
 export const BOT_USERNAME = process.env.TELEGRAM_BOT_USERNAME ?? "my_bot";
 export const SECRET = process.env.TELEGRAM_WEBHOOK_SECRET_TOKEN;
 export const PORT = process.env.IVA_PORT ?? "8723";
-export const HOST = (process.env.ASSISTANT_HOST ?? `http://127.0.0.1:${PORT}`).replace(/\/$/, "");
+export const HOST = (
+  process.env.ASSISTANT_HOST ?? `http://127.0.0.1:${PORT}`
+).replace(/\/$/, "");
 export const DATA_DIR_RAW = process.env.ASSISTANT_DATA_DIR ?? "data";
-export const DATA_DIR = DATA_DIR_RAW.startsWith("/") ? DATA_DIR_RAW : join(ROOT, DATA_DIR_RAW);
+export const DATA_DIR = DATA_DIR_RAW.startsWith("/")
+  ? DATA_DIR_RAW
+  : join(ROOT, DATA_DIR_RAW);
 // Absolute paths for the /model wizard: .env is read fresh (this process's env goes
 // stale after the wizard edits the file) and data/ holds codex-auth.json.
 export const ENV_PATH = join(ROOT, ".env");
@@ -41,7 +45,10 @@ export const UPDATE_JOB_TTL_MS = 6 * 60 * 60 * 1000;
 
 // Trusted IDs — only they are allowed control commands (/restart etc.).
 export const ALLOWED = new Set(
-  (process.env.TELEGRAM_ALLOWED_USER_IDS ?? "").split(/[,\s]+/).map((s) => s.trim()).filter(Boolean),
+  (process.env.TELEGRAM_ALLOWED_USER_IDS ?? "")
+    .split(/[,\s]+/)
+    .map((s) => s.trim())
+    .filter(Boolean),
 );
 
 // LANG/t/HELP убраны: язык теперь динамический (getLang из i18n.mjs, реагирует на

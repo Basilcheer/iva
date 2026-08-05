@@ -3,7 +3,11 @@ import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { INTERVIEW, saveInterview, buildDistillMessage } from "./core-interview.mjs";
+import {
+  INTERVIEW,
+  saveInterview,
+  buildDistillMessage,
+} from "./core-interview.mjs";
 
 // Полный набор ответов на все 6 тем — общий для двух групп тестов.
 const QA = [
@@ -45,7 +49,10 @@ test("saveInterview создаёт отсутствующий каталог vau
   const file = await saveInterview(vault, [{ q: "второй", a: "новый ответ" }]);
   const md = readFileSync(file, "utf8");
   assert.ok(md.includes("новый ответ"));
-  assert.ok(!md.includes("старый ответ"), "перезапись не затёрла прошлое интервью");
+  assert.ok(
+    !md.includes("старый ответ"),
+    "перезапись не затёрла прошлое интервью",
+  );
 });
 
 test("saveInterview показывает пропущенный ответ прочерком, не роняясь", async () => {

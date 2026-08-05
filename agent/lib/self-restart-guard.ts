@@ -70,8 +70,14 @@ const SYSTEMCTL_LETHAL =
 const PKILL_LETHAL = /^(?:pkill|killall)\b[^]*?\b(?:node|eve|iva)(?![\w-])/;
 
 const RULES: Array<{ re: RegExp; what: string }> = [
-  { re: IVA_CLI_LETHAL, what: "команда iva, останавливающая/перезапускающая сервис" },
-  { re: SYSTEMCTL_LETHAL, what: "systemctl restart/stop/kill юнита iva.service" },
+  {
+    re: IVA_CLI_LETHAL,
+    what: "команда iva, останавливающая/перезапускающая сервис",
+  },
+  {
+    re: SYSTEMCTL_LETHAL,
+    what: "systemctl restart/stop/kill юнита iva.service",
+  },
   { re: PKILL_LETHAL, what: "pkill/killall по процессу node/eve/iva" },
 ];
 

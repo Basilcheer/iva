@@ -1,0 +1,12 @@
+.output/
+node_modules/
+patches/
+assets/
+vault-template/
+.eve/
+.venv-userbot/
+services/telegram-userbot/
+data/
+scripts/autograph/tests/golden/
+CHANGELOG.md
+notes/plans/2026-08-06-ts-migration.md

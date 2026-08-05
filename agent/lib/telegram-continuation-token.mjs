@@ -24,9 +24,13 @@ const CHANNEL_LOCAL_SHAPE = /^-?\d+(:|$)/;
  */
 export function toChannelLocalToken(token, { warn = console.error } = {}) {
   if (typeof token !== "string" || token.length === 0) return token;
-  const local = token.startsWith(NAMESPACE) ? token.slice(NAMESPACE.length) : token;
+  const local = token.startsWith(NAMESPACE)
+    ? token.slice(NAMESPACE.length)
+    : token;
   if (!CHANNEL_LOCAL_SHAPE.test(local)) {
-    warn(`[telegram] continuation token has an unexpected shape: ${JSON.stringify(token)}`);
+    warn(
+      `[telegram] continuation token has an unexpected shape: ${JSON.stringify(token)}`,
+    );
   }
   return local;
 }

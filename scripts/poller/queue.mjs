@@ -45,7 +45,10 @@ function statusGeneration(status) {
 export async function loadQueue({ strict = false } = {}) {
   const loaded = await loadQueueFile(QUEUE_FILE, { strict });
   if (loaded.quarantined) {
-    log(`damaged Telegram queue moved to ${loaded.quarantined}:`, loaded.error.message);
+    log(
+      `damaged Telegram queue moved to ${loaded.quarantined}:`,
+      loaded.error.message,
+    );
   }
   return loaded.document;
 }
@@ -100,7 +103,11 @@ export async function completeScopedResetState(
 }
 
 export async function persistPrivateResetIntent(chatKey, continuationToken) {
-  return persistTelegramResetIntent(RESET_INTENT_DIR, chatKey, continuationToken);
+  return persistTelegramResetIntent(
+    RESET_INTENT_DIR,
+    chatKey,
+    continuationToken,
+  );
 }
 
 export async function loadPrivateResetIntents() {
@@ -162,7 +169,6 @@ export async function performScopedReset(
     logImpl = log,
   } = {},
 ) {
-  const intent = { chatKey, continuationToken };
   if (clearQueue) {
     try {
       await persistIntentImpl(chatKey, continuationToken);
@@ -171,11 +177,10 @@ export async function performScopedReset(
       throw error;
     }
   }
-  try {
-    await releaseScopedContinuation(chatKey, continuationToken, { requestResetImpl, logImpl });
-  } catch (error) {
-    throw error;
-  }
+  await releaseScopedContinuation(chatKey, continuationToken, {
+    requestResetImpl,
+    logImpl,
+  });
   try {
     await completeStateImpl(chatKey, continuationToken, { clearQueue });
   } catch (error) {
@@ -205,7 +210,9 @@ export async function reconcileScopedResetIntents({
     const continuationToken = toChannelLocalToken(intent.continuationToken);
     const result = await requestResetImpl({ ...intent, continuationToken });
     logResetOutcome(logImpl, intent.chatKey, continuationToken, result);
-    await completeStateImpl(intent.chatKey, continuationToken, { clearQueue: true });
+    await completeStateImpl(intent.chatKey, continuationToken, {
+      clearQueue: true,
+    });
     await clearIntentImpl(intent.chatKey);
   }
   return intents.length;
@@ -220,7 +227,8 @@ function telegramTargetOf(chatKey) {
   if (thread === "") return { chat_id: chatId };
   if (!/^\d+$/.test(thread)) return null;
   const messageThreadId = Number(thread);
-  if (!Number.isSafeInteger(messageThreadId) || messageThreadId <= 0) return null;
+  if (!Number.isSafeInteger(messageThreadId) || messageThreadId <= 0)
+    return null;
   return { chat_id: chatId, message_thread_id: messageThreadId };
 }
 
@@ -291,7 +299,10 @@ async function clearFailedDirectIngress(
   );
   if (!cleared) return false;
 
-  if (current.statusMessageId !== undefined && current.statusMessageId !== null) {
+  if (
+    current.statusMessageId !== undefined &&
+    current.statusMessageId !== null
+  ) {
     try {
       await deleteMessageImpl(chatKey, current.statusMessageId);
     } catch {
@@ -400,7 +411,10 @@ export async function reapStaleRuns({
       safeLog(`stale run notification failed for ${key}:`, error.message);
     }
 
-    if (status.statusMessageId !== undefined && status.statusMessageId !== null) {
+    if (
+      status.statusMessageId !== undefined &&
+      status.statusMessageId !== null
+    ) {
       try {
         await deleteMessageImpl(key, status.statusMessageId);
       } catch {

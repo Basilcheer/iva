@@ -74,7 +74,8 @@ export async function requestTelegramReset({
     body: JSON.stringify({ continuationToken }),
     signal: AbortSignal.timeout(timeoutMs),
   });
-  if (!response.ok) throw new Error(`Eve reset route returned HTTP ${response.status}`);
+  if (!response.ok)
+    throw new Error(`Eve reset route returned HTTP ${response.status}`);
 
   const body = await response.json();
   if (

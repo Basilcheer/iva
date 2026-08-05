@@ -22,18 +22,26 @@ const TICK_MS = 3_000;
 const POLL_MS = 3_000;
 const TAIL_LINES = 40;
 
-let RUN = null;            // единственный запуск на мост
-let customEmojiOk = true;  // глобальный даунгрейд после первого 400
+let RUN = null; // единственный запуск на мост
+let customEmojiOk = true; // глобальный даунгрейд после первого 400
 
 export const currentRun = () => RUN;
-export function resetForTests() { RUN = null; customEmojiOk = true; }
+export function resetForTests() {
+  RUN = null;
+  customEmojiOk = true;
+}
 
 export function stripAnsi(s) {
-  return String(s).replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "").replace(/\r/g, "");
+  // eslint-disable-next-line no-control-regex -- This helper intentionally strips ANSI escape sequences.
+  const withoutAnsi = String(s).replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "");
+  return withoutAnsi.replace(/\r/g, "");
 }
 
 export function elapsed(run) {
-  const s = Math.max(0, Math.floor(((run.finishedAt ?? Date.now()) - run.startedAt) / 1000));
+  const s = Math.max(
+    0,
+    Math.floor(((run.finishedAt ?? Date.now()) - run.startedAt) / 1000),
+  );
   return `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
 }
 
@@ -52,15 +60,27 @@ export function tailText(run, limit = 1500) {
 
 function baseRun(cmd, opts) {
   return {
-    cmd, status: "running", startedAt: Date.now(), finishedAt: null,
-    lastLine: "", tail: [], cancelled: false, timedOut: false,
-    chatId: opts.chatId, messageId: opts.messageId,
-    _edit: { lastPayload: "" }, _timer: null, _kill: null,
+    cmd,
+    status: "running",
+    startedAt: Date.now(),
+    finishedAt: null,
+    lastLine: "",
+    tail: [],
+    cancelled: false,
+    timedOut: false,
+    chatId: opts.chatId,
+    messageId: opts.messageId,
+    _edit: { lastPayload: "" },
+    _timer: null,
+    _kill: null,
   };
 }
 
 function pushLines(run, chunk) {
-  for (const line of stripAnsi(chunk.toString()).split("\n").map((l) => l.trim()).filter(Boolean)) {
+  for (const line of stripAnsi(chunk.toString())
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean)) {
     run.lastLine = line;
     run.tail.push(line);
     if (run.tail.length > TAIL_LINES) run.tail.shift();
@@ -76,21 +96,35 @@ async function editRich(opts, run, text, rows) {
   const base = { chat_id: run.chatId, message_id: run.messageId, reply_markup };
   if (customEmojiOk) {
     const L = opts.loader;
-    const r = await opts.tg("editMessageText", {
-      ...base,
-      text: `${L.alt} ${text}`,
-      entities: [{ type: "custom_emoji", offset: 0, length: L.alt.length, custom_emoji_id: L.id }],
-    }).catch(() => ({ ok: false }));
+    const r = await opts
+      .tg("editMessageText", {
+        ...base,
+        text: `${L.alt} ${text}`,
+        entities: [
+          {
+            type: "custom_emoji",
+            offset: 0,
+            length: L.alt.length,
+            custom_emoji_id: L.id,
+          },
+        ],
+      })
+      .catch(() => ({ ok: false }));
     if (r.ok || /not modified/i.test(r.description || "")) return;
     if (r.error_code !== 400) return;
     customEmojiOk = false;
   }
-  await opts.tg("editMessageText", { ...base, text: `${opts.loader.fallback} ${text}` }).catch(() => {});
+  await opts
+    .tg("editMessageText", { ...base, text: `${opts.loader.fallback} ${text}` })
+    .catch(() => {});
 }
 
 function startTicker(run, opts) {
   const tick = async () => {
-    if (run.status !== "running") { clearInterval(run._timer); return; }
+    if (run.status !== "running") {
+      clearInterval(run._timer);
+      return;
+    }
     if (opts.attached && !opts.attached()) return; // юзер ушёл с экрана — не дерёмся за сообщение
     const v = opts.progressView(run);
     await editRich(opts, run, v.text, v.rows);
@@ -114,22 +148,43 @@ export function startProcess(cmd, spec, opts) {
   let child;
   try {
     child = (opts.spawnImpl ?? spawn)(spec.argv[0], spec.argv.slice(1), {
-      cwd: spec.cwd, env: spec.env ?? process.env, stdio: ["ignore", "pipe", "pipe"],
+      cwd: spec.cwd,
+      env: spec.env ?? process.env,
+      stdio: ["ignore", "pipe", "pipe"],
     });
   } catch (e) {
     pushLines(run, String(e.message || e));
     finish(run, "failed", opts);
     return run;
   }
-  run._kill = () => { try { child.kill("SIGTERM"); } catch {} };
+  run._kill = () => {
+    try {
+      child.kill("SIGTERM");
+    } catch {
+      // The child may already have exited before cancellation reaches it.
+    }
+  };
   child.stdout.on("data", (b) => pushLines(run, b));
   child.stderr.on("data", (b) => pushLines(run, b));
-  const timer = setTimeout(() => { run.timedOut = true; run._kill(); }, opts.timeoutMs ?? TIMEOUT_MS[cmd]);
+  const timer = setTimeout(() => {
+    run.timedOut = true;
+    run._kill();
+  }, opts.timeoutMs ?? TIMEOUT_MS[cmd]);
   if (timer.unref) timer.unref();
-  child.on("error", (e) => { clearTimeout(timer); pushLines(run, String(e.message || e)); finish(run, "failed", opts); });
+  child.on("error", (e) => {
+    clearTimeout(timer);
+    pushLines(run, String(e.message || e));
+    finish(run, "failed", opts);
+  });
   child.on("close", (code) => {
     clearTimeout(timer);
-    const status = run.cancelled ? "cancelled" : run.timedOut ? "timeout" : code === 0 ? "done" : "failed";
+    const status = run.cancelled
+      ? "cancelled"
+      : run.timedOut
+        ? "timeout"
+        : code === 0
+          ? "done"
+          : "failed";
     finish(run, status, opts);
   });
   startTicker(run, opts);
@@ -140,15 +195,37 @@ export function startUnit(cmd, { unit }, opts) {
   if (RUN && RUN.status === "running") return null;
   const run = (RUN = baseRun(cmd, opts));
   const ex = opts.execFileImpl ?? execFile;
-  const sysctl = (args) => new Promise((resolve) =>
-    ex("systemctl", ["--user", ...args], { timeout: 15_000, encoding: "utf8" }, (err, out = "") =>
-      resolve({ code: err ? (typeof err.code === "number" ? err.code : 1) : 0, out: String(out).trim() })),
-  );
-  const journal = () => new Promise((resolve) =>
-    ex("journalctl", ["--user", "-u", unit, "-n", "15", "--no-pager", "-o", "cat"], { timeout: 15_000, encoding: "utf8" },
-      (err, out = "") => resolve(stripAnsi(String(out)).split("\n").map((l) => l.trim()).filter(Boolean))),
-  );
-  run._kill = () => { sysctl(["stop", unit]); };
+  const sysctl = (args) =>
+    new Promise((resolve) =>
+      ex(
+        "systemctl",
+        ["--user", ...args],
+        { timeout: 15_000, encoding: "utf8" },
+        (err, out = "") =>
+          resolve({
+            code: err ? (typeof err.code === "number" ? err.code : 1) : 0,
+            out: String(out).trim(),
+          }),
+      ),
+    );
+  const journal = () =>
+    new Promise((resolve) =>
+      ex(
+        "journalctl",
+        ["--user", "-u", unit, "-n", "15", "--no-pager", "-o", "cat"],
+        { timeout: 15_000, encoding: "utf8" },
+        (err, out = "") =>
+          resolve(
+            stripAnsi(String(out))
+              .split("\n")
+              .map((l) => l.trim())
+              .filter(Boolean),
+          ),
+      ),
+    );
+  run._kill = () => {
+    sysctl(["stop", unit]);
+  };
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   (async () => {
     const started = await sysctl(["start", "--no-block", unit]);
@@ -161,7 +238,9 @@ export function startUnit(cmd, { unit }, opts) {
       await wait(opts.pollMs ?? POLL_MS);
       if (run.status !== "running") return;
       const st = await sysctl(["is-active", unit]);
-      if (["activating", "active", "reloading", "deactivating"].includes(st.out)) {
+      if (
+        ["activating", "active", "reloading", "deactivating"].includes(st.out)
+      ) {
         if (Date.now() > deadline) return finish(run, "timeout", opts); // юнит НЕ убиваем
         continue;
       }

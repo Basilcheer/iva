@@ -6,13 +6,13 @@ Memory is the part that compounds. Most agents forget you the moment the context
 
 ## The memory tree
 
-*Iva* means *willow*, and the memory is shaped like one:
+_Iva_ means _willow_, and the memory is shaped like one:
 
-| Layer | What lives there | Path |
-|---|---|---|
-| 🍃 Leaves | the word-for-word transcript of each day, Iva's replies included | `daily/YYYY-MM-DD.md` |
-| 🌿 Branches | summaries folded upward: day → week → month → year | `summaries/daily/`, `weekly/`, `monthly/`, `yearly/` |
-| 🪵 Trunk | `CORE.md` (≤1200 chars, in every prompt) + typed cards: contacts, projects, decisions, ideas, notes | `CORE.md`, `cards/` |
+| Layer       | What lives there                                                                                    | Path                                                 |
+| ----------- | --------------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
+| 🍃 Leaves   | the word-for-word transcript of each day, Iva's replies included                                    | `daily/YYYY-MM-DD.md`                                |
+| 🌿 Branches | summaries folded upward: day → week → month → year                                                  | `summaries/daily/`, `weekly/`, `monthly/`, `yearly/` |
+| 🪵 Trunk    | `CORE.md` (≤1200 chars, in every prompt) + typed cards: contacts, projects, decisions, ideas, notes | `CORE.md`, `cards/`                                  |
 
 CORE.md rides in every system prompt; everything else comes in per question through ranked search. A weekly summary costs about 1/35th of its seven raw days, so recall stays cheap as the vault grows.
 
@@ -20,12 +20,12 @@ CORE.md rides in every system prompt; everything else comes in per question thro
 
 One script, four in-process eve schedules, configured local time. `scripts/memory/rollup.ts` drives the running agent through `eve/client`:
 
-| Schedule | When | Reads | Writes |
-|---|---|---|---|
-| daily | 04:00 | yesterday's raw transcript | cards, daily summary, CORE.md |
-| weekly | Mon 04:15 | 7 daily summaries | weekly summary |
-| monthly | 1st, 04:20 | the month's weeklies | monthly summary |
-| yearly | Jan 1, 04:25 | the year's monthlies | yearly summary |
+| Schedule | When         | Reads                      | Writes                        |
+| -------- | ------------ | -------------------------- | ----------------------------- |
+| daily    | 04:00        | yesterday's raw transcript | cards, daily summary, CORE.md |
+| weekly   | Mon 04:15    | 7 daily summaries          | weekly summary                |
+| monthly  | 1st, 04:20   | the month's weeklies       | monthly summary               |
+| yearly   | Jan 1, 04:25 | the year's monthlies       | yearly summary                |
 
 Daily and weekly runs post a report to Telegram; monthly and yearly run silent.
 

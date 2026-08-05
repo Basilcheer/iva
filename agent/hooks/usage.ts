@@ -19,7 +19,10 @@ const MODEL =
     : PROVIDER === "openrouter"
       ? (process.env.OPENROUTER_MODEL ?? "openai/gpt-5.1")
       : PROVIDER === "opencode"
-        ? (process.env.OPENCODE_MODEL ?? "deepseek-v4-pro").replace(/^opencode-go\//, "")
+        ? (process.env.OPENCODE_MODEL ?? "deepseek-v4-pro").replace(
+            /^opencode-go\//,
+            "",
+          )
         : (process.env.OLLAMA_MODEL ?? "deepseek-v4-pro");
 
 interface StepData {
@@ -33,7 +36,12 @@ interface StepData {
   };
 }
 
-function record(data: StepData, sessionId: string, source: string, subagent?: string): void {
+function record(
+  data: StepData,
+  sessionId: string,
+  source: string,
+  subagent?: string,
+): void {
   const u = data.usage;
   if (!u) return;
   const inT = u.inputTokens ?? 0;
@@ -77,7 +85,11 @@ export default defineHook({
         record(
           {
             ...inner.data,
-            turnId: subagentTurnId(ctx.session.turn, event.data.subagentName, inner.data.turnId),
+            turnId: subagentTurnId(
+              ctx.session.turn,
+              event.data.subagentName,
+              inner.data.turnId,
+            ),
           },
           ctx.session.id,
           ctx.channel.kind ?? "unknown",

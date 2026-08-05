@@ -1,7 +1,18 @@
-import { addTelegramQueueReceipt, TELEGRAM_ACCEPTANCE_KIND_HEADER } from "#lib/telegram-acceptance.mjs";
+import {
+  addTelegramQueueReceipt,
+  TELEGRAM_ACCEPTANCE_KIND_HEADER,
+} from "#lib/telegram-acceptance.mjs";
 import { classifyDeliverStatus } from "../lib/deliver-policy.mjs";
 import { tr } from "#lib/i18n.mjs";
-import { ROUTE, ACCEPTANCE_ROUTE, SECRET, ALLOWED, SETTLE_MS, sleep, log } from "./config.mjs";
+import {
+  ROUTE,
+  ACCEPTANCE_ROUTE,
+  SECRET,
+  ALLOWED,
+  SETTLE_MS,
+  sleep,
+  log,
+} from "./config.mjs";
 import { tg } from "./transport.mjs";
 import { chatKey } from "./offset.mjs";
 
@@ -61,7 +72,9 @@ async function deliver(
           "X-Telegram-Bot-Api-Secret-Token": SECRET,
         },
         body: JSON.stringify(outgoing),
-        ...(timeoutMs === undefined ? {} : { signal: AbortSignal.timeout(timeoutMs) }),
+        ...(timeoutMs === undefined
+          ? {}
+          : { signal: AbortSignal.timeout(timeoutMs) }),
       });
       const acceptanceKind = expectsAcceptance
         ? res.headers.get(TELEGRAM_ACCEPTANCE_KIND_HEADER)
@@ -69,11 +82,9 @@ async function deliver(
       if (
         res.ok &&
         (expectedStatus === undefined || res.status === expectedStatus) &&
-        (
-          !expectsAcceptance ||
+        (!expectsAcceptance ||
           acceptanceKind === "turn" ||
-          acceptanceKind === "handled"
-        )
+          acceptanceKind === "handled")
       ) {
         return acceptanceKind === "handled" ? "handled" : true;
       }
@@ -103,7 +114,9 @@ async function deliver(
         acceptance: expectsAcceptance,
       });
       if (!retry) {
-        log(`deliver: eve replied ${res.status}; queue head retained for a later pass`);
+        log(
+          `deliver: eve replied ${res.status}; queue head retained for a later pass`,
+        );
         return false;
       }
       if (cls === "drop") {
@@ -114,7 +127,9 @@ async function deliver(
           await sleep(wait);
           continue;
         }
-        log(`deliver: eve replied ${res.status} ${DROP_ATTEMPTS} times — DROPPING update ${update.update_id}`);
+        log(
+          `deliver: eve replied ${res.status} ${DROP_ATTEMPTS} times — DROPPING update ${update.update_id}`,
+        );
         await notifyDeliverProblem("drop", res.status);
         return false;
       }
@@ -123,9 +138,13 @@ async function deliver(
         // молотить, и алерт владельцу — чинить надо руками (secret/route).
         wait = CONFIG_RETRY_MS;
         await notifyDeliverProblem("config", res.status);
-        log(`deliver: eve replied ${res.status} (config error, attempt ${attempt}) — retrying in ${wait / 1000}s`);
+        log(
+          `deliver: eve replied ${res.status} (config error, attempt ${attempt}) — retrying in ${wait / 1000}s`,
+        );
       } else {
-        log(`deliver: eve replied ${res.status} (attempt ${attempt}) — retrying`);
+        log(
+          `deliver: eve replied ${res.status} (attempt ${attempt}) — retrying`,
+        );
       }
     } catch (e) {
       const acceptanceTimeout =
@@ -139,7 +158,9 @@ async function deliver(
         });
       }
       if (!retry) {
-        log(`deliver: eve unavailable (${e.message}); queue head retained for a later pass`);
+        log(
+          `deliver: eve unavailable (${e.message}); queue head retained for a later pass`,
+        );
         return false;
       }
       if (acceptanceTimeout && !retryAcceptanceTimeout) {
@@ -164,7 +185,9 @@ async function deliver(
         await notifyDeliverProblem("drop", "timeout");
         return false;
       }
-      log(`deliver: eve unavailable (${e.message}, attempt ${attempt}) — waiting for server`);
+      log(
+        `deliver: eve unavailable (${e.message}, attempt ${attempt}) — waiting for server`,
+      );
     }
     await sleep(wait);
   }
@@ -209,7 +232,9 @@ const lastDeliverAt = new Map();
 // lastDeliverAt, поэтому доставка из меню сдвигает паузу для следующего реального сообщения.
 async function pacedDeliver(update, options) {
   const deadline =
-    options?.timeoutMs === undefined ? null : Date.now() + Math.max(0, options.timeoutMs);
+    options?.timeoutMs === undefined
+      ? null
+      : Date.now() + Math.max(0, options.timeoutMs);
   const key = chatKey(update);
   if (key !== null && SETTLE_MS > 0) {
     const prev = lastDeliverAt.get(key);
@@ -224,7 +249,10 @@ async function pacedDeliver(update, options) {
   const deliverOptions =
     deadline === null
       ? options
-      : { ...options, timeoutMs: Math.max(1, Math.floor(deadline - Date.now())) };
+      : {
+          ...options,
+          timeoutMs: Math.max(1, Math.floor(deadline - Date.now())),
+        };
   const accepted = await deliver(update, deliverOptions); // wait for delivery — ordered and lossless
   if (key !== null) lastDeliverAt.set(key, Date.now());
   return accepted; // false = апдейт выброшен как битый, eve его НЕ получила

@@ -24,7 +24,8 @@ const enc = new TextEncoder();
 function streamOf(...parts) {
   return new ReadableStream({
     start(controller) {
-      for (const p of parts) controller.enqueue(typeof p === "string" ? enc.encode(p) : p);
+      for (const p of parts)
+        controller.enqueue(typeof p === "string" ? enc.encode(p) : p);
       controller.close();
     },
   });
@@ -35,10 +36,20 @@ function streamOf(...parts) {
 function recorder(content = '{"installed":{}}', { deleteOk = true } = {}) {
   const calls = [];
   const io = {
-    deleteSecret: async (_c, id) => { calls.push(["delete", id]); return deleteOk; },
-    reply: async (_c, text) => { calls.push(["reply", text]); },
-    download: async (fileId) => { calls.push(["download", fileId]); return content; },
-    deliver: async (text) => { calls.push(["deliver", text]); },
+    deleteSecret: async (_c, id) => {
+      calls.push(["delete", id]);
+      return deleteOk;
+    },
+    reply: async (_c, text) => {
+      calls.push(["reply", text]);
+    },
+    download: async (fileId) => {
+      calls.push(["download", fileId]);
+      return content;
+    },
+    deliver: async (text) => {
+      calls.push(["deliver", text]);
+    },
   };
   return { calls, io, names: () => calls.map((c) => c[0]) };
 }
@@ -81,24 +92,27 @@ test("routeMessageUpdate enqueues and acknowledges one busy update", async () =>
   let enqueued = 0;
   let acknowledged = 0;
   let delivered = 0;
-  const result = await routeMessageUpdate(routedUpdate, routeDeps({
-    runningImpl: () => true,
-    enqueueImpl: async (key, update) => {
-      enqueued++;
-      assert.equal(key, "1:");
-      assert.equal(update, routedUpdate);
-      return { count: 3 };
-    },
-    acknowledgeImpl: async (update, count) => {
-      acknowledged++;
-      assert.equal(update, routedUpdate);
-      assert.equal(count, 3);
-    },
-    deliverImpl: async () => {
-      delivered++;
-      return true;
-    },
-  }));
+  const result = await routeMessageUpdate(
+    routedUpdate,
+    routeDeps({
+      runningImpl: () => true,
+      enqueueImpl: async (key, update) => {
+        enqueued++;
+        assert.equal(key, "1:");
+        assert.equal(update, routedUpdate);
+        return { count: 3 };
+      },
+      acknowledgeImpl: async (update, count) => {
+        acknowledged++;
+        assert.equal(update, routedUpdate);
+        assert.equal(count, 3);
+      },
+      deliverImpl: async () => {
+        delivered++;
+        return true;
+      },
+    }),
+  );
 
   assert.equal(result, "queued");
   assert.equal(enqueued, 1);
@@ -108,13 +122,16 @@ test("routeMessageUpdate enqueues and acknowledges one busy update", async () =>
 
 test("routeMessageUpdate sends one idle update through paced delivery", async () => {
   let delivered = 0;
-  const result = await routeMessageUpdate(routedUpdate, routeDeps({
-    deliverImpl: async (update) => {
-      delivered++;
-      assert.equal(update, routedUpdate);
-      return true;
-    },
-  }));
+  const result = await routeMessageUpdate(
+    routedUpdate,
+    routeDeps({
+      deliverImpl: async (update) => {
+        delivered++;
+        assert.equal(update, routedUpdate);
+        return true;
+      },
+    }),
+  );
 
   assert.equal(result, "delivered");
   assert.equal(delivered, 1);
@@ -129,45 +146,48 @@ test("a direct acceptance timeout is rejected after one cleanup and notification
   const calls = [];
   let deliveries = 0;
   let timeoutReports = 0;
-  const result = await routeMessageUpdate(routedUpdate, routeDeps({
-    statusImpl: () => current,
-    setStatusIfImpl: (key, expected, patch) => {
-      calls.push(["cas", key, expected, patch]);
-      current = {
-        ...current,
-        ...patch,
-        generation: current.generation + 1,
-        updatedAt: 1_000,
-      };
-      for (const field of Object.keys(current)) {
-        if (current[field] === null) delete current[field];
-      }
-      return current;
-    },
-    sendFailureImpl: async (key, text) => calls.push(["send", key, text]),
-    deleteMessageImpl: async (key, messageId) =>
-      calls.push(["delete", key, messageId]),
-    deliverImpl: async (_update, options) => {
-      deliveries++;
-      assert.equal(options.timeoutMs, 90_000);
-      assert.equal(options.retryAcceptanceTimeout, false);
-      current = {
-        status: "running",
-        generation: 5,
-        updatedAt: 1_000,
-        ingressId: "timed-out-ingress",
-        ingressAt: 1_000,
-        statusMessageId: 73,
-      };
-      timeoutReports++;
-      await options.onAcceptanceFailure({
-        kind: "timeout",
-        status: "timeout",
-        attempt: 1,
-      });
-      return false;
-    },
-  }));
+  const result = await routeMessageUpdate(
+    routedUpdate,
+    routeDeps({
+      statusImpl: () => current,
+      setStatusIfImpl: (key, expected, patch) => {
+        calls.push(["cas", key, expected, patch]);
+        current = {
+          ...current,
+          ...patch,
+          generation: current.generation + 1,
+          updatedAt: 1_000,
+        };
+        for (const field of Object.keys(current)) {
+          if (current[field] === null) delete current[field];
+        }
+        return current;
+      },
+      sendFailureImpl: async (key, text) => calls.push(["send", key, text]),
+      deleteMessageImpl: async (key, messageId) =>
+        calls.push(["delete", key, messageId]),
+      deliverImpl: async (_update, options) => {
+        deliveries++;
+        assert.equal(options.timeoutMs, 90_000);
+        assert.equal(options.retryAcceptanceTimeout, false);
+        current = {
+          status: "running",
+          generation: 5,
+          updatedAt: 1_000,
+          ingressId: "timed-out-ingress",
+          ingressAt: 1_000,
+          statusMessageId: 73,
+        };
+        timeoutReports++;
+        await options.onAcceptanceFailure({
+          kind: "timeout",
+          status: "timeout",
+          attempt: 1,
+        });
+        return false;
+      },
+    }),
+  );
 
   assert.equal(result, "rejected");
   assert.equal(deliveries, 1);
@@ -190,49 +210,68 @@ test("direct acceptance failures clear each matching ingress and notify the chat
     updatedAt: 900,
   };
   const calls = [];
-  const result = await routeMessageUpdate(routedUpdate, routeDeps({
-    statusImpl: () => current,
-    setStatusIfImpl: (key, expected, patch) => {
-      calls.push(["cas", key, expected, patch]);
-      current = {
-        ...current,
-        ...patch,
-        generation: current.generation + 1,
-        updatedAt: 1_000,
-      };
-      for (const field of Object.keys(current)) {
-        if (current[field] === null) delete current[field];
-      }
-      return current;
-    },
-    sendFailureImpl: async (key, text) => calls.push(["send", key, text]),
-    deleteMessageImpl: async (key, messageId) =>
-      calls.push(["delete", key, messageId]),
-    deliverImpl: async (_update, { onAcceptanceFailure }) => {
-      current = {
-        status: "running",
-        generation: 5,
-        updatedAt: 1_000,
-        ingressId: "ingress-first",
-        ingressAt: 1_000,
-        statusMessageId: 71,
-      };
-      await onAcceptanceFailure({ kind: "dispatch", status: 503, attempt: 1 });
-      assert.equal(current.status, "idle", "the first failed ingress resets immediately");
+  const result = await routeMessageUpdate(
+    routedUpdate,
+    routeDeps({
+      statusImpl: () => current,
+      setStatusIfImpl: (key, expected, patch) => {
+        calls.push(["cas", key, expected, patch]);
+        current = {
+          ...current,
+          ...patch,
+          generation: current.generation + 1,
+          updatedAt: 1_000,
+        };
+        for (const field of Object.keys(current)) {
+          if (current[field] === null) delete current[field];
+        }
+        return current;
+      },
+      sendFailureImpl: async (key, text) => calls.push(["send", key, text]),
+      deleteMessageImpl: async (key, messageId) =>
+        calls.push(["delete", key, messageId]),
+      deliverImpl: async (_update, { onAcceptanceFailure }) => {
+        current = {
+          status: "running",
+          generation: 5,
+          updatedAt: 1_000,
+          ingressId: "ingress-first",
+          ingressAt: 1_000,
+          statusMessageId: 71,
+        };
+        await onAcceptanceFailure({
+          kind: "dispatch",
+          status: 503,
+          attempt: 1,
+        });
+        assert.equal(
+          current.status,
+          "idle",
+          "the first failed ingress resets immediately",
+        );
 
-      current = {
-        status: "running",
-        generation: 7,
-        updatedAt: 1_000,
-        ingressId: "ingress-retry",
-        ingressAt: 1_000,
-        statusMessageId: 72,
-      };
-      await onAcceptanceFailure({ kind: "dispatch", status: 503, attempt: 2 });
-      assert.equal(current.status, "idle", "a failed bounded retry is cleaned too");
-      return false;
-    },
-  }));
+        current = {
+          status: "running",
+          generation: 7,
+          updatedAt: 1_000,
+          ingressId: "ingress-retry",
+          ingressAt: 1_000,
+          statusMessageId: 72,
+        };
+        await onAcceptanceFailure({
+          kind: "dispatch",
+          status: 503,
+          attempt: 2,
+        });
+        assert.equal(
+          current.status,
+          "idle",
+          "a failed bounded retry is cleaned too",
+        );
+        return false;
+      },
+    }),
+  );
 
   assert.equal(result, "rejected");
   assert.equal(calls.filter(([kind]) => kind === "cas").length, 2);
@@ -258,42 +297,49 @@ test("reply-to-bot bypass clears its failed early status before delivery returns
   };
   let resetBeforeReturn = false;
   let notifications = 0;
-  const result = await routeMessageUpdate(routedUpdate, routeDeps({
-    replyToBotImpl: () => true,
-    loadQueueImpl: async () => {
-      throw new Error("reply-to-bot must bypass the busy queue");
-    },
-    now: () => 2_000,
-    statusImpl: () => current,
-    setStatusIfImpl: (_key, _expected, patch) => {
-      current = {
-        ...current,
-        ...patch,
-        generation: current.generation + 1,
-        updatedAt: 2_000,
-      };
-      for (const field of Object.keys(current)) {
-        if (current[field] === null) delete current[field];
-      }
-      return current;
-    },
-    sendFailureImpl: async () => {
-      notifications++;
-    },
-    deliverImpl: async (_update, { onAcceptanceFailure }) => {
-      current = {
-        status: "running",
-        generation: 8,
-        updatedAt: 2_000,
-        ingressId: "reply-ingress",
-        ingressAt: 2_000,
-        statusMessageId: 81,
-      };
-      await onAcceptanceFailure({ kind: "dispatch", status: 503, attempt: 1 });
-      resetBeforeReturn = current.status === "idle";
-      return false;
-    },
-  }));
+  const result = await routeMessageUpdate(
+    routedUpdate,
+    routeDeps({
+      replyToBotImpl: () => true,
+      loadQueueImpl: async () => {
+        throw new Error("reply-to-bot must bypass the busy queue");
+      },
+      now: () => 2_000,
+      statusImpl: () => current,
+      setStatusIfImpl: (_key, _expected, patch) => {
+        current = {
+          ...current,
+          ...patch,
+          generation: current.generation + 1,
+          updatedAt: 2_000,
+        };
+        for (const field of Object.keys(current)) {
+          if (current[field] === null) delete current[field];
+        }
+        return current;
+      },
+      sendFailureImpl: async () => {
+        notifications++;
+      },
+      deliverImpl: async (_update, { onAcceptanceFailure }) => {
+        current = {
+          status: "running",
+          generation: 8,
+          updatedAt: 2_000,
+          ingressId: "reply-ingress",
+          ingressAt: 2_000,
+          statusMessageId: 81,
+        };
+        await onAcceptanceFailure({
+          kind: "dispatch",
+          status: 503,
+          attempt: 1,
+        });
+        resetBeforeReturn = current.status === "idle";
+        return false;
+      },
+    }),
+  );
 
   assert.equal(result, "rejected");
   assert.equal(resetBeforeReturn, true);
@@ -308,29 +354,36 @@ test("direct failure cleanup never clobbers a turn that acquired a session", asy
   };
   let casCalls = 0;
   let notifications = 0;
-  const result = await routeMessageUpdate(routedUpdate, routeDeps({
-    statusImpl: () => current,
-    setStatusIfImpl: () => {
-      casCalls++;
-      return null;
-    },
-    sendFailureImpl: async () => {
-      notifications++;
-    },
-    deliverImpl: async (_update, { onAcceptanceFailure }) => {
-      current = {
-        status: "running",
-        generation: 3,
-        updatedAt: 1_000,
-        ingressId: "adopted-ingress",
-        ingressAt: 1_000,
-        sessionId: "live-session",
-        turnId: "live-turn",
-      };
-      await onAcceptanceFailure({ kind: "timeout", status: "timeout", attempt: 1 });
-      return false;
-    },
-  }));
+  const result = await routeMessageUpdate(
+    routedUpdate,
+    routeDeps({
+      statusImpl: () => current,
+      setStatusIfImpl: () => {
+        casCalls++;
+        return null;
+      },
+      sendFailureImpl: async () => {
+        notifications++;
+      },
+      deliverImpl: async (_update, { onAcceptanceFailure }) => {
+        current = {
+          status: "running",
+          generation: 3,
+          updatedAt: 1_000,
+          ingressId: "adopted-ingress",
+          ingressAt: 1_000,
+          sessionId: "live-session",
+          turnId: "live-turn",
+        };
+        await onAcceptanceFailure({
+          kind: "timeout",
+          status: "timeout",
+          attempt: 1,
+        });
+        return false;
+      },
+    }),
+  );
 
   assert.equal(result, "rejected");
   assert.equal(casCalls, 0);
@@ -349,17 +402,20 @@ test("callback_query delivery keeps the original option-free webhook path", asyn
     },
   };
   let statusReads = 0;
-  const result = await routeMessageUpdate(callbackUpdate, routeDeps({
-    statusImpl: () => {
-      statusReads++;
-      return null;
-    },
-    deliverImpl: async (update, options) => {
-      assert.equal(update, callbackUpdate);
-      assert.equal(options, undefined);
-      return true;
-    },
-  }));
+  const result = await routeMessageUpdate(
+    callbackUpdate,
+    routeDeps({
+      statusImpl: () => {
+        statusReads++;
+        return null;
+      },
+      deliverImpl: async (update, options) => {
+        assert.equal(update, callbackUpdate);
+        assert.equal(options, undefined);
+        return true;
+      },
+    }),
+  );
 
   assert.equal(result, "delivered");
   assert.equal(statusReads, 0);
@@ -367,15 +423,18 @@ test("callback_query delivery keeps the original option-free webhook path", asyn
 
 test("routeMessageUpdate reports enqueue failure without acknowledging", async () => {
   let acknowledged = 0;
-  const result = await routeMessageUpdate(routedUpdate, routeDeps({
-    runningImpl: () => true,
-    enqueueImpl: async () => {
-      throw new Error("disk full");
-    },
-    acknowledgeImpl: async () => {
-      acknowledged++;
-    },
-  }));
+  const result = await routeMessageUpdate(
+    routedUpdate,
+    routeDeps({
+      runningImpl: () => true,
+      enqueueImpl: async () => {
+        throw new Error("disk full");
+      },
+      acknowledgeImpl: async () => {
+        acknowledged++;
+      },
+    }),
+  );
 
   assert.equal(result, "enqueue-failed");
   assert.equal(acknowledged, 0);
@@ -413,9 +472,8 @@ function reaperDeps(statuses, overrides = {}) {
 
 test("reapStaleRuns flips one stale run, resets Eve, notifies, and removes working status", async () => {
   const calls = [];
-  const reaped = await reapStaleRuns(reaperDeps(
-    [{ chatKey: "1:", status: staleStatus }],
-    {
+  const reaped = await reapStaleRuns(
+    reaperDeps([{ chatKey: "1:", status: staleStatus }], {
       setStatusIfImpl: (key, expected, patch) => {
         calls.push(["cas", key, expected, patch]);
         return { ...staleStatus, ...patch, generation: 8 };
@@ -424,8 +482,8 @@ test("reapStaleRuns flips one stale run, resets Eve, notifies, and removes worki
       sendImpl: async (key, text) => calls.push(["send", key, text]),
       deleteMessageImpl: async (key, messageId) =>
         calls.push(["delete", key, messageId]),
-    },
-  ));
+    }),
+  );
 
   assert.equal(reaped, 1);
   assert.deepEqual(calls[0].slice(0, 3), [
@@ -445,18 +503,22 @@ test("reapStaleRuns flips one stale run, resets Eve, notifies, and removes worki
 
 test("reapStaleRuns leaves a fresh running record untouched", async () => {
   let sideEffects = 0;
-  const reaped = await reapStaleRuns(reaperDeps(
-    [{
-      chatKey: "1:",
-      status: { ...staleStatus, updatedAt: reaperNow - 30_000 },
-    }],
-    {
-      setStatusIfImpl: () => {
-        sideEffects++;
-        return { status: "idle" };
+  const reaped = await reapStaleRuns(
+    reaperDeps(
+      [
+        {
+          chatKey: "1:",
+          status: { ...staleStatus, updatedAt: reaperNow - 30_000 },
+        },
+      ],
+      {
+        setStatusIfImpl: () => {
+          sideEffects++;
+          return { status: "idle" };
+        },
       },
-    },
-  ));
+    ),
+  );
 
   assert.equal(reaped, 0);
   assert.equal(sideEffects, 0);
@@ -464,18 +526,20 @@ test("reapStaleRuns leaves a fresh running record untouched", async () => {
 
 test("reapStaleRuns leaves non-running statuses untouched", async () => {
   let sideEffects = 0;
-  const reaped = await reapStaleRuns(reaperDeps(
-    [
-      { chatKey: "1:", status: { ...staleStatus, status: "idle" } },
-      { chatKey: "2:", status: { ...staleStatus, status: "failed" } },
-    ],
-    {
-      setStatusIfImpl: () => {
-        sideEffects++;
-        return { status: "idle" };
+  const reaped = await reapStaleRuns(
+    reaperDeps(
+      [
+        { chatKey: "1:", status: { ...staleStatus, status: "idle" } },
+        { chatKey: "2:", status: { ...staleStatus, status: "failed" } },
+      ],
+      {
+        setStatusIfImpl: () => {
+          sideEffects++;
+          return { status: "idle" };
+        },
       },
-    },
-  ));
+    ),
+  );
 
   assert.equal(reaped, 0);
   assert.equal(sideEffects, 0);
@@ -484,14 +548,13 @@ test("reapStaleRuns leaves non-running statuses untouched", async () => {
 test("reapStaleRuns stops after a CAS conflict", async () => {
   let reset = 0;
   let sent = 0;
-  const reaped = await reapStaleRuns(reaperDeps(
-    [{ chatKey: "1:", status: staleStatus }],
-    {
+  const reaped = await reapStaleRuns(
+    reaperDeps([{ chatKey: "1:", status: staleStatus }], {
       setStatusIfImpl: () => null,
       resetImpl: async () => reset++,
       sendImpl: async () => sent++,
-    },
-  ));
+    }),
+  );
 
   assert.equal(reaped, 0);
   assert.equal(reset, 0);
@@ -500,16 +563,15 @@ test("reapStaleRuns stops after a CAS conflict", async () => {
 
 test("reapStaleRuns skips chats while their queue head is mid-drain", async () => {
   let sideEffects = 0;
-  const reaped = await reapStaleRuns(reaperDeps(
-    [{ chatKey: "1:", status: staleStatus }],
-    {
+  const reaped = await reapStaleRuns(
+    reaperDeps([{ chatKey: "1:", status: staleStatus }], {
       inFlight: new Map([["1:", { state: "delivering" }]]),
       setStatusIfImpl: () => {
         sideEffects++;
         return { status: "idle" };
       },
-    },
-  ));
+    }),
+  );
 
   assert.equal(reaped, 0);
   assert.equal(sideEffects, 0);
@@ -518,48 +580,58 @@ test("reapStaleRuns skips chats while their queue head is mid-drain", async () =
 test("reapStaleRuns swallows and logs a notification failure", async () => {
   const logs = [];
   let deleted = 0;
-  const reaped = await reapStaleRuns(reaperDeps(
-    [{ chatKey: "1:", status: staleStatus }],
-    {
+  const reaped = await reapStaleRuns(
+    reaperDeps([{ chatKey: "1:", status: staleStatus }], {
       sendImpl: async () => {
         throw new Error("Telegram unavailable");
       },
       deleteMessageImpl: async () => deleted++,
       logImpl: (...args) => logs.push(args.join(" ")),
-    },
-  ));
+    }),
+  );
 
   assert.equal(reaped, 1);
   assert.equal(deleted, 1);
   assert.equal(logs.length, 1);
-  assert.match(logs[0], /stale run notification failed for 1:: Telegram unavailable/);
+  assert.match(
+    logs[0],
+    /stale run notification failed for 1:: Telegram unavailable/,
+  );
 });
 
 test("a fresh message is delivered after its stale status is reaped", async () => {
   let running = true;
-  await reapStaleRuns(reaperDeps(
-    [{ chatKey: "1:", status: staleStatus }],
-    {
+  await reapStaleRuns(
+    reaperDeps([{ chatKey: "1:", status: staleStatus }], {
       setStatusIfImpl: () => {
         running = false;
         return { status: "idle" };
       },
-    },
-  ));
+    }),
+  );
 
-  const result = await routeMessageUpdate(routedUpdate, routeDeps({
-    runningImpl: () => running,
-  }));
+  const result = await routeMessageUpdate(
+    routedUpdate,
+    routeDeps({
+      runningImpl: () => running,
+    }),
+  );
   assert.equal(result, "delivered");
 });
 
 test("readCappedStream reads a small body under the cap", async () => {
-  assert.equal(await readCappedStream(streamOf('{"installed":{}}'), 1024), '{"installed":{}}');
+  assert.equal(
+    await readCappedStream(streamOf('{"installed":{}}'), 1024),
+    '{"installed":{}}',
+  );
 });
 
 test("readCappedStream: oversized body with NO metadata → null (hard cap mid-stream)", async () => {
   const chunk = "x".repeat(1000);
-  assert.equal(await readCappedStream(streamOf(chunk, chunk, chunk), 2048), null);
+  assert.equal(
+    await readCappedStream(streamOf(chunk, chunk, chunk), 2048),
+    null,
+  );
 });
 
 test("readCappedStream: exactly at the cap allowed, one over rejected; null body → null", async () => {
@@ -570,18 +642,35 @@ test("readCappedStream: exactly at the cap allowed, one over rejected; null body
 
 test("file-capable secret: message is DELETED BEFORE the download, then content delivered", async () => {
   const r = recorder();
-  const msg = { chat: { id: 1 }, message_id: 42, document: { file_id: "F", file_size: 100 } };
-  const pending = { flow: "menu", awaitText: { secret: true, file: true, kind: "gwsjson" } };
+  const msg = {
+    chat: { id: 1 },
+    message_id: 42,
+    document: { file_id: "F", file_size: 100 },
+  };
+  const pending = {
+    flow: "menu",
+    awaitText: { secret: true, file: true, kind: "gwsjson" },
+  };
   const consumed = await handleAwaitNonText(msg, pending, r.io);
   assert.equal(consumed, true); // consumed → handleControl won't deliver it to eve
   assert.deepEqual(r.names(), ["delete", "download", "deliver"]);
-  assert.ok(r.names().indexOf("delete") < r.names().indexOf("download"), "delete must precede download");
+  assert.ok(
+    r.names().indexOf("delete") < r.names().indexOf("download"),
+    "delete must precede download",
+  );
 });
 
 test("failed deletion → the secret is NOT downloaded or delivered (still consumed)", async () => {
   const r = recorder('{"installed":{}}', { deleteOk: false });
-  const msg = { chat: { id: 1 }, message_id: 42, document: { file_id: "F", file_size: 100 } };
-  const pending = { flow: "menu", awaitText: { secret: true, file: true, kind: "gwsjson" } };
+  const msg = {
+    chat: { id: 1 },
+    message_id: 42,
+    document: { file_id: "F", file_size: 100 },
+  };
+  const pending = {
+    flow: "menu",
+    awaitText: { secret: true, file: true, kind: "gwsjson" },
+  };
   const consumed = await handleAwaitNonText(msg, pending, r.io);
   assert.equal(consumed, true); // never reaches eve
   assert.deepEqual(r.names(), ["delete"]); // deletion failed → no download, no deliver
@@ -589,8 +678,15 @@ test("failed deletion → the secret is NOT downloaded or delivered (still consu
 
 test("over-size document is deleted and never downloaded", async () => {
   const r = recorder();
-  const msg = { chat: { id: 1 }, message_id: 9, document: { file_id: "F", file_size: 999_999 } };
-  const pending = { flow: "menu", awaitText: { secret: true, file: true, kind: "gwsjson" } };
+  const msg = {
+    chat: { id: 1 },
+    message_id: 9,
+    document: { file_id: "F", file_size: 999_999 },
+  };
+  const pending = {
+    flow: "menu",
+    awaitText: { secret: true, file: true, kind: "gwsjson" },
+  };
   await handleAwaitNonText(msg, pending, r.io);
   assert.deepEqual(r.names(), ["delete", "reply"]); // no download
 });
@@ -612,9 +708,27 @@ test("stale wizard callbacks are rejected by message and screen step", () => {
   assert.equal(wizardActionAllowed(st, "m:0"), true);
   assert.equal(wizardActionAllowed(st, "eff:high"), false);
   assert.equal(wizardActionAllowed(st, "unknown"), false);
-  assert.equal(selectWizardModel({ modelOptions: [{ id: "safe", reasoningLevels: [] }] }, ""), null);
-  assert.equal(selectWizardModel({ modelOptions: [{ id: "safe", reasoningLevels: [] }] }, "00"), null);
-  assert.equal(selectWizardModel({ modelOptions: [{ id: "safe", reasoningLevels: [] }] }, "99"), null);
+  assert.equal(
+    selectWizardModel(
+      { modelOptions: [{ id: "safe", reasoningLevels: [] }] },
+      "",
+    ),
+    null,
+  );
+  assert.equal(
+    selectWizardModel(
+      { modelOptions: [{ id: "safe", reasoningLevels: [] }] },
+      "00",
+    ),
+    null,
+  );
+  assert.equal(
+    selectWizardModel(
+      { modelOptions: [{ id: "safe", reasoningLevels: [] }] },
+      "99",
+    ),
+    null,
+  );
   assert.equal(wizardActionAllowed({ step: "model_error" }, "retry"), true);
   assert.equal(wizardActionAllowed({ step: "model_error" }, "back"), true);
 });
@@ -645,14 +759,14 @@ test("stale current model stays display-only while a live current remains select
     { id: "new-a", reasoningLevels: ["low"] },
     { id: "current", reasoningLevels: ["high"] },
   ];
-  assert.deepEqual(selectableWizardOptions(live, "retired").map((item) => item.id), [
-    "new-a",
-    "current",
-  ]);
-  assert.deepEqual(selectableWizardOptions(live, "current").map((item) => item.id), [
-    "current",
-    "new-a",
-  ]);
+  assert.deepEqual(
+    selectableWizardOptions(live, "retired").map((item) => item.id),
+    ["new-a", "current"],
+  );
+  assert.deepEqual(
+    selectableWizardOptions(live, "current").map((item) => item.id),
+    ["current", "new-a"],
+  );
 });
 
 test("Cancel during a rejected model fetch discards the stale error path", async () => {
@@ -661,7 +775,10 @@ test("Cancel during a rejected model fetch discards the stale error path", async
   let rejectFetch;
   const pending = runWizardRequest(
     st,
-    () => new Promise((_resolve, reject) => { rejectFetch = reject; }),
+    () =>
+      new Promise((_resolve, reject) => {
+        rejectFetch = reject;
+      }),
     (candidate) => active === candidate,
   );
 
@@ -711,7 +828,9 @@ test("catalog change before save preserves the old env", async () => {
           OLLAMA_API_KEY: "old-secret",
         }),
         validate: async () => {
-          throw Object.assign(new Error("retired"), { code: "model_unavailable" });
+          throw Object.assign(new Error("retired"), {
+            code: "model_unavailable",
+          });
         },
         write: async (updates) => writes.push(updates),
       },
@@ -742,10 +861,12 @@ test("provider, model, effort and pending key persist in one atomic write", asyn
     },
   );
   assert.equal(validations[0].key, "new-secret");
-  assert.deepEqual(writes, [{
-    THINKING_EFFORT: "medium",
-    MODEL_PROVIDER: "opencode",
-    OPENCODE_MODEL: "live-model",
-    OPENCODE_API_KEY: "new-secret",
-  }]);
+  assert.deepEqual(writes, [
+    {
+      THINKING_EFFORT: "medium",
+      MODEL_PROVIDER: "opencode",
+      OPENCODE_MODEL: "live-model",
+      OPENCODE_API_KEY: "new-secret",
+    },
+  ]);
 });

@@ -1,7 +1,9 @@
 const FRAMES = ["◇", "◈", "◆", "◈"];
 
 export function animationEnabled(stream = process.stdout, env = process.env) {
-  return Boolean(stream.isTTY && !env.IVA_NO_ANIM && !env.NO_COLOR && env.TERM !== "dumb");
+  return Boolean(
+    stream.isTTY && !env.IVA_NO_ANIM && !env.NO_COLOR && env.TERM !== "dumb",
+  );
 }
 
 export function createTerminalProgress({
@@ -69,14 +71,21 @@ export function createTerminalProgress({
       if (animate && active) stream.write("\r\x1b[2K");
       active = null;
       showCursor();
-      for (const signal of signals) process.removeListener(signal, signalHandlers[signal]);
+      for (const signal of signals)
+        process.removeListener(signal, signalHandlers[signal]);
     },
   };
-  const signalHandlers = Object.fromEntries(signals.map((signal) => [signal, () => {
-    api.dispose();
-    process.kill(process.pid, signal);
-  }]));
-  if (animate) for (const signal of signals) process.once(signal, signalHandlers[signal]);
+  const signalHandlers = Object.fromEntries(
+    signals.map((signal) => [
+      signal,
+      () => {
+        api.dispose();
+        process.kill(process.pid, signal);
+      },
+    ]),
+  );
+  if (animate)
+    for (const signal of signals) process.once(signal, signalHandlers[signal]);
   return api;
 }
 

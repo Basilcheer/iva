@@ -1,20 +1,50 @@
 // Deterministic inbound and outbound security gates shared by the agent runtime
 // and bare-Node operational scripts.
 
-const INVISIBLE_RE = /[\p{Cf}\p{Cc}​‌‍⁠﻿­͏᠎]/gu;
+const INVISIBLE_RE = /[\p{Cf}\p{Cc}\u034F]/gu;
 const KEEP_CONTROL = new Set(["\n", "\r", "\t"]);
 const WALLET_DRAIN_RE =
   /[ༀ-࿿ꀀ-꓏⠀-⣿]|[\u{1D400}-\u{1D7FF}\u{10000}-\u{1034F}]/gu;
 
 const LOOKALIKES = {
-  А: "A", В: "B", С: "C", Е: "E", Н: "H", К: "K", М: "M", О: "O", Р: "P", Т: "T", Х: "X",
-  а: "a", с: "c", е: "e", о: "o", р: "p", х: "x", у: "y",
-  Α: "A", Β: "B", Ε: "E", Ζ: "Z", Η: "H", Ι: "I", Κ: "K", Μ: "M", Ν: "N", Ο: "O",
-  Ρ: "P", Τ: "T", Υ: "Y", Χ: "X", ο: "o", ν: "v",
+  А: "A",
+  В: "B",
+  С: "C",
+  Е: "E",
+  Н: "H",
+  К: "K",
+  М: "M",
+  О: "O",
+  Р: "P",
+  Т: "T",
+  Х: "X",
+  а: "a",
+  с: "c",
+  е: "e",
+  о: "o",
+  р: "p",
+  х: "x",
+  у: "y",
+  Α: "A",
+  Β: "B",
+  Ε: "E",
+  Ζ: "Z",
+  Η: "H",
+  Ι: "I",
+  Κ: "K",
+  Μ: "M",
+  Ν: "N",
+  Ο: "O",
+  Ρ: "P",
+  Τ: "T",
+  Υ: "Y",
+  Χ: "X",
+  ο: "o",
+  ν: "v",
 };
 
 const ROLE_MARKER_RE =
-  /(?:^|\n)\s*(?:system|assistant|user|human|AI|claude|instruction|admin|root)\s*[:\-]\s/gim;
+  /(?:^|\n)\s*(?:system|assistant|user|human|AI|claude|instruction|admin|root)\s*[:-]\s/gim;
 
 const OVERRIDE_PATTERNS = [
   /ignore\s+(?:all\s+)?previous\s+instructions?/i,
@@ -122,7 +152,7 @@ export function sanitizeInbound(input, maxChars = 50000) {
 
 const API_KEY_PATTERNS = [
   ["openai", /sk-[A-Za-z0-9]{20,}/g],
-  ["anthropic", /sk-ant-[A-Za-z0-9\-]{20,}/g],
+  ["anthropic", /sk-ant-[A-Za-z0-9-]{20,}/g],
   ["google_api", /AIza[A-Za-z0-9\-_]{35}/g],
   ["github_pat", /ghp_[A-Za-z0-9]{36}/g],
   ["github_fine", /github_pat_[A-Za-z0-9_]{82}/g],
@@ -136,12 +166,21 @@ const API_KEY_PATTERNS = [
   ["supabase", /sbp_[A-Za-z0-9]{40,}/g],
   ["fal_key", /fal_[A-Za-z0-9_]{20,}/g],
   ["bearer_token", /Bearer\s+[A-Za-z0-9\-._~+/]+=*/gi],
-  ["generic_key", /(?:api[_-]?key|apikey|api[_-]?token)\s*[=:]\s*["']?[A-Za-z0-9\-._]{20,}/gi],
-  ["generic_secret", /(?:secret|password|passwd|pwd)\s*[=:]\s*["']?[^\s"']{8,}/gi],
+  [
+    "generic_key",
+    /(?:api[_-]?key|apikey|api[_-]?token)\s*[=:]\s*["']?[A-Za-z0-9\-._]{20,}/gi,
+  ],
+  [
+    "generic_secret",
+    /(?:secret|password|passwd|pwd)\s*[=:]\s*["']?[^\s"']{8,}/gi,
+  ],
 ];
 
 const INTERNAL_PATH_PATTERNS = [
-  ["home_dotfiles", /(?:\/home\/\w+|~)\/\.(?:ssh|config|env|gnupg|aws|docker|kube)/g],
+  [
+    "home_dotfiles",
+    /(?:\/home\/\w+|~)\/\.(?:ssh|config|env|gnupg|aws|docker|kube)/g,
+  ],
   ["etc_sensitive", /\/etc\/(?:shadow|passwd|sudoers|ssh)/g],
   ["run_secrets", /\/run\/secrets\/\w+/g],
   ["proc_environ", /\/proc\/\w+\/environ/g],
@@ -149,13 +188,25 @@ const INTERNAL_PATH_PATTERNS = [
 ];
 
 const EXFIL_PATTERNS = [
-  ["markdown_image_exfil", /!\[.*?\]\(https?:\/\/[^)]*(?:token|key|secret|api|auth|password|env|data=)[^)]*\)/gi],
-  ["html_img_exfil", /<img[^>]+src\s*=\s*["']https?:\/\/[^"']*(?:token|key|secret|api|auth)[^"']*["']/gi],
-  ["url_with_secret_param", /https?:\/\/[^\s]*[?&](?:token|key|secret|api_key|password|auth)=[^\s&]{8,}/gi],
+  [
+    "markdown_image_exfil",
+    /!\[.*?\]\(https?:\/\/[^)]*(?:token|key|secret|api|auth|password|env|data=)[^)]*\)/gi,
+  ],
+  [
+    "html_img_exfil",
+    /<img[^>]+src\s*=\s*["']https?:\/\/[^"']*(?:token|key|secret|api|auth)[^"']*["']/gi,
+  ],
+  [
+    "url_with_secret_param",
+    /https?:\/\/[^\s]*[?&](?:token|key|secret|api_key|password|auth)=[^\s&]{8,}/gi,
+  ],
 ];
 
 const INJECTION_ARTIFACTS = [
-  ["special_tokens", /<\|(?:im_start|im_end|system|user|assistant|endoftext)\|>/g],
+  [
+    "special_tokens",
+    /<\|(?:im_start|im_end|system|user|assistant|endoftext)\|>/g,
+  ],
 ];
 
 const REDACTED = "[REDACTED]";
@@ -182,10 +233,16 @@ export function scanOutbound(input, redact = true) {
     const matches = input.match(re);
     if (matches) {
       for (const match of matches) {
-        findings.push({ type: "injection_artifact", name, preview: match.slice(0, 20) });
+        findings.push({
+          type: "injection_artifact",
+          name,
+          preview: match.slice(0, 20),
+        });
       }
     }
   }
-  const clean = findings.every((finding) => finding.type === "injection_artifact");
+  const clean = findings.every(
+    (finding) => finding.type === "injection_artifact",
+  );
   return { clean, text, findings };
 }

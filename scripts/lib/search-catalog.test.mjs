@@ -15,24 +15,35 @@ async function withFetch(impl, fn) {
 }
 
 test("каталог перечисляет все 4 провайдера с label/keyVar/url", () => {
-  assert.deepEqual(Object.keys(SEARCH_CATALOG), ["tavily", "brave", "exa", "parallel"]);
+  assert.deepEqual(Object.keys(SEARCH_CATALOG), [
+    "tavily",
+    "brave",
+    "exa",
+    "parallel",
+  ]);
   for (const spec of Object.values(SEARCH_CATALOG)) {
     assert.ok(spec.label && spec.keyVar && spec.url);
   }
 });
 
 test("401 → причина отказа", async () => {
-  await withFetch(async () => ({ status: 401 }), async () => {
-    const reason = await checkSearchKey("tavily", "secret-key");
-    assert.equal(typeof reason, "string");
-    assert.match(reason, /401/);
-  });
+  await withFetch(
+    async () => ({ status: 401 }),
+    async () => {
+      const reason = await checkSearchKey("tavily", "secret-key");
+      assert.equal(typeof reason, "string");
+      assert.match(reason, /401/);
+    },
+  );
 });
 
 test("403 → причина отказа", async () => {
-  await withFetch(async () => ({ status: 403 }), async () => {
-    assert.match(await checkSearchKey("brave", "secret-key"), /403/);
-  });
+  await withFetch(
+    async () => ({ status: 403 }),
+    async () => {
+      assert.match(await checkSearchKey("brave", "secret-key"), /403/);
+    },
+  );
 });
 
 test("сетевой сбой → null (мягкая политика: ключ принят)", async () => {
@@ -47,9 +58,12 @@ test("сетевой сбой → null (мягкая политика: ключ 
 });
 
 test("200 → null (ключ рабочий)", async () => {
-  await withFetch(async () => ({ status: 200 }), async () => {
-    assert.equal(await checkSearchKey("parallel", "secret-key"), null);
-  });
+  await withFetch(
+    async () => ({ status: 200 }),
+    async () => {
+      assert.equal(await checkSearchKey("parallel", "secret-key"), null);
+    },
+  );
 });
 
 test("неизвестный провайдер → null без сетевого вызова", async () => {

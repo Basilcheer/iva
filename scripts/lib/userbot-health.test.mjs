@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { probeUserbotHealth, USERBOT_HEALTH_TIMEOUT_MS } from "./userbot-health.mjs";
+import {
+  probeUserbotHealth,
+  USERBOT_HEALTH_TIMEOUT_MS,
+} from "./userbot-health.mjs";
 
 const activeSystemd = async (args) => {
   if (args[0] === "is-active") return { code: 0, out: "active" };
@@ -22,7 +25,9 @@ test("userbot health reports off and does not contact the proxy", async () => {
   let fetched = false;
   const health = await probeUserbotHealth({
     runSystemctl: async (args) =>
-      args[0] === "is-active" ? { code: 3, out: "inactive" } : { code: 1, out: "disabled" },
+      args[0] === "is-active"
+        ? { code: 3, out: "inactive" }
+        : { code: 1, out: "disabled" },
     readToken: async () => "unused",
     fetchImpl: async () => {
       fetched = true;
@@ -38,7 +43,9 @@ test("userbot health reports starting for an enabled inactive service", async ()
   let fetched = false;
   const health = await probeUserbotHealth({
     runSystemctl: async (args) =>
-      args[0] === "is-active" ? { code: 3, out: "activating" } : { code: 0, out: "enabled" },
+      args[0] === "is-active"
+        ? { code: 3, out: "activating" }
+        : { code: 0, out: "enabled" },
     readToken: async () => "unused",
     fetchImpl: async () => {
       fetched = true;
@@ -59,7 +66,10 @@ test("userbot health reports unreachable when the proxy is down", async () => {
     },
   });
 
-  assert.deepEqual(health, { state: "unreachable", reason: "proxy_unreachable" });
+  assert.deepEqual(health, {
+    state: "unreachable",
+    reason: "proxy_unreachable",
+  });
   assert.doesNotMatch(JSON.stringify(health), /local-token|ECONNREFUSED/);
 });
 
@@ -76,7 +86,10 @@ test("userbot health reports unreachable on bearer mismatch and redacts the toke
   });
 
   assert.equal(authorization, `Bearer ${token}`);
-  assert.deepEqual(health, { state: "unreachable", reason: "proxy_auth_rejected" });
+  assert.deepEqual(health, {
+    state: "unreachable",
+    reason: "proxy_auth_rejected",
+  });
   assert.doesNotMatch(JSON.stringify(health), new RegExp(token));
 });
 
@@ -88,12 +101,17 @@ test("userbot health bounds a hanging proxy probe to its timeout", async () => {
     readToken: async () => "local-token",
     fetchImpl: async (_url, { signal }) =>
       new Promise((_resolve, reject) => {
-        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+        signal.addEventListener("abort", () => reject(signal.reason), {
+          once: true,
+        });
       }),
   });
 
   assert.deepEqual(health, { state: "unreachable", reason: "probe_timeout" });
-  assert.ok(Date.now() - started < 250, "probe exceeded the bounded test budget");
+  assert.ok(
+    Date.now() - started < 250,
+    "probe exceeded the bounded test budget",
+  );
 });
 
 test("userbot health distinguishes an unauthorized Telethon session", async () => {
@@ -103,7 +121,10 @@ test("userbot health distinguishes an unauthorized Telethon session", async () =
     fetchImpl: async () => response(200, { state: "unauthorized" }),
   });
 
-  assert.deepEqual(health, { state: "unauthorized", reason: "telegram_login_required" });
+  assert.deepEqual(health, {
+    state: "unauthorized",
+    reason: "telegram_login_required",
+  });
 });
 
 test("userbot health reports ready from the existing proxy session", async () => {

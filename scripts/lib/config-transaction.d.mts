@@ -23,7 +23,10 @@ export interface ProbeEveHealthOptions {
 
 // Polls GET <url> (must be the local http://127.0.0.1|localhost|::1/eve/v1/health
 // route) until it responds ok, or throws once timeoutMs elapses.
-export function probeEveHealth(url: string, options?: ProbeEveHealthOptions): Promise<void>;
+export function probeEveHealth(
+  url: string,
+  options?: ProbeEveHealthOptions,
+): Promise<void>;
 
 export function recoverConfigTransaction(
   target: { envPath: string; services: readonly string[] },

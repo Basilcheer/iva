@@ -23,19 +23,25 @@ source: daily/YYYY-MM-DD.md
 # YYYY-MM-DD
 
 ## Topics
+
 - **Topic A** — one line.
 - **Topic B** — one line.
 
 ## Highlights
+
 - What actually happened / was decided / was learned.
 
 ## Cards created today
+
 <!-- MOC down → the cards from Phase 2/3 -->
+
 - [[cards/decisions/2026-06-20-systemd-timers|Use systemd timers for rollups]]
 - [[cards/ideas/layered-memory-with-decay|Layered memory with decay]]
 
 ## Navigation
+
 <!-- DAG: down to the raw transcript, up to the week -->
+
 - Raw transcript: [[daily/YYYY-MM-DD|Full transcript]]
 - Up: [[weekly/YYYY-Www|Week WW]]
 ```
@@ -58,7 +64,9 @@ Append to the **end** of `daily/YYYY-MM-DD.md` (never edit existing entries):
 
 ```markdown
 <!-- processed: YYYY-MM-DDTHH:MM -->
+
 ---
+
 processed: YYYY-MM-DDTHH:MM
 cards: <N>
 summary: summaries/daily/YYYY-MM-DD.md

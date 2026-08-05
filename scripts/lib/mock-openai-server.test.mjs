@@ -54,7 +54,12 @@ test("marker is echoed back from the replayed transcript", async () => {
       messages: [
         { role: "user", content: "Remember this code: CEDAR-4729" },
         { role: "assistant", content: "REMEMBERED" },
-        { role: "user", content: [{ type: "text", text: "What code did I ask you to remember?" }] },
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "What code did I ask you to remember?" },
+          ],
+        },
       ],
     });
     const json = await res.json();

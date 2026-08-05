@@ -30,7 +30,9 @@ const EVE_SCHEDULES = [
 
 function loadRollupStatus(dataDir) {
   try {
-    const raw = JSON.parse(readFileSync(join(dataDir, "rollup-status.json"), "utf8"));
+    const raw = JSON.parse(
+      readFileSync(join(dataDir, "rollup-status.json"), "utf8"),
+    );
     return typeof raw === "object" && raw !== null ? raw : {};
   } catch {
     return {};
@@ -46,7 +48,10 @@ function formatLastSuccess(entry, T) {
   if (!Number.isFinite(at)) return T("never", "никогда");
   const date = new Date(at);
   if (Number.isNaN(date.getTime())) return T("never", "никогда");
-  return date.toISOString().replace("T", " ").replace(/\.\d{3}Z$/, "Z");
+  return date
+    .toISOString()
+    .replace("T", " ")
+    .replace(/\.\d{3}Z$/, "Z");
 }
 
 function digestEnabled() {
@@ -76,7 +81,9 @@ function schedulesBlock(dataDir, T) {
 
 function run(cmd, args, timeout = 1500) {
   return new Promise((resolve) => {
-    execFile(cmd, args, { timeout, encoding: "utf8" }, (err, stdout = "") => resolve(String(stdout)));
+    execFile(cmd, args, { timeout, encoding: "utf8" }, (err, stdout = "") =>
+      resolve(String(stdout)),
+    );
   });
 }
 
@@ -89,7 +96,9 @@ function parseTimers(stdout) {
     const unit = (line.match(/(\S+\.timer)/) || [])[1];
     if (!unit) continue;
     if (!/^iva-/.test(unit) && !/^xfeed-daily/.test(unit)) continue;
-    const dm = line.match(/^(\w{3} \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?: \S+)?)/);
+    const dm = line.match(
+      /^(\w{3} \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?: \S+)?)/,
+    );
     out.push({ unit, next: dm ? dm[1] : "—" });
   }
   out.sort((a, b) => a.unit.localeCompare(b.unit));
@@ -98,7 +107,12 @@ function parseTimers(stdout) {
 
 async function loadTimers() {
   if (cache.timers && Date.now() - cache.at < CACHE_TTL_MS) return cache.timers;
-  const stdout = await run("systemctl", ["--user", "list-timers", "--all", "--no-pager"]);
+  const stdout = await run("systemctl", [
+    "--user",
+    "list-timers",
+    "--all",
+    "--no-pager",
+  ]);
   const timers = parseTimers(stdout);
   cache = { at: Date.now(), timers };
   return timers;
@@ -107,7 +121,11 @@ async function loadTimers() {
 export function openTaskCount(dataDir) {
   try {
     const raw = JSON.parse(readFileSync(join(dataDir, "tasks.json"), "utf8"));
-    const arr = Array.isArray(raw) ? raw : Array.isArray(raw?.tasks) ? raw.tasks : [];
+    const arr = Array.isArray(raw)
+      ? raw
+      : Array.isArray(raw?.tasks)
+        ? raw.tasks
+        : [];
     return arr.filter((task) => !task?.done).length;
   } catch {
     return 0;
@@ -120,7 +138,10 @@ export default {
     const T = ctx.tr;
     const timers = await loadTimers();
     const taskCount = openTaskCount(ctx.deps.dataDir);
-    const taskLine = T(`Tasks in queue: ${taskCount}`, `Задач в очереди: ${taskCount}`);
+    const taskLine = T(
+      `Tasks in queue: ${taskCount}`,
+      `Задач в очереди: ${taskCount}`,
+    );
     const head = T("⏰ Timers & tasks", "⏰ Кроны и задачи");
     const schedules = schedulesBlock(ctx.deps.dataDir, T);
     if (timers.length === 0) {
@@ -141,7 +162,10 @@ export default {
       rows.push([
         ctx.btn("‹", `iva_menu:cron:pg:${page > 0 ? page - 1 : 0}`),
         ctx.btn(`${page + 1}/${pages}`, `iva_menu:cron:pg:${page}`),
-        ctx.btn("›", `iva_menu:cron:pg:${page < pages - 1 ? page + 1 : pages - 1}`),
+        ctx.btn(
+          "›",
+          `iva_menu:cron:pg:${page < pages - 1 ? page + 1 : pages - 1}`,
+        ),
       ]);
     }
     rows.push(ctx.backRow("r"));

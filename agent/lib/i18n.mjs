@@ -13,7 +13,9 @@ import { readSettings } from "./settings.mjs";
 // Тот же путь, что в settings.mjs (от cwd, не от import.meta.url — см. там про
 // authored-modules-кэш eve). Нужен для statSync-дросселя ниже.
 const DATA_DIR_RAW = process.env.ASSISTANT_DATA_DIR ?? "data";
-const DATA_DIR = DATA_DIR_RAW.startsWith("/") ? DATA_DIR_RAW : join(process.cwd(), DATA_DIR_RAW);
+const DATA_DIR = DATA_DIR_RAW.startsWith("/")
+  ? DATA_DIR_RAW
+  : join(process.cwd(), DATA_DIR_RAW);
 const SETTINGS_FILE = join(DATA_DIR, "settings.json");
 
 // settings.json меняется кнопкой в /menu и должен подхватываться на лету. Но statSync
@@ -32,7 +34,8 @@ function resolveLang() {
 
 export function getLang() {
   const now = Date.now();
-  if (cache.lang !== null && now - cache.checkedAt < CHECK_INTERVAL_MS) return cache.lang;
+  if (cache.lang !== null && now - cache.checkedAt < CHECK_INTERVAL_MS)
+    return cache.lang;
   cache.checkedAt = now;
   let mtimeMs = -1;
   try {
@@ -66,17 +69,41 @@ export const COMMANDS = [
     en: "start over (reset the current conversation)",
     ru: "начать диалог заново",
   },
-  { command: "restart", en: "restart the agent if it's stuck", ru: "перезапустить зависшего агента" },
-  { command: "update", en: "check for a new version and install it", ru: "проверить и установить обновление" },
-  { command: "model", en: "switch AI provider/model/thinking effort", ru: "сменить провайдера, модель и размышления" },
-  { command: "think", en: "set thinking effort", ru: "настроить уровень размышлений" },
+  {
+    command: "restart",
+    en: "restart the agent if it's stuck",
+    ru: "перезапустить зависшего агента",
+  },
+  {
+    command: "update",
+    en: "check for a new version and install it",
+    ru: "проверить и установить обновление",
+  },
+  {
+    command: "model",
+    en: "switch AI provider/model/thinking effort",
+    ru: "сменить провайдера, модель и размышления",
+  },
+  {
+    command: "think",
+    en: "set thinking effort",
+    ru: "настроить уровень размышлений",
+  },
   {
     command: "usage",
     en: "token usage",
     ru: "расход токенов",
-    args: { en: "[today|week|month|by-model|by-source]", ru: "[today|week|month|by-model|by-source]" },
+    args: {
+      en: "[today|week|month|by-model|by-source]",
+      ru: "[today|week|month|by-model|by-source]",
+    },
   },
-  { command: "task", en: "add a task", ru: "добавить задачу", args: { en: "<text>", ru: "<текст>" } },
+  {
+    command: "task",
+    en: "add a task",
+    ru: "добавить задачу",
+    args: { en: "<text>", ru: "<текст>" },
+  },
   { command: "tasks", en: "show tasks", ru: "показать задачи" },
   { command: "digest", en: "morning digest", ru: "утренний дайджест" },
 ];
@@ -97,5 +124,8 @@ export function helpText() {
 // подсказок аргументов — Telegram показывает только имя команды и описание.
 export function botCommands(lang) {
   const isRu = lang === "ru";
-  return COMMANDS.map((c) => ({ command: c.command, description: isRu ? c.ru : c.en }));
+  return COMMANDS.map((c) => ({
+    command: c.command,
+    description: isRu ? c.ru : c.en,
+  }));
 }

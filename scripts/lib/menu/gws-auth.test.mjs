@@ -16,7 +16,8 @@ test("parseAuthChallenge extracts the Google URL and loopback port", () => {
 });
 
 test("parseAuthChallenge accepts 127.0.0.1 loopback", () => {
-  const log = "go: https://accounts.google.com/o/oauth2/auth?redirect_uri=http://127.0.0.1:51000&x=1";
+  const log =
+    "go: https://accounts.google.com/o/oauth2/auth?redirect_uri=http://127.0.0.1:51000&x=1";
   const r = parseAuthChallenge(log);
   assert.equal(r.port, 51000);
 });
@@ -27,7 +28,9 @@ test("parseAuthChallenge returns null when the URL is not printed yet", () => {
 });
 
 test("extractCallbackQuery pulls the query from a full redirect URL", () => {
-  const q = extractCallbackQuery("http://localhost:44369/?code=4/0ABC_def-123&scope=email%20profile&authuser=0");
+  const q = extractCallbackQuery(
+    "http://localhost:44369/?code=4/0ABC_def-123&scope=email%20profile&authuser=0",
+  );
   assert.equal(q, "code=4/0ABC_def-123&scope=email%20profile&authuser=0");
 });
 
@@ -41,7 +44,10 @@ test("extractCallbackQuery accepts a bare query string", () => {
 });
 
 test("extractCallbackQuery accepts a bare authorization code", () => {
-  assert.equal(extractCallbackQuery("4/0AXEQabc-DEF_123"), "code=4/0AXEQabc-DEF_123");
+  assert.equal(
+    extractCallbackQuery("4/0AXEQabc-DEF_123"),
+    "code=4/0AXEQabc-DEF_123",
+  );
 });
 
 test("extractCallbackQuery returns null when there is no code", () => {

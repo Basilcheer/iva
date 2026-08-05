@@ -4,7 +4,8 @@ import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 const [mode, dataDir, fault = "none"] = process.argv.slice(2);
-if (!mode || !dataDir) throw new Error("usage: harness <mode> <data-dir> [fault]");
+if (!mode || !dataDir)
+  throw new Error("usage: harness <mode> <data-dir> [fault]");
 
 process.env.ASSISTANT_DATA_DIR = dataDir;
 process.env.ASSISTANT_HOST = "http://iva-red.invalid";
@@ -19,7 +20,8 @@ mkdirSync(dataDir, { recursive: true });
 const offsetFile = join(dataDir, "telegram-offset.json");
 const queueFile = join(dataDir, "telegram-queue.json");
 const resultFile = join(dataDir, "queue-harness-result.json");
-if (!existsSync(offsetFile)) writeFileSync(offsetFile, JSON.stringify({ offset: 100 }));
+if (!existsSync(offsetFile))
+  writeFileSync(offsetFile, JSON.stringify({ offset: 100 }));
 let queueDirSyncAttempts = 0;
 let queueDirSyncSuccesses = 0;
 
@@ -84,28 +86,39 @@ if (fault !== "none") {
   const originalOpen = fsPromises.open;
   namedExports.writeFile = async (path, ...args) => {
     if (fault === "write" && String(path).startsWith(`${queueFile}.tmp-`)) {
-      throw Object.assign(new Error("injected queue write failure"), { code: "ENOSPC" });
+      throw Object.assign(new Error("injected queue write failure"), {
+        code: "ENOSPC",
+      });
     }
     return originalWriteFile(path, ...args);
   };
   namedExports.rename = async (from, to, ...args) => {
     if (fault === "rename" && String(to) === queueFile) {
-      throw Object.assign(new Error("injected queue rename failure"), { code: "EIO" });
+      throw Object.assign(new Error("injected queue rename failure"), {
+        code: "EIO",
+      });
     }
     return originalRename(from, to, ...args);
   };
   namedExports.open = async (path, flags, ...args) => {
     const handle = await originalOpen(path, flags, ...args);
-    if (fault !== "dir-sync-once" || String(path) !== dataDir || flags !== "r") {
+    if (
+      fault !== "dir-sync-once" ||
+      String(path) !== dataDir ||
+      flags !== "r"
+    ) {
       return handle;
     }
     return {
       sync: async () => {
         queueDirSyncAttempts++;
         if (queueDirSyncAttempts === 1) {
-          throw Object.assign(new Error("injected queue directory sync failure"), {
-            code: "EIO",
-          });
+          throw Object.assign(
+            new Error("injected queue directory sync failure"),
+            {
+              code: "EIO",
+            },
+          );
         }
         await handle.sync();
         queueDirSyncSuccesses++;
@@ -187,7 +200,8 @@ const jsonResponse = (payload, statusCode = 200) => ({
   status: statusCode,
   headers: {
     get: (name) =>
-      statusCode === 204 && String(name).toLowerCase() === "x-iva-telegram-acceptance"
+      statusCode === 204 &&
+      String(name).toLowerCase() === "x-iva-telegram-acceptance"
         ? "turn"
         : null,
   },
@@ -226,23 +240,30 @@ function finish() {
 }
 
 if (mode === "fair-drain") {
-  writeFileSync(queueFile, JSON.stringify({
-    version: 1,
-    queues: {
-      "1:": [{
-        version: 1,
-        updateId: 101,
-        enqueuedAt: 1,
-        update: privateUpdate(101, "poison head", 1),
-      }],
-      "2:": [{
-        version: 1,
-        updateId: 102,
-        enqueuedAt: 2,
-        update: privateUpdate(102, "healthy head", 2),
-      }],
-    },
-  }));
+  writeFileSync(
+    queueFile,
+    JSON.stringify({
+      version: 1,
+      queues: {
+        "1:": [
+          {
+            version: 1,
+            updateId: 101,
+            enqueuedAt: 1,
+            update: privateUpdate(101, "poison head", 1),
+          },
+        ],
+        "2:": [
+          {
+            version: 1,
+            updateId: 102,
+            enqueuedAt: 2,
+            update: privateUpdate(102, "healthy head", 2),
+          },
+        ],
+      },
+    }),
+  );
 }
 
 globalThis.fetch = async (url, options = {}) => {
@@ -259,7 +280,10 @@ globalThis.fetch = async (url, options = {}) => {
     ) {
       return jsonResponse({}, 503);
     }
-    if (mode === "direct-retry" && deliveryRoute === "/eve/v1/telegram/accepted") {
+    if (
+      mode === "direct-retry" &&
+      deliveryRoute === "/eve/v1/telegram/accepted"
+    ) {
       directAcceptanceAttempts++;
       if (directAcceptanceAttempts === 1) {
         status.setChatStatus(privateKey, {
@@ -279,7 +303,10 @@ globalThis.fetch = async (url, options = {}) => {
         turnId: `turn-${delivery.update_id}`,
       });
     }
-    if (mode === "direct-timeout" && deliveryRoute === "/eve/v1/telegram/accepted") {
+    if (
+      mode === "direct-timeout" &&
+      deliveryRoute === "/eve/v1/telegram/accepted"
+    ) {
       directAcceptanceAttempts++;
       status.setChatStatus(privateKey, {
         status: "running",
@@ -309,11 +336,15 @@ globalThis.fetch = async (url, options = {}) => {
           rejectTimeout();
           return;
         }
-        options.signal?.addEventListener("abort", rejectTimeout, { once: true });
+        options.signal?.addEventListener("abort", rejectTimeout, {
+          once: true,
+        });
       });
     }
     if (
-      (mode === "auto-drain" || mode === "collect-burst" || mode === "restart-drain") &&
+      (mode === "auto-drain" ||
+        mode === "collect-burst" ||
+        mode === "restart-drain") &&
       deliveryRoute === "/eve/v1/telegram/accepted"
     ) {
       status.setChatStatus(privateKey, {
@@ -335,12 +366,19 @@ globalThis.fetch = async (url, options = {}) => {
     requestedOffsets.push(body.offset);
 
     if (mode === "disk-failure") {
-      if (getUpdatesCalls === 1) return jsonResponse({ ok: true, result: [privateUpdate(101, "persist me")] });
+      if (getUpdatesCalls === 1)
+        return jsonResponse({
+          ok: true,
+          result: [privateUpdate(101, "persist me")],
+        });
       finish();
     }
     if (mode === "dir-sync-retry") {
       if (getUpdatesCalls <= 2) {
-        return jsonResponse({ ok: true, result: [privateUpdate(101, "persist me")] });
+        return jsonResponse({
+          ok: true,
+          result: [privateUpdate(101, "persist me")],
+        });
       }
       finish();
     }
@@ -378,7 +416,10 @@ globalThis.fetch = async (url, options = {}) => {
       if (getUpdatesCalls === 2) {
         await new Promise((resolveDelay) => setTimeout(resolveDelay, 120));
       }
-      if (getUpdatesCalls === 3 || (getUpdatesCalls > 3 && status.isRunning(privateKey))) {
+      if (
+        getUpdatesCalls === 3 ||
+        (getUpdatesCalls > 3 && status.isRunning(privateKey))
+      ) {
         status.setChatStatus(privateKey, {
           status: "idle",
           sessionId: null,
@@ -409,7 +450,8 @@ globalThis.fetch = async (url, options = {}) => {
       return jsonResponse({ ok: true, result: [] });
     }
     if (mode === "group-noise") {
-      if (getUpdatesCalls === 1) return jsonResponse({ ok: true, result: [groupNoiseUpdate] });
+      if (getUpdatesCalls === 1)
+        return jsonResponse({ ok: true, result: [groupNoiseUpdate] });
       finish();
     }
     if (mode === "routing") {

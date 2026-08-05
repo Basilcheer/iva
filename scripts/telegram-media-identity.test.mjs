@@ -34,7 +34,10 @@ let transcriptStatus = 200;
 globalThis.fetch = async (input) => {
   const url = input instanceof Request ? input.url : String(input);
   if (url.endsWith("/getFile")) {
-    return Response.json({ ok: true, result: { file_path: "photos/test.jpg" } });
+    return Response.json({
+      ok: true,
+      result: { file_path: "photos/test.jpg" },
+    });
   }
   if (url.includes("/file/bot")) {
     counts.download++;
@@ -42,21 +45,29 @@ globalThis.fetch = async (input) => {
   }
   if (url.endsWith("/chat/completions")) {
     counts.vision++;
-    if (visionStatus !== 200) return new Response("provider unavailable", { status: visionStatus });
+    if (visionStatus !== 200)
+      return new Response("provider unavailable", { status: visionStatus });
     return Response.json({ choices: [{ message: { content: visionText } }] });
   }
   if (url.startsWith("https://api.deepgram.com/v1/listen")) {
     counts.transcript++;
-    if (transcriptStatus !== 200) return new Response("provider unavailable", { status: transcriptStatus });
+    if (transcriptStatus !== 200)
+      return new Response("provider unavailable", { status: transcriptStatus });
     return Response.json({
-      results: { channels: [{ alternatives: [{ transcript: transcriptText }] }] },
+      results: {
+        channels: [{ alternatives: [{ transcript: transcriptText }] }],
+      },
     });
   }
   return Response.json({ ok: true, result: { message_id: 1000 } });
 };
 
-const channel = (await import("../agent/channels/telegram.ts?media-identity-test")).default;
-const route = channel.routes.find((candidate) => candidate.path === "/eve/v1/telegram/accepted");
+const channel = (
+  await import("../agent/channels/telegram.ts?media-identity-test")
+).default;
+const route = channel.routes.find(
+  (candidate) => candidate.path === "/eve/v1/telegram/accepted",
+);
 assert.ok(route && route.transport !== "websocket");
 
 after(() => rmSync(root, { recursive: true, force: true }));
@@ -129,10 +140,12 @@ async function deliver(update) {
 function dailyEntries() {
   const dailyDir = join(vaultDir, "daily");
   if (!existsSync(dailyDir)) return 0;
-  return readdirSync(dailyDir)
-    .map((name) => readFileSync(join(dailyDir, name), "utf8"))
-    .join("\n")
-    .match(/## .* \[photo\]/gu)?.length ?? 0;
+  return (
+    readdirSync(dailyDir)
+      .map((name) => readFileSync(join(dailyDir, name), "utf8"))
+      .join("\n")
+      .match(/## .* \[photo\]/gu)?.length ?? 0
+  );
 }
 
 test("three deliveries create one media derivation, while a new update reuses the file", async () => {
@@ -162,7 +175,9 @@ test("an empty vision result is cached and does not trigger another provider cal
   assert.equal(counts.turns - before.turns, 2);
   assert.equal(dailyEntries() - before.daily, 2);
 
-  const cache = JSON.parse(readFileSync(join(dataDir, "media-cache.json"), "utf8"));
+  const cache = JSON.parse(
+    readFileSync(join(dataDir, "media-cache.json"), "utf8"),
+  );
   assert.equal(cache["empty-vision-photo"].vision, "");
 });
 
@@ -171,7 +186,9 @@ test("a failed vision result is not cached and the next delivery retries the pro
   visionStatus = 503;
   assert.equal(await deliver(mediaUpdate(705, "failed-vision-photo")), "turn");
 
-  let cache = JSON.parse(readFileSync(join(dataDir, "media-cache.json"), "utf8"));
+  let cache = JSON.parse(
+    readFileSync(join(dataDir, "media-cache.json"), "utf8"),
+  );
   assert.equal(cache["failed-vision-photo"].vision, undefined);
 
   visionStatus = 200;
@@ -189,31 +206,50 @@ test("a failed vision result is not cached and the next delivery retries the pro
 test("an empty transcript result is cached and does not trigger another provider call", async () => {
   const before = { ...counts, daily: dailyEntries() };
   transcriptText = "";
-  assert.equal(await deliver(voiceUpdate(707, "empty-transcript-voice")), "turn");
-  assert.equal(await deliver(voiceUpdate(708, "empty-transcript-voice")), "turn");
+  assert.equal(
+    await deliver(voiceUpdate(707, "empty-transcript-voice")),
+    "turn",
+  );
+  assert.equal(
+    await deliver(voiceUpdate(708, "empty-transcript-voice")),
+    "turn",
+  );
   assert.equal(counts.download - before.download, 1);
   assert.equal(counts.transcript - before.transcript, 1);
   assert.equal(counts.turns - before.turns, 2);
 
-  const cache = JSON.parse(readFileSync(join(dataDir, "media-cache.json"), "utf8"));
+  const cache = JSON.parse(
+    readFileSync(join(dataDir, "media-cache.json"), "utf8"),
+  );
   assert.equal(cache["empty-transcript-voice"].transcript, "");
 });
 
 test("a failed transcript result reuses the blob and retries the provider", async () => {
   const before = { ...counts, daily: dailyEntries() };
   transcriptStatus = 503;
-  assert.equal(await deliver(voiceUpdate(709, "failed-transcript-voice")), "turn");
+  assert.equal(
+    await deliver(voiceUpdate(709, "failed-transcript-voice")),
+    "turn",
+  );
 
-  let cache = JSON.parse(readFileSync(join(dataDir, "media-cache.json"), "utf8"));
+  let cache = JSON.parse(
+    readFileSync(join(dataDir, "media-cache.json"), "utf8"),
+  );
   assert.equal(cache["failed-transcript-voice"].transcript, undefined);
 
   transcriptStatus = 200;
   transcriptText = "transcribed after retry";
-  assert.equal(await deliver(voiceUpdate(710, "failed-transcript-voice")), "turn");
+  assert.equal(
+    await deliver(voiceUpdate(710, "failed-transcript-voice")),
+    "turn",
+  );
   assert.equal(counts.download - before.download, 1);
   assert.equal(counts.transcript - before.transcript, 2);
   assert.equal(counts.turns - before.turns, 2);
 
   cache = JSON.parse(readFileSync(join(dataDir, "media-cache.json"), "utf8"));
-  assert.equal(cache["failed-transcript-voice"].transcript, "transcribed after retry");
+  assert.equal(
+    cache["failed-transcript-voice"].transcript,
+    "transcribed after retry",
+  );
 });
