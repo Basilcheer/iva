@@ -442,7 +442,6 @@
   while old ownerless markers keep the time-based compatibility rule.
 - Completion and cleanup mutate status only while holding the status lock and keep a
   reservation marked locally until its removal write succeeds.
-
 ## fix/reminder-node-runtime
 
 - Kept the security gate deterministic and dependency-free.
@@ -474,3 +473,21 @@
   note remains linkable while a missing `voice.ogg` attachment stays ignored.
 - The full Node matrix initially hit the existing deadline-probe timing test once;
   its isolated rerun and the complete 568-test rerun both passed.
+
+## Rollup card invariants (v0.3.11)
+
+- `write_card` now accepts an explicit `ADD | UPDATE | SUPERSEDE | NOOP` decision.
+  UPDATE owns one Log, SUPERSEDE owns Compiled Truth plus preserved History, and
+  relations enter through one canonical Related section.
+- Related identity ignores aliases and anchors. Links elsewhere in prose do not
+  suppress a relation, and `body` cannot provide its own Related heading.
+- SUPERSEDE replaces only Compiled Truth: old Log, History and Related content
+  survives, and newly supplied relations merge into that preserved graph structure.
+- `enforce.py` repairs only unambiguous drift under `cards/`: dated update blocks
+  migrate into Log, empty update headings disappear, and link-only Related blocks
+  merge idempotently. Prose-bearing duplicates are reported as compile candidates.
+- Raw daily transcripts and rollup summaries stay outside this cleanup scope.
+- TypeScript and Python section scanners ignore fenced code, so documentation
+  examples containing structural headings remain byte-identical.
+- The dbrain skill chooses semantic operations, rereads every touched card, and
+  consumes compile candidates; deterministic code keeps structural invariants.

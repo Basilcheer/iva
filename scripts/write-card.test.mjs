@@ -6,7 +6,16 @@
 import "./lib/ts-esm-hooks.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, cpSync, rmSync } from "node:fs";
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -200,6 +209,217 @@ test("related дописываются в существующую секцию 
   assert.equal(out.match(/^## Related$/gm).length, 1);
   assert.equal(out.match(/\[\[majento\]\]/g).length, 1);
   assert.ok(out.includes("[[aimasters]]"));
+});
+
+test("явные UPDATE складываются в единственный Log без датированных H2", async () => {
+  const base = {
+    operation: "ADD",
+    type: "note",
+    title: "Единый журнал",
+    description: "проверка единственного журнала",
+    tags: ["note", "log"],
+    body: "Текущая выжимка.",
+    related: ["cards/notes/hub"],
+  };
+  const created = await call(base);
+  assert.equal(created.ok, true);
+  await call({
+    ...base,
+    operation: "UPDATE",
+    body: "Добавлен первый непротиворечивый факт.",
+  });
+  await call({
+    ...base,
+    operation: "UPDATE",
+    body: "Добавлен второй непротиворечивый факт.",
+  });
+  const out = read(created.file);
+  assert.equal(out.match(/^## Log$/gm).length, 1);
+  assert.equal(out.match(/^## (?:Обновление|Update) /gm), null);
+  assert.match(out, /^- \d{4}-\d{2}-\d{2}: Добавлен первый/m);
+  assert.match(out, /^- \d{4}-\d{2}-\d{2}: Добавлен второй/m);
+
+  const before = out;
+  const repeated = await call({
+    ...base,
+    operation: "UPDATE",
+    body: "Добавлен второй непротиворечивый факт.",
+  });
+  assert.equal(repeated.action, "updated");
+  assert.equal(read(created.file), before, "повтор факта должен быть byte-stable");
+});
+
+test("ADD не перезаписывает, UPDATE не создаёт, NOOP не пишет", async () => {
+  const base = {
+    type: "note",
+    title: "Границы операции",
+    description: "проверка контрактов операций",
+    tags: ["note", "operation"],
+    body: "Исходное содержимое.",
+  };
+  const created = await call({ ...base, operation: "ADD" });
+  const before = read(created.file);
+  const duplicate = await call({ ...base, operation: "ADD", body: "Нельзя записать." });
+  assert.equal(duplicate.ok, false);
+  assert.match(duplicate.error, /ADD отказан/);
+  assert.equal(read(created.file), before);
+
+  const notesDir = join(VAULT, "cards", "notes");
+  const countBeforeMissingUpdate = readdirSync(notesDir).length;
+  const missing = await call({
+    ...base,
+    operation: "UPDATE",
+    title: "Отсутствующая карточка для UPDATE",
+  });
+  assert.equal(missing.ok, false);
+  assert.match(missing.error, /UPDATE требует существующую/);
+  assert.equal(
+    readdirSync(notesDir).length,
+    countBeforeMissingUpdate,
+    "UPDATE missing must not create a second card",
+  );
+
+  const projectDir = join(VAULT, "cards", "projects");
+  assert.equal(existsSync(projectDir), false);
+  const noop = await call({
+    ...base,
+    operation: "NOOP",
+    type: "project",
+    title: "NOOP без каталога",
+    status: "active",
+  });
+  assert.equal(noop.action, "noop");
+  assert.equal(existsSync(projectDir), false, "NOOP не должен создавать даже каталог");
+});
+
+test("body с Related отклоняется без записи", async () => {
+  const base = {
+    operation: "ADD",
+    type: "note",
+    title: "Related только параметром",
+    description: "проверка запрета Related в body",
+    tags: ["note", "related"],
+    body: "Исходная истина.",
+  };
+  const created = await call(base);
+  const before = read(created.file);
+  const rejected = await call({
+    ...base,
+    operation: "UPDATE",
+    body: "Новый факт.\n\n## Related\n- [[wrong-place]]",
+  });
+  assert.equal(rejected.ok, false);
+  assert.match(rejected.error, /pass links through related/);
+  assert.equal(read(created.file), before);
+});
+
+test("fenced структурные заголовки остаются кодом", async () => {
+  const fenced = [
+    "Пример формата:",
+    "```markdown",
+    "## Related",
+    "## Log",
+    "## Update 2026-08-05",
+    "```",
+  ].join("\n");
+  const created = await call({
+    operation: "ADD",
+    type: "note",
+    title: "Пример fenced headings",
+    description: "структурные заголовки внутри code fence",
+    tags: ["note", "fence"],
+    body: fenced,
+    related: ["cards/notes/hub"],
+  });
+  assert.equal(created.ok, true);
+  const out = read(created.file);
+  assert.ok(out.includes(fenced), "code example must remain byte-identical");
+  assert.equal(out.match(/^## Related$/gm).length, 2, "one fenced example plus one real section");
+
+  await call({
+    operation: "UPDATE",
+    type: "note",
+    title: "Пример fenced headings",
+    description: "структурные заголовки внутри code fence",
+    tags: ["note", "fence"],
+    body: "Совместимый новый факт.",
+    related: ["cards/notes/hub#part|Hub"],
+  });
+  const updated = read(created.file);
+  assert.ok(updated.includes(fenced));
+  assert.equal(updated.match(/^## Log$/gm).length, 2, "one fenced example plus one real section");
+  assert.match(updated, /^- \d{4}-\d{2}-\d{2}: Совместимый новый факт\.$/m);
+});
+
+test("Related дедуплицирует target по alias/anchor и не считает ссылку в prose", async () => {
+  const base = {
+    operation: "ADD",
+    type: "note",
+    title: "Нормализация Related",
+    description: "проверка идентичности ссылок",
+    tags: ["note", "related"],
+    body: "В тексте уже упомянут [[cards/notes/hub]], но это не секция связей.",
+    related: ["cards/notes/hub#top|Hub"],
+  };
+  const created = await call(base);
+  await call({
+    ...base,
+    operation: "UPDATE",
+    body: "Ещё один факт.",
+    related: ["cards/notes/hub#other|Other", "cards/notes/sibling"],
+  });
+  const out = read(created.file);
+  assert.equal(out.match(/^## Related$/gm).length, 1);
+  assert.equal(out.match(/\[\[cards\/notes\/hub#/g).length, 1);
+  assert.equal(out.match(/\[\[cards\/notes\/hub\]\]/g).length, 1, "prose link remains separate");
+  assert.equal(out.match(/\[\[cards\/notes\/sibling\]\]/g).length, 1);
+});
+
+test("SUPERSEDE требует history_entry, заменяет truth и сохраняет History", async () => {
+  const base = {
+    operation: "ADD",
+    type: "note",
+    title: "Смена владельца",
+    description: "текущий владелец Alice",
+    tags: ["note", "owner"],
+    body:
+      "Current owner: Alice\n\n## Log\n- 2026-07-01: Ownership confirmed\n\n" +
+      "## History\n- 2025: Initial owner Carol",
+    related: ["cards/contacts/alice"],
+  };
+  const created = await call(base);
+  const before = read(created.file);
+  const rejected = await call({
+    ...base,
+    operation: "SUPERSEDE",
+    description: "текущий владелец Bob",
+    body: "Current owner: Bob",
+  });
+  assert.equal(rejected.ok, false);
+  assert.match(rejected.error, /требует history_entry/);
+  assert.equal(read(created.file), before);
+
+  const replaced = await call({
+    ...base,
+    operation: "SUPERSEDE",
+    description: "текущий владелец Bob",
+    body: "Current owner: Bob",
+    history_entry: "2026-01→08: Current owner Alice",
+    related: ["cards/contacts/bob"],
+  });
+  assert.equal(replaced.action, "replaced");
+  const out = read(created.file);
+  const current = out.split("## History")[0];
+  assert.match(current, /Current owner: Bob/);
+  assert.doesNotMatch(current, /Current owner: Alice/);
+  assert.equal(out.match(/^## History$/gm).length, 1);
+  assert.equal(out.match(/^## Log$/gm).length, 1);
+  assert.equal(out.match(/^## Related$/gm).length, 1);
+  assert.match(out, /Initial owner Carol/);
+  assert.match(out, /Current owner Alice/);
+  assert.match(out, /Ownership confirmed/);
+  assert.match(out, /\[\[cards\/contacts\/alice\]\]/);
+  assert.match(out, /\[\[cards\/contacts\/bob\]\]/);
 });
 
 // ─── лок и атомарная запись ────────────────────────────────────────────────

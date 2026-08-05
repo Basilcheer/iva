@@ -15,13 +15,18 @@ For each item:
    ```bash
    grep -ril "<entity name or key phrase>" cards/
    ```
-   - Match found → **update** that card (sharpen description, add tags, bump status,
-     append a dated line under `## Log`). Do not create a duplicate.
-     - If the new fact **contradicts** a current value → **SUPERSEDE**: rewrite the current
-       value (Compiled Truth) and move the old one to `## History` with a date range.
-       See `references/classification.md` → "ADD / SUPERSEDE / NOOP".
-   - No match → **create** a new card (prefer the `write_card` tool — it enforces type/schema).
-   - Tag each card with `confidence: EXTRACTED|INFERRED` (see classification.md → "Confidence").
+   Then choose exactly one operation and pass it to `write_card`:
+   - No match → **ADD**. Create the card; ADD refuses an existing identity.
+   - Match, same fact already present → **NOOP**. Do not touch the file.
+   - Match, genuinely new and compatible fact → **UPDATE**. The tool appends one
+     dated bullet under the card's single `## Log`.
+   - Match, new fact contradicts current truth → **SUPERSEDE**. Pass the complete
+     new Compiled Truth in `body` and the displaced old fact in `history_entry`.
+     The tool rewrites current truth and preserves one append-only `## History`.
+   See `references/classification.md` → "ADD / UPDATE / SUPERSEDE / NOOP".
+   Never use `UPDATE` to hide a contradiction in chronology.
+   - Tag each written card with `confidence: EXTRACTED|INFERRED` (see
+     classification.md → "Confidence").
 2. **Path & filename.** Place by type (see SKILL layout table). Filenames are
    kebab-case slugs:
    - `cards/contacts/jane-doe.md`, `cards/projects/iva-memory.md`,
@@ -34,9 +39,12 @@ For each item:
    - `description` is a search snippet (what/why), never a title repeat.
    - `tags`: 2–5, lowercase, kebab-case.
    - `created: YYYY-MM-DD` and `source: daily/YYYY-MM-DD.md`.
-4. **Body.** A few sentences of context, then leave a `## Related` section for Phase 3.
-   Quote the transcript only as needed; link back with
-   `source: daily/YYYY-MM-DD.md` in frontmatter.
+4. **Body.** A few sentences of context. Never put `## Related` in `body`; collect
+   relation targets and pass them through the `related` argument. Quote the transcript
+   only as needed; link back with `source: daily/YYYY-MM-DD.md` in frontmatter.
+5. **Reread.** After each non-NOOP call, reread the returned file. Confirm current
+   truth is current, and that it contains at most one `## Log`, at most one
+   `## Related`, and no dated `## Обновление` / `## Update` heading.
 
 ## Title-as-claim (for notes & ideas)
 

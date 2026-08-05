@@ -9,6 +9,7 @@ Usage:
 """
 
 import json
+import re
 import sys
 from pathlib import Path
 from datetime import date
@@ -24,6 +25,159 @@ from common import (
 ENFORCE_MAX_FILE_BYTES = 10 * 1024 * 1024
 # cleanup.py owns bounded-memory repair; enforce only handles ordinary-sized cards.
 
+RELATED_HEADING_RE = re.compile(r'^##\s+Related\s*$', re.IGNORECASE)
+UPDATE_HEADING_RE = re.compile(
+    r'^##\s+(?:Обновление|Update)\s+(\d{4}-\d{2}-\d{2})\s*$', re.IGNORECASE)
+LOG_HEADING_RE = re.compile(r'^##\s+Log\s*$', re.IGNORECASE)
+H1_H2_RE = re.compile(r'^#{1,2}\s+')
+WIKILINK_RE = re.compile(r'\[\[([^\]]+)\]\]')
+
+
+def _outside_fences(lines: list[str]) -> list[bool]:
+    outside = [True] * len(lines)
+    fence_char = None
+    fence_len = 0
+    for index, line in enumerate(lines):
+        if fence_char:
+            outside[index] = False
+            close = re.match(r'^ {0,3}(`{3,}|~{3,})\s*$', line)
+            if close and close.group(1)[0] == fence_char and len(close.group(1)) >= fence_len:
+                fence_char = None
+                fence_len = 0
+            continue
+        opened = re.match(r'^ {0,3}(`{3,}|~{3,})(.*)$', line)
+        if not opened or (opened.group(1)[0] == '`' and '`' in opened.group(2)):
+            continue
+        outside[index] = False
+        fence_char = opened.group(1)[0]
+        fence_len = len(opened.group(1))
+    return outside
+
+
+def _sections(lines: list[str], matcher: re.Pattern) -> list[tuple[int, int, re.Match]]:
+    outside = _outside_fences(lines)
+    starts = [
+        (i, matcher.match(line.strip()))
+        for i, line in enumerate(lines)
+        if outside[i] and len(line) - len(line.lstrip(' ')) <= 3
+    ]
+    starts = [(i, match) for i, match in starts if match]
+    result = []
+    for start, match in starts:
+        end = len(lines)
+        for index in range(start + 1, len(lines)):
+            if (outside[index]
+                    and len(lines[index]) - len(lines[index].lstrip(' ')) <= 3
+                    and H1_H2_RE.match(lines[index].lstrip(' '))):
+                end = index
+                break
+        result.append((start, end, match))
+    return result
+
+
+def _replace_ranges(lines: list[str], ranges: list[tuple[int, int]],
+                    replacement: list[str], insert_at: int) -> list[str]:
+    by_start = {start: end for start, end in ranges}
+    output = []
+    index = 0
+    while index < len(lines):
+        end = by_start.get(index)
+        if end is not None:
+            if index == insert_at:
+                output.extend(replacement)
+            index = end
+            continue
+        output.append(lines[index])
+        index += 1
+    return output
+
+
+def _related_target(raw: str) -> str:
+    return raw.split('|', 1)[0].split('#', 1)[0].strip().lower()
+
+
+def cleanup_card_body(body: str) -> tuple[str, dict, bool]:
+    """Repair only unambiguous structural drift in a cards/** body."""
+    fixes = defaultdict(int)
+    compile_candidate = False
+    lines = body.split('\n')
+
+    # Legacy dated H2 updates become entries under one Log section. Empty update
+    # headings disappear. Existing Log content is preserved in source order.
+    updates = _sections(lines, UPDATE_HEADING_RE)
+    logs = _sections(lines, LOG_HEADING_RE)
+    if updates or len(logs) > 1:
+        combined = sorted(
+            [(start, end, 'update', match) for start, end, match in updates]
+            + [(start, end, 'log', match) for start, end, match in logs],
+            key=lambda item: item[0],
+        )
+        content = []
+        for start, end, kind, match in combined:
+            section_lines = [line for line in lines[start + 1:end] if line.strip()]
+            if kind == 'log':
+                content.extend(section_lines)
+                continue
+            if not section_lines:
+                fixes['empty_updates_removed'] += 1
+                continue
+            day = match.group(1)
+            if len(section_lines) == 1:
+                content.append(f'- {day}: {section_lines[0].strip()}')
+            else:
+                content.append(f'- {day}:')
+                content.extend(f'  {line}' for line in section_lines)
+            fixes['updates_migrated_to_log'] += 1
+
+        ranges = [(start, end) for start, end, _, _ in combined]
+        insert_at = combined[0][0]
+        keep_log = bool(content) or bool(logs)
+        replacement = ['## Log', *content] if keep_log else []
+        if len(logs) > 1:
+            fixes['log_sections_merged'] += len(logs) - 1
+        lines = _replace_ranges(lines, ranges, replacement, insert_at)
+
+    # Duplicate Related blocks are merged only when every non-empty line is a
+    # link-only list item. Prose-bearing duplicates stay byte-identical and are
+    # queued for the next semantic dbrain pass.
+    related = _sections(lines, RELATED_HEADING_RE)
+    if len(related) > 1:
+        safe = True
+        targets = []
+        seen = set()
+        duplicate_links = 0
+        for start, end, _ in related:
+            for line in lines[start + 1:end]:
+                if not line.strip():
+                    continue
+                matches = WIKILINK_RE.findall(line)
+                remainder = WIKILINK_RE.sub('', line)
+                remainder = re.sub(r'[-*·,;:\s]', '', remainder)
+                if not matches or remainder:
+                    safe = False
+                    break
+                for raw in matches:
+                    target = _related_target(raw)
+                    if not target or target in seen:
+                        duplicate_links += 1
+                        continue
+                    seen.add(target)
+                    targets.append(raw.strip())
+            if not safe:
+                break
+
+        if safe:
+            ranges = [(start, end) for start, end, _ in related]
+            replacement = ['## Related', *(f'- [[{target}]]' for target in targets)]
+            lines = _replace_ranges(lines, ranges, replacement, related[0][0])
+            fixes['related_sections_merged'] += len(related) - 1
+            fixes['related_links_deduped'] += duplicate_links
+        else:
+            compile_candidate = True
+
+    cleaned = '\n'.join(lines)
+    return cleaned, dict(fixes), compile_candidate
+
 
 def enforce(vault_dir: Path, schema: dict, apply=False, verbose=False):
     node_types = schema['node_types']
@@ -34,7 +188,7 @@ def enforce(vault_dir: Path, schema: dict, apply=False, verbose=False):
     stats = {
         'total': 0, 'valid': 0, 'fixed': 0, 'needs_review': 0,
         'no_fm': 0, 'skipped_oversize': 0,
-        'fixes': defaultdict(int), 'review_items': []
+        'fixes': defaultdict(int), 'review_items': [], 'compile_candidates': []
     }
     eligible_files = []
     for md in walk_vault(vault_dir):
@@ -58,6 +212,17 @@ def enforce(vault_dir: Path, schema: dict, apply=False, verbose=False):
 
         changed = False
         issues = []
+
+        if rp.startswith('cards/'):
+            cleaned_body, body_fixes, compile_candidate = cleanup_card_body(body)
+            if cleaned_body != body:
+                body = cleaned_body
+                changed = True
+            for name, count in body_fixes.items():
+                stats['fixes'][name] += count
+            if compile_candidate:
+                stats['compile_candidates'].append(rp)
+                issues.append('ambiguous duplicate Related sections')
 
         # --- TYPE ---
         t = fields.get('type', '')
@@ -248,6 +413,7 @@ def main():
         'skipped_oversize': stats['skipped_oversize'],
         'duplicates': len(dupes), 'mode': mode,
         'fixes': dict(stats['fixes']),
+        'compile_candidates': sorted(stats['compile_candidates']),
     }, indent=2))
     print(f"  Report: {out}")
 
