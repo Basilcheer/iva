@@ -522,7 +522,7 @@ test("safe update preserves staged, unstaged and untracked user files", async ()
   );
   assert.equal(readFileSync(join(local, ".env"), "utf8"), "SECRET=kept\n");
   assert.equal(readFileSync(join(local, "upstream.txt"), "utf8"), "upstream\n");
-  assert.match(git(local, "status", "--porcelain=v1"), /^M  tracked\.txt/m);
+  assert.match(git(local, "status", "--porcelain=v1"), /^M {2}tracked\.txt/m);
   await tx.commit();
   assert.equal(git(local, "stash", "list"), "");
 });

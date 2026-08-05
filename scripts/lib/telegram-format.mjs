@@ -69,7 +69,7 @@ function inlineHtml(text) {
     .replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g, "<i>$1</i>")
     .replace(/(?<!\w)_([^_\n]+)_(?!\w)/g, "<i>$1</i>");
   // restore inline code
-  return s.replace(/  (\d+)  /g, (_m, i) => spans[Number(i)] ?? "");
+  return s.replace(/ {2}(\d+) {2}/g, (_m, i) => spans[Number(i)] ?? "");
 }
 
 // GFM table separator: |---|:--:|---|

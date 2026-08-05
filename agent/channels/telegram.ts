@@ -385,7 +385,7 @@ async function processMediaPart(
           bytes = saved.buffer.slice(
             saved.byteOffset,
             saved.byteOffset + saved.byteLength,
-          ) as ArrayBuffer;
+          );
         } catch (error) {
           console.error(
             "[telegram] не смог прочитать сохранённый blob, скачиваю заново:",
@@ -640,14 +640,14 @@ async function sendWorkingStatus(
         },
       ],
     });
-    if (res.ok) return (res.body as any)?.result?.message_id ?? null;
+    if (res.ok) return res.body?.result?.message_id ?? null;
     workLoaderSupported = false;
   }
   const res = await tg.request("sendMessage", {
     ...base,
     text: `${WORK_LOADER.fallback} ${tr("Working…", "Работаю…")}`,
   });
-  return res.ok ? ((res.body as any)?.result?.message_id ?? null) : null;
+  return res.ok ? (res.body?.result?.message_id ?? null) : null;
 }
 
 // Callback hooks Telegram не получают route-level cancel helper. resumeHook("<sessionId>:cancel")
