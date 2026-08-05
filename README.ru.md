@@ -26,6 +26,8 @@ curl -fsSL https://raw.githubusercontent.com/smixs/iva/main/install.sh | bash
 
 **Зачем вам это** → [25+ живых сценариев - бизнес, работа, жизнь](docs/ru/use-cases.md).
 
+<img src="assets/iva-use-cases.webp" alt="Что просят у Ивы: восемь бытовых запросов - от голосового, ставшего задачами, до ресёрча с источниками и сказки на ночь с продолжением" width="100%">
+
 ## Что нового 🔥
 
 <details>
