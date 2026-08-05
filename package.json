@@ -37,9 +37,16 @@
     "zod": "4.4.3"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@types/node": "24.x",
     "@typescript/native-preview": "7.0.0-dev.20260523.1",
-    "patch-package": "^8.0.1"
+    "eslint": "^10.8.0",
+    "eslint-config-prettier": "^10.1.8",
+    "globals": "^17.9.0",
+    "patch-package": "^8.0.1",
+    "prettier": "^3.9.6",
+    "typescript": "~6.0.3",
+    "typescript-eslint": "^8.66.0"
   },
   "overrides": {
     "ai": "7.0.39"
