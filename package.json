@@ -27,6 +27,7 @@
     "lint:fix": "eslint . --fix",
     "format": "prettier . --write",
     "format:check": "prettier . --check",
+    "test": "node --test",
     "test:security": "node --test agent/lib/eve-auth.test.mjs scripts/lib/assistant-auth.test.mjs scripts/lib/listener-security.test.mjs scripts/lib/security-migration.test.mjs",
     "test:update-ui": "node --test scripts/lib/update-ui.test.mjs scripts/lib/update-check.test.mjs",
     "postinstall": "patch-package"
