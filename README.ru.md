@@ -28,6 +28,9 @@ curl -fsSL https://raw.githubusercontent.com/smixs/iva/main/install.sh | bash
 
 ## Что нового 🔥
 
+<details>
+<summary><b>v0.3.12 · 05.08.2026 - развернуть четыре недели релизов</b></summary>
+
 ### 05.08.2026
 
 #### v0.3.12
@@ -69,6 +72,8 @@ curl -fsSL https://raw.githubusercontent.com/smixs/iva/main/install.sh | bash
 - 🛡️ Обновление стало безопаснее: сломанное обновление больше не трогает работающую Иву.
 - 🌙 Ночная память переживает перезапуск сервера - утренний отчёт приходит даже после ребута.
 - 🧪 Каждый релиз проходит полную тестовую установку с нуля перед выходом.
+
+</details>
 
 Полная история - в [CHANGELOG.md](CHANGELOG.md).
 

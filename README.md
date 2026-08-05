@@ -26,6 +26,9 @@ curl -fsSL https://raw.githubusercontent.com/smixs/iva/main/install.sh | bash
 
 ## What's New 🔥
 
+<details>
+<summary><b>v0.3.12 · 05.08.2026 — expand four weeks of releases</b></summary>
+
 ### 05.08.2026
 
 #### v0.3.12
@@ -67,6 +70,8 @@ curl -fsSL https://raw.githubusercontent.com/smixs/iva/main/install.sh | bash
 - 🛡️ Updates are safer: a broken update no longer touches your working Iva.
 - 🌙 Nightly memory survives a server restart — the morning report arrives even after a reboot.
 - 🧪 Every release goes through a full test install from scratch before it ships.
+
+</details>
 
 Full history — [CHANGELOG.md](CHANGELOG.md).
 
