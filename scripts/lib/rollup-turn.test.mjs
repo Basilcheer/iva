@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  cancelTurnAndConfirmQuietly,
   canRetryFresh,
   cancelTurnQuietly,
   DEFAULT_TURN_TIMEOUT_MS,
@@ -21,6 +22,7 @@ async function countSendsThroughRetryPolicy({ firstSend, cancel }) {
   let sends = 0;
   let accepted = false;
   let sendRejected = false;
+  let acceptedTurnResult;
   try {
     await withTurnTimeout(async () => {
       let response;
@@ -33,12 +35,15 @@ async function countSendsThroughRetryPolicy({ firstSend, cancel }) {
         throw error;
       }
       accepted = true;
-      return await response.result();
+      acceptedTurnResult = response.result();
+      return await acceptedTurnResult;
     }, { timeoutMs: 20, label: "main-turn" });
   } catch (error) {
     // Это точная модель catch-флоу rollup.ts, а не выполнение самого rollup.ts.
     const hung = error?.code === "ROLLUP_TURN_TIMEOUT";
-    const cancelConfirmed = accepted || hung ? await cancel() : false;
+    const cancelConfirmed = accepted || hung
+      ? await cancelTurnAndConfirmQuietly({ cancel }, acceptedTurnResult, { timeoutMs: 20 })
+      : false;
     if (canRetryFresh({ accepted, sendRejected, cancelConfirmed })) sends += 1;
   }
   return sends;
@@ -50,9 +55,41 @@ test("an accepted hung turn with refused cancellation never sends a fresh retry"
       recordSend();
       return { result: () => new Promise(() => {}) };
     },
-    cancel: async () => false,
+    cancel: async () => {
+      throw new Error("cancel refused");
+    },
   });
   assert.equal(sends, 1);
+});
+
+test("an accepted cancel response without a terminal cancelled event blocks fresh retry", async () => {
+  const sends = await countSendsThroughRetryPolicy({
+    firstSend: async (recordSend) => {
+      recordSend();
+      return { result: () => new Promise(() => {}) };
+    },
+    cancel: async () => ({ status: "accepted" }),
+  });
+  assert.equal(sends, 1);
+});
+
+test("an accepted hung turn retries after the stream confirms turn.cancelled", async () => {
+  let finishTurn;
+  const sends = await countSendsThroughRetryPolicy({
+    firstSend: async (recordSend) => {
+      recordSend();
+      return {
+        result: () => new Promise((resolve) => {
+          finishTurn = resolve;
+        }),
+      };
+    },
+    cancel: async () => {
+      finishTurn({ events: [{ type: "turn.cancelled" }, { type: "session.waiting" }] });
+      return { status: "accepted" };
+    },
+  });
+  assert.equal(sends, 2);
 });
 
 test("a hung send with refused cancellation never sends a fresh retry", async () => {
@@ -64,20 +101,20 @@ test("a hung send with refused cancellation never sends a fresh retry", async ()
     },
     cancel: async () => {
       cancels += 1;
-      return false;
+      return { status: "accepted" };
     },
   });
   assert.equal(sends, 1);
   assert.equal(cancels, 1);
 });
 
-test("a hung send gets one fresh retry only after confirmed cancellation", async () => {
+test("a hung send gets one fresh retry when cancel reports no active turn", async () => {
   const sends = await countSendsThroughRetryPolicy({
     firstSend: async (recordSend) => {
       recordSend();
       return await new Promise(() => {});
     },
-    cancel: async () => true,
+    cancel: async () => ({ status: "no_active_turn" }),
   });
   assert.equal(sends, 2);
 });

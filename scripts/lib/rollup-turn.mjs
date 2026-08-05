@@ -62,6 +62,31 @@ export async function cancelTurnQuietly(session, { timeoutMs = DEFAULT_CANCEL_TI
   }
 }
 
+// Успешный HTTP-ответ cancel ещё не означает, что ход перестал писать. `accepted` только
+// принимает сигнал отмены; безопасную границу подтверждает `turn.cancelled` в дочитанном
+// результате. `no_active_turn` сам является серверным подтверждением, что писателя уже нет.
+export async function cancelTurnAndConfirmQuietly(
+  session,
+  turnResult,
+  { timeoutMs = DEFAULT_CANCEL_TIMEOUT_MS } = {},
+) {
+  try {
+    const cancellation = await withTurnTimeout(() => session.cancel(), {
+      timeoutMs,
+      label: "cancel",
+    });
+    if (cancellation?.status === "no_active_turn") return true;
+    if (cancellation?.status !== "accepted" || !turnResult) return false;
+    const result = await withTurnTimeout(() => turnResult, {
+      timeoutMs,
+      label: "cancel-terminal",
+    });
+    return result?.events?.some((event) => event?.type === "turn.cancelled") === true;
+  } catch {
+    return false;
+  }
+}
+
 // Выполняет fn() и отклоняется RollupTurnTimeoutError, если тот не уложился в timeoutMs.
 // Проигравшая сторона гонки не отменяется (у eve-хода нет abort) — она просто повисает
 // в фоне; вызывающий должен считать сессию непригодной и завести новую.

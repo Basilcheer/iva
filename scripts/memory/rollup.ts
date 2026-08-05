@@ -9,10 +9,16 @@
 import { appendFileSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { Client, type SessionState } from "eve/client";
+import { Client, type MessageResult, type SessionState } from "eve/client";
 import { CORE_CAP } from "../lib/core-cap.mjs";
 import { notificationChat } from "../lib/notification-chat.mjs";
-import { canRetryFresh, cancelTurnQuietly, resolveTurnTimeoutMs, withTurnTimeout } from "../lib/rollup-turn.mjs";
+import {
+  cancelTurnAndConfirmQuietly,
+  canRetryFresh,
+  cancelTurnQuietly,
+  resolveTurnTimeoutMs,
+  withTurnTimeout,
+} from "../lib/rollup-turn.mjs";
 import { sendTelegramHtml } from "../lib/telegram-send.mjs";
 
 type Period = "daily" | "weekly" | "monthly" | "yearly";
@@ -206,7 +212,7 @@ const guardedTurn = (
   session: ReturnType<typeof client.session>,
   prompt: string,
   label: string,
-  onAccepted: () => void = () => {},
+  onAccepted: (result: Promise<MessageResult>) => void = () => {},
   onSendRejected: () => void = () => {},
 ) =>
   withTurnTimeout(
@@ -218,8 +224,9 @@ const guardedTurn = (
         onSendRejected();
         throw error;
       }
-      onAccepted();
-      return await response.result();
+      const result = response.result();
+      onAccepted(result);
+      return await result;
     },
     { timeoutMs: TURN_TIMEOUT_MS, label },
   );
@@ -244,13 +251,15 @@ let session = saved ? client.session(saved.state) : client.session();
 let result;
 let accepted = false;
 let sendRejected = false;
+let acceptedTurnResult: Promise<MessageResult> | undefined;
 try {
   result = await guardedTurn(
     session,
     buildPrompt(period, today),
     "main-turn",
-    () => {
+    (turnResult) => {
       accepted = true;
+      acceptedTurnResult = turnResult;
     },
     () => {
       sendRejected = true;
@@ -267,8 +276,11 @@ try {
     throw e;
   }
   // Принятый ход и зависший send могли продолжить писать после локального таймаута. Перед retry
-  // оба требуют подтверждённого cancel; только явно отклонённый send безопасен сам по себе.
-  const cancelConfirmed = accepted || hung ? await cancelTurnQuietly(session) : false;
+  // оба требуют терминального подтверждения: no_active_turn либо turn.cancelled в дочитанном
+  // потоке. Успешный ответ cancel со статусом accepted сам по себе второго писателя не разрешает.
+  const cancelConfirmed = accepted || hung
+    ? await cancelTurnAndConfirmQuietly(session, acceptedTurnResult)
+    : false;
   if (!canRetryFresh({ accepted, sendRejected, cancelConfirmed })) {
     console.error(`rollup ${period}: could not confirm cancellation of the unresolved turn — refusing fresh retry`);
     logAbandoned(saved.state, "cancel-unconfirmed");

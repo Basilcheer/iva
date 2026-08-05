@@ -29,3 +29,11 @@ export function cancelTurnQuietly(
   session: { cancel: (options?: { turnId?: string }) => Promise<unknown> },
   options?: { timeoutMs?: number },
 ): Promise<boolean>;
+
+export function cancelTurnAndConfirmQuietly(
+  session: {
+    cancel: (options?: { turnId?: string }) => Promise<{ status?: string }>;
+  },
+  turnResult: Promise<{ events?: Array<{ type?: string }> }> | undefined,
+  options?: { timeoutMs?: number },
+): Promise<boolean>;
