@@ -362,6 +362,9 @@
   were removed and no patterns were added to `bash.ts`.
 - Runtime topology, Eve version, schedule cadence, skill count, Google Tasks support and
   open-task menu counting are synchronized across the requested documentation surfaces.
+- The flat `documents` skill uses only installed system tools and an ephemeral `openpyxl`
+  environment. Failed PDF text extraction is reported honestly; optional library imports are
+  split into searchable chunks capped at 8000 characters.
 - CLI documentation keeps topology distinct from command coverage: `iva doctor` reads the
   four memory-schedule status records, while `iva status` reports systemd units only.
 - PHILOSOPHY.md now records the project boundary rules and explicit removal points for

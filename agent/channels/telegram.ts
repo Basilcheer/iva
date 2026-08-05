@@ -393,10 +393,8 @@ async function processMediaPart(
                 `скиллами и ответь по содержимому; не можешь — так и скажи.`,
             )
           : tr(
-              `${tag} the user sent a file: ${path}. Open/read it (read_file, bash, ` +
-                `pdf/xlsx/docx skills) and reply on its content.`,
-              `${tag} пользователь прислал файл: ${path}. Открой/прочитай его (read_file, bash, скиллы ` +
-                `pdf/xlsx/docx) и ответь по содержимому.`,
+              `${tag} the user sent a file: ${path}. Load the \`documents\` skill and reply on its content.`,
+              `${tag} пользователь прислал файл: ${path}. Загрузи скилл \`documents\` и ответь по содержимому файла.`,
             );
     const context = [lead];
     if (transcript) {

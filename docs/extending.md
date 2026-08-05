@@ -4,13 +4,14 @@ Everything Iva does is a file in `agent/`. Drop a new one, rebuild, restart — 
 
 ## Adding a skill
 
-Skills are markdown procedures in `agent/skills/` that the model loads on demand. The frontmatter `description` is the only part the model sees before loading — write it as a trigger condition ("Use when…"), not a summary. Two shapes work: a flat `<name>.md`, or a `<name>/` directory with a `SKILL.md` plus supporting files. The seven bundled skills are your templates, simplest first:
+Skills are markdown procedures in `agent/skills/` that the model loads on demand. The frontmatter `description` is the only part the model sees before loading — write it as a trigger condition ("Use when…"), not a summary. Two shapes work: a flat `<name>.md`, or a `<name>/` directory with a `SKILL.md` plus supporting files. The eight bundled skills are your templates, simplest first:
 
 - 📋 **morning-digest.md** — one tool call (`tasks`), grouping rules, output format. Copy this for any "call a tool, format the result" job.
 - 🔎 **web-research.md** — a 4-step chain: `web_search` → pick 2–4 sources → `web_fetch` each → synthesize with links.
 - 🌐 **agent-browser/** — directory skill wrapping a CLI the model drives through `bash`.
 - 🛡 **security-defense/** — the full shape: `SKILL.md`, bundled scripts, a patterns file.
 - 📮 **google-workspace.md** — one CLI surface covering Gmail, Calendar, Drive, Sheets, Docs and Tasks.
+- 📄 **documents.md** — local PDF, DOCX and XLSX extraction, one-file answers and optional library import.
 - 📡 **telegram-userbot/** — a guarded personal-account workflow with a separate safety reference.
 - 🎨 **rich-post/** — a directory skill for rich Telegram posts with supporting references.
 

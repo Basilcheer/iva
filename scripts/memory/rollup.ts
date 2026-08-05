@@ -65,7 +65,7 @@ function shiftDate(iso: string, deltaDays: number): string {
 }
 
 // We take the target period as COMPLETED: schedules fire at the start of a new period
-// (daily ≈04:00, weekly on Sun, monthly on the 1st, yearly on Jan 1), so we process
+// (daily ≈04:00, weekly on Mon, monthly on the 1st, yearly on Jan 1), so we process
 // the PREVIOUS period, not the empty current one (now is the current local date).
 function buildPrompt(p: Period, now: string): string {
   const [y, m] = now.split("-").map(Number);

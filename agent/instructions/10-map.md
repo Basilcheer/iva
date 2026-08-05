@@ -41,7 +41,8 @@
 - Ночью eve schedules запускают rollup daily→weekly→monthly→yearly; отдельный systemd-watchdog
   запускает doctor. Они превращают сырой день в карточки + саммари и обновляют `CORE.md`. Не гоняй вручную.
 - Тяжёлые процедуры — это скиллы: грузи по имени, тело придёт само
-  (`morning-digest`, `web-research`, `agent-browser`, `google-workspace`).
+  (`morning-digest`, `web-research`, `agent-browser`, `google-workspace`, `security-defense`,
+  `telegram-userbot`, `rich-post`, `documents`).
 
 ### Запись в ядро (CORE) — пользователь управляет тобой через разговор
 Обычно `CORE.md` пишет ночной rollup. Но когда пользователь ПРЯМО просит что-то изменить — запомнить
