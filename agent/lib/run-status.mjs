@@ -56,7 +56,9 @@ function readObject(file) {
   try {
     const parsed = JSON.parse(readFileSync(file, "utf8"));
     if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-      throw new Error(`${file} does not contain a JSON object`);
+      const error = new Error(`${file} does not contain a JSON object`);
+      error.code = "ERR_RUN_STATUS_SCHEMA";
+      throw error;
     }
     return parsed;
   } catch (error) {
@@ -65,13 +67,18 @@ function readObject(file) {
   }
 }
 
+function isCorruptStatus(error) {
+  return error instanceof SyntaxError || error?.code === "ERR_RUN_STATUS_SCHEMA";
+}
+
 function readLegacy(chatKey) {
   try {
     return readObject(LEGACY_STATUS_FILE)?.[chatKey] ?? null;
-  } catch {
+  } catch (error) {
     // Старый код считал битый whole-map пустым. Чтение остаётся совместимым,
     // но новый код legacy-файл не переписывает и не рискует остальными чатами.
-    return null;
+    if (isCorruptStatus(error)) return null;
+    throw error;
   }
 }
 
@@ -79,7 +86,8 @@ function readPerChat(chatKey) {
   const file = statusFileOf(chatKey);
   try {
     return readObject(file);
-  } catch {
+  } catch (error) {
+    if (!isCorruptStatus(error)) throw error;
     const backup = `${file}.corrupt-${Date.now()}-${randomUUID()}`;
     try {
       renameSync(file, backup);

@@ -1,4 +1,3 @@
-import { existsSync } from "node:fs";
 import {
   COLLECT_QUIET_MS,
   collectorOffer,
@@ -9,7 +8,7 @@ import {
 } from "../lib/telegram-collect.mjs";
 import { alreadyDelivered } from "../lib/offset-store.mjs";
 import { isReplyToBot, migrateQueueFile } from "../lib/telegram-queue.mjs";
-import { ACCEPTANCE_ROUTE, OFFSET_FILE, ROUTE, SECRET, TOKEN, log, sleep } from "./config.mjs";
+import { ACCEPTANCE_ROUTE, ROUTE, SECRET, TOKEN, log, sleep } from "./config.mjs";
 import { tg } from "./transport.mjs";
 import { fastForwardOffset, loadOffset, saveOffset } from "./offset.mjs";
 import { QUEUE_FILE, reapStaleRuns, reconcileScopedResetIntents } from "./queue.mjs";
@@ -42,15 +41,18 @@ export async function main() {
   if (reconciledResets > 0) {
     log(`reconciled ${reconciledResets} durable private Telegram reset intent(s)`);
   }
+  // Читаем offset ДО любого destructive Telegram-вызова: EACCES/EIO/битый JSON
+  // останавливают мост, пока backlog ещё цел. Только подтверждённый ENOENT означает
+  // first run и разрешает drop_pending=true.
+  let { offset, delivered } = await loadOffset();
   // First run (no offset file) — drop the accumulated install backlog (drop_pending=true),
   // so old messages don't replay in a batch → parallel sessions on one chat (HookConflict).
   // On subsequent starts we do NOT drop the backlog (don't lose messages that arrived while the bridge was down).
-  const firstRun = !existsSync(OFFSET_FILE);
+  const firstRun = offset === null;
   const dw = await tg("deleteWebhook", { drop_pending_updates: firstRun });
   log("deleteWebhook:", dw.ok ? `ok (drop_pending=${firstRun})` : dw.description);
   await registerBotCommands();
 
-  let { offset, delivered } = await loadOffset();
   if (offset === null) {
     offset = await fastForwardOffset();
     log("first run — offset past the tail of the queue:", offset);

@@ -393,10 +393,8 @@ async function processMediaPart(
                 `скиллами и ответь по содержимому; не можешь — так и скажи.`,
             )
           : tr(
-              `${tag} the user sent a file: ${path}. Open/read it (read_file, bash, ` +
-                `pdf/xlsx/docx skills) and reply on its content.`,
-              `${tag} пользователь прислал файл: ${path}. Открой/прочитай его (read_file, bash, скиллы ` +
-                `pdf/xlsx/docx) и ответь по содержимому.`,
+              `${tag} the user sent a file: ${path}. Load the \`documents\` skill and reply on its content.`,
+              `${tag} пользователь прислал файл: ${path}. Загрузи скилл \`documents\` и ответь по содержимому файла.`,
             );
     const context = [lead];
     if (transcript) {
@@ -420,14 +418,14 @@ async function processMediaPart(
     }
     return { kind: "context", context };
   } catch (error) {
-    const detail = String((error as Error).message ?? error).slice(0, 200);
+    const detail = error instanceof Error ? error.message : String(error);
     const token = process.env.TELEGRAM_BOT_TOKEN;
-    const contextDetail = token ? detail.replaceAll(token, "***") : detail;
+    const contextDetail = (token ? detail.replaceAll(token, "***") : detail).slice(0, 200);
     try {
       await ctx.telegram.sendMessage(
         tr(
-          `Couldn't process the entry: ${detail}`,
-          `Не смог обработать запись: ${detail}`,
+          `Couldn't process the entry: ${contextDetail}`,
+          `Не смог обработать запись: ${contextDetail}`,
         ),
       );
     } catch {
