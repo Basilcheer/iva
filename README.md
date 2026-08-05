@@ -28,6 +28,12 @@ curl -fsSL https://raw.githubusercontent.com/smixs/iva/main/install.sh | bash
 
 ### 05.08.2026
 
+#### v0.3.12
+
+- ⏰ One-off reminders arrive again — the system timer crashed before the message could be sent; delivery now runs on plain JS under any Node.
+- 📈 Vault health no longer decays from raw daily transcripts — the score counts only the cards Iva actually maintains; an "up" link to a not-yet-created weekly summary isn't broken until its scheduled day, and audio attachments aren't broken links at all.
+- 🗂️ Cards no longer pile up dated "## Update" sections — writes carry explicit operations now: one Log, one Related, displaced facts go to a dated History; the nightly cleanup migrates old piles on its own.
+
 #### v0.3.11
 
 - 📸 Re-sent and queued photos/files are no longer processed twice — one message, one blob, one reply, even while Iva is busy (and no repeated paid vision/transcription calls).
@@ -78,7 +84,7 @@ The rest — for business owners, specialists, executives and everyday life: **[
 - 👁️ **Vision** — photos described by your provider's own vision model; no extra key, no extra bill.
 - 🧾 **Rich replies** — tables, checklists, collapsible blocks and formulas render natively in Telegram via Bot API 10.1 rich messages; plain formatting keeps its proven path, with a graceful fallback.
 - ⬆️ **Quiet update checks** — once a day Iva checks for a newer stable release without spending model tokens. If one exists, Telegram offers **Update** or **Later** once; otherwise it says nothing.
-- 🧠 **Layered memory** — remembers across months, not just the current chat window.
+- 🧠 **Layered memory** — remembers across months, long after the chat window has scrolled away.
 - 📇 **Personal CRM** — who your people are, what you agreed, when to follow up.
 - 🔎 **Search by meaning** — BM25 plus link-graph rerank, any language; optional vector mode with one key.
 - 🧭 **Decision cards** — what you chose, when and why; old versions stay in a dated History.
