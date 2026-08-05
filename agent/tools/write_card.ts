@@ -127,6 +127,7 @@ export default defineTool({
     history_entry: z
       .string()
       .min(1)
+      .refine((value) => !/[\r\n]/.test(value), "history_entry должен быть одной строкой")
       .optional()
       .describe("Для SUPERSEDE: датированная строка о прежней истине, переносимая в ## History"),
     confidence: z

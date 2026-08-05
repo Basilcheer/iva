@@ -159,6 +159,22 @@ test("description длиннее 500 символов отклоняется с 
   );
 });
 
+test("history_entry принимает только одну строку", () => {
+  assert.throws(
+    () =>
+      writeCard.inputSchema.parse({
+        operation: "SUPERSEDE",
+        type: "note",
+        title: "Многострочная история",
+        description: "проверка структурной безопасности history entry",
+        tags: ["note"],
+        body: "Новая истина",
+        history_entry: "Старая истина\n\n## Log\n- injected",
+      }),
+    /одной строкой/,
+  );
+});
+
 test("tags и domain квотируются, если содержат YAML-спецсимволы", async () => {
   const res = await call({
     type: "note",
@@ -316,6 +332,34 @@ test("body с Related отклоняется без записи", async () => {
   assert.equal(rejected.ok, false);
   assert.match(rejected.error, /pass links through related/);
   assert.equal(read(created.file), before);
+});
+
+test("UPDATE отклоняет H1/H2 и существующие legacy dated-секции без записи", async () => {
+  const base = {
+    operation: "ADD",
+    type: "note",
+    title: "Fail closed update",
+    description: "проверка структурных границ update",
+    tags: ["note", "update"],
+    body: "Текущая истина.",
+  };
+  const created = await call(base);
+  const before = read(created.file);
+  const heading = await call({
+    ...base,
+    operation: "UPDATE",
+    body: "Новый факт.\n\n## Next steps\nнеструктурированный хвост",
+  });
+  assert.equal(heading.ok, false);
+  assert.match(heading.error, /without H1\/H2 headings/);
+  assert.equal(read(created.file), before);
+
+  const legacy = `${before.trimEnd()}\n\n## Обновление 2026-08-01\nСтарый факт.\n`;
+  writeFileSync(join(VAULT, created.file), legacy);
+  const dated = await call({ ...base, operation: "UPDATE", body: "Ещё один факт." });
+  assert.equal(dated.ok, false);
+  assert.match(dated.error, /run semantic cleanup before UPDATE/);
+  assert.equal(read(created.file), legacy);
 });
 
 test("fenced структурные заголовки остаются кодом", async () => {

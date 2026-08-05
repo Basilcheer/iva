@@ -185,6 +185,12 @@ export function hasH2Section(body: string, heading: string): boolean {
   return h2Sections(body.split("\n"), heading).length > 0;
 }
 
+function hasOutsideHeading(body: string, pattern: RegExp): boolean {
+  const lines = body.split("\n");
+  const outside = outsideFences(lines);
+  return lines.some((line, index) => outside[index] && pattern.test(line));
+}
+
 function namedH2Sections(lines: string[]): NamedH2Section[] {
   const outside = outsideFences(lines);
   const starts = lines.flatMap((line, index) => {
@@ -455,6 +461,12 @@ export function mergeCard(input: MergeInput): MergeResult {
   if (replaceBody && operation !== "SUPERSEDE") {
     throw new Error("replaceBody is valid only for SUPERSEDE");
   }
+  if (historyEntry && /[\r\n]/.test(historyEntry)) {
+    throw new Error("historyEntry must be a single line");
+  }
+  if (operation === "UPDATE" && hasOutsideHeading(trimmedBody, /^ {0,3}#{1,2}\s+/)) {
+    throw new Error("UPDATE body must be a fact without H1/H2 headings");
+  }
   if (operation === "NOOP") {
     return { content: existing ?? "", action: "noop" };
   }
@@ -475,6 +487,12 @@ export function mergeCard(input: MergeInput): MergeResult {
 
   const parsed = parseFrontmatter(existing);
   const oldBody = parsed.body;
+  if (
+    operation === "UPDATE" &&
+    hasOutsideHeading(oldBody, /^ {0,3}##\s+(?:Обновление|Update)\s+\d{4}-\d{2}-\d{2}\s*$/i)
+  ) {
+    throw new Error("existing card has legacy dated update headings; run semantic cleanup before UPDATE");
+  }
   // Обновляем ТОЛЬКО известные ключи; created/source и любые неизвестные поля
   // (tier, relevance, last_accessed, phone, telegram, priority…) остаются как были.
   const updates: FmFields = { ...fields };
