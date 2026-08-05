@@ -363,3 +363,13 @@
 - The first-run tail lookup also fails closed on Telegram or response-shape errors; falling
   back to offset 0 after such an error could replay the installation backlog. An actually empty
   Telegram result still stores offset 0. Per-call tmp suffixes avoid overlap.
+## Schedule migration durability (v0.3.11)
+
+- Memory catch-up baselines are seeded per key under the shared status lock. Existing
+  digest state can no longer disable first-run storm protection for memory schedules.
+- The seed transaction commits before legacy timer teardown; a failed seed leaves the
+  retired persistent units available for another boot.
+- Reservations record the owner process. A confirmed-dead owner is recovered immediately,
+  while old ownerless markers keep the time-based compatibility rule.
+- Completion and cleanup mutate status only while holding the status lock and keep a
+  reservation marked locally until its removal write succeeds.

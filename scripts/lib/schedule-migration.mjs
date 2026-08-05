@@ -198,24 +198,7 @@ export async function runScheduleMigration({
   runJob,
 } = {}) {
   try {
-    // Legacy-unit teardown genuinely needs systemd — catch-up does not. These used to
-    // share one early-return, which meant ANY environment without a user systemd
-    // (containers, this repo's own `npm run replica` sandbox, CI) silently never caught
-    // up a missed rollup either, contradicting the "runs on every start" contract
-    // documented in docs/deploy.md and TECH_DEBT.md.
-    if (homedir && existsSync(join(homedir, ".config/systemd/user"))) {
-      let probe;
-      try {
-        probe = execImpl(["--version"]);
-      } catch (error) {
-        probe = { code: 127, error };
-      }
-      if (probe?.error?.code !== "ENOENT") {
-        removeLegacyUnits({ homedir, execImpl, log });
-      }
-    }
-
-    if (!statusPath) return; // nowhere to read/write catch-up state — nothing more to do
+    if (!statusPath) return;
 
     const runPeriod =
       runJob ??
@@ -230,7 +213,7 @@ export async function runScheduleMigration({
           log,
         }));
 
-    // First-boot detection, the seed write, AND the due-check all happen inside the
+    // Per-key seed, the seed write, AND the due-check all happen inside the
     // SAME single lock acquisition runScheduledJob's own admission check uses — never
     // decided from a status snapshot read outside any critical section. Two things this
     // closes: (1) a real run's own read-modify-write (recording inProgressSince/
@@ -246,46 +229,62 @@ export async function runScheduleMigration({
         return { action: "defer" };
       }
       const current = readStatus(statusPath);
-      const isFirstBoot = Object.keys(current).length === 0;
-      if (isFirstBoot) {
-        const nowMs = now();
-        const seeded = { ...current };
-        // seededAt, deliberately NOT lastSuccessAt: this is a storm-protection baseline,
-        // not a real run — /menu → crons and formatLastSuccess() must keep showing
-        // "never" for a period that has only ever been seeded, never actually executed.
-        // It still suppresses first-boot catch-up below exactly the way
-        // lastSuccessAt-as-seed used to (see the effective-baseline comparison), just
-        // under its own field name.
-        for (const period of PERIODS) {
-          seeded[statusKey(period)] = { ...seeded[statusKey(period)], seededAt: nowMs };
-        }
-        writeStatusAtomic(statusPath, seeded);
-        return { action: "seeded" };
-      }
-
       const nowMs = now();
+      const seeded = { ...current };
+      const freshlySeeded = new Set();
+      for (const period of PERIODS) {
+        const key = statusKey(period);
+        const entry = current[key];
+        if (
+          typeof entry?.lastSuccessAt !== "number" &&
+          typeof entry?.seededAt !== "number"
+        ) {
+          seeded[key] = { ...entry, seededAt: nowMs };
+          freshlySeeded.add(period);
+        }
+      }
+      if (freshlySeeded.size > 0) writeStatusAtomic(statusPath, seeded);
+
       const due = [];
       for (const period of PERIODS) {
+        if (freshlySeeded.has(period)) continue;
         const { graceMs } = PERIOD_SCHEDULE[period];
         const dueAt = lastDueMs(period, nowMs, tz);
-        const entry = current[statusKey(period)];
+        const entry = seeded[statusKey(period)];
         // A real success always wins; otherwise fall back to the seeded baseline (if
         // any) so a freshly-seeded period doesn't immediately look "due" the moment
         // it's due relative to real time — same suppression the old
         // lastSuccessAt-as-seed did.
         const recorded = typeof entry?.lastSuccessAt === "number" ? entry.lastSuccessAt : entry?.seededAt;
-        const effectiveBaseline = typeof recorded === "number" ? recorded : -Infinity;
+        const effectiveBaseline = recorded;
         const alreadyCaughtUp = effectiveBaseline >= dueAt;
         const withinGrace = nowMs - dueAt <= graceMs;
         if (!alreadyCaughtUp && withinGrace) due.push({ period, dueAt, effectiveBaseline });
       }
-      return { action: "run", due };
+      return { action: "run", due, freshlySeeded: [...freshlySeeded] };
     });
 
     if (decision.action === "defer") return;
-    if (decision.action === "seeded") {
-      log("schedule-migration: first boot — seeded catch-up baseline, running nothing (storm protection)");
-      return;
+
+    // The seed transaction must commit before the retired units are disabled. A crash
+    // before this point leaves the old persistent timers able to cover the night; a
+    // crash after it has a durable in-process catch-up baseline.
+    if (homedir && existsSync(join(homedir, ".config/systemd/user"))) {
+      let probe;
+      try {
+        probe = execImpl(["--version"]);
+      } catch (error) {
+        probe = { code: 127, error };
+      }
+      if (probe?.error?.code !== "ENOENT") {
+        removeLegacyUnits({ homedir, execImpl, log });
+      }
+    }
+
+    if (decision.freshlySeeded.length > 0) {
+      log(
+        `schedule-migration: seeded catch-up baseline for ${decision.freshlySeeded.join(", ")} (storm protection)`,
+      );
     }
 
     // The actual catch-up run (and ITS OWN reservation, under its own fresh lock
