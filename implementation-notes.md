@@ -353,6 +353,12 @@
   It guards Eve's documented contract ("reset retires a session so its continuation starts
   fresh"), which 0.27.13 honours — the `/new` failure was Iva's token shape, not Eve's reset.
 
+## Rollup writer safety (v0.3.11)
+
+- База ветки: `origin/main` (`b464b74a22eb4f2c0dce4ab888d2a9b62bad0658`).
+- Fresh retry сохраняет прежнюю единственную попытку только для явно отклонённого `send` или терминально подтверждённой отмены.
+- Зависший до разрешения `send` считается потенциально принятым сервером: ответ `cancel: accepted` только принимает сигнал и не разрешает retry. Безопасную границу подтверждает `no_active_turn` либо событие `turn.cancelled` в дочитанном потоке.
+- При неподтверждённой отмене сохранённый курсор остаётся на диске, а исходная ошибка выходит наверх.
 ## Security honesty and documentation sync (v0.3.11)
 
 - Media-processing errors use the same token-redacted detail in user messages and model
