@@ -2,7 +2,7 @@
 
 Memory is the part that compounds. Most agents forget you the moment the context window fills — 131k tokens goes fast. Iva files everything into a plain-markdown vault, reorganizes it while you sleep, and pulls back only what each question needs. You talk, it files.
 
-![Iva's memory tree: daily transcripts as leaves, rolled-up summaries as branches, CORE.md and typed cards as the trunk](../assets/iva-memory-tree.webp)
+![How Iva remembers: a leaf is a day, branches are weeks and months, tree rings are years around CORE.md](../assets/iva-memory-tree.webp)
 
 ## The memory tree
 

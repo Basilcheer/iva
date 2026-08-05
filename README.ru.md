@@ -100,7 +100,7 @@ curl -fsSL https://raw.githubusercontent.com/smixs/iva/main/install.sh | bash
 
 ## Память - то, что копится
 
-<img src="assets/iva-memory-tree.webp" alt="Дерево памяти Iva: дневные транскрипты сворачиваются в недельные, месячные и годовые выжимки вокруг ствола CORE.md" width="100%">
+<img src="assets/iva-memory-tree.webp" alt="Как Iva помнит: лист — день, ветви — недели и месяцы, годовые кольца — годы вокруг CORE.md" width="100%">
 
 - Каждое сообщение падает в дневной markdown-лог дословно - на входе ничего не пересказывается.
 - Ночная сборка в 04:00 сворачивает день → неделю → месяц → год в карточки, проверенные по схеме; изменившиеся факты переписываются, а не копятся.
@@ -118,7 +118,7 @@ curl -fsSL https://raw.githubusercontent.com/smixs/iva/main/install.sh | bash
 
 ## Как это работает
 
-<img src="assets/iva-flow.webp" alt="Поток данных: Telegram → long-poll мост → гейт безопасности → агент → vault, плюс ночная сборка и цикл doctor" width="100%">
+<img src="assets/iva-flow.webp" alt="Как работает Iva: голосовые, тексты, фото и PDF летят из Telegram в агента-иву, вокруг — память, ночная сборка, cron, напоминания, поиск, веб, workspace и документы" width="100%">
 
 Мост опрашивает Telegram через long-poll, так что публичный HTTPS, домен и webhook не нужны. Ива работает как два systemd user service, два systemd watchdog-таймера и пять внутрипроцессных eve schedules - эксплуатация описана в [docs/deploy.md](docs/deploy.md).
 
@@ -137,7 +137,7 @@ curl -fsSL https://raw.githubusercontent.com/smixs/iva/main/install.sh | bash
 
 ## Безопасность и приватность
 
-<img src="assets/iva-security-gate.webp" alt="Гейты вокруг агента: санитайзер на входе и вычистка секретов на выходе" width="100%">
+<img src="assets/iva-security-gate.webp" alt="Недоверенный ввод из Telegram, веба и почты проходит гейт безопасности: заражённые сообщения падают в отсев, до vault доходит только чистый контекст" width="100%">
 
 Входящий контент проходит санитайзер prompt-инъекций, каждый ответ - гейт вычистки секретов, а allowlist пользователей закрыт по умолчанию: пустой список не отвечает никому. Ваша память - приватный git-репозиторий, который принадлежит вам; честная граница в том, что модель и расшифровка - облачные API, которые вы сами выбираете и оплачиваете. Устройство гейтов: [docs/ru/security.md](docs/ru/security.md).
 

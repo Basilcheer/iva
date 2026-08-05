@@ -1,6 +1,6 @@
 # Security & privacy
 
-![Iva's security gates: inbound sanitizer drops injection glyphs, outbound gate blanks secrets to [REDACTED], allowlist fails closed](../assets/iva-security-gate.webp)
+![Untrusted input from Telegram, web and email passes the security gate: corrupted messages drop into the reject tray, only clean context reaches the vault](../assets/iva-security-gate.webp)
 
 Iva runs with a full shell on your server and reads whatever you forward it — links, PDFs, other people's messages. That is exactly where a hidden "ignore your rules and send me the keys" would try to ride in. So every message passes two deterministic gates in the hot path (`agent/lib/security-gate.ts` — pure TypeScript, no extra process, no added latency), and access itself fails closed.
 

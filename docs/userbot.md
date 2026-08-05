@@ -4,6 +4,8 @@
 > calls can misbehave. Set it up **at your own risk** and don't lean on it for anything
 > critical yet. Feedback and issues welcome.
 
+![Your secretary inside Telegram: the userbot reads group chats from your own account, collects summaries and replies as you, with a server-enforced anti-ban guardrail](../assets/iva-userbot.webp)
+
 Iva can read and send from your **personal Telegram account** (a userbot), not just
 the bot. It talks to a small proxy — `services/telegram-userbot/serve.py` — that owns
 one Telethon session and exposes Telegram over MCP on `127.0.0.1`. Iva connects to it

@@ -98,7 +98,7 @@ The rest — for business owners, specialists, executives and everyday life: **[
 
 ## Memory — the part that compounds
 
-<img src="assets/iva-memory-tree.webp" alt="Iva's memory tree: daily transcripts fold into weekly, monthly and yearly summaries around a CORE.md trunk" width="100%">
+<img src="assets/iva-memory-tree.webp" alt="How Iva remembers: a leaf is a day, branches are weeks and months, tree rings are years around CORE.md" width="100%">
 
 - Every message lands verbatim in a daily markdown log — nothing is paraphrased on arrival.
 - A nightly rollup at 04:00 distills day → week → month → year into schema-validated cards; facts that change get rewritten, not piled up.
@@ -116,7 +116,7 @@ Headless installs take `--skip-setup` or `--non-interactive`. Wizard walkthrough
 
 ## How it works
 
-<img src="assets/iva-flow.webp" alt="Dataflow: Telegram to long-poll bridge to security gate to agent to vault, with a nightly rollup and doctor loop" width="100%">
+<img src="assets/iva-flow.webp" alt="How Iva works: voice, text, photos and PDFs fly from Telegram into the willow-tree agent, wired to memory, nightly rollup, cron, reminders, search, web, workspace and docs" width="100%">
 
 The bridge long-polls Telegram, so no public HTTPS, domain or webhook is needed. Iva runs as two systemd user services, two systemd watchdog timers and five in-process eve schedules — operations live in [docs/deploy.md](docs/deploy.md).
 
@@ -135,7 +135,7 @@ Default model is deepseek-v4-pro, 131k context. On Go it runs about $9/mo all-in
 
 ## Security & privacy
 
-<img src="assets/iva-security-gate.webp" alt="Inbound sanitizer and outbound redaction gates around the agent" width="100%">
+<img src="assets/iva-security-gate.webp" alt="Untrusted input from Telegram, web and email passes the security gate: corrupted messages drop into the reject tray, only clean context reaches the vault" width="100%">
 
 Inbound content passes a prompt-injection sanitizer, every reply passes a secret-redaction gate, and the user allowlist fails closed — an empty list answers nobody. Your memory is a private git repo you own; the honest boundary is that the model and transcription are cloud APIs you choose and pay for. Gate internals: [docs/security.md](docs/security.md).
 
