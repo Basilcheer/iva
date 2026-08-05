@@ -24,6 +24,31 @@ const TAIL_MAX = 4000;
 const LOCK_STALE_MS = 30_000;
 const LOCK_RETRY_ATTEMPTS = 25;
 const LOCK_RETRY_DELAY_MS = 20;
+const OWNER_STARTED_AT = Math.round(Date.now() - process.uptime() * 1000);
+
+function reservationOwnerIsDead(entry) {
+  if (
+    !Number.isSafeInteger(entry?.ownerPid) ||
+    entry.ownerPid <= 0 ||
+    typeof entry?.ownerStartedAt !== "number"
+  ) {
+    return false;
+  }
+  try {
+    process.kill(entry.ownerPid, 0);
+    return false;
+  } catch (error) {
+    return error?.code === "ESRCH";
+  }
+}
+
+function ownsReservation(entry, startedAt) {
+  return (
+    entry?.inProgressSince === startedAt &&
+    entry?.ownerPid === process.pid &&
+    entry?.ownerStartedAt === OWNER_STARTED_AT
+  );
+}
 
 // Shared with schedule-migration.mjs — one status file, one implementation of how it's
 // safely read/written/locked, rather than two copies that could drift.
@@ -142,7 +167,11 @@ export async function runScheduledJob({
         // see it. Without this, a Nitro tick and a migration catch-up landing on the
         // same period at nearly the same instant would both read the same stale
         // lastSuccessAt and both pass that guard.
-        if (typeof prior?.inProgressSince === "number" && now() - prior.inProgressSince < timeoutMs) {
+        if (
+          typeof prior?.inProgressSince === "number" &&
+          now() - prior.inProgressSince < timeoutMs &&
+          !reservationOwnerIsDead(prior)
+        ) {
           const ageS = Math.round((now() - prior.inProgressSince) / 1000);
           log(`schedule-runner: ${name} skipped — already in progress (started ${ageS}s ago)`);
           return false;
@@ -156,7 +185,13 @@ export async function runScheduledJob({
         startedAt = now();
         writeStatusAtomic(statusPath, {
           ...existing,
-          [name]: { ...prior, lastStartedAt: startedAt, inProgressSince: startedAt },
+          [name]: {
+            ...prior,
+            lastStartedAt: startedAt,
+            inProgressSince: startedAt,
+            ownerPid: process.pid,
+            ownerStartedAt: OWNER_STARTED_AT,
+          },
         });
         reserved = true;
         return true;
@@ -258,9 +293,22 @@ export async function runScheduledJob({
     if (outcome.error) log(`schedule-runner: ${name} spawn error: ${outcome.error.message}`);
 
     if (statusPath) {
-      await withStatusLock(statusPath, () => {
+      const completed = await withStatusLock(statusPath, (acquired) => {
+        if (!acquired) {
+          log(`schedule-runner: ${name} could not acquire the status lock to record completion`);
+          return false;
+        }
         const current = readStatus(statusPath);
-        const { inProgressSince: _drop, ...rest } = current[name] ?? {};
+        if (!ownsReservation(current[name], startedAt)) {
+          log(`schedule-runner: ${name} completion ignored because its reservation changed owner`);
+          return false;
+        }
+        const {
+          inProgressSince: _drop,
+          ownerPid: _ownerPid,
+          ownerStartedAt: _ownerStartedAt,
+          ...rest
+        } = current[name] ?? {};
         writeStatusAtomic(statusPath, {
           ...current,
           [name]: {
@@ -271,8 +319,9 @@ export async function runScheduledJob({
             ...(ok ? { lastSuccessAt: finishedAt } : {}),
           },
         });
+        return true;
       });
-      reserved = false;
+      if (completed) reserved = false;
     }
 
     return { skipped: false, ok, code: outcome.code, signal: outcome.signal };
@@ -289,13 +338,27 @@ export async function runScheduledJob({
     // don't leave the reservation stuck for the rest of timeoutMs for no reason.
     if (reserved && statusPath) {
       try {
-        await withStatusLock(statusPath, () => {
-          const current = readStatus(statusPath);
-          if (typeof current[name]?.inProgressSince === "number") {
-            const { inProgressSince: _drop, ...rest } = current[name];
-            writeStatusAtomic(statusPath, { ...current, [name]: rest });
+        const cleaned = await withStatusLock(statusPath, (acquired) => {
+          if (!acquired) {
+            log(`schedule-runner: ${name} could not acquire the status lock to clear its reservation`);
+            return false;
           }
+          const current = readStatus(statusPath);
+          if (ownsReservation(current[name], startedAt)) {
+            const {
+              inProgressSince: _drop,
+              ownerPid: _ownerPid,
+              ownerStartedAt: _ownerStartedAt,
+              ...rest
+            } = current[name];
+            writeStatusAtomic(statusPath, { ...current, [name]: rest });
+          } else {
+            log(`schedule-runner: ${name} cleanup ignored because its reservation changed owner`);
+            return false;
+          }
+          return true;
         });
+        if (cleaned) reserved = false;
       } catch {
         // best-effort cleanup only — a stuck reservation still self-heals via the
         // inProgressSince/timeoutMs staleness check above on the next attempt.
