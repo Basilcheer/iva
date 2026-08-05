@@ -156,7 +156,13 @@ curl -fsSL https://raw.githubusercontent.com/smixs/iva/main/install.sh | bash
 
 ## Спасибо
 
-Ива становится лучше, потому что люди гоняют её по-настоящему и сообщают о том, что реально ломается. Отдельное спасибо [@litrokol](https://github.com/litrokol), [@shamulin-hamnoi](https://github.com/shamulin-hamnoi), [@snjrusmn](https://github.com/snjrusmn), [@mamysh](https://github.com/mamysh) и [@neproger](https://github.com/neproger) — их репорты и предложения сформировали последние релизы. Нашли что-то? [Заводите issue](https://github.com/smixs/iva/issues).
+Ива становится лучше, потому что люди гоняют её по-настоящему — присылают патчи и сообщают о том, что реально ломается.
+
+Вклад кодом: [@yakovmakovets](https://github.com/yakovmakovets), [@AndyShaman](https://github.com/AndyShaman), [@lidmitry19](https://github.com/lidmitry19), [@anupamme](https://github.com/anupamme), [@snjrusmn](https://github.com/snjrusmn), [@865x44](https://github.com/865x44).
+
+Репорты и предложения, сформировавшие релизы: [@shamulin-hamnoi](https://github.com/shamulin-hamnoi), [@AndyShaman](https://github.com/AndyShaman), [@mamysh](https://github.com/mamysh), [@snjrusmn](https://github.com/snjrusmn), [@D1msn](https://github.com/D1msn), [@865x44](https://github.com/865x44), [@neproger](https://github.com/neproger), [@litrokol](https://github.com/litrokol).
+
+Нашли что-то? [Заводите issue](https://github.com/smixs/iva/issues).
 
 ## Лицензия
 
