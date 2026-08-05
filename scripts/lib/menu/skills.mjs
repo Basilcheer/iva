@@ -10,7 +10,7 @@ export default {
   parent: "r",
   render(st, ctx) {
     const T = ctx.tr;
-    let skills = null;
+    let skills;
     try {
       const data = JSON.parse(
         readFileSync(join(ctx.deps.root, ".eve/agent-summary.json"), "utf8"),

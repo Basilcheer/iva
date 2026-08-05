@@ -37,6 +37,23 @@ const BOT = process.env.TELEGRAM_BOT_TOKEN;
 const CHAT = notificationChat(); // admin chat
 const TZ = process.env.ASSISTANT_TIMEZONE ?? process.env.TZ ?? "UTC";
 
+interface HealthHistoryEntry {
+  date?: string;
+  health_score?: number;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isHealthHistoryEntry(value: unknown): value is HealthHistoryEntry {
+  if (!isRecord(value)) return false;
+  return (
+    (value.date === undefined || typeof value.date === "string") &&
+    (value.health_score === undefined || typeof value.health_score === "number")
+  );
+}
+
 if (!existsSync(VAULT)) {
   console.error(`doctor: vault not found: ${VAULT}`);
   process.exit(1);
@@ -85,12 +102,12 @@ async function telegram(text: string): Promise<void> {
 }
 
 // Health score is read from the history that graph.py health appends after each run.
-function readHealthHistory(): Array<{ date?: string; health_score?: number }> {
+function readHealthHistory(): HealthHistoryEntry[] {
   const p = resolve(VAULT, ".graph/health-history.json");
   if (!existsSync(p)) return [];
   try {
-    const data = JSON.parse(readFileSync(p, "utf8"));
-    return Array.isArray(data) ? data : [];
+    const data: unknown = JSON.parse(readFileSync(p, "utf8"));
+    return Array.isArray(data) ? data.filter(isHealthHistoryEntry) : [];
   } catch {
     return [];
   }

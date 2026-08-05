@@ -153,7 +153,9 @@ export function createTelegramUpdateReporter({
     if (!uiLost) return;
     try {
       await call("sendMessage", { chat_id: job.chatId, text });
-    } catch {}
+    } catch {
+      // The final status notification is best-effort after the original UI is lost.
+    }
   }
 
   return {

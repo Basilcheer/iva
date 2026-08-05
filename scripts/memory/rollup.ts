@@ -162,7 +162,7 @@ function buildPrompt(p: Period, now: string): string {
 
 const client = new Client({
   host: HOST,
-  ...(BEARER ? { auth: { bearer: async () => BEARER } } : {}),
+  ...(BEARER ? { auth: { bearer: () => Promise.resolve(BEARER) } } : {}),
 });
 
 // Session REUSE, not a fresh session per night. eve backs every client session with a
@@ -177,15 +177,34 @@ const DATA_DIR = process.env.ASSISTANT_DATA_DIR ?? "data";
 const SESSION_FILE = join(DATA_DIR, `rollup-session-${period}.json`);
 const SESSION_TTL_MS = 90 * 24 * 3600 * 1000;
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function isSessionState(value: unknown): value is SessionState {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.streamIndex === "number" &&
+    Number.isFinite(value.streamIndex) &&
+    (value.sessionId === undefined || typeof value.sessionId === "string") &&
+    (value.continuationToken === undefined ||
+      typeof value.continuationToken === "string")
+  );
+}
+
 function loadSession(): { state: SessionState; createdAt: number } | null {
   try {
-    const j = JSON.parse(readFileSync(SESSION_FILE, "utf8"));
-    if (!j?.state) return null;
-    if (Date.now() - (j.createdAt ?? 0) > SESSION_TTL_MS) {
-      logAbandoned(j.state, "ttl-rotation");
+    const parsed: unknown = JSON.parse(readFileSync(SESSION_FILE, "utf8"));
+    if (!isRecord(parsed) || !isSessionState(parsed.state)) return null;
+    const createdAt =
+      typeof parsed.createdAt === "number" && Number.isFinite(parsed.createdAt)
+        ? parsed.createdAt
+        : 0;
+    if (Date.now() - createdAt > SESSION_TTL_MS) {
+      logAbandoned(parsed.state, "ttl-rotation");
       return null;
     }
-    return j;
+    return { state: parsed.state, createdAt };
   } catch {
     return null;
   }

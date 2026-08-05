@@ -32,9 +32,9 @@ export function resetForTests() {
 }
 
 export function stripAnsi(s) {
-  return String(s)
-    .replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "")
-    .replace(/\r/g, "");
+  // eslint-disable-next-line no-control-regex -- This helper intentionally strips ANSI escape sequences.
+  const withoutAnsi = String(s).replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "");
+  return withoutAnsi.replace(/\r/g, "");
 }
 
 export function elapsed(run) {
@@ -160,7 +160,9 @@ export function startProcess(cmd, spec, opts) {
   run._kill = () => {
     try {
       child.kill("SIGTERM");
-    } catch {}
+    } catch {
+      // The child may already have exited before cancellation reaches it.
+    }
   };
   child.stdout.on("data", (b) => pushLines(run, b));
   child.stderr.on("data", (b) => pushLines(run, b));

@@ -107,7 +107,7 @@ export function resolveCard(dir: string, title: string): Identity {
   const wantedBase = baseName(title);
   const bareQuery = !hasQualifier(title);
   const hits: string[] = [];
-  let names: string[] = [];
+  let names: string[];
   try {
     names = readdirSync(dir).filter((n) => n.endsWith(".md"));
   } catch {

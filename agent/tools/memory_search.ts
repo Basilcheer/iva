@@ -153,14 +153,47 @@ function toFtsQuery(tokens: string[]): string {
 
 type GraphNodes = Record<string, { incoming?: string[]; outgoing?: string[] }>;
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return (
+    Array.isArray(value) && value.every((item) => typeof item === "string")
+  );
+}
+
+function isGraphNodes(value: unknown): value is GraphNodes {
+  if (!isRecord(value)) return false;
+  return Object.values(value).every(
+    (node) =>
+      isRecord(node) &&
+      (node.incoming === undefined || isStringArray(node.incoming)) &&
+      (node.outgoing === undefined || isStringArray(node.outgoing)),
+  );
+}
+
+function isVectorIndex(value: unknown): value is Record<string, number[]> {
+  if (!isRecord(value)) return false;
+  return Object.values(value).every(
+    (vector) =>
+      Array.isArray(vector) &&
+      vector.every(
+        (component) =>
+          typeof component === "number" && Number.isFinite(component),
+      ),
+  );
+}
+
 // Читаем ночной adjacency-граф (autograph graph.py). ASSISTANT_GRAPH_PATH — override для тестов.
 function loadGraph(): GraphNodes {
   const path =
     process.env.ASSISTANT_GRAPH_PATH ||
     join(VAULT(), ".graph", "vault-graph.json");
   try {
-    const j = JSON.parse(readFileSync(path, "utf8"));
-    return (j.nodes || {}) as GraphNodes;
+    const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
+    if (!isRecord(parsed)) return {};
+    return isGraphNodes(parsed.nodes) ? parsed.nodes : {};
   } catch {
     return {};
   }
@@ -207,8 +240,9 @@ function loadEmbedIndex(): Record<string, number[]> | null {
       join(VAULT(), ".index", "embeddings.json"),
       "utf8",
     );
-    const j = JSON.parse(raw);
-    return (j.vectors || null) as Record<string, number[]> | null;
+    const parsed: unknown = JSON.parse(raw);
+    if (!isRecord(parsed)) return null;
+    return isVectorIndex(parsed.vectors) ? parsed.vectors : null;
   } catch {
     return null;
   }

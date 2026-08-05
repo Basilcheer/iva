@@ -347,6 +347,9 @@ export async function runScheduledJob({
           ownerStartedAt: _ownerStartedAt,
           ...rest
         } = current[name] ?? {};
+        void _drop;
+        void _ownerPid;
+        void _ownerStartedAt;
         writeStatusAtomic(statusPath, {
           ...current,
           [name]: {
@@ -391,6 +394,9 @@ export async function runScheduledJob({
               ownerStartedAt: _ownerStartedAt,
               ...rest
             } = current[name];
+            void _drop;
+            void _ownerPid;
+            void _ownerStartedAt;
             writeStatusAtomic(statusPath, { ...current, [name]: rest });
           } else {
             log(

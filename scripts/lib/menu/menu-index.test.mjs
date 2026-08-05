@@ -29,7 +29,7 @@ function fakeScreens() {
       log.render.push(st.screen);
       return { text: `[${st.screen}#${st.page}]`, rows: [ctx.backRow("r")] };
     },
-    on(verb, args, st) {
+    on(verb, args) {
       log.on.push({ sid, verb, args: [...args] });
     },
     texts: {

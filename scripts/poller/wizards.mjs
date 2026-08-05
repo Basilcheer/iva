@@ -451,7 +451,6 @@ async function handleKeyMessage(msg, st) {
     );
     return true;
   }
-  const cat = CATALOG[st.provider];
   const checked = await runWizardRequest(st, () => checkKey(st.provider, key));
   if (checked.stale) return true;
   if (!checked.ok) {

@@ -27,6 +27,26 @@ const CARD_TYPE_DIR: Record<string, string> = {
 };
 const DESC_CAP = 500;
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return (
+    Array.isArray(value) && value.every((item) => typeof item === "string")
+  );
+}
+
+function asStringRecord(value: unknown): Record<string, string> | null {
+  if (!isRecord(value)) return null;
+  const result: Record<string, string> = {};
+  for (const [key, item] of Object.entries(value)) {
+    if (typeof item !== "string") return null;
+    result[key] = item;
+  }
+  return result;
+}
+
 // Схема vault'а: корень vault'а → легаси `.claude`-путь (vault'ы до 0.3.3) → дефолт из репо.
 function schemaPath(): string {
   const candidates = [
@@ -63,15 +83,27 @@ function loadSchema(): {
   };
   try {
     const raw = readFileSync(schemaPath(), "utf8");
-    const s = JSON.parse(raw);
+    const parsed: unknown = JSON.parse(raw);
+    if (!isRecord(parsed)) return fallback;
+    const nodeTypes = isRecord(parsed.node_types)
+      ? parsed.node_types
+      : undefined;
     const status: Record<string, string[]> = {};
     for (const t of Object.keys(CARD_TYPE_DIR)) {
-      const node = s.node_types?.[t];
-      status[t] = node?.status ||
-        node?.statuses ||
-        fallback.status[t] || ["active"];
+      const node = nodeTypes?.[t];
+      const configured = isRecord(node)
+        ? isStringArray(node.status)
+          ? node.status
+          : isStringArray(node.statuses)
+            ? node.statuses
+            : undefined
+        : undefined;
+      status[t] = configured ?? fallback.status[t] ?? ["active"];
     }
-    return { status, aliases: s.type_aliases || fallback.aliases };
+    return {
+      status,
+      aliases: asStringRecord(parsed.type_aliases) ?? fallback.aliases,
+    };
   } catch {
     return fallback;
   }
@@ -180,6 +212,7 @@ export default defineTool({
           "Без флага body дописывается, противоречащие факты так не исправить.",
       ),
   }),
+  // eslint-disable-next-line @typescript-eslint/require-await -- Preserve the established Promise-returning Eve tool contract.
   async execute({
     operation,
     type,
@@ -338,10 +371,11 @@ export default defineTool({
         action,
         matchedBy: id.matchedBy,
       };
-    } catch (e) {
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
       return {
         ok: false,
-        error: `Не удалось записать карточку ${rel}: ${(e as Error).message}`,
+        error: `Не удалось записать карточку ${rel}: ${detail}`,
       };
     } finally {
       release?.();

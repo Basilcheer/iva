@@ -8,6 +8,10 @@ import { EFFORTS } from "../scripts/lib/model-catalog.mjs";
 
 type WrappableModel = Parameters<typeof wrapLanguageModel>[0]["model"];
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 // Единый источник конфигурации провайдера модели (выбор раз при старте через MODEL_PROVIDER).
 // ollama/opencode/openrouter — OpenAI-совместимы (chat/completions, статичный ключ из .env).
 // codex — личная подписка OpenAI (ChatGPT): Responses API + OAuth-токен (data/codex-auth.json,
@@ -99,7 +103,8 @@ const codexFetch: typeof fetch = async (input, init) => {
     String((input as Request).url ?? input).endsWith("/responses")
   ) {
     try {
-      const j = JSON.parse(body);
+      const j: unknown = JSON.parse(body);
+      if (!isRecord(j)) throw new TypeError("Responses body is not an object");
       j.store = false;
       delete j.previous_response_id;
       // store:false → бэкенд ничего не персистит, поэтому любой server-side id в input — это эхо
@@ -107,12 +112,13 @@ const codexFetch: typeof fetch = async (input, init) => {
       // echoed id у инлайн-item ловят "Item '<id>' not found. Items are not persisted...".
       // Контент истории уже инлайнится целиком (store:false задан на этапе сборки тела, см.
       // codexProviderOptions), поэтому ссылки режем, а id-эхо у остальных item'ов вычищаем.
-      if (Array.isArray(j.input)) {
-        j.input = j.input.filter(
-          (it: unknown) => (it as { type?: string })?.type !== "item_reference",
+      const input = j.input;
+      if (Array.isArray(input)) {
+        const filteredInput = input.filter(
+          (item) => !isRecord(item) || item.type !== "item_reference",
         );
-        for (const it of j.input)
-          if (it && typeof it === "object") delete (it as { id?: unknown }).id;
+        for (const item of filteredInput) if (isRecord(item)) delete item.id;
+        j.input = filteredInput;
       }
       body = JSON.stringify(j);
     } catch {
@@ -133,8 +139,8 @@ const codexFetch: typeof fetch = async (input, init) => {
 // добавляет summary:"detailed" в reasoning-блок. Summary нам не нужен (reasoning всё равно
 // вырезается withReasoningStripped), а лишний параметр — лишний шанс на 400 от бэкенда.
 const codexProviderOptions: LanguageModelMiddleware = {
-  async transformParams({ params }) {
-    return {
+  transformParams({ params }) {
+    return Promise.resolve({
       ...params,
       providerOptions: {
         ...params.providerOptions,
@@ -146,7 +152,7 @@ const codexProviderOptions: LanguageModelMiddleware = {
             : {}),
         },
       },
-    };
+    });
   },
 };
 

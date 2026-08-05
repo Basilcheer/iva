@@ -1,7 +1,7 @@
 // Deterministic inbound and outbound security gates shared by the agent runtime
 // and bare-Node operational scripts.
 
-const INVISIBLE_RE = /[\p{Cf}\p{Cc}​‌‍⁠﻿­͏᠎]/gu;
+const INVISIBLE_RE = /[\p{Cf}\p{Cc}\u034F]/gu;
 const KEEP_CONTROL = new Set(["\n", "\r", "\t"]);
 const WALLET_DRAIN_RE =
   /[ༀ-࿿ꀀ-꓏⠀-⣿]|[\u{1D400}-\u{1D7FF}\u{10000}-\u{1034F}]/gu;
@@ -44,7 +44,7 @@ const LOOKALIKES = {
 };
 
 const ROLE_MARKER_RE =
-  /(?:^|\n)\s*(?:system|assistant|user|human|AI|claude|instruction|admin|root)\s*[:\-]\s/gim;
+  /(?:^|\n)\s*(?:system|assistant|user|human|AI|claude|instruction|admin|root)\s*[:-]\s/gim;
 
 const OVERRIDE_PATTERNS = [
   /ignore\s+(?:all\s+)?previous\s+instructions?/i,
@@ -152,7 +152,7 @@ export function sanitizeInbound(input, maxChars = 50000) {
 
 const API_KEY_PATTERNS = [
   ["openai", /sk-[A-Za-z0-9]{20,}/g],
-  ["anthropic", /sk-ant-[A-Za-z0-9\-]{20,}/g],
+  ["anthropic", /sk-ant-[A-Za-z0-9-]{20,}/g],
   ["google_api", /AIza[A-Za-z0-9\-_]{35}/g],
   ["github_pat", /ghp_[A-Za-z0-9]{36}/g],
   ["github_fine", /github_pat_[A-Za-z0-9_]{82}/g],

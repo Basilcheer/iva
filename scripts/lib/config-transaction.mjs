@@ -131,7 +131,9 @@ export async function probeEveHealth(
       });
       lastStatus = response.status;
       if (response.ok) return;
-    } catch {}
+    } catch {
+      // Connection failures are retried until the health-check deadline.
+    }
     if (now() < deadline)
       await wait(Math.min(intervalMs, Math.max(1, deadline - now())));
   } while (now() < deadline);
@@ -191,17 +193,15 @@ export async function applyConfigTransaction(
   if (typeof nextText !== "string")
     throw new TypeError("config transaction requires nextText");
 
-  let phase = "validate";
   await validate(selection);
 
   const snapshot = snapshotOf(envPath);
   const secrets = secretValues(snapshot.oldText, nextText);
   const journalPath = pendingConfigPath(envPath);
-  phase = "snapshot";
   writeJournal(journalPath, `${JSON.stringify(snapshot)}\n`);
 
+  let phase = "write";
   try {
-    phase = "write";
     writeEnv(envPath, nextText);
     phase = "restart";
     await checkedRestart(restart, services);

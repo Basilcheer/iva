@@ -169,7 +169,6 @@ export async function performScopedReset(
     logImpl = log,
   } = {},
 ) {
-  const intent = { chatKey, continuationToken };
   if (clearQueue) {
     try {
       await persistIntentImpl(chatKey, continuationToken);
@@ -178,14 +177,10 @@ export async function performScopedReset(
       throw error;
     }
   }
-  try {
-    await releaseScopedContinuation(chatKey, continuationToken, {
-      requestResetImpl,
-      logImpl,
-    });
-  } catch (error) {
-    throw error;
-  }
+  await releaseScopedContinuation(chatKey, continuationToken, {
+    requestResetImpl,
+    logImpl,
+  });
   try {
     await completeStateImpl(chatKey, continuationToken, { clearQueue });
   } catch (error) {

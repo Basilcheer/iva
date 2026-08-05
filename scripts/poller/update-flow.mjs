@@ -63,7 +63,7 @@ export async function handleUpdateCheck(
   let info;
   try {
     info = await inspectImpl({ root: ROOT });
-  } catch (e) {
+  } catch {
     await edit(
       chatId,
       status.message_id,
@@ -124,7 +124,9 @@ async function removeStaleUpdateJobs() {
         try {
           if (Date.now() - (await stat(path)).mtimeMs > UPDATE_JOB_TTL_MS)
             await rm(path, { force: true });
-        } catch {}
+        } catch {
+          // Stale-job cleanup tolerates files disappearing or changing concurrently.
+        }
       }),
   );
 }

@@ -3,15 +3,16 @@ import type {
   TelegramInboundResultOrPromise,
   TelegramMessage,
 } from "eve/channels/telegram";
+import type { RouteHandlerArgs } from "eve/channels";
 
 export declare const TELEGRAM_ACCEPTANCE_ROUTE: "/eve/v1/telegram/accepted";
 export declare const TELEGRAM_QUEUE_RECEIPT_FIELD: "iva_durable_queue_receipt";
 export declare const TELEGRAM_ACCEPTANCE_KIND_HEADER: "x-iva-telegram-acceptance";
 
 export declare function addTelegramQueueReceipt(
-  update: Record<string, any>,
+  update: Record<string, unknown>,
   receipt?: string,
-): Record<string, any>;
+): Record<string, unknown>;
 
 export declare function wrapTelegramQueueOnMessage(
   onMessage: (
@@ -23,16 +24,12 @@ export declare function wrapTelegramQueueOnMessage(
   message: TelegramMessage,
 ) => Promise<Awaited<TelegramInboundResultOrPromise>>;
 
-type AcceptanceArgs = {
-  send: (...args: any[]) => Promise<any>;
-  waitUntil: (task: Promise<unknown>) => void;
-};
-
-export declare function handleAcceptedTelegramWebhook<
-  TArgs extends AcceptanceArgs,
->(
-  handler: (request: Request, args: TArgs) => Promise<Response>,
+export declare function handleAcceptedTelegramWebhook<TState>(
+  handler: (
+    request: Request,
+    args: RouteHandlerArgs<TState>,
+  ) => Promise<Response>,
   request: Request,
-  args: TArgs,
+  args: RouteHandlerArgs<TState>,
   options?: { completedUpdatesFile?: string },
 ): Promise<Response>;

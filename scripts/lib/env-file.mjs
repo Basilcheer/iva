@@ -95,7 +95,9 @@ export function writeEnvAtomicSync(
   } catch (error) {
     try {
       rmSync(tmp);
-    } catch {}
+    } catch {
+      // Failure to remove a missing or inaccessible temp file must preserve the original error.
+    }
     throw error;
   }
 }

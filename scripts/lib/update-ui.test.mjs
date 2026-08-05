@@ -69,7 +69,9 @@ test("terminal progress restores the cursor when disposed", () => {
   });
   progress.start("Building");
   progress.dispose();
+  // eslint-disable-next-line no-control-regex -- The assertion verifies the ANSI hide-cursor sequence.
   assert.match(output, /\x1b\[\?25l/);
+  // eslint-disable-next-line no-control-regex -- The assertion verifies the ANSI show-cursor sequence.
   assert.match(output, /\x1b\[\?25h/);
 });
 

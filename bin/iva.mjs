@@ -206,7 +206,7 @@ function ensureAssistantBearer({ quiet = false } = {}) {
 // local time) need — one place so the fallback/validation rule can't drift between them.
 function configuredTimezone() {
   const raw = (readEnv().ASSISTANT_TIMEZONE || "UTC").trim();
-  if (/^[A-Za-z0-9_+\/-]+$/.test(raw)) {
+  if (/^[A-Za-z0-9_+/-]+$/.test(raw)) {
     const timezone = validateTimeZone(raw);
     if (timezone) return timezone;
   }
@@ -476,6 +476,7 @@ function loadTreeGrid() {
   const sh = readFileSync(join(ROOT, "install.sh"), "utf8");
   const body = sh.split("<<'IVA_TREE'\n")[1]?.split("\nIVA_TREE")[0];
   if (!body) return null;
+  // eslint-disable-next-line no-control-regex -- The install art contains literal ANSI escape sequences.
   const re = /\x1b\[38;2;(\d+);(\d+);(\d+)m([\s\S])|\x1b\[0m|([\s\S])/g;
   return body
     .replace(/\\033/g, "\x1b")
@@ -754,7 +755,9 @@ async function cmdUpdate(args) {
       });
       if (cleaned.status === 0 && !cleaned.stdout.includes(" 0 file(s)"))
         terminal.info(`🧹 ${cleaned.stdout.trim().split("\n").pop()}`);
-    } catch {}
+    } catch {
+      // Vault cleanup is best-effort and must not fail an update.
+    }
     const promoted = candidate ? await tx.promoteCandidate() : false;
     if (!promoted) {
       if (integrated.changed) {
@@ -798,7 +801,9 @@ async function cmdUpdate(args) {
             healthy = true;
             break;
           }
-        } catch {}
+        } catch {
+          // Transient health-check failures are retried until the deadline.
+        }
         await new Promise((resolve) => setTimeout(resolve, 1000));
       }
       if (!healthy) throw new Error("health check failed");
@@ -870,7 +875,9 @@ async function cmdUpdate(args) {
   } finally {
     try {
       await tx.teardownCandidate();
-    } catch {}
+    } catch {
+      // Candidate teardown is best-effort during final cleanup.
+    }
     terminal.dispose();
     reporter?.dispose();
     releaseUpdateLock(lock);
@@ -1377,7 +1384,9 @@ async function cmdUninstall(args) {
   try {
     rmSync(join(homedir(), ".local/bin/iva"));
     ok("iva command removed from ~/.local/bin");
-  } catch {}
+  } catch {
+    // An already absent CLI symlink is a successful uninstall outcome.
+  }
 
   if (!purge) {
     console.log(`${C.d}Code and vault kept: ${ROOT}${C.x}`);
@@ -1409,7 +1418,9 @@ function cmdVersion() {
   let v = "?";
   try {
     v = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")).version;
-  } catch {}
+  } catch {
+    // Keep the fallback version marker when package metadata is unavailable.
+  }
   console.log(`iva ${v} · commit ${gitHead() || "?"}`);
 }
 
@@ -1572,7 +1583,9 @@ function ensureUserbotToken() {
   writeFileSync(TOKEN_FILE, randomBytes(24).toString("hex"), { mode: 0o600 });
   try {
     chmodSync(TOKEN_FILE, 0o600);
-  } catch {}
+  } catch {
+    // The token file is already created with mode 0600; chmod is best-effort.
+  }
   ok("Сгенерировал токен прокси (data/telegram-userbot.token).");
 }
 
@@ -1599,7 +1612,9 @@ async function cmdUserbot(args) {
     let data = "";
     try {
       data = readFileSync(0, "utf8");
-    } catch {}
+    } catch {
+      // Empty input falls through to the existing credential validation.
+    }
     const [apiId, apiHash] = data
       .split(/\r?\n/)
       .map((s) => s.trim())

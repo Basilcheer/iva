@@ -33,6 +33,6 @@ export default defineMcpClientConnection({
     "и отправлять сообщения от его имени. Требует подключения аккаунта через QR " +
     "(скилл telegram-userbot). Соблюдай анти-бан правила из скилла.",
   auth: {
-    getToken: async () => ({ token: proxyToken() }),
+    getToken: () => Promise.resolve({ token: proxyToken() }),
   },
 });

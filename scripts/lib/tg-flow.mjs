@@ -14,6 +14,7 @@ const TTL_MS = 15 * 60 * 1000; // как WIZARD_TTL_MS — совпадает с
 // log принимается по контракту для будущих обработчиков; примитивы ниже не логируют —
 // поведение обязано остаться дословным (тихий фолбэк при неудачной правке).
 export function createFlows({ tg, log = () => {} }) {
+  void log;
   const flows = new Map(); // был `wizards`; ключ `${chatId}:${userId}`
 
   const key = (chatId, userId) => `${chatId}:${userId}`;

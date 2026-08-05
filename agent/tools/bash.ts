@@ -462,7 +462,7 @@ export default defineTool({
         if (pipeDrainTimer) clearTimeout(pipeDrainTimer);
         cancelDeadline();
         timedOut ||= Atomics.load(deadlineState, 0) === DEADLINE_EXPIRED;
-        startCleanup();
+        void startCleanup();
         finish();
       });
 
@@ -479,17 +479,17 @@ export default defineTool({
         const deadlineResult = Atomics.load(deadlineState, 0);
         if (deadlineResult === DEADLINE_EXPIRED) {
           timedOut = true;
-          startCleanup();
+          void startCleanup();
           return;
         }
         if (deadlineResult === DEADLINE_PROBE_FAILED) {
-          startCleanup();
+          void startCleanup();
           return;
         }
         const observedRootState = rootProcessState(childPid);
         if (observedRootState === "exited") {
           cancelDeadline();
-          startCleanup();
+          void startCleanup();
           return;
         }
         if (observedRootState === "unknown") {
@@ -503,7 +503,7 @@ export default defineTool({
           ) {
             Atomics.notify(deadlineState, 0);
           }
-          startCleanup();
+          void startCleanup();
           return;
         }
         if (
@@ -516,7 +516,7 @@ export default defineTool({
         ) {
           Atomics.notify(deadlineState, 0);
           timedOut = true;
-          startCleanup();
+          void startCleanup();
         }
       };
       initialized = true;

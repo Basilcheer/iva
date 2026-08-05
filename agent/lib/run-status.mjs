@@ -150,8 +150,10 @@ function acquireChatLock(file) {
         if (statError?.code !== "ENOENT") throw statError;
         continue;
       }
-      if (Date.now() >= deadline)
+      if (Date.now() >= deadline) {
+        // eslint-disable-next-line preserve-caught-error -- Preserve the stable timeout diagnostic without exposing the caught OS error as its cause.
         throw new Error(`run-status lock timeout: ${lock}`);
+      }
       Atomics.wait(lockWaitBuffer, 0, 0, LOCK_RETRY_MS);
     }
   }

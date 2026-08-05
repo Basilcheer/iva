@@ -1,6 +1,10 @@
 import {
   telegramChannel,
+  type TelegramApiResponse,
   type TelegramChannelState,
+  type TelegramContext,
+  type TelegramHandle,
+  type TelegramMessage,
   type TelegramMessageBody,
 } from "eve/channels/telegram";
 import { POST } from "eve/channels";
@@ -83,6 +87,47 @@ const ALLOWED = new Set(
     .filter(Boolean),
 );
 
+type TelegramDispatchMessage = {
+  readonly attachments: readonly unknown[];
+  readonly caption: string;
+  readonly chat: {
+    readonly id: string;
+    readonly title?: string;
+    readonly type: string;
+  };
+  readonly from?: {
+    readonly id: string;
+    readonly isBot: boolean;
+    readonly username?: string;
+  };
+  readonly messageId: string;
+  readonly messageThreadId?: number;
+  readonly raw: TelegramRawMessage;
+  readonly replyToMessage?: {
+    readonly from?: { readonly isBot: boolean };
+  };
+  readonly text: string;
+};
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function asText(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+function asScalarText(value: unknown): string {
+  return typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "bigint" ||
+    typeof value === "boolean"
+    ? String(value)
+    : "";
+}
+
 // Повторяет дефолтную логику диспатча eve (приваты — всегда; группы — только
 // команда/упоминание/ответ боту; боты и каналы игнорируются).
 function isBotCommand(text: string, bot?: string): boolean {
@@ -96,7 +141,7 @@ function isBotCommand(text: string, bot?: string): boolean {
     ? true
     : bot !== undefined && target.toLowerCase() === bot.toLowerCase();
 }
-function shouldDispatch(msg: any, bot?: string): boolean {
+function shouldDispatch(msg: TelegramDispatchMessage, bot?: string): boolean {
   if (msg.from?.isBot === true || msg.chat.type === "channel") return false;
   const text: string = msg.text || msg.caption || "";
   if (!(text.trim().length > 0 || msg.attachments.length > 0)) return false;
@@ -112,7 +157,10 @@ function shouldDispatch(msg: any, bot?: string): boolean {
 // поэтому обычный shouldDispatch их всегда отбрасывает (строка с проверкой длины).
 // Гейтим по чату: личка — всегда; группа/супергруппа — только реплай боту,
 // команда или @упоминание в подписи. Иначе в группе чужой голос ушёл бы в Deepgram.
-function shouldDispatchMedia(msg: any, bot?: string): boolean {
+function shouldDispatchMedia(
+  msg: TelegramDispatchMessage,
+  bot?: string,
+): boolean {
   if (msg.from?.isBot === true || msg.chat.type === "channel") return false;
   if (msg.chat.type === "private") return true;
   const caption: string = msg.caption || "";
@@ -124,31 +172,43 @@ function shouldDispatchMedia(msg: any, bot?: string): boolean {
   );
 }
 
-function messageViewForRaw(message: any, raw: TelegramRawMessage): any {
+function messageViewForRaw(
+  message: TelegramMessage,
+  raw: TelegramRawMessage,
+): TelegramDispatchMessage {
+  const rawChat = asRecord(raw.chat);
+  const rawFrom = asRecord(raw.from);
+  const rawReply = asRecord(raw.reply_to_message);
+  const rawReplyFrom = asRecord(rawReply?.from);
   return {
     ...message,
     raw,
-    text: raw.text,
-    caption: raw.caption,
+    text: asText(raw.text),
+    caption: asText(raw.caption),
     attachments: raw.location || raw.contact || raw.poll ? [{}] : [],
-    chat: raw.chat
-      ? { ...message.chat, id: String(raw.chat.id), type: raw.chat.type }
+    chat: rawChat
+      ? {
+          ...message.chat,
+          id: asScalarText(rawChat.id),
+          type:
+            typeof rawChat.type === "string" ? rawChat.type : message.chat.type,
+        }
       : message.chat,
-    from: raw.from
+    from: rawFrom
       ? {
           ...message.from,
-          id: String(raw.from.id),
-          isBot: raw.from.is_bot === true,
+          id: asScalarText(rawFrom.id),
+          isBot: rawFrom.is_bot === true,
         }
       : message.from,
-    replyToMessage: raw.reply_to_message
-      ? { from: { isBot: raw.reply_to_message.from?.is_bot === true } }
+    replyToMessage: rawReply
+      ? { from: { isBot: rawReplyFrom?.is_bot === true } }
       : undefined,
   };
 }
 
 // Воспроизводит дефолтный auth-контекст eve для Telegram-актора.
-function buildAuth(msg: any) {
+function buildAuth(msg: TelegramDispatchMessage) {
   const u = msg.from;
   if (!u) return null;
   const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
@@ -347,13 +407,13 @@ type MediaPartResult = {
 };
 
 async function processMediaPart(
-  ctx: any,
+  ctx: TelegramContext,
   raw: TelegramRawMessage,
   media: TelegramRawMedia,
   { dropSilent = false } = {},
 ): Promise<MediaPartResult> {
   const tag = `[${media.tag}]`;
-  const caption = (raw.caption || "").trim();
+  const caption = asText(raw.caption).trim();
   const capSuffix = caption ? `\n\n${caption}` : "";
   try {
     let cached = null;
@@ -613,11 +673,7 @@ const stopReplyMarkup = () => ({
 });
 
 async function sendWorkingStatus(
-  tg: {
-    chatId: string;
-    messageThreadId?: number;
-    request: (m: string, b?: any) => Promise<any>;
-  },
+  tg: Pick<TelegramHandle, "chatId" | "messageThreadId" | "request">,
   { canStop = true } = {},
 ): Promise<number | null> {
   const base = {
@@ -640,14 +696,20 @@ async function sendWorkingStatus(
         },
       ],
     });
-    if (res.ok) return res.body?.result?.message_id ?? null;
+    if (res.ok) return messageIdFromResponse(res);
     workLoaderSupported = false;
   }
   const res = await tg.request("sendMessage", {
     ...base,
     text: `${WORK_LOADER.fallback} ${tr("Working…", "Работаю…")}`,
   });
-  return res.ok ? (res.body?.result?.message_id ?? null) : null;
+  return res.ok ? messageIdFromResponse(res) : null;
+}
+
+function messageIdFromResponse(response: TelegramApiResponse): number | null {
+  const body = asRecord(response.body);
+  const result = asRecord(body?.result);
+  return typeof result?.message_id === "number" ? result.message_id : null;
 }
 
 // Callback hooks Telegram не получают route-level cancel helper. resumeHook("<sessionId>:cancel")
@@ -660,7 +722,9 @@ async function sendWorkingStatus(
 let resumeHookPromise: Promise<
   (token: string, payload: unknown) => Promise<unknown>
 > | null = null;
-function loadResumeHook() {
+function loadResumeHook(): Promise<
+  (token: string, payload: unknown) => Promise<unknown>
+> {
   resumeHookPromise ??= import(
     pathToFileURL(
       join(
@@ -668,7 +732,13 @@ function loadResumeHook() {
         "node_modules/eve/dist/src/internal/workflow/runtime.js",
       ),
     ).href
-  ).then((m) => m.resumeHook);
+  ).then((moduleValue: unknown) => {
+    const resumeHook = asRecord(moduleValue)?.resumeHook;
+    if (typeof resumeHook !== "function") {
+      throw new TypeError("eve runtime did not export resumeHook");
+    }
+    return resumeHook as (token: string, payload: unknown) => Promise<unknown>;
+  });
   return resumeHookPromise;
 }
 
@@ -677,11 +747,7 @@ function loadResumeHook() {
 async function finishStatus(
   channel: {
     continuationToken: string;
-    telegram: {
-      chatId: string;
-      messageThreadId?: number;
-      request: (m: string, b?: any) => Promise<any>;
-    };
+    telegram: Pick<TelegramHandle, "chatId" | "messageThreadId" | "request">;
   },
   sessionId: string,
   mode: "completed" | "cancelled" | "failed",
@@ -714,7 +780,7 @@ async function finishStatus(
     return false;
   }
   const msgId = st?.statusMessageId;
-  if (!msgId) return true;
+  if (typeof msgId !== "number") return true;
   try {
     if (mode === "cancelled") {
       await tg.request("editMessageText", {
@@ -818,7 +884,13 @@ const telegram = telegramChannel({
     if (!ref) return ack();
     const key = chatKeyOf(ref.chat.id, ref.messageThreadId);
     const st = getChatStatus(key);
-    if (!st || st.status !== "running" || !st.sessionId) {
+    const sessionId = st?.sessionId;
+    if (
+      !st ||
+      st.status !== "running" ||
+      typeof sessionId !== "string" ||
+      sessionId.length === 0
+    ) {
       return ack(
         tr("Nothing is running right now.", "Сейчас ничего не выполняется."),
       );
@@ -827,9 +899,10 @@ const telegram = telegramChannel({
       // Пустой payload матчит любой активный ход; turnId — гард, чтобы запоздалое
       // нажатие не убило уже СЛЕДУЮЩИЙ ход (несовпавший turnId eve глотает как no-op).
       const resumeHook = await loadResumeHook();
+      const turnId = st.turnId;
       await resumeHook(
-        `${st.sessionId}:cancel`,
-        st.turnId ? { turnId: st.turnId } : {},
+        `${sessionId}:cancel`,
+        typeof turnId === "string" && turnId.length > 0 ? { turnId } : {},
       );
       await ack(tr("Stopping…", "Останавливаю…"));
     } catch (e) {
@@ -1067,22 +1140,25 @@ const telegram = telegramChannel({
       return null; // дропаем апдейт
     }
 
-    const raw = message.raw as TelegramRawMessage;
+    const raw: TelegramRawMessage = message.raw;
     const partsRaw = messageParts(raw);
     const media = mediaFromRaw(raw);
     for (const partRaw of partsRaw) {
-      const nonFile = partRaw.location
-        ? `[location]\t${partRaw.location.latitude}, ${partRaw.location.longitude}`
-        : partRaw.contact
+      const location = asRecord(partRaw.location);
+      const contact = asRecord(partRaw.contact);
+      const poll = asRecord(partRaw.poll);
+      const nonFile = location
+        ? `[location]\t${asScalarText(location.latitude)}, ${asScalarText(location.longitude)}`
+        : contact
           ? `[contact]\t${[
-              partRaw.contact.first_name,
-              partRaw.contact.last_name,
-              partRaw.contact.phone_number,
+              asText(contact.first_name),
+              asText(contact.last_name),
+              asText(contact.phone_number),
             ]
               .filter(Boolean)
               .join(" ")}`
-          : partRaw.poll
-            ? `[poll]\t${partRaw.poll.question}`
+          : poll
+            ? `[poll]\t${asText(poll.question)}`
             : null;
       if (nonFile) {
         const [head, body] = nonFile.split("\t");
@@ -1159,7 +1235,7 @@ const telegram = telegramChannel({
         ),
       );
     }
-    const rawBuffered = (message.raw as Record<string, any>).iva_buffered;
+    const rawBuffered = message.raw.iva_buffered;
     if (Array.isArray(rawBuffered) && rawBuffered.length) {
       // Буфер — недоверенный пользовательский текст: тот же санитайз, что у обычных реплик.
       const rawItems = rawBuffered.filter(
@@ -1330,7 +1406,7 @@ const telegram = telegramChannel({
         continue;
       }
 
-      const userText = (partRaw.text || partRaw.caption || "").trim();
+      const userText = (asText(partRaw.text) || asText(partRaw.caption)).trim();
       if (!userText) continue;
       const userDailyPath = appendDaily("[text]", userText);
       const sanitized = sanitizeInbound(userText);
