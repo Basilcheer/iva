@@ -144,14 +144,15 @@ def build_graph(vault_dir: Path, schema: dict, today: date | None = None) -> dic
         outgoing = []
         links = extract_wikilinks(body if body else content)
         for target, display in links:
-            # Skip embeds
-            if any(target.lower().endswith(ext) for ext in EMBED_EXTS):
-                continue
             target_clean = normalize_link_target(target)
             resolved, _ = resolve_link_target(target_clean, link_index)
             if resolved:
                 outgoing.append(resolved)
                 all_links.append((rp_noext, target_clean, resolved))
+            elif any(target.lower().endswith(ext) for ext in EMBED_EXTS):
+                # A Markdown note may legitimately end in an attachment-like suffix
+                # (voice.ogg.md). Resolution must win before the embed exemption.
+                continue
             elif expected_future_link(rp_noext, target_clean, today=today):
                 future_links.append((rp_noext, target_clean))
             else:
@@ -184,8 +185,10 @@ def build_graph(vault_dir: Path, schema: dict, today: date | None = None) -> dic
 
     managed_nodes = {path: node for path, node in nodes.items() if node['managed']}
     managed_total = len(managed_nodes)
+    future_sources = {source for source, _ in future_links}
     managed_orphans = [path for path, node in managed_nodes.items()
-                       if not node['incoming'] and not is_hub_path(path)]
+                       if not node['incoming'] and path not in future_sources
+                       and not is_hub_path(path)]
     managed_broken_links = [(source, target) for source, target in broken_links
                             if nodes.get(source, {}).get('managed')]
     managed_resolved_links = sum(node['link_count'] for node in managed_nodes.values())

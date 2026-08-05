@@ -812,7 +812,8 @@ def main():
         future_graph = build_graph(rollup_vault, health_schema, today=date(2021, 1, 4))
         test("exact absent parent is reported separately as future",
              future_graph['stats']['future_links'] == 1
-             and future_graph['stats']['broken_links'] == 0,
+             and future_graph['stats']['broken_links'] == 0
+             and future_graph['stats']['managed_orphans'] == 0,
              str(future_graph['stats']))
         fixes, applied = fix_broken_links(rollup_vault, future_graph, apply=False)
         test("graph fix ignores an expected future parent", fixes == [] and applied == 0)
@@ -846,7 +847,8 @@ def main():
         overdue_graph = build_graph(rollup_vault, health_schema, today=date(2021, 1, 5))
         test("overdue parent becomes managed broken link",
              overdue_graph['stats']['future_links'] == 0
-             and overdue_graph['stats']['managed_broken_links'] == 1,
+             and overdue_graph['stats']['managed_broken_links'] == 1
+             and overdue_graph['stats']['managed_orphans'] == 1,
              str(overdue_graph['stats']))
         daily_summary.write_text(
             "---\ntype: daily-summary\ndescription: Boundary day\n---\n"
@@ -871,18 +873,25 @@ def main():
 
         audio_vault = tmp / 'audio-embed-vault'
         (audio_vault / 'cards/notes').mkdir(parents=True)
+        (audio_vault / 'cards/notes/voice.ogg.md').write_text(
+            "---\ntype: note\ndescription: Real Markdown note\n---\n# Voice note\n"
+        )
         (audio_vault / 'cards/notes/audio.md').write_text(
             "---\ntype: note\ndescription: Audio embeds\n---\n# Audio\n"
-            "![[voice.ogg]] ![[voice.OPUS]] ![[voice.m4a]] ![[voice.WAV]] "
-            "[[voice.ogg.md]]\n"
+            "![[missing.ogg]] ![[missing.OPUS]] ![[missing.m4a]] ![[missing.WAV]] "
+            "[[cards/notes/voice.ogg]] [[missing-note.ogg.md]]\n"
         )
         audio_graph = build_graph(audio_vault, health_schema, today=date(2026, 8, 5))
         test("audio attachment extensions are not broken wiki-links",
              audio_graph['stats']['broken_links'] == 1,
              str(audio_graph['broken_link_list']))
-        test("Markdown filename ending in .ogg.md is still checked",
+        test("existing Markdown filename ending in .ogg.md resolves before embed skip",
+             audio_graph['stats']['total_links'] == 1
+             and audio_graph['nodes']['cards/notes/voice.ogg']['incoming']
+             == ['cards/notes/audio'], str(audio_graph['nodes']))
+        test("missing Markdown filename ending in .ogg.md is still checked",
              audio_graph['broken_link_list'] == [
-                 {'source': 'cards/notes/audio', 'target': 'voice.ogg'}
+                 {'source': 'cards/notes/audio', 'target': 'missing-note.ogg'}
              ], str(audio_graph['broken_link_list']))
 
         # graph orphans

@@ -468,3 +468,9 @@
   affects scoring, not whether an exact pending parent is considered broken.
 - Doctor supplies its timezone-aware local day through `--as-of`, avoiding midnight
   disagreements between the Node orchestrator and Python graph process.
+- A not-yet-materialized exact parent supplies a virtual incoming signal only for
+  orphan scoring; persisted graph edges still contain resolved files exclusively.
+- Wiki targets resolve before the audio-embed exemption, so a real `voice.ogg.md`
+  note remains linkable while a missing `voice.ogg` attachment stays ignored.
+- The full Node matrix initially hit the existing deadline-probe timing test once;
+  its isolated rerun and the complete 568-test rerun both passed.
