@@ -1,4 +1,4 @@
-[English](./README.md) · **Русский**
+<p align="right"><a href="./README.md">English</a> · <b>Русский</b></p>
 
 <div align="center">
 
@@ -12,7 +12,7 @@
 [![built on eve](https://img.shields.io/badge/built%20on-eve-000000?logo=vercel&logoColor=white)](https://eve.dev/docs/introduction)
 [![Node 24](https://img.shields.io/badge/node-24.x-339933?logo=node.js&logoColor=white)](https://nodejs.org)
 
-[Юзкейсы](#зачем-люди-ставят-иву) · [Что умеет](#что-умеет) · [Быстрый старт](#быстрый-старт) · [Память](#память---то-что-копится) · [Документация](#документация)
+[Юзкейсы](#зачем-люди-ставят-иву) · [Что умеет](#что-умеет) · [Установка](#установка) · [Память](#память---то-что-копится) · [Документация](#документация)
 
 </div>
 
@@ -89,6 +89,9 @@ curl -fsSL https://raw.githubusercontent.com/smixs/iva/main/install.sh | bash
 
 ## Что умеет
 
+<details>
+<summary><b>Голос, зрение, память, личный CRM, Google Workspace, скиллы - развернуть полный список</b></summary>
+
 - 🎙️ **Голос** - голосовые, аудио и видеосообщения расшифровывает Deepgram nova-3; язык (ru/uz/en) определяет сама.
 - 👁️ **Зрение** - фото описывает vision-модель вашего же провайдера; ни лишнего ключа, ни лишнего счёта.
 - 🧾 **Живые ответы** - таблицы, чек-листы, сворачиваемые блоки и формулы рендерятся прямо в Telegram (rich messages Bot API 10.1); обычное форматирование идёт проверенным путём, с мягким откатом при сбое.
@@ -105,9 +108,17 @@ curl -fsSL https://raw.githubusercontent.com/smixs/iva/main/install.sh | bash
 - 🛡️ **Можно пересылать что угодно** - ссылки, PDF и чужие сообщения проверяются до того, как их прочитает модель.
 - 📊 **Учёт токенов** - каждый шаг модели логируется; `/usage` бесплатно показывает расход.
 
+</details>
+
 ## Память - то, что копится
 
 <img src="assets/iva-memory-tree.webp" alt="Как Iva помнит: лист - день, ветви - недели и месяцы, годовые кольца - годы вокруг CORE.md" width="100%">
+
+| Слой | Что там живёт | Путь |
+|---|---|---|
+| 🍃 Листья | дословный транскрипт каждого дня, вместе с ответами Iva | `daily/YYYY-MM-DD.md` |
+| 🌿 Ветви | сводки, свёрнутые вверх: день → неделя → месяц → год | `summaries/daily/`, `weekly/`, `monthly/`, `yearly/` |
+| 🪵 Ствол | `CORE.md` (≤1200 символов, в каждом промпте) + типизированные карточки: контакты, проекты, решения, идеи, заметки | `CORE.md`, `cards/` |
 
 - Каждое сообщение падает в дневной markdown-лог дословно - на входе ничего не пересказывается.
 - Ночная сборка в 04:00 сворачивает день → неделю → месяц → год в карточки, проверенные по схеме; изменившиеся факты переписываются, а не копятся.
@@ -115,13 +126,31 @@ curl -fsSL https://raw.githubusercontent.com/smixs/iva/main/install.sh | bash
 
 Полная архитектура и устройство поиска: [docs/ru/memory.md](docs/ru/memory.md).
 
-## Быстрый старт
+## Установка
+
+Одна команда на любой машине с Ubuntu/Debian - свежем VPS или собственном компьютере:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/smixs/iva/main/install.sh | bash
+```
 
 1. Возьмите токен бота у [@BotFather](https://t.me/BotFather).
-2. Запустите однострочный установщик выше на любой машине с Ubuntu/Debian - свежем VPS или собственном компьютере.
+2. Запустите установщик и ответьте на его вопросы.
 3. Напишите своему боту. Мастер достанет ваш Telegram ID из этого сообщения, закончит настройку, и Ива прямо в чате подтвердит, что работает.
 
 Для установки без диалога есть `--skip-setup` и `--non-interactive`. Прохождение мастера шаг за шагом и SSH-ликбез для тех, у кого VPS впервые: [docs/ru/install.md](docs/ru/install.md).
+
+<details>
+<summary><b>Установка из исходников - собрать из клона самому</b></summary>
+
+```bash
+git clone https://github.com/smixs/iva.git ~/iva
+cd ~/iva && bash install.sh
+```
+
+Установщик переиспользует существующий чекаут вместо повторного клонирования, не трогает `.env` и vault и ставит те же зависимости. Форк или ветка задаются переменными, которые скрипт читает на старте: `REPO_URL=…`, `BRANCH=…`, `INSTALL_DIR=…` (по умолчанию: этот репозиторий, `main`, `~/iva`). Подробности: [docs/ru/install.md](docs/ru/install.md).
+
+</details>
 
 ## Как это работает
 
@@ -161,19 +190,9 @@ curl -fsSL https://raw.githubusercontent.com/smixs/iva/main/install.sh | bash
 
 Входящий контент проходит санитайзер prompt-инъекций, каждый ответ - гейт вычистки секретов, а allowlist пользователей закрыт по умолчанию: пустой список не отвечает никому. Ваша память - приватный git-репозиторий, который принадлежит вам; честная граница в том, что модель и расшифровка - облачные API, которые вы сами выбираете и оплачиваете. Устройство гейтов: [docs/ru/security.md](docs/ru/security.md).
 
-## Команды
-
-| В Telegram | На сервере |
-|---|---|
-| `/menu` · `/help` · `/task` · `/digest` · `/new` · `/update` · `/usage` | `iva status` · `iva update` · `iva doctor` · `iva logs` |
-
-`/menu` открывает центр настроек одним сообщением - модель, веб-поиск, язык, тест характера и интервью памяти. Он остаётся отзывчивым, даже когда Ива занята, и не тратит токены модели: [docs/menu.md](docs/menu.md).
-
-Полный справочник, включая разбивку `/usage` по моделям и источникам: [docs/cli.md](docs/cli.md).
-
 ## Документация
 
-[Юзкейсы](docs/ru/use-cases.md) · [Установка](docs/ru/install.md) · [Настройка](docs/ru/configuration.md) · [Память](docs/ru/memory.md) · [Провайдеры](docs/providers.md) · [Безопасность](docs/ru/security.md) · [Деплой](docs/deploy.md) · [CLI](docs/cli.md) · [Расширение](docs/extending.md) · [FAQ](docs/ru/faq.md) · [Решение проблем](docs/troubleshooting.md)
+[Юзкейсы](docs/ru/use-cases.md) · [Установка](docs/ru/install.md) · [Настройка](docs/ru/configuration.md) · [Память](docs/ru/memory.md) · [Провайдеры](docs/providers.md) · [Безопасность](docs/ru/security.md) · [Деплой](docs/deploy.md) · [Команды и CLI](docs/cli.md) · [Меню](docs/menu.md) · [Расширение](docs/extending.md) · [FAQ](docs/ru/faq.md) · [Решение проблем](docs/troubleshooting.md)
 
 Документация на английском → [docs/](docs/)
 
@@ -183,13 +202,7 @@ curl -fsSL https://raw.githubusercontent.com/smixs/iva/main/install.sh | bash
 
 ## Спасибо
 
-Ива становится лучше, потому что люди гоняют её по-настоящему - присылают патчи и сообщают о том, что реально ломается.
-
-Вклад кодом: [@yakovmakovets](https://github.com/yakovmakovets), [@AndyShaman](https://github.com/AndyShaman), [@lidmitry19](https://github.com/lidmitry19), [@anupamme](https://github.com/anupamme), [@snjrusmn](https://github.com/snjrusmn), [@865x44](https://github.com/865x44).
-
-Репорты и предложения, сформировавшие релизы: [@shamulin-hamnoi](https://github.com/shamulin-hamnoi), [@AndyShaman](https://github.com/AndyShaman), [@mamysh](https://github.com/mamysh), [@snjrusmn](https://github.com/snjrusmn), [@D1msn](https://github.com/D1msn), [@865x44](https://github.com/865x44), [@neproger](https://github.com/neproger), [@litrokol](https://github.com/litrokol).
-
-Нашли что-то? [Заводите issue](https://github.com/smixs/iva/issues).
+Ива становится лучше, потому что люди гоняют её по-настоящему - контрибуторам мы рады. [Заводите issue](https://github.com/smixs/iva/issues) о том, что сломалось, или присылайте PR. Все, кто уже помог: [docs/thanks.md](docs/thanks.md).
 
 ## Лицензия
 
