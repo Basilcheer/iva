@@ -564,3 +564,6 @@ test` now uses `node --test`.
   functions across repeated full runs. Integer floors of 72, 79, and 71 are the
   initial deterministic CI thresholds; later migration batches may only raise
   them.
+- A local reproduction of the CI userbot gate creates `.venv-userbot/` in the
+  repository root. Prettier traversed that generated environment on later local
+  runs, so the environment is now explicitly ignored.

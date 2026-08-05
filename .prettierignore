@@ -4,6 +4,7 @@ patches/
 assets/
 vault-template/
 .eve/
+.venv-userbot/
 services/telegram-userbot/
 data/
 scripts/autograph/tests/golden/
