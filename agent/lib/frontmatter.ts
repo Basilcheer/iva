@@ -31,11 +31,18 @@ export function parseFrontmatter(content: string): ParsedFrontmatter {
   let multilineKey: string | null = null;
   let multilineMode: "fold" | "literal" | "list" | "pending" | null = null;
   let multilineSep = " ";
+  let multilineBlankLines = 0;
 
   for (const line of rawLines) {
     const stripped = line.trim();
     // ЛЮБОЙ ведущий пробел/таб = continuation: YAML допускает и одиночный пробел.
     const indented = /^[ \t]/.test(line);
+
+    // Пустая строка внутри block scalar разделяет абзацы и не завершает ключ.
+    if (multilineKey && !stripped) {
+      multilineBlankLines++;
+      continue;
+    }
 
     if (multilineKey && indented) {
       if (multilineMode === "pending") {
@@ -53,8 +60,12 @@ export function parseFrontmatter(content: string): ParsedFrontmatter {
         if (item) (fields[multilineKey] as string[]).push(unquote(item));
       } else {
         const prev = (fields[multilineKey] as string) || "";
-        fields[multilineKey] = (prev + multilineSep + stripped).trim();
+        const separator = multilineBlankLines
+          ? "\n".repeat(multilineBlankLines + (multilineMode === "literal" ? 1 : 0))
+          : multilineSep;
+        fields[multilineKey] = (prev + separator + stripped).trim();
       }
+      multilineBlankLines = 0;
       continue;
     }
 
@@ -63,6 +74,7 @@ export function parseFrontmatter(content: string): ParsedFrontmatter {
       multilineKey = null;
       multilineMode = null;
       multilineSep = " ";
+      multilineBlankLines = 0;
     }
 
     if (!stripped || stripped.startsWith("#")) continue;
@@ -155,6 +167,14 @@ function splitFlowItems(inner: string): string[] {
 
 function unquote(s: string): string {
   if (s.length >= 2 && ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'")))) {
+    if (s.startsWith('"')) {
+      try {
+        const parsed: unknown = JSON.parse(s);
+        if (typeof parsed === "string") return parsed;
+      } catch {
+        /* старый повреждённый скаляр разбираем прежним best-effort путём ниже */
+      }
+    }
     const inner = s.slice(1, -1);
     return s.startsWith('"') ? inner.replace(/\\"/g, '"').replace(/\\\\/g, "\\") : inner;
   }
@@ -185,6 +205,9 @@ export function formatField(key: string, val: FmValue): string {
   if (Array.isArray(val)) return `${key}: [${val.map(formatItem).join(", ")}]`;
   const s = String(val);
   if (s === "") return `${key}:`;
+  if (s.includes("\n")) {
+    return `${key}: |-\n${s.split("\n").map((line) => `  ${line}`).join("\n")}`;
+  }
   return needsQuote(s) ? `${key}: ${JSON.stringify(s)}` : `${key}: ${s}`;
 }
 

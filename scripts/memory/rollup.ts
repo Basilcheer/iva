@@ -1,5 +1,5 @@
 // Memory consolidation (DAG): one parameterized script for all periods.
-// Run by a systemd timer (see deploy/iva-memory-*.{service,timer}), drives Iva
+// Run by the in-process eve schedules in agent/schedules/memory-*.ts, drives Iva
 // via eve/client (like scripts/daily-digest.ts), and posts a report to Telegram for daily/weekly.
 //
 //   node --env-file=.env scripts/memory/rollup.ts <daily|weekly|monthly|yearly>
@@ -9,10 +9,16 @@
 import { appendFileSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { Client, type SessionState } from "eve/client";
+import { Client, type MessageResult, type SessionState } from "eve/client";
 import { CORE_CAP } from "../lib/core-cap.mjs";
 import { notificationChat } from "../lib/notification-chat.mjs";
-import { cancelTurnQuietly, resolveTurnTimeoutMs, withTurnTimeout } from "../lib/rollup-turn.mjs";
+import {
+  cancelTurnAndConfirmQuietly,
+  canRetryFresh,
+  cancelTurnQuietly,
+  resolveTurnTimeoutMs,
+  withTurnTimeout,
+} from "../lib/rollup-turn.mjs";
 import { sendTelegramHtml } from "../lib/telegram-send.mjs";
 
 type Period = "daily" | "weekly" | "monthly" | "yearly";
@@ -46,7 +52,7 @@ const POST_TO_TELEGRAM: Record<Period, boolean> = {
   yearly: false,
 };
 
-// Current date in the user's timezone (systemd sets TZ from .env, but we hedge anyway).
+// Current date in the user's timezone (iva.service sets TZ from .env, but we hedge anyway).
 function localDate(): string {
   return new Intl.DateTimeFormat("en-CA", {
     timeZone: TZ,
@@ -64,8 +70,8 @@ function shiftDate(iso: string, deltaDays: number): string {
   return dt.toISOString().slice(0, 10);
 }
 
-// We take the target period as COMPLETED: timers fire at the start of a new period
-// (daily ≈04:00, weekly on Sun, monthly on the 1st, yearly on Jan 1), so we process
+// We take the target period as COMPLETED: schedules fire at the start of a new period
+// (daily ≈04:00, weekly on Mon, monthly on the 1st, yearly on Jan 1), so we process
 // the PREVIOUS period, not the empty current one (now is the current local date).
 function buildPrompt(p: Period, now: string): string {
   const [y, m] = now.split("-").map(Number);
@@ -202,11 +208,25 @@ function logAbandoned(state: SessionState, reason: string): void {
 const TURN_TIMEOUT_MS = resolveTurnTimeoutMs(process.env.ROLLUP_TURN_TIMEOUT_MS, {
   warn: (message) => console.error(`rollup ${period}: ${message}`),
 });
-const guardedTurn = (session: ReturnType<typeof client.session>, prompt: string, label: string) =>
+const guardedTurn = (
+  session: ReturnType<typeof client.session>,
+  prompt: string,
+  label: string,
+  onAccepted: (result: Promise<MessageResult>) => void = () => {},
+  onSendRejected: () => void = () => {},
+) =>
   withTurnTimeout(
     async () => {
-      const response = await session.send(prompt);
-      return await response.result();
+      let response;
+      try {
+        response = await session.send(prompt);
+      } catch (error) {
+        onSendRejected();
+        throw error;
+      }
+      const result = response.result();
+      onAccepted(result);
+      return await result;
     },
     { timeoutMs: TURN_TIMEOUT_MS, label },
   );
@@ -229,11 +249,25 @@ const saved = loadSession();
 let sessionCreatedAt = saved?.createdAt ?? Date.now();
 let session = saved ? client.session(saved.state) : client.session();
 let result;
+let accepted = false;
+let sendRejected = false;
+let acceptedTurnResult: Promise<MessageResult> | undefined;
 try {
-  result = await guardedTurn(session, buildPrompt(period, today), "main-turn");
+  result = await guardedTurn(
+    session,
+    buildPrompt(period, today),
+    "main-turn",
+    (turnResult) => {
+      accepted = true;
+      acceptedTurnResult = turnResult;
+    },
+    () => {
+      sendRejected = true;
+    },
+  );
 } catch (e) {
   // The parked session may be gone (iva reset quarantined the store) or hung on resume —
-  // fall back to a fresh one once instead of failing the night.
+  // fall back to a fresh one once only after proving the old turn cannot keep writing.
   const hung = (e as { code?: string }).code === "ROLLUP_TURN_TIMEOUT";
   // Выход наверх роняет процесс и отпускает .memory.lock, а зависший ход продолжает писать
   // в vault — уже без всякой защиты от параллельного роллапа. Гасим и на терминальных путях.
@@ -241,17 +275,21 @@ try {
     if (hung) await cancelTurnQuietly(session);
     throw e;
   }
+  // Принятый ход и зависший send могли продолжить писать после локального таймаута. Перед retry
+  // оба требуют терминального подтверждения: no_active_turn либо turn.cancelled в дочитанном
+  // потоке. Успешный ответ cancel со статусом accepted сам по себе второго писателя не разрешает.
+  const cancelConfirmed = accepted || hung
+    ? await cancelTurnAndConfirmQuietly(session, acceptedTurnResult)
+    : false;
+  if (!canRetryFresh({ accepted, sendRejected, cancelConfirmed })) {
+    console.error(`rollup ${period}: could not confirm cancellation of the unresolved turn — refusing fresh retry`);
+    logAbandoned(saved.state, "cancel-unconfirmed");
+    throw e;
+  }
   console.error(
     `rollup ${period}: parked session ${hung ? "hung" : "unusable"} (${(e as Error).message}) — starting fresh`,
   );
   logAbandoned(saved.state, hung ? "resume-timeout" : "unusable-cursor");
-  // «Медленный», а не мёртвый ход продолжил бы писать в vault параллельно с retry — гасим его
-  // до создания второго писателя (оба идут под одним флоком, конфликт не поймать иначе).
-  if (!(await cancelTurnQuietly(session))) {
-    // Отмена — best-effort: у заклинившей сессии она сама может не подтвердиться. Retry всё
-    // равно делаем (иначе ночь без роллапа), но след для разбора полётов оставляем.
-    console.error(`rollup ${period}: could not confirm cancellation of the timed-out turn — retrying anyway`);
-  }
   session = client.session();
   sessionCreatedAt = Date.now();
   // Ровно одна попытка: второй сбой уходит наверх и роняет юнит с ненулевым кодом.

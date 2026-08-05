@@ -88,7 +88,7 @@ curl -fsSL https://raw.githubusercontent.com/smixs/iva/main/install.sh | bash
 - 🧭 **Карточки решений** — что выбрали, когда и почему; старые версии остаются в датированной истории.
 - ⏰ **Задачи и напоминания** — приоритеты, сроки и утренний дайджест.
 - 🌐 **Поиск в интернете** — четыре провайдера на выбор: Tavily, Exa, Parallel или Brave.
-- 📮 **Google Workspace** — Gmail, Календарь, Drive, Таблицы и Документы прямо из чата через CLI `gws`; ставится сам, а подключение ключа проходите по шагам прямо в переписке.
+- 📮 **Google Workspace** — Gmail, Календарь, Drive, Таблицы, Документы и Задачи прямо из чата через CLI `gws`; ставится сам, а подключение ключа проходите по шагам прямо в переписке.
 - 🧩 **Скиллы и MCP** — один файл, чтобы добавить процедуру или подключить MCP-сервер; ключи остаются в `.env`.
 - 🛡️ **Можно пересылать что угодно** — ссылки, PDF и чужие сообщения проверяются до того, как их прочитает модель.
 - 📊 **Учёт токенов** — каждый шаг модели логируется; `/usage` бесплатно показывает расход.
@@ -115,7 +115,7 @@ curl -fsSL https://raw.githubusercontent.com/smixs/iva/main/install.sh | bash
 
 <img src="assets/iva-flow.webp" alt="Поток данных: Telegram → long-poll мост → гейт безопасности → агент → vault, плюс ночная сборка и цикл doctor" width="100%">
 
-Мост опрашивает Telegram через long-poll, так что публичный HTTPS, домен и webhook не нужны. Агент, мост и пять таймеров памяти работают как systemd user units на вашей машине — эксплуатация описана в [docs/deploy.md](docs/deploy.md).
+Мост опрашивает Telegram через long-poll, так что публичный HTTPS, домен и webhook не нужны. Iva работает как два systemd user service, два systemd watchdog-таймера и пять внутрипроцессных eve schedules — эксплуатация описана в [docs/deploy.md](docs/deploy.md).
 
 ## Провайдеры и цена
 
@@ -154,7 +154,7 @@ curl -fsSL https://raw.githubusercontent.com/smixs/iva/main/install.sh | bash
 
 ## На чём построено
 
-Агента запускает [eve](https://eve.dev/docs/introduction) 0.27.8, агентный фреймворк Vercel; поисковый индекс живёт на SQLite, встроенном в Node 24, — без отдельной базы. Iva выросла из [agent-second-brain](https://github.com/smixs/agent-second-brain) и [autograph](https://github.com/smixs/autograph) — эта история рассказана в [docs/ru/memory.md](docs/ru/memory.md).
+Агента запускает [eve](https://eve.dev/docs/introduction) 0.29.5, агентный фреймворк Vercel; поисковый индекс живёт на SQLite, встроенном в Node 24, — без отдельной базы. Iva выросла из [agent-second-brain](https://github.com/smixs/agent-second-brain) и [autograph](https://github.com/smixs/autograph) — эта история рассказана в [docs/ru/memory.md](docs/ru/memory.md).
 
 ## Лицензия
 

@@ -4,16 +4,20 @@ Everything Iva does is a file in `agent/`. Drop a new one, rebuild, restart — 
 
 ## Adding a skill
 
-Skills are markdown procedures in `agent/skills/` that the model loads on demand. The frontmatter `description` is the only part the model sees before loading — write it as a trigger condition ("Use when…"), not a summary. Two shapes work: a flat `<name>.md`, or a `<name>/` directory with a `SKILL.md` plus supporting files. The four bundled skills are your templates, simplest first:
+Skills are markdown procedures in `agent/skills/` that the model loads on demand. The frontmatter `description` is the only part the model sees before loading — write it as a trigger condition ("Use when…"), not a summary. Two shapes work: a flat `<name>.md`, or a `<name>/` directory with a `SKILL.md` plus supporting files. The eight bundled skills are your templates, simplest first:
 
 - 📋 **morning-digest.md** — one tool call (`tasks`), grouping rules, output format. Copy this for any "call a tool, format the result" job.
 - 🔎 **web-research.md** — a 4-step chain: `web_search` → pick 2–4 sources → `web_fetch` each → synthesize with links.
 - 🌐 **agent-browser/** — directory skill wrapping a CLI the model drives through `bash`.
 - 🛡 **security-defense/** — the full shape: `SKILL.md`, bundled scripts, a patterns file.
+- 📮 **google-workspace.md** — one CLI surface covering Gmail, Calendar, Drive, Sheets, Docs and Tasks.
+- 📄 **documents.md** — local PDF, DOCX and XLSX extraction, one-file answers and optional library import.
+- 📡 **telegram-userbot/** — a guarded personal-account workflow with a separate safety reference.
+- 🎨 **rich-post/** — a directory skill for rich Telegram posts with supporting references.
 
 ⚠️ Skills go in `agent/skills/` and nowhere else — never in a `.claude/` directory (`~/.claude/skills/`, `vault/.claude/skills/`). That is a different tool's layout; Iva does not read it, so a skill placed there simply never loads.
 
-If Iva should reach for your skill unprompted, name it in `agent/instructions.md` — that's how all four above get triggered.
+If Iva should reach for your skill unprompted, name it in `agent/instructions.md` — that's how the bundled skills get triggered.
 
 ## MCP connections
 
@@ -56,7 +60,7 @@ What Iva knows about *you* is memory, not code — that's `CORE.md` in the vault
 ## Local development
 
 ```bash
-npm ci        # postinstall applies patches/eve+0.27.13.patch
+npm ci        # postinstall applies patches/eve+0.29.5.patch
 npm run dev   # eve dev TUI, server on http://127.0.0.1:2000
 npm exec -- eve dev --no-ui --logs all   # headless
 ```
@@ -70,8 +74,8 @@ const res = await session.send("Add a task: buy coffee, high priority.");
 console.log((await res.result()).message);
 ```
 
-One gotcha — Iva runs eve **0.27.13**:
+One gotcha — Iva runs eve **0.29.5**:
 
-- 🩹 **patch-package** — `patches/eve+0.27.13.patch` makes deterministic model-call errors (invalid prompt, unknown tool) fail fast instead of parking a poisoned session; upstream still classifies them as recoverable in 0.27.13. If you bump Eve, regenerate the patch (re-apply the edit to `node_modules/eve/dist/src/harness/model-call-error.js`, then `npx patch-package eve`) or drop it only after the targeted classification test passes against upstream.
+- 🩹 **patch-package** — `patches/eve+0.29.5.patch` makes deterministic model-call errors (invalid prompt, unknown tool) fail fast instead of parking a poisoned session; upstream still classifies them as recoverable in 0.29.5. If you bump Eve, regenerate the patch (re-apply the edit to `node_modules/eve/dist/src/harness/model-call-error.js`, then `npx patch-package eve`) or drop it only after the targeted classification test passes against upstream.
 
-The Eve 0.11.4 schedule crash (`eve dev` dying when a schedule handler imported another authored module) is fixed since 0.27.8 — verified with a probe schedule. The repo still ships no `agent/schedules/*.ts`: on a VPS `defineSchedule` never fires anyway, systemd timers do that job ([deploy.md](./deploy.md)).
+The Eve 0.11.4 schedule crash (`eve dev` dying when a schedule handler imported another authored module) is fixed since 0.27.8. Iva now ships five `agent/schedules/*.ts` handlers: four memory rollups and the opt-in digest. On a VPS they run in the `iva.service` process; the two remaining systemd timers are watchdogs for doctor and update-check ([deploy.md](./deploy.md)).

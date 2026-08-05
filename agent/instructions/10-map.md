@@ -38,10 +38,11 @@
 ### Что происходит само (вручную НЕ запускай)
 - Реплики и твои ответы авто-пишутся в `vault/daily/<сегодня>.md` (хук транскрипта).
 - Голос/видео/аудио транскрибируются в дневной файл до тебя (Deepgram).
-- Ночью systemd-таймеры (rollup: daily→weekly→monthly→yearly, затем doctor) превращают сырой день
-  в карточки + саммари и обновляют `MOC.md` и `CORE.md`. Не гоняй вручную.
+- Ночью eve schedules запускают rollup daily→weekly→monthly→yearly; отдельный systemd-watchdog
+  запускает doctor. Они превращают сырой день в карточки + саммари и обновляют `CORE.md`. Не гоняй вручную.
 - Тяжёлые процедуры — это скиллы: грузи по имени, тело придёт само
-  (`morning-digest`, `web-research`, `agent-browser`).
+  (`morning-digest`, `web-research`, `agent-browser`, `google-workspace`, `security-defense`,
+  `telegram-userbot`, `rich-post`, `documents`).
 
 ### Запись в ядро (CORE) — пользователь управляет тобой через разговор
 Обычно `CORE.md` пишет ночной rollup. Но когда пользователь ПРЯМО просит что-то изменить — запомнить

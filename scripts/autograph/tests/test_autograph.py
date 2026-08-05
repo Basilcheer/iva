@@ -451,6 +451,33 @@ def main():
         test("literal |- rewrite: no leaked continuation lines",
              not continuation_leaked,
              f"got: {rebuilt_lit}")
+        paragraph_folded = ("---\ndescription: >-\n"
+                            "  First paragraph\n\n"
+                            "  Second paragraph\n\n\n"
+                            "  Third paragraph\nstatus: active\n---\n")
+        fm_paragraphs, _, lines_paragraphs = parse_frontmatter(paragraph_folded)
+        expected_folded = "First paragraph\nSecond paragraph\n\nThird paragraph"
+        test("folded paragraphs survive blank lines",
+             fm_paragraphs.get('description') == expected_folded,
+             f"got: {fm_paragraphs.get('description')!r}")
+        folded_written = write_frontmatter(fm_paragraphs, lines_paragraphs)
+        folded_again, _, _ = parse_frontmatter(f"---\n{folded_written}\n---\n")
+        test("folded paragraphs survive parse-write-parse",
+             folded_again.get('description') == expected_folded,
+             f"got: {folded_again.get('description')!r}")
+        paragraph_literal = ("---\nnote: |-\n"
+                             "  Line one\n\n"
+                             "  Line two\nkind: note\n---\n")
+        fm_literal_paragraphs, _, lines_literal_paragraphs = parse_frontmatter(paragraph_literal)
+        expected_literal = "Line one\n\nLine two"
+        test("literal paragraphs survive blank lines",
+             fm_literal_paragraphs.get('note') == expected_literal,
+             f"got: {fm_literal_paragraphs.get('note')!r}")
+        literal_written = write_frontmatter(fm_literal_paragraphs, lines_literal_paragraphs)
+        literal_again, _, _ = parse_frontmatter(f"---\n{literal_written}\n---\n")
+        test("literal paragraphs survive parse-write-parse",
+             literal_again.get('note') == expected_literal,
+             f"got: {literal_again.get('note')!r}")
         # Untouched multiline key preserved as-is
         partial_fields = {'tags': ['ai', 'updated']}  # only update tags, not description
         rebuilt_partial = write_frontmatter(partial_fields, orig_ml)

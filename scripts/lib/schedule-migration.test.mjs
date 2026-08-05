@@ -131,6 +131,54 @@ test("first boot (no status file): seeds a baseline (seededAt, NOT lastSuccessAt
   }
 });
 
+test("a digest-only status seeds every missing memory key and causes no catch-up burst", async () => {
+  const homedir = await scaffoldHome();
+  const statusPath = join(homedir, "..", "data", "rollup-status.json");
+  await mkdir(join(homedir, "..", "data"), { recursive: true });
+  await writeFile(statusPath, JSON.stringify({ digest: { lastSuccessAt: 123 } }));
+  const fixedNow = Date.UTC(2026, 7, 4, 10, 0, 0);
+  const ranPeriods = [];
+
+  await runScheduleMigration({
+    homedir,
+    statusPath,
+    tz: "UTC",
+    log: () => {},
+    now: () => fixedNow,
+    execImpl: fakeExecImpl().execImpl,
+    runJob: async (period) => { ranPeriods.push(period); },
+  });
+
+  assert.deepEqual(ranPeriods, []);
+  const status = JSON.parse(await readFile(statusPath, "utf8"));
+  assert.deepEqual(status.digest, { lastSuccessAt: 123 });
+  for (const period of ["daily", "weekly", "monthly", "yearly"]) {
+    assert.equal(status[`memory-${period}`]?.seededAt, fixedNow);
+  }
+});
+
+test("legacy teardown is not attempted when the seed transaction cannot be committed", async () => {
+  const homedir = await scaffoldHome();
+  const unitDir = join(homedir, UNIT_DIR_REL);
+  const unit = join(unitDir, "iva-memory-daily.timer");
+  await writeFile(unit, "[Unit]\n");
+  const { execImpl, calls } = fakeExecImpl();
+  const logs = [];
+
+  // A directory cannot be atomically replaced by the JSON status tmp file. This makes
+  // the seed write fail after the status lock is acquired, before teardown is allowed.
+  await runScheduleMigration({
+    homedir,
+    statusPath: unitDir,
+    execImpl,
+    log: (...args) => logs.push(args.join(" ")),
+  });
+
+  assert.deepEqual(calls, []);
+  assert.equal(existsSync(unit), true);
+  assert.ok(logs.some((line) => line.includes("unexpected failure")));
+});
+
 test("legacy units: disabled and deleted by exact name; unrelated xfeed-daily.timer is left alone", async () => {
   const homedir = await scaffoldHome();
   const unitDir = join(homedir, UNIT_DIR_REL);

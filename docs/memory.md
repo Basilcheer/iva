@@ -18,12 +18,12 @@ CORE.md rides in every system prompt; everything else comes in per question thro
 
 ## Nightly rollup
 
-One script, four timers, server-local time. `scripts/memory/rollup.ts` drives the running agent through `eve/client`:
+One script, four in-process eve schedules, configured local time. `scripts/memory/rollup.ts` drives the running agent through `eve/client`:
 
-| Timer | When | Reads | Writes |
+| Schedule | When | Reads | Writes |
 |---|---|---|---|
 | daily | 04:00 | yesterday's raw transcript | cards, daily summary, CORE.md |
-| weekly | Sun 04:15 | 7 daily summaries | weekly summary |
+| weekly | Mon 04:15 | 7 daily summaries | weekly summary |
 | monthly | 1st, 04:20 | the month's weeklies | monthly summary |
 | yearly | Jan 1, 04:25 | the year's monthlies | yearly summary |
 

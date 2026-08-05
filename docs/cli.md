@@ -51,8 +51,8 @@ The installer puts `iva` in `~/.local/bin`. Commands that touch systemd need a L
 | `iva update [--force] [--verbose]` | Preserve tracked and untracked changes, safely fast-forward or rebase local commits, build, restart and health-check. On failure Iva rolls back to the recorded HEAD and previous `.output`. `--force` rebuilds with no new commits; `--verbose` streams technical output otherwise kept in `data/logs/` |
 | `iva config` | The 5-step setup wizard, then offers a restart to apply |
 | `iva login [--browser]` | Sign in to an OpenAI (ChatGPT) subscription for `MODEL_PROVIDER=codex`. Default is device code (a link + one-time code, works on a headless VPS); `--browser` runs the local PKCE flow. Token → `data/codex-auth.json` (chmod 600) |
-| `iva doctor` | Checks Node ≥ 24, `.env` keys, build, units, both services, 5 memory timers, vault git origin — auto-repairs what's safe |
-| `iva status` | Status of both services + the memory-timer schedule |
+| `iva doctor` | Checks Node ≥ 24, `.env` keys, build, units, both services, two systemd watchdog timers, four memory-schedule status records, vault git origin — auto-repairs what's safe |
+| `iva status` | Status of both services and the systemd watchdog timers |
 | `iva restart` | Regenerates units (keeps the port in sync with `IVA_PORT`), restarts agent + bridge |
 | `iva reset` | Stop, quarantine workflow plus Telegram busy/queue state, restart — cures stuck turns that a plain restart brings right back |
 | `iva usage [window]` | Same windows as `/usage`, plus `tail [N]` — the last N raw log lines (default 10) |

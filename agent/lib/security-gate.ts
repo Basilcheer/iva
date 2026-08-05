@@ -1,8 +1,8 @@
-// Детерминированные security-гейты в hot path (порт из agent/skills/security-defense/scripts/
-// sanitizer.py + outbound_gate.py). Ноль python в рантайме, ноль latency-процессов.
+// Детерминированные security-гейты в hot path (TypeScript-порт ручных Python-утилит из
+// agent/skills/security-defense/scripts/). Python-файлы не вызываются рантаймом.
 //   - sanitizeInbound: чистит недоверенный текст (Telegram/web) ДО модели, флагует инъекции.
 //   - scanOutbound: ловит утечку секретов/эксфильтрацию в ответе ДО отправки, редактит.
-// spend_governor и bash-паттерны (blocked-patterns.json) остаются на Python (nightly/on-demand).
+// spend_governor и blocked-patterns.json доступны только для ручных проверок.
 
 // --- INBOUND: очистка недоверенного ввода ---------------------------------------------------
 

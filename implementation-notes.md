@@ -378,3 +378,67 @@
   presence of an empty string records a successful empty result.
 - Both stores use the existing JSON-store primitives and bounded JSON files under
   `ASSISTANT_DATA_DIR`; no delivery timeout or direct-delivery policy changed.
+## Rollup writer safety (v0.3.11)
+
+- База ветки: `origin/main` (`b464b74a22eb4f2c0dce4ab888d2a9b62bad0658`).
+- Fresh retry сохраняет прежнюю единственную попытку только для явно отклонённого `send` или терминально подтверждённой отмены.
+- Зависший до разрешения `send` считается потенциально принятым сервером: ответ `cancel: accepted` только принимает сигнал и не разрешает retry. Безопасную границу подтверждает `no_active_turn` либо событие `turn.cancelled` в дочитанном потоке.
+- При неподтверждённой отмене сохранённый курсор остаётся на диске, а исходная ошибка выходит наверх.
+## Security honesty and documentation sync (v0.3.11)
+
+- Media-processing errors use the same token-redacted detail in user messages and model
+  context. A regression drives the real Telegram webhook path and inspects Bot API output.
+- The security skill now names only `security-gate.ts` as runtime enforcement. Its Python
+  utilities and JSON patterns are documented as manual tools; reminder-related patterns
+  were removed and no patterns were added to `bash.ts`.
+- Runtime topology, Eve version, schedule cadence, skill count, Google Tasks support and
+  open-task menu counting are synchronized across the requested documentation surfaces.
+- The flat `documents` skill uses only installed system tools and an ephemeral `openpyxl`
+  environment. Failed PDF text extraction is reported honestly; optional library imports are
+  split into searchable chunks capped at 8000 characters.
+- Telegram's automatic `attachments` and `daily` ingress archive is now distinguished from an
+  explicit library import. The skill pins ephemeral `openpyxl` 3.1.5 and serializes document
+  frontmatter through the existing `formatField` helper, including hostile scalar edge cases.
+- Telegram error redaction runs before the 200-character bound, and the acceptance test checks
+  both the user reply and model context when a token crosses that boundary in a multipart update.
+- Media error reporting also handles arbitrary JavaScript throw values, including `null` and
+  `undefined`, without replacing the original failure with a secondary property-access error.
+- Owner-explicit local paths remain supported as required by the document-skill contract. A
+  vault-only path allowlist was rejected because it would remove that requested capability.
+- CLI documentation keeps topology distinct from command coverage: `iva doctor` reads the
+  four memory-schedule status records, while `iva status` reports systemd units only.
+- PHILOSOPHY.md now records the project boundary rules and explicit removal points for
+  local workarounds.
+## Memory and configuration integrity (v0.3.11)
+
+- TypeScript and Python frontmatter parsers keep blank lines inside block scalars. Strings
+  containing newlines are serialized as literal blocks so parse-write-parse is lossless.
+- One Intl-backed timezone validator is shared by setup, startup instrumentation, and the
+  CLI unit generator. Runtime TZ is always assigned a validated zone or UTC.
+- Per-chat run-status quarantines only JSON/schema corruption. Filesystem failures remain
+  visible to callers and leave the original status path untouched.
+- The real chmod-based EACCES regression is skipped under UID 0 because root bypasses
+  discretionary permission bits; ordinary users and CI still exercise the filesystem path.
+- CORE truncation removes a mutable bullet when fewer than two marker characters survive;
+  a complete `-` plus its following space may still receive the ellipsis. Pointers remain
+  immutable.
+## Telegram offset durability (v0.3.11)
+
+- Only ENOENT represents first run. Existing JSON, schema, permission, and I/O failures stop
+  the bridge before `deleteWebhook(drop_pending=true)` or `getUpdates(-1)`, preserving
+  Telegram's backlog for the systemd restart.
+- Offset publication uses a private same-directory tmp file and one rename. Any save failure
+  reaches the top-level fatal handler; the bridge never reports an unsaved cursor as durable.
+- The first-run tail lookup also fails closed on Telegram or response-shape errors; falling
+  back to offset 0 after such an error could replay the installation backlog. An actually empty
+  Telegram result still stores offset 0. Per-call tmp suffixes avoid overlap.
+## Schedule migration durability (v0.3.11)
+
+- Memory catch-up baselines are seeded per key under the shared status lock. Existing
+  digest state can no longer disable first-run storm protection for memory schedules.
+- The seed transaction commits before legacy timer teardown; a failed seed leaves the
+  retired persistent units available for another boot.
+- Reservations record the owner process. A confirmed-dead owner is recovered immediately,
+  while old ownerless markers keep the time-based compatibility rule.
+- Completion and cleanup mutate status only while holding the status lock and keep a
+  reservation marked locally until its removal write succeeds.

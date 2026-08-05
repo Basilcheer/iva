@@ -41,6 +41,13 @@ export class RollupTurnTimeoutError extends Error {
 
 export const DEFAULT_CANCEL_TIMEOUT_MS = 30_000;
 
+// Свежая сессия безопасна, когда send явно отклонён до принятия хода либо сервер
+// подтвердил отмену. Неразрешившийся send мог быть принят сервером и требует cancel.
+export function canRetryFresh({ accepted, sendRejected, cancelConfirmed }) {
+  if (accepted) return cancelConfirmed === true;
+  return sendRejected === true || cancelConfirmed === true;
+}
+
 // Отмена проигравшего гонку хода. Таймаут не останавливает ход на сервере — тот продолжает
 // писать в vault, — поэтому перед retry в свежей сессии старый ход надо погасить, иначе два
 // писателя правят одни и те же карточки и CORE.md под одним флоком.
@@ -50,6 +57,31 @@ export async function cancelTurnQuietly(session, { timeoutMs = DEFAULT_CANCEL_TI
   try {
     await withTurnTimeout(() => session.cancel(), { timeoutMs, label: "cancel" });
     return true;
+  } catch {
+    return false;
+  }
+}
+
+// Успешный HTTP-ответ cancel ещё не означает, что ход перестал писать. `accepted` только
+// принимает сигнал отмены; безопасную границу подтверждает `turn.cancelled` в дочитанном
+// результате. `no_active_turn` сам является серверным подтверждением, что писателя уже нет.
+export async function cancelTurnAndConfirmQuietly(
+  session,
+  turnResult,
+  { timeoutMs = DEFAULT_CANCEL_TIMEOUT_MS } = {},
+) {
+  try {
+    const cancellation = await withTurnTimeout(() => session.cancel(), {
+      timeoutMs,
+      label: "cancel",
+    });
+    if (cancellation?.status === "no_active_turn") return true;
+    if (cancellation?.status !== "accepted" || !turnResult) return false;
+    const result = await withTurnTimeout(() => turnResult, {
+      timeoutMs,
+      label: "cancel-terminal",
+    });
+    return result?.events?.some((event) => event?.type === "turn.cancelled") === true;
   } catch {
     return false;
   }

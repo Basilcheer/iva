@@ -38,7 +38,7 @@ curl -fsSL https://raw.githubusercontent.com/smixs/iva/main/install.sh | bash
 - 🟢 **Node 24 через nvm** — root не нужен; 24 — жёсткий минимум, потому что поиск по памяти использует встроенный `node:sqlite`.
 - 🌐 **agent-browser + Chromium** — headless-браузер для веб-задач; самый долгий шаг, 1–3 минуты видимого вывода загрузки.
 - 🗂️ **Инициализация vault** — память создаётся из `vault-template/` как отдельный git-репозиторий, так что личные данные никогда не попадают в репозиторий с кодом.
-- ⚙️ **systemd user units** — сервис агента, мост в Telegram и 5 таймеров памяти, с включённым linger, чтобы всё пережило logout. Подробности: [deploy.md](../deploy.md).
+- ⚙️ **Фоновый runtime** — два systemd user service, два systemd watchdog-таймера и пять внутрипроцессных eve schedules, с включённым linger, чтобы всё пережило logout. Подробности: [deploy.md](../deploy.md).
 - 🧰 **Команда `iva`** — ставится в `~/.local/bin`: `iva status`, `iva doctor`, `iva update`. Полный справочник: [cli.md](../cli.md).
 - ✅ **Подтверждение в Telegram** — последнее, что делает установщик, — пишет вам из вашего же бота: «Iva установлена и на связи. Напишите мне — отвечу». Это и есть сигнал успеха.
 
