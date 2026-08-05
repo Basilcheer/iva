@@ -2,7 +2,12 @@ export const TELEGRAM_REPLY_TEXT_MAX_CHARS = 8_000;
 
 const AUTHOR_FIELD_MAX_CHARS = 256;
 const FILENAME_MAX_CHARS = 512;
-const TELEGRAM_CHAT_TYPES = new Set(["private", "group", "supergroup", "channel"]);
+const TELEGRAM_CHAT_TYPES = new Set([
+  "private",
+  "group",
+  "supergroup",
+  "channel",
+]);
 const FILE_MEDIA = [
   "animation",
   "audio",
@@ -18,17 +23,20 @@ function isRecord(value) {
 }
 
 function boundedTelegramMessageId(value) {
-  if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) return String(value);
+  if (typeof value === "number" && Number.isSafeInteger(value) && value > 0)
+    return String(value);
   return null;
 }
 
 function boundedTelegramUserId(value) {
-  if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) return String(value);
+  if (typeof value === "number" && Number.isSafeInteger(value) && value > 0)
+    return String(value);
   return null;
 }
 
 function boundedTelegramChatId(value) {
-  if (typeof value === "number" && Number.isSafeInteger(value) && value !== 0) return String(value);
+  if (typeof value === "number" && Number.isSafeInteger(value) && value !== 0)
+    return String(value);
   return null;
 }
 
@@ -64,7 +72,8 @@ function readAuthor(value, sanitizeText, hasAttackSignal) {
   if (id !== null) {
     author.id = id;
   }
-  const firstName = typeof value.first_name === "string" ? value.first_name : "";
+  const firstName =
+    typeof value.first_name === "string" ? value.first_name : "";
   const lastName = typeof value.last_name === "string" ? value.last_name : "";
   const rawName = [firstName, lastName].filter(Boolean).join(" ");
   if (rawName) {
@@ -100,7 +109,12 @@ function readAuthor(value, sanitizeText, hasAttackSignal) {
 
 function readSenderChat(value, sanitizeText, hasAttackSignal) {
   if (!isRecord(value)) {
-    return { value: null, truncated: false, warned: false, validIdentity: false };
+    return {
+      value: null,
+      truncated: false,
+      warned: false,
+      validIdentity: false,
+    };
   }
 
   const author = {};
@@ -138,14 +152,23 @@ function findMedia(reply) {
 
   if (
     Array.isArray(reply.photo) &&
-    reply.photo.some((photo) => isRecord(photo) && typeof photo.file_id === "string" && photo.file_id.length > 0)
+    reply.photo.some(
+      (photo) =>
+        isRecord(photo) &&
+        typeof photo.file_id === "string" &&
+        photo.file_id.length > 0,
+    )
   ) {
     type = "photo";
     value = {};
   } else {
     for (const key of FILE_MEDIA) {
       const candidate = reply[key];
-      if (isRecord(candidate) && typeof candidate.file_id === "string" && candidate.file_id.length > 0) {
+      if (
+        isRecord(candidate) &&
+        typeof candidate.file_id === "string" &&
+        candidate.file_id.length > 0
+      ) {
         type = key;
         value = candidate;
         break;
@@ -173,7 +196,10 @@ function readMedia(media, caption, sanitizeText, hasAttackSignal) {
           sanitizeText,
           hasAttackSignal,
         );
-  const boundedCaption = truncateCodePoints(caption, TELEGRAM_REPLY_TEXT_MAX_CHARS);
+  const boundedCaption = truncateCodePoints(
+    caption,
+    TELEGRAM_REPLY_TEXT_MAX_CHARS,
+  );
   return {
     value: {
       type,
@@ -191,9 +217,15 @@ function readMedia(media, caption, sanitizeText, hasAttackSignal) {
  * The raw reply is untrusted. Only bounded text and inert metadata cross the
  * boundary; file IDs and download URLs are deliberately excluded.
  */
-export function buildTelegramReplyContext(rawMessage, sanitizeText, hasAttackSignal) {
-  if (!isRecord(rawMessage) || !isRecord(rawMessage.reply_to_message)) return null;
-  if (typeof sanitizeText !== "function") throw new TypeError("sanitizeText must be a function");
+export function buildTelegramReplyContext(
+  rawMessage,
+  sanitizeText,
+  hasAttackSignal,
+) {
+  if (!isRecord(rawMessage) || !isRecord(rawMessage.reply_to_message))
+    return null;
+  if (typeof sanitizeText !== "function")
+    throw new TypeError("sanitizeText must be a function");
   if (typeof hasAttackSignal !== "function") {
     throw new TypeError("hasAttackSignal must be a function");
   }
@@ -210,8 +242,12 @@ export function buildTelegramReplyContext(rawMessage, sanitizeText, hasAttackSig
   if (rawText.trim().length === 0 && mediaIdentity === null) return null;
 
   const textSecurity = sanitizeText(rawText);
-  const captionSecurity = rawText === caption ? textSecurity : sanitizeText(caption);
-  const text = truncateCodePoints(textSecurity.text, TELEGRAM_REPLY_TEXT_MAX_CHARS);
+  const captionSecurity =
+    rawText === caption ? textSecurity : sanitizeText(caption);
+  const text = truncateCodePoints(
+    textSecurity.text,
+    TELEGRAM_REPLY_TEXT_MAX_CHARS,
+  );
   const media = readMedia(
     mediaIdentity,
     captionSecurity.text,
@@ -220,7 +256,11 @@ export function buildTelegramReplyContext(rawMessage, sanitizeText, hasAttackSig
   );
 
   const fromAuthor = readAuthor(reply.from, sanitizeText, hasAttackSignal);
-  const senderChat = readSenderChat(reply.sender_chat, sanitizeText, hasAttackSignal);
+  const senderChat = readSenderChat(
+    reply.sender_chat,
+    sanitizeText,
+    hasAttackSignal,
+  );
   // Telegram may pair sender_chat with the GroupAnonymousBot compatibility
   // placeholder. A validated chat ID identifies the real author; malformed
   // sender_chat metadata cannot replace a valid from identity.

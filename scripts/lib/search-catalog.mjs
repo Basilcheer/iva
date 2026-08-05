@@ -4,10 +4,22 @@
 // Мост на .mjs не может импортировать TS-инструмент, поэтому факты авторизации продублированы здесь;
 // при правке провайдера в web_search.ts эти билдеры надо синхронизировать вручную.
 export const SEARCH_CATALOG = {
-  tavily: { label: "Tavily", keyVar: "TAVILY_API_KEY", url: "https://app.tavily.com" },
-  brave: { label: "Brave", keyVar: "BRAVE_API_KEY", url: "https://api-dashboard.search.brave.com" },
+  tavily: {
+    label: "Tavily",
+    keyVar: "TAVILY_API_KEY",
+    url: "https://app.tavily.com",
+  },
+  brave: {
+    label: "Brave",
+    keyVar: "BRAVE_API_KEY",
+    url: "https://api-dashboard.search.brave.com",
+  },
   exa: { label: "Exa", keyVar: "EXA_API_KEY", url: "https://dashboard.exa.ai" },
-  parallel: { label: "Parallel", keyVar: "PARALLEL_API_KEY", url: "https://platform.parallel.ai" },
+  parallel: {
+    label: "Parallel",
+    keyVar: "PARALLEL_API_KEY",
+    url: "https://platform.parallel.ai",
+  },
 };
 
 // Зависший эндпойнт провайдера не должен подвесить единственный getUpdates-цикл моста:
@@ -20,8 +32,17 @@ const PROBE = {
   tavily: (key) => ({
     url: "https://api.tavily.com/search",
     method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
-    body: JSON.stringify({ query: "ping", max_results: 1, search_depth: "basic", include_answer: "basic", topic: "general" }),
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${key}`,
+    },
+    body: JSON.stringify({
+      query: "ping",
+      max_results: 1,
+      search_depth: "basic",
+      include_answer: "basic",
+      topic: "general",
+    }),
   }),
   brave: (key) => ({
     url: "https://api.search.brave.com/res/v1/web/search?q=ping&count=1",
@@ -38,7 +59,12 @@ const PROBE = {
     url: "https://api.parallel.ai/v1/search",
     method: "POST",
     headers: { "Content-Type": "application/json", "x-api-key": key },
-    body: JSON.stringify({ objective: "ping", search_queries: ["ping"], mode: "basic", advanced_settings: { max_results: 1 } }),
+    body: JSON.stringify({
+      objective: "ping",
+      search_queries: ["ping"],
+      mode: "basic",
+      advanced_settings: { max_results: 1 },
+    }),
   }),
 };
 
@@ -57,7 +83,8 @@ export async function checkSearchKey(provider, key) {
       body: req.body,
       signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     });
-    if (res.status === 401 || res.status === 403) return `провайдер отверг ключ (${res.status})`;
+    if (res.status === 401 || res.status === 403)
+      return `провайдер отверг ключ (${res.status})`;
     return null;
   } catch {
     return null; // сеть/таймаут — ключ не наказываем

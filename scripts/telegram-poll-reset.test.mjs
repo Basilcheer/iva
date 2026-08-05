@@ -9,17 +9,20 @@ process.env.ASSISTANT_DATA_DIR = dataDir;
 process.env.TELEGRAM_BOT_TOKEN = "test-token";
 process.env.TELEGRAM_WEBHOOK_SECRET_TOKEN = "test-secret";
 
-const [{
-  clearPrivateResetIntent,
-  completeScopedResetState,
-  drainReadyQueueHeads,
-  loadPrivateResetIntents,
-  loadQueue,
-  performScopedReset,
-  persistPrivateResetIntent,
-  reconcileScopedResetIntents,
-  writeQueueAtomic,
-}, status] = await Promise.all([
+const [
+  {
+    clearPrivateResetIntent,
+    completeScopedResetState,
+    drainReadyQueueHeads,
+    loadPrivateResetIntents,
+    loadQueue,
+    performScopedReset,
+    persistPrivateResetIntent,
+    reconcileScopedResetIntents,
+    writeQueueAtomic,
+  },
+  status,
+] = await Promise.all([
   import(`./telegram-poll.mjs?reset-test=${Date.now()}`),
   import(`#lib/run-status.mjs?reset-test=${Date.now()}`),
 ]);
@@ -58,7 +61,9 @@ test("private reset clears only the target chat status and queue", async () => {
   assert.equal(untouched.sessionId, "session-b");
   assert.equal(untouched.continuationToken, "-102:7:55");
 
-  const queue = JSON.parse(readFileSync(join(dataDir, "telegram-queue.json"), "utf8"));
+  const queue = JSON.parse(
+    readFileSync(join(dataDir, "telegram-queue.json"), "utf8"),
+  );
   assert.equal(queue.version, 1);
   assert.deepEqual(Object.keys(queue.queues), ["chat-b:7"]);
   assert.equal(queue.queues["chat-b:7"][0].legacyText, "keep me");
@@ -137,21 +142,23 @@ test("startup reconciliation prevents a remotely reset private queue from draini
   await writeQueueAtomic({
     version: 1,
     queues: {
-      [key]: [{
-        version: 1,
-        updateId: 901,
-        enqueuedAt: 1,
-        update: {
-          update_id: 901,
-          message: {
-            message_id: 901,
-            date: 1,
-            chat: { id: 901, type: "private" },
-            from: { id: 42, is_bot: false, first_name: "Owner" },
-            text: "must be discarded after reset",
+      [key]: [
+        {
+          version: 1,
+          updateId: 901,
+          enqueuedAt: 1,
+          update: {
+            update_id: 901,
+            message: {
+              message_id: 901,
+              date: 1,
+              chat: { id: 901, type: "private" },
+              from: { id: 42, is_bot: false, first_name: "Owner" },
+              text: "must be discarded after reset",
+            },
           },
         },
-      }],
+      ],
     },
   });
   await persistPrivateResetIntent(key, continuationToken);
@@ -164,7 +171,10 @@ test("startup reconciliation prevents a remotely reset private queue from draini
   });
 
   assert.deepEqual(
-    remoteRetries.map(({ chatKey, continuationToken: token }) => [chatKey, token]),
+    remoteRetries.map(({ chatKey, continuationToken: token }) => [
+      chatKey,
+      token,
+    ]),
     [[key, continuationToken]],
   );
   assert.deepEqual(await loadPrivateResetIntents(), []);
@@ -184,7 +194,11 @@ test("startup reconciliation prevents a remotely reset private queue from draini
     }),
     0,
   );
-  assert.deepEqual(delivered, [], "startup must reconcile reset intent before any old head can drain");
+  assert.deepEqual(
+    delivered,
+    [],
+    "startup must reconcile reset intent before any old head can drain",
+  );
 });
 
 test("failed reset reconciliation keeps its durable intent for the next startup", async () => {
@@ -230,7 +244,9 @@ test("queue rename failure keeps the previous whole queue byte-for-byte", async 
 
   assert.equal(readFileSync(queueFile, "utf8"), original);
   assert.equal(
-    readdirSync(dataDir).some((name) => name.startsWith("telegram-queue.json.tmp-")),
+    readdirSync(dataDir).some((name) =>
+      name.startsWith("telegram-queue.json.tmp-"),
+    ),
     false,
   );
 });
@@ -272,7 +288,9 @@ test("reset tombstone stores the token channel-local (#110)", async () => {
   // Токен приходит из статуса, а тот до фикса заполнялся namespaced-значением eve.
   // Надгробие переживает рестарт и потом само уходит в reset — сохранить его как есть
   // значило бы законсервировать «telegram:telegram:…» и молчаливый no_active_session.
-  await completeScopedResetState("7091451031:", "telegram:7091451031::", { clearQueue: true });
+  await completeScopedResetState("7091451031:", "telegram:7091451031::", {
+    clearQueue: true,
+  });
 
   const tombstone = status.getChatStatus("7091451031:");
   assert.equal(tombstone.status, "idle");
@@ -300,7 +318,8 @@ test("/new sends the reset channel-local even from a namespaced status (#110)", 
   await performScopedReset("7091451031:", "telegram:7091451031::", {
     clearQueue: true,
     persistIntentImpl: async () => {},
-    requestResetImpl: async ({ continuationToken }) => requested.push(continuationToken),
+    requestResetImpl: async ({ continuationToken }) =>
+      requested.push(continuationToken),
     completeStateImpl: async () => {},
     clearIntentImpl: async () => {},
   });
@@ -321,17 +340,25 @@ test("reset outcome is logged, including the silent no_active_session (#110)", a
     logImpl: (line) => lines.push(line),
   });
 
-  assert.deepEqual(lines, ["reset for chat 7091451031: -> no_active_session (token 7091451031::)"]);
+  assert.deepEqual(lines, [
+    "reset for chat 7091451031: -> no_active_session (token 7091451031::)",
+  ]);
 
   const successes = [];
   await performScopedReset("7091451031:", "7091451031::", {
     persistIntentImpl: async () => {},
-    requestResetImpl: async () => ({ ok: true, status: "reset", previousSessionId: "wrun_1" }),
+    requestResetImpl: async () => ({
+      ok: true,
+      status: "reset",
+      previousSessionId: "wrun_1",
+    }),
     completeStateImpl: async () => {},
     clearIntentImpl: async () => {},
     logImpl: (line) => successes.push(line),
   });
-  assert.deepEqual(successes, ["reset for chat 7091451031: -> reset (token 7091451031::)"]);
+  assert.deepEqual(successes, [
+    "reset for chat 7091451031: -> reset (token 7091451031::)",
+  ]);
 });
 
 test("intent reconciliation logs its reset outcome too", async () => {
@@ -342,5 +369,7 @@ test("intent reconciliation logs its reset outcome too", async () => {
     logImpl: (line) => lines.push(line),
   });
 
-  assert.deepEqual(lines, ["reset for chat 429888768: -> reset (token 429888768::)"]);
+  assert.deepEqual(lines, [
+    "reset for chat 429888768: -> reset (token 429888768::)",
+  ]);
 });

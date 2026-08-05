@@ -30,7 +30,12 @@ function isExistingCard(path: string): boolean {
   if (!cards) return false; // cards/ ещё нет — нечего защищать
   const abs = resolve(path);
   if (!existsSync(abs)) return false;
-  const real = realOrNull(abs) ?? resolve(realOrNull(dirname(abs)) ?? dirname(abs), abs.split(sep).pop() as string);
+  const real =
+    realOrNull(abs) ??
+    resolve(
+      realOrNull(dirname(abs)) ?? dirname(abs),
+      abs.split(sep).pop() as string,
+    );
   return real === cards || real.startsWith(cards + sep);
 }
 

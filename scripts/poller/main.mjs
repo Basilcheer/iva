@@ -8,10 +8,21 @@ import {
 } from "../lib/telegram-collect.mjs";
 import { alreadyDelivered } from "../lib/offset-store.mjs";
 import { isReplyToBot, migrateQueueFile } from "../lib/telegram-queue.mjs";
-import { ACCEPTANCE_ROUTE, ROUTE, SECRET, TOKEN, log, sleep } from "./config.mjs";
+import {
+  ACCEPTANCE_ROUTE,
+  ROUTE,
+  SECRET,
+  TOKEN,
+  log,
+  sleep,
+} from "./config.mjs";
 import { tg } from "./transport.mjs";
 import { fastForwardOffset, loadOffset, saveOffset } from "./offset.mjs";
-import { QUEUE_FILE, reapStaleRuns, reconcileScopedResetIntents } from "./queue.mjs";
+import {
+  QUEUE_FILE,
+  reapStaleRuns,
+  reconcileScopedResetIntents,
+} from "./queue.mjs";
 import { drainReadyQueueHeads, routeMessageUpdate } from "./routing.mjs";
 import { removeStaleUpdateJobs } from "./update-flow.mjs";
 import { handleControl, registerBotCommands } from "./control.mjs";
@@ -26,8 +37,12 @@ const configuredCollectQuietMs =
 const messageCollector = createCollector({ quietMs: configuredCollectQuietMs });
 
 export async function main() {
-  if (!TOKEN) throw new Error("no TELEGRAM_BOT_TOKEN in .env — nothing to poll");
-  if (!SECRET) throw new Error("no TELEGRAM_WEBHOOK_SECRET_TOKEN — the channel won't accept updates");
+  if (!TOKEN)
+    throw new Error("no TELEGRAM_BOT_TOKEN in .env — nothing to poll");
+  if (!SECRET)
+    throw new Error(
+      "no TELEGRAM_WEBHOOK_SECRET_TOKEN — the channel won't accept updates",
+    );
   log(`telegram-poll start → messages ${ACCEPTANCE_ROUTE}; callbacks ${ROUTE}`);
   await removeStaleUpdateJobs();
   // Upgrade the old {chatKey: string[]} queue atomically before polling. A failed
@@ -35,11 +50,15 @@ export async function main() {
   // are safely represented as versioned FIFO items.
   await migrateQueueFile(QUEUE_FILE, {
     onLegacyQuarantine: (path) =>
-      log(`legacy Telegram group messages moved to ${path}; sender identity was unavailable`),
+      log(
+        `legacy Telegram group messages moved to ${path}; sender identity was unavailable`,
+      ),
   });
   const reconciledResets = await reconcileScopedResetIntents();
   if (reconciledResets > 0) {
-    log(`reconciled ${reconciledResets} durable private Telegram reset intent(s)`);
+    log(
+      `reconciled ${reconciledResets} durable private Telegram reset intent(s)`,
+    );
   }
   // Читаем offset ДО любого destructive Telegram-вызова: EACCES/EIO/битый JSON
   // останавливают мост, пока backlog ещё цел. Только подтверждённый ENOENT означает
@@ -50,7 +69,10 @@ export async function main() {
   // On subsequent starts we do NOT drop the backlog (don't lose messages that arrived while the bridge was down).
   const firstRun = offset === null;
   const dw = await tg("deleteWebhook", { drop_pending_updates: firstRun });
-  log("deleteWebhook:", dw.ok ? `ok (drop_pending=${firstRun})` : dw.description);
+  log(
+    "deleteWebhook:",
+    dw.ok ? `ok (drop_pending=${firstRun})` : dw.description,
+  );
   await registerBotCommands();
 
   if (offset === null) {
@@ -75,7 +97,9 @@ export async function main() {
       const routed = await routeMessageUpdate(update);
       if (routed === "delivered") {
         delivered =
-          delivered === null ? update.update_id : Math.max(delivered, update.update_id);
+          delivered === null
+            ? update.update_id
+            : Math.max(delivered, update.update_id);
         await saveOffset(offset, delivered);
       } else if (routed === "queued") {
         pendingQueueCount = Math.max(1, pendingQueueCount);
@@ -92,11 +116,15 @@ export async function main() {
       pendingQueueCount > 0 || collectorPending(messageCollector) > 0 ? 1 : 30;
     let data;
     try {
-      data = await tg("getUpdates", {
-        offset,
-        timeout: pollSeconds,
-        allowed_updates: ["message", "callback_query"],
-      }, { timeoutMs: pollSeconds > 1 ? 40_000 : 10_000 });
+      data = await tg(
+        "getUpdates",
+        {
+          offset,
+          timeout: pollSeconds,
+          allowed_updates: ["message", "callback_query"],
+        },
+        { timeoutMs: pollSeconds > 1 ? 40_000 : 10_000 },
+      );
     } catch (e) {
       log("getUpdates network:", e.message);
       await sleep(3000);
@@ -116,7 +144,9 @@ export async function main() {
       // Переигровка после краша (Telegram = at-least-once): этот апдейт уже уходил в eve
       // в прошлой жизни процесса — второй раз не доставляем, только двигаем offset.
       if (alreadyDelivered(update.update_id, delivered)) {
-        log(`skip update ${update.update_id} — already delivered before restart`);
+        log(
+          `skip update ${update.update_id} — already delivered before restart`,
+        );
         offset = update.update_id + 1;
         await saveOffset(offset, delivered);
         continue;
@@ -157,7 +187,9 @@ export async function main() {
       if (!collected) offset = update.update_id + 1;
       if (routed === "delivered") {
         delivered =
-          delivered === null ? candidate.update_id : Math.max(delivered, candidate.update_id);
+          delivered === null
+            ? candidate.update_id
+            : Math.max(delivered, candidate.update_id);
       }
       await saveOffset(offset, delivered);
     }

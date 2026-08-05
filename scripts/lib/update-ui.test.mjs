@@ -1,26 +1,52 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { modelSummary } from "./model-summary.mjs";
 import { createTerminalProgress } from "./progress.mjs";
-import { createTelegramUpdateReporter, UPDATE_LOADER } from "./telegram-status.mjs";
-import { acquireUpdateLock, createUpdateTransaction, releaseUpdateLock } from "./update-safety.mjs";
+import {
+  createTelegramUpdateReporter,
+  UPDATE_LOADER,
+} from "./telegram-status.mjs";
+import {
+  acquireUpdateLock,
+  createUpdateTransaction,
+  releaseUpdateLock,
+} from "./update-safety.mjs";
 
 test("modelSummary uses configured provider values without runtime defaults", () => {
-  assert.deepEqual(modelSummary({ MODEL_PROVIDER: "codex", CODEX_MODEL: "gpt-5.5", CODEX_CONTEXT_WINDOW: "272000" }), {
-    provider: "OpenAI",
-    model: "gpt-5.5",
-    contextWindow: 272000,
-    line: "OpenAI · gpt-5.5",
-  });
+  assert.deepEqual(
+    modelSummary({
+      MODEL_PROVIDER: "codex",
+      CODEX_MODEL: "gpt-5.5",
+      CODEX_CONTEXT_WINDOW: "272000",
+    }),
+    {
+      provider: "OpenAI",
+      model: "gpt-5.5",
+      contextWindow: 272000,
+      line: "OpenAI · gpt-5.5",
+    },
+  );
 });
 
 test("terminal progress is deterministic outside a TTY", () => {
   let output = "";
-  const stream = { isTTY: false, write: (chunk) => { output += chunk; } };
+  const stream = {
+    isTTY: false,
+    write: (chunk) => {
+      output += chunk;
+    },
+  };
   const progress = createTerminalProgress({ stream, env: {} });
   progress.start("Saving changes");
   progress.done("Changes saved");
@@ -30,8 +56,17 @@ test("terminal progress is deterministic outside a TTY", () => {
 
 test("terminal progress restores the cursor when disposed", () => {
   let output = "";
-  const stream = { isTTY: true, write: (chunk) => { output += chunk; } };
-  const progress = createTerminalProgress({ stream, env: { TERM: "xterm" }, intervalMs: 60_000 });
+  const stream = {
+    isTTY: true,
+    write: (chunk) => {
+      output += chunk;
+    },
+  };
+  const progress = createTerminalProgress({
+    stream,
+    env: { TERM: "xterm" },
+    intervalMs: 60_000,
+  });
   progress.start("Building");
   progress.dispose();
   assert.match(output, /\x1b\[\?25l/);
@@ -62,23 +97,36 @@ test("Telegram update edits one message through every phase and final result", a
   await reporter.done("fetch");
   await reporter.start("build");
   await reporter.done("build");
-  await reporter.complete({ beforeVersion: "v1", afterVersion: "v2", changedLocal: true });
+  await reporter.complete({
+    beforeVersion: "v1",
+    afterVersion: "v2",
+    changedLocal: true,
+  });
   reporter.dispose();
 
   assert.equal(calls.filter((call) => call.method === "sendMessage").length, 0);
   const edits = calls.filter((call) => call.method === "editMessageText");
   assert.equal(edits.length, 4);
-  assert.deepEqual(edits.map((call) => call.body.message_id), [100, 100, 100, 100]);
-  assert.deepEqual(edits.slice(0, 3).map((call) => call.body.entities[0].custom_emoji_id), [
-    UPDATE_LOADER.customEmojiId,
-    UPDATE_LOADER.customEmojiId,
-    UPDATE_LOADER.customEmojiId,
-  ]);
-  assert.deepEqual(edits.slice(0, 3).map((call) => call.body.text), [
-    `${UPDATE_LOADER.alt} Сохраняю ваши изменения`,
-    `${UPDATE_LOADER.alt} Получаю обновление`,
-    `${UPDATE_LOADER.alt} Собираю Iva`,
-  ]);
+  assert.deepEqual(
+    edits.map((call) => call.body.message_id),
+    [100, 100, 100, 100],
+  );
+  assert.deepEqual(
+    edits.slice(0, 3).map((call) => call.body.entities[0].custom_emoji_id),
+    [
+      UPDATE_LOADER.customEmojiId,
+      UPDATE_LOADER.customEmojiId,
+      UPDATE_LOADER.customEmojiId,
+    ],
+  );
+  assert.deepEqual(
+    edits.slice(0, 3).map((call) => call.body.text),
+    [
+      `${UPDATE_LOADER.alt} Сохраняю ваши изменения`,
+      `${UPDATE_LOADER.alt} Получаю обновление`,
+      `${UPDATE_LOADER.alt} Собираю Iva`,
+    ],
+  );
   assert.match(edits[3].body.text, /Iva обновлена/);
   assert.match(edits[3].body.text, /OpenAI · gpt-5.5/);
   assert.equal(edits[3].body.entities, undefined);
@@ -90,9 +138,20 @@ test("Telegram does not recreate phase messages after the active message was del
     const method = url.split("/").at(-1);
     calls.push({ method, body: JSON.parse(init.body) });
     if (method === "editMessageText") {
-      return { ok: false, status: 400, json: async () => ({ ok: false, description: "Bad Request: message to edit not found" }) };
+      return {
+        ok: false,
+        status: 400,
+        json: async () => ({
+          ok: false,
+          description: "Bad Request: message to edit not found",
+        }),
+      };
     }
-    return { ok: true, status: 200, json: async () => ({ ok: true, result: { message_id: 200 } }) };
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ ok: true, result: { message_id: 200 } }),
+    };
   };
   const reporter = createTelegramUpdateReporter({
     token: "token",
@@ -105,7 +164,11 @@ test("Telegram does not recreate phase messages after the active message was del
   await reporter.start("build");
   await reporter.complete({ beforeVersion: "v1", afterVersion: "v2" });
   reporter.dispose();
-  assert.equal(calls.filter((call) => call.method === "sendMessage").length, 1, "only the final result is recreated");
+  assert.equal(
+    calls.filter((call) => call.method === "sendMessage").length,
+    1,
+    "only the final result is recreated",
+  );
 });
 
 test("Telegram retries 429 without downgrading the custom emoji and deduplicates phase edits", async () => {
@@ -115,9 +178,17 @@ test("Telegram retries 429 without downgrading the custom emoji and deduplicates
     calls.push({ method: url.split("/").at(-1), body: JSON.parse(init.body) });
     if (first) {
       first = false;
-      return { ok: false, status: 429, json: async () => ({ ok: false, parameters: { retry_after: 1 } }) };
+      return {
+        ok: false,
+        status: 429,
+        json: async () => ({ ok: false, parameters: { retry_after: 1 } }),
+      };
     }
-    return { ok: true, status: 200, json: async () => ({ ok: true, result: {} }) };
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ ok: true, result: {} }),
+    };
   };
   const reporter = createTelegramUpdateReporter({
     token: "token",
@@ -132,7 +203,12 @@ test("Telegram retries 429 without downgrading the custom emoji and deduplicates
   await reporter.done("protect");
   reporter.dispose();
   assert.equal(calls.length, 2, "one retry and no duplicate edit");
-  assert.ok(calls.every((call) => call.body.entities?.[0].custom_emoji_id === UPDATE_LOADER.customEmojiId));
+  assert.ok(
+    calls.every(
+      (call) =>
+        call.body.entities?.[0].custom_emoji_id === UPDATE_LOADER.customEmojiId,
+    ),
+  );
 });
 
 test("Telegram falls back to a simple Unicode marker when custom emoji is unavailable", async () => {
@@ -144,10 +220,17 @@ test("Telegram falls back to a simple Unicode marker when custom emoji is unavai
       return {
         ok: false,
         status: 400,
-        json: async () => ({ ok: false, description: "Bad Request: custom emoji entities are not allowed" }),
+        json: async () => ({
+          ok: false,
+          description: "Bad Request: custom emoji entities are not allowed",
+        }),
       };
     }
-    return { ok: true, status: 200, json: async () => ({ ok: true, result: {} }) };
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ ok: true, result: {} }),
+    };
   };
   const reporter = createTelegramUpdateReporter({
     token: "token",
@@ -161,8 +244,14 @@ test("Telegram falls back to a simple Unicode marker when custom emoji is unavai
 
   assert.equal(calls.length, 3);
   assert.ok(calls[0].body.entities);
-  assert.equal(calls[1].body.text, `${UPDATE_LOADER.fallback} Saving your changes`);
-  assert.equal(calls[2].body.text, `${UPDATE_LOADER.fallback} Getting the update`);
+  assert.equal(
+    calls[1].body.text,
+    `${UPDATE_LOADER.fallback} Saving your changes`,
+  );
+  assert.equal(
+    calls[2].body.text,
+    `${UPDATE_LOADER.fallback} Getting the update`,
+  );
   assert.equal(calls[1].body.entities, undefined);
   assert.equal(calls[2].body.entities, undefined);
 });
@@ -171,7 +260,11 @@ test("Telegram update failure replaces the active phase in the same message", as
   const calls = [];
   const fetchImpl = async (url, init) => {
     calls.push({ method: url.split("/").at(-1), body: JSON.parse(init.body) });
-    return { ok: true, status: 200, json: async () => ({ ok: true, result: {} }) };
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ ok: true, result: {} }),
+    };
   };
   const reporter = createTelegramUpdateReporter({
     token: "token",
@@ -184,7 +277,10 @@ test("Telegram update failure replaces the active phase in the same message", as
   reporter.dispose();
 
   assert.equal(calls.filter((call) => call.method === "sendMessage").length, 0);
-  assert.deepEqual(calls.map((call) => call.body.message_id), [100, 100]);
+  assert.deepEqual(
+    calls.map((call) => call.body.message_id),
+    [100, 100],
+  );
   assert.match(calls[1].body.text, /Couldn't get the update/);
   assert.match(calls[1].body.text, /still running v1/);
 });
@@ -210,17 +306,27 @@ test("update callback is acknowledged before any message edit", async () => {
     });
     assert.deepEqual(calls, ["answerCallbackQuery", "editMessageText"]);
     assert.deepEqual(
-      bridge.resetMessageCopy("/new", { MODEL_PROVIDER: "codex", CODEX_MODEL: "gpt-5.5", CODEX_CONTEXT_WINDOW: "272000" }, "ru"),
+      bridge.resetMessageCopy(
+        "/new",
+        {
+          MODEL_PROVIDER: "codex",
+          CODEX_MODEL: "gpt-5.5",
+          CODEX_CONTEXT_WINDOW: "272000",
+        },
+        "ru",
+      ),
       {
         pending: "◇ Начинаю новый диалог",
-        complete: "✨ Новый диалог готов\n\nМодель: OpenAI · gpt-5.5\nКонтекст очищен · окно 272k",
+        complete:
+          "✨ Новый диалог готов\n\nМодель: OpenAI · gpt-5.5\nКонтекст очищен · окно 272k",
       },
     );
   } finally {
     globalThis.fetch = previousFetch;
     if (previousToken === undefined) delete process.env.TELEGRAM_BOT_TOKEN;
     else process.env.TELEGRAM_BOT_TOKEN = previousToken;
-    if (previousAllowed === undefined) delete process.env.TELEGRAM_ALLOWED_USER_IDS;
+    if (previousAllowed === undefined)
+      delete process.env.TELEGRAM_ALLOWED_USER_IDS;
     else process.env.TELEGRAM_ALLOWED_USER_IDS = previousAllowed;
   }
 });
@@ -228,7 +334,12 @@ test("update callback is acknowledged before any message edit", async () => {
 test("up-to-date check shows the model from fresh .env, not this process's snapshot", async () => {
   const previousFetch = globalThis.fetch;
   const previousEnv = Object.fromEntries(
-    ["TELEGRAM_BOT_TOKEN", "TELEGRAM_ALLOWED_USER_IDS", "MODEL_PROVIDER", "OPENCODE_MODEL"].map((k) => [k, process.env[k]]),
+    [
+      "TELEGRAM_BOT_TOKEN",
+      "TELEGRAM_ALLOWED_USER_IDS",
+      "MODEL_PROVIDER",
+      "OPENCODE_MODEL",
+    ].map((k) => [k, process.env[k]]),
   );
   process.env.TELEGRAM_BOT_TOKEN = "token";
   process.env.TELEGRAM_ALLOWED_USER_IDS = "42";
@@ -238,13 +349,22 @@ test("up-to-date check shows the model from fresh .env, not this process's snaps
   const calls = [];
   globalThis.fetch = async (url, init) => {
     calls.push({ method: url.split("/").at(-1), body: JSON.parse(init.body) });
-    return { ok: true, json: async () => ({ ok: true, result: { message_id: 10 } }) };
+    return {
+      ok: true,
+      json: async () => ({ ok: true, result: { message_id: 10 } }),
+    };
   };
   try {
     const bridge = await import(`../telegram-poll.mjs?fresh=${Date.now()}`);
     await bridge.handleUpdateCheck(1, {
-      inspectImpl: async () => ({ hasCommitUpdate: false, localVersion: "1.2.3" }),
-      envImpl: async () => ({ MODEL_PROVIDER: "codex", CODEX_MODEL: "fresh-model" }),
+      inspectImpl: async () => ({
+        hasCommitUpdate: false,
+        localVersion: "1.2.3",
+      }),
+      envImpl: async () => ({
+        MODEL_PROVIDER: "codex",
+        CODEX_MODEL: "fresh-model",
+      }),
     });
     const edit = calls.find((call) => call.method === "editMessageText");
     assert.match(edit.body.text, /OpenAI · fresh-model/);
@@ -270,7 +390,11 @@ test("manual update offer keeps commit-based behavior and marks a stable release
     calls.push({ method, body });
     return {
       ok: true,
-      json: async () => ({ ok: true, result: method === "sendMessage" ? { message_id: 10 } : { message_id: 10 } }),
+      json: async () => ({
+        ok: true,
+        result:
+          method === "sendMessage" ? { message_id: 10 } : { message_id: 10 },
+      }),
     };
   };
   try {
@@ -285,14 +409,18 @@ test("manual update offer keeps commit-based behavior and marks a stable release
       }),
       markNotifiedImpl: async (_dataDir, version) => marked.push(version),
     });
-    assert.deepEqual(calls.map((call) => call.method), ["sendMessage", "editMessageText"]);
+    assert.deepEqual(
+      calls.map((call) => call.method),
+      ["sendMessage", "editMessageText"],
+    );
     assert.equal(calls[1].body.reply_markup.inline_keyboard[0].length, 2);
     assert.deepEqual(marked, ["1.2.4"]);
   } finally {
     globalThis.fetch = previousFetch;
     if (previousToken === undefined) delete process.env.TELEGRAM_BOT_TOKEN;
     else process.env.TELEGRAM_BOT_TOKEN = previousToken;
-    if (previousAllowed === undefined) delete process.env.TELEGRAM_ALLOWED_USER_IDS;
+    if (previousAllowed === undefined)
+      delete process.env.TELEGRAM_ALLOWED_USER_IDS;
     else process.env.TELEGRAM_ALLOWED_USER_IDS = previousAllowed;
   }
 });
@@ -346,7 +474,10 @@ test("safe update preserves staged, unstaged and untracked user files", async ()
   git(temp, "init", "-b", "main", seed);
   configureGit(seed);
   writeFileSync(join(seed, ".gitignore"), ".env\n.output\n");
-  writeFileSync(join(seed, "package.json"), JSON.stringify({ version: "1.0.0" }));
+  writeFileSync(
+    join(seed, "package.json"),
+    JSON.stringify({ version: "1.0.0" }),
+  );
   writeFileSync(join(seed, "tracked.txt"), "base\n");
   git(seed, "add", ".");
   git(seed, "commit", "-m", "base");
@@ -356,7 +487,10 @@ test("safe update preserves staged, unstaged and untracked user files", async ()
   configureGit(local);
 
   writeFileSync(join(seed, "upstream.txt"), "upstream\n");
-  writeFileSync(join(seed, "package.json"), JSON.stringify({ version: "1.1.0" }));
+  writeFileSync(
+    join(seed, "package.json"),
+    JSON.stringify({ version: "1.1.0" }),
+  );
   git(seed, "add", ".");
   git(seed, "commit", "-m", "upstream");
   git(seed, "push", "origin", "main");
@@ -377,9 +511,15 @@ test("safe update preserves staged, unstaged and untracked user files", async ()
   const result = await tx.fetchAndIntegrate();
   await tx.restoreLocalChanges();
   assert.equal(result.changed, true);
-  assert.equal(readFileSync(join(local, "tracked.txt"), "utf8"), "user change\n");
+  assert.equal(
+    readFileSync(join(local, "tracked.txt"), "utf8"),
+    "user change\n",
+  );
   assert.equal(readFileSync(join(local, "unstaged.txt"), "utf8"), "unstaged\n");
-  assert.equal(readFileSync(join(local, "custom-skill.txt"), "utf8"), "custom\n");
+  assert.equal(
+    readFileSync(join(local, "custom-skill.txt"), "utf8"),
+    "custom\n",
+  );
   assert.equal(readFileSync(join(local, ".env"), "utf8"), "SECRET=kept\n");
   assert.equal(readFileSync(join(local, "upstream.txt"), "utf8"), "upstream\n");
   assert.match(git(local, "status", "--porcelain=v1"), /^M  tracked\.txt/m);
@@ -396,7 +536,10 @@ test("safe update migrates a merged legacy branch to the main channel", async ()
   git(temp, "init", "--bare", remote);
   git(temp, "init", "-b", "main", seed);
   configureGit(seed);
-  writeFileSync(join(seed, "package.json"), JSON.stringify({ version: "1.0.0" }));
+  writeFileSync(
+    join(seed, "package.json"),
+    JSON.stringify({ version: "1.0.0" }),
+  );
   writeFileSync(join(seed, "base.txt"), "base\n");
   git(seed, "add", ".");
   git(seed, "commit", "-m", "base");
@@ -412,7 +555,12 @@ test("safe update migrates a merged legacy branch to the main channel", async ()
   git(seed, "push", "origin", "main");
   const expected = git(seed, "rev-parse", "HEAD");
 
-  const tx = createUpdateTransaction({ root: local, dataDir: data, envPath: join(local, ".env"), logFile: join(temp, "log") });
+  const tx = createUpdateTransaction({
+    root: local,
+    dataDir: data,
+    envPath: join(local, ".env"),
+    logFile: join(temp, "log"),
+  });
   await tx.protect();
   const update = await tx.fetchAndIntegrate();
   await tx.restoreLocalChanges();
@@ -420,7 +568,10 @@ test("safe update migrates a merged legacy branch to the main channel", async ()
   assert.equal(update.branch, "main");
   assert.equal(git(local, "rev-parse", "HEAD"), expected);
   await tx.commit();
-  assert.equal(git(local, "config", "--local", "--get", "iva.updateBranch"), "main");
+  assert.equal(
+    git(local, "config", "--local", "--get", "iva.updateBranch"),
+    "main",
+  );
 });
 
 function updateFixture() {
@@ -433,7 +584,10 @@ function updateFixture() {
   git(temp, "init", "-b", "main", seed);
   configureGit(seed);
   writeFileSync(join(seed, ".gitignore"), ".env\n.output\n");
-  writeFileSync(join(seed, "package.json"), JSON.stringify({ version: "1.0.0" }));
+  writeFileSync(
+    join(seed, "package.json"),
+    JSON.stringify({ version: "1.0.0" }),
+  );
   writeFileSync(join(seed, "tracked.txt"), "base\n");
   git(seed, "add", ".");
   git(seed, "commit", "-m", "base");
@@ -459,7 +613,12 @@ test("stash conflict rolls back HEAD, output and user files byte-for-byte", asyn
   git(seed, "commit", "-m", "conflicting upstream");
   git(seed, "push", "origin", "main");
 
-  const tx = createUpdateTransaction({ root: local, dataDir: data, envPath: join(local, ".env"), logFile: join(temp, "log") });
+  const tx = createUpdateTransaction({
+    root: local,
+    dataDir: data,
+    envPath: join(local, ".env"),
+    logFile: join(temp, "log"),
+  });
   await tx.protect();
   await tx.fetchAndIntegrate();
   await assert.rejects(() => tx.restoreLocalChanges(), /conflict/);
@@ -470,11 +629,24 @@ test("stash conflict rolls back HEAD, output and user files byte-for-byte", asyn
   await tx.rollback();
 
   assert.equal(git(local, "rev-parse", "HEAD"), originalHead);
-  assert.equal(readFileSync(join(local, "tracked.txt"), "utf8"), "user version\n");
-  assert.deepEqual(readFileSync(join(local, "custom.bin")), Buffer.from([0, 1, 2, 255]));
+  assert.equal(
+    readFileSync(join(local, "tracked.txt"), "utf8"),
+    "user version\n",
+  );
+  assert.deepEqual(
+    readFileSync(join(local, "custom.bin")),
+    Buffer.from([0, 1, 2, 255]),
+  );
   assert.equal(readFileSync(join(local, ".env"), "utf8"), "SECRET=before\n");
-  assert.equal(readFileSync(join(local, ".output", "server"), "utf8"), "old build");
-  assert.notEqual(git(local, "stash", "list"), "", "protective stash is retained after rollback");
+  assert.equal(
+    readFileSync(join(local, ".output", "server"), "utf8"),
+    "old build",
+  );
+  assert.notEqual(
+    git(local, "stash", "list"),
+    "",
+    "protective stash is retained after rollback",
+  );
   assert.equal(existsSync(join(local, ".output.iva-backup")), false);
 });
 
@@ -488,12 +660,20 @@ test("conflicting local commits abort rebase and restore the original branch", a
   git(seed, "add", "tracked.txt");
   git(seed, "commit", "-m", "upstream");
   git(seed, "push", "origin", "main");
-  const tx = createUpdateTransaction({ root: local, dataDir: data, envPath: join(local, ".env"), logFile: join(temp, "log") });
+  const tx = createUpdateTransaction({
+    root: local,
+    dataDir: data,
+    envPath: join(local, ".env"),
+    logFile: join(temp, "log"),
+  });
   await tx.protect();
   await assert.rejects(() => tx.fetchAndIntegrate(), /local commits conflict/);
   await tx.rollback();
   assert.equal(git(local, "rev-parse", "HEAD"), originalHead);
-  assert.equal(readFileSync(join(local, "tracked.txt"), "utf8"), "local commit\n");
+  assert.equal(
+    readFileSync(join(local, "tracked.txt"), "utf8"),
+    "local commit\n",
+  );
   assert.equal(git(local, "status", "--porcelain=v1"), "");
 });
 
@@ -512,8 +692,18 @@ function candidateFixture({ buildScript = FAKE_BUILD } = {}) {
   git(temp, "init", "--bare", remote);
   git(temp, "init", "-b", "main", seed);
   configureGit(seed);
-  writeFileSync(join(seed, ".gitignore"), ".env\n.output\n/.iva-update/\nnode_modules\n");
-  writeFileSync(join(seed, "package.json"), JSON.stringify({ name: "fixture", version: "1.0.0", scripts: { build: buildScript } }));
+  writeFileSync(
+    join(seed, ".gitignore"),
+    ".env\n.output\n/.iva-update/\nnode_modules\n",
+  );
+  writeFileSync(
+    join(seed, "package.json"),
+    JSON.stringify({
+      name: "fixture",
+      version: "1.0.0",
+      scripts: { build: buildScript },
+    }),
+  );
   writeFileSync(join(seed, "tracked.txt"), "base\n");
   git(seed, "add", ".");
   git(seed, "commit", "-m", "base");
@@ -547,22 +737,32 @@ function candidateTx({ local, temp, data }) {
 
 test("update candidate builds in a worktree and is promoted after a clean fast-forward", async () => {
   const fx = candidateFixture();
-  const target = pushUpstream(fx.seed, (seed) => {
-    writeFileSync(join(seed, "tracked.txt"), "v2\n");
-  }, "bump");
+  const target = pushUpstream(
+    fx.seed,
+    (seed) => {
+      writeFileSync(join(seed, "tracked.txt"), "v2\n");
+    },
+    "bump",
+  );
   const tx = candidateTx(fx);
   await tx.protect();
   const update = await tx.resolveTarget();
   assert.equal(update.plan, "fast-forward");
   const candidate = await tx.buildCandidate({ npm: "npm" });
   assert.ok(candidate, "clean fast-forward must produce a candidate");
-  assert.equal(readFileSync(join(fx.local, ".output/server/marker.txt"), "utf8"), "live");
+  assert.equal(
+    readFileSync(join(fx.local, ".output/server/marker.txt"), "utf8"),
+    "live",
+  );
   await tx.fetchAndIntegrate();
   assert.equal(await tx.promoteCandidate(), true);
   await tx.commit();
   await tx.teardownCandidate();
   assert.equal(git(fx.local, "rev-parse", "HEAD"), target);
-  assert.equal(readFileSync(join(fx.local, ".output/server/marker.txt"), "utf8"), "v2");
+  assert.equal(
+    readFileSync(join(fx.local, ".output/server/marker.txt"), "utf8"),
+    "v2",
+  );
   assert.equal(existsSync(join(fx.local, ".iva-update")), false);
   assert.equal(git(fx.local, "stash", "list"), "");
   assert.equal(git(fx.local, "worktree", "list").split("\n").length, 1);
@@ -570,31 +770,48 @@ test("update candidate builds in a worktree and is promoted after a clean fast-f
 
 test("broken candidate build aborts before the live checkout is touched", async () => {
   const fx = candidateFixture();
-  pushUpstream(fx.seed, (seed) => {
-    const pkg = JSON.parse(readFileSync(join(seed, "package.json"), "utf8"));
-    pkg.version = "1.1.0";
-    pkg.scripts.build = "node -e \"process.exit(1)\"";
-    writeFileSync(join(seed, "package.json"), JSON.stringify(pkg));
-  }, "broken build");
+  pushUpstream(
+    fx.seed,
+    (seed) => {
+      const pkg = JSON.parse(readFileSync(join(seed, "package.json"), "utf8"));
+      pkg.version = "1.1.0";
+      pkg.scripts.build = 'node -e "process.exit(1)"';
+      writeFileSync(join(seed, "package.json"), JSON.stringify(pkg));
+    },
+    "broken build",
+  );
   const baseline = git(fx.local, "rev-parse", "HEAD");
   const tx = candidateTx(fx);
   await tx.protect();
   await tx.resolveTarget();
-  await assert.rejects(() => tx.buildCandidate({ npm: "npm" }), /candidate build failed/);
+  await assert.rejects(
+    () => tx.buildCandidate({ npm: "npm" }),
+    /candidate build failed/,
+  );
   assert.equal(tx.outputTouched, false);
   await tx.rollback();
   assert.equal(git(fx.local, "rev-parse", "HEAD"), baseline);
-  assert.equal(readFileSync(join(fx.local, ".output/server/marker.txt"), "utf8"), "live");
+  assert.equal(
+    readFileSync(join(fx.local, ".output/server/marker.txt"), "utf8"),
+    "live",
+  );
   assert.equal(existsSync(join(fx.local, ".iva-update")), false);
 });
 
 test("changed lockfile installs candidate dependencies and promotes fresh node_modules", async () => {
   const fx = candidateFixture();
   const npmLock = (cwd) =>
-    execFileSync("npm", ["install", "--package-lock-only", "--no-audit", "--no-fund"], { cwd, encoding: "utf8" });
+    execFileSync(
+      "npm",
+      ["install", "--package-lock-only", "--no-audit", "--no-fund"],
+      { cwd, encoding: "utf8" },
+    );
   const writeDep = (seed, version) => {
     mkdirSync(join(seed, "dep"), { recursive: true });
-    writeFileSync(join(seed, "dep/package.json"), JSON.stringify({ name: "dep", version }));
+    writeFileSync(
+      join(seed, "dep/package.json"),
+      JSON.stringify({ name: "dep", version }),
+    );
   };
   writeDep(fx.seed, "1.0.0");
   const pkg = JSON.parse(readFileSync(join(fx.seed, "package.json"), "utf8"));
@@ -607,13 +824,19 @@ test("changed lockfile installs candidate dependencies and promotes fresh node_m
   git(fx.local, "pull", "--ff-only");
   mkdirSync(join(fx.local, "node_modules"), { recursive: true });
   writeFileSync(join(fx.local, "node_modules/sentinel.txt"), "old-deps");
-  pushUpstream(fx.seed, (seed) => {
-    const bumped = JSON.parse(readFileSync(join(seed, "package.json"), "utf8"));
-    bumped.version = "1.1.0";
-    writeFileSync(join(seed, "package.json"), JSON.stringify(bumped));
-    writeDep(seed, "1.1.0");
-    npmLock(seed);
-  }, "bump deps");
+  pushUpstream(
+    fx.seed,
+    (seed) => {
+      const bumped = JSON.parse(
+        readFileSync(join(seed, "package.json"), "utf8"),
+      );
+      bumped.version = "1.1.0";
+      writeFileSync(join(seed, "package.json"), JSON.stringify(bumped));
+      writeDep(seed, "1.1.0");
+      npmLock(seed);
+    },
+    "bump deps",
+  );
   const tx = candidateTx(fx);
   await tx.protect();
   await tx.resolveTarget();
@@ -626,16 +849,25 @@ test("changed lockfile installs candidate dependencies and promotes fresh node_m
   assert.equal(existsSync(join(fx.local, "node_modules/dep")), true);
   await tx.commit();
   await tx.teardownCandidate();
-  assert.equal(readFileSync(join(fx.local, ".output/server/marker.txt"), "utf8"), "base");
-  const leftovers = readdirSync(fx.local).filter((name) => name.startsWith("node_modules.iva-backup-"));
+  assert.equal(
+    readFileSync(join(fx.local, ".output/server/marker.txt"), "utf8"),
+    "base",
+  );
+  const leftovers = readdirSync(fx.local).filter((name) =>
+    name.startsWith("node_modules.iva-backup-"),
+  );
   assert.deepEqual(leftovers, []);
 });
 
 test("local commits skip the candidate and keep the in-place path", async () => {
   const fx = candidateFixture();
-  pushUpstream(fx.seed, (seed) => {
-    writeFileSync(join(seed, "upstream.txt"), "upstream\n");
-  }, "upstream");
+  pushUpstream(
+    fx.seed,
+    (seed) => {
+      writeFileSync(join(seed, "upstream.txt"), "upstream\n");
+    },
+    "upstream",
+  );
   writeFileSync(join(fx.local, "local.txt"), "local\n");
   git(fx.local, "add", "local.txt");
   git(fx.local, "commit", "-m", "local commit");

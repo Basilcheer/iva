@@ -1,6 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { alreadyDelivered, parseOffsetFile, serializeOffsetFile } from "./offset-store.mjs";
+import {
+  alreadyDelivered,
+  parseOffsetFile,
+  serializeOffsetFile,
+} from "./offset-store.mjs";
 
 test("round-trip offset + delivered", () => {
   const raw = serializeOffsetFile(42, 41);
@@ -8,7 +12,10 @@ test("round-trip offset + delivered", () => {
 });
 
 test("легаси-файл без delivered читается, битый JSON отвергается", () => {
-  assert.deepEqual(parseOffsetFile('{"offset":7}'), { offset: 7, delivered: null });
+  assert.deepEqual(parseOffsetFile('{"offset":7}'), {
+    offset: 7,
+    delivered: null,
+  });
   assert.deepEqual(parseOffsetFile('{"offset":7,"delivered":null}'), {
     offset: 7,
     delivered: null,
@@ -24,8 +31,16 @@ test("alreadyDelivered: пропускаем только то, что уже у
 });
 
 test("маркер — не вечная граница: далёкое прошлое вне окна доставляется", () => {
-  assert.equal(alreadyDelivered(5, 5_000_000), false, "перевыдача id с другой базы — не глотаем");
-  assert.equal(alreadyDelivered(4_999_999, 5_000_000), true, "в пределах окна — дубль");
+  assert.equal(
+    alreadyDelivered(5, 5_000_000),
+    false,
+    "перевыдача id с другой базы — не глотаем",
+  );
+  assert.equal(
+    alreadyDelivered(4_999_999, 5_000_000),
+    true,
+    "в пределах окна — дубль",
+  );
 });
 
 test("невалидные значения делают существующий файл невалидным", () => {

@@ -313,8 +313,8 @@
   - on read — `continuationTokenForControl`, the stale-run reaper (which reads
     `status.continuationToken` directly) and `reconcileScopedResetIntents` (a durable intent
     may have been written by an older version).
-  Statuses poisoned by earlier versions therefore heal on the next turn or `/new` instead of
-  needing a migration.
+    Statuses poisoned by earlier versions therefore heal on the next turn or `/new` instead of
+    needing a migration.
 - On an Eve bump: re-check what `channel.continuationToken` yields in event handlers. If Eve
   ever hands out the channel-local token there, the helper stays correct (it is idempotent),
   but `scripts/lib/telegram-reset.test.mjs` is the place that pins the expectation. If the
@@ -337,7 +337,7 @@
 - One line per model step in `data/usage.jsonl`, grouped into turns. `sessionId:turnId` is not
   unique on its own: Eve numbers turns per session as `turn_<sequence>`, so a week-old `turn_0`
   and today's `turn_0` look identical, and an inline subagent restarts the counter while the
-  hook records its steps under the *parent* `sessionId`.
+  hook records its steps under the _parent_ `sessionId`.
 - The write side removes the ambiguity: a subagent step is logged with the parent's turn id and
   a suffix, `<parent turnId>#<subagentName>` (`agent/hooks/usage.ts`). The key is unique by
   construction, and the part before `#` keeps the step attached to the parent turn, so the
@@ -378,12 +378,14 @@
   presence of an empty string records a successful empty result.
 - Both stores use the existing JSON-store primitives and bounded JSON files under
   `ASSISTANT_DATA_DIR`; no delivery timeout or direct-delivery policy changed.
+
 ## Rollup writer safety (v0.3.11)
 
 - База ветки: `origin/main` (`b464b74a22eb4f2c0dce4ab888d2a9b62bad0658`).
 - Fresh retry сохраняет прежнюю единственную попытку только для явно отклонённого `send` или терминально подтверждённой отмены.
 - Зависший до разрешения `send` считается потенциально принятым сервером: ответ `cancel: accepted` только принимает сигнал и не разрешает retry. Безопасную границу подтверждает `no_active_turn` либо событие `turn.cancelled` в дочитанном потоке.
 - При неподтверждённой отмене сохранённый курсор остаётся на диске, а исходная ошибка выходит наверх.
+
 ## Security honesty and documentation sync (v0.3.11)
 
 - Media-processing errors use the same token-redacted detail in user messages and model
@@ -409,6 +411,7 @@
   four memory-schedule status records, while `iva status` reports systemd units only.
 - PHILOSOPHY.md now records the project boundary rules and explicit removal points for
   local workarounds.
+
 ## Memory and configuration integrity (v0.3.11)
 
 - TypeScript and Python frontmatter parsers keep blank lines inside block scalars. Strings
@@ -422,6 +425,7 @@
 - CORE truncation removes a mutable bullet when fewer than two marker characters survive;
   a complete `-` plus its following space may still receive the ellipsis. Pointers remain
   immutable.
+
 ## Telegram offset durability (v0.3.11)
 
 - Only ENOENT represents first run. Existing JSON, schema, permission, and I/O failures stop
@@ -432,6 +436,7 @@
 - The first-run tail lookup also fails closed on Telegram or response-shape errors; falling
   back to offset 0 after such an error could replay the installation backlog. An actually empty
   Telegram result still stores offset 0. Per-call tmp suffixes avoid overlap.
+
 ## Schedule migration durability (v0.3.11)
 
 - Memory catch-up baselines are seeded per key under the shared status lock. Existing
@@ -442,6 +447,7 @@
   while old ownerless markers keep the time-based compatibility rule.
 - Completion and cleanup mutate status only while holding the status lock and keep a
   reservation marked locally until its removal write succeeds.
+
 ## fix/reminder-node-runtime
 
 - Kept the security gate deterministic and dependency-free.

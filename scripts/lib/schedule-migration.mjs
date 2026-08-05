@@ -20,7 +20,12 @@ import { existsSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 
-import { readStatus, runScheduledJob, withStatusLock, writeStatusAtomic } from "./schedule-runner.mjs";
+import {
+  readStatus,
+  runScheduledJob,
+  withStatusLock,
+  writeStatusAtomic,
+} from "./schedule-runner.mjs";
 
 export const LEGACY_MEMORY_UNITS = [
   "iva-memory-daily.service",
@@ -52,7 +57,12 @@ function statusKey(period) {
 
 function defaultExecImpl(args) {
   const r = spawnSync("systemctl", args, { encoding: "utf8" });
-  return { code: r.status ?? (r.error ? 127 : 1), out: (r.stdout || "").trim(), err: (r.stderr || "").trim(), error: r.error };
+  return {
+    code: r.status ?? (r.error ? 127 : 1),
+    out: (r.stdout || "").trim(),
+    err: (r.stderr || "").trim(),
+    error: r.error,
+  };
 }
 
 // ── timezone-aware "most recent due point" math ─────────────────────────────
@@ -70,17 +80,33 @@ function zonedParts(epochMs, tz) {
     minute: "2-digit",
     second: "2-digit",
   });
-  const parts = Object.fromEntries(fmt.formatToParts(new Date(epochMs)).map((p) => [p.type, p.value]));
+  const parts = Object.fromEntries(
+    fmt.formatToParts(new Date(epochMs)).map((p) => [p.type, p.value]),
+  );
   // Midnight sometimes formats as "24" in en-US hour12:false — normalize to 0.
   const hour = parts.hour === "24" ? 0 : Number(parts.hour);
-  return { y: Number(parts.year), m: Number(parts.month), d: Number(parts.day), hh: hour, mm: Number(parts.minute), ss: Number(parts.second) };
+  return {
+    y: Number(parts.year),
+    m: Number(parts.month),
+    d: Number(parts.day),
+    hh: hour,
+    mm: Number(parts.minute),
+    ss: Number(parts.second),
+  };
 }
 
 function zonedToUtcMs(y, m, d, hh, mm, tz) {
   let guess = Date.UTC(y, m - 1, d, hh, mm, 0);
   for (let i = 0; i < 3; i++) {
     const seen = zonedParts(guess, tz);
-    const seenAsUtc = Date.UTC(seen.y, seen.m - 1, seen.d, seen.hh, seen.mm, seen.ss);
+    const seenAsUtc = Date.UTC(
+      seen.y,
+      seen.m - 1,
+      seen.d,
+      seen.hh,
+      seen.mm,
+      seen.ss,
+    );
     const wantAsUtc = Date.UTC(y, m - 1, d, hh, mm, 0);
     const diff = seenAsUtc - wantAsUtc;
     if (diff === 0) break;
@@ -91,7 +117,11 @@ function zonedToUtcMs(y, m, d, hh, mm, tz) {
 
 function addDaysToDate(y, m, d, days) {
   const shifted = new Date(Date.UTC(y, m - 1, d, 12) + days * 86_400_000); // noon avoids DST edge cases
-  return { y: shifted.getUTCFullYear(), m: shifted.getUTCMonth() + 1, d: shifted.getUTCDate() };
+  return {
+    y: shifted.getUTCFullYear(),
+    m: shifted.getUTCMonth() + 1,
+    d: shifted.getUTCDate(),
+  };
 }
 
 function prevMonth(y, m) {
@@ -119,10 +149,24 @@ function lastDueMs(period, nowMs, tz) {
   if (period === "weekly") {
     const back = mondayOffset(today.y, today.m, today.d);
     const monday = addDaysToDate(today.y, today.m, today.d, -back);
-    const candidate = zonedToUtcMs(monday.y, monday.m, monday.d, hour, minute, tz);
+    const candidate = zonedToUtcMs(
+      monday.y,
+      monday.m,
+      monday.d,
+      hour,
+      minute,
+      tz,
+    );
     if (candidate <= nowMs) return candidate;
     const prevMonday = addDaysToDate(monday.y, monday.m, monday.d, -7);
-    return zonedToUtcMs(prevMonday.y, prevMonday.m, prevMonday.d, hour, minute, tz);
+    return zonedToUtcMs(
+      prevMonday.y,
+      prevMonday.m,
+      prevMonday.d,
+      hour,
+      minute,
+      tz,
+    );
   }
   if (period === "monthly") {
     const candidate = zonedToUtcMs(today.y, today.m, 1, hour, minute, tz);
@@ -148,12 +192,16 @@ function removeLegacyUnits({ homedir, execImpl, log }) {
     try {
       const result = execImpl(["--user", "disable", "--now", unit]);
       if (result.code !== 0) {
-        log(`schedule-migration: disable --now ${unit} failed (best-effort): ${result.err || result.out}`);
+        log(
+          `schedule-migration: disable --now ${unit} failed (best-effort): ${result.err || result.out}`,
+        );
       } else {
         disabled = true;
       }
     } catch (error) {
-      log(`schedule-migration: disable --now ${unit} threw (best-effort): ${error.message}`);
+      log(
+        `schedule-migration: disable --now ${unit} threw (best-effort): ${error.message}`,
+      );
     }
     // Only remove the file once systemd has actually let go of the unit. Deleting it
     // after a failed disable would leave a still-enabled/active unit with no file behind
@@ -161,27 +209,41 @@ function removeLegacyUnits({ homedir, execImpl, log }) {
     // the file in place means this boot's cleanup is simply retried on the next one,
     // same as a partial systemctl failure anywhere else in this function.
     if (!disabled) {
-      log(`schedule-migration: leaving ${unit} in place — disable failed, the next boot will retry`);
+      log(
+        `schedule-migration: leaving ${unit} in place — disable failed, the next boot will retry`,
+      );
       continue;
     }
     try {
       rmSync(path, { force: true });
     } catch (error) {
-      log(`schedule-migration: removing ${unit} failed (best-effort): ${error.message}`);
+      log(
+        `schedule-migration: removing ${unit} failed (best-effort): ${error.message}`,
+      );
     }
   }
   if (touchedAny) {
     try {
       const reload = execImpl(["--user", "daemon-reload"]);
-      if (reload.code !== 0) log(`schedule-migration: daemon-reload failed (best-effort): ${reload.err || reload.out}`);
+      if (reload.code !== 0)
+        log(
+          `schedule-migration: daemon-reload failed (best-effort): ${reload.err || reload.out}`,
+        );
     } catch (error) {
-      log(`schedule-migration: daemon-reload threw (best-effort): ${error.message}`);
+      log(
+        `schedule-migration: daemon-reload threw (best-effort): ${error.message}`,
+      );
     }
     try {
       const reset = execImpl(["--user", "reset-failed"]);
-      if (reset.code !== 0) log(`schedule-migration: reset-failed failed (best-effort): ${reset.err || reset.out}`);
+      if (reset.code !== 0)
+        log(
+          `schedule-migration: reset-failed failed (best-effort): ${reset.err || reset.out}`,
+        );
     } catch (error) {
-      log(`schedule-migration: reset-failed threw (best-effort): ${error.message}`);
+      log(
+        `schedule-migration: reset-failed threw (best-effort): ${error.message}`,
+      );
     }
   }
 }
@@ -225,7 +287,9 @@ export async function runScheduleMigration({
     // tick itself) retries cleanly.
     const decision = await withStatusLock(statusPath, (acquired) => {
       if (!acquired) {
-        log("schedule-migration: could not acquire the status lock in time — deferring this pass (retried on the next boot)");
+        log(
+          "schedule-migration: could not acquire the status lock in time — deferring this pass (retried on the next boot)",
+        );
         return { action: "defer" };
       }
       const current = readStatus(statusPath);
@@ -255,11 +319,15 @@ export async function runScheduleMigration({
         // any) so a freshly-seeded period doesn't immediately look "due" the moment
         // it's due relative to real time — same suppression the old
         // lastSuccessAt-as-seed did.
-        const recorded = typeof entry?.lastSuccessAt === "number" ? entry.lastSuccessAt : entry?.seededAt;
+        const recorded =
+          typeof entry?.lastSuccessAt === "number"
+            ? entry.lastSuccessAt
+            : entry?.seededAt;
         const effectiveBaseline = recorded;
         const alreadyCaughtUp = effectiveBaseline >= dueAt;
         const withinGrace = nowMs - dueAt <= graceMs;
-        if (!alreadyCaughtUp && withinGrace) due.push({ period, dueAt, effectiveBaseline });
+        if (!alreadyCaughtUp && withinGrace)
+          due.push({ period, dueAt, effectiveBaseline });
       }
       return { action: "run", due, freshlySeeded: [...freshlySeeded] };
     });
@@ -292,11 +360,15 @@ export async function runScheduleMigration({
     // take up to the job's full timeoutMs, and holding the status lock for that entire
     // duration would block every other schedule's admission check in the meantime.
     for (const { period, dueAt, effectiveBaseline } of decision.due) {
-      log(`schedule-migration: catching up ${period} (due ${new Date(dueAt).toISOString()}, last success ${Number.isFinite(effectiveBaseline) ? new Date(effectiveBaseline).toISOString() : "never"})`);
+      log(
+        `schedule-migration: catching up ${period} (due ${new Date(dueAt).toISOString()}, last success ${Number.isFinite(effectiveBaseline) ? new Date(effectiveBaseline).toISOString() : "never"})`,
+      );
       try {
         await runPeriod(period);
       } catch (error) {
-        log(`schedule-migration: catch-up run for ${period} failed: ${error.message}`);
+        log(
+          `schedule-migration: catch-up run for ${period} failed: ${error.message}`,
+        );
       }
     }
   } catch (error) {

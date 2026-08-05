@@ -11,8 +11,10 @@ import {
   recoverConfigTransaction,
 } from "./config-transaction.mjs";
 
-const OLD = "MODEL_PROVIDER=ollama\nOLLAMA_MODEL=old\nOLLAMA_API_KEY=old-secret\nIVA_PORT=8723\n";
-const NEXT = "MODEL_PROVIDER=ollama\nOLLAMA_MODEL=new\nOLLAMA_API_KEY=new-secret\nIVA_PORT=8724\n";
+const OLD =
+  "MODEL_PROVIDER=ollama\nOLLAMA_MODEL=old\nOLLAMA_API_KEY=old-secret\nIVA_PORT=8723\n";
+const NEXT =
+  "MODEL_PROVIDER=ollama\nOLLAMA_MODEL=new\nOLLAMA_API_KEY=new-secret\nIVA_PORT=8724\n";
 const SELECTION = {
   provider: "ollama",
   model: "new",
@@ -51,18 +53,25 @@ test("env write failure leaves old bytes and never reports success", async (t) =
   });
 
   await assert.rejects(
-    applyConfigTransaction({
-      envPath,
-      nextText: NEXT,
-      selection: SELECTION,
-      healthUrl: "http://127.0.0.1:8724/eve/v1/health",
-      services: SERVICES,
-    }, deps),
-    (error) => error instanceof ConfigTransactionError && error.phase === "write",
+    applyConfigTransaction(
+      {
+        envPath,
+        nextText: NEXT,
+        selection: SELECTION,
+        healthUrl: "http://127.0.0.1:8724/eve/v1/health",
+        services: SERVICES,
+      },
+      deps,
+    ),
+    (error) =>
+      error instanceof ConfigTransactionError && error.phase === "write",
   );
 
   assert.equal(await readFile(envPath, "utf8"), OLD);
-  assert.deepEqual(calls.map((call) => call[0]), ["validate", "restart"]);
+  assert.deepEqual(
+    calls.map((call) => call[0]),
+    ["validate", "restart"],
+  );
 });
 test("restart failure restores snapshot and restarts old services", async (t) => {
   const { envPath } = await fixture(t);
@@ -75,13 +84,16 @@ test("restart failure restores snapshot and restarts old services", async (t) =>
   });
 
   await assert.rejects(
-    applyConfigTransaction({
-      envPath,
-      nextText: NEXT,
-      selection: SELECTION,
-      healthUrl: "http://127.0.0.1:8724/eve/v1/health",
-      services: SERVICES,
-    }, deps),
+    applyConfigTransaction(
+      {
+        envPath,
+        nextText: NEXT,
+        selection: SELECTION,
+        healthUrl: "http://127.0.0.1:8724/eve/v1/health",
+        services: SERVICES,
+      },
+      deps,
+    ),
     (error) =>
       error instanceof ConfigTransactionError &&
       error.phase === "restart" &&
@@ -89,28 +101,36 @@ test("restart failure restores snapshot and restarts old services", async (t) =>
   );
   assert.equal(restarts, 2);
   assert.equal(await readFile(envPath, "utf8"), OLD);
-  await assert.rejects(readFile(pendingConfigPath(envPath), "utf8"), { code: "ENOENT" });
+  await assert.rejects(readFile(pendingConfigPath(envPath), "utf8"), {
+    code: "ENOENT",
+  });
 });
 
 test("health timeout rolls back the env and restarts old services", async (t) => {
   const { envPath } = await fixture(t);
   let restarts = 0;
   const { deps } = healthyDeps({
-    restart: async () => { restarts++; },
+    restart: async () => {
+      restarts++;
+    },
     health: async () => {
       throw Object.assign(new Error("health timeout"), { code: "ETIMEDOUT" });
     },
   });
 
   await assert.rejects(
-    applyConfigTransaction({
-      envPath,
-      nextText: NEXT,
-      selection: SELECTION,
-      healthUrl: "http://127.0.0.1:8724/eve/v1/health",
-      services: SERVICES,
-    }, deps),
-    (error) => error instanceof ConfigTransactionError && error.phase === "health",
+    applyConfigTransaction(
+      {
+        envPath,
+        nextText: NEXT,
+        selection: SELECTION,
+        healthUrl: "http://127.0.0.1:8724/eve/v1/health",
+        services: SERVICES,
+      },
+      deps,
+    ),
+    (error) =>
+      error instanceof ConfigTransactionError && error.phase === "health",
   );
   assert.equal(restarts, 2);
   assert.equal(await readFile(envPath, "utf8"), OLD);
@@ -119,13 +139,16 @@ test("health timeout rolls back the env and restarts old services", async (t) =>
 test("successful apply validates, restarts both units, probes local health and commits", async (t) => {
   const { envPath } = await fixture(t);
   const { calls, deps } = healthyDeps();
-  const result = await applyConfigTransaction({
-    envPath,
-    nextText: NEXT,
-    selection: SELECTION,
-    healthUrl: "http://127.0.0.1:8724/eve/v1/health",
-    services: SERVICES,
-  }, deps);
+  const result = await applyConfigTransaction(
+    {
+      envPath,
+      nextText: NEXT,
+      selection: SELECTION,
+      healthUrl: "http://127.0.0.1:8724/eve/v1/health",
+      services: SERVICES,
+    },
+    deps,
+  );
 
   assert.deepEqual(result, { committed: true });
   assert.equal(await readFile(envPath, "utf8"), NEXT);
@@ -134,7 +157,12 @@ test("successful apply validates, restarts both units, probes local health and c
     ["restart", ...SERVICES],
     ["health", "http://127.0.0.1:8724/eve/v1/health"],
   ]);
-  assert.deepEqual((await readdir(join(envPath, ".."))).filter((name) => name.includes("transaction")), []);
+  assert.deepEqual(
+    (await readdir(join(envPath, ".."))).filter((name) =>
+      name.includes("transaction"),
+    ),
+    [],
+  );
 });
 
 test("failed rollback keeps the snapshot and gives a secret-free recovery instruction", async (t) => {
@@ -143,23 +171,33 @@ test("failed rollback keeps the snapshot and gives a secret-free recovery instru
   const { deps } = healthyDeps({
     restart: async () => {
       restarts++;
-      throw new Error(restarts === 1 ? "new-secret restart failure" : "old-secret rollback failure");
+      throw new Error(
+        restarts === 1
+          ? "new-secret restart failure"
+          : "old-secret rollback failure",
+      );
     },
   });
 
-  const error = await applyConfigTransaction({
-    envPath,
-    nextText: NEXT,
-    selection: SELECTION,
-    healthUrl: "http://127.0.0.1:8724/eve/v1/health",
-    services: SERVICES,
-  }, deps).catch((caught) => caught);
+  const error = await applyConfigTransaction(
+    {
+      envPath,
+      nextText: NEXT,
+      selection: SELECTION,
+      healthUrl: "http://127.0.0.1:8724/eve/v1/health",
+      services: SERVICES,
+    },
+    deps,
+  ).catch((caught) => caught);
 
   assert.equal(error.rollbackFailed, true);
   assert.match(error.message, /iva config --recover/);
   assert.doesNotMatch(error.message, /new-secret|old-secret/);
   assert.equal(await readFile(envPath, "utf8"), OLD);
-  assert.equal(JSON.parse(await readFile(pendingConfigPath(envPath), "utf8")).version, 1);
+  assert.equal(
+    JSON.parse(await readFile(pendingConfigPath(envPath), "utf8")).version,
+    1,
+  );
 });
 
 test("a crash after env replacement is recovered from the durable snapshot", async (t) => {
@@ -191,7 +229,10 @@ test("a crash after env replacement is recovered from the durable snapshot", asy
   );
   assert.equal(child.status, 73, child.stderr);
   assert.equal(await readFile(envPath, "utf8"), NEXT);
-  assert.equal(JSON.parse(await readFile(pendingConfigPath(envPath), "utf8")).version, 1);
+  assert.equal(
+    JSON.parse(await readFile(pendingConfigPath(envPath), "utf8")).version,
+    1,
+  );
 
   const restarts = [];
   assert.equal(
@@ -203,5 +244,7 @@ test("a crash after env replacement is recovered from the durable snapshot", asy
   );
   assert.equal(await readFile(envPath, "utf8"), OLD);
   assert.deepEqual(restarts, [SERVICES]);
-  await assert.rejects(readFile(pendingConfigPath(envPath), "utf8"), { code: "ENOENT" });
+  await assert.rejects(readFile(pendingConfigPath(envPath), "utf8"), {
+    code: "ENOENT",
+  });
 });

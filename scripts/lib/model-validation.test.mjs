@@ -25,16 +25,24 @@ test("catalog providers require exact live membership", async () => {
         { provider, model: "retired", key: "secret" },
         { fetchFn: async () => response({ data: [{ id: "live/model" }] }) },
       ),
-      (error) => error instanceof ModelValidationError && error.code === "model_unavailable",
+      (error) =>
+        error instanceof ModelValidationError &&
+        error.code === "model_unavailable",
     );
   }
 
   await assert.rejects(
     validateModelSelection(
       { provider: "codex", model: "retired" },
-      { listCodexCatalog: async () => [{ id: "live", reasoningLevels: ["high"] }] },
+      {
+        listCodexCatalog: async () => [
+          { id: "live", reasoningLevels: ["high"] },
+        ],
+      },
     ),
-    (error) => error instanceof ModelValidationError && error.code === "model_unavailable",
+    (error) =>
+      error instanceof ModelValidationError &&
+      error.code === "model_unavailable",
   );
 });
 
@@ -49,8 +57,14 @@ test("catalog outage, auth, empty and malformed responses fail closed", async ()
     { code: "auth_rejected", fetchFn: async () => response({}, 401) },
     { code: "auth_rejected", fetchFn: async () => response({}, 403) },
     { code: "catalog_invalid", fetchFn: async () => response({ data: [] }) },
-    { code: "catalog_invalid", fetchFn: async () => response({ data: "broken" }) },
-    { code: "catalog_invalid", fetchFn: async () => response({ data: [{ name: "missing-id" }] }) },
+    {
+      code: "catalog_invalid",
+      fetchFn: async () => response({ data: "broken" }),
+    },
+    {
+      code: "catalog_invalid",
+      fetchFn: async () => response({ data: [{ name: "missing-id" }] }),
+    },
     { code: "catalog_invalid", fetchFn: async () => response("{", 200) },
   ];
   for (const item of cases) {
@@ -59,7 +73,8 @@ test("catalog outage, auth, empty and malformed responses fail closed", async ()
         { provider: "ollama", model: "live", key: "secret" },
         { fetchFn: item.fetchFn },
       ),
-      (error) => error instanceof ModelValidationError && error.code === item.code,
+      (error) =>
+        error instanceof ModelValidationError && error.code === item.code,
     );
   }
   await assert.rejects(
@@ -67,7 +82,8 @@ test("catalog outage, auth, empty and malformed responses fail closed", async ()
       { provider: "codex", model: "live" },
       { listCodexCatalog: async () => [] },
     ),
-    (error) => error instanceof ModelValidationError && error.code === "catalog_invalid",
+    (error) =>
+      error instanceof ModelValidationError && error.code === "catalog_invalid",
   );
 });
 
@@ -78,7 +94,9 @@ test("OpenRouter validation sends a minimal tool-call request", async () => {
     {
       fetchFn: async (url, init) => {
         request = { url, init, body: JSON.parse(init.body) };
-        return response({ choices: [{ message: { tool_calls: [{ id: "1" }] } }] });
+        return response({
+          choices: [{ message: { tool_calls: [{ id: "1" }] } }],
+        });
       },
     },
   );
@@ -91,12 +109,15 @@ test("OpenRouter validation sends a minimal tool-call request", async () => {
   const exhausted = await validateModelSelection(
     { provider: "openrouter", model: "vendor/reasoning", key: "secret" },
     {
-      fetchFn: async () => response({
-        choices: [{
-          finish_reason: "length",
-          message: { content: "", reasoning: "hidden budget exhausted" },
-        }],
-      }),
+      fetchFn: async () =>
+        response({
+          choices: [
+            {
+              finish_reason: "length",
+              message: { content: "", reasoning: "hidden budget exhausted" },
+            },
+          ],
+        }),
     },
   );
   assert.equal(exhausted.id, "vendor/reasoning");
@@ -104,9 +125,14 @@ test("OpenRouter validation sends a minimal tool-call request", async () => {
   await assert.rejects(
     validateModelSelection(
       { provider: "openrouter", model: "vendor/no-tools", key: "secret" },
-      { fetchFn: async () => response({ error: { message: "No tool use" } }, 400) },
+      {
+        fetchFn: async () =>
+          response({ error: { message: "No tool use" } }, 400),
+      },
     ),
-    (error) => error instanceof ModelValidationError && error.code === "model_unavailable",
+    (error) =>
+      error instanceof ModelValidationError &&
+      error.code === "model_unavailable",
   );
 });
 
@@ -116,10 +142,11 @@ test("OpenRouter classifies non-JSON auth failures before parsing the body", asy
       validateModelSelection(
         { provider: "openrouter", model: "vendor/model", key: "bad" },
         {
-          fetchFn: async () => new Response("unauthorized", {
-            status,
-            headers: { "content-type": "text/plain" },
-          }),
+          fetchFn: async () =>
+            new Response("unauthorized", {
+              status,
+              headers: { "content-type": "text/plain" },
+            }),
         },
       ),
       (error) =>
@@ -138,13 +165,23 @@ test("empty and malformed selections are rejected before provider I/O", async ()
   };
   for (const model of ["", " \n ", null]) {
     await assert.rejects(
-      validateModelSelection({ provider: "ollama", model, key: "secret" }, { fetchFn }),
-      (error) => error instanceof ModelValidationError && error.code === "invalid_selection",
+      validateModelSelection(
+        { provider: "ollama", model, key: "secret" },
+        { fetchFn },
+      ),
+      (error) =>
+        error instanceof ModelValidationError &&
+        error.code === "invalid_selection",
     );
   }
   await assert.rejects(
-    validateModelSelection({ provider: "__proto__", model: "x", key: "secret" }, { fetchFn }),
-    (error) => error instanceof ModelValidationError && error.code === "invalid_selection",
+    validateModelSelection(
+      { provider: "__proto__", model: "x", key: "secret" },
+      { fetchFn },
+    ),
+    (error) =>
+      error instanceof ModelValidationError &&
+      error.code === "invalid_selection",
   );
   assert.equal(calls, 0);
 });

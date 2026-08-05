@@ -7,13 +7,13 @@ is done.
 
 Resolve domain from path via schema `domain_inference`:
 
-| Path | domain | hub |
-|------|--------|-----|
-| `cards/projects/` | work | `cards/projects/_index.md` |
-| `cards/decisions/` | work | `cards/decisions/_index.md` |
-| `cards/contacts/` | personal | `cards/contacts/_index.md` |
-| `cards/notes/` | knowledge | `cards/notes/_index.md` |
-| `cards/ideas/` | knowledge | `cards/ideas/_index.md` |
+| Path               | domain    | hub                         |
+| ------------------ | --------- | --------------------------- |
+| `cards/projects/`  | work      | `cards/projects/_index.md`  |
+| `cards/decisions/` | work      | `cards/decisions/_index.md` |
+| `cards/contacts/`  | personal  | `cards/contacts/_index.md`  |
+| `cards/notes/`     | knowledge | `cards/notes/_index.md`     |
+| `cards/ideas/`     | knowledge | `cards/ideas/_index.md`     |
 
 Hubs (`_index.md`) are generated/maintained by
 `uv run scripts/autograph/moc.py generate vault vault/schema.json`. Link the hub even if it
@@ -32,6 +32,7 @@ Link the 2–3 most relevant, each with a context phrase explaining the relation
 
 ```markdown
 ## Related
+
 - [[cards/projects/_index|Projects]]
 - [[cards/projects/iva-memory|Iva memory]] — this decision picks its scheduler
 - [[cards/notes/deepgram-nova3-multi|Deepgram nova-3 multi]] — feeds the same pipeline

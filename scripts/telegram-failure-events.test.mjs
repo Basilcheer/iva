@@ -81,7 +81,8 @@ function eventContext({
 async function emitTurnFailed(data, options) {
   const context = eventContext(options);
   await contextStorage.run(context.ctx, () =>
-    adapter["turn.failed"](data, context.value));
+    adapter["turn.failed"](data, context.value),
+  );
 }
 
 async function emitSessionFailed(data, options) {

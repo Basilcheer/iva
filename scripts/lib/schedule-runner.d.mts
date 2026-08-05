@@ -26,4 +26,6 @@ export interface RunScheduledJobResult {
   readonly error?: unknown;
 }
 
-export function runScheduledJob(options: RunScheduledJobOptions): Promise<RunScheduledJobResult>;
+export function runScheduledJob(
+  options: RunScheduledJobOptions,
+): Promise<RunScheduledJobResult>;

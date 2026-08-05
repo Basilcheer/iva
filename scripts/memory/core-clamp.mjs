@@ -90,7 +90,8 @@ function preferenceEvictionOrder(lines) {
   return lines
     .map((line, index) => {
       if (line.section !== "preferences" || !isBullet(line)) return null;
-      const date = /^-[ \t]+(\d{4}-\d{2}(?:-\d{2})?)\b/.exec(line.content)?.[1] ?? null;
+      const date =
+        /^-[ \t]+(\d{4}-\d{2}(?:-\d{2})?)\b/.exec(line.content)?.[1] ?? null;
       return { line, index, date };
     })
     .filter(Boolean)
@@ -113,7 +114,8 @@ function longestMutableBullet(lines) {
     ) {
       continue;
     }
-    if (!longest || line.content.length > longest.content.length) longest = line;
+    if (!longest || line.content.length > longest.content.length)
+      longest = line;
   }
   return longest;
 }
@@ -150,7 +152,8 @@ function truncateToCap(lines) {
  * sections. Files already within the cap are returned byte-for-byte unchanged.
  */
 export function clampCore(text) {
-  if (typeof text !== "string") throw new TypeError("clampCore expects a string");
+  if (typeof text !== "string")
+    throw new TypeError("clampCore expects a string");
   if (text.length <= CORE_CAP) return text;
 
   const lines = linesOf(text);

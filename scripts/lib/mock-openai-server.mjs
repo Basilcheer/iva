@@ -12,7 +12,7 @@ function partText(content) {
   if (typeof content === "string") return content;
   if (Array.isArray(content)) {
     return content
-      .map((p) => (typeof p === "string" ? p : p?.text ?? ""))
+      .map((p) => (typeof p === "string" ? p : (p?.text ?? "")))
       .join(" ");
   }
   return "";
@@ -50,18 +50,40 @@ function completionJson(text) {
     created: 1,
     model: MODEL,
     choices: [
-      { index: 0, message: { role: "assistant", content: text }, finish_reason: "stop" },
+      {
+        index: 0,
+        message: { role: "assistant", content: text },
+        finish_reason: "stop",
+      },
     ],
     usage: { prompt_tokens: 8, completion_tokens: 4, total_tokens: 12 },
   };
 }
 
 function streamChunks(text) {
-  const base = { id: "chatcmpl-replica", object: "chat.completion.chunk", created: 1, model: MODEL };
+  const base = {
+    id: "chatcmpl-replica",
+    object: "chat.completion.chunk",
+    created: 1,
+    model: MODEL,
+  };
   return [
-    { ...base, choices: [{ index: 0, delta: { role: "assistant", content: text }, finish_reason: null }] },
+    {
+      ...base,
+      choices: [
+        {
+          index: 0,
+          delta: { role: "assistant", content: text },
+          finish_reason: null,
+        },
+      ],
+    },
     { ...base, choices: [{ index: 0, delta: {}, finish_reason: "stop" }] },
-    { ...base, choices: [], usage: { prompt_tokens: 8, completion_tokens: 4, total_tokens: 12 } },
+    {
+      ...base,
+      choices: [],
+      usage: { prompt_tokens: 8, completion_tokens: 4, total_tokens: 12 },
+    },
   ];
 }
 
@@ -77,7 +99,11 @@ export async function startMockOpenAiServer() {
   const server = createServer(async (req, res) => {
     if (req.method !== "POST" || req.url !== "/v1/chat/completions") {
       res.writeHead(404, { "content-type": "application/json" });
-      res.end(JSON.stringify({ error: { message: `no route: ${req.method} ${req.url}` } }));
+      res.end(
+        JSON.stringify({
+          error: { message: `no route: ${req.method} ${req.url}` },
+        }),
+      );
       return;
     }
     let body;
@@ -96,7 +122,8 @@ export async function startMockOpenAiServer() {
         "cache-control": "no-cache",
         connection: "keep-alive",
       });
-      for (const chunk of streamChunks(text)) res.write(`data: ${JSON.stringify(chunk)}\n\n`);
+      for (const chunk of streamChunks(text))
+        res.write(`data: ${JSON.stringify(chunk)}\n\n`);
       res.end("data: [DONE]\n\n");
     } else {
       res.writeHead(200, { "content-type": "application/json" });

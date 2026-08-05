@@ -38,16 +38,20 @@ topics: [theme-a, theme-b, theme-c]
 # Year YYYY
 
 ## Story of the year
+
 - The throughline — how the year began, turned, and ended.
 
 ## Turning points
+
 - [[cards/decisions/<slug>|Decision]] — why it mattered.
 
 ## What endured
+
 - Projects that shipped, ideas that stuck, people who recurred.
 - [[cards/projects/<slug>|Project]] · [[cards/ideas/<slug>|Idea]] · [[cards/contacts/<slug>|Person]]
 
 ## Months (MOC down)
+
 - [[monthly/YYYY-01|January]]
 - [[monthly/YYYY-02|February]]
 - … (all months that exist)

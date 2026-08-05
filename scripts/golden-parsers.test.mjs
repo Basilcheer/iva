@@ -15,9 +15,13 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 const { parseFrontmatter } = await import("../agent/lib/frontmatter.ts");
-const { h2Sections, outsideFences } = await import("../agent/lib/card-store.ts");
+const { h2Sections, outsideFences } =
+  await import("../agent/lib/card-store.ts");
 
-const GOLDEN = join(dirname(fileURLToPath(import.meta.url)), "autograph/tests/golden");
+const GOLDEN = join(
+  dirname(fileURLToPath(import.meta.url)),
+  "autograph/tests/golden",
+);
 
 function cases(sub) {
   const dir = join(GOLDEN, sub);
@@ -26,7 +30,9 @@ function cases(sub) {
     .map((f) => ({
       name: f.replace(/\.md$/, ""),
       input: readFileSync(join(dir, f), "utf8"),
-      expected: JSON.parse(readFileSync(join(dir, f.replace(/\.md$/, ".json")), "utf8")),
+      expected: JSON.parse(
+        readFileSync(join(dir, f.replace(/\.md$/, ".json")), "utf8"),
+      ),
     }));
 }
 

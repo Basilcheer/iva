@@ -5,7 +5,17 @@
 // SINGLE source of truth for systemd units and activation: install.sh delegates here
 // (`iva _install-units` + `_activate-units`), and CLI/doctor reuse the same paths.
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync, mkdirSync, mkdtempSync, rmSync, readdirSync, chmodSync, statSync } from "node:fs";
+import {
+  existsSync,
+  readFileSync,
+  writeFileSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  readdirSync,
+  chmodSync,
+  statSync,
+} from "node:fs";
 import { randomBytes } from "node:crypto";
 import { join, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -14,12 +24,22 @@ import { createInterface } from "node:readline/promises";
 import { modelSummary } from "../scripts/lib/model-summary.mjs";
 import { createTerminalProgress } from "../scripts/lib/progress.mjs";
 import { quarantinePath, resetStateTargets } from "../scripts/lib/wf-store.mjs";
-import { createTelegramUpdateReporter, loadTelegramJob, removeTelegramJob } from "../scripts/lib/telegram-status.mjs";
-import { generateAssistantBearer, isAssistantBearer } from "../scripts/lib/assistant-auth.mjs";
+import {
+  createTelegramUpdateReporter,
+  loadTelegramJob,
+  removeTelegramJob,
+} from "../scripts/lib/telegram-status.mjs";
+import {
+  generateAssistantBearer,
+  isAssistantBearer,
+} from "../scripts/lib/assistant-auth.mjs";
 import { parseEnvText, writeEnvAtomicSync } from "../scripts/lib/env-file.mjs";
 import { classifyAgentListeners } from "../scripts/lib/listener-security.mjs";
 import { readMemoryMaintenanceReport } from "../scripts/lib/memory-maintenance.mjs";
-import { cleanupSystemdUnits, createSystemdControl } from "../scripts/lib/systemd-control.mjs";
+import {
+  cleanupSystemdUnits,
+  createSystemdControl,
+} from "../scripts/lib/systemd-control.mjs";
 import { LEGACY_MEMORY_UNITS } from "../scripts/lib/schedule-migration.mjs";
 import {
   applyConfigTransaction,
@@ -42,9 +62,14 @@ const ENV_PATH = join(ROOT, ".env");
 const UNIT_DIR = join(homedir(), ".config/systemd/user");
 const NODE = process.execPath;
 const NODE_BIN_DIR = dirname(NODE);
-const NPM = existsSync(join(NODE_BIN_DIR, "npm")) ? join(NODE_BIN_DIR, "npm") : "npm";
+const NPM = existsSync(join(NODE_BIN_DIR, "npm"))
+  ? join(NODE_BIN_DIR, "npm")
+  : "npm";
 // Children inherit PATH with the node directory — otherwise npm/eve won't be found when called via wrapper.
-const childEnv = { ...process.env, PATH: `${NODE_BIN_DIR}:${process.env.PATH || ""}` };
+const childEnv = {
+  ...process.env,
+  PATH: `${NODE_BIN_DIR}:${process.env.PATH || ""}`,
+};
 
 const SERVICES = ["iva.service", "iva-telegram-poll.service"];
 // daily/weekly/monthly/yearly moved to in-process eve schedules (agent/schedules/memory-*.ts,
@@ -73,9 +98,18 @@ const DEFAULT_PORT = "8723";
 // Former (hardcoded) default before the switch to IVA_PORT — needed to migrate old .env files.
 const OLD_DEFAULT_HOST = "http://127.0.0.1:3000";
 
-const C = process.env.NO_COLOR || process.env.TERM === "dumb"
-  ? { g: "", y: "", r: "", c: "", b: "", d: "", x: "" }
-  : { g: "\x1b[32m", y: "\x1b[33m", r: "\x1b[31m", c: "\x1b[36m", b: "\x1b[1m", d: "\x1b[2m", x: "\x1b[0m" };
+const C =
+  process.env.NO_COLOR || process.env.TERM === "dumb"
+    ? { g: "", y: "", r: "", c: "", b: "", d: "", x: "" }
+    : {
+        g: "\x1b[32m",
+        y: "\x1b[33m",
+        r: "\x1b[31m",
+        c: "\x1b[36m",
+        b: "\x1b[1m",
+        d: "\x1b[2m",
+        x: "\x1b[0m",
+      };
 const ok = (m) => console.log(`${C.g}✓${C.x} ${m}`);
 const warn = (m) => console.log(`${C.y}!${C.x} ${m}`);
 const bad = (m) => console.log(`${C.r}✗${C.x} ${m}`);
@@ -83,11 +117,25 @@ const step = (m) => console.log(`${C.b}${C.c}▸ ${m}${C.x}`);
 
 // ── small helpers ────────────────────────────────────────────────────────
 function run(cmd, args, opts = {}) {
-  return spawnSync(cmd, args, { cwd: ROOT, stdio: "inherit", env: childEnv, ...opts });
+  return spawnSync(cmd, args, {
+    cwd: ROOT,
+    stdio: "inherit",
+    env: childEnv,
+    ...opts,
+  });
 }
 function cap(cmd, args, opts = {}) {
-  const r = spawnSync(cmd, args, { cwd: ROOT, encoding: "utf8", env: childEnv, ...opts });
-  return { code: r.status ?? 1, out: (r.stdout || "").trim(), err: (r.stderr || "").trim() };
+  const r = spawnSync(cmd, args, {
+    cwd: ROOT,
+    encoding: "utf8",
+    env: childEnv,
+    ...opts,
+  });
+  return {
+    code: r.status ?? 1,
+    out: (r.stdout || "").trim(),
+    err: (r.stderr || "").trim(),
+  };
 }
 const hasSystemd = () => !!cap("sh", ["-c", "command -v systemctl"]).out;
 const scQ = (...args) => cap("systemctl", ["--user", ...args]);
@@ -114,7 +162,9 @@ function dataDirAbs(env = readEnv()) {
 async function confirm(question, def = false) {
   if (!process.stdin.isTTY) return def;
   const rl = createInterface({ input: process.stdin, output: process.stdout });
-  const a = (await rl.question(`${question} ${def ? "[Y/n]" : "[y/N]"} `)).trim().toLowerCase();
+  const a = (await rl.question(`${question} ${def ? "[Y/n]" : "[y/N]"} `))
+    .trim()
+    .toLowerCase();
   rl.close();
   return a ? a.startsWith("y") : def;
 }
@@ -132,7 +182,9 @@ function ensureAssistantBearer({ quiet = false } = {}) {
   if (!existsSync(ENV_PATH)) return false;
   let changed = false;
   const bearer = (readEnv().ASSISTANT_BEARER || "").trim();
-  const bearerLines = readFileSync(ENV_PATH, "utf8").match(/^\s*ASSISTANT_BEARER\s*=/gm)?.length || 0;
+  const bearerLines =
+    readFileSync(ENV_PATH, "utf8").match(/^\s*ASSISTANT_BEARER\s*=/gm)
+      ?.length || 0;
   if (!isAssistantBearer(bearer)) {
     writeEnvVars({ ASSISTANT_BEARER: generateAssistantBearer() });
     changed = true;
@@ -225,7 +277,11 @@ function hardenPerms() {
   // могли быть созданы world-readable. chmod только верхнего уровня (закрывает traversal).
   const vaultRel = readEnv().ASSISTANT_VAULT_DIR || "vault";
   const vaultDir = vaultRel.startsWith("/") ? vaultRel : join(ROOT, vaultRel);
-  for (const p of [join(ROOT, ".eve"), join(ROOT, ".workflow-data"), vaultDir]) {
+  for (const p of [
+    join(ROOT, ".eve"),
+    join(ROOT, ".workflow-data"),
+    vaultDir,
+  ]) {
     try {
       if (existsSync(p)) chmodSync(p, 0o700);
     } catch (e) {
@@ -331,10 +387,14 @@ function buildHasSchedules() {
 
 function removeLegacyMemoryUnits() {
   if (!hasSystemd()) return [];
-  const units = LEGACY_MEMORY_UNITS.filter((u) => existsSync(join(UNIT_DIR, u)));
+  const units = LEGACY_MEMORY_UNITS.filter((u) =>
+    existsSync(join(UNIT_DIR, u)),
+  );
   if (!units.length) return [];
   if (!buildHasSchedules()) {
-    warn("skipping legacy memory-timer cleanup — the current build doesn't contain the eve schedules yet (rebuild with `iva doctor` or `npm run build`, then it will run automatically)");
+    warn(
+      "skipping legacy memory-timer cleanup — the current build doesn't contain the eve schedules yet (rebuild with `iva doctor` or `npm run build`, then it will run automatically)",
+    );
     return [];
   }
   try {
@@ -357,7 +417,9 @@ function activateUnits() {
 
 function removeUnits() {
   if (!existsSync(UNIT_DIR)) return [];
-  const units = readdirSync(UNIT_DIR).filter((f) => /^iva.*\.(service|timer)$/.test(f));
+  const units = readdirSync(UNIT_DIR).filter((f) =>
+    /^iva.*\.(service|timer)$/.test(f),
+  );
   return cleanupSystemdUnits({
     units,
     disable: (unit) => systemd.disableNow([unit]),
@@ -379,11 +441,19 @@ function migrateEnv({ quiet = false } = {}) {
   const isOldDefault = host === OLD_DEFAULT_HOST;
   // old default :3000 → new default 8723; custom local host → its port; otherwise the default
   const port = isOldDefault ? DEFAULT_PORT : local ? local[1] : DEFAULT_PORT;
-  let raw = readFileSync(ENV_PATH, "utf8").replace(/\n*$/, "\n") + `IVA_PORT=${port}\n`;
+  let raw =
+    readFileSync(ENV_PATH, "utf8").replace(/\n*$/, "\n") + `IVA_PORT=${port}\n`;
   // don't leave a stale :3000 in ASSISTANT_HOST — otherwise clients get stuck on the taken port
-  if (isOldDefault) raw = raw.replace(/^(\s*ASSISTANT_HOST\s*=).*$/m, `$1http://127.0.0.1:${port}`);
+  if (isOldDefault)
+    raw = raw.replace(
+      /^(\s*ASSISTANT_HOST\s*=).*$/m,
+      `$1http://127.0.0.1:${port}`,
+    );
   writeEnvAtomicSync(ENV_PATH, raw);
-  if (!quiet) ok(`.env migrated → IVA_PORT=${port}${isOldDefault ? ", ASSISTANT_HOST moved off :3000" : ""}`);
+  if (!quiet)
+    ok(
+      `.env migrated → IVA_PORT=${port}${isOldDefault ? ", ASSISTANT_HOST moved off :3000" : ""}`,
+    );
   return true;
 }
 
@@ -407,16 +477,20 @@ function loadTreeGrid() {
   const body = sh.split("<<'IVA_TREE'\n")[1]?.split("\nIVA_TREE")[0];
   if (!body) return null;
   const re = /\x1b\[38;2;(\d+);(\d+);(\d+)m([\s\S])|\x1b\[0m|([\s\S])/g;
-  return body.replace(/\\033/g, "\x1b").split("\n").map((line) => {
-    const cells = [];
-    let m;
-    re.lastIndex = 0;
-    while ((m = re.exec(line))) {
-      if (m[4] !== undefined) cells.push({ ch: m[4], r: +m[1], g: +m[2], b: +m[3] });
-      else if (m[5] !== undefined) cells.push({ ch: m[5], bg: true });
-    }
-    return cells;
-  });
+  return body
+    .replace(/\\033/g, "\x1b")
+    .split("\n")
+    .map((line) => {
+      const cells = [];
+      let m;
+      re.lastIndex = 0;
+      while ((m = re.exec(line))) {
+        if (m[4] !== undefined)
+          cells.push({ ch: m[4], r: +m[1], g: +m[2], b: +m[3] });
+        else if (m[5] !== undefined) cells.push({ ch: m[5], bg: true });
+      }
+      return cells;
+    });
 }
 
 const clampByte = (v) => (v < 0 ? 0 : v > 255 ? 255 : v);
@@ -436,7 +510,10 @@ function renderTreeFrame(grid, t, live) {
     let line = " ".repeat(lead);
     for (let x = lead; x <= last; x++) {
       const c = cells[x];
-      if (c.bg) { line += " "; continue; }
+      if (c.bg) {
+        line += " ";
+        continue;
+      }
       let { r, g, b, ch } = c;
       if (live) {
         const shim = 1 + 0.16 * Math.sin(t * 0.6 + x * 0.45 + y * 0.3); // brightness shimmer
@@ -444,7 +521,15 @@ function renderTreeFrame(grid, t, live) {
         g = clampByte(Math.round(g * shim));
         b = clampByte(Math.round(b * shim));
         const idx = TREE_RAMP.indexOf(ch); // glyph breathes ±1 along the ramp (not into background)
-        if (idx > 0) ch = TREE_RAMP[clamp(idx + Math.round(0.9 * Math.sin(t * 0.5 + x * 0.7 + y * 1.1)), 1, TREE_RAMP.length - 1)];
+        if (idx > 0)
+          ch =
+            TREE_RAMP[
+              clamp(
+                idx + Math.round(0.9 * Math.sin(t * 0.5 + x * 0.7 + y * 1.1)),
+                1,
+                TREE_RAMP.length - 1,
+              )
+            ];
       }
       line += `\x1b[38;2;${r};${g};${b}m${ch}`;
     }
@@ -454,18 +539,29 @@ function renderTreeFrame(grid, t, live) {
 }
 
 async function showTree() {
-  if (!process.stdout.isTTY || process.env.NO_COLOR || process.env.TERM === "dumb") return;
+  if (
+    !process.stdout.isTTY ||
+    process.env.NO_COLOR ||
+    process.env.TERM === "dumb"
+  )
+    return;
   let cursorHidden = false;
   const restoreCursor = () => {
     if (cursorHidden) process.stdout.write("\x1b[?25h");
     cursorHidden = false;
   };
   const signals = ["SIGINT", "SIGTERM"];
-  const handlers = Object.fromEntries(signals.map((signal) => [signal, () => {
-    restoreCursor();
-    for (const name of signals) process.removeListener(name, handlers[name]);
-    process.kill(process.pid, signal);
-  }]));
+  const handlers = Object.fromEntries(
+    signals.map((signal) => [
+      signal,
+      () => {
+        restoreCursor();
+        for (const name of signals)
+          process.removeListener(name, handlers[name]);
+        process.kill(process.pid, signal);
+      },
+    ]),
+  );
   try {
     const grid = loadTreeGrid();
     if (!grid) return;
@@ -480,7 +576,8 @@ async function showTree() {
     process.stdout.write("\x1b[?25l"); // hide the cursor
     cursorHidden = true;
     for (const signal of signals) process.once(signal, handlers[signal]);
-    const FRAMES = 36, DELAY = 70;
+    const FRAMES = 36,
+      DELAY = 70;
     for (let f = 0; f < FRAMES; f++) {
       if (f > 0) process.stdout.write(`\x1b[${rows}A`);
       process.stdout.write(renderTreeFrame(grid, f * 0.7, true));
@@ -492,7 +589,8 @@ async function showTree() {
   } catch {
     restoreCursor();
   } finally {
-    for (const signal of signals) process.removeListener(signal, handlers[signal]);
+    for (const signal of signals)
+      process.removeListener(signal, handlers[signal]);
   }
 }
 
@@ -502,35 +600,63 @@ async function cmdUpdate(args) {
   const verbose = args.includes("--verbose");
   const telegramJobAt = args.indexOf("--telegram-job");
   const telegramJobId = telegramJobAt >= 0 ? args[telegramJobAt + 1] || "" : "";
-  const locale = (readEnv().AGENT_LANGUAGE || process.env.AGENT_LANGUAGE) === "ru" ? "ru" : "en";
-  const text = locale === "ru"
-    ? {
-        protect: ["Сохраняю ваши изменения", "Изменения сохранены", "Не удалось сохранить изменения"],
-        fetch: ["Получаю обновление", "Обновление получено", "Не удалось получить обновление"],
-        build: ["Собираю Iva", "Iva собрана", "Не удалось собрать Iva"],
-        timerFailure: "Iva готова, но таймер автоматических обновлений не удалось активировать",
-        current: "Iva уже обновлена",
-      }
-    : {
-        protect: ["Saving your changes", "Changes saved", "Couldn't save your changes"],
-        fetch: ["Getting the update", "Update received", "Couldn't get the update"],
-        build: ["Building Iva", "Iva built", "Couldn't build Iva"],
-        timerFailure: "Iva is ready, but the automatic update timer could not be activated",
-        current: "Iva is already up to date",
-      };
+  const locale =
+    (readEnv().AGENT_LANGUAGE || process.env.AGENT_LANGUAGE) === "ru"
+      ? "ru"
+      : "en";
+  const text =
+    locale === "ru"
+      ? {
+          protect: [
+            "Сохраняю ваши изменения",
+            "Изменения сохранены",
+            "Не удалось сохранить изменения",
+          ],
+          fetch: [
+            "Получаю обновление",
+            "Обновление получено",
+            "Не удалось получить обновление",
+          ],
+          build: ["Собираю Iva", "Iva собрана", "Не удалось собрать Iva"],
+          timerFailure:
+            "Iva готова, но таймер автоматических обновлений не удалось активировать",
+          current: "Iva уже обновлена",
+        }
+      : {
+          protect: [
+            "Saving your changes",
+            "Changes saved",
+            "Couldn't save your changes",
+          ],
+          fetch: [
+            "Getting the update",
+            "Update received",
+            "Couldn't get the update",
+          ],
+          build: ["Building Iva", "Iva built", "Couldn't build Iva"],
+          timerFailure:
+            "Iva is ready, but the automatic update timer could not be activated",
+          current: "Iva is already up to date",
+        };
 
   await showTree();
   const env = readEnv();
   const dataDir = dataDirAbs(env);
   const loadedJob = await loadTelegramJob(dataDir, telegramJobId);
   const reporter = loadedJob
-    ? createTelegramUpdateReporter({ token: env.TELEGRAM_BOT_TOKEN, job: loadedJob.job, env })
+    ? createTelegramUpdateReporter({
+        token: env.TELEGRAM_BOT_TOKEN,
+        job: loadedJob.job,
+        env,
+      })
     : null;
   const terminal = createTerminalProgress({ verbose });
   const owner = telegramJobId || `cli-${process.pid}-${Date.now()}`;
   const lock = acquireUpdateLock(dataDir, owner);
   if (!lock.ok) {
-    terminal.fail(locale === "ru" ? "Обновление уже идёт" : "An update is already running");
+    terminal.fail(
+      locale === "ru" ? "Обновление уже идёт" : "An update is already running",
+    );
     reporter?.dispose();
     await removeTelegramJob(loadedJob?.path);
     process.exitCode = 1;
@@ -538,11 +664,21 @@ async function cmdUpdate(args) {
   }
 
   const logFile = createUpdateLog(dataDir);
-  const tx = createUpdateTransaction({ root: ROOT, dataDir, envPath: ENV_PATH, verbose, logFile, env: childEnv });
+  const tx = createUpdateTransaction({
+    root: ROOT,
+    dataDir,
+    envPath: ENV_PATH,
+    verbose,
+    logFile,
+    env: childEnv,
+  });
   let phase = "protect";
   let userbotUpdateAttempted = false;
   let userbotRollbackSnapshot = null;
-  let versions = { beforeVersion: "the previous version", afterVersion: "the new version" };
+  let versions = {
+    beforeVersion: "the previous version",
+    afterVersion: "the new version",
+  };
   const phaseStart = async (name) => {
     phase = name;
     terminal.start(text[name][0]);
@@ -587,7 +723,10 @@ async function cmdUpdate(args) {
       await phaseDone("fetch");
       if (!(await finalizeUpdate())) return;
       terminal.info(`✅ ${text.current} (${versions.afterVersion})`);
-      await reporter?.complete({ ...versions, changedLocal: tx.hadLocalChanges });
+      await reporter?.complete({
+        ...versions,
+        changedLocal: tx.hadLocalChanges,
+      });
       return;
     }
     await phaseDone("fetch");
@@ -604,20 +743,36 @@ async function cmdUpdate(args) {
     // best-effort: it never fails an update.
     try {
       const vaultRel = readEnv().ASSISTANT_VAULT_DIR || "vault";
-      const vaultDir = vaultRel.startsWith("/") ? vaultRel : join(ROOT, vaultRel);
+      const vaultDir = vaultRel.startsWith("/")
+        ? vaultRel
+        : join(ROOT, vaultRel);
       const cleanupScript = join(ROOT, "scripts/autograph/cleanup.py");
-      const cleaned = spawnSync("uv", ["run", cleanupScript, ".", "--apply"], { cwd: vaultDir, encoding: "utf8", env: childEnv });
+      const cleaned = spawnSync("uv", ["run", cleanupScript, ".", "--apply"], {
+        cwd: vaultDir,
+        encoding: "utf8",
+        env: childEnv,
+      });
       if (cleaned.status === 0 && !cleaned.stdout.includes(" 0 file(s)"))
         terminal.info(`🧹 ${cleaned.stdout.trim().split("\n").pop()}`);
     } catch {}
     const promoted = candidate ? await tx.promoteCandidate() : false;
     if (!promoted) {
       if (integrated.changed) {
-        const diff = await tx.git("diff", "--name-only", `${versions.beforeHead}..${versions.afterHead}`);
+        const diff = await tx.git(
+          "diff",
+          "--name-only",
+          `${versions.beforeHead}..${versions.afterHead}`,
+        );
         const files = diff.stdout.split("\n");
-        if (files.includes("package.json") || files.includes("package-lock.json")) {
-          const install = await tx.run(NPM, [existsSync(join(ROOT, "package-lock.json")) ? "ci" : "install"]);
-          if (install.code !== 0) throw new Error("dependency installation failed");
+        if (
+          files.includes("package.json") ||
+          files.includes("package-lock.json")
+        ) {
+          const install = await tx.run(NPM, [
+            existsSync(join(ROOT, "package-lock.json")) ? "ci" : "install",
+          ]);
+          if (install.code !== 0)
+            throw new Error("dependency installation failed");
         }
       }
       tx.backupOutput();
@@ -636,18 +791,32 @@ async function cmdUpdate(args) {
       for (let attempt = 0; attempt < 30; attempt++) {
         const active = SERVICES.every((service) => systemd.isActive(service));
         try {
-          const response = await fetch(`http://127.0.0.1:${port}/`, { signal: AbortSignal.timeout(2000) });
-          if (active && response.ok) { healthy = true; break; }
+          const response = await fetch(`http://127.0.0.1:${port}/`, {
+            signal: AbortSignal.timeout(2000),
+          });
+          if (active && response.ok) {
+            healthy = true;
+            break;
+          }
         } catch {}
         await new Promise((resolve) => setTimeout(resolve, 1000));
       }
       if (!healthy) throw new Error("health check failed");
       if (systemd.isActive(SVC_USERBOT)) {
-        const frozen = cap("uv", ["pip", "freeze", "--python", VENV_PY], { cwd: USERBOT_DIR });
+        const frozen = cap("uv", ["pip", "freeze", "--python", VENV_PY], {
+          cwd: USERBOT_DIR,
+        });
         if (frozen.code !== 0 || !frozen.out)
-          throw new Error("userbot: не удалось сохранить dependency snapshot перед обновлением");
-        userbotRollbackSnapshot = join(tmpdir(), `iva-userbot-before-update-${process.pid}-${Date.now()}.txt`);
-        writeFileSync(userbotRollbackSnapshot, `${frozen.out}\n`, { mode: 0o600 });
+          throw new Error(
+            "userbot: не удалось сохранить dependency snapshot перед обновлением",
+          );
+        userbotRollbackSnapshot = join(
+          tmpdir(),
+          `iva-userbot-before-update-${process.pid}-${Date.now()}.txt`,
+        );
+        writeFileSync(userbotRollbackSnapshot, `${frozen.out}\n`, {
+          mode: 0o600,
+        });
         userbotUpdateAttempted = true;
         restartUserbotIfActive({ quiet: true, knownActive: true });
       }
@@ -657,7 +826,9 @@ async function cmdUpdate(args) {
     if (!(await finalizeUpdate())) return;
     const model = modelSummary(readEnv());
     terminal.info(`✅ Iva ${locale === "ru" ? "обновлена" : "updated"}`);
-    terminal.info(`${versions.beforeVersion} → ${versions.afterVersion} · ${model.provider}/${model.model}`);
+    terminal.info(
+      `${versions.beforeVersion} → ${versions.afterVersion} · ${model.provider}/${model.model}`,
+    );
     await reporter?.complete({ ...versions, changedLocal: tx.hadLocalChanges });
   } catch (error) {
     terminal.fail(text[phase][2]);
@@ -692,7 +863,9 @@ async function cmdUpdate(args) {
       }
     }
     await reporter?.fail(phase, versions.beforeVersion);
-    terminal.info(`${error.message}. ${locale === "ru" ? "Откат" : "Rollback"}: ${rollbackOk ? "OK" : "FAILED"}. ${locale === "ru" ? "Лог" : "Log"}: ${logFile}`);
+    terminal.info(
+      `${error.message}. ${locale === "ru" ? "Откат" : "Rollback"}: ${rollbackOk ? "OK" : "FAILED"}. ${locale === "ru" ? "Лог" : "Log"}: ${logFile}`,
+    );
     process.exitCode = 1;
   } finally {
     try {
@@ -701,7 +874,8 @@ async function cmdUpdate(args) {
     terminal.dispose();
     reporter?.dispose();
     releaseUpdateLock(lock);
-    if (userbotRollbackSnapshot) rmSync(userbotRollbackSnapshot, { force: true });
+    if (userbotRollbackSnapshot)
+      rmSync(userbotRollbackSnapshot, { force: true });
     await removeTelegramJob(loadedJob?.path);
   }
 }
@@ -721,7 +895,8 @@ async function cmdConfig(args = []) {
     { envPath: ENV_PATH, services: SERVICES },
     { restart: restartConfiguredServices },
   );
-  if (recovered) ok("Recovered the previous configuration and restarted services");
+  if (recovered)
+    ok("Recovered the previous configuration and restarted services");
   if (args.includes("--recover")) {
     if (!recovered) ok("No pending configuration recovery");
     return;
@@ -751,27 +926,31 @@ async function cmdConfig(args = []) {
       openrouter: ["OPENROUTER_MODEL", "OPENROUTER_API_KEY"],
       codex: ["CODEX_MODEL", null],
     }[provider];
-    if (!selected) throw new Error("candidate configuration has an invalid model provider");
+    if (!selected)
+      throw new Error("candidate configuration has an invalid model provider");
     const port = Number(nextEnv.IVA_PORT || DEFAULT_PORT);
     if (!Number.isInteger(port) || port < 1 || port > 65535) {
       throw new Error("candidate configuration has an invalid IVA_PORT");
     }
 
-    await applyConfigTransaction({
-      envPath: ENV_PATH,
-      nextText,
-      selection: {
-        provider,
-        model: nextEnv[selected[0]],
-        key: selected[1] ? nextEnv[selected[1]] : undefined,
-        dataDir: dataDirAbs(nextEnv),
+    await applyConfigTransaction(
+      {
+        envPath: ENV_PATH,
+        nextText,
+        selection: {
+          provider,
+          model: nextEnv[selected[0]],
+          key: selected[1] ? nextEnv[selected[1]] : undefined,
+          dataDir: dataDirAbs(nextEnv),
+        },
+        services: SERVICES,
+        healthUrl: `http://127.0.0.1:${port}/eve/v1/health`,
       },
-      services: SERVICES,
-      healthUrl: `http://127.0.0.1:${port}/eve/v1/health`,
-    }, {
-      restart: restartConfiguredServices,
-      health: (url) => probeEveHealth(url),
-    });
+      {
+        restart: restartConfiguredServices,
+        health: (url) => probeEveHealth(url),
+      },
+    );
     ok("Configuration applied; agent and Telegram bridge are active");
   } finally {
     rmSync(candidateDir, { recursive: true, force: true });
@@ -790,7 +969,9 @@ async function cmdDoctor() {
   // 1. Node ≥24
   const major = parseInt(process.versions.node.split(".")[0], 10);
   if (major >= 24) (ok(`Node ${process.versions.node}`), okN++);
-  else (bad(`Node ${process.versions.node} < 24 — upgrade: nvm install 24`), badN++);
+  else
+    (bad(`Node ${process.versions.node} < 24 — upgrade: nvm install 24`),
+      badN++);
 
   // 2. .env + required keys (the same REQUIRED logic as in scripts/setup.mjs)
   if (!existsSync(ENV_PATH)) (bad(".env missing — run: iva config"), badN++);
@@ -811,27 +992,48 @@ async function cmdDoctor() {
       "ASSISTANT_BEARER",
     ];
     const missing = REQUIRED.filter((k) => !(env[k] || "").trim());
-    if (prov === "codex" && !existsSync(join(dataDirAbs(env), "codex-auth.json"))) missing.push("OpenAI sign-in (iva login)");
+    if (
+      prov === "codex" &&
+      !existsSync(join(dataDirAbs(env), "codex-auth.json"))
+    )
+      missing.push("OpenAI sign-in (iva login)");
     if (!missing.length) (ok(`.env filled in (provider: ${prov})`), okN++);
-    else (bad(`.env incomplete, missing: ${missing.join(", ")} — run: iva config`), badN++);
+    else
+      (bad(`.env incomplete, missing: ${missing.join(", ")} — run: iva config`),
+        badN++);
     // old .env without IVA_PORT (or with :3000) — migrate right here
     if (migrateEnv()) fixN++;
     // web search is optional; check the key of the SELECTED provider (SEARCH_PROVIDER)
-    const SEARCH_KEY = { tavily: "TAVILY_API_KEY", brave: "BRAVE_API_KEY", exa: "EXA_API_KEY", parallel: "PARALLEL_API_KEY" };
+    const SEARCH_KEY = {
+      tavily: "TAVILY_API_KEY",
+      brave: "BRAVE_API_KEY",
+      exa: "EXA_API_KEY",
+      parallel: "PARALLEL_API_KEY",
+    };
     const sp = (env.SEARCH_PROVIDER || "tavily").trim().toLowerCase();
     const skey = SEARCH_KEY[sp] || SEARCH_KEY.tavily;
     if (!(env[skey] || "").trim())
-      (warn(`web_search: SEARCH_PROVIDER=${sp}, but ${skey} is not set — search won't work (iva config)`), warnN++);
+      (warn(
+        `web_search: SEARCH_PROVIDER=${sp}, but ${skey} is not set — search won't work (iva config)`,
+      ),
+        warnN++);
     else (ok(`web_search: ${sp}`), okN++);
     // memory_search: hybrid mode needs one embedding key; base (grep) needs nothing.
     const mmode = (env.MEMORY_SEARCH_MODE || "grep").trim().toLowerCase();
-    if (mmode === "hybrid" && !(env.JINA_API_KEY || env.DEEPINFRA_API_KEY || "").trim())
-      (warn("memory_search: MEMORY_SEARCH_MODE=hybrid but no JINA_API_KEY/DEEPINFRA_API_KEY — falls back to BM25"), warnN++);
+    if (
+      mmode === "hybrid" &&
+      !(env.JINA_API_KEY || env.DEEPINFRA_API_KEY || "").trim()
+    )
+      (warn(
+        "memory_search: MEMORY_SEARCH_MODE=hybrid but no JINA_API_KEY/DEEPINFRA_API_KEY — falls back to BM25",
+      ),
+        warnN++);
     else (ok(`memory_search: ${mmode}`), okN++);
   }
 
   // 3. Build
-  if (existsSync(join(ROOT, ".output/server/index.mjs"))) (ok("Build in place (.output)"), okN++);
+  if (existsSync(join(ROOT, ".output/server/index.mjs")))
+    (ok("Build in place (.output)"), okN++);
   else {
     warn(".output missing — building…");
     if (run(NPM, ["run", "build"]).status === 0) (ok("Built"), fixN++);
@@ -844,7 +1046,9 @@ async function cmdDoctor() {
   }
 
   // 4. Units installed
-  const present = existsSync(UNIT_DIR) && readdirSync(UNIT_DIR).some((f) => /^iva.*\.(service|timer)$/.test(f));
+  const present =
+    existsSync(UNIT_DIR) &&
+    readdirSync(UNIT_DIR).some((f) => /^iva.*\.(service|timer)$/.test(f));
   if (!present) {
     warn("systemd units not installed — installing…");
     try {
@@ -865,7 +1069,8 @@ async function cmdDoctor() {
 
   // 5. Services active
   for (const svc of SERVICES) {
-    if (systemd.isEnabled(svc) && systemd.isActive(svc)) (ok(`${svc} enabled and active`), okN++);
+    if (systemd.isEnabled(svc) && systemd.isActive(svc))
+      (ok(`${svc} enabled and active`), okN++);
     else {
       warn(`${svc} disabled or inactive — activating…`);
       try {
@@ -897,7 +1102,9 @@ async function cmdDoctor() {
   };
   let listener = inspectListener();
   if (listener === "exposed") {
-    warn(`iva.service is exposed beyond loopback on port ${port} - restarting securely`);
+    warn(
+      `iva.service is exposed beyond loopback on port ${port} - restarting securely`,
+    );
     try {
       systemd.restart(["iva.service"]);
       for (let attempt = 0; attempt < 30; attempt++) {
@@ -905,13 +1112,16 @@ async function cmdDoctor() {
         listener = inspectListener();
         if (listener === "loopback") break;
       }
-      if (listener === "loopback") (ok(`iva.service bound to loopback:${port}`), fixN++);
+      if (listener === "loopback")
+        (ok(`iva.service bound to loopback:${port}`), fixN++);
       else (bad(`iva.service still exposed on port ${port}`), badN++);
     } catch (e) {
       (bad(e.message), badN++);
     }
-  } else if (listener === "loopback") (ok(`iva.service bound to loopback:${port}`), okN++);
-  else if (listener === "absent") (warn(`no listener found on port ${port}`), warnN++);
+  } else if (listener === "loopback")
+    (ok(`iva.service bound to loopback:${port}`), okN++);
+  else if (listener === "absent")
+    (warn(`no listener found on port ${port}`), warnN++);
   else (warn("could not inspect listener addresses (ss unavailable)"), warnN++);
 
   // Background timers enabled
@@ -930,16 +1140,22 @@ async function cmdDoctor() {
     }
   }
   if (!timerFailed)
-    ok(`Background timers enabled and active (${TIMERS.length}: ${MEMORY_TIMERS.length} memory + update check)`);
+    ok(
+      `Background timers enabled and active (${TIMERS.length}: ${MEMORY_TIMERS.length} memory + update check)`,
+    );
 
   // A oneshot service can be inactive and still healthy; its persistent failed state is the
   // signal that the last nightly run broke. Query only units actually installed on this host.
-  const installedMemoryServices = MEMORY_SERVICES.filter((unit) => existsSync(join(UNIT_DIR, unit)));
+  const installedMemoryServices = MEMORY_SERVICES.filter((unit) =>
+    existsSync(join(UNIT_DIR, unit)),
+  );
   let failedMemoryServices = 0;
   for (const unit of installedMemoryServices) {
     const state = systemd.query("is-failed", unit);
     if (state.code === 0 && state.out === "failed") {
-      bad(`${unit} failed — check: journalctl --user -u ${unit} -n 100 --no-pager`);
+      bad(
+        `${unit} failed — check: journalctl --user -u ${unit} -n 100 --no-pager`,
+      );
       badN++;
       failedMemoryServices++;
     }
@@ -956,12 +1172,19 @@ async function cmdDoctor() {
   // 26h for the 04:00 daily slot, 8d/32d/370d for weekly/monthly/yearly respectively.
   let rollupStatus = null;
   try {
-    rollupStatus = JSON.parse(readFileSync(join(dataDirAbs(env), "rollup-status.json"), "utf8"));
+    rollupStatus = JSON.parse(
+      readFileSync(join(dataDirAbs(env), "rollup-status.json"), "utf8"),
+    );
   } catch {
     // No rollup-status.json yet (fresh install, or nothing has fired yet) — not an error.
   }
   if (rollupStatus) {
-    const STALE_AFTER_H = { daily: 26, weekly: 8 * 24, monthly: 32 * 24, yearly: 370 * 24 };
+    const STALE_AFTER_H = {
+      daily: 26,
+      weekly: 8 * 24,
+      monthly: 32 * 24,
+      yearly: 370 * 24,
+    };
     for (const period of ["daily", "weekly", "monthly", "yearly"]) {
       // "memory-<period>" — the `name` each agent/schedules/memory-*.ts passes to
       // runScheduledJob, not the bare period (see scripts/lib/schedule-runner.mjs).
@@ -971,20 +1194,29 @@ async function cmdDoctor() {
         const ageHours = (Date.now() - entry.lastSuccessAt) / (60 * 60 * 1000);
         const thresholdH = STALE_AFTER_H[period];
         if (ageHours > thresholdH) {
-          warn(`memory-${period} schedule hasn't succeeded in ${Math.round(ageHours)}h (> ${thresholdH}h) — check: journalctl --user -u iva.service | grep schedule-runner`);
+          warn(
+            `memory-${period} schedule hasn't succeeded in ${Math.round(ageHours)}h (> ${thresholdH}h) — check: journalctl --user -u iva.service | grep schedule-runner`,
+          );
           warnN++;
         } else {
-          (ok(`memory-${period} schedule last succeeded ${Math.round(ageHours)}h ago`), okN++);
+          (ok(
+            `memory-${period} schedule last succeeded ${Math.round(ageHours)}h ago`,
+          ),
+            okN++);
         }
       } else {
-        warn(`memory-${period} schedule has never succeeded — check: journalctl --user -u iva.service | grep schedule-runner`);
+        warn(
+          `memory-${period} schedule has never succeeded — check: journalctl --user -u iva.service | grep schedule-runner`,
+        );
         warnN++;
       }
       // A recent success doesn't mean the MOST RECENT attempt was clean — e.g. it
       // succeeded, then a later catch-up retry failed and hasn't run again since.
       // Surface that even when the staleness check above is satisfied.
       if (typeof entry.lastExitCode === "number" && entry.lastExitCode !== 0) {
-        warn(`memory-${period} schedule's last run exited ${entry.lastExitCode} — check: journalctl --user -u iva.service | grep schedule-runner`);
+        warn(
+          `memory-${period} schedule's last run exited ${entry.lastExitCode} — check: journalctl --user -u iva.service | grep schedule-runner`,
+        );
         warnN++;
       }
     }
@@ -993,18 +1225,25 @@ async function cmdDoctor() {
   // 6. Vault + git origin (report only — we don't initiate git operations)
   const vaultRel = env.ASSISTANT_VAULT_DIR || "vault";
   const vaultPath = vaultRel.startsWith("/") ? vaultRel : join(ROOT, vaultRel);
-  if (!existsSync(vaultPath)) (warn(`vault not found (${vaultPath}) — created on first memory or: npm run init-vault`), warnN++);
-  else if (cap("git", ["-C", vaultPath, "remote", "get-url", "origin"]).out) (ok(`vault + git origin`), okN++);
+  if (!existsSync(vaultPath))
+    (warn(
+      `vault not found (${vaultPath}) — created on first memory or: npm run init-vault`,
+    ),
+      warnN++);
+  else if (cap("git", ["-C", vaultPath, "remote", "get-url", "origin"]).out)
+    (ok(`vault + git origin`), okN++);
   else
     (warn(
       `vault without git origin — memory backup not configured:\n    gh repo create <user>/iva-vault --private --source="${vaultPath}" --remote=origin --push`,
     ),
-    warnN++);
+      warnN++);
 
   // enforce-report.json is produced by iva-memory-doctor.service, so only complain about
   // missing/stale output when that timer is enabled. A fresh report is still useful either way.
   const maintenanceTimerEnabled = systemd.isEnabled("iva-memory-doctor.timer");
-  const maintenanceReport = readMemoryMaintenanceReport(join(vaultPath, ".graph/enforce-report.json"));
+  const maintenanceReport = readMemoryMaintenanceReport(
+    join(vaultPath, ".graph/enforce-report.json"),
+  );
   if (maintenanceReport.status === "fresh") {
     if (maintenanceReport.problems.length) {
       warn(
@@ -1038,7 +1277,13 @@ async function cmdDoctor() {
 function cmdStatus() {
   requireSystemd();
   run("systemctl", ["--user", "status", "--no-pager", "-n", "5", ...SERVICES]);
-  run("systemctl", ["--user", "list-timers", "--no-pager", "iva-memory-*", UPDATE_TIMER]);
+  run("systemctl", [
+    "--user",
+    "list-timers",
+    "--no-pager",
+    "iva-memory-*",
+    UPDATE_TIMER,
+  ]);
 }
 function cmdRestart() {
   requireSystemd();
@@ -1073,13 +1318,16 @@ function cmdReset() {
       const dest = quarantinePath(target, stamp);
       if (!dest) continue;
       found = true;
-      ok(`${relative(ROOT, target)} → ${relative(ROOT, dest)} — reset state quarantined`);
+      ok(
+        `${relative(ROOT, target)} → ${relative(ROOT, dest)} — reset state quarantined`,
+      );
     } catch (e) {
       failed = true;
       warn(`failed to quarantine ${relative(ROOT, target)}: ${e.message}`);
     }
   }
-  if (!found && !failed) ok("workflow and Telegram control state already empty");
+  if (!found && !failed)
+    ok("workflow and Telegram control state already empty");
   let restartError = null;
   try {
     restartServices();
@@ -1089,7 +1337,10 @@ function cmdReset() {
   if (restartError) {
     bad(restartError.message);
   }
-  if (failed) bad("Reset INCOMPLETE — old workflow or Telegram control state may still be active");
+  if (failed)
+    bad(
+      "Reset INCOMPLETE — old workflow or Telegram control state may still be active",
+    );
   if (failed || restartError) process.exit(1);
   ok("Restarted: iva + telegram-poll");
 }
@@ -1105,14 +1356,21 @@ function cmdStop() {
 }
 function cmdLogs(args) {
   requireSystemd();
-  const unit = args.includes("poll") ? "iva-telegram-poll.service" : "iva.service";
+  const unit = args.includes("poll")
+    ? "iva-telegram-poll.service"
+    : "iva.service";
   run("journalctl", ["--user", "-u", unit, "-f", "-n", "50"]);
 }
 
 async function cmdUninstall(args) {
   const purge = args.includes("--purge");
-  warn("Uninstalling Iva: systemd units and the `iva` command will be removed.");
-  if (purge) bad("--purge will ALSO DELETE the project code and vault (a separate git repo with your memory!).");
+  warn(
+    "Uninstalling Iva: systemd units and the `iva` command will be removed.",
+  );
+  if (purge)
+    bad(
+      "--purge will ALSO DELETE the project code and vault (a separate git repo with your memory!).",
+    );
   if (!(await confirm("Continue?", false))) return console.log("Cancelled.");
 
   if (hasSystemd()) ok(`Removed systemd units: ${removeUnits().length}`);
@@ -1125,7 +1383,12 @@ async function cmdUninstall(args) {
     console.log(`${C.d}Code and vault kept: ${ROOT}${C.x}`);
     return ok("Done.");
   }
-  if (!(await confirm(`Delete the ${ROOT} directory AND vault IRREVERSIBLY?`, false)))
+  if (
+    !(await confirm(
+      `Delete the ${ROOT} directory AND vault IRREVERSIBLY?`,
+      false,
+    ))
+  )
     return console.log("Code and vault kept.");
   const vaultRel = readEnv().ASSISTANT_VAULT_DIR || "vault";
   const vaultPath = vaultRel.startsWith("/") ? vaultRel : join(ROOT, vaultRel);
@@ -1153,22 +1416,29 @@ function cmdVersion() {
 // Token usage from data/usage.jsonl — the same log that Telegram /usage reads. A terminal
 // view (issue #7, the comment about a CLI monitor). `tail [N]` — the last raw lines.
 async function cmdUsage(args) {
-  const { readEntries, summarize, formatUsageReport, parseWindow } = await import("../scripts/lib/usage.mjs");
+  const { readEntries, summarize, formatUsageReport, parseWindow } =
+    await import("../scripts/lib/usage.mjs");
   const env = readEnv();
   const dataDir = dataDirAbs(env);
   if (args[0] === "tail") {
     const n = Number(args[1]) || 10;
-    for (const e of readEntries(dataDir).slice(-n)) console.log(JSON.stringify(e));
+    for (const e of readEntries(dataDir).slice(-n))
+      console.log(JSON.stringify(e));
     return;
   }
-  const agg = summarize(readEntries(dataDir), { window: parseWindow(args[0]), now: Date.now(), tz: env.ASSISTANT_TIMEZONE });
+  const agg = summarize(readEntries(dataDir), {
+    window: parseWindow(args[0]),
+    now: Date.now(),
+    tz: env.ASSISTANT_TIMEZONE,
+  });
   console.log(formatUsageReport(agg));
 }
 
 // OpenAI subscription (ChatGPT) login — device code by default, --browser for the PKCE flow.
 // Writes an OAuth token to data/codex-auth.json (0600); used when MODEL_PROVIDER=codex.
 async function cmdLogin(args) {
-  const { runDeviceCodeLogin, runBrowserLogin } = await import("../scripts/lib/codex-oauth.mjs");
+  const { runDeviceCodeLogin, runBrowserLogin } =
+    await import("../scripts/lib/codex-oauth.mjs");
   const dataDir = dataDirAbs();
   const lang = (readEnv().AGENT_LANGUAGE || "en").toLowerCase();
   const browser = args.includes("--browser");
@@ -1177,9 +1447,14 @@ async function cmdLogin(args) {
     const auth = browser
       ? await runBrowserLogin({ dataDir, lang, log: (m) => console.log(m) })
       : await runDeviceCodeLogin({ dataDir, lang, log: (m) => console.log(m) });
-    ok(`Signed in${auth.planType ? ` — plan: ${auth.planType}` : ""}${auth.accountId ? ` · account ${auth.accountId}` : ""}`);
-    console.log(`${C.d}Token stored: ${join(dataDir, "codex-auth.json")} (chmod 600)${C.x}`);
-    if (readEnv().MODEL_PROVIDER !== "codex") warn("Set MODEL_PROVIDER=codex to use it: iva config (then iva restart)");
+    ok(
+      `Signed in${auth.planType ? ` — plan: ${auth.planType}` : ""}${auth.accountId ? ` · account ${auth.accountId}` : ""}`,
+    );
+    console.log(
+      `${C.d}Token stored: ${join(dataDir, "codex-auth.json")} (chmod 600)${C.x}`,
+    );
+    if (readEnv().MODEL_PROVIDER !== "codex")
+      warn("Set MODEL_PROVIDER=codex to use it: iva config (then iva restart)");
   } catch (e) {
     bad(`Sign-in failed: ${e.message}`);
     process.exit(1);
@@ -1220,15 +1495,20 @@ function ensureUserbotVenv({
   requireHashes = true,
 } = {}) {
   const hasUv = !!cap("sh", ["-c", "command -v uv"]).out;
-  if (!hasUv) throw new Error("userbot: uv не найден — повторно запусти install.sh");
+  if (!hasUv)
+    throw new Error("userbot: uv не найден — повторно запусти install.sh");
   const opts = { cwd: USERBOT_DIR, ...(quiet ? { stdio: "ignore" } : {}) };
   const must = (r, what) => {
     if ((r?.status ?? 1) !== 0) throw new Error(`userbot: ${what} не удалось`);
   };
   if (!existsSync(VENV_PY)) {
     if (!quiet) step("Создаю venv для userbot-прокси…");
-    must(run("uv", ["venv", "--python", "3.12", ".venv"], opts), "создание venv");
-    if (!existsSync(VENV_PY)) throw new Error("userbot: venv не создан — проверь python3/uv");
+    must(
+      run("uv", ["venv", "--python", "3.12", ".venv"], opts),
+      "создание venv",
+    );
+    if (!existsSync(VENV_PY))
+      throw new Error("userbot: venv не создан — проверь python3/uv");
   }
   if (!quiet) step("Синхронизирую зависимости userbot-прокси…");
   const requirements = readFileSync(requirementsPath, "utf8");
@@ -1246,19 +1526,28 @@ function ensureUserbotVenv({
     "установка зависимостей",
   );
   // A partial install imports-fails at runtime → the service restart-loops silently.
-  const check = cap(VENV_PY, ["-c", "import telethon, telegram_mcp, qrcode, mcp"], opts);
+  const check = cap(
+    VENV_PY,
+    ["-c", "import telethon, telegram_mcp, qrcode, mcp"],
+    opts,
+  );
   if (check.code !== 0)
-    throw new Error(`userbot: зависимости не импортируются — ${check.err.split("\n").pop() || "проверь requirements"}`);
+    throw new Error(
+      `userbot: зависимости не импортируются — ${check.err.split("\n").pop() || "проверь requirements"}`,
+    );
 }
 
 // Update-or-append keys in .env (dedup). Used to write Telegram api_id/api_hash
 // without the agent hand-editing .env or leaking secrets through argv.
 function writeEnvVars(vars) {
   for (const [key, value] of Object.entries(vars)) {
-    if (/[\r\n]/.test(String(value))) throw new Error(`env value for ${key} contains a newline`);
+    if (/[\r\n]/.test(String(value)))
+      throw new Error(`env value for ${key} contains a newline`);
   }
   const raw = existsSync(ENV_PATH) ? readFileSync(ENV_PATH, "utf8") : "";
-  const pending = new Map(Object.entries(vars).map(([key, value]) => [key, String(value)]));
+  const pending = new Map(
+    Object.entries(vars).map(([key, value]) => [key, String(value)]),
+  );
   const out = [];
   for (const line of raw.split(/\r?\n/)) {
     const key = line.match(/^\s*([A-Z0-9_]+)\s*=/)?.[1];
@@ -1316,7 +1605,9 @@ async function cmdUserbot(args) {
       .map((s) => s.trim())
       .filter(Boolean);
     if (!apiId || !apiHash) {
-      bad("stdin: жду две строки — api_id и api_hash (создай приложение на my.telegram.org)");
+      bad(
+        "stdin: жду две строки — api_id и api_hash (создай приложение на my.telegram.org)",
+      );
       process.exit(1);
     }
     if (!/^\d+$/.test(apiId)) {
@@ -1330,7 +1621,9 @@ async function cmdUserbot(args) {
   if (sub === "setup") {
     const env = readEnv();
     if (!env.TELEGRAM_API_ID || !env.TELEGRAM_API_HASH) {
-      bad("Нет TELEGRAM_API_ID/TELEGRAM_API_HASH в .env. Создай приложение на my.telegram.org,");
+      bad(
+        "Нет TELEGRAM_API_ID/TELEGRAM_API_HASH в .env. Создай приложение на my.telegram.org,",
+      );
       bad("впиши оба ключа в .env и запусти снова: iva userbot setup");
       process.exit(1);
     }
@@ -1343,7 +1636,9 @@ async function cmdUserbot(args) {
     systemd.restart([SVC_USERBOT]);
     // NOTE: do NOT restart iva here — the agent runs this mid-chat, and iva reads the token
     // from the file at call time, so no restart is needed (Eve retries the MCP connection).
-    ok("Userbot-прокси включён. Подключи аккаунт по QR через бота: напиши боту «подключи мой телеграм».");
+    ok(
+      "Userbot-прокси включён. Подключи аккаунт по QR через бота: напиши боту «подключи мой телеграм».",
+    );
     ok("Статус: iva userbot status · выключить: iva userbot off");
     return;
   }
@@ -1375,8 +1670,12 @@ async function cmdUserbot(args) {
     port: env.TELEGRAM_MCP_PORT || "8724",
   });
   console.log(`${SVC_USERBOT}: ${health.state}`);
-  console.log(`venv: ${existsSync(VENV_PY) ? "собран" : "нет — будет собран при setup"}`);
-  console.log(`токен: ${existsSync(TOKEN_FILE) ? "есть" : "нет — создастся при setup"}`);
+  console.log(
+    `venv: ${existsSync(VENV_PY) ? "собран" : "нет — будет собран при setup"}`,
+  );
+  console.log(
+    `токен: ${existsSync(TOKEN_FILE) ? "есть" : "нет — создастся при setup"}`,
+  );
 }
 
 const [, , cmd, ...rest] = process.argv;

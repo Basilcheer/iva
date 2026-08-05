@@ -10,12 +10,7 @@ import {
 } from "./telegram-collect.mjs";
 
 function update(updateId, text, options = {}) {
-  const {
-    chatId = 1,
-    threadId,
-    fromId = 42,
-    mediaGroupId,
-  } = options;
+  const { chatId = 1, threadId, fromId = 42, mediaGroupId } = options;
   return {
     update_id: updateId,
     message: {
@@ -34,7 +29,9 @@ test("a solitary part flushes as the original update verbatim", () => {
   const collector = createCollector();
   const original = update(1, "one");
 
-  assert.deepEqual(collectorOffer(collector, original, 100), { status: "buffered" });
+  assert.deepEqual(collectorOffer(collector, original, 100), {
+    status: "buffered",
+  });
   assert.deepEqual(collectorTakeExpired(collector, 899), []);
   const [flushed] = collectorTakeExpired(collector, 900);
 
@@ -58,7 +55,10 @@ test("two text messages merge in message_id order with the maximum update_id", (
   assert.equal(flushed.message.message_id, 10);
   assert.deepEqual(
     flushed.message.iva_parts.map((part) => [part.message_id, part.text]),
-    [[10, "first"], [20, "second"]],
+    [
+      [10, "first"],
+      [20, "second"],
+    ],
   );
   assert.equal(Object.hasOwn(earlierMessage.message, "iva_parts"), false);
 });

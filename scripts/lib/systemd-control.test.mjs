@@ -107,24 +107,34 @@ async function fixture(t) {
 
   const runCommand = (
     command,
-    { args = [], exit = 0, failAction = "", inactiveUnit = "", failedUnit = "" } = {},
+    {
+      args = [],
+      exit = 0,
+      failAction = "",
+      inactiveUnit = "",
+      failedUnit = "",
+    } = {},
   ) =>
-    spawnSync(process.execPath, [join(project, "bin/iva.mjs"), command, ...args], {
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        HOME: home,
-        NO_COLOR: "1",
-        PATH: `${fakeBin}:/usr/bin:/bin`,
-        IVA_FAKE_SYSTEMCTL_CALLS: calls,
-        IVA_FAKE_SYSTEMCTL_EXIT: String(exit),
-        IVA_FAKE_FAIL_ACTION: failAction,
-        IVA_FAKE_SECRET_OUTPUT: SECRET,
-        IVA_FAKE_SYSTEMD_STATE: state,
-        IVA_FAKE_INACTIVE_UNIT: inactiveUnit,
-        IVA_FAKE_FAILED_UNIT: failedUnit,
+    spawnSync(
+      process.execPath,
+      [join(project, "bin/iva.mjs"), command, ...args],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          HOME: home,
+          NO_COLOR: "1",
+          PATH: `${fakeBin}:/usr/bin:/bin`,
+          IVA_FAKE_SYSTEMCTL_CALLS: calls,
+          IVA_FAKE_SYSTEMCTL_EXIT: String(exit),
+          IVA_FAKE_FAIL_ACTION: failAction,
+          IVA_FAKE_SECRET_OUTPUT: SECRET,
+          IVA_FAKE_SYSTEMD_STATE: state,
+          IVA_FAKE_INACTIVE_UNIT: inactiveUnit,
+          IVA_FAKE_FAILED_UNIT: failedUnit,
+        },
       },
-    });
+    );
 
   return {
     calls,
@@ -225,7 +235,9 @@ test("doctor checks installed memory services and reports failed ones with a jou
   // daily/weekly/monthly/yearly moved to in-process eve schedules (agent/schedules/memory-*.ts,
   // see scripts/lib/schedule-migration.mjs) — doctor stays the only external systemd watchdog.
   const { calls, runCommand } = await fixture(t);
-  const result = runCommand("doctor", { failedUnit: "iva-memory-doctor.service" });
+  const result = runCommand("doctor", {
+    failedUnit: "iva-memory-doctor.service",
+  });
   const output = `${result.stdout}\n${result.stderr}`;
   const systemctlCalls = (await readFile(calls, "utf8")).trim().split("\n");
   const checked = systemctlCalls
@@ -235,7 +247,10 @@ test("doctor checks installed memory services and reports failed ones with a jou
   assert.equal(result.status, 1, output);
   assert.deepEqual(checked, ["iva-memory-doctor.service"]);
   assert.match(output, /iva-memory-doctor\.service failed/);
-  assert.match(output, /journalctl --user -u iva-memory-doctor\.service -n 100 --no-pager/);
+  assert.match(
+    output,
+    /journalctl --user -u iva-memory-doctor\.service -n 100 --no-pager/,
+  );
 });
 
 test("doctor checks all four rollup periods against their own staleness threshold", async (t) => {
@@ -245,8 +260,8 @@ test("doctor checks all four rollup periods against their own staleness threshol
   await writeFile(
     join(project, "data/rollup-status.json"),
     JSON.stringify({
-      "memory-daily": { lastSuccessAt: now - 27 * 60 * 60 * 1000 },       // > 26h -> stale
-      "memory-weekly": { lastSuccessAt: now - 2 * 24 * 60 * 60 * 1000 },  // < 8d -> fresh
+      "memory-daily": { lastSuccessAt: now - 27 * 60 * 60 * 1000 }, // > 26h -> stale
+      "memory-weekly": { lastSuccessAt: now - 2 * 24 * 60 * 60 * 1000 }, // < 8d -> fresh
       "memory-monthly": { lastSuccessAt: now - 33 * 24 * 60 * 60 * 1000 }, // > 32d -> stale
       "memory-yearly": { lastSuccessAt: now - 10 * 24 * 60 * 60 * 1000 }, // < 370d -> fresh
     }),
@@ -298,7 +313,11 @@ test("legacy memory-timer cleanup is skipped when the current build doesn't cont
 
   assert.equal(result.status, 0, output);
   assert.match(output, /skipping legacy memory-timer cleanup/);
-  assert.equal(existsSync(join(unitDir, "iva-memory-daily.timer")), true, "the legacy unit is left alone on a stale build");
+  assert.equal(
+    existsSync(join(unitDir, "iva-memory-daily.timer")),
+    true,
+    "the legacy unit is left alone on a stale build",
+  );
 });
 
 test("a build that only bundles LEGACY_MEMORY_UNITS strings (not the compiled schedules) still counts as stale", async (t) => {
@@ -319,7 +338,11 @@ test("a build that only bundles LEGACY_MEMORY_UNITS strings (not the compiled sc
   const output = `${result.stdout}\n${result.stderr}`;
 
   assert.equal(result.status, 0, output);
-  assert.match(output, /skipping legacy memory-timer cleanup/, "the legacy-units array text must not be mistaken for a compiled schedule");
+  assert.match(
+    output,
+    /skipping legacy memory-timer cleanup/,
+    "the legacy-units array text must not be mistaken for a compiled schedule",
+  );
   assert.equal(existsSync(join(unitDir, "iva-memory-daily.timer")), true);
 });
 
@@ -336,7 +359,10 @@ test("legacy memory-timer cleanup proceeds once the build actually contains ALL 
   await writeFile(join(unitDir, "iva-memory-daily.timer"), "[Unit]\n");
   await mkdir(join(project, ".output/server/_virtual"), { recursive: true });
   for (const period of ["daily", "weekly", "monthly", "yearly"]) {
-    await writeFile(join(project, `.output/server/_virtual/eve-${period}.schedule.mjs`), scheduleDescriptionMjs(period));
+    await writeFile(
+      join(project, `.output/server/_virtual/eve-${period}.schedule.mjs`),
+      scheduleDescriptionMjs(period),
+    );
   }
 
   const result = runCommand("_install-units");
@@ -344,9 +370,17 @@ test("legacy memory-timer cleanup proceeds once the build actually contains ALL 
 
   assert.equal(result.status, 0, output);
   assert.doesNotMatch(output, /skipping legacy memory-timer cleanup/);
-  assert.equal(existsSync(join(unitDir, "iva-memory-daily.timer")), false, "a build that has all four schedules lets cleanup proceed");
+  assert.equal(
+    existsSync(join(unitDir, "iva-memory-daily.timer")),
+    false,
+    "a build that has all four schedules lets cleanup proceed",
+  );
   const systemctlCalls = (await readFile(calls, "utf8")).trim().split("\n");
-  assert.ok(systemctlCalls.some((c) => c === "--user disable --now iva-memory-daily.timer"));
+  assert.ok(
+    systemctlCalls.some(
+      (c) => c === "--user disable --now iva-memory-daily.timer",
+    ),
+  );
 });
 
 test("a PARTIAL build (only memory-daily compiled) still counts as stale — legacy units are preserved", async (t) => {
@@ -361,15 +395,26 @@ test("a PARTIAL build (only memory-daily compiled) still counts as stale — leg
     await writeFile(join(unitDir, `iva-memory-${period}.timer`), "[Unit]\n");
   }
   await mkdir(join(project, ".output/server/_virtual"), { recursive: true });
-  await writeFile(join(project, ".output/server/_virtual/eve.schedule.mjs"), scheduleDescriptionMjs("daily"));
+  await writeFile(
+    join(project, ".output/server/_virtual/eve.schedule.mjs"),
+    scheduleDescriptionMjs("daily"),
+  );
 
   const result = runCommand("_install-units");
   const output = `${result.stdout}\n${result.stderr}`;
 
   assert.equal(result.status, 0, output);
-  assert.match(output, /skipping legacy memory-timer cleanup/, "one marker out of four must not be treated as a complete build");
+  assert.match(
+    output,
+    /skipping legacy memory-timer cleanup/,
+    "one marker out of four must not be treated as a complete build",
+  );
   for (const period of ["daily", "weekly", "monthly", "yearly"]) {
-    assert.equal(existsSync(join(unitDir, `iva-memory-${period}.timer`)), true, `${period}'s legacy unit survives a partial build`);
+    assert.equal(
+      existsSync(join(unitDir, `iva-memory-${period}.timer`)),
+      true,
+      `${period}'s legacy unit survives a partial build`,
+    );
   }
 });
 
@@ -379,13 +424,21 @@ test("doctor surfaces problems from a fresh nightly memory report", async (t) =>
   await mkdir(graph, { recursive: true });
   await writeFile(
     join(graph, "enforce-report.json"),
-    JSON.stringify({ review: 2, duplicates: 1, skipped_oversize: 3, unknown: 99 }),
+    JSON.stringify({
+      review: 2,
+      duplicates: 1,
+      skipped_oversize: 3,
+      unknown: 99,
+    }),
   );
 
   const result = runCommand("doctor");
   const output = `${result.stdout}\n${result.stderr}`;
 
-  assert.match(output, /ночной maintenance сообщает о проблемах: review=2, duplicates=1, skipped_oversize=3/);
+  assert.match(
+    output,
+    /ночной maintenance сообщает о проблемах: review=2, duplicates=1, skipped_oversize=3/,
+  );
   assert.doesNotMatch(output, /unknown=99/);
 });
 
@@ -401,8 +454,12 @@ test("userbot setup restarts an already enabled and active unit for new desired 
   const result = runCommand("userbot", { args: ["setup"] });
   assert.equal(result.status, 0, result.stderr || result.stdout);
   const systemctlCalls = (await readFile(calls, "utf8")).trim().split("\n");
-  const enableAt = systemctlCalls.indexOf("--user enable --now iva-telegram-userbot.service");
-  const restartAt = systemctlCalls.indexOf("--user restart iva-telegram-userbot.service");
+  const enableAt = systemctlCalls.indexOf(
+    "--user enable --now iva-telegram-userbot.service",
+  );
+  const restartAt = systemctlCalls.indexOf(
+    "--user restart iva-telegram-userbot.service",
+  );
 
   assert.ok(enableAt >= 0, systemctlCalls.join("\n"));
   assert.ok(restartAt > enableAt, systemctlCalls.join("\n"));

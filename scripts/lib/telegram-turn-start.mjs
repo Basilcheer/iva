@@ -43,7 +43,8 @@ export async function publishTelegramEarlyStatus({
     onWorkingStatusError(error);
     return ingressId;
   }
-  if (statusMessageId === null || statusMessageId === undefined) return ingressId;
+  if (statusMessageId === null || statusMessageId === undefined)
+    return ingressId;
 
   const attached = setStatusIfImpl(
     chatKey,
@@ -106,7 +107,8 @@ export async function publishTelegramTurnStarted({
       onWorkingStatusError(error);
       return false;
     }
-    if (!claimed || sendWorkingStatusImpl === undefined) return Boolean(claimed);
+    if (!claimed || sendWorkingStatusImpl === undefined)
+      return Boolean(claimed);
     let statusMessageId;
     try {
       statusMessageId = await sendWorkingStatusImpl({ canStop: true });
@@ -253,7 +255,10 @@ export function emitTelegramTurnLatency({
     event: "telegram_turn_latency",
     ingressToStatusMs: durationFromIngress(current.ingressAt, current.statusAt),
     ingressToTurnMs: durationFromIngress(current.ingressAt, current.turnAt),
-    ingressToFirstOutputMs: durationFromIngress(current.ingressAt, current.firstOutputAt),
+    ingressToFirstOutputMs: durationFromIngress(
+      current.ingressAt,
+      current.firstOutputAt,
+    ),
     ingressToDeliveryMs: durationFromIngress(current.ingressAt, deliveryAt),
   };
   logImpl(JSON.stringify(record));

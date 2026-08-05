@@ -9,7 +9,15 @@ test("userbot install enforces hashes and exact environment sync", () => {
       requirementsFile: "requirements.lock",
       requirementsText: "idna==3.18 --hash=sha256:abc",
     }),
-    ["pip", "sync", "--python", "/tmp/venv/bin/python", "--require-hashes", "--strict", "requirements.lock"],
+    [
+      "pip",
+      "sync",
+      "--python",
+      "/tmp/venv/bin/python",
+      "--require-hashes",
+      "--strict",
+      "requirements.lock",
+    ],
   );
 });
 
@@ -33,6 +41,12 @@ test("rollback syncs the exact frozen environment and removes extras", () => {
       requirementsText: "idna==3.17",
       requireHashes: false,
     }),
-    ["pip", "sync", "--python", "/tmp/venv/bin/python", "/tmp/userbot-before-update.txt"],
+    [
+      "pip",
+      "sync",
+      "--python",
+      "/tmp/venv/bin/python",
+      "/tmp/userbot-before-update.txt",
+    ],
   );
 });

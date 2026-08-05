@@ -5,7 +5,10 @@ import {
   fetchModelOptions,
   providerSupportsReasoning,
 } from "../lib/model-catalog.mjs";
-import { ModelValidationError, validateModelSelection } from "../lib/model-validation.mjs";
+import {
+  ModelValidationError,
+  validateModelSelection,
+} from "../lib/model-validation.mjs";
 import { getAccessToken, runDeviceCodeLogin } from "../lib/codex-oauth.mjs";
 import { compactNumber, modelSummary } from "../lib/model-summary.mjs";
 import { getLang, tr } from "#lib/i18n.mjs";
@@ -24,7 +27,8 @@ import { reply, sc, tg } from "./transport.mjs";
 // edit-in-place) дословно та же.
 const flows = createFlows({ tg, log });
 const getWizard = (chatId, userId) => flows.get(chatId, userId);
-const newWizard = (chatId, userId, flow, extra) => flows.start(chatId, userId, flow, extra);
+const newWizard = (chatId, userId, flow, extra) =>
+  flows.start(chatId, userId, flow, extra);
 const wizScreen = (st, text, rows) => flows.screen(st, text, rows);
 const endWizard = (st, text, rows) => flows.end(st, text, rows);
 const wizardIsCurrent = (st) => flows.get(st.chatId, st.userId) === st;
@@ -32,7 +36,11 @@ const wizardIsCurrent = (st) => flows.get(st.chatId, st.userId) === st;
 // A network result belongs to the wizard object that started it. The slot can be
 // replaced while the request is pending (Cancel, /menu, another /model), so both
 // success and error must be discarded before either path mutates or renders state.
-export async function runWizardRequest(st, request, isCurrent = wizardIsCurrent) {
+export async function runWizardRequest(
+  st,
+  request,
+  isCurrent = wizardIsCurrent,
+) {
   try {
     const value = await request();
     return isCurrent(st) ? { ok: true, value } : { stale: true };
@@ -43,10 +51,13 @@ export async function runWizardRequest(st, request, isCurrent = wizardIsCurrent)
 
 const EFFORT_SET = new Set(EFFORTS);
 // effortLabel — функция (tr на месте вызова): язык не замораживается в module-level const.
-const effortLabel = (v) => (v && EFFORT_SET.has(v) ? v : tr("not set", "не задан"));
+const effortLabel = (v) =>
+  v && EFFORT_SET.has(v) ? v : tr("not set", "не задан");
 
 export function isStaleWizard(st, messageId) {
-  return !st || (st.msgId != null && messageId != null && st.msgId !== messageId);
+  return (
+    !st || (st.msgId != null && messageId != null && st.msgId !== messageId)
+  );
 }
 
 export function wizardActionAllowed(st, action) {
@@ -98,17 +109,21 @@ async function currentConfig() {
   return {
     provider,
     model: env[cat.modelVar] || cat.def,
-    effort: providerSupportsReasoning(provider) ? (env.THINKING_EFFORT ?? "").toLowerCase() : "",
+    effort: providerSupportsReasoning(provider)
+      ? (env.THINKING_EFFORT ?? "").toLowerCase()
+      : "",
   };
 }
 
 const btn = (text, callback_data) => ({ text, callback_data });
 // cancelRow/menuRow — функции (tr на месте вызова), не module-level const с переведённой строкой.
 const cancelRow = () => [btn(tr("Cancel", "Отмена"), "iva_model:cancel")];
-const retryBackRows = () => [[
-  btn(tr("Retry", "Повторить"), "iva_model:retry"),
-  btn(tr("‹ Back", "‹ Назад"), "iva_model:back"),
-]];
+const retryBackRows = () => [
+  [
+    btn(tr("Retry", "Повторить"), "iva_model:retry"),
+    btn(tr("‹ Back", "‹ Назад"), "iva_model:back"),
+  ],
+];
 // Ряд «‹ Меню» на терминальных экранах визарда — возврат в /menu. r:o усыновляет
 // это сообщение даже без живого стейта (движок меню само-чинится после рестарта моста).
 const menuRow = () => [[btn(tr("‹ Menu", "‹ Меню"), "iva_menu:r:o")]];
@@ -119,17 +134,28 @@ const menuRow = () => [[btn(tr("‹ Menu", "‹ Меню"), "iva_menu:r:o")]];
 // что в menu-экранах search.mjs). Гейтим ОБА пути к ключу: и голый /model, и хендофф из /menu.
 const isPrivateChat = (st) => Number(st.chatId) > 0;
 const refuseSecretInGroup = (st) =>
-  endWizard(st, tr(
-    "API keys are secrets — open a private chat with me and set the key there.",
-    "Ключи — это секрет. Открой личный чат со мной и введи ключ там.",
-  ), menuRow());
+  endWizard(
+    st,
+    tr(
+      "API keys are secrets — open a private chat with me and set the key there.",
+      "Ключи — это секрет. Открой личный чат со мной и введи ключ там.",
+    ),
+    menuRow(),
+  );
 
 function effortRows(ns, withKeep, efforts) {
   const rows = [];
   for (let i = 0; i < efforts.length; i += 3) {
-    rows.push(efforts.slice(i, i + 3).map((effort) => btn(effort, `${ns}:eff:${effort}`)));
+    rows.push(
+      efforts
+        .slice(i, i + 3)
+        .map((effort) => btn(effort, `${ns}:eff:${effort}`)),
+    );
   }
-  rows.push([btn(tr("Don't set", "Не задавать"), `${ns}:eff:unset`), withKeep ? btn(tr("Keep", "Оставить"), `${ns}:keep`) : cancelRow()[0]]);
+  rows.push([
+    btn(tr("Don't set", "Не задавать"), `${ns}:eff:unset`),
+    withKeep ? btn(tr("Keep", "Оставить"), `${ns}:keep`) : cancelRow()[0],
+  ]);
   return rows;
 }
 
@@ -139,12 +165,19 @@ async function handleModelCmd(chatId, from, { msgId } = {}) {
   const st = newWizard(chatId, from, "model");
   st.msgId = msgId ?? null;
   st.step = "intro";
-  await wizScreen(st, tr(
-    `Now: provider ${provider} · model ${model} · thinking: ${effortLabel(effort)}.`,
-    `Сейчас: провайдер ${provider} · модель ${model} · размышления: ${effortLabel(effort)}.`,
-  ), [
-    [btn(tr("Change", "Сменить"), "iva_model:chg"), btn(tr("Keep", "Оставить"), "iva_model:keep")],
-  ]);
+  await wizScreen(
+    st,
+    tr(
+      `Now: provider ${provider} · model ${model} · thinking: ${effortLabel(effort)}.`,
+      `Сейчас: провайдер ${provider} · модель ${model} · размышления: ${effortLabel(effort)}.`,
+    ),
+    [
+      [
+        btn(tr("Change", "Сменить"), "iva_model:chg"),
+        btn(tr("Keep", "Оставить"), "iva_model:keep"),
+      ],
+    ],
+  );
 }
 
 async function handleThinkCmd(chatId, from, { msgId } = {}) {
@@ -154,38 +187,56 @@ async function handleThinkCmd(chatId, from, { msgId } = {}) {
   st.model = model;
   st.msgId = msgId ?? null;
   if (!providerSupportsReasoning(provider)) {
-    await endWizard(st, tr(
-      `Adjustable thinking is unavailable for ${CATALOG[provider].label}. Choose a reasoning-capable provider via /model.`,
-      `Настраиваемые размышления недоступны для ${CATALOG[provider].label}. Выбери провайдера с reasoning через /model.`,
-    ), menuRow());
+    await endWizard(
+      st,
+      tr(
+        `Adjustable thinking is unavailable for ${CATALOG[provider].label}. Choose a reasoning-capable provider via /model.`,
+        `Настраиваемые размышления недоступны для ${CATALOG[provider].label}. Выбери провайдера с reasoning через /model.`,
+      ),
+      menuRow(),
+    );
     return;
   }
   const cat = CATALOG[provider];
   const env = await readEnvValues(ENV_PATH);
   st.step = "loading";
-  await wizScreen(st, tr(
-    `Loading thinking levels for ${model}…`,
-    `Загружаю уровни размышлений для ${model}…`,
-  ), [cancelRow()]);
-  if (!wizardIsCurrent(st)) return;
-  const loaded = await runWizardRequest(
+  await wizScreen(
     st,
-    () => fetchModelOptions(provider, cat.keyVar ? env[cat.keyVar] : undefined, { dataDir: DATA_DIR_ABS }),
+    tr(
+      `Loading thinking levels for ${model}…`,
+      `Загружаю уровни размышлений для ${model}…`,
+    ),
+    [cancelRow()],
+  );
+  if (!wizardIsCurrent(st)) return;
+  const loaded = await runWizardRequest(st, () =>
+    fetchModelOptions(provider, cat.keyVar ? env[cat.keyVar] : undefined, {
+      dataDir: DATA_DIR_ABS,
+    }),
   );
   const options = await resolveThinkCatalogLoad(st, loaded);
   if (options === null) return;
   const option = options.find((candidate) => candidate.id === model);
-  if (!option) return showModelValidationError(
-    st,
-    new ModelValidationError("model_unavailable", `${model} is not in the live catalog`),
-  );
+  if (!option)
+    return showModelValidationError(
+      st,
+      new ModelValidationError(
+        "model_unavailable",
+        `${model} is not in the live catalog`,
+      ),
+    );
   st.modelOptions = [option];
   st.model = model;
   st.efforts = [...option.reasoningLevels];
   st.step = "effort";
-  await wizScreen(st,
-    tr(`Thinking level for ${model}: ${effortLabel(effort)}.`, `Уровень размышлений для ${model}: ${effortLabel(effort)}.`),
-    effortRows("iva_think", true, st.efforts));
+  await wizScreen(
+    st,
+    tr(
+      `Thinking level for ${model}: ${effortLabel(effort)}.`,
+      `Уровень размышлений для ${model}: ${effortLabel(effort)}.`,
+    ),
+    effortRows("iva_think", true, st.efforts),
+  );
 }
 
 export async function resolveThinkCatalogLoad(
@@ -203,7 +254,9 @@ export async function resolveThinkCatalogLoad(
 
 async function showProviderScreen(st) {
   st.step = "provider";
-  const rows = Object.entries(CATALOG).map(([id, c]) => [btn(c.label, `iva_model:prov:${id}`)]);
+  const rows = Object.entries(CATALOG).map(([id, c]) => [
+    btn(c.label, `iva_model:prov:${id}`),
+  ]);
   rows.push(cancelRow());
   await wizScreen(st, tr("Pick a provider:", "Выбери провайдера:"), rows);
 }
@@ -214,10 +267,11 @@ async function pickProvider(st, provider) {
   const cat = CATALOG[provider];
   if (cat.auth === "oauth") {
     st.step = "loading";
-    await wizScreen(st, tr(
-      "Checking the OpenAI subscription…",
-      "Проверяю подписку OpenAI…",
-    ), [cancelRow()]);
+    await wizScreen(
+      st,
+      tr("Checking the OpenAI subscription…", "Проверяю подписку OpenAI…"),
+      [cancelRow()],
+    );
     if (!wizardIsCurrent(st)) return;
     // File presence is not enough — a revoked/expired refresh token would let the wizard
     // finish into a config that 401s every turn. getAccessToken refreshes a stale token
@@ -237,14 +291,16 @@ async function pickProvider(st, provider) {
     // отдаёт следующий текст этому визарду (handleKeyMessage), а не eve.
     st.awaitText = { kind: "apikey", secret: true, data: {} };
     st.step = "awaiting_key";
-    await wizScreen(st,
+    await wizScreen(
+      st,
       tr(
         `Need a ${cat.label} API key. Send it in the next message — I'll delete it from the chat right away.\n` +
-        "If I don't confirm within a couple of seconds — don't resend, start over with /model.",
+          "If I don't confirm within a couple of seconds — don't resend, start over with /model.",
         `Нужен API-ключ ${cat.label}. Пришли его следующим сообщением — я сразу удалю его из чата.\n` +
-        "Если через пару секунд не подтвержу получение — не отправляй повторно, начни заново с /model.",
+          "Если через пару секунд не подтвержу получение — не отправляй повторно, начни заново с /model.",
       ),
-      [cancelRow()]);
+      [cancelRow()],
+    );
     return;
   }
   return showModelScreen(st);
@@ -255,14 +311,14 @@ async function showModelScreen(st) {
   const env = await readEnvValues(ENV_PATH);
   if (!wizardIsCurrent(st)) return;
   st.step = "loading";
-  await wizScreen(st, tr(
-    `Loading models for ${cat.label}…`,
-    `Загружаю модели ${cat.label}…`,
-  ), [cancelRow()]);
-  if (!wizardIsCurrent(st)) return;
-  const loaded = await runWizardRequest(
+  await wizScreen(
     st,
-    () => fetchModelOptions(
+    tr(`Loading models for ${cat.label}…`, `Загружаю модели ${cat.label}…`),
+    [cancelRow()],
+  );
+  if (!wizardIsCurrent(st)) return;
+  const loaded = await runWizardRequest(st, () =>
+    fetchModelOptions(
       st.provider,
       cat.keyVar ? (st.pendingKey ?? env[cat.keyVar]) : undefined,
       { dataDir: DATA_DIR_ABS },
@@ -276,15 +332,29 @@ async function showModelScreen(st) {
   const current = env[cat.modelVar];
   st.modelOptions = selectableWizardOptions(options, current);
   st.step = "models";
-  const rows = st.modelOptions.map((option, i) => [btn(option.id, `iva_model:m:${i}`)]);
+  const rows = st.modelOptions.map((option, i) => [
+    btn(option.id, `iva_model:m:${i}`),
+  ]);
   rows.push(cancelRow());
   const currentLine = current
-    ? tr(`Current (display only): ${current}.`, `Текущая (только для справки): ${current}.`)
+    ? tr(
+        `Current (display only): ${current}.`,
+        `Текущая (только для справки): ${current}.`,
+      )
     : "";
-  await wizScreen(st, [
-    currentLine,
-    tr(`Choose a live model (${cat.label}):`, `Выбери модель из живого каталога (${cat.label}):`),
-  ].filter(Boolean).join("\n"), rows);
+  await wizScreen(
+    st,
+    [
+      currentLine,
+      tr(
+        `Choose a live model (${cat.label}):`,
+        `Выбери модель из живого каталога (${cat.label}):`,
+      ),
+    ]
+      .filter(Boolean)
+      .join("\n"),
+    rows,
+  );
 }
 
 async function showModelValidationError(st, error) {
@@ -292,13 +362,18 @@ async function showModelValidationError(st, error) {
   if (error?.code === "auth_rejected" && CATALOG[st.provider]?.keyVar) {
     st.reenterKey = st.provider;
   }
-  const reason = error instanceof ModelValidationError
-    ? error.message
-    : tr("provider validation failed", "проверка провайдера не прошла");
-  await wizScreen(st, tr(
-    `Couldn't validate the live model catalog: ${reason}. Your current configuration was not changed.`,
-    `Не удалось проверить живой каталог моделей: ${reason}. Текущая конфигурация не изменена.`,
-  ), retryBackRows());
+  const reason =
+    error instanceof ModelValidationError
+      ? error.message
+      : tr("provider validation failed", "проверка провайдера не прошла");
+  await wizScreen(
+    st,
+    tr(
+      `Couldn't validate the live model catalog: ${reason}. Your current configuration was not changed.`,
+      `Не удалось проверить живой каталог моделей: ${reason}. Текущая конфигурация не изменена.`,
+    ),
+    retryBackRows(),
+  );
 }
 
 // Codex device-link login. runDeviceCodeLogin polls up to 15 min — deliberately NOT
@@ -308,7 +383,9 @@ function startCodexLogin(st) {
   st.step = "login";
   // Serialize device-code log lines (link, one-time code) into ordered chat messages.
   let q = Promise.resolve();
-  const tlog = (m) => { q = q.then(() => reply(st.chatId, String(m).trim())); };
+  const tlog = (m) => {
+    q = q.then(() => reply(st.chatId, String(m).trim()));
+  };
   runDeviceCodeLogin({ dataDir: DATA_DIR_ABS, lang: getLang(), log: tlog })
     .then(() => {
       // Identity-сверка: flows.get !== st истинно и когда слот заменён (другой /model,
@@ -318,53 +395,86 @@ function startCodexLogin(st) {
     })
     .catch((e) => {
       if (flows.get(st.chatId, st.userId) !== st) return;
-      return endWizard(st, tr(
-        "Login failed: " + e.message + "\nSend /model to try again.",
-        "Вход не удался: " + e.message + "\nОтправь /model, чтобы попробовать снова.",
-      ), menuRow());
+      return endWizard(
+        st,
+        tr(
+          "Login failed: " + e.message + "\nSend /model to try again.",
+          "Вход не удался: " +
+            e.message +
+            "\nОтправь /model, чтобы попробовать снова.",
+        ),
+        menuRow(),
+      );
     });
-  return wizScreen(st, tr(
-    "Waiting for the OpenAI subscription login — link and code below. The code lives 15 minutes.",
-    "Жду вход по подписке OpenAI — ссылка и код ниже. Код живёт 15 минут.",
-  ), [cancelRow()]);
+  return wizScreen(
+    st,
+    tr(
+      "Waiting for the OpenAI subscription login — link and code below. The code lives 15 minutes.",
+      "Жду вход по подписке OpenAI — ссылка и код ниже. Код живёт 15 минут.",
+    ),
+    [cancelRow()],
+  );
 }
 
 // Plain-text message while the wizard awaits an API key. Deleted from the chat FIRST;
 // the key value must never reach eve, log(), reply() or any error text.
 async function handleKeyMessage(msg, st) {
   const chatId = msg.chat.id;
-  const del = await tg("deleteMessage", { chat_id: chatId, message_id: msg.message_id });
+  const del = await tg("deleteMessage", {
+    chat_id: chatId,
+    message_id: msg.message_id,
+  });
   if (!wizardIsCurrent(st)) return true;
   if (!del.ok) {
-    await reply(chatId, tr("Couldn't delete the message with the key — delete it manually.", "Не смог удалить сообщение с ключом — удали его вручную."));
+    await reply(
+      chatId,
+      tr(
+        "Couldn't delete the message with the key — delete it manually.",
+        "Не смог удалить сообщение с ключом — удали его вручную.",
+      ),
+    );
     if (!wizardIsCurrent(st)) return true;
   }
   const key = msg.text.trim();
   // Not key-shaped (whitespace / too short) — most likely an ordinary message typed
   // while the prompt was pending. Don't store it; end the wait so the chat works again.
   if (!/^\S{8,}$/.test(key)) {
-    await endWizard(st,
+    await endWizard(
+      st,
       tr(
         "That doesn't look like an API key — the wait is cleared, I deleted the message just in case.\n" +
-        "If it was a question — send it again; come back for a key via /model.",
+          "If it was a question — send it again; come back for a key via /model.",
         "Это не похоже на API-ключ — ожидание снято, сообщение удалил на всякий случай.\n" +
-        "Если это был вопрос — отправь его ещё раз; за ключом приходи через /model.",
-      ), menuRow());
+          "Если это был вопрос — отправь его ещё раз; за ключом приходи через /model.",
+      ),
+      menuRow(),
+    );
     return true;
   }
   const cat = CATALOG[st.provider];
   const checked = await runWizardRequest(st, () => checkKey(st.provider, key));
   if (checked.stale) return true;
   if (!checked.ok) {
-    await endWizard(st, tr(
-      "Couldn't validate the key. Start again with /model.",
-      "Не удалось проверить ключ. Начни заново через /model.",
-    ), menuRow());
+    await endWizard(
+      st,
+      tr(
+        "Couldn't validate the key. Start again with /model.",
+        "Не удалось проверить ключ. Начни заново через /model.",
+      ),
+      menuRow(),
+    );
     return true;
   }
   const err = checked.value;
   if (err) {
-    await wizScreen(st, tr(`Key rejected (${err}). Send another key or tap «Cancel».`, `Ключ не принят (${err}). Пришли другой ключ или нажми «Отмена».`), [cancelRow()]);
+    await wizScreen(
+      st,
+      tr(
+        `Key rejected (${err}). Send another key or tap «Cancel».`,
+        `Ключ не принят (${err}). Пришли другой ключ или нажми «Отмена».`,
+      ),
+      [cancelRow()],
+    );
     return true;
   }
   st.awaitText = null;
@@ -374,15 +484,21 @@ async function handleKeyMessage(msg, st) {
   return true;
 }
 
-export async function validateAndSaveWizard(st, {
-  readEnv = () => readEnvValues(ENV_PATH),
-  validate = validateModelSelection,
-  write = (updates) => upsertEnv(ENV_PATH, updates),
-} = {}) {
+export async function validateAndSaveWizard(
+  st,
+  {
+    readEnv = () => readEnvValues(ENV_PATH),
+    validate = validateModelSelection,
+    write = (updates) => upsertEnv(ENV_PATH, updates),
+  } = {},
+) {
   const env = await readEnv();
   const cat = CATALOG[st.provider];
   if (!cat || typeof st.model !== "string") {
-    throw new ModelValidationError("invalid_selection", "invalid wizard selection");
+    throw new ModelValidationError(
+      "invalid_selection",
+      "invalid wizard selection",
+    );
   }
   const key = cat.keyVar ? (st.pendingKey ?? env[cat.keyVar]) : undefined;
   await validate({
@@ -405,10 +521,21 @@ const saveWizard = (st) => validateAndSaveWizard(st);
 async function showSaved(st) {
   const { provider, model, effort } = await currentConfig();
   if (!wizardIsCurrent(st)) return;
-  let text = tr(`Saved: ${provider} · ${model} · thinking: ${effortLabel(effort)}.`, `Сохранил: ${provider} · ${model} · размышления: ${effortLabel(effort)}.`);
-  text += tr("\nRestart the agent to apply?", "\nПерезапустить агента, чтобы применить?");
+  let text = tr(
+    `Saved: ${provider} · ${model} · thinking: ${effortLabel(effort)}.`,
+    `Сохранил: ${provider} · ${model} · размышления: ${effortLabel(effort)}.`,
+  );
+  text += tr(
+    "\nRestart the agent to apply?",
+    "\nПерезапустить агента, чтобы применить?",
+  );
   st.step = "saved";
-  await wizScreen(st, text, [[btn(tr("Restart now", "Перезапустить сейчас"), "iva_model:rs:now"), btn(tr("Later", "Позже"), "iva_model:rs:later")]]);
+  await wizScreen(st, text, [
+    [
+      btn(tr("Restart now", "Перезапустить сейчас"), "iva_model:rs:now"),
+      btn(tr("Later", "Позже"), "iva_model:rs:later"),
+    ],
+  ]);
 }
 
 // Inline-button taps for /model and /think. Mirrors handleUpdateCallback: ack the
@@ -423,12 +550,31 @@ async function handleWizardCallback(cq) {
   const st = getWizard(chatId, from);
   // No state (bridge restarted / TTL) or a tap on an older wizard message → stale.
   if (isStaleWizard(st, messageId)) {
-    await tg("editMessageText", { chat_id: chatId, message_id: messageId, text: tr("This dialog has expired — send /model again.", "Диалог устарел — отправь /model заново.") });
+    await tg("editMessageText", {
+      chat_id: chatId,
+      message_id: messageId,
+      text: tr(
+        "This dialog has expired — send /model again.",
+        "Диалог устарел — отправь /model заново.",
+      ),
+    });
     return true;
   }
   if (!wizardActionAllowed(st, action)) return true;
   if (action === "keep") {
-    await endWizard(st, st.flow === "think" ? tr("Kept the current thinking level.", "Оставил текущий уровень размышлений.") : tr("Kept the current configuration.", "Оставил текущую конфигурацию."), menuRow());
+    await endWizard(
+      st,
+      st.flow === "think"
+        ? tr(
+            "Kept the current thinking level.",
+            "Оставил текущий уровень размышлений.",
+          )
+        : tr(
+            "Kept the current configuration.",
+            "Оставил текущую конфигурацию.",
+          ),
+      menuRow(),
+    );
     return true;
   }
   if (action === "cancel") {
@@ -454,7 +600,11 @@ async function handleWizardCallback(cq) {
   }
   if (action === "back") {
     if (st.flow === "think") {
-      await endWizard(st, tr("Kept the current configuration.", "Оставил текущую конфигурацию."), menuRow());
+      await endWizard(
+        st,
+        tr("Kept the current configuration.", "Оставил текущую конфигурацию."),
+        menuRow(),
+      );
       return true;
     }
     await showProviderScreen(st);
@@ -473,7 +623,14 @@ async function handleWizardCallback(cq) {
           await showModelValidationError(st, e);
           return true;
         }
-        await endWizard(st, tr("Couldn't save .env: " + e.message, "Не удалось сохранить .env: " + e.message), menuRow());
+        await endWizard(
+          st,
+          tr(
+            "Couldn't save .env: " + e.message,
+            "Не удалось сохранить .env: " + e.message,
+          ),
+          menuRow(),
+        );
         return true;
       }
       if (!wizardIsCurrent(st)) return true;
@@ -481,9 +638,14 @@ async function handleWizardCallback(cq) {
       return true;
     }
     st.step = "effort";
-    await wizScreen(st,
-      tr(`Thinking level for ${option.id}:`, `Уровень размышлений для ${option.id}:`),
-      effortRows("iva_model", false, st.efforts));
+    await wizScreen(
+      st,
+      tr(
+        `Thinking level for ${option.id}:`,
+        `Уровень размышлений для ${option.id}:`,
+      ),
+      effortRows("iva_model", false, st.efforts),
+    );
     return true;
   }
   if (action.startsWith("eff:")) {
@@ -497,7 +659,14 @@ async function handleWizardCallback(cq) {
         await showModelValidationError(st, e);
         return true;
       }
-      await endWizard(st, tr("Couldn't save .env: " + e.message, "Не удалось сохранить .env: " + e.message), menuRow());
+      await endWizard(
+        st,
+        tr(
+          "Couldn't save .env: " + e.message,
+          "Не удалось сохранить .env: " + e.message,
+        ),
+        menuRow(),
+      );
       return true;
     }
     if (!wizardIsCurrent(st)) return true;
@@ -505,19 +674,45 @@ async function handleWizardCallback(cq) {
     return true;
   }
   if (action === "rs:later") {
-    await endWizard(st, tr("Saved. It'll apply after a restart (/restart).", "Сохранил. Применится после перезапуска (/restart)."), menuRow());
+    await endWizard(
+      st,
+      tr(
+        "Saved. It'll apply after a restart (/restart).",
+        "Сохранил. Применится после перезапуска (/restart).",
+      ),
+      menuRow(),
+    );
     return true;
   }
   if (action === "rs:now") {
-    await endWizard(st, tr("Restarting the agent… (~30s). The current conversation resumes after the restart.", "Перезапускаю агента… (~30 сек). Текущий диалог продолжится после перезапуска."), menuRow());
+    await endWizard(
+      st,
+      tr(
+        "Restarting the agent… (~30s). The current conversation resumes after the restart.",
+        "Перезапускаю агента… (~30 сек). Текущий диалог продолжится после перезапуска.",
+      ),
+      menuRow(),
+    );
     // Plain restart: a config change is not a recovery — parked
     // conversations in .workflow-data survive and resume under the new model.
     const ok = await sc("restart", "iva.service");
     if (ok) {
       const { provider, model, effort } = await currentConfig();
-      await reply(chatId, tr(`Done — the new configuration is active: ${provider} · ${model} · thinking: ${effortLabel(effort)}.`, `Готово — новая конфигурация активна: ${provider} · ${model} · размышления: ${effortLabel(effort)}.`));
+      await reply(
+        chatId,
+        tr(
+          `Done — the new configuration is active: ${provider} · ${model} · thinking: ${effortLabel(effort)}.`,
+          `Готово — новая конфигурация активна: ${provider} · ${model} · размышления: ${effortLabel(effort)}.`,
+        ),
+      );
     } else {
-      await reply(chatId, tr("Couldn't restart (systemctl). Check the service on the server.", "Не удалось перезапустить (systemctl). Проверь сервис на сервере."));
+      await reply(
+        chatId,
+        tr(
+          "Couldn't restart (systemctl). Check the service on the server.",
+          "Не удалось перезапустить (systemctl). Проверь сервис на сервере.",
+        ),
+      );
     }
     return true;
   }
@@ -531,11 +726,20 @@ export function resetMessageCopy(cmd, env = process.env, locale = getLang()) {
   return cmd === "/restart"
     ? {
         pending: pick("◇ Restarting Iva", "◇ Перезапускаю Iva"),
-        complete: pick(`♻️ Iva restarted\n\nModel: ${model.line}\nUnfinished turn cleared`, `♻️ Iva перезапущена\n\nМодель: ${model.line}\nНезавершённый ход очищен`),
+        complete: pick(
+          `♻️ Iva restarted\n\nModel: ${model.line}\nUnfinished turn cleared`,
+          `♻️ Iva перезапущена\n\nМодель: ${model.line}\nНезавершённый ход очищен`,
+        ),
       }
     : {
-        pending: pick("◇ Starting a new conversation", "◇ Начинаю новый диалог"),
-        complete: pick(`✨ New conversation ready\n\nModel: ${model.line}\nContext cleared · window ${context}`, `✨ Новый диалог готов\n\nМодель: ${model.line}\nКонтекст очищен · окно ${context}`),
+        pending: pick(
+          "◇ Starting a new conversation",
+          "◇ Начинаю новый диалог",
+        ),
+        complete: pick(
+          `✨ New conversation ready\n\nModel: ${model.line}\nContext cleared · window ${context}`,
+          `✨ Новый диалог готов\n\nМодель: ${model.line}\nКонтекст очищен · окно ${context}`,
+        ),
       };
 }
 

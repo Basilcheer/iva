@@ -23,7 +23,9 @@ import { join, dirname } from "node:path";
 export function parseAuthChallenge(logText) {
   const text = String(logText ?? "");
   const url = text.match(/https:\/\/accounts\.google\.com\/[^\s]+/)?.[0];
-  const port = text.match(/redirect_uri=http:\/\/(?:localhost|127\.0\.0\.1):(\d+)/)?.[1];
+  const port = text.match(
+    /redirect_uri=http:\/\/(?:localhost|127\.0\.0\.1):(\d+)/,
+  )?.[1];
   if (!url || !port) return null;
   return { url, port: Number(port) };
 }
@@ -63,7 +65,9 @@ export function gwsBin() {
 }
 
 export function childEnv() {
-  const path = process.env.PATH ? `${NODE_BIN_DIR}:${process.env.PATH}` : NODE_BIN_DIR;
+  const path = process.env.PATH
+    ? `${NODE_BIN_DIR}:${process.env.PATH}`
+    : NODE_BIN_DIR;
   return { ...process.env, PATH: path };
 }
 
@@ -75,8 +79,14 @@ export const AUTH_SERVICES = "gmail,calendar,drive,tasks";
 // Start `gws auth login` detached, capturing stdout to a temp log. Poll the log until gws prints
 // the consent URL + loopback port, then return { pid, port, url, logPath }. Returns null if gws
 // never printed the challenge (died early / timed out) — the child is killed in that case.
-export async function startAuth({ services = AUTH_SERVICES, timeoutMs = 6000 } = {}) {
-  const logPath = join(tmpdir(), `iva-gws-auth-${process.pid}-${Date.now()}.log`);
+export async function startAuth({
+  services = AUTH_SERVICES,
+  timeoutMs = 6000,
+} = {}) {
+  const logPath = join(
+    tmpdir(),
+    `iva-gws-auth-${process.pid}-${Date.now()}.log`,
+  );
   const fd = openSync(logPath, "a");
   let child;
   try {
@@ -116,10 +126,21 @@ export async function startAuth({ services = AUTH_SERVICES, timeoutMs = 6000 } =
 export function relayCode(port, query, { timeoutMs = 8000 } = {}) {
   return new Promise((resolve) => {
     const req = httpRequest(
-      { host: "127.0.0.1", port, path: `/?${query}`, method: "GET", timeout: timeoutMs },
+      {
+        host: "127.0.0.1",
+        port,
+        path: `/?${query}`,
+        method: "GET",
+        timeout: timeoutMs,
+      },
       (res) => {
         res.resume();
-        res.on("end", () => resolve({ ok: res.statusCode >= 200 && res.statusCode < 400, status: res.statusCode }));
+        res.on("end", () =>
+          resolve({
+            ok: res.statusCode >= 200 && res.statusCode < 400,
+            status: res.statusCode,
+          }),
+        );
       },
     );
     req.on("timeout", () => {

@@ -39,8 +39,14 @@ function schemaPath(): string {
 
 // Читаем схему на старте: валидные статусы per-type + алиасы. Fallback — зашитый минимум,
 // чтобы тул не падал, если vault ещё не инициализирован.
-function loadSchema(): { status: Record<string, string[]>; aliases: Record<string, string> } {
-  const fallback: { status: Record<string, string[]>; aliases: Record<string, string> } = {
+function loadSchema(): {
+  status: Record<string, string[]>;
+  aliases: Record<string, string>;
+} {
+  const fallback: {
+    status: Record<string, string[]>;
+    aliases: Record<string, string>;
+  } = {
     status: {
       contact: ["active", "inactive"],
       project: ["active", "done", "paused", "cancelled", "draft"],
@@ -48,7 +54,12 @@ function loadSchema(): { status: Record<string, string[]>; aliases: Record<strin
       idea: ["active", "explored", "archived", "draft"],
       note: ["active", "draft", "archived"],
     },
-    aliases: { person: "contact", company: "contact", thought: "note", proposal: "idea" },
+    aliases: {
+      person: "contact",
+      company: "contact",
+      thought: "note",
+      proposal: "idea",
+    },
   };
   try {
     const raw = readFileSync(schemaPath(), "utf8");
@@ -56,7 +67,9 @@ function loadSchema(): { status: Record<string, string[]>; aliases: Record<strin
     const status: Record<string, string[]> = {};
     for (const t of Object.keys(CARD_TYPE_DIR)) {
       const node = s.node_types?.[t];
-      status[t] = node?.status || node?.statuses || fallback.status[t] || ["active"];
+      status[t] = node?.status ||
+        node?.statuses ||
+        fallback.status[t] || ["active"];
     }
     return { status, aliases: s.type_aliases || fallback.aliases };
   } catch {
@@ -106,8 +119,13 @@ export default defineTool({
       ),
     type: z
       .preprocess(normalizeType, z.enum(CARD_TYPES))
-      .describe("Тип карточки (строго из списка; алиасы вроде person/company → contact применяются автоматически)"),
-    title: z.string().min(1).describe("Имя/заголовок сущности (пойдёт в имя файла и заголовок)"),
+      .describe(
+        "Тип карточки (строго из списка; алиасы вроде person/company → contact применяются автоматически)",
+      ),
+    title: z
+      .string()
+      .min(1)
+      .describe("Имя/заголовок сущности (пойдёт в имя файла и заголовок)"),
     description: z
       .string()
       .min(1)
@@ -116,24 +134,44 @@ export default defineTool({
         `description слишком длинное: максимум ${DESC_CAP} символов; сократи его и повтори вызов`,
       )
       .describe("Краткая выжимка что/зачем (1–2 фразы, для поиска)"),
-    tags: z.array(z.string()).min(1).max(6).describe("2–5 тегов, lowercase-kebab"),
-    status: z.string().optional().describe("Статус жизненного цикла (валидируется по типу)"),
-    domain: z.string().optional().describe("Домен (work/personal/…), опционально"),
+    tags: z
+      .array(z.string())
+      .min(1)
+      .max(6)
+      .describe("2–5 тегов, lowercase-kebab"),
+    status: z
+      .string()
+      .optional()
+      .describe("Статус жизненного цикла (валидируется по типу)"),
+    domain: z
+      .string()
+      .optional()
+      .describe("Домен (work/personal/…), опционально"),
     related: z
       .array(z.string())
       .optional()
       .describe("Вики-цели связей [[...]] (vault-пути или слаги), опционально"),
-    body: z.string().min(1).describe("Тело карточки в markdown (контекст, факты)"),
+    body: z
+      .string()
+      .min(1)
+      .describe("Тело карточки в markdown (контекст, факты)"),
     history_entry: z
       .string()
       .min(1)
-      .refine((value) => !/[\r\n]/.test(value), "history_entry должен быть одной строкой")
+      .refine(
+        (value) => !/[\r\n]/.test(value),
+        "history_entry должен быть одной строкой",
+      )
       .optional()
-      .describe("Для SUPERSEDE: датированная строка о прежней истине, переносимая в ## History"),
+      .describe(
+        "Для SUPERSEDE: датированная строка о прежней истине, переносимая в ## History",
+      ),
     confidence: z
       .enum(["EXTRACTED", "INFERRED", "AMBIGUOUS"])
       .optional()
-      .describe("EXTRACTED — прямо сказано; INFERRED — выведено; по умолчанию EXTRACTED"),
+      .describe(
+        "EXTRACTED — прямо сказано; INFERRED — выведено; по умолчанию EXTRACTED",
+      ),
     replace_body: z
       .boolean()
       .optional()
@@ -171,7 +209,9 @@ export default defineTool({
     // (легаси-файлы с латинским слагом и кириллическим заголовком).
     const id = resolveCard(dir, title);
     if (id.candidates && id.candidates.length > 1) {
-      const list = id.candidates.map((f) => relative(VAULT(), f).split(sep).join("/"));
+      const list = id.candidates.map((f) =>
+        relative(VAULT(), f).split(sep).join("/"),
+      );
       return {
         ok: false,
         error:
@@ -185,21 +225,43 @@ export default defineTool({
 
     if (operation === "NOOP") {
       if (replace_body || history_entry) {
-        return { ok: false, error: "NOOP не принимает replace_body или history_entry." };
+        return {
+          ok: false,
+          error: "NOOP не принимает replace_body или history_entry.",
+        };
       }
       if (!existsSync(file)) {
-        return { ok: false, error: `NOOP требует существующую карточку ${rel}.` };
+        return {
+          ok: false,
+          error: `NOOP требует существующую карточку ${rel}.`,
+        };
       }
-      return { ok: true, file: rel, type, status: st, action: "noop", matchedBy: id.matchedBy };
+      return {
+        ok: true,
+        file: rel,
+        type,
+        status: st,
+        action: "noop",
+        matchedBy: id.matchedBy,
+      };
     }
     if (replace_body && operation && operation !== "SUPERSEDE") {
-      return { ok: false, error: "replace_body допустим только для SUPERSEDE." };
+      return {
+        ok: false,
+        error: "replace_body допустим только для SUPERSEDE.",
+      };
     }
     if (history_entry && operation && operation !== "SUPERSEDE") {
-      return { ok: false, error: "history_entry допустим только для SUPERSEDE." };
+      return {
+        ok: false,
+        error: "history_entry допустим только для SUPERSEDE.",
+      };
     }
     if (operation === "SUPERSEDE" && !history_entry) {
-      return { ok: false, error: "SUPERSEDE требует history_entry с прежней истиной." };
+      return {
+        ok: false,
+        error: "SUPERSEDE требует history_entry с прежней истиной.",
+      };
     }
 
     mkdirSync(dir, { recursive: true });
@@ -209,22 +271,43 @@ export default defineTool({
     let release: (() => void) | null = null;
     try {
       release = acquireLock(file);
-      const existing = existsSync(file) ? readFileSync(file, "utf8") : undefined;
-      const effectiveOperation = operation ?? (replace_body ? "SUPERSEDE" : existing ? "UPDATE" : "ADD");
+      const existing = existsSync(file)
+        ? readFileSync(file, "utf8")
+        : undefined;
+      const effectiveOperation =
+        operation ?? (replace_body ? "SUPERSEDE" : existing ? "UPDATE" : "ADD");
       if (history_entry && effectiveOperation !== "SUPERSEDE") {
-        return { ok: false, error: "history_entry допустим только для SUPERSEDE." };
-      }
-      if (effectiveOperation === "ADD" && existing !== undefined) {
-        return { ok: false, error: `ADD отказан: карточка ${rel} уже существует.` };
-      }
-      if ((effectiveOperation === "UPDATE" || effectiveOperation === "SUPERSEDE") && existing === undefined) {
-        return { ok: false, error: `${effectiveOperation} требует существующую карточку ${rel}.` };
-      }
-      const legacyHistoryInBody = hasH2Section(body, "History");
-      if (effectiveOperation === "SUPERSEDE" && !history_entry && !legacyHistoryInBody) {
         return {
           ok: false,
-          error: "SUPERSEDE требует history_entry; legacy replace_body должен содержать ## History.",
+          error: "history_entry допустим только для SUPERSEDE.",
+        };
+      }
+      if (effectiveOperation === "ADD" && existing !== undefined) {
+        return {
+          ok: false,
+          error: `ADD отказан: карточка ${rel} уже существует.`,
+        };
+      }
+      if (
+        (effectiveOperation === "UPDATE" ||
+          effectiveOperation === "SUPERSEDE") &&
+        existing === undefined
+      ) {
+        return {
+          ok: false,
+          error: `${effectiveOperation} требует существующую карточку ${rel}.`,
+        };
+      }
+      const legacyHistoryInBody = hasH2Section(body, "History");
+      if (
+        effectiveOperation === "SUPERSEDE" &&
+        !history_entry &&
+        !legacyHistoryInBody
+      ) {
+        return {
+          ok: false,
+          error:
+            "SUPERSEDE требует history_entry; legacy replace_body должен содержать ## History.",
         };
       }
       const { content, action } = mergeCard({
@@ -247,9 +330,19 @@ export default defineTool({
         historyEntry: history_entry,
       });
       if (action !== "noop") atomicWrite(file, content);
-      return { ok: true, file: rel, type, status: st, action, matchedBy: id.matchedBy };
+      return {
+        ok: true,
+        file: rel,
+        type,
+        status: st,
+        action,
+        matchedBy: id.matchedBy,
+      };
     } catch (e) {
-      return { ok: false, error: `Не удалось записать карточку ${rel}: ${(e as Error).message}` };
+      return {
+        ok: false,
+        error: `Не удалось записать карточку ${rel}: ${(e as Error).message}`,
+      };
     } finally {
       release?.();
     }

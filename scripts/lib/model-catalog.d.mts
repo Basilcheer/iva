@@ -28,6 +28,14 @@ export const CATALOG: Record<string, ProviderCatalogEntry>;
 
 export function providerSupportsReasoning(provider: string): boolean;
 export function providerFallbackReasoningLevels(provider: string): string[];
-export function fetchModels(provider: string, key?: string, opts?: FetchModelOptions): Promise<string[]>;
-export function fetchModelOptions(provider: string, key?: string, opts?: FetchModelOptions): Promise<ModelOption[]>;
+export function fetchModels(
+  provider: string,
+  key?: string,
+  opts?: FetchModelOptions,
+): Promise<string[]>;
+export function fetchModelOptions(
+  provider: string,
+  key?: string,
+  opts?: FetchModelOptions,
+): Promise<ModelOption[]>;
 export function checkKey(provider: string, key: string): Promise<string | null>;

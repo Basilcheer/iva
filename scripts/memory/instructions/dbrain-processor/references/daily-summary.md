@@ -22,18 +22,22 @@ source: daily/YYYY-MM-DD.md
 # YYYY-MM-DD
 
 ## Topics
+
 - **Topic A** — one line.
 - **Topic B** — one line.
 
 ## Highlights
+
 - The few things that actually mattered.
 
 ## Cards created today
+
 - [[cards/decisions/2026-06-20-systemd-timers|Use systemd timers for rollups]]
 - [[cards/ideas/layered-memory-with-decay|Layered memory with decay]]
-- (none)   <!-- if a quiet day -->
+- (none) <!-- if a quiet day -->
 
 ## Navigation
+
 - Raw transcript: [[daily/YYYY-MM-DD|Full transcript]]
 - Up: [[weekly/YYYY-Www|Week WW]]
 ```

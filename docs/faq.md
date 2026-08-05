@@ -36,14 +36,14 @@ Yes — that is the point. You talk, it files: daily transcripts, nightly rollup
 
 ## How does Iva compare to other options?
 
-| | Iva | karfly/chatgpt_telegram_bot | LibreChat | Hosted assistants |
-|---|---|---|---|---|
-| Self-hosted | Yes — one command | Yes — Docker | Yes — Docker | No |
-| Voice | Deepgram nova-3, auto ru/uz/en | Whisper transcription | Built-in STT/TTS | Yes |
-| Long-term memory | Layered vault + nightly rollups | Per-dialog history | Opt-in key/value store | Built-in, vendor-held |
-| Personal CRM | Contact/project/decision cards | No | No | No |
-| Price | ~$9/mo, no markup | VPS + API usage | VPS + API usage | ~$20/mo |
-| License | MIT | MIT | MIT | Proprietary |
+|                  | Iva                             | karfly/chatgpt_telegram_bot | LibreChat              | Hosted assistants     |
+| ---------------- | ------------------------------- | --------------------------- | ---------------------- | --------------------- |
+| Self-hosted      | Yes — one command               | Yes — Docker                | Yes — Docker           | No                    |
+| Voice            | Deepgram nova-3, auto ru/uz/en  | Whisper transcription       | Built-in STT/TTS       | Yes                   |
+| Long-term memory | Layered vault + nightly rollups | Per-dialog history          | Opt-in key/value store | Built-in, vendor-held |
+| Personal CRM     | Contact/project/decision cards  | No                          | No                     | No                    |
+| Price            | ~$9/mo, no markup               | VPS + API usage             | VPS + API usage        | ~$20/mo               |
+| License          | MIT                             | MIT                         | MIT                    | Proprietary           |
 
 ## When NOT to use Iva
 

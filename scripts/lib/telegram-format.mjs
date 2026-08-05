@@ -49,13 +49,21 @@ function inlineHtml(text) {
   });
   s = escHtml(s);
   // links [t](http(s)://url)
-  s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, (_m, t, u) => `<a href="${escAttr(u)}">${t}</a>`);
+  s = s.replace(
+    /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
+    (_m, t, u) => `<a href="${escAttr(u)}">${t}</a>`,
+  );
   // bold
-  s = s.replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>").replace(/__([^_]+)__/g, "<b>$1</b>");
+  s = s
+    .replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>")
+    .replace(/__([^_]+)__/g, "<b>$1</b>");
   // strikethrough
   s = s.replace(/~~([^~]+)~~/g, "<s>$1</s>");
   // spoiler ||text||
-  s = s.replace(/\|\|([^|]+(?:\|(?!\|)[^|]*)*)\|\|/g, "<tg-spoiler>$1</tg-spoiler>");
+  s = s.replace(
+    /\|\|([^|]+(?:\|(?!\|)[^|]*)*)\|\|/g,
+    "<tg-spoiler>$1</tg-spoiler>",
+  );
   // italic (single * or _), not touching the ** / __ already consumed
   s = s
     .replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g, "<i>$1</i>")
@@ -67,7 +75,11 @@ function inlineHtml(text) {
 // GFM table separator: |---|:--:|---|
 const TABLE_SEP_RE = /^\s*\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)+\|?\s*$/;
 const tableCells = (l) =>
-  l.replace(/^\s*\|/, "").replace(/\|\s*$/, "").split("|").map((c) => c.trim());
+  l
+    .replace(/^\s*\|/, "")
+    .replace(/\|\s*$/, "")
+    .split("|")
+    .map((c) => c.trim());
 
 // ── block + inline converter ────────────────────────────────────────────────────
 function convert(md) {
@@ -82,17 +94,30 @@ function convert(md) {
       const lang = fence[1];
       const body = [];
       i++;
-      while (i < lines.length && !/^```\s*$/.test(lines[i])) body.push(lines[i++]);
+      while (i < lines.length && !/^```\s*$/.test(lines[i]))
+        body.push(lines[i++]);
       i++; // closing ``` (no-op if half-open / EOF)
       const inner = escHtml(body.join("\n"));
-      out.push(lang ? `<pre><code class="language-${lang}">${inner}</code></pre>` : `<pre>${inner}</pre>`);
+      out.push(
+        lang
+          ? `<pre><code class="language-${lang}">${inner}</code></pre>`
+          : `<pre>${inner}</pre>`,
+      );
       continue;
     }
     // table: header row + separator → header bold, body rows joined with ·
-    if (line.includes("|") && i + 1 < lines.length && TABLE_SEP_RE.test(lines[i + 1])) {
+    if (
+      line.includes("|") &&
+      i + 1 < lines.length &&
+      TABLE_SEP_RE.test(lines[i + 1])
+    ) {
       out.push(`<b>${tableCells(line).map(inlineHtml).join("  ·  ")}</b>`);
       i += 2;
-      while (i < lines.length && lines[i].includes("|") && lines[i].trim() !== "") {
+      while (
+        i < lines.length &&
+        lines[i].includes("|") &&
+        lines[i].trim() !== ""
+      ) {
         out.push(tableCells(lines[i]).map(inlineHtml).join("  ·  "));
         i++;
       }
@@ -100,7 +125,11 @@ function convert(md) {
     }
     // ATX heading → bold
     const h = /^#{1,6}\s+(.*)$/.exec(line);
-    if (h) { out.push(`<b>${inlineHtml(h[1].trim())}</b>`); i++; continue; }
+    if (h) {
+      out.push(`<b>${inlineHtml(h[1].trim())}</b>`);
+      i++;
+      continue;
+    }
     // blockquote (grouped, multi-line); leading "!" on first line → expandable
     if (/^>\s?/.test(line)) {
       const ql = [];
@@ -111,52 +140,105 @@ function convert(md) {
         i++;
       }
       let expandable = false;
-      if (ql[0] && /^!\s?/.test(ql[0])) { expandable = true; ql[0] = ql[0].replace(/^!\s?/, ""); }
+      if (ql[0] && /^!\s?/.test(ql[0])) {
+        expandable = true;
+        ql[0] = ql[0].replace(/^!\s?/, "");
+      }
       const inner = ql.map(inlineHtml).join("\n");
-      out.push(expandable ? `<blockquote expandable>${inner}</blockquote>` : `<blockquote>${inner}</blockquote>`);
+      out.push(
+        expandable
+          ? `<blockquote expandable>${inner}</blockquote>`
+          : `<blockquote>${inner}</blockquote>`,
+      );
       continue;
     }
     // unordered list
     const ul = /^\s*[-*+]\s+(.*)$/.exec(line);
-    if (ul) { out.push(`• ${inlineHtml(ul[1])}`); i++; continue; }
+    if (ul) {
+      out.push(`• ${inlineHtml(ul[1])}`);
+      i++;
+      continue;
+    }
     // ordered list
     const ol = /^\s*(\d+)\.\s+(.*)$/.exec(line);
-    if (ol) { out.push(`${ol[1]}. ${inlineHtml(ol[2])}`); i++; continue; }
+    if (ol) {
+      out.push(`${ol[1]}. ${inlineHtml(ol[2])}`);
+      i++;
+      continue;
+    }
     // horizontal rule
-    if (/^\s*([-*_])\1{2,}\s*$/.test(line)) { out.push("—"); i++; continue; }
+    if (/^\s*([-*_])\1{2,}\s*$/.test(line)) {
+      out.push("—");
+      i++;
+      continue;
+    }
     out.push(line.trim() === "" ? "" : inlineHtml(line));
     i++;
   }
-  return out.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+  return out
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 // ── tag whitelist / tokenizer for the safety pass ───────────────────────────────
-const CLOSE_RE = /^<\/(b|strong|i|em|u|ins|s|strike|del|code|pre|blockquote|span|a|tg-spoiler|tg-emoji|tg-time)>/;
+const CLOSE_RE =
+  /^<\/(b|strong|i|em|u|ins|s|strike|del|code|pre|blockquote|span|a|tg-spoiler|tg-emoji|tg-time)>/;
 const ENTITY_RE = new RegExp(`^&(?:${ENTITY});`);
 
 // Returns { kind:'open'|'close', len, name, html } or null if not a valid tag.
 function matchTagAt(s) {
   let m = CLOSE_RE.exec(s);
   if (m) return { kind: "close", len: m[0].length, name: m[1] };
-  m = /^<(b|strong|i|em|u|ins|s|strike|del|code|pre|blockquote|tg-spoiler)>/.exec(s);
+  m =
+    /^<(b|strong|i|em|u|ins|s|strike|del|code|pre|blockquote|tg-spoiler)>/.exec(
+      s,
+    );
   if (m) return { kind: "open", len: m[0].length, name: m[1], html: m[0] };
   m = /^<blockquote expandable>/.exec(s);
-  if (m) return { kind: "open", len: m[0].length, name: "blockquote", html: "<blockquote expandable>" };
+  if (m)
+    return {
+      kind: "open",
+      len: m[0].length,
+      name: "blockquote",
+      html: "<blockquote expandable>",
+    };
   m = /^<a\s+href="([^"<>]*)">/.exec(s);
-  if (m) return { kind: "open", len: m[0].length, name: "a", html: `<a href="${escAttr(m[1])}">` };
+  if (m)
+    return {
+      kind: "open",
+      len: m[0].length,
+      name: "a",
+      html: `<a href="${escAttr(m[1])}">`,
+    };
   m = /^<span class="tg-spoiler">/.exec(s);
   if (m) return { kind: "open", len: m[0].length, name: "span", html: m[0] };
   m = /^<code class="language-([A-Za-z0-9+#._-]*)">/.exec(s);
-  if (m) return { kind: "open", len: m[0].length, name: "code", html: `<code class="language-${m[1]}">` };
+  if (m)
+    return {
+      kind: "open",
+      len: m[0].length,
+      name: "code",
+      html: `<code class="language-${m[1]}">`,
+    };
   m = /^<tg-emoji emoji-id="([0-9]+)">/.exec(s);
-  if (m) return { kind: "open", len: m[0].length, name: "tg-emoji", html: `<tg-emoji emoji-id="${m[1]}">` };
+  if (m)
+    return {
+      kind: "open",
+      len: m[0].length,
+      name: "tg-emoji",
+      html: `<tg-emoji emoji-id="${m[1]}">`,
+    };
   m = /^<tg-time unix="([0-9]+)"(?:\s+format="([a-zA-Z]*)")?>/.exec(s);
   if (m)
     return {
       kind: "open",
       len: m[0].length,
       name: "tg-time",
-      html: m[2] != null ? `<tg-time unix="${m[1]}" format="${m[2]}">` : `<tg-time unix="${m[1]}">`,
+      html:
+        m[2] != null
+          ? `<tg-time unix="${m[1]}" format="${m[2]}">`
+          : `<tg-time unix="${m[1]}">`,
     };
   return null;
 }
@@ -177,11 +259,25 @@ export function sanitizeTelegramHtml(input) {
       const ch = s[i];
       if (ch === "&") {
         const m = ENTITY_RE.exec(s.slice(i));
-        if (m) { out.push(m[0]); i += m[0].length; } else { out.push("&amp;"); i++; }
+        if (m) {
+          out.push(m[0]);
+          i += m[0].length;
+        } else {
+          out.push("&amp;");
+          i++;
+        }
         continue;
       }
-      if (ch === ">") { out.push("&gt;"); i++; continue; }
-      if (ch !== "<") { out.push(ch); i++; continue; }
+      if (ch === ">") {
+        out.push("&gt;");
+        i++;
+        continue;
+      }
+      if (ch !== "<") {
+        out.push(ch);
+        i++;
+        continue;
+      }
 
       const t = matchTagAt(s.slice(i));
       const top = stack[stack.length - 1];
@@ -190,24 +286,46 @@ export function sanitizeTelegramHtml(input) {
       // </pre> may appear directly inside <pre>.
       if (top && top.name === "code") {
         if (t && t.kind === "close" && t.name === "code") {
-          out.push("</code>"); stack.pop(); i += t.len;
-        } else { out.push("&lt;"); i++; }
+          out.push("</code>");
+          stack.pop();
+          i += t.len;
+        } else {
+          out.push("&lt;");
+          i++;
+        }
         continue;
       }
       if (top && top.name === "pre") {
         if (t && t.kind === "close" && t.name === "pre") {
-          out.push("</pre>"); stack.pop(); i += t.len;
+          out.push("</pre>");
+          stack.pop();
+          i += t.len;
         } else if (t && t.kind === "open" && t.name === "code") {
-          out.push(t.html); stack.push({ name: "code", html: t.html }); i += t.len;
-        } else { out.push("&lt;"); i++; }
+          out.push(t.html);
+          stack.push({ name: "code", html: t.html });
+          i += t.len;
+        } else {
+          out.push("&lt;");
+          i++;
+        }
         continue;
       }
 
-      if (!t) { out.push("&lt;"); i++; continue; }
+      if (!t) {
+        out.push("&lt;");
+        i++;
+        continue;
+      }
 
       if (t.kind === "open") {
         // blockquote cannot nest inside blockquote → drop the redundant tag (keep text).
-        if (t.name === "blockquote" && stack.some((e) => e.name === "blockquote")) { i += t.len; continue; }
+        if (
+          t.name === "blockquote" &&
+          stack.some((e) => e.name === "blockquote")
+        ) {
+          i += t.len;
+          continue;
+        }
         out.push(t.html);
         stack.push({ name: t.name, html: t.html });
         i += t.len;
@@ -216,21 +334,39 @@ export function sanitizeTelegramHtml(input) {
 
       // close tag
       let idx = -1;
-      for (let k = stack.length - 1; k >= 0; k--) if (stack[k].name === t.name) { idx = k; break; }
-      if (idx === -1) { i += t.len; continue; } // stray close → drop
+      for (let k = stack.length - 1; k >= 0; k--)
+        if (stack[k].name === t.name) {
+          idx = k;
+          break;
+        }
+      if (idx === -1) {
+        i += t.len;
+        continue;
+      } // stray close → drop
       const reopened = [];
-      for (let k = stack.length - 1; k > idx; k--) { out.push(`</${stack[k].name}>`); reopened.push(stack[k]); }
+      for (let k = stack.length - 1; k > idx; k--) {
+        out.push(`</${stack[k].name}>`);
+        reopened.push(stack[k]);
+      }
       out.push(`</${t.name}>`);
       stack.length = idx;
-      for (let k = reopened.length - 1; k >= 0; k--) { out.push(reopened[k].html); stack.push(reopened[k]); }
+      for (let k = reopened.length - 1; k >= 0; k--) {
+        out.push(reopened[k].html);
+        stack.push(reopened[k]);
+      }
       i += t.len;
     }
     for (let k = stack.length - 1; k >= 0; k--) out.push(`</${stack[k].name}>`);
     return out.join("");
   } catch {
     // Absolute last resort: strip everything to plain escaped text.
-    try { return String(input).replace(/<[^>]*>/g, "").replace(/[&<>]/g, (c) => HTML_ESC[c]); }
-    catch { return ""; }
+    try {
+      return String(input)
+        .replace(/<[^>]*>/g, "")
+        .replace(/[&<>]/g, (c) => HTML_ESC[c]);
+    } catch {
+      return "";
+    }
   }
 }
 
@@ -239,7 +375,11 @@ export function mdToTelegramHtml(md) {
   try {
     return sanitizeTelegramHtml(convert(md));
   } catch {
-    try { return escHtml(md); } catch { return ""; }
+    try {
+      return escHtml(md);
+    } catch {
+      return "";
+    }
   }
 }
 
@@ -252,16 +392,26 @@ export function chunkMarkdown(md, limit = 3500) {
   if (text.length <= limit) return [text];
   const paras = [];
   for (const p of text.split(/\n{2,}/)) {
-    if (p.length <= limit) { paras.push(p); continue; }
+    if (p.length <= limit) {
+      paras.push(p);
+      continue;
+    }
     for (const line of p.split("\n")) {
-      if (line.length <= limit) { paras.push(line); continue; }
-      for (let j = 0; j < line.length; j += limit) paras.push(line.slice(j, j + limit));
+      if (line.length <= limit) {
+        paras.push(line);
+        continue;
+      }
+      for (let j = 0; j < line.length; j += limit)
+        paras.push(line.slice(j, j + limit));
     }
   }
   const chunks = [];
   let cur = "";
   for (const p of paras) {
-    if (cur && cur.length + p.length + 2 > limit) { chunks.push(cur); cur = ""; }
+    if (cur && cur.length + p.length + 2 > limit) {
+      chunks.push(cur);
+      cur = "";
+    }
     cur = cur ? `${cur}\n\n${p}` : p;
   }
   if (cur) chunks.push(cur);
@@ -277,13 +427,22 @@ function htmlAtoms(s) {
   while (i < n) {
     if (s[i] === "<") {
       const t = matchTagAt(s.slice(i));
-      if (t) { atoms.push(s.slice(i, i + t.len)); i += t.len; continue; }
+      if (t) {
+        atoms.push(s.slice(i, i + t.len));
+        i += t.len;
+        continue;
+      }
     }
     if (s[i] === "&") {
       const m = ENTITY_RE.exec(s.slice(i));
-      if (m) { atoms.push(m[0]); i += m[0].length; continue; }
+      if (m) {
+        atoms.push(m[0]);
+        i += m[0].length;
+        continue;
+      }
     }
-    atoms.push(s[i]); i++;
+    atoms.push(s[i]);
+    i++;
   }
   return atoms;
 }
@@ -297,15 +456,22 @@ function splitHtmlHard(html, limit) {
   const pieces = [];
   let buf = "";
   for (const a of htmlAtoms(html)) {
-    if (buf && buf.length + a.length > budget) { pieces.push(sanitizeTelegramHtml(buf)); buf = ""; }
+    if (buf && buf.length + a.length > budget) {
+      pieces.push(sanitizeTelegramHtml(buf));
+      buf = "";
+    }
     buf += a;
   }
   if (buf) pieces.push(sanitizeTelegramHtml(buf));
   // Final guarantee: nothing exceeds the hard limit even after re-balancing.
   const safe = [];
   for (const p of pieces) {
-    if (p.length <= limit) { safe.push(p); continue; }
-    for (let j = 0; j < p.length; j += limit) safe.push(sanitizeTelegramHtml(p.slice(j, j + limit)));
+    if (p.length <= limit) {
+      safe.push(p);
+      continue;
+    }
+    for (let j = 0; j < p.length; j += limit)
+      safe.push(sanitizeTelegramHtml(p.slice(j, j + limit)));
   }
   return safe;
 }
@@ -319,12 +485,18 @@ export function toTelegramHtmlChunks(md, limit = 4096) {
     const result = [];
     for (const src of chunkMarkdown(md, srcLimit)) {
       const html = mdToTelegramHtml(src);
-      if (html.length <= cap) { if (html) result.push(html); else if (src) result.push(""); }
-      else for (const piece of splitHtmlHard(html, cap)) result.push(piece);
+      if (html.length <= cap) {
+        if (html) result.push(html);
+        else if (src) result.push("");
+      } else for (const piece of splitHtmlHard(html, cap)) result.push(piece);
     }
     return result.length ? result : [""];
   } catch {
-    try { return [escHtml(md)]; } catch { return [""]; }
+    try {
+      return [escHtml(md)];
+    } catch {
+      return [""];
+    }
   }
 }
 
@@ -341,10 +513,11 @@ export function needsRichMessage(md) {
   // Plain prose effectively never produces such a line, so this alone is a safe signal.
   for (const line of s.split("\n")) {
     const t = line.trim();
-    if (t.includes("|") && /-{2,}/.test(t) && /^[|\-: \t]+$/.test(t)) return true;
+    if (t.includes("|") && /-{2,}/.test(t) && /^[|\-: \t]+$/.test(t))
+      return true;
   }
   if (/^[ \t]*[-*][ \t]+\[[ xX]\][ \t]+/m.test(s)) return true; // task list
-  if (/<details[\s>]/i.test(s)) return true;                    // collapsible
-  if (/\$\$[\s\S]+?\$\$/.test(s)) return true;                  // block math
+  if (/<details[\s>]/i.test(s)) return true; // collapsible
+  if (/\$\$[\s\S]+?\$\$/.test(s)) return true; // block math
   return false;
 }

@@ -27,7 +27,11 @@ function appendDaily(type: string, content: string): void {
   const dir = join(process.env.ASSISTANT_VAULT_DIR || "vault", "daily");
   mkdirSync(dir, { recursive: true });
   // Append-only: существующие записи никогда не переписываются.
-  appendFileSync(join(dir, `${localDate}.md`), `\n## ${hhmm} ${type}\n${content}\n`, "utf8");
+  appendFileSync(
+    join(dir, `${localDate}.md`),
+    `\n## ${hhmm} ${type}\n${content}\n`,
+    "utf8",
+  );
 }
 
 export default defineHook({

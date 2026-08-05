@@ -44,11 +44,18 @@ export function embeddingProviderName(): string {
 
 // Батчами (эмбеддинг-эндпоинты OpenAI-совместимы: {input: string[], model}). Бросает при
 // сетевой/HTTP-ошибке — вызывающий (memory_search) ловит и уходит в чистый BM25 (graceful).
-export async function embedTexts(texts: string[], batchSize = 64): Promise<number[][]> {
+export async function embedTexts(
+  texts: string[],
+  batchSize = 64,
+): Promise<number[][]> {
   const { cfg } = pickProvider();
   if (!cfg.key && !process.env.MEMORY_EMBED_URL)
-    throw new Error("no embedding API key (JINA_API_KEY / DEEPINFRA_API_KEY) or MEMORY_EMBED_URL");
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
+    throw new Error(
+      "no embedding API key (JINA_API_KEY / DEEPINFRA_API_KEY) or MEMORY_EMBED_URL",
+    );
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
   if (cfg.key) headers.Authorization = `Bearer ${cfg.key}`; // custom endpoint может быть без auth
   const out: number[][] = [];
   for (let i = 0; i < texts.length; i += batchSize) {
@@ -58,8 +65,13 @@ export async function embedTexts(texts: string[], batchSize = 64): Promise<numbe
       headers,
       body: JSON.stringify({ model: cfg.model, input: batch }),
     });
-    if (!res.ok) throw new Error(`embeddings HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
-    const json = (await res.json()) as { data?: Array<{ embedding: number[] }> };
+    if (!res.ok)
+      throw new Error(
+        `embeddings HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`,
+      );
+    const json = (await res.json()) as {
+      data?: Array<{ embedding: number[] }>;
+    };
     for (const d of json.data ?? []) out.push(d.embedding);
   }
   return out;

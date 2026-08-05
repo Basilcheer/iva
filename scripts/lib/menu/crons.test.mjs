@@ -8,7 +8,11 @@ import { openTaskCount } from "./crons.mjs";
 
 test("openTaskCount reports only open tasks for array and wrapped storage shapes", () => {
   for (const value of [
-    [{ text: "open" }, { text: "done", done: true }, { text: "explicit open", done: false }],
+    [
+      { text: "open" },
+      { text: "done", done: true },
+      { text: "explicit open", done: false },
+    ],
     { tasks: [{ text: "open" }, { text: "done", done: true }] },
   ]) {
     const dataDir = mkdtempSync(join(tmpdir(), "iva-menu-task-count-"));

@@ -32,7 +32,13 @@ function globToRegExp(pattern: string): RegExp {
   return new RegExp("^" + re + "$");
 }
 
-const IGNORE_DIRS = new Set([".git", "node_modules", ".next", "dist", ".cache"]);
+const IGNORE_DIRS = new Set([
+  ".git",
+  "node_modules",
+  ".next",
+  "dist",
+  ".cache",
+]);
 
 async function walk(root: string, dir: string, out: string[]): Promise<void> {
   let entries;
@@ -72,7 +78,9 @@ export default defineTool({
     path: z
       .string()
       .optional()
-      .describe("Файл или директория для поиска (абсолютный путь, по умолчанию cwd)"),
+      .describe(
+        "Файл или директория для поиска (абсолютный путь, по умолчанию cwd)",
+      ),
     glob: z
       .string()
       .optional()
@@ -113,7 +121,8 @@ export default defineTool({
         re.lastIndex = 0;
         if (re.test(lines[i])) {
           // Усекаем длинные строки (минифайлы), чтобы не раздуть контекст.
-          const text = lines[i].length > 300 ? lines[i].slice(0, 300) + "…" : lines[i];
+          const text =
+            lines[i].length > 300 ? lines[i].slice(0, 300) + "…" : lines[i];
           matches.push({ file, line: i + 1, text });
           if (matches.length >= MAX_MATCHES) {
             truncated = true;

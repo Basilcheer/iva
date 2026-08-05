@@ -6,6 +6,7 @@ Guidance for Claude Code working in this repository.
 
 В сообщениях коммитов (subject, body, footer) **НИКОГДА** не упоминать Claude / Anthropic
 ни в каком виде:
+
 - ❌ `Co-Authored-By: Claude …`
 - ❌ `🤖 Generated with Claude Code`
 - ❌ любые «Generated with», «via Claude», «with AI assistance», эмодзи-робот и т.п.

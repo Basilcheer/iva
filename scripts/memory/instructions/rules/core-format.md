@@ -21,13 +21,13 @@ file the model never has to search for.
 
 ## MECE routing (what goes where)
 
-| Belongs in CORE.md | Belongs elsewhere |
-|--------------------|-------------------|
-| Who the user is (name, role, language, how to address them) | A specific event/decision → `cards/decisions/` |
-| Standing preferences (tone, format, channels) | Project details/architecture → `cards/projects/` |
-| ≤3 active goals (one line each) | A person's details → `cards/contacts/` |
-| Pointers (latest daily-summary date, `MOC.md`) | Task to do → `tasks` tool, not the vault |
-| — | What happened on a day → `summaries/daily/` |
+| Belongs in CORE.md                                          | Belongs elsewhere                                |
+| ----------------------------------------------------------- | ------------------------------------------------ |
+| Who the user is (name, role, language, how to address them) | A specific event/decision → `cards/decisions/`   |
+| Standing preferences (tone, format, channels)               | Project details/architecture → `cards/projects/` |
+| ≤3 active goals (one line each)                             | A person's details → `cards/contacts/`           |
+| Pointers (latest daily-summary date, `MOC.md`)              | Task to do → `tasks` tool, not the vault         |
+| —                                                           | What happened on a day → `summaries/daily/`      |
 
 ## Shape
 
@@ -35,15 +35,19 @@ file the model never has to search for.
 # CORE — ядро памяти
 
 ## Пользователь
+
 - <name> — <role>, язык <ru/…>, обращаться <как>.
 
 ## Предпочтения
+
 - <durable preference, one line>
 
 ## Активные цели (≤3)
+
 - <goal>
 
 ## Указатели
+
 - Последний день: vault/summaries/daily/YYYY-MM-DD · Оглавление: vault/MOC.md
 ```
 

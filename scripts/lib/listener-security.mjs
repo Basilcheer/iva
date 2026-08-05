@@ -9,7 +9,11 @@ export function classifyAgentListeners(output, port) {
   if (addresses.length === 0) return "absent";
   const loopback = addresses.every((address) => {
     const host = address.slice(0, -suffix.length);
-    return host === "localhost" || host === "[::1]" || /^127(?:\.\d{1,3}){3}$/.test(host);
+    return (
+      host === "localhost" ||
+      host === "[::1]" ||
+      /^127(?:\.\d{1,3}){3}$/.test(host)
+    );
   });
   return loopback ? "loopback" : "exposed";
 }

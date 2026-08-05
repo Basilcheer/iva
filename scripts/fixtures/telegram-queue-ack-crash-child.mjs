@@ -5,7 +5,9 @@ import { acknowledgeQueueHead } from "../lib/telegram-queue.mjs";
 
 const [queueFile, markerFile] = process.argv.slice(2);
 if (!queueFile || !markerFile) {
-  throw new Error("usage: telegram-queue-ack-crash-child <queue-file> <marker-file>");
+  throw new Error(
+    "usage: telegram-queue-ack-crash-child <queue-file> <marker-file>",
+  );
 }
 
 await acknowledgeQueueHead(queueFile, "1:", 101, {

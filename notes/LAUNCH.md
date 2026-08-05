@@ -9,7 +9,7 @@ open-source dev tools (Preevy, Documenso, Twenty, QuestDB) grew on GitHub.
    colleagues, your channel, anyone who already knows the project. Cross this threshold first so
    public visitors don't land on an empty repo.
 2. **Hacker News — the single highest-leverage channel.** Post a `Show HN: Iva — open-source personal
-   AI agent with long-term memory`. Rules that matter:
+AI agent with long-term memory`. Rules that matter:
    - Your own voice, not marketing copy. One clear sentence of what it does, then the backstory and
      the technical solution.
    - **No superlatives.** HN punishes "the best/fastest/revolutionary". State facts plainly.
@@ -24,7 +24,7 @@ open-source dev tools (Preevy, Documenso, Twenty, QuestDB) grew on GitHub.
 5. **X / build-in-public.** Demo GIFs, the memory-tree diagram, milestone posts. Tag adjacent projects
    and maintainers in honest "here's the landscape" threads so they re-share. Reply to everyone who engages.
 6. **Dev content platforms with trending algorithms.** Dev.to (`#showdev`), Hashnode, Hackernoon,
-   daily.dev. Drive traffic *to* these so their algorithms amplify; cross-post to your own domain after.
+   daily.dev. Drive traffic _to_ these so their algorithms amplify; cross-post to your own domain after.
 7. **GitHub's own surfaces.** PR Iva into relevant `awesome-*` lists. Get it onto GitHub Topics
    (must be added by a third party, not you). Stars-velocity in the first days feeds GitHub Trending —
    which is exactly why steps 1–2 are front-loaded.

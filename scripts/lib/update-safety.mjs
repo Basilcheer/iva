@@ -18,9 +18,17 @@ import { persistUpdateBranch, resolveUpdateTarget } from "./update-channel.mjs";
 
 const LOCK_TTL_MS = 6 * 60 * 60 * 1000;
 
-export function runCommand(command, args, { cwd, env = process.env, logFile, verbose = false } = {}) {
+export function runCommand(
+  command,
+  args,
+  { cwd, env = process.env, logFile, verbose = false } = {},
+) {
   return new Promise((resolve) => {
-    const child = spawn(command, args, { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(command, args, {
+      cwd,
+      env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
     let stdout = "";
     let stderr = "";
     const collect = (kind, stream, target) => {
@@ -34,8 +42,16 @@ export function runCommand(command, args, { cwd, env = process.env, logFile, ver
     };
     collect("out", child.stdout, process.stdout);
     collect("err", child.stderr, process.stderr);
-    child.on("error", (error) => resolve({ code: 1, stdout, stderr: `${stderr}${error.message}` }));
-    child.on("close", (code) => resolve({ code: code ?? 1, stdout: stdout.trim(), stderr: stderr.trim() }));
+    child.on("error", (error) =>
+      resolve({ code: 1, stdout, stderr: `${stderr}${error.message}` }),
+    );
+    child.on("close", (code) =>
+      resolve({
+        code: code ?? 1,
+        stdout: stdout.trim(),
+        stderr: stderr.trim(),
+      }),
+    );
   });
 }
 
@@ -62,9 +78,17 @@ export function acquireUpdateLock(dataDir, owner) {
   const path = join(dataDir, "update.lock");
   const claim = () => {
     mkdirSync(path);
-    writeFileSync(join(path, "owner.json"), JSON.stringify({ owner, pid: process.pid, startedAt: new Date().toISOString() }), {
-      mode: 0o600,
-    });
+    writeFileSync(
+      join(path, "owner.json"),
+      JSON.stringify({
+        owner,
+        pid: process.pid,
+        startedAt: new Date().toISOString(),
+      }),
+      {
+        mode: 0o600,
+      },
+    );
     return { ok: true, path, owner };
   };
   try {
@@ -92,7 +116,9 @@ export function acquireUpdateLock(dataDir, owner) {
 export function releaseUpdateLock(lock) {
   if (!lock?.ok || !lock.path) return;
   try {
-    const current = JSON.parse(readFileSync(join(lock.path, "owner.json"), "utf8"));
+    const current = JSON.parse(
+      readFileSync(join(lock.path, "owner.json"), "utf8"),
+    );
     if (current.owner !== lock.owner) return;
   } catch {
     return;
@@ -118,7 +144,14 @@ function parseVersion(text) {
   }
 }
 
-export function createUpdateTransaction({ root, dataDir, envPath, verbose = false, logFile, env = process.env }) {
+export function createUpdateTransaction({
+  root,
+  dataDir,
+  envPath,
+  verbose = false,
+  logFile,
+  env = process.env,
+}) {
   const commandEnv = { ...env };
   let originalHead = "";
   let branch = "";
@@ -136,18 +169,23 @@ export function createUpdateTransaction({ root, dataDir, envPath, verbose = fals
   let nodeModulesBackup = "";
   let outputTouched = false;
 
-  const run = (command, args) => runCommand(command, args, { cwd: root, env: commandEnv, logFile, verbose });
+  const run = (command, args) =>
+    runCommand(command, args, { cwd: root, env: commandEnv, logFile, verbose });
   const git = (...args) => run("git", args);
   const mustGit = async (...args) => {
     const result = await git(...args);
-    if (result.code !== 0) throw new Error(result.stderr || result.stdout || `git ${args[0]} failed`);
+    if (result.code !== 0)
+      throw new Error(
+        result.stderr || result.stdout || `git ${args[0]} failed`,
+      );
     return result.stdout;
   };
 
   async function protect() {
     originalHead = await mustGit("rev-parse", "HEAD");
     branch = await mustGit("rev-parse", "--abbrev-ref", "HEAD");
-    if (!branch || branch === "HEAD") throw new Error("detached HEAD: switch to the update branch first");
+    if (!branch || branch === "HEAD")
+      throw new Error("detached HEAD: switch to the update branch first");
     backupRef = `refs/iva/update-backups/${safeTimestamp()}`;
     await mustGit("update-ref", backupRef, originalHead);
 
@@ -162,10 +200,21 @@ export function createUpdateTransaction({ root, dataDir, envPath, verbose = fals
     const status = await mustGit("status", "--porcelain=v1");
     hadLocalChanges = Boolean(status.trim());
     if (hadLocalChanges) {
-      const untracked = await mustGit("ls-files", "--others", "--exclude-standard", "-z");
+      const untracked = await mustGit(
+        "ls-files",
+        "--others",
+        "--exclude-standard",
+        "-z",
+      );
       originalUntracked = untracked.split("\0").filter(Boolean);
       const message = `iva-update-${safeTimestamp()}`;
-      await mustGit("stash", "push", "--include-untracked", "--message", message);
+      await mustGit(
+        "stash",
+        "push",
+        "--include-untracked",
+        "--message",
+        message,
+      );
       stashOid = await mustGit("rev-parse", "refs/stash");
     }
     return { originalHead, branch, hadLocalChanges, stashOid };
@@ -179,8 +228,16 @@ export function createUpdateTransaction({ root, dataDir, envPath, verbose = fals
     const remote = target.targetHead;
     let plan = "none";
     if (remote !== originalHead) {
-      if ((await git("merge-base", "--is-ancestor", originalHead, remote)).code === 0) plan = "fast-forward";
-      else if ((await git("merge-base", "--is-ancestor", remote, originalHead)).code === 0) plan = "none";
+      if (
+        (await git("merge-base", "--is-ancestor", originalHead, remote))
+          .code === 0
+      )
+        plan = "fast-forward";
+      else if (
+        (await git("merge-base", "--is-ancestor", remote, originalHead))
+          .code === 0
+      )
+        plan = "none";
       else plan = "rebase";
     }
     cachedTarget = { ...target, remote, plan, changed: plan !== "none" };
@@ -206,7 +263,8 @@ export function createUpdateTransaction({ root, dataDir, envPath, verbose = fals
   async function restoreLocalChanges() {
     if (!stashOid) return;
     const result = await git("stash", "apply", "--index", stashOid);
-    if (result.code !== 0) throw new Error("local changes conflict with the updated source");
+    if (result.code !== 0)
+      throw new Error("local changes conflict with the updated source");
     stashApplied = true;
   }
 
@@ -217,34 +275,63 @@ export function createUpdateTransaction({ root, dataDir, envPath, verbose = fals
   // равен SHA кандидата. Rebase локальных коммитов / грязное дерево / force-пересборка идут
   // прежним in-place путём (не жжём лишний билд на слабом VPS).
   async function buildCandidate({ npm = "npm" } = {}) {
-    if (!cachedTarget) throw new Error("resolveTarget must run before buildCandidate");
+    if (!cachedTarget)
+      throw new Error("resolveTarget must run before buildCandidate");
     if (cachedTarget.plan !== "fast-forward" || hadLocalChanges) return null;
     const staging = join(root, ".iva-update", "staging");
     await teardownCandidate();
-    const added = await git("worktree", "add", "--detach", staging, cachedTarget.remote);
-    if (added.code !== 0) throw new Error(added.stderr || "couldn't prepare the update candidate worktree");
+    const added = await git(
+      "worktree",
+      "add",
+      "--detach",
+      staging,
+      cachedTarget.remote,
+    );
+    if (added.code !== 0)
+      throw new Error(
+        added.stderr || "couldn't prepare the update candidate worktree",
+      );
     try {
       const depsDiff = await mustGit(
-        "diff", "--name-only", `${originalHead}..${cachedTarget.remote}`, "--", "package.json", "package-lock.json",
+        "diff",
+        "--name-only",
+        `${originalHead}..${cachedTarget.remote}`,
+        "--",
+        "package.json",
+        "package-lock.json",
       );
       // Отсутствие живых node_modules (битая/недоустановленная инсталляция) лечим так же,
       // как смену лока: полной установкой зависимостей в staging.
-      const depsChanged = Boolean(depsDiff.trim()) || !existsSync(join(root, "node_modules"));
+      const depsChanged =
+        Boolean(depsDiff.trim()) || !existsSync(join(root, "node_modules"));
       if (depsChanged) {
         const install = await runCommand(
           npm,
           [existsSync(join(staging, "package-lock.json")) ? "ci" : "install"],
           { cwd: staging, env: commandEnv, logFile, verbose },
         );
-        if (install.code !== 0) throw new Error("candidate dependency installation failed — live installation untouched");
+        if (install.code !== 0)
+          throw new Error(
+            "candidate dependency installation failed — live installation untouched",
+          );
       } else {
         // Лок не менялся — живые node_modules (уже пропатченные patch-package) валидны для target.
-        symlinkSync(join(root, "node_modules"), join(staging, "node_modules"), "dir");
+        symlinkSync(
+          join(root, "node_modules"),
+          join(staging, "node_modules"),
+          "dir",
+        );
       }
       // Паритет с in-place сборкой: она идёт в cwd, где лежит .env.
       if (existsSync(envPath)) symlinkSync(envPath, join(staging, ".env"));
-      const build = await runCommand(npm, ["run", "build"], { cwd: staging, env: commandEnv, logFile, verbose });
-      if (build.code !== 0) throw new Error("candidate build failed — live installation untouched");
+      const build = await runCommand(npm, ["run", "build"], {
+        cwd: staging,
+        env: commandEnv,
+        logFile,
+        verbose,
+      });
+      if (build.code !== 0)
+        throw new Error("candidate build failed — live installation untouched");
       candidate = { staging, targetSha: cachedTarget.remote, depsChanged };
       return candidate;
     } catch (error) {
@@ -265,7 +352,10 @@ export function createUpdateTransaction({ root, dataDir, envPath, verbose = fals
       if (!existsSync(join(candidate.staging, "node_modules"))) return false;
       nodeModulesBackup = join(root, `node_modules.iva-backup-${Date.now()}`);
       renameSync(join(root, "node_modules"), nodeModulesBackup);
-      renameSync(join(candidate.staging, "node_modules"), join(root, "node_modules"));
+      renameSync(
+        join(candidate.staging, "node_modules"),
+        join(root, "node_modules"),
+      );
     }
     backupOutput();
     renameSync(join(candidate.staging, ".output"), join(root, ".output"));
@@ -317,7 +407,8 @@ export function createUpdateTransaction({ root, dataDir, envPath, verbose = fals
       const rootPath = `${resolve(root)}${sep}`;
       for (const relative of originalUntracked) {
         const target = resolve(root, relative);
-        if (target.startsWith(rootPath)) rmSync(target, { recursive: true, force: true });
+        if (target.startsWith(rootPath))
+          rmSync(target, { recursive: true, force: true });
       }
       const reapplied = await git("stash", "apply", "--index", stashOid);
       stashApplied = reapplied.code === 0;
@@ -327,7 +418,10 @@ export function createUpdateTransaction({ root, dataDir, envPath, verbose = fals
   async function dropExactStash() {
     if (!stashOid) return;
     const list = await git("stash", "list", "--format=%H %gd");
-    const match = list.stdout.split("\n").map((line) => line.trim().split(/\s+/, 2)).find(([oid]) => oid === stashOid);
+    const match = list.stdout
+      .split("\n")
+      .map((line) => line.trim().split(/\s+/, 2))
+      .find(([oid]) => oid === stashOid);
     if (match?.[1]) await git("stash", "drop", match[1]);
   }
 
@@ -353,8 +447,12 @@ export function createUpdateTransaction({ root, dataDir, envPath, verbose = fals
     return {
       beforeHead: originalHead,
       afterHead,
-      beforeVersion: parseVersion(beforeText.stdout) ? `v${parseVersion(beforeText.stdout)}` : "previous build",
-      afterVersion: parseVersion(afterText.stdout) ? `v${parseVersion(afterText.stdout)}` : "new build",
+      beforeVersion: parseVersion(beforeText.stdout)
+        ? `v${parseVersion(beforeText.stdout)}`
+        : "previous build",
+      afterVersion: parseVersion(afterText.stdout)
+        ? `v${parseVersion(afterText.stdout)}`
+        : "new build",
     };
   }
 
@@ -372,9 +470,17 @@ export function createUpdateTransaction({ root, dataDir, envPath, verbose = fals
     versions,
     run,
     git,
-    get changed() { return changed; },
-    get hadLocalChanges() { return hadLocalChanges; },
-    get stashApplied() { return stashApplied; },
-    get outputTouched() { return outputTouched; },
+    get changed() {
+      return changed;
+    },
+    get hadLocalChanges() {
+      return hadLocalChanges;
+    },
+    get stashApplied() {
+      return stashApplied;
+    },
+    get outputTouched() {
+      return outputTouched;
+    },
   };
 }

@@ -16,7 +16,9 @@ const DATA_DIR = process.env.ASSISTANT_DATA_DIR ?? "data";
 // → env-фолбэк.
 function resolveLang(): string {
   try {
-    const parsed = JSON.parse(readFileSync(join(DATA_DIR, "settings.json"), "utf8"));
+    const parsed = JSON.parse(
+      readFileSync(join(DATA_DIR, "settings.json"), "utf8"),
+    );
     const language = parsed?.language;
     if (language === "ru" || language === "en") return language;
   } catch {

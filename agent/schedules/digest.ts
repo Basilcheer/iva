@@ -13,7 +13,9 @@ import { runScheduledJob } from "../../scripts/lib/schedule-runner.mjs";
 export default defineSchedule({
   cron: "0 8 * * *",
   run({ waitUntil }) {
-    const settings = readSettings() as { digestSchedule?: { enabled?: boolean } };
+    const settings = readSettings() as {
+      digestSchedule?: { enabled?: boolean };
+    };
     if (settings.digestSchedule?.enabled !== true) return;
 
     const { root, statusPath } = resolvePaths();

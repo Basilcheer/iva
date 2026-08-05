@@ -20,10 +20,19 @@ const clip = (s: string, n: number) => (s.length > n ? s.slice(0, n) + "…" : s
 // ── мелкие безопасные геттеры (ответы провайдеров — нетипизированный JSON) ──
 const str = (v: unknown): string => (typeof v === "string" ? v : "");
 const arr = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
-const joinChunks = (v: unknown): string => arr(v).map(str).filter(Boolean).join(" … ");
+const joinChunks = (v: unknown): string =>
+  arr(v).map(str).filter(Boolean).join(" … ");
 
-type Normalized = { answer?: string; results: { title: string; url: string; snippet: string }[] };
-type BuiltRequest = { url: string; method: "GET" | "POST"; headers: Record<string, string>; body?: string };
+type Normalized = {
+  answer?: string;
+  results: { title: string; url: string; snippet: string }[];
+};
+type BuiltRequest = {
+  url: string;
+  method: "GET" | "POST";
+  headers: Record<string, string>;
+  body?: string;
+};
 
 interface SearchProvider {
   name: string; // совпадает со значением SEARCH_PROVIDER
@@ -42,14 +51,27 @@ const PROVIDERS: SearchProvider[] = [
     build: (query, n, key) => ({
       url: "https://api.tavily.com/search",
       method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
-      body: JSON.stringify({ query, max_results: n, search_depth: "basic", include_answer: "basic", topic: "general" }),
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${key}`,
+      },
+      body: JSON.stringify({
+        query,
+        max_results: n,
+        search_depth: "basic",
+        include_answer: "basic",
+        topic: "general",
+      }),
     }),
     parse: (json) => {
       const d = json as { answer?: unknown; results?: unknown };
       const results = arr(d.results).map((r) => {
         const it = r as { title?: unknown; url?: unknown; content?: unknown };
-        return { title: str(it.title), url: str(it.url), snippet: str(it.content) };
+        return {
+          title: str(it.title),
+          url: str(it.url),
+          snippet: str(it.content),
+        };
       });
       return { answer: str(d.answer) || undefined, results };
     },
@@ -66,8 +88,16 @@ const PROVIDERS: SearchProvider[] = [
     parse: (json) => {
       const d = json as { web?: { results?: unknown } };
       const results = arr(d.web?.results).map((r) => {
-        const it = r as { title?: unknown; url?: unknown; description?: unknown };
-        return { title: str(it.title), url: str(it.url), snippet: str(it.description) };
+        const it = r as {
+          title?: unknown;
+          url?: unknown;
+          description?: unknown;
+        };
+        return {
+          title: str(it.title),
+          url: str(it.url),
+          snippet: str(it.description),
+        };
       });
       return { results }; // web/search не отдаёт inline-answer
     },
@@ -81,13 +111,28 @@ const PROVIDERS: SearchProvider[] = [
       method: "POST",
       headers: { "Content-Type": "application/json", "x-api-key": key },
       // без contents результаты приходят без текста — запрашиваем highlights/summary/text явно
-      body: JSON.stringify({ query, type: "auto", numResults: n, contents: { text: true, highlights: true, summary: true } }),
+      body: JSON.stringify({
+        query,
+        type: "auto",
+        numResults: n,
+        contents: { text: true, highlights: true, summary: true },
+      }),
     }),
     parse: (json) => {
       const d = json as { results?: unknown };
       const results = arr(d.results).map((r) => {
-        const it = r as { title?: unknown; url?: unknown; highlights?: unknown; summary?: unknown; text?: unknown };
-        return { title: str(it.title), url: str(it.url), snippet: joinChunks(it.highlights) || str(it.summary) || str(it.text) };
+        const it = r as {
+          title?: unknown;
+          url?: unknown;
+          highlights?: unknown;
+          summary?: unknown;
+          text?: unknown;
+        };
+        return {
+          title: str(it.title),
+          url: str(it.url),
+          snippet: joinChunks(it.highlights) || str(it.summary) || str(it.text),
+        };
       });
       return { results }; // answer — только на отдельном /answer
     },
@@ -101,13 +146,22 @@ const PROVIDERS: SearchProvider[] = [
       method: "POST",
       headers: { "Content-Type": "application/json", "x-api-key": key },
       // search_queries обязателен; mode=basic — низкая латентность (advanced ~3с)
-      body: JSON.stringify({ objective: query, search_queries: [query], mode: "basic", advanced_settings: { max_results: n } }),
+      body: JSON.stringify({
+        objective: query,
+        search_queries: [query],
+        mode: "basic",
+        advanced_settings: { max_results: n },
+      }),
     }),
     parse: (json) => {
       const d = json as { results?: unknown };
       const results = arr(d.results).map((r) => {
         const it = r as { title?: unknown; url?: unknown; excerpts?: unknown };
-        return { title: str(it.title), url: str(it.url), snippet: joinChunks(it.excerpts) };
+        return {
+          title: str(it.title),
+          url: str(it.url),
+          snippet: joinChunks(it.excerpts),
+        };
       });
       return { results }; // answer нет — отдаёт ранжированные excerpts
     },
@@ -125,7 +179,13 @@ export default defineTool({
     "title, url, snippet (+ быстрый answer, если провайдер его даёт). Чтобы прочитать страницу — web_fetch; интерактив — agent-browser.",
   inputSchema: z.object({
     query: z.string().min(1).describe("Поисковый запрос"),
-    count: z.number().int().min(1).max(10).optional().describe("Сколько результатов (по умолчанию 5)"),
+    count: z
+      .number()
+      .int()
+      .min(1)
+      .max(10)
+      .optional()
+      .describe("Сколько результатов (по умолчанию 5)"),
   }),
   async execute({ query, count }) {
     const n = Math.min(count ?? 5, 10);
@@ -140,30 +200,52 @@ export default defineTool({
     const req = provider.build(query, n, key);
     let res: Response;
     try {
-      res = await fetch(req.url, { method: req.method, headers: req.headers, body: req.body });
+      res = await fetch(req.url, {
+        method: req.method,
+        headers: req.headers,
+        body: req.body,
+      });
     } catch (e) {
       return { error: `сеть: ${(e as Error).message}` };
     }
 
-    if (res.status === 401 || res.status === 403) return { error: `${provider.name} отклонил ключ (401/403) — проверь ${provider.keyEnv}.` };
-    if (res.status === 429) return { error: `${provider.name}: превышен лимит запросов (429) — попробуй позже.` };
+    if (res.status === 401 || res.status === 403)
+      return {
+        error: `${provider.name} отклонил ключ (401/403) — проверь ${provider.keyEnv}.`,
+      };
+    if (res.status === 429)
+      return {
+        error: `${provider.name}: превышен лимит запросов (429) — попробуй позже.`,
+      };
     if (!res.ok) return { error: `${provider.name} HTTP ${res.status}` };
 
     let json: unknown;
     try {
       json = await res.json();
     } catch (e) {
-      return { error: `${provider.name}: некорректный JSON (${(e as Error).message})` };
+      return {
+        error: `${provider.name}: некорректный JSON (${(e as Error).message})`,
+      };
     }
 
     const norm = provider.parse(json);
     const results = norm.results
       .filter((r) => r.url)
       .slice(0, n)
-      .map((r) => ({ title: clip(r.title, TITLE_MAX), url: r.url, snippet: clip(r.snippet, SNIPPET_MAX) }));
-    const answer = norm.answer && norm.answer.trim() ? norm.answer.trim() : undefined;
+      .map((r) => ({
+        title: clip(r.title, TITLE_MAX),
+        url: r.url,
+        snippet: clip(r.snippet, SNIPPET_MAX),
+      }));
+    const answer =
+      norm.answer && norm.answer.trim() ? norm.answer.trim() : undefined;
 
-    if (!results.length) return { results: [], ...(answer ? { answer } : {}), note: "Ничего не найдено." };
+    if (!results.length)
+      return {
+        results: [],
+        ...(answer ? { answer } : {}),
+        note: "Ничего не найдено.",
+      };
     return answer ? { answer, results } : { results };
   },
 });

@@ -21,7 +21,8 @@ function tinyPrefixFixture(prefixLength) {
   const after = "\n\n## Указатели\n- pointer stays exact\n";
   const bullet = `- ${"x".repeat(78)}`;
   const fixedWithoutPadding = before.length + between.length + after.length;
-  const protectedPaddingLength = CORE_CAP - prefixLength - 1 - fixedWithoutPadding;
+  const protectedPaddingLength =
+    CORE_CAP - prefixLength - 1 - fixedWithoutPadding;
   assert.ok(protectedPaddingLength > 0);
   return `${before}${"p".repeat(protectedPaddingLength)}${between}${bullet}${after}`;
 }
@@ -161,9 +162,14 @@ test("all H1/H2 headings and their formatting are preserved", () => {
     CORE_CAP + 5,
   );
 
-  const headings = (text) => text.split("\n").filter((line) => /^#{1,2} /.test(line));
+  const headings = (text) =>
+    text.split("\n").filter((line) => /^#{1,2} /.test(line));
   assert.deepEqual(headings(clampCore(input)), headings(input));
-  assert.ok(clampCore(input).includes("## Неизвестный раздел\r\n- untouched unknown bullet\r\n"));
+  assert.ok(
+    clampCore(input).includes(
+      "## Неизвестный раздел\r\n- untouched unknown bullet\r\n",
+    ),
+  );
 });
 
 test("English template headings are recognized", () => {

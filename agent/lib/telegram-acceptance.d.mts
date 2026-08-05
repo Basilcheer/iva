@@ -28,7 +28,9 @@ type AcceptanceArgs = {
   waitUntil: (task: Promise<unknown>) => void;
 };
 
-export declare function handleAcceptedTelegramWebhook<TArgs extends AcceptanceArgs>(
+export declare function handleAcceptedTelegramWebhook<
+  TArgs extends AcceptanceArgs,
+>(
   handler: (request: Request, args: TArgs) => Promise<Response>,
   request: Request,
   args: TArgs,

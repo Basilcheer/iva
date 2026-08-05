@@ -23,9 +23,14 @@ export const bindProbe = {
     return new Promise((resolve) => {
       const srv = net.createServer();
       srv.once("error", (e) =>
-        resolve({ occupied: e.code === "EADDRINUSE", holder: e.code === "EADDRINUSE" ? "порт занят" : undefined }),
+        resolve({
+          occupied: e.code === "EADDRINUSE",
+          holder: e.code === "EADDRINUSE" ? "порт занят" : undefined,
+        }),
       );
-      srv.once("listening", () => srv.close(() => resolve({ occupied: false })));
+      srv.once("listening", () =>
+        srv.close(() => resolve({ occupied: false })),
+      );
       srv.listen(port, "0.0.0.0"); // 0.0.0.0 перекрывает и 127.0.0.1, и чужой wildcard-биндинг
     });
   },
@@ -41,7 +46,8 @@ export const procProbe = {
       for (const line of readFileSync(f, "utf8").split("\n").slice(1)) {
         const c = line.trim().split(/\s+/);
         if (!c[1] || c[3] !== "0A") continue; // 0A = LISTEN
-        if (c[1].endsWith(":" + hex)) return { occupied: true, holder: `uid=${c[7]} inode=${c[9]}` };
+        if (c[1].endsWith(":" + hex))
+          return { occupied: true, holder: `uid=${c[7]} inode=${c[9]}` };
       }
     }
     return { occupied: false };
@@ -53,13 +59,18 @@ export const dockerProbe = {
   name: "docker",
   async check(port) {
     try {
-      const out = execFileSync("docker", ["ps", "--format", "{{.Names}}\t{{.Ports}}"], {
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "ignore"],
-      });
+      const out = execFileSync(
+        "docker",
+        ["ps", "--format", "{{.Names}}\t{{.Ports}}"],
+        {
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "ignore"],
+        },
+      );
       for (const line of out.split("\n")) {
         const [name, ports] = line.split("\t");
-        if (ports && new RegExp(`[:.]${port}->`).test(ports)) return { occupied: true, holder: `docker:${name}` };
+        if (ports && new RegExp(`[:.]${port}->`).test(ports))
+          return { occupied: true, holder: `docker:${name}` };
       }
     } catch {
       /* docker нет/недоступен — мягко пропускаем (Probe деградирует, а не падает) */
@@ -110,7 +121,8 @@ export async function confirmOccupiedCurrentPort({
   confirm,
 }) {
   if (Number(port) !== Number(currentPort)) return false;
-  if (typeof confirm !== "function") throw new TypeError("occupied port reuse requires confirm(details)");
+  if (typeof confirm !== "function")
+    throw new TypeError("occupied port reuse requires confirm(details)");
   return Boolean(await confirm({ port: Number(port), holders }));
 }
 

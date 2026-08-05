@@ -8,7 +8,14 @@
 // Guards: no git-remote/credentials → alert admin on Telegram (gh auth login + git remote),
 // push is skipped. Health score drop → alert on Telegram. Plain Node orchestration.
 import { spawnSync } from "node:child_process";
-import { copyFileSync, existsSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  existsSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CORE_CAP } from "../lib/core-cap.mjs";
@@ -49,12 +56,19 @@ function run(cmd: string, args: string[], cwd = VAULT) {
   const r = spawnSync(cmd, args, { cwd, encoding: "utf8" });
   const out = `${r.stdout ?? ""}${r.stderr ?? ""}`.trim();
   if (out) console.log(`$ ${cmd} ${args.join(" ")}\n${out}`);
-  return { status: r.status ?? (r.error ? 1 : 0), stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
+  return {
+    status: r.status ?? (r.error ? 1 : 0),
+    stdout: r.stdout ?? "",
+    stderr: r.stderr ?? "",
+  };
 }
 
 async function telegram(text: string): Promise<void> {
   if (!BOT || !CHAT) {
-    console.error("doctor: no TELEGRAM_BOT_TOKEN/TELEGRAM_DIGEST_CHAT_ID — alert not sent:", text);
+    console.error(
+      "doctor: no TELEGRAM_BOT_TOKEN/TELEGRAM_DIGEST_CHAT_ID — alert not sent:",
+      text,
+    );
     return;
   }
   const res = await fetch(`https://api.telegram.org/bot${BOT}/sendMessage`, {
@@ -62,7 +76,12 @@ async function telegram(text: string): Promise<void> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ chat_id: CHAT, text }),
   });
-  if (!res.ok) console.error("doctor: Telegram sendMessage failed:", res.status, await res.text());
+  if (!res.ok)
+    console.error(
+      "doctor: Telegram sendMessage failed:",
+      res.status,
+      await res.text(),
+    );
 }
 
 // Health score is read from the history that graph.py health appends after each run.
@@ -114,7 +133,14 @@ maint("cleanup", [`${SCRIPTS}/cleanup.py`, ".", "--apply"]);
 // This is the deterministic guarantee that cards written outside write_card stay in-schema.
 maint("enforce", [`${SCRIPTS}/enforce.py`, ".", SCHEMA, "--apply"]);
 // graph.health rebuilds the graph and writes health-history.json (for drop detection).
-maint("graph.health", [`${SCRIPTS}/graph.py`, "health", ".", SCHEMA, "--as-of", today]);
+maint("graph.health", [
+  `${SCRIPTS}/graph.py`,
+  "health",
+  ".",
+  SCHEMA,
+  "--as-of",
+  today,
+]);
 // engine.decay updates card relevance/tiers.
 maint("engine.decay", [`${SCRIPTS}/engine.py`, "decay", "."]);
 // moc.generate rebuilds the MOC indexes.
@@ -131,7 +157,11 @@ maint("link_cleanup", [`${SCRIPTS}/link_cleanup.py`, "."]);
 if (process.env.MEMORY_SEARCH_MODE === "hybrid") {
   // Use process.execPath, not bare "node": the systemd unit's PATH does not include the
   // nvm node dir, so spawning "node" by name fails with ENOENT and falsely reports a failure.
-  const r = run(process.execPath, ["--env-file=.env", "scripts/memory/embed-index.ts"], process.cwd());
+  const r = run(
+    process.execPath,
+    ["--env-file=.env", "scripts/memory/embed-index.ts"],
+    process.cwd(),
+  );
   if (r.status !== 0) failures.push("embed-index");
 }
 
@@ -161,7 +191,9 @@ if (existsSync(corePath)) {
       }
       throw error;
     }
-    console.warn(`doctor: CORE.md clamped ${oldCore.length} → ${newCore.length} chars (cap ${CORE_CAP})`);
+    console.warn(
+      `doctor: CORE.md clamped ${oldCore.length} → ${newCore.length} chars (cap ${CORE_CAP})`,
+    );
     const protectedOverflow =
       newCore.length > CORE_CAP
         ? " Protected headings, pointers or unknown sections still exceed the cap."
@@ -179,7 +211,9 @@ if (history.length >= 2) {
   const cur = history[history.length - 1]?.health_score;
   const prev = history[history.length - 2]?.health_score;
   if (typeof cur === "number" && typeof prev === "number" && cur < prev) {
-    await telegram(`Vault health dropped: ${prev} → ${cur}/100 (${today}). Check vault/.graph/report.md.`);
+    await telegram(
+      `Vault health dropped: ${prev} → ${cur}/100 (${today}). Check vault/.graph/report.md.`,
+    );
   }
 }
 
@@ -204,7 +238,10 @@ try {
 }
 
 if (oversized.length) {
-  recordSkippedOversize(resolve(VAULT, ".graph/enforce-report.json"), oversized.length);
+  recordSkippedOversize(
+    resolve(VAULT, ".graph/enforce-report.json"),
+    oversized.length,
+  );
   const lines = oversized.map(
     ({ path, size }) =>
       `файл ${path} (${formatMegabytes(size)}) превышает лимит GitHub; ` +
@@ -219,15 +256,28 @@ if (oversized.length) {
 // nagging nightly: only alert when gh itself can't help (not installed / not logged in).
 function ensureRemote(): string {
   const existing = run("git", ["remote", "get-url", "origin"]);
-  if (existing.status === 0 && existing.stdout.trim()) return existing.stdout.trim();
+  if (existing.status === 0 && existing.stdout.trim())
+    return existing.stdout.trim();
 
   if (run("gh", ["auth", "status"]).status !== 0) return ""; // gh missing or not authed
   run("gh", ["auth", "setup-git"]); // make https push use gh credentials
 
   // Create the private repo and wire origin in one shot.
-  const create = run("gh", ["repo", "create", "iva-vault", "--private", "--source", VAULT, "--remote", "origin", "--push"]);
+  const create = run("gh", [
+    "repo",
+    "create",
+    "iva-vault",
+    "--private",
+    "--source",
+    VAULT,
+    "--remote",
+    "origin",
+    "--push",
+  ]);
   if (create.status === 0) {
-    console.log("doctor: created private backup repo iva-vault and attached origin");
+    console.log(
+      "doctor: created private backup repo iva-vault and attached origin",
+    );
     return run("git", ["remote", "get-url", "origin"]).stdout.trim();
   }
 

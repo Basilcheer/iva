@@ -1,7 +1,15 @@
 // Примитивы надёжного JSON-файла для инструментов агента: лок-файл (O_EXCL) против
 // параллельных ходов (расписание + живой чат), атомарная запись (tmp + rename) против
 // полуписьма, и честная ошибка парсинга с бэкапом вместо тихого «файла нет».
-import { closeSync, openSync, readFileSync, renameSync, rmSync, statSync, writeSync } from "node:fs";
+import {
+  closeSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeSync,
+} from "node:fs";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { dirname } from "node:path";
@@ -74,15 +82,23 @@ export async function loadJsonStrict<T>(file: string, fallback: T): Promise<T> {
     } catch {
       /* не смогли отложить — всё равно не перезаписываем молча */
     }
-    throw new Error(`${file} damaged (invalid JSON) — moved to ${backup}, fix or delete it`);
+    throw new Error(
+      `${file} damaged (invalid JSON) — moved to ${backup}, fix or delete it`,
+    );
   }
 }
 
 // Атомарная запись: уникальный tmp в той же директории (wx — эксклюзивное создание,
 // два параллельных save не разделят один tmp-путь) + rename.
-export async function saveJsonAtomic(file: string, data: unknown): Promise<void> {
+export async function saveJsonAtomic(
+  file: string,
+  data: unknown,
+): Promise<void> {
   await mkdir(dirname(file), { recursive: true });
   const tmp = `${file}.tmp-${process.pid}-${randomUUID()}`;
-  await writeFile(tmp, JSON.stringify(data, null, 2), { encoding: "utf8", flag: "wx" });
+  await writeFile(tmp, JSON.stringify(data, null, 2), {
+    encoding: "utf8",
+    flag: "wx",
+  });
   await rename(tmp, file);
 }

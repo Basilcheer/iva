@@ -2,6 +2,6 @@
 name: lists
 aliases:
   - Иво
-  - 'Ива Иванова'
+  - "Ива Иванова"
 status: active
 ---

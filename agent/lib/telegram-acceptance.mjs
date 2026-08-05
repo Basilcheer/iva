@@ -1,7 +1,12 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { join } from "node:path";
-import { acquireLock, loadJsonStrict, releaseLock, saveJsonAtomic } from "./json-store.ts";
+import {
+  acquireLock,
+  loadJsonStrict,
+  releaseLock,
+  saveJsonAtomic,
+} from "./json-store.ts";
 
 export const TELEGRAM_ACCEPTANCE_ROUTE = "/eve/v1/telegram/accepted";
 export const TELEGRAM_QUEUE_RECEIPT_FIELD = "iva_durable_queue_receipt";
@@ -36,7 +41,10 @@ function hasValidWebhookSecret(request) {
 }
 
 function configuredBotId() {
-  return BOT_ID_PATTERN.exec(process.env.TELEGRAM_BOT_TOKEN ?? "")?.groups?.id ?? null;
+  return (
+    BOT_ID_PATTERN.exec(process.env.TELEGRAM_BOT_TOKEN ?? "")?.groups?.id ??
+    null
+  );
 }
 
 export function addTelegramQueueReceipt(
@@ -52,7 +60,9 @@ export function addTelegramQueueReceipt(
     Array.isArray(update.message) ||
     !validReceipt(receipt)
   ) {
-    throw new Error("Telegram queue receipt requires a message update and a 128-bit hex id");
+    throw new Error(
+      "Telegram queue receipt requires a message update and a 128-bit hex id",
+    );
   }
   return {
     ...update,
@@ -132,7 +142,9 @@ async function loadCompletedLedger(file, botId) {
     ) {
       throw error;
     }
-    console.error(`[telegram] ledger завершённых update пересоздан: ${message}`);
+    console.error(
+      `[telegram] ledger завершённых update пересоздан: ${message}`,
+    );
     return { ledger: { botId, updates: [] }, recovered: true };
   }
 }
@@ -178,7 +190,12 @@ async function recordCompletedUpdate(file, botId, updateId) {
  * @param {any} args
  * @returns {Promise<Response>}
  */
-export async function handleAcceptedTelegramWebhook(handler, request, args, options = {}) {
+export async function handleAcceptedTelegramWebhook(
+  handler,
+  request,
+  args,
+  options = {},
+) {
   const { receipt, updateId } = await metadataFromRequest(request);
   const authenticated = hasValidWebhookSecret(request);
   const botId = configuredBotId();
@@ -190,7 +207,7 @@ export async function handleAcceptedTelegramWebhook(handler, request, args, opti
     updateId !== null &&
     authenticated &&
     botId !== null &&
-    await hasCompletedUpdate(completedFile, botId, updateId)
+    (await hasCompletedUpdate(completedFile, botId, updateId))
   ) {
     return new Response(null, {
       status: 204,
@@ -223,14 +240,21 @@ export async function handleAcceptedTelegramWebhook(handler, request, args, opti
           await recordCompletedUpdate(completedFile, botId, updateId);
         } catch (error) {
           // Ход уже принят: ошибка ledger не должна вернуть 5xx и запустить тот же ход снова.
-          console.error("[telegram] не смог записать завершённый update:", error);
+          console.error(
+            "[telegram] не смог записать завершённый update:",
+            error,
+          );
         }
       }
       return new Response(null, {
         status: 204,
-        headers: { [TELEGRAM_ACCEPTANCE_KIND_HEADER]: accepted ? "turn" : "handled" },
+        headers: {
+          [TELEGRAM_ACCEPTANCE_KIND_HEADER]: accepted ? "turn" : "handled",
+        },
       });
     }
-    return new Response("Telegram update was not accepted by Eve", { status: 503 });
+    return new Response("Telegram update was not accepted by Eve", {
+      status: 503,
+    });
   });
 }

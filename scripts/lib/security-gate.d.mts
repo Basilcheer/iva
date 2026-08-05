@@ -21,5 +21,8 @@ export interface OutboundResult {
 export function hasInboundAttackSignal(
   result: Pick<SanitizeResult, "blocked" | "flags">,
 ): boolean;
-export function sanitizeInbound(input: string, maxChars?: number): SanitizeResult;
+export function sanitizeInbound(
+  input: string,
+  maxChars?: number,
+): SanitizeResult;
 export function scanOutbound(input: string, redact?: boolean): OutboundResult;

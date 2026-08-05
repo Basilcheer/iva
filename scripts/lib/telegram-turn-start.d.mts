@@ -13,7 +13,9 @@ export interface PublishTelegramEarlyStatusOptions {
   now?: () => number;
   setStatusImpl: SetStatus;
   setStatusIfImpl: SetStatusIf;
-  sendWorkingStatusImpl: (options: { canStop: false }) => Promise<number | null | undefined>;
+  sendWorkingStatusImpl: (options: {
+    canStop: false;
+  }) => Promise<number | null | undefined>;
   removeWorkingStatusImpl?: (messageId: number) => Promise<unknown>;
   onWorkingStatusError?: (error: unknown) => void;
 }
@@ -30,7 +32,9 @@ export interface PublishTelegramTurnStartedOptions {
   now?: () => number;
   getStatusImpl: GetStatus;
   setStatusIfImpl: SetStatusIf;
-  sendWorkingStatusImpl?: (options: { canStop: true }) => Promise<number | null | undefined>;
+  sendWorkingStatusImpl?: (options: {
+    canStop: true;
+  }) => Promise<number | null | undefined>;
   enableWorkingStatusStopImpl?: (messageId: number) => Promise<unknown>;
   removeWorkingStatusImpl?: (messageId: number) => Promise<unknown>;
   onWorkingStatusError?: (error: unknown) => void;

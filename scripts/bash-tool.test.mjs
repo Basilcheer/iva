@@ -1,5 +1,11 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -117,7 +123,10 @@ async function runWithExhaustedFileDescriptors() {
   return { stdout, stderr, exitCode };
 }
 
-function termResistantCommand(pidFile, { asChild = false, detachIo = false } = {}) {
+function termResistantCommand(
+  pidFile,
+  { asChild = false, detachIo = false } = {},
+) {
   const redirect = detachIo ? " </dev/null >/dev/null 2>&1" : "";
   const processCommand =
     `trap '' TERM HUP; printf '%s\\n' "$$" > ${shellQuote(pidFile)}; ` +
@@ -203,7 +212,8 @@ test("bash input schema rejects deadlines below the documented floor", () => {
   assert.equal(rejected.success, false);
   assert.match(rejected.error.issues[0].message, /100 ms/);
   assert.equal(
-    bash.inputSchema.safeParse({ command: ":", timeoutMs: MIN_TIMEOUT_MS }).success,
+    bash.inputSchema.safeParse({ command: ":", timeoutMs: MIN_TIMEOUT_MS })
+      .success,
     true,
   );
 });
@@ -217,7 +227,8 @@ test("bash input schema enforces Node's maximum timer delay", () => {
   assert.equal(rejected.success, false);
   assert.match(rejected.error.issues[0].message, /2147483647 ms/);
   assert.equal(
-    bash.inputSchema.safeParse({ command: ":", timeoutMs: MAX_TIMEOUT_MS }).success,
+    bash.inputSchema.safeParse({ command: ":", timeoutMs: MAX_TIMEOUT_MS })
+      .success,
     true,
   );
 });
@@ -299,7 +310,11 @@ test("worker initialization failure falls back without orphaning the child group
 test("a delayed exit event does not turn an already-exited command into a timeout", async () => {
   const execution = bash.execute({ command: "exit 7", timeoutMs: 100 });
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
-  const result = await within(execution, 1_800, "delayed exit event did not settle");
+  const result = await within(
+    execution,
+    1_800,
+    "delayed exit event did not settle",
+  );
   assert.equal(result.exitCode, 7);
   assert.equal(result.timedOut, undefined);
 });
@@ -315,9 +330,16 @@ test("portable deadline probe recognizes an exited root while the main loop is b
       },
     }),
   );
-  const execution = bash.execute({ command: "exit 7", timeoutMs: MIN_TIMEOUT_MS });
+  const execution = bash.execute({
+    command: "exit 7",
+    timeoutMs: MIN_TIMEOUT_MS,
+  });
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
-  const result = await within(execution, 1_800, "portable deadline probe did not settle");
+  const result = await within(
+    execution,
+    1_800,
+    "portable deadline probe did not settle",
+  );
   assert.equal(result.exitCode, 7);
   assert.equal(result.timedOut, undefined);
 });
@@ -328,7 +350,11 @@ test("minimum deadline is enforced while the Node event loop is blocked", async 
     timeoutMs: MIN_TIMEOUT_MS,
   });
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 300);
-  const result = await within(execution, 1_800, "blocked event loop disabled the deadline");
+  const result = await within(
+    execution,
+    1_800,
+    "blocked event loop disabled the deadline",
+  );
   assert.equal(result.timedOut, true);
   assert.equal(result.stdout.includes("completed"), false);
 });
@@ -349,14 +375,22 @@ test("deadline checks the root PID rather than a surviving process group", async
     pid = readPid(pidFile);
     assert.notEqual(pid, null, "background child did not write its PID");
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
-    const result = await within(execution, 1_800, "root PID deadline check did not settle");
+    const result = await within(
+      execution,
+      1_800,
+      "root PID deadline check did not settle",
+    );
     assert.equal(result.exitCode, 7);
     assert.equal(result.timedOut, undefined);
     assert.equal(await waitUntilGone(pid, 1_500), true);
   } finally {
     pid ??= readPid(pidFile);
     if (isAlive(pid)) process.kill(pid, "SIGKILL");
-    await within(execution.catch(() => {}), 1_000, "root PID execution did not settle");
+    await within(
+      execution.catch(() => {}),
+      1_000,
+      "root PID execution did not settle",
+    );
     rmSync(dir, { recursive: true, force: true });
   }
 });
@@ -402,14 +436,19 @@ test("writing to fd 3 cannot disable the command deadline", async () => {
   } finally {
     pid ??= readPid(pidFile);
     if (isAlive(pid)) process.kill(-pid, "SIGKILL");
-    await within(execution.catch(() => {}), 1_000, "fd spoof execution did not settle");
+    await within(
+      execution.catch(() => {}),
+      1_000,
+      "fd spoof execution did not settle",
+    );
     rmSync(dir, { recursive: true, force: true });
   }
 });
 
 test("bash closes stdin so a command waiting for input receives EOF", async () => {
   const result = await bash.execute({
-    command: "if IFS= read -r line; then printf unexpected; else printf stdin-closed; fi",
+    command:
+      "if IFS= read -r line; then printf unexpected; else printf stdin-closed; fi",
     timeoutMs: 1_000,
   });
   assert.equal(result.stdout, "stdin-closed");
@@ -434,7 +473,9 @@ test("bash preserves the last 30000 characters of each output stream", async () 
 
 test("normal calls do not accumulate cleanup timers", async () => {
   const timeoutHandles = () =>
-    process.getActiveResourcesInfo().filter((resource) => resource === "Timeout").length;
+    process
+      .getActiveResourcesInfo()
+      .filter((resource) => resource === "Timeout").length;
   const before = timeoutHandles();
   const started = Date.now();
   for (let index = 0; index < 3; index++) {
@@ -442,8 +483,16 @@ test("normal calls do not accumulate cleanup timers", async () => {
     assert.equal(result.exitCode, 0);
   }
   await delay(50);
-  assert.equal(timeoutHandles() <= before, true, "completed bash calls leaked cleanup timers");
-  assert.equal(Date.now() - started < 1_800, true, "normal calls performed unbounded cleanup work");
+  assert.equal(
+    timeoutHandles() <= before,
+    true,
+    "completed bash calls leaked cleanup timers",
+  );
+  assert.equal(
+    Date.now() - started < 1_800,
+    true,
+    "normal calls performed unbounded cleanup work",
+  );
 });
 
 test("timeout resolves within two seconds when a child ignores SIGTERM", async () => {
@@ -465,7 +514,11 @@ test("timeout resolves within two seconds when a child ignores SIGTERM", async (
   } finally {
     pid ??= readPid(pidFile);
     if (isAlive(pid)) process.kill(pid, "SIGKILL");
-    await within(execution.catch(() => {}), 1_000, "bash execution did not settle after test cleanup");
+    await within(
+      execution.catch(() => {}),
+      1_000,
+      "bash execution did not settle after test cleanup",
+    );
     rmSync(dir, { recursive: true, force: true });
   }
 });
@@ -538,7 +591,11 @@ test("a setsid process outside the owned group cannot hold result pipes open", a
     pid = await waitForPid(pidFile);
     assert.equal(result.exitCode, 0);
     assert.equal(result.timedOut, undefined);
-    assert.equal(isAlive(pid), true, "setsid must place the process outside the owned group");
+    assert.equal(
+      isAlive(pid),
+      true,
+      "setsid must place the process outside the owned group",
+    );
   } finally {
     pid ??= readPid(pidFile);
     if (isAlive(pid)) process.kill(pid, "SIGKILL");
@@ -562,11 +619,19 @@ test("timeout settles when a setsid process outside the owned group inherits out
       "bash timeout did not settle after a setsid descendant inherited its pipes",
     );
     assert.equal(result.timedOut, true);
-    assert.equal(isAlive(pid), true, "setsid must place the process outside the owned group");
+    assert.equal(
+      isAlive(pid),
+      true,
+      "setsid must place the process outside the owned group",
+    );
   } finally {
     pid ??= readPid(pidFile);
     if (isAlive(pid)) process.kill(pid, "SIGKILL");
-    await within(execution.catch(() => {}), 1_000, "bash execution did not settle after test cleanup");
+    await within(
+      execution.catch(() => {}),
+      1_000,
+      "bash execution did not settle after test cleanup",
+    );
     rmSync(dir, { recursive: true, force: true });
   }
 });
@@ -581,7 +646,11 @@ test("timeout leaves no TERM-resistant child PID behind", async () => {
   let pid = null;
   try {
     pid = await waitForPid(pidFile);
-    const result = await within(execution, 1_800, "bash timeout did not settle");
+    const result = await within(
+      execution,
+      1_800,
+      "bash timeout did not settle",
+    );
     assert.equal(result.timedOut, true);
     assert.equal(
       await waitUntilGone(pid, 1_500),
@@ -611,7 +680,11 @@ test("a fake-manager process outside the PGID remains outside bash cleanup", asy
     });
     assert.equal(result.exitCode, 0);
     pid = await waitForPid(pidFile);
-    assert.equal(isAlive(pid), true, "manager-owned work must outlive the requesting bash client");
+    assert.equal(
+      isAlive(pid),
+      true,
+      "manager-owned work must outlive the requesting bash client",
+    );
   } finally {
     stopManager();
     pid ??= readPid(pidFile);

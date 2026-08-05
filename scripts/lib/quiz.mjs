@@ -137,7 +137,8 @@ export function scoreQuiz(answers) {
     if (typeof w === "number") sums[q.axis] += w * q.pole;
   });
   const letters = {};
-  for (const axis of AXIS_ORDER) letters[axis] = POLES[axis][sums[axis] >= 0 ? 0 : 1];
+  for (const axis of AXIS_ORDER)
+    letters[axis] = POLES[axis][sums[axis] >= 0 ? 0 : 1];
   return { code: AXIS_ORDER.map((a) => letters[a]).join(""), letters };
 }
 
@@ -149,7 +150,10 @@ export const ARCHETYPES = {
   WVPF: {
     name: { en: "Big Sister", ru: "Старшая сестра" },
     psychotype: { en: "warm and driven", ru: "тёплая и деятельная" },
-    modus: { en: "takes care and pushes forward", ru: "заботится и подталкивает вперёд" },
+    modus: {
+      en: "takes care and pushes forward",
+      ru: "заботится и подталкивает вперёд",
+    },
     description: {
       en: "Looks after you and keeps things moving — warm, lively, never lets a plan stall.",
       ru: "Опекает и не даёт делам встать — тёплая, живая, держит план в движении.",
@@ -167,7 +171,10 @@ export const ARCHETYPES = {
   WVRF: {
     name: { en: "Close Friend", ru: "Подруга" },
     psychotype: { en: "warm and easy", ru: "тёплая и лёгкая" },
-    modus: { en: "is there when you turn to her", ru: "рядом, когда обращаешься" },
+    modus: {
+      en: "is there when you turn to her",
+      ru: "рядом, когда обращаешься",
+    },
     description: {
       en: "Chatty and supportive, answers clearly and waits for you to lead.",
       ru: "Общительная и поддерживающая, отвечает понятно и ждёт, что ты поведёшь.",
@@ -176,7 +183,10 @@ export const ARCHETYPES = {
   WVRN: {
     name: { en: "Artist", ru: "Художница" },
     psychotype: { en: "warm and imaginative", ru: "тёплая и образная" },
-    modus: { en: "answers when asked, in images", ru: "отвечает по просьбе, образами" },
+    modus: {
+      en: "answers when asked, in images",
+      ru: "отвечает по просьбе, образами",
+    },
     description: {
       en: "Gentle and vivid, paints answers with metaphors and steps back until called.",
       ru: "Мягкая и яркая, рисует ответы метафорами и не лезет, пока не позовут.",
@@ -185,7 +195,10 @@ export const ARCHETYPES = {
   WCPF: {
     name: { en: "Guardian", ru: "Хранительница" },
     psychotype: { en: "warm and composed", ru: "тёплая и собранная" },
-    modus: { en: "quietly keeps everything in order", ru: "тихо держит всё в порядке" },
+    modus: {
+      en: "quietly keeps everything in order",
+      ru: "тихо держит всё в порядке",
+    },
     description: {
       en: "Caring but calm, watches the details and reminds you before things slip.",
       ru: "Заботливая, но спокойная, следит за деталями и напоминает, пока не упущено.",
@@ -194,7 +207,10 @@ export const ARCHETYPES = {
   WCPN: {
     name: { en: "Mentor", ru: "Наставница" },
     psychotype: { en: "warm and thoughtful", ru: "тёплая и вдумчивая" },
-    modus: { en: "guides with questions and pictures", ru: "ведёт вопросами и образами" },
+    modus: {
+      en: "guides with questions and pictures",
+      ru: "ведёт вопросами и образами",
+    },
     description: {
       en: "Supportive and reflective, nudges you toward your own answers with examples.",
       ru: "Поддерживающая и рассудительная, наводит на собственные ответы через примеры.",
@@ -203,7 +219,10 @@ export const ARCHETYPES = {
   WCRF: {
     name: { en: "Quiet Helper", ru: "Тихая помощница" },
     psychotype: { en: "warm and unobtrusive", ru: "тёплая и ненавязчивая" },
-    modus: { en: "helps precisely, on request", ru: "помогает точно, по запросу" },
+    modus: {
+      en: "helps precisely, on request",
+      ru: "помогает точно, по запросу",
+    },
     description: {
       en: "Kind and low-key, gives clean structured answers and never crowds you.",
       ru: "Добрая и негромкая, даёт чистые структурные ответы и не теснит тебя.",
@@ -239,7 +258,10 @@ export const ARCHETYPES = {
   DVRF: {
     name: { en: "Expert", ru: "Эксперт" },
     psychotype: { en: "sharp and factual", ru: "чёткая и предметная" },
-    modus: { en: "answers precisely on request", ru: "отвечает точно по запросу" },
+    modus: {
+      en: "answers precisely on request",
+      ru: "отвечает точно по запросу",
+    },
     description: {
       en: "Confident and lively, gives structured expert answers and waits for your ask.",
       ru: "Уверенная и живая, даёт структурные экспертные ответы и ждёт твоего запроса.",
@@ -248,7 +270,10 @@ export const ARCHETYPES = {
   DVRN: {
     name: { en: "Sparring Partner", ru: "Спарринг-партнёр" },
     psychotype: { en: "quick and challenging", ru: "быстрая и задиристая" },
-    modus: { en: "argues to sharpen ideas", ru: "спорит, чтобы заострить мысль" },
+    modus: {
+      en: "argues to sharpen ideas",
+      ru: "спорит, чтобы заострить мысль",
+    },
     description: {
       en: "Direct and vivid, tests your thinking with counter-angles when you engage.",
       ru: "Прямая и яркая, проверяет твою мысль контрходами, когда ты втягиваешь её.",
@@ -257,7 +282,10 @@ export const ARCHETYPES = {
   DCPF: {
     name: { en: "Navigator", ru: "Штурман" },
     psychotype: { en: "cool and precise", ru: "хладнокровная и точная" },
-    modus: { en: "plots the route and checks it", ru: "прокладывает маршрут и сверяет" },
+    modus: {
+      en: "plots the route and checks it",
+      ru: "прокладывает маршрут и сверяет",
+    },
     description: {
       en: "Reserved and organized, lays out steps, tracks progress and flags risks early.",
       ru: "Сдержанная и организованная, раскладывает шаги, ведёт прогресс и рано ловит риски.",
@@ -266,7 +294,10 @@ export const ARCHETYPES = {
   DCPN: {
     name: { en: "Strategist", ru: "Стратег" },
     psychotype: { en: "calm and far-seeing", ru: "спокойная и дальновидная" },
-    modus: { en: "frames the big picture ahead", ru: "заранее рисует общую картину" },
+    modus: {
+      en: "frames the big picture ahead",
+      ru: "заранее рисует общую картину",
+    },
     description: {
       en: "Restrained and conceptual, offers directions and second-order effects unprompted.",
       ru: "Сдержанная и концептуальная, сама предлагает направления и вторичные эффекты.",
@@ -275,7 +306,10 @@ export const ARCHETYPES = {
   DCRF: {
     name: { en: "Minimalist Assistant", ru: "Ассистент-минималист" },
     psychotype: { en: "dry and exact", ru: "сухая и точная" },
-    modus: { en: "does exactly what's asked", ru: "делает ровно то, о чём просят" },
+    modus: {
+      en: "does exactly what's asked",
+      ru: "делает ровно то, о чём просят",
+    },
     description: {
       en: "Terse and businesslike, replies in tight structured points and nothing extra.",
       ru: "Немногословная и деловая, отвечает сжатыми структурными пунктами и без лишнего.",
@@ -297,28 +331,72 @@ export const ARCHETYPES = {
 const DESC = {
   W: { en: "Tone: warm and caring.", ru: "Тон: тёплый, участливый." },
   D: { en: "Tone: businesslike and direct.", ru: "Тон: деловой, прямой." },
-  V: { en: "Manner: lively, jokes and emojis are fine.", ru: "Манера: живая, шутки и эмодзи уместны." },
-  C: { en: "Manner: restrained, little extra emotion.", ru: "Манера: сдержанная, без лишних эмоций." },
-  P: { en: "Initiative: writes first, reminds, suggests ideas.", ru: "Инициатива: пишет первой, напоминает, предлагает идеи." },
-  R: { en: "Initiative: acts on request, stays quiet otherwise.", ru: "Инициатива: действует по запросу, иначе не тревожит." },
-  F: { en: "Thinking: structured, answers in lists and steps.", ru: "Мышление: структурное, ответы списками и по шагам." },
-  N: { en: "Thinking: figurative, explains with images and examples.", ru: "Мышление: образное, объясняет метафорами и примерами." },
+  V: {
+    en: "Manner: lively, jokes and emojis are fine.",
+    ru: "Манера: живая, шутки и эмодзи уместны.",
+  },
+  C: {
+    en: "Manner: restrained, little extra emotion.",
+    ru: "Манера: сдержанная, без лишних эмоций.",
+  },
+  P: {
+    en: "Initiative: writes first, reminds, suggests ideas.",
+    ru: "Инициатива: пишет первой, напоминает, предлагает идеи.",
+  },
+  R: {
+    en: "Initiative: acts on request, stays quiet otherwise.",
+    ru: "Инициатива: действует по запросу, иначе не тревожит.",
+  },
+  F: {
+    en: "Thinking: structured, answers in lists and steps.",
+    ru: "Мышление: структурное, ответы списками и по шагам.",
+  },
+  N: {
+    en: "Thinking: figurative, explains with images and examples.",
+    ru: "Мышление: образное, объясняет метафорами и примерами.",
+  },
 };
 const PERSONA = {
-  W: { en: "Be warm and supportive; acknowledge feelings, not only the task.", ru: "Будь тёплой и поддерживающей: замечай состояние, а не только задачу." },
-  D: { en: "Be businesslike and direct; say things plainly, even when blunt.", ru: "Будь деловой и прямой: говори по существу, даже если резко." },
-  V: { en: "Keep a lively voice; light humour and the odd emoji are welcome.", ru: "Держи живой голос: лёгкий юмор и уместные эмодзи приветствуются." },
-  C: { en: "Keep a calm, restrained voice; skip extra emotion and filler.", ru: "Держи спокойный, сдержанный голос: без лишних эмоций и воды." },
-  P: { en: "Take initiative: write first when useful, remind, offer ideas unasked.", ru: "Проявляй инициативу: пиши первой по делу, напоминай, предлагай идеи без запроса." },
-  R: { en: "Wait for a request; don't message first or push unsolicited ideas.", ru: "Жди запроса: не пиши первой и не навязывай идеи без просьбы." },
-  F: { en: "Answer in clear structure — lists, steps, short points.", ru: "Отвечай чёткой структурой — списки, шаги, короткие пункты." },
-  N: { en: "Explain through images, metaphors and concrete examples.", ru: "Объясняй через образы, метафоры и конкретные примеры." },
+  W: {
+    en: "Be warm and supportive; acknowledge feelings, not only the task.",
+    ru: "Будь тёплой и поддерживающей: замечай состояние, а не только задачу.",
+  },
+  D: {
+    en: "Be businesslike and direct; say things plainly, even when blunt.",
+    ru: "Будь деловой и прямой: говори по существу, даже если резко.",
+  },
+  V: {
+    en: "Keep a lively voice; light humour and the odd emoji are welcome.",
+    ru: "Держи живой голос: лёгкий юмор и уместные эмодзи приветствуются.",
+  },
+  C: {
+    en: "Keep a calm, restrained voice; skip extra emotion and filler.",
+    ru: "Держи спокойный, сдержанный голос: без лишних эмоций и воды.",
+  },
+  P: {
+    en: "Take initiative: write first when useful, remind, offer ideas unasked.",
+    ru: "Проявляй инициативу: пиши первой по делу, напоминай, предлагай идеи без запроса.",
+  },
+  R: {
+    en: "Wait for a request; don't message first or push unsolicited ideas.",
+    ru: "Жди запроса: не пиши первой и не навязывай идеи без просьбы.",
+  },
+  F: {
+    en: "Answer in clear structure — lists, steps, short points.",
+    ru: "Отвечай чёткой структурой — списки, шаги, короткие пункты.",
+  },
+  N: {
+    en: "Explain through images, metaphors and concrete examples.",
+    ru: "Объясняй через образы, метафоры и конкретные примеры.",
+  },
 };
 
 // Буквы кода в порядке осей → массив фраз выбранного набора.
 function axisPhrases(code, table, lang) {
   const isRu = lang === "ru";
-  return code.split("").map((letter) => (isRu ? table[letter].ru : table[letter].en));
+  return code
+    .split("")
+    .map((letter) => (isRu ? table[letter].ru : table[letter].en));
 }
 
 // Постоянный поясняющий блок портрета: держит длину сводки в целевом коридоре 600-900
@@ -342,7 +420,9 @@ const SUMMARY_NOTE = {
 export function quizSummary(code, lang) {
   const card = ARCHETYPES[code] ?? ARCHETYPES.WVPF;
   const isRu = lang !== "en";
-  const lines = axisPhrases(code, DESC, isRu ? "ru" : "en").map((s) => `• ${s}`).join("\n");
+  const lines = axisPhrases(code, DESC, isRu ? "ru" : "en")
+    .map((s) => `• ${s}`)
+    .join("\n");
   if (isRu) {
     return [
       `🎭 Твой архетип Ивы: ${card.name.ru} (${code})`,
@@ -384,7 +464,9 @@ export function quizSummary(code, lang) {
 export function personaMarkdown(code, lang) {
   const card = ARCHETYPES[code] ?? ARCHETYPES.WVPF;
   const isRu = lang !== "en";
-  const phrases = axisPhrases(code, PERSONA, isRu ? "ru" : "en").map((s) => `- ${s}`).join("\n");
+  const phrases = axisPhrases(code, PERSONA, isRu ? "ru" : "en")
+    .map((s) => `- ${s}`)
+    .join("\n");
   const md = isRu
     ? [
         `# Характер Ивы — ${card.name.ru} (${code})`,

@@ -3,9 +3,17 @@ import test from "node:test";
 import { selfRestartViolation } from "./self-restart-guard.ts";
 
 const blocked = (cmd) =>
-  assert.notEqual(selfRestartViolation(cmd), null, `должна блокироваться: ${cmd}`);
+  assert.notEqual(
+    selfRestartViolation(cmd),
+    null,
+    `должна блокироваться: ${cmd}`,
+  );
 const allowed = (cmd) =>
-  assert.equal(selfRestartViolation(cmd), null, `не должна блокироваться: ${cmd}`);
+  assert.equal(
+    selfRestartViolation(cmd),
+    null,
+    `не должна блокироваться: ${cmd}`,
+  );
 
 test("летальные команды iva CLI блокируются во всех формах вызова", () => {
   blocked("iva restart");
@@ -73,7 +81,9 @@ test("упоминания в аргументах — не команды (ре
 });
 
 test("летальный глагол одной команды не дотягивается до iva из следующей", () => {
-  allowed("systemctl --user stop some-other.service; systemctl --user status iva");
+  allowed(
+    "systemctl --user stop some-other.service; systemctl --user status iva",
+  );
   allowed("systemctl --user restart caddy && journalctl -u iva -n 5");
 });
 

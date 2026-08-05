@@ -1,11 +1,22 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { QUIZ, scoreQuiz, quizSummary, personaMarkdown, ARCHETYPES } from "./quiz.mjs";
+import {
+  QUIZ,
+  scoreQuiz,
+  quizSummary,
+  personaMarkdown,
+  ARCHETYPES,
+} from "./quiz.mjs";
 
 // Оси и их полюса (буквы) — зеркало quiz.mjs (POLES/AXIS_ORDER там приватны). Первый
 // полюс = буква при сумме >= 0. Порядок осей = порядок букв в коде.
-const POLES = { tone: ["W", "D"], expr: ["V", "C"], init: ["P", "R"], mind: ["F", "N"] };
+const POLES = {
+  tone: ["W", "D"],
+  expr: ["V", "C"],
+  init: ["P", "R"],
+  mind: ["F", "N"],
+};
 const AXIS_ORDER = ["tone", "expr", "init", "mind"];
 
 // Все 16 кодов — декартово произведение полюсов по осям.
@@ -31,7 +42,11 @@ test("scoreQuiz возвращает каждый из 16 кодов ровно 
   const seen = new Set();
   for (const code of ALL_CODES) {
     const res = scoreQuiz(answersFor(code));
-    assert.equal(res.code, code, `крайние ответы для ${code} должны дать ${code}, получено ${res.code}`);
+    assert.equal(
+      res.code,
+      code,
+      `крайние ответы для ${code} должны дать ${code}, получено ${res.code}`,
+    );
     assert.equal(seen.has(res.code), false, `код ${res.code} получен повторно`);
     seen.add(res.code);
   }
@@ -48,15 +63,30 @@ test("у каждого кода портрет и персона непусты
     for (const lang of ["ru", "en"]) {
       const summary = quizSummary(code, lang);
       assert.equal(typeof summary, "string");
-      assert.ok(summary.trim().length > 0, `quizSummary(${code}, ${lang}) пуст`);
-      assert.ok(summary.includes(code), `quizSummary(${code}, ${lang}) не содержит код`);
+      assert.ok(
+        summary.trim().length > 0,
+        `quizSummary(${code}, ${lang}) пуст`,
+      );
+      assert.ok(
+        summary.includes(code),
+        `quizSummary(${code}, ${lang}) не содержит код`,
+      );
 
       const persona = personaMarkdown(code, lang);
       assert.equal(typeof persona, "string");
-      assert.ok(persona.trim().length > 0, `personaMarkdown(${code}, ${lang}) пуст`);
-      assert.ok(persona.length <= 800, `personaMarkdown(${code}, ${lang}) = ${persona.length} > 800`);
+      assert.ok(
+        persona.trim().length > 0,
+        `personaMarkdown(${code}, ${lang}) пуст`,
+      );
+      assert.ok(
+        persona.length <= 800,
+        `personaMarkdown(${code}, ${lang}) = ${persona.length} > 800`,
+      );
       // Самодостаточность: имя архетипа присутствует (персона — инструкция про этот характер).
-      assert.ok(persona.includes(ARCHETYPES[code].name[lang]), `personaMarkdown(${code}, ${lang}) без имени архетипа`);
+      assert.ok(
+        persona.includes(ARCHETYPES[code].name[lang]),
+        `personaMarkdown(${code}, ${lang}) без имени архетипа`,
+      );
     }
   }
 });

@@ -22,8 +22,26 @@ test("start сеет полный стейт и кладёт его в стор 
   const st = flows.start(10, 20, "model");
   assert.equal(flows.key(10, 20), "10:20");
   assert.deepEqual(
-    { flow: st.flow, chatId: st.chatId, userId: st.userId, msgId: st.msgId, awaitText: st.awaitText, screen: st.screen, page: st.page, data: st.data },
-    { flow: "model", chatId: 10, userId: 20, msgId: null, awaitText: null, screen: null, page: 0, data: {} },
+    {
+      flow: st.flow,
+      chatId: st.chatId,
+      userId: st.userId,
+      msgId: st.msgId,
+      awaitText: st.awaitText,
+      screen: st.screen,
+      page: st.page,
+      data: st.data,
+    },
+    {
+      flow: "model",
+      chatId: 10,
+      userId: 20,
+      msgId: null,
+      awaitText: null,
+      screen: null,
+      page: 0,
+      data: {},
+    },
   );
   assert.equal(flows.get(10, 20), st);
 });
@@ -44,7 +62,9 @@ test("screen без msgId шлёт новое сообщение и запоми
   await flows.screen(st, "привет", [[{ text: "A", callback_data: "x" }]]);
   assert.equal(calls.length, 1);
   assert.equal(calls[0].method, "sendMessage");
-  assert.deepEqual(calls[0].params.reply_markup, { inline_keyboard: [[{ text: "A", callback_data: "x" }]] });
+  assert.deepEqual(calls[0].params.reply_markup, {
+    inline_keyboard: [[{ text: "A", callback_data: "x" }]],
+  });
   assert.equal(st.msgId, 777);
 });
 
@@ -61,8 +81,10 @@ test("screen с msgId правит на месте, без фолбэка при
   assert.equal(st.msgId, 42);
 });
 
-test('«not modified» на правке считается успехом — фолбэка нет', async () => {
-  const { tg, calls } = makeTg([{ ok: false, description: "Bad Request: message is not modified" }]);
+test("«not modified» на правке считается успехом — фолбэка нет", async () => {
+  const { tg, calls } = makeTg([
+    { ok: false, description: "Bad Request: message is not modified" },
+  ]);
   const flows = createFlows({ tg });
   const st = flows.start(5, 6, "think");
   st.msgId = 42;
@@ -103,12 +125,12 @@ test("get чистит протухший по TTL стейт и отдаёт nu
   const flows = createFlows({ tg });
   const st = flows.start(3, 4, "model");
   // Состарим стейт за пределы 15-минутного TTL.
-  st.createdAt = Date.now() - (16 * 60 * 1000);
+  st.createdAt = Date.now() - 16 * 60 * 1000;
   assert.equal(flows.get(3, 4), null); // протух -> удалён
   assert.equal(flows.get(3, 4), null); // и правда снят из стора
 
   const st2 = flows.start(3, 4, "model");
-  st2.createdAt = Date.now() - (16 * 60 * 1000);
+  st2.createdAt = Date.now() - 16 * 60 * 1000;
   flows.touch(st2); // меню продлевает createdAt -> флоу не протухает
   assert.equal(flows.get(3, 4), st2);
 });

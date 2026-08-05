@@ -25,10 +25,12 @@
 ### Task 1: Раннер `svc-run.mjs` — механика процессов, юнита и прогресса
 
 **Files:**
+
 - Create: `scripts/lib/menu/svc-run.mjs`
 - Test: `scripts/lib/menu/svc-run.test.mjs`
 
 **Interfaces (Produces):**
+
 - `LOADERS = { doc:{alt:"🟥",id:"5255894270597941229",fallback:"◇"}, cln:{alt:"🟨",id:"5255975857796695002",fallback:"◇"}, mem:{alt:"🟪",id:"5256218768262056531",fallback:"◇"} }`
 - `TIMEOUT_MS = { doc: 600_000, cln: 1_800_000, mem: 3_600_000 }`
 - `stripAnsi(s: string): string`
@@ -51,8 +53,15 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
-  LOADERS, stripAnsi, elapsed, tailText, currentRun, cancelRun,
-  startProcess, startUnit, resetForTests,
+  LOADERS,
+  stripAnsi,
+  elapsed,
+  tailText,
+  currentRun,
+  cancelRun,
+  startProcess,
+  startUnit,
+  resetForTests,
 } from "./svc-run.mjs";
 
 // tg-мок: копит вызовы; fail400First — первый editMessageText с entities получает 400.
@@ -63,7 +72,11 @@ function makeTg({ fail400First = false } = {}) {
     calls.push({ method, body });
     if (fail400First && body.entities && !failed) {
       failed = true;
-      return { ok: false, error_code: 400, description: "CUSTOM_EMOJI_INVALID" };
+      return {
+        ok: false,
+        error_code: 400,
+        description: "CUSTOM_EMOJI_INVALID",
+      };
     }
     return { ok: true, result: {} };
   };
@@ -71,11 +84,19 @@ function makeTg({ fail400First = false } = {}) {
 }
 
 const baseOpts = (tg, over = {}) => ({
-  tg, chatId: 10, messageId: 7, loader: LOADERS.doc,
+  tg,
+  chatId: 10,
+  messageId: 7,
+  loader: LOADERS.doc,
   attached: () => true,
-  progressView: (run) => ({ text: `работаю ${run.lastLine}`, rows: [[{ text: "✖", callback_data: "iva_menu:svc:ab" }]] }),
+  progressView: (run) => ({
+    text: `работаю ${run.lastLine}`,
+    rows: [[{ text: "✖", callback_data: "iva_menu:svc:ab" }]],
+  }),
   onFinish: () => {},
-  tickMs: 15, timeoutMs: 5_000, pollMs: 5,
+  tickMs: 15,
+  timeoutMs: 5_000,
+  pollMs: 5,
   ...over,
 });
 
@@ -97,9 +118,21 @@ test("startProcess: успех — done, tail собран, прогресс ш�
   resetForTests();
   const { tg, calls } = makeTg();
   let finished = null;
-  const run = startProcess("doc", {
-    argv: [process.execPath, "-e", "console.log('step one'); console.log('step two')"],
-  }, baseOpts(tg, { onFinish: (r) => { finished = r; } }));
+  const run = startProcess(
+    "doc",
+    {
+      argv: [
+        process.execPath,
+        "-e",
+        "console.log('step one'); console.log('step two')",
+      ],
+    },
+    baseOpts(tg, {
+      onFinish: (r) => {
+        finished = r;
+      },
+    }),
+  );
   assert.ok(run);
   await waitFor(() => finished);
   assert.equal(finished.status, "done");
@@ -116,11 +149,22 @@ test("startProcess: exit 1 — failed; второй старт при running �
   resetForTests();
   const { tg } = makeTg();
   let finished = null;
-  const run = startProcess("doc", {
-    argv: [process.execPath, "-e", "setTimeout(()=>process.exit(1), 150)"],
-  }, baseOpts(tg, { onFinish: (r) => { finished = r; } }));
+  const run = startProcess(
+    "doc",
+    {
+      argv: [process.execPath, "-e", "setTimeout(()=>process.exit(1), 150)"],
+    },
+    baseOpts(tg, {
+      onFinish: (r) => {
+        finished = r;
+      },
+    }),
+  );
   assert.ok(run);
-  assert.equal(startProcess("cln", { argv: [process.execPath, "-e", "0"] }, baseOpts(tg)), null);
+  assert.equal(
+    startProcess("cln", { argv: [process.execPath, "-e", "0"] }, baseOpts(tg)),
+    null,
+  );
   await waitFor(() => finished);
   assert.equal(finished.status, "failed");
 });
@@ -129,9 +173,18 @@ test("cancelRun: SIGTERM ребёнку, статус cancelled", async () => {
   resetForTests();
   const { tg } = makeTg();
   let finished = null;
-  startProcess("cln", {
-    argv: [process.execPath, "-e", "setTimeout(()=>{}, 60000)"],
-  }, baseOpts(tg, { loader: LOADERS.cln, onFinish: (r) => { finished = r; } }));
+  startProcess(
+    "cln",
+    {
+      argv: [process.execPath, "-e", "setTimeout(()=>{}, 60000)"],
+    },
+    baseOpts(tg, {
+      loader: LOADERS.cln,
+      onFinish: (r) => {
+        finished = r;
+      },
+    }),
+  );
   await waitFor(() => currentRun()?.status === "running");
   assert.equal(cancelRun(), true);
   await waitFor(() => finished);
@@ -143,9 +196,18 @@ test("startProcess: таймаут убивает и даёт status timeout", a
   resetForTests();
   const { tg } = makeTg();
   let finished = null;
-  startProcess("doc", {
-    argv: [process.execPath, "-e", "setTimeout(()=>{}, 60000)"],
-  }, baseOpts(tg, { timeoutMs: 100, onFinish: (r) => { finished = r; } }));
+  startProcess(
+    "doc",
+    {
+      argv: [process.execPath, "-e", "setTimeout(()=>{}, 60000)"],
+    },
+    baseOpts(tg, {
+      timeoutMs: 100,
+      onFinish: (r) => {
+        finished = r;
+      },
+    }),
+  );
   await waitFor(() => finished);
   assert.equal(finished.status, "timeout");
 });
@@ -154,13 +216,31 @@ test("прогресс: 400 на entity — даунгрейд на fallback д�
   resetForTests();
   const { tg, calls } = makeTg({ fail400First: true });
   let finished = null;
-  startProcess("mem", {
-    argv: [process.execPath, "-e", "setTimeout(()=>{}, 300)"],
-  }, baseOpts(tg, { loader: LOADERS.mem, tickMs: 30, onFinish: (r) => { finished = r; } }));
+  startProcess(
+    "mem",
+    {
+      argv: [process.execPath, "-e", "setTimeout(()=>{}, 300)"],
+    },
+    baseOpts(tg, {
+      loader: LOADERS.mem,
+      tickMs: 30,
+      onFinish: (r) => {
+        finished = r;
+      },
+    }),
+  );
   await waitFor(() => finished);
-  const after400 = calls.slice(calls.findIndex((c) => c.body.entities) + 1)
-    .filter((c) => c.method === "editMessageText" && c.body.text?.startsWith(LOADERS.mem.fallback));
-  assert.ok(after400.length >= 1, "после 400 эдиты идут с fallback-символом без entities");
+  const after400 = calls
+    .slice(calls.findIndex((c) => c.body.entities) + 1)
+    .filter(
+      (c) =>
+        c.method === "editMessageText" &&
+        c.body.text?.startsWith(LOADERS.mem.fallback),
+    );
+  assert.ok(
+    after400.length >= 1,
+    "после 400 эдиты идут с fallback-символом без entities",
+  );
   assert.ok(after400.every((c) => !c.body.entities));
 });
 
@@ -168,9 +248,18 @@ test("attached()=false: тикер молчит, процесс всё равн�
   resetForTests();
   const { tg, calls } = makeTg();
   let finished = null;
-  startProcess("doc", {
-    argv: [process.execPath, "-e", "console.log('quiet')"],
-  }, baseOpts(tg, { attached: () => false, onFinish: (r) => { finished = r; } }));
+  startProcess(
+    "doc",
+    {
+      argv: [process.execPath, "-e", "console.log('quiet')"],
+    },
+    baseOpts(tg, {
+      attached: () => false,
+      onFinish: (r) => {
+        finished = r;
+      },
+    }),
+  );
   await waitFor(() => finished);
   assert.equal(finished.status, "done");
   assert.equal(calls.filter((c) => c.method === "editMessageText").length, 0);
@@ -188,8 +277,17 @@ test("startUnit: oneshot activating→inactive = done, журнал в tail", as
     return cb(null, "");
   };
   let finished = null;
-  startUnit("mem", { unit: "iva-memory-doctor.service" },
-    baseOpts(tg, { loader: LOADERS.mem, execFileImpl, onFinish: (r) => { finished = r; } }));
+  startUnit(
+    "mem",
+    { unit: "iva-memory-doctor.service" },
+    baseOpts(tg, {
+      loader: LOADERS.mem,
+      execFileImpl,
+      onFinish: (r) => {
+        finished = r;
+      },
+    }),
+  );
   await waitFor(() => finished);
   assert.equal(finished.status, "done");
   assert.deepEqual(finished.tail, ["sync ok", "cleanup ok"]);
@@ -201,20 +299,36 @@ test("startUnit: failed юнит — status failed", async () => {
   const execFileImpl = (cmd, args, o, cb) => {
     const a = args.join(" ");
     if (a.includes("start")) return cb(null, "");
-    if (a.includes("is-active")) { const e = new Error("x"); e.code = 3; return cb(e, "failed"); }
+    if (a.includes("is-active")) {
+      const e = new Error("x");
+      e.code = 3;
+      return cb(e, "failed");
+    }
     if (cmd === "journalctl") return cb(null, "boom\n");
     return cb(null, "");
   };
   let finished = null;
-  startUnit("mem", { unit: "iva-memory-doctor.service" },
-    baseOpts(tg, { execFileImpl, onFinish: (r) => { finished = r; } }));
+  startUnit(
+    "mem",
+    { unit: "iva-memory-doctor.service" },
+    baseOpts(tg, {
+      execFileImpl,
+      onFinish: (r) => {
+        finished = r;
+      },
+    }),
+  );
   await waitFor(() => finished);
   assert.equal(finished.status, "failed");
   assert.deepEqual(finished.tail, ["boom"]);
 });
 
 test("elapsed/tailText: формат MM:SS и обрезка хвоста с конца", () => {
-  const run = { startedAt: Date.now() - 65_000, finishedAt: Date.now(), tail: ["a".repeat(900), "b".repeat(900)] };
+  const run = {
+    startedAt: Date.now() - 65_000,
+    finishedAt: Date.now(),
+    tail: ["a".repeat(900), "b".repeat(900)],
+  };
   assert.equal(elapsed(run), "01:05");
   const t = tailText(run, 1000);
   assert.ok(t.length <= 1000);
@@ -254,18 +368,26 @@ const TICK_MS = 3_000;
 const POLL_MS = 3_000;
 const TAIL_LINES = 40;
 
-let RUN = null;            // единственный запуск на мост
-let customEmojiOk = true;  // глобальный даунгрейд после первого 400
+let RUN = null; // единственный запуск на мост
+let customEmojiOk = true; // глобальный даунгрейд после первого 400
 
 export const currentRun = () => RUN;
-export function resetForTests() { RUN = null; customEmojiOk = true; }
+export function resetForTests() {
+  RUN = null;
+  customEmojiOk = true;
+}
 
 export function stripAnsi(s) {
-  return String(s).replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "").replace(/\r/g, "");
+  return String(s)
+    .replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "")
+    .replace(/\r/g, "");
 }
 
 export function elapsed(run) {
-  const s = Math.max(0, Math.floor(((run.finishedAt ?? Date.now()) - run.startedAt) / 1000));
+  const s = Math.max(
+    0,
+    Math.floor(((run.finishedAt ?? Date.now()) - run.startedAt) / 1000),
+  );
   return `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
 }
 
@@ -284,15 +406,27 @@ export function tailText(run, limit = 1500) {
 
 function baseRun(cmd, opts) {
   return {
-    cmd, status: "running", startedAt: Date.now(), finishedAt: null,
-    lastLine: "", tail: [], cancelled: false, timedOut: false,
-    chatId: opts.chatId, messageId: opts.messageId,
-    _edit: { lastPayload: "" }, _timer: null, _kill: null,
+    cmd,
+    status: "running",
+    startedAt: Date.now(),
+    finishedAt: null,
+    lastLine: "",
+    tail: [],
+    cancelled: false,
+    timedOut: false,
+    chatId: opts.chatId,
+    messageId: opts.messageId,
+    _edit: { lastPayload: "" },
+    _timer: null,
+    _kill: null,
   };
 }
 
 function pushLines(run, chunk) {
-  for (const line of stripAnsi(chunk.toString()).split("\n").map((l) => l.trim()).filter(Boolean)) {
+  for (const line of stripAnsi(chunk.toString())
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean)) {
     run.lastLine = line;
     run.tail.push(line);
     if (run.tail.length > TAIL_LINES) run.tail.shift();
@@ -308,21 +442,35 @@ async function editRich(opts, run, text, rows) {
   const base = { chat_id: run.chatId, message_id: run.messageId, reply_markup };
   if (customEmojiOk) {
     const L = opts.loader;
-    const r = await opts.tg("editMessageText", {
-      ...base,
-      text: `${L.alt} ${text}`,
-      entities: [{ type: "custom_emoji", offset: 0, length: L.alt.length, custom_emoji_id: L.id }],
-    }).catch(() => ({ ok: false }));
+    const r = await opts
+      .tg("editMessageText", {
+        ...base,
+        text: `${L.alt} ${text}`,
+        entities: [
+          {
+            type: "custom_emoji",
+            offset: 0,
+            length: L.alt.length,
+            custom_emoji_id: L.id,
+          },
+        ],
+      })
+      .catch(() => ({ ok: false }));
     if (r.ok || /not modified/i.test(r.description || "")) return;
     if (r.error_code !== 400) return;
     customEmojiOk = false;
   }
-  await opts.tg("editMessageText", { ...base, text: `${opts.loader.fallback} ${text}` }).catch(() => {});
+  await opts
+    .tg("editMessageText", { ...base, text: `${opts.loader.fallback} ${text}` })
+    .catch(() => {});
 }
 
 function startTicker(run, opts) {
   const tick = async () => {
-    if (run.status !== "running") { clearInterval(run._timer); return; }
+    if (run.status !== "running") {
+      clearInterval(run._timer);
+      return;
+    }
     if (opts.attached && !opts.attached()) return; // юзер ушёл с экрана — не дерёмся за сообщение
     const v = opts.progressView(run);
     await editRich(opts, run, v.text, v.rows);
@@ -346,22 +494,41 @@ export function startProcess(cmd, spec, opts) {
   let child;
   try {
     child = (opts.spawnImpl ?? spawn)(spec.argv[0], spec.argv.slice(1), {
-      cwd: spec.cwd, env: spec.env ?? process.env, stdio: ["ignore", "pipe", "pipe"],
+      cwd: spec.cwd,
+      env: spec.env ?? process.env,
+      stdio: ["ignore", "pipe", "pipe"],
     });
   } catch (e) {
     pushLines(run, String(e.message || e));
     finish(run, "failed", opts);
     return run;
   }
-  run._kill = () => { try { child.kill("SIGTERM"); } catch {} };
+  run._kill = () => {
+    try {
+      child.kill("SIGTERM");
+    } catch {}
+  };
   child.stdout.on("data", (b) => pushLines(run, b));
   child.stderr.on("data", (b) => pushLines(run, b));
-  const timer = setTimeout(() => { run.timedOut = true; run._kill(); }, opts.timeoutMs ?? TIMEOUT_MS[cmd]);
+  const timer = setTimeout(() => {
+    run.timedOut = true;
+    run._kill();
+  }, opts.timeoutMs ?? TIMEOUT_MS[cmd]);
   if (timer.unref) timer.unref();
-  child.on("error", (e) => { clearTimeout(timer); pushLines(run, String(e.message || e)); finish(run, "failed", opts); });
+  child.on("error", (e) => {
+    clearTimeout(timer);
+    pushLines(run, String(e.message || e));
+    finish(run, "failed", opts);
+  });
   child.on("close", (code) => {
     clearTimeout(timer);
-    const status = run.cancelled ? "cancelled" : run.timedOut ? "timeout" : code === 0 ? "done" : "failed";
+    const status = run.cancelled
+      ? "cancelled"
+      : run.timedOut
+        ? "timeout"
+        : code === 0
+          ? "done"
+          : "failed";
     finish(run, status, opts);
   });
   startTicker(run, opts);
@@ -372,15 +539,37 @@ export function startUnit(cmd, { unit }, opts) {
   if (RUN && RUN.status === "running") return null;
   const run = (RUN = baseRun(cmd, opts));
   const ex = opts.execFileImpl ?? execFile;
-  const sysctl = (args) => new Promise((resolve) =>
-    ex("systemctl", ["--user", ...args], { timeout: 15_000, encoding: "utf8" }, (err, out = "") =>
-      resolve({ code: err ? (typeof err.code === "number" ? err.code : 1) : 0, out: String(out).trim() })),
-  );
-  const journal = () => new Promise((resolve) =>
-    ex("journalctl", ["--user", "-u", unit, "-n", "15", "--no-pager", "-o", "cat"], { timeout: 15_000, encoding: "utf8" },
-      (err, out = "") => resolve(stripAnsi(String(out)).split("\n").map((l) => l.trim()).filter(Boolean))),
-  );
-  run._kill = () => { sysctl(["stop", unit]); };
+  const sysctl = (args) =>
+    new Promise((resolve) =>
+      ex(
+        "systemctl",
+        ["--user", ...args],
+        { timeout: 15_000, encoding: "utf8" },
+        (err, out = "") =>
+          resolve({
+            code: err ? (typeof err.code === "number" ? err.code : 1) : 0,
+            out: String(out).trim(),
+          }),
+      ),
+    );
+  const journal = () =>
+    new Promise((resolve) =>
+      ex(
+        "journalctl",
+        ["--user", "-u", unit, "-n", "15", "--no-pager", "-o", "cat"],
+        { timeout: 15_000, encoding: "utf8" },
+        (err, out = "") =>
+          resolve(
+            stripAnsi(String(out))
+              .split("\n")
+              .map((l) => l.trim())
+              .filter(Boolean),
+          ),
+      ),
+    );
+  run._kill = () => {
+    sysctl(["stop", unit]);
+  };
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   (async () => {
     const started = await sysctl(["start", "--no-block", unit]);
@@ -393,7 +582,9 @@ export function startUnit(cmd, { unit }, opts) {
       await wait(opts.pollMs ?? POLL_MS);
       if (run.status !== "running") return;
       const st = await sysctl(["is-active", unit]);
-      if (["activating", "active", "reloading", "deactivating"].includes(st.out)) {
+      if (
+        ["activating", "active", "reloading", "deactivating"].includes(st.out)
+      ) {
         if (Date.now() > deadline) return finish(run, "timeout", opts); // юнит НЕ убиваем
         continue;
       }
@@ -434,6 +625,7 @@ git commit -m "feat(menu): maintenance runner — process/unit mechanics with li
 ### Task 2: Экран `service.mjs` + кнопка в root + регистрация + проводка deps
 
 **Files:**
+
 - Create: `scripts/lib/menu/service.mjs`
 - Modify: `scripts/lib/menu/root.mjs:16-19` (пара Статус+Обслуживание, Закрыть в свой ряд)
 - Modify: `scripts/lib/menu/index.mjs` (import + `SCREENS.svc` + sid в комменте грамматики)
@@ -441,6 +633,7 @@ git commit -m "feat(menu): maintenance runner — process/unit mechanics with li
 - Test: `scripts/lib/menu/service.test.mjs`
 
 **Interfaces:**
+
 - Consumes (Task 1): `LOADERS, TIMEOUT_MS, currentRun, cancelRun, startProcess, startUnit, elapsed, tailText, resetForTests` из `./svc-run.mjs`.
 - Produces: экран `svc` `{parent:"r", render, on}`; вербы `c:<cmd>` (подтверждение), `go:<cmd>` (запуск), `ab` (отмена), `up` (хендофф). `<cmd>` ∈ `doc|cln|mem`.
 - Тестовые инъекции через deps: `deps.svcSpec(cmd, ctx)` — подмена командной строки; `deps.svcRun = {tickMs, timeoutMs, pollMs, execFileImpl}`.
@@ -466,31 +659,58 @@ function makeCtx({ lang = "ru", deps = {} } = {}) {
   const rendered = [];
   const tgCalls = [];
   const flows = {
-    screen: async (st, text, rows) => { st.msgId ??= 1; st._last = { text, rows }; rendered.push({ text, rows }); },
-    end: async (st, text, rows) => { st._last = { text, rows }; rendered.push({ text, rows }); },
+    screen: async (st, text, rows) => {
+      st.msgId ??= 1;
+      st._last = { text, rows };
+      rendered.push({ text, rows });
+    },
+    end: async (st, text, rows) => {
+      st._last = { text, rows };
+      rendered.push({ text, rows });
+    },
     get: () => harness.st,
     touch: () => {},
   };
   const ctx = {
-    tg: async (method, body) => { tgCalls.push({ method, body }); return { ok: true, result: {} }; },
-    deps, flows, lang,
+    tg: async (method, body) => {
+      tgCalls.push({ method, body });
+      return { ok: true, result: {} };
+    },
+    deps,
+    flows,
+    lang,
     tr: (en, ru) => (lang === "ru" ? ru : en),
     getLang: () => lang,
     btn: (text, data) => ({ text, callback_data: data }),
     backRow: () => [{ text: "‹ Назад", callback_data: "iva_menu:r:o" }],
-    show: async (st, sid) => { st.screen = sid; const v = await service.render(st, ctx); if (v) await flows.screen(st, v.text, v.rows); },
+    show: async (st, sid) => {
+      st.screen = sid;
+      const v = await service.render(st, ctx);
+      if (v) await flows.screen(st, v.text, v.rows);
+    },
   };
   const harness = { ctx, flows, rendered, tgCalls, st: null };
   return harness;
 }
 
 const newState = (over = {}) => ({
-  flow: "menu", chatId: 10, userId: "20", screen: "svc", page: 0, awaitText: null, data: {}, msgId: 1, ...over,
+  flow: "menu",
+  chatId: 10,
+  userId: "20",
+  screen: "svc",
+  page: 0,
+  awaitText: null,
+  data: {},
+  msgId: 1,
+  ...over,
 });
 
 const waitFor = async (fn, ms = 3000) => {
   const until = Date.now() + ms;
-  while (Date.now() < until) { if (fn()) return; await new Promise((r) => setTimeout(r, 10)); }
+  while (Date.now() < until) {
+    if (fn()) return;
+    await new Promise((r) => setTimeout(r, 10));
+  }
   throw new Error("waitFor timeout");
 };
 
@@ -501,7 +721,9 @@ test("svc зарегистрирован в движке, root ведёт на �
   const view = root.render(newState({ screen: "r" }), makeCtx().ctx);
   const flat = view.rows.flat();
   assert.ok(flat.some((b) => b.callback_data === "iva_menu:svc:o"));
-  const closeRow = view.rows.find((r) => r.some((b) => b.callback_data === "iva_menu:r:x"));
+  const closeRow = view.rows.find((r) =>
+    r.some((b) => b.callback_data === "iva_menu:r:x"),
+  );
   assert.equal(closeRow.length, 1);
 });
 
@@ -509,10 +731,16 @@ test("render idle: четыре команды и Назад, ru/en", async () =
   resetForTests();
   for (const lang of ["ru", "en"]) {
     const h = makeCtx({ lang });
-    const st = newState(); h.st = st;
+    const st = newState();
+    h.st = st;
     const view = await service.render(st, h.ctx);
     const data = view.rows.flat().map((b) => b.callback_data);
-    for (const cb of ["iva_menu:svc:c:doc", "iva_menu:svc:c:cln", "iva_menu:svc:c:mem", "iva_menu:svc:up"])
+    for (const cb of [
+      "iva_menu:svc:c:doc",
+      "iva_menu:svc:c:cln",
+      "iva_menu:svc:c:mem",
+      "iva_menu:svc:up",
+    ])
       assert.ok(data.includes(cb), `${lang}: ${cb}`);
     assert.match(view.text, lang === "ru" ? /Обслуживание/ : /Maintenance/);
   }
@@ -521,7 +749,8 @@ test("render idle: четыре команды и Назад, ru/en", async () =
 test("подтверждение: c:<cmd> рисует описание и ▶ go:<cmd>", async () => {
   resetForTests();
   const h = makeCtx();
-  const st = newState(); h.st = st;
+  const st = newState();
+  h.st = st;
   for (const cmd of ["doc", "cln", "mem"]) {
     await service.on("c", [cmd], st, h.ctx);
     const data = st._last.rows.flat().map((b) => b.callback_data);
@@ -533,8 +762,15 @@ test("подтверждение: c:<cmd> рисует описание и ▶ g
 test("up: хендофф в deps.handleUpdateCheck с chatId", async () => {
   resetForTests();
   let called = null;
-  const h = makeCtx({ deps: { handleUpdateCheck: (chatId) => { called = chatId; } } });
-  const st = newState(); h.st = st;
+  const h = makeCtx({
+    deps: {
+      handleUpdateCheck: (chatId) => {
+        called = chatId;
+      },
+    },
+  });
+  const st = newState();
+  h.st = st;
   await service.on("up", [], st, h.ctx);
   assert.equal(called, 10);
 });
@@ -542,12 +778,20 @@ test("up: хендофф в deps.handleUpdateCheck с chatId", async () => {
 test("go:doc: прогресс с 🟥-entity, финал ✅ с кнопкой Назад", async () => {
   resetForTests();
   const dataDir = mkdtempSync(join(tmpdir(), "iva-data-"));
-  const h = makeCtx({ deps: {
-    dataDir, root: "/nonexistent", envPath: join(dataDir, ".env"),
-    svcRun: fastRun,
-    svcSpec: () => ({ kind: "proc", argv: [process.execPath, "-e", "console.log('шаг ок')"] }),
-  }});
-  const st = newState(); h.st = st;
+  const h = makeCtx({
+    deps: {
+      dataDir,
+      root: "/nonexistent",
+      envPath: join(dataDir, ".env"),
+      svcRun: fastRun,
+      svcSpec: () => ({
+        kind: "proc",
+        argv: [process.execPath, "-e", "console.log('шаг ок')"],
+      }),
+    },
+  });
+  const st = newState();
+  h.st = st;
   await service.on("go", ["doc"], st, h.ctx);
   await waitFor(() => currentRun()?.status === "done");
   await waitFor(() => h.tgCalls.some((c) => /✅/.test(c.body.text || "")));
@@ -561,15 +805,30 @@ test("go:doc: прогресс с 🟥-entity, финал ✅ с кнопкой 
 test("go:cln: сводка парсит финальную строку cleanup", async () => {
   resetForTests();
   const dataDir = mkdtempSync(join(tmpdir(), "iva-data-"));
-  const h = makeCtx({ deps: {
-    dataDir, root: "/nonexistent", envPath: join(dataDir, ".env"),
-    svcRun: fastRun,
-    svcSpec: () => ({ kind: "proc", argv: [process.execPath, "-e",
-      "console.log('cleanup (apply): 3 file(s), 224,000,000 bytes of bug garbage removed')"] }),
-  }});
-  const st = newState(); h.st = st;
+  const h = makeCtx({
+    deps: {
+      dataDir,
+      root: "/nonexistent",
+      envPath: join(dataDir, ".env"),
+      svcRun: fastRun,
+      svcSpec: () => ({
+        kind: "proc",
+        argv: [
+          process.execPath,
+          "-e",
+          "console.log('cleanup (apply): 3 file(s), 224,000,000 bytes of bug garbage removed')",
+        ],
+      }),
+    },
+  });
+  const st = newState();
+  h.st = st;
   await service.on("go", ["cln"], st, h.ctx);
-  await waitFor(() => h.tgCalls.some((c) => /Чистка/.test(c.body.text || "") && /✅/.test(c.body.text)));
+  await waitFor(() =>
+    h.tgCalls.some(
+      (c) => /Чистка/.test(c.body.text || "") && /✅/.test(c.body.text),
+    ),
+  );
   const final = h.tgCalls.filter((c) => /✅/.test(c.body.text || "")).at(-1);
   assert.match(final.body.text, /3 файл/);
   assert.match(final.body.text, /224(\.0)? МБ/);
@@ -586,20 +845,39 @@ test("go:mem: юнит через systemctl, финал «Цикл памяти 
     if (cmd === "journalctl") return cb(null, "done\n");
     return cb(null, "");
   };
-  const h = makeCtx({ deps: { dataDir, root: "/x", envPath: join(dataDir, ".env"), svcRun: { ...fastRun, execFileImpl } } });
-  const st = newState(); h.st = st;
+  const h = makeCtx({
+    deps: {
+      dataDir,
+      root: "/x",
+      envPath: join(dataDir, ".env"),
+      svcRun: { ...fastRun, execFileImpl },
+    },
+  });
+  const st = newState();
+  h.st = st;
   await service.on("go", ["mem"], st, h.ctx);
-  await waitFor(() => h.tgCalls.some((c) => /Цикл памяти пройден/.test(c.body.text || "")));
+  await waitFor(() =>
+    h.tgCalls.some((c) => /Цикл памяти пройден/.test(c.body.text || "")),
+  );
 });
 
 test("busy-гейт: второй go при running — экран «Уже идёт», без второго процесса", async () => {
   resetForTests();
   const dataDir = mkdtempSync(join(tmpdir(), "iva-data-"));
-  const h = makeCtx({ deps: {
-    dataDir, root: "/x", envPath: join(dataDir, ".env"), svcRun: fastRun,
-    svcSpec: () => ({ kind: "proc", argv: [process.execPath, "-e", "setTimeout(()=>{}, 2000)"] }),
-  }});
-  const st = newState(); h.st = st;
+  const h = makeCtx({
+    deps: {
+      dataDir,
+      root: "/x",
+      envPath: join(dataDir, ".env"),
+      svcRun: fastRun,
+      svcSpec: () => ({
+        kind: "proc",
+        argv: [process.execPath, "-e", "setTimeout(()=>{}, 2000)"],
+      }),
+    },
+  });
+  const st = newState();
+  h.st = st;
   await service.on("go", ["doc"], st, h.ctx);
   await waitFor(() => currentRun()?.status === "running");
   const first = currentRun();
@@ -609,7 +887,9 @@ test("busy-гейт: второй go при running — экран «Уже ид
   // отмена через ab
   await service.on("ab", [], st, h.ctx);
   await waitFor(() => currentRun()?.status === "cancelled");
-  await waitFor(() => h.tgCalls.some((c) => /Прервано/.test(c.body.text || "")));
+  await waitFor(() =>
+    h.tgCalls.some((c) => /Прервано/.test(c.body.text || "")),
+  );
 });
 
 test("update-lock: занят — go:doc не стартует, текст про обновление", async () => {
@@ -617,11 +897,17 @@ test("update-lock: занят — go:doc не стартует, текст пр�
   const dataDir = mkdtempSync(join(tmpdir(), "iva-data-"));
   const lock = acquireUpdateLock(dataDir, "test-hold");
   assert.ok(lock.ok);
-  const h = makeCtx({ deps: {
-    dataDir, root: "/x", envPath: join(dataDir, ".env"), svcRun: fastRun,
-    svcSpec: () => ({ kind: "proc", argv: [process.execPath, "-e", "0"] }),
-  }});
-  const st = newState(); h.st = st;
+  const h = makeCtx({
+    deps: {
+      dataDir,
+      root: "/x",
+      envPath: join(dataDir, ".env"),
+      svcRun: fastRun,
+      svcSpec: () => ({ kind: "proc", argv: [process.execPath, "-e", "0"] }),
+    },
+  });
+  const st = newState();
+  h.st = st;
   await service.on("go", ["doc"], st, h.ctx);
   assert.equal(currentRun(), null);
   assert.match(st._last.text, /обновлени/i);
@@ -648,43 +934,66 @@ import { join } from "node:path";
 import { readEnvValues } from "../env-file.mjs";
 import { acquireUpdateLock, releaseUpdateLock } from "../update-safety.mjs";
 import {
-  LOADERS, currentRun, cancelRun, startProcess, startUnit, elapsed, tailText,
+  LOADERS,
+  currentRun,
+  cancelRun,
+  startProcess,
+  startUnit,
+  elapsed,
+  tailText,
 } from "./svc-run.mjs";
 
 const CMDS = new Set(["doc", "cln", "mem"]);
 const MEM_UNIT = "iva-memory-doctor.service";
 
-const label = (cmd, T) => ({
-  doc: T("🩺 Doctor", "🩺 Доктор"),
-  cln: T("🧹 Vault cleanup", "🧹 Чистка vault"),
-  mem: T("🌙 Night memory cycle", "🌙 Ночной цикл"),
-}[cmd]);
+const label = (cmd, T) =>
+  ({
+    doc: T("🩺 Doctor", "🩺 Доктор"),
+    cln: T("🧹 Vault cleanup", "🧹 Чистка vault"),
+    mem: T("🌙 Night memory cycle", "🌙 Ночной цикл"),
+  })[cmd];
 
-const describe = (cmd, T) => ({
-  doc: T(
-    "Diagnoses and auto-repairs the install: units, timers, port, .env, build.\nUsually 10–60 seconds (up to minutes if a rebuild is needed).",
-    "Диагностика и авто-починка инсталляции: юниты, таймеры, порт, .env, сборка.\nОбычно 10–60 секунд (до минут, если нужна пересборка).",
-  ),
-  cln: T(
-    "Streams every memory card and removes the description bloat from the 0.3.0 bug. Safe for card bodies.\nUsually under a minute; gigabyte files take longer.",
-    "Проходит по карточкам памяти стримингом и убирает раздутые description из бага 0.3.0. Тела карточек не трогает.\nОбычно меньше минуты; гигабайтные файлы — дольше.",
-  ),
-  mem: T(
-    "Runs the nightly memory doctor now, without waiting for 05:00: script sync → cleanup → enforce → graph → git push.\nUsually 1–10 minutes.",
-    "Запускает ночной цикл памяти сейчас, не дожидаясь 05:00: синк скриптов → cleanup → enforce → graph → git push.\nОбычно 1–10 минут.",
-  ),
-}[cmd]);
+const describe = (cmd, T) =>
+  ({
+    doc: T(
+      "Diagnoses and auto-repairs the install: units, timers, port, .env, build.\nUsually 10–60 seconds (up to minutes if a rebuild is needed).",
+      "Диагностика и авто-починка инсталляции: юниты, таймеры, порт, .env, сборка.\nОбычно 10–60 секунд (до минут, если нужна пересборка).",
+    ),
+    cln: T(
+      "Streams every memory card and removes the description bloat from the 0.3.0 bug. Safe for card bodies.\nUsually under a minute; gigabyte files take longer.",
+      "Проходит по карточкам памяти стримингом и убирает раздутые description из бага 0.3.0. Тела карточек не трогает.\nОбычно меньше минуты; гигабайтные файлы — дольше.",
+    ),
+    mem: T(
+      "Runs the nightly memory doctor now, without waiting for 05:00: script sync → cleanup → enforce → graph → git push.\nUsually 1–10 minutes.",
+      "Запускает ночной цикл памяти сейчас, не дожидаясь 05:00: синк скриптов → cleanup → enforce → graph → git push.\nОбычно 1–10 минут.",
+    ),
+  })[cmd];
 
 // Командные строки. deps.svcSpec — тестовая подмена (argv на быстрые node -e).
 async function commandSpec(cmd, ctx) {
   if (ctx.deps.svcSpec) return ctx.deps.svcSpec(cmd, ctx);
   const root = ctx.deps.root;
-  if (cmd === "doc") return { kind: "proc", argv: [process.execPath, join(root, "bin/iva.mjs"), "doctor"], cwd: root };
+  if (cmd === "doc")
+    return {
+      kind: "proc",
+      argv: [process.execPath, join(root, "bin/iva.mjs"), "doctor"],
+      cwd: root,
+    };
   if (cmd === "cln") {
     const env = await readEnvValues(ctx.deps.envPath);
     const rel = env.ASSISTANT_VAULT_DIR || "vault";
     const vaultDir = rel.startsWith("/") ? rel : join(root, rel);
-    return { kind: "proc", argv: ["uv", "run", ".claude/skills/autograph/scripts/cleanup.py", ".", "--apply"], cwd: vaultDir };
+    return {
+      kind: "proc",
+      argv: [
+        "uv",
+        "run",
+        ".claude/skills/autograph/scripts/cleanup.py",
+        ".",
+        "--apply",
+      ],
+      cwd: vaultDir,
+    };
   }
   return { kind: "unit", unit: MEM_UNIT };
 }
@@ -703,52 +1012,89 @@ function summaryText(run, ctx) {
   const T = ctx.tr;
   const name = label(run.cmd, T);
   const took = elapsed(run);
-  if (run.status === "cancelled") return T(`✖ Cancelled: ${name} · ${took}`, `✖ Прервано: ${name} · ${took}`);
+  if (run.status === "cancelled")
+    return T(`✖ Cancelled: ${name} · ${took}`, `✖ Прервано: ${name} · ${took}`);
   if (run.status === "timeout") {
-    if (run.cmd === "mem") return T(
-      `⏳ Still running after ${took} — check: journalctl --user -u ${MEM_UNIT}`,
-      `⏳ Всё ещё идёт (${took}) — смотри: journalctl --user -u ${MEM_UNIT}`,
+    if (run.cmd === "mem")
+      return T(
+        `⏳ Still running after ${took} — check: journalctl --user -u ${MEM_UNIT}`,
+        `⏳ Всё ещё идёт (${took}) — смотри: journalctl --user -u ${MEM_UNIT}`,
+      );
+    return T(
+      `⚠️ Timed out: ${name} · ${took}`,
+      `⚠️ Не уложился в лимит: ${name} · ${took}`,
     );
-    return T(`⚠️ Timed out: ${name} · ${took}`, `⚠️ Не уложился в лимит: ${name} · ${took}`);
   }
   const ok = run.status === "done";
   if (run.cmd === "cln" && ok) {
-    const m = run.tail.join("\n").match(/cleanup \((?:apply|dry-run)\): (\d+) file\(s\), ([\d,]+) bytes/);
+    const m = run.tail
+      .join("\n")
+      .match(/cleanup \((?:apply|dry-run)\): (\d+) file\(s\), ([\d,]+) bytes/);
     if (m) {
       const files = Number(m[1]);
       const mb = (Number(m[2].replace(/,/g, "")) / 1e6).toFixed(files ? 1 : 0);
       return files
-        ? T(`✅ Cleanup: ${files} file(s), ${mb} MB of garbage removed · ${took}`,
-            `✅ Чистка: ${files} файл(ов), ${mb} МБ мусора убрано · ${took}`)
-        : T(`✅ Cleanup: vault is clean · ${took}`, `✅ Чистка: vault чистый · ${took}`);
+        ? T(
+            `✅ Cleanup: ${files} file(s), ${mb} MB of garbage removed · ${took}`,
+            `✅ Чистка: ${files} файл(ов), ${mb} МБ мусора убрано · ${took}`,
+          )
+        : T(
+            `✅ Cleanup: vault is clean · ${took}`,
+            `✅ Чистка: vault чистый · ${took}`,
+          );
     }
   }
-  if (run.cmd === "mem" && ok) return T(`✅ Memory cycle finished in ${took}`, `✅ Цикл памяти пройден за ${took}`);
+  if (run.cmd === "mem" && ok)
+    return T(
+      `✅ Memory cycle finished in ${took}`,
+      `✅ Цикл памяти пройден за ${took}`,
+    );
   const head =
     run.cmd === "doc"
-      ? ok ? T("✅ Diagnostics passed", "✅ Диагностика пройдена") : T("⚠️ Issues found", "⚠️ Есть проблемы")
-      : ok ? T(`✅ Done: ${name}`, `✅ Готово: ${name}`) : T(`⚠️ Failed: ${name}`, `⚠️ Упало: ${name}`);
+      ? ok
+        ? T("✅ Diagnostics passed", "✅ Диагностика пройдена")
+        : T("⚠️ Issues found", "⚠️ Есть проблемы")
+      : ok
+        ? T(`✅ Done: ${name}`, `✅ Готово: ${name}`)
+        : T(`⚠️ Failed: ${name}`, `⚠️ Упало: ${name}`);
   const tail = tailText(run);
   return tail ? `${head} · ${took}\n\n${tail}` : `${head} · ${took}`;
 }
 
 function lastRunLine(run, ctx) {
   const T = ctx.tr;
-  const icon = { done: "✅", failed: "⚠️", cancelled: "✖", timeout: "⏳" }[run.status] || "•";
-  return T(`${icon} Last run: ${label(run.cmd, T)} · ${elapsed(run)}`,
-           `${icon} Последний запуск: ${label(run.cmd, T)} · ${elapsed(run)}`);
+  const icon =
+    { done: "✅", failed: "⚠️", cancelled: "✖", timeout: "⏳" }[run.status] ||
+    "•";
+  return T(
+    `${icon} Last run: ${label(run.cmd, T)} · ${elapsed(run)}`,
+    `${icon} Последний запуск: ${label(run.cmd, T)} · ${elapsed(run)}`,
+  );
 }
 
 function idleView(st, ctx) {
   const T = ctx.tr;
-  const lines = [T("🛠 Maintenance", "🛠 Обслуживание"), "", T("Diagnostics and upkeep for this install.", "Диагностика и уход за инсталляцией.")];
+  const lines = [
+    T("🛠 Maintenance", "🛠 Обслуживание"),
+    "",
+    T(
+      "Diagnostics and upkeep for this install.",
+      "Диагностика и уход за инсталляцией.",
+    ),
+  ];
   const run = currentRun();
   if (run && run.status !== "running") lines.push("", lastRunLine(run, ctx));
   return {
     text: lines.join("\n"),
     rows: [
-      [ctx.btn(label("doc", T), "iva_menu:svc:c:doc"), ctx.btn(label("cln", T), "iva_menu:svc:c:cln")],
-      [ctx.btn(label("mem", T), "iva_menu:svc:c:mem"), ctx.btn(T("🔄 Update", "🔄 Обновление"), "iva_menu:svc:up")],
+      [
+        ctx.btn(label("doc", T), "iva_menu:svc:c:doc"),
+        ctx.btn(label("cln", T), "iva_menu:svc:c:cln"),
+      ],
+      [
+        ctx.btn(label("mem", T), "iva_menu:svc:c:mem"),
+        ctx.btn(T("🔄 Update", "🔄 Обновление"), "iva_menu:svc:up"),
+      ],
       ctx.backRow("r"),
     ],
   };
@@ -760,37 +1106,68 @@ async function startCommand(cmd, st, ctx) {
   const running = currentRun();
   if (running && running.status === "running") {
     const v = progressView(running, ctx);
-    return ctx.flows.screen(st, T(`Already running:\n${v.text}`, `Уже идёт:\n${v.text}`), v.rows);
+    return ctx.flows.screen(
+      st,
+      T(`Already running:\n${v.text}`, `Уже идёт:\n${v.text}`),
+      v.rows,
+    );
   }
   // Гейт 2: идёт обновление — в репо чужим процессам нельзя (probe: взяли лок — отпустили).
   if (cmd !== "mem") {
     const lock = acquireUpdateLock(ctx.deps.dataDir, "menu-svc");
     if (!lock.ok) {
-      return ctx.flows.screen(st, T("⬆️ An update is in progress — try again after it finishes.",
-        "⬆️ Идёт обновление — попробуй после его завершения."), [ctx.backRow("r")]);
+      return ctx.flows.screen(
+        st,
+        T(
+          "⬆️ An update is in progress — try again after it finishes.",
+          "⬆️ Идёт обновление — попробуй после его завершения.",
+        ),
+        [ctx.backRow("r")],
+      );
     }
     releaseUpdateLock(lock);
   }
   const spec = await commandSpec(cmd, ctx);
   const over = ctx.deps.svcRun || {};
   const opts = {
-    tg: ctx.tg, chatId: st.chatId, messageId: st.msgId, loader: LOADERS[cmd],
-    attached: () => ctx.flows.get(st.chatId, st.userId) === st && st.screen === "svc",
+    tg: ctx.tg,
+    chatId: st.chatId,
+    messageId: st.msgId,
+    loader: LOADERS[cmd],
+    attached: () =>
+      ctx.flows.get(st.chatId, st.userId) === st && st.screen === "svc",
     progressView: (run) => progressView(run, ctx),
     onFinish: async (run) => {
       // Итог рисуем, только если юзер всё ещё на экране svc — иначе сводка ждёт в render.
-      if (!(ctx.flows.get(st.chatId, st.userId) === st && st.screen === "svc")) return;
-      await ctx.tg("editMessageText", {
-        chat_id: run.chatId, message_id: run.messageId, text: summaryText(run, ctx),
-        reply_markup: { inline_keyboard: [[ctx.btn(ctx.tr("‹ Back", "‹ Назад"), "iva_menu:svc:o")]] },
-      }).catch(() => {});
+      if (!(ctx.flows.get(st.chatId, st.userId) === st && st.screen === "svc"))
+        return;
+      await ctx
+        .tg("editMessageText", {
+          chat_id: run.chatId,
+          message_id: run.messageId,
+          text: summaryText(run, ctx),
+          reply_markup: {
+            inline_keyboard: [
+              [ctx.btn(ctx.tr("‹ Back", "‹ Назад"), "iva_menu:svc:o")],
+            ],
+          },
+        })
+        .catch(() => {});
     },
     ...over,
   };
-  const run = spec.kind === "unit" ? startUnit(cmd, spec, opts) : startProcess(cmd, spec, opts);
-  if (!run) { // гонка: кто-то успел стартовать между гейтом и стартом
+  const run =
+    spec.kind === "unit"
+      ? startUnit(cmd, spec, opts)
+      : startProcess(cmd, spec, opts);
+  if (!run) {
+    // гонка: кто-то успел стартовать между гейтом и стартом
     const v = progressView(currentRun(), ctx);
-    return ctx.flows.screen(st, T(`Already running:\n${v.text}`, `Уже идёт:\n${v.text}`), v.rows);
+    return ctx.flows.screen(
+      st,
+      T(`Already running:\n${v.text}`, `Уже идёт:\n${v.text}`),
+      v.rows,
+    );
   }
 }
 
@@ -810,9 +1187,11 @@ export default {
         [ctx.btn(T("‹ Back", "‹ Назад"), "iva_menu:svc:o")],
       ]);
     }
-    if (verb === "go" && CMDS.has(args[0])) return startCommand(args[0], st, ctx);
+    if (verb === "go" && CMDS.has(args[0]))
+      return startCommand(args[0], st, ctx);
     if (verb === "ab") {
-      if (cancelRun()) return ctx.flows.screen(st, T("Stopping…", "Останавливаю…"), []);
+      if (cancelRun())
+        return ctx.flows.screen(st, T("Stopping…", "Останавливаю…"), []);
       return ctx.show(st, "svc"); // нечего отменять — перерисовать текущее состояние
     }
     if (verb === "up") return ctx.deps.handleUpdateCheck?.(st.chatId);
@@ -835,6 +1214,7 @@ export default {
 ```js
 import service from "./service.mjs";
 ```
+
 В `SCREENS` добавить `svc: service,` после `st: status,`. В комменте грамматики (строка 11) дополнить список sid: `... sk st svc`.
 
 - [ ] **Step 6: Проводка deps — `scripts/telegram-poll.mjs:663`**
@@ -869,6 +1249,7 @@ git commit -m "feat(menu): maintenance screen — doctor, vault cleanup, night m
 ### Task 3: Документация `docs/menu.md`
 
 **Files:**
+
 - Modify: `docs/menu.md` (карта + новый раздел после «Status»/таблицы применения)
 
 **Interfaces:** Consumes: имена кнопок/команд из Task 2. Produces: ничего для кода.
@@ -909,6 +1290,7 @@ git commit -m "docs(menu): maintenance section — doctor, cleanup, night cycle,
 ### Task 4: Релиз 0.3.2 — версия, CHANGELOG, пуш, деплой на этом VPS
 
 **Files:**
+
 - Modify: `package.json` (`"version": "0.3.2"`)
 - Modify: `CHANGELOG.md` (новая секция сверху)
 

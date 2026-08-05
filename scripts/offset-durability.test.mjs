@@ -29,7 +29,10 @@ test("corrupt JSON fails closed before getUpdates(-1)", async () => {
 test("ENOENT is the only first-run path and fast-forwards to the Telegram tail", async () => {
   const dir = mkdtempSync(join(tmpdir(), "iva-offset-first-run-test-"));
   const file = join(dir, "telegram-offset.json");
-  assert.deepEqual(await loadOffset({ file }), { offset: null, delivered: null });
+  assert.deepEqual(await loadOffset({ file }), {
+    offset: null,
+    delivered: null,
+  });
 
   const calls = [];
   const offset = await fastForwardOffset({
@@ -44,7 +47,9 @@ test("ENOENT is the only first-run path and fast-forwards to the Telegram tail",
 
 test("first-run fast-forward propagates Telegram and response-shape failures", async () => {
   for (const tgImpl of [
-    async () => { throw new Error("network down"); },
+    async () => {
+      throw new Error("network down");
+    },
     async () => ({ ok: false, description: "Telegram unavailable" }),
     async () => ({ ok: true, result: null }),
     async () => ({ ok: "true", result: [] }),
@@ -52,11 +57,17 @@ test("first-run fast-forward propagates Telegram and response-shape failures", a
     async () => ({ ok: true, result: [{ update_id: null }] }),
     async () => ({ ok: true, result: [{ update_id: "41" }] }),
     async () => ({ ok: true, result: [{ update_id: -1 }] }),
-    async () => ({ ok: true, result: [{ update_id: Number.MAX_SAFE_INTEGER }] }),
+    async () => ({
+      ok: true,
+      result: [{ update_id: Number.MAX_SAFE_INTEGER }],
+    }),
   ]) {
     const logs = [];
     await assert.rejects(
-      fastForwardOffset({ tgImpl, logImpl: (...args) => logs.push(args.join(" ")) }),
+      fastForwardOffset({
+        tgImpl,
+        logImpl: (...args) => logs.push(args.join(" ")),
+      }),
       /failed to fast-forward Telegram offset/u,
     );
     assert.equal(logs.length, 1);
@@ -83,7 +94,10 @@ test("saveOffset propagates a write error and never renames the cursor", async (
     }),
     /injected write failure/u,
   );
-  assert.equal(calls.some(([kind]) => kind === "rename"), false);
+  assert.equal(
+    calls.some(([kind]) => kind === "rename"),
+    false,
+  );
   assert.equal(calls[0][1], `${file}.tmp-123-write-error`);
   assert.deepEqual(calls[0][2], { encoding: "utf8", mode: 0o600, flag: "wx" });
 });
@@ -110,9 +124,15 @@ test("saveOffset publishes a private tmp file with one atomic rename", async () 
     writeFileImpl,
     renameImpl,
   });
-  assert.deepEqual(calls.map(([kind]) => kind), ["write", "rename"]);
+  assert.deepEqual(
+    calls.map(([kind]) => kind),
+    ["write", "rename"],
+  );
   assert.equal(calls[0][1], `${file}.tmp-456-atomic`);
   assert.deepEqual(calls[1], ["rename", `${file}.tmp-456-atomic`, file]);
-  assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), { offset: 42, delivered: 41 });
+  assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), {
+    offset: 42,
+    delivered: 41,
+  });
   assert.equal(statSync(file).mode & 0o777, 0o600);
 });

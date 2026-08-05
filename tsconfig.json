@@ -10,5 +10,10 @@
     "allowImportingTsExtensions": true,
     "noEmit": true
   },
-  "include": ["agent/**/*.ts", "evals/**/*.ts", "scripts/**/*.ts", ".eve/**/*.d.ts"]
+  "include": [
+    "agent/**/*.ts",
+    "evals/**/*.ts",
+    "scripts/**/*.ts",
+    ".eve/**/*.d.ts"
+  ]
 }

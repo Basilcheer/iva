@@ -16,31 +16,58 @@ function makeCtx({ lang = "ru", deps = {} } = {}) {
   const rendered = [];
   const tgCalls = [];
   const flows = {
-    screen: async (st, text, rows) => { st.msgId ??= 1; st._last = { text, rows }; rendered.push({ text, rows }); },
-    end: async (st, text, rows) => { st._last = { text, rows }; rendered.push({ text, rows }); },
+    screen: async (st, text, rows) => {
+      st.msgId ??= 1;
+      st._last = { text, rows };
+      rendered.push({ text, rows });
+    },
+    end: async (st, text, rows) => {
+      st._last = { text, rows };
+      rendered.push({ text, rows });
+    },
     get: () => harness.st,
     touch: () => {},
   };
   const ctx = {
-    tg: async (method, body) => { tgCalls.push({ method, body }); return { ok: true, result: {} }; },
-    deps, flows, lang,
+    tg: async (method, body) => {
+      tgCalls.push({ method, body });
+      return { ok: true, result: {} };
+    },
+    deps,
+    flows,
+    lang,
     tr: (en, ru) => (lang === "ru" ? ru : en),
     getLang: () => lang,
     btn: (text, data) => ({ text, callback_data: data }),
     backRow: () => [{ text: "‹ Назад", callback_data: "iva_menu:r:o" }],
-    show: async (st, sid) => { st.screen = sid; const v = await service.render(st, ctx); if (v) await flows.screen(st, v.text, v.rows); },
+    show: async (st, sid) => {
+      st.screen = sid;
+      const v = await service.render(st, ctx);
+      if (v) await flows.screen(st, v.text, v.rows);
+    },
   };
   const harness = { ctx, flows, rendered, tgCalls, st: null };
   return harness;
 }
 
 const newState = (over = {}) => ({
-  flow: "menu", chatId: 10, userId: "20", screen: "svc", page: 0, awaitText: null, data: {}, msgId: 1, ...over,
+  flow: "menu",
+  chatId: 10,
+  userId: "20",
+  screen: "svc",
+  page: 0,
+  awaitText: null,
+  data: {},
+  msgId: 1,
+  ...over,
 });
 
 const waitFor = async (fn, ms = 3000) => {
   const until = Date.now() + ms;
-  while (Date.now() < until) { if (fn()) return; await new Promise((r) => setTimeout(r, 10)); }
+  while (Date.now() < until) {
+    if (fn()) return;
+    await new Promise((r) => setTimeout(r, 10));
+  }
   throw new Error("waitFor timeout");
 };
 
@@ -51,7 +78,9 @@ test("svc зарегистрирован в движке, root ведёт на �
   const view = root.render(newState({ screen: "r" }), makeCtx().ctx);
   const flat = view.rows.flat();
   assert.ok(flat.some((b) => b.callback_data === "iva_menu:svc:o"));
-  const closeRow = view.rows.find((r) => r.some((b) => b.callback_data === "iva_menu:r:x"));
+  const closeRow = view.rows.find((r) =>
+    r.some((b) => b.callback_data === "iva_menu:r:x"),
+  );
   assert.equal(closeRow.length, 1);
 });
 
@@ -59,10 +88,16 @@ test("render idle: четыре команды и Назад, ru/en", async () =
   resetForTests();
   for (const lang of ["ru", "en"]) {
     const h = makeCtx({ lang });
-    const st = newState(); h.st = st;
+    const st = newState();
+    h.st = st;
     const view = await service.render(st, h.ctx);
     const data = view.rows.flat().map((b) => b.callback_data);
-    for (const cb of ["iva_menu:svc:c:doc", "iva_menu:svc:c:cln", "iva_menu:svc:c:mem", "iva_menu:svc:up"])
+    for (const cb of [
+      "iva_menu:svc:c:doc",
+      "iva_menu:svc:c:cln",
+      "iva_menu:svc:c:mem",
+      "iva_menu:svc:up",
+    ])
       assert.ok(data.includes(cb), `${lang}: ${cb}`);
     assert.match(view.text, lang === "ru" ? /Обслуживание/ : /Maintenance/);
   }
@@ -71,7 +106,8 @@ test("render idle: четыре команды и Назад, ru/en", async () =
 test("подтверждение: c:<cmd> рисует описание и ▶ go:<cmd>", async () => {
   resetForTests();
   const h = makeCtx();
-  const st = newState(); h.st = st;
+  const st = newState();
+  h.st = st;
   for (const cmd of ["doc", "cln", "mem"]) {
     await service.on("c", [cmd], st, h.ctx);
     const data = st._last.rows.flat().map((b) => b.callback_data);
@@ -83,8 +119,15 @@ test("подтверждение: c:<cmd> рисует описание и ▶ g
 test("up: хендофф в deps.handleUpdateCheck с chatId", async () => {
   resetForTests();
   let called = null;
-  const h = makeCtx({ deps: { handleUpdateCheck: (chatId) => { called = chatId; } } });
-  const st = newState(); h.st = st;
+  const h = makeCtx({
+    deps: {
+      handleUpdateCheck: (chatId) => {
+        called = chatId;
+      },
+    },
+  });
+  const st = newState();
+  h.st = st;
   await service.on("up", [], st, h.ctx);
   assert.equal(called, 10);
 });
@@ -95,7 +138,9 @@ test("up: хендофф в deps.handleUpdateCheck с chatId", async () => {
 test("cln: cleanup.py берётся из репо, cwd — vault", async () => {
   const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "../../..");
   const dataDir = mkdtempSync(join(tmpdir(), "iva-data-"));
-  const h = makeCtx({ deps: { root: repoRoot, envPath: join(dataDir, ".env") } });
+  const h = makeCtx({
+    deps: { root: repoRoot, envPath: join(dataDir, ".env") },
+  });
   const spec = await commandSpec("cln", h.ctx);
   assert.deepEqual(spec.argv.slice(0, 2), ["uv", "run"]);
   assert.equal(spec.argv[2], join(repoRoot, "scripts/autograph/cleanup.py"));
@@ -107,12 +152,20 @@ test("cln: cleanup.py берётся из репо, cwd — vault", async () => 
 test("go:doc: прогресс с 🟥-entity, финал ✅ с кнопкой Назад", async () => {
   resetForTests();
   const dataDir = mkdtempSync(join(tmpdir(), "iva-data-"));
-  const h = makeCtx({ deps: {
-    dataDir, root: "/nonexistent", envPath: join(dataDir, ".env"),
-    svcRun: fastRun,
-    svcSpec: () => ({ kind: "proc", argv: [process.execPath, "-e", "console.log('шаг ок')"] }),
-  }});
-  const st = newState(); h.st = st;
+  const h = makeCtx({
+    deps: {
+      dataDir,
+      root: "/nonexistent",
+      envPath: join(dataDir, ".env"),
+      svcRun: fastRun,
+      svcSpec: () => ({
+        kind: "proc",
+        argv: [process.execPath, "-e", "console.log('шаг ок')"],
+      }),
+    },
+  });
+  const st = newState();
+  h.st = st;
   await service.on("go", ["doc"], st, h.ctx);
   await waitFor(() => currentRun()?.status === "done");
   await waitFor(() => h.tgCalls.some((c) => /✅/.test(c.body.text || "")));
@@ -126,16 +179,31 @@ test("go:doc: прогресс с 🟥-entity, финал ✅ с кнопкой 
 test("go:cln: сводка парсит финальную строку cleanup", async () => {
   resetForTests();
   const dataDir = mkdtempSync(join(tmpdir(), "iva-data-"));
-  const h = makeCtx({ deps: {
-    dataDir, root: "/nonexistent", envPath: join(dataDir, ".env"),
-    svcRun: fastRun,
-    // Строка ДОСЛОВНО как её печатает scripts/autograph/cleanup.py (режим — applied).
-    svcSpec: () => ({ kind: "proc", argv: [process.execPath, "-e",
-      "console.log('cleanup (applied): 3 file(s), 224,000,000 bytes of bug garbage')"] }),
-  }});
-  const st = newState(); h.st = st;
+  const h = makeCtx({
+    deps: {
+      dataDir,
+      root: "/nonexistent",
+      envPath: join(dataDir, ".env"),
+      svcRun: fastRun,
+      // Строка ДОСЛОВНО как её печатает scripts/autograph/cleanup.py (режим — applied).
+      svcSpec: () => ({
+        kind: "proc",
+        argv: [
+          process.execPath,
+          "-e",
+          "console.log('cleanup (applied): 3 file(s), 224,000,000 bytes of bug garbage')",
+        ],
+      }),
+    },
+  });
+  const st = newState();
+  h.st = st;
   await service.on("go", ["cln"], st, h.ctx);
-  await waitFor(() => h.tgCalls.some((c) => /Чистка/.test(c.body.text || "") && /✅/.test(c.body.text)));
+  await waitFor(() =>
+    h.tgCalls.some(
+      (c) => /Чистка/.test(c.body.text || "") && /✅/.test(c.body.text),
+    ),
+  );
   const final = h.tgCalls.filter((c) => /✅/.test(c.body.text || "")).at(-1);
   assert.match(final.body.text, /3 файл/);
   assert.match(final.body.text, /224(\.0)? МБ/);
@@ -152,20 +220,39 @@ test("go:mem: юнит через systemctl, финал «Цикл памяти 
     if (cmd === "journalctl") return cb(null, "done\n");
     return cb(null, "");
   };
-  const h = makeCtx({ deps: { dataDir, root: "/x", envPath: join(dataDir, ".env"), svcRun: { ...fastRun, execFileImpl } } });
-  const st = newState(); h.st = st;
+  const h = makeCtx({
+    deps: {
+      dataDir,
+      root: "/x",
+      envPath: join(dataDir, ".env"),
+      svcRun: { ...fastRun, execFileImpl },
+    },
+  });
+  const st = newState();
+  h.st = st;
   await service.on("go", ["mem"], st, h.ctx);
-  await waitFor(() => h.tgCalls.some((c) => /Цикл памяти пройден/.test(c.body.text || "")));
+  await waitFor(() =>
+    h.tgCalls.some((c) => /Цикл памяти пройден/.test(c.body.text || "")),
+  );
 });
 
 test("busy-гейт: второй go при running — экран «Уже идёт», без второго процесса", async () => {
   resetForTests();
   const dataDir = mkdtempSync(join(tmpdir(), "iva-data-"));
-  const h = makeCtx({ deps: {
-    dataDir, root: "/x", envPath: join(dataDir, ".env"), svcRun: fastRun,
-    svcSpec: () => ({ kind: "proc", argv: [process.execPath, "-e", "setTimeout(()=>{}, 2000)"] }),
-  }});
-  const st = newState(); h.st = st;
+  const h = makeCtx({
+    deps: {
+      dataDir,
+      root: "/x",
+      envPath: join(dataDir, ".env"),
+      svcRun: fastRun,
+      svcSpec: () => ({
+        kind: "proc",
+        argv: [process.execPath, "-e", "setTimeout(()=>{}, 2000)"],
+      }),
+    },
+  });
+  const st = newState();
+  h.st = st;
   await service.on("go", ["doc"], st, h.ctx);
   await waitFor(() => currentRun()?.status === "running");
   const first = currentRun();
@@ -175,7 +262,9 @@ test("busy-гейт: второй go при running — экран «Уже ид
   // отмена через ab
   await service.on("ab", [], st, h.ctx);
   await waitFor(() => currentRun()?.status === "cancelled");
-  await waitFor(() => h.tgCalls.some((c) => /Прервано/.test(c.body.text || "")));
+  await waitFor(() =>
+    h.tgCalls.some((c) => /Прервано/.test(c.body.text || "")),
+  );
 });
 
 test("update-lock: занят — go:doc не стартует, текст про обновление", async () => {
@@ -183,11 +272,17 @@ test("update-lock: занят — go:doc не стартует, текст пр�
   const dataDir = mkdtempSync(join(tmpdir(), "iva-data-"));
   const lock = acquireUpdateLock(dataDir, "test-hold");
   assert.ok(lock.ok);
-  const h = makeCtx({ deps: {
-    dataDir, root: "/x", envPath: join(dataDir, ".env"), svcRun: fastRun,
-    svcSpec: () => ({ kind: "proc", argv: [process.execPath, "-e", "0"] }),
-  }});
-  const st = newState(); h.st = st;
+  const h = makeCtx({
+    deps: {
+      dataDir,
+      root: "/x",
+      envPath: join(dataDir, ".env"),
+      svcRun: fastRun,
+      svcSpec: () => ({ kind: "proc", argv: [process.execPath, "-e", "0"] }),
+    },
+  });
+  const st = newState();
+  h.st = st;
   await service.on("go", ["doc"], st, h.ctx);
   assert.equal(currentRun(), null);
   assert.match(st._last.text, /обновлени/i);

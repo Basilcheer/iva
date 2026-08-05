@@ -23,12 +23,14 @@ Full documentation for `schema.json` — generated per vault, never shipped with
 ## node_types
 
 Map of type name → definition. Each type has:
+
 - `description` — what this type represents
 - `required` — fields that must be present (e.g. `["description", "tags", "status"]`)
 - `status` — valid status enum values for this type
 - Optional: `priority`, `potential`, `source` — additional enum fields
 
 Example:
+
 ```json
 "project": {
   "description": "Project with deliverables",
@@ -47,11 +49,11 @@ Autograph keeps **one card per subject**: when a fact changes, the existing card
 updated in place rather than duplicated (see `references/update-in-place.md`). Three
 frontmatter/body conventions support this:
 
-| Field / section | Meaning |
-|-----------------|---------|
-| `updated: YYYY-MM-DD` | Date a Compiled-Truth value last changed. Recency key for dedup merges (`updated > created > last_accessed`). |
-| `status: superseded` | Whole card retired. Must be present in the type's status enum. |
-| `superseded_by: [[card]]` | Pointer to the replacement card. |
+| Field / section             | Meaning                                                                                                                  |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `updated: YYYY-MM-DD`       | Date a Compiled-Truth value last changed. Recency key for dedup merges (`updated > created > last_accessed`).            |
+| `status: superseded`        | Whole card retired. Must be present in the type's status enum.                                                           |
+| `superseded_by: [[card]]`   | Pointer to the replacement card.                                                                                         |
 | `## History` (body section) | Append-only log of old values, one dated line each: `- 2026-03→2026-06 · company: TDI Group`. Never edited or reordered. |
 
 Optional: `confidence: EXTRACTED | INFERRED | AMBIGUOUS` — certainty of a captured fact.
@@ -78,13 +80,13 @@ Example: `"projects/": "work"` — any file under `projects/` gets `domain: work
 
 Controls relevance decay over time.
 
-| Parameter | Description | Default |
-|-----------|-------------|---------|
-| rate | Relevance loss per day | 0.015 |
-| floor | Minimum relevance | 0.1 |
-| tiers.active | Days threshold for "active" | 7 |
-| tiers.warm | Days threshold for "warm" | 21 |
-| tiers.cold | Days threshold for "cold" | 60 |
+| Parameter    | Description                 | Default |
+| ------------ | --------------------------- | ------- |
+| rate         | Relevance loss per day      | 0.015   |
+| floor        | Minimum relevance           | 0.1     |
+| tiers.active | Days threshold for "active" | 7       |
+| tiers.warm   | Days threshold for "warm"   | 21      |
+| tiers.cold   | Days threshold for "cold"   | 60      |
 
 Formula: `relevance = max(floor, 1.0 - rate × days_since_access)`
 
@@ -130,12 +132,12 @@ List of tags to skip during processing (e.g. bulk import artifacts).
 
 ## System Fields (auto-managed by engine.py)
 
-| Field | Values | Description |
-|-------|--------|-------------|
-| tier | core, active, warm, cold, archive | Decay tier |
-| relevance | 0.0–1.0 | Decay score |
-| last_accessed | ISO date | Last touched |
-| domain | (from domain_inference) | Auto-inferred from path |
+| Field         | Values                            | Description             |
+| ------------- | --------------------------------- | ----------------------- |
+| tier          | core, active, warm, cold, archive | Decay tier              |
+| relevance     | 0.0–1.0                           | Decay score             |
+| last_accessed | ISO date                          | Last touched            |
+| domain        | (from domain_inference)           | Auto-inferred from path |
 
 ## Generating Your Schema
 

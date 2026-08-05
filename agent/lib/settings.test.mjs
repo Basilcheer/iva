@@ -1,7 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -46,8 +52,14 @@ test("writeSettings persists and returns the merged object", () => {
 test("writeSettings merges over existing keys", () => {
   reset();
   writeSettings({ language: "ru" });
-  assert.deepEqual(writeSettings({ theme: "dark" }), { language: "ru", theme: "dark" });
-  assert.deepEqual(writeSettings({ language: "en" }), { language: "en", theme: "dark" });
+  assert.deepEqual(writeSettings({ theme: "dark" }), {
+    language: "ru",
+    theme: "dark",
+  });
+  assert.deepEqual(writeSettings({ language: "en" }), {
+    language: "en",
+    theme: "dark",
+  });
 });
 
 test("a null patch value deletes the key", () => {
@@ -68,7 +80,9 @@ test("the write is atomic: no leftover .tmp and the file is valid JSON", () => {
   writeSettings({ language: "ru" });
   const leftovers = readdirSync(DATA_DIR).filter((f) => f.endsWith(".tmp"));
   assert.deepEqual(leftovers, []);
-  assert.deepEqual(JSON.parse(readFileSync(SETTINGS_FILE, "utf8")), { language: "ru" });
+  assert.deepEqual(JSON.parse(readFileSync(SETTINGS_FILE, "utf8")), {
+    language: "ru",
+  });
 });
 
 test("data dir defaults to <cwd>/data for a relative ASSISTANT_DATA_DIR", () => {
@@ -76,10 +90,15 @@ test("data dir defaults to <cwd>/data for a relative ASSISTANT_DATA_DIR", () => 
   // в отдельном процессе с cwd=temp и без ASSISTANT_DATA_DIR (дефолт "data").
   const cwd = mkdtempSync(join(tmpdir(), "iva-settings-cwd-"));
   const url = pathToFileURL(join(import.meta.dirname, "settings.mjs")).href;
-  const code = 'const { writeSettings } = await import(process.env.__URL); writeSettings({ language: "en" });';
+  const code =
+    'const { writeSettings } = await import(process.env.__URL); writeSettings({ language: "en" });';
   const env = { ...process.env, __URL: url };
   delete env.ASSISTANT_DATA_DIR;
-  execFileSync(process.execPath, ["--input-type=module", "-e", code], { env, cwd, encoding: "utf8" });
+  execFileSync(process.execPath, ["--input-type=module", "-e", code], {
+    env,
+    cwd,
+    encoding: "utf8",
+  });
   assert.deepEqual(
     JSON.parse(readFileSync(join(cwd, "data", "settings.json"), "utf8")),
     { language: "en" },

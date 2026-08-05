@@ -35,12 +35,26 @@ export function readAuth(dataDir?: string): CodexAuth | null;
 export function writeAuth(auth: CodexAuth, dataDir?: string): void;
 export function parseJwt(jwt: string): Record<string, unknown>;
 export function jwtExp(jwt: string): number;
-export function accountFromIdToken(idToken: string): { accountId: string | null; planType: string | null };
-export function getAccessToken(dataDir?: string): Promise<{ accessToken: string; accountId: string | null }>;
-export function codexAuthHeaders(dataDir?: string): Promise<Record<string, string>>;
+export function accountFromIdToken(idToken: string): {
+  accountId: string | null;
+  planType: string | null;
+};
+export function getAccessToken(
+  dataDir?: string,
+): Promise<{ accessToken: string; accountId: string | null }>;
+export function codexAuthHeaders(
+  dataDir?: string,
+): Promise<Record<string, string>>;
 export function runDeviceCodeLogin(opts?: LoginOptions): Promise<CodexAuth>;
 export function runBrowserLogin(opts?: LoginOptions): Promise<CodexAuth>;
-export function login(mode?: "device" | "browser", opts?: LoginOptions): Promise<CodexAuth>;
-export function listCodexModels(opts?: CodexModelCatalogOptions): Promise<string[]>;
+export function login(
+  mode?: "device" | "browser",
+  opts?: LoginOptions,
+): Promise<CodexAuth>;
+export function listCodexModels(
+  opts?: CodexModelCatalogOptions,
+): Promise<string[]>;
 export function parseCodexModelCatalog(json: unknown): CodexModelCatalogEntry[];
-export function listCodexModelCatalog(opts?: CodexModelCatalogOptions): Promise<CodexModelCatalogEntry[]>;
+export function listCodexModelCatalog(
+  opts?: CodexModelCatalogOptions,
+): Promise<CodexModelCatalogEntry[]>;

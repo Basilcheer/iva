@@ -28,34 +28,51 @@ import { join } from "node:path";
 // authored-modules eve, откуда «две папки вверх» указывают в node_modules/.cache.
 // Оба процесса (iva.service и мост) стартуют из одного WorkingDirectory (корень установки Ивы).
 const DATA_DIR_RAW = process.env.ASSISTANT_DATA_DIR ?? "data";
-const DATA_DIR = DATA_DIR_RAW.startsWith("/") ? DATA_DIR_RAW : join(process.cwd(), DATA_DIR_RAW);
+const DATA_DIR = DATA_DIR_RAW.startsWith("/")
+  ? DATA_DIR_RAW
+  : join(process.cwd(), DATA_DIR_RAW);
 const LEGACY_STATUS_FILE = join(DATA_DIR, "run-status.json");
 const STATUS_DIR = join(DATA_DIR, "run-status.d");
 const positiveMs = (raw, fallback) => {
   const value = Number(raw);
   return Number.isFinite(value) && value > 0 ? value : fallback;
 };
-const LOCK_STALE_MS = positiveMs(process.env.IVA_RUN_STATUS_LOCK_STALE_MS, 30_000);
-const LOCK_TIMEOUT_MS = positiveMs(process.env.IVA_RUN_STATUS_LOCK_TIMEOUT_MS, 5_000);
+const LOCK_STALE_MS = positiveMs(
+  process.env.IVA_RUN_STATUS_LOCK_STALE_MS,
+  30_000,
+);
+const LOCK_TIMEOUT_MS = positiveMs(
+  process.env.IVA_RUN_STATUS_LOCK_TIMEOUT_MS,
+  5_000,
+);
 const LOCK_RETRY_MS = 10;
 const lockWaitBuffer = new Int32Array(new SharedArrayBuffer(4));
 
 // Ход длиннее этого считаем зависшим/осиротевшим (упал без terminal-события):
 // мост перестаёт буферизовать, чтобы сообщения не копились вечно.
-export const RUN_STALE_MS = Number(process.env.IVA_RUN_STALE_MS ?? 30 * 60 * 1000);
+export const RUN_STALE_MS = Number(
+  process.env.IVA_RUN_STALE_MS ?? 30 * 60 * 1000,
+);
 
 export function chatKeyOf(chatId, threadId) {
   return `${chatId}:${threadId ?? ""}`;
 }
 
 function statusFileOf(chatKey) {
-  return join(STATUS_DIR, `${Buffer.from(chatKey, "utf8").toString("base64url")}.json`);
+  return join(
+    STATUS_DIR,
+    `${Buffer.from(chatKey, "utf8").toString("base64url")}.json`,
+  );
 }
 
 function readObject(file) {
   try {
     const parsed = JSON.parse(readFileSync(file, "utf8"));
-    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    if (
+      typeof parsed !== "object" ||
+      parsed === null ||
+      Array.isArray(parsed)
+    ) {
       const error = new Error(`${file} does not contain a JSON object`);
       error.code = "ERR_RUN_STATUS_SCHEMA";
       throw error;
@@ -68,7 +85,9 @@ function readObject(file) {
 }
 
 function isCorruptStatus(error) {
-  return error instanceof SyntaxError || error?.code === "ERR_RUN_STATUS_SCHEMA";
+  return (
+    error instanceof SyntaxError || error?.code === "ERR_RUN_STATUS_SCHEMA"
+  );
 }
 
 function readLegacy(chatKey) {
@@ -131,7 +150,8 @@ function acquireChatLock(file) {
         if (statError?.code !== "ENOENT") throw statError;
         continue;
       }
-      if (Date.now() >= deadline) throw new Error(`run-status lock timeout: ${lock}`);
+      if (Date.now() >= deadline)
+        throw new Error(`run-status lock timeout: ${lock}`);
       Atomics.wait(lockWaitBuffer, 0, 0, LOCK_RETRY_MS);
     }
   }
@@ -205,7 +225,9 @@ function updateChatStatus(chatKey, patch, expected) {
     const prev = readCurrent(chatKey) ?? {};
     if (
       expected &&
-      Object.entries(expected).some(([key, value]) => !Object.is(prev[key], value))
+      Object.entries(expected).some(
+        ([key, value]) => !Object.is(prev[key], value),
+      )
     ) {
       return null;
     }
@@ -219,7 +241,8 @@ function updateChatStatus(chatKey, patch, expected) {
       generation: previousGeneration + 1,
       updatedAt: Date.now(),
     };
-    for (const key of Object.keys(next)) if (next[key] === null) delete next[key];
+    for (const key of Object.keys(next))
+      if (next[key] === null) delete next[key];
     writeCurrent(file, next);
     return next;
   } finally {

@@ -9,7 +9,12 @@ import {
   shouldQueueBusyUpdate,
   TELEGRAM_QUEUE_FATAL_DURABILITY,
 } from "../lib/telegram-queue.mjs";
-import { getChatStatus, isRunning, RUN_STALE_MS, setChatStatusIf } from "#lib/run-status.mjs";
+import {
+  getChatStatus,
+  isRunning,
+  RUN_STALE_MS,
+  setChatStatusIf,
+} from "#lib/run-status.mjs";
 import { tr } from "#lib/i18n.mjs";
 import {
   ACCEPTANCE_ROUTE,
@@ -75,7 +80,10 @@ async function deliverDirectUpdate(
         now,
       });
     } catch (error) {
-      logImpl(`direct delivery status cleanup failed for ${key}:`, error.message);
+      logImpl(
+        `direct delivery status cleanup failed for ${key}:`,
+        error.message,
+      );
     }
 
     if (failureNotified) return;
@@ -114,7 +122,8 @@ export async function routeMessageUpdate(
     queueCountImpl = queueCount,
     replyToBotImpl = isReplyToBot,
     shouldQueueImpl = shouldQueueBusyUpdate,
-    enqueueImpl = (key, candidate) => enqueueQueueFile(QUEUE_FILE, key, candidate),
+    enqueueImpl = (key, candidate) =>
+      enqueueQueueFile(QUEUE_FILE, key, candidate),
     acknowledgeImpl = acknowledgeQueued,
     deliverImpl = pacedDeliver,
     statusImpl = getChatStatus,
@@ -134,12 +143,16 @@ export async function routeMessageUpdate(
     const mustQueue =
       runningImpl(key) || inFlight.has(key) || queueCountImpl(queue, key) > 0;
     if (mustQueue) {
-      if (!shouldQueueImpl(update, { allowedUserIds, botUsername })) return "dropped";
+      if (!shouldQueueImpl(update, { allowedUserIds, botUsername }))
+        return "dropped";
       let queued;
       try {
         queued = await enqueueImpl(key, update);
       } catch (error) {
-        logImpl(`queue enqueue failed for update ${update.update_id}:`, error.message);
+        logImpl(
+          `queue enqueue failed for update ${update.update_id}:`,
+          error.message,
+        );
         return "enqueue-failed";
       }
       await acknowledgeImpl(update, queued.count);
@@ -172,7 +185,8 @@ export async function drainReadyQueueHeads({
       retry: false,
       timeoutMs,
     }),
-  acknowledgeImpl = (key, updateId) => acknowledgeQueueHead(QUEUE_FILE, key, updateId),
+  acknowledgeImpl = (key, updateId) =>
+    acknowledgeQueueHead(QUEUE_FILE, key, updateId),
   legacyAllowedUserIds = ALLOWED,
   now = Date.now,
   settleUntil = queueSettleUntil,
@@ -205,7 +219,11 @@ export async function drainReadyQueueHeads({
     if (phase?.state === "delivering") continue;
     if (phase?.state === "awaiting-running") {
       if (running) {
-        inFlight.set(key, { ...phase, state: "running", generation: currentGeneration });
+        inFlight.set(key, {
+          ...phase,
+          state: "running",
+          generation: currentGeneration,
+        });
         continue;
       }
       const generationAdvanced = currentGeneration > phase.baselineGeneration;
@@ -223,12 +241,17 @@ export async function drainReadyQueueHeads({
     const update = materializeQueueItem(key, item, { legacyAllowedUserIds });
     if (!update) {
       if (!undrainableLegacyLogged.has(key)) {
-        log(`queued legacy messages for ${key} cannot be replayed because their author is not verifiable`);
+        log(
+          `queued legacy messages for ${key} cannot be replayed because their author is not verifiable`,
+        );
         undrainableLegacyLogged.add(key);
       }
       continue;
     }
-    const timeoutMs = Math.max(1, Math.min(deliveryTimeoutMs, deadline - now()));
+    const timeoutMs = Math.max(
+      1,
+      Math.min(deliveryTimeoutMs, deadline - now()),
+    );
     lastAttempted = key;
     const baselineGeneration = currentGeneration;
     inFlight.set(key, { state: "delivering", baselineGeneration });
@@ -275,7 +298,10 @@ export async function drainReadyQueueHeads({
         rotationState.afterKey = null;
         throw error;
       }
-      log(`queued update ${item.updateId} ack failed; head retained or restored:`, error.message);
+      log(
+        `queued update ${item.updateId} ack failed; head retained or restored:`,
+        error.message,
+      );
     }
   }
   rotationState.afterKey = exhausted ? lastAttempted : null;

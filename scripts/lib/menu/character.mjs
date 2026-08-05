@@ -7,7 +7,13 @@
 // ответов), поэтому смена формулировок/архетипов не трогает экран.
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { QUIZ, QUIZ_ANSWERS, scoreQuiz, quizSummary, personaMarkdown } from "../quiz.mjs";
+import {
+  QUIZ,
+  QUIZ_ANSWERS,
+  scoreQuiz,
+  quizSummary,
+  personaMarkdown,
+} from "../quiz.mjs";
 
 const SID = "chr";
 const PARENT = "r";
@@ -28,13 +34,22 @@ function renderQuestion(st, ctx) {
   const q = QUIZ[i];
   const a = QUIZ_ANSWERS[lang] ?? QUIZ_ANSWERS.ru;
   const text = [
-    ctx.tr(`🎭 Character · ${i + 1}/${QUIZ.length}`, `🎭 Характер · ${i + 1}/${QUIZ.length}`),
+    ctx.tr(
+      `🎭 Character · ${i + 1}/${QUIZ.length}`,
+      `🎭 Характер · ${i + 1}/${QUIZ.length}`,
+    ),
     "",
     q.text[lang] ?? q.text.ru,
   ].join("\n");
   const rows = [
-    [ctx.btn(a[0], `iva_menu:${SID}:q:${i}:0`), ctx.btn(a[1], `iva_menu:${SID}:q:${i}:1`)],
-    [ctx.btn(a[2], `iva_menu:${SID}:q:${i}:2`), ctx.btn(a[3], `iva_menu:${SID}:q:${i}:3`)],
+    [
+      ctx.btn(a[0], `iva_menu:${SID}:q:${i}:0`),
+      ctx.btn(a[1], `iva_menu:${SID}:q:${i}:1`),
+    ],
+    [
+      ctx.btn(a[2], `iva_menu:${SID}:q:${i}:2`),
+      ctx.btn(a[3], `iva_menu:${SID}:q:${i}:3`),
+    ],
     ctx.backRow(PARENT),
   ];
   return ctx.flows.screen(st, text, rows);
@@ -68,7 +83,10 @@ export default {
     ].join("\n");
     return {
       text,
-      rows: [[ctx.btn(ctx.tr("Start", "Начать"), `iva_menu:${SID}:go`)], ctx.backRow(PARENT)],
+      rows: [
+        [ctx.btn(ctx.tr("Start", "Начать"), `iva_menu:${SID}:go`)],
+        ctx.backRow(PARENT),
+      ],
     };
   },
 
@@ -83,7 +101,9 @@ export default {
       // Гард от протухшего даблтапа: принимаем ответ только на ТЕКУЩИЙ вопрос. Иначе просто
       // перерисовываем актуальное состояние (или интро, если квиз не идёт).
       if (!st.data.quiz || i !== st.data.quiz.i) {
-        return st.data.quiz && st.data.quiz.code === null ? renderQuestion(st, ctx) : ctx.show(st, SID);
+        return st.data.quiz && st.data.quiz.code === null
+          ? renderQuestion(st, ctx)
+          : ctx.show(st, SID);
       }
       st.data.quiz.answers[i] = v;
       st.data.quiz.i = i + 1;
@@ -98,11 +118,18 @@ export default {
       const dir = vaultDir();
       try {
         await mkdir(dir, { recursive: true });
-        await writeFile(join(dir, "PERSONA.md"), personaMarkdown(code, ctx.getLang()), "utf8");
+        await writeFile(
+          join(dir, "PERSONA.md"),
+          personaMarkdown(code, ctx.getLang()),
+          "utf8",
+        );
       } catch (e) {
         return ctx.flows.screen(
           st,
-          ctx.tr(`Couldn't write the character file: ${e.message}`, `Не удалось записать файл характера: ${e.message}`),
+          ctx.tr(
+            `Couldn't write the character file: ${e.message}`,
+            `Не удалось записать файл характера: ${e.message}`,
+          ),
           [ctx.backRow(PARENT)],
         );
       }

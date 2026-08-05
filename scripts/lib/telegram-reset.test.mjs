@@ -16,9 +16,13 @@ test("stored Eve token wins for groups and forum topics", () => {
     },
   };
   assert.equal(
-    continuationTokenForControl(update, {
-      continuationToken: "-1001:77:42",
-    }, "777"),
+    continuationTokenForControl(
+      update,
+      {
+        continuationToken: "-1001:77:42",
+      },
+      "777",
+    ),
     "-1001:77:42",
   );
 });
@@ -41,49 +45,61 @@ test("group upgrade fallback requires a reply to Iva", () => {
   };
   assert.equal(continuationTokenForControl({ message: base }, null), null);
   assert.equal(
-    continuationTokenForControl({
-      message: {
-        ...base,
-        reply_to_message: {
-          message_id: 55,
-          from: { id: 777, is_bot: true },
+    continuationTokenForControl(
+      {
+        message: {
+          ...base,
+          reply_to_message: {
+            message_id: 55,
+            from: { id: 777, is_bot: true },
+          },
         },
       },
-    }, null, "777"),
+      null,
+      "777",
+    ),
     "-1001:7:55",
   );
 });
 
 test("explicit Iva reply wins over the last topic token", () => {
-  const token = continuationTokenForControl({
-    message: {
-      chat: { id: -1001, type: "supergroup" },
-      message_thread_id: 7,
-      message_id: 91,
-      reply_to_message: {
-        message_id: 55,
-        from: { id: 777, is_bot: true },
-      },
-    },
-  }, {
-    continuationToken: "-1001:7:42",
-  }, "777");
-  assert.equal(token, "-1001:7:55");
-});
-
-test("reply to a different bot never selects the stored Iva conversation", () => {
-  assert.equal(
-    continuationTokenForControl({
+  const token = continuationTokenForControl(
+    {
       message: {
         chat: { id: -1001, type: "supergroup" },
         message_thread_id: 7,
         message_id: 91,
         reply_to_message: {
           message_id: 55,
-          from: { id: 888, is_bot: true },
+          from: { id: 777, is_bot: true },
         },
       },
-    }, { continuationToken: "-1001:7:42" }, "777"),
+    },
+    {
+      continuationToken: "-1001:7:42",
+    },
+    "777",
+  );
+  assert.equal(token, "-1001:7:55");
+});
+
+test("reply to a different bot never selects the stored Iva conversation", () => {
+  assert.equal(
+    continuationTokenForControl(
+      {
+        message: {
+          chat: { id: -1001, type: "supergroup" },
+          message_thread_id: 7,
+          message_id: 91,
+          reply_to_message: {
+            message_id: 55,
+            from: { id: 888, is_bot: true },
+          },
+        },
+      },
+      { continuationToken: "-1001:7:42" },
+      "777",
+    ),
     null,
   );
 });
@@ -155,10 +171,12 @@ test("Telegram reset route authenticates and forwards the exact raw token", asyn
     status: "reset",
     previousSessionId: "session-1",
   });
-  assert.deepEqual(calls, [{
-    continuationToken: "-1001:7:55",
-    reason: "Telegram recovery command",
-  }]);
+  assert.deepEqual(calls, [
+    {
+      continuationToken: "-1001:7:55",
+      reason: "Telegram recovery command",
+    },
+  ]);
 });
 
 test("Telegram reset route rejects bad auth and bad input before reset", async () => {
@@ -194,23 +212,41 @@ test("namespaced stored token is normalized before reset (#110)", () => {
   // Реальная запись с прода: обработчики событий eve отдают токен с именем канала
   // впереди, и он попадал в data/run-status.d как есть. Reset-роут клеил "telegram:"
   // второй раз → no_active_session, мост печатал «контекст очищен» вхолостую.
-  const privateUpdate = { message: { chat: { id: 7091451031, type: "private" }, message_id: 5 } };
+  const privateUpdate = {
+    message: { chat: { id: 7091451031, type: "private" }, message_id: 5 },
+  };
   assert.equal(
-    continuationTokenForControl(privateUpdate, { continuationToken: "telegram:7091451031::" }, "777"),
+    continuationTokenForControl(
+      privateUpdate,
+      { continuationToken: "telegram:7091451031::" },
+      "777",
+    ),
     "7091451031::",
   );
 
   const groupUpdate = {
-    message: { chat: { id: -1001, type: "supergroup" }, message_thread_id: 77, message_id: 91 },
+    message: {
+      chat: { id: -1001, type: "supergroup" },
+      message_thread_id: 77,
+      message_id: 91,
+    },
   };
   assert.equal(
-    continuationTokenForControl(groupUpdate, { continuationToken: "telegram:-1001:77:42" }, "777"),
+    continuationTokenForControl(
+      groupUpdate,
+      { continuationToken: "telegram:-1001:77:42" },
+      "777",
+    ),
     "-1001:77:42",
   );
 
   const callbackOnly = { callback_query: { id: "cb" } };
   assert.equal(
-    continuationTokenForControl(callbackOnly, { continuationToken: "telegram:7091451031::" }, "777"),
+    continuationTokenForControl(
+      callbackOnly,
+      { continuationToken: "telegram:7091451031::" },
+      "777",
+    ),
     "7091451031::",
   );
 });
@@ -233,10 +269,16 @@ test("normalization strips the channel prefix and nothing else", () => {
   // проход, а не превращаться в "telegram:…" от повторной нормализации.
   const warnings = [];
   assert.equal(
-    toChannelLocalToken("telegram:telegram:7091451031::", { warn: (m) => warnings.push(m) }),
+    toChannelLocalToken("telegram:telegram:7091451031::", {
+      warn: (m) => warnings.push(m),
+    }),
     "telegram:7091451031::",
   );
-  assert.equal(warnings.length, 1, "нераспознанная форма обязана попасть в журнал");
+  assert.equal(
+    warnings.length,
+    1,
+    "нераспознанная форма обязана попасть в журнал",
+  );
 });
 
 test("an unexpected token shape is reported instead of silently passed on", () => {
@@ -245,15 +287,27 @@ test("an unexpected token shape is reported instead of silently passed on", () =
   const warnings = [];
   const warn = (message) => warnings.push(message);
 
-  assert.equal(toChannelLocalToken("slack:C123:456", { warn }), "slack:C123:456");
-  assert.equal(toChannelLocalToken("telegram:not-a-chat-id", { warn }), "not-a-chat-id");
+  assert.equal(
+    toChannelLocalToken("slack:C123:456", { warn }),
+    "slack:C123:456",
+  );
+  assert.equal(
+    toChannelLocalToken("telegram:not-a-chat-id", { warn }),
+    "not-a-chat-id",
+  );
   assert.equal(warnings.length, 2);
   assert.match(warnings[0], /unexpected shape: "slack:C123:456"/);
   assert.match(warnings[1], /unexpected shape: "telegram:not-a-chat-id"/);
 
   // Нормальные токены молчат, включая групповые с минусом и пустое значение.
   const quiet = [];
-  for (const token of ["7091451031::", "-1001:77:42", "telegram:-1001:77:42", "123", ""]) {
+  for (const token of [
+    "7091451031::",
+    "-1001:77:42",
+    "telegram:-1001:77:42",
+    "123",
+    "",
+  ]) {
     toChannelLocalToken(token, { warn: (m) => quiet.push(m) });
   }
   assert.deepEqual(quiet, []);

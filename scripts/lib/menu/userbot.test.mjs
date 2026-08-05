@@ -27,7 +27,10 @@ test("userbot menu setup rejects exit 1 with a redacted error", async () => {
 test("userbot menu renders the shared Telethon authorization state", async () => {
   const dir = await mkdtemp(join(tmpdir(), "iva-userbot-health-menu-"));
   const envPath = join(dir, ".env");
-  await writeFile(envPath, "TELEGRAM_API_ID=12345\nTELEGRAM_API_HASH=abcdef123456\n");
+  await writeFile(
+    envPath,
+    "TELEGRAM_API_ID=12345\nTELEGRAM_API_HASH=abcdef123456\n",
+  );
   let calls = 0;
   const ctx = {
     deps: {
@@ -55,7 +58,10 @@ test("userbot menu renders the shared Telethon authorization state", async () =>
 test("userbot menu surfaces setup exit 1 and keeps the beta warning", async () => {
   const dir = await mkdtemp(join(tmpdir(), "iva-userbot-menu-"));
   const envPath = join(dir, ".env");
-  await writeFile(envPath, "TELEGRAM_API_ID=12345\nTELEGRAM_API_HASH=abcdef123456\n");
+  await writeFile(
+    envPath,
+    "TELEGRAM_API_ID=12345\nTELEGRAM_API_HASH=abcdef123456\n",
+  );
   const rendered = [];
   const state = {
     chatId: 1,
@@ -88,7 +94,11 @@ test("userbot menu surfaces setup exit 1 and keeps the beta warning", async () =
   };
 
   await userbot.on("do", ["setup"], state, ctx);
-  for (let i = 0; i < 20 && !rendered.some((view) => /Setup failed/.test(view.text)); i += 1) {
+  for (
+    let i = 0;
+    i < 20 && !rendered.some((view) => /Setup failed/.test(view.text));
+    i += 1
+  ) {
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
 

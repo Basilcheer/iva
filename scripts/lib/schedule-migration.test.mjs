@@ -6,7 +6,10 @@ import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { LEGACY_MEMORY_UNITS, runScheduleMigration } from "./schedule-migration.mjs";
+import {
+  LEGACY_MEMORY_UNITS,
+  runScheduleMigration,
+} from "./schedule-migration.mjs";
 
 const UNIT_DIR_REL = ".config/systemd/user";
 
@@ -62,13 +65,23 @@ test("no ~/.config/systemd/user: legacy-unit cleanup is skipped, but catch-up (f
       statusPath,
       tz: "UTC",
       log: () => {},
-      runJob: async () => { runJobCalled = true; },
+      runJob: async () => {
+        runJobCalled = true;
+      },
     }),
   );
 
   assert.equal(calls.length, 0, "no systemd -> no systemctl calls of any kind");
-  assert.equal(runJobCalled, false, "first boot still suppresses catch-up (storm protection), regardless of systemd");
-  assert.equal(existsSync(statusPath), true, "catch-up bookkeeping (the first-boot seed) proceeds even without systemd");
+  assert.equal(
+    runJobCalled,
+    false,
+    "first boot still suppresses catch-up (storm protection), regardless of systemd",
+  );
+  assert.equal(
+    existsSync(statusPath),
+    true,
+    "catch-up bookkeeping (the first-boot seed) proceeds even without systemd",
+  );
 });
 
 test("systemctl binary missing (ENOENT): legacy-unit cleanup is skipped, but catch-up still runs", async () => {
@@ -89,15 +102,28 @@ test("systemctl binary missing (ENOENT): legacy-unit cleanup is skipped, but cat
     statusPath,
     tz: "UTC",
     log: () => {},
-    runJob: async () => { runJobCalled = true; },
+    runJob: async () => {
+      runJobCalled = true;
+    },
   });
 
   // The very first probe call may legitimately happen (to discover ENOENT), but no
   // mutating systemctl calls may follow it — actually verify the call log, not a
   // tautology.
-  assert.ok(calls.length <= 1, `no mutating systemctl calls followed the probe: ${JSON.stringify(calls)}`);
-  assert.equal(runJobCalled, false, "first boot suppresses catch-up regardless of systemctl availability");
-  assert.equal(existsSync(statusPath), true, "catch-up bookkeeping proceeds even when systemctl itself is missing");
+  assert.ok(
+    calls.length <= 1,
+    `no mutating systemctl calls followed the probe: ${JSON.stringify(calls)}`,
+  );
+  assert.equal(
+    runJobCalled,
+    false,
+    "first boot suppresses catch-up regardless of systemctl availability",
+  );
+  assert.equal(
+    existsSync(statusPath),
+    true,
+    "catch-up bookkeeping proceeds even when systemctl itself is missing",
+  );
 });
 
 test("first boot (no status file): seeds a baseline (seededAt, NOT lastSuccessAt) for all four periods and runs nothing", async () => {
@@ -115,10 +141,16 @@ test("first boot (no status file): seeds a baseline (seededAt, NOT lastSuccessAt
     tz: "UTC",
     log: () => {},
     now: () => fixedNow,
-    runJob: async (period) => { ranPeriods.push(period); },
+    runJob: async (period) => {
+      ranPeriods.push(period);
+    },
   });
 
-  assert.deepEqual(ranPeriods, [], "first boot must never run a catch-up job (storm protection)");
+  assert.deepEqual(
+    ranPeriods,
+    [],
+    "first boot must never run a catch-up job (storm protection)",
+  );
   const status = JSON.parse(await readFile(statusPath, "utf8"));
   // Keyed "memory-<period>" — the same name schedule-runner.mjs actually records a real
   // run under (the `name` each agent/schedules/memory-*.ts passes), not the bare period.
@@ -127,7 +159,11 @@ test("first boot (no status file): seeds a baseline (seededAt, NOT lastSuccessAt
     assert.equal(entry?.seededAt, fixedNow, `${period} is seeded to now`);
     // The seed is a storm-protection baseline, not a real run — /menu → crons and
     // iva doctor must not report it as one.
-    assert.equal(entry?.lastSuccessAt, undefined, `${period}'s seed must not read as a real success`);
+    assert.equal(
+      entry?.lastSuccessAt,
+      undefined,
+      `${period}'s seed must not read as a real success`,
+    );
   }
 });
 
@@ -135,7 +171,10 @@ test("a digest-only status seeds every missing memory key and causes no catch-up
   const homedir = await scaffoldHome();
   const statusPath = join(homedir, "..", "data", "rollup-status.json");
   await mkdir(join(homedir, "..", "data"), { recursive: true });
-  await writeFile(statusPath, JSON.stringify({ digest: { lastSuccessAt: 123 } }));
+  await writeFile(
+    statusPath,
+    JSON.stringify({ digest: { lastSuccessAt: 123 } }),
+  );
   const fixedNow = Date.UTC(2026, 7, 4, 10, 0, 0);
   const ranPeriods = [];
 
@@ -146,7 +185,9 @@ test("a digest-only status seeds every missing memory key and causes no catch-up
     log: () => {},
     now: () => fixedNow,
     execImpl: fakeExecImpl().execImpl,
-    runJob: async (period) => { ranPeriods.push(period); },
+    runJob: async (period) => {
+      ranPeriods.push(period);
+    },
   });
 
   assert.deepEqual(ranPeriods, []);
@@ -194,12 +235,15 @@ test("legacy units: disabled and deleted by exact name; unrelated xfeed-daily.ti
   // Not a first boot — seed the status file up front so catch-up logic is skipped/neutral
   // for this test (it only cares about the legacy-unit teardown).
   await mkdir(join(homedir, "..", "data"), { recursive: true });
-  await writeFile(statusPath, JSON.stringify({
-    "memory-daily": { lastSuccessAt: Date.now() },
-    "memory-weekly": { lastSuccessAt: Date.now() },
-    "memory-monthly": { lastSuccessAt: Date.now() },
-    "memory-yearly": { lastSuccessAt: Date.now() },
-  }));
+  await writeFile(
+    statusPath,
+    JSON.stringify({
+      "memory-daily": { lastSuccessAt: Date.now() },
+      "memory-weekly": { lastSuccessAt: Date.now() },
+      "memory-monthly": { lastSuccessAt: Date.now() },
+      "memory-yearly": { lastSuccessAt: Date.now() },
+    }),
+  );
 
   const { execImpl, calls } = fakeExecImpl();
   await runScheduleMigration({
@@ -208,18 +252,31 @@ test("legacy units: disabled and deleted by exact name; unrelated xfeed-daily.ti
     statusPath,
     tz: "UTC",
     log: () => {},
-    runJob: async () => { throw new Error("must not run on a seeded, up-to-date status file"); },
+    runJob: async () => {
+      throw new Error("must not run on a seeded, up-to-date status file");
+    },
   });
 
   for (const name of existing) {
-    assert.ok(calls.some((c) => c === `--user disable --now ${name}`), `disable --now ${name}`);
-    assert.equal(existsSync(join(unitDir, name)), false, `${name} file removed`);
+    assert.ok(
+      calls.some((c) => c === `--user disable --now ${name}`),
+      `disable --now ${name}`,
+    );
+    assert.equal(
+      existsSync(join(unitDir, name)),
+      false,
+      `${name} file removed`,
+    );
   }
   // Units that were never installed must never be referenced at all.
   assert.ok(!calls.some((c) => c.includes("iva-memory-monthly")));
   assert.ok(!calls.some((c) => c.includes("iva-memory-yearly")));
   assert.ok(!calls.some((c) => c.includes("xfeed-daily")));
-  assert.equal(existsSync(join(unitDir, "xfeed-daily.timer")), true, "xfeed-daily.timer is untouched");
+  assert.equal(
+    existsSync(join(unitDir, "xfeed-daily.timer")),
+    true,
+    "xfeed-daily.timer is untouched",
+  );
 
   assert.equal(calls.filter((c) => c === "--user daemon-reload").length, 1);
   assert.equal(calls.filter((c) => c === "--user reset-failed").length, 1);
@@ -232,26 +289,57 @@ test("a partial systemctl failure does not throw, leaves the file for a retry, a
   await writeFile(join(unitDir, "iva-memory-daily.service"), "[Unit]\n");
   const statusPath = join(homedir, "..", "data/rollup-status.json");
   await mkdir(join(homedir, "..", "data"), { recursive: true });
-  await writeFile(statusPath, JSON.stringify({
-    "memory-daily": { lastSuccessAt: Date.now() },
-    "memory-weekly": { lastSuccessAt: Date.now() },
-    "memory-monthly": { lastSuccessAt: Date.now() },
-    "memory-yearly": { lastSuccessAt: Date.now() },
-  }));
+  await writeFile(
+    statusPath,
+    JSON.stringify({
+      "memory-daily": { lastSuccessAt: Date.now() },
+      "memory-weekly": { lastSuccessAt: Date.now() },
+      "memory-monthly": { lastSuccessAt: Date.now() },
+      "memory-yearly": { lastSuccessAt: Date.now() },
+    }),
+  );
 
-  const { execImpl, calls } = fakeExecImpl({ failUnits: new Set(["iva-memory-daily.timer"]) });
+  const { execImpl, calls } = fakeExecImpl({
+    failUnits: new Set(["iva-memory-daily.timer"]),
+  });
   const logged = [];
 
   await assert.doesNotReject(() =>
-    runScheduleMigration({ homedir, execImpl, statusPath, tz: "UTC", log: (...a) => logged.push(a.join(" ")) }),
+    runScheduleMigration({
+      homedir,
+      execImpl,
+      statusPath,
+      tz: "UTC",
+      log: (...a) => logged.push(a.join(" ")),
+    }),
   );
-  assert.ok(calls.some((c) => c === "--user disable --now iva-memory-daily.timer"), "the failing disable was actually attempted");
-  assert.ok(logged.some((l) => l.includes("disable --now iva-memory-daily.timer") && l.includes("failed")), "the failure was logged, not swallowed silently");
+  assert.ok(
+    calls.some((c) => c === "--user disable --now iva-memory-daily.timer"),
+    "the failing disable was actually attempted",
+  );
+  assert.ok(
+    logged.some(
+      (l) =>
+        l.includes("disable --now iva-memory-daily.timer") &&
+        l.includes("failed"),
+    ),
+    "the failure was logged, not swallowed silently",
+  );
   // The file must survive a failed disable: deleting it anyway would leave a unit that
   // systemd still considers enabled/active with no file behind it — invisible to a
   // human, but not actually gone. It's deleted only once disable actually succeeds.
-  assert.equal(existsSync(join(unitDir, "iva-memory-daily.timer")), true, "the unit file is kept when disable failed");
-  assert.ok(logged.some((l) => l.includes("iva-memory-daily.timer") && l.includes("next boot will retry")));
+  assert.equal(
+    existsSync(join(unitDir, "iva-memory-daily.timer")),
+    true,
+    "the unit file is kept when disable failed",
+  );
+  assert.ok(
+    logged.some(
+      (l) =>
+        l.includes("iva-memory-daily.timer") &&
+        l.includes("next boot will retry"),
+    ),
+  );
   // Its sibling .service file (whose disable did NOT fail) is removed as normal.
   assert.equal(existsSync(join(unitDir, "iva-memory-daily.service")), false);
 
@@ -259,10 +347,25 @@ test("a partial systemctl failure does not throw, leaves the file for a retry, a
   // file is finally removed.
   const second = fakeExecImpl();
   await assert.doesNotReject(() =>
-    runScheduleMigration({ homedir, execImpl: second.execImpl, statusPath, tz: "UTC", log: () => {} }),
+    runScheduleMigration({
+      homedir,
+      execImpl: second.execImpl,
+      statusPath,
+      tz: "UTC",
+      log: () => {},
+    }),
   );
-  assert.ok(second.calls.some((c) => c === "--user disable --now iva-memory-daily.timer"), "the retry actually re-attempts disable");
-  assert.equal(existsSync(join(unitDir, "iva-memory-daily.timer")), false, "the retry succeeds and the file is finally removed");
+  assert.ok(
+    second.calls.some(
+      (c) => c === "--user disable --now iva-memory-daily.timer",
+    ),
+    "the retry actually re-attempts disable",
+  );
+  assert.equal(
+    existsSync(join(unitDir, "iva-memory-daily.timer")),
+    false,
+    "the retry succeeds and the file is finally removed",
+  );
 });
 
 test("catch-up math: due-and-in-grace periods run, an already-succeeded period does not, and a period whose due point is past its grace window is skipped", async () => {
@@ -280,12 +383,15 @@ test("catch-up math: due-and-in-grace periods run, an already-succeeded period d
   const dataDir = join(homedir, "..", "data");
   const statusPath = join(dataDir, "rollup-status.json");
   await mkdir(dataDir, { recursive: true });
-  await writeFile(statusPath, JSON.stringify({
-    "memory-daily": { lastSuccessAt: dailyDue - 60_000 },       // stale by 1 minute -> due, in grace -> RUNS
-    "memory-weekly": { lastSuccessAt: weeklyDue + 60_000 },      // already succeeded AFTER due -> does NOT run
-    "memory-monthly": { lastSuccessAt: monthlyDue - 60_000 },    // stale, in grace -> RUNS
-    "memory-yearly": { lastSuccessAt: 0 },                       // ancient, but due point itself is out of grace -> does NOT run
-  }));
+  await writeFile(
+    statusPath,
+    JSON.stringify({
+      "memory-daily": { lastSuccessAt: dailyDue - 60_000 }, // stale by 1 minute -> due, in grace -> RUNS
+      "memory-weekly": { lastSuccessAt: weeklyDue + 60_000 }, // already succeeded AFTER due -> does NOT run
+      "memory-monthly": { lastSuccessAt: monthlyDue - 60_000 }, // stale, in grace -> RUNS
+      "memory-yearly": { lastSuccessAt: 0 }, // ancient, but due point itself is out of grace -> does NOT run
+    }),
+  );
 
   const { execImpl } = fakeExecImpl();
   const ranPeriods = [];
@@ -296,7 +402,9 @@ test("catch-up math: due-and-in-grace periods run, an already-succeeded period d
     tz: "Asia/Almaty",
     log: () => {},
     now: () => fixedNow,
-    runJob: async (period) => { ranPeriods.push(period); },
+    runJob: async (period) => {
+      ranPeriods.push(period);
+    },
   });
 
   assert.deepEqual([...ranPeriods].sort(), ["daily", "monthly"]);
@@ -314,14 +422,14 @@ test("style-matched integration: a real fake systemctl on PATH, tmpdir HOME, via
   const bin = join(dir, "bin");
   await mkdir(join(home, UNIT_DIR_REL), { recursive: true });
   await mkdir(bin, { recursive: true });
-  await writeFile(join(home, UNIT_DIR_REL, "iva-memory-yearly.timer"), "[Unit]\n");
+  await writeFile(
+    join(home, UNIT_DIR_REL, "iva-memory-yearly.timer"),
+    "[Unit]\n",
+  );
 
   const fakeSystemctl = join(bin, "systemctl");
   const log = join(dir, "systemctl-calls.log");
-  await writeFile(
-    fakeSystemctl,
-    `#!/bin/sh\necho "$@" >> "${log}"\nexit 0\n`,
-  );
+  await writeFile(fakeSystemctl, `#!/bin/sh\necho "$@" >> "${log}"\nexit 0\n`);
   await chmod(fakeSystemctl, 0o755);
 
   const script = join(dir, "run.mjs");
@@ -340,7 +448,10 @@ test("style-matched integration: a real fake systemctl on PATH, tmpdir HOME, via
     env: { ...process.env, HOME: home, PATH: `${bin}:/usr/bin:/bin` },
   });
   assert.equal(result.status, 0, result.stderr || result.stdout);
-  assert.equal(existsSync(join(home, UNIT_DIR_REL, "iva-memory-yearly.timer")), false);
+  assert.equal(
+    existsSync(join(home, UNIT_DIR_REL, "iva-memory-yearly.timer")),
+    false,
+  );
   const calls = existsSync(log) ? await readFile(log, "utf8") : "";
   assert.match(calls, /disable --now iva-memory-yearly\.timer/);
   assert.match(calls, /daemon-reload/);
@@ -365,10 +476,23 @@ test("if the status lock can't be acquired, the whole pass is deferred: no seed,
     statusPath,
     tz: "UTC",
     log: (...a) => lines.push(a.join(" ")),
-    runJob: async () => { runJobCalled = true; },
+    runJob: async () => {
+      runJobCalled = true;
+    },
   });
 
-  assert.equal(runJobCalled, false, "no catch-up may run off an undecided (lock-less) pass");
-  assert.equal(existsSync(statusPath), false, "no status write at all — not a seed, not anything else — without the lock");
-  assert.ok(lines.some((l) => l.toLowerCase().includes("defer")), "the deferral must be logged, not silent");
+  assert.equal(
+    runJobCalled,
+    false,
+    "no catch-up may run off an undecided (lock-less) pass",
+  );
+  assert.equal(
+    existsSync(statusPath),
+    false,
+    "no status write at all — not a seed, not anything else — without the lock",
+  );
+  assert.ok(
+    lines.some((l) => l.toLowerCase().includes("defer")),
+    "the deferral must be logged, not silent",
+  );
 });

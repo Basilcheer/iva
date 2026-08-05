@@ -1,6 +1,9 @@
 import { wrapLanguageModel, type LanguageModelMiddleware } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
-import { CODEX_BASE_URL, codexAuthHeaders } from "../scripts/lib/codex-oauth.mjs";
+import {
+  CODEX_BASE_URL,
+  codexAuthHeaders,
+} from "../scripts/lib/codex-oauth.mjs";
 import { EFFORTS } from "../scripts/lib/model-catalog.mjs";
 
 type WrappableModel = Parameters<typeof wrapLanguageModel>[0]["model"];
@@ -30,7 +33,10 @@ const PROVIDERS = {
     baseURL: "https://opencode.ai/zen/go/v1",
     apiKey: process.env.OPENCODE_API_KEY,
     // Эндпоинт ждёт bare-ID — срезаем внутренний UI-префикс "opencode-go/" из дефолта и старых .env.
-    textModel: (process.env.OPENCODE_MODEL ?? "deepseek-v4-pro").replace(/^opencode-go\//, ""),
+    textModel: (process.env.OPENCODE_MODEL ?? "deepseek-v4-pro").replace(
+      /^opencode-go\//,
+      "",
+    ),
     contextWindow: Number(process.env.OPENCODE_CONTEXT_WINDOW ?? 131072),
     // gemini-3-flash выпал из каталога Go (401 "Model gemini-3-flash is not supported") — теперь
     // qwen3.7-plus: отвечает 200 и кладёт описание в message.content. У glm-5.2/minimax-m3 текст
@@ -59,7 +65,8 @@ const PROVIDERS = {
 } as const;
 
 export const providerName = PROVIDER;
-export const providerConfig = PROVIDERS[PROVIDER as keyof typeof PROVIDERS] ?? PROVIDERS.ollama;
+export const providerConfig =
+  PROVIDERS[PROVIDER as keyof typeof PROVIDERS] ?? PROVIDERS.ollama;
 
 // THINKING_EFFORT (.env, пишут /model и /think в Telegram): reasoning-усилие модели.
 // Codex получает его через providerOptions.openai.reasoningEffort ниже. Ollama Cloud
@@ -67,13 +74,15 @@ export const providerConfig = PROVIDERS[PROVIDER as keyof typeof PROVIDERS] ?? P
 // provider-agnostic reasoning как reasoning_effort (см. compatibleThinkingEffort).
 // Уровни — из общего каталога мастера, чтобы кнопки и рантайм не разъезжались.
 const effortRaw = (process.env.THINKING_EFFORT ?? "").toLowerCase();
-export const thinkingEffort = EFFORTS.includes(effortRaw) ? effortRaw : undefined;
+export const thinkingEffort = EFFORTS.includes(effortRaw)
+  ? effortRaw
+  : undefined;
 const COMPATIBLE_EFFORTS = ["low", "medium", "high"] as const;
 type CompatibleEffort = (typeof COMPATIBLE_EFFORTS)[number];
 export const compatibleThinkingEffort: CompatibleEffort | undefined =
-  (PROVIDER === "ollama" || PROVIDER === "opencode")
-  && (COMPATIBLE_EFFORTS as readonly string[]).includes(effortRaw)
-    ? effortRaw as CompatibleEffort
+  (PROVIDER === "ollama" || PROVIDER === "opencode") &&
+  (COMPATIBLE_EFFORTS as readonly string[]).includes(effortRaw)
+    ? (effortRaw as CompatibleEffort)
     : undefined;
 
 // --- Codex (подписка ChatGPT): Responses API через @ai-sdk/openai ----------------------------
@@ -82,9 +91,13 @@ export const compatibleThinkingEffort: CompatibleEffort | undefined =
 // историю eve шлёт целиком каждый ход. Тело патчим здесь же (точка правки, если бэкенд строже).
 const codexFetch: typeof fetch = async (input, init) => {
   const headers = new Headers(init?.headers);
-  for (const [k, v] of Object.entries(await codexAuthHeaders())) headers.set(k, v);
+  for (const [k, v] of Object.entries(await codexAuthHeaders()))
+    headers.set(k, v);
   let body = init?.body;
-  if (typeof body === "string" && String((input as Request).url ?? input).endsWith("/responses")) {
+  if (
+    typeof body === "string" &&
+    String((input as Request).url ?? input).endsWith("/responses")
+  ) {
     try {
       const j = JSON.parse(body);
       j.store = false;
@@ -95,8 +108,11 @@ const codexFetch: typeof fetch = async (input, init) => {
       // Контент истории уже инлайнится целиком (store:false задан на этапе сборки тела, см.
       // codexProviderOptions), поэтому ссылки режем, а id-эхо у остальных item'ов вычищаем.
       if (Array.isArray(j.input)) {
-        j.input = j.input.filter((it: unknown) => (it as { type?: string })?.type !== "item_reference");
-        for (const it of j.input) if (it && typeof it === "object") delete (it as { id?: unknown }).id;
+        j.input = j.input.filter(
+          (it: unknown) => (it as { type?: string })?.type !== "item_reference",
+        );
+        for (const it of j.input)
+          if (it && typeof it === "object") delete (it as { id?: unknown }).id;
       }
       body = JSON.stringify(j);
     } catch {
@@ -125,7 +141,9 @@ const codexProviderOptions: LanguageModelMiddleware = {
         openai: {
           ...params.providerOptions?.openai,
           store: false,
-          ...(thinkingEffort ? { reasoningEffort: thinkingEffort, reasoningSummary: null } : {}),
+          ...(thinkingEffort
+            ? { reasoningEffort: thinkingEffort, reasoningSummary: null }
+            : {}),
         },
       },
     };
@@ -134,8 +152,15 @@ const codexProviderOptions: LanguageModelMiddleware = {
 
 /** Строит Codex-модель (Responses API подписки). Общая для agent.ts и vision.ts. */
 export function makeCodexModel(model: string = providerConfig.textModel) {
-  const openai = createOpenAI({ baseURL: CODEX_BASE_URL, apiKey: "chatgpt-subscription", fetch: codexFetch });
-  return wrapLanguageModel({ model: openai.responses(model), middleware: codexProviderOptions });
+  const openai = createOpenAI({
+    baseURL: CODEX_BASE_URL,
+    apiKey: "chatgpt-subscription",
+    fetch: codexFetch,
+  });
+  return wrapLanguageModel({
+    model: openai.responses(model),
+    middleware: codexProviderOptions,
+  });
 }
 
 // --- Анти-InvalidPrompt: срезаем reasoning из вывода модели ---------------------------------
@@ -156,7 +181,10 @@ const REASONING_PART_TYPES = new Set([
 const stripReasoningMiddleware: LanguageModelMiddleware = {
   async wrapGenerate({ doGenerate }) {
     const result = await doGenerate();
-    return { ...result, content: result.content.filter((p) => p.type !== "reasoning") };
+    return {
+      ...result,
+      content: result.content.filter((p) => p.type !== "reasoning"),
+    };
   },
   async wrapStream({ doStream }) {
     const { stream, ...rest } = await doStream();

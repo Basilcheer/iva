@@ -10,7 +10,12 @@ test("mediaFromRaw selects the largest Telegram photo size", () => {
         { file_id: "large", file_unique_id: "large-photo" },
       ],
     }),
-    { fileId: "large", fileUniqueId: "large-photo", tag: "photo", transcribe: false },
+    {
+      fileId: "large",
+      fileUniqueId: "large-photo",
+      tag: "photo",
+      transcribe: false,
+    },
   );
 });
 

@@ -4,12 +4,12 @@ Iva runs on your server with your keys. Here is every external service it talks 
 
 ## Model providers
 
-| Provider | Price | Text models | Vision |
-|---|---|---|---|
-| **OpenCode Go** (ex-Zen) | ~$5/mo | ~23 models fetched live at setup — `deepseek-v4-pro` (default), `kimi-k3`, `kimi-k2.7-code`, `glm-5.2`, `minimax-m3`, `qwen3.7-max`, `grok-4.5`… | `qwen3.7-plus` |
-| **Ollama Cloud** | ~$20/mo | ~19 models fetched live — `deepseek-v4-pro` (default), `kimi-k3`, `glm-5.2`, `minimax-m3`, `gpt-oss:120b`… | `gemma4:31b` |
-| **OpenRouter** | pay-as-you-go | 300+ models across vendors — pick any slug (`vendor/model`) | `google/gemini-2.5-flash` |
-| **OpenAI (ChatGPT subscription)** | your existing Plus/Pro/Team | the models your plan exposes (`gpt-5.x`, `-codex`), fetched live | same subscription (multimodal) |
+| Provider                          | Price                       | Text models                                                                                                                                      | Vision                         |
+| --------------------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------ |
+| **OpenCode Go** (ex-Zen)          | ~$5/mo                      | ~23 models fetched live at setup — `deepseek-v4-pro` (default), `kimi-k3`, `kimi-k2.7-code`, `glm-5.2`, `minimax-m3`, `qwen3.7-max`, `grok-4.5`… | `qwen3.7-plus`                 |
+| **Ollama Cloud**                  | ~$20/mo                     | ~19 models fetched live — `deepseek-v4-pro` (default), `kimi-k3`, `glm-5.2`, `minimax-m3`, `gpt-oss:120b`…                                       | `gemma4:31b`                   |
+| **OpenRouter**                    | pay-as-you-go               | 300+ models across vendors — pick any slug (`vendor/model`)                                                                                      | `google/gemini-2.5-flash`      |
+| **OpenAI (ChatGPT subscription)** | your existing Plus/Pro/Team | the models your plan exposes (`gpt-5.x`, `-codex`), fetched live                                                                                 | same subscription (multimodal) |
 
 The first three are plain API keys; the last rides your personal OpenAI subscription:
 
@@ -62,12 +62,12 @@ Transcription runs on Deepgram `nova-3` with `language=multi`: Russian, Uzbek an
 
 ## Web search
 
-| Provider | Free tier | Card |
-|---|---|---|
+| Provider                 | Free tier          | Card         |
+| ------------------------ | ------------------ | ------------ |
 | **tavily** (recommended) | ~1,000 searches/mo | not required |
-| **exa** | ~20,000/mo | not required |
-| **parallel** | starter credits | not required |
-| **brave** | ~$5/mo credit | required |
+| **exa**                  | ~20,000/mo         | not required |
+| **parallel**             | starter credits    | not required |
+| **brave**                | ~$5/mo credit      | required     |
 
 Pick one, set `SEARCH_PROVIDER` and its key. No key means no web search — Iva says so instead of guessing. DuckDuckGo scraping was removed on purpose: server IPs get captchas, and a search tool that randomly hits a wall is worse than none.
 
@@ -75,12 +75,12 @@ Optional hybrid memory search adds one more key (Jina or DeepInfra embeddings) �
 
 ## Total cost
 
-| Service | Monthly |
-|---|---|
-| VPS | $4–5 |
-| OpenCode Go | ~$5 |
-| Deepgram voice | $0 — starter credit |
-| Web search (tavily) | $0 — free tier |
-| **Total** | **~$9/mo** |
+| Service             | Monthly             |
+| ------------------- | ------------------- |
+| VPS                 | $4–5                |
+| OpenCode Go         | ~$5                 |
+| Deepgram voice      | $0 — starter credit |
+| Web search (tavily) | $0 — free tier      |
+| **Total**           | **~$9/mo**          |
 
 Prefer Ollama Cloud and the same stack lands around $25/mo. Either way the bill is flat, predictable, and paid straight to the providers.

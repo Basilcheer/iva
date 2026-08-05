@@ -1,7 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runDailyUpdateCheck } from "../check-update.mjs";
@@ -14,7 +20,8 @@ import {
   updateOffer,
 } from "./update-check.mjs";
 
-const git = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
+const git = (cwd, ...args) =>
+  execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
 
 function repoFixture() {
   const temp = mkdtempSync(join(tmpdir(), "iva-update-check-"));
@@ -25,7 +32,10 @@ function repoFixture() {
   git(seed, "init", "-b", "main");
   git(seed, "config", "user.email", "test@example.com");
   git(seed, "config", "user.name", "Test");
-  writeFileSync(join(seed, "package.json"), '{"name":"iva","version":"1.2.3"}\n');
+  writeFileSync(
+    join(seed, "package.json"),
+    '{"name":"iva","version":"1.2.3"}\n',
+  );
   git(seed, "add", "package.json");
   git(seed, "commit", "-m", "initial");
   git(temp, "init", "--bare", remote);
@@ -61,7 +71,10 @@ test("upstream inspection separates commit updates from release updates", async 
   assert.equal(info.hasCommitUpdate, true);
   assert.equal(info.hasVersionUpdate, false);
 
-  writeFileSync(join(seed, "package.json"), '{"name":"iva","version":"1.3.0"}\n');
+  writeFileSync(
+    join(seed, "package.json"),
+    '{"name":"iva","version":"1.3.0"}\n',
+  );
   git(seed, "add", "package.json");
   git(seed, "commit", "-m", "release");
   git(seed, "push");
@@ -88,7 +101,10 @@ test("a merged legacy feature branch discovers updates from main", async () => {
   git(local, "fetch", "origin", "feat/legacy");
   git(local, "switch", "-c", "feat/legacy", "FETCH_HEAD");
 
-  writeFileSync(join(seed, "package.json"), '{"name":"iva","version":"1.3.0"}\n');
+  writeFileSync(
+    join(seed, "package.json"),
+    '{"name":"iva","version":"1.3.0"}\n',
+  );
   git(seed, "add", "package.json");
   git(seed, "commit", "-m", "release");
   git(seed, "push", "origin", "main");
@@ -113,7 +129,10 @@ test("an explicitly configured feature channel does not drift to main", async ()
   git(local, "config", "iva.updateBranch", "feat/beta");
 
   git(seed, "switch", "main");
-  writeFileSync(join(seed, "package.json"), '{"name":"iva","version":"2.0.0"}\n');
+  writeFileSync(
+    join(seed, "package.json"),
+    '{"name":"iva","version":"2.0.0"}\n',
+  );
   git(seed, "add", "package.json");
   git(seed, "commit", "-m", "main release");
   git(seed, "push", "origin", "main");
@@ -126,16 +145,34 @@ test("an explicitly configured feature channel does not drift to main", async ()
 });
 
 test("notification target prefers digest chat and falls back to the first trusted user", () => {
-  assert.equal(notificationChat({ TELEGRAM_DIGEST_CHAT_ID: "99", TELEGRAM_ALLOWED_USER_IDS: "1,2" }), "99");
+  assert.equal(
+    notificationChat({
+      TELEGRAM_DIGEST_CHAT_ID: "99",
+      TELEGRAM_ALLOWED_USER_IDS: "1,2",
+    }),
+    "99",
+  );
   assert.equal(notificationChat({ TELEGRAM_ALLOWED_USER_IDS: " 1, 2" }), "1");
   assert.equal(notificationChat({}), "");
 });
 
 test("installer persists the selected update channel and integrates the fetched oid", () => {
-  const installer = readFileSync(new URL("../../install.sh", import.meta.url), "utf8");
-  assert.match(installer, /config --local iva\.updateBranch "\$UPDATE_CHANNEL"/);
-  assert.match(installer, /UPDATE_CHANNEL="\$\(git -C "\$PROJECT_DIR" branch --show-current/);
-  assert.match(installer, /remote_ref="\$\(git -C "\$PROJECT_DIR" rev-parse FETCH_HEAD\)"/);
+  const installer = readFileSync(
+    new URL("../../install.sh", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    installer,
+    /config --local iva\.updateBranch "\$UPDATE_CHANNEL"/,
+  );
+  assert.match(
+    installer,
+    /UPDATE_CHANNEL="\$\(git -C "\$PROJECT_DIR" branch --show-current/,
+  );
+  assert.match(
+    installer,
+    /remote_ref="\$\(git -C "\$PROJECT_DIR" rev-parse FETCH_HEAD\)"/,
+  );
   assert.doesNotMatch(installer, /remote_ref="origin\/\$BRANCH"/);
 });
 
@@ -154,7 +191,11 @@ test("daily check sends one offer per version and records only successful sends"
     AGENT_LANGUAGE: "ru",
     ASSISTANT_DATA_DIR: "data",
   };
-  const info = { hasVersionUpdate: true, localVersion: "1.2.3", remoteVersion: "1.2.4" };
+  const info = {
+    hasVersionUpdate: true,
+    localVersion: "1.2.3",
+    remoteVersion: "1.2.4",
+  };
   const sent = [];
   const options = {
     root,
@@ -174,13 +215,25 @@ test("daily check sends one offer per version and records only successful sends"
   assert.equal(sent.length, 2);
 
   info.remoteVersion = "1.2.6";
-  await assert.rejects(() => runDailyUpdateCheck({ ...options, sendImpl: async () => { throw new Error("offline"); } }), /offline/);
+  await assert.rejects(
+    () =>
+      runDailyUpdateCheck({
+        ...options,
+        sendImpl: async () => {
+          throw new Error("offline");
+        },
+      }),
+    /offline/,
+  );
   assert.equal(await readNotifiedVersion(join(root, "data")), "1.2.5");
 });
 
 test("daily check is silent without config, without a release, or during an update", async () => {
   const root = mkdtempSync(join(tmpdir(), "iva-daily-silent-"));
-  assert.equal((await runDailyUpdateCheck({ root, env: {} })).status, "not-configured");
+  assert.equal(
+    (await runDailyUpdateCheck({ root, env: {} })).status,
+    "not-configured",
+  );
 
   const env = { TELEGRAM_BOT_TOKEN: "token", TELEGRAM_ALLOWED_USER_IDS: "1" };
   const current = await runDailyUpdateCheck({
@@ -205,14 +258,26 @@ test("offer copy is bilingual and keeps existing callback actions", () => {
   const ru = updateOffer("1.2.3", "1.2.4", "ru");
   assert.match(en.text, /new Iva version/);
   assert.match(ru.text, /новая версия Iva/);
-  assert.deepEqual(en.replyMarkup.inline_keyboard[0].map((button) => button.callback_data), ["iva_update:do", "iva_update:skip"]);
+  assert.deepEqual(
+    en.replyMarkup.inline_keyboard[0].map((button) => button.callback_data),
+    ["iva_update:do", "iva_update:skip"],
+  );
 });
 
 test("systemd templates schedule a persistent 10:00 local check and lifecycle commands include it", () => {
   const root = join(import.meta.dirname, "..", "..");
-  const timer = readFileSync(join(root, "deploy", "iva-update-check.timer"), "utf8");
-  const service = readFileSync(join(root, "deploy", "iva-update-check.service"), "utf8");
-  const pollService = readFileSync(join(root, "deploy", "iva-telegram-poll.service"), "utf8");
+  const timer = readFileSync(
+    join(root, "deploy", "iva-update-check.timer"),
+    "utf8",
+  );
+  const service = readFileSync(
+    join(root, "deploy", "iva-update-check.service"),
+    "utf8",
+  );
+  const pollService = readFileSync(
+    join(root, "deploy", "iva-telegram-poll.service"),
+    "utf8",
+  );
   const cli = readFileSync(join(root, "bin", "iva.mjs"), "utf8");
   const installer = readFileSync(join(root, "install.sh"), "utf8");
   assert.match(timer, /OnCalendar=\*-\*-\* 10:00:00 __TIMEZONE__/);
@@ -223,17 +288,29 @@ test("systemd templates schedule a persistent 10:00 local check and lifecycle co
   assert.match(cli, /replaceAll\("__TIMEZONE__", timezone\)/);
   assert.match(cli, /systemd\.activate\(\[UPDATE_TIMER\]\)/);
   assert.match(installer, /bin\/iva\.mjs" _activate-units/);
-  assert.match(pollService, /ExecStartPost=-\/usr\/bin\/systemctl --user enable --now iva-update-check\.timer/);
+  assert.match(
+    pollService,
+    /ExecStartPost=-\/usr\/bin\/systemctl --user enable --now iva-update-check\.timer/,
+  );
 });
 
 test("a post-commit timer failure exits without rollback or a false update claim", () => {
-  const cli = readFileSync(new URL("../../bin/iva.mjs", import.meta.url), "utf8");
+  const cli = readFileSync(
+    new URL("../../bin/iva.mjs", import.meta.url),
+    "utf8",
+  );
 
-  assert.match(cli, /Iva is ready, but the automatic update timer could not be activated/);
+  assert.match(
+    cli,
+    /Iva is ready, but the automatic update timer could not be activated/,
+  );
   assert.doesNotMatch(cli, /timerFailure: "Iva updated/);
   assert.match(
     cli,
     /const finalizeUpdate = async \(\) => \{[\s\S]*?commitThenRunPostCommit[\s\S]*?terminal\.fail\(text\.timerFailure\)[\s\S]*?process\.exitCode = 1;[\s\S]*?return false;/,
   );
-  assert.equal(cli.match(/if \(!\(await finalizeUpdate\(\)\)\) return;/g)?.length, 2);
+  assert.equal(
+    cli.match(/if \(!\(await finalizeUpdate\(\)\)\) return;/g)?.length,
+    2,
+  );
 });

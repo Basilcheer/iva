@@ -25,12 +25,22 @@ process.stdout.write(JSON.stringify({
 // language: строка → пишем settings.json {language}; corrupt: строка → пишем как есть.
 function probe({ language, agentLanguage, corrupt } = {}) {
   const dataDir = mkdtempSync(join(tmpdir(), "iva-i18n-"));
-  if (corrupt !== undefined) writeFileSync(join(dataDir, "settings.json"), corrupt);
-  else if (language !== undefined) writeFileSync(join(dataDir, "settings.json"), JSON.stringify({ language }));
-  const env = { ...process.env, __I18N_URL: I18N_URL, ASSISTANT_DATA_DIR: dataDir };
+  if (corrupt !== undefined)
+    writeFileSync(join(dataDir, "settings.json"), corrupt);
+  else if (language !== undefined)
+    writeFileSync(join(dataDir, "settings.json"), JSON.stringify({ language }));
+  const env = {
+    ...process.env,
+    __I18N_URL: I18N_URL,
+    ASSISTANT_DATA_DIR: dataDir,
+  };
   delete env.AGENT_LANGUAGE;
   if (agentLanguage !== undefined) env.AGENT_LANGUAGE = agentLanguage;
-  const out = execFileSync(process.execPath, ["--input-type=module", "-e", PROBE], { env, encoding: "utf8" });
+  const out = execFileSync(
+    process.execPath,
+    ["--input-type=module", "-e", PROBE],
+    { env, encoding: "utf8" },
+  );
   return JSON.parse(out);
 }
 
@@ -52,7 +62,10 @@ test("settings.language overrides the environment both ways", () => {
 });
 
 test("corrupt settings.json falls back to the environment", () => {
-  assert.equal(probe({ corrupt: "{ not json", agentLanguage: "en" }).lang, "en");
+  assert.equal(
+    probe({ corrupt: "{ not json", agentLanguage: "en" }).lang,
+    "en",
+  );
 });
 
 test("unknown settings.language falls through to env then default", () => {
@@ -63,7 +76,20 @@ test("unknown settings.language falls through to env then default", () => {
 test("COMMANDS is the single source: menu first, all control commands present", () => {
   const { commands } = probe();
   assert.equal(commands[0], "menu");
-  const expected = ["menu", "help", "stop", "new", "restart", "update", "model", "think", "usage", "task", "tasks", "digest"];
+  const expected = [
+    "menu",
+    "help",
+    "stop",
+    "new",
+    "restart",
+    "update",
+    "model",
+    "think",
+    "usage",
+    "task",
+    "tasks",
+    "digest",
+  ];
   assert.deepEqual(commands, expected);
 });
 
@@ -80,7 +106,10 @@ test("helpText renders /menu and respects the language", () => {
 
 test("helpText keeps the argument hints from the original help", () => {
   const en = probe({ agentLanguage: "en" }).help;
-  assert.match(en, /\/usage \[today\|week\|month\|by-model\|by-source\] — token usage/);
+  assert.match(
+    en,
+    /\/usage \[today\|week\|month\|by-model\|by-source\] — token usage/,
+  );
   assert.match(en, /\/task <text> — add a task/);
   const ru = probe({ language: "ru" }).help;
   assert.match(ru, /\/task <текст> — добавить задачу/);

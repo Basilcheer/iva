@@ -1,5 +1,12 @@
 import { execFile } from "node:child_process";
-import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  readFile,
+  rename,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { join } from "node:path";
 import { notificationChat } from "./notification-chat.mjs";
 import { resolveUpdateTarget } from "./update-channel.mjs";
@@ -8,20 +15,26 @@ export { notificationChat };
 
 function git(root, args) {
   return new Promise((resolve) => {
-    execFile("git", ["-C", root, ...args], { maxBuffer: 1 << 20 }, (error, stdout, stderr) => {
-      resolve({
-        code: typeof error?.code === "number" ? error.code : error ? 1 : 0,
-        stdout: (stdout || "").trim(),
-        stderr: (stderr || error?.message || "").trim(),
-      });
-    });
+    execFile(
+      "git",
+      ["-C", root, ...args],
+      { maxBuffer: 1 << 20 },
+      (error, stdout, stderr) => {
+        resolve({
+          code: typeof error?.code === "number" ? error.code : error ? 1 : 0,
+          stdout: (stdout || "").trim(),
+          stderr: (stderr || error?.message || "").trim(),
+        });
+      },
+    );
   });
 }
 
 async function requireGit(gitImpl, root, args) {
   const result = await gitImpl(root, args);
   if (typeof result === "string") return result;
-  if (result.code !== 0) throw new Error(result.stderr || result.stdout || `git ${args[0]} failed`);
+  if (result.code !== 0)
+    throw new Error(result.stderr || result.stdout || `git ${args[0]} failed`);
   return result.stdout;
 }
 
@@ -35,7 +48,9 @@ function packageVersion(jsonText) {
 }
 
 function stableParts(version) {
-  const match = String(version ?? "").match(/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/);
+  const match = String(version ?? "").match(
+    /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/,
+  );
   return match ? match.slice(1).map(Number) : null;
 }
 
@@ -50,18 +65,35 @@ export function compareStableVersions(localVersion, remoteVersion) {
   return 0;
 }
 
-export async function inspectUpstream({ root, remote = "origin", gitImpl = git } = {}) {
+export async function inspectUpstream({
+  root,
+  remote = "origin",
+  gitImpl = git,
+} = {}) {
   if (!root) throw new Error("update check requires a repository root");
   const run = async (...args) => {
     const result = await gitImpl(root, args);
-    return typeof result === "string" ? { code: 0, stdout: result, stderr: "" } : result;
+    return typeof result === "string"
+      ? { code: 0, stdout: result, stderr: "" }
+      : result;
   };
   const target = await resolveUpdateTarget({ git: run, remote });
   const local = await requireGit(gitImpl, root, ["rev-parse", "HEAD"]);
   const remoteHead = target.targetHead;
-  const behind = Number(await requireGit(gitImpl, root, ["rev-list", "--count", `HEAD..${remoteHead}`])) || 0;
-  const localVersion = packageVersion(await requireGit(gitImpl, root, ["show", "HEAD:package.json"]));
-  const remoteVersion = packageVersion(await requireGit(gitImpl, root, ["show", `${remoteHead}:package.json`]));
+  const behind =
+    Number(
+      await requireGit(gitImpl, root, [
+        "rev-list",
+        "--count",
+        `HEAD..${remoteHead}`,
+      ]),
+    ) || 0;
+  const localVersion = packageVersion(
+    await requireGit(gitImpl, root, ["show", "HEAD:package.json"]),
+  );
+  const remoteVersion = packageVersion(
+    await requireGit(gitImpl, root, ["show", `${remoteHead}:package.json`]),
+  );
   const versionComparison = compareStableVersions(localVersion, remoteVersion);
   const hasCommitUpdate = behind > 0 && local !== remoteHead;
   return {
@@ -85,22 +117,42 @@ export function updateOffer(localVersion, remoteVersion, locale = "en") {
       ? `⬆️ Доступна новая версия Iva\n\nv${localVersion} → v${remoteVersion}\nНастройки и локальные изменения будут сохранены.`
       : `⬆️ A new Iva version is available\n\nv${localVersion} → v${remoteVersion}\nSettings and local changes will be preserved.`,
     replyMarkup: {
-      inline_keyboard: [[
-        { text: ru ? "⬆️ Обновить" : "⬆️ Update", callback_data: "iva_update:do" },
-        { text: ru ? "Позже" : "Later", callback_data: "iva_update:skip" },
-      ]],
+      inline_keyboard: [
+        [
+          {
+            text: ru ? "⬆️ Обновить" : "⬆️ Update",
+            callback_data: "iva_update:do",
+          },
+          { text: ru ? "Позже" : "Later", callback_data: "iva_update:skip" },
+        ],
+      ],
     },
   };
 }
 
-export async function sendUpdateOffer({ token, chatId, offer, fetchImpl = fetch } = {}) {
-  const response = await fetchImpl(`https://api.telegram.org/bot${token}/sendMessage`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ chat_id: chatId, text: offer.text, reply_markup: offer.replyMarkup }),
-  });
-  const data = await response.json().catch(() => ({ ok: false, description: `HTTP ${response.status}` }));
-  if (!response.ok || !data.ok) throw new Error(data.description || `Telegram ${response.status}`);
+export async function sendUpdateOffer({
+  token,
+  chatId,
+  offer,
+  fetchImpl = fetch,
+} = {}) {
+  const response = await fetchImpl(
+    `https://api.telegram.org/bot${token}/sendMessage`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text: offer.text,
+        reply_markup: offer.replyMarkup,
+      }),
+    },
+  );
+  const data = await response
+    .json()
+    .catch(() => ({ ok: false, description: `HTTP ${response.status}` }));
+  if (!response.ok || !data.ok)
+    throw new Error(data.description || `Telegram ${response.status}`);
   return data.result;
 }
 
@@ -110,8 +162,12 @@ export function updateCheckStatePath(dataDir) {
 
 export async function readNotifiedVersion(dataDir) {
   try {
-    const state = JSON.parse(await readFile(updateCheckStatePath(dataDir), "utf8"));
-    return typeof state.lastNotifiedVersion === "string" ? state.lastNotifiedVersion : null;
+    const state = JSON.parse(
+      await readFile(updateCheckStatePath(dataDir), "utf8"),
+    );
+    return typeof state.lastNotifiedVersion === "string"
+      ? state.lastNotifiedVersion
+      : null;
   } catch {
     return null;
   }
@@ -122,9 +178,13 @@ export async function markVersionNotified(dataDir, version) {
   const path = updateCheckStatePath(dataDir);
   const temp = `${path}.${process.pid}.${Date.now()}.tmp`;
   try {
-    await writeFile(temp, `${JSON.stringify({ lastNotifiedVersion: version, notifiedAt: new Date().toISOString() })}\n`, {
-      mode: 0o600,
-    });
+    await writeFile(
+      temp,
+      `${JSON.stringify({ lastNotifiedVersion: version, notifiedAt: new Date().toISOString() })}\n`,
+      {
+        mode: 0o600,
+      },
+    );
     await rename(temp, path);
     await chmod(path, 0o600);
   } finally {

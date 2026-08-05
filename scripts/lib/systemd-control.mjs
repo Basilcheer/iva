@@ -32,18 +32,24 @@ export function cleanupSystemdUnits({ units, disable, remove, reload, reset }) {
     try {
       action();
     } catch (cause) {
-      errors.push(new Error(`${label}: ${cause?.message || String(cause)}`, { cause }));
+      errors.push(
+        new Error(`${label}: ${cause?.message || String(cause)}`, { cause }),
+      );
     }
   };
 
   const checkedUnits = units.map(safeUnit);
-  for (const unit of checkedUnits) attempt(`disable ${unit}`, () => disable(unit));
-  for (const unit of checkedUnits) attempt(`remove ${unit}`, () => remove(unit));
+  for (const unit of checkedUnits)
+    attempt(`disable ${unit}`, () => disable(unit));
+  for (const unit of checkedUnits)
+    attempt(`remove ${unit}`, () => remove(unit));
   attempt("daemon-reload", reload);
   attempt("reset-failed", reset);
 
   if (errors.length > 0) {
-    const shown = errors.slice(0, 8).map((error) => error.message.replace(/\s+/g, " ").slice(0, 240));
+    const shown = errors
+      .slice(0, 8)
+      .map((error) => error.message.replace(/\s+/g, " ").slice(0, 240));
     const omitted = errors.length - shown.length;
     const detail = `${shown.join("; ")}${omitted > 0 ? `; ${omitted} more failure(s)` : ""}`;
     throw new AggregateError(errors, `systemd unit cleanup failed: ${detail}`);
@@ -52,17 +58,21 @@ export function cleanupSystemdUnits({ units, disable, remove, reload, reset }) {
 }
 
 export function createSystemdControl({ run }) {
-  if (typeof run !== "function") throw new TypeError("systemd control requires run(args)");
+  if (typeof run !== "function")
+    throw new TypeError("systemd control requires run(args)");
 
   const query = (...args) => resultOf(run(args));
 
   function mutate(args, unit) {
     const result = query(...args);
     if (result.code !== 0) {
-      throw new SystemdControlError(`systemctl --user ${args.join(" ")} failed`, {
-        unit,
-        code: result.code,
-      });
+      throw new SystemdControlError(
+        `systemctl --user ${args.join(" ")} failed`,
+        {
+          unit,
+          code: result.code,
+        },
+      );
     }
     return result;
   }
@@ -105,7 +115,10 @@ export function createSystemdControl({ run }) {
         safeUnit(unit);
         mutate(["restart", unit], unit);
         if (!isActive(unit)) {
-          throw new SystemdControlError(`${unit} did not become active after restart`, { unit });
+          throw new SystemdControlError(
+            `${unit} did not become active after restart`,
+            { unit },
+          );
         }
       }
     },

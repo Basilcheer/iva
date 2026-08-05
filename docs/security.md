@@ -45,7 +45,7 @@ The setup and upgrade paths generate `ASSISTANT_BEARER` automatically and keep `
 
 ## Host access
 
-Iva's tools (`bash`, `read_file`, `write_file`, `glob`, `grep`) run host-native on your VPS — Node `fs` and `child_process`, no Docker, no sandbox. That's deliberate: it can read your files, fix its own config, run your scripts. It also means a hijacked turn has whatever access the service user has. Run the installer as a dedicated non-root user; everything is systemd *user* units, so Iva inherits exactly that user's permissions and nothing more.
+Iva's tools (`bash`, `read_file`, `write_file`, `glob`, `grep`) run host-native on your VPS — Node `fs` and `child_process`, no Docker, no sandbox. That's deliberate: it can read your files, fix its own config, run your scripts. It also means a hijacked turn has whatever access the service user has. Run the installer as a dedicated non-root user; everything is systemd _user_ units, so Iva inherits exactly that user's permissions and nothing more.
 
 ## Privacy
 

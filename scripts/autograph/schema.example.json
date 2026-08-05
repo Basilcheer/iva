@@ -60,12 +60,29 @@
 
   "richness_fields": {
     "_comment": "frontmatter fields that indicate content richness (used by dedup)",
-    "bonus_fields": ["telegram", "email", "company", "role", "source", "deal_status", "responsible"]
+    "bonus_fields": [
+      "telegram",
+      "email",
+      "company",
+      "role",
+      "source",
+      "deal_status",
+      "responsible"
+    ]
   },
 
   "conflict_fields": {
     "_comment": "scalar facts where a NEW differing value supersedes the old (recency wins); the losing value is recorded to ## History. Used by dedup merge + supersede scan.",
-    "fields": ["company", "role", "status", "handle", "platform", "phone", "email", "title"]
+    "fields": [
+      "company",
+      "role",
+      "status",
+      "handle",
+      "platform",
+      "phone",
+      "email",
+      "title"
+    ]
   },
 
   "identity": {
@@ -80,8 +97,17 @@
 
   "entity_extraction": {
     "_comment": "settings for daily.py entity extraction",
-    "noise_words": ["TODO", "FIX", "NEW", "UPDATED", "Phase", "Score", "Vault",
-                    "Health", "Pricing"]
+    "noise_words": [
+      "TODO",
+      "FIX",
+      "NEW",
+      "UPDATED",
+      "Phase",
+      "Score",
+      "Vault",
+      "Health",
+      "Pricing"
+    ]
   },
 
   "decay": {
@@ -96,9 +122,9 @@
       "_comment": "type-specific decay rates (override default rate)",
       "contact": 0.005,
       "crm": 0.008,
-      "learning": 0.010,
+      "learning": 0.01,
       "project": 0.012,
-      "daily": 0.020
+      "daily": 0.02
     }
   },
 

@@ -1,6 +1,7 @@
 ---
-tags: [a, b, 'c d']
+tags: [a, b, "c d"]
 title: "Hello: world"
-nick: 'Ива'
+nick: "Ива"
 ---
+
 x

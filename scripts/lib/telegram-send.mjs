@@ -20,26 +20,50 @@ async function post(bot, body) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  return { ok: res.ok, status: res.status, text: res.ok ? "" : await res.text() };
+  return {
+    ok: res.ok,
+    status: res.status,
+    text: res.ok ? "" : await res.text(),
+  };
 }
 
-export async function sendTelegramHtml(bot, chat, md, { caption = false } = {}) {
+export async function sendTelegramHtml(
+  bot,
+  chat,
+  md,
+  { caption = false } = {},
+) {
   let fellBack = false;
   // Outbound security-гейт: редактим утёкшие секреты и в ночных отчётах (fail-open + лог).
   const guard = scanOutbound(md);
   if (!guard.clean) {
-    console.error("[security] outbound report leak redacted:", guard.findings.map((f) => `${f.type}:${f.name}`).join(", "));
+    console.error(
+      "[security] outbound report leak redacted:",
+      guard.findings.map((f) => `${f.type}:${f.name}`).join(", "),
+    );
   }
   md = guard.text;
   try {
     for (const chunk of toTelegramHtmlChunks(md, caption ? 1024 : 4096)) {
-      const r = await post(bot, { chat_id: chat, text: chunk, parse_mode: "HTML" });
+      const r = await post(bot, {
+        chat_id: chat,
+        text: chunk,
+        parse_mode: "HTML",
+      });
       if (r.ok) continue;
       // 400 = Telegram не распарсил HTML. Одна повторная попытка без тегов/parse_mode.
       if (r.status === 400) {
         fellBack = true;
-        const plain = await post(bot, { chat_id: chat, text: htmlToPlain(chunk) });
-        if (!plain.ok) return { ok: false, fellBack, error: `plain retry ${plain.status}: ${plain.text}` };
+        const plain = await post(bot, {
+          chat_id: chat,
+          text: htmlToPlain(chunk),
+        });
+        if (!plain.ok)
+          return {
+            ok: false,
+            fellBack,
+            error: `plain retry ${plain.status}: ${plain.text}`,
+          };
         continue;
       }
       return { ok: false, fellBack, error: `${r.status}: ${r.text}` };
