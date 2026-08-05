@@ -128,7 +128,7 @@ Headless installs take `--skip-setup` or `--non-interactive`. Wizard walkthrough
 
 The bridge long-polls Telegram, so no public HTTPS, domain or webhook is needed. Iva runs as two systemd user services, two systemd watchdog timers and five in-process eve schedules — operations live in [docs/deploy.md](docs/deploy.md).
 
-## Telegram All
+## Telegram AI
 
 <img src="assets/iva-userbot.webp" alt="Your secretary inside Telegram: the userbot reads group chats from your own account, collects summaries and replies as you, guarded by a server-enforced anti-ban guardrail" width="100%">
 
