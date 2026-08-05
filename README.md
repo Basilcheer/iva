@@ -131,6 +131,25 @@ The rest — for business owners, specialists, executives and everyday life: **[
 
 Full architecture and search internals: [docs/memory.md](docs/memory.md).
 
+## Telegram AI
+
+<img src="assets/iva-userbot.webp" alt="Your secretary inside Telegram: the userbot reads group chats from your own account, collects summaries and replies as you, guarded by a server-enforced anti-ban guardrail" width="100%">
+
+The bot is half of Telegram. The other half is your personal account: connect the userbot (beta, opt-in) and Iva works from it like a secretary — reads the group chats you never keep up with, folds them into summaries, catches the messages that actually need you, and replies as you.
+
+- **All of Telegram** — groups, channels, unreads, search and the full history of your personal account.
+- **Onboarding in chat** — tell the bot to connect your Telegram, scan a QR. No terminal.
+- **Anti-ban guardrail on the server** — FloodWait compliance, a randomized delay after every send, and a circuit-breaker that pauses sending after three warnings in a day. The agent can't bypass it: the rules live in the proxy, not in a prompt.
+- **Read-only mode** — one `.env` switch and Iva can read and search but physically cannot send.
+
+Automating a personal account is against Telegram's ToS: opt-in, at your own risk, and reading is far safer than sending. Details: [docs/userbot.md](docs/userbot.md).
+
+## Security & privacy
+
+<img src="assets/iva-security-gate.webp" alt="Untrusted input from Telegram, web and email passes the security gate: corrupted messages drop into the reject tray, only clean context reaches the vault" width="100%">
+
+Inbound content passes a prompt-injection sanitizer, every reply passes a secret-redaction gate, and the user allowlist fails closed — an empty list answers nobody. Your memory is a private git repo you own; the honest boundary is that the model and transcription are cloud APIs you choose and pay for. Gate internals: [docs/security.md](docs/security.md).
+
 ## Install
 
 One command on any Ubuntu/Debian box — a fresh VPS or your own machine:
@@ -157,19 +176,6 @@ The installer reuses the existing checkout instead of re-cloning, keeps `.env` a
 
 </details>
 
-## Telegram AI
-
-<img src="assets/iva-userbot.webp" alt="Your secretary inside Telegram: the userbot reads group chats from your own account, collects summaries and replies as you, guarded by a server-enforced anti-ban guardrail" width="100%">
-
-The bot is half of Telegram. The other half is your personal account: connect the userbot (beta, opt-in) and Iva works from it like a secretary — reads the group chats you never keep up with, folds them into summaries, catches the messages that actually need you, and replies as you.
-
-- **All of Telegram** — groups, channels, unreads, search and the full history of your personal account.
-- **Onboarding in chat** — tell the bot to connect your Telegram, scan a QR. No terminal.
-- **Anti-ban guardrail on the server** — FloodWait compliance, a randomized delay after every send, and a circuit-breaker that pauses sending after three warnings in a day. The agent can't bypass it: the rules live in the proxy, not in a prompt.
-- **Read-only mode** — one `.env` switch and Iva can read and search but physically cannot send.
-
-Automating a personal account is against Telegram's ToS: opt-in, at your own risk, and reading is far safer than sending. Details: [docs/userbot.md](docs/userbot.md).
-
 ## Providers & cost
 
 Four model providers. Pick one and fill its block in `.env`:
@@ -182,12 +188,6 @@ Four model providers. Pick one and fill its block in `.env`:
 | OpenAI (ChatGPT) | your Plus/Pro subscription, no API key |
 
 Default model is deepseek-v4-pro, 131k context. On Go it runs about $9/mo all-in ($5 model + $4–5 VPS), no markup; voice rides Deepgram's free starter credit. Model lists, limits and the search matrix: [docs/providers.md](docs/providers.md).
-
-## Security & privacy
-
-<img src="assets/iva-security-gate.webp" alt="Untrusted input from Telegram, web and email passes the security gate: corrupted messages drop into the reject tray, only clean context reaches the vault" width="100%">
-
-Inbound content passes a prompt-injection sanitizer, every reply passes a secret-redaction gate, and the user allowlist fails closed — an empty list answers nobody. Your memory is a private git repo you own; the honest boundary is that the model and transcription are cloud APIs you choose and pay for. Gate internals: [docs/security.md](docs/security.md).
 
 ## Documentation
 
