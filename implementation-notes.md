@@ -499,3 +499,68 @@
   examples containing structural headings remain byte-identical.
 - The dbrain skill chooses semantic operations, rereads every touched card, and
   consumes compile candidates; deterministic code keeps structural invariants.
+
+## TypeScript migration (PR-0 through PR-12)
+
+### 2026-08-06 (Asia/Tashkent)
+
+- Bootstrap completed on `main` at `d099da5`: `npm ci`, `npm run typecheck`, and
+  `npm run build` passed. The approved handoff plan remains an untracked local
+  file at `notes/plans/2026-08-06-ts-migration.md` and is excluded from migration
+  commits.
+- The factual PR-0 baseline is 160 tracked `.mjs` files and 73 tracked
+  `*.test.mjs` files. PR #151 added `scripts/golden-parsers.test.mjs` after the
+  handoff recorded 159 and 72, so discovery equivalence uses 73 files.
+- `@eslint/js` and `globals` are direct development dependencies because the flat
+  config imports both. TypeScript is constrained to `~6.0.3`, matching
+  typescript-eslint's `<6.1.0` peer range. A newly disclosed transitive
+  `brace-expansion` audit finding was cleared by resolving its patched 5.0.9
+  release before the dependency commit.
+- Prettier uses its defaults because the plan sets no style overrides. The local,
+  untracked handoff path is ignored so `npm run format` and `format:check` do not
+  rewrite or reject that approved input.
+- PR-0 must add `eslint.config.mjs`, increasing the post-infrastructure tracked
+  count from 160 to 161. The PR-0 ratchet therefore starts at the factual 161;
+  PR-12 will convert the config to `eslint.config.ts` so the final five-file
+  acceptance remains reachable.
+- The underspecified and overlapping conversion layers are partitioned uniquely:
+  PR-1 handles the first 13 `scripts/lib` leaves; PR-2 the next 13; PR-3 the final
+  nine leaves plus four menu leaves. PR-4 owns six middle core modules, six menu
+  screens, and poller config. PR-5 owns six middle runtime modules, two menu
+  screens, and poller transport/offset. PR-6 owns only the seven remaining poller
+  modules and two fixtures; PR-7 owns the remaining menu service/index pair.
+- Because PR-6's `poller/control.ts` must import the still-JavaScript menu hub, PR-6
+  will add a narrow temporary `menu/index.d.mts` declaration and PR-7 will remove
+  it with the real `index.ts`. This preserves the approved ordering and runtime
+  import semantics.
+- Final `.mjs` reference verification treats references to the five approved shim
+  paths as an explicit allowlist. Install scripts, units, package metadata, and
+  runtime string paths must keep those references; every other live `.mjs`
+  reference must be removed.
+- While starting PR-0, the existing implementation notes were accidentally
+  replaced locally. They were restored byte-for-byte from `HEAD` before any
+  commit, this append-only section was added, and the local rule now requires an
+  additions-only diff check before committing notes.
+- Typed lint exposed unchecked JSON and framework boundaries in existing
+  TypeScript. Valid payload behavior is unchanged; malformed Telegram collector
+  parts are now filtered, nonnumeric Telegram `message_id` values are ignored,
+  and malformed persisted graph/schema/session/history objects take their
+  existing empty/fallback paths. Non-finite persisted numeric values are also
+  rejected. A regression test covers malformed collector entries.
+- The existing run-status lock-timeout text includes its resolved lock path.
+  PR-0 preserves that diagnostic to keep lint cleanup behavior-neutral and drops
+  the caught OS error from `cause`; sanitizing the legacy message is deferred as
+  a separate behavior change.
+- The first post-Prettier full suite exposed that
+  `scripts/autograph/tests/golden/` contains byte-significant parser fixtures.
+  Seventeen formatted fixtures were restored from pre-migration `main`, and the
+  directory is now ignored by Prettier. The same run also hit the existing
+  `timeout leaves no TERM-resistant child PID behind` timing test once; that
+  isolated test must pass before treating it as a blocker.
+- The old explicit CI globs and Node 24 default discovery both select the same 73
+  tracked test files. Both commands completed with 595 passing tests, so `npm
+test` now uses `node --test`.
+- Native Node coverage measured 72.62% lines, 79.13-79.15% branches, and 71.59%
+  functions across repeated full runs. Integer floors of 72, 79, and 71 are the
+  initial deterministic CI thresholds; later migration batches may only raise
+  them.
