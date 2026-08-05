@@ -120,6 +120,19 @@ Headless installs take `--skip-setup` or `--non-interactive`. Wizard walkthrough
 
 The bridge long-polls Telegram, so no public HTTPS, domain or webhook is needed. Iva runs as two systemd user services, two systemd watchdog timers and five in-process eve schedules — operations live in [docs/deploy.md](docs/deploy.md).
 
+## Your secretary inside Telegram
+
+<img src="assets/iva-userbot.webp" alt="Your secretary inside Telegram: the userbot reads group chats from your own account, collects summaries and replies as you, guarded by a server-enforced anti-ban guardrail" width="100%">
+
+The bot is half of Telegram. The other half is your personal account: connect the userbot (beta, opt-in) and Iva works from it like a secretary — reads the group chats you never keep up with, folds them into summaries, catches the messages that actually need you, and replies as you.
+
+- **All of Telegram** — groups, channels, unreads, search and the full history of your personal account.
+- **Onboarding in chat** — tell the bot to connect your Telegram, scan a QR. No terminal.
+- **Anti-ban guardrail on the server** — FloodWait compliance, a randomized delay after every send, and a circuit-breaker that pauses sending after three warnings in a day. The agent can't bypass it: the rules live in the proxy, not in a prompt.
+- **Read-only mode** — one `.env` switch and Iva can read and search but physically cannot send.
+
+Automating a personal account is against Telegram's ToS: opt-in, at your own risk, and reading is far safer than sending. Details: [docs/userbot.md](docs/userbot.md).
+
 ## Providers & cost
 
 Four model providers. Pick one and fill its block in `.env`:
