@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-floating-promises -- Node's test runner owns registration promises. */
 import assert from "node:assert/strict";
-import { mkdtempSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -12,7 +12,8 @@ const { removeStaleUpdateJobs } = (await import(
   `./update-flow.ts?characterize=${Date.now()}`
 )) as { removeStaleUpdateJobs: () => Promise<void> };
 
-test("stale update-job cleanup removes only expired JSON job files", async () => {
+test("stale update-job cleanup removes only expired JSON job files", async (t) => {
+  t.after(() => rmSync(dataDir, { recursive: true, force: true }));
   const jobs = join(dataDir, "update-jobs");
   await import("node:fs/promises").then(({ mkdir }) => mkdir(jobs));
   const oldJob = join(jobs, "old.json");

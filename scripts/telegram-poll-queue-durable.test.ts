@@ -157,20 +157,23 @@ test("direct routing runtime durably queues a busy private update", async () => 
 test("direct delivery runtime requires the accepted-route receipt", async (t: TestContext) => {
   const originalFetch = globalThis.fetch;
   const calls: FetchCall[] = [];
+  let includeAcceptanceReceipt = true;
   globalThis.fetch = async (url, init) => {
     const requestUrl =
       typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
     calls.push({ url: requestUrl, init });
     return new Response(null, {
       status: 204,
-      headers: { "x-iva-telegram-acceptance": "turn" },
+      headers: includeAcceptanceReceipt
+        ? { "x-iva-telegram-acceptance": "turn" }
+        : undefined,
     });
   };
   t.after(() => {
     globalThis.fetch = originalFetch;
   });
 
-  const accepted = await deliverRuntime.deliver({
+  const update = {
     update_id: 601,
     message: {
       message_id: 601,
@@ -178,11 +181,20 @@ test("direct delivery runtime requires the accepted-route receipt", async (t: Te
       from: { id: 42, is_bot: false },
       text: "hello",
     },
-  });
+  };
+
+  const accepted = await deliverRuntime.deliver(update);
 
   assert.equal(accepted, true);
   assert.equal(calls.length, 1);
   assert.match(calls[0].url, /\/eve\/v1\/telegram\/accepted$/);
+
+  includeAcceptanceReceipt = false;
+  const requestsBeforeMissingReceipt = calls.length;
+  const retained = await deliverRuntime.deliver(update, { retry: false });
+
+  assert.equal(retained, false);
+  assert.equal(calls.length, requestsBeforeMissingReceipt + 1);
 });
 
 for (const fault of ["write", "rename"]) {
