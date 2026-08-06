@@ -863,3 +863,10 @@ the Node event loop is blocked` assertion once. Two later sequential suites hit
   installed `eve/hooks` export; an unchanged immediate rerun passed, so it was
   recorded as a transient local dependency-resolution event rather than a code
   failure.
+- 2026-08-06 Asia/Tashkent: `origin/main` remained at the PR-4 merge during the
+  required pre-push pull/rebase. The entire gate set was repeated on the
+  committed post-pull tree: 657 / 653 / 0 / 4, coverage 75.91% lines, 79.08%
+  branches, and 73.56% functions, exact 56/56 ratchet, lint, formatting,
+  typecheck, build, replica, both Python test suites, deterministic userbot
+  lock, and all Python 3.12 userbot checks are green. The PR diff check is clean,
+  and the two approved untracked handoff files remain outside Git.
