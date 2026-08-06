@@ -65,14 +65,15 @@ export function resolveTurnTimeoutMs(
 }
 
 export class RollupTurnTimeoutError extends Error {
-  readonly code = "ROLLUP_TURN_TIMEOUT";
-  readonly label: string;
+  declare readonly code: "ROLLUP_TURN_TIMEOUT";
+  declare readonly label: string;
 
   constructor(label: string, timeoutMs: number) {
     super(
       `rollup turn "${label}" timed out after ${Math.round(timeoutMs / 1000)}s`,
     );
     this.name = "RollupTurnTimeoutError";
+    this.code = "ROLLUP_TURN_TIMEOUT";
     this.label = label;
   }
 }

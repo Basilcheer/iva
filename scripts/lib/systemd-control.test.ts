@@ -602,3 +602,16 @@ void test("unit removal preserves legacy cleanup error normalization", () => {
     },
   );
 });
+
+void test("systemd errors preserve legacy enumerable property order", () => {
+  const error = new systemdControl.SystemdControlError("failed", {
+    unit: "iva.service",
+    code: 1,
+  });
+
+  assert.deepEqual(Object.keys(error), ["name", "unit", "code"]);
+  assert.equal(
+    JSON.stringify(error),
+    '{"name":"SystemdControlError","unit":"iva.service","code":1}',
+  );
+});

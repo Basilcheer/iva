@@ -47,8 +47,8 @@ function journalHint(unit: string): string {
 }
 
 export class SystemdControlError extends Error {
-  readonly unit: string | undefined;
-  readonly code: number | undefined;
+  declare readonly unit: string | undefined;
+  declare readonly code: number | undefined;
 
   constructor(
     message: string,

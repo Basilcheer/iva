@@ -222,6 +222,7 @@ void test("a hung turn rejects with a labelled timeout error", async () => {
       assert.ok(e instanceof RollupTurnTimeoutError);
       assert.equal(e.code, "ROLLUP_TURN_TIMEOUT");
       assert.equal(e.label, "main-turn");
+      assert.deepEqual(Object.keys(e), ["name", "code", "label"]);
       return true;
     },
   );

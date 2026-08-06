@@ -673,3 +673,8 @@ the Node event loop is blocked` assertion once. Two later sequential suites hit
   `error?.code` access at runtime. The separate compatibility fix restores
   optional access and directly proves that nullish injected filesystem/link
   failures are rethrown unchanged.
+- 2026-08-06 Asia/Tashkent: Native TypeScript stripping had materialized
+  type-only Error properties before their constructors ran, changing enumerable
+  key order from the source JavaScript. `declare` keeps the fields type-only;
+  constructor assignments now reproduce the original Rollup and systemd error
+  serialization order, covered by direct regression assertions.
