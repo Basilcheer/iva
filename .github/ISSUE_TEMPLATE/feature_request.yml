@@ -1,0 +1,40 @@
+name: Feature request
+description: Something Iva should be able to do
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before writing: most new behaviour in Iva is a **skill** — a markdown file the
+        agent reads — not new code. See [docs/philosophy.md](https://github.com/smixs/iva/blob/main/docs/philosophy.md)
+        and [docs/extending.md](https://github.com/smixs/iva/blob/main/docs/extending.md).
+        If your idea fits there, you can likely ship it yourself in one file.
+  - type: textarea
+    id: problem
+    attributes:
+      label: The situation
+      description: What you were doing when you wished Iva could do this. Real case, not a feature name.
+      placeholder: |
+        Every Monday I paste last week's client threads into a doc by hand to see
+        what I promised anyone.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What Iva should do
+      description: Describe it as the conversation you'd have with the bot.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you tried instead
+      description: Existing commands, a skill, another tool — and why it fell short.
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Shape of it
+      options:
+        - label: I think this is a skill (markdown), not new code
+        - label: I would be up for implementing it

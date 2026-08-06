@@ -1,0 +1,85 @@
+name: Bug report
+description: Something in Iva behaves wrong on a real install
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Security problems do not belong here — use
+        [private reporting](https://github.com/smixs/iva/security/advisories/new),
+        or email mixshima@gmail.com if that page is unavailable to you. Everything
+        else: the more of the below you fill in, the faster this gets fixed.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what Iva did, what you expected instead.
+      placeholder: |
+        Sent a voice note in Russian. Iva replied "processing" and nothing arrived.
+        Expected a transcript and a card in the vault.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: The shortest path from a working install to the bug.
+      placeholder: |
+        1. /new
+        2. Send a 30-second voice note
+        3. Wait
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `iva version`.
+      placeholder: "iva 0.3.12 · commit a1b2c3d"
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: How it was installed
+      options:
+        - install.sh on a fresh VPS
+        - install.sh on my own machine
+        - Clone + bash install.sh
+        - Updated from an older version
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: provider
+    attributes:
+      label: Model provider
+      options:
+        - OpenCode Go
+        - Ollama Cloud
+        - OpenRouter
+        - OpenAI (ChatGPT subscription)
+        - Other / self-hosted
+  - type: input
+    id: os
+    attributes:
+      label: OS and Node version
+      placeholder: "Ubuntu 24.04, Node 24.4.0"
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: |
+        `iva logs poll` (the Telegram bridge) is the safe one — it logs no message text.
+        Avoid pasting `iva logs`: on a provider error the agent's log can contain your
+        `CORE.md`, retrieved cards and the message itself. Strip tokens, keys and chat IDs.
+      render: shell
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I am on the latest release (`iva update` or the Update button)
+          required: true
+        - label: I removed secrets from anything I pasted
+          required: true

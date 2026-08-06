@@ -4,7 +4,7 @@ Iva is a self-hosted personal Telegram assistant built on the eve agent framewor
 (TypeScript ESM). Core runtime lives in `agent/` (import alias `#*` → `./agent/*`),
 operational scripts in `scripts/`, CLI entry in `bin/iva.mjs`.
 
-Design philosophy (skill vs code, thin harness, the wheel principle): PHILOSOPHY.md.
+Design philosophy (skill vs code, thin harness, the wheel principle): docs/philosophy.md.
 Before wiring a new feature into code, check it against that document — most
 recurring problems should become skills, not mechanisms.
 
