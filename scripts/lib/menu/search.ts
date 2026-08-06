@@ -44,10 +44,14 @@ type MenuContext = {
 // посторонние). st не хранит chat.type, поэтому опираемся на знак chatId — надёжно.
 const isPrivate = (st: MenuState) => Number(st.chatId) > 0;
 
+function isProvider(value: unknown): value is Provider {
+  return typeof value === "string" && Object.hasOwn(SEARCH_CATALOG, value);
+}
+
 // Текущий провайдер из .env (свежим чтением — снимок процесса устаревает после upsertEnv).
 function currentProvider(env: Record<string, string>): Provider {
   const p = env.SEARCH_PROVIDER;
-  return p && p in SEARCH_CATALOG ? (p as Provider) : DEFAULT_PROVIDER;
+  return isProvider(p) ? p : DEFAULT_PROVIDER;
 }
 
 // Экран-приглашение ввести ключ: ставит awaitText (перехват следующего текста движком)
@@ -150,9 +154,9 @@ export default {
 
   async on(verb: string, args: string[], st: MenuState, ctx: MenuContext) {
     if (verb === "set") {
-      const provider = args[0] as Provider;
+      const provider = args[0];
+      if (!isProvider(provider)) return ctx.show(st, SID);
       const cat = SEARCH_CATALOG[provider];
-      if (!cat) return ctx.show(st, SID);
       const env = await readEnvValues(ctx.deps.envPath);
       if (!env[cat.keyVar]) return promptKey(st, ctx, provider); // нет ключа → приём
       await upsertEnv(ctx.deps.envPath, { SEARCH_PROVIDER: provider }); // ключ есть → просто переключаем
@@ -160,10 +164,9 @@ export default {
     }
     if (verb === "key") {
       // «Сменить ключ» — приём ключа для указанного провайдера независимо от наличия.
-      const provider =
-        args[0] in SEARCH_CATALOG
-          ? (args[0] as Provider)
-          : currentProvider(await readEnvValues(ctx.deps.envPath));
+      const provider = isProvider(args[0])
+        ? args[0]
+        : currentProvider(await readEnvValues(ctx.deps.envPath));
       return promptKey(st, ctx, provider);
     }
     if (verb === "rs") {
@@ -208,11 +211,10 @@ export default {
     ) {
       const key = String(text).trim();
       const data = st.awaitText?.data ?? {};
-      const provider = data.provider as Provider;
-      const cat = SEARCH_CATALOG[provider];
+      const provider = data.provider;
       // Не похоже на ключ (пробелы/слишком коротко) — обычный текст, набранный при ждущем
       // приглашении. Не храним, снимаем ожидание, чтобы чат снова работал.
-      if (!/^\S{8,}$/.test(key) || !cat) {
+      if (!/^\S{8,}$/.test(key) || !isProvider(provider)) {
         st.awaitText = null;
         return ctx.flows.end(
           st,
@@ -223,6 +225,7 @@ export default {
           [ctx.backRow(PARENT)],
         );
       }
+      const cat = SEARCH_CATALOG[provider];
       const err = await checkSearchKey(provider, key);
       if (err) {
         // Причина отказа не содержит значения ключа (см. checkSearchKey) — печатать безопасно.

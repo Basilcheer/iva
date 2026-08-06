@@ -262,6 +262,38 @@ test("search: тап по провайдеру без ключа ставит с
   assert.equal(st.awaitText.data.provider, "brave");
 });
 
+test("search: inherited property names are never accepted as providers", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "iva-env-provider-"));
+  const envPath = join(dir, ".env");
+  writeFileSync(envPath, "SEARCH_PROVIDER=toString\n");
+  const h = makeCtx({
+    lang: "en",
+    deps: { envPath, sc: () => Promise.resolve(true) },
+    screens: { srch: searchScreen },
+  });
+  const st = newState({ screen: "srch", chatId: 555 });
+  h.st = st;
+
+  const view = await searchScreen.render(st, h.ctx);
+  const tavily = view.rows
+    .flat()
+    .find((button) => button.callback_data === "iva_menu:srch:set:tavily");
+  assert.ok(tavily?.text.startsWith("✓ "));
+
+  await searchScreen.on("set", ["toString"], st, h.ctx);
+  assert.equal(st.awaitText, null);
+
+  st.awaitText = {
+    kind: "apikey",
+    secret: true,
+    data: { provider: "toString" },
+  };
+  await searchScreen.texts?.apikey("abcdefgh", null, st, h.ctx);
+  assert.equal(st.awaitText, null);
+  assert.match(st._last?.text ?? "", /doesn't look like a key/);
+  assert.equal(readFileSync(envPath, "utf8"), "SEARCH_PROVIDER=toString\n");
+});
+
 // ── 3. gws: валидация shape client_secret.json (bad JSON / неверная форма / успех 0600) ──
 test("gws.gwsjson: bad JSON и неверная форма отвергаются, валидный секрет пишется 0600", async () => {
   const home = mkdtempSync(join(tmpdir(), "iva-home-"));
