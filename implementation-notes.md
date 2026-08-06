@@ -803,3 +803,20 @@ the Node event loop is blocked` assertion once. Two later sequential suites hit
   72.84%, with a conservative merged-PR-3 delta of +0.83 / -0.34 / +0.87
   percentage points. The exact PR diff check remains clean, and only the two
   approved untracked handoff files remain outside Git.
+- 2026-08-06 Asia/Tashkent: PR-4's first hosted CodeRabbit run produced six
+  comments. Two requests to restore `.test.mjs` entry points conflict with the
+  approved migration plan and are deferred to the planned PR-12 convention
+  update. The request to make schedule-migration error normalization null-safe
+  would change the source module's direct `error.message` behavior and was also
+  rejected as conversion scope drift. The token-shaped poller fixture was
+  cleaned up without changing its value. Two valid pre-existing boundary bugs
+  were fixed in separate commits: Codex JWT account claims now accept only
+  non-empty strings, and search-provider inputs now require own catalog keys
+  instead of accepting inherited names such as `toString`.
+- 2026-08-06 Asia/Tashkent: Post-review verification is clean: 650 tests, 646
+  passed, zero failed, and four expected macOS skips. Coverage is 75.18% lines,
+  79.27% branches, and 73.11% functions. Lint, formatting, 73/73 ratchet,
+  typecheck, build, replica, autograph 343/343, security-defense 45/45,
+  deterministic userbot lock, and Python 3.12 userbot gates all pass. The three
+  review fixes will be delivered in one incremental push to conserve the Pro
+  review allowance.
