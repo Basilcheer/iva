@@ -14,8 +14,50 @@ import { compactNumber, modelSummary } from "../lib/model-summary.ts";
 import { getLang, tr } from "#lib/i18n.mjs";
 import { readEnvValues, upsertEnv } from "../lib/env-file.ts";
 import { createFlows } from "../lib/tg-flow.ts";
+import type { ModelOption } from "../lib/model-catalog.ts";
+import type { TelegramFlowState } from "../lib/tg-flow.ts";
 import { ALLOWED, DATA_DIR_ABS, ENV_PATH, log } from "./config.ts";
 import { reply, sc, tg } from "./transport.ts";
+
+type FlowId = number | string;
+
+type WizardState = Omit<TelegramFlowState, "chatId" | "userId" | "msgId"> & {
+  chatId: FlowId;
+  userId: FlowId;
+  msgId: number | null;
+  provider: string;
+  modelOptions: ModelOption[];
+  model: string;
+  efforts: string[];
+  effort: string | null;
+  step: string;
+  pendingKey?: string | null;
+  reenterKey?: string | null;
+};
+type WizardRequestResult<T> =
+  | { stale: true; ok?: false; value?: never; error?: never }
+  | { stale?: false; ok: true; value: T; error?: never }
+  | { stale?: false; ok: false; value?: never; error: unknown };
+type TelegramResult = {
+  ok: boolean;
+  result?: { message_id: number };
+  description?: string;
+};
+type WizardTransport = (
+  method: string,
+  body: Record<string, unknown>,
+) => Promise<TelegramResult>;
+const wizardTg = tg as unknown as WizardTransport;
+const errorMessage = (error: unknown) =>
+  (error as { message?: unknown } | null | undefined)?.message;
+type WizardSnapshot = {
+  msgId?: number | null;
+  step?: string;
+  modelOptions?: ModelOption[];
+  efforts?: string[];
+  effort?: string | null;
+  model?: string;
+};
 
 // ── /model & /think wizard (out-of-band, inline keyboards) ─────────────────
 // State lives in memory keyed by `${chatId}:${userId}`; each flow edits ONE message
@@ -25,22 +67,41 @@ import { reply, sc, tg } from "./transport.ts";
 // пользователя делят /model, /think и /menu. Локальные алиасы сохраняют исходные call-sites —
 // дифф визарда минимальный, а стейт-семантика (ключ chatId:userId, TTL 15 мин, identity-replace,
 // edit-in-place) дословно та же.
-const flows = createFlows({ tg, log });
-const getWizard = (chatId, userId) => flows.get(chatId, userId);
-const newWizard = (chatId, userId, flow, extra) =>
-  flows.start(chatId, userId, flow, extra);
-const wizScreen = (st, text, rows) => flows.screen(st, text, rows);
-const endWizard = (st, text, rows) => flows.end(st, text, rows);
-const wizardIsCurrent = (st) => flows.get(st.chatId, st.userId) === st;
+const flows = createFlows({ tg: wizardTg, log });
+const getWizard = (
+  chatId: FlowId | undefined,
+  userId: FlowId,
+): WizardState | null =>
+  flows.get(chatId as number, userId as number) as WizardState | null;
+const newWizard = (
+  chatId: FlowId,
+  userId: FlowId,
+  flow: string,
+  extra: Record<string, unknown> = {},
+): WizardState =>
+  flows.start(chatId as number, userId as number, flow, extra) as WizardState;
+const wizScreen = (
+  st: WizardState,
+  text: string,
+  rows?: Array<Array<Record<string, unknown>>>,
+) => flows.screen(st as TelegramFlowState, text, rows);
+const endWizard = (
+  st: WizardState,
+  text: string,
+  rows?: Array<Array<Record<string, unknown>>>,
+) => flows.end(st as TelegramFlowState, text, rows);
+const wizardIsCurrent = (st: WizardState) =>
+  flows.get(st.chatId as number, st.userId as number) === st;
 
 // A network result belongs to the wizard object that started it. The slot can be
 // replaced while the request is pending (Cancel, /menu, another /model), so both
 // success and error must be discarded before either path mutates or renders state.
-export async function runWizardRequest(
-  st,
-  request,
-  isCurrent = wizardIsCurrent,
-) {
+export async function runWizardRequest<T>(
+  st: unknown,
+  request: () => Promise<T>,
+  isCurrent: (state: unknown) => boolean = (state) =>
+    wizardIsCurrent(state as WizardState),
+): Promise<WizardRequestResult<T>> {
   try {
     const value = await request();
     return isCurrent(st) ? { ok: true, value } : { stale: true };
@@ -51,16 +112,22 @@ export async function runWizardRequest(
 
 const EFFORT_SET = new Set(EFFORTS);
 // effortLabel — функция (tr на месте вызова): язык не замораживается в module-level const.
-const effortLabel = (v) =>
+const effortLabel = (v: string | null) =>
   v && EFFORT_SET.has(v) ? v : tr("not set", "не задан");
 
-export function isStaleWizard(st, messageId) {
+export function isStaleWizard(
+  st: WizardSnapshot | null,
+  messageId: number | undefined,
+) {
   return (
     !st || (st.msgId != null && messageId != null && st.msgId !== messageId)
   );
 }
 
-export function wizardActionAllowed(st, action) {
+export function wizardActionAllowed(
+  st: Pick<WizardSnapshot, "step"> | null,
+  action: string,
+) {
   if (!st || action === "cancel") return Boolean(st);
   if (action === "keep") return st.step === "intro" || st.step === "effort";
   if (action === "chg") return st.step === "intro";
@@ -72,7 +139,10 @@ export function wizardActionAllowed(st, action) {
   return false;
 }
 
-export function selectWizardModel(st, rawIndex) {
+export function selectWizardModel(
+  st: WizardSnapshot,
+  rawIndex: unknown,
+): ModelOption | null {
   if (!/^(0|[1-9]\d*)$/.test(String(rawIndex))) return null;
   const index = Number(rawIndex);
   if (!Number.isInteger(index) || index < 0) return null;
@@ -83,7 +153,7 @@ export function selectWizardModel(st, rawIndex) {
   return option;
 }
 
-export function selectWizardEffort(st, value) {
+export function selectWizardEffort(st: WizardSnapshot, value: string): boolean {
   if (value === "unset") {
     st.effort = null;
     return true;
@@ -93,8 +163,12 @@ export function selectWizardEffort(st, value) {
   return true;
 }
 
-export function selectableWizardOptions(options, current, limit = 30) {
-  const live = Array.isArray(options) ? options : [];
+export function selectableWizardOptions(
+  options: unknown,
+  current: string,
+  limit = 30,
+): ModelOption[] {
+  const live = Array.isArray(options) ? (options as ModelOption[]) : [];
   const currentOption = live.find((option) => option.id === current);
   return [
     ...(currentOption ? [currentOption] : []),
@@ -115,7 +189,7 @@ async function currentConfig() {
   };
 }
 
-const btn = (text, callback_data) => ({ text, callback_data });
+const btn = (text: string, callback_data: string) => ({ text, callback_data });
 // cancelRow/menuRow — функции (tr на месте вызова), не module-level const с переведённой строкой.
 const cancelRow = () => [btn(tr("Cancel", "Отмена"), "iva_model:cancel")];
 const retryBackRows = () => [
@@ -132,8 +206,8 @@ const menuRow = () => [[btn(tr("‹ Menu", "‹ Меню"), "iva_menu:r:o")]];
 // сообщение с ключом (deleteMessage вернёт !ok), и его увидят все участники. Знак chatId
 // надёжен — id личных чатов положительны, групп/супергрупп отрицательны (та же isPrivate,
 // что в menu-экранах search.ts). Гейтим ОБА пути к ключу: и голый /model, и хендофф из /menu.
-const isPrivateChat = (st) => Number(st.chatId) > 0;
-const refuseSecretInGroup = (st) =>
+const isPrivateChat = (st: WizardState) => Number(st.chatId) > 0;
+const refuseSecretInGroup = (st: WizardState) =>
   endWizard(
     st,
     tr(
@@ -143,13 +217,13 @@ const refuseSecretInGroup = (st) =>
     menuRow(),
   );
 
-function effortRows(ns, withKeep, efforts) {
-  const rows = [];
+function effortRows(ns: string, withKeep: boolean, efforts: string[]) {
+  const rows: Array<Array<Record<string, unknown>>> = [];
   for (let i = 0; i < efforts.length; i += 3) {
     rows.push(
       efforts
         .slice(i, i + 3)
-        .map((effort) => btn(effort, `${ns}:eff:${effort}`)),
+        .map((effort: string) => btn(effort, `${ns}:eff:${effort}`)),
     );
   }
   rows.push([
@@ -160,7 +234,11 @@ function effortRows(ns, withKeep, efforts) {
 }
 
 // {msgId} (опц.) — хендофф из /menu: визард заменяет flow-слот и рисует в ТО ЖЕ сообщение меню.
-async function handleModelCmd(chatId, from, { msgId } = {}) {
+async function handleModelCmd(
+  chatId: FlowId,
+  from: FlowId,
+  { msgId }: { msgId?: number } = {},
+) {
   const { provider, model, effort } = await currentConfig();
   const st = newWizard(chatId, from, "model");
   st.msgId = msgId ?? null;
@@ -180,7 +258,11 @@ async function handleModelCmd(chatId, from, { msgId } = {}) {
   );
 }
 
-async function handleThinkCmd(chatId, from, { msgId } = {}) {
+async function handleThinkCmd(
+  chatId: FlowId,
+  from: FlowId,
+  { msgId }: { msgId?: number } = {},
+) {
   const { provider, model, effort } = await currentConfig();
   const st = newWizard(chatId, from, "think");
   st.provider = provider;
@@ -240,8 +322,8 @@ async function handleThinkCmd(chatId, from, { msgId } = {}) {
 }
 
 export async function resolveThinkCatalogLoad(
-  st,
-  loaded,
+  st: WizardState,
+  loaded: WizardRequestResult<ModelOption[]>,
   showErrorImpl = showModelValidationError,
 ) {
   if (loaded.stale) return null;
@@ -252,7 +334,7 @@ export async function resolveThinkCatalogLoad(
   return loaded.value;
 }
 
-async function showProviderScreen(st) {
+async function showProviderScreen(st: WizardState) {
   st.step = "provider";
   const rows = Object.entries(CATALOG).map(([id, c]) => [
     btn(c.label, `iva_model:prov:${id}`),
@@ -261,7 +343,7 @@ async function showProviderScreen(st) {
   await wizScreen(st, tr("Pick a provider:", "Выбери провайдера:"), rows);
 }
 
-async function pickProvider(st, provider) {
+async function pickProvider(st: WizardState, provider: string) {
   st.provider = provider;
   st.pendingKey = null;
   const cat = CATALOG[provider];
@@ -283,7 +365,7 @@ async function pickProvider(st, provider) {
   }
   const env = await readEnvValues(ENV_PATH);
   if (!wizardIsCurrent(st)) return;
-  if (!env[cat.keyVar] || st.reenterKey === provider) {
+  if (!cat.keyVar || !env[cat.keyVar] || st.reenterKey === provider) {
     st.reenterKey = null;
     // В группе ключ вводить нельзя (его не удалить) — отказ до установки awaitText.
     if (!isPrivateChat(st)) return refuseSecretInGroup(st);
@@ -306,7 +388,7 @@ async function pickProvider(st, provider) {
   return showModelScreen(st);
 }
 
-async function showModelScreen(st) {
+async function showModelScreen(st: WizardState) {
   const cat = CATALOG[st.provider];
   const env = await readEnvValues(ENV_PATH);
   if (!wizardIsCurrent(st)) return;
@@ -357,9 +439,15 @@ async function showModelScreen(st) {
   );
 }
 
-async function showModelValidationError(st, error) {
+async function showModelValidationError(st: WizardState, error: unknown) {
   st.step = "model_error";
-  if (error?.code === "auth_rejected" && CATALOG[st.provider]?.keyVar) {
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    error.code === "auth_rejected" &&
+    CATALOG[st.provider]?.keyVar
+  ) {
     st.reenterKey = st.provider;
   }
   const reason =
@@ -379,28 +467,30 @@ async function showModelValidationError(st, error) {
 // Codex device-link login. runDeviceCodeLogin polls up to 15 min — deliberately NOT
 // awaited, so the getUpdates loop keeps running; the continuation discards itself
 // when this state object is no longer the current wizard (cancelled/replaced).
-function startCodexLogin(st) {
+function startCodexLogin(st: WizardState) {
   st.step = "login";
   // Serialize device-code log lines (link, one-time code) into ordered chat messages.
-  let q = Promise.resolve();
-  const tlog = (m) => {
-    q = q.then(() => reply(st.chatId, String(m).trim()));
+  let q: Promise<void> = Promise.resolve();
+  const tlog = (m: unknown) => {
+    q = q.then(() => reply(st.chatId, String(m).trim()).then(() => {}));
   };
   runDeviceCodeLogin({ dataDir: DATA_DIR_ABS, lang: getLang(), log: tlog })
     .then(() => {
       // Identity-сверка: flows.get !== st истинно и когда слот заменён (другой /model,
       // /menu), и когда протух по TTL — осиротевшая континуация сама себя отбрасывает.
-      if (flows.get(st.chatId, st.userId) !== st) return;
+      if (flows.get(st.chatId as number, st.userId as number) !== st) return;
       return showModelScreen(st);
     })
-    .catch((e) => {
-      if (flows.get(st.chatId, st.userId) !== st) return;
+    .catch((e: unknown) => {
+      if (flows.get(st.chatId as number, st.userId as number) !== st) return;
       return endWizard(
         st,
         tr(
-          "Login failed: " + e.message + "\nSend /model to try again.",
+          "Login failed: " +
+            String(errorMessage(e)) +
+            "\nSend /model to try again.",
           "Вход не удался: " +
-            e.message +
+            String(errorMessage(e)) +
             "\nОтправь /model, чтобы попробовать снова.",
         ),
         menuRow(),
@@ -418,9 +508,12 @@ function startCodexLogin(st) {
 
 // Plain-text message while the wizard awaits an API key. Deleted from the chat FIRST;
 // the key value must never reach eve, log(), reply() or any error text.
-async function handleKeyMessage(msg, st) {
+async function handleKeyMessage(
+  msg: { chat: { id: number }; message_id: number; text: string },
+  st: WizardState,
+) {
   const chatId = msg.chat.id;
-  const del = await tg("deleteMessage", {
+  const del = await wizardTg("deleteMessage", {
     chat_id: chatId,
     message_id: msg.message_id,
   });
@@ -484,11 +577,12 @@ async function handleKeyMessage(msg, st) {
 }
 
 export async function validateAndSaveWizard(
-  st,
+  st: WizardState,
   {
     readEnv = () => readEnvValues(ENV_PATH),
     validate = validateModelSelection,
-    write = (updates) => upsertEnv(ENV_PATH, updates),
+    write = (updates: Record<string, string | null>) =>
+      upsertEnv(ENV_PATH, updates),
   } = {},
 ) {
   const env = await readEnv();
@@ -506,7 +600,7 @@ export async function validateAndSaveWizard(
     key,
     dataDir: DATA_DIR_ABS,
   });
-  const updates = { THINKING_EFFORT: st.effort }; // null ⇒ drop the line ("не задан")
+  const updates: Record<string, string | null> = { THINKING_EFFORT: st.effort }; // null ⇒ drop the line ("не задан")
   if (st.flow === "model") {
     updates.MODEL_PROVIDER = st.provider;
     updates[cat.modelVar] = st.model;
@@ -515,9 +609,9 @@ export async function validateAndSaveWizard(
   await write(updates);
 }
 
-const saveWizard = (st) => validateAndSaveWizard(st);
+const saveWizard = (st: WizardState) => validateAndSaveWizard(st);
 
-async function showSaved(st) {
+async function showSaved(st: WizardState) {
   const { provider, model, effort } = await currentConfig();
   if (!wizardIsCurrent(st)) return;
   let text = tr(
@@ -539,7 +633,12 @@ async function showSaved(st) {
 
 // Inline-button taps for /model and /think. Mirrors handleUpdateCallback: ack the
 // spinner first, swallow untrusted taps, then dispatch on the wizard state.
-async function handleWizardCallback(cq) {
+async function handleWizardCallback(cq: {
+  id: string;
+  data: string;
+  from?: { id?: string | number };
+  message?: { chat?: { id?: number }; message_id?: number };
+}) {
   const from = String(cq.from?.id ?? "");
   const chatId = cq.message?.chat?.id;
   const messageId = cq.message?.message_id;
@@ -548,7 +647,7 @@ async function handleWizardCallback(cq) {
   const action = cq.data.replace(/^iva_(model|think):/, "");
   const st = getWizard(chatId, from);
   // No state (bridge restarted / TTL) or a tap on an older wizard message → stale.
-  if (isStaleWizard(st, messageId)) {
+  if (isStaleWizard(st, messageId) || st === null) {
     await tg("editMessageText", {
       chat_id: chatId,
       message_id: messageId,
@@ -591,7 +690,9 @@ async function handleWizardCallback(cq) {
   }
   if (action === "retry") {
     if (st.flow === "think") {
-      await handleThinkCmd(st.chatId, st.userId, { msgId: st.msgId });
+      await handleThinkCmd(st.chatId, st.userId, {
+        msgId: st.msgId ?? undefined,
+      });
       return true;
     }
     await showModelScreen(st);
@@ -625,8 +726,8 @@ async function handleWizardCallback(cq) {
         await endWizard(
           st,
           tr(
-            "Couldn't save .env: " + e.message,
-            "Не удалось сохранить .env: " + e.message,
+            "Couldn't save .env: " + String(errorMessage(e)),
+            "Не удалось сохранить .env: " + String(errorMessage(e)),
           ),
           menuRow(),
         );
@@ -661,8 +762,8 @@ async function handleWizardCallback(cq) {
       await endWizard(
         st,
         tr(
-          "Couldn't save .env: " + e.message,
-          "Не удалось сохранить .env: " + e.message,
+          "Couldn't save .env: " + String(errorMessage(e)),
+          "Не удалось сохранить .env: " + String(errorMessage(e)),
         ),
         menuRow(),
       );
@@ -698,7 +799,7 @@ async function handleWizardCallback(cq) {
     if (ok) {
       const { provider, model, effort } = await currentConfig();
       await reply(
-        chatId,
+        chatId as number,
         tr(
           `Done — the new configuration is active: ${provider} · ${model} · thinking: ${effortLabel(effort)}.`,
           `Готово — новая конфигурация активна: ${provider} · ${model} · размышления: ${effortLabel(effort)}.`,
@@ -706,7 +807,7 @@ async function handleWizardCallback(cq) {
       );
     } else {
       await reply(
-        chatId,
+        chatId as number,
         tr(
           "Couldn't restart (systemctl). Check the service on the server.",
           "Не удалось перезапустить (systemctl). Проверь сервис на сервере.",
@@ -718,8 +819,12 @@ async function handleWizardCallback(cq) {
   return true;
 }
 
-export function resetMessageCopy(cmd, env = process.env, locale = getLang()) {
-  const pick = (en, ru) => (locale === "ru" ? ru : en);
+export function resetMessageCopy(
+  cmd: string,
+  env: NodeJS.ProcessEnv = process.env,
+  locale = getLang(),
+) {
+  const pick = (en: string, ru: string) => (locale === "ru" ? ru : en);
   const model = modelSummary(env);
   const context = compactNumber(model.contextWindow);
   return cmd === "/restart"

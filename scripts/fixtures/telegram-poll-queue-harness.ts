@@ -3,9 +3,44 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
-const [mode, dataDir, fault = "none"] = process.argv.slice(2);
-if (!mode || !dataDir)
+type JsonRecord = Record<string, unknown>;
+type Message = {
+  message_id: number;
+  date: number;
+  chat: { id: number; type: string; [key: string]: unknown };
+  from: { id: number; is_bot: boolean; first_name: string };
+  text?: string;
+  reply_to_message?: Message;
+  [key: string]: unknown;
+};
+type Update = {
+  update_id: number;
+  message?: Message;
+  callback_query?: { id: string; message: Message; [key: string]: unknown };
+  [key: string]: unknown;
+};
+type MessageUpdate = Update & { message: Message };
+type ChatStatus = {
+  status: string;
+  [key: string]: string | number | null | undefined;
+};
+type RunStatusModule = {
+  setChatStatus: (chatKey: string, status: ChatStatus) => void;
+  getChatStatus: (chatKey: string) => ChatStatus;
+  isRunning: (chatKey: string) => boolean;
+};
+type FetchOptions = { body?: string; signal?: AbortSignal };
+type FileOperation = (...args: unknown[]) => Promise<unknown>;
+type SyncHandle = {
+  sync: () => Promise<void>;
+  close: () => Promise<void>;
+};
+
+const [modeArg, dataDirArg, fault = "none"] = process.argv.slice(2);
+if (!modeArg || !dataDirArg)
   throw new Error("usage: harness <mode> <data-dir> [fault]");
+const mode = modeArg;
+const dataDir = dataDirArg;
 
 process.env.ASSISTANT_DATA_DIR = dataDir;
 process.env.ASSISTANT_HOST = "http://iva-red.invalid";
@@ -25,7 +60,8 @@ if (!existsSync(offsetFile))
 let queueDirSyncAttempts = 0;
 let queueDirSyncSuccesses = 0;
 
-const status = await import("#lib/run-status.mjs");
+const statusModulePath = "#lib/run-status.mjs";
+const status = (await import(statusModulePath)) as RunStatusModule;
 const privateKey = "1:";
 const groupKey = "-100:";
 const topicKey = "-100:7";
@@ -80,11 +116,11 @@ if (fault !== "none") {
   const fsPromises = await import("node:fs/promises");
   const namedExports = Object.fromEntries(
     Object.entries(fsPromises).filter(([name]) => name !== "default"),
-  );
-  const originalWriteFile = fsPromises.writeFile;
-  const originalRename = fsPromises.rename;
-  const originalOpen = fsPromises.open;
-  namedExports.writeFile = async (path, ...args) => {
+  ) as Record<string, unknown>;
+  const originalWriteFile = fsPromises.writeFile as unknown as FileOperation;
+  const originalRename = fsPromises.rename as unknown as FileOperation;
+  const originalOpen = fsPromises.open as unknown as FileOperation;
+  namedExports.writeFile = async (path: unknown, ...args: unknown[]) => {
     if (fault === "write" && String(path).startsWith(`${queueFile}.tmp-`)) {
       throw Object.assign(new Error("injected queue write failure"), {
         code: "ENOSPC",
@@ -92,7 +128,11 @@ if (fault !== "none") {
     }
     return originalWriteFile(path, ...args);
   };
-  namedExports.rename = async (from, to, ...args) => {
+  namedExports.rename = async (
+    from: unknown,
+    to: unknown,
+    ...args: unknown[]
+  ) => {
     if (fault === "rename" && String(to) === queueFile) {
       throw Object.assign(new Error("injected queue rename failure"), {
         code: "EIO",
@@ -100,8 +140,12 @@ if (fault !== "none") {
     }
     return originalRename(from, to, ...args);
   };
-  namedExports.open = async (path, flags, ...args) => {
-    const handle = await originalOpen(path, flags, ...args);
+  namedExports.open = async (
+    path: unknown,
+    flags: unknown,
+    ...args: unknown[]
+  ) => {
+    const handle = (await originalOpen(path, flags, ...args)) as SyncHandle;
     if (
       fault !== "dir-sync-once" ||
       String(path) !== dataDir ||
@@ -132,7 +176,11 @@ if (fault !== "none") {
   });
 }
 
-const privateUpdate = (updateId, text, chatId = 1) => ({
+const privateUpdate = (
+  updateId: number,
+  text: string,
+  chatId = 1,
+): MessageUpdate => ({
   update_id: updateId,
   message: {
     message_id: updateId,
@@ -142,7 +190,7 @@ const privateUpdate = (updateId, text, chatId = 1) => ({
     text,
   },
 });
-const replyToBotUpdate = (updateId, text) => {
+const replyToBotUpdate = (updateId: number, text: string): Update => {
   const update = privateUpdate(updateId, text);
   update.message.reply_to_message = {
     message_id: updateId - 1,
@@ -172,7 +220,11 @@ const groupNoiseUpdate = {
     text: "side conversation, not addressed to Iva",
   },
 };
-const groupUpdate = (updateId, text, threadId) => ({
+const groupUpdate = (
+  updateId: number,
+  text: string,
+  threadId?: number,
+): Update => ({
   update_id: updateId,
   message: {
     message_id: updateId,
@@ -184,34 +236,34 @@ const groupUpdate = (updateId, text, threadId) => ({
   },
 });
 
-const deliveries = [];
-const deliveryRoutes = [];
-const reactions = [];
-const queueStatuses = [];
-const failureNotices = [];
-const deletedMessages = [];
-const requestedOffsets = [];
+const deliveries: Update[] = [];
+const deliveryRoutes: string[] = [];
+const reactions: JsonRecord[] = [];
+const queueStatuses: JsonRecord[] = [];
+const failureNotices: JsonRecord[] = [];
+const deletedMessages: JsonRecord[] = [];
+const requestedOffsets: number[] = [];
 let getUpdatesCalls = 0;
 let directAcceptanceAttempts = 0;
-let statusBeforeRetry = null;
+let statusBeforeRetry: ChatStatus | null = null;
 
-const jsonResponse = (payload, statusCode = 200) => ({
+const jsonResponse = (payload: unknown, statusCode = 200) => ({
   ok: statusCode >= 200 && statusCode < 300,
   status: statusCode,
   headers: {
-    get: (name) =>
+    get: (name: string) =>
       statusCode === 204 &&
       String(name).toLowerCase() === "x-iva-telegram-acceptance"
         ? "turn"
         : null,
   },
   body: null,
-  json: async () => payload,
+  json: () => Promise.resolve(payload),
 });
 
-function readJson(path, fallback) {
+function readJson(path: string, fallback: unknown): unknown {
   try {
-    return JSON.parse(readFileSync(path, "utf8"));
+    return JSON.parse(readFileSync(path, "utf8")) as unknown;
   } catch {
     return fallback;
   }
@@ -266,12 +318,12 @@ if (mode === "fair-drain") {
   );
 }
 
-globalThis.fetch = async (url, options = {}) => {
+const fetchHarness = async (url: unknown, options: FetchOptions = {}) => {
   const target = String(url);
   if (target.startsWith("http://iva-red.invalid/")) {
     const deliveryRoute = new URL(target).pathname;
     deliveryRoutes.push(deliveryRoute);
-    const delivery = JSON.parse(options.body);
+    const delivery = JSON.parse(options.body ?? "{}") as unknown as Update;
     deliveries.push(delivery);
     if (
       mode === "fair-drain" &&
@@ -326,10 +378,11 @@ globalThis.fetch = async (url, options = {}) => {
         const rejectTimeout = () => {
           clearTimeout(keepAlive);
           reject(
-            options.signal?.reason ??
-              Object.assign(new Error("direct acceptance timed out"), {
-                name: "TimeoutError",
-              }),
+            options.signal?.reason instanceof Error
+              ? options.signal.reason
+              : Object.assign(new Error("direct acceptance timed out"), {
+                  name: "TimeoutError",
+                }),
           );
         };
         if (options.signal?.aborted) {
@@ -360,10 +413,14 @@ globalThis.fetch = async (url, options = {}) => {
   }
 
   const method = new URL(target).pathname.split("/").at(-1);
-  const body = options.body ? JSON.parse(options.body) : {};
+  const body = options.body
+    ? (JSON.parse(options.body) as unknown as JsonRecord)
+    : {};
   if (method === "getUpdates") {
     getUpdatesCalls++;
-    requestedOffsets.push(body.offset);
+    requestedOffsets.push(
+      typeof body.offset === "number" ? body.offset : Number.NaN,
+    );
 
     if (mode === "disk-failure") {
       if (getUpdatesCalls === 1)
@@ -495,18 +552,24 @@ globalThis.fetch = async (url, options = {}) => {
     throw new Error(`unknown harness mode: ${mode}`);
   }
   if (method === "setMessageReaction") reactions.push(body);
-  if (method === "sendMessage" && /^Queued \(\d+\)/.test(body.text || "")) {
+  const bodyText = typeof body.text === "string" ? body.text : "";
+  if (method === "sendMessage" && /^Queued \(\d+\)/.test(bodyText)) {
     queueStatuses.push(body);
   }
   if (
     method === "sendMessage" &&
-    body.text === "Couldn't process the message - repeat it or use /new"
+    bodyText === "Couldn't process the message - repeat it or use /new"
   ) {
     failureNotices.push(body);
   }
   if (method === "deleteMessage") deletedMessages.push(body);
   return jsonResponse({ ok: true, result: { message_id: 1 } });
 };
+Object.defineProperty(globalThis, "fetch", {
+  configurable: true,
+  value: fetchHarness,
+  writable: true,
+});
 
 const pollPath = resolve("scripts/telegram-poll.mjs");
 process.argv[1] = pollPath;

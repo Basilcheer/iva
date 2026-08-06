@@ -3,12 +3,14 @@ import { rename } from "node:fs/promises";
 
 import { acknowledgeQueueHead } from "../lib/telegram-queue.ts";
 
-const [queueFile, markerFile] = process.argv.slice(2);
-if (!queueFile || !markerFile) {
+const [queueFileArg, markerFileArg] = process.argv.slice(2);
+if (!queueFileArg || !markerFileArg) {
   throw new Error(
     "usage: telegram-queue-ack-crash-child <queue-file> <marker-file>",
   );
 }
+const queueFile = queueFileArg;
+const markerFile = markerFileArg;
 
 await acknowledgeQueueHead(queueFile, "1:", 101, {
   renameImpl: async (from, to) => {

@@ -877,3 +877,91 @@ the Node event loop is blocked` assertion once. Two later sequential suites hit
   warning is a repository-wide optional finishing touch, not an inline code
   finding or a migration acceptance gate. The fix will be delivered in the
   single incremental push allotted to this review batch.
+- 2026-08-06 Asia/Tashkent: PR-5 merged as #157 with merge commit `5182f01`
+  after one batched test-only review fix, a green repeated CI run, CodeRabbit
+  approval, and the sole review thread resolved. Final scope is ten production
+  conversions, seven existing test-file conversions, two new characterization
+  files, two removed declarations, and `.mjs` budget 56. Final coverage is
+  75.91% lines, 79.08% branches, and 73.56% functions.
+- 2026-08-06 Asia/Tashkent: PR-6 starts from `5182f01`. The already-converted
+  poller config/transport/offset leaves seven production `.mjs` modules in the
+  cluster. The derived batch also converts two spawned fixtures and three
+  poller integration tests while preserving `scripts/telegram-poll.mjs` as the
+  permanent compatibility shim, for a target ratchet of 44. Three isolated
+  worktrees own queue/routing/delivery plus fixtures, control/update/wizards,
+  and main/shim respectively; the lead owns cross-partition specifiers, ratchet,
+  integration review, and final gates.
+- 2026-08-06 Asia/Tashkent: PR-6 characterization is committed separately from
+  conversion. Direct tests cover the main import contract; control's
+  delete-before-download secret flow; stale update cleanup; wizard guards,
+  selection, and stale async results; queue reset normalization; busy routing
+  enqueue/ack; and delivery acceptance receipts. The focused original-runtime
+  groups passed 35/35 and 16/16 before any corresponding source rename.
+- 2026-08-06 Asia/Tashkent: The first broad parallel conversion attempt exposed
+  too many simultaneous strict-type errors to review safely, so ownership was
+  repartitioned to one production module per worker. No `any`, `@ts-nocheck`,
+  `@ts-ignore`, or `@ts-expect-error` escape hatch is accepted. Completed lanes
+  are independently rechecked by the lead before integration; update-flow,
+  wizards, main/shim, delivery, and the reset integration test are now converted.
+  A short-lived `.mjs` re-export for delivery remains only until routing and
+  control switch to their final `.ts` imports within this PR.
+- 2026-08-06 Asia/Tashkent: Independent semantic cross-review rejected three
+  integration drifts before finalization. Main's control importer was switched
+  to the renamed `.ts` module. Wizard callback handling again preserves an
+  absent chat ID instead of substituting zero, and wizard error copy again uses
+  the thrown value's `message` field rather than the full Error string. Delivery
+  again passes the configured secret value through unchanged; a type assertion,
+  not a runtime empty-string fallback, satisfies the Fetch header contract.
+- 2026-08-06 Asia/Tashkent: A second cross-review found the converted crash-child
+  fixture's remaining caller in `telegram-queue.test.ts`; it now launches the
+  `.ts` path. Review also found that queue typing had replaced the original
+  subtraction-time coercion of `status.updatedAt` with a number-only fallback;
+  the source expression was restored with a type-only assertion. Queue,
+  routing, and both fixtures otherwise preserve the original runtime behavior.
+- 2026-08-06 Asia/Tashkent: PR-6 integration now contains all seven remaining
+  production poller conversions, two fixture conversions, and all three planned
+  test conversions. The permanent `scripts/telegram-poll.mjs` shim is exactly
+  ten lines; the temporary delivery re-export is removed. All active importer
+  tripwires point at `.ts`, and the derived ratchet is exactly 44.
+- 2026-08-06 Asia/Tashkent: The final pre-pull PR-6 gate set is green. The clean
+  Node 24 full suite reports 667 total, 663 passed, zero failed, and four expected
+  macOS skips. Coverage is 75.57% lines, 79.11% branches, and 73.01% functions,
+  a PR-5 delta of -0.34 / +0.03 / -0.55 percentage points. Lint, formatting,
+  exact 44/44 ratchet, ten-line shim check, typecheck, build, and replica all
+  exited zero. Replica still prints its pre-existing known-issue notice for
+  cross-restart session resume, then proves reset retirement and finishes `OK`
+  with five provider requests; no PR-6 poller path is implicated.
+- 2026-08-06 Asia/Tashkent: CI-equivalent Python gates pass under Python 3.12:
+  Autograph 343/343, security-defense 45/45, deterministic userbot lock with
+  pinned uv 0.8.3, strict hashed environment sync, guardrails, health, and
+  py_compile. The committed diff from the PR-5 merge and the working diff are
+  whitespace-clean; the two approved untracked handoff files remain outside Git.
+- 2026-08-06 Asia/Tashkent: `origin/main` remained at the PR-5 merge during the
+  required pull/rebase, so no commits were rewritten. The entire gate set was
+  repeated on the committed post-pull tree: Node 24 reports 667 total, 663
+  passed, zero failed, and four expected macOS skips; coverage is 75.57% lines,
+  79.12% branches, and 73.01% functions. Against PR-5 this is -0.34 / +0.04 /
+  -0.55 percentage points. Lint, formatting, exact 44/44 ratchet, the ten-line
+  shim check, typecheck, build, replica, Autograph 343/343, security-defense
+  45/45, uv 0.8.3 lock reproduction, and Python 3.12.13 userbot
+  guardrail/health/compile checks all pass. Replica again emitted only its
+  documented cross-restart known-issue notice before the successful reset and
+  final `OK`; the process exited zero. Two independent final read-only reviews
+  found no scope, semantics, stale-import, attribution, or diff-integrity
+  blocker.
+- 2026-08-06 Asia/Tashkent: PR-6's first hosted CodeRabbit run produced four
+  comments. Two valid test-only findings were fixed together: the update-flow
+  characterization now removes its temporary directory, and direct delivery
+  coverage proves that HTTP 204 without an acceptance receipt returns false
+  after one non-retrying request. Two production suggestions were declined
+  after independent verification. Replacing every dynamic-import façade with
+  `typeof import()` exposes three existing incompatible Telegram update shapes
+  and is not strict-clean without masking casts; aligning those domain types is
+  separate work. Normalizing non-object rejection values would change the
+  original `.mjs` exception identity and strict-mode failure behavior, contrary
+  to this batch's behavior-preserving conversion contract. The focused review
+  suite passed 17/17. The complete post-review gate set is also green: 667
+  total, 663 passed, zero failed, four expected macOS skips; coverage 75.62%
+  lines, 79.15% branches, and 73.01% functions; lint, formatting, typecheck,
+  exact 44/44 ratchet, ten-line shim, build, replica, both Python suites, pinned
+  uv 0.8.3 lock reproduction, and all Python 3.12 userbot checks.

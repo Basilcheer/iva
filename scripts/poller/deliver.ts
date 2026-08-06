@@ -16,6 +16,23 @@ import {
 import { tg } from "./transport.ts";
 import { chatKey } from "./offset.ts";
 
+type TelegramUpdate = Record<string, unknown> & {
+  update_id?: unknown;
+  message?: unknown;
+  callback_query?: unknown;
+};
+type ErrorLike = { message?: unknown; name?: unknown };
+type DeliverOptions = {
+  route?: string;
+  acceptedStatus?: number;
+  queueReceipt?: boolean;
+  retry?: boolean;
+  retryAcceptanceTimeout?: boolean;
+  timeoutMs?: number;
+  onAcceptanceFailure?: (details: Record<string, unknown>) => Promise<unknown>;
+};
+const errorMessage = (error: unknown) => (error as ErrorLike).message;
+
 // Deliver one update to the local eve (we mimic a webhook). Three failure classes (see
 // deliver-policy.ts): retry — network/5xx/408/425/429, fast backoff, forever; config —
 // 401/403/404 mean the secret/route is broken, messages must NOT be thrown away, so
@@ -30,7 +47,7 @@ import { chatKey } from "./offset.ts";
 const CONFIG_RETRY_MS = 60_000;
 const DROP_ATTEMPTS = 30;
 async function deliver(
-  update,
+  update: TelegramUpdate,
   {
     route: requestedRoute,
     acceptedStatus,
@@ -39,7 +56,7 @@ async function deliver(
     retryAcceptanceTimeout = retry,
     timeoutMs,
     onAcceptanceFailure,
-  } = {},
+  }: DeliverOptions = {},
 ) {
   // The authored acceptance wrapper observes onMessage/send(), but not
   // onCallbackQuery. Message updates therefore use the stronger route by default,
@@ -54,12 +71,15 @@ async function deliver(
   const queueReceipt =
     requestedQueueReceipt ?? (expectsAcceptance && Boolean(update?.message));
   const outgoing = queueReceipt ? addTelegramQueueReceipt(update) : update;
-  const reportAcceptanceFailure = async (details) => {
+  const reportAcceptanceFailure = async (details: Record<string, unknown>) => {
     if (!onAcceptanceFailure) return;
     try {
       await onAcceptanceFailure(details);
     } catch (error) {
-      log("deliver: direct acceptance failure cleanup failed:", error.message);
+      log(
+        "deliver: direct acceptance failure cleanup failed:",
+        errorMessage(error),
+      );
     }
   };
   for (let attempt = 1; ; attempt++) {
@@ -69,7 +89,7 @@ async function deliver(
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "X-Telegram-Bot-Api-Secret-Token": SECRET,
+          "X-Telegram-Bot-Api-Secret-Token": SECRET as string,
         },
         body: JSON.stringify(outgoing),
         ...(timeoutMs === undefined
@@ -128,7 +148,7 @@ async function deliver(
           continue;
         }
         log(
-          `deliver: eve replied ${res.status} ${DROP_ATTEMPTS} times — DROPPING update ${update.update_id}`,
+          `deliver: eve replied ${res.status} ${DROP_ATTEMPTS} times — DROPPING update ${String(update.update_id)}`,
         );
         await notifyDeliverProblem("drop", res.status);
         return false;
@@ -149,7 +169,8 @@ async function deliver(
     } catch (e) {
       const acceptanceTimeout =
         expectsAcceptance &&
-        (e?.name === "TimeoutError" || e?.name === "AbortError");
+        ((e as ErrorLike | null | undefined)?.name === "TimeoutError" ||
+          (e as ErrorLike | null | undefined)?.name === "AbortError");
       if (acceptanceTimeout) {
         await reportAcceptanceFailure({
           attempt,
@@ -159,7 +180,7 @@ async function deliver(
       }
       if (!retry) {
         log(
-          `deliver: eve unavailable (${e.message}); queue head retained for a later pass`,
+          `deliver: eve unavailable (${String(errorMessage(e))}); queue head retained for a later pass`,
         );
         return false;
       }
@@ -167,7 +188,7 @@ async function deliver(
         // A timed-out POST may still start later. Re-posting it could duplicate the
         // turn, so direct acceptance timeouts are definitive and never retried.
         log(
-          `deliver: direct acceptance timed out after ${timeoutMs}ms; rejecting update ${update.update_id} without retry`,
+          `deliver: direct acceptance timed out after ${timeoutMs}ms; rejecting update ${String(update.update_id)} without retry`,
         );
         return false;
       }
@@ -180,13 +201,13 @@ async function deliver(
           continue;
         }
         log(
-          `deliver: acceptance timed out ${DROP_ATTEMPTS} times — DROPPING update ${update.update_id}`,
+          `deliver: acceptance timed out ${DROP_ATTEMPTS} times — DROPPING update ${String(update.update_id)}`,
         );
         await notifyDeliverProblem("drop", "timeout");
         return false;
       }
       log(
-        `deliver: eve unavailable (${e.message}, attempt ${attempt}) — waiting for server`,
+        `deliver: eve unavailable (${String(errorMessage(e))}, attempt ${attempt}) — waiting for server`,
       );
     }
     await sleep(wait);
@@ -198,25 +219,25 @@ async function deliver(
 // помечается «уведомлённым» только ПОСЛЕ успешной отправки: упавший sendMessage не
 // должен навсегда лишать владельца алерта.
 const deliverNotified = new Set();
-async function notifyDeliverProblem(kind, status) {
+async function notifyDeliverProblem(kind: string, status: unknown) {
   if (deliverNotified.has(kind)) return;
   const target = process.env.TELEGRAM_DIGEST_CHAT_ID || [...ALLOWED][0];
   if (!target) return;
   const text =
     kind === "config"
       ? tr(
-          `⚠️ Iva bridge can't deliver to eve: HTTP ${status} — the webhook secret or route looks broken. Messages are queued (retrying every 60s). Check: journalctl --user -u iva-telegram-poll`,
-          `⚠️ Мост Iva не может доставить в eve: HTTP ${status} — похоже, разъехались webhook-секрет или маршрут. Сообщения не теряются (ретрай раз в 60с). Проверь: journalctl --user -u iva-telegram-poll`,
+          `⚠️ Iva bridge can't deliver to eve: HTTP ${String(status)} — the webhook secret or route looks broken. Messages are queued (retrying every 60s). Check: journalctl --user -u iva-telegram-poll`,
+          `⚠️ Мост Iva не может доставить в eve: HTTP ${String(status)} — похоже, разъехались webhook-секрет или маршрут. Сообщения не теряются (ретрай раз в 60с). Проверь: journalctl --user -u iva-telegram-poll`,
         )
       : tr(
-          `⚠️ Iva bridge dropped a Telegram update: eve replied ${status} (permanent). Check the logs: journalctl --user -u iva-telegram-poll`,
-          `⚠️ Мост Iva выбросил Telegram-апдейт: eve ответила ${status} (постоянная ошибка). Проверь логи: journalctl --user -u iva-telegram-poll`,
+          `⚠️ Iva bridge dropped a Telegram update: eve replied ${String(status)} (permanent). Check the logs: journalctl --user -u iva-telegram-poll`,
+          `⚠️ Мост Iva выбросил Telegram-апдейт: eve ответила ${String(status)} (постоянная ошибка). Проверь логи: journalctl --user -u iva-telegram-poll`,
         );
   try {
     const res = await tg("sendMessage", { chat_id: target, text });
-    if (res?.ok) deliverNotified.add(kind);
+    if ((res as { ok?: unknown } | null)?.ok) deliverNotified.add(kind);
   } catch (e) {
-    log("deliver notification failed:", e.message);
+    log("deliver notification failed:", errorMessage(e));
   }
 }
 
@@ -225,17 +246,17 @@ async function notifyDeliverProblem(kind, status) {
 // (дистилляция интервью), иначе реальное сообщение сразу после него ушло бы без паузы —
 // в окно, пока eve ещё не записала run-status и не зарегистрировала continuation-hook →
 // второй ран на том же токене → HookConflictError.
-const lastDeliverAt = new Map();
+const lastDeliverAt = new Map<string, number>();
 
 // Доставка с пейсингом: выдержать SETTLE_MS с последней доставки в этот чат, доставить,
 // отметить время. ЕДИНЫЙ путь для главного цикла и для меню (deps.deliver) — оба делят
 // lastDeliverAt, поэтому доставка из меню сдвигает паузу для следующего реального сообщения.
-async function pacedDeliver(update, options) {
+async function pacedDeliver(update: TelegramUpdate, options?: DeliverOptions) {
   const deadline =
     options?.timeoutMs === undefined
       ? null
       : Date.now() + Math.max(0, options.timeoutMs);
-  const key = chatKey(update);
+  const key = chatKey(update as Parameters<typeof chatKey>[0]);
   if (key !== null && SETTLE_MS > 0) {
     const prev = lastDeliverAt.get(key);
     if (prev !== undefined) {

@@ -1,31 +1,111 @@
-import test from "node:test";
+/* eslint-disable @typescript-eslint/no-floating-promises, @typescript-eslint/require-await -- Node's test runner owns registrations and reset test doubles intentionally preserve asynchronous production boundaries. */
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import test from "node:test";
+
+type ChatStatus = {
+  status: string;
+  continuationToken?: string;
+  sessionId?: string;
+  turnId?: string;
+  [key: string]: unknown;
+};
+type RunStatusModule = {
+  setChatStatus: (chatKey: string, status: ChatStatus) => void;
+  getChatStatus: (chatKey: string) => ChatStatus;
+};
+type QueueUpdate = {
+  update_id: number;
+  message?: Record<string, unknown>;
+};
+type QueueItem = {
+  version: number;
+  updateId: number;
+  enqueuedAt?: number;
+  update?: QueueUpdate;
+  legacyText?: string;
+};
+type QueueDocument = {
+  version: number;
+  queues: Record<string, QueueItem[]>;
+};
+type ResetIntent = { chatKey: string; continuationToken: string };
+type CompleteResetOptions = {
+  clearQueue?: boolean;
+  clearQueueImpl?: () => Promise<unknown>;
+};
+type PerformResetOptions = {
+  clearQueue?: boolean;
+  persistIntentImpl?: () => Promise<unknown>;
+  requestResetImpl?: (intent: ResetIntent) => Promise<unknown>;
+  completeStateImpl?: () => Promise<unknown>;
+  clearIntentImpl?: () => Promise<unknown>;
+  logImpl?: (line: string) => void;
+};
+type ReconcileResetOptions = {
+  requestResetImpl?: (intent: ResetIntent) => Promise<unknown>;
+  logImpl?: (line: string) => void;
+};
+type DrainOptions = {
+  deliverImpl: (update: QueueUpdate) => Promise<boolean>;
+  settleUntil: Map<string, number>;
+  inFlight: Map<string, unknown>;
+};
+type WriteQueueOptions = {
+  nonce?: string;
+  renameImpl?: () => Promise<unknown>;
+};
+type PollModule = {
+  clearPrivateResetIntent: (chatKey: string) => Promise<void>;
+  completeScopedResetState: (
+    chatKey: string,
+    continuationToken: string,
+    options: CompleteResetOptions,
+  ) => Promise<void>;
+  drainReadyQueueHeads: (options: DrainOptions) => Promise<number>;
+  loadPrivateResetIntents: () => Promise<ResetIntent[]>;
+  loadQueue: () => Promise<QueueDocument>;
+  performScopedReset: (
+    chatKey: string,
+    continuationToken: string,
+    options?: PerformResetOptions,
+  ) => Promise<void>;
+  persistPrivateResetIntent: (
+    chatKey: string,
+    continuationToken: string,
+  ) => Promise<void>;
+  reconcileScopedResetIntents: (
+    options?: ReconcileResetOptions,
+  ) => Promise<number>;
+  writeQueueAtomic: (
+    queue: QueueDocument | Record<string, string[]>,
+    options?: WriteQueueOptions,
+  ) => Promise<void>;
+};
 
 const dataDir = mkdtempSync(join(tmpdir(), "iva-scoped-reset-"));
 process.env.ASSISTANT_DATA_DIR = dataDir;
 process.env.TELEGRAM_BOT_TOKEN = "test-token";
 process.env.TELEGRAM_WEBHOOK_SECRET_TOKEN = "test-secret";
 
-const [
-  {
-    clearPrivateResetIntent,
-    completeScopedResetState,
-    drainReadyQueueHeads,
-    loadPrivateResetIntents,
-    loadQueue,
-    performScopedReset,
-    persistPrivateResetIntent,
-    reconcileScopedResetIntents,
-    writeQueueAtomic,
-  },
-  status,
-] = await Promise.all([
+const [pollModule, runStatusModule] = (await Promise.all([
   import(`./telegram-poll.mjs?reset-test=${Date.now()}`),
   import(`#lib/run-status.mjs?reset-test=${Date.now()}`),
-]);
+])) as [unknown, unknown];
+const {
+  clearPrivateResetIntent,
+  completeScopedResetState,
+  drainReadyQueueHeads,
+  loadPrivateResetIntents,
+  loadQueue,
+  performScopedReset,
+  persistPrivateResetIntent,
+  reconcileScopedResetIntents,
+  writeQueueAtomic,
+} = pollModule as PollModule;
+const status = runStatusModule as RunStatusModule;
 
 test("private reset clears only the target chat status and queue", async () => {
   status.setChatStatus("chat-a:", {
@@ -63,7 +143,7 @@ test("private reset clears only the target chat status and queue", async () => {
 
   const queue = JSON.parse(
     readFileSync(join(dataDir, "telegram-queue.json"), "utf8"),
-  );
+  ) as unknown as QueueDocument;
   assert.equal(queue.version, 1);
   assert.deepEqual(Object.keys(queue.queues), ["chat-b:7"]);
   assert.equal(queue.queues["chat-b:7"][0].legacyText, "keep me");
@@ -89,7 +169,9 @@ test("group reset preserves the shared topic queue", async () => {
 
   assert.equal(status.getChatStatus("group:7").status, "idle");
   assert.deepEqual(
-    JSON.parse(readFileSync(join(dataDir, "telegram-queue.json"), "utf8")),
+    JSON.parse(
+      readFileSync(join(dataDir, "telegram-queue.json"), "utf8"),
+    ) as unknown,
     {
       "group:7": ["future standalone conversation"],
       "other:9": ["keep me too"],
@@ -118,7 +200,7 @@ test("failed private queue cleanup does not expose an idle tombstone", async () 
 });
 
 test("private reset intent is durable before remote reset and clears after local cleanup", async () => {
-  const events = [];
+  const events: string[] = [];
   await performScopedReset("chat-intent:", "105::", {
     clearQueue: true,
     persistIntentImpl: async () => events.push("intent"),
@@ -163,7 +245,7 @@ test("startup reconciliation prevents a remotely reset private queue from draini
   });
   await persistPrivateResetIntent(key, continuationToken);
 
-  const remoteRetries = [];
+  const remoteRetries: ResetIntent[] = [];
   await reconcileScopedResetIntents({
     requestResetImpl: async (intent) => {
       remoteRetries.push(intent);
@@ -182,7 +264,7 @@ test("startup reconciliation prevents a remotely reset private queue from draini
   assert.equal(status.getChatStatus(key).sessionId, undefined);
   assert.equal((await loadQueue()).queues[key], undefined);
 
-  const delivered = [];
+  const delivered: number[] = [];
   assert.equal(
     await drainReadyQueueHeads({
       deliverImpl: async (update) => {
@@ -301,7 +383,7 @@ test("a reset intent written before the fix is retried channel-local (#110)", as
   const key = "429888768:";
   await persistPrivateResetIntent(key, "telegram:429888768::");
 
-  const requested = [];
+  const requested: string[] = [];
   await reconcileScopedResetIntents({
     requestResetImpl: async ({ continuationToken }) => {
       // Точка выхода наружу — то, что реально уедет в /eve/v1/telegram/reset.
@@ -314,7 +396,7 @@ test("a reset intent written before the fix is retried channel-local (#110)", as
 });
 
 test("/new sends the reset channel-local even from a namespaced status (#110)", async () => {
-  const requested = [];
+  const requested: string[] = [];
   await performScopedReset("7091451031:", "telegram:7091451031::", {
     clearQueue: true,
     persistIntentImpl: async () => {},
@@ -330,7 +412,7 @@ test("/new sends the reset channel-local even from a namespaced status (#110)", 
 test("reset outcome is logged, including the silent no_active_session (#110)", async () => {
   // Именно no_active_session маскировал баг: сброс «удавался», не сбросив ничего.
   // Теперь исход и точный токен видны в journalctl моста.
-  const lines = [];
+  const lines: string[] = [];
   await performScopedReset("7091451031:", "telegram:7091451031::", {
     clearQueue: true,
     persistIntentImpl: async () => {},
@@ -344,7 +426,7 @@ test("reset outcome is logged, including the silent no_active_session (#110)", a
     "reset for chat 7091451031: -> no_active_session (token 7091451031::)",
   ]);
 
-  const successes = [];
+  const successes: string[] = [];
   await performScopedReset("7091451031:", "7091451031::", {
     persistIntentImpl: async () => {},
     requestResetImpl: async () => ({
@@ -363,7 +445,7 @@ test("reset outcome is logged, including the silent no_active_session (#110)", a
 
 test("intent reconciliation logs its reset outcome too", async () => {
   await persistPrivateResetIntent("429888768:", "telegram:429888768::");
-  const lines = [];
+  const lines: string[] = [];
   await reconcileScopedResetIntents({
     requestResetImpl: async () => ({ ok: true, status: "reset" }),
     logImpl: (line) => lines.push(line),
