@@ -36,7 +36,7 @@ function requireNamedConfig(
 }
 
 test("ESLint config preserves the migration lint policy", async () => {
-  const configUrl = new URL("../eslint.config.mjs", import.meta.url);
+  const configUrl = new URL("../eslint.config.ts", import.meta.url);
   const imported: unknown = await import(configUrl.href);
   const module = requireRecord(imported, "ESLint config module");
 
