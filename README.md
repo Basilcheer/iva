@@ -122,6 +122,16 @@ curl -fsSL https://raw.githubusercontent.com/smixs/iva/main/install.sh | bash
 
 Headless installs take `--skip-setup` or `--non-interactive`. Wizard walkthrough and an SSH primer for first-time VPS owners: [docs/install.md](docs/install.md).
 
+### The first minute
+
+Three messages that show what you actually have:
+
+1. Send a voice note about your day — anything, out loud. It lands in `daily/` word for word, and Iva answers in text.
+2. `Remind me tomorrow at 9 to call the bank` — the reminder arrives, no calendar involved.
+3. Tomorrow: `what did I tell you yesterday?` — the answer comes out of memory, not out of the chat window.
+
+Then send a photo of a business card, or forward a long post and ask for the gist. `/menu` has the rest; the full list is in [25+ scenarios](docs/use-cases.md).
+
 <details>
 <summary><b>Install from a clone — build it yourself</b></summary>
 
