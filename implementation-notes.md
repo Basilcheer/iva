@@ -1075,3 +1075,30 @@ the Node event loop is blocked` assertion once. Two later sequential suites hit
   reproduction, and all Python 3.12 userbot checks pass. An independent final
   range audit found no behavior, scope, history, protected-file, or attribution
   blocker.
+- 2026-08-06 Asia/Tashkent: PR-8 merged as #160 with merge commit `5985f22`
+  after green hosted CI and an approved CodeRabbit Pro review. CodeRabbit
+  reviewed the full range and produced no actionable comment; its only warning
+  was the repository-wide optional docstring-coverage check. Final scope is six
+  production conversions, four existing test-file conversions, one new
+  characterization file, five removed declarations, and `.mjs` budget 32.
+  Hosted coverage is 75.92% lines, 79.05% branches, and 73.22% functions.
+- 2026-08-06 Asia/Tashkent: PR-9 starts from the PR-8 merge `5985f22`. It owns
+  the two deferred canonical leaves `security-gate` and `telegram-format`; the
+  permanent `setup`, `init-vault`, and `check-update` compatibility shims with
+  their logic extracted to TypeScript; four internal entrypoint renames
+  (`check-bash-cwd`, `check-port`, `check-reasoning-strip`, `replica-smoke`);
+  and eighteen remaining non-bin test-file conversions. The bin-coupled
+  `security-migration.test.mjs` and `userbot-health-cli.test.mjs` stay for the
+  PR-10/11 CLI work. Together these changes reduce the exact tracked `.mjs`
+  count from 32 to 8.
+- 2026-08-06 Asia/Tashkent: PR-9 preparation found three runtime boundaries
+  that must remain explicit. Security and Telegram formatting feed both the Eve
+  bundle and raw Node 24 scripts, so every importer moves in the same conversion
+  commit and build plus raw-import smoke are mandatory. Setup and init-vault
+  keep their installer-visible `.mjs` paths and move behavior behind `.ts`
+  implementations; replica must prove the init-vault shim. Check-update likewise
+  keeps the systemd unit path and importable test contract while moving its
+  implementation to `.ts`. Three non-overlapping worktrees own security/format,
+  setup/init-vault, and internal entries/tests; the lead owns check-update,
+  ratchet integration, cross-lane review, and final gates. Missing direct
+  behavior is characterized against the original `.mjs` before each conversion.
