@@ -630,3 +630,11 @@ the Node event loop is blocked` assertion once. Two later sequential suites hit
   converted and exercises the canonical JS module through its restored
   declaration. The corrected PR-2 scope is 11 production modules, 12 test files,
   three removed declarations, and an `.mjs` budget of 116.
+- 2026-08-06 Asia/Tashkent: Full-suite discovery on the high-core local machine
+  intermittently starved the existing 1.5-second `userbot-health-cli` integration
+  probe even though repeated isolated runs completed in 584-675 ms. Both Node
+  test scripts now cap file concurrency at four: this preserves automatic test
+  discovery and the production timeout while preventing unrelated test workers
+  from turning the timing assertion into a load-dependent failure. Two
+  successive bounded full suites passed all 598 tests with the four expected
+  platform skips.
