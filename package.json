@@ -12,7 +12,7 @@
   "scripts": {
     "iva": "node bin/iva.mjs",
     "setup": "node scripts/setup.mjs",
-    "check-port": "node scripts/check-port.mjs",
+    "check-port": "node scripts/check-port.ts",
     "build": "eve build",
     "dev": "eve dev",
     "start": "eve start",

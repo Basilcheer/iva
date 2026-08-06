@@ -5,7 +5,7 @@ import { createServer } from "node:net";
 import { join } from "node:path";
 import test from "node:test";
 
-const CHECK_PORT = join(import.meta.dirname, "check-port.mjs");
+const CHECK_PORT = join(import.meta.dirname, "check-port.ts");
 
 test("check-port rejects an out-of-range explicit port", () => {
   const result = spawnSync(process.execPath, [CHECK_PORT, "70000"], {

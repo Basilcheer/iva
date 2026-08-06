@@ -1,4 +1,4 @@
-// SOLID-ядро проверки портов Iva. Переиспользуется CLI (scripts/check-port.mjs) и setup.mjs.
+// SOLID-ядро проверки портов Iva. Переиспользуется CLI (scripts/check-port.ts) и setup.mjs.
 //
 //   • Probe (SRP/ISP)   — один способ детекта «занят ли порт»: bind / /proc / docker.
 //   • PortChecker (DIP) — агрегирует инъецированные Probe, не зная их реализации.
