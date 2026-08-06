@@ -949,3 +949,19 @@ the Node event loop is blocked` assertion once. Two later sequential suites hit
   final `OK`; the process exited zero. Two independent final read-only reviews
   found no scope, semantics, stale-import, attribution, or diff-integrity
   blocker.
+- 2026-08-06 Asia/Tashkent: PR-6's first hosted CodeRabbit run produced four
+  comments. Two valid test-only findings were fixed together: the update-flow
+  characterization now removes its temporary directory, and direct delivery
+  coverage proves that HTTP 204 without an acceptance receipt returns false
+  after one non-retrying request. Two production suggestions were declined
+  after independent verification. Replacing every dynamic-import façade with
+  `typeof import()` exposes three existing incompatible Telegram update shapes
+  and is not strict-clean without masking casts; aligning those domain types is
+  separate work. Normalizing non-object rejection values would change the
+  original `.mjs` exception identity and strict-mode failure behavior, contrary
+  to this batch's behavior-preserving conversion contract. The focused review
+  suite passed 17/17. The complete post-review gate set is also green: 667
+  total, 663 passed, zero failed, four expected macOS skips; coverage 75.62%
+  lines, 79.15% branches, and 73.01% functions; lint, formatting, typecheck,
+  exact 44/44 ratchet, ten-line shim, build, replica, both Python suites, pinned
+  uv 0.8.3 lock reproduction, and all Python 3.12 userbot checks.
