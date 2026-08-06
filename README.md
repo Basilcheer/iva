@@ -26,6 +26,14 @@ Iva is a self-hosted Telegram AI assistant with layered memory that turns your m
 curl -fsSL https://raw.githubusercontent.com/smixs/iva/main/install.sh | bash
 ```
 
+## Why people run Iva
+
+- "What did we agree with client X about the last shipment?" — found in seconds, months later.
+- A five-minute voice note from the car → a task list, a draft email, a meeting card.
+- "Make a quote from this price list, cut the discount by 2.5%, send it to the client" — a finished Google Doc, link in the chat.
+
+The rest — for business owners, specialists, executives and everyday life: **[Use cases](docs/use-cases.md)**.
+
 ## How it works
 
 <img src="assets/iva-flow.webp" alt="How Iva works: voice, text, photos and PDFs fly from Telegram into the willow-tree agent, wired to memory, nightly rollup, cron, reminders, search, web, workspace and docs" width="100%">
@@ -35,14 +43,6 @@ The bridge long-polls Telegram, so no public HTTPS, domain or webhook is needed.
 **Wondering what you'd actually use an agent for?** → [25+ real scenarios — business, work, everyday life](docs/use-cases.md).
 
 <img src="assets/iva-use-cases.webp" alt="What people ask Iva: eight everyday requests, from a voice note turned into tasks to research with sources and a bedtime story that continues tomorrow" width="100%">
-
-## Why people run Iva
-
-- "What did we agree with client X about the last shipment?" — found in seconds, months later.
-- A five-minute voice note from the car → a task list, a draft email, a meeting card.
-- "Make a quote from this price list, cut the discount by 2.5%, send it to the client" — a finished Google Doc, link in the chat.
-
-The rest — for business owners, specialists, executives and everyday life: **[Use cases](docs/use-cases.md)**.
 
 ## Features
 
