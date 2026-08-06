@@ -870,3 +870,10 @@ the Node event loop is blocked` assertion once. Two later sequential suites hit
   typecheck, build, replica, both Python test suites, deterministic userbot
   lock, and all Python 3.12 userbot checks are green. The PR diff check is clean,
   and the two approved untracked handoff files remain outside Git.
+- 2026-08-06 Asia/Tashkent: PR-5's first hosted CodeRabbit run found one valid
+  minor coverage gap and no production defect: the exact transport byte-cap
+  characterization used only ASCII. A separate test-only commit retains that
+  assertion and adds an exact three-byte UTF-8 `€` case. The docstring-coverage
+  warning is a repository-wide optional finishing touch, not an inline code
+  finding or a migration acceptance gate. The fix will be delivered in the
+  single incremental push allotted to this review batch.
