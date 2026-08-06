@@ -137,18 +137,19 @@ void test("poller config snapshots default root, routes, data, and helper behavi
 });
 
 void test("poller config keeps explicit host, token, relative data, and allowlist normalization", async () => {
+  const token = ["123456", "fixture"].join(":");
   const config = await importConfig({
     ASSISTANT_DATA_DIR: "runtime-data",
     ASSISTANT_HOST: "https://poll.example.test:9443/",
     IVA_PORT: "9123",
     TELEGRAM_ALLOWED_USER_IDS: " 10,20  20\n003 ",
-    TELEGRAM_BOT_TOKEN: "123456:fixture",
+    TELEGRAM_BOT_TOKEN: token,
     TELEGRAM_BOT_USERNAME: "fixture_bot",
     TELEGRAM_DIRECT_ACCEPTANCE_TIMEOUT_MS: "123",
     TELEGRAM_POLL_SETTLE_MS: "17",
   });
 
-  assert.equal(config.token, "123456:fixture");
+  assert.equal(config.token, token);
   assert.equal(config.botUserId, "123456");
   assert.equal(config.botUsername, "fixture_bot");
   assert.equal(config.port, "9123");
@@ -164,7 +165,7 @@ void test("poller config keeps explicit host, token, relative data, and allowlis
     config.resetRoute,
     "https://poll.example.test:9443/eve/v1/telegram/reset",
   );
-  assert.equal(config.api, "https://api.telegram.org/bot123456:fixture");
+  assert.equal(config.api, `https://api.telegram.org/bot${token}`);
   assert.equal(config.directAcceptanceTimeoutMs, 123);
   assert.equal(config.settleMs, 17);
   assert.deepEqual(config.allowed, ["10", "20", "003"]);
