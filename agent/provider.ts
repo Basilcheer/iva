@@ -3,8 +3,8 @@ import { createOpenAI } from "@ai-sdk/openai";
 import {
   CODEX_BASE_URL,
   codexAuthHeaders,
-} from "../scripts/lib/codex-oauth.mjs";
-import { EFFORTS } from "../scripts/lib/model-catalog.mjs";
+} from "../scripts/lib/codex-oauth.ts";
+import { EFFORTS } from "../scripts/lib/model-catalog.ts";
 
 type WrappableModel = Parameters<typeof wrapLanguageModel>[0]["model"];
 

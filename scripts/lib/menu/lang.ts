@@ -5,11 +5,24 @@
 import { writeSettings } from "#lib/settings.mjs";
 import { upsertEnv } from "../env-file.ts";
 
+type Lang = "en" | "ru";
+type Button = { text: string; callback_data: string };
+type MenuState = { page: number };
+type MenuContext = {
+  lang: Lang;
+  deps: { envPath: string };
+  getLang: () => Lang;
+  tr: (english: string, russian: string) => string;
+  btn: (text: string, callbackData: string) => Button;
+  backRow: (screen: string) => Button[];
+  show: (state: MenuState, screen: string) => Promise<void>;
+};
+
 export default {
   parent: "r",
-  render(st, ctx) {
+  render(_st: MenuState, ctx: MenuContext) {
     const cur = ctx.getLang();
-    const mark = (v) => (cur === v ? " ✓" : "");
+    const mark = (v: Lang) => (cur === v ? " ✓" : "");
     const rows = [
       [
         ctx.btn(`Русский${mark("ru")}`, "iva_menu:lang:set:ru"),
@@ -22,7 +35,7 @@ export default {
       rows,
     };
   },
-  async on(verb, args, st, ctx) {
+  async on(verb: string, args: string[], st: MenuState, ctx: MenuContext) {
     if (verb !== "set") return;
     const v = args[0] === "en" ? "en" : "ru";
     writeSettings({ language: v });

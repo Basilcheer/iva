@@ -14,10 +14,21 @@ import { readSettings } from "#lib/settings.mjs";
 
 const PER_PAGE = 8;
 const CACHE_TTL_MS = 60_000;
-let cache = { at: 0, timers: null };
+type Button = { text: string; callback_data: string };
+type Timer = { unit: string; next: string };
+type Translate = (english: string, russian: string) => string;
+type RollupEntry = { lastSuccessAt?: unknown };
+type MenuState = { page: number };
+type MenuContext = {
+  deps: { dataDir: string };
+  tr: Translate;
+  btn: (text: string, callbackData: string) => Button;
+  backRow: (screen: string) => Button[];
+};
+let cache: { at: number; timers: Timer[] | null } = { at: 0, timers: null };
 
 // Cron strings mirrored by hand from agent/schedules/*.ts — same tradeoff as
-// scripts/lib/schedule-migration.mjs's PERIOD_SCHEDULE, there is no single shared source
+// scripts/lib/schedule-migration.ts's PERIOD_SCHEDULE, there is no single shared source
 // at the cron-string level. Status-file keys match the `name` each schedule passes to
 // runScheduledJob (see scripts/lib/schedule-runner.ts), not the bare period.
 const EVE_SCHEDULES = [
@@ -28,24 +39,27 @@ const EVE_SCHEDULES = [
   { name: "digest", cron: "0 8 * * *" },
 ];
 
-function loadRollupStatus(dataDir) {
+function loadRollupStatus(dataDir: string): Record<string, RollupEntry> {
   try {
-    const raw = JSON.parse(
+    const raw: unknown = JSON.parse(
       readFileSync(join(dataDir, "rollup-status.json"), "utf8"),
     );
-    return typeof raw === "object" && raw !== null ? raw : {};
+    return typeof raw === "object" && raw !== null
+      ? (raw as Record<string, RollupEntry>)
+      : {};
   } catch {
     return {};
   }
 }
 
-function formatLastSuccess(entry, T) {
+function formatLastSuccess(entry: RollupEntry | undefined, T: Translate) {
   const at = entry?.lastSuccessAt;
   // typeof === "number" alone lets Infinity/-Infinity and other out-of-range values
   // through; new Date(at).toISOString() throws a RangeError on those and would take
   // the whole menu render down with it. Number.isFinite() plus a getTime() NaN check
   // (an out-of-range-but-finite value, e.g. beyond ±8.64e15) both fall back to "never".
-  if (!Number.isFinite(at)) return T("never", "никогда");
+  if (typeof at !== "number" || !Number.isFinite(at))
+    return T("never", "никогда");
   const date = new Date(at);
   if (Number.isNaN(date.getTime())) return T("never", "никогда");
   return date
@@ -59,13 +73,16 @@ function digestEnabled() {
   // agent/lib/settings.mjs) — same file agent/schedules/digest.ts reads at fire time,
   // so this always reflects the toggle digest.ts itself would see on its next tick.
   try {
-    return readSettings()?.digestSchedule?.enabled === true;
+    const settings = readSettings() as {
+      digestSchedule?: { enabled?: boolean };
+    };
+    return settings.digestSchedule?.enabled === true;
   } catch {
     return false;
   }
 }
 
-function schedulesBlock(dataDir, T) {
+function schedulesBlock(dataDir: string, T: Translate) {
   const status = loadRollupStatus(dataDir);
   const digestOn = digestEnabled();
   const lines = EVE_SCHEDULES.map((s) => {
@@ -79,8 +96,8 @@ function schedulesBlock(dataDir, T) {
   return `${T("📅 Schedules (inside Iva)", "📅 Расписания (внутри Ивы)")}\n${lines.join("\n")}`;
 }
 
-function run(cmd, args, timeout = 1500) {
-  return new Promise((resolve) => {
+function run(cmd: string, args: string[], timeout = 1500): Promise<string> {
+  return new Promise((resolve: (stdout: string) => void) => {
     execFile(cmd, args, { timeout, encoding: "utf8" }, (err, stdout = "") =>
       resolve(String(stdout)),
     );
@@ -89,8 +106,8 @@ function run(cmd, args, timeout = 1500) {
 
 // Толерантный парс: колонки list-timers переменной ширины (NEXT/LEFT содержат пробелы),
 // поэтому берём только надёжное — имя таймера (*.timer) и ведущую абсолютную дату NEXT.
-function parseTimers(stdout) {
-  const out = [];
+function parseTimers(stdout: string): Timer[] {
+  const out: Timer[] = [];
   for (const line of stdout.split("\n")) {
     if (!/\.timer\b/.test(line)) continue; // пропускаем шапку/подвал/пустые
     const unit = (line.match(/(\S+\.timer)/) || [])[1];
@@ -118,15 +135,24 @@ async function loadTimers() {
   return timers;
 }
 
-export function openTaskCount(dataDir) {
+export function openTaskCount(dataDir: string): number {
   try {
-    const raw = JSON.parse(readFileSync(join(dataDir, "tasks.json"), "utf8"));
+    const raw: unknown = JSON.parse(
+      readFileSync(join(dataDir, "tasks.json"), "utf8"),
+    );
+    const wrapped =
+      typeof raw === "object" && raw !== null
+        ? (raw as { tasks?: unknown })
+        : null;
     const arr = Array.isArray(raw)
       ? raw
-      : Array.isArray(raw?.tasks)
-        ? raw.tasks
+      : Array.isArray(wrapped?.tasks)
+        ? wrapped.tasks
         : [];
-    return arr.filter((task) => !task?.done).length;
+    return arr.filter(
+      (task: unknown) =>
+        !(task as { readonly done?: unknown } | null | undefined)?.done,
+    ).length;
   } catch {
     return 0;
   }
@@ -134,7 +160,7 @@ export function openTaskCount(dataDir) {
 
 export default {
   parent: "r",
-  async render(st, ctx) {
+  async render(st: MenuState, ctx: MenuContext) {
     const T = ctx.tr;
     const timers = await loadTimers();
     const taskCount = openTaskCount(ctx.deps.dataDir);

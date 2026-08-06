@@ -15,20 +15,48 @@ const SID = "srch";
 const PARENT = "r";
 const DEFAULT_PROVIDER = "tavily"; // web_search.ts: провайдер по умолчанию, когда SEARCH_PROVIDER пуст
 
+type Provider = keyof typeof SEARCH_CATALOG;
+type Button = { text: string; callback_data: string };
+type View = { text: string; rows: Button[][] };
+type AwaitText = {
+  kind: string;
+  secret: boolean;
+  data: Record<string, string>;
+};
+type MenuState = { chatId: number; awaitText: AwaitText | null };
+type MenuContext = {
+  deps: {
+    envPath: string;
+    sc: (action: string, unit: string) => Promise<boolean>;
+  };
+  tr: (english: string, russian: string) => string;
+  btn: (text: string, callbackData: string) => Button;
+  backRow: (screen: string) => Button[];
+  show: (state: MenuState, screen: string) => Promise<void>;
+  flows: {
+    screen: (state: MenuState, text: string, rows: Button[][]) => Promise<void>;
+    end: (state: MenuState, text: string, rows: Button[][]) => Promise<void>;
+  };
+};
+
 // Telegram: id личных чатов положительны, групп/супергрупп — отрицательны. Секреты
 // принимаем только в личке (в группе бот может не иметь прав на удаление, и ключ увидят
 // посторонние). st не хранит chat.type, поэтому опираемся на знак chatId — надёжно.
-const isPrivate = (st) => Number(st.chatId) > 0;
+const isPrivate = (st: MenuState) => Number(st.chatId) > 0;
+
+function isProvider(value: unknown): value is Provider {
+  return typeof value === "string" && Object.hasOwn(SEARCH_CATALOG, value);
+}
 
 // Текущий провайдер из .env (свежим чтением — снимок процесса устаревает после upsertEnv).
-function currentProvider(env) {
+function currentProvider(env: Record<string, string>): Provider {
   const p = env.SEARCH_PROVIDER;
-  return p && SEARCH_CATALOG[p] ? p : DEFAULT_PROVIDER;
+  return isProvider(p) ? p : DEFAULT_PROVIDER;
 }
 
 // Экран-приглашение ввести ключ: ставит awaitText (перехват следующего текста движком)
 // и показывает, где взять ключ. secret:true — приём только в личке (иначе отказ).
-async function promptKey(st, ctx, provider) {
+async function promptKey(st: MenuState, ctx: MenuContext, provider: Provider) {
   const cat = SEARCH_CATALOG[provider];
   if (!cat) return ctx.show(st, SID);
   if (!isPrivate(st)) {
@@ -63,7 +91,11 @@ async function promptKey(st, ctx, provider) {
 }
 
 // Экран «провайдер выбран — применить рестартом?»: после записи SEARCH_PROVIDER.
-async function restartOffer(st, ctx, provider) {
+async function restartOffer(
+  st: MenuState,
+  ctx: MenuContext,
+  provider: Provider,
+) {
   const cat = SEARCH_CATALOG[provider];
   const label = cat ? cat.label : provider;
   const text = [
@@ -90,7 +122,7 @@ export default {
 
   // Список провайдеров: ✓ у текущего, 🔑 при наличии ключа (только булевы — значения ключей
   // наружу не выводим). Свежее чтение .env на каждый рендер — состояние всегда актуально.
-  async render(st, ctx) {
+  async render(st: MenuState, ctx: MenuContext): Promise<View> {
     st.awaitText = null; // возврат на список снимает возможный ждущий ввод ключа
     const env = await readEnvValues(ctx.deps.envPath);
     const current = currentProvider(env);
@@ -120,11 +152,11 @@ export default {
     return { text, rows };
   },
 
-  async on(verb, args, st, ctx) {
+  async on(verb: string, args: string[], st: MenuState, ctx: MenuContext) {
     if (verb === "set") {
       const provider = args[0];
+      if (!isProvider(provider)) return ctx.show(st, SID);
       const cat = SEARCH_CATALOG[provider];
-      if (!cat) return ctx.show(st, SID);
       const env = await readEnvValues(ctx.deps.envPath);
       if (!env[cat.keyVar]) return promptKey(st, ctx, provider); // нет ключа → приём
       await upsertEnv(ctx.deps.envPath, { SEARCH_PROVIDER: provider }); // ключ есть → просто переключаем
@@ -132,7 +164,7 @@ export default {
     }
     if (verb === "key") {
       // «Сменить ключ» — приём ключа для указанного провайдера независимо от наличия.
-      const provider = SEARCH_CATALOG[args[0]]
+      const provider = isProvider(args[0])
         ? args[0]
         : currentProvider(await readEnvValues(ctx.deps.envPath));
       return promptKey(st, ctx, provider);
@@ -171,14 +203,18 @@ export default {
   texts: {
     // Приём API-ключа поиска. Сообщение уже удалено движком (secret:true) до этого вызова.
     // Значение ключа не пишется в лог/reply/eve ни при каком исходе.
-    async apikey(text, msg, st, ctx) {
+    async apikey(
+      text: unknown,
+      _msg: unknown,
+      st: MenuState,
+      ctx: MenuContext,
+    ) {
       const key = String(text).trim();
       const data = st.awaitText?.data ?? {};
       const provider = data.provider;
-      const cat = SEARCH_CATALOG[provider];
       // Не похоже на ключ (пробелы/слишком коротко) — обычный текст, набранный при ждущем
       // приглашении. Не храним, снимаем ожидание, чтобы чат снова работал.
-      if (!/^\S{8,}$/.test(key) || !cat) {
+      if (!/^\S{8,}$/.test(key) || !isProvider(provider)) {
         st.awaitText = null;
         return ctx.flows.end(
           st,
@@ -189,6 +225,7 @@ export default {
           [ctx.backRow(PARENT)],
         );
       }
+      const cat = SEARCH_CATALOG[provider];
       const err = await checkSearchKey(provider, key);
       if (err) {
         // Причина отказа не содержит значения ключа (см. checkSearchKey) — печатать безопасно.

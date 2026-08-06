@@ -1,9 +1,38 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+/* eslint-disable @typescript-eslint/no-floating-promises, @typescript-eslint/require-await */
 import {
+  accountFromIdToken,
   listCodexModelCatalog,
   parseCodexModelCatalog,
-} from "./codex-oauth.mjs";
+} from "./codex-oauth.ts";
+
+const idToken = (auth: Record<string, unknown>): string =>
+  [
+    "header",
+    Buffer.from(
+      JSON.stringify({ "https://api.openai.com/auth": auth }),
+    ).toString("base64url"),
+    "signature",
+  ].join(".");
+
+test("account claims accept only non-empty strings", () => {
+  assert.deepEqual(
+    accountFromIdToken(
+      idToken({
+        chatgpt_account_id: { unexpected: true },
+        chatgpt_plan_type: 42,
+      }),
+    ),
+    { accountId: null, planType: null },
+  );
+  assert.deepEqual(
+    accountFromIdToken(
+      idToken({ chatgpt_account_id: "account", chatgpt_plan_type: "pro" }),
+    ),
+    { accountId: "account", planType: "pro" },
+  );
+});
 
 test("catalog parser supports model/slug/id/name and preserves quoted Unicode IDs", () => {
   const parsed = parseCodexModelCatalog({

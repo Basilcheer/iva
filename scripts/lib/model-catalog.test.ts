@@ -1,10 +1,11 @@
 import { test } from "node:test";
+/* eslint-disable @typescript-eslint/no-floating-promises, @typescript-eslint/require-await */
 import assert from "node:assert/strict";
 import {
   FALLBACK_EFFORTS,
   ModelCatalogError,
   fetchModelOptions,
-} from "./model-catalog.mjs";
+} from "./model-catalog.ts";
 
 test("Codex catalog failure cannot create selectable fallback models", async () => {
   await assert.rejects(

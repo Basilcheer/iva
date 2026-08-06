@@ -18,6 +18,29 @@ import {
 const SID = "chr";
 const PARENT = "r";
 
+type Lang = "en" | "ru";
+type Button = { text: string; callback_data: string };
+type View = { text: string; rows: Button[][] };
+type QuizState = { i: number; answers: number[]; code: string | null };
+type MenuState = {
+  data: { quiz?: QuizState };
+  awaitText?: unknown;
+};
+type MenuContext = {
+  getLang: () => string;
+  tr: (english: string, russian: string) => string;
+  btn: (text: string, callbackData: string) => Button;
+  backRow: (screen: string) => Button[];
+  show: (state: MenuState, screen: string) => Promise<void>;
+  flows: {
+    screen: (state: MenuState, text: string, rows: Button[][]) => Promise<void>;
+  };
+};
+
+function errorMessage(error: unknown): string {
+  return (error as { readonly message: string }).message;
+}
+
 // vault/PERSONA.md: каталог = ASSISTANT_VAULT_DIR ?? "vault", относительный — от cwd
 // (как канал agent/channels/telegram.ts:182; оба процесса стартуют из /home/shima/iva).
 function vaultDir() {
@@ -28,9 +51,11 @@ function vaultDir() {
 // Экран одного вопроса «i/10» + 4 кнопки-ответа (2×2, индекс = позиция в QUIZ_ANSWERS).
 // Рендерится напрямую (не через render()), т.к. вопрос — под-состояние квиза, а render()
 // показывает интро при заходе на экран.
-function renderQuestion(st, ctx) {
-  const i = st.data.quiz.i;
-  const lang = ctx.getLang();
+function renderQuestion(st: MenuState, ctx: MenuContext) {
+  const quiz = st.data.quiz;
+  if (!quiz) return renderPortrait(st, ctx);
+  const i = quiz.i;
+  const lang: Lang = ctx.getLang() === "en" ? "en" : "ru";
   const q = QUIZ[i];
   const a = QUIZ_ANSWERS[lang] ?? QUIZ_ANSWERS.ru;
   const text = [
@@ -56,8 +81,8 @@ function renderQuestion(st, ctx) {
 }
 
 // Экран портрета: сводка архетипа + [Принять]/[Пройти заново].
-function renderPortrait(st, ctx) {
-  const code = st.data.quiz.code;
+function renderPortrait(st: MenuState, ctx: MenuContext) {
+  const code = st.data.quiz?.code;
   const rows = [
     [
       ctx.btn(ctx.tr("✅ Accept", "✅ Принять"), `iva_menu:${SID}:apply`),
@@ -65,14 +90,18 @@ function renderPortrait(st, ctx) {
     ],
     ctx.backRow(PARENT),
   ];
-  return ctx.flows.screen(st, quizSummary(code, ctx.getLang()), rows);
+  return ctx.flows.screen(
+    st,
+    quizSummary(code ?? "", ctx.getLang() === "en" ? "en" : "ru"),
+    rows,
+  );
 }
 
 export default {
   parent: PARENT,
 
   // Заход на экран (verb o) — интро-предупреждение. Квиз стартует по кнопке go.
-  render(st, ctx) {
+  render(st: MenuState, ctx: MenuContext): View {
     const text = [
       ctx.tr("🎭 Iva's character", "🎭 Характер Ивы"),
       "",
@@ -90,7 +119,7 @@ export default {
     };
   },
 
-  async on(verb, args, st, ctx) {
+  async on(verb: string, args: string[], st: MenuState, ctx: MenuContext) {
     if (verb === "go" || verb === "redo") {
       st.data.quiz = { i: 0, answers: [], code: null };
       return renderQuestion(st, ctx);
@@ -123,12 +152,13 @@ export default {
           personaMarkdown(code, ctx.getLang()),
           "utf8",
         );
-      } catch (e) {
+      } catch (error) {
+        const message = errorMessage(error);
         return ctx.flows.screen(
           st,
           ctx.tr(
-            `Couldn't write the character file: ${e.message}`,
-            `Не удалось записать файл характера: ${e.message}`,
+            `Couldn't write the character file: ${message}`,
+            `Не удалось записать файл характера: ${message}`,
           ),
           [ctx.backRow(PARENT)],
         );

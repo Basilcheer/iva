@@ -751,3 +751,72 @@ the Node event loop is blocked` assertion once. Two later sequential suites hit
   test leaves the suite at 633 / 629 / 0 / 4; its final coverage run reports
   74.14% lines, 79.56% branches, and 71.97% functions, extending the verified
   PR-3 range to 74.14-74.16 / 79.52-79.56 / 71.87-71.97%.
+- 2026-08-06 Asia/Tashkent: PR-3 merged as #155 with merge commit `8c538dc`
+  after CI passed, CodeRabbit approved the final head, and both review threads
+  were resolved. The review cadence was checked against current CodeRabbit Pro
+  documentation: the allowance is five PR review runs per developer in a rolling
+  hour, and automatic incremental reviews after pushes consume the same allowance.
+  PR-4 therefore stays local until its complete gate set passes; findings from its
+  first hosted review will be batched into one fix push where possible.
+- 2026-08-06 Asia/Tashkent: PR-4 follows the partition already fixed above: six
+  middle core modules (`codex-oauth`, `model-catalog`, `model-validation`,
+  `config-transaction`, `schedule-migration`, `memory/core-clamp`), six menu
+  screens (`character`, `core`, `crons`, `gws`, `lang`, `search`), and
+  `poller/config`. Direct TypeScript characterization is being added first for
+  the three modules without a focused direct suite: menu core, menu language,
+  and poller config. Three isolated worktrees own those tests; production code,
+  the ratchet, and this log remain lead-owned until integration.
+- 2026-08-06 Asia/Tashkent: PR-4's missing direct coverage was established before
+  conversion in three atomic characterization commits: menu core (three tests),
+  menu language (four tests), and poller config (four tests). All 11 tests passed
+  against the original JavaScript modules before the production renames.
+- 2026-08-06 Asia/Tashkent: The conversion integrates 13 production modules and
+  nine existing test-file conversions, removes five superseded declarations,
+  and lowers the `.mjs` budget from 95 to the exact tracked count of 73. All
+  importer, tripwire, runtime-comment, and current deployment-document paths
+  were updated in the same commit; historical CHANGELOG and notes references
+  remain intentionally unchanged.
+- 2026-08-06 Asia/Tashkent: Three independent adversarial reviews covered the
+  core/auth, menu, and poller groups. They found conversion-only semantic drift
+  at JavaScript exception and persistence boundaries: nullish transaction
+  causes had lost optional `message` access, three menu screens had started
+  coercing primitive errors, cron completion had narrowed legacy truthiness to
+  boolean `true`, and valid JSON primitives had moved from GWS shape validation
+  into the parse-error branch. The conversion now preserves the exact source
+  semantics, and focused regression coverage passes 19/19. Review also confirmed
+  the former declaration contracts, native Node 24 loading, and absence of live
+  imports of the removed `.mjs` paths.
+- 2026-08-06 Asia/Tashkent: Final pre-rebase PR-4 verification is clean on Node
+  24.19.0: 648 tests, 644 passed, zero failed, and four expected macOS skips.
+  Coverage is 74.99% lines, 79.22% branches, and 72.84% functions; versus the
+  highest observed merged PR-3 values this is +0.83 / -0.34 / +0.87 percentage
+  points, with all enforced 72/79/71 thresholds still satisfied. Lint,
+  formatting, the exact 73/73 `.mjs` ratchet, typecheck, build, replica,
+  autograph 343/343, security-defense 45/45, the deterministic userbot lock,
+  and Python 3.12 userbot guardrail/health/compile gates all pass. The Python
+  dependency gates used CI's pinned uv 0.8.3 rather than the host uv 0.8.4.
+- 2026-08-06 Asia/Tashkent: `origin/main` remained at the PR-3 merge during the
+  required PR-4 rebase. After a clean Node 24 `npm ci`, every local and Python
+  gate was repeated on the committed tree. The second coverage run again reports
+  648 / 644 / 0 / 4 and 75.03% lines, 79.29% branches, and 72.84% functions.
+  The verified PR-4 coverage range is therefore 74.99-75.03 / 79.22-79.29 /
+  72.84%, with a conservative merged-PR-3 delta of +0.83 / -0.34 / +0.87
+  percentage points. The exact PR diff check remains clean, and only the two
+  approved untracked handoff files remain outside Git.
+- 2026-08-06 Asia/Tashkent: PR-4's first hosted CodeRabbit run produced six
+  comments. Two requests to restore `.test.mjs` entry points conflict with the
+  approved migration plan and are deferred to the planned PR-12 convention
+  update. The request to make schedule-migration error normalization null-safe
+  would change the source module's direct `error.message` behavior and was also
+  rejected as conversion scope drift. The token-shaped poller fixture was
+  cleaned up without changing its value. Two valid pre-existing boundary bugs
+  were fixed in separate commits: Codex JWT account claims now accept only
+  non-empty strings, and search-provider inputs now require own catalog keys
+  instead of accepting inherited names such as `toString`.
+- 2026-08-06 Asia/Tashkent: Post-review verification is clean: 650 tests, 646
+  passed, zero failed, and four expected macOS skips. Coverage is 75.18% lines,
+  79.27% branches, and 73.11% functions. Lint, formatting, 73/73 ratchet,
+  typecheck, build, replica, autograph 343/343, security-defense 45/45,
+  deterministic userbot lock, and Python 3.12 userbot gates all pass. The three
+  review fixes will be delivered in one incremental push to conserve the Pro
+  review allowance.

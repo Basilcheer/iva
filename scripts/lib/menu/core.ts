@@ -21,6 +21,47 @@ const SID = "core";
 const PARENT = "r";
 const EXCERPT_LIMIT = 400;
 
+type Lang = "en" | "ru";
+type Button = { text: string; callback_data: string };
+type Interview = {
+  i: number;
+  qa: Array<{ q: string; a: string }>;
+  chat: Record<string, unknown> | null;
+  from: Record<string, unknown> | null;
+  threadId: number | null;
+};
+type MenuState = {
+  chatId: number;
+  userId: string;
+  data: { iv?: Interview };
+  awaitText: {
+    kind: string;
+    secret: boolean;
+    data: Record<string, unknown>;
+  } | null;
+};
+type MenuContext = {
+  deps: {
+    deliver: (update: {
+      update_id: number;
+      message: Record<string, unknown>;
+    }) => Promise<void>;
+    log?: (...parts: unknown[]) => void;
+  };
+  getLang: () => string;
+  tr: (english: string, russian: string) => string;
+  btn: (text: string, callbackData: string) => Button;
+  backRow: (screen: string) => Button[];
+  show: (state: MenuState, screen: string) => Promise<void>;
+  flows: {
+    screen: (state: MenuState, text: string, rows: Button[][]) => Promise<void>;
+  };
+};
+
+function errorMessage(error: unknown): string {
+  return (error as { readonly message: string }).message;
+}
+
 function vaultDir() {
   const raw = process.env.ASSISTANT_VAULT_DIR ?? "vault";
   return raw.startsWith("/") ? raw : join(process.cwd(), raw);
@@ -41,9 +82,11 @@ async function coreExcerpt() {
 // Экран одного вопроса интервью: ставит awaitText{kind:"interview"} (движок отдаст следующий
 // текст в texts.interview) и показывает кнопки [Пропустить]/[Завершить]. Ответы не секретны —
 // движок их не удаляет; в eve/дневник они не попадают, только в vault через saveInterview.
-function renderInterviewQuestion(st, ctx) {
-  const i = st.data.iv.i;
-  const lang = ctx.getLang();
+function renderInterviewQuestion(st: MenuState, ctx: MenuContext) {
+  const iv = st.data.iv;
+  if (!iv) return ctx.show(st, SID);
+  const i = iv.i;
+  const lang: Lang = ctx.getLang() === "en" ? "en" : "ru";
   const q = INTERVIEW[i];
   st.awaitText = { kind: "interview", secret: false, data: {} };
   const text = [
@@ -70,32 +113,41 @@ function renderInterviewQuestion(st, ctx) {
 }
 
 // Записать ответ (или пропуск) и перейти к следующему вопросу; после последнего — завершить.
-function advance(st, ctx, answer) {
-  const i = st.data.iv.i;
-  const lang = ctx.getLang();
-  st.data.iv.qa.push({
+function advance(st: MenuState, ctx: MenuContext, answer: string) {
+  const iv = st.data.iv;
+  if (!iv) return ctx.show(st, SID);
+  const i = iv.i;
+  const lang: Lang = ctx.getLang() === "en" ? "en" : "ru";
+  iv.qa.push({
     q: INTERVIEW[i].text[lang] ?? INTERVIEW[i].text.ru,
     a: answer,
   });
-  st.data.iv.i = i + 1;
-  if (st.data.iv.i < INTERVIEW.length) return renderInterviewQuestion(st, ctx);
+  iv.i = i + 1;
+  if (iv.i < INTERVIEW.length) return renderInterviewQuestion(st, ctx);
   return finish(st, ctx);
 }
 
 // Завершение: сохранить сырой архив и (если ива свободна) отдать ответы на дистилляцию.
-async function finish(st, ctx) {
+async function finish(st: MenuState, ctx: MenuContext) {
   st.awaitText = null;
-  const iv = st.data.iv ?? { qa: [] };
+  const iv: Interview = st.data.iv ?? {
+    i: 0,
+    qa: [],
+    chat: null,
+    from: null,
+    threadId: null,
+  };
   const qa = iv.qa;
-  const lang = ctx.getLang();
+  const lang: Lang = ctx.getLang() === "en" ? "en" : "ru";
   try {
     await saveInterview(vaultDir(), qa);
-  } catch (e) {
+  } catch (error) {
+    const message = errorMessage(error);
     return ctx.flows.screen(
       st,
       ctx.tr(
-        `Couldn't save the interview: ${e.message}`,
-        `Не удалось сохранить интервью: ${e.message}`,
+        `Couldn't save the interview: ${message}`,
+        `Не удалось сохранить интервью: ${message}`,
       ),
       [ctx.backRow(PARENT)],
     );
@@ -133,8 +185,8 @@ async function finish(st, ctx) {
   };
   try {
     await ctx.deps.deliver({ update_id: 0, message });
-  } catch (e) {
-    ctx.deps.log?.("core deliver error:", e.message);
+  } catch (error) {
+    ctx.deps.log?.("core deliver error:", errorMessage(error));
   }
   return ctx.flows.screen(
     st,
@@ -149,7 +201,7 @@ async function finish(st, ctx) {
 export default {
   parent: PARENT,
 
-  async render(st, ctx) {
+  async render(st: MenuState, ctx: MenuContext) {
     const excerpt = await coreExcerpt();
     const head = ctx.tr("💾 Memory core", "💾 Ядро памяти");
     const body = excerpt
@@ -173,7 +225,7 @@ export default {
     };
   },
 
-  async on(verb, args, st, ctx) {
+  async on(verb: string, _args: string[], st: MenuState, ctx: MenuContext) {
     if (verb === "go") {
       st.data.iv = { i: 0, qa: [], chat: null, from: null, threadId: null };
       return renderInterviewQuestion(st, ctx);
@@ -187,7 +239,16 @@ export default {
   texts: {
     // Свободный ответ на вопрос интервью (не секрет — движок не удаляет). Стэшим реальные
     // chat/from/thread для будущего синтетического deliver, пишем ответ, идём дальше.
-    async interview(text, msg, st, ctx) {
+    async interview(
+      text: unknown,
+      msg: {
+        chat: Record<string, unknown>;
+        from: Record<string, unknown>;
+        message_thread_id?: number;
+      },
+      st: MenuState,
+      ctx: MenuContext,
+    ) {
       if (!st.data.iv) return ctx.show(st, SID);
       st.data.iv.chat = msg.chat;
       st.data.iv.from = msg.from;

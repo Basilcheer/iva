@@ -4,17 +4,17 @@ import {
   EFFORTS,
   fetchModelOptions,
   providerSupportsReasoning,
-} from "../lib/model-catalog.mjs";
+} from "../lib/model-catalog.ts";
 import {
   ModelValidationError,
   validateModelSelection,
-} from "../lib/model-validation.mjs";
-import { getAccessToken, runDeviceCodeLogin } from "../lib/codex-oauth.mjs";
+} from "../lib/model-validation.ts";
+import { getAccessToken, runDeviceCodeLogin } from "../lib/codex-oauth.ts";
 import { compactNumber, modelSummary } from "../lib/model-summary.ts";
 import { getLang, tr } from "#lib/i18n.mjs";
 import { readEnvValues, upsertEnv } from "../lib/env-file.ts";
 import { createFlows } from "../lib/tg-flow.ts";
-import { ALLOWED, DATA_DIR_ABS, ENV_PATH, log } from "./config.mjs";
+import { ALLOWED, DATA_DIR_ABS, ENV_PATH, log } from "./config.ts";
 import { reply, sc, tg } from "./transport.mjs";
 
 // ── /model & /think wizard (out-of-band, inline keyboards) ─────────────────
@@ -131,7 +131,7 @@ const menuRow = () => [[btn(tr("‹ Menu", "‹ Меню"), "iva_menu:r:o")]];
 // Секреты (API-ключи) принимаем ТОЛЬКО в личке: в группе бот может не иметь прав удалить
 // сообщение с ключом (deleteMessage вернёт !ok), и его увидят все участники. Знак chatId
 // надёжен — id личных чатов положительны, групп/супергрупп отрицательны (та же isPrivate,
-// что в menu-экранах search.mjs). Гейтим ОБА пути к ключу: и голый /model, и хендофф из /menu.
+// что в menu-экранах search.ts). Гейтим ОБА пути к ключу: и голый /model, и хендофф из /menu.
 const isPrivateChat = (st) => Number(st.chatId) > 0;
 const refuseSecretInGroup = (st) =>
   endWizard(

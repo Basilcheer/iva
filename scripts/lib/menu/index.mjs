@@ -15,13 +15,13 @@
 import { getLang } from "#lib/i18n.mjs";
 
 import root from "./root.ts";
-import search from "./search.mjs";
-import lang from "./lang.mjs";
-import character from "./character.mjs";
-import core from "./core.mjs";
+import search from "./search.ts";
+import lang from "./lang.ts";
+import character from "./character.ts";
+import core from "./core.ts";
 import userbot from "./userbot.mjs";
-import gws from "./gws.mjs";
-import crons from "./crons.mjs";
+import gws from "./gws.ts";
+import crons from "./crons.ts";
 import skills from "./skills.ts";
 import status from "./status.mjs";
 import service from "./service.mjs";

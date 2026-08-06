@@ -2,12 +2,39 @@ import {
   CATALOG,
   ModelCatalogError,
   fetchModelOptions,
-} from "./model-catalog.mjs";
+} from "./model-catalog.ts";
+
+type OpenRouterErrorReason = (
+  body: unknown,
+  status: number,
+) => string | undefined;
+type ModelSelection = {
+  provider: string;
+  model: string | null | undefined;
+  key?: string;
+  dataDir?: string;
+};
+type ValidationOptions = {
+  fetchFn?: typeof fetch;
+  listCodexCatalog?: (options?: {
+    dataDir?: string;
+  }) => Promise<{ id: string; reasoningLevels: string[] }[]>;
+};
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === "object";
 
 const FETCH_TIMEOUT_MS = 10_000;
 
 export class ModelValidationError extends Error {
-  constructor(code, message, { status, cause } = {}) {
+  declare readonly code: string;
+  declare readonly status?: number;
+
+  constructor(
+    code: string,
+    message: string,
+    { status, cause }: { status?: number; cause?: unknown } = {},
+  ) {
     super(message, { cause });
     this.name = "ModelValidationError";
     this.code = code;
@@ -15,7 +42,7 @@ export class ModelValidationError extends Error {
   }
 }
 
-const validationError = (error) => {
+const validationError = (error: unknown): ModelValidationError => {
   if (error instanceof ModelValidationError) return error;
   if (error instanceof ModelCatalogError) {
     return new ModelValidationError(error.code, error.message, {
@@ -33,10 +60,13 @@ const validationError = (error) => {
 };
 
 export async function probeOpenRouterModel(
-  { model, key },
-  { fetchFn = fetch, errorReason } = {},
-) {
-  let response;
+  { model, key }: { model: string; key?: string },
+  {
+    fetchFn = fetch,
+    errorReason,
+  }: { fetchFn?: typeof fetch; errorReason?: OpenRouterErrorReason } = {},
+): Promise<{ id: string; reasoningLevels: string[]; answered: boolean }> {
+  let response: Response;
   try {
     response = await fetchFn(`${CATALOG.openrouter.base}/chat/completions`, {
       method: "POST",
@@ -80,7 +110,7 @@ export async function probeOpenRouterModel(
       },
     );
   }
-  let body;
+  let body: unknown;
   try {
     body = await response.json();
   } catch (cause) {
@@ -96,7 +126,11 @@ export async function probeOpenRouterModel(
   if (!response.ok) {
     const detail =
       errorReason?.(body, response.status) ??
-      (typeof body?.error?.message === "string" ? body.error.message : "");
+      (isRecord(body) &&
+      isRecord(body.error) &&
+      typeof body.error.message === "string"
+        ? body.error.message
+        : "");
     const reason = detail ? `: ${detail}` : "";
     throw new ModelValidationError(
       "model_unavailable",
@@ -104,10 +138,19 @@ export async function probeOpenRouterModel(
       { status: response.status },
     );
   }
-  const message = body?.choices?.[0]?.message;
+  const choices =
+    isRecord(body) && Array.isArray(body.choices)
+      ? (body.choices as unknown[])
+      : [];
+  const first = choices[0];
+  const message = isRecord(first) ? first.message : undefined;
   const answered = Boolean(
-    (typeof message?.content === "string" && message.content.trim()) ||
-    (Array.isArray(message?.tool_calls) && message.tool_calls.length),
+    (isRecord(message) &&
+      typeof message.content === "string" &&
+      message.content.trim()) ||
+    (isRecord(message) &&
+      Array.isArray(message.tool_calls) &&
+      message.tool_calls.length),
   );
   // A reasoning model can spend the entire small probe allowance before it
   // emits visible content. HTTP 200 still proves that the key, slug and tools
@@ -116,9 +159,9 @@ export async function probeOpenRouterModel(
 }
 
 export async function validateModelSelection(
-  { provider, model, key, dataDir },
-  { fetchFn = fetch, listCodexCatalog } = {},
-) {
+  { provider, model, key, dataDir }: ModelSelection,
+  { fetchFn = fetch, listCodexCatalog }: ValidationOptions = {},
+): Promise<{ id: string; reasoningLevels: string[]; answered?: boolean }> {
   if (
     typeof provider !== "string" ||
     !Object.hasOwn(CATALOG, provider) ||

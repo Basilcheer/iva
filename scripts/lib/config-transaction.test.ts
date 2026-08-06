@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+/* eslint-disable @typescript-eslint/no-floating-promises, @typescript-eslint/require-await */
+import test, { type TestContext } from "node:test";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,7 +11,7 @@ import {
   applyConfigTransaction,
   pendingConfigPath,
   recoverConfigTransaction,
-} from "./config-transaction.mjs";
+} from "./config-transaction.ts";
 
 const OLD =
   "MODEL_PROVIDER=ollama\nOLLAMA_MODEL=old\nOLLAMA_API_KEY=old-secret\nIVA_PORT=8723\n";
@@ -23,7 +25,7 @@ const SELECTION = {
 };
 const SERVICES = ["iva.service", "iva-telegram-poll.service"];
 
-async function fixture(t) {
+async function fixture(t: TestContext) {
   const dir = await mkdtemp(join(tmpdir(), "iva-config-transaction-"));
   t.after(() => rm(dir, { recursive: true, force: true }));
   const envPath = join(dir, ".env");
@@ -32,13 +34,15 @@ async function fixture(t) {
 }
 
 function healthyDeps(overrides = {}) {
-  const calls = [];
+  const calls: unknown[][] = [];
   return {
     calls,
     deps: {
-      validate: async (selection) => calls.push(["validate", selection.model]),
-      restart: async (services) => calls.push(["restart", ...services]),
-      health: async (url) => calls.push(["health", url]),
+      validate: async (selection: { model: string | null | undefined }) =>
+        calls.push(["validate", selection.model]),
+      restart: async (services: readonly string[]) =>
+        calls.push(["restart", ...services]),
+      health: async (url: string) => calls.push(["health", url]),
       ...overrides,
     },
   };
@@ -71,6 +75,97 @@ test("env write failure leaves old bytes and never reports success", async (t) =
   assert.deepEqual(
     calls.map((call) => call[0]),
     ["validate", "restart"],
+  );
+});
+
+test("non-Error apply failures keep rollback and secret-safe ConfigTransactionError semantics", async (t) => {
+  let stringRestartAttempts = 0;
+  const cases: Array<{
+    name: string;
+    deps: Record<string, unknown>;
+    expectedPhase: string;
+    expectedMessage: RegExp;
+  }> = [
+    {
+      name: "null write failure",
+      deps: {
+        writeEnv() {
+          // eslint-disable-next-line @typescript-eslint/only-throw-error -- regression: dependencies may throw arbitrary JavaScript values.
+          throw null;
+        },
+      },
+      expectedPhase: "write",
+      expectedMessage: /unknown failure/,
+    },
+    {
+      name: "string restart failure",
+      deps: {
+        restart: async () => {
+          stringRestartAttempts += 1;
+          if (stringRestartAttempts !== 1) return;
+          // eslint-disable-next-line @typescript-eslint/only-throw-error -- regression: dependencies may throw arbitrary JavaScript values.
+          throw "new-secret restart failure";
+        },
+      },
+      expectedPhase: "restart",
+      expectedMessage: /unknown failure/,
+    },
+  ];
+
+  for (const scenario of cases) {
+    const { envPath } = await fixture(t);
+    const { deps } = healthyDeps(scenario.deps);
+    let error: unknown;
+
+    try {
+      await applyConfigTransaction(
+        {
+          envPath,
+          nextText: NEXT,
+          selection: SELECTION,
+          healthUrl: "http://127.0.0.1:8724/eve/v1/health",
+          services: SERVICES,
+        },
+        deps,
+      );
+    } catch (caught) {
+      error = caught;
+    }
+
+    assert.ok(error instanceof ConfigTransactionError, scenario.name);
+    assert.equal(error.phase, scenario.expectedPhase, scenario.name);
+    assert.equal(error.rollbackFailed, false, scenario.name);
+    assert.match(error.message, scenario.expectedMessage, scenario.name);
+    assert.doesNotMatch(error.message, /new-secret/, scenario.name);
+    assert.equal(await readFile(envPath, "utf8"), OLD, scenario.name);
+  }
+});
+
+test("null recovery failure remains a recoverable ConfigTransactionError", async (t) => {
+  const { envPath } = await fixture(t);
+  await writeFile(
+    pendingConfigPath(envPath),
+    `${JSON.stringify({
+      version: 1,
+      existed: true,
+      oldText: OLD,
+      sha256: createHash("sha256").update(OLD).digest("hex"),
+    })}\n`,
+  );
+
+  await assert.rejects(
+    recoverConfigTransaction(
+      { envPath, services: SERVICES },
+      {
+        // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- regression: dependencies may reject with arbitrary JavaScript values.
+        restart: async () => Promise.reject(null),
+      },
+    ),
+    (error) =>
+      error instanceof ConfigTransactionError &&
+      error.phase === "recovery" &&
+      error.rollbackFailed === true &&
+      /unknown failure/.test(error.message),
   );
 });
 test("restart failure restores snapshot and restarts old services", async (t) => {
@@ -179,23 +274,33 @@ test("failed rollback keeps the snapshot and gives a secret-free recovery instru
     },
   });
 
-  const error = await applyConfigTransaction(
-    {
-      envPath,
-      nextText: NEXT,
-      selection: SELECTION,
-      healthUrl: "http://127.0.0.1:8724/eve/v1/health",
-      services: SERVICES,
-    },
-    deps,
-  ).catch((caught) => caught);
+  let error: unknown;
+  try {
+    await applyConfigTransaction(
+      {
+        envPath,
+        nextText: NEXT,
+        selection: SELECTION,
+        healthUrl: "http://127.0.0.1:8724/eve/v1/health",
+        services: SERVICES,
+      },
+      deps,
+    );
+  } catch (caught) {
+    error = caught;
+  }
 
+  assert.ok(error instanceof ConfigTransactionError);
   assert.equal(error.rollbackFailed, true);
   assert.match(error.message, /iva config --recover/);
   assert.doesNotMatch(error.message, /new-secret|old-secret/);
   assert.equal(await readFile(envPath, "utf8"), OLD);
   assert.equal(
-    JSON.parse(await readFile(pendingConfigPath(envPath), "utf8")).version,
+    (
+      JSON.parse(await readFile(pendingConfigPath(envPath), "utf8")) as {
+        version: number;
+      }
+    ).version,
     1,
   );
 });
@@ -208,7 +313,7 @@ test("a crash after env replacement is recovered from the durable snapshot", asy
       "--input-type=module",
       "--eval",
       `
-        import { applyConfigTransaction } from ${JSON.stringify(new URL("./config-transaction.mjs", import.meta.url).href)};
+        import { applyConfigTransaction } from ${JSON.stringify(new URL("./config-transaction.ts", import.meta.url).href)};
         await applyConfigTransaction(
           ${JSON.stringify({
             envPath,
@@ -230,15 +335,21 @@ test("a crash after env replacement is recovered from the durable snapshot", asy
   assert.equal(child.status, 73, child.stderr);
   assert.equal(await readFile(envPath, "utf8"), NEXT);
   assert.equal(
-    JSON.parse(await readFile(pendingConfigPath(envPath), "utf8")).version,
+    (
+      JSON.parse(await readFile(pendingConfigPath(envPath), "utf8")) as {
+        version: number;
+      }
+    ).version,
     1,
   );
 
-  const restarts = [];
+  const restarts: (readonly string[])[] = [];
   assert.equal(
     await recoverConfigTransaction(
       { envPath, services: SERVICES },
-      { restart: async (services) => restarts.push(services) },
+      {
+        restart: async (services: readonly string[]) => restarts.push(services),
+      },
     ),
     true,
   );

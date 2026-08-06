@@ -27,7 +27,60 @@ import {
   writeStatusAtomic,
 } from "./schedule-runner.ts";
 
-export const LEGACY_MEMORY_UNITS = [
+type Period = "daily" | "weekly" | "monthly" | "yearly";
+
+interface ExecResult {
+  readonly code: number;
+  readonly out?: string;
+  readonly err?: string;
+  readonly error?: unknown;
+}
+
+type ExecImplementation = (args: readonly string[]) => ExecResult;
+
+interface MigrationStatusEntry {
+  readonly lastSuccessAt?: number;
+  readonly seededAt?: number;
+  readonly [key: string]: unknown;
+}
+
+type MigrationStatus = Record<string, MigrationStatusEntry>;
+
+interface DuePeriod {
+  readonly period: Period;
+  readonly dueAt: number;
+  readonly effectiveBaseline: number | undefined;
+}
+
+type MigrationDecision =
+  | { readonly action: "defer" }
+  | {
+      readonly action: "run";
+      readonly due: readonly DuePeriod[];
+      readonly freshlySeeded: readonly Period[];
+    };
+
+export interface RunScheduleMigrationOptions {
+  readonly homedir?: string;
+  readonly execImpl?: ExecImplementation;
+  readonly statusPath?: string;
+  readonly tz?: string;
+  readonly log?: (...args: unknown[]) => void;
+  readonly now?: () => number;
+  readonly root?: string;
+  readonly nodeBin?: string;
+  readonly runJob?: (period: Period) => Promise<unknown>;
+}
+
+function errorMessage(error: unknown): string {
+  return (error as { readonly message: string }).message;
+}
+
+function errorCode(error: unknown): unknown {
+  return (error as { readonly code?: unknown } | null | undefined)?.code;
+}
+
+export const LEGACY_MEMORY_UNITS: readonly string[] = [
   "iva-memory-daily.service",
   "iva-memory-daily.timer",
   "iva-memory-weekly.service",
@@ -41,21 +94,24 @@ export const LEGACY_MEMORY_UNITS = [
 // { period, cron hour:minute in local tz, day-of-week|day-of-month|month constraint }
 // mirrors the cron strings the eve schedules carry (see agent/schedules/memory-*.ts) —
 // keep these two in sync by hand, there is no single shared source at the cron-string level.
-const PERIOD_SCHEDULE = {
+const PERIOD_SCHEDULE: Record<
+  Period,
+  { readonly hour: number; readonly minute: number; readonly graceMs: number }
+> = {
   daily: { hour: 4, minute: 0, graceMs: 20 * 60 * 60 * 1000 },
   weekly: { hour: 4, minute: 15, graceMs: 3 * 24 * 60 * 60 * 1000 },
   monthly: { hour: 4, minute: 20, graceMs: 7 * 24 * 60 * 60 * 1000 },
   yearly: { hour: 4, minute: 25, graceMs: 14 * 24 * 60 * 60 * 1000 },
 };
-const PERIODS = Object.keys(PERIOD_SCHEDULE);
+const PERIODS = Object.keys(PERIOD_SCHEDULE) as Period[];
 
 // The status-file key a real run is recorded under — must match the `name` each
 // agent/schedules/memory-*.ts passes to runScheduledJob, not the bare period.
-function statusKey(period) {
+function statusKey(period: Period): string {
   return `memory-${period}`;
 }
 
-function defaultExecImpl(args) {
+function defaultExecImpl(args: readonly string[]): ExecResult {
   const r = spawnSync("systemctl", args, { encoding: "utf8" });
   return {
     code: r.status ?? (r.error ? 127 : 1),
@@ -69,7 +125,10 @@ function defaultExecImpl(args) {
 // No Temporal/date library dependency: derive local wall-clock Y-M-D-H-M from Intl, then
 // convert a candidate local wall-clock point back to a UTC epoch by the standard
 // guess-and-correct trick (good to the minute, which is all a memory rollup needs).
-function zonedParts(epochMs, tz) {
+function zonedParts(
+  epochMs: number,
+  tz: string,
+): { y: number; m: number; d: number; hh: number; mm: number; ss: number } {
   const fmt = new Intl.DateTimeFormat("en-US", {
     timeZone: tz,
     hour12: false,
@@ -95,7 +154,14 @@ function zonedParts(epochMs, tz) {
   };
 }
 
-function zonedToUtcMs(y, m, d, hh, mm, tz) {
+function zonedToUtcMs(
+  y: number,
+  m: number,
+  d: number,
+  hh: number,
+  mm: number,
+  tz: string,
+): number {
   let guess = Date.UTC(y, m - 1, d, hh, mm, 0);
   for (let i = 0; i < 3; i++) {
     const seen = zonedParts(guess, tz);
@@ -115,7 +181,12 @@ function zonedToUtcMs(y, m, d, hh, mm, tz) {
   return guess;
 }
 
-function addDaysToDate(y, m, d, days) {
+function addDaysToDate(
+  y: number,
+  m: number,
+  d: number,
+  days: number,
+): { y: number; m: number; d: number } {
   const shifted = new Date(Date.UTC(y, m - 1, d, 12) + days * 86_400_000); // noon avoids DST edge cases
   return {
     y: shifted.getUTCFullYear(),
@@ -124,19 +195,19 @@ function addDaysToDate(y, m, d, days) {
   };
 }
 
-function prevMonth(y, m) {
+function prevMonth(y: number, m: number): { y: number; m: number } {
   return m === 1 ? { y: y - 1, m: 12 } : { y, m: m - 1 };
 }
 
 // Monday=0 .. Sunday=6, from a plain Y-M-D calendar date (weekday does not depend on tz
 // once the calendar date itself is fixed).
-function mondayOffset(y, m, d) {
+function mondayOffset(y: number, m: number, d: number): number {
   const dow = new Date(Date.UTC(y, m - 1, d)).getUTCDay(); // 0=Sun..6=Sat
   return (dow + 6) % 7;
 }
 
 // Returns the most recent scheduled UTC epoch ms for a period, at or before `nowMs`.
-function lastDueMs(period, nowMs, tz) {
+function lastDueMs(period: Period, nowMs: number, tz: string): number {
   const { hour, minute } = PERIOD_SCHEDULE[period];
   const today = zonedParts(nowMs, tz);
 
@@ -181,7 +252,13 @@ function lastDueMs(period, nowMs, tz) {
 }
 
 // ── legacy unit teardown ─────────────────────────────────────────────────
-function removeLegacyUnits({ homedir, execImpl, log }) {
+function removeLegacyUnits({
+  homedir,
+  execImpl,
+  log,
+}: Required<
+  Pick<RunScheduleMigrationOptions, "homedir" | "execImpl" | "log">
+>): void {
   const unitDir = join(homedir, ".config/systemd/user");
   let touchedAny = false;
   for (const unit of LEGACY_MEMORY_UNITS) {
@@ -200,7 +277,7 @@ function removeLegacyUnits({ homedir, execImpl, log }) {
       }
     } catch (error) {
       log(
-        `schedule-migration: disable --now ${unit} threw (best-effort): ${error.message}`,
+        `schedule-migration: disable --now ${unit} threw (best-effort): ${errorMessage(error)}`,
       );
     }
     // Only remove the file once systemd has actually let go of the unit. Deleting it
@@ -218,7 +295,7 @@ function removeLegacyUnits({ homedir, execImpl, log }) {
       rmSync(path, { force: true });
     } catch (error) {
       log(
-        `schedule-migration: removing ${unit} failed (best-effort): ${error.message}`,
+        `schedule-migration: removing ${unit} failed (best-effort): ${errorMessage(error)}`,
       );
     }
   }
@@ -231,7 +308,7 @@ function removeLegacyUnits({ homedir, execImpl, log }) {
         );
     } catch (error) {
       log(
-        `schedule-migration: daemon-reload threw (best-effort): ${error.message}`,
+        `schedule-migration: daemon-reload threw (best-effort): ${errorMessage(error)}`,
       );
     }
     try {
@@ -242,7 +319,7 @@ function removeLegacyUnits({ homedir, execImpl, log }) {
         );
     } catch (error) {
       log(
-        `schedule-migration: reset-failed threw (best-effort): ${error.message}`,
+        `schedule-migration: reset-failed threw (best-effort): ${errorMessage(error)}`,
       );
     }
   }
@@ -258,13 +335,13 @@ export async function runScheduleMigration({
   root,
   nodeBin = process.execPath,
   runJob,
-} = {}) {
+}: RunScheduleMigrationOptions = {}): Promise<void> {
   try {
     if (!statusPath) return;
 
     const runPeriod =
       runJob ??
-      ((period) =>
+      ((period: Period) =>
         runScheduledJob({
           name: `memory-${period}`,
           argv: ["scripts/memory/rollup.ts", period],
@@ -285,52 +362,56 @@ export async function runScheduleMigration({
     // all, this whole pass is deferred rather than deciding anything from an unlocked
     // read — the next boot (or, for a period a Nitro tick fires in the meantime, that
     // tick itself) retries cleanly.
-    const decision = await withStatusLock(statusPath, (acquired) => {
-      if (!acquired) {
-        log(
-          "schedule-migration: could not acquire the status lock in time — deferring this pass (retried on the next boot)",
-        );
-        return { action: "defer" };
-      }
-      const current = readStatus(statusPath);
-      const nowMs = now();
-      const seeded = { ...current };
-      const freshlySeeded = new Set();
-      for (const period of PERIODS) {
-        const key = statusKey(period);
-        const entry = current[key];
-        if (
-          typeof entry?.lastSuccessAt !== "number" &&
-          typeof entry?.seededAt !== "number"
-        ) {
-          seeded[key] = { ...entry, seededAt: nowMs };
-          freshlySeeded.add(period);
+    const decision = await withStatusLock<MigrationDecision>(
+      statusPath,
+      (acquired) => {
+        if (!acquired) {
+          log(
+            "schedule-migration: could not acquire the status lock in time — deferring this pass (retried on the next boot)",
+          );
+          return { action: "defer" };
         }
-      }
-      if (freshlySeeded.size > 0) writeStatusAtomic(statusPath, seeded);
+        const current: MigrationStatus = readStatus(statusPath);
+        const nowMs = now();
+        const seeded: MigrationStatus = { ...current };
+        const freshlySeeded = new Set<Period>();
+        for (const period of PERIODS) {
+          const key = statusKey(period);
+          const entry = current[key];
+          if (
+            typeof entry?.lastSuccessAt !== "number" &&
+            typeof entry?.seededAt !== "number"
+          ) {
+            seeded[key] = { ...entry, seededAt: nowMs };
+            freshlySeeded.add(period);
+          }
+        }
+        if (freshlySeeded.size > 0) writeStatusAtomic(statusPath, seeded);
 
-      const due = [];
-      for (const period of PERIODS) {
-        if (freshlySeeded.has(period)) continue;
-        const { graceMs } = PERIOD_SCHEDULE[period];
-        const dueAt = lastDueMs(period, nowMs, tz);
-        const entry = seeded[statusKey(period)];
-        // A real success always wins; otherwise fall back to the seeded baseline (if
-        // any) so a freshly-seeded period doesn't immediately look "due" the moment
-        // it's due relative to real time — same suppression the old
-        // lastSuccessAt-as-seed did.
-        const recorded =
-          typeof entry?.lastSuccessAt === "number"
-            ? entry.lastSuccessAt
-            : entry?.seededAt;
-        const effectiveBaseline = recorded;
-        const alreadyCaughtUp = effectiveBaseline >= dueAt;
-        const withinGrace = nowMs - dueAt <= graceMs;
-        if (!alreadyCaughtUp && withinGrace)
-          due.push({ period, dueAt, effectiveBaseline });
-      }
-      return { action: "run", due, freshlySeeded: [...freshlySeeded] };
-    });
+        const due: DuePeriod[] = [];
+        for (const period of PERIODS) {
+          if (freshlySeeded.has(period)) continue;
+          const { graceMs } = PERIOD_SCHEDULE[period];
+          const dueAt = lastDueMs(period, nowMs, tz);
+          const entry = seeded[statusKey(period)];
+          // A real success always wins; otherwise fall back to the seeded baseline (if
+          // any) so a freshly-seeded period doesn't immediately look "due" the moment
+          // it's due relative to real time — same suppression the old
+          // lastSuccessAt-as-seed did.
+          const recorded =
+            typeof entry?.lastSuccessAt === "number"
+              ? entry.lastSuccessAt
+              : entry?.seededAt;
+          const effectiveBaseline = recorded;
+          const alreadyCaughtUp =
+            effectiveBaseline !== undefined && effectiveBaseline >= dueAt;
+          const withinGrace = nowMs - dueAt <= graceMs;
+          if (!alreadyCaughtUp && withinGrace)
+            due.push({ period, dueAt, effectiveBaseline });
+        }
+        return { action: "run", due, freshlySeeded: [...freshlySeeded] };
+      },
+    );
 
     if (decision.action === "defer") return;
 
@@ -338,13 +419,13 @@ export async function runScheduleMigration({
     // before this point leaves the old persistent timers able to cover the night; a
     // crash after it has a durable in-process catch-up baseline.
     if (homedir && existsSync(join(homedir, ".config/systemd/user"))) {
-      let probe;
+      let probe: ExecResult;
       try {
         probe = execImpl(["--version"]);
       } catch (error) {
         probe = { code: 127, error };
       }
-      if (probe?.error?.code !== "ENOENT") {
+      if (errorCode(probe.error) !== "ENOENT") {
         removeLegacyUnits({ homedir, execImpl, log });
       }
     }
@@ -360,20 +441,25 @@ export async function runScheduleMigration({
     // take up to the job's full timeoutMs, and holding the status lock for that entire
     // duration would block every other schedule's admission check in the meantime.
     for (const { period, dueAt, effectiveBaseline } of decision.due) {
+      const lastSuccess =
+        typeof effectiveBaseline === "number" &&
+        Number.isFinite(effectiveBaseline)
+          ? new Date(effectiveBaseline).toISOString()
+          : "never";
       log(
-        `schedule-migration: catching up ${period} (due ${new Date(dueAt).toISOString()}, last success ${Number.isFinite(effectiveBaseline) ? new Date(effectiveBaseline).toISOString() : "never"})`,
+        `schedule-migration: catching up ${period} (due ${new Date(dueAt).toISOString()}, last success ${lastSuccess})`,
       );
       try {
         await runPeriod(period);
       } catch (error) {
         log(
-          `schedule-migration: catch-up run for ${period} failed: ${error.message}`,
+          `schedule-migration: catch-up run for ${period} failed: ${errorMessage(error)}`,
         );
       }
     }
   } catch (error) {
     try {
-      log(`schedule-migration: unexpected failure: ${error.message}`);
+      log(`schedule-migration: unexpected failure: ${errorMessage(error)}`);
     } catch {
       // logging must never be able to throw out of this function
     }

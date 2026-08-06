@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
+/* eslint-disable @typescript-eslint/no-floating-promises, @typescript-eslint/require-await */
 import { test } from "node:test";
 import {
   ModelValidationError,
   validateModelSelection,
-} from "./model-validation.mjs";
+} from "./model-validation.ts";
 
-const response = (body, status = 200) =>
+const response = (body: unknown, status = 200) =>
   new Response(typeof body === "string" ? body : JSON.stringify(body), {
     status,
     headers: { "content-type": "application/json" },
@@ -88,12 +89,23 @@ test("catalog outage, auth, empty and malformed responses fail closed", async ()
 });
 
 test("OpenRouter validation sends a minimal tool-call request", async () => {
-  let request;
+  let request:
+    { url: string | URL | Request; body: Record<string, unknown> } | undefined;
   const result = await validateModelSelection(
     { provider: "openrouter", model: "vendor/model", key: "secret" },
     {
       fetchFn: async (url, init) => {
-        request = { url, init, body: JSON.parse(init.body) };
+        const requestUrl =
+          typeof url === "string"
+            ? url
+            : url instanceof URL
+              ? url.href
+              : url.url;
+        const requestBody = typeof init?.body === "string" ? init.body : "";
+        request = {
+          url: requestUrl,
+          body: JSON.parse(requestBody) as Record<string, unknown>,
+        };
         return response({
           choices: [{ message: { tool_calls: [{ id: "1" }] } }],
         });
@@ -101,9 +113,20 @@ test("OpenRouter validation sends a minimal tool-call request", async () => {
     },
   );
   assert.equal(result.id, "vendor/model");
-  assert.match(request.url, /chat\/completions$/);
+  assert.ok(request);
+  assert.match(
+    typeof request.url === "string"
+      ? request.url
+      : request.url instanceof URL
+        ? request.url.href
+        : request.url.url,
+    /chat\/completions$/,
+  );
   assert.equal(request.body.model, "vendor/model");
-  assert.equal(request.body.tools[0].function.name, "ping");
+  assert.equal(
+    (request.body.tools as { function: { name: string } }[])[0].function.name,
+    "ping",
+  );
   assert.equal(request.body.max_tokens, 32);
 
   const exhausted = await validateModelSelection(
