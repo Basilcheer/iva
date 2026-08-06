@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-floating-promises -- Node's test runner owns registrations. */
 import assert from "node:assert/strict";
 import {
   existsSync,
@@ -10,6 +11,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { spawn, spawnSync } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
+import { z } from "zod";
 
 const {
   default: bash,
@@ -18,33 +21,85 @@ const {
   MIN_TIMEOUT_MS,
 } = await import("../agent/tools/bash.ts");
 
-const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+type BashInput = Parameters<typeof bash.execute>[0];
+type BashResult = {
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+  cwd?: string;
+  truncated?: boolean;
+  timedOut?: boolean;
+};
+
+async function executeBash(input: BashInput): Promise<BashResult> {
+  return await (
+    bash.execute as unknown as (input: BashInput) => Promise<BashResult>
+  )(input);
+}
+
+const inputSchema = bash.inputSchema;
+assert.ok(inputSchema instanceof z.ZodType);
+
+const delay = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
 const HAS_SETSID =
   spawnSync("sh", ["-c", "command -v setsid"], { stdio: "ignore" }).status ===
   0;
 
-function shellQuote(value) {
+function shellQuote(value: string): string {
   return `'${String(value).replaceAll("'", "'\\''")}'`;
 }
 
-function readPid(file) {
+function readPid(file: string): number | null {
   if (!existsSync(file)) return null;
   const pid = Number.parseInt(readFileSync(file, "utf8").trim(), 10);
   return Number.isSafeInteger(pid) && pid > 1 ? pid : null;
 }
 
-function isAlive(pid) {
-  if (pid === null) return false;
+function isAlive(pid: number | null | undefined): boolean {
+  if (pid === null || pid === undefined) return false;
   try {
     process.kill(pid, 0);
     return true;
-  } catch (error) {
-    if (error?.code === "ESRCH") return false;
+  } catch (error: unknown) {
+    if (
+      error !== null &&
+      (typeof error === "object" || typeof error === "function") &&
+      "code" in error &&
+      error.code === "ESRCH"
+    )
+      return false;
     throw error;
   }
 }
 
-async function waitForPid(file, timeoutMs = 500) {
+function killIfAlive(
+  pid: number | null | undefined,
+  signal: NodeJS.Signals,
+  processGroup = false,
+): void {
+  if (!isAlive(pid)) return;
+  assert.ok(pid !== null && pid !== undefined);
+  process.kill(processGroup ? -pid : pid, signal);
+}
+
+function isBashResult(value: unknown): value is BashResult {
+  if (value === null || typeof value !== "object") return false;
+  return (
+    "stdout" in value &&
+    typeof value.stdout === "string" &&
+    "stderr" in value &&
+    typeof value.stderr === "string" &&
+    "exitCode" in value &&
+    typeof value.exitCode === "number"
+  );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object";
+}
+
+async function waitForPid(file: string, timeoutMs = 500): Promise<number> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const pid = readPid(file);
@@ -54,7 +109,7 @@ async function waitForPid(file, timeoutMs = 500) {
   assert.fail(`child did not write its PID to ${file}`);
 }
 
-async function waitUntilGone(pid, timeoutMs) {
+async function waitUntilGone(pid: number, timeoutMs: number): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (!isAlive(pid)) return true;
@@ -63,12 +118,16 @@ async function waitUntilGone(pid, timeoutMs) {
   return !isAlive(pid);
 }
 
-async function within(promise, timeoutMs, message) {
-  let timer;
+async function within<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  message: string,
+): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
   try {
     return await Promise.race([
       promise,
-      new Promise((_, reject) => {
+      new Promise<never>((_resolve, reject) => {
         timer = setTimeout(() => reject(new Error(message)), timeoutMs);
       }),
     ]);
@@ -77,7 +136,11 @@ async function within(promise, timeoutMs, message) {
   }
 }
 
-async function runWithExhaustedFileDescriptors() {
+async function runWithExhaustedFileDescriptors(): Promise<{
+  stdout: string;
+  stderr: string;
+  exitCode: number | null;
+}> {
   const script = String.raw`
     import { closeSync, openSync } from "node:fs";
     const { default: bash } = await import("./agent/tools/bash.ts");
@@ -113,13 +176,13 @@ async function runWithExhaustedFileDescriptors() {
   let stderr = "";
   child.stdout.setEncoding("utf8");
   child.stderr.setEncoding("utf8");
-  child.stdout.on("data", (chunk) => {
+  child.stdout.on("data", (chunk: string) => {
     stdout += chunk;
   });
-  child.stderr.on("data", (chunk) => {
+  child.stderr.on("data", (chunk: string) => {
     stderr += chunk;
   });
-  const exitCode = await new Promise((resolve, reject) => {
+  const exitCode = await new Promise<number | null>((resolve, reject) => {
     child.once("error", reject);
     child.once("close", resolve);
   });
@@ -127,9 +190,12 @@ async function runWithExhaustedFileDescriptors() {
 }
 
 function termResistantCommand(
-  pidFile,
-  { asChild = false, detachIo = false } = {},
-) {
+  pidFile: string,
+  {
+    asChild = false,
+    detachIo = false,
+  }: { asChild?: boolean; detachIo?: boolean } = {},
+): string {
   const redirect = detachIo ? " </dev/null >/dev/null 2>&1" : "";
   const processCommand =
     `trap '' TERM HUP; printf '%s\\n' "$$" > ${shellQuote(pidFile)}; ` +
@@ -141,9 +207,12 @@ function termResistantCommand(
 }
 
 function escapedProcessGroupCommand(
-  pidFile,
-  { detachIo = false, wait = false } = {},
-) {
+  pidFile: string,
+  {
+    detachIo = false,
+    wait = false,
+  }: { detachIo?: boolean; wait?: boolean } = {},
+): string {
   const redirect = detachIo ? " </dev/null >/dev/null 2>&1" : "";
   const escaped =
     `trap '' TERM HUP; printf '%s\\n' "$$" > ${shellQuote(pidFile)}; ` +
@@ -155,8 +224,8 @@ function escapedProcessGroupCommand(
   );
 }
 
-function startFakeManager(requestFile, pidFile) {
-  let managed = null;
+function startFakeManager(requestFile: string, pidFile: string): () => void {
+  let managed: ChildProcess | null = null;
   const poll = setInterval(() => {
     if (managed || !existsSync(requestFile)) return;
     managed = spawn("sleep", ["3600"], {
@@ -170,14 +239,14 @@ function startFakeManager(requestFile, pidFile) {
   }, 5);
   return () => {
     clearInterval(poll);
-    if (managed && isAlive(managed.pid)) process.kill(managed.pid, "SIGKILL");
+    killIfAlive(managed?.pid, "SIGKILL");
   };
 }
 
 test("bash preserves stdout, stderr and the effective cwd", async () => {
   const cwd = mkdtempSync(join(tmpdir(), "iva-bash-normal-"));
   try {
-    const result = await bash.execute({
+    const result = await executeBash({
       command: "printf stdout; printf stderr >&2",
       cwd,
       timeoutMs: 1_000,
@@ -196,7 +265,7 @@ test("bash preserves stdout, stderr and the effective cwd", async () => {
 });
 
 test("bash preserves an ordinary non-zero shell exit code", async () => {
-  const result = await bash.execute({
+  const result = await executeBash({
     command: "printf failed >&2; exit 7",
     timeoutMs: 1_000,
   });
@@ -208,30 +277,28 @@ test("bash preserves an ordinary non-zero shell exit code", async () => {
 
 test("bash input schema rejects deadlines below the documented floor", () => {
   assert.equal(MIN_TIMEOUT_MS, 100);
-  const rejected = bash.inputSchema.safeParse({
+  const rejected = inputSchema.safeParse({
     command: ":",
     timeoutMs: MIN_TIMEOUT_MS - 1,
   });
   assert.equal(rejected.success, false);
   assert.match(rejected.error.issues[0].message, /100 ms/);
   assert.equal(
-    bash.inputSchema.safeParse({ command: ":", timeoutMs: MIN_TIMEOUT_MS })
-      .success,
+    inputSchema.safeParse({ command: ":", timeoutMs: MIN_TIMEOUT_MS }).success,
     true,
   );
 });
 
 test("bash input schema enforces Node's maximum timer delay", () => {
   assert.equal(MAX_TIMEOUT_MS, 2_147_483_647);
-  const rejected = bash.inputSchema.safeParse({
+  const rejected = inputSchema.safeParse({
     command: ":",
     timeoutMs: MAX_TIMEOUT_MS + 1,
   });
   assert.equal(rejected.success, false);
   assert.match(rejected.error.issues[0].message, /2147483647 ms/);
   assert.equal(
-    bash.inputSchema.safeParse({ command: ":", timeoutMs: MAX_TIMEOUT_MS })
-      .success,
+    inputSchema.safeParse({ command: ":", timeoutMs: MAX_TIMEOUT_MS }).success,
     true,
   );
 });
@@ -240,7 +307,7 @@ test("direct execute rejects a deadline below the floor before spawning", async 
   const dir = mkdtempSync(join(tmpdir(), "iva-bash-timeout-floor-"));
   const marker = join(dir, "spawned");
   try {
-    const result = await bash.execute({
+    const result = await executeBash({
       command: `: > ${shellQuote(marker)}`,
       timeoutMs: MIN_TIMEOUT_MS - 1,
     });
@@ -256,7 +323,7 @@ test("direct execute rejects a deadline above Node's timer limit before spawning
   const dir = mkdtempSync(join(tmpdir(), "iva-bash-timeout-ceiling-"));
   const marker = join(dir, "spawned");
   try {
-    const result = await bash.execute({
+    const result = await executeBash({
       command: `: > ${shellQuote(marker)}`,
       timeoutMs: MAX_TIMEOUT_MS + 1,
     });
@@ -275,7 +342,8 @@ test("spawn resource failure returns a bounded result without an unhandled error
     "EMFILE regression process did not settle",
   );
   assert.equal(child.exitCode, 0, child.stderr);
-  const result = JSON.parse(child.stdout);
+  const result: unknown = JSON.parse(child.stdout);
+  assert.ok(isBashResult(result));
   assert.equal(result.exitCode, 1);
   assert.equal(result.stdout, "");
   assert.match(result.stderr, /EMFILE|too many open files/i);
@@ -288,11 +356,11 @@ test("worker initialization failure falls back without orphaning the child group
   t.mock.method(deadlineWorkerRuntime, "create", () => {
     throw new Error("injected Worker initialization failure");
   });
-  const execution = bash.execute({
+  const execution = executeBash({
     command: `printf '%s\\n' "$$" > ${shellQuote(pidFile)}; sleep 3600`,
     timeoutMs: MIN_TIMEOUT_MS,
   });
-  let pid = null;
+  let pid: number | null = null;
   try {
     pid = await waitForPid(pidFile);
     const result = await within(
@@ -304,14 +372,14 @@ test("worker initialization failure falls back without orphaning the child group
     assert.equal(await waitUntilGone(pid, 1_500), true);
   } finally {
     pid ??= readPid(pidFile);
-    if (isAlive(pid)) process.kill(-pid, "SIGKILL");
+    killIfAlive(pid, "SIGKILL", true);
     await execution.catch(() => {});
     rmSync(dir, { recursive: true, force: true });
   }
 });
 
 test("a delayed exit event does not turn an already-exited command into a timeout", async () => {
-  const execution = bash.execute({ command: "exit 7", timeoutMs: 100 });
+  const execution = executeBash({ command: "exit 7", timeoutMs: 100 });
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
   const result = await within(
     execution,
@@ -323,17 +391,27 @@ test("a delayed exit event does not turn an already-exited command into a timeou
 });
 
 test("portable deadline probe recognizes an exited root while the main loop is blocked", async (t) => {
+  // Preserve the original unbound factory call; the worker implementation does
+  // not consume `this`, and this test intentionally exercises that exact path.
+  // eslint-disable-next-line @typescript-eslint/unbound-method
   const createWorker = deadlineWorkerRuntime.create;
-  t.mock.method(deadlineWorkerRuntime, "create", (options) =>
-    createWorker({
-      ...options,
-      workerData: {
-        ...options.workerData,
-        forcePortableProbe: true,
-      },
-    }),
+  t.mock.method(
+    deadlineWorkerRuntime,
+    "create",
+    (options: Parameters<typeof deadlineWorkerRuntime.create>[0]) => {
+      assert.ok(options !== undefined);
+      const workerData: unknown = options.workerData;
+      assert.ok(isRecord(workerData));
+      return createWorker({
+        ...options,
+        workerData: {
+          ...workerData,
+          forcePortableProbe: true,
+        },
+      });
+    },
   );
-  const execution = bash.execute({
+  const execution = executeBash({
     command: "exit 7",
     timeoutMs: MIN_TIMEOUT_MS,
   });
@@ -348,7 +426,7 @@ test("portable deadline probe recognizes an exited root while the main loop is b
 });
 
 test("minimum deadline is enforced while the Node event loop is blocked", async () => {
-  const execution = bash.execute({
+  const execution = executeBash({
     command: "sleep 0.2; printf completed",
     timeoutMs: MIN_TIMEOUT_MS,
   });
@@ -368,15 +446,15 @@ test("deadline checks the root PID rather than a surviving process group", async
   const command =
     `${termResistantCommand(pidFile)} & ` +
     `while [ ! -s ${shellQuote(pidFile)} ]; do sleep 0.01; done; exit 7`;
-  const execution = bash.execute({ command, timeoutMs: 100 });
-  let pid = null;
+  const execution = executeBash({ command, timeoutMs: 100 });
+  let pid: number | null = null;
   try {
     const pidDeadline = Date.now() + 500;
     while (!existsSync(pidFile) && Date.now() < pidDeadline) {
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
     }
     pid = readPid(pidFile);
-    assert.notEqual(pid, null, "background child did not write its PID");
+    assert.ok(pid !== null, "background child did not write its PID");
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
     const result = await within(
       execution,
@@ -388,7 +466,7 @@ test("deadline checks the root PID rather than a surviving process group", async
     assert.equal(await waitUntilGone(pid, 1_500), true);
   } finally {
     pid ??= readPid(pidFile);
-    if (isAlive(pid)) process.kill(pid, "SIGKILL");
+    killIfAlive(pid, "SIGKILL");
     await within(
       execution.catch(() => {}),
       1_000,
@@ -400,7 +478,7 @@ test("deadline checks the root PID rather than a surviving process group", async
 
 test("closing fd 4 cannot crash bash execution or change its exit code", async () => {
   const result = await within(
-    bash.execute({ command: "exec 4<&-; exit 9", timeoutMs: 1_000 }),
+    executeBash({ command: "exec 4<&-; exit 9", timeoutMs: 1_000 }),
     1_800,
     "closing fd 4 prevented bash execution from settling",
   );
@@ -410,7 +488,7 @@ test("closing fd 4 cannot crash bash execution or change its exit code", async (
 
 test("closing fd 3 cannot turn a normal exit into a timeout", async () => {
   const result = await within(
-    bash.execute({ command: "exec 3>&-; exit 0", timeoutMs: 1_000 }),
+    executeBash({ command: "exec 3>&-; exit 0", timeoutMs: 1_000 }),
     1_800,
     "closing fd 3 prevented bash execution from settling",
   );
@@ -421,13 +499,13 @@ test("closing fd 3 cannot turn a normal exit into a timeout", async () => {
 test("writing to fd 3 cannot disable the command deadline", async () => {
   const dir = mkdtempSync(join(tmpdir(), "iva-bash-fd-spoof-"));
   const pidFile = join(dir, "shell.pid");
-  const execution = bash.execute({
+  const execution = executeBash({
     command:
       `printf '%s\\n' "$$" > ${shellQuote(pidFile)}; ` +
       "(printf x >&3) 2>/dev/null || :; while :; do :; done",
     timeoutMs: 100,
   });
-  let pid = null;
+  let pid: number | null = null;
   try {
     pid = await waitForPid(pidFile);
     const result = await within(
@@ -438,7 +516,7 @@ test("writing to fd 3 cannot disable the command deadline", async () => {
     assert.equal(result.timedOut, true);
   } finally {
     pid ??= readPid(pidFile);
-    if (isAlive(pid)) process.kill(-pid, "SIGKILL");
+    killIfAlive(pid, "SIGKILL", true);
     await within(
       execution.catch(() => {}),
       1_000,
@@ -449,7 +527,7 @@ test("writing to fd 3 cannot disable the command deadline", async () => {
 });
 
 test("bash closes stdin so a command waiting for input receives EOF", async () => {
-  const result = await bash.execute({
+  const result = await executeBash({
     command:
       "if IFS= read -r line; then printf unexpected; else printf stdin-closed; fi",
     timeoutMs: 1_000,
@@ -463,7 +541,7 @@ test("bash preserves the last 30000 characters of each output stream", async () 
   const script =
     `process.stdout.write("prefix-" + "o".repeat(30000));` +
     `process.stderr.write("prefix-" + "e".repeat(30000));`;
-  const result = await bash.execute({
+  const result = await executeBash({
     command: `${shellQuote(process.execPath)} -e ${shellQuote(script)}`,
     timeoutMs: 1_000,
   });
@@ -482,7 +560,7 @@ test("normal calls do not accumulate cleanup timers", async () => {
   const before = timeoutHandles();
   const started = Date.now();
   for (let index = 0; index < 3; index++) {
-    const result = await bash.execute({ command: ":", timeoutMs: 1_000 });
+    const result = await executeBash({ command: ":", timeoutMs: 1_000 });
     assert.equal(result.exitCode, 0);
   }
   await delay(50);
@@ -501,11 +579,11 @@ test("normal calls do not accumulate cleanup timers", async () => {
 test("timeout resolves within two seconds when a child ignores SIGTERM", async () => {
   const dir = mkdtempSync(join(tmpdir(), "iva-bash-term-"));
   const pidFile = join(dir, "child.pid");
-  const execution = bash.execute({
+  const execution = executeBash({
     command: termResistantCommand(pidFile),
     timeoutMs: 100,
   });
-  let pid = null;
+  let pid: number | null = null;
   try {
     pid = await waitForPid(pidFile);
     const result = await within(
@@ -516,7 +594,7 @@ test("timeout resolves within two seconds when a child ignores SIGTERM", async (
     assert.equal(result.timedOut, true);
   } finally {
     pid ??= readPid(pidFile);
-    if (isAlive(pid)) process.kill(pid, "SIGKILL");
+    killIfAlive(pid, "SIGKILL");
     await within(
       execution.catch(() => {}),
       1_000,
@@ -530,10 +608,10 @@ test("normal shell exit reaps a background TERM-resistant descendant in its grou
   const dir = mkdtempSync(join(tmpdir(), "iva-bash-normal-reap-"));
   const pidFile = join(dir, "child.pid");
   const command = `${termResistantCommand(pidFile)} &`;
-  let pid = null;
+  let pid: number | null = null;
   try {
     const result = await within(
-      bash.execute({ command, timeoutMs: 1_000 }),
+      executeBash({ command, timeoutMs: 1_000 }),
       1_800,
       "bash did not settle after a normal shell exit with a background child",
     );
@@ -547,7 +625,7 @@ test("normal shell exit reaps a background TERM-resistant descendant in its grou
     );
   } finally {
     pid ??= readPid(pidFile);
-    if (isAlive(pid)) process.kill(pid, "SIGKILL");
+    killIfAlive(pid, "SIGKILL");
     rmSync(dir, { recursive: true, force: true });
   }
 });
@@ -556,10 +634,10 @@ test("descendant cleanup after a normal shell exit does not report a timeout", a
   const dir = mkdtempSync(join(tmpdir(), "iva-bash-normal-deadline-"));
   const pidFile = join(dir, "child.pid");
   const command = `${termResistantCommand(pidFile, { detachIo: true })} &`;
-  let pid = null;
+  let pid: number | null = null;
   try {
     const result = await within(
-      bash.execute({ command, timeoutMs: 100 }),
+      executeBash({ command, timeoutMs: 100 }),
       1_800,
       "bash did not settle after cleanup crossed the command deadline",
     );
@@ -573,7 +651,7 @@ test("descendant cleanup after a normal shell exit does not report a timeout", a
     );
   } finally {
     pid ??= readPid(pidFile);
-    if (isAlive(pid)) process.kill(pid, "SIGKILL");
+    killIfAlive(pid, "SIGKILL");
     rmSync(dir, { recursive: true, force: true });
   }
 });
@@ -586,10 +664,10 @@ test(
   async () => {
     const dir = mkdtempSync(join(tmpdir(), "iva-bash-setsid-bounded-"));
     const pidFile = join(dir, "child.pid");
-    let pid = null;
+    let pid: number | null = null;
     try {
       const result = await within(
-        bash.execute({
+        executeBash({
           command: escapedProcessGroupCommand(pidFile),
           timeoutMs: 1_000,
         }),
@@ -606,7 +684,7 @@ test(
       );
     } finally {
       pid ??= readPid(pidFile);
-      if (isAlive(pid)) process.kill(pid, "SIGKILL");
+      killIfAlive(pid, "SIGKILL");
       rmSync(dir, { recursive: true, force: true });
     }
   },
@@ -620,11 +698,11 @@ test(
   async () => {
     const dir = mkdtempSync(join(tmpdir(), "iva-bash-setsid-timeout-"));
     const pidFile = join(dir, "child.pid");
-    const execution = bash.execute({
+    const execution = executeBash({
       command: escapedProcessGroupCommand(pidFile, { wait: true }),
       timeoutMs: 100,
     });
-    let pid = null;
+    let pid: number | null = null;
     try {
       pid = await waitForPid(pidFile);
       const result = await within(
@@ -640,7 +718,7 @@ test(
       );
     } finally {
       pid ??= readPid(pidFile);
-      if (isAlive(pid)) process.kill(pid, "SIGKILL");
+      killIfAlive(pid, "SIGKILL");
       await within(
         execution.catch(() => {}),
         1_000,
@@ -654,11 +732,11 @@ test(
 test("timeout leaves no TERM-resistant child PID behind", async () => {
   const dir = mkdtempSync(join(tmpdir(), "iva-bash-reap-"));
   const pidFile = join(dir, "child.pid");
-  const execution = bash.execute({
+  const execution = executeBash({
     command: termResistantCommand(pidFile, { asChild: true, detachIo: true }),
     timeoutMs: 100,
   });
-  let pid = null;
+  let pid: number | null = null;
   try {
     pid = await waitForPid(pidFile);
     const result = await within(
@@ -674,7 +752,7 @@ test("timeout leaves no TERM-resistant child PID behind", async () => {
     );
   } finally {
     pid ??= readPid(pidFile);
-    if (isAlive(pid)) process.kill(pid, "SIGKILL");
+    killIfAlive(pid, "SIGKILL");
     await execution.catch(() => {});
     rmSync(dir, { recursive: true, force: true });
   }
@@ -685,9 +763,9 @@ test("a fake-manager process outside the PGID remains outside bash cleanup", asy
   const requestFile = join(dir, "start.request");
   const pidFile = join(dir, "managed.pid");
   const stopManager = startFakeManager(requestFile, pidFile);
-  let pid = null;
+  let pid: number | null = null;
   try {
-    const result = await bash.execute({
+    const result = await executeBash({
       command:
         `: > ${shellQuote(requestFile)}; ` +
         `while [ ! -s ${shellQuote(pidFile)} ]; do sleep 0.01; done`,
@@ -703,7 +781,7 @@ test("a fake-manager process outside the PGID remains outside bash cleanup", asy
   } finally {
     stopManager();
     pid ??= readPid(pidFile);
-    if (isAlive(pid)) process.kill(pid, "SIGKILL");
+    killIfAlive(pid, "SIGKILL");
     rmSync(dir, { recursive: true, force: true });
   }
 });

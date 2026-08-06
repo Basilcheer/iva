@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-floating-promises -- Node's test runner owns registrations. */
 // CI guard for the systemd-timers -> eve-schedules migration (see CHANGELOG.md
 // Unreleased, docs/deploy.md, scripts/lib/schedule-migration.ts): catches a future
 // change that accidentally reintroduces one of the retired deploy/ unit files, or

@@ -1,6 +1,6 @@
 // Self-check: normalizeCwd разворачивает ~, валидирует директорию до exec и даёт понятную
 // диагностику вместо сырого EACCES/ENOENT (см. agent/tools/bash.ts, issue #17).
-// Запуск: node scripts/check-bash-cwd.mjs
+// Запуск: node scripts/check-bash-cwd.ts
 import assert from "node:assert/strict";
 import { homedir } from "node:os";
 import { normalizeCwd } from "../agent/tools/bash.ts";

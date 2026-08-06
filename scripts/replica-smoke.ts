@@ -7,11 +7,13 @@
 import { spawn } from "node:child_process";
 import { mkdtemp, mkdir, rm, symlink, writeFile, cp } from "node:fs/promises";
 import { createServer } from "node:net";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomBytes } from "node:crypto";
 import { startMockOpenAiServer } from "./lib/mock-openai-server.ts";
+import type { ClientSession, MessageResult } from "eve/client";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const MARKER = "CEDAR-4729";
@@ -20,29 +22,41 @@ const HEALTH_TIMEOUT_MS = 90_000;
 const TURN_TIMEOUT_MS = 120_000;
 
 let phase = "prepare";
-function setPhase(name) {
+function setPhase(name: string): void {
   phase = name;
   note(`[smoke] ${new Date().toISOString()} phase: ${name}`);
 }
-const logs = [];
+const logs: string[] = [];
 
-function note(line) {
+function note(line: string): void {
   logs.push(line);
   if (logs.length > 400) logs.shift();
 }
 
-async function freePort() {
-  return new Promise((resolve, reject) => {
+async function freePort(): Promise<number> {
+  return new Promise<number>((resolve, reject) => {
     const srv = createServer();
     srv.once("error", reject);
     srv.listen(0, "127.0.0.1", () => {
-      const { port } = srv.address();
+      const { port } = srv.address() as AddressInfo;
       srv.close(() => resolve(port));
     });
   });
 }
 
-function replicaEnv({ sandbox, app, port, mockBaseUrl, bearer }) {
+function replicaEnv({
+  sandbox,
+  app,
+  port,
+  mockBaseUrl,
+  bearer,
+}: {
+  sandbox: string;
+  app: string;
+  port: number;
+  mockBaseUrl: string;
+  bearer: string;
+}): NodeJS.ProcessEnv {
   // Закрытый allowlist: process.env НЕ спредится — ни секретов хоста, ни его настроек.
   return {
     PATH: process.env.PATH,
@@ -63,14 +77,18 @@ function replicaEnv({ sandbox, app, port, mockBaseUrl, bearer }) {
   };
 }
 
-function run(cmd, args, { cwd, env }) {
-  return new Promise((resolve, reject) => {
+function run(
+  cmd: string,
+  args: string[],
+  { cwd, env }: { cwd: string; env: NodeJS.ProcessEnv },
+): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
     const child = spawn(cmd, args, {
       cwd,
       env,
       stdio: ["ignore", "pipe", "pipe"],
     });
-    const capture = (buf) =>
+    const capture = (buf: Buffer) =>
       String(buf).split("\n").filter(Boolean).forEach(note);
     child.stdout.on("data", capture);
     child.stderr.on("data", capture);
@@ -83,7 +101,15 @@ function run(cmd, args, { cwd, env }) {
   });
 }
 
-function startEve({ app, env, port }) {
+function startEve({
+  app,
+  env,
+  port,
+}: {
+  app: string;
+  env: NodeJS.ProcessEnv;
+  port: number;
+}) {
   const child = spawn(
     process.execPath,
     [
@@ -96,27 +122,33 @@ function startEve({ app, env, port }) {
     ],
     { cwd: app, env, detached: true, stdio: ["ignore", "pipe", "pipe"] },
   );
-  const capture = (buf) =>
+  const capture = (buf: Buffer) =>
     String(buf).split("\n").filter(Boolean).forEach(note);
   child.stdout.on("data", capture);
   child.stderr.on("data", capture);
   return child;
 }
 
-async function stopEve(child) {
+type EveProcess = ReturnType<typeof startEve>;
+
+async function stopEve(child: EveProcess | null): Promise<void> {
   if (!child || child.exitCode !== null) return;
-  const gone = new Promise((resolve) => child.once("exit", resolve));
+  const gone = new Promise<number | null>((resolve) =>
+    child.once("exit", resolve),
+  );
   try {
-    process.kill(-child.pid, "SIGTERM");
+    process.kill(-(child.pid as number), "SIGTERM");
   } catch {
     return;
   }
   // Окно graceful stop у самого eve — 5с; даём заметно больше, чтобы SIGKILL
   // не обрубал запись состояния .workflow-data на полпути.
-  const timer = new Promise((resolve) => setTimeout(resolve, 15000, "timeout"));
+  const timer = new Promise<"timeout">((resolve) =>
+    setTimeout(resolve, 15000, "timeout"),
+  );
   if ((await Promise.race([gone, timer])) === "timeout") {
     try {
-      process.kill(-child.pid, "SIGKILL");
+      process.kill(-(child.pid as number), "SIGKILL");
     } catch {
       /* уже умер */
     }
@@ -124,7 +156,7 @@ async function stopEve(child) {
   }
 }
 
-async function waitForHealth(port, child) {
+async function waitForHealth(port: number, child: EveProcess): Promise<void> {
   const deadline = Date.now() + HEALTH_TIMEOUT_MS;
   while (Date.now() < deadline) {
     if (child.exitCode !== null)
@@ -146,9 +178,13 @@ async function waitForHealth(port, child) {
   );
 }
 
-async function turn(session, prompt, timeoutMs = TURN_TIMEOUT_MS) {
-  let timer;
-  let result;
+async function turn(
+  session: ClientSession,
+  prompt: string,
+  timeoutMs = TURN_TIMEOUT_MS,
+): Promise<string> {
+  let timer: NodeJS.Timeout | undefined;
+  let result: MessageResult;
   try {
     result = await Promise.race([
       session.send(prompt).then((r) => {
@@ -157,7 +193,7 @@ async function turn(session, prompt, timeoutMs = TURN_TIMEOUT_MS) {
         );
         return r.result();
       }),
-      new Promise((_, reject) => {
+      new Promise<never>((_resolve, reject) => {
         timer = setTimeout(
           reject,
           timeoutMs,
@@ -177,7 +213,7 @@ async function turn(session, prompt, timeoutMs = TURN_TIMEOUT_MS) {
   return result.message.trim();
 }
 
-async function prepareReplica(sandbox) {
+async function prepareReplica(sandbox: string): Promise<string> {
   const app = join(sandbox, "app");
   await mkdir(app, { recursive: true });
   for (const dir of ["agent", "scripts", "patches", "vault-template"]) {
@@ -193,10 +229,14 @@ async function prepareReplica(sandbox) {
   return app;
 }
 
-async function main() {
+function errorDetail(error: unknown): unknown {
+  return (error as { message?: unknown } | null | undefined)?.message ?? error;
+}
+
+async function main(): Promise<void> {
   const sandbox = await mkdtemp(join(tmpdir(), "iva-replica-"));
   const mock = await startMockOpenAiServer();
-  let eve = null;
+  let eve: EveProcess | null = null;
   try {
     const app = await prepareReplica(sandbox);
     const port = await freePort();
@@ -233,7 +273,10 @@ async function main() {
     const { Client } = await import("eve/client");
     const client = new Client({
       host: `http://127.0.0.1:${port}`,
-      auth: { bearer: async () => bearer },
+      auth: {
+        // eslint-disable-next-line @typescript-eslint/require-await -- preserve the original async callback.
+        bearer: async () => bearer,
+      },
     });
 
     setPhase("first-reply");
@@ -280,7 +323,8 @@ async function main() {
     } catch (err) {
       if (strictResume) throw err;
       console.warn(
-        `replica smoke: KNOWN ISSUE — session resume across restart failed (${err?.message ?? err})`,
+        // eslint-disable-next-line @typescript-eslint/restrict-template-expressions -- preserve the original template coercion.
+        `replica smoke: KNOWN ISSUE — session resume across restart failed (${errorDetail(err)})`,
       );
     }
 
@@ -326,7 +370,8 @@ async function main() {
     );
   } catch (err) {
     console.error(
-      `replica smoke FAILED at phase "${phase}": ${err?.message ?? err}`,
+      // eslint-disable-next-line @typescript-eslint/restrict-template-expressions -- preserve the original template coercion.
+      `replica smoke FAILED at phase "${phase}": ${errorDetail(err)}`,
     );
     console.error(`provider requests so far: ${mock.requests.length}`);
     console.error("--- last child output ---");

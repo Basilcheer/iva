@@ -1075,3 +1075,106 @@ the Node event loop is blocked` assertion once. Two later sequential suites hit
   reproduction, and all Python 3.12 userbot checks pass. An independent final
   range audit found no behavior, scope, history, protected-file, or attribution
   blocker.
+- 2026-08-06 Asia/Tashkent: PR-8 merged as #160 with merge commit `5985f22`
+  after green hosted CI and an approved CodeRabbit Pro review. CodeRabbit
+  reviewed the full range and produced no actionable comment; its only warning
+  was the repository-wide optional docstring-coverage check. Final scope is six
+  production conversions, four existing test-file conversions, one new
+  characterization file, five removed declarations, and `.mjs` budget 32.
+  Hosted coverage is 75.92% lines, 79.05% branches, and 73.22% functions.
+- 2026-08-06 Asia/Tashkent: PR-9 starts from the PR-8 merge `5985f22`. It owns
+  the two deferred canonical leaves `security-gate` and `telegram-format`; the
+  permanent `setup`, `init-vault`, and `check-update` compatibility shims with
+  their logic extracted to TypeScript; four internal entrypoint renames
+  (`check-bash-cwd`, `check-port`, `check-reasoning-strip`, `replica-smoke`);
+  and eighteen remaining non-bin test-file conversions. The bin-coupled
+  `security-migration.test.mjs` and `userbot-health-cli.test.mjs` stay for the
+  PR-10/11 CLI work. Together these changes reduce the exact tracked `.mjs`
+  count from 32 to 8.
+- 2026-08-06 Asia/Tashkent: PR-9 preparation found three runtime boundaries
+  that must remain explicit. Security and Telegram formatting feed both the Eve
+  bundle and raw Node 24 scripts, so every importer moves in the same conversion
+  commit and build plus raw-import smoke are mandatory. Setup and init-vault
+  keep their installer-visible `.mjs` paths and move behavior behind `.ts`
+  implementations; replica must prove the init-vault shim. Check-update likewise
+  keeps the systemd unit path and importable test contract while moving its
+  implementation to `.ts`. Three non-overlapping worktrees own security/format,
+  setup/init-vault, and internal entries/tests; the lead owns check-update,
+  ratchet integration, cross-lane review, and final gates. Missing direct
+  behavior is characterized against the original `.mjs` before conversion where
+  the original entrypoint can be imported safely; the setup exception is
+  documented below.
+- 2026-08-06 Asia/Tashkent: PR-9 integration completed the planned source set:
+  `security-gate` and `telegram-format` are canonical TypeScript; `setup`,
+  `init-vault`, and `check-update` retain their permanent `.mjs` entry paths
+  over TypeScript implementations; four internal utility entrypoints and all
+  eighteen remaining non-bin test files were renamed to `.ts`. Direct
+  characterization was added before the `init-vault` and `check-port`
+  conversions. The exact tracked `.mjs` count is now eight, matching the PR-9
+  ratchet target; the only two bin-coupled `.mjs` tests remain assigned to
+  PR-10 and PR-11.
+- 2026-08-06 Asia/Tashkent: PR-9 has one explicit TDD process deviation. The
+  original `setup.mjs` unconditionally starts the interactive wizard, opens
+  `/dev/tty`, and requires real provider/Telegram credentials and network calls
+  to complete, so a safe pre-conversion direct-import characterization was not
+  added. Existing dependency-level setup tests remained green; after extraction,
+  the pure OpenRouter helper gained direct tests, and an independent differential
+  harness matched 8,852 normal and malformed response shapes against the original
+  implementation. This avoids a brittle PTY/credential harness but means those
+  helper tests live in the setup conversion commit rather than a preceding
+  characterization commit.
+- 2026-08-06 Asia/Tashkent: Cross-lane review rejected several seemingly safer
+  conversion changes because they altered malformed-input or thrown-value
+  behavior. Setup provider/Telegram JSON access, check-update diagnostics,
+  check-port diagnostics, replica process shutdown and diagnostics, and the
+  reasoning-strip fixtures now preserve the original JavaScript operations and
+  coercion exactly through type-only boundaries. Independent differential
+  review matched 8,852 OpenRouter shapes and representative security/Telegram
+  formatting inputs. The overdue temporary `telegram-poll.d.mts` bridge was
+  removed after its two typed test consumers switched to explicit dynamic
+  module boundaries; no tracked `.d.mts` or `.mts` declaration remains.
+- 2026-08-06 Asia/Tashkent: The complete pre-pull PR-9 gate set is green on
+  Node 24.19.0. The full suite reports 689 total tests, 685 passed, zero failed,
+  and four expected macOS skips. Coverage is 76.94% lines, 79.52% branches, and
+  74.48% functions, a PR-8 delta of +1.02 / +0.47 / +1.26 percentage points.
+  Lint, formatting, typecheck, build, exact 8/8 `.mjs` ratchet, zero declaration
+  bridges, and diff checks pass. Replica exits zero after its documented
+  cross-restart resume notice, proves reset retirement, and finishes `OK` with
+  five provider requests.
+- 2026-08-06 Asia/Tashkent: CI-equivalent Python gates also pass: Autograph
+  343/343, security-defense 45/45, deterministic userbot lock reproduction with
+  uv 0.8.3, strict hashed environment sync, userbot guardrails, health, and
+  Python 3.12.13 byte-compilation. The two approved handoff files remain the
+  only untracked paths, no protected file is present in the PR range, and all
+  PR-9 commit messages are free of AI attribution.
+- 2026-08-06 Asia/Tashkent: The required fetch and pull/rebase found
+  `origin/main` still at the PR-8 merge `5985f22`, so no PR-9 commit was
+  rewritten. The complete post-pull gate set is green on the committed tree:
+  Node 24 again reports 689 total tests, 685 passed, zero failed, and four
+  expected macOS skips; the final repeated coverage run is 76.95% lines, 79.57%
+  branches, and 74.48% functions, a final PR-8 delta of +1.03 / +0.52 / +1.26
+  percentage points.
+  Lint, formatting, exact 8/8 ratchet, zero declarations, typecheck, build,
+  replica, Autograph 343/343, security-defense 45/45, uv 0.8.3 lock
+  reproduction, and all Python 3.12 userbot checks pass. Replica again emitted
+  only the documented cross-restart resume notice before proving reset
+  retirement and exiting zero with five provider requests.
+- 2026-08-06 Asia/Tashkent: Hosted CI passed PR-9 on the first push. The
+  CodeRabbit review found one lost comment header, one dishonest OpenRouter
+  callback return type, and PR-9-introduced duplication in update-check result
+  construction; those review fixes preserve runtime behavior. Its test-token
+  hardening suggestion is also accepted as a test-only no-op. The review also
+  surfaced four pre-existing behaviors that are deliberately not changed in
+  this zero-semantics batch: init-vault treats `git init`/`git add` failures as
+  fatal while only an initial commit failure is non-fatal; setup accepts
+  non-numeric manual Telegram allowlist entries; setup serializes embedded
+  newlines in inherited environment values; and an empty Ollama catalog reaches
+  `pickFromList([])` before final validation rejects the missing model. The
+  suggested catch-and-continue init-vault patch would falsely report an
+  initialized backup repository, while the three interactive setup fixes need a
+  safe dependency-injected test seam rather than an unsafe credential/network
+  PTY harness. The reasoning-strip modernization suggestion is also declined:
+  its flat usage, string finish reason, and async factories intentionally match
+  the original JavaScript runtime fixture; replacing them with current SDK V4
+  shapes would change characterization semantics. These deferred defects remain
+  candidates for separate test-first bugfix work after the migration.

@@ -4,10 +4,7 @@ import {
   fetchModelOptions,
 } from "./model-catalog.ts";
 
-type OpenRouterErrorReason = (
-  body: unknown,
-  status: number,
-) => string | undefined;
+type OpenRouterErrorReason = (body: unknown, status: number) => unknown;
 type ModelSelection = {
   provider: string;
   model: string | null | undefined;
@@ -131,7 +128,9 @@ export async function probeOpenRouterModel(
       typeof body.error.message === "string"
         ? body.error.message
         : "");
-    const reason = detail ? `: ${detail}` : "";
+    // Preserve the former template-literal coercion for malformed provider
+    // values while keeping the callback contract honest at its boundary.
+    const reason = detail ? `: ${detail as string}` : "";
     throw new ModelValidationError(
       "model_unavailable",
       `OpenRouter rejected model ${model}${reason}`,

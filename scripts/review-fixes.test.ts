@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-floating-promises -- Node's test runner owns registrations. */
 // Регрессии на находки независимого ревью: квалификаторы идентичности, SUPERSEDE через
 // replace_body, ownership-токен card-лока, symlink-обход write_file, права карантина,
 // лок в несуществующем каталоге (свежая установка).
@@ -17,6 +18,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { ToolContext } from "eve/tools";
 import { quarantineDir } from "./lib/wf-store.ts";
 
 // TS — только динамическим импортом: resolve-хук (.js→.ts) не действует на статические
@@ -29,7 +31,27 @@ const {
 const { acquireLock: jsonLock, releaseLock: jsonRelease } =
   await import("../agent/lib/json-store.ts");
 
-function makeCard(dir, name, h1) {
+function testToolContext(toolName: string): ToolContext {
+  const unavailable = (): never => {
+    throw new Error("not used by this test");
+  };
+  return {
+    abortSignal: new AbortController().signal,
+    callId: "review-fixes",
+    toolName,
+    session: {
+      id: "review-fixes",
+      auth: { current: null, initiator: null },
+      turn: { id: "review-fixes", sequence: 0 },
+    },
+    getSandbox: () => Promise.reject(new Error("not used by this test")),
+    getSkill: unavailable,
+    getToken: () => Promise.reject(new Error("not used by this test")),
+    requireAuth: unavailable,
+  };
+}
+
+function makeCard(dir: string, name: string, h1: string): void {
   writeFileSync(
     join(dir, `${name}.md`),
     `---\ntype: contact\nstatus: active\n---\n# ${h1}\n\nтело\n`,
@@ -105,6 +127,7 @@ test("карантин закрывает права старого world-readab
   mkdirSync(dir);
   chmodSync(dir, 0o755); // стор из эпохи до UMask-фикса
   const dest = quarantineDir(dir, "2026-01-01");
+  assert.ok(dest);
   assert.equal(
     statSync(dest).mode & 0o777,
     0o700,
@@ -120,10 +143,13 @@ test("write_file: симлинк-алиас на cards/ не обходит га
   symlinkSync(join(vault, "cards"), join(vault, "card-alias"));
   process.env.ASSISTANT_VAULT_DIR = vault;
   const { default: writeFile } = await import("../agent/tools/write_file.ts");
-  const res = await writeFile.execute({
-    path: join(vault, "card-alias", "contacts", "ivan.md"),
-    content: "OVERWRITTEN",
-  });
+  const res = await writeFile.execute(
+    {
+      path: join(vault, "card-alias", "contacts", "ivan.md"),
+      content: "OVERWRITTEN",
+    },
+    testToolContext("write_file"),
+  );
   assert.equal(res.ok, false, JSON.stringify(res));
   assert.equal(
     readFileSync(join(cards, "ivan.md"), "utf8"),

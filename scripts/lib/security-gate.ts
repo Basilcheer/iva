@@ -6,7 +6,29 @@ const KEEP_CONTROL = new Set(["\n", "\r", "\t"]);
 const WALLET_DRAIN_RE =
   /[ༀ-࿿ꀀ-꓏⠀-⣿]|[\u{1D400}-\u{1D7FF}\u{10000}-\u{1034F}]/gu;
 
-const LOOKALIKES = {
+export interface SanitizeResult {
+  text: string;
+  blocked: boolean;
+  reason: string;
+  flags: string[];
+  truncatedChars: number;
+}
+
+export interface OutboundFinding {
+  type: string;
+  name: string;
+  preview: string;
+}
+
+export interface OutboundResult {
+  clean: boolean;
+  text: string;
+  findings: OutboundFinding[];
+}
+
+type Pattern = readonly [name: string, expression: RegExp];
+
+const LOOKALIKES: Record<string, string> = {
   А: "A",
   В: "B",
   С: "C",
@@ -62,7 +84,9 @@ const OVERRIDE_PATTERNS = [
 
 const INBOUND_ATTACK_FLAG_NAMES = new Set(["role-markers", "overrides"]);
 
-export function hasInboundAttackSignal(result) {
+export function hasInboundAttackSignal(
+  result: Pick<SanitizeResult, "blocked" | "flags">,
+): boolean {
   if (result.blocked) return true;
   return result.flags.some((flag) => {
     const separator = flag.indexOf("=");
@@ -71,12 +95,15 @@ export function hasInboundAttackSignal(result) {
   });
 }
 
-export function sanitizeInbound(input, maxChars = 50000) {
+export function sanitizeInbound(
+  input: string,
+  maxChars = 50000,
+): SanitizeResult {
   if (!Number.isSafeInteger(maxChars) || maxChars < 0) {
     throw new RangeError("maxChars must be a non-negative safe integer");
   }
   const originalLen = input.length;
-  const flags = [];
+  const flags: string[] = [];
 
   let invisibleRemoved = 0;
   let text = input.replace(INVISIBLE_RE, (c) => {
@@ -150,7 +177,7 @@ export function sanitizeInbound(input, maxChars = 50000) {
   return { text, blocked: false, reason: "clean", flags, truncatedChars };
 }
 
-const API_KEY_PATTERNS = [
+const API_KEY_PATTERNS: readonly Pattern[] = [
   ["openai", /sk-[A-Za-z0-9]{20,}/g],
   ["anthropic", /sk-ant-[A-Za-z0-9-]{20,}/g],
   ["google_api", /AIza[A-Za-z0-9\-_]{35}/g],
@@ -176,7 +203,7 @@ const API_KEY_PATTERNS = [
   ],
 ];
 
-const INTERNAL_PATH_PATTERNS = [
+const INTERNAL_PATH_PATTERNS: readonly Pattern[] = [
   [
     "home_dotfiles",
     /(?:\/home\/\w+|~)\/\.(?:ssh|config|env|gnupg|aws|docker|kube)/g,
@@ -187,7 +214,7 @@ const INTERNAL_PATH_PATTERNS = [
   ["dot_env_content", /^\w+_(?:KEY|TOKEN|SECRET|PASSWORD)\s*=\s*.+$/gm],
 ];
 
-const EXFIL_PATTERNS = [
+const EXFIL_PATTERNS: readonly Pattern[] = [
   [
     "markdown_image_exfil",
     /!\[.*?\]\(https?:\/\/[^)]*(?:token|key|secret|api|auth|password|env|data=)[^)]*\)/gi,
@@ -202,7 +229,7 @@ const EXFIL_PATTERNS = [
   ],
 ];
 
-const INJECTION_ARTIFACTS = [
+const INJECTION_ARTIFACTS: readonly Pattern[] = [
   [
     "special_tokens",
     /<\|(?:im_start|im_end|system|user|assistant|endoftext)\|>/g,
@@ -211,10 +238,12 @@ const INJECTION_ARTIFACTS = [
 
 const REDACTED = "[REDACTED]";
 
-export function scanOutbound(input, redact = true) {
+export function scanOutbound(input: string, redact = true): OutboundResult {
   let text = input;
-  const findings = [];
-  const groups = [
+  const findings: OutboundFinding[] = [];
+  const groups: ReadonlyArray<
+    readonly [type: string, patterns: readonly Pattern[]]
+  > = [
     ["api_key", API_KEY_PATTERNS],
     ["internal_path", INTERNAL_PATH_PATTERNS],
     ["data_exfil", EXFIL_PATTERNS],

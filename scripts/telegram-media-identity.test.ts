@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-floating-promises, @typescript-eslint/require-await -- Node's test runner owns registrations and async doubles preserve production boundaries. */
 import "./lib/ts-esm-hooks.ts";
 import assert from "node:assert/strict";
 import {
@@ -62,17 +63,38 @@ globalThis.fetch = async (input) => {
   return Response.json({ ok: true, result: { message_id: 1000 } });
 };
 
+const telegramTestModule = "../agent/channels/telegram.ts?media-identity-test";
 const channel = (
-  await import("../agent/channels/telegram.ts?media-identity-test")
+  (await import(
+    telegramTestModule
+  )) as typeof import("../agent/channels/telegram.ts")
 ).default;
+type AcceptedRoute = {
+  transport: string;
+  handler: (
+    request: Request,
+    args: {
+      send: () => Promise<{ id: string }>;
+      resolveActiveSession: () => Promise<undefined>;
+      cancel: () => Promise<{ status: string }>;
+      reset: () => Promise<{ status: string }>;
+      getSession: () => never;
+      receive: () => Promise<never>;
+      params: Record<string, string>;
+      waitUntil: () => void;
+      requestIp: string;
+    },
+  ) => Promise<Response>;
+};
 const route = channel.routes.find(
-  (candidate) => candidate.path === "/eve/v1/telegram/accepted",
-);
+  (candidate: { path: string }) =>
+    candidate.path === "/eve/v1/telegram/accepted",
+) as unknown as AcceptedRoute | undefined;
 assert.ok(route && route.transport !== "websocket");
 
 after(() => rmSync(root, { recursive: true, force: true }));
 
-function mediaUpdate(updateId, fileUniqueId) {
+function mediaUpdate(updateId: number, fileUniqueId: string) {
   return {
     update_id: updateId,
     message: {
@@ -85,7 +107,7 @@ function mediaUpdate(updateId, fileUniqueId) {
   };
 }
 
-function voiceUpdate(updateId, fileUniqueId) {
+function voiceUpdate(updateId: number, fileUniqueId: string) {
   return {
     update_id: updateId,
     message: {
@@ -104,8 +126,12 @@ function voiceUpdate(updateId, fileUniqueId) {
   };
 }
 
-async function deliver(update) {
-  const response = await route.handler(
+type TestUpdate =
+  ReturnType<typeof mediaUpdate> | ReturnType<typeof voiceUpdate>;
+type MediaCache = Record<string, { transcript?: string; vision?: string }>;
+
+async function deliver(update: TestUpdate) {
+  const response = await route!.handler(
     new Request("http://iva.test/eve/v1/telegram/accepted", {
       method: "POST",
       headers: {
@@ -177,7 +203,7 @@ test("an empty vision result is cached and does not trigger another provider cal
 
   const cache = JSON.parse(
     readFileSync(join(dataDir, "media-cache.json"), "utf8"),
-  );
+  ) as MediaCache;
   assert.equal(cache["empty-vision-photo"].vision, "");
 });
 
@@ -188,7 +214,7 @@ test("a failed vision result is not cached and the next delivery retries the pro
 
   let cache = JSON.parse(
     readFileSync(join(dataDir, "media-cache.json"), "utf8"),
-  );
+  ) as MediaCache;
   assert.equal(cache["failed-vision-photo"].vision, undefined);
 
   visionStatus = 200;
@@ -199,7 +225,9 @@ test("a failed vision result is not cached and the next delivery retries the pro
   assert.equal(counts.turns - before.turns, 2);
   assert.equal(dailyEntries() - before.daily, 2);
 
-  cache = JSON.parse(readFileSync(join(dataDir, "media-cache.json"), "utf8"));
+  cache = JSON.parse(
+    readFileSync(join(dataDir, "media-cache.json"), "utf8"),
+  ) as MediaCache;
   assert.equal(cache["failed-vision-photo"].vision, "derived after retry");
 });
 
@@ -220,7 +248,7 @@ test("an empty transcript result is cached and does not trigger another provider
 
   const cache = JSON.parse(
     readFileSync(join(dataDir, "media-cache.json"), "utf8"),
-  );
+  ) as MediaCache;
   assert.equal(cache["empty-transcript-voice"].transcript, "");
 });
 
@@ -234,7 +262,7 @@ test("a failed transcript result reuses the blob and retries the provider", asyn
 
   let cache = JSON.parse(
     readFileSync(join(dataDir, "media-cache.json"), "utf8"),
-  );
+  ) as MediaCache;
   assert.equal(cache["failed-transcript-voice"].transcript, undefined);
 
   transcriptStatus = 200;
@@ -247,7 +275,9 @@ test("a failed transcript result reuses the blob and retries the provider", asyn
   assert.equal(counts.transcript - before.transcript, 2);
   assert.equal(counts.turns - before.turns, 2);
 
-  cache = JSON.parse(readFileSync(join(dataDir, "media-cache.json"), "utf8"));
+  cache = JSON.parse(
+    readFileSync(join(dataDir, "media-cache.json"), "utf8"),
+  ) as MediaCache;
   assert.equal(
     cache["failed-transcript-voice"].transcript,
     "transcribed after retry",
