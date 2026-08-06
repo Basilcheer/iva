@@ -116,11 +116,11 @@ Headless installs take `--skip-setup` or `--non-interactive`. Prefer to read bef
 
 ### The first minute
 
-Three messages that show what you actually have:
+Three messages, and you can watch the memory work:
 
-1. Send a voice note about your day — anything, out loud. It lands in `daily/` word for word, and Iva answers in text.
-2. `Remind me tomorrow at 9 to call the bank` — the reminder arrives, no calendar involved.
-3. Tomorrow: `what did I tell you yesterday?` — the answer comes out of memory, not out of the chat window.
+1. Send a voice note about your day — anything, out loud. Then look in `~/iva/vault/daily/` on the server: your words are sitting there in plain markdown, dated, yours. No other assistant hands you the file.
+2. Tell it something a colleague would remember: `Marina at Acme wants the revised quote by Friday — she never picks up the phone.`
+3. Ask for it back the way a person would: `how should I follow up with Marina?` — the answer comes from the card Iva just wrote, not from the last few messages.
 
 Then send a photo of a business card, or forward a long post and ask for the gist. `/menu` has the rest; the full list is in [25+ scenarios](docs/use-cases.md).
 
