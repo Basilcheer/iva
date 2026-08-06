@@ -51,7 +51,7 @@ type ControlModule = {
   [name: string]: unknown;
 };
 
-const queueModulePath = "./queue.mjs";
+const queueModulePath = "./queue.ts";
 const routingModulePath = "./routing.ts";
 const updateFlowModulePath = "./update-flow.ts";
 const controlModulePath = "./control.ts";

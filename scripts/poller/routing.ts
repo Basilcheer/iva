@@ -95,7 +95,7 @@ type QueueModule = {
   undrainableLegacyLogged: Set<string>;
 };
 
-const queueModulePath = "./queue.mjs";
+const queueModulePath = "./queue.ts";
 const {
   acknowledgeQueued,
   clearFailedDirectIngress,

@@ -8,7 +8,7 @@ import { spawnSync } from "node:child_process";
 const ROOT = resolve(import.meta.dirname, "..");
 const HARNESS = join(ROOT, "scripts/fixtures/telegram-poll-queue-harness.mjs");
 const [queueRuntime, routingRuntime, deliverRuntime] = await Promise.all([
-  import("./poller/queue.mjs"),
+  import("./poller/queue.ts"),
   import("./poller/routing.ts"),
   import("./poller/deliver.ts"),
 ]);

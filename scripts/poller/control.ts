@@ -94,7 +94,7 @@ type ControlTransport = (
 
 const menuModulePath: string = "../lib/menu/index.mjs";
 const deliverModulePath: string = "./deliver.ts";
-const queueModulePath: string = "./queue.mjs";
+const queueModulePath: string = "./queue.ts";
 const routingModulePath: string = "./routing.ts";
 const { createMenu } = (await import(menuModulePath)) as {
   createMenu: CreateMenu;
