@@ -4,9 +4,9 @@ export {
   hasInboundAttackSignal,
   sanitizeInbound,
   scanOutbound,
-} from "../../scripts/lib/security-gate.mjs";
+} from "../../scripts/lib/security-gate.ts";
 export type {
   OutboundFinding,
   OutboundResult,
   SanitizeResult,
-} from "../../scripts/lib/security-gate.mjs";
+} from "../../scripts/lib/security-gate.ts";

@@ -8,7 +8,7 @@ import {
   needsRichMessage,
   sanitizeTelegramHtml,
   toTelegramHtmlChunks,
-} from "./telegram-format.mjs";
+} from "./telegram-format.ts";
 
 await test("escaping and plain fallback preserve the existing entity order", () => {
   assert.equal(escHtml("<&>"), "&lt;&amp;&gt;");

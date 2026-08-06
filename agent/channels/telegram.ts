@@ -23,7 +23,7 @@ import {
   toTelegramHtmlChunks,
   htmlToPlain,
   needsRichMessage,
-} from "../../scripts/lib/telegram-format.mjs";
+} from "../../scripts/lib/telegram-format.ts";
 import { describeImage } from "../vision.js";
 import {
   hasInboundAttackSignal,
@@ -237,7 +237,7 @@ function buildAuth(msg: TelegramDispatchMessage) {
 //
 // Тот же крошечный хелпер продублирован в agent/hooks/transcript.ts — выносить в
 // общий модуль не стали из-за тривиальности (это пара fs-вызовов), а НЕ из-за бандла:
-// импорт из scripts/lib в бандл работает (см. telegram-format.mjs). Формат d_brain:
+// импорт из scripts/lib в бандл работает (см. telegram-format.ts). Формат d_brain:
 // `## HH:MM [type]` + контент.
 // Дата/время — в часовом поясе пользователя (ASSISTANT_TIMEZONE, иначе локальный TZ).
 function localStamp(): { date: string; hhmm: string; hhmmss: string } {
@@ -637,7 +637,7 @@ async function processMediaPart(
 }
 
 // Markdown → Telegram HTML и нарезка на чанки — в общем модуле
-// scripts/lib/telegram-format.mjs (тот же конвертер использует cron). Импорт выше.
+// scripts/lib/telegram-format.ts (тот же конвертер использует cron). Импорт выше.
 
 // --- ESC-остановка хода (аналог ESC в Claude Code) ---
 //
