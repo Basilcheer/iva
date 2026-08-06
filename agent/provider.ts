@@ -175,7 +175,7 @@ export function makeCodexModel(model: string = providerConfig.textModel) {
 // `text` → одна такая часть бросает AI_InvalidPromptError в standardizePrompt и отравляет сессию
 // навсегда (Iva молчит в треде до ручного сброса). reasoning в реплее не нужен — это приватное
 // «мышление», юзеру не видно — поэтому выкидываем его из ВЫВОДА целиком, и в историю он не попадает.
-// Подтверждено репродукцией: reasoning с text:"" проходит, без text — FAIL (см. implementation-notes).
+// Подтверждено репродукцией: reasoning с text:"" проходит, без text — FAIL (см. implementation-notes, вне публичного дерева).
 const REASONING_PART_TYPES = new Set([
   "reasoning",
   "reasoning-start",

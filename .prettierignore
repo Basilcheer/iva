@@ -9,4 +9,3 @@ services/telegram-userbot/
 data/
 scripts/autograph/tests/golden/
 CHANGELOG.md
-notes/plans/2026-08-06-ts-migration.md
