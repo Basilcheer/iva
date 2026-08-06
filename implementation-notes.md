@@ -1392,3 +1392,17 @@ update` before and after merge) and was not run by Codex.
   Node 24 lane run reports 76.72% lines, 78.94% branches, and 72.50% functions,
   leaving 1.72 / 1.94 / 1.50 percentage points of headroom; these figures use a
   different denominator and are not a regression comparison with the old totals.
+- 2026-08-06 19:37 Asia/Tashkent: Final integrated verification uses Node
+  24.19.0 after a clean `npm ci`. The complete suite and repeated exact coverage
+  command pass with 793 tests, 789 passed, zero failed, and four expected macOS
+  skips; the final report is 76.64% lines, 79.02% branches, and 72.78% functions
+  against floors of 75 / 77 / 71. Full ESLint, Prettier, typecheck, Eve build,
+  replica smoke, the exact 5/5 `.mjs` ratchet, and zero `.mts` / `.d.mts` checks
+  pass. The first combined lint/format run found one obsolete string-ID cast in
+  `wizards.test.ts` plus one Prettier-only line wrap that neither isolated lane
+  owned; both were committed separately and every affected gate was repeated.
+  Python 3.12 reports Autograph 343/343 and security defense 45/45. The pinned
+  uv 0.8.3 lock reproduces byte-for-byte, and a clean strict hashed userbot sync,
+  guardrail tests, health tests, and `py_compile` all pass. Range checks exclude
+  `LEARNINGS.md` and the untracked migration plan, and all branch commits are free
+  of AI attribution.
