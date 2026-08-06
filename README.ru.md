@@ -113,7 +113,7 @@ curl -fsSL https://raw.githubusercontent.com/smixs/iva/main/install.sh | bash
 2. Запустите установщик и ответьте на его вопросы.
 3. Напишите своему боту. Мастер достанет ваш Telegram ID из этого сообщения, закончит настройку, и Ива прямо в чате подтвердит, что работает.
 
-Для установки без диалога есть `--skip-setup` и `--non-interactive`. Хотите сначала прочитать скрипт - заберите его через `curl -fsSL https://raw.githubusercontent.com/smixs/iva/main/install.sh -o install.sh`, прочитайте, потом `bash install.sh`. Прохождение мастера шаг за шагом и SSH-ликбез для тех, у кого VPS впервые: [docs/ru/install.md](docs/ru/install.md).
+Ставьте от обычного пользователя, не от root: shell-инструмент Ивы работает с правами того, кто её поставил. Для установки без диалога есть `--skip-setup` и `--non-interactive`. Хотите сначала прочитать скрипт - заберите его через `curl -fsSL https://raw.githubusercontent.com/smixs/iva/main/install.sh -o install.sh`, прочитайте, потом `bash install.sh`. Прохождение мастера шаг за шагом и SSH-ликбез для тех, у кого VPS впервые: [docs/ru/install.md](docs/ru/install.md).
 
 ### Первая минута
 
