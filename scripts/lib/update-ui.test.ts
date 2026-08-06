@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-floating-promises, @typescript-eslint/require-await, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access -- legacy Node test registration and dynamic JavaScript bridge fixtures */
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -16,12 +17,32 @@ import { createTerminalProgress } from "./progress.ts";
 import {
   createTelegramUpdateReporter,
   UPDATE_LOADER,
-} from "./telegram-status.mjs";
+} from "./telegram-status.ts";
 import {
   acquireUpdateLock,
   createUpdateTransaction,
   releaseUpdateLock,
-} from "./update-safety.mjs";
+} from "./update-safety.ts";
+
+type TelegramBody = {
+  message_id?: number;
+  text?: string;
+  entities?: { custom_emoji_id?: string }[];
+  reply_markup?: { inline_keyboard: { callback_data: string }[][] };
+};
+type TelegramCall = { method: string | undefined; body: TelegramBody };
+type MockResponse = {
+  ok: boolean;
+  status: number;
+  json(): Promise<{
+    ok?: boolean;
+    result?: unknown;
+    description?: string;
+    parameters?: { retry_after?: number };
+  }>;
+};
+type MockFetch = (url: string, init: { body: string }) => Promise<MockResponse>;
+const mutableGlobal = globalThis as unknown as { fetch: MockFetch };
 
 test("modelSummary uses configured provider values without runtime defaults", () => {
   assert.deepEqual(
@@ -43,7 +64,7 @@ test("terminal progress is deterministic outside a TTY", () => {
   let output = "";
   const stream = {
     isTTY: false,
-    write: (chunk) => {
+    write: (chunk: string) => {
       output += chunk;
     },
   };
@@ -58,7 +79,7 @@ test("terminal progress restores the cursor when disposed", () => {
   let output = "";
   const stream = {
     isTTY: true,
-    write: (chunk) => {
+    write: (chunk: string) => {
       output += chunk;
     },
   };
@@ -76,8 +97,8 @@ test("terminal progress restores the cursor when disposed", () => {
 });
 
 test("Telegram update edits one message through every phase and final result", async () => {
-  const calls = [];
-  const fetchImpl = async (url, init) => {
+  const calls: TelegramCall[] = [];
+  const fetchImpl: MockFetch = async (url, init) => {
     const method = url.split("/").at(-1);
     const body = JSON.parse(init.body);
     calls.push({ method, body });
@@ -93,6 +114,7 @@ test("Telegram update edits one message through every phase and final result", a
     env: { MODEL_PROVIDER: "codex", CODEX_MODEL: "gpt-5.5" },
     fetchImpl,
   });
+  assert.ok(reporter);
   await reporter.start("protect");
   await reporter.done("protect");
   await reporter.start("fetch");
@@ -114,7 +136,7 @@ test("Telegram update edits one message through every phase and final result", a
     [100, 100, 100, 100],
   );
   assert.deepEqual(
-    edits.slice(0, 3).map((call) => call.body.entities[0].custom_emoji_id),
+    edits.slice(0, 3).map((call) => call.body.entities?.[0]?.custom_emoji_id),
     [
       UPDATE_LOADER.customEmojiId,
       UPDATE_LOADER.customEmojiId,
@@ -129,14 +151,14 @@ test("Telegram update edits one message through every phase and final result", a
       `${UPDATE_LOADER.alt} Собираю Iva`,
     ],
   );
-  assert.match(edits[3].body.text, /Iva обновлена/);
-  assert.match(edits[3].body.text, /OpenAI · gpt-5.5/);
+  assert.match(edits[3]?.body.text ?? "", /Iva обновлена/);
+  assert.match(edits[3]?.body.text ?? "", /OpenAI · gpt-5.5/);
   assert.equal(edits[3].body.entities, undefined);
 });
 
 test("Telegram does not recreate phase messages after the active message was deleted", async () => {
-  const calls = [];
-  const fetchImpl = async (url, init) => {
+  const calls: TelegramCall[] = [];
+  const fetchImpl: MockFetch = async (url, init) => {
     const method = url.split("/").at(-1);
     calls.push({ method, body: JSON.parse(init.body) });
     if (method === "editMessageText") {
@@ -161,6 +183,7 @@ test("Telegram does not recreate phase messages after the active message was del
     env: { MODEL_PROVIDER: "codex", CODEX_MODEL: "gpt-5.5" },
     fetchImpl,
   });
+  assert.ok(reporter);
   await reporter.start("protect");
   await reporter.start("fetch");
   await reporter.start("build");
@@ -174,9 +197,9 @@ test("Telegram does not recreate phase messages after the active message was del
 });
 
 test("Telegram retries 429 without downgrading the custom emoji and deduplicates phase edits", async () => {
-  const calls = [];
+  const calls: TelegramCall[] = [];
   let first = true;
-  const fetchImpl = async (url, init) => {
+  const fetchImpl: MockFetch = async (url, init) => {
     calls.push({ method: url.split("/").at(-1), body: JSON.parse(init.body) });
     if (first) {
       first = false;
@@ -199,6 +222,7 @@ test("Telegram retries 429 without downgrading the custom emoji and deduplicates
     fetchImpl,
     sleepImpl: async () => {},
   });
+  assert.ok(reporter);
   await reporter.start("protect");
   await reporter.start("protect");
   await reporter.done("protect");
@@ -214,8 +238,8 @@ test("Telegram retries 429 without downgrading the custom emoji and deduplicates
 });
 
 test("Telegram falls back to a simple Unicode marker when custom emoji is unavailable", async () => {
-  const calls = [];
-  const fetchImpl = async (url, init) => {
+  const calls: TelegramCall[] = [];
+  const fetchImpl: MockFetch = async (url, init) => {
     const body = JSON.parse(init.body);
     calls.push({ method: url.split("/").at(-1), body });
     if (body.entities) {
@@ -240,6 +264,7 @@ test("Telegram falls back to a simple Unicode marker when custom emoji is unavai
     env: {},
     fetchImpl,
   });
+  assert.ok(reporter);
   await reporter.start("protect");
   await reporter.start("fetch");
   reporter.dispose();
@@ -258,9 +283,46 @@ test("Telegram falls back to a simple Unicode marker when custom emoji is unavai
   assert.equal(calls[2].body.entities, undefined);
 });
 
+test("Telegram preserves error-like status when selecting the custom emoji fallback", async () => {
+  const calls: TelegramCall[] = [];
+  const telegramError = {
+    message: "Bad Request: custom emoji entities are not allowed",
+    status: 400,
+  };
+  const fetchImpl: MockFetch = async (url, init) => {
+    const body = JSON.parse(init.body);
+    calls.push({ method: url.split("/").at(-1), body });
+    // eslint-disable-next-line @typescript-eslint/only-throw-error -- Telegram adapters may reject with a structural API error instead of an Error instance
+    if (body.entities) throw telegramError;
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ ok: true, result: {} }),
+    };
+  };
+  const reporter = createTelegramUpdateReporter({
+    token: "token",
+    job: { chatId: 1, messageId: 100, locale: "en" },
+    env: {},
+    fetchImpl,
+    sleepImpl: async () => {},
+  });
+  assert.ok(reporter);
+  await reporter.start("protect");
+  reporter.dispose();
+
+  assert.equal(calls.length, 4);
+  assert.ok(calls.slice(0, 3).every((call) => call.body.entities));
+  assert.equal(calls[3].body.entities, undefined);
+  assert.equal(
+    calls[3].body.text,
+    `${UPDATE_LOADER.fallback} Saving your changes`,
+  );
+});
+
 test("Telegram update failure replaces the active phase in the same message", async () => {
-  const calls = [];
-  const fetchImpl = async (url, init) => {
+  const calls: TelegramCall[] = [];
+  const fetchImpl: MockFetch = async (url, init) => {
     calls.push({ method: url.split("/").at(-1), body: JSON.parse(init.body) });
     return {
       ok: true,
@@ -274,6 +336,7 @@ test("Telegram update failure replaces the active phase in the same message", as
     env: {},
     fetchImpl,
   });
+  assert.ok(reporter);
   await reporter.start("fetch");
   await reporter.fail("fetch", "v1");
   reporter.dispose();
@@ -283,20 +346,24 @@ test("Telegram update failure replaces the active phase in the same message", as
     calls.map((call) => call.body.message_id),
     [100, 100],
   );
-  assert.match(calls[1].body.text, /Couldn't get the update/);
-  assert.match(calls[1].body.text, /still running v1/);
+  assert.match(calls[1]?.body.text ?? "", /Couldn't get the update/);
+  assert.match(calls[1]?.body.text ?? "", /still running v1/);
 });
 
 test("update callback is acknowledged before any message edit", async () => {
-  const previousFetch = globalThis.fetch;
+  const previousFetch = mutableGlobal.fetch;
   const previousToken = process.env.TELEGRAM_BOT_TOKEN;
   const previousAllowed = process.env.TELEGRAM_ALLOWED_USER_IDS;
   process.env.TELEGRAM_BOT_TOKEN = "token";
   process.env.TELEGRAM_ALLOWED_USER_IDS = "42";
-  const calls = [];
-  globalThis.fetch = async (url) => {
-    calls.push(url.split("/").at(-1));
-    return { ok: true, json: async () => ({ ok: true, result: {} }) };
+  const calls: string[] = [];
+  mutableGlobal.fetch = async (url) => {
+    calls.push(url.split("/").at(-1) ?? "");
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ ok: true, result: {} }),
+    };
   };
   try {
     const bridge = await import(`../telegram-poll.mjs?test=${Date.now()}`);
@@ -324,7 +391,7 @@ test("update callback is acknowledged before any message edit", async () => {
       },
     );
   } finally {
-    globalThis.fetch = previousFetch;
+    mutableGlobal.fetch = previousFetch;
     if (previousToken === undefined) delete process.env.TELEGRAM_BOT_TOKEN;
     else process.env.TELEGRAM_BOT_TOKEN = previousToken;
     if (previousAllowed === undefined)
@@ -334,7 +401,7 @@ test("update callback is acknowledged before any message edit", async () => {
 });
 
 test("up-to-date check shows the model from fresh .env, not this process's snapshot", async () => {
-  const previousFetch = globalThis.fetch;
+  const previousFetch = mutableGlobal.fetch;
   const previousEnv = Object.fromEntries(
     [
       "TELEGRAM_BOT_TOKEN",
@@ -348,11 +415,12 @@ test("up-to-date check shows the model from fresh .env, not this process's snaps
   // The bridge's snapshot is stale: the /model wizard rewrote .env after this process started.
   process.env.MODEL_PROVIDER = "opencode";
   process.env.OPENCODE_MODEL = "stale-model";
-  const calls = [];
-  globalThis.fetch = async (url, init) => {
+  const calls: TelegramCall[] = [];
+  mutableGlobal.fetch = async (url, init) => {
     calls.push({ method: url.split("/").at(-1), body: JSON.parse(init.body) });
     return {
       ok: true,
+      status: 200,
       json: async () => ({ ok: true, result: { message_id: 10 } }),
     };
   };
@@ -369,9 +437,9 @@ test("up-to-date check shows the model from fresh .env, not this process's snaps
       }),
     });
     const edit = calls.find((call) => call.method === "editMessageText");
-    assert.match(edit.body.text, /OpenAI · fresh-model/);
+    assert.match(edit?.body.text ?? "", /OpenAI · fresh-model/);
   } finally {
-    globalThis.fetch = previousFetch;
+    mutableGlobal.fetch = previousFetch;
     for (const [key, value] of Object.entries(previousEnv)) {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
@@ -380,18 +448,19 @@ test("up-to-date check shows the model from fresh .env, not this process's snaps
 });
 
 test("manual update offer keeps commit-based behavior and marks a stable release as shown", async () => {
-  const previousFetch = globalThis.fetch;
+  const previousFetch = mutableGlobal.fetch;
   const previousToken = process.env.TELEGRAM_BOT_TOKEN;
   const previousAllowed = process.env.TELEGRAM_ALLOWED_USER_IDS;
   process.env.TELEGRAM_BOT_TOKEN = "token";
   process.env.TELEGRAM_ALLOWED_USER_IDS = "42";
-  const calls = [];
-  globalThis.fetch = async (url, init) => {
+  const calls: TelegramCall[] = [];
+  mutableGlobal.fetch = async (url, init) => {
     const method = url.split("/").at(-1);
     const body = JSON.parse(init.body);
     calls.push({ method, body });
     return {
       ok: true,
+      status: 200,
       json: async () => ({
         ok: true,
         result:
@@ -401,7 +470,7 @@ test("manual update offer keeps commit-based behavior and marks a stable release
   };
   try {
     const bridge = await import(`../telegram-poll.mjs?manual=${Date.now()}`);
-    const marked = [];
+    const marked: string[] = [];
     await bridge.handleUpdateCheck(1, {
       inspectImpl: async () => ({
         hasCommitUpdate: true,
@@ -409,16 +478,17 @@ test("manual update offer keeps commit-based behavior and marks a stable release
         localVersion: "1.2.3",
         remoteVersion: "1.2.4",
       }),
-      markNotifiedImpl: async (_dataDir, version) => marked.push(version),
+      markNotifiedImpl: async (_dataDir: string, version: string) =>
+        marked.push(version),
     });
     assert.deepEqual(
       calls.map((call) => call.method),
       ["sendMessage", "editMessageText"],
     );
-    assert.equal(calls[1].body.reply_markup.inline_keyboard[0].length, 2);
+    assert.equal(calls[1]?.body.reply_markup?.inline_keyboard[0]?.length, 2);
     assert.deepEqual(marked, ["1.2.4"]);
   } finally {
-    globalThis.fetch = previousFetch;
+    mutableGlobal.fetch = previousFetch;
     if (previousToken === undefined) delete process.env.TELEGRAM_BOT_TOKEN;
     else process.env.TELEGRAM_BOT_TOKEN = previousToken;
     if (previousAllowed === undefined)
@@ -438,10 +508,10 @@ test("update lock is exclusive and owner-reentrant", () => {
 });
 
 test("verified update commits before timer activation and contains a timer failure", async () => {
-  const updateSafety = await import("./update-safety.mjs");
+  const updateSafety = await import("./update-safety.ts");
   assert.equal(typeof updateSafety.commitThenRunPostCommit, "function");
 
-  const calls = [];
+  const calls: string[] = [];
   const timerError = new Error("timer activation failed");
   const result = await updateSafety.commitThenRunPostCommit({
     commit: async () => {
@@ -457,11 +527,11 @@ test("verified update commits before timer activation and contains a timer failu
   assert.deepEqual(result, { ok: false, error: timerError });
 });
 
-function git(cwd, ...args) {
+function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
 }
 
-function configureGit(cwd) {
+function configureGit(cwd: string): void {
   git(cwd, "config", "user.email", "test@example.com");
   git(cwd, "config", "user.name", "Iva Test");
 }
@@ -685,7 +755,17 @@ const FAKE_BUILD =
   "node -e \"const f=require('node:fs');f.mkdirSync('.output/server',{recursive:true});" +
   "f.writeFileSync('.output/server/marker.txt',f.readFileSync('tracked.txt','utf8').trim())\"";
 
-function candidateFixture({ buildScript = FAKE_BUILD } = {}) {
+type CandidateFixture = {
+  temp: string;
+  remote: string;
+  seed: string;
+  local: string;
+  data: string;
+};
+
+function candidateFixture({
+  buildScript = FAKE_BUILD,
+}: { buildScript?: string } = {}): CandidateFixture {
   const temp = mkdtempSync(join(tmpdir(), "iva-update-candidate-"));
   const remote = join(temp, "remote.git");
   const seed = join(temp, "seed");
@@ -720,7 +800,11 @@ function candidateFixture({ buildScript = FAKE_BUILD } = {}) {
   return { temp, remote, seed, local, data };
 }
 
-function pushUpstream(seed, mutate, message) {
+function pushUpstream(
+  seed: string,
+  mutate: (seed: string) => void,
+  message: string,
+): string {
   mutate(seed);
   git(seed, "add", ".");
   git(seed, "commit", "-m", message);
@@ -728,7 +812,7 @@ function pushUpstream(seed, mutate, message) {
   return git(seed, "rev-parse", "HEAD");
 }
 
-function candidateTx({ local, temp, data }) {
+function candidateTx({ local, temp, data }: CandidateFixture) {
   return createUpdateTransaction({
     root: local,
     dataDir: data,
@@ -802,13 +886,13 @@ test("broken candidate build aborts before the live checkout is touched", async 
 
 test("changed lockfile installs candidate dependencies and promotes fresh node_modules", async () => {
   const fx = candidateFixture();
-  const npmLock = (cwd) =>
+  const npmLock = (cwd: string) =>
     execFileSync(
       "npm",
       ["install", "--package-lock-only", "--no-audit", "--no-fund"],
       { cwd, encoding: "utf8" },
     );
-  const writeDep = (seed, version) => {
+  const writeDep = (seed: string, version: string) => {
     mkdirSync(join(seed, "dep"), { recursive: true });
     writeFileSync(
       join(seed, "dep/package.json"),

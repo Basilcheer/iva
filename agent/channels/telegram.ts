@@ -70,7 +70,7 @@ import {
   markTelegramFirstOutput,
   publishTelegramEarlyStatus,
   publishTelegramTurnStarted,
-} from "../../scripts/lib/telegram-turn-start.mjs";
+} from "../../scripts/lib/telegram-turn-start.ts";
 import { pathToFileURL } from "node:url";
 
 // Токен (TELEGRAM_BOT_TOKEN) и секрет вебхука (TELEGRAM_WEBHOOK_SECRET_TOKEN)

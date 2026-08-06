@@ -6,27 +6,29 @@ import {
   markTelegramFirstOutput,
   publishTelegramEarlyStatus,
   publishTelegramTurnStarted,
-} from "./telegram-turn-start.mjs";
+} from "./telegram-turn-start.ts";
 
-function deferred() {
-  let resolve;
-  const promise = new Promise((done) => {
+type Status = Record<string, unknown>;
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
     resolve = done;
   });
   return { promise, resolve };
 }
 
-function statusStore(initial = {}) {
+function statusStore(initial: Status = {}) {
   let value = initial;
   return {
     get: () => value,
-    set: (_key, patch) => {
+    set: (_key: string, patch: Status) => {
       value = { ...value, ...patch };
       for (const key of Object.keys(value))
         if (value[key] === null) delete value[key];
       return value;
     },
-    cas: (_key, expected, patch) => {
+    cas: (_key: string, expected: Status, patch: Status) => {
       if (
         Object.entries(expected).some(
           ([key, expectedValue]) => !Object.is(value[key], expectedValue),
@@ -42,12 +44,12 @@ function statusStore(initial = {}) {
   };
 }
 
-test("a trusted dispatch creates one status before a fake 20-second pre-turn delay and turn.started adopts it", async () => {
-  const events = [];
+void test("a trusted dispatch creates one status before a fake 20-second pre-turn delay and turn.started adopts it", async () => {
+  const events: string[] = [];
   const store = statusStore({ status: "idle" });
   let nowMs = 1_000;
   let sends = 0;
-  const stopEnabled = [];
+  const stopEnabled: boolean[] = [];
 
   await publishTelegramEarlyStatus({
     chatKey: "1:",
@@ -55,11 +57,11 @@ test("a trusted dispatch creates one status before a fake 20-second pre-turn del
     now: () => nowMs++,
     setStatusImpl: store.set,
     setStatusIfImpl: store.cas,
-    sendWorkingStatusImpl: async (options) => {
+    sendWorkingStatusImpl: (options) => {
       sends++;
       stopEnabled.push(options.canStop);
       events.push("working-status");
-      return 77;
+      return Promise.resolve(77);
     },
   });
   events.push("provider-work");
@@ -73,9 +75,10 @@ test("a trusted dispatch creates one status before a fake 20-second pre-turn del
     now: () => nowMs,
     getStatusImpl: store.get,
     setStatusIfImpl: store.cas,
-    enableWorkingStatusStopImpl: async (messageId) => {
+    enableWorkingStatusStopImpl: (messageId) => {
       assert.equal(messageId, 77);
       stopEnabled.push(true);
+      return Promise.resolve();
     },
   });
 
@@ -91,19 +94,19 @@ test("a trusted dispatch creates one status before a fake 20-second pre-turn del
   assert.equal(store.get().turnAt, 21_002);
 });
 
-test("working-status failure never blocks turn adoption", async () => {
+void test("working-status failure never blocks turn adoption", async () => {
   const store = statusStore({ status: "idle" });
-  const errors = [];
+  const errors: string[] = [];
 
   await publishTelegramEarlyStatus({
     chatKey: "1:",
     ingressId: "ingress-1",
     setStatusImpl: store.set,
     setStatusIfImpl: store.cas,
-    sendWorkingStatusImpl: async () => {
-      throw new Error("Telegram unavailable");
-    },
-    onWorkingStatusError: (error) => errors.push(error.message),
+    sendWorkingStatusImpl: () =>
+      Promise.reject(new Error("Telegram unavailable")),
+    onWorkingStatusError: (error) =>
+      errors.push(error instanceof Error ? error.message : String(error)),
   });
   const adopted = await publishTelegramTurnStarted({
     chatKey: "1:",
@@ -120,10 +123,10 @@ test("working-status failure never blocks turn adoption", async () => {
   assert.equal(store.get().statusMessageId, undefined);
 });
 
-test("a reset racing a late early-status response cannot revive the old session", async () => {
-  const working = deferred();
+void test("a reset racing a late early-status response cannot revive the old session", async () => {
+  const working = deferred<number>();
   const store = statusStore({ status: "idle" });
-  const removed = [];
+  const removed: number[] = [];
 
   const publishing = publishTelegramEarlyStatus({
     chatKey: "1:",
@@ -131,8 +134,9 @@ test("a reset racing a late early-status response cannot revive the old session"
     setStatusImpl: store.set,
     setStatusIfImpl: store.cas,
     sendWorkingStatusImpl: () => working.promise,
-    removeWorkingStatusImpl: async (messageId) => {
+    removeWorkingStatusImpl: (messageId) => {
       removed.push(messageId);
+      return Promise.resolve();
     },
   });
 
@@ -161,7 +165,7 @@ test("a reset racing a late early-status response cannot revive the old session"
   assert.equal(store.get().sessionId, undefined);
 });
 
-test("latency logging emits one allowlisted JSON record with no sensitive fields", () => {
+void test("latency logging emits one allowlisted JSON record with no sensitive fields", () => {
   const store = statusStore({
     status: "running",
     sessionId: "session-secret",
@@ -172,7 +176,7 @@ test("latency logging emits one allowlisted JSON record with no sensitive fields
     userId: "123456",
     token: "bot-token",
   });
-  const lines = [];
+  const lines: string[] = [];
   assert.equal(
     markTelegramFirstOutput({
       chatKey: "1:",
@@ -200,7 +204,7 @@ test("latency logging emits one allowlisted JSON record with no sensitive fields
     delivered: true,
     getStatusImpl: store.get,
     setStatusIfImpl: store.cas,
-    logImpl: (line) => lines.push(line),
+    logImpl: (line: string) => lines.push(line),
   };
 
   assert.equal(
@@ -224,7 +228,7 @@ test("latency logging emits one allowlisted JSON record with no sensitive fields
   );
 });
 
-test("a namespaced token from Eve is stored channel-local (#110)", async () => {
+void test("a namespaced token from Eve is stored channel-local (#110)", async () => {
   // Реальное значение с прода: обработчики событий eve отдают токен с именем канала
   // впереди. Если сохранить его как есть, /new сбрасывает "telegram:telegram:…" —
   // владельца нет, ответ no_active_session, история продолжается.
@@ -249,6 +253,7 @@ test("a namespaced token from Eve is stored channel-local (#110)", async () => {
     ingressId: "ingress-1",
     setStatusImpl: adopted.set,
     setStatusIfImpl: adopted.cas,
+    sendWorkingStatusImpl: () => Promise.resolve(null),
   });
   assert.equal(
     await publishTelegramTurnStarted({

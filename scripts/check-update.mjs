@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { acquireUpdateLock, releaseUpdateLock } from "./lib/update-safety.mjs";
+import { acquireUpdateLock, releaseUpdateLock } from "./lib/update-safety.ts";
 import {
   inspectUpstream,
   markVersionNotified,
@@ -9,7 +9,7 @@ import {
   readNotifiedVersion,
   sendUpdateOffer,
   updateOffer,
-} from "./lib/update-check.mjs";
+} from "./lib/update-check.ts";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 

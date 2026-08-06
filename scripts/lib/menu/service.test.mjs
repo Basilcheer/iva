@@ -9,7 +9,7 @@ import service, { commandSpec } from "./service.mjs";
 import root from "./root.ts";
 import { SCREENS } from "./index.mjs";
 import { LOADERS, currentRun, resetForTests } from "./svc-run.ts";
-import { acquireUpdateLock, releaseUpdateLock } from "../update-safety.mjs";
+import { acquireUpdateLock, releaseUpdateLock } from "../update-safety.ts";
 
 // стенд как в menu-screens.test.mjs + захват прямых tg-вызовов раннера
 function makeCtx({ lang = "ru", deps = {} } = {}) {

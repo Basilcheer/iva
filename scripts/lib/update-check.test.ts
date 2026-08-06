@@ -1,6 +1,8 @@
+/* eslint-disable @typescript-eslint/no-floating-promises, @typescript-eslint/require-await, @typescript-eslint/unbound-method -- Node's test runner owns registration promises, async doubles preserve adapter boundaries, and the tested JavaScript entrypoint is loaded through createRequire */
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { createRequire } from "node:module";
 import {
   mkdirSync,
   mkdtempSync,
@@ -10,7 +12,6 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runDailyUpdateCheck } from "../check-update.mjs";
 import {
   compareStableVersions,
   inspectUpstream,
@@ -18,9 +19,33 @@ import {
   notificationChat,
   readNotifiedVersion,
   updateOffer,
-} from "./update-check.mjs";
+} from "./update-check.ts";
 
-const git = (cwd, ...args) =>
+type UpdateOfferRequest = {
+  token: string;
+  chatId: string;
+  offer: { text: string; replyMarkup: { inline_keyboard: unknown[][] } };
+};
+type DailyUpdateResult = {
+  status: string;
+  info?: { remoteVersion?: string };
+};
+type DailyUpdateOptions = {
+  root?: string;
+  env?: Record<string, string>;
+  inspectImpl?: () => Promise<{
+    hasVersionUpdate: boolean;
+    localVersion?: string;
+    remoteVersion?: string;
+  }>;
+  sendImpl?: (request: UpdateOfferRequest) => Promise<unknown>;
+};
+const require = createRequire(import.meta.url);
+const { runDailyUpdateCheck } = require("../check-update.mjs") as unknown as {
+  runDailyUpdateCheck(options?: DailyUpdateOptions): Promise<DailyUpdateResult>;
+};
+
+const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
 
 function repoFixture() {
@@ -55,6 +80,10 @@ test("stable version comparison accepts only numeric release triples", () => {
   assert.equal(compareStableVersions("1.2.3", "1.2.2"), -1);
   assert.equal(compareStableVersions("1.2.3", "1.3.0-beta.1"), null);
   assert.equal(compareStableVersions("not-semver", "1.3.0"), null);
+});
+
+test("stable version comparison preserves runtime string coercion", () => {
+  assert.equal(compareStableVersions({ toString: () => "1.2.3" }, "1.2.4"), 1);
 });
 
 test("upstream inspection separates commit updates from release updates", async () => {
@@ -196,12 +225,12 @@ test("daily check sends one offer per version and records only successful sends"
     localVersion: "1.2.3",
     remoteVersion: "1.2.4",
   };
-  const sent = [];
+  const sent: UpdateOfferRequest[] = [];
   const options = {
     root,
     env,
     inspectImpl: async () => info,
-    sendImpl: async (request) => sent.push(request),
+    sendImpl: async (request: UpdateOfferRequest) => sent.push(request),
   };
   assert.equal((await runDailyUpdateCheck(options)).status, "notified");
   assert.equal(sent.length, 1);

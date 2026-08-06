@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-unnecessary-type-assertion -- conversion keeps the injectable exec boundary source-compatible. */
 // Экран «Userbot» меню (/menu → 📡). Статус личного userbot-прокси (Telegram) + подключение.
 // Общая CLI/Telegram-проба проверяет systemd, health endpoint и авторизацию Telethon.
 // Общий таймаут 1.5с: getUpdates-цикл нельзя блокировать дольше.
@@ -12,29 +13,82 @@ import { join } from "node:path";
 import { readEnvValues, upsertEnv } from "../env-file.ts";
 import { probeUserbotHealth } from "../userbot-health.ts";
 
+type ErrorLike = { code?: unknown; message?: unknown };
+type Health = { state: string };
+type MenuState = {
+  chatId: number | string;
+  userId: string;
+  screen: string;
+  data: { ub?: { apiId?: string } | null };
+  awaitText?: { kind: string; secret: boolean; data: { step?: string } } | null;
+};
+type View = { text: string; rows: Array<Array<unknown>> };
+type MenuContext = {
+  deps: {
+    root: string;
+    envPath: string;
+    probeUserbotHealth?: (options: {
+      root: string;
+      port: string;
+    }) => Promise<Health>;
+    runUserbotSetup?: () => Promise<void>;
+    log?: (...parts: unknown[]) => void;
+  };
+  flows: {
+    get: (chatId: number | string, userId: string) => MenuState | null;
+    screen: (
+      state: MenuState,
+      text: string,
+      rows: Array<Array<unknown>>,
+    ) => Promise<unknown>;
+  };
+  tr: (en: string, ru: string) => string;
+  btn: (text: string, callbackData: string) => unknown;
+  backRow: (screen: string) => Array<unknown>;
+  show: (state: MenuState, screen: string) => Promise<unknown>;
+};
+type Exec = (
+  file: string,
+  args: string[],
+  options: { timeout: number; encoding: "utf8" },
+  callback: (error: ErrorLike | null, stdout?: string) => void,
+) => unknown;
+
+const errorMessage = (error: unknown) => (error as ErrorLike).message;
+
 const SID = "ub";
 const PARENT = "r";
 const SVC = "iva-telegram-userbot.service";
 
-const isPrivate = (st) => Number(st.chatId) > 0;
+const isPrivate = (st: MenuState) => Number(st.chatId) > 0;
 
-function run(cmd, args, timeout = 1500) {
-  return new Promise((resolve) => {
-    execFile(cmd, args, { timeout, encoding: "utf8" }, (err, stdout = "") =>
-      resolve({
-        failed: Boolean(err),
-        code: typeof err?.code === "number" ? err.code : err ? 1 : 0,
-        stdout: String(stdout),
-      }),
-    );
-  });
+function run(cmd: string, args: string[], timeout = 1500) {
+  return new Promise<{ failed: boolean; code: number; stdout: string }>(
+    (resolve) => {
+      execFile(cmd, args, { timeout, encoding: "utf8" }, (err, stdout = "") =>
+        resolve({
+          failed: Boolean(err),
+          code:
+            typeof (err as ErrorLike | null)?.code === "number"
+              ? Number((err as ErrorLike).code)
+              : err
+                ? 1
+                : 0,
+          stdout: String(stdout),
+        }),
+      );
+    },
+  );
 }
 
 export function runSetupCommand(
-  bin,
-  { exec = execFile, timeoutMs = 180_000 } = {},
+  bin: string,
+  {
+    exec = execFile as unknown as Exec,
+    timeoutMs = 180_000,
+  }: { exec?: Exec; timeoutMs?: number } = {},
 ) {
-  return new Promise((resolve, reject) => {
+  return new Promise<void>((resolve, reject) => {
     exec(
       process.execPath,
       [bin, "userbot", "setup"],
@@ -51,13 +105,16 @@ export function runSetupCommand(
   });
 }
 
-async function probeStatus(ctx, env) {
+async function probeStatus(
+  ctx: MenuContext,
+  env: Record<string, string | undefined>,
+) {
   const probe = ctx.deps.probeUserbotHealth || probeUserbotHealth;
   return probe({ root: ctx.deps.root, port: env.TELEGRAM_MCP_PORT || "8724" });
 }
 
 // Единая сборка карты — используется и render(), и async-перерисовкой после setup.
-async function buildScreen(st, ctx) {
+async function buildScreen(st: MenuState, ctx: MenuContext): Promise<View> {
   const T = ctx.tr;
   const env = await readEnvValues(ctx.deps.envPath);
   const hasCreds = Boolean(env.TELEGRAM_API_ID && env.TELEGRAM_API_HASH);
@@ -74,7 +131,10 @@ async function buildScreen(st, ctx) {
       unreachable: T("unreachable", "недоступен"),
       unauthorized: T("login required", "нужен вход"),
       ready: T("ready", "готов"),
-    }[status.state] || T("unreachable", "недоступен");
+    }[
+      status.state as
+        "off" | "starting" | "unreachable" | "unauthorized" | "ready"
+    ] || T("unreachable", "недоступен");
   const statusLine = `${T("Status", "Статус")}: ${stateLabel}`;
 
   if (!hasCreds) {
@@ -199,7 +259,7 @@ async function buildScreen(st, ctx) {
 }
 
 // Приглашение ввести api_id или api_hash (двухшаговый секретный приём).
-function promptCred(st, ctx, step) {
+function promptCred(st: MenuState, ctx: MenuContext, step: string) {
   st.awaitText = { kind: "ubcred", secret: true, data: { step } };
   const text =
     step === "api_id"
@@ -219,11 +279,11 @@ function promptCred(st, ctx, step) {
 export default {
   parent: PARENT,
 
-  render(st, ctx) {
+  render(st: MenuState, ctx: MenuContext) {
     return buildScreen(st, ctx);
   },
 
-  async on(verb, args, st, ctx) {
+  async on(verb: string, args: string[], st: MenuState, ctx: MenuContext) {
     if (verb !== "do") return ctx.show(st, SID);
     const step = args[0];
 
@@ -295,7 +355,12 @@ export default {
 
   texts: {
     // Двухшаговый приём: сначала api_id (число), затем api_hash. Сообщения уже удалены движком.
-    async ubcred(text, msg, st, ctx) {
+    async ubcred(
+      text: unknown,
+      _msg: unknown,
+      st: MenuState,
+      ctx: MenuContext,
+    ) {
       const value = String(text).trim();
       const step = st.awaitText?.data?.step;
       if (step === "api_id") {
@@ -328,15 +393,15 @@ export default {
       st.data.ub = null;
       try {
         await upsertEnv(ctx.deps.envPath, {
-          TELEGRAM_API_ID: apiId,
+          TELEGRAM_API_ID: apiId ?? "",
           TELEGRAM_API_HASH: value,
         });
-      } catch (e) {
+      } catch (error) {
         return ctx.flows.screen(
           st,
           ctx.tr(
-            `Couldn't write .env: ${e.message}`,
-            `Не удалось записать .env: ${e.message}`,
+            `Couldn't write .env: ${String(errorMessage(error))}`,
+            `Не удалось записать .env: ${String(errorMessage(error))}`,
           ),
           [ctx.backRow(PARENT)],
         );

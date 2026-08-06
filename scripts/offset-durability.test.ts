@@ -1,9 +1,12 @@
+/* eslint-disable @typescript-eslint/no-floating-promises, @typescript-eslint/require-await -- Node's test runner owns registrations and test doubles return promises. */
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fastForwardOffset, loadOffset, saveOffset } from "./poller/offset.mjs";
+import { fastForwardOffset, loadOffset, saveOffset } from "./poller/offset.ts";
+
+type Call = unknown[];
 
 test("corrupt JSON fails closed before getUpdates(-1)", async () => {
   const dir = mkdtempSync(join(tmpdir(), "iva-offset-corrupt-test-"));
@@ -34,7 +37,7 @@ test("ENOENT is the only first-run path and fast-forwards to the Telegram tail",
     delivered: null,
   });
 
-  const calls = [];
+  const calls: Call[] = [];
   const offset = await fastForwardOffset({
     tgImpl: async (method, body) => {
       calls.push([method, body]);
@@ -77,7 +80,7 @@ test("first-run fast-forward propagates Telegram and response-shape failures", a
 test("saveOffset propagates a write error and never renames the cursor", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "iva-offset-write-error-test-"));
   const file = join(dataDir, "telegram-offset-test.json");
-  const calls = [];
+  const calls: Call[] = [];
   await assert.rejects(
     saveOffset(42, 41, {
       file,
@@ -85,12 +88,16 @@ test("saveOffset propagates a write error and never renames the cursor", async (
       pid: 123,
       tmpId: "write-error",
       mkdirImpl: async () => {},
-      writeFileImpl: async (file, _data, options) => {
+      writeFileImpl: async (
+        file: unknown,
+        _data: unknown,
+        options: unknown,
+      ) => {
         calls.push(["write", file, options]);
         throw new Error("injected write failure");
       },
-      renameImpl: async (...args) => calls.push(["rename", ...args]),
-      rmImpl: async (...args) => calls.push(["rm", ...args]),
+      renameImpl: async (...args: unknown[]) => calls.push(["rename", ...args]),
+      rmImpl: async (...args: unknown[]) => calls.push(["rm", ...args]),
     }),
     /injected write failure/u,
   );
@@ -105,16 +112,24 @@ test("saveOffset propagates a write error and never renames the cursor", async (
 test("saveOffset publishes a private tmp file with one atomic rename", async () => {
   const dir = mkdtempSync(join(tmpdir(), "iva-offset-save-test-"));
   const file = join(dir, "telegram-offset.json");
-  const calls = [];
-  const writeFileImpl = async (path, data, options) => {
+  const calls: Call[] = [];
+  const writeFileImpl = async (
+    path: unknown,
+    data: unknown,
+    options: unknown,
+  ) => {
     calls.push(["write", path, options]);
     const { writeFile } = await import("node:fs/promises");
-    await writeFile(path, data, options);
+    await writeFile(
+      String(path),
+      data as string,
+      options as { encoding: "utf8"; mode: number; flag: "wx" },
+    );
   };
-  const renameImpl = async (from, to) => {
+  const renameImpl = async (from: unknown, to: unknown) => {
     calls.push(["rename", from, to]);
     const { rename } = await import("node:fs/promises");
-    await rename(from, to);
+    await rename(String(from), String(to));
   };
   await saveOffset(42, 41, {
     file,

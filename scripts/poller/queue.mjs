@@ -10,7 +10,7 @@ import {
   loadTelegramResetIntents,
   persistTelegramResetIntent,
 } from "../lib/telegram-reset-intent.ts";
-import { requestTelegramReset } from "../lib/telegram-reset.mjs";
+import { requestTelegramReset } from "../lib/telegram-reset.ts";
 import {
   getChatStatus,
   listChatStatuses,
@@ -20,7 +20,7 @@ import {
 } from "#lib/run-status.mjs";
 import { tr } from "#lib/i18n.mjs";
 import { DATA_DIR, SECRET, RESET_ROUTE, log } from "./config.ts";
-import { tg } from "./transport.mjs";
+import { tg } from "./transport.ts";
 
 // ── Durable busy-time FIFO ──────────────────────────────────────────────────
 // Each accepted Telegram update is written as a versioned item (including update_id and

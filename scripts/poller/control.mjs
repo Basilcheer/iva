@@ -1,6 +1,6 @@
 import { createMenu } from "../lib/menu/index.mjs";
 import { botCommands, helpText, tr } from "#lib/i18n.mjs";
-import { continuationTokenForControl } from "../lib/telegram-reset.mjs";
+import { continuationTokenForControl } from "../lib/telegram-reset.ts";
 import { getChatStatus, isRunning } from "#lib/run-status.mjs";
 import { readEnvFresh } from "../lib/env-file.ts";
 import {
@@ -17,8 +17,8 @@ import {
   ROOT,
   log,
 } from "./config.ts";
-import { downloadTelegramFile, edit, reply, sc, tg } from "./transport.mjs";
-import { chatKey } from "./offset.mjs";
+import { downloadTelegramFile, edit, reply, sc, tg } from "./transport.ts";
+import { chatKey } from "./offset.ts";
 import { deliver } from "./deliver.mjs";
 import { performScopedReset } from "./queue.mjs";
 import { deliverDirectUpdate } from "./routing.mjs";

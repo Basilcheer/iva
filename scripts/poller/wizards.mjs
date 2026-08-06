@@ -15,7 +15,7 @@ import { getLang, tr } from "#lib/i18n.mjs";
 import { readEnvValues, upsertEnv } from "../lib/env-file.ts";
 import { createFlows } from "../lib/tg-flow.ts";
 import { ALLOWED, DATA_DIR_ABS, ENV_PATH, log } from "./config.ts";
-import { reply, sc, tg } from "./transport.mjs";
+import { reply, sc, tg } from "./transport.ts";
 
 // ── /model & /think wizard (out-of-band, inline keyboards) ─────────────────
 // State lives in memory keyed by `${chatId}:${userId}`; each flow edits ONE message

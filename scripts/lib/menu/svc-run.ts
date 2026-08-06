@@ -6,7 +6,7 @@
 //   (activating → inactive|failed), переживает рестарт моста, отмена = systemctl stop;
 // - custom emoji анимируется клиентом сам: редактируем не чаще tickMs и только при смене
 //   payload; 400 от Telegram (владелец без Premium) — одноразовый даунгрейд на fallback
-//   (паттерн editActive из scripts/lib/telegram-status.mjs).
+//   (паттерн editActive из scripts/lib/telegram-status.ts).
 import {
   spawn,
   execFile,

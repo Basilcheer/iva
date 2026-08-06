@@ -14,7 +14,18 @@
 import { toTelegramHtmlChunks, htmlToPlain } from "./telegram-format.mjs";
 import { scanOutbound } from "./security-gate.mjs";
 
-async function post(bot, body) {
+type TelegramRequest = Record<string, unknown>;
+
+type TelegramResponse = {
+  ok: boolean;
+  status: number;
+  text: string;
+};
+
+async function post(
+  bot: string,
+  body: TelegramRequest,
+): Promise<TelegramResponse> {
   const res = await fetch(`https://api.telegram.org/bot${bot}/sendMessage`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -28,23 +39,26 @@ async function post(bot, body) {
 }
 
 export async function sendTelegramHtml(
-  bot,
-  chat,
-  md,
-  { caption = false } = {},
-) {
+  bot: string,
+  chat: string,
+  md: unknown,
+  { caption = false }: { caption?: boolean } = {},
+): Promise<{ ok: boolean; fellBack: boolean; error: string }> {
   let fellBack = false;
   // Outbound security-гейт: редактим утёкшие секреты и в ночных отчётах (fail-open + лог).
-  const guard = scanOutbound(md);
+  const guard = scanOutbound(md as string);
   if (!guard.clean) {
     console.error(
       "[security] outbound report leak redacted:",
       guard.findings.map((f) => `${f.type}:${f.name}`).join(", "),
     );
   }
-  md = guard.text;
+  const guardedMarkdown = guard.text;
   try {
-    for (const chunk of toTelegramHtmlChunks(md, caption ? 1024 : 4096)) {
+    for (const chunk of toTelegramHtmlChunks(
+      guardedMarkdown,
+      caption ? 1024 : 4096,
+    )) {
       const r = await post(bot, {
         chat_id: chat,
         text: chunk,
@@ -70,6 +84,12 @@ export async function sendTelegramHtml(
     }
     return { ok: true, fellBack, error: "" };
   } catch (e) {
-    return { ok: false, fellBack, error: String(e?.message ?? e) };
+    const message =
+      e !== null &&
+      (typeof e === "object" || typeof e === "function") &&
+      "message" in e
+        ? (e.message ?? e)
+        : e;
+    return { ok: false, fellBack, error: String(message) };
   }
 }
