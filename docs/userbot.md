@@ -36,6 +36,12 @@ for you, in chat:
 3. If you have 2FA, it asks for your password (change it afterward if you'd rather it not pass
    through chat). Done — the session persists on the server, so this is one-time.
 
+> [!WARNING]
+> Whatever you type in the chat is stored verbatim in that day's `daily/` log, `api_hash` and
+> 2FA password included, and it passes through the model like any other message. After
+> connecting, delete those lines from the daily file — and if you sent a 2FA password, change
+> it. There is no separate secure channel for this yet.
+
 ## Manual commands (optional — the agent runs these for you)
 
 ```bash
