@@ -27,13 +27,21 @@ curl -fsSL https://raw.githubusercontent.com/smixs/iva/main/install.sh | bash
 ## What's New 🔥
 
 <details>
-<summary><b>v0.3.12 · 05.08.2026 — expand four weeks of releases</b></summary>
+<summary><b>v0.3.13 · 06.08.2026 — expand the latest releases</b></summary>
+
+### 06.08.2026
+
+#### v0.3.13
+
+- 🧱 Iva's Node code and tests are now TypeScript end to end. Five tiny compatibility launchers keep the existing CLI, installer and service paths unchanged.
+- 🛡️ The migration added stricter linting, type checks and coverage gates, while follow-up checks preserve Telegram edge cases and accurate token-usage accounting.
+- 🗺️ The memory table of contents now rebuilds from the domains that actually exist, and shared parser fixtures keep the TypeScript and Python implementations in sync.
 
 ### 05.08.2026
 
 #### v0.3.12
 
-- ⏰ One-off reminders arrive again — the system timer crashed before the message could be sent; delivery now runs on plain JS under any Node.
+- ⏰ One-off reminders arrive again — the system timer crashed before the message could be sent; delivery now stays on a stock-Node-compatible path.
 - 📈 Vault health no longer decays from raw daily transcripts — the score counts only the cards Iva actually maintains; an "up" link to a not-yet-created weekly summary isn't broken until its scheduled day, and audio attachments aren't broken links at all.
 - 🗂️ Cards no longer pile up dated "## Update" sections — writes carry explicit operations now: one Log, one Related, displaced facts go to a dated History; the nightly cleanup migrates old piles on its own.
 
@@ -57,19 +65,6 @@ curl -fsSL https://raw.githubusercontent.com/smixs/iva/main/install.sh | bash
 - ⚙️ The eve engine is updated (0.29.5) — more reliable turn cancellation and message delivery around restarts.
 - 🧹 /new truly clears the context — no more "cleared" replies while the old history quietly continues.
 - 📊 /usage now shows the real context size of the last turn instead of a doubled sum.
-
-### 31.07.2026
-
-#### v0.3.8
-
-- ✅ Iva works with Google Tasks — add, view and close a task.
-- 🔑 Connected Google earlier? Tap "Reconnect" in /menu → Google to grant access to Tasks.
-
-#### v0.3.7
-
-- 🛡️ Updates are safer: a broken update no longer touches your working Iva.
-- 🌙 Nightly memory survives a server restart — the morning report arrives even after a reboot.
-- 🧪 Every release goes through a full test install from scratch before it ships.
 
 </details>
 
