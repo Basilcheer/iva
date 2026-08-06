@@ -20,11 +20,16 @@ attribution. Full contract: CONTRIBUTING.md and AGENTS.md.
 - [ ] `npm test`
 - [ ] Ran it against a live bot (say which provider)
 
-## Self-host impact
+## This PR touches
 
-- [ ] Touches `agent/` — the change only takes effect after `eve build`
-- [ ] Touches the update path or a persisted format (`data/settings.json`, vault
-      layout) — upgrade path from older versions described above
-- [ ] User-visible change — `docs/` updated (and `docs/ru/`, or noted as pending)
+- [ ] `agent/` — takes effect only after `npm run build`
+- [ ] The update path or a persisted format (`data/settings.json`, vault layout) —
+      the upgrade path from older versions is described above
+- [ ] Something user-visible
+
+## I confirm
+
+- [ ] Docs updated for any user-visible change (`docs/`, and `docs/ru/` if that page
+      exists in Russian — or said above that it is still pending)
 - [ ] No secrets, no machine-specific absolute paths, no files from `data/`,
       `attachments/` or a vault

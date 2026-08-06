@@ -60,15 +60,11 @@ body:
         - OpenRouter
         - OpenAI (ChatGPT subscription)
         - Other / self-hosted
-    validations:
-      required: true
   - type: input
     id: os
     attributes:
       label: OS and Node version
       placeholder: "Ubuntu 24.04, Node 24.4.0"
-    validations:
-      required: true
   - type: textarea
     id: logs
     attributes:
