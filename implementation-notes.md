@@ -820,3 +820,46 @@ the Node event loop is blocked` assertion once. Two later sequential suites hit
   deterministic userbot lock, and Python 3.12 userbot gates all pass. The three
   review fixes will be delivered in one incremental push to conserve the Pro
   review allowance.
+- 2026-08-06 Asia/Tashkent: PR-4 merged as #156 with merge commit `0723365`
+  after the single batched review-fix push passed CI, CodeRabbit approved the
+  final head, and all six review threads were resolved. Final scope is 13
+  production conversions, nine existing test-file conversions, three new
+  characterization files, five removed declarations, and `.mjs` budget 73.
+- 2026-08-06 Asia/Tashkent: PR-5 is partitioned into ten production conversions:
+  six middle runtime modules, menu status/userbot, and poller transport/offset.
+  Seven existing `.mjs` tests move with them, two declarations are removed, and
+  the derived target budget is 56. Three isolated worktrees own delivery/turn,
+  update runtime/UI, and reset/menu/poller respectively. The third group must
+  commit direct menu-status and poller-transport characterization against the
+  original JavaScript before its conversion; the lead retains the ratchet,
+  integration notes, shared `update-flow` transport specifier, and final review.
+- 2026-08-06 Asia/Tashkent: PR-5 characterization landed before conversion in
+  two atomic commits: menu status covers fast initial rendering and stale async
+  edit suppression, while poller transport covers the exact byte cap, oversize
+  cancellation, and reader failure. The five direct tests passed against the
+  original `.mjs` implementations. Three isolated conversion worktrees were
+  then integrated without retaining their intermediate worker commits, so the
+  branch has one shared conversion commit after the two characterization
+  commits.
+- 2026-08-06 Asia/Tashkent: Independent cross-review found two behavior drifts
+  in the update-runtime partition before commit. Telegram status had normalized
+  a structurally valid thrown `{ message, status }` value into a generic Error,
+  losing the HTTP status used for custom-emoji fallback. Stable-version parsing
+  had also stopped applying the original JavaScript `String(value ?? "")`
+  coercion. Both source behaviors were restored and protected by direct
+  regression tests. The shared poller transport specifier and two live design
+  references were updated from `.mjs` to `.ts`; active-code stale-import scans
+  are empty.
+- 2026-08-06 Asia/Tashkent: PR-5 conversion commit `e6e2591` contains ten
+  production conversions, seven existing test-file conversions, two removed
+  declarations, and the required importer updates. The ratchet is exactly
+  56/56. The focused conversion suite passed 68/68; the full suite passed 657
+  total, 653 passed, zero failed, and four expected macOS skips. Coverage is
+  75.91% lines, 79.06% branches, and 73.56% functions, a delta of +0.73 / -0.21
+  / +0.45 percentage points from the final merged PR-4 result. Lint, formatting,
+  typecheck, build, replica, Autograph 343/343, security-defense 45/45, pinned
+  uv 0.8.3 lock reproduction, and Python 3.12 userbot guardrail/health/compile
+  gates all pass. One typecheck invocation briefly failed to resolve the
+  installed `eve/hooks` export; an unchanged immediate rerun passed, so it was
+  recorded as a transient local dependency-resolution event rather than a code
+  failure.
