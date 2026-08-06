@@ -11,7 +11,6 @@ import {
   writeFileSync,
   mkdirSync,
   rmSync,
-  readdirSync,
   chmodSync,
 } from "node:fs";
 import { randomBytes } from "node:crypto";
@@ -26,8 +25,6 @@ import {
   loadTelegramJob,
   removeTelegramJob,
 } from "../scripts/lib/telegram-status.ts";
-import { classifyAgentListeners } from "../scripts/lib/listener-security.ts";
-import { readMemoryMaintenanceReport } from "../scripts/lib/memory-maintenance.ts";
 import { userbotSyncArgs } from "../scripts/lib/userbot-deps.ts";
 import { probeUserbotHealth } from "../scripts/lib/userbot-health.ts";
 import {
@@ -40,6 +37,7 @@ import {
 import { createCliRuntime } from "../scripts/cli/runtime.ts";
 import { createCliSystemd } from "../scripts/cli/systemd.ts";
 import { createConfigCommand } from "../scripts/cli/config.ts";
+import { createDoctorCommand } from "../scripts/cli/doctor.ts";
 
 const runtime = createCliRuntime(
   join(dirname(fileURLToPath(import.meta.url)), ".."),
@@ -48,12 +46,9 @@ const cliSystemd = createCliSystemd(runtime);
 const {
   ROOT,
   ENV_PATH,
-  UNIT_DIR,
   NPM,
   childEnv,
   SERVICES,
-  MEMORY_SERVICES,
-  MEMORY_TIMERS,
   UPDATE_TIMER,
   TIMERS,
   SVC_USERBOT,
@@ -77,15 +72,10 @@ const {
   requireSystemd,
   writeEnvVars,
 } = runtime;
-const {
-  ensureAssistantBearer,
-  writeUnits,
-  activateUnits,
-  removeUnits,
-  migrateEnv,
-  restartServices,
-} = cliSystemd;
+const { writeUnits, activateUnits, removeUnits, migrateEnv, restartServices } =
+  cliSystemd;
 const cmdConfig = createConfigCommand(runtime, cliSystemd);
+const cmdDoctor = createDoctorCommand(runtime, cliSystemd);
 
 // ANSI tree like during install. The only source of the art is install.sh (heredoc
 // IVA_TREE); we read it from there so as not to spawn a copy. In a real terminal we add
@@ -506,323 +496,6 @@ async function cmdUpdate(args) {
     if (userbotRollbackSnapshot)
       rmSync(userbotRollbackSnapshot, { force: true });
     await removeTelegramJob(loadedJob?.path);
-  }
-}
-
-async function cmdDoctor() {
-  let okN = 0,
-    warnN = 0,
-    fixN = 0,
-    badN = 0;
-  const bearerChanged = ensureAssistantBearer();
-  if (bearerChanged) fixN++;
-  const env = readEnv();
-
-  // 1. Node ≥24
-  const major = parseInt(process.versions.node.split(".")[0], 10);
-  if (major >= 24) (ok(`Node ${process.versions.node}`), okN++);
-  else
-    (bad(`Node ${process.versions.node} < 24 — upgrade: nvm install 24`),
-      badN++);
-
-  // 2. .env + required keys (the same REQUIRED logic as in scripts/setup.mjs)
-  if (!existsSync(ENV_PATH)) (bad(".env missing — run: iva config"), badN++);
-  else {
-    const prov = env.MODEL_PROVIDER || "ollama";
-    // codex — доступ по OAuth-токену (data/codex-auth.json), у ollama/opencode — API-ключ в .env.
-    const PROV_KEYS = {
-      ollama: ["OLLAMA_API_KEY", "OLLAMA_MODEL"],
-      opencode: ["OPENCODE_API_KEY", "OPENCODE_MODEL"],
-      openrouter: ["OPENROUTER_API_KEY", "OPENROUTER_MODEL"],
-      codex: ["CODEX_MODEL"],
-    };
-    const REQUIRED = [
-      ...(PROV_KEYS[prov] || PROV_KEYS.ollama),
-      "DEEPGRAM_API_KEY",
-      "TELEGRAM_BOT_TOKEN",
-      "TELEGRAM_ALLOWED_USER_IDS",
-      "ASSISTANT_BEARER",
-    ];
-    const missing = REQUIRED.filter((k) => !(env[k] || "").trim());
-    if (
-      prov === "codex" &&
-      !existsSync(join(dataDirAbs(env), "codex-auth.json"))
-    )
-      missing.push("OpenAI sign-in (iva login)");
-    if (!missing.length) (ok(`.env filled in (provider: ${prov})`), okN++);
-    else
-      (bad(`.env incomplete, missing: ${missing.join(", ")} — run: iva config`),
-        badN++);
-    // old .env without IVA_PORT (or with :3000) — migrate right here
-    if (migrateEnv()) fixN++;
-    // web search is optional; check the key of the SELECTED provider (SEARCH_PROVIDER)
-    const SEARCH_KEY = {
-      tavily: "TAVILY_API_KEY",
-      brave: "BRAVE_API_KEY",
-      exa: "EXA_API_KEY",
-      parallel: "PARALLEL_API_KEY",
-    };
-    const sp = (env.SEARCH_PROVIDER || "tavily").trim().toLowerCase();
-    const skey = SEARCH_KEY[sp] || SEARCH_KEY.tavily;
-    if (!(env[skey] || "").trim())
-      (warn(
-        `web_search: SEARCH_PROVIDER=${sp}, but ${skey} is not set — search won't work (iva config)`,
-      ),
-        warnN++);
-    else (ok(`web_search: ${sp}`), okN++);
-    // memory_search: hybrid mode needs one embedding key; base (grep) needs nothing.
-    const mmode = (env.MEMORY_SEARCH_MODE || "grep").trim().toLowerCase();
-    if (
-      mmode === "hybrid" &&
-      !(env.JINA_API_KEY || env.DEEPINFRA_API_KEY || "").trim()
-    )
-      (warn(
-        "memory_search: MEMORY_SEARCH_MODE=hybrid but no JINA_API_KEY/DEEPINFRA_API_KEY — falls back to BM25",
-      ),
-        warnN++);
-    else (ok(`memory_search: ${mmode}`), okN++);
-  }
-
-  // 3. Build
-  if (existsSync(join(ROOT, ".output/server/index.mjs")))
-    (ok("Build in place (.output)"), okN++);
-  else {
-    warn(".output missing — building…");
-    if (run(NPM, ["run", "build"]).status === 0) (ok("Built"), fixN++);
-    else (bad("Build failed"), badN++);
-  }
-
-  if (!hasSystemd()) {
-    warn("systemd unavailable (not Linux) — skipping service and timer checks");
-    return summary();
-  }
-
-  // 4. Units installed
-  const present =
-    existsSync(UNIT_DIR) &&
-    readdirSync(UNIT_DIR).some((f) => /^iva.*\.(service|timer)$/.test(f));
-  if (!present) {
-    warn("systemd units not installed — installing…");
-    try {
-      writeUnits();
-      activateUnits();
-      (ok("Units installed, enabled and active"), fixN++);
-    } catch (e) {
-      (bad(e.message), badN++);
-    }
-  } else {
-    try {
-      writeUnits(); // refresh: Environment=PORT syncs with the current IVA_PORT (eliminates drift)
-      (ok("systemd units installed (refreshed)"), okN++);
-    } catch (e) {
-      (bad(e.message), badN++);
-    }
-  }
-
-  // 5. Services active
-  for (const svc of SERVICES) {
-    if (systemd.isEnabled(svc) && systemd.isActive(svc))
-      (ok(`${svc} enabled and active`), okN++);
-    else {
-      warn(`${svc} disabled or inactive — activating…`);
-      try {
-        systemd.resetFailed([svc]);
-        systemd.activate([svc]);
-        (ok(`${svc} enabled and active`), fixN++);
-      } catch (e) {
-        (bad(e.message), badN++);
-      }
-    }
-  }
-  // A newly generated bearer is read only at process start. Without this restart,
-  // doctor would fix the file while leaving the live Eve process unable to accept it.
-  if (bearerChanged) {
-    warn("iva.service needs one restart to load the new internal bearer");
-    try {
-      systemd.restart(["iva.service"]);
-      (ok("iva.service loaded the internal bearer"), fixN++);
-    } catch (e) {
-      (bad(e.message), badN++);
-    }
-  }
-  // A refreshed unit does not move an already-running old process off 0.0.0.0.
-  // Detect the actual socket and restart once so doctor repairs that upgrade state too.
-  const port = Number((readEnv().IVA_PORT || DEFAULT_PORT).trim());
-  const inspectListener = () => {
-    const r = cap("ss", ["-H", "-ltn", "sport", "=", `:${port}`]);
-    return r.code === 0 ? classifyAgentListeners(r.out, port) : "unknown";
-  };
-  let listener = inspectListener();
-  if (listener === "exposed") {
-    warn(
-      `iva.service is exposed beyond loopback on port ${port} - restarting securely`,
-    );
-    try {
-      systemd.restart(["iva.service"]);
-      for (let attempt = 0; attempt < 30; attempt++) {
-        await new Promise((resolve) => setTimeout(resolve, 500));
-        listener = inspectListener();
-        if (listener === "loopback") break;
-      }
-      if (listener === "loopback")
-        (ok(`iva.service bound to loopback:${port}`), fixN++);
-      else (bad(`iva.service still exposed on port ${port}`), badN++);
-    } catch (e) {
-      (bad(e.message), badN++);
-    }
-  } else if (listener === "loopback")
-    (ok(`iva.service bound to loopback:${port}`), okN++);
-  else if (listener === "absent")
-    (warn(`no listener found on port ${port}`), warnN++);
-  else (warn("could not inspect listener addresses (ss unavailable)"), warnN++);
-
-  // Background timers enabled
-  let timerFailed = false;
-  for (const t of TIMERS) {
-    if (systemd.isEnabled(t) && systemd.isActive(t)) okN++;
-    else {
-      warn(`${t} disabled or inactive — enabling…`);
-      try {
-        systemd.activate([t]);
-        fixN++;
-      } catch (e) {
-        timerFailed = true;
-        (bad(e.message), badN++);
-      }
-    }
-  }
-  if (!timerFailed)
-    ok(
-      `Background timers enabled and active (${TIMERS.length}: ${MEMORY_TIMERS.length} memory + update check)`,
-    );
-
-  // A oneshot service can be inactive and still healthy; its persistent failed state is the
-  // signal that the last nightly run broke. Query only units actually installed on this host.
-  const installedMemoryServices = MEMORY_SERVICES.filter((unit) =>
-    existsSync(join(UNIT_DIR, unit)),
-  );
-  let failedMemoryServices = 0;
-  for (const unit of installedMemoryServices) {
-    const state = systemd.query("is-failed", unit);
-    if (state.code === 0 && state.out === "failed") {
-      bad(
-        `${unit} failed — check: journalctl --user -u ${unit} -n 100 --no-pager`,
-      );
-      badN++;
-      failedMemoryServices++;
-    }
-  }
-  if (installedMemoryServices.length && failedMemoryServices === 0) {
-    ok(`Memory units have no failed state (${installedMemoryServices.length})`);
-    okN++;
-  }
-
-  // daily/weekly/monthly/yearly now run as in-process eve schedules (no systemd unit of
-  // their own to query for a failed state, unlike doctor above) — data/rollup-status.json
-  // (scripts/lib/schedule-runner.ts) is the only record of whether they're actually firing.
-  // Threshold gives each cadence a full extra cycle of slack before doctor complains:
-  // 26h for the 04:00 daily slot, 8d/32d/370d for weekly/monthly/yearly respectively.
-  let rollupStatus = null;
-  try {
-    rollupStatus = JSON.parse(
-      readFileSync(join(dataDirAbs(env), "rollup-status.json"), "utf8"),
-    );
-  } catch {
-    // No rollup-status.json yet (fresh install, or nothing has fired yet) — not an error.
-  }
-  if (rollupStatus) {
-    const STALE_AFTER_H = {
-      daily: 26,
-      weekly: 8 * 24,
-      monthly: 32 * 24,
-      yearly: 370 * 24,
-    };
-    for (const period of ["daily", "weekly", "monthly", "yearly"]) {
-      // "memory-<period>" — the `name` each agent/schedules/memory-*.ts passes to
-      // runScheduledJob, not the bare period (see scripts/lib/schedule-runner.ts).
-      const entry = rollupStatus?.[`memory-${period}`];
-      if (!entry) continue; // hasn't fired yet on this install (e.g. yearly, on most installs)
-      if (typeof entry.lastSuccessAt === "number") {
-        const ageHours = (Date.now() - entry.lastSuccessAt) / (60 * 60 * 1000);
-        const thresholdH = STALE_AFTER_H[period];
-        if (ageHours > thresholdH) {
-          warn(
-            `memory-${period} schedule hasn't succeeded in ${Math.round(ageHours)}h (> ${thresholdH}h) — check: journalctl --user -u iva.service | grep schedule-runner`,
-          );
-          warnN++;
-        } else {
-          (ok(
-            `memory-${period} schedule last succeeded ${Math.round(ageHours)}h ago`,
-          ),
-            okN++);
-        }
-      } else {
-        warn(
-          `memory-${period} schedule has never succeeded — check: journalctl --user -u iva.service | grep schedule-runner`,
-        );
-        warnN++;
-      }
-      // A recent success doesn't mean the MOST RECENT attempt was clean — e.g. it
-      // succeeded, then a later catch-up retry failed and hasn't run again since.
-      // Surface that even when the staleness check above is satisfied.
-      if (typeof entry.lastExitCode === "number" && entry.lastExitCode !== 0) {
-        warn(
-          `memory-${period} schedule's last run exited ${entry.lastExitCode} — check: journalctl --user -u iva.service | grep schedule-runner`,
-        );
-        warnN++;
-      }
-    }
-  }
-
-  // 6. Vault + git origin (report only — we don't initiate git operations)
-  const vaultRel = env.ASSISTANT_VAULT_DIR || "vault";
-  const vaultPath = vaultRel.startsWith("/") ? vaultRel : join(ROOT, vaultRel);
-  if (!existsSync(vaultPath))
-    (warn(
-      `vault not found (${vaultPath}) — created on first memory or: npm run init-vault`,
-    ),
-      warnN++);
-  else if (cap("git", ["-C", vaultPath, "remote", "get-url", "origin"]).out)
-    (ok(`vault + git origin`), okN++);
-  else
-    (warn(
-      `vault without git origin — memory backup not configured:\n    gh repo create <user>/iva-vault --private --source="${vaultPath}" --remote=origin --push`,
-    ),
-      warnN++);
-
-  // enforce-report.json is produced by iva-memory-doctor.service, so only complain about
-  // missing/stale output when that timer is enabled. A fresh report is still useful either way.
-  const maintenanceTimerEnabled = systemd.isEnabled("iva-memory-doctor.timer");
-  const maintenanceReport = readMemoryMaintenanceReport(
-    join(vaultPath, ".graph/enforce-report.json"),
-  );
-  if (maintenanceReport.status === "fresh") {
-    if (maintenanceReport.problems.length) {
-      warn(
-        `ночной maintenance сообщает о проблемах: ${maintenanceReport.problems
-          .map(({ key, count }) => `${key}=${count}`)
-          .join(", ")}`,
-      );
-      warnN++;
-    } else {
-      ok("Ночной maintenance-отчёт свежий, проблем нет");
-      okN++;
-    }
-  } else if (maintenanceTimerEnabled) {
-    if (maintenanceReport.status === "invalid")
-      warn("ночной maintenance оставил нечитаемый отчёт");
-    else warn("ночной maintenance давно не отчитывался");
-    warnN++;
-  }
-
-  return summary();
-
-  function summary() {
-    console.log();
-    console.log(
-      `${C.b}Summary:${C.x} ${C.g}${okN} ok${C.x} · ${C.y}${warnN} warn${C.x} · ${C.c}${fixN} fixed${C.x} · ${C.r}${badN} fail${C.x}`,
-    );
-    process.exit(badN > 0 ? 1 : 0);
   }
 }
 
