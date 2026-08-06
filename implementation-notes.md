@@ -1102,3 +1102,22 @@ the Node event loop is blocked` assertion once. Two later sequential suites hit
   setup/init-vault, and internal entries/tests; the lead owns check-update,
   ratchet integration, cross-lane review, and final gates. Missing direct
   behavior is characterized against the original `.mjs` before each conversion.
+- 2026-08-06 Asia/Tashkent: PR-9 integration completed the planned source set:
+  `security-gate` and `telegram-format` are canonical TypeScript; `setup`,
+  `init-vault`, and `check-update` retain their permanent `.mjs` entry paths
+  over TypeScript implementations; four internal utility entrypoints and all
+  eighteen remaining non-bin test files were renamed to `.ts`. Direct
+  characterization was added before the `init-vault` and `check-port`
+  conversions. The exact tracked `.mjs` count is now eight, matching the PR-9
+  ratchet target; the only two bin-coupled `.mjs` tests remain assigned to
+  PR-10 and PR-11.
+- 2026-08-06 Asia/Tashkent: Cross-lane review rejected several seemingly safer
+  conversion changes because they altered malformed-input or thrown-value
+  behavior. Setup provider/Telegram JSON access, check-update diagnostics,
+  check-port diagnostics, replica process shutdown and diagnostics, and the
+  reasoning-strip fixtures now preserve the original JavaScript operations and
+  coercion exactly through type-only boundaries. Independent differential
+  review matched 8,852 OpenRouter shapes and representative security/Telegram
+  formatting inputs. The overdue temporary `telegram-poll.d.mts` bridge was
+  removed after its two typed test consumers switched to explicit dynamic
+  module boundaries; no tracked `.d.mts` or `.mts` declaration remains.
