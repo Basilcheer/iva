@@ -24,7 +24,7 @@ import {
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 
-// Путь от cwd, как в usage.mjs, а НЕ от import.meta.url: канал инлайнится в кэш
+// Путь от cwd, как в usage.ts, а НЕ от import.meta.url: канал инлайнится в кэш
 // authored-modules eve, откуда «две папки вверх» указывают в node_modules/.cache.
 // Оба процесса (iva.service и мост) стартуют из одного WorkingDirectory (корень установки Ивы).
 const DATA_DIR_RAW = process.env.ASSISTANT_DATA_DIR ?? "data";

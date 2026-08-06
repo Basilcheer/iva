@@ -3,7 +3,7 @@
 // Запуск: node --test scripts/write-card.test.mjs  (TS импортируется напрямую — Node 24
 // стрипает типы; отдельная сборка не нужна).
 
-import "./lib/ts-esm-hooks.mjs";
+import "./lib/ts-esm-hooks.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {

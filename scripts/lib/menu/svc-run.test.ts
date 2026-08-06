@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-floating-promises -- Node's test runner owns registration promises. */
 import test from "node:test";
 import assert from "node:assert/strict";
 
@@ -11,34 +12,53 @@ import {
   startProcess,
   startUnit,
   resetForTests,
-} from "./svc-run.mjs";
+} from "./svc-run.ts";
+import type {
+  ExecFileImplementation,
+  RunOptions,
+  ServiceRun,
+} from "./svc-run.ts";
+
+interface TestTelegramBody {
+  entities?: Array<{ custom_emoji_id: string }>;
+  text?: string;
+}
+
+interface TestTelegramCall {
+  method: string;
+  body: TestTelegramBody;
+}
 
 // tg-мок: копит вызовы; fail400First — первый editMessageText с entities получает 400.
-function makeTg({ fail400First = false } = {}) {
-  const calls = [];
+function makeTg({ fail400First = false }: { fail400First?: boolean } = {}) {
+  const calls: TestTelegramCall[] = [];
   let failed = false;
-  const tg = async (method, body) => {
-    calls.push({ method, body });
-    if (fail400First && body.entities && !failed) {
+  const tg: RunOptions["tg"] = (method, body) => {
+    const testBody = body as TestTelegramBody;
+    calls.push({ method, body: testBody });
+    if (fail400First && testBody.entities && !failed) {
       failed = true;
-      return {
+      return Promise.resolve({
         ok: false,
         error_code: 400,
         description: "CUSTOM_EMOJI_INVALID",
-      };
+      });
     }
-    return { ok: true, result: {} };
+    return Promise.resolve({ ok: true });
   };
   return { tg, calls };
 }
 
-const baseOpts = (tg, over = {}) => ({
+const baseOpts = (
+  tg: ReturnType<typeof makeTg>["tg"],
+  over: Partial<RunOptions> = {},
+) => ({
   tg,
   chatId: 10,
   messageId: 7,
   loader: LOADERS.doc,
   attached: () => true,
-  progressView: (run) => ({
+  progressView: (run: ServiceRun) => ({
     text: `работаю ${run.lastLine}`,
     rows: [[{ text: "✖", callback_data: "iva_menu:svc:ab" }]],
   }),
@@ -49,7 +69,7 @@ const baseOpts = (tg, over = {}) => ({
   ...over,
 });
 
-const waitFor = async (fn, ms = 3000) => {
+const waitFor = async (fn: () => unknown, ms = 3000): Promise<true> => {
   const until = Date.now() + ms;
   while (Date.now() < until) {
     if (fn()) return true;
@@ -66,7 +86,7 @@ test("stripAnsi: срезает цветовые и курсорные коды"
 test("startProcess: успех — done, tail собран, прогресс шёл с custom_emoji entity", async () => {
   resetForTests();
   const { tg, calls } = makeTg();
-  let finished = null;
+  const finished: { value: ServiceRun | null } = { value: null };
   const run = startProcess(
     "doc",
     {
@@ -78,18 +98,21 @@ test("startProcess: успех — done, tail собран, прогресс ш�
     },
     baseOpts(tg, {
       onFinish: (r) => {
-        finished = r;
+        finished.value = r;
       },
     }),
   );
   assert.ok(run);
-  await waitFor(() => finished);
-  assert.equal(finished.status, "done");
-  assert.deepEqual(finished.tail, ["step one", "step two"]);
+  await waitFor(() => finished.value);
+  assert.ok(finished.value);
+  assert.equal(finished.value.status, "done");
+  assert.deepEqual(finished.value.tail, ["step one", "step two"]);
   assert.equal(currentRun(), run);
   // хотя бы один прогресс-эдит и он нёс entity нужного лоадера
   const rich = calls.find((c) => c.body.entities);
   assert.ok(rich);
+  assert.ok(rich.body.entities);
+  assert.ok(rich.body.text);
   assert.equal(rich.body.entities[0].custom_emoji_id, LOADERS.doc.id);
   assert.ok(rich.body.text.startsWith(`${LOADERS.doc.alt} `));
 });
@@ -97,7 +120,7 @@ test("startProcess: успех — done, tail собран, прогресс ш�
 test("startProcess: exit 1 — failed; второй старт при running — null", async () => {
   resetForTests();
   const { tg } = makeTg();
-  let finished = null;
+  const finished: { value: ServiceRun | null } = { value: null };
   const run = startProcess(
     "doc",
     {
@@ -105,7 +128,7 @@ test("startProcess: exit 1 — failed; второй старт при running �
     },
     baseOpts(tg, {
       onFinish: (r) => {
-        finished = r;
+        finished.value = r;
       },
     }),
   );
@@ -114,14 +137,15 @@ test("startProcess: exit 1 — failed; второй старт при running �
     startProcess("cln", { argv: [process.execPath, "-e", "0"] }, baseOpts(tg)),
     null,
   );
-  await waitFor(() => finished);
-  assert.equal(finished.status, "failed");
+  await waitFor(() => finished.value);
+  assert.ok(finished.value);
+  assert.equal(finished.value.status, "failed");
 });
 
 test("cancelRun: SIGTERM ребёнку, статус cancelled", async () => {
   resetForTests();
   const { tg } = makeTg();
-  let finished = null;
+  const finished: { value: ServiceRun | null } = { value: null };
   startProcess(
     "cln",
     {
@@ -130,21 +154,22 @@ test("cancelRun: SIGTERM ребёнку, статус cancelled", async () => {
     baseOpts(tg, {
       loader: LOADERS.cln,
       onFinish: (r) => {
-        finished = r;
+        finished.value = r;
       },
     }),
   );
   await waitFor(() => currentRun()?.status === "running");
   assert.equal(cancelRun(), true);
-  await waitFor(() => finished);
-  assert.equal(finished.status, "cancelled");
+  await waitFor(() => finished.value);
+  assert.ok(finished.value);
+  assert.equal(finished.value.status, "cancelled");
   assert.equal(cancelRun(), false); // уже не running
 });
 
 test("startProcess: таймаут убивает и даёт status timeout", async () => {
   resetForTests();
   const { tg } = makeTg();
-  let finished = null;
+  const finished: { value: ServiceRun | null } = { value: null };
   startProcess(
     "doc",
     {
@@ -153,18 +178,19 @@ test("startProcess: таймаут убивает и даёт status timeout", a
     baseOpts(tg, {
       timeoutMs: 100,
       onFinish: (r) => {
-        finished = r;
+        finished.value = r;
       },
     }),
   );
-  await waitFor(() => finished);
-  assert.equal(finished.status, "timeout");
+  await waitFor(() => finished.value);
+  assert.ok(finished.value);
+  assert.equal(finished.value.status, "timeout");
 });
 
 test("прогресс: 400 на entity — даунгрейд на fallback до конца процесса", async () => {
   resetForTests();
   const { tg, calls } = makeTg({ fail400First: true });
-  let finished = null;
+  const finished: { value: ServiceRun | null } = { value: null };
   startProcess(
     "mem",
     {
@@ -174,11 +200,11 @@ test("прогресс: 400 на entity — даунгрейд на fallback д�
       loader: LOADERS.mem,
       tickMs: 30,
       onFinish: (r) => {
-        finished = r;
+        finished.value = r;
       },
     }),
   );
-  await waitFor(() => finished);
+  await waitFor(() => finished.value);
   const after400 = calls
     .slice(calls.findIndex((c) => c.body.entities) + 1)
     .filter(
@@ -196,7 +222,7 @@ test("прогресс: 400 на entity — даунгрейд на fallback д�
 test("attached()=false: тикер молчит, процесс всё равно доезжает", async () => {
   resetForTests();
   const { tg, calls } = makeTg();
-  let finished = null;
+  const finished: { value: ServiceRun | null } = { value: null };
   startProcess(
     "doc",
     {
@@ -205,12 +231,13 @@ test("attached()=false: тикер молчит, процесс всё равн�
     baseOpts(tg, {
       attached: () => false,
       onFinish: (r) => {
-        finished = r;
+        finished.value = r;
       },
     }),
   );
-  await waitFor(() => finished);
-  assert.equal(finished.status, "done");
+  await waitFor(() => finished.value);
+  assert.ok(finished.value);
+  assert.equal(finished.value.status, "done");
   assert.equal(calls.filter((c) => c.method === "editMessageText").length, 0);
 });
 
@@ -218,14 +245,21 @@ test("startUnit: oneshot activating→inactive = done, журнал в tail", as
   resetForTests();
   const { tg } = makeTg();
   const active = ["activating", "activating", "inactive"];
-  const execFileImpl = (cmd, args, o, cb) => {
+  const execFileImpl: ExecFileImplementation = (
+    cmd,
+    args,
+    _options,
+    callback,
+  ) => {
     const a = args.join(" ");
-    if (a.includes("start")) return cb(null, "");
-    if (a.includes("is-active")) return cb(null, active.shift() ?? "inactive");
-    if (cmd === "journalctl") return cb(null, "sync ok\ncleanup ok\n");
-    return cb(null, "");
+    if (a.includes("start")) return callback(null, "", "");
+    if (a.includes("is-active"))
+      return callback(null, active.shift() ?? "inactive", "");
+    if (cmd === "journalctl")
+      return callback(null, "sync ok\ncleanup ok\n", "");
+    return callback(null, "", "");
   };
-  let finished = null;
+  const finished: { value: ServiceRun | null } = { value: null };
   startUnit(
     "mem",
     { unit: "iva-memory-doctor.service" },
@@ -233,43 +267,49 @@ test("startUnit: oneshot activating→inactive = done, журнал в tail", as
       loader: LOADERS.mem,
       execFileImpl,
       onFinish: (r) => {
-        finished = r;
+        finished.value = r;
       },
     }),
   );
-  await waitFor(() => finished);
-  assert.equal(finished.status, "done");
-  assert.deepEqual(finished.tail, ["sync ok", "cleanup ok"]);
+  await waitFor(() => finished.value);
+  assert.ok(finished.value);
+  assert.equal(finished.value.status, "done");
+  assert.deepEqual(finished.value.tail, ["sync ok", "cleanup ok"]);
 });
 
 test("startUnit: failed юнит — status failed", async () => {
   resetForTests();
   const { tg } = makeTg();
-  const execFileImpl = (cmd, args, o, cb) => {
+  const execFileImpl: ExecFileImplementation = (
+    cmd,
+    args,
+    _options,
+    callback,
+  ) => {
     const a = args.join(" ");
-    if (a.includes("start")) return cb(null, "");
+    if (a.includes("start")) return callback(null, "", "");
     if (a.includes("is-active")) {
-      const e = new Error("x");
-      e.code = 3;
-      return cb(e, "failed");
+      const error = Object.assign(new Error("x"), { code: 3 });
+      return callback(error, "failed", "");
     }
-    if (cmd === "journalctl") return cb(null, "boom\n");
-    return cb(null, "");
+    if (cmd === "journalctl") return callback(null, "boom\n", "");
+    return callback(null, "", "");
   };
-  let finished = null;
+  const finished: { value: ServiceRun | null } = { value: null };
   startUnit(
     "mem",
     { unit: "iva-memory-doctor.service" },
     baseOpts(tg, {
       execFileImpl,
       onFinish: (r) => {
-        finished = r;
+        finished.value = r;
       },
     }),
   );
-  await waitFor(() => finished);
-  assert.equal(finished.status, "failed");
-  assert.deepEqual(finished.tail, ["boom"]);
+  await waitFor(() => finished.value);
+  assert.ok(finished.value);
+  assert.equal(finished.value.status, "failed");
+  assert.deepEqual(finished.value.tail, ["boom"]);
 });
 
 test("elapsed/tailText: формат MM:SS и обрезка хвоста с конца", () => {

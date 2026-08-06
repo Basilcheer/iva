@@ -7,7 +7,12 @@
 // - custom emoji анимируется клиентом сам: редактируем не чаще tickMs и только при смене
 //   payload; 400 от Telegram (владелец без Premium) — одноразовый даунгрейд на fallback
 //   (паттерн editActive из scripts/lib/telegram-status.mjs).
-import { spawn, execFile } from "node:child_process";
+import {
+  spawn,
+  execFile,
+  type ChildProcess,
+  type ExecFileOptions,
+} from "node:child_process";
 
 // Лоадеры из t.me/addemoji/LoadingStatusByTimDesign — набор /update (🟩) и working-status
 // (🔵); id — первые в своей цветовой группе, как у двух уже используемых. Не переводы.
@@ -22,7 +27,96 @@ const TICK_MS = 3_000;
 const POLL_MS = 3_000;
 const TAIL_LINES = 40;
 
-let RUN = null; // единственный запуск на мост
+type ServiceCommand = keyof typeof TIMEOUT_MS;
+type RunStatus = "running" | "failed" | "cancelled" | "timeout" | "done";
+
+interface Loader {
+  alt: string;
+  id: string;
+  fallback: string;
+}
+
+interface MenuButton {
+  text: string;
+  callback_data: string;
+}
+
+interface ProgressView {
+  text: string;
+  rows?: MenuButton[][];
+}
+
+interface TelegramResponse {
+  ok?: boolean;
+  error_code?: number;
+  description?: string;
+}
+
+type TelegramClient = (
+  method: string,
+  body: Record<string, unknown>,
+) => Promise<TelegramResponse>;
+
+export interface RunOptions {
+  tg: TelegramClient;
+  chatId: number | string;
+  messageId: number;
+  loader: Loader;
+  attached?: () => boolean;
+  progressView: (run: ServiceRun) => ProgressView;
+  onFinish?: (run: ServiceRun) => void | Promise<void>;
+  tickMs?: number;
+  timeoutMs?: number;
+  pollMs?: number;
+  spawnImpl?: typeof spawn;
+  execFileImpl?: ExecFileImplementation;
+}
+
+interface ProcessSpec {
+  argv: string[];
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+}
+
+interface UnitSpec {
+  unit: string;
+}
+
+export interface ServiceRun {
+  cmd: ServiceCommand;
+  status: RunStatus;
+  startedAt: number;
+  finishedAt: number | null;
+  lastLine: string;
+  tail: string[];
+  cancelled: boolean;
+  timedOut: boolean;
+  chatId: number | string;
+  messageId: number;
+  _edit: { lastPayload: string };
+  _timer: NodeJS.Timeout | null;
+  _kill: (() => void) | null;
+}
+
+type ExecFileCallback = (
+  error: (Error & { code?: string | number | null }) | null,
+  stdout: string | Buffer,
+  stderr: string | Buffer,
+) => void;
+
+export type ExecFileImplementation = (
+  file: string,
+  args: string[],
+  options: ExecFileOptions & { encoding: "utf8" },
+  callback: ExecFileCallback,
+) => unknown;
+
+function errorMessage(error: unknown): string {
+  const withMessage = error as { message?: unknown };
+  return String(withMessage.message || error);
+}
+
+let RUN: ServiceRun | null = null; // единственный запуск на мост
 let customEmojiOk = true; // глобальный даунгрейд после первого 400
 
 export const currentRun = () => RUN;
@@ -31,13 +125,15 @@ export function resetForTests() {
   customEmojiOk = true;
 }
 
-export function stripAnsi(s) {
+export function stripAnsi(s: unknown): string {
   // eslint-disable-next-line no-control-regex -- This helper intentionally strips ANSI escape sequences.
   const withoutAnsi = String(s).replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "");
   return withoutAnsi.replace(/\r/g, "");
 }
 
-export function elapsed(run) {
+export function elapsed(
+  run: Pick<ServiceRun, "startedAt" | "finishedAt">,
+): string {
   const s = Math.max(
     0,
     Math.floor(((run.finishedAt ?? Date.now()) - run.startedAt) / 1000),
@@ -46,7 +142,7 @@ export function elapsed(run) {
 }
 
 // Хвост вывода с конца, суммарно не длиннее limit (запас от лимита 4096 editMessageText).
-export function tailText(run, limit = 1500) {
+export function tailText(run: Pick<ServiceRun, "tail">, limit = 1500): string {
   const out = [];
   let len = 0;
   for (let i = run.tail.length - 1; i >= 0; i--) {
@@ -58,7 +154,7 @@ export function tailText(run, limit = 1500) {
   return out.join("\n");
 }
 
-function baseRun(cmd, opts) {
+function baseRun(cmd: ServiceCommand, opts: RunOptions): ServiceRun {
   return {
     cmd,
     status: "running",
@@ -76,7 +172,10 @@ function baseRun(cmd, opts) {
   };
 }
 
-function pushLines(run, chunk) {
+function pushLines(
+  run: Pick<ServiceRun, "lastLine" | "tail">,
+  chunk: Buffer | string,
+): void {
   for (const line of stripAnsi(chunk.toString())
     .split("\n")
     .map((l) => l.trim())
@@ -88,7 +187,12 @@ function pushLines(run, chunk) {
 }
 
 // Эдит с custom_emoji entity; «not modified» = успех; 400 — даунгрейд и повтор с fallback.
-async function editRich(opts, run, text, rows) {
+async function editRich(
+  opts: RunOptions,
+  run: ServiceRun,
+  text: string,
+  rows: MenuButton[][] | undefined,
+): Promise<void> {
   const reply_markup = rows ? { inline_keyboard: rows } : undefined;
   const payload = JSON.stringify([text, rows, customEmojiOk]);
   if (run._edit.lastPayload === payload) return;
@@ -109,7 +213,7 @@ async function editRich(opts, run, text, rows) {
           },
         ],
       })
-      .catch(() => ({ ok: false }));
+      .catch((): TelegramResponse => ({ ok: false }));
     if (r.ok || /not modified/i.test(r.description || "")) return;
     if (r.error_code !== 400) return;
     customEmojiOk = false;
@@ -119,41 +223,47 @@ async function editRich(opts, run, text, rows) {
     .catch(() => {});
 }
 
-function startTicker(run, opts) {
+function startTicker(run: ServiceRun, opts: RunOptions): void {
   const tick = async () => {
     if (run.status !== "running") {
-      clearInterval(run._timer);
+      if (run._timer) clearInterval(run._timer);
       return;
     }
     if (opts.attached && !opts.attached()) return; // юзер ушёл с экрана — не дерёмся за сообщение
     const v = opts.progressView(run);
     await editRich(opts, run, v.text, v.rows);
   };
-  run._timer = setInterval(tick, opts.tickMs ?? TICK_MS);
+  run._timer = setInterval(() => {
+    void tick();
+  }, opts.tickMs ?? TICK_MS);
   if (run._timer.unref) run._timer.unref();
-  tick();
+  void tick();
 }
 
-function finish(run, status, opts) {
+function finish(run: ServiceRun, status: RunStatus, opts: RunOptions): void {
   if (run.status !== "running") return;
   run.status = status;
   run.finishedAt = Date.now();
-  clearInterval(run._timer);
-  Promise.resolve(opts.onFinish?.(run)).catch(() => {});
+  if (run._timer) clearInterval(run._timer);
+  void Promise.resolve(opts.onFinish?.(run)).catch(() => {});
 }
 
-export function startProcess(cmd, spec, opts) {
+export function startProcess(
+  cmd: ServiceCommand,
+  spec: ProcessSpec,
+  opts: RunOptions,
+): ServiceRun | null {
   if (RUN && RUN.status === "running") return null;
   const run = (RUN = baseRun(cmd, opts));
-  let child;
+  let child: ChildProcess;
   try {
     child = (opts.spawnImpl ?? spawn)(spec.argv[0], spec.argv.slice(1), {
       cwd: spec.cwd,
       env: spec.env ?? process.env,
       stdio: ["ignore", "pipe", "pipe"],
     });
-  } catch (e) {
-    pushLines(run, String(e.message || e));
+  } catch (error) {
+    pushLines(run, errorMessage(error));
     finish(run, "failed", opts);
     return run;
   }
@@ -164,16 +274,16 @@ export function startProcess(cmd, spec, opts) {
       // The child may already have exited before cancellation reaches it.
     }
   };
-  child.stdout.on("data", (b) => pushLines(run, b));
-  child.stderr.on("data", (b) => pushLines(run, b));
+  child.stdout!.on("data", (chunk: Buffer | string) => pushLines(run, chunk));
+  child.stderr!.on("data", (chunk: Buffer | string) => pushLines(run, chunk));
   const timer = setTimeout(() => {
     run.timedOut = true;
-    run._kill();
+    run._kill!();
   }, opts.timeoutMs ?? TIMEOUT_MS[cmd]);
   if (timer.unref) timer.unref();
-  child.on("error", (e) => {
+  child.on("error", (error) => {
     clearTimeout(timer);
-    pushLines(run, String(e.message || e));
+    pushLines(run, errorMessage(error));
     finish(run, "failed", opts);
   });
   child.on("close", (code) => {
@@ -191,32 +301,40 @@ export function startProcess(cmd, spec, opts) {
   return run;
 }
 
-export function startUnit(cmd, { unit }, opts) {
+export function startUnit(
+  cmd: ServiceCommand,
+  { unit }: UnitSpec,
+  opts: RunOptions,
+): ServiceRun | null {
   if (RUN && RUN.status === "running") return null;
   const run = (RUN = baseRun(cmd, opts));
-  const ex = opts.execFileImpl ?? execFile;
-  const sysctl = (args) =>
+  const ex: ExecFileImplementation =
+    opts.execFileImpl ??
+    ((file, args, options, callback) => {
+      execFile(file, args, options, callback);
+    });
+  const sysctl = (args: string[]): Promise<{ code: number; out: string }> =>
     new Promise((resolve) =>
       ex(
         "systemctl",
         ["--user", ...args],
         { timeout: 15_000, encoding: "utf8" },
-        (err, out = "") =>
+        (error, stdout = "") =>
           resolve({
-            code: err ? (typeof err.code === "number" ? err.code : 1) : 0,
-            out: String(out).trim(),
+            code: error ? (typeof error.code === "number" ? error.code : 1) : 0,
+            out: String(stdout).trim(),
           }),
       ),
     );
-  const journal = () =>
+  const journal = (): Promise<string[]> =>
     new Promise((resolve) =>
       ex(
         "journalctl",
         ["--user", "-u", unit, "-n", "15", "--no-pager", "-o", "cat"],
         { timeout: 15_000, encoding: "utf8" },
-        (err, out = "") =>
+        (_error, stdout = "") =>
           resolve(
-            stripAnsi(String(out))
+            stripAnsi(String(stdout))
               .split("\n")
               .map((l) => l.trim())
               .filter(Boolean),
@@ -224,10 +342,11 @@ export function startUnit(cmd, { unit }, opts) {
       ),
     );
   run._kill = () => {
-    sysctl(["stop", unit]);
+    void sysctl(["stop", unit]);
   };
-  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-  (async () => {
+  const wait = (ms: number): Promise<void> =>
+    new Promise((resolve) => setTimeout(resolve, ms));
+  void (async () => {
     const started = await sysctl(["start", "--no-block", unit]);
     if (started.code !== 0) {
       pushLines(run, started.out || "systemctl start failed");
@@ -256,6 +375,6 @@ export function startUnit(cmd, { unit }, opts) {
 export function cancelRun() {
   if (!RUN || RUN.status !== "running") return false;
   RUN.cancelled = true;
-  RUN._kill?.();
+  RUN._kill!();
   return true;
 }

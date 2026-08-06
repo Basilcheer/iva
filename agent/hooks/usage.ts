@@ -1,5 +1,5 @@
 import { defineHook } from "eve/hooks";
-import { appendUsage, subagentTurnId } from "../../scripts/lib/usage.mjs";
+import { appendUsage, subagentTurnId } from "../../scripts/lib/usage.ts";
 
 // Учёт фактического расхода токенов. ОДИН хук ловит весь расход одного eve-агента без
 // двойного счёта: основной чат (channel.kind="telegram") и фоновые джобы через eve/client —
@@ -78,7 +78,7 @@ export default defineHook({
     // значит ключ sessionId:turnId столкнулся бы с каким-то ходом родителя (сразу после
     // /new — с его же текущим turn_0, позже — с давним одноимённым). Пишем ход РОДИТЕЛЯ
     // с суффиксом: ключ уникален по построению, а привязка к ходу сохраняется, поэтому
-    // расход субагента продолжает попадать в «итого за ход» (scripts/lib/usage.mjs).
+    // расход субагента продолжает попадать в «итого за ход» (scripts/lib/usage.ts).
     "subagent.event": (event, ctx) => {
       const inner = event.data.event;
       if (inner.type === "step.completed") {

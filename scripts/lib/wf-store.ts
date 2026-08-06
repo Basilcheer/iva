@@ -7,11 +7,15 @@ import { basename, dirname, join } from "node:path";
 
 export const TRASH_KEEP = 2;
 
-function pathStat(path) {
+function hasErrorCode(error: unknown, code: string): boolean {
+  return (error as { code?: unknown } | null | undefined)?.code === code;
+}
+
+function pathStat(path: string) {
   try {
     return lstatSync(path);
   } catch (error) {
-    if (error?.code === "ENOENT") return null;
+    if (hasErrorCode(error, "ENOENT")) return null;
     throw error;
   }
 }
@@ -19,9 +23,9 @@ function pathStat(path) {
 // file/dir → path.trash-<stamp>. Одна операция reset передаёт общий stamp; если такой
 // карантин уже есть, суффикс не даёт затереть предыдущую копию.
 export function quarantinePath(
-  path,
+  path: string,
   stamp = new Date().toISOString().replace(/[:.]/g, "-"),
-) {
+): string | null {
   const stat = pathStat(path);
   if (!stat) return null;
   const base = `${path}.trash-${stamp}`;
@@ -39,12 +43,12 @@ export function quarantinePath(
 }
 
 // Старое имя остаётся публичным alias для существующих вызовов и тестов.
-export function quarantineDir(dir, stamp) {
+export function quarantineDir(dir: string, stamp?: string): string | null {
   return quarantinePath(dir, stamp);
 }
 
 // Полный reset должен атомарно вывести из обращения и workflow, и Telegram control state.
-export function resetStateTargets(root, dataDir) {
+export function resetStateTargets(root: string, dataDir: string): string[] {
   return [
     join(root, ".eve", ".workflow-data"),
     join(root, ".workflow-data"),
@@ -55,17 +59,17 @@ export function resetStateTargets(root, dataDir) {
 }
 
 // Оставляет keep свежих карантинов path (ISO-штампы сортируются лексикографически).
-export function pruneTrash(path, keep = TRASH_KEEP) {
+export function pruneTrash(path: string, keep = TRASH_KEEP): void {
   const prefix = `${basename(path)}.trash-`;
-  let names;
+  let names: string[];
   try {
     names = readdirSync(dirname(path))
-      .filter((n) => n.startsWith(prefix))
+      .filter((name) => name.startsWith(prefix))
       .sort();
   } catch {
     return;
   }
-  for (const n of names.slice(0, Math.max(0, names.length - keep))) {
-    rmSync(join(dirname(path), n), { recursive: true, force: true });
+  for (const name of names.slice(0, Math.max(0, names.length - keep))) {
+    rmSync(join(dirname(path), name), { recursive: true, force: true });
   }
 }

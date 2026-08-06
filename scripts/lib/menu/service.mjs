@@ -1,5 +1,5 @@
 // Экран «🛠 Обслуживание»: доктор / чистка vault / ночной цикл памяти / обновление.
-// Вся механика запуска и прогресса — svc-run.mjs; здесь вьюхи, копирайт и гейты.
+// Вся механика запуска и прогресса — svc-run.ts; здесь вьюхи, копирайт и гейты.
 // Спека: notes/specs/2026-07-25-menu-service-design.md.
 //
 // Вербы: c:<cmd> подтверждение (stateless-вьюха), go:<cmd> запуск, ab отмена,
@@ -16,7 +16,7 @@ import {
   startUnit,
   elapsed,
   tailText,
-} from "./svc-run.mjs";
+} from "./svc-run.ts";
 
 const CMDS = new Set(["doc", "cln", "mem"]);
 const MEM_UNIT = "iva-memory-doctor.service";

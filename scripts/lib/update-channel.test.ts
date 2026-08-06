@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/require-await -- async test double preserves the git adapter contract. */
 import test from "node:test";
 import assert from "node:assert/strict";
 
@@ -6,11 +7,22 @@ import {
   persistUpdateBranch,
   resolveUpdateTarget,
   UPDATE_BRANCH_CONFIG,
-} from "./update-channel.mjs";
+  type Git,
+  type GitResult,
+} from "./update-channel.ts";
 
-function scriptedGit(steps) {
+type GitStep = {
+  args: string[];
+  code?: number;
+  stdout?: string;
+  stderr?: string;
+};
+
+type ScriptedGit = Git & { assertComplete: () => void };
+
+function scriptedGit(steps: GitStep[]): ScriptedGit {
   let index = 0;
-  const git = async (...args) => {
+  const git: Git = async (...args: string[]): Promise<GitResult> => {
     assert.ok(index < steps.length, `unexpected git call: ${args.join(" ")}`);
     const step = steps[index];
     index += 1;
@@ -21,16 +33,17 @@ function scriptedGit(steps) {
       stderr: step.stderr ?? "",
     };
   };
-  git.assertComplete = () => assert.equal(index, steps.length);
-  return git;
+  return Object.assign(git, {
+    assertComplete: (): void => assert.equal(index, steps.length),
+  });
 }
 
-test("update channel constants preserve the main branch and local config key", () => {
+void test("update channel constants preserve the main branch and local config key", () => {
   assert.equal(DEFAULT_UPDATE_BRANCH, "main");
   assert.equal(UPDATE_BRANCH_CONFIG, "iva.updateBranch");
 });
 
-test("configured update branch is validated and resolved through FETCH_HEAD", async () => {
+void test("configured update branch is validated and resolved through FETCH_HEAD", async () => {
   const git = scriptedGit([
     {
       args: ["rev-parse", "--abbrev-ref", "HEAD"],
@@ -57,7 +70,7 @@ test("configured update branch is validated and resolved through FETCH_HEAD", as
   git.assertComplete();
 });
 
-test("configured branch validation and fetch failures stop target resolution", async (t) => {
+void test("configured branch validation and fetch failures stop target resolution", async (t) => {
   await t.test("invalid branch", async () => {
     const git = scriptedGit([
       {
@@ -107,7 +120,7 @@ test("configured branch validation and fetch failures stop target resolution", a
   });
 });
 
-test("resolver rejects a missing git adapter, branch lookup failure, and detached HEAD", async (t) => {
+void test("resolver rejects a missing git adapter, branch lookup failure, and detached HEAD", async (t) => {
   await t.test("missing adapter", async () => {
     await assert.rejects(
       () => resolveUpdateTarget(),
@@ -147,7 +160,7 @@ test("resolver rejects a missing git adapter, branch lookup failure, and detache
   });
 });
 
-test("a contained legacy branch migrates to the configured default channel", async () => {
+void test("a contained legacy branch migrates to the configured default channel", async () => {
   const git = scriptedGit([
     {
       args: ["rev-parse", "--abbrev-ref", "HEAD"],
@@ -178,7 +191,7 @@ test("a contained legacy branch migrates to the configured default channel", asy
   git.assertComplete();
 });
 
-test("a diverged legacy branch remains on its current channel", async () => {
+void test("a diverged legacy branch remains on its current channel", async () => {
   const git = scriptedGit([
     {
       args: ["rev-parse", "--abbrev-ref", "HEAD"],
@@ -212,7 +225,7 @@ test("a diverged legacy branch remains on its current channel", async () => {
   git.assertComplete();
 });
 
-test("the default branch remains its own channel without an ancestry probe", async () => {
+void test("the default branch remains its own channel without an ancestry probe", async () => {
   const git = scriptedGit([
     {
       args: ["rev-parse", "--abbrev-ref", "HEAD"],
@@ -237,7 +250,7 @@ test("the default branch remains its own channel without an ancestry probe", asy
   git.assertComplete();
 });
 
-test("persistUpdateBranch writes local config and surfaces git errors", async (t) => {
+void test("persistUpdateBranch writes local config and surfaces git errors", async (t) => {
   await t.test("success", async () => {
     const git = scriptedGit([
       {

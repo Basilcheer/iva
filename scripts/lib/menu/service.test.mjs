@@ -6,9 +6,9 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import service, { commandSpec } from "./service.mjs";
-import root from "./root.mjs";
+import root from "./root.ts";
 import { SCREENS } from "./index.mjs";
-import { LOADERS, currentRun, resetForTests } from "./svc-run.mjs";
+import { LOADERS, currentRun, resetForTests } from "./svc-run.ts";
 import { acquireUpdateLock, releaseUpdateLock } from "../update-safety.mjs";
 
 // стенд как в menu-screens.test.mjs + захват прямых tg-вызовов раннера

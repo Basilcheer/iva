@@ -6,11 +6,15 @@ import { join } from "node:path";
 import test from "node:test";
 import { promisify } from "node:util";
 import { pathToFileURL } from "node:url";
+import type { TestContext } from "node:test";
 
 const execFileAsync = promisify(execFile);
-const hookUrl = new URL("./ts-esm-hooks.mjs", import.meta.url).href;
+const hookUrl = new URL("./ts-esm-hooks.ts", import.meta.url).href;
 
-async function runEntry(entryPath, { withHook = true } = {}) {
+async function runEntry(
+  entryPath: string,
+  { withHook = true }: { withHook?: boolean } = {},
+) {
   const entryUrl = pathToFileURL(entryPath).href;
   const source = [
     withHook ? `import ${JSON.stringify(hookUrl)};` : "",
@@ -24,13 +28,13 @@ async function runEntry(entryPath, { withHook = true } = {}) {
   );
 }
 
-async function makeFixture(t) {
+async function makeFixture(t: TestContext): Promise<string> {
   const directory = await mkdtemp(join(tmpdir(), "iva-ts-esm-hooks-"));
   t.after(() => rm(directory, { force: true, recursive: true }));
   return directory;
 }
 
-test("resolves a missing sibling.js import to an existing sibling.ts", async (t) => {
+void test("resolves a missing sibling.js import to an existing sibling.ts", async (t) => {
   const directory = await makeFixture(t);
   const entryPath = join(directory, "entry.ts");
   await writeFile(
@@ -47,7 +51,7 @@ test("resolves a missing sibling.js import to an existing sibling.ts", async (t)
   assert.equal(stdout, "typescript\n");
 });
 
-test("keeps an existing sibling.js ahead of sibling.ts", async (t) => {
+void test("keeps an existing sibling.js ahead of sibling.ts", async (t) => {
   const directory = await makeFixture(t);
   const entryPath = join(directory, "entry.mjs");
   await writeFile(
@@ -68,7 +72,7 @@ test("keeps an existing sibling.js ahead of sibling.ts", async (t) => {
   assert.equal(stdout, "javascript\n");
 });
 
-test("preserves standard bare, non-file, and unresolved resolution", async (t) => {
+void test("preserves standard bare, non-file, and unresolved resolution", async (t) => {
   const directory = await makeFixture(t);
   const entryPath = join(directory, "entry.mjs");
   await writeFile(

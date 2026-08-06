@@ -14,7 +14,7 @@
 
 import { getLang } from "#lib/i18n.mjs";
 
-import root from "./root.mjs";
+import root from "./root.ts";
 import search from "./search.mjs";
 import lang from "./lang.mjs";
 import character from "./character.mjs";
@@ -22,7 +22,7 @@ import core from "./core.mjs";
 import userbot from "./userbot.mjs";
 import gws from "./gws.mjs";
 import crons from "./crons.mjs";
-import skills from "./skills.mjs";
+import skills from "./skills.ts";
 import status from "./status.mjs";
 import service from "./service.mjs";
 

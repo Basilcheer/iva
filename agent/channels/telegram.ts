@@ -55,7 +55,7 @@ import {
 // telegram-format выше.
 import { tr } from "../lib/i18n.mjs";
 import { buildTelegramReplyContext } from "../../scripts/lib/telegram-reply-context.ts";
-import { handleTelegramResetRequest } from "../../scripts/lib/telegram-reset-route.mjs";
+import { handleTelegramResetRequest } from "../../scripts/lib/telegram-reset-route.ts";
 // Eve отдаёт обработчикам событий токен с именем канала впереди, а reset-роут клеит его
 // сам. Сохраняем только channel-local вид, иначе /new сбрасывает несуществующий токен (#110).
 import { toChannelLocalToken } from "../lib/telegram-continuation-token.mjs";

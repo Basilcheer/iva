@@ -8,7 +8,7 @@ import {
   parseWindow,
   readEntries,
   summarize,
-} from "../lib/usage.mjs";
+} from "../lib/usage.ts";
 import {
   ALLOWED,
   BOT_USER_ID,

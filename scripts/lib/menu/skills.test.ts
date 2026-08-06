@@ -1,31 +1,34 @@
+/* eslint-disable @typescript-eslint/no-floating-promises -- Node's test runner owns registration promises. */
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import skills from "./skills.mjs";
+import skills from "./skills.ts";
 
 function makeRoot() {
   return mkdtempSync(join(tmpdir(), "iva-menu-skills-"));
 }
 
-function writeSummary(root, value) {
+function writeSummary(root: string, value: string) {
   const summaryDir = join(root, ".eve");
   mkdirSync(summaryDir, { recursive: true });
   writeFileSync(join(summaryDir, "agent-summary.json"), value);
 }
 
-function makeCtx(root, lang = "en") {
+function makeCtx(root: string, lang = "en") {
   return {
     deps: { root },
-    tr: (en, ru) => (lang === "ru" ? ru : en),
-    btn: (text, callback_data) => ({ text, callback_data }),
-    backRow: (sid) => [{ text: "back", callback_data: `iva_menu:${sid}:o` }],
+    tr: (en: string, ru: string) => (lang === "ru" ? ru : en),
+    btn: (text: string, callback_data: string) => ({ text, callback_data }),
+    backRow: (sid: string) => [
+      { text: "back", callback_data: `iva_menu:${sid}:o` },
+    ],
   };
 }
 
-function skillList(count) {
+function skillList(count: number) {
   return Array.from({ length: count }, (_, index) => ({
     name: `skill-${index + 1}`,
     description: `description-${index + 1}`,

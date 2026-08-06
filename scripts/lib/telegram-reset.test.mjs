@@ -5,7 +5,7 @@ import {
   requestTelegramReset,
 } from "./telegram-reset.mjs";
 import { toChannelLocalToken } from "#lib/telegram-continuation-token.mjs";
-import { handleTelegramResetRequest } from "./telegram-reset-route.mjs";
+import { handleTelegramResetRequest } from "./telegram-reset-route.ts";
 
 test("stored Eve token wins for groups and forum topics", () => {
   const update = {

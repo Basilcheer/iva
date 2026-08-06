@@ -694,3 +694,34 @@ the Node event loop is blocked` assertion once. Two later sequential suites hit
   79.27-79.29% branches, and 71.64% functions, with a conservative delta from
   PR-1 of at least +0.64 / +0.23 / +0.11 percentage points. Every observation
   remains above the enforced coverage baseline.
+- 2026-08-06 Asia/Tashkent: PR-3 adds characterization tests for the four leaf
+  modules that lacked direct coverage before conversion: update-channel,
+  ts-esm-hooks, menu/root, and menu/skills. They are isolated in three atomic
+  test commits and pass 26/26 on Node 24.19.0 before any production rename.
+- 2026-08-06 Asia/Tashkent: PR-3 conversion work is partitioned into three
+  file-owned local worktrees (core resolver/channel, runtime data helpers, and
+  menu leaves). Only the final integrated branch will reach GitHub. This keeps
+  the required PR sequence intact and avoids spending CodeRabbit's five-PR-per-
+  hour allowance on intermediate work; no manual bot review pings are used.
+- 2026-08-06 Asia/Tashkent: The core worktree transport branch was accidentally
+  pushed to origin despite the local-only integration boundary. It never had a
+  PR and therefore triggered no CodeRabbit review; the exact remote branch was
+  verified and deleted immediately after its commit was integrated locally.
+- 2026-08-06 Asia/Tashkent: Lead review of the integrated PR-3 conversion found
+  type-only contract narrowing that the green runtime suite could not expose:
+  `UsageRecord` had become readonly and `summarize` no longer accepted the
+  declaration's dynamic string window. The implementation now preserves those
+  public TypeScript contracts while retaining precise overloads; direct compile-
+  time/runtime tests cover mutable records, dynamic windows, and the legacy
+  missing-source fallback. The same review removed conversion-only optional
+  child-stream/kill guards and restored exact null-safe coercion semantics at
+  the usage and workflow-store boundaries.
+- 2026-08-06 Asia/Tashkent: Final pre-commit PR-3 verification is clean on Node
+  24.19.0: 632 tests, 628 passed, zero failed, and four expected macOS skips.
+  Coverage is 74.14% lines, 79.52% branches, and 71.87% functions, a conservative
+  increase of at least +0.66 / +0.23 / +0.23 percentage points over the highest
+  observed merged PR-2 baseline. Lint, formatting, the exact 95/95 `.mjs`
+  ratchet, typecheck, build, replica, autograph 343/343, security-defense 45/45,
+  deterministic userbot lock, and Python 3.12 userbot guardrail/health/compile
+  gates all pass. Scope is 13 production modules, 12 converted test files, and
+  three removed declarations.

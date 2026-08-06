@@ -1,12 +1,13 @@
+/* eslint-disable @typescript-eslint/no-floating-promises -- Node's test runner owns registration promises. */
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import root from "./root.mjs";
+import root from "./root.ts";
 
-function makeCtx(lang) {
+function makeCtx(lang: string) {
   return {
-    tr: (en, ru) => (lang === "ru" ? ru : en),
-    btn: (text, callback_data) => ({ text, callback_data }),
+    tr: (en: string, ru: string) => (lang === "ru" ? ru : en),
+    btn: (text: string, callback_data: string) => ({ text, callback_data }),
   };
 }
 
@@ -66,7 +67,9 @@ const russianRows = [
   [["✖ Закрыть", "iva_menu:r:x"]],
 ];
 
-function compact(rows) {
+function compact(
+  rows: Array<Array<{ text: string; callback_data: string }>>,
+): Array<Array<[string, string]>> {
   return rows.map((row) =>
     row.map(({ text, callback_data }) => [text, callback_data]),
   );

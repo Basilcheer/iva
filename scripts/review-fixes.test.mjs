@@ -1,7 +1,7 @@
 // Регрессии на находки независимого ревью: квалификаторы идентичности, SUPERSEDE через
 // replace_body, ownership-токен card-лока, symlink-обход write_file, права карантина,
 // лок в несуществующем каталоге (свежая установка).
-import "./lib/ts-esm-hooks.mjs";
+import "./lib/ts-esm-hooks.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -17,7 +17,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { quarantineDir } from "./lib/wf-store.mjs";
+import { quarantineDir } from "./lib/wf-store.ts";
 
 // TS — только динамическим импортом: resolve-хук (.js→.ts) не действует на статические
 // импорты, слинкованные до его регистрации.

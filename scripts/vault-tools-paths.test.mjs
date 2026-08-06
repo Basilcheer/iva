@@ -1,7 +1,7 @@
 // Тесты контрактов файловых тулов: write_file не затирает существующие карточки,
 // но продолжает писать CORE.md; путь из memory_search открывается read_file без ENOENT.
 
-import "./lib/ts-esm-hooks.mjs";
+import "./lib/ts-esm-hooks.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {

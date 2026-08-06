@@ -1,4 +1,4 @@
-import "./lib/ts-esm-hooks.mjs";
+import "./lib/ts-esm-hooks.ts";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import {

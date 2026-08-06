@@ -9,8 +9,8 @@ import { homedir } from "node:os";
 import { readEnvValues } from "../env-file.ts";
 import { CATALOG } from "../model-catalog.mjs";
 import { SEARCH_CATALOG } from "../search-catalog.ts";
-import { readEntries, summarize } from "../usage.mjs";
-import { probeUserbotHealth } from "../userbot-health.mjs";
+import { readEntries, summarize } from "../usage.ts";
+import { probeUserbotHealth } from "../userbot-health.ts";
 
 function version(root) {
   try {

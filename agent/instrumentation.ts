@@ -28,7 +28,7 @@ import { homedir } from "node:os";
 import { defineInstrumentation } from "eve/instrumentation";
 import { probeEveHealth } from "../scripts/lib/config-transaction.mjs";
 import { runScheduleMigration } from "../scripts/lib/schedule-migration.mjs";
-import { validateTimeZone } from "../scripts/lib/timezone.mjs";
+import { validateTimeZone } from "../scripts/lib/timezone.ts";
 
 const log = (...args: unknown[]) =>
   console.log(new Date().toISOString(), ...args);

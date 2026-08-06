@@ -1,11 +1,16 @@
 import { verifyTelegramRequest } from "eve/channels/telegram";
+import type { ResetFn } from "eve/channels";
 
 /**
  * Authenticated Telegram-owned session reset endpoint.
  * `reset` is the route helper Eve binds to the containing authored channel,
  * so the raw token resolves in the "telegram" namespace.
  */
-export async function handleTelegramResetRequest(req, reset, secretToken) {
+export async function handleTelegramResetRequest(
+  req: Request,
+  reset: ResetFn,
+  secretToken?: string,
+): Promise<Response> {
   let raw;
   try {
     raw = await verifyTelegramRequest(req, { secretToken });
@@ -15,7 +20,9 @@ export async function handleTelegramResetRequest(req, reset, secretToken) {
 
   let continuationToken;
   try {
-    continuationToken = JSON.parse(raw)?.continuationToken;
+    continuationToken = (
+      JSON.parse(raw) as { continuationToken?: unknown } | null
+    )?.continuationToken;
   } catch {
     return new Response("invalid JSON", { status: 400 });
   }

@@ -18,7 +18,7 @@ import {
   gwsBin,
   childEnv,
   AUTH_SERVICES,
-} from "./gws-auth.mjs";
+} from "./gws-auth.ts";
 
 const SID = "gws";
 const PARENT = "r";

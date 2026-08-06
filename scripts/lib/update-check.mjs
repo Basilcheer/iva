@@ -9,7 +9,7 @@ import {
 } from "node:fs/promises";
 import { join } from "node:path";
 import { notificationChat } from "./notification-chat.ts";
-import { resolveUpdateTarget } from "./update-channel.mjs";
+import { resolveUpdateTarget } from "./update-channel.ts";
 
 export { notificationChat };
 

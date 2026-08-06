@@ -23,7 +23,7 @@ import { homedir, tmpdir } from "node:os";
 import { createInterface } from "node:readline/promises";
 import { modelSummary } from "../scripts/lib/model-summary.ts";
 import { createTerminalProgress } from "../scripts/lib/progress.ts";
-import { quarantinePath, resetStateTargets } from "../scripts/lib/wf-store.mjs";
+import { quarantinePath, resetStateTargets } from "../scripts/lib/wf-store.ts";
 import {
   createTelegramUpdateReporter,
   loadTelegramJob,
@@ -46,9 +46,9 @@ import {
   probeEveHealth,
   recoverConfigTransaction,
 } from "../scripts/lib/config-transaction.mjs";
-import { userbotSyncArgs } from "../scripts/lib/userbot-deps.mjs";
-import { probeUserbotHealth } from "../scripts/lib/userbot-health.mjs";
-import { validateTimeZone } from "../scripts/lib/timezone.mjs";
+import { userbotSyncArgs } from "../scripts/lib/userbot-deps.ts";
+import { probeUserbotHealth } from "../scripts/lib/userbot-health.ts";
+import { validateTimeZone } from "../scripts/lib/timezone.ts";
 import {
   acquireUpdateLock,
   commitThenRunPostCommit,
@@ -1428,7 +1428,7 @@ function cmdVersion() {
 // view (issue #7, the comment about a CLI monitor). `tail [N]` — the last raw lines.
 async function cmdUsage(args) {
   const { readEntries, summarize, formatUsageReport, parseWindow } =
-    await import("../scripts/lib/usage.mjs");
+    await import("../scripts/lib/usage.ts");
   const env = readEnv();
   const dataDir = dataDirAbs(env);
   if (args[0] === "tail") {

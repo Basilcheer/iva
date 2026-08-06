@@ -13,7 +13,7 @@ import { getAccessToken, runDeviceCodeLogin } from "../lib/codex-oauth.mjs";
 import { compactNumber, modelSummary } from "../lib/model-summary.ts";
 import { getLang, tr } from "#lib/i18n.mjs";
 import { readEnvValues, upsertEnv } from "../lib/env-file.ts";
-import { createFlows } from "../lib/tg-flow.mjs";
+import { createFlows } from "../lib/tg-flow.ts";
 import { ALLOWED, DATA_DIR_ABS, ENV_PATH, log } from "./config.mjs";
 import { reply, sc, tg } from "./transport.mjs";
 
@@ -21,7 +21,7 @@ import { reply, sc, tg } from "./transport.mjs";
 // State lives in memory keyed by `${chatId}:${userId}`; each flow edits ONE message
 // (like /update). A bridge restart loses state — stale button taps get "диалог устарел".
 // Config is always read fresh from .env: this process's env goes stale after writes.
-// Примитивы визарда вынесены в scripts/lib/tg-flow.mjs (createFlows): тот же слот на
+// Примитивы визарда вынесены в scripts/lib/tg-flow.ts (createFlows): тот же слот на
 // пользователя делят /model, /think и /menu. Локальные алиасы сохраняют исходные call-sites —
 // дифф визарда минимальный, а стейт-семантика (ключ chatId:userId, TTL 15 мин, identity-replace,
 // edit-in-place) дословно та же.
