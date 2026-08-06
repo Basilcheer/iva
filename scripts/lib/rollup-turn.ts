@@ -17,7 +17,40 @@ const MAX_TIMER_MS = 2 ** 31 - 1;
 // Разбор ROLLUP_TURN_TIMEOUT_MS. Пустая строка (частый случай — `ROLLUP_TURN_TIMEOUT_MS=` в .env)
 // и мусор дают Number() → 0/NaN, а это таймер на 1 мс: каждый ход «зависал» бы мгновенно и ночь
 // уходила бы в фолбэк. Мусор не роняет ночь — падаем на дефолт и громко пишем в stderr.
-export function resolveTurnTimeoutMs(raw, { warn = () => {} } = {}) {
+interface TimeoutOptions {
+  readonly timeoutMs?: number;
+}
+
+interface TurnTimeoutOptions extends TimeoutOptions {
+  readonly label?: string;
+}
+
+interface RetryState {
+  readonly accepted: boolean;
+  readonly sendRejected: boolean;
+  readonly cancelConfirmed: boolean;
+}
+
+interface CancelSession<T = unknown> {
+  cancel(options?: { turnId?: string }): Promise<T>;
+}
+
+interface CancelResult {
+  readonly status?: string;
+}
+
+interface TurnResult {
+  readonly events?: readonly { readonly type?: string }[];
+}
+
+export function resolveTurnTimeoutMs(
+  raw: string | undefined | null,
+  {
+    warn = (): void => {},
+  }: {
+    warn?: (message: string) => void;
+  } = {},
+): number {
   if (raw === undefined || raw === null || String(raw).trim() === "")
     return DEFAULT_TURN_TIMEOUT_MS;
   const n = Number(raw);
@@ -32,12 +65,14 @@ export function resolveTurnTimeoutMs(raw, { warn = () => {} } = {}) {
 }
 
 export class RollupTurnTimeoutError extends Error {
-  constructor(label, timeoutMs) {
+  readonly code = "ROLLUP_TURN_TIMEOUT";
+  readonly label: string;
+
+  constructor(label: string, timeoutMs: number) {
     super(
       `rollup turn "${label}" timed out after ${Math.round(timeoutMs / 1000)}s`,
     );
     this.name = "RollupTurnTimeoutError";
-    this.code = "ROLLUP_TURN_TIMEOUT";
     this.label = label;
   }
 }
@@ -46,7 +81,11 @@ export const DEFAULT_CANCEL_TIMEOUT_MS = 30_000;
 
 // Свежая сессия безопасна, когда send явно отклонён до принятия хода либо сервер
 // подтвердил отмену. Неразрешившийся send мог быть принят сервером и требует cancel.
-export function canRetryFresh({ accepted, sendRejected, cancelConfirmed }) {
+export function canRetryFresh({
+  accepted,
+  sendRejected,
+  cancelConfirmed,
+}: RetryState): boolean {
   if (accepted) return cancelConfirmed === true;
   return sendRejected === true || cancelConfirmed === true;
 }
@@ -57,9 +96,9 @@ export function canRetryFresh({ accepted, sendRejected, cancelConfirmed }) {
 // Best-effort по определению: у заклинившей сессии cancel сам может висеть или ответить 500,
 // а у не начатой — бросить. Любой исход проглатывается, наверх идёт только признак успеха.
 export async function cancelTurnQuietly(
-  session,
-  { timeoutMs = DEFAULT_CANCEL_TIMEOUT_MS } = {},
-) {
+  session: CancelSession,
+  { timeoutMs = DEFAULT_CANCEL_TIMEOUT_MS }: TimeoutOptions = {},
+): Promise<boolean> {
   try {
     await withTurnTimeout(() => session.cancel(), {
       timeoutMs,
@@ -75,10 +114,10 @@ export async function cancelTurnQuietly(
 // принимает сигнал отмены; безопасную границу подтверждает `turn.cancelled` в дочитанном
 // результате. `no_active_turn` сам является серверным подтверждением, что писателя уже нет.
 export async function cancelTurnAndConfirmQuietly(
-  session,
-  turnResult,
-  { timeoutMs = DEFAULT_CANCEL_TIMEOUT_MS } = {},
-) {
+  session: CancelSession<CancelResult>,
+  turnResult: Promise<TurnResult> | undefined,
+  { timeoutMs = DEFAULT_CANCEL_TIMEOUT_MS }: TimeoutOptions = {},
+): Promise<boolean> {
   try {
     const cancellation = await withTurnTimeout(() => session.cancel(), {
       timeoutMs,
@@ -101,15 +140,18 @@ export async function cancelTurnAndConfirmQuietly(
 // Выполняет fn() и отклоняется RollupTurnTimeoutError, если тот не уложился в timeoutMs.
 // Проигравшая сторона гонки не отменяется (у eve-хода нет abort) — она просто повисает
 // в фоне; вызывающий должен считать сессию непригодной и завести новую.
-export async function withTurnTimeout(
-  fn,
-  { timeoutMs = DEFAULT_TURN_TIMEOUT_MS, label = "turn" } = {},
-) {
-  let timer;
+export async function withTurnTimeout<T>(
+  fn: () => Promise<T>,
+  {
+    timeoutMs = DEFAULT_TURN_TIMEOUT_MS,
+    label = "turn",
+  }: TurnTimeoutOptions = {},
+): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
   try {
     return await Promise.race([
       fn(),
-      new Promise((_resolve, reject) => {
+      new Promise<never>((_resolve, reject) => {
         timer = setTimeout(
           () => reject(new RollupTurnTimeoutError(label, timeoutMs)),
           timeoutMs,

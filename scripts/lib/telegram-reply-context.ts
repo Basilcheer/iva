@@ -18,29 +18,105 @@ const FILE_MEDIA = [
   "voice",
 ];
 
-function isRecord(value) {
+type UnknownRecord = Record<string, unknown>;
+
+export interface TelegramReplySanitizeResult {
+  text: string;
+  blocked: boolean;
+  flags: string[];
+}
+
+export interface TelegramReplyContextResult {
+  item: string;
+  flagged: boolean;
+}
+
+type SanitizeText = (text: string) => TelegramReplySanitizeResult;
+type HasAttackSignal = (result: TelegramReplySanitizeResult) => boolean;
+
+interface BoundedText {
+  text: string;
+  truncated: boolean;
+}
+
+interface SanitizedBoundedText extends BoundedText {
+  warned: boolean;
+}
+
+interface ReplyAuthor {
+  id?: string;
+  name?: string;
+  username?: string;
+  isBot?: boolean;
+}
+
+interface SenderChatAuthor {
+  id?: string;
+  title?: string;
+  username?: string;
+  type?: string;
+}
+
+interface ReadIdentity<T> {
+  value: T | null;
+  truncated: boolean;
+  warned: boolean;
+}
+
+interface ReadSenderChat extends ReadIdentity<SenderChatAuthor> {
+  validIdentity: boolean;
+}
+
+interface MediaIdentity {
+  type: string;
+  value: UnknownRecord;
+}
+
+interface ReplyMedia {
+  type: string;
+  filename: string | null;
+  caption: string;
+}
+
+interface ReadMedia {
+  value: ReplyMedia;
+  truncated: boolean;
+  warned: boolean;
+}
+
+interface TelegramReplyItem {
+  type: "telegram_reply";
+  messageId: string;
+  author: ReplyAuthor | SenderChatAuthor | null;
+  text: string;
+  truncated: boolean;
+  untrusted: true;
+  media?: ReplyMedia;
+}
+
+function isRecord(value: unknown): value is UnknownRecord {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function boundedTelegramMessageId(value) {
+function boundedTelegramMessageId(value: unknown): string | null {
   if (typeof value === "number" && Number.isSafeInteger(value) && value > 0)
     return String(value);
   return null;
 }
 
-function boundedTelegramUserId(value) {
+function boundedTelegramUserId(value: unknown): string | null {
   if (typeof value === "number" && Number.isSafeInteger(value) && value > 0)
     return String(value);
   return null;
 }
 
-function boundedTelegramChatId(value) {
+function boundedTelegramChatId(value: unknown): string | null {
   if (typeof value === "number" && Number.isSafeInteger(value) && value !== 0)
     return String(value);
   return null;
 }
 
-function truncateCodePoints(value, limit) {
+function truncateCodePoints(value: string, limit: number): BoundedText {
   let text = "";
   let count = 0;
   for (const char of value) {
@@ -51,7 +127,12 @@ function truncateCodePoints(value, limit) {
   return { text, truncated: false };
 }
 
-function sanitizeBounded(value, limit, sanitizeText, hasAttackSignal) {
+function sanitizeBounded(
+  value: string,
+  limit: number,
+  sanitizeText: SanitizeText,
+  hasAttackSignal: HasAttackSignal,
+): SanitizedBoundedText {
   const boundedInput = truncateCodePoints(value, limit);
   const security = sanitizeText(boundedInput.text);
   const boundedOutput = truncateCodePoints(security.text, limit);
@@ -62,10 +143,14 @@ function sanitizeBounded(value, limit, sanitizeText, hasAttackSignal) {
   };
 }
 
-function readAuthor(value, sanitizeText, hasAttackSignal) {
+function readAuthor(
+  value: unknown,
+  sanitizeText: SanitizeText,
+  hasAttackSignal: HasAttackSignal,
+): ReadIdentity<ReplyAuthor> {
   if (!isRecord(value)) return { value: null, truncated: false, warned: false };
 
-  const author = {};
+  const author: ReplyAuthor = {};
   let truncated = false;
   let warned = false;
   const id = boundedTelegramUserId(value.id);
@@ -107,7 +192,11 @@ function readAuthor(value, sanitizeText, hasAttackSignal) {
   };
 }
 
-function readSenderChat(value, sanitizeText, hasAttackSignal) {
+function readSenderChat(
+  value: unknown,
+  sanitizeText: SanitizeText,
+  hasAttackSignal: HasAttackSignal,
+): ReadSenderChat {
   if (!isRecord(value)) {
     return {
       value: null,
@@ -117,12 +206,12 @@ function readSenderChat(value, sanitizeText, hasAttackSignal) {
     };
   }
 
-  const author = {};
+  const author: SenderChatAuthor = {};
   let truncated = false;
   let warned = false;
   const id = boundedTelegramChatId(value.id);
   if (id !== null) author.id = id;
-  for (const field of ["title", "username"]) {
+  for (const field of ["title", "username"] as const) {
     if (typeof value[field] !== "string" || value[field].length === 0) continue;
     const result = sanitizeBounded(
       value[field],
@@ -146,9 +235,9 @@ function readSenderChat(value, sanitizeText, hasAttackSignal) {
   };
 }
 
-function findMedia(reply) {
-  let type = null;
-  let value = null;
+function findMedia(reply: UnknownRecord): MediaIdentity | null {
+  let type: string | null = null;
+  let value: UnknownRecord | null = null;
 
   if (
     Array.isArray(reply.photo) &&
@@ -178,7 +267,12 @@ function findMedia(reply) {
   return type === null || value === null ? null : { type, value };
 }
 
-function readMedia(media, caption, sanitizeText, hasAttackSignal) {
+function readMedia(
+  media: MediaIdentity | null,
+  caption: string,
+  sanitizeText: SanitizeText,
+  hasAttackSignal: HasAttackSignal,
+): ReadMedia | null {
   if (media === null) return null;
   const { type, value } = media;
   const rawFilename =
@@ -218,10 +312,10 @@ function readMedia(media, caption, sanitizeText, hasAttackSignal) {
  * boundary; file IDs and download URLs are deliberately excluded.
  */
 export function buildTelegramReplyContext(
-  rawMessage,
-  sanitizeText,
-  hasAttackSignal,
-) {
+  rawMessage: unknown,
+  sanitizeText: SanitizeText,
+  hasAttackSignal: HasAttackSignal,
+): TelegramReplyContextResult | null {
   if (!isRecord(rawMessage) || !isRecord(rawMessage.reply_to_message))
     return null;
   if (typeof sanitizeText !== "function")
@@ -265,7 +359,7 @@ export function buildTelegramReplyContext(
   // placeholder. A validated chat ID identifies the real author; malformed
   // sender_chat metadata cannot replace a valid from identity.
   const author = senderChat.validIdentity ? senderChat : fromAuthor;
-  const item = {
+  const item: TelegramReplyItem = {
     type: "telegram_reply",
     messageId,
     author: author.value,

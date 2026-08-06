@@ -12,24 +12,46 @@ import { dirname, join } from "node:path";
 
 export const TELEGRAM_RESET_INTENT_VERSION = 1;
 
-function intentPath(directory, chatKey) {
+export interface TelegramResetIntent {
+  version: typeof TELEGRAM_RESET_INTENT_VERSION;
+  chatKey: string;
+  continuationToken: string;
+  requestedAt: number;
+}
+
+interface TelegramResetIntentOptions {
+  now?: () => number;
+  nonce?: () => string;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isSafeInteger(value: unknown): value is number {
+  return Number.isSafeInteger(value);
+}
+
+function hasErrorCode(error: unknown, code: string): boolean {
+  return (error as { code?: unknown } | null | undefined)?.code === code;
+}
+
+function intentPath(directory: string, chatKey: string) {
   return join(
     directory,
     `${Buffer.from(chatKey, "utf8").toString("base64url")}.json`,
   );
 }
 
-function normalizeIntent(value, source) {
+function normalizeIntent(value: unknown, source: string): TelegramResetIntent {
   if (
-    typeof value !== "object" ||
-    value === null ||
-    Array.isArray(value) ||
+    !isRecord(value) ||
     value.version !== TELEGRAM_RESET_INTENT_VERSION ||
     typeof value.chatKey !== "string" ||
     !value.chatKey ||
     typeof value.continuationToken !== "string" ||
     !value.continuationToken ||
-    !Number.isSafeInteger(value.requestedAt) ||
+    !isSafeInteger(value.requestedAt) ||
     value.requestedAt < 0
   ) {
     throw new Error(`invalid Telegram reset intent in ${source}`);
@@ -42,7 +64,7 @@ function normalizeIntent(value, source) {
   };
 }
 
-async function syncDirectory(path) {
+async function syncDirectory(path: string) {
   const directory = await open(path, "r");
   try {
     await directory.sync();
@@ -51,7 +73,7 @@ async function syncDirectory(path) {
   }
 }
 
-async function ensureIntentDirectory(directory) {
+async function ensureIntentDirectory(directory: string) {
   const parent = dirname(directory);
   await mkdir(parent, { recursive: true });
   await mkdir(directory, { recursive: true });
@@ -59,10 +81,13 @@ async function ensureIntentDirectory(directory) {
 }
 
 export async function persistTelegramResetIntent(
-  directory,
-  chatKey,
-  continuationToken,
-  { now = Date.now, nonce = () => randomBytes(8).toString("hex") } = {},
+  directory: string,
+  chatKey: string,
+  continuationToken: string,
+  {
+    now = Date.now,
+    nonce = () => randomBytes(8).toString("hex"),
+  }: TelegramResetIntentOptions = {},
 ) {
   const intent = normalizeIntent(
     {
@@ -96,15 +121,17 @@ export async function persistTelegramResetIntent(
   return intent;
 }
 
-export async function loadTelegramResetIntents(directory) {
+export async function loadTelegramResetIntents(
+  directory: string,
+): Promise<TelegramResetIntent[]> {
   let entries;
   try {
     entries = await readdir(directory, { withFileTypes: true });
   } catch (error) {
-    if (error?.code === "ENOENT") return [];
+    if (hasErrorCode(error, "ENOENT")) return [];
     throw error;
   }
-  const intents = [];
+  const intents: TelegramResetIntent[] = [];
   for (const entry of entries) {
     if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
     const path = join(directory, entry.name);
@@ -126,11 +153,14 @@ export async function loadTelegramResetIntents(directory) {
   );
 }
 
-export async function clearTelegramResetIntent(directory, chatKey) {
+export async function clearTelegramResetIntent(
+  directory: string,
+  chatKey: string,
+) {
   try {
     await rm(intentPath(directory, chatKey));
   } catch (error) {
-    if (error?.code === "ENOENT") return;
+    if (hasErrorCode(error, "ENOENT")) return;
     throw error;
   }
   await syncDirectory(directory);

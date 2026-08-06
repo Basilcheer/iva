@@ -25,7 +25,7 @@ import {
   runScheduledJob,
   withStatusLock,
   writeStatusAtomic,
-} from "./schedule-runner.mjs";
+} from "./schedule-runner.ts";
 
 export const LEGACY_MEMORY_UNITS = [
   "iva-memory-daily.service",

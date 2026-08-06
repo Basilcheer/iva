@@ -1,13 +1,42 @@
 import { strict as assert } from "node:assert";
 import test from "node:test";
-import { spawn as realSpawn, spawnSync } from "node:child_process";
+import {
+  spawn as realSpawn,
+  spawnSync,
+  type SpawnOptions,
+} from "node:child_process";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { existsSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { randomBytes } from "node:crypto";
 
-import { runScheduledJob } from "./schedule-runner.mjs";
+import {
+  runScheduledJob,
+  type RunScheduledJobResult,
+} from "./schedule-runner.ts";
+
+interface SeenSpawn {
+  readonly cmd: string;
+  readonly args: readonly string[];
+  readonly opts: SpawnOptions;
+}
+
+interface TestStatusEntry {
+  readonly lastSuccessAt: number;
+  readonly lastExitCode: number;
+  readonly lastStartedAt: number;
+  readonly lastFinishedAt: number;
+  readonly inProgressSince: number;
+  readonly [key: string]: unknown;
+}
+
+type TestStatus = Record<string, TestStatusEntry>;
+
+function parseStatus(source: string): TestStatus {
+  const parsed: unknown = JSON.parse(source);
+  return parsed as TestStatus;
+}
 
 async function scaffold() {
   const dir = await mkdtemp(join(tmpdir(), "iva-schedule-runner-"));
@@ -18,11 +47,16 @@ async function scaffold() {
 }
 
 function collectLogs() {
-  const lines = [];
-  return { log: (...a) => lines.push(a.join(" ")), lines };
+  const lines: string[] = [];
+  return {
+    log: (...args: unknown[]) => {
+      lines.push(args.join(" "));
+    },
+    lines,
+  };
 }
 
-test("direct run (no lockPath): success writes lastSuccessAt and does not touch other entries", async (t) => {
+void test("direct run (no lockPath): success writes lastSuccessAt and does not touch other entries", async (t) => {
   const root = await scaffold();
   t.after(() => {});
   await writeFile(join(root, "ok.mjs"), "process.exit(0);\n");
@@ -46,7 +80,7 @@ test("direct run (no lockPath): success writes lastSuccessAt and does not touch 
 
   assert.equal(result.ok, true);
   assert.equal(result.skipped, false);
-  const status = JSON.parse(await readFile(statusPath, "utf8"));
+  const status = parseStatus(await readFile(statusPath, "utf8"));
   assert.equal(
     status["memory-weekly"].lastSuccessAt,
     111,
@@ -71,7 +105,7 @@ test("direct run (no lockPath): success writes lastSuccessAt and does not touch 
   assert.deepEqual(strayTmp, [], "no stray tmp file left behind");
 });
 
-test("non-zero exit: lastExitCode recorded, lastSuccessAt left untouched", async () => {
+void test("non-zero exit: lastExitCode recorded, lastSuccessAt left untouched", async () => {
   const root = await scaffold();
   await writeFile(join(root, "fail.mjs"), "process.exit(7);\n");
   const statusPath = join(root, "data/rollup-status.json");
@@ -94,7 +128,7 @@ test("non-zero exit: lastExitCode recorded, lastSuccessAt left untouched", async
 
   assert.equal(result.ok, false);
   assert.equal(result.code, 7);
-  const status = JSON.parse(await readFile(statusPath, "utf8"));
+  const status = parseStatus(await readFile(statusPath, "utf8"));
   assert.equal(status["memory-daily"].lastExitCode, 7);
   assert.equal(
     status["memory-daily"].lastSuccessAt,
@@ -103,7 +137,7 @@ test("non-zero exit: lastExitCode recorded, lastSuccessAt left untouched", async
   );
 });
 
-test("guard: a lastSuccessAt inside the 2h window skips the job without spawning", async () => {
+void test("guard: a lastSuccessAt inside the 2h window skips the job without spawning", async () => {
   const root = await scaffold();
   await writeFile(join(root, "boom.mjs"), "process.exit(1);\n"); // would fail loudly if actually spawned
   const statusPath = join(root, "data/rollup-status.json");
@@ -133,7 +167,7 @@ test("guard: a lastSuccessAt inside the 2h window skips the job without spawning
   assert.equal(result.skipped, true);
   assert.equal(spawned, false, "the guard must prevent spawning entirely");
   assert.ok(lines.some((l) => l.toLowerCase().includes("skip")));
-  const status = JSON.parse(await readFile(statusPath, "utf8"));
+  const status = parseStatus(await readFile(statusPath, "utf8"));
   assert.equal(
     status["memory-daily"].lastSuccessAt,
     recentSuccess,
@@ -141,7 +175,7 @@ test("guard: a lastSuccessAt inside the 2h window skips the job without spawning
   );
 });
 
-test("guard: a lastSuccessAt older than 2h runs normally", async () => {
+void test("guard: a lastSuccessAt older than 2h runs normally", async () => {
   const root = await scaffold();
   await writeFile(join(root, "ok.mjs"), "process.exit(0);\n");
   const statusPath = join(root, "data/rollup-status.json");
@@ -166,14 +200,14 @@ test("guard: a lastSuccessAt older than 2h runs normally", async () => {
   assert.equal(result.ok, true);
 });
 
-test("lockPath given: the spawned command is flock-wrapped in the documented shape", async () => {
+void test("lockPath given: the spawned command is flock-wrapped in the documented shape", async () => {
   const root = await scaffold();
   await writeFile(join(root, "ok.mjs"), "process.exit(0);\n");
   const lockPath = join(root, ".memory.lock");
   const statusPath = join(root, "data/rollup-status.json");
   await mkdir(join(root, "data"), { recursive: true });
 
-  let seen = null;
+  let seen: SeenSpawn | null = null;
   const result = await runScheduledJob({
     name: "memory-weekly",
     argv: ["scripts/memory/rollup.ts", "weekly"],
@@ -190,8 +224,8 @@ test("lockPath given: the spawned command is flock-wrapped in the documented sha
     },
   });
 
-  assert.equal(seen.cmd, "flock");
-  assert.deepEqual(seen.args, [
+  assert.equal(seen!.cmd, "flock");
+  assert.deepEqual(seen!.args, [
     "-w",
     "900",
     lockPath,
@@ -200,16 +234,16 @@ test("lockPath given: the spawned command is flock-wrapped in the documented sha
     "scripts/memory/rollup.ts",
     "weekly",
   ]);
-  assert.equal(seen.opts.cwd, root);
+  assert.equal(seen!.opts.cwd, root);
   assert.equal(result.ok, true);
 });
 
-test("no lockPath: the spawned command invokes nodeBin directly (digest case)", async () => {
+void test("no lockPath: the spawned command invokes nodeBin directly (digest case)", async () => {
   const root = await scaffold();
   await writeFile(join(root, "ok.mjs"), "process.exit(0);\n");
   const statusPath = join(root, "data/rollup-status.json");
 
-  let seen = null;
+  let seen: Pick<SeenSpawn, "cmd" | "args"> | null = null;
   await runScheduledJob({
     name: "digest",
     argv: ["scripts/daily-digest.ts"],
@@ -223,11 +257,11 @@ test("no lockPath: the spawned command invokes nodeBin directly (digest case)", 
     },
   });
 
-  assert.equal(seen.cmd, process.execPath);
-  assert.deepEqual(seen.args, ["--env-file=.env", "scripts/daily-digest.ts"]);
+  assert.equal(seen!.cmd, process.execPath);
+  assert.deepEqual(seen!.args, ["--env-file=.env", "scripts/daily-digest.ts"]);
 });
 
-test(
+void test(
   "full flock integration (real /usr/bin/flock): success path end to end",
   { skip: !existsSync("/usr/bin/flock") },
   async () => {
@@ -247,12 +281,12 @@ test(
     });
 
     assert.equal(result.ok, true);
-    const status = JSON.parse(await readFile(statusPath, "utf8"));
+    const status = parseStatus(await readFile(statusPath, "utf8"));
     assert.equal(status["memory-daily"].lastExitCode, 0);
   },
 );
 
-test("timeout: SIGTERM first, escalates to SIGKILL after the grace window", async () => {
+void test("timeout: SIGTERM first, escalates to SIGKILL after the grace window", async () => {
   const root = await scaffold();
   const sigtermMarker = join(root, "got-sigterm");
   // Ignores SIGTERM and spins forever — forces the SIGKILL escalation. Writes a marker
@@ -338,12 +372,12 @@ test("timeout: SIGTERM first, escalates to SIGKILL after the grace window", asyn
   );
 });
 
-test("spawn failure (bad nodeBin) never throws and records the error", async () => {
+void test("spawn failure (bad nodeBin) never throws and records the error", async () => {
   const root = await scaffold();
   const statusPath = join(root, "data/rollup-status.json");
 
   let threw = false;
-  let result;
+  let result!: RunScheduledJobResult;
   try {
     result = await runScheduledJob({
       name: "memory-daily",
@@ -361,7 +395,7 @@ test("spawn failure (bad nodeBin) never throws and records the error", async () 
   assert.equal(result.ok, false);
 });
 
-test(
+void test(
   "timeout kills the WHOLE process group, not just flock's own pid: the lock is released and no grandchild lingers",
   { skip: !existsSync("/usr/bin/flock") },
   async () => {
@@ -420,7 +454,7 @@ test(
   },
 );
 
-test("double entry: two concurrent calls for the same name only run once (inProgressSince admission guard)", async () => {
+void test("double entry: two concurrent calls for the same name only run once (inProgressSince admission guard)", async () => {
   const root = await scaffold();
   await writeFile(
     join(root, "slow.mjs"),
@@ -456,7 +490,7 @@ test("double entry: two concurrent calls for the same name only run once (inProg
   assert.equal(ran.length, 1, "exactly one must actually run");
   assert.equal(ran[0].ok, true);
 
-  const status = JSON.parse(await readFile(statusPath, "utf8"));
+  const status = parseStatus(await readFile(statusPath, "utf8"));
   assert.equal(
     Object.hasOwn(status["memory-daily"], "inProgressSince"),
     false,
@@ -470,7 +504,7 @@ test("double entry: two concurrent calls for the same name only run once (inProg
   );
 });
 
-test("a stale inProgressSince (older than timeoutMs — a presumed crash) does not block a new run forever", async () => {
+void test("a stale inProgressSince (older than timeoutMs — a presumed crash) does not block a new run forever", async () => {
   const root = await scaffold();
   await writeFile(join(root, "ok.mjs"), "process.exit(0);\n");
   const statusPath = join(root, "data/rollup-status.json");
@@ -500,7 +534,7 @@ test("a stale inProgressSince (older than timeoutMs — a presumed crash) does n
   assert.equal(result.ok, true);
 });
 
-test("a fresh reservation owned by a dead process is recovered immediately", async () => {
+void test("a fresh reservation owned by a dead process is recovered immediately", async () => {
   const root = await scaffold();
   await writeFile(join(root, "ok.mjs"), "process.exit(0);\n");
   const statusPath = join(root, "data/rollup-status.json");
@@ -529,7 +563,7 @@ test("a fresh reservation owned by a dead process is recovered immediately", asy
   assert.equal(result.ok, true);
 });
 
-test("a fresh reservation owned by a live process still blocks duplicate entry", async () => {
+void test("a fresh reservation owned by a live process still blocks duplicate entry", async () => {
   const root = await scaffold();
   await writeFile(join(root, "boom.mjs"), "process.exit(1);\n");
   const statusPath = join(root, "data/rollup-status.json");
@@ -563,7 +597,7 @@ test("a fresh reservation owned by a live process still blocks duplicate entry",
   assert.equal(spawned, false);
 });
 
-test("completion and finally do not modify status when their lock acquisition fails", async () => {
+void test("completion and finally do not modify status when their lock acquisition fails", async () => {
   const root = await scaffold();
   const statusPath = join(root, "data/rollup-status.json");
   await mkdir(join(root, "data"), { recursive: true });
@@ -587,14 +621,14 @@ test("completion and finally do not modify status when their lock acquisition fa
   });
 
   assert.equal(result.ok, true, "the child outcome remains successful");
-  const status = JSON.parse(await readFile(statusPath, "utf8"));
+  const status = parseStatus(await readFile(statusPath, "utf8"));
   assert.equal(typeof status["memory-daily"].inProgressSince, "number");
   assert.equal(status["memory-daily"].lastFinishedAt, undefined);
   assert.ok(lines.some((line) => line.includes("record completion")));
   assert.ok(lines.some((line) => line.includes("clear its reservation")));
 });
 
-test("no lockPath: a clean exit right after SIGTERM cancels the pending hard-kill (no stale SIGKILL later)", async () => {
+void test("no lockPath: a clean exit right after SIGTERM cancels the pending hard-kill (no stale SIGKILL later)", async () => {
   // The direct-spawn case (digest has no lockPath): "child" IS the actual target, so its
   // exit really does mean the process is gone, and any still-pending hard-kill timer must
   // be canceled — left dangling, it would risk firing later against a since-reused pid.
@@ -604,7 +638,7 @@ test("no lockPath: a clean exit right after SIGTERM cancels the pending hard-kil
     "process.on('SIGTERM', () => { process.exit(0); });\nsetInterval(() => {}, 1000);\n",
   );
   const statusPath = join(root, "data/rollup-status.json");
-  const signals = [];
+  const signals: NodeJS.Signals[] = [];
 
   // Generous margins for the same reason as the SIGTERM/SIGKILL escalation test above
   // (was 100/150): too tight a timeoutMs risks the first SIGTERM arriving before a
@@ -638,7 +672,7 @@ test("no lockPath: a clean exit right after SIGTERM cancels the pending hard-kil
   );
 });
 
-test("if the status lock can't be acquired, the run is deferred: no unlocked reservation write, nothing spawned", async () => {
+void test("if the status lock can't be acquired, the run is deferred: no unlocked reservation write, nothing spawned", async () => {
   const root = await scaffold();
   await writeFile(join(root, "boom.mjs"), "process.exit(1);\n"); // would fail loudly if actually spawned
   const statusPath = join(root, "data/rollup-status.json");

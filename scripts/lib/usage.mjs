@@ -1,7 +1,7 @@
 // Учёт расхода токенов — ЕДИНЫЙ источник правды по формату usage.jsonl, чтению и сводкам.
 // Переиспользуется хуком (запись: agent/hooks/usage.ts), Telegram-мостом и CLI `iva usage`
 // (чтение). Чистый ESM (только node-builtins) — бандлится в eve и работает в bare-node,
-// как scripts/lib/telegram-format.mjs.
+// как scripts/lib/telegram-format.ts.
 //
 // Лог живёт в data/usage.jsonl (ASSISTANT_DATA_DIR, дефолт ./data) — рядом с tasks.json,
 // gitignored, НЕ в vault (иначе ночной doctor коммитил бы растущий лог в репо памяти).

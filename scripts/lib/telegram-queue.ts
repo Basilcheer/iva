@@ -10,6 +10,91 @@ import {
 import { createHash, randomBytes } from "node:crypto";
 import { dirname } from "node:path";
 
+type TelegramPeer = {
+  id?: string | number;
+  is_bot?: boolean;
+  type?: string;
+  [key: string]: unknown;
+};
+
+export type TelegramQueueMessage = {
+  from?: TelegramPeer;
+  chat?: TelegramPeer;
+  reply_to_message?: TelegramQueueMessage;
+  text?: unknown;
+  caption?: unknown;
+  entities?: unknown;
+  caption_entities?: unknown;
+  iva_parts?: unknown;
+  [key: string]: unknown;
+};
+
+export type TelegramQueueUpdate = {
+  update_id: number;
+  message?: TelegramQueueMessage;
+  [key: string]: unknown;
+};
+
+export type TelegramQueueItem = {
+  version: number;
+  updateId: number;
+  enqueuedAt?: number;
+  update?: TelegramQueueUpdate;
+  legacyText?: string;
+  migratedFrom?: string;
+  [key: string]: unknown;
+};
+
+export type TelegramQueueDocument = {
+  version: number;
+  queues: Record<string, TelegramQueueItem[]>;
+};
+
+type SyncHandle = {
+  sync: () => Promise<void>;
+  close: () => Promise<void>;
+};
+
+type QueueFileOptions = {
+  strict?: boolean;
+  readFileImpl?: (file: string, encoding: "utf8") => Promise<string>;
+  writeFileImpl?: (
+    file: string,
+    data: string,
+    options: {
+      encoding: "utf8";
+      flag: "wx";
+      mode: number;
+    },
+  ) => Promise<void>;
+  mkdirImpl?: (
+    path: string,
+    options: { recursive: true },
+  ) => Promise<string | undefined>;
+  renameImpl?: (source: string, target: string) => Promise<void>;
+  linkImpl?: (source: string, target: string) => Promise<void>;
+  rmImpl?: (path: string, options: { force: true }) => Promise<void>;
+  openImpl?: (path: string, flags: string) => Promise<SyncHandle>;
+  nonce?: string | (() => string);
+  replace?: boolean;
+  quarantineNow?: () => number;
+  quarantineNonce?: () => string;
+  onLegacyQuarantine?: (path: string) => void;
+  now?: () => number;
+};
+
+type TelegramEntity = {
+  type?: unknown;
+  offset: number;
+  length: number;
+  [key: string]: unknown;
+};
+
+type SplitChatKey = {
+  chatId: number | string;
+  threadId: number | null;
+};
+
 export const TELEGRAM_QUEUE_VERSION = 1;
 export const TELEGRAM_QUEUE_ITEM_VERSION = 1;
 export const TELEGRAM_QUEUE_DURABILITY = "ETELEGRAM_QUEUE_DURABILITY";
@@ -32,22 +117,26 @@ const MEDIA_KEYS = [
   "poll",
 ];
 
-export function emptyQueueDocument() {
+export function emptyQueueDocument(): TelegramQueueDocument {
   return { version: TELEGRAM_QUEUE_VERSION, queues: Object.fromEntries([]) };
 }
 
-function cloneJson(value) {
-  return JSON.parse(JSON.stringify(value));
+function cloneJson<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
 }
 
-function legacyUpdateId(chatKey, index, text) {
+function legacyUpdateId(chatKey: string, index: number, text: string): number {
   const digest = createHash("sha256")
     .update(`${chatKey}\0${index}\0${text}`)
     .digest();
   return -(digest.readUInt32BE(0) || 1);
 }
 
-function normalizeItem(item, chatKey, index) {
+function normalizeItem(
+  item: unknown,
+  chatKey: string,
+  index: number,
+): TelegramQueueItem {
   if (typeof item === "string") {
     return {
       version: TELEGRAM_QUEUE_ITEM_VERSION,
@@ -56,34 +145,39 @@ function normalizeItem(item, chatKey, index) {
       migratedFrom: "string",
     };
   }
+  const candidate = item as Record<string, unknown>;
   if (
     typeof item !== "object" ||
     item === null ||
     Array.isArray(item) ||
-    item.version !== TELEGRAM_QUEUE_ITEM_VERSION ||
-    !Number.isSafeInteger(item.updateId)
+    candidate.version !== TELEGRAM_QUEUE_ITEM_VERSION ||
+    !Number.isSafeInteger(candidate.updateId)
   ) {
     throw new Error(`invalid Telegram queue item for ${chatKey}[${index}]`);
   }
   const hasUpdate =
-    typeof item.update === "object" &&
-    item.update !== null &&
-    !Array.isArray(item.update) &&
-    item.update.update_id === item.updateId;
-  const hasLegacyText = typeof item.legacyText === "string";
+    typeof candidate.update === "object" &&
+    candidate.update !== null &&
+    !Array.isArray(candidate.update) &&
+    (candidate.update as Record<string, unknown>).update_id ===
+      candidate.updateId;
+  const hasLegacyText = typeof candidate.legacyText === "string";
   if (!hasUpdate && !hasLegacyText) {
     throw new Error(
       `Telegram queue item ${chatKey}[${index}] has no replayable payload`,
     );
   }
-  return cloneJson(item);
+  return cloneJson(candidate) as TelegramQueueItem;
 }
 
-function normalizeQueues(queues, { legacy = false } = {}) {
+function normalizeQueues(
+  queues: unknown,
+  { legacy = false }: { legacy?: boolean } = {},
+): { document: TelegramQueueDocument; migrated: boolean } {
   if (typeof queues !== "object" || queues === null || Array.isArray(queues)) {
     throw new Error("Telegram queue does not contain a queues object");
   }
-  const entries = [];
+  const entries: [string, TelegramQueueItem[]][] = [];
   for (const [chatKey, items] of Object.entries(queues)) {
     if (!Array.isArray(items))
       throw new Error(`Telegram queue ${chatKey} is not an array`);
@@ -102,15 +196,18 @@ function normalizeQueues(queues, { legacy = false } = {}) {
   };
 }
 
-export function normalizeQueueDocument(value) {
+export function normalizeQueueDocument(value: unknown): {
+  document: TelegramQueueDocument;
+  migrated: boolean;
+} {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new Error("Telegram queue does not contain an object");
   }
   if (
-    value.version === TELEGRAM_QUEUE_VERSION &&
+    (value as Record<string, unknown>).version === TELEGRAM_QUEUE_VERSION &&
     Object.hasOwn(value, "queues")
   ) {
-    return normalizeQueues(value.queues);
+    return normalizeQueues((value as Record<string, unknown>).queues);
   }
   // Pre-IVA-008 format: { "<chat>:<topic>": ["text", ...] }.
   // Convert every string to a versioned item with a stable synthetic update id.
@@ -118,12 +215,16 @@ export function normalizeQueueDocument(value) {
   return normalizeQueues(value, { legacy: true });
 }
 
-export function createQueueItem(update, now = Date.now()) {
+export function createQueueItem(
+  update: unknown,
+  now = Date.now(),
+): TelegramQueueItem {
+  const candidate = update as Record<string, unknown>;
   if (
     typeof update !== "object" ||
     update === null ||
     Array.isArray(update) ||
-    !Number.isSafeInteger(update.update_id)
+    !Number.isSafeInteger(candidate.update_id)
   ) {
     throw new Error(
       "queued Telegram update must have a safe integer update_id",
@@ -131,13 +232,16 @@ export function createQueueItem(update, now = Date.now()) {
   }
   return {
     version: TELEGRAM_QUEUE_ITEM_VERSION,
-    updateId: update.update_id,
+    updateId: candidate.update_id as number,
     enqueuedAt: now,
-    update: cloneJson(update),
+    update: cloneJson(candidate) as TelegramQueueUpdate,
   };
 }
 
-export function queueCount(document, chatKey) {
+export function queueCount(
+  document: TelegramQueueDocument,
+  chatKey?: string,
+): number {
   if (chatKey !== undefined) {
     return Object.hasOwn(document.queues, chatKey)
       ? document.queues[chatKey].length
@@ -149,23 +253,32 @@ export function queueCount(document, chatKey) {
   );
 }
 
-export function queueKeys(document) {
+export function queueKeys(document: TelegramQueueDocument): string[] {
   return Object.keys(document.queues).filter(
     (key) => document.queues[key]?.length,
   );
 }
 
-export function queueHead(document, chatKey) {
+export function queueHead(
+  document: TelegramQueueDocument,
+  chatKey: string,
+): TelegramQueueItem | null {
   return Object.hasOwn(document.queues, chatKey)
     ? (document.queues[chatKey][0] ?? null)
     : null;
 }
 
-function cloneQueueMap(queues) {
+function cloneQueueMap(
+  queues: Record<string, TelegramQueueItem[]>,
+): Record<string, TelegramQueueItem[]> {
   return Object.fromEntries(Object.entries(queues));
 }
 
-function defineQueue(queues, chatKey, items) {
+function defineQueue(
+  queues: Record<string, TelegramQueueItem[]>,
+  chatKey: string,
+  items: TelegramQueueItem[],
+): void {
   Object.defineProperty(queues, chatKey, {
     value: items,
     enumerable: true,
@@ -174,7 +287,11 @@ function defineQueue(queues, chatKey, items) {
   });
 }
 
-export function enqueueItem(document, chatKey, item) {
+export function enqueueItem(
+  document: TelegramQueueDocument,
+  chatKey: string,
+  item: TelegramQueueItem,
+): { document: TelegramQueueDocument; added: boolean; count: number } {
   const queues = cloneQueueMap(document.queues);
   const current = Object.hasOwn(queues, chatKey) ? queues[chatKey] : [];
   const duplicate = current.some(
@@ -191,7 +308,11 @@ export function enqueueItem(document, chatKey, item) {
   };
 }
 
-export function removeQueueHead(document, chatKey, updateId) {
+export function removeQueueHead(
+  document: TelegramQueueDocument,
+  chatKey: string,
+  updateId: number,
+): TelegramQueueDocument {
   const current = Object.hasOwn(document.queues, chatKey)
     ? document.queues[chatKey]
     : [];
@@ -206,7 +327,13 @@ export function removeQueueHead(document, chatKey, updateId) {
   return { version: TELEGRAM_QUEUE_VERSION, queues };
 }
 
-export function clearQueueKey(document, chatKey) {
+export function clearQueueKey(
+  document: TelegramQueueDocument,
+  chatKey: string,
+): {
+  document: TelegramQueueDocument;
+  changed: boolean;
+} {
   if (!Object.hasOwn(document.queues, chatKey))
     return { document, changed: false };
   const queues = cloneQueueMap(document.queues);
@@ -217,7 +344,7 @@ export function clearQueueKey(document, chatKey) {
   };
 }
 
-function splitChatKey(chatKey) {
+function splitChatKey(chatKey: string): SplitChatKey | null {
   const colon = chatKey.lastIndexOf(":");
   if (colon < 0) return null;
   const chat = chatKey.slice(0, colon);
@@ -232,10 +359,14 @@ function splitChatKey(chatKey) {
 }
 
 export function materializeQueueItem(
-  chatKey,
-  item,
-  { legacyAllowedUserIds } = {},
-) {
+  chatKey: string,
+  item: TelegramQueueItem,
+  {
+    legacyAllowedUserIds,
+  }: {
+    legacyAllowedUserIds?: ReadonlySet<string> | Iterable<unknown> | null;
+  } = {},
+): TelegramQueueUpdate | null {
   if (item.update) return cloneJson(item.update);
   const route = splitChatKey(chatKey);
   const allowed =
@@ -275,56 +406,71 @@ export function materializeQueueItem(
 const TELEGRAM_USERNAME = /^[A-Za-z0-9_]{5,32}$/u;
 const TOKEN_NEIGHBOR = /[\p{L}\p{N}_]/u;
 
-function normalizeBotUsername(botUsername) {
+function normalizeBotUsername(botUsername: unknown): string {
   if (typeof botUsername !== "string") return "";
   const username = botUsername.replace(/^@/, "");
   return TELEGRAM_USERNAME.test(username) ? username : "";
 }
 
-function validEntityRange(text, entity) {
+function validEntityRange(
+  text: string,
+  entity: unknown,
+): entity is TelegramEntity {
+  const candidate = entity as Record<string, unknown>;
   return (
     typeof entity === "object" &&
     entity !== null &&
-    Number.isSafeInteger(entity.offset) &&
-    Number.isSafeInteger(entity.length) &&
-    entity.offset >= 0 &&
-    entity.length > 0 &&
-    entity.offset + entity.length <= text.length
+    Number.isSafeInteger(candidate.offset) &&
+    Number.isSafeInteger(candidate.length) &&
+    (candidate.offset as number) >= 0 &&
+    (candidate.length as number) > 0 &&
+    (candidate.offset as number) + (candidate.length as number) <= text.length
   );
 }
 
-function codePointBefore(text, index) {
+function codePointBefore(text: string, index: number): string {
   return Array.from(text.slice(0, index)).at(-1) ?? "";
 }
 
-function codePointAfter(text, index) {
+function codePointAfter(text: string, index: number): string {
   return Array.from(text.slice(index))[0] ?? "";
 }
 
-function hasTokenBoundaries(text, start, end) {
+function hasTokenBoundaries(text: string, start: number, end: number): boolean {
   return (
     !TOKEN_NEIGHBOR.test(codePointBefore(text, start)) &&
     !TOKEN_NEIGHBOR.test(codePointAfter(text, end))
   );
 }
 
-function mentionAt(text, start, end, username) {
+function mentionAt(
+  text: string,
+  start: number,
+  end: number,
+  username: string,
+): boolean {
   return (
     text.slice(start, end).toLowerCase() === `@${username.toLowerCase()}` &&
     hasTokenBoundaries(text, start, end)
   );
 }
 
-function hasExactMention(text, entities, username) {
+function hasExactMention(
+  text: string,
+  entities: unknown,
+  username: string,
+): boolean {
   if (!username) return false;
   if (entities !== undefined) {
     if (!Array.isArray(entities)) return false;
-    return entities.some(
-      (entity) =>
-        entity?.type === "mention" &&
+    return entities.some((entity: unknown) => {
+      const candidate = entity as { type?: unknown } | null | undefined;
+      return (
+        candidate?.type === "mention" &&
         validEntityRange(text, entity) &&
-        mentionAt(text, entity.offset, entity.offset + entity.length, username),
-    );
+        mentionAt(text, entity.offset, entity.offset + entity.length, username)
+      );
+    });
   }
 
   const needleLength = username.length + 1;
@@ -336,7 +482,10 @@ function hasExactMention(text, entities, username) {
   return false;
 }
 
-function commandTokenTargetsBot(token, botUsername) {
+function commandTokenTargetsBot(
+  token: string,
+  botUsername: string,
+): boolean | string {
   const match = /^\/[A-Za-z0-9_]+(?:@(?<target>[A-Za-z0-9_]+))?$/u.exec(token);
   if (!match) return false;
   const target = match.groups?.target;
@@ -346,13 +495,18 @@ function commandTokenTargetsBot(token, botUsername) {
   );
 }
 
-function isBotCommand(text, botUsername, entities) {
+function isBotCommand(
+  text: string,
+  botUsername: string,
+  entities: unknown,
+): boolean {
   if (entities !== undefined) {
     if (!Array.isArray(entities)) return false;
-    return entities.some((entity) => {
+    return entities.some((entity: unknown) => {
+      const candidate = entity as Record<string, unknown>;
       if (
-        entity?.type !== "bot_command" ||
-        entity.offset !== 0 ||
+        candidate.type !== "bot_command" ||
+        candidate.offset !== 0 ||
         !validEntityRange(text, entity)
       ) {
         return false;
@@ -368,7 +522,10 @@ function isBotCommand(text, botUsername, entities) {
   return Boolean(match && commandTokenTargetsBot(match[0], botUsername));
 }
 
-function messageTextAndEntities(message) {
+function messageTextAndEntities(message: TelegramQueueMessage): {
+  text: string;
+  entities: unknown;
+} {
   if (typeof message.text === "string") {
     return { text: message.text, entities: message.entities };
   }
@@ -378,18 +535,27 @@ function messageTextAndEntities(message) {
   return { text: "", entities: undefined };
 }
 
-function hasMessagePayload(message) {
+function hasMessagePayload(message: TelegramQueueMessage): boolean {
   const { text } = messageTextAndEntities(message);
   return Boolean(
     text.trim() || MEDIA_KEYS.some((key) => message[key] !== undefined),
   );
 }
 
-export function isReplyToBot(message) {
+export function isReplyToBot(message: TelegramQueueMessage): boolean {
   return message.reply_to_message?.from?.is_bot === true;
 }
 
-export function shouldQueueBusyUpdate(update, { allowedUserIds, botUsername }) {
+export function shouldQueueBusyUpdate(
+  update: TelegramQueueUpdate | null | undefined,
+  {
+    allowedUserIds,
+    botUsername,
+  }: {
+    allowedUserIds?: ReadonlySet<string> | Iterable<unknown> | null;
+    botUsername?: unknown;
+  },
+): boolean {
   const message = update?.message;
   const parts = Array.isArray(message?.iva_parts)
     ? message.iva_parts
@@ -397,7 +563,10 @@ export function shouldQueueBusyUpdate(update, { allowedUserIds, botUsername }) {
   if (
     !message ||
     message.from?.is_bot === true ||
-    !parts.some((part) => part && hasMessagePayload(part))
+    !parts.some(
+      (part: unknown) =>
+        part && hasMessagePayload(part as TelegramQueueMessage),
+    )
   ) {
     return false;
   }
@@ -410,9 +579,11 @@ export function shouldQueueBusyUpdate(update, { allowedUserIds, botUsername }) {
   if (message.chat?.type === "private") return true;
   if (message.chat?.type === "channel") return false;
   const username = normalizeBotUsername(botUsername);
-  return parts.some((part) => {
+  return parts.some((part: unknown) => {
     if (!part || typeof part !== "object") return false;
-    const { text, entities } = messageTextAndEntities(part);
+    const { text, entities } = messageTextAndEntities(
+      part as TelegramQueueMessage,
+    );
     return (
       isBotCommand(text, username, entities) ||
       hasExactMention(text, entities, username)
@@ -420,7 +591,10 @@ export function shouldQueueBusyUpdate(update, { allowedUserIds, botUsername }) {
   });
 }
 
-export async function loadQueueFile(file, options = {}) {
+export async function loadQueueFile(
+  file: string,
+  options: QueueFileOptions = {},
+) {
   const {
     strict = false,
     readFileImpl = readFile,
@@ -431,11 +605,11 @@ export async function loadQueueFile(file, options = {}) {
       ? options.nonce
       : () => randomBytes(8).toString("hex");
   const pendingFile = `${file}${TELEGRAM_QUEUE_ACK_PENDING_SUFFIX}`;
-  let pendingRaw;
+  let pendingRaw: string | undefined;
   try {
     pendingRaw = await readFileImpl(pendingFile, "utf8");
   } catch (error) {
-    if (error?.code !== "ENOENT") throw error;
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
   if (pendingRaw !== undefined) {
     // A pending document is the last fully durable pre-ack state. Restore it
@@ -454,11 +628,11 @@ export async function loadQueueFile(file, options = {}) {
     };
   }
 
-  let raw;
+  let raw: string;
   try {
     raw = await readFileImpl(file, "utf8");
   } catch (error) {
-    if (error?.code === "ENOENT") {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       return {
         document: emptyQueueDocument(),
         migrated: false,
@@ -483,7 +657,10 @@ export async function loadQueueFile(file, options = {}) {
   }
 }
 
-async function removeFileDurable(file, { rmImpl = rm, openImpl = open } = {}) {
+async function removeFileDurable(
+  file: string,
+  { rmImpl = rm, openImpl = open }: QueueFileOptions = {},
+): Promise<void> {
   await rmImpl(file, { force: true });
   const directory = await openImpl(dirname(file), "r");
   try {
@@ -494,8 +671,8 @@ async function removeFileDurable(file, { rmImpl = rm, openImpl = open } = {}) {
 }
 
 export async function writeQueueFileAtomic(
-  file,
-  document,
+  file: string,
+  document: unknown,
   {
     mkdirImpl = mkdir,
     writeFileImpl = writeFile,
@@ -505,12 +682,12 @@ export async function writeQueueFileAtomic(
     openImpl = open,
     nonce = randomBytes(8).toString("hex"),
     replace = true,
-  } = {},
-) {
+  }: QueueFileOptions = {},
+): Promise<void> {
   const normalized = normalizeQueueDocument(document).document;
   const parent = dirname(file);
   await mkdirImpl(parent, { recursive: true });
-  const tmp = `${file}.tmp-${process.pid}-${nonce}`;
+  const tmp = `${file}.tmp-${process.pid}-${nonce as string}`;
   let replaced = false;
   try {
     await writeFileImpl(tmp, JSON.stringify(normalized), {
@@ -536,9 +713,9 @@ export async function writeQueueFileAtomic(
   } catch (cause) {
     if (replaced) {
       const error = new Error(
-        `Telegram queue file was published, but durability could not be confirmed: ${cause.message}`,
+        `Telegram queue file was published, but durability could not be confirmed: ${(cause as Error).message}`,
         { cause },
-      );
+      ) as Error & { code: string };
       error.code = TELEGRAM_QUEUE_DURABILITY;
       throw error;
     }
@@ -548,7 +725,11 @@ export async function writeQueueFileAtomic(
   }
 }
 
-async function writeLegacyQuarantine(file, document, options) {
+async function writeLegacyQuarantine(
+  file: string,
+  document: TelegramQueueDocument,
+  options: QueueFileOptions,
+): Promise<string> {
   const now = options.quarantineNow?.() ?? Date.now();
   const nonce = options.quarantineNonce?.() ?? randomBytes(8).toString("hex");
   const stem = `${file}.legacy-unattributed-${now}-${nonce}`;
@@ -564,7 +745,7 @@ async function writeLegacyQuarantine(file, document, options) {
       });
       return path;
     } catch (error) {
-      if (error?.code !== "EEXIST") throw error;
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
     }
   }
   throw new Error(
@@ -572,11 +753,14 @@ async function writeLegacyQuarantine(file, document, options) {
   );
 }
 
-export async function migrateQueueFile(file, options = {}) {
+export async function migrateQueueFile(
+  file: string,
+  options: QueueFileOptions = {},
+): Promise<TelegramQueueDocument> {
   const loaded = await loadQueueFile(file, options);
   if (loaded.migrated) {
-    const activeEntries = [];
-    const unattributedEntries = [];
+    const activeEntries: [string, TelegramQueueItem[]][] = [];
+    const unattributedEntries: [string, TelegramQueueItem[]][] = [];
     for (const [chatKey, items] of Object.entries(loaded.document.queues)) {
       const route = splitChatKey(chatKey);
       const target =
@@ -610,7 +794,12 @@ export async function migrateQueueFile(file, options = {}) {
   return loaded.document;
 }
 
-export async function enqueueQueueFile(file, chatKey, update, options = {}) {
+export async function enqueueQueueFile(
+  file: string,
+  chatKey: string,
+  update: unknown,
+  options: QueueFileOptions = {},
+) {
   const loaded = await loadQueueFile(file, options);
   const result = enqueueItem(
     loaded.document,
@@ -629,11 +818,11 @@ export async function enqueueQueueFile(file, chatKey, update, options = {}) {
 }
 
 export async function acknowledgeQueueHead(
-  file,
-  chatKey,
-  updateId,
-  options = {},
-) {
+  file: string,
+  chatKey: string,
+  updateId: number,
+  options: QueueFileOptions = {},
+): Promise<TelegramQueueDocument> {
   const loaded = await loadQueueFile(file, { ...options, strict: true });
   const document = removeQueueHead(loaded.document, chatKey, updateId);
   const pendingFile = `${file}${TELEGRAM_QUEUE_ACK_PENDING_SUFFIX}`;
@@ -651,9 +840,9 @@ export async function acknowledgeQueueHead(
       await removeFileDurable(pendingFile, options);
     } catch (rollbackError) {
       const fatal = new Error(
-        `Telegram queue acknowledgement and rollback durability are unknown: ${rollbackError.message}`,
+        `Telegram queue acknowledgement and rollback durability are unknown: ${(rollbackError as Error).message}`,
         { cause: rollbackError },
-      );
+      ) as Error & { code: string; acknowledgementError: unknown };
       fatal.code = TELEGRAM_QUEUE_FATAL_DURABILITY;
       fatal.acknowledgementError = error;
       throw fatal;
@@ -661,14 +850,18 @@ export async function acknowledgeQueueHead(
     const rolledBack = new Error(
       `Telegram queue acknowledgement was not durable; original head ${updateId} was restored`,
       { cause: error },
-    );
+    ) as Error & { code: string };
     rolledBack.code = TELEGRAM_QUEUE_ACK_ROLLED_BACK;
     throw rolledBack;
   }
   return document;
 }
 
-export async function clearQueueFileKey(file, chatKey, options = {}) {
+export async function clearQueueFileKey(
+  file: string,
+  chatKey: string,
+  options: QueueFileOptions = {},
+): Promise<TelegramQueueDocument> {
   const loaded = await loadQueueFile(file, { ...options, strict: true });
   const result = clearQueueKey(loaded.document, chatKey);
   if (result.changed || loaded.migrated) {

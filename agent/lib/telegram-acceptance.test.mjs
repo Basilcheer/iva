@@ -9,7 +9,7 @@ import {
   enqueueItem,
   queueHead,
   removeQueueHead,
-} from "../../scripts/lib/telegram-queue.mjs";
+} from "../../scripts/lib/telegram-queue.ts";
 import {
   addTelegramQueueReceipt,
   handleAcceptedTelegramWebhook,

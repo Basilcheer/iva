@@ -581,3 +581,37 @@ test` now uses `node --test`.
   in the Git index, the synchronous Docker port probe has no timeout, and
   `upsertEnv` accepts key names outside its parser grammar. Each requires its own
   regression test and behavior commit.
+- 2026-08-06: PR-2 converts 13 additional leaf modules and 11 related tests, removes five
+  superseded declarations, and lowers the `.mjs` ratchet from 138 to 114.
+  `reasoning-levels` is characterized through the model and OAuth suites, while
+  `telegram-reset-intent` was already exercised through the poller queue suites.
+  A separate pre-conversion characterization commit adds its direct durable
+  lifecycle, invalid-record, and filename-integrity cases so the native branch
+  coverage gate has deterministic headroom.
+- 2026-08-06: `telegram-queue.test.ts` still imports the eternal `telegram-poll.mjs` shim
+  before the poller implementation moves to TypeScript. PR-2 adds the narrow
+  temporary `scripts/telegram-poll.d.mts` bridge for the two exports that test
+  consumes; PR-6 must delete it when the poller and shim boundary are converted.
+- 2026-08-06: PR-2 typing review found five pre-existing behavior defects and leaves them for
+  separate TDD fixes: quiz answer lookup accepts inherited/array property names
+  such as `"length"` despite documenting invalid answers as neutral; quiz summary
+  and persona fallback select the WVPF card but still crash on an unknown code;
+  Telegram Markdown placeholder restoration can delete ordinary text matching
+  two spaces, digits, two spaces; the Telegram HTML sanitizer preserves unsafe
+  `javascript:` and `data:` anchor schemes; and outbound security findings retain
+  the first 12 characters of matched credentials in `preview`.
+- 2026-08-06: The first full PR-2 suite, run concurrently with the full typed
+  linter, hit the unrelated timing-sensitive `minimum deadline is enforced while
+the Node event loop is blocked` assertion once. Two later sequential suites hit
+  the same assertion while unrelated VPS builds drove the load average above 11;
+  every isolated rerun passed. The conversion does not touch the bash tool, and a
+  complete clean suite is still required before push.
+- 2026-08-06 07:02 Asia/Tashkent: The first full Node 24 suite after transfer to
+  macOS exposed two pre-existing portability gaps. Rich-post compared realpath
+  candidates against a symlinked `/var` data root, and two Linux process-group
+  tests assumed `setsid` existed. Separate commits `59be5e7` and `63536a6`
+  normalize the media roots and skip only those two cases when `setsid` is absent;
+  the staged PR-2 conversion remained byte-identical at its handoff SHA-256.
+- 2026-08-06 07:02 Asia/Tashkent: The next complete local suite passed cleanly
+  after transfer: 594 passed, zero failed, and four expected platform skips (two
+  existing `flock` skips plus the two unavailable-`setsid` cases).

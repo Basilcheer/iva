@@ -30,7 +30,7 @@ import {
   probeOpenRouterModel,
   validateModelSelection,
 } from "./lib/model-validation.mjs";
-import { keptSetupWritePlan } from "./lib/setup-keep.mjs";
+import { keptSetupWritePlan } from "./lib/setup-keep.ts";
 import { validateTimeZone } from "./lib/timezone.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");

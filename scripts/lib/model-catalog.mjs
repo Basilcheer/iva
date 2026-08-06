@@ -5,7 +5,7 @@ import { listCodexModelCatalog } from "./codex-oauth.mjs";
 import {
   CANONICAL_REASONING_EFFORTS,
   FALLBACK_REASONING_EFFORTS,
-} from "./reasoning-levels.mjs";
+} from "./reasoning-levels.ts";
 
 // Runtime accepts the stable protocol vocabulary. Telegram only offers the live
 // model-specific subset; when the response is missing/broken it uses the conservative

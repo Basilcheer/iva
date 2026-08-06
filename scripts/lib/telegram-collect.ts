@@ -4,15 +4,72 @@ export const COLLECT_MAX_PARTS = 20;
 export const COLLECT_MAX_CHARS = 50_000;
 export const COLLECT_MAX_AGE_MS = 10_000;
 
-function finiteNonNegative(value, fallback) {
-  return Number.isFinite(value) && value >= 0 ? value : fallback;
+export interface TelegramCollectMessage {
+  message_id?: unknown;
+  date?: unknown;
+  chat?: { id?: string | number; [key: string]: unknown };
+  from?: { id?: string | number; [key: string]: unknown };
+  message_thread_id?: string | number;
+  media_group_id?: unknown;
+  text?: unknown;
+  caption?: unknown;
+  iva_parts?: TelegramCollectMessage[];
+  [key: string]: unknown;
 }
 
-function finitePositiveInteger(value, fallback) {
-  return Number.isSafeInteger(value) && value > 0 ? value : fallback;
+export interface TelegramCollectUpdate {
+  update_id?: unknown;
+  message?: TelegramCollectMessage;
+  [key: string]: unknown;
 }
 
-export function createCollector(options = {}) {
+interface CollectorOptions {
+  quietMs?: unknown;
+  mediaQuietMs?: unknown;
+  maxParts?: unknown;
+  maxChars?: unknown;
+  maxAgeMs?: unknown;
+}
+
+interface CollectorEntry {
+  updates: TelegramCollectUpdate[];
+  chars: number;
+  firstAt: number;
+  lastAt: number;
+  forced: boolean;
+}
+
+export interface TelegramCollector {
+  entries: Map<string, CollectorEntry>;
+  quietMs: number;
+  mediaQuietMs: number;
+  maxParts: number;
+  maxChars: number;
+  maxAgeMs: number;
+}
+
+export type CollectorOfferResult =
+  | { status: "passthrough"; update: TelegramCollectUpdate }
+  | { status: "buffered" }
+  | { status: "ready"; update: TelegramCollectUpdate };
+
+function isSafeInteger(value: unknown): value is number {
+  return Number.isSafeInteger(value);
+}
+
+function finiteNonNegative(value: unknown, fallback: number) {
+  return Number.isFinite(value) && (value as number) >= 0
+    ? (value as number)
+    : fallback;
+}
+
+function finitePositiveInteger(value: unknown, fallback: number) {
+  return isSafeInteger(value) && value > 0 ? value : fallback;
+}
+
+export function createCollector(
+  options: CollectorOptions = {},
+): TelegramCollector {
   return {
     entries: new Map(),
     quietMs: finiteNonNegative(options.quietMs, COLLECT_QUIET_MS),
@@ -26,22 +83,24 @@ export function createCollector(options = {}) {
   };
 }
 
-export function collectorKeyFor(update) {
+export function collectorKeyFor(
+  update: TelegramCollectUpdate | null | undefined,
+) {
   const message = update?.message;
   const chatId = message?.chat?.id;
   const fromId = message?.from?.id;
   if (chatId === undefined || fromId === undefined) return null;
-  return `${chatId}:${message.message_thread_id ?? ""}:${fromId}`;
+  return `${chatId}:${message!.message_thread_id ?? ""}:${fromId}`;
 }
 
-function messageChars(message) {
+function messageChars(message: TelegramCollectMessage | undefined) {
   return (
     (typeof message?.text === "string" ? message.text.length : 0) +
     (typeof message?.caption === "string" ? message.caption.length : 0)
   );
 }
 
-function mergeParts(updates) {
+function mergeParts(updates: TelegramCollectUpdate[]): TelegramCollectUpdate {
   if (updates.length === 1) return updates[0];
 
   const ordered = updates
@@ -49,11 +108,7 @@ function mergeParts(updates) {
     .sort((a, b) => {
       const aId = a.update.message?.message_id;
       const bId = b.update.message?.message_id;
-      if (
-        Number.isSafeInteger(aId) &&
-        Number.isSafeInteger(bId) &&
-        aId !== bId
-      ) {
+      if (isSafeInteger(aId) && isSafeInteger(bId) && aId !== bId) {
         return aId - bId;
       }
       return a.index - b.index;
@@ -62,9 +117,7 @@ function mergeParts(updates) {
   const first = ordered[0];
   const updateId = ordered.reduce(
     (max, update) =>
-      Number.isSafeInteger(update.update_id)
-        ? Math.max(max, update.update_id)
-        : max,
+      isSafeInteger(update.update_id) ? Math.max(max, update.update_id) : max,
     Number.MIN_SAFE_INTEGER,
   );
 
@@ -73,19 +126,25 @@ function mergeParts(updates) {
     update_id: updateId,
     message: {
       ...first.message,
-      iva_parts: ordered.map((update) => update.message),
+      iva_parts: ordered.map(
+        (update) => update.message as TelegramCollectMessage,
+      ),
     },
   };
 }
 
-function entryQuietMs(collector, entry) {
+function entryQuietMs(collector: TelegramCollector, entry: CollectorEntry) {
   const last = entry.updates.at(-1)?.message;
   return last?.media_group_id === undefined
     ? collector.quietMs
     : collector.mediaQuietMs;
 }
 
-export function collectorOffer(collector, update, now) {
+export function collectorOffer(
+  collector: TelegramCollector,
+  update: TelegramCollectUpdate,
+  now: number,
+): CollectorOfferResult {
   const key = collectorKeyFor(update);
   if (collector.quietMs === 0 || key === null) {
     return { status: "passthrough", update };
@@ -114,8 +173,11 @@ export function collectorOffer(collector, update, now) {
   return { status: "ready", update: mergeParts(entry.updates) };
 }
 
-export function collectorTakeExpired(collector, now) {
-  const ready = [];
+export function collectorTakeExpired(
+  collector: TelegramCollector,
+  now: number,
+) {
+  const ready: TelegramCollectUpdate[] = [];
   for (const [key, entry] of collector.entries) {
     if (
       !entry.forced &&
@@ -130,7 +192,10 @@ export function collectorTakeExpired(collector, now) {
   return ready;
 }
 
-export function collectorRestore(collector, update) {
+export function collectorRestore(
+  collector: TelegramCollector,
+  update: TelegramCollectUpdate,
+) {
   const key = collectorKeyFor(update);
   if (key === null) return false;
   collector.entries.set(key, {
@@ -143,6 +208,6 @@ export function collectorRestore(collector, update) {
   return true;
 }
 
-export function collectorPending(collector) {
+export function collectorPending(collector: TelegramCollector) {
   return collector.entries.size;
 }

@@ -26,10 +26,19 @@ export const SEARCH_CATALOG = {
 // проба на 1 результат укладывается в секунды, дольше 3с ждать нельзя (мост стоит).
 const FETCH_TIMEOUT_MS = 3_000;
 
+interface ProbeRequest {
+  url: string;
+  method: string;
+  headers: Record<string, string>;
+  body?: string;
+}
+
+type ProbeBuilder = (key: string) => ProbeRequest;
+
 // Билдеры пробного запроса на 1 результат — калька build() из web_search.ts с n=1.
 // Ключ уходит только в заголовок/тело fetch; наружу (лог/текст причины) он не попадает.
-const PROBE = {
-  tavily: (key) => ({
+const PROBE: Record<keyof typeof SEARCH_CATALOG, ProbeBuilder> = {
+  tavily: (key: string) => ({
     url: "https://api.tavily.com/search",
     method: "POST",
     headers: {
@@ -44,18 +53,18 @@ const PROBE = {
       topic: "general",
     }),
   }),
-  brave: (key) => ({
+  brave: (key: string) => ({
     url: "https://api.search.brave.com/res/v1/web/search?q=ping&count=1",
     method: "GET",
     headers: { Accept: "application/json", "X-Subscription-Token": key },
   }),
-  exa: (key) => ({
+  exa: (key: string) => ({
     url: "https://api.exa.ai/search",
     method: "POST",
     headers: { "Content-Type": "application/json", "x-api-key": key },
     body: JSON.stringify({ query: "ping", type: "auto", numResults: 1 }),
   }),
-  parallel: (key) => ({
+  parallel: (key: string) => ({
     url: "https://api.parallel.ai/v1/search",
     method: "POST",
     headers: { "Content-Type": "application/json", "x-api-key": key },
@@ -72,8 +81,8 @@ const PROBE = {
 // 401/403 → отказ с короткой причиной, любой другой исход (иной статус, сетевой сбой, таймаут) → null.
 // Сеть флакует чаще, чем ключи протухают, поэтому сомнение трактуем в пользу ключа — не блокируем юзера.
 // Возвращает null, когда ключ выглядит рабочим, либо строку-причину.
-export async function checkSearchKey(provider, key) {
-  const build = PROBE[provider];
+export async function checkSearchKey(provider: string, key: string) {
+  const build = (PROBE as Record<string, ProbeBuilder | undefined>)[provider];
   if (!build) return null; // неизвестный провайдер — пробовать нечего, принимаем
   const req = build(key);
   try {

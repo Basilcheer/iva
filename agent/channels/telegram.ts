@@ -23,7 +23,7 @@ import {
   toTelegramHtmlChunks,
   htmlToPlain,
   needsRichMessage,
-} from "../../scripts/lib/telegram-format.mjs";
+} from "../../scripts/lib/telegram-format.ts";
 import { describeImage } from "../vision.js";
 import {
   hasInboundAttackSignal,
@@ -54,7 +54,7 @@ import {
 // AGENT_LANGUAGE). i18n.mjs живёт в agent/lib — это уже не кросс-импорт, в отличие от
 // telegram-format выше.
 import { tr } from "../lib/i18n.mjs";
-import { buildTelegramReplyContext } from "../../scripts/lib/telegram-reply-context.mjs";
+import { buildTelegramReplyContext } from "../../scripts/lib/telegram-reply-context.ts";
 import { handleTelegramResetRequest } from "../../scripts/lib/telegram-reset-route.mjs";
 // Eve отдаёт обработчикам событий токен с именем канала впереди, а reset-роут клеит его
 // сам. Сохраняем только channel-local вид, иначе /new сбрасывает несуществующий токен (#110).
@@ -237,7 +237,7 @@ function buildAuth(msg: TelegramDispatchMessage) {
 //
 // Тот же крошечный хелпер продублирован в agent/hooks/transcript.ts — выносить в
 // общий модуль не стали из-за тривиальности (это пара fs-вызовов), а НЕ из-за бандла:
-// импорт из scripts/lib в бандл работает (см. telegram-format.mjs). Формат d_brain:
+// импорт из scripts/lib в бандл работает (см. telegram-format.ts). Формат d_brain:
 // `## HH:MM [type]` + контент.
 // Дата/время — в часовом поясе пользователя (ASSISTANT_TIMEZONE, иначе локальный TZ).
 function localStamp(): { date: string; hhmm: string; hhmmss: string } {
@@ -637,7 +637,7 @@ async function processMediaPart(
 }
 
 // Markdown → Telegram HTML и нарезка на чанки — в общем модуле
-// scripts/lib/telegram-format.mjs (тот же конвертер использует cron). Импорт выше.
+// scripts/lib/telegram-format.ts (тот же конвертер использует cron). Импорт выше.
 
 // --- ESC-остановка хода (аналог ESC в Claude Code) ---
 //

@@ -2,22 +2,22 @@ import assert from "node:assert/strict";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import test, { type TestContext } from "node:test";
 
 import {
   TELEGRAM_RESET_INTENT_VERSION,
   clearTelegramResetIntent,
   loadTelegramResetIntents,
   persistTelegramResetIntent,
-} from "./telegram-reset-intent.mjs";
+} from "./telegram-reset-intent.ts";
 
-async function intentDirectory(t) {
+async function intentDirectory(t: TestContext): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "iva-reset-intent-test-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   return join(root, "intents");
 }
 
-test("reset intent persists, loads, clears, and tolerates missing paths", async (t) => {
+void test("reset intent persists, loads, clears, and tolerates missing paths", async (t) => {
   const directory = await intentDirectory(t);
   assert.deepEqual(await loadTelegramResetIntents(directory), []);
 
@@ -40,7 +40,7 @@ test("reset intent persists, loads, clears, and tolerates missing paths", async 
   assert.deepEqual(await loadTelegramResetIntents(directory), []);
 });
 
-test("reset intent loader rejects invalid records", async (t) => {
+void test("reset intent loader rejects invalid records", async (t) => {
   const directory = await intentDirectory(t);
   await mkdir(directory, { recursive: true });
   await writeFile(join(directory, "bad.json"), "{}", "utf8");
@@ -51,7 +51,7 @@ test("reset intent loader rejects invalid records", async (t) => {
   );
 });
 
-test("reset intent loader rejects a filename that does not match the chat", async (t) => {
+void test("reset intent loader rejects a filename that does not match the chat", async (t) => {
   const directory = await intentDirectory(t);
   await mkdir(directory, { recursive: true });
   await writeFile(

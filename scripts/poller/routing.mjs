@@ -8,7 +8,7 @@ import {
   queueKeys,
   shouldQueueBusyUpdate,
   TELEGRAM_QUEUE_FATAL_DURABILITY,
-} from "../lib/telegram-queue.mjs";
+} from "../lib/telegram-queue.ts";
 import {
   getChatStatus,
   isRunning,

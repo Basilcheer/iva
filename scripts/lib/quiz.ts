@@ -17,10 +17,10 @@
 export const QUIZ_ANSWERS = {
   en: ["yes", "rather yes", "rather no", "no"],
   ru: ["да", "скорее да", "скорее нет", "нет"],
-};
+} as const;
 
 // Веса ответов по индексу. Единственный источник правды для скоринга и тестов.
-const WEIGHTS = [2, 1, -1, -2];
+const WEIGHTS = [2, 1, -1, -2] as const;
 
 // Ровно 10 вопросов: tone 3, expr 2, init 3, mind 2. Утверждения про желаемую иву.
 // pole: 1 — согласие тянет к первому полюсу оси; -1 — реверс (к второму).
@@ -115,7 +115,7 @@ export const QUIZ = [
       ru: "Мне ближе, когда объясняют образами, метафорами и примерами.",
     },
   },
-];
+] as const;
 
 // Первый/второй полюс каждой оси (буквы). Сумма >= 0 → первая буква.
 const POLES = {
@@ -123,20 +123,30 @@ const POLES = {
   expr: ["V", "C"],
   init: ["P", "R"],
   mind: ["F", "N"],
-};
-const AXIS_ORDER = ["tone", "expr", "init", "mind"];
+} as const;
+const AXIS_ORDER = ["tone", "expr", "init", "mind"] as const;
+
+type Axis = (typeof AXIS_ORDER)[number];
+type LocalizedText = { en: string; ru: string };
 
 // answers: number[10], индекс выбранного ответа 0..3 (позиция в QUIZ_ANSWERS).
 // Возвращает { code:"WVPF"-подобный, letters:{tone,expr,init,mind} }. Битые/вне
 // диапазона ответы вносят 0 (нейтрально) — тай по оси решается в пользу первого полюса.
-export function scoreQuiz(answers) {
-  const sums = { tone: 0, expr: 0, init: 0, mind: 0 };
+export function scoreQuiz(answers: unknown) {
+  const sums: Record<Axis, number> = {
+    tone: 0,
+    expr: 0,
+    init: 0,
+    mind: 0,
+  };
   const list = Array.isArray(answers) ? answers : [];
   QUIZ.forEach((q, i) => {
-    const w = WEIGHTS[list[i]];
+    const w: unknown = (WEIGHTS as unknown as Record<PropertyKey, unknown>)[
+      list[i] as PropertyKey
+    ];
     if (typeof w === "number") sums[q.axis] += w * q.pole;
   });
-  const letters = {};
+  const letters = {} as Record<Axis, string>;
   for (const axis of AXIS_ORDER)
     letters[axis] = POLES[axis][sums[axis] >= 0 ? 0 : 1];
   return { code: AXIS_ORDER.map((a) => letters[a]).join(""), letters };
@@ -324,7 +334,7 @@ export const ARCHETYPES = {
       ru: "Сдержанная и вдумчивая, взвешивает варианты моделями и понятиями по запросу.",
     },
   },
-};
+} as const;
 
 // Фразы поведения по буквам оси. Два набора: DESC (3-е лицо, для портрета в чате)
 // и PERSONA (2-е лицо, императив — для vault/PERSONA.md, инструкция самой иве).
@@ -355,7 +365,7 @@ const DESC = {
     en: "Thinking: figurative, explains with images and examples.",
     ru: "Мышление: образное, объясняет метафорами и примерами.",
   },
-};
+} satisfies Record<string, LocalizedText>;
 const PERSONA = {
   W: {
     en: "Be warm and supportive; acknowledge feelings, not only the task.",
@@ -389,10 +399,14 @@ const PERSONA = {
     en: "Explain through images, metaphors and concrete examples.",
     ru: "Объясняй через образы, метафоры и конкретные примеры.",
   },
-};
+} satisfies Record<string, LocalizedText>;
 
 // Буквы кода в порядке осей → массив фраз выбранного набора.
-function axisPhrases(code, table, lang) {
+function axisPhrases(
+  code: string,
+  table: Record<string, LocalizedText>,
+  lang: string,
+) {
   const isRu = lang === "ru";
   return code
     .split("")
@@ -417,8 +431,11 @@ const SUMMARY_NOTE = {
 // Портрет для чата: Архетип · Психотип · Модус · описание + как проявляется по осям +
 // поясняющий блок. Собирается из карточки и фраз DESC — длина стабильно в 600-900 символов.
 // lang: "ru"|"en" (незнакомое → ru, дефолт канала).
-export function quizSummary(code, lang) {
-  const card = ARCHETYPES[code] ?? ARCHETYPES.WVPF;
+export function quizSummary(code: string, lang: string) {
+  type ArchetypeCard = (typeof ARCHETYPES)[keyof typeof ARCHETYPES];
+  const card =
+    (ARCHETYPES as Record<string, ArchetypeCard | undefined>)[code] ??
+    ARCHETYPES.WVPF;
   const isRu = lang !== "en";
   const lines = axisPhrases(code, DESC, isRu ? "ru" : "en")
     .map((s) => `• ${s}`)
@@ -461,8 +478,11 @@ export function quizSummary(code, lang) {
 // поведения Иве от второго лица (тон, экспрессия, инициатива, стиль ответов). Читает
 // её dynamic-инструкция 25-persona.ts каждый ход. Собирается из PERSONA-фраз, длина
 // заведомо в лимите; финальный slice(0,800) — страховка на случай правок фраз.
-export function personaMarkdown(code, lang) {
-  const card = ARCHETYPES[code] ?? ARCHETYPES.WVPF;
+export function personaMarkdown(code: string, lang: string) {
+  type ArchetypeCard = (typeof ARCHETYPES)[keyof typeof ARCHETYPES];
+  const card =
+    (ARCHETYPES as Record<string, ArchetypeCard | undefined>)[code] ??
+    ARCHETYPES.WVPF;
   const isRu = lang !== "en";
   const phrases = axisPhrases(code, PERSONA, isRu ? "ru" : "en")
     .map((s) => `- ${s}`)

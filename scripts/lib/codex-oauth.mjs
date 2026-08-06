@@ -22,7 +22,7 @@ import { dirname, join } from "node:path";
 import {
   CANONICAL_REASONING_EFFORTS,
   FALLBACK_REASONING_EFFORTS,
-} from "./reasoning-levels.mjs";
+} from "./reasoning-levels.ts";
 
 export const ISSUER = "https://auth.openai.com";
 export const CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"; // публичный client_id Codex CLI
