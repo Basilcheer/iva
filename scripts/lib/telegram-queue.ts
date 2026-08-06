@@ -687,7 +687,8 @@ export async function writeQueueFileAtomic(
   const normalized = normalizeQueueDocument(document).document;
   const parent = dirname(file);
   await mkdirImpl(parent, { recursive: true });
-  const tmp = `${file}.tmp-${process.pid}-${nonce as string}`;
+  const nonceValue = typeof nonce === "function" ? nonce() : nonce;
+  const tmp = `${file}.tmp-${process.pid}-${nonceValue}`;
   let replaced = false;
   try {
     await writeFileImpl(tmp, JSON.stringify(normalized), {

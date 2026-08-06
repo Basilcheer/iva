@@ -31,6 +31,7 @@ import {
   shouldQueueBusyUpdate,
   TELEGRAM_QUEUE_ACK_ROLLED_BACK,
   TELEGRAM_QUEUE_FATAL_DURABILITY,
+  writeQueueFileAtomic,
   type TelegramQueueDocument,
   type TelegramQueueUpdate,
 } from "./telegram-queue.ts";
@@ -137,6 +138,19 @@ async function waitForFile(file: string, timeoutMs = 2_000): Promise<void> {
   }
   assert.fail(`timed out waiting for ${file}`);
 }
+
+void test("atomic queue writes invoke a fresh nonce factory per write", async (t) => {
+  const file = await queueFile(t);
+  let calls = 0;
+  const options = {
+    nonce: () => `nonce-${(calls += 1)}`,
+  };
+
+  await writeQueueFileAtomic(file, { version: 1, queues: {} }, options);
+  await writeQueueFileAtomic(file, { version: 1, queues: {} }, options);
+
+  assert.equal(calls, 2);
+});
 
 void test("versioned FIFO items preserve update ids, order and duplicate retries across reload", async (t) => {
   const file = await queueFile(t);

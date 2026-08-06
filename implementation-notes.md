@@ -656,3 +656,8 @@ the Node event loop is blocked` assertion once. Two later sequential suites hit
   sets `redirect: "error"`; the existing soft network-failure policy still
   returns `null`. The same response lifecycle now cancels unread bodies without
   allowing cancellation failures to change the probe result.
+- 2026-08-06 Asia/Tashkent: The shared Telegram queue options had long accepted
+  a nonce factory for quarantine paths, but atomic queue writes interpolated the
+  function object instead of invoking it. A separate regression fix normalizes
+  string and factory nonces at the write boundary; a direct test proves that
+  each write asks the factory for a fresh value.
