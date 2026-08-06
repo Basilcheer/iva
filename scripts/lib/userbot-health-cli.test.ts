@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, type SpawnOptions } from "node:child_process";
 import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import test from "node:test";
 import {
   chmod,
@@ -18,23 +19,41 @@ import { fileURLToPath } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "../..");
 
-function run(command, args, options) {
+type RunOptions = SpawnOptions & { readonly encoding?: BufferEncoding };
+
+type RunResult = {
+  readonly code: number | null;
+  readonly stdout: string;
+  readonly stderr: string;
+};
+
+function run(
+  command: string,
+  args: readonly string[],
+  options: RunOptions,
+): Promise<RunResult> {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, options);
     let stdout = "";
     let stderr = "";
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk;
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk;
-    });
+    (child.stdout as NonNullable<typeof child.stdout>).on(
+      "data",
+      (chunk: string) => {
+        stdout += chunk;
+      },
+    );
+    (child.stderr as NonNullable<typeof child.stderr>).on(
+      "data",
+      (chunk: string) => {
+        stderr += chunk;
+      },
+    );
     child.once("error", reject);
     child.once("close", (code) => resolve({ code, stdout, stderr }));
   });
 }
 
-test("iva userbot diagnose --json returns the shared ready state without secrets", async (t) => {
+void test("iva userbot diagnose --json returns the shared ready state without secrets", async (t) => {
   const dir = await mkdtemp(join(tmpdir(), "iva-userbot-cli-"));
   t.after(() => rm(dir, { recursive: true, force: true }));
   const project = join(dir, "iva");
@@ -70,9 +89,9 @@ test("iva userbot diagnose --json returns the shared ready state without secrets
     response.writeHead(200, { "content-type": "application/json" });
     response.end('{"state":"ready"}');
   });
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(() => server.close());
-  const port = server.address().port;
+  const port = (server.address() as AddressInfo).port;
   await writeFile(join(project, ".env"), `TELEGRAM_MCP_PORT=${port}\n`);
 
   const result = await run(

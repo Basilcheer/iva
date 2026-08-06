@@ -1254,3 +1254,53 @@ the Node event loop is blocked` assertion once. Two later sequential suites hit
   the uv 0.8.3 lock reproduction, and the strict Python 3.12 userbot gates are
   green. Independent semantic review confirms that the runtime output is
   unchanged; only the adapter's erased TypeScript contract is narrower.
+- 2026-08-06 Asia/Tashkent: PR-11 starts from the PR-10 merge `e164e9d` and
+  finishes the executable CLI extraction. Services, account commands, and
+  userbot commands are developed concurrently in three isolated worktrees with
+  exclusive new-file ownership; the integration branch alone owns `main.ts`,
+  `bin/iva.mjs`, update wiring, the `.mjs` test rename, the ratchet, and this
+  log. Every lane first commits black-box characterization against the unchanged
+  mixed JavaScript dispatcher, and all characterization commits are integrated
+  and run together before any production extraction enters the canonical
+  branch. This keeps the critical path parallel without allowing workers to
+  race on shared routing or migration-policy files.
+- 2026-08-06 Asia/Tashkent: Root integration caught two test-boundary issues
+  before publication. The account conversion briefly normalized a truthy
+  `Symbol` version even though legacy template interpolation throws; the
+  coercion was removed and a direct regression test now preserves that edge.
+  The userbot characterization fixture also contained a local Node path, which
+  was replaced with `process.execPath`. Under the full suite, its status probe
+  then exposed a real timing nondeterminism: the production 1.5-second deadline
+  can return `unreachable` before an inactive fake systemd result arrives. The
+  fixture now seeds an active service with no token, so both the ordinary path
+  and deadline path deterministically produce the exact three-line
+  `unreachable` response without weakening the assertion.
+- 2026-08-06 Asia/Tashkent: Three independent read-only audits of the assembled
+  PR-11 tree are clean across CLI semantics, deletion/security boundaries,
+  update rollback wiring, copied-root fixtures, shim behavior, TDD ordering,
+  migration scope, and machine-specific paths. The executable `bin/iva.mjs`
+  is an eight-line root-aware shim with mode 0755. The tracked `.mjs` count and
+  ratchet are exactly six; `.mts` and `.d.mts` are empty. All four
+  characterization commits precede their production extractions, and the
+  temporary fixup commits will be autosquashed before publication.
+- 2026-08-06 Asia/Tashkent: The complete pre-rebase PR-11 verification set is
+  green on Node 24.19.0. The full suite reports 785 tests: 781 passed, zero
+  failed, and four expected macOS skips. Coverage is 77.10% lines, 79.17%
+  branches, and 72.51% functions, a PR-10 delta of +0.96 / +0.13 / -0.77
+  percentage points. Lint, formatting, typecheck, exact 6/6 ratchet, zero
+  declarations, diff and protected-file checks, Eve build, and replica pass;
+  replica emits only its documented resume notice and exits `OK` with five
+  provider requests. Autograph passes 343/343 and security-defense 45/45. The
+  userbot lock reproduces byte-for-byte with CI-pinned uv 0.8.3, and a freshly
+  recreated Python 3.12 environment passes strict hashed sync, guardrails,
+  health tests, and byte compilation.
+- 2026-08-06 Asia/Tashkent: `git pull --rebase origin main` confirmed that the
+  branch is current on the PR-10 merge. After autosquashing both userbot test
+  fixups, the final atomic history passes the complete gate set again: 781/785
+  Node tests with zero failures, coverage 77.10 / 79.20 / 72.51, lint,
+  formatting, exact 6/6 ratchet, zero declarations, typecheck, diff checks,
+  build, replica, Autograph 343/343, security-defense 45/45, the uv 0.8.3 lock
+  reproduction, and strict Python 3.12 userbot checks. The final PR-10 coverage
+  delta is +0.96 / +0.16 / -0.77 percentage points. Commit messages and bodies
+  contain no AI attribution; the two protected handoff files remain untracked
+  and absent from the branch diff.

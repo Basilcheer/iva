@@ -1,0 +1,446 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { createCliRuntime } from "./runtime.ts";
+import { createServiceCommands } from "./services.ts";
+import type { createCliSystemd } from "./systemd.ts";
+
+type Runtime = ReturnType<typeof createCliRuntime>;
+type SystemdLifecycle = Pick<
+  ReturnType<typeof createCliSystemd>,
+  "activateUnits" | "restartServices"
+>;
+type Dependencies = NonNullable<Parameters<typeof createServiceCommands>[2]>;
+
+type RuntimeOptions = {
+  readonly dataDir?: string;
+  readonly requireSystemd?: () => void;
+  readonly runStatus?: number;
+  readonly stop?: (units: readonly string[]) => void;
+};
+
+class ExitSignal extends Error {
+  readonly code: number;
+
+  constructor(code: number) {
+    super(`exit ${code}`);
+    this.code = code;
+  }
+}
+
+function runtimeFixture(
+  events: string[],
+  {
+    dataDir = "/srv/iva/data",
+    requireSystemd = () => events.push("runtime.requireSystemd"),
+    runStatus = 0,
+    stop = (units) => events.push(`systemd.stop:${units.join(",")}`),
+  }: RuntimeOptions = {},
+): Runtime {
+  const base = createCliRuntime("/srv/iva");
+  const run: Runtime["run"] = (command, args) => {
+    events.push(`runtime.run:${command}:${args.join("|")}`);
+    return { status: runStatus } as ReturnType<Runtime["run"]>;
+  };
+  return {
+    ...base,
+    ok: (message) => events.push(`runtime.ok:${message}`),
+    warn: (message) => events.push(`runtime.warn:${message}`),
+    bad: (message) => events.push(`runtime.bad:${message}`),
+    step: (message) => events.push(`runtime.step:${message}`),
+    run,
+    systemd: {
+      ...base.systemd,
+      stop,
+    },
+    dataDirAbs: () => {
+      events.push("runtime.dataDirAbs");
+      return dataDir;
+    },
+    requireSystemd,
+  };
+}
+
+function lifecycleFixture(
+  events: string[],
+  {
+    activateUnits = () => events.push("lifecycle.activateUnits"),
+    restartServices = () => events.push("lifecycle.restartServices"),
+  }: Partial<SystemdLifecycle> = {},
+): SystemdLifecycle {
+  return { activateUnits, restartServices };
+}
+
+function dependencyFixture(
+  events: string[],
+  overrides: Partial<Dependencies> = {},
+): Dependencies {
+  return {
+    now: () => {
+      events.push("dependencies.now");
+      return new Date("2026-08-06T12:34:56.789Z");
+    },
+    resetStateTargets: (root, dataDir) => {
+      events.push(`dependencies.resetStateTargets:${root}:${dataDir}`);
+      return [];
+    },
+    quarantinePath: (path, stamp) => {
+      events.push(`dependencies.quarantinePath:${path}:${stamp}`);
+      return null;
+    },
+    exit: (code): never => {
+      events.push(`dependencies.exit:${code}`);
+      throw new ExitSignal(code);
+    },
+    ...overrides,
+  };
+}
+
+void test("factory evaluation is side-effect free", () => {
+  const events: string[] = [];
+
+  createServiceCommands(
+    runtimeFixture(events),
+    lifecycleFixture(events),
+    dependencyFixture(events),
+  );
+
+  assert.deepEqual(events, []);
+});
+
+void test("status preserves command order and ignores non-zero command results", () => {
+  const events: string[] = [];
+  const commands = createServiceCommands(
+    runtimeFixture(events, { runStatus: 7 }),
+    lifecycleFixture(events),
+  );
+
+  commands.cmdStatus();
+
+  assert.deepEqual(events, [
+    "runtime.requireSystemd",
+    "runtime.run:systemctl:--user|status|--no-pager|-n|5|iva.service|iva-telegram-poll.service",
+    "runtime.run:systemctl:--user|list-timers|--no-pager|iva-memory-*|iva-update-check.timer",
+  ]);
+});
+
+void test("restart, start and stop report success only after their lifecycle action", () => {
+  const events: string[] = [];
+  const commands = createServiceCommands(
+    runtimeFixture(events),
+    lifecycleFixture(events),
+  );
+
+  commands.cmdRestart();
+  commands.cmdStart();
+  commands.cmdStop();
+
+  assert.deepEqual(events, [
+    "runtime.requireSystemd",
+    "lifecycle.restartServices",
+    "runtime.ok:Restarted: iva + telegram-poll",
+    "runtime.requireSystemd",
+    "lifecycle.activateUnits",
+    "runtime.ok:Started and enabled at boot",
+    "runtime.requireSystemd",
+    "systemd.stop:iva.service,iva-telegram-poll.service",
+    "runtime.ok:Stopped",
+  ]);
+});
+
+void test("service action failures propagate without printing success", () => {
+  for (const commandName of ["restart", "start", "stop"] as const) {
+    const events: string[] = [];
+    const failure = new Error(`${commandName} failed`);
+    const commands = createServiceCommands(
+      runtimeFixture(events, {
+        stop: () => {
+          events.push("systemd.stop");
+          throw failure;
+        },
+      }),
+      lifecycleFixture(events, {
+        activateUnits: () => {
+          events.push("lifecycle.activateUnits");
+          throw failure;
+        },
+        restartServices: () => {
+          events.push("lifecycle.restartServices");
+          throw failure;
+        },
+      }),
+    );
+
+    const invoke = {
+      restart: commands.cmdRestart,
+      start: commands.cmdStart,
+      stop: commands.cmdStop,
+    }[commandName];
+    assert.throws(invoke, failure);
+    assert.equal(
+      events.some((event) => event.startsWith("runtime.ok:")),
+      false,
+    );
+  }
+});
+
+void test("logs selects only the exact poll token and ignores command results", () => {
+  const events: string[] = [];
+  const commands = createServiceCommands(
+    runtimeFixture(events, { runStatus: 9 }),
+    lifecycleFixture(events),
+  );
+
+  commands.cmdLogs([]);
+  commands.cmdLogs(["--poll"]);
+  commands.cmdLogs(["anything", "poll"]);
+
+  assert.deepEqual(events, [
+    "runtime.requireSystemd",
+    "runtime.run:journalctl:--user|-u|iva.service|-f|-n|50",
+    "runtime.requireSystemd",
+    "runtime.run:journalctl:--user|-u|iva.service|-f|-n|50",
+    "runtime.requireSystemd",
+    "runtime.run:journalctl:--user|-u|iva-telegram-poll.service|-f|-n|50",
+  ]);
+});
+
+void test("reset stops first, uses one stamp in target order and restarts last", () => {
+  const events: string[] = [];
+  const targets = [
+    "/srv/iva/.eve/.workflow-data",
+    "/srv/iva/data/run-status.json",
+    "/srv/iva/data/telegram-queue.json",
+  ];
+  const commands = createServiceCommands(
+    runtimeFixture(events),
+    lifecycleFixture(events),
+    dependencyFixture(events, {
+      resetStateTargets: (root, dataDir) => {
+        events.push(`dependencies.resetStateTargets:${root}:${dataDir}`);
+        return targets;
+      },
+      quarantinePath: (path, stamp) => {
+        events.push(`dependencies.quarantinePath:${path}:${stamp}`);
+        return path.endsWith("run-status.json")
+          ? null
+          : `${path}.trash-${stamp}`;
+      },
+    }),
+  );
+
+  commands.cmdReset();
+
+  const stamp = "2026-08-06T12-34-56-789Z";
+  assert.deepEqual(events, [
+    "runtime.requireSystemd",
+    "runtime.step:Full reset: stopping services…",
+    "systemd.stop:iva.service,iva-telegram-poll.service",
+    "dependencies.now",
+    "runtime.dataDirAbs",
+    "dependencies.resetStateTargets:/srv/iva:/srv/iva/data",
+    `dependencies.quarantinePath:${targets[0]}:${stamp}`,
+    `runtime.ok:.eve/.workflow-data → .eve/.workflow-data.trash-${stamp} — reset state quarantined`,
+    `dependencies.quarantinePath:${targets[1]}:${stamp}`,
+    `dependencies.quarantinePath:${targets[2]}:${stamp}`,
+    `runtime.ok:data/telegram-queue.json → data/telegram-queue.json.trash-${stamp} — reset state quarantined`,
+    "lifecycle.restartServices",
+    "runtime.ok:Restarted: iva + telegram-poll",
+  ]);
+});
+
+void test("empty reset reports empty state before restart success", () => {
+  const events: string[] = [];
+  const commands = createServiceCommands(
+    runtimeFixture(events),
+    lifecycleFixture(events),
+    dependencyFixture(events),
+  );
+
+  commands.cmdReset();
+
+  assert.deepEqual(events.slice(-3), [
+    "runtime.ok:workflow and Telegram control state already empty",
+    "lifecycle.restartServices",
+    "runtime.ok:Restarted: iva + telegram-poll",
+  ]);
+});
+
+void test("stop failure exits before reset state is inspected or restarted", () => {
+  const events: string[] = [];
+  const commands = createServiceCommands(
+    runtimeFixture(events, {
+      stop: () => {
+        events.push("systemd.stop");
+        throw new Error("stop failed");
+      },
+    }),
+    lifecycleFixture(events),
+    dependencyFixture(events),
+  );
+
+  assert.throws(() => commands.cmdReset(), ExitSignal);
+  assert.deepEqual(events, [
+    "runtime.requireSystemd",
+    "runtime.step:Full reset: stopping services…",
+    "systemd.stop",
+    "runtime.bad:stop failed Workflow and Telegram control state left untouched",
+    "dependencies.exit:1",
+  ]);
+});
+
+void test("reset continues after quarantine failure, reports restart first and exits without success", () => {
+  const events: string[] = [];
+  const targets = ["/srv/iva/first", "/srv/iva/second", "/srv/iva/third"];
+  const commands = createServiceCommands(
+    runtimeFixture(events),
+    lifecycleFixture(events, {
+      restartServices: () => {
+        events.push("lifecycle.restartServices");
+        throw new Error("restart failed");
+      },
+    }),
+    dependencyFixture(events, {
+      resetStateTargets: () => targets,
+      quarantinePath: (path, stamp) => {
+        events.push(`dependencies.quarantinePath:${path}:${stamp}`);
+        if (path.endsWith("first")) throw new Error("permission denied");
+        if (path.endsWith("second")) return `${path}.trash-${stamp}`;
+        return null;
+      },
+    }),
+  );
+
+  assert.throws(() => commands.cmdReset(), ExitSignal);
+  const stamp = "2026-08-06T12-34-56-789Z";
+  assert.deepEqual(events.slice(-9), [
+    `dependencies.quarantinePath:${targets[0]}:${stamp}`,
+    "runtime.warn:failed to quarantine first: permission denied",
+    `dependencies.quarantinePath:${targets[1]}:${stamp}`,
+    `runtime.ok:second → second.trash-${stamp} — reset state quarantined`,
+    `dependencies.quarantinePath:${targets[2]}:${stamp}`,
+    "lifecycle.restartServices",
+    "runtime.bad:restart failed",
+    "runtime.bad:Reset INCOMPLETE — old workflow or Telegram control state may still be active",
+    "dependencies.exit:1",
+  ]);
+  assert.equal(
+    events.includes("runtime.ok:Restarted: iva + telegram-poll"),
+    false,
+  );
+});
+
+void test("reset preserves direct message access for null stop and quarantine throws", () => {
+  const stopEvents: string[] = [];
+  const stopCommands = createServiceCommands(
+    runtimeFixture(stopEvents, {
+      stop: () => {
+        // eslint-disable-next-line @typescript-eslint/only-throw-error -- preserve the legacy direct error.message behavior
+        throw null;
+      },
+    }),
+    lifecycleFixture(stopEvents),
+    dependencyFixture(stopEvents),
+  );
+  assert.throws(() => stopCommands.cmdReset(), TypeError);
+  assert.equal(
+    stopEvents.some((event) => event.includes("exit")),
+    false,
+  );
+
+  const quarantineEvents: string[] = [];
+  const quarantineCommands = createServiceCommands(
+    runtimeFixture(quarantineEvents),
+    lifecycleFixture(quarantineEvents),
+    dependencyFixture(quarantineEvents, {
+      resetStateTargets: () => ["/srv/iva/state"],
+      quarantinePath: () => {
+        // eslint-disable-next-line @typescript-eslint/only-throw-error -- preserve the legacy direct error.message behavior
+        throw null;
+      },
+    }),
+  );
+  assert.throws(() => quarantineCommands.cmdReset(), TypeError);
+  assert.equal(quarantineEvents.includes("lifecycle.restartServices"), false);
+});
+
+void test("a Symbol-valued stop error message preserves legacy interpolation failure", () => {
+  const events: string[] = [];
+  const commands = createServiceCommands(
+    runtimeFixture(events, {
+      stop: () => {
+        // eslint-disable-next-line @typescript-eslint/only-throw-error -- preserve the legacy template interpolation boundary
+        throw { message: Symbol("stop failure") };
+      },
+    }),
+    lifecycleFixture(events),
+    dependencyFixture(events),
+  );
+
+  assert.throws(() => commands.cmdReset(), TypeError);
+  assert.equal(
+    events.some((event) => event.includes("exit")),
+    false,
+  );
+});
+
+void test("a falsy null restart throw retains the legacy success path", () => {
+  const events: string[] = [];
+  const commands = createServiceCommands(
+    runtimeFixture(events),
+    lifecycleFixture(events, {
+      restartServices: () => {
+        events.push("lifecycle.restartServices:null");
+        // eslint-disable-next-line @typescript-eslint/only-throw-error -- characterize the legacy truthiness check
+        throw null;
+      },
+    }),
+    dependencyFixture(events),
+  );
+
+  commands.cmdReset();
+
+  assert.deepEqual(events.slice(-3), [
+    "runtime.ok:workflow and Telegram control state already empty",
+    "lifecycle.restartServices:null",
+    "runtime.ok:Restarted: iva + telegram-poll",
+  ]);
+  assert.equal(
+    events.some((event) => event.includes("exit")),
+    false,
+  );
+});
+
+void test("every command requires systemd before its own side effects", () => {
+  for (const commandName of [
+    "status",
+    "restart",
+    "reset",
+    "start",
+    "stop",
+    "logs",
+  ] as const) {
+    const events: string[] = [];
+    const unavailable = new Error("systemd unavailable");
+    const commands = createServiceCommands(
+      runtimeFixture(events, {
+        requireSystemd: () => {
+          events.push("runtime.requireSystemd");
+          throw unavailable;
+        },
+      }),
+      lifecycleFixture(events),
+      dependencyFixture(events),
+    );
+    const invoke = {
+      status: commands.cmdStatus,
+      restart: commands.cmdRestart,
+      reset: commands.cmdReset,
+      start: commands.cmdStart,
+      stop: commands.cmdStop,
+      logs: () => commands.cmdLogs([]),
+    }[commandName];
+
+    assert.throws(invoke, unavailable);
+    assert.deepEqual(events, ["runtime.requireSystemd"]);
+  }
+});
