@@ -678,3 +678,12 @@ the Node event loop is blocked` assertion once. Two later sequential suites hit
   key order from the source JavaScript. `declare` keeps the fields type-only;
   constructor assignments now reproduce the original Rollup and systemd error
   serialization order, covered by direct regression assertions.
+- 2026-08-06 Asia/Tashkent: The earlier PR-2 entries reporting 13 production
+  modules / 11 tests / budget 114 and later 601-test verification are historical
+  pre-boundary and pre-final-review snapshots, not the merge result. The final
+  confirmed scope is 11 production modules, 12 converted test files, three
+  removed declarations, and budget 116. After the last compatibility tests the
+  exact suite is 604 tests, 600 passed, zero failed, and four expected macOS
+  skips; coverage is 73.48% lines, 79.27% branches, and 71.64% functions, a
+  +0.66 / +0.23 / +0.11 percentage-point delta from PR-1. Every remaining local
+  and Python 3.12 gate was repeated successfully on this final tree.
