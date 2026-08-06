@@ -78,8 +78,7 @@ const newWizard = (
   userId: FlowId,
   flow: string,
   extra: Record<string, unknown> = {},
-): WizardState =>
-  flows.start(chatId, userId, flow, extra) as WizardState;
+): WizardState => flows.start(chatId, userId, flow, extra) as WizardState;
 const wizScreen = (
   st: WizardState,
   text: string,
