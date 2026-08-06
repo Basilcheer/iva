@@ -86,10 +86,10 @@ process.env.TELEGRAM_BOT_TOKEN = fakeBotToken(999, "acceptance-default");
 process.env.TELEGRAM_WEBHOOK_SECRET_TOKEN = WEBHOOK_SECRET;
 process.env.TELEGRAM_ALLOWED_USER_IDS = "42";
 process.env.TELEGRAM_POLL_SETTLE_MS = "0";
-const { drainReadyQueueHeads } =
-  (await import("../../scripts/telegram-poll.mjs")) as {
-    drainReadyQueueHeads: DrainReadyQueueHeads;
-  };
+const pollModulePath = "../../scripts/telegram-poll.mjs";
+const { drainReadyQueueHeads } = (await import(pollModulePath)) as {
+  drainReadyQueueHeads: DrainReadyQueueHeads;
+};
 
 const privateUpdate = (updateId: number, text?: string): TestUpdate => ({
   update_id: updateId,
