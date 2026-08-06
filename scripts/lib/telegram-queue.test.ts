@@ -304,7 +304,7 @@ void test("SIGKILL after acknowledgement rename restores the pending original qu
     [
       join(
         import.meta.dirname,
-        "../fixtures/telegram-queue-ack-crash-child.mjs",
+        "../fixtures/telegram-queue-ack-crash-child.ts",
       ),
       file,
       marker,
