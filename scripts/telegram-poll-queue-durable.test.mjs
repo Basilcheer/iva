@@ -7,6 +7,11 @@ import { spawnSync } from "node:child_process";
 
 const ROOT = resolve(import.meta.dirname, "..");
 const HARNESS = join(ROOT, "scripts/fixtures/telegram-poll-queue-harness.mjs");
+const [queueRuntime, routingRuntime, deliverRuntime] = await Promise.all([
+  import("./poller/queue.mjs"),
+  import("./poller/routing.mjs"),
+  import("./poller/deliver.mjs"),
+]);
 
 function makeDataDir(t, label) {
   const path = mkdtempSync(join(tmpdir(), `iva-008-${label}-`));
@@ -47,6 +52,99 @@ function runHarness(
     readFileSync(join(dataDir, "queue-harness-result.json"), "utf8"),
   );
 }
+
+test("direct queue runtime normalizes a namespaced reset token", async () => {
+  const requests = [];
+  const result = await queueRuntime.releaseScopedContinuation(
+    "1:",
+    "telegram:1::",
+    {
+      requestResetImpl: async (request) => {
+        requests.push(request);
+        return { ok: true, status: "reset" };
+      },
+      logImpl: () => {},
+    },
+  );
+
+  assert.deepEqual(result, { ok: true, status: "reset" });
+  assert.deepEqual(requests, [
+    { chatKey: "1:", continuationToken: "1::" },
+  ]);
+});
+
+test("direct routing runtime durably queues a busy private update", async () => {
+  const update = {
+    update_id: 501,
+    message: {
+      message_id: 501,
+      chat: { id: 1, type: "private" },
+      from: { id: 42, is_bot: false },
+      text: "follow-up",
+    },
+  };
+  const calls = [];
+  const result = await routingRuntime.routeMessageUpdate(update, {
+    chatKeyImpl: () => "1:",
+    loadQueueImpl: async () => ({ version: 1, queues: {} }),
+    runningImpl: () => true,
+    inFlight: new Map(),
+    queueCountImpl: () => 0,
+    replyToBotImpl: () => false,
+    shouldQueueImpl: () => true,
+    enqueueImpl: async (key, candidate) => {
+      calls.push(["enqueue", key, candidate]);
+      return { count: 1 };
+    },
+    acknowledgeImpl: async (candidate, count) => {
+      calls.push(["acknowledge", candidate, count]);
+    },
+    deliverImpl: async () => {
+      calls.push(["deliver"]);
+      return true;
+    },
+    logImpl: () => {},
+  });
+
+  assert.equal(result, "queued");
+  assert.deepEqual(calls, [
+    ["enqueue", "1:", update],
+    ["acknowledge", update, 1],
+  ]);
+});
+
+test("direct delivery runtime requires the accepted-route receipt", async (t) => {
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (url, init) => {
+    calls.push({ url, init });
+    return {
+      ok: true,
+      status: 204,
+      headers: {
+        get: (name) =>
+          name === "x-iva-telegram-acceptance" ? "turn" : null,
+      },
+    };
+  };
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  const accepted = await deliverRuntime.deliver({
+    update_id: 601,
+    message: {
+      message_id: 601,
+      chat: { id: 1, type: "private" },
+      from: { id: 42, is_bot: false },
+      text: "hello",
+    },
+  });
+
+  assert.equal(accepted, true);
+  assert.equal(calls.length, 1);
+  assert.match(calls[0].url, /\/eve\/v1\/telegram\/accepted$/);
+});
 
 for (const fault of ["write", "rename"]) {
   test(`busy queue ${fault} failure does not advance Telegram offset`, (t) => {
