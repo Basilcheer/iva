@@ -14,13 +14,11 @@ import {
   rmSync,
   readdirSync,
   chmodSync,
-  statSync,
 } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { join, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir, tmpdir } from "node:os";
-import { createInterface } from "node:readline/promises";
 import { modelSummary } from "../scripts/lib/model-summary.ts";
 import { createTerminalProgress } from "../scripts/lib/progress.ts";
 import { quarantinePath, resetStateTargets } from "../scripts/lib/wf-store.ts";
@@ -29,18 +27,9 @@ import {
   loadTelegramJob,
   removeTelegramJob,
 } from "../scripts/lib/telegram-status.ts";
-import {
-  generateAssistantBearer,
-  isAssistantBearer,
-} from "../scripts/lib/assistant-auth.ts";
-import { parseEnvText, writeEnvAtomicSync } from "../scripts/lib/env-file.ts";
+import { parseEnvText } from "../scripts/lib/env-file.ts";
 import { classifyAgentListeners } from "../scripts/lib/listener-security.ts";
 import { readMemoryMaintenanceReport } from "../scripts/lib/memory-maintenance.ts";
-import {
-  cleanupSystemdUnits,
-  createSystemdControl,
-} from "../scripts/lib/systemd-control.ts";
-import { LEGACY_MEMORY_UNITS } from "../scripts/lib/schedule-migration.ts";
 import {
   applyConfigTransaction,
   probeEveHealth,
@@ -48,7 +37,6 @@ import {
 } from "../scripts/lib/config-transaction.ts";
 import { userbotSyncArgs } from "../scripts/lib/userbot-deps.ts";
 import { probeUserbotHealth } from "../scripts/lib/userbot-health.ts";
-import { validateTimeZone } from "../scripts/lib/timezone.ts";
 import {
   acquireUpdateLock,
   commitThenRunPostCommit,
@@ -56,414 +44,53 @@ import {
   createUpdateTransaction,
   releaseUpdateLock,
 } from "../scripts/lib/update-safety.ts";
+import { createCliRuntime } from "../scripts/cli/runtime.ts";
+import { createCliSystemd } from "../scripts/cli/systemd.ts";
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const ENV_PATH = join(ROOT, ".env");
-const UNIT_DIR = join(homedir(), ".config/systemd/user");
-const NODE = process.execPath;
-const NODE_BIN_DIR = dirname(NODE);
-const NPM = existsSync(join(NODE_BIN_DIR, "npm"))
-  ? join(NODE_BIN_DIR, "npm")
-  : "npm";
-// Children inherit PATH with the node directory — otherwise npm/eve won't be found when called via wrapper.
-const childEnv = {
-  ...process.env,
-  PATH: `${NODE_BIN_DIR}:${process.env.PATH || ""}`,
-};
-
-const SERVICES = ["iva.service", "iva-telegram-poll.service"];
-// daily/weekly/monthly/yearly moved to in-process eve schedules (agent/schedules/memory-*.ts,
-// migrated by scripts/lib/schedule-migration.ts on server start) — only doctor stays an
-// external systemd watchdog, on purpose: it must keep running even if the server itself is
-// wedged. LEGACY_MEMORY_UNITS (imported above) is the single source of truth for the 8 exact
-// retired unit names both this file and the schedule migration tear down.
-const MEMORY_PERIODS = ["doctor"];
-const MEMORY_SERVICES = MEMORY_PERIODS.map((n) => `iva-memory-${n}.service`);
-const MEMORY_TIMERS = MEMORY_PERIODS.map((n) => `iva-memory-${n}.timer`);
-const UPDATE_TIMER = "iva-update-check.timer";
-const TIMERS = [...MEMORY_TIMERS, UPDATE_TIMER];
-
-// Telegram userbot proxy — OPT-IN (not in SERVICES, so `iva update` never tries to start
-// it without API creds). Enabled explicitly via `iva userbot setup`.
-const SVC_USERBOT = "iva-telegram-userbot.service";
-const USERBOT_DIR = join(ROOT, "services/telegram-userbot");
-const VENV_PY = join(USERBOT_DIR, ".venv/bin/python");
-// Proxy bearer secret. A FILE (not .env) read at runtime by both the proxy and iva's
-// connection, so iva needn't restart after the agent sets the proxy up mid-chat.
-const TOKEN_FILE = join(ROOT, "data/telegram-userbot.token");
-
-// Uncommon default port: 3000/8000/8080 are typically taken on a VPS (docker, etc.).
-// Overridden by the IVA_PORT variable in .env; the default ASSISTANT_HOST depends on it too.
-const DEFAULT_PORT = "8723";
-// Former (hardcoded) default before the switch to IVA_PORT — needed to migrate old .env files.
-const OLD_DEFAULT_HOST = "http://127.0.0.1:3000";
-
-const C =
-  process.env.NO_COLOR || process.env.TERM === "dumb"
-    ? { g: "", y: "", r: "", c: "", b: "", d: "", x: "" }
-    : {
-        g: "\x1b[32m",
-        y: "\x1b[33m",
-        r: "\x1b[31m",
-        c: "\x1b[36m",
-        b: "\x1b[1m",
-        d: "\x1b[2m",
-        x: "\x1b[0m",
-      };
-const ok = (m) => console.log(`${C.g}✓${C.x} ${m}`);
-const warn = (m) => console.log(`${C.y}!${C.x} ${m}`);
-const bad = (m) => console.log(`${C.r}✗${C.x} ${m}`);
-const step = (m) => console.log(`${C.b}${C.c}▸ ${m}${C.x}`);
-
-// ── small helpers ────────────────────────────────────────────────────────
-function run(cmd, args, opts = {}) {
-  return spawnSync(cmd, args, {
-    cwd: ROOT,
-    stdio: "inherit",
-    env: childEnv,
-    ...opts,
-  });
-}
-function cap(cmd, args, opts = {}) {
-  const r = spawnSync(cmd, args, {
-    cwd: ROOT,
-    encoding: "utf8",
-    env: childEnv,
-    ...opts,
-  });
-  return {
-    code: r.status ?? 1,
-    out: (r.stdout || "").trim(),
-    err: (r.stderr || "").trim(),
-  };
-}
-const hasSystemd = () => !!cap("sh", ["-c", "command -v systemctl"]).out;
-const scQ = (...args) => cap("systemctl", ["--user", ...args]);
-const systemd = createSystemdControl({ run: (args) => scQ(...args) });
-const gitHead = () => cap("git", ["rev-parse", "--short", "HEAD"]).out;
-
-function readEnv() {
-  const env = {};
-  if (!existsSync(ENV_PATH)) return env;
-  for (const line of readFileSync(ENV_PATH, "utf8").split("\n")) {
-    const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$/);
-    if (m) env[m[1]] = m[2].replace(/^["']|["']$/g, "");
-  }
-  return env;
-}
-
-// Абсолютный путь к каталогу data (тот же, что видит агент из cwd=ROOT). Абсолютный
-// ASSISTANT_DATA_DIR берём как есть, относительный — от ROOT (как vault-путь ниже).
-function dataDirAbs(env = readEnv()) {
-  const d = env.ASSISTANT_DATA_DIR || "data";
-  return d.startsWith("/") ? d : join(ROOT, d);
-}
-
-async function confirm(question, def = false) {
-  if (!process.stdin.isTTY) return def;
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  const a = (await rl.question(`${question} ${def ? "[Y/n]" : "[y/N]"} `))
-    .trim()
-    .toLowerCase();
-  rl.close();
-  return a ? a.startsWith("y") : def;
-}
-
-function requireSystemd() {
-  if (!hasSystemd()) {
-    bad("systemd unavailable — this command only works on a Linux server");
-    process.exit(1);
-  }
-}
-
-// Existing installs gain the server-side bearer on their next unit refresh/update.
-// The same migration also repairs .env permissions because it contains every runtime secret.
-function ensureAssistantBearer({ quiet = false } = {}) {
-  if (!existsSync(ENV_PATH)) return false;
-  let changed = false;
-  const bearer = (readEnv().ASSISTANT_BEARER || "").trim();
-  const bearerLines =
-    readFileSync(ENV_PATH, "utf8").match(/^\s*ASSISTANT_BEARER\s*=/gm)
-      ?.length || 0;
-  if (!isAssistantBearer(bearer)) {
-    writeEnvVars({ ASSISTANT_BEARER: generateAssistantBearer() });
-    changed = true;
-  } else if (bearerLines !== 1) {
-    writeEnvVars({ ASSISTANT_BEARER: bearer });
-    changed = true;
-  }
-  if ((statSync(ENV_PATH).mode & 0o777) !== 0o600) {
-    chmodSync(ENV_PATH, 0o600);
-    changed = true;
-  }
-  if (changed && !quiet) ok(".env protected and internal bearer configured");
-  return changed;
-}
-
-// Same regex-validated timezone both writeUnits() (substituted into the deploy/ timer
-// templates' __TIMEZONE__) and ivaServiceBody() (Environment=TZ=, since the eve schedules
-// in agent/schedules/memory-*.ts carry no timezone of their own and fire in the process's
-// local time) need — one place so the fallback/validation rule can't drift between them.
-function configuredTimezone() {
-  const raw = (readEnv().ASSISTANT_TIMEZONE || "UTC").trim();
-  if (/^[A-Za-z0-9_+/-]+$/.test(raw)) {
-    const timezone = validateTimeZone(raw);
-    if (timezone) return timezone;
-  }
-  warn(`invalid ASSISTANT_TIMEZONE=${JSON.stringify(raw)}; using UTC`);
-  return "UTC";
-}
-
-// ── systemd units: single source of truth ─────────────────────────────────
-function ivaServiceBody() {
-  // PATH with the node directory (= npm global bin under nvm), Restart=always.
-  const port = (readEnv().IVA_PORT || DEFAULT_PORT).trim();
-  const timezone = configuredTimezone();
-  return [
-    "[Unit]",
-    "Description=Iva",
-    "After=network-online.target",
-    "",
-    "[Service]",
-    // Everything eve creates (vault, transcripts, data/) must not be world-readable:
-    // the system umask (022 on Ubuntu) would expose it to every user on the box.
-    "UMask=0077",
-    `WorkingDirectory=${ROOT}`,
-    `EnvironmentFile=${ROOT}/.env`,
-    // Стартуем через `eve start`, а НЕ напрямую `node .output/server/index.mjs`: eve start
-    // вызывает prewarmBuiltAppSandboxes() и собирает шаблон песочницы ДО приёма трафика. Сырой
-    // index.mjs prewarm не делает → первое же вложение падает SandboxTemplateNotProvisionedError
-    // (шаблона нет в .eve/sandbox-cache). Ключ шаблона — контент-хеш, после iva update он меняется,
-    // поэтому provision обязан идти на каждом старте, а не разово. eve start остаётся foreground.
-    // --host: bind to loopback only. eve's auth strategy localDev() treats a request as local
-    // by the hostname of request.url — i.e. by the client's own Host header — so a server bound
-    // to 0.0.0.0 hands local-dev rights (and with them a sandbox-free `bash` on the host) to
-    // anyone who can reach the port and sends `Host: 127.0.0.1`. The port is only ever consumed
-    // locally: telegram-poll, the sweep and the memory scripts all talk to 127.0.0.1.
-    // Env is not enough here — `eve start` takes options.host ?? "0.0.0.0" and overwrites
-    // HOST/NITRO_HOST for the spawned .output/server/index.mjs, so the flag is what binds.
-    `ExecStart=${NODE} ${ROOT}/node_modules/eve/bin/eve.js start --host 127.0.0.1`,
-    `Environment=PORT=${port}`,
-    `Environment=TZ=${timezone}`,
-    `Environment=PATH=${NODE_BIN_DIR}:%h/.local/bin:/usr/local/bin:/usr/bin:/bin`,
-    "Environment=AGENT_BROWSER_MAX_OUTPUT=24000",
-    "Restart=always",
-    "",
-    "[Install]",
-    "WantedBy=default.target",
-    "",
-  ].join("\n");
-}
-
-// One-time (idempotent) perms migration for installs created before UMask=0077: the
-// secrets file and the data dir were world-readable under the default umask 022.
-// Runs from writeUnits — i.e. on every install/update — so old installs self-heal.
-function hardenPerms() {
-  // Каждая цель — независимо: сбой на .env не должен отменять миграцию data/ (и наоборот).
-  // Предупреждаем, но установку юнитов не срываем: юниты сами несут UMask=0077, а сорванный
-  // writeUnits оставил бы систему вовсе без юнитов — хуже, чем старые права.
-  try {
-    if (existsSync(ENV_PATH)) chmodSync(ENV_PATH, 0o600);
-  } catch (e) {
-    warn(`perms migration (.env) failed: ${e.message}`);
-  }
-  try {
-    const data = dataDirAbs();
-    if (existsSync(data)) chmodSync(data, 0o700);
-  } catch (e) {
-    warn(`perms migration (data/) failed: ${e.message}`);
-  }
-  // Стор воркфлоу несёт транскрипты диалогов, vault — саму память; оба старше UMask-фикса
-  // могли быть созданы world-readable. chmod только верхнего уровня (закрывает traversal).
-  const vaultRel = readEnv().ASSISTANT_VAULT_DIR || "vault";
-  const vaultDir = vaultRel.startsWith("/") ? vaultRel : join(ROOT, vaultRel);
-  for (const p of [
-    join(ROOT, ".eve"),
-    join(ROOT, ".workflow-data"),
-    vaultDir,
-  ]) {
-    try {
-      if (existsSync(p)) chmodSync(p, 0o700);
-    } catch (e) {
-      warn(`perms migration (${relative(ROOT, p)}) failed: ${e.message}`);
-    }
-  }
-}
-
-// Writes iva.service + all deploy/iva-*.{service,timer} with placeholder substitution. daemon-reload.
-function writeUnits({ ensureBearer = true } = {}) {
-  hardenPerms();
-  if (ensureBearer) ensureAssistantBearer({ quiet: true });
-  mkdirSync(UNIT_DIR, { recursive: true });
-  writeFileSync(join(UNIT_DIR, "iva.service"), ivaServiceBody());
-  const written = ["iva.service"];
-  const deploy = join(ROOT, "deploy");
-  const timezone = configuredTimezone();
-  for (const f of readdirSync(deploy)) {
-    if (!/^iva-.*\.(service|timer)$/.test(f)) continue;
-    const tpl = readFileSync(join(deploy, f), "utf8")
-      .replaceAll("__PROJECT_DIR__", ROOT)
-      .replaceAll("__NODE_BIN__", NODE)
-      .replaceAll("__PYTHON_BIN__", VENV_PY)
-      .replaceAll("__TIMEZONE__", timezone);
-    writeFileSync(join(UNIT_DIR, f), tpl);
-    written.push(f);
-  }
-  if (hasSystemd()) systemd.daemonReload();
-  removeLegacyMemoryUnits();
-  return written;
-}
-
-// Existing installs may still carry the 8 retired iva-memory-{daily,weekly,monthly,yearly}
-// unit files (deploy/ no longer ships them, so the copy loop above never overwrites or
-// removes them on its own). `iva update`/`iva doctor` both call writeUnits() on every run,
-// so this self-heals every existing install onto eve schedules without a dedicated
-// migration command — by exact name only, so an unrelated self-host timer is never touched.
-// Guards against tearing down the old systemd safety net while running a BUILD that
-// predates the eve-schedules migration — e.g. .output/ wasn't rebuilt yet after an
-// `iva update` pulled this change (writeUnits() runs before the build step in some
-// call paths). Without this check, a stale build would lose its memory rollups
-// entirely (old timers gone, new eve schedules not actually in the bundle) until the
-// next successful build. A shallow recursive text scan for markers unique to the
-// COMPILED schedules is enough — bare "memory-daily" is NOT unique enough: instrumentation.ts
-// always imports schedule-migration.ts, whose LEGACY_MEMORY_UNITS array contains the
-// string "iva-memory-daily.service", which itself contains "memory-daily" as a substring
-// — that would make the marker match on every build regardless of whether the schedules
-// themselves actually compiled. Nitro's schedule-task wrapper embeds each schedule's own
-// source path ("schedules/memory-daily.ts") in its description string, which cannot
-// appear anywhere else.
-//
-// ALL FOUR memory-* markers are required, not just one: a partial build (e.g. one
-// schedule file failed to compile, or a build got interrupted mid-write) could contain
-// memory-daily.ts's marker while missing weekly/monthly/yearly — a single-marker check
-// would then let removeLegacyMemoryUnits() tear down the OLD systemd timers for periods
-// that have no working in-process replacement in THIS build, losing those rollups
-// entirely rather than just delaying the migration one more boot.
-const BUILD_SCHEDULE_MARKERS = [
-  "schedules/memory-daily.ts",
-  "schedules/memory-weekly.ts",
-  "schedules/memory-monthly.ts",
-  "schedules/memory-yearly.ts",
-];
-const BUILD_SCAN_MAX_FILE_BYTES = 15_000_000;
-function buildHasSchedules() {
-  const outputServer = join(ROOT, ".output/server");
-  if (!existsSync(outputServer)) return false;
-  const remaining = new Set(BUILD_SCHEDULE_MARKERS);
-  try {
-    for (const rel of readdirSync(outputServer, { recursive: true })) {
-      if (remaining.size === 0) break;
-      const full = join(outputServer, rel);
-      let stat;
-      try {
-        stat = statSync(full);
-      } catch {
-        continue;
-      }
-      if (!stat.isFile() || stat.size > BUILD_SCAN_MAX_FILE_BYTES) continue;
-      // .output/server is the WHOLE server bundle plus every vendored dependency — a
-      // miss (the common case: doctor/writeUnits runs on every `iva update`) would
-      // otherwise mean synchronously reading tens to hundreds of MB. The markers can only
-      // ever land in Nitro's own compiled JS/JSON output, never in a vendored asset.
-      if (!/\.(mjs|cjs|js|json)$/.test(rel)) continue;
-      let content;
-      try {
-        content = readFileSync(full); // Buffer — no need to decode as UTF-8 just to substring-search
-      } catch {
-        continue; // unreadable — not where a schedule name would live anyway
-      }
-      // Markers can land in different files (each schedule may compile to its own
-      // _virtual/*.schedule.mjs, or all get inlined into one bundle) — check every
-      // still-missing marker against every file rather than stopping at the first hit.
-      for (const marker of remaining) {
-        if (content.includes(marker)) remaining.delete(marker);
-      }
-    }
-  } catch {
-    return false;
-  }
-  return remaining.size === 0;
-}
-
-function removeLegacyMemoryUnits() {
-  if (!hasSystemd()) return [];
-  const units = LEGACY_MEMORY_UNITS.filter((u) =>
-    existsSync(join(UNIT_DIR, u)),
-  );
-  if (!units.length) return [];
-  if (!buildHasSchedules()) {
-    warn(
-      "skipping legacy memory-timer cleanup — the current build doesn't contain the eve schedules yet (rebuild with `iva doctor` or `npm run build`, then it will run automatically)",
-    );
-    return [];
-  }
-  try {
-    return cleanupSystemdUnits({
-      units,
-      disable: (unit) => systemd.disableNow([unit]),
-      remove: (unit) => rmSync(join(UNIT_DIR, unit)),
-      reload: () => systemd.daemonReload(),
-      reset: () => systemd.resetFailed(),
-    });
-  } catch (e) {
-    warn(`legacy memory-timer cleanup incomplete: ${e.message}`);
-    return units;
-  }
-}
-
-function activateUnits() {
-  systemd.activate([...SERVICES, ...TIMERS]);
-}
-
-function removeUnits() {
-  if (!existsSync(UNIT_DIR)) return [];
-  const units = readdirSync(UNIT_DIR).filter((f) =>
-    /^iva.*\.(service|timer)$/.test(f),
-  );
-  return cleanupSystemdUnits({
-    units,
-    disable: (unit) => systemd.disableNow([unit]),
-    remove: (unit) => rmSync(join(UNIT_DIR, unit)),
-    reload: () => systemd.daemonReload(),
-    reset: () => systemd.resetFailed(),
-  });
-}
-
-// Migrate old installs to IVA_PORT. Idempotent: on the first `iva update`
-// after switching to the new scheme it guarantees the variable and keeps the server
-// (Environment=PORT=$IVA_PORT) from drifting away from clients (whose default is ASSISTANT_HOST).
-function migrateEnv({ quiet = false } = {}) {
-  if (!existsSync(ENV_PATH)) return false;
-  const env = readEnv();
-  if (env.IVA_PORT) return false; // already on the new scheme — leave it alone
-  const host = env.ASSISTANT_HOST || "";
-  const local = host.match(/^https?:\/\/(?:127\.0\.0\.1|localhost):(\d+)\/?$/i);
-  const isOldDefault = host === OLD_DEFAULT_HOST;
-  // old default :3000 → new default 8723; custom local host → its port; otherwise the default
-  const port = isOldDefault ? DEFAULT_PORT : local ? local[1] : DEFAULT_PORT;
-  let raw =
-    readFileSync(ENV_PATH, "utf8").replace(/\n*$/, "\n") + `IVA_PORT=${port}\n`;
-  // don't leave a stale :3000 in ASSISTANT_HOST — otherwise clients get stuck on the taken port
-  if (isOldDefault)
-    raw = raw.replace(
-      /^(\s*ASSISTANT_HOST\s*=).*$/m,
-      `$1http://127.0.0.1:${port}`,
-    );
-  writeEnvAtomicSync(ENV_PATH, raw);
-  if (!quiet)
-    ok(
-      `.env migrated → IVA_PORT=${port}${isOldDefault ? ", ASSISTANT_HOST moved off :3000" : ""}`,
-    );
-  return true;
-}
-
-// Any restart via `iva` first regenerates the unit → Environment=PORT always equals
-// the current IVA_PORT from .env. Without this, editing IVA_PORT + restart would leave the server
-// on the old port (the unit was already baked) while clients read the new one — the same desync.
-function restartServices() {
-  writeUnits();
-  systemd.restart(SERVICES);
-}
+const runtime = createCliRuntime(
+  join(dirname(fileURLToPath(import.meta.url)), ".."),
+);
+const {
+  ROOT,
+  ENV_PATH,
+  UNIT_DIR,
+  NODE,
+  NPM,
+  childEnv,
+  SERVICES,
+  MEMORY_SERVICES,
+  MEMORY_TIMERS,
+  UPDATE_TIMER,
+  TIMERS,
+  SVC_USERBOT,
+  USERBOT_DIR,
+  VENV_PY,
+  TOKEN_FILE,
+  DEFAULT_PORT,
+  C,
+  ok,
+  warn,
+  bad,
+  step,
+  run,
+  cap,
+  hasSystemd,
+  systemd,
+  gitHead,
+  readEnv,
+  dataDirAbs,
+  confirm,
+  requireSystemd,
+  writeEnvVars,
+} = runtime;
+const {
+  ensureAssistantBearer,
+  writeUnits,
+  activateUnits,
+  removeUnits,
+  migrateEnv,
+  restartServices,
+} = createCliSystemd(runtime);
 
 // ANSI tree like during install. The only source of the art is install.sh (heredoc
 // IVA_TREE); we read it from there so as not to spawn a copy. In a real terminal we add
@@ -1546,34 +1173,6 @@ function ensureUserbotVenv({
     throw new Error(
       `userbot: зависимости не импортируются — ${check.err.split("\n").pop() || "проверь requirements"}`,
     );
-}
-
-// Update-or-append keys in .env (dedup). Used to write Telegram api_id/api_hash
-// without the agent hand-editing .env or leaking secrets through argv.
-function writeEnvVars(vars) {
-  for (const [key, value] of Object.entries(vars)) {
-    if (/[\r\n]/.test(String(value)))
-      throw new Error(`env value for ${key} contains a newline`);
-  }
-  const raw = existsSync(ENV_PATH) ? readFileSync(ENV_PATH, "utf8") : "";
-  const pending = new Map(
-    Object.entries(vars).map(([key, value]) => [key, String(value)]),
-  );
-  const out = [];
-  for (const line of raw.split(/\r?\n/)) {
-    const key = line.match(/^\s*([A-Z0-9_]+)\s*=/)?.[1];
-    if (key && Object.hasOwn(vars, key)) {
-      if (pending.has(key)) {
-        out.push(`${key}=${pending.get(key)}`);
-        pending.delete(key);
-      }
-      continue; // drop duplicate occurrences
-    }
-    out.push(line);
-  }
-  while (out.length && out.at(-1) === "") out.pop();
-  for (const [key, value] of pending) out.push(`${key}=${value}`);
-  writeEnvAtomicSync(ENV_PATH, `${out.join("\n")}\n`);
 }
 
 // Generate the proxy bearer once, into a 0600 file both sides read at runtime.

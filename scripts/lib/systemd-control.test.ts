@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import {
   chmod,
+  cp,
   copyFile,
   mkdir,
   mkdtemp,
@@ -42,13 +43,17 @@ async function fixture(t: TestContext) {
   const envPath = join(project, ".env");
   const userbotDir = join(project, "services/telegram-userbot");
   await mkdir(join(project, "bin"), { recursive: true });
+  await mkdir(join(project, "scripts"), { recursive: true });
   await mkdir(join(project, ".output/server"), { recursive: true });
   await mkdir(join(userbotDir, ".venv/bin"), { recursive: true });
   await mkdir(home, { recursive: true });
   await mkdir(fakeBin, { recursive: true });
   await mkdir(state, { recursive: true });
   await copyFile(join(ROOT, "bin/iva.mjs"), join(project, "bin/iva.mjs"));
-  await symlink(join(ROOT, "scripts"), join(project, "scripts"), "dir");
+  await cp(join(ROOT, "scripts/cli"), join(project, "scripts/cli"), {
+    recursive: true,
+  });
+  await symlink(join(ROOT, "scripts/lib"), join(project, "scripts/lib"), "dir");
   await symlink(join(ROOT, "deploy"), join(project, "deploy"), "dir");
   await writeFile(join(project, ".output/server/index.mjs"), "");
   await copyFile(

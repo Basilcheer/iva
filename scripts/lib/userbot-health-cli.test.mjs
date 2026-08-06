@@ -4,6 +4,7 @@ import { createServer } from "node:http";
 import test from "node:test";
 import {
   chmod,
+  cp,
   copyFile,
   mkdir,
   mkdtemp,
@@ -40,10 +41,14 @@ test("iva userbot diagnose --json returns the shared ready state without secrets
   const fakeBin = join(dir, "bin");
   const token = "diagnose-secret-token";
   await mkdir(join(project, "bin"), { recursive: true });
+  await mkdir(join(project, "scripts"), { recursive: true });
   await mkdir(join(project, "data"), { recursive: true });
   await mkdir(fakeBin, { recursive: true });
   await copyFile(join(ROOT, "bin/iva.mjs"), join(project, "bin/iva.mjs"));
-  await symlink(join(ROOT, "scripts"), join(project, "scripts"), "dir");
+  await cp(join(ROOT, "scripts/cli"), join(project, "scripts/cli"), {
+    recursive: true,
+  });
+  await symlink(join(ROOT, "scripts/lib"), join(project, "scripts/lib"), "dir");
   await writeFile(join(project, "data/telegram-userbot.token"), token);
 
   const systemctl = join(fakeBin, "systemctl");

@@ -308,13 +308,24 @@ test("systemd templates schedule a persistent 10:00 local check and lifecycle co
     "utf8",
   );
   const cli = readFileSync(join(root, "bin", "iva.mjs"), "utf8");
+  const cliRuntime = readFileSync(
+    join(root, "scripts", "cli", "runtime.ts"),
+    "utf8",
+  );
+  const cliSystemd = readFileSync(
+    join(root, "scripts", "cli", "systemd.ts"),
+    "utf8",
+  );
   const installer = readFileSync(join(root, "install.sh"), "utf8");
   assert.match(timer, /OnCalendar=\*-\*-\* 10:00:00 __TIMEZONE__/);
   assert.match(timer, /Persistent=true/);
   assert.match(service, /scripts\/check-update\.mjs/);
   assert.match(service, /EnvironmentFile=__PROJECT_DIR__\/\.env/);
-  assert.match(cli, /const TIMERS = \[\.\.\.MEMORY_TIMERS, UPDATE_TIMER\]/);
-  assert.match(cli, /replaceAll\("__TIMEZONE__", timezone\)/);
+  assert.match(
+    cliRuntime,
+    /const TIMERS = \[\.\.\.MEMORY_TIMERS, UPDATE_TIMER\]/,
+  );
+  assert.match(cliSystemd, /replaceAll\("__TIMEZONE__", timezone\)/);
   assert.match(cli, /systemd\.activate\(\[UPDATE_TIMER\]\)/);
   assert.match(installer, /bin\/iva\.mjs" _activate-units/);
   assert.match(

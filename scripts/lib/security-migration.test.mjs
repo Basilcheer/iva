@@ -3,6 +3,7 @@ import test from "node:test";
 import { spawnSync } from "node:child_process";
 import {
   chmod,
+  cp,
   copyFile,
   mkdir,
   mkdtemp,
@@ -28,10 +29,14 @@ test("old install migration deduplicates a stable bearer and writes a loopback u
   const home = join(dir, "home");
   const fakeBin = join(dir, "bin");
   await mkdir(join(project, "bin"), { recursive: true });
+  await mkdir(join(project, "scripts"), { recursive: true });
   await mkdir(home, { recursive: true });
   await mkdir(fakeBin, { recursive: true });
   await copyFile(join(ROOT, "bin/iva.mjs"), join(project, "bin/iva.mjs"));
-  await symlink(join(ROOT, "scripts"), join(project, "scripts"), "dir");
+  await cp(join(ROOT, "scripts/cli"), join(project, "scripts/cli"), {
+    recursive: true,
+  });
+  await symlink(join(ROOT, "scripts/lib"), join(project, "scripts/lib"), "dir");
   await symlink(join(ROOT, "deploy"), join(project, "deploy"), "dir");
 
   const envPath = join(project, ".env");

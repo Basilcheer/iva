@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import {
   chmod,
+  cp,
   copyFile,
   mkdir,
   mkdtemp,
@@ -37,10 +38,14 @@ async function createCliFixture(t: TestContext): Promise<CliFixture> {
   const fakeBin = join(dir, "bin");
   const systemctlLog = join(dir, "systemctl.log");
   await mkdir(join(project, "bin"), { recursive: true });
+  await mkdir(join(project, "scripts"), { recursive: true });
   await mkdir(home, { recursive: true });
   await mkdir(fakeBin, { recursive: true });
   await copyFile(join(ROOT, "bin/iva.mjs"), join(project, "bin/iva.mjs"));
-  await symlink(join(ROOT, "scripts"), join(project, "scripts"), "dir");
+  await cp(join(ROOT, "scripts/cli"), join(project, "scripts/cli"), {
+    recursive: true,
+  });
+  await symlink(join(ROOT, "scripts/lib"), join(project, "scripts/lib"), "dir");
   await symlink(join(ROOT, "deploy"), join(project, "deploy"), "dir");
 
   const fakeSystemctl = join(fakeBin, "systemctl");
