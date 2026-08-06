@@ -1,8 +1,8 @@
 // CI guard for the systemd-timers -> eve-schedules migration (see CHANGELOG.md
-// Unreleased, docs/deploy.md, scripts/lib/schedule-migration.mjs): catches a future
+// Unreleased, docs/deploy.md, scripts/lib/schedule-migration.ts): catches a future
 // change that accidentally reintroduces one of the retired deploy/ unit files, or
 // silently changes the shape of agent/schedules/ (a stray extra/missing file there
-// changes what `eve info` reports and what schedule-migration.mjs's catch-up covers).
+// changes what `eve info` reports and what schedule-migration.ts's catch-up covers).
 import { strict as assert } from "node:assert";
 import test from "node:test";
 import { readdirSync } from "node:fs";
@@ -19,7 +19,7 @@ test("deploy/ contains none of the 8 retired iva-memory-{daily,weekly,monthly,ye
   assert.deepEqual(
     retired,
     [],
-    "these units moved to agent/schedules/*.ts — see scripts/lib/schedule-migration.mjs",
+    "these units moved to agent/schedules/*.ts — see scripts/lib/schedule-migration.ts",
   );
   // The doctor timer is the one memory-related unit that stays on systemd on purpose.
   assert.ok(files.includes("iva-memory-doctor.service"));

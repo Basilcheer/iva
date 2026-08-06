@@ -1,7 +1,74 @@
+/* eslint-disable @typescript-eslint/no-floating-promises -- Node's test runner owns registration promises. */
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createFlows } from "../tg-flow.ts";
-import { createMenu } from "./index.mjs";
+
+type Params = {
+  message_id?: number;
+  text?: string;
+  reply_markup?: unknown;
+  [key: string]: unknown;
+};
+type Call = { method: string; params: Params };
+type AwaitText = {
+  kind: string;
+  secret: boolean;
+  data: Record<string, unknown>;
+};
+type MenuState = {
+  flow: string;
+  msgId: number;
+  screen: string;
+  page: number;
+  awaitText: AwaitText | null;
+};
+type FlowStore = { get: (chatId: number, userId: string) => MenuState | null };
+type Menu = {
+  open: (chatId: number, userId: string) => Promise<MenuState>;
+  onCallback: (callback: Callback) => Promise<boolean>;
+  onText: (message: TextMessage, state: MenuState) => Promise<void>;
+};
+type Callback = {
+  id: string;
+  from: { id: string };
+  message: { chat: { id: number }; message_id: number };
+  data: string;
+};
+type TextMessage = {
+  chat: { id: number };
+  from: { id: number };
+  message_id: number;
+  text: string;
+};
+type ScreenContext = {
+  backRow: (screen: string) => Array<Record<string, unknown>>;
+  show: (state: MenuState, screen: string) => Promise<void>;
+};
+type Screen = {
+  parent: string | null;
+  render: (
+    state: MenuState,
+    context: ScreenContext,
+  ) => { text: string; rows: Array<Array<Record<string, unknown>>> };
+  on: (verb: string, args: string[]) => void;
+  texts: {
+    demo: (
+      text: string,
+      message: unknown,
+      state: MenuState,
+      context: ScreenContext,
+    ) => Promise<void>;
+  };
+};
+type Log = {
+  render: string[];
+  on: Array<{ sid: string; verb: string; args: string[] }>;
+  texts: Array<{ sid: string; text: string }>;
+};
+const indexModulePath: string = "./index.mjs";
+const { createMenu } = (await import(indexModulePath)) as {
+  createMenu: (options: Record<string, unknown>) => Menu;
+};
 
 // Тестируем ЛОГИКУ движка (парс грамматики, stale-политика, allowlist, close) на фейковом
 // реестре экранов — так тест не зависит от контента реальных экранов (в т.ч. тех, что пишет
@@ -9,39 +76,39 @@ import { createMenu } from "./index.mjs";
 
 // Мок Bot API: копит вызовы, sendMessage выдаёт растущий message_id (как tg-flow.test).
 function makeTg() {
-  const calls = [];
+  const calls: Call[] = [];
   let auto = 100;
-  const tg = async (method, params) => {
+  const tg = (method: string, params: Params) => {
     calls.push({ method, params });
     if (method === "sendMessage")
-      return { ok: true, result: { message_id: auto++ } };
-    return { ok: true, result: {} };
+      return Promise.resolve({ ok: true, result: { message_id: auto++ } });
+    return Promise.resolve({ ok: true, result: { message_id: auto } });
   };
   return { tg, calls };
 }
 
 // Фейковые экраны: пишут в log каждый вызов render/on/texts, чтобы проверить диспатч.
 function fakeScreens() {
-  const log = { render: [], on: [], texts: [] };
-  const mk = (sid, parent) => ({
+  const log: Log = { render: [], on: [], texts: [] };
+  const mk = (sid: string, parent: string | null): Screen => ({
     parent,
-    render(st, ctx) {
+    render(st: MenuState, ctx: ScreenContext) {
       log.render.push(st.screen);
       return { text: `[${st.screen}#${st.page}]`, rows: [ctx.backRow("r")] };
     },
-    on(verb, args) {
+    on(verb: string, args: string[]) {
       log.on.push({ sid, verb, args: [...args] });
     },
     texts: {
-      demo(text, msg, st, ctx) {
+      demo(text: string, _msg: unknown, st: MenuState, ctx: ScreenContext) {
         log.texts.push({ sid, text });
         st.awaitText = null;
         return ctx.show(st, sid);
       },
     },
   });
-  const screens = {};
-  for (const [sid, parent] of [
+  const screens: Record<string, Screen> = {};
+  const screenParents: Array<[string, string | null]> = [
     ["r", null],
     ["srch", "r"],
     ["lang", "r"],
@@ -52,32 +119,42 @@ function fakeScreens() {
     ["cron", "r"],
     ["sk", "r"],
     ["st", "r"],
-  ]) {
+  ];
+  for (const [sid, parent] of screenParents) {
     screens[sid] = mk(sid, parent);
   }
   return { screens, log };
 }
 
-function setup({ allowed = new Set(["20"]) } = {}) {
+function setup({ allowed = new Set(["20"]) }: { allowed?: Set<string> } = {}) {
   const { tg, calls } = makeTg();
-  const flows = createFlows({ tg });
+  const flows = createFlows({ tg }) as unknown as FlowStore;
   const { screens, log } = fakeScreens();
-  const modelCalls = [];
-  const thinkCalls = [];
-  const replies = [];
+  const modelCalls: Array<{
+    chatId: number;
+    from: string;
+    opts: { msgId: number };
+  }> = [];
+  const thinkCalls: Array<{
+    chatId: number;
+    from: string;
+    opts: { msgId: number };
+  }> = [];
+  const replies: Array<{ chatId: number; text: string }> = [];
   const deps = {
     envPath: "/nonexistent/.env",
     dataDir: "/nonexistent/data",
     root: "/nonexistent",
-    sc: async () => true,
-    reply: async (chatId, text) => replies.push({ chatId, text }),
-    deliver: async () => {},
+    sc: () => Promise.resolve(true),
+    reply: (chatId: number, text: string) =>
+      Promise.resolve(replies.push({ chatId, text })),
+    deliver: () => Promise.resolve(),
     log: () => {},
     allowed,
-    handleModelCmd: async (chatId, from, opts) =>
-      modelCalls.push({ chatId, from, opts }),
-    handleThinkCmd: async (chatId, from, opts) =>
-      thinkCalls.push({ chatId, from, opts }),
+    handleModelCmd: (chatId: number, from: string, opts: { msgId: number }) =>
+      Promise.resolve(modelCalls.push({ chatId, from, opts })),
+    handleThinkCmd: (chatId: number, from: string, opts: { msgId: number }) =>
+      Promise.resolve(thinkCalls.push({ chatId, from, opts })),
   };
   const menu = createMenu({ flows, tg, deps, screens });
   return {
@@ -94,9 +171,9 @@ function setup({ allowed = new Set(["20"]) } = {}) {
 }
 
 const cb = (
-  data,
+  data: string,
   { from = "20", chat = 10, messageId = 100, id = "cq" } = {},
-) => ({
+): Callback => ({
   id,
   from: { id: from },
   message: { chat: { id: chat }, message_id: messageId },
@@ -198,7 +275,7 @@ test("stale: нет стейта, data-верб -> «устарело» (editMes
   assert.equal(flows.get(10, "20"), null); // стейт не создан
   assert.equal(log.on.length, 0); // экран не тронут
   const edit = calls.find((c) => c.method === "editMessageText");
-  assert.ok(edit && /устарело|expired/i.test(edit.params.text));
+  assert.ok(edit && /устарело|expired/i.test(edit.params.text ?? ""));
 });
 
 test("stale: msgId mismatch на data-верб -> «устарело», экран не тронут", async () => {
@@ -212,7 +289,7 @@ test("stale: msgId mismatch на data-верб -> «устарело», экра
     calls.some(
       (c) =>
         c.method === "editMessageText" &&
-        /устарело|expired/i.test(c.params.text),
+        /устарело|expired/i.test(c.params.text ?? ""),
     ),
   );
 });
@@ -222,6 +299,7 @@ test("stale: msgId mismatch на o-верб -> усыновляет новое �
   await menu.open(10, "20");
   await menu.onCallback(cb("iva_menu:st:o", { messageId: 777 }));
   const st = flows.get(10, "20");
+  assert.ok(st);
   assert.equal(st.msgId, 777);
   assert.equal(st.screen, "st");
 });
@@ -315,7 +393,7 @@ test("onText не-secret: сообщение НЕ удаляется, обраб
     st,
   );
   assert.ok(!calls.some((c) => c.method === "deleteMessage"));
-  assert.equal(log.texts.at(-1).text, "мой ответ");
+  assert.equal(log.texts.at(-1)?.text, "мой ответ");
 });
 
 test("onText: команда прерывает ожидание (flows.end), обработчик НЕ зван", async () => {

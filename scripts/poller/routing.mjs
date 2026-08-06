@@ -23,7 +23,7 @@ import {
   DIRECT_ACCEPTANCE_TIMEOUT_MS,
   SETTLE_MS,
   log,
-} from "./config.mjs";
+} from "./config.ts";
 import { chatKey } from "./offset.mjs";
 import { pacedDeliver } from "./deliver.mjs";
 import {

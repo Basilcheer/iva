@@ -2,20 +2,20 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { CORE_CAP } from "./lib/core-cap.ts";
-import { clampCore } from "./memory/core-clamp.mjs";
+import { clampCore } from "./memory/core-clamp.ts";
 
-function fillTo(text, target) {
+function fillTo(text: string, target: number): string {
   const marker = "{FILL}";
   const size = target - (text.length - marker.length);
   assert.ok(size >= 0, "test fixture is already above its target size");
   return text.replace(marker, "x".repeat(size));
 }
 
-function pointers(text, heading = "## Указатели") {
+function pointers(text: string, heading = "## Указатели"): string {
   return text.slice(text.indexOf(heading));
 }
 
-function tinyPrefixFixture(prefixLength) {
+function tinyPrefixFixture(prefixLength: number): string {
   const before = "# CORE — ядро памяти\n\n## Custom\n";
   const between = "\n## Пользователь\n";
   const after = "\n\n## Указатели\n- pointer stays exact\n";
@@ -27,7 +27,7 @@ function tinyPrefixFixture(prefixLength) {
   return `${before}${"p".repeat(protectedPaddingLength)}${between}${bullet}${after}`;
 }
 
-test("under-cap input is returned byte-identically", () => {
+void test("under-cap input is returned byte-identically", () => {
   const input =
     "# CORE — ядро памяти\r\n\r\n" +
     "<!-- comment -->  \r\n\r\n" +
@@ -40,7 +40,7 @@ test("under-cap input is returned byte-identically", () => {
   assert.equal(clampCore(input), input);
 });
 
-test("preferences evict undated bullets first, then oldest dated bullets", () => {
+void test("preferences evict undated bullets first, then oldest dated bullets", () => {
   const undated = "- durable but undated\n";
   const oldest = "- 2024-01: oldest dated\n";
   const input = fillTo(
@@ -65,7 +65,7 @@ test("preferences evict undated bullets first, then oldest dated bullets", () =>
   assert.ok(output.includes("- 2026-06: newest"));
 });
 
-test("an oversized goals section keeps its first three bullets", () => {
+void test("an oversized goals section keeps its first three bullets", () => {
   const input = fillTo(
     "# CORE — ядро памяти\n\n" +
       "## Пользователь\n{FILL}\n\n" +
@@ -85,7 +85,7 @@ test("an oversized goals section keeps its first three bullets", () => {
   assert.ok(!output.includes("- goal five"));
 });
 
-test("pointers are never modified", () => {
+void test("pointers are never modified", () => {
   const input = fillTo(
     "# CORE — ядро памяти\n\n" +
       "## Пользователь\n{FILL}\n\n" +
@@ -102,7 +102,7 @@ test("pointers are never modified", () => {
   assert.equal(pointers(output), pointers(input));
 });
 
-test("last resort truncates only the longest mutable bullet with an ellipsis", () => {
+void test("last resort truncates only the longest mutable bullet with an ellipsis", () => {
   const input = fillTo(
     "# CORE — ядро памяти\n\n" +
       "## Пользователь\n" +
@@ -121,7 +121,7 @@ test("last resort truncates only the longest mutable bullet with an ellipsis", (
   assert.equal(pointers(output), pointers(input));
 });
 
-test("clamp is idempotent", () => {
+void test("clamp is idempotent", () => {
   const input = fillTo(
     "# CORE — ядро памяти\n\n" +
       "## Пользователь\n- {FILL}\n\n" +
@@ -134,7 +134,7 @@ test("clamp is idempotent", () => {
   assert.equal(clampCore(once), once);
 });
 
-test("prefix 0/1 removes the mutable bullet; prefix 2 keeps a complete bullet marker", () => {
+void test("prefix 0/1 removes the mutable bullet; prefix 2 keeps a complete bullet marker", () => {
   for (const prefixLength of [0, 1, 2]) {
     const input = tinyPrefixFixture(prefixLength);
     const output = clampCore(input);
@@ -150,7 +150,7 @@ test("prefix 0/1 removes the mutable bullet; prefix 2 keeps a complete bullet ma
   }
 });
 
-test("all H1/H2 headings and their formatting are preserved", () => {
+void test("all H1/H2 headings and their formatting are preserved", () => {
   const input = fillTo(
     "# CORE — ядро памяти\r\n\r\n" +
       "<!-- exact comment -->\r\n\r\n" +
@@ -162,7 +162,7 @@ test("all H1/H2 headings and their formatting are preserved", () => {
     CORE_CAP + 5,
   );
 
-  const headings = (text) =>
+  const headings = (text: string) =>
     text.split("\n").filter((line) => /^#{1,2} /.test(line));
   assert.deepEqual(headings(clampCore(input)), headings(input));
   assert.ok(
@@ -172,7 +172,7 @@ test("all H1/H2 headings and their formatting are preserved", () => {
   );
 });
 
-test("English template headings are recognized", () => {
+void test("English template headings are recognized", () => {
   const old = "- 2024-02: old preference\n";
   const input = fillTo(
     "# CORE — memory core\n\n" +
@@ -193,7 +193,7 @@ test("English template headings are recognized", () => {
   assert.equal(pointers(output, "## Pointers"), pointers(input, "## Pointers"));
 });
 
-test("degenerate over-cap files without known sections stay safely unchanged", () => {
+void test("degenerate over-cap files without known sections stay safely unchanged", () => {
   const input = `# unrelated\n${"x".repeat(CORE_CAP + 50)}\n## Custom\n- data\n`;
   assert.doesNotThrow(() => clampCore(input));
   assert.equal(clampCore(input), input);

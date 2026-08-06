@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const CONFIG_URL = pathToFileURL(join(ROOT, "scripts/poller/config.mjs")).href;
+const CONFIG_URL = pathToFileURL(join(ROOT, "scripts/poller/config.ts")).href;
 
 interface ConfigSnapshot {
   readonly root: string;

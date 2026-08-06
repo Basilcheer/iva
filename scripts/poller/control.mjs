@@ -16,7 +16,7 @@ import {
   ENV_PATH,
   ROOT,
   log,
-} from "./config.mjs";
+} from "./config.ts";
 import { downloadTelegramFile, edit, reply, sc, tg } from "./transport.mjs";
 import { chatKey } from "./offset.mjs";
 import { deliver } from "./deliver.mjs";

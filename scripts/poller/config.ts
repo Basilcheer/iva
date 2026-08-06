@@ -54,5 +54,7 @@ export const ALLOWED = new Set(
 // LANG/t/HELP убраны: язык теперь динамический (getLang из i18n.mjs, реагирует на
 // data/settings.json без рестарта), /help генерится helpText() из общей таблицы COMMANDS.
 
-export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-export const log = (...a) => console.log(new Date().toISOString(), ...a);
+export const sleep = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
+export const log = (...args: unknown[]): void =>
+  console.log(new Date().toISOString(), ...args);

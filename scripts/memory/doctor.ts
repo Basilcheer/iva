@@ -26,7 +26,7 @@ import {
   scanOversizeWorkingTreeFiles,
 } from "../lib/memory-maintenance.ts";
 import { notificationChat } from "../lib/notification-chat.ts";
-import { clampCore } from "./core-clamp.mjs";
+import { clampCore } from "./core-clamp.ts";
 
 const VAULT = resolve(process.env.ASSISTANT_VAULT_DIR ?? "vault");
 // The autograph code lives in THIS repo, not in the vault: the vault is user data only.

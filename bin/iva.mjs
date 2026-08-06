@@ -40,12 +40,12 @@ import {
   cleanupSystemdUnits,
   createSystemdControl,
 } from "../scripts/lib/systemd-control.ts";
-import { LEGACY_MEMORY_UNITS } from "../scripts/lib/schedule-migration.mjs";
+import { LEGACY_MEMORY_UNITS } from "../scripts/lib/schedule-migration.ts";
 import {
   applyConfigTransaction,
   probeEveHealth,
   recoverConfigTransaction,
-} from "../scripts/lib/config-transaction.mjs";
+} from "../scripts/lib/config-transaction.ts";
 import { userbotSyncArgs } from "../scripts/lib/userbot-deps.ts";
 import { probeUserbotHealth } from "../scripts/lib/userbot-health.ts";
 import { validateTimeZone } from "../scripts/lib/timezone.ts";
@@ -73,7 +73,7 @@ const childEnv = {
 
 const SERVICES = ["iva.service", "iva-telegram-poll.service"];
 // daily/weekly/monthly/yearly moved to in-process eve schedules (agent/schedules/memory-*.ts,
-// migrated by scripts/lib/schedule-migration.mjs on server start) — only doctor stays an
+// migrated by scripts/lib/schedule-migration.ts on server start) — only doctor stays an
 // external systemd watchdog, on purpose: it must keep running even if the server itself is
 // wedged. LEGACY_MEMORY_UNITS (imported above) is the single source of truth for the 8 exact
 // retired unit names both this file and the schedule migration tear down.
@@ -326,7 +326,7 @@ function writeUnits({ ensureBearer = true } = {}) {
 // entirely (old timers gone, new eve schedules not actually in the bundle) until the
 // next successful build. A shallow recursive text scan for markers unique to the
 // COMPILED schedules is enough — bare "memory-daily" is NOT unique enough: instrumentation.ts
-// always imports schedule-migration.mjs, whose LEGACY_MEMORY_UNITS array contains the
+// always imports schedule-migration.ts, whose LEGACY_MEMORY_UNITS array contains the
 // string "iva-memory-daily.service", which itself contains "memory-daily" as a substring
 // — that would make the marker match on every build regardless of whether the schedules
 // themselves actually compiled. Nitro's schedule-task wrapper embeds each schedule's own
@@ -1449,7 +1449,7 @@ async function cmdUsage(args) {
 // Writes an OAuth token to data/codex-auth.json (0600); used when MODEL_PROVIDER=codex.
 async function cmdLogin(args) {
   const { runDeviceCodeLogin, runBrowserLogin } =
-    await import("../scripts/lib/codex-oauth.mjs");
+    await import("../scripts/lib/codex-oauth.ts");
   const dataDir = dataDirAbs();
   const lang = (readEnv().AGENT_LANGUAGE || "en").toLowerCase();
   const browser = args.includes("--browser");

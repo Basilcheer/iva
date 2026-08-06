@@ -241,7 +241,7 @@ void test("doctor reports checked activation failures and keeps its summary", as
 
 void test("doctor checks installed memory services and reports failed ones with a journal hint", async (t) => {
   // daily/weekly/monthly/yearly moved to in-process eve schedules (agent/schedules/memory-*.ts,
-  // see scripts/lib/schedule-migration.mjs) — doctor stays the only external systemd watchdog.
+  // see scripts/lib/schedule-migration.ts) — doctor stays the only external systemd watchdog.
   const { calls, runCommand } = await fixture(t);
   const result = runCommand("doctor", {
     failedUnit: "iva-memory-doctor.service",
@@ -329,7 +329,7 @@ void test("legacy memory-timer cleanup is skipped when the current build doesn't
 });
 
 void test("a build that only bundles LEGACY_MEMORY_UNITS strings (not the compiled schedules) still counts as stale", async (t) => {
-  // Regression test: instrumentation.ts always imports schedule-migration.mjs, whose
+  // Regression test: instrumentation.ts always imports schedule-migration.ts, whose
   // LEGACY_MEMORY_UNITS array contains "iva-memory-daily.service" — which itself
   // contains "memory-daily" as a substring. A marker that was just the bare string
   // "memory-daily" would match THIS text and wrongly conclude the schedules compiled.

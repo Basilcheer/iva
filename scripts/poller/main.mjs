@@ -15,7 +15,7 @@ import {
   TOKEN,
   log,
   sleep,
-} from "./config.mjs";
+} from "./config.ts";
 import { tg } from "./transport.mjs";
 import { fastForwardOffset, loadOffset, saveOffset } from "./offset.mjs";
 import {

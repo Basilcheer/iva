@@ -1,6 +1,24 @@
 import { CORE_CAP } from "../lib/core-cap.ts";
 
-const SECTION_KIND = new Map([
+type Section = "user" | "preferences" | "goals" | "pointers";
+
+interface CoreLine {
+  readonly content: string;
+  readonly ending: string;
+  section: Section | null;
+  sectionId: number;
+  heading: boolean;
+  removed: boolean;
+  replacement: string | null;
+}
+
+interface PreferenceCandidate {
+  readonly line: CoreLine;
+  readonly index: number;
+  readonly date: string | null;
+}
+
+const SECTION_KIND = new Map<string, Section>([
   ["Пользователь", "user"],
   ["User", "user"],
   ["Предпочтения", "preferences"],
@@ -14,8 +32,8 @@ const SECTION_KIND = new Map([
   ["Pointers", "pointers"],
 ]);
 
-function linesOf(text) {
-  const lines = [];
+function linesOf(text: string): CoreLine[] {
+  const lines: CoreLine[] = [];
   let start = 0;
 
   while (start < text.length) {
@@ -47,8 +65,8 @@ function linesOf(text) {
   return lines;
 }
 
-function classifySections(lines) {
-  let section = null;
+function classifySections(lines: CoreLine[]): void {
+  let section: Section | null = null;
   let sectionId = 0;
 
   for (const line of lines) {
@@ -63,11 +81,11 @@ function classifySections(lines) {
   }
 }
 
-function isBullet(line) {
+function isBullet(line: CoreLine): boolean {
   return !line.heading && /^-(?:[ \t]+|$)/.test(line.content);
 }
 
-function render(lines) {
+function render(lines: readonly CoreLine[]): string {
   let out = "";
   for (const line of lines) {
     if (line.removed) continue;
@@ -76,8 +94,8 @@ function render(lines) {
   return out;
 }
 
-function enforceGoalLimit(lines) {
-  const seen = new Map();
+function enforceGoalLimit(lines: CoreLine[]): void {
+  const seen = new Map<number, number>();
   for (const line of lines) {
     if (line.section !== "goals" || !isBullet(line)) continue;
     const count = seen.get(line.sectionId) ?? 0;
@@ -86,7 +104,9 @@ function enforceGoalLimit(lines) {
   }
 }
 
-function preferenceEvictionOrder(lines) {
+function preferenceEvictionOrder(
+  lines: readonly CoreLine[],
+): PreferenceCandidate[] {
   return lines
     .map((line, index) => {
       if (line.section !== "preferences" || !isBullet(line)) return null;
@@ -94,7 +114,7 @@ function preferenceEvictionOrder(lines) {
         /^-[ \t]+(\d{4}-\d{2}(?:-\d{2})?)\b/.exec(line.content)?.[1] ?? null;
       return { line, index, date };
     })
-    .filter(Boolean)
+    .filter((item): item is PreferenceCandidate => item !== null)
     .sort((a, b) => {
       if (a.date === null && b.date !== null) return -1;
       if (a.date !== null && b.date === null) return 1;
@@ -103,8 +123,8 @@ function preferenceEvictionOrder(lines) {
     });
 }
 
-function longestMutableBullet(lines) {
-  let longest = null;
+function longestMutableBullet(lines: readonly CoreLine[]): CoreLine | null {
+  let longest: CoreLine | null = null;
   for (const line of lines) {
     if (
       line.removed ||
@@ -120,7 +140,7 @@ function longestMutableBullet(lines) {
   return longest;
 }
 
-function truncateToCap(lines) {
+function truncateToCap(lines: CoreLine[]): string {
   const current = render(lines);
   const excess = current.length - CORE_CAP;
   if (excess <= 0) return current;
@@ -151,7 +171,7 @@ function truncateToCap(lines) {
  * Deterministically shrink CORE.md without ever cutting headings, pointers or unknown
  * sections. Files already within the cap are returned byte-for-byte unchanged.
  */
-export function clampCore(text) {
+export function clampCore(text: string): string {
   if (typeof text !== "string")
     throw new TypeError("clampCore expects a string");
   if (text.length <= CORE_CAP) return text;

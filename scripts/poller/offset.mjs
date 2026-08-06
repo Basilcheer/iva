@@ -1,7 +1,7 @@
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { parseOffsetFile, serializeOffsetFile } from "../lib/offset-store.ts";
-import { OFFSET_FILE, DATA_DIR, log } from "./config.mjs";
+import { OFFSET_FILE, DATA_DIR, log } from "./config.ts";
 import { tg } from "./transport.mjs";
 
 // offset: null ⇒ no file (first run) — distinguish from a genuine offset 0.

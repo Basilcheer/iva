@@ -89,7 +89,7 @@ const statusDir = mkdtempSync(join(tmpdir(), "iva-menu-core-status-"));
 const previousDataDir = process.env.ASSISTANT_DATA_DIR;
 process.env.ASSISTANT_DATA_DIR = statusDir;
 
-const coreModulePath: string = "./core.mjs";
+const coreModulePath: string = "./core.ts";
 const { default: core } = (await import(coreModulePath)) as {
   default: CoreScreen;
 };
@@ -249,5 +249,33 @@ void test("core saves the interview but never delivers while the same threaded c
   assert.match(
     readFileSync(join(vault, "core-interview.md"), "utf8"),
     /Сергей/,
+  );
+});
+
+void test("core keeps direct legacy error.message behavior for injectable delivery rejections", async (t) => {
+  useVault(t);
+  const { context } = makeContext();
+  const logged: unknown[][] = [];
+  context.deps.log = (...parts: unknown[]) => {
+    logged.push(parts);
+  };
+  const interview = (): InterviewState => ({
+    i: 0,
+    qa: [],
+    chat: null,
+    from: null,
+    threadId: null,
+  });
+
+  // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- characterizes legacy non-Error rejection semantics.
+  context.deps.deliver = () => Promise.reject("primitive delivery failure");
+  await core.on("fin", [], makeState({ data: { iv: interview() } }), context);
+  assert.deepEqual(logged, [["core deliver error:", undefined]]);
+
+  // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- characterizes legacy non-Error rejection semantics.
+  context.deps.deliver = () => Promise.reject(null);
+  await assert.rejects(
+    core.on("fin", [], makeState({ data: { iv: interview() } }), context),
+    TypeError,
   );
 });

@@ -26,16 +26,52 @@ const CONFIG_DIR = join(homedir(), ".config/gws");
 const SECRET_PATH = join(CONFIG_DIR, "client_secret.json");
 const CACHE_TTL_MS = 60_000;
 const SCOPES = AUTH_SERVICES.split(",").join(", ");
-let cache = { at: 0, status: null };
+type AuthStatus = "missing" | "unauth" | "ok";
+type Button = { text: string; callback_data: string };
+type GwsAuth = { pid?: number; port?: number; logPath?: string };
+type AwaitText = {
+  kind: string;
+  secret: boolean;
+  data?: Record<string, unknown>;
+  file?: boolean;
+};
+type MenuState = {
+  chatId: number;
+  awaitText: AwaitText | null;
+  gwsAuth?: GwsAuth | null;
+};
+type MenuContext = {
+  tr: (english: string, russian: string) => string;
+  btn: (text: string, callbackData: string) => Button;
+  backRow: (screen: string) => Button[];
+  show: (state: MenuState, screen: string) => Promise<void>;
+  flows: {
+    screen: (
+      state: MenuState,
+      text: string,
+      rows: Button[][] | null,
+    ) => Promise<void>;
+  };
+};
+type ClientSecret = {
+  installed?: { client_id?: unknown };
+  web?: { client_id?: unknown };
+};
+let cache: { at: number; status: AuthStatus | null } = { at: 0, status: null };
 
-const isPrivate = (st) => Number(st.chatId) > 0;
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const isPrivate = (st: MenuState) => Number(st.chatId) > 0;
+const sleep = (ms: number) =>
+  new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+function errorMessage(error: unknown): string {
+  return (error as { readonly message: string }).message;
+}
 
 // Проба авторизации. Возвращает "missing" (нет бинаря gws), "unauth" (код 2) или "ok".
 // Неавторизованный gws выходит с кодом 2 сразу (без сети); авторизованный `+triage` может
 // не уложиться в 1.5с — таймаут трактуем как «похоже, подключено» (код != 2).
-function probeAuth() {
-  return new Promise((resolve) => {
+function probeAuth(): Promise<AuthStatus> {
+  return new Promise((resolve: (status: AuthStatus) => void) => {
     execFile(
       gwsBin(),
       ["gmail", "+triage"],
@@ -62,7 +98,7 @@ const invalidate = () => (cache = { at: 0, status: null });
 // Вызывается при повторном «Подключить», при возврате на экран с висящей авторизацией
 // и после завершения обмена. Ограничение: если стейт меню испарился целиком (TTL
 // tg-flow, рестарт моста), pid потерян — процесс доживает до собственного таймаута gws.
-function reapAuth(st) {
+function reapAuth(st: MenuState) {
   const a = st.gwsAuth;
   st.gwsAuth = null;
   if (!a) return;
@@ -76,7 +112,7 @@ function reapAuth(st) {
   if (a.logPath) rm(a.logPath, { force: true }).catch(() => {});
 }
 
-function instructions(ctx) {
+function instructions(ctx: MenuContext) {
   const T = ctx.tr;
   const text = [
     T("🔗 Google Workspace", "🔗 Google Workspace"),
@@ -112,7 +148,7 @@ function instructions(ctx) {
 export default {
   parent: PARENT,
 
-  async render(st, ctx) {
+  async render(st: MenuState, ctx: MenuContext) {
     const T = ctx.tr;
     // Возврат на экран (отмена, «Назад») с незавершённой авторизацией: awaitText уже снят
     // движком, код принять некому — приберём процесс и лог, а не оставим их висеть.
@@ -185,7 +221,7 @@ export default {
     };
   },
 
-  async on(verb, args, st, ctx) {
+  async on(verb: string, args: string[], st: MenuState, ctx: MenuContext) {
     if (verb !== "do") return ctx.show(st, SID);
     const step = args[0];
 
@@ -271,9 +307,14 @@ export default {
   texts: {
     // Приём client_secret.json текстом. Сообщение уже удалено движком (secret:true).
     // Содержимое НЕ логируем/не печатаем в чат ни при каком исходе; файл пишем 0600.
-    async gwsjson(text, msg, st, ctx) {
+    async gwsjson(
+      text: unknown,
+      _msg: unknown,
+      st: MenuState,
+      ctx: MenuContext,
+    ) {
       const raw = String(text).trim();
-      let parsed;
+      let parsed: unknown;
       try {
         parsed = JSON.parse(raw);
       } catch {
@@ -287,7 +328,8 @@ export default {
         );
       }
       // Форма client_secret.json: корневой ключ installed (Desktop app) или web, с client_id.
-      const node = parsed?.installed || parsed?.web;
+      const candidate = parsed as ClientSecret | null | undefined;
+      const node = candidate?.installed || candidate?.web;
       if (!node || typeof node.client_id !== "string" || !node.client_id) {
         return ctx.flows.screen(
           st,
@@ -303,12 +345,13 @@ export default {
         await mkdir(CONFIG_DIR, { recursive: true });
         await writeFile(SECRET_PATH, raw, { encoding: "utf8", mode: 0o600 });
         await chmod(SECRET_PATH, 0o600); // mode игнорируется, если файл уже существовал
-      } catch (e) {
+      } catch (error) {
+        const message = errorMessage(error);
         return ctx.flows.screen(
           st,
           ctx.tr(
-            `Couldn't save the file: ${e.message}`,
-            `Не удалось сохранить файл: ${e.message}`,
+            `Couldn't save the file: ${message}`,
+            `Не удалось сохранить файл: ${message}`,
           ),
           [ctx.backRow(PARENT)],
         );
@@ -335,7 +378,12 @@ export default {
     // Приём redirect-URL из браузера после согласия Google. Достаём callback-запрос (в нём code)
     // и локально проигрываем его на loopback-слушателе gws на сервере → gws завершает обмен и
     // сохраняет токен. code одноразовый — сам URL/код не логируем и в чат не печатаем.
-    async gwsauthcode(text, msg, st, ctx) {
+    async gwsauthcode(
+      text: string,
+      _msg: unknown,
+      st: MenuState,
+      ctx: MenuContext,
+    ) {
       const T = ctx.tr;
       const auth = st.gwsAuth;
       const cancelRow = [[ctx.btn(T("Cancel", "Отмена"), `iva_menu:${SID}:o`)]];

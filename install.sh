@@ -589,7 +589,7 @@ esac
 #    configured .env. Memory rollups (daily/weekly/monthly/yearly) no longer have
 #    systemd units of their own — they run as in-process eve schedules
 #    (agent/schedules/memory-*.ts), migrated automatically on the server's first
-#    start by scripts/lib/schedule-migration.mjs.
+#    start by scripts/lib/schedule-migration.ts.
 # ─────────────────────────────────────────────────────────────────────────
 if ! command -v systemctl >/dev/null 2>&1; then
   : # not Linux/systemd — skip silently

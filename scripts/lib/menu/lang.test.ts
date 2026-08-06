@@ -9,7 +9,7 @@ const dataDir = mkdtempSync(join(tmpdir(), "iva-menu-lang-data-"));
 process.env.ASSISTANT_DATA_DIR = dataDir;
 
 const languageModule: unknown = await import(
-  new URL("./lang.mjs", import.meta.url).href
+  new URL("./lang.ts", import.meta.url).href
 );
 
 after(() => rmSync(dataDir, { recursive: true, force: true }));

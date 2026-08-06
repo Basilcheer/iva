@@ -1,9 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+/* eslint-disable @typescript-eslint/no-floating-promises, @typescript-eslint/require-await */
 import {
   listCodexModelCatalog,
   parseCodexModelCatalog,
-} from "./codex-oauth.mjs";
+} from "./codex-oauth.ts";
 
 test("catalog parser supports model/slug/id/name and preserves quoted Unicode IDs", () => {
   const parsed = parseCodexModelCatalog({

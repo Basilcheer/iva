@@ -12,7 +12,7 @@ import {
   SETTLE_MS,
   sleep,
   log,
-} from "./config.mjs";
+} from "./config.ts";
 import { tg } from "./transport.mjs";
 import { chatKey } from "./offset.mjs";
 

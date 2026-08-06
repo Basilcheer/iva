@@ -19,7 +19,7 @@ import {
   ROOT,
   UPDATE_JOB_TTL_MS,
   log,
-} from "./config.mjs";
+} from "./config.ts";
 import { edit, reply, tg } from "./transport.mjs";
 
 // ── self-update (/update) ──────────────────────────────────────────────────

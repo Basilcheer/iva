@@ -25,11 +25,11 @@ import {
   runDeviceCodeLogin,
   runBrowserLogin,
   listCodexModels,
-} from "./lib/codex-oauth.mjs";
+} from "./lib/codex-oauth.ts";
 import {
   probeOpenRouterModel,
   validateModelSelection,
-} from "./lib/model-validation.mjs";
+} from "./lib/model-validation.ts";
 import { keptSetupWritePlan } from "./lib/setup-keep.ts";
 import { validateTimeZone } from "./lib/timezone.ts";
 

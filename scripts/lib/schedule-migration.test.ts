@@ -9,11 +9,26 @@ import { join } from "node:path";
 import {
   LEGACY_MEMORY_UNITS,
   runScheduleMigration,
-} from "./schedule-migration.mjs";
+} from "./schedule-migration.ts";
+
+type MigrationOptions = NonNullable<Parameters<typeof runScheduleMigration>[0]>;
+type ExecImplementation = NonNullable<MigrationOptions["execImpl"]>;
+type Period = Parameters<NonNullable<MigrationOptions["runJob"]>>[0];
+type StatusEntry = Readonly<Record<string, unknown>>;
+type Status = Readonly<Record<string, StatusEntry>>;
+
+function parseStatus(text: string): Status {
+  const parsed: unknown = JSON.parse(text);
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed))
+    throw new TypeError("status fixture must be an object");
+  return parsed as Status;
+}
 
 const UNIT_DIR_REL = ".config/systemd/user";
 
-async function scaffoldHome({ withUnitDir = true } = {}) {
+async function scaffoldHome({
+  withUnitDir = true,
+}: { readonly withUnitDir?: boolean } = {}): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), "iva-schedule-migration-"));
   const home = join(dir, "home");
   await mkdir(home, { recursive: true });
@@ -21,9 +36,14 @@ async function scaffoldHome({ withUnitDir = true } = {}) {
   return home;
 }
 
-function fakeExecImpl({ failUnits = new Set() } = {}) {
-  const calls = [];
-  const execImpl = (args) => {
+function fakeExecImpl({
+  failUnits = new Set<string>(),
+}: { readonly failUnits?: ReadonlySet<string> } = {}): {
+  readonly execImpl: ExecImplementation;
+  readonly calls: string[];
+} {
+  const calls: string[] = [];
+  const execImpl: ExecImplementation = (args: readonly string[]) => {
     calls.push(args.join(" "));
     if (args[1] === "disable" && failUnits.has(args[3])) {
       return { code: 1, out: "", err: "simulated systemctl failure" };
@@ -33,7 +53,7 @@ function fakeExecImpl({ failUnits = new Set() } = {}) {
   return { execImpl, calls };
 }
 
-test("LEGACY_MEMORY_UNITS lists exactly the 8 retired unit names", () => {
+void test("LEGACY_MEMORY_UNITS lists exactly the 8 retired unit names", () => {
   assert.deepEqual(
     [...LEGACY_MEMORY_UNITS].sort(),
     [
@@ -49,7 +69,7 @@ test("LEGACY_MEMORY_UNITS lists exactly the 8 retired unit names", () => {
   );
 });
 
-test("no ~/.config/systemd/user: legacy-unit cleanup is skipped, but catch-up (first-boot seeding) still runs", async () => {
+void test("no ~/.config/systemd/user: legacy-unit cleanup is skipped, but catch-up (first-boot seeding) still runs", async () => {
   // Catch-up must not depend on systemd being present at all — a container, this repo's
   // own `npm run replica` sandbox, or CI has no ~/.config/systemd/user (nothing to tear
   // down) but should still track and eventually catch up a missed rollup.
@@ -65,8 +85,9 @@ test("no ~/.config/systemd/user: legacy-unit cleanup is skipped, but catch-up (f
       statusPath,
       tz: "UTC",
       log: () => {},
-      runJob: async () => {
+      runJob: () => {
         runJobCalled = true;
+        return Promise.resolve();
       },
     }),
   );
@@ -84,14 +105,15 @@ test("no ~/.config/systemd/user: legacy-unit cleanup is skipped, but catch-up (f
   );
 });
 
-test("systemctl binary missing (ENOENT): legacy-unit cleanup is skipped, but catch-up still runs", async () => {
+void test("systemctl binary missing (ENOENT): legacy-unit cleanup is skipped, but catch-up still runs", async () => {
   const homedir = await scaffoldHome();
   const statusPath = join(homedir, "..", "data/rollup-status.json");
-  const calls = [];
-  const execImpl = (args) => {
+  const calls: (readonly string[])[] = [];
+  const execImpl: ExecImplementation = (args: readonly string[]) => {
     calls.push(args);
-    const error = new Error("spawnSync systemctl ENOENT");
-    error.code = "ENOENT";
+    const error = Object.assign(new Error("spawnSync systemctl ENOENT"), {
+      code: "ENOENT",
+    });
     return { code: 127, out: "", err: "", error };
   };
   let runJobCalled = false;
@@ -102,8 +124,9 @@ test("systemctl binary missing (ENOENT): legacy-unit cleanup is skipped, but cat
     statusPath,
     tz: "UTC",
     log: () => {},
-    runJob: async () => {
+    runJob: () => {
       runJobCalled = true;
+      return Promise.resolve();
     },
   });
 
@@ -126,12 +149,12 @@ test("systemctl binary missing (ENOENT): legacy-unit cleanup is skipped, but cat
   );
 });
 
-test("first boot (no status file): seeds a baseline (seededAt, NOT lastSuccessAt) for all four periods and runs nothing", async () => {
+void test("first boot (no status file): seeds a baseline (seededAt, NOT lastSuccessAt) for all four periods and runs nothing", async () => {
   const homedir = await scaffoldHome();
   const dataDir = join(homedir, "..", "data");
   const statusPath = join(dataDir, "rollup-status.json");
   const { execImpl } = fakeExecImpl();
-  const ranPeriods = [];
+  const ranPeriods: Period[] = [];
   const fixedNow = Date.UTC(2026, 7, 4, 10, 0, 0);
 
   await runScheduleMigration({
@@ -141,8 +164,9 @@ test("first boot (no status file): seeds a baseline (seededAt, NOT lastSuccessAt
     tz: "UTC",
     log: () => {},
     now: () => fixedNow,
-    runJob: async (period) => {
+    runJob: (period) => {
       ranPeriods.push(period);
+      return Promise.resolve();
     },
   });
 
@@ -151,23 +175,23 @@ test("first boot (no status file): seeds a baseline (seededAt, NOT lastSuccessAt
     [],
     "first boot must never run a catch-up job (storm protection)",
   );
-  const status = JSON.parse(await readFile(statusPath, "utf8"));
+  const status = parseStatus(await readFile(statusPath, "utf8"));
   // Keyed "memory-<period>" — the same name schedule-runner.ts actually records a real
   // run under (the `name` each agent/schedules/memory-*.ts passes), not the bare period.
   for (const period of ["daily", "weekly", "monthly", "yearly"]) {
     const entry = status[`memory-${period}`];
-    assert.equal(entry?.seededAt, fixedNow, `${period} is seeded to now`);
+    assert.equal(entry?.["seededAt"], fixedNow, `${period} is seeded to now`);
     // The seed is a storm-protection baseline, not a real run — /menu → crons and
     // iva doctor must not report it as one.
     assert.equal(
-      entry?.lastSuccessAt,
+      entry?.["lastSuccessAt"],
       undefined,
       `${period}'s seed must not read as a real success`,
     );
   }
 });
 
-test("a digest-only status seeds every missing memory key and causes no catch-up burst", async () => {
+void test("a digest-only status seeds every missing memory key and causes no catch-up burst", async () => {
   const homedir = await scaffoldHome();
   const statusPath = join(homedir, "..", "data", "rollup-status.json");
   await mkdir(join(homedir, "..", "data"), { recursive: true });
@@ -176,7 +200,7 @@ test("a digest-only status seeds every missing memory key and causes no catch-up
     JSON.stringify({ digest: { lastSuccessAt: 123 } }),
   );
   const fixedNow = Date.UTC(2026, 7, 4, 10, 0, 0);
-  const ranPeriods = [];
+  const ranPeriods: Period[] = [];
 
   await runScheduleMigration({
     homedir,
@@ -185,26 +209,27 @@ test("a digest-only status seeds every missing memory key and causes no catch-up
     log: () => {},
     now: () => fixedNow,
     execImpl: fakeExecImpl().execImpl,
-    runJob: async (period) => {
+    runJob: (period) => {
       ranPeriods.push(period);
+      return Promise.resolve();
     },
   });
 
   assert.deepEqual(ranPeriods, []);
-  const status = JSON.parse(await readFile(statusPath, "utf8"));
-  assert.deepEqual(status.digest, { lastSuccessAt: 123 });
+  const status = parseStatus(await readFile(statusPath, "utf8"));
+  assert.deepEqual(status["digest"], { lastSuccessAt: 123 });
   for (const period of ["daily", "weekly", "monthly", "yearly"]) {
-    assert.equal(status[`memory-${period}`]?.seededAt, fixedNow);
+    assert.equal(status[`memory-${period}`]?.["seededAt"], fixedNow);
   }
 });
 
-test("legacy teardown is not attempted when the seed transaction cannot be committed", async () => {
+void test("legacy teardown is not attempted when the seed transaction cannot be committed", async () => {
   const homedir = await scaffoldHome();
   const unitDir = join(homedir, UNIT_DIR_REL);
   const unit = join(unitDir, "iva-memory-daily.timer");
   await writeFile(unit, "[Unit]\n");
   const { execImpl, calls } = fakeExecImpl();
-  const logs = [];
+  const logs: string[] = [];
 
   // A directory cannot be atomically replaced by the JSON status tmp file. This makes
   // the seed write fail after the status lock is acquired, before teardown is allowed.
@@ -212,7 +237,7 @@ test("legacy teardown is not attempted when the seed transaction cannot be commi
     homedir,
     statusPath: unitDir,
     execImpl,
-    log: (...args) => logs.push(args.join(" ")),
+    log: (...args: unknown[]) => logs.push(args.join(" ")),
   });
 
   assert.deepEqual(calls, []);
@@ -220,7 +245,7 @@ test("legacy teardown is not attempted when the seed transaction cannot be commi
   assert.ok(logs.some((line) => line.includes("unexpected failure")));
 });
 
-test("legacy units: disabled and deleted by exact name; unrelated xfeed-daily.timer is left alone", async () => {
+void test("legacy units: disabled and deleted by exact name; unrelated xfeed-daily.timer is left alone", async () => {
   const homedir = await scaffoldHome();
   const unitDir = join(homedir, UNIT_DIR_REL);
   const existing = [
@@ -252,9 +277,10 @@ test("legacy units: disabled and deleted by exact name; unrelated xfeed-daily.ti
     statusPath,
     tz: "UTC",
     log: () => {},
-    runJob: async () => {
-      throw new Error("must not run on a seeded, up-to-date status file");
-    },
+    runJob: () =>
+      Promise.reject(
+        new Error("must not run on a seeded, up-to-date status file"),
+      ),
   });
 
   for (const name of existing) {
@@ -282,7 +308,7 @@ test("legacy units: disabled and deleted by exact name; unrelated xfeed-daily.ti
   assert.equal(calls.filter((c) => c === "--user reset-failed").length, 1);
 });
 
-test("a partial systemctl failure does not throw, leaves the file for a retry, and the next boot cleans it up", async () => {
+void test("a partial systemctl failure does not throw, leaves the file for a retry, and the next boot cleans it up", async () => {
   const homedir = await scaffoldHome();
   const unitDir = join(homedir, UNIT_DIR_REL);
   await writeFile(join(unitDir, "iva-memory-daily.timer"), "[Unit]\n");
@@ -302,7 +328,7 @@ test("a partial systemctl failure does not throw, leaves the file for a retry, a
   const { execImpl, calls } = fakeExecImpl({
     failUnits: new Set(["iva-memory-daily.timer"]),
   });
-  const logged = [];
+  const logged: string[] = [];
 
   await assert.doesNotReject(() =>
     runScheduleMigration({
@@ -310,7 +336,7 @@ test("a partial systemctl failure does not throw, leaves the file for a retry, a
       execImpl,
       statusPath,
       tz: "UTC",
-      log: (...a) => logged.push(a.join(" ")),
+      log: (...args: unknown[]) => logged.push(args.join(" ")),
     }),
   );
   assert.ok(
@@ -368,7 +394,7 @@ test("a partial systemctl failure does not throw, leaves the file for a retry, a
   );
 });
 
-test("catch-up math: due-and-in-grace periods run, an already-succeeded period does not, and a period whose due point is past its grace window is skipped", async () => {
+void test("catch-up math: due-and-in-grace periods run, an already-succeeded period does not, and a period whose due point is past its grace window is skipped", async () => {
   // Fixed instant: 2026-08-04T10:00:00Z == Tuesday 15:00 in Asia/Almaty (UTC+5).
   //   daily   due: 2026-08-04 04:00 Almaty == 2026-08-03T23:00:00Z  (now - due =  11h,   grace 20h  -> in grace)
   //   weekly  due: Monday 2026-08-03 04:15 Almaty == 2026-08-02T23:15:00Z (now - due ~34.75h, grace 3d -> in grace)
@@ -394,7 +420,7 @@ test("catch-up math: due-and-in-grace periods run, an already-succeeded period d
   );
 
   const { execImpl } = fakeExecImpl();
-  const ranPeriods = [];
+  const ranPeriods: Period[] = [];
   await runScheduleMigration({
     homedir,
     execImpl,
@@ -402,15 +428,16 @@ test("catch-up math: due-and-in-grace periods run, an already-succeeded period d
     tz: "Asia/Almaty",
     log: () => {},
     now: () => fixedNow,
-    runJob: async (period) => {
+    runJob: (period) => {
       ranPeriods.push(period);
+      return Promise.resolve();
     },
   });
 
   assert.deepEqual([...ranPeriods].sort(), ["daily", "monthly"]);
 });
 
-test("style-matched integration: a real fake systemctl on PATH, tmpdir HOME, via bin/iva.mjs _install-units", async () => {
+void test("style-matched integration: a real fake systemctl on PATH, tmpdir HOME, via bin/iva.mjs _install-units", async () => {
   // Mirrors scripts/lib/security-migration.test.mjs's black-box shape: this confirms the
   // migration also behaves when invoked the way it actually runs in production — as a
   // side effect of server startup — rather than only through direct unit-level calls above.
@@ -436,7 +463,7 @@ test("style-matched integration: a real fake systemctl on PATH, tmpdir HOME, via
   await writeFile(
     script,
     [
-      `import { runScheduleMigration } from ${JSON.stringify(join(process.cwd(), "scripts/lib/schedule-migration.mjs"))};`,
+      `import { runScheduleMigration } from ${JSON.stringify(join(process.cwd(), "scripts/lib/schedule-migration.ts"))};`,
       `const statusPath = ${JSON.stringify(join(dir, "data/rollup-status.json"))};`,
       `await runScheduleMigration({ homedir: ${JSON.stringify(home)}, statusPath, tz: "UTC", log: () => {} });`,
       `process.exit(0);`,
@@ -457,7 +484,7 @@ test("style-matched integration: a real fake systemctl on PATH, tmpdir HOME, via
   assert.match(calls, /daemon-reload/);
 });
 
-test("if the status lock can't be acquired, the whole pass is deferred: no seed, no due-check write, no catch-up run", async () => {
+void test("if the status lock can't be acquired, the whole pass is deferred: no seed, no due-check write, no catch-up run", async () => {
   const homedir = await scaffoldHome();
   const dataDir = join(homedir, "..", "data");
   const statusPath = join(dataDir, "rollup-status.json");
@@ -468,16 +495,17 @@ test("if the status lock can't be acquired, the whole pass is deferred: no seed,
 
   const { execImpl } = fakeExecImpl();
   let runJobCalled = false;
-  const lines = [];
+  const lines: string[] = [];
 
   await runScheduleMigration({
     homedir,
     execImpl,
     statusPath,
     tz: "UTC",
-    log: (...a) => lines.push(a.join(" ")),
-    runJob: async () => {
+    log: (...args: unknown[]) => lines.push(args.join(" ")),
+    runJob: () => {
       runJobCalled = true;
+      return Promise.resolve();
     },
   });
 

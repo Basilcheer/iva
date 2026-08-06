@@ -1,4 +1,4 @@
-// Thin spawner shared by agent/schedules/*.ts and scripts/lib/schedule-migration.mjs.
+// Thin spawner shared by agent/schedules/*.ts and scripts/lib/schedule-migration.ts.
 // Runs an existing cron script exactly the way the (now retired) systemd units did —
 // `flock -w 900 <lockPath> <nodeBin> --env-file=.env <argv...>` — under a hard timeout,
 // and records the outcome to a status file so `iva doctor` and the /menu → crons screen
@@ -123,7 +123,7 @@ function ownsReservation(
   );
 }
 
-// Shared with schedule-migration.mjs — one status file, one implementation of how it's
+// Shared with schedule-migration.ts — one status file, one implementation of how it's
 // safely read/written/locked, rather than two copies that could drift.
 export function readStatus(statusPath: string): ScheduleStatus {
   try {
@@ -169,7 +169,7 @@ function tailLines(tail: string, n = 5): string {
 }
 
 // True mutual exclusion around a read-modify-write of the shared status file. Two
-// runScheduledJob calls — a Nitro schedule tick and schedule-migration.mjs's catch-up
+// runScheduledJob calls — a Nitro schedule tick and schedule-migration.ts's catch-up
 // firing at nearly the same instant is the concrete case this guards against — could
 // otherwise both read the same pre-reservation status and both decide to proceed before
 // either's write lands, since the tmp+rename write above is atomic per-write but doesn't

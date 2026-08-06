@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { API, TOKEN, log } from "./config.mjs";
+import { API, TOKEN, log } from "./config.ts";
 
 // Every Bot API call carries a deadline — a hung response must never stall the single polling loop.
 // The default suits normal calls; getUpdates overrides it to sit above its own long-poll window.

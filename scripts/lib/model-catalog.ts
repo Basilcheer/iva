@@ -1,11 +1,32 @@
 // Provider/model/effort metadata for the /model and /think Telegram wizards.
 // Static lists are suggestions only; selectable catalog providers must come from
 // a successful live response. Codex also returns model-specific reasoning levels.
-import { listCodexModelCatalog } from "./codex-oauth.mjs";
+import { listCodexModelCatalog } from "./codex-oauth.ts";
 import {
   CANONICAL_REASONING_EFFORTS,
   FALLBACK_REASONING_EFFORTS,
 } from "./reasoning-levels.ts";
+
+export interface ProviderCatalogEntry {
+  label: string;
+  auth: "key" | "oauth";
+  base?: string;
+  keyVar: string | null;
+  modelVar: string;
+  def: string;
+  models: string[];
+}
+
+export interface ModelOption {
+  id: string;
+  reasoningLevels: string[];
+}
+
+export interface FetchModelOptions {
+  dataDir?: string;
+  listCodexCatalog?: (options?: { dataDir?: string }) => Promise<ModelOption[]>;
+  fetchFn?: typeof fetch;
+}
 
 // Runtime accepts the stable protocol vocabulary. Telegram only offers the live
 // model-specific subset; when the response is missing/broken it uses the conservative
@@ -17,7 +38,14 @@ export const FALLBACK_EFFORTS = FALLBACK_REASONING_EFFORTS;
 const FETCH_TIMEOUT_MS = 10_000;
 
 export class ModelCatalogError extends Error {
-  constructor(code, message, { status, cause } = {}) {
+  declare readonly code: string;
+  declare readonly status?: number;
+
+  constructor(
+    code: string,
+    message: string,
+    { status, cause }: { status?: number; cause?: unknown } = {},
+  ) {
     super(message, { cause });
     this.name = "ModelCatalogError";
     this.code = code;
@@ -25,7 +53,7 @@ export class ModelCatalogError extends Error {
   }
 }
 
-export const CATALOG = {
+export const CATALOG: Record<string, ProviderCatalogEntry> = {
   ollama: {
     label: "Ollama Cloud",
     auth: "key",
@@ -100,28 +128,35 @@ export const CATALOG = {
 // catalog carries a model-specific subset.
 const REASONING_PROVIDERS = new Set(["ollama", "opencode", "codex"]);
 
-export const providerSupportsReasoning = (provider) =>
+export const providerSupportsReasoning = (provider: string): boolean =>
   REASONING_PROVIDERS.has(provider);
-export const providerFallbackReasoningLevels = (provider) =>
+export const providerFallbackReasoningLevels = (provider: string): string[] =>
   providerSupportsReasoning(provider) ? [...FALLBACK_EFFORTS] : [];
 
-const optionsFor = (provider, models) =>
+const optionsFor = (
+  provider: string,
+  models: readonly string[],
+): ModelOption[] =>
   models.map((id) => ({
     id,
     reasoningLevels: providerFallbackReasoningLevels(provider),
   }));
 
-const validOptions = (provider, entries) => {
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === "object";
+
+const validOptions = (provider: string, entries: unknown): ModelOption[] => {
   if (!Array.isArray(entries)) {
     throw new ModelCatalogError(
       "catalog_invalid",
       "provider returned a malformed model catalog",
     );
   }
-  const seen = new Set();
-  const options = [];
-  for (const entry of entries) {
-    const id = typeof entry?.id === "string" ? entry.id.trim() : "";
+  const seen = new Set<string>();
+  const options: ModelOption[] = [];
+  for (const value of entries as unknown[]) {
+    const entry = isRecord(value) ? value : null;
+    const id = entry && typeof entry.id === "string" ? entry.id.trim() : "";
     if (!id) {
       throw new ModelCatalogError(
         "catalog_invalid",
@@ -132,9 +167,10 @@ const validOptions = (provider, entries) => {
     seen.add(id);
     options.push({
       id,
-      reasoningLevels: Array.isArray(entry.reasoningLevels)
-        ? [...entry.reasoningLevels]
-        : providerFallbackReasoningLevels(provider),
+      reasoningLevels:
+        entry && Array.isArray(entry.reasoningLevels)
+          ? ([...(entry.reasoningLevels as unknown[])] as string[])
+          : providerFallbackReasoningLevels(provider),
     });
   }
   if (!options.length) {
@@ -149,10 +185,14 @@ const validOptions = (provider, entries) => {
 // Selectable options come only from the live provider catalog. Static lists remain
 // display metadata and OpenRouter suggestions; they must never resurrect retired models.
 export async function fetchModelOptions(
-  provider,
-  key,
-  { dataDir, listCodexCatalog = listCodexModelCatalog, fetchFn = fetch } = {},
-) {
+  provider: string,
+  key?: string,
+  {
+    dataDir,
+    listCodexCatalog = listCodexModelCatalog,
+    fetchFn = fetch,
+  }: FetchModelOptions = {},
+): Promise<ModelOption[]> {
   const cat = CATALOG[provider];
   if (!cat) return [];
   try {
@@ -183,7 +223,7 @@ export async function fetchModelOptions(
           },
         );
       }
-      let body;
+      let body: unknown;
       try {
         body = await res.json();
       } catch (cause) {
@@ -195,15 +235,20 @@ export async function fetchModelOptions(
           },
         );
       }
-      if (!body || typeof body !== "object" || !Array.isArray(body.data)) {
+      if (
+        !body ||
+        typeof body !== "object" ||
+        !Array.isArray((body as Record<string, unknown>).data)
+      ) {
         throw new ModelCatalogError(
           "catalog_invalid",
           "provider returned a malformed model catalog",
         );
       }
-      return validOptions(provider, body.data).sort((a, b) =>
-        a.id.localeCompare(b.id),
-      );
+      return validOptions(
+        provider,
+        (body as Record<string, unknown>).data,
+      ).sort((a, b) => a.id.localeCompare(b.id));
     }
   } catch (e) {
     if (e instanceof ModelCatalogError) throw e;
@@ -219,7 +264,11 @@ export async function fetchModelOptions(
 }
 
 // Compatibility for setup or future CLI consumers that only need IDs.
-export async function fetchModels(provider, key, opts = {}) {
+export async function fetchModels(
+  provider: string,
+  key?: string,
+  opts: FetchModelOptions = {},
+): Promise<string[]> {
   return (await fetchModelOptions(provider, key, opts)).map(
     (option) => option.id,
   );
@@ -227,7 +276,10 @@ export async function fetchModels(provider, key, opts = {}) {
 
 // Cheap key validity probe (same lenient policy as setup.mjs: network flake ⇒ accept).
 // Returns null when the key looks fine, or a short human-readable reason.
-export async function checkKey(provider, key) {
+export async function checkKey(
+  provider: string,
+  key: string,
+): Promise<string | null> {
   const cat = CATALOG[provider];
   if (!cat?.base) return null;
   // OpenRouter has a dedicated auth-only endpoint; the others validate via /models.

@@ -1,7 +1,7 @@
 // OAuth-ядро для входа по подписке OpenAI (ChatGPT Plus/Pro/Team) — как в официальном codex CLI.
 // ЕДИНЫЙ источник правды: импортируется и из bare-node (bin/iva.mjs, scripts/setup.mjs),
 // и из бандла eve (agent/provider.ts, agent/vision.ts) — как scripts/lib/usage.ts.
-// Чистый ESM, только node-builtins (crypto/fs/http/child_process). Типы — в codex-oauth.d.mts.
+// Чистый ESM, только node-builtins (crypto/fs/http/child_process); типы — в этом модуле.
 //
 // Протокол (reverse-engineered из openai/codex, публичный client_id):
 //   auth-домен  https://auth.openai.com     device-code + browser-PKCE + refresh
@@ -17,12 +17,47 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createServer } from "node:http";
+import type { Server } from "node:http";
 import { spawn } from "node:child_process";
 import { dirname, join } from "node:path";
 import {
   CANONICAL_REASONING_EFFORTS,
   FALLBACK_REASONING_EFFORTS,
 } from "./reasoning-levels.ts";
+
+export interface CodexAuth {
+  id_token?: string;
+  access_token: string;
+  refresh_token?: string;
+  accountId: string | null;
+  planType: string | null;
+}
+
+export interface LoginOptions {
+  dataDir?: string;
+  log?: (message: string) => void;
+  open?: boolean;
+  lang?: string;
+}
+
+export interface CodexModelCatalogEntry {
+  id: string;
+  reasoningLevels: string[];
+}
+
+export interface CodexModelCatalogOptions {
+  dataDir?: string;
+  fetchFn?: typeof fetch;
+  authHeadersFn?: (dataDir?: string) => Promise<Record<string, string>>;
+}
+
+type JsonRecord = Record<string, unknown>;
+type TokenResponse = {
+  id_token?: string;
+  access_token: string;
+  refresh_token?: string;
+};
+type LoginPort = { server: Server; port: number };
 
 export const ISSUER = "https://auth.openai.com";
 export const CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"; // публичный client_id Codex CLI
@@ -39,20 +74,20 @@ const REFRESH_SKEW_S = 300; // рефрешим за 5 мин до exp (как �
 const DEVICE_PORT = 1455; // codex-совместимый redirect-порт (fallback 1457)
 const FALLBACK_PORT = 1457;
 
-const b64url = (buf) => Buffer.from(buf).toString("base64url");
+const b64url = (buf: string | Buffer) => Buffer.from(buf).toString("base64url");
 const defaultDir = () => process.env.ASSISTANT_DATA_DIR || "data";
 const MODELS_FETCH_TIMEOUT_MS = 10_000;
 // Язык подсказок входа (en по умолчанию — как у codex CLI). Мастер/CLI прокидывают lang.
-const tr = (lang, en, ru) => (lang === "ru" ? ru : en);
+const tr = (lang: string, en: string, ru: string) => (lang === "ru" ? ru : en);
 
 // ── хранилище токенов ─────────────────────────────────────────────────────
 export function authFilePath(dataDir = defaultDir()) {
   return join(dataDir, "codex-auth.json");
 }
 
-export function readAuth(dataDir = defaultDir()) {
+export function readAuth(dataDir = defaultDir()): CodexAuth | null {
   try {
-    return JSON.parse(readFileSync(authFilePath(dataDir), "utf8"));
+    return JSON.parse(readFileSync(authFilePath(dataDir), "utf8")) as CodexAuth;
   } catch {
     return null;
   }
@@ -60,7 +95,7 @@ export function readAuth(dataDir = defaultDir()) {
 
 // Атомарная запись 0600 (temp + rename) — секрет не должен мелькнуть с широкими правами,
 // а конкурентный read не должен поймать полу-записанный файл.
-export function writeAuth(auth, dataDir = defaultDir()) {
+export function writeAuth(auth: CodexAuth, dataDir = defaultDir()): void {
   const file = authFilePath(dataDir);
   mkdirSync(dirname(file), { recursive: true });
   const tmp = `${file}.${process.pid}.tmp`;
@@ -70,14 +105,16 @@ export function writeAuth(auth, dataDir = defaultDir()) {
 }
 
 // ── JWT / PKCE (без внешних зависимостей) ──────────────────────────────────
-export function parseJwt(jwt) {
+export function parseJwt(jwt: string): JsonRecord {
   const payload = String(jwt).split(".")[1];
   if (!payload) throw new Error("malformed JWT");
-  return JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
+  return JSON.parse(
+    Buffer.from(payload, "base64url").toString("utf8"),
+  ) as JsonRecord;
 }
 
 // exp (unix-секунды) из access_token; 0 если нет клейма.
-export function jwtExp(jwt) {
+export function jwtExp(jwt: string): number {
   try {
     return Number(parseJwt(jwt).exp) || 0;
   } catch {
@@ -86,16 +123,20 @@ export function jwtExp(jwt) {
 }
 
 // Из id_token достаём account_id и план подписки (клейм https://api.openai.com/auth).
-export function accountFromIdToken(idToken) {
-  let auth = {};
+export function accountFromIdToken(idToken: string): {
+  accountId: string | null;
+  planType: string | null;
+} {
+  let auth: JsonRecord = {};
   try {
-    auth = parseJwt(idToken)["https://api.openai.com/auth"] || {};
+    auth = (parseJwt(idToken)["https://api.openai.com/auth"] ||
+      {}) as JsonRecord;
   } catch {
     /* нет клейма — вернём пустое */
   }
   return {
-    accountId: auth.chatgpt_account_id || null,
-    planType: auth.chatgpt_plan_type || null,
+    accountId: (auth.chatgpt_account_id || null) as string | null,
+    planType: (auth.chatgpt_plan_type || null) as string | null,
   };
 }
 
@@ -106,7 +147,15 @@ function pkce() {
 }
 
 // ── обмен кода и refresh (общий /oauth/token) ──────────────────────────────
-async function exchangeCode({ code, verifier, redirectUri }) {
+async function exchangeCode({
+  code,
+  verifier,
+  redirectUri,
+}: {
+  code: string;
+  verifier: string;
+  redirectUri: string;
+}): Promise<TokenResponse> {
   const body = new URLSearchParams({
     grant_type: "authorization_code",
     code,
@@ -123,10 +172,12 @@ async function exchangeCode({ code, verifier, redirectUri }) {
     throw new Error(
       `token exchange failed: ${res.status} ${(await res.text()).slice(0, 300)}`,
     );
-  return res.json(); // { id_token, access_token, refresh_token }
+  return (await res.json()) as TokenResponse; // { id_token, access_token, refresh_token }
 }
 
-async function refresh(refreshToken) {
+async function refresh(
+  refreshToken: string | undefined,
+): Promise<TokenResponse> {
   const res = await fetch(TOKEN_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -140,11 +191,14 @@ async function refresh(refreshToken) {
     throw new Error(
       `token refresh failed: ${res.status} ${(await res.text()).slice(0, 300)}`,
     );
-  return res.json(); // { id_token?, access_token, refresh_token? }
+  return (await res.json()) as TokenResponse; // { id_token?, access_token, refresh_token? }
 }
 
 // Собирает объект хранилища из ответа токен-эндпоинта.
-function toAuth(tokens, prev = {}) {
+function toAuth(
+  tokens: TokenResponse,
+  prev: Partial<CodexAuth> = {},
+): CodexAuth {
   const idToken = tokens.id_token || prev.id_token;
   const { accountId, planType } = idToken
     ? accountFromIdToken(idToken)
@@ -153,8 +207,8 @@ function toAuth(tokens, prev = {}) {
     id_token: idToken,
     access_token: tokens.access_token,
     refresh_token: tokens.refresh_token || prev.refresh_token,
-    accountId,
-    planType,
+    accountId: accountId as string | null,
+    planType: planType as string | null,
   };
 }
 
@@ -162,8 +216,10 @@ function toAuth(tokens, prev = {}) {
 // Дедуп рефреша в пределах процесса (модель зовётся конкурентно). Кросс-процессный
 // рейс (CLI login + сервер) маловероятен и самолечится: при провале рефреша
 // перечитываем файл — вдруг другой процесс уже обновил.
-let refreshInFlight = null;
-export async function getAccessToken(dataDir = defaultDir()) {
+let refreshInFlight: Promise<CodexAuth> | null = null;
+export async function getAccessToken(
+  dataDir = defaultDir(),
+): Promise<{ accessToken: string; accountId: string | null }> {
   let auth = readAuth(dataDir);
   if (!auth?.access_token) throw new Error("not logged in — run `iva login`");
   const fresh =
@@ -196,9 +252,11 @@ export async function getAccessToken(dataDir = defaultDir()) {
 }
 
 // Заголовки авторизации для вызова Codex-бэкенда (/responses, /models).
-export async function codexAuthHeaders(dataDir = defaultDir()) {
+export async function codexAuthHeaders(
+  dataDir = defaultDir(),
+): Promise<Record<string, string>> {
   const { accessToken, accountId } = await getAccessToken(dataDir);
-  const h = {
+  const h: Record<string, string> = {
     Authorization: `Bearer ${accessToken}`,
     originator: ORIGINATOR,
     "User-Agent": `${ORIGINATOR}/${CLIENT_VERSION}`,
@@ -212,7 +270,7 @@ export async function runDeviceCodeLogin({
   dataDir = defaultDir(),
   log = console.log,
   lang = "en",
-} = {}) {
+}: LoginOptions = {}): Promise<CodexAuth> {
   const api = `${ISSUER}/api/accounts`;
   const uc = await fetch(`${api}/deviceauth/usercode`, {
     method: "POST",
@@ -223,7 +281,11 @@ export async function runDeviceCodeLogin({
     throw new Error(
       `device usercode failed: ${uc.status} ${(await uc.text()).slice(0, 200)}`,
     );
-  const { device_auth_id, user_code, interval } = await uc.json();
+  const { device_auth_id, user_code, interval } = (await uc.json()) as {
+    device_auth_id: string;
+    user_code: string;
+    interval: unknown;
+  };
 
   log(
     `\n  1. ${tr(lang, "Open this link in a browser (any device):", "Открой в браузере (на любом устройстве):")}  ${ISSUER}/codex/device`,
@@ -244,7 +306,10 @@ export async function runDeviceCodeLogin({
       body: JSON.stringify({ device_auth_id, user_code }),
     });
     if (r.ok) {
-      const { authorization_code, code_verifier } = await r.json();
+      const { authorization_code, code_verifier } = (await r.json()) as {
+        authorization_code: string;
+        code_verifier: string;
+      };
       const tokens = await exchangeCode({
         code: authorization_code,
         verifier: code_verifier,
@@ -261,7 +326,7 @@ export async function runDeviceCodeLogin({
 }
 
 // ── browser-PKCE flow (локальный сервер + авто-открытие браузера) ───────────
-function openBrowser(url) {
+function openBrowser(url: string): void {
   const win = process.platform === "win32";
   const cmd =
     process.platform === "darwin" ? "open" : win ? "start" : "xdg-open";
@@ -280,7 +345,7 @@ export async function runBrowserLogin({
   log = console.log,
   open = true,
   lang = "en",
-} = {}) {
+}: LoginOptions = {}): Promise<CodexAuth> {
   const { verifier, challenge } = pkce();
   const state = b64url(randomBytes(32));
   const port = await listenFirstFree([DEVICE_PORT, FALLBACK_PORT]);
@@ -314,53 +379,58 @@ export async function runBrowserLogin({
       10 * 60 * 1000,
     );
 
-    port.server.on("request", async (req, res) => {
-      const url = new URL(req.url, `http://localhost:${port.port}`);
-      if (url.pathname !== "/auth/callback") {
-        res.writeHead(404).end("Not found");
-        return;
-      }
-      const done = (code, msg) => {
-        res
-          .writeHead(code, { "Content-Type": "text/html; charset=utf-8" })
-          .end(`<h3>${msg}</h3>`);
-      };
-      try {
-        if (url.searchParams.get("state") !== state)
-          throw new Error("state mismatch");
-        const err = url.searchParams.get("error");
-        if (err) throw new Error(`OAuth error: ${err}`);
-        const code = url.searchParams.get("code");
-        if (!code) throw new Error("missing authorization code");
-        const auth = toAuth(
-          await exchangeCode({ code, verifier, redirectUri }),
-        );
-        writeAuth(auth, dataDir);
-        done(
-          200,
-          tr(
-            lang,
-            "Signed in — you can close this tab and return to the terminal.",
-            "Готово — вход выполнен. Можно закрыть вкладку и вернуться в терминал.",
-          ),
-        );
-        clearTimeout(timer);
-        port.server.close();
-        resolve(auth);
-      } catch (e) {
-        done(400, `${tr(lang, "Sign-in error", "Ошибка входа")}: ${e.message}`);
-        clearTimeout(timer);
-        port.server.close();
-        reject(e);
-      }
+    port.server.on("request", (req, res) => {
+      void (async () => {
+        const url = new URL(req.url ?? "/", `http://localhost:${port.port}`);
+        if (url.pathname !== "/auth/callback") {
+          res.writeHead(404).end("Not found");
+          return;
+        }
+        const done = (code: number, msg: string): void => {
+          res
+            .writeHead(code, { "Content-Type": "text/html; charset=utf-8" })
+            .end(`<h3>${msg}</h3>`);
+        };
+        try {
+          if (url.searchParams.get("state") !== state)
+            throw new Error("state mismatch");
+          const err = url.searchParams.get("error");
+          if (err) throw new Error(`OAuth error: ${err}`);
+          const code = url.searchParams.get("code");
+          if (!code) throw new Error("missing authorization code");
+          const auth = toAuth(
+            await exchangeCode({ code, verifier, redirectUri }),
+          );
+          writeAuth(auth, dataDir);
+          done(
+            200,
+            tr(
+              lang,
+              "Signed in — you can close this tab and return to the terminal.",
+              "Готово — вход выполнен. Можно закрыть вкладку и вернуться в терминал.",
+            ),
+          );
+          clearTimeout(timer);
+          port.server.close();
+          resolve(auth);
+        } catch (e) {
+          done(
+            400,
+            `${tr(lang, "Sign-in error", "Ошибка входа")}: ${(e as Error).message}`,
+          );
+          clearTimeout(timer);
+          port.server.close();
+          reject(e instanceof Error ? e : new Error(String(e)));
+        }
+      })();
     });
   });
 }
 
 // Пытается слушать порты по списку, возвращает первый свободный { server, port }.
-function listenFirstFree(ports) {
-  return new Promise((resolve, reject) => {
-    const tryPort = (i) => {
+function listenFirstFree(ports: readonly number[]): Promise<LoginPort> {
+  return new Promise<LoginPort>((resolve, reject) => {
+    const tryPort = (i: number): void => {
       if (i >= ports.length)
         return reject(new Error("no free login port (1455/1457 busy)"));
       const server = createServer();
@@ -373,7 +443,10 @@ function listenFirstFree(ports) {
   });
 }
 
-export async function login(mode = "device", opts = {}) {
+export async function login(
+  mode: "device" | "browser" = "device",
+  opts: LoginOptions = {},
+): Promise<CodexAuth> {
   return mode === "browser" ? runBrowserLogin(opts) : runDeviceCodeLogin(opts);
 }
 
@@ -383,38 +456,53 @@ export async function login(mode = "device", opts = {}) {
 const MODEL_LIST_KEYS = /^(models?|model_presets|presets|items|data)$/i;
 const CANONICAL_REASONING_LEVELS = new Set(CANONICAL_REASONING_EFFORTS);
 
-function cleanString(value) {
+function cleanString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
-function modelId(node, parentKey) {
+function objectValue(node: unknown, key: string): unknown {
+  return node && typeof node === "object"
+    ? (node as JsonRecord)[key]
+    : undefined;
+}
+
+function modelId(node: unknown, parentKey: string): string | null {
   if (!node || typeof node !== "object" || Array.isArray(node)) return null;
-  const primary = cleanString(node.model) || cleanString(node.slug);
+  const primary =
+    cleanString(objectValue(node, "model")) ||
+    cleanString(objectValue(node, "slug"));
   if (primary) return primary;
   // `id`/`name` are documented fallbacks, but only inside a model-list wrapper:
   // arbitrary metadata such as tiers:[{id:"flex"}] must not become a model button.
   if (MODEL_LIST_KEYS.test(parentKey || ""))
-    return cleanString(node.id) || cleanString(node.name);
+    return (
+      cleanString(objectValue(node, "id")) ||
+      cleanString(objectValue(node, "name"))
+    );
   return null;
 }
 
-function reasoningLevels(node) {
-  if (!Array.isArray(node?.supported_reasoning_levels)) {
+function reasoningLevels(node: unknown): { levels: string[]; live: boolean } {
+  const supported = objectValue(node, "supported_reasoning_levels");
+  if (!Array.isArray(supported)) {
     return { levels: [...FALLBACK_REASONING_EFFORTS], live: false };
   }
-  const levels = node.supported_reasoning_levels
-    .map((level) => {
+  const levels = supported
+    .map((level): string | null => {
       if (typeof level === "string")
         return cleanString(level)?.toLowerCase() || null;
       return (
-        cleanString(level?.effort)?.toLowerCase() ||
-        cleanString(level?.level)?.toLowerCase() ||
-        cleanString(level?.id)?.toLowerCase() ||
-        cleanString(level?.name)?.toLowerCase() ||
+        cleanString(objectValue(level, "effort"))?.toLowerCase() ||
+        cleanString(objectValue(level, "level"))?.toLowerCase() ||
+        cleanString(objectValue(level, "id"))?.toLowerCase() ||
+        cleanString(objectValue(level, "name"))?.toLowerCase() ||
         null
       );
     })
-    .filter((level) => level && CANONICAL_REASONING_LEVELS.has(level));
+    .filter(
+      (level): level is string =>
+        level !== null && CANONICAL_REASONING_LEVELS.has(level),
+    );
   const unique = [...new Set(levels)];
   return unique.length
     ? { levels: unique, live: true }
@@ -424,9 +512,11 @@ function reasoningLevels(node) {
 // Pure parser kept separate from auth/network so malformed and future wrapper
 // shapes can be covered without credentials. Quotes and Unicode in IDs remain
 // untouched; buttons carry only their numeric index.
-export function parseCodexModelCatalog(json) {
-  const found = new Map();
-  function walk(node, parentKey = "") {
+export function parseCodexModelCatalog(
+  json: unknown,
+): CodexModelCatalogEntry[] {
+  const found = new Map<string, CodexModelCatalogEntry & { live: boolean }>();
+  function walk(node: unknown, parentKey = ""): void {
     if (Array.isArray(node)) {
       for (const item of node) {
         const stringId = MODEL_LIST_KEYS.test(parentKey)
@@ -453,7 +543,7 @@ export function parseCodexModelCatalog(json) {
         found.set(id, { id, reasoningLevels: levels, live });
       }
     }
-    for (const [key, value] of Object.entries(node)) {
+    for (const [key, value] of Object.entries(node as JsonRecord)) {
       if (key !== "supported_reasoning_levels") walk(value, key);
     }
   }
@@ -467,7 +557,7 @@ export async function listCodexModelCatalog({
   dataDir = defaultDir(),
   fetchFn = fetch,
   authHeadersFn = codexAuthHeaders,
-} = {}) {
+}: CodexModelCatalogOptions = {}): Promise<CodexModelCatalogEntry[]> {
   const headers = await authHeadersFn(dataDir);
   const res = await fetchFn(
     `${CODEX_BASE_URL}/models?client_version=${CLIENT_VERSION}`,
@@ -480,7 +570,7 @@ export async function listCodexModelCatalog({
     throw new Error(
       `list models failed: ${res.status} ${(await res.text()).slice(0, 300)}`,
     );
-  const json = await res.json();
+  const json: unknown = await res.json();
   const catalog = parseCodexModelCatalog(json);
   if (!catalog.length)
     throw new Error(
@@ -489,20 +579,22 @@ export async function listCodexModelCatalog({
   return catalog;
 }
 
-export async function listCodexModels(opts = {}) {
+export async function listCodexModels(
+  opts: CodexModelCatalogOptions = {},
+): Promise<string[]> {
   return (await listCodexModelCatalog(opts)).map((entry) => entry.id);
 }
 
 // «Новые сверху»: сравниваем числовую версию в slug (gpt-5.1 → 5.1), при равенстве — по имени.
-function compareModelDesc(a, b) {
-  const ver = (s) =>
+function compareModelDesc(a: string, b: string): number {
+  const ver = (s: string): number =>
     parseFloat((String(s).match(/(\d+(?:\.\d+)?)/) || [])[1] || "0");
   return ver(b) - ver(a) || String(a).localeCompare(String(b));
 }
 
-// ── self-check (node scripts/lib/codex-oauth.mjs) — без сети ────────────────
+// ── self-check (node scripts/lib/codex-oauth.ts) — без сети ────────────────
 if (import.meta.url === `file://${process.argv[1]}`) {
-  const assert = (c, m) => {
+  const assert = (c: unknown, m: string): void => {
     if (!c) throw new Error(`self-check FAIL: ${m}`);
   };
   // PKCE: challenge = base64url(sha256(verifier))
