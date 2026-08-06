@@ -1178,3 +1178,18 @@ the Node event loop is blocked` assertion once. Two later sequential suites hit
   the original JavaScript runtime fixture; replacing them with current SDK V4
   shapes would change characterization semantics. These deferred defects remain
   candidates for separate test-first bugfix work after the migration.
+- 2026-08-06 Asia/Tashkent: PR-10 starts from the PR-9 merge `ab0ae84`. Its
+  boundary is the first half of the executable CLI: shared runtime/environment
+  primitives, systemd unit management, update, config, and doctor move from
+  `bin/iva.mjs` into `scripts/cli/*.ts`; the executable remains a mixed
+  dispatcher until PR-11. `security-migration.test.mjs` becomes TypeScript and
+  the exact tracked `.mjs` ratchet moves from eight to seven. The install root
+  must always be derived by the copied `bin/iva.mjs` shim and injected into CLI
+  modules; deriving it from a realpathed `scripts/cli/*.ts` URL could make
+  sandbox fixtures read or mutate the source checkout. All black-box CLI
+  fixtures therefore physically copy `scripts/cli/` rather than symlinking the
+  whole scripts tree. Pre-conversion root/update/config characterization and a
+  tested runtime factory are prepared in parallel worktrees; the final history
+  will place characterization before extraction. The shared runtime/systemd API
+  is integrated and reviewed before update, config, and doctor are assigned to
+  parallel ownership lanes.
