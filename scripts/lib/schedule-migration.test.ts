@@ -438,7 +438,7 @@ void test("catch-up math: due-and-in-grace periods run, an already-succeeded per
 });
 
 void test("style-matched integration: a real fake systemctl on PATH, tmpdir HOME, via bin/iva.mjs _install-units", async () => {
-  // Mirrors scripts/lib/security-migration.test.mjs's black-box shape: this confirms the
+  // Mirrors scripts/lib/security-migration.test.ts's black-box shape: this confirms the
   // migration also behaves when invoked the way it actually runs in production — as a
   // side effect of server startup — rather than only through direct unit-level calls above.
   // We exercise it here through the schedule-migration module directly (not a CLI command,

@@ -3,10 +3,12 @@ import test from "node:test";
 import { spawnSync } from "node:child_process";
 import {
   chmod,
+  cp,
   copyFile,
   mkdir,
   mkdtemp,
   readFile,
+  realpath,
   rm,
   stat,
   symlink,
@@ -19,7 +21,7 @@ import { fileURLToPath } from "node:url";
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "../..");
 const STABLE_BEARER = "a".repeat(43);
 
-test("old install migration deduplicates a stable bearer and writes a loopback unit", async (t) => {
+void test("old install migration deduplicates a stable bearer and writes a loopback unit", async (t) => {
   const dir = await mkdtemp(join(tmpdir(), "iva-security-migration-"));
   t.after(() => rm(dir, { recursive: true, force: true }));
 
@@ -27,10 +29,14 @@ test("old install migration deduplicates a stable bearer and writes a loopback u
   const home = join(dir, "home");
   const fakeBin = join(dir, "bin");
   await mkdir(join(project, "bin"), { recursive: true });
+  await mkdir(join(project, "scripts"), { recursive: true });
   await mkdir(home, { recursive: true });
   await mkdir(fakeBin, { recursive: true });
   await copyFile(join(ROOT, "bin/iva.mjs"), join(project, "bin/iva.mjs"));
-  await symlink(join(ROOT, "scripts"), join(project, "scripts"), "dir");
+  await cp(join(ROOT, "scripts/cli"), join(project, "scripts/cli"), {
+    recursive: true,
+  });
+  await symlink(join(ROOT, "scripts/lib"), join(project, "scripts/lib"), "dir");
   await symlink(join(ROOT, "deploy"), join(project, "deploy"), "dir");
 
   const envPath = join(project, ".env");
@@ -84,7 +90,18 @@ test("old install migration deduplicates a stable bearer and writes a loopback u
     join(home, ".config/systemd/user/iva.service"),
     "utf8",
   );
+  const canonicalProject = await realpath(project);
   assert.match(unit, /eve\.js start --host 127\.0\.0\.1/);
+  assert.equal(
+    unit.match(/^WorkingDirectory=(.*)$/m)?.[1],
+    canonicalProject,
+    "the generated unit is rooted in the sandbox project",
+  );
+  assert.equal(
+    unit.match(/^EnvironmentFile=(.*)$/m)?.[1],
+    join(canonicalProject, ".env"),
+    "the generated unit reads the sandbox environment file",
+  );
 
   const second = runMigration();
   assert.equal(second.status, 0, second.stderr || second.stdout);
