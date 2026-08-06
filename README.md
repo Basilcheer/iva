@@ -36,7 +36,7 @@ The bridge long-polls Telegram, so no public HTTPS, domain or webhook is needed.
 ## Why people run Iva
 
 - "What did we agree with client X about the last shipment?" — found in seconds, months later.
-- A five-minute voice note from the car  a task list, a draft email, a meeting card.
+- A five-minute voice note from the car → a task list, a draft email, a meeting card.
 - "Make a quote from this price list, cut the discount by 2.5%, send it to the client" — a finished Google Doc, link in the chat.
 
 The rest — for business owners, specialists, executives and everyday life: **[Use cases](docs/use-cases.md)**.
@@ -54,7 +54,7 @@ The rest — for business owners, specialists, executives and everyday life: **[
 - **Personal CRM** — who your people are, what you agreed, when to follow up.
 - **Search by meaning** — BM25 plus link-graph rerank, any language; optional vector mode with one key.
 - **Decision cards** — what you chose, when and why; old versions stay in a dated History.
-- ⏰ **Tasks & reminders** — priorities, due dates and a morning digest.
+- **Tasks & reminders** — priorities, due dates and a morning digest.
 - **Web search** — four pluggable providers: Tavily, Exa, Parallel or Brave.
 - **Google Workspace** — Gmail, Calendar, Drive, Sheets, Docs and Tasks from chat via the `gws` CLI; installed for you, with a guided key setup right in the conversation.
 - **Skills & MCP** — drop one file to add a procedure or connect an MCP server; keys stay in `.env`.
@@ -75,7 +75,7 @@ The rest — for business owners, specialists, executives and everyday life: **[
 | 🪵 Trunk    | `CORE.md` (≤1200 chars, in every prompt) + typed cards: contacts, projects, decisions, ideas, notes | `CORE.md`, `cards/`                                  |
 
 - Every message lands verbatim in a daily markdown log — nothing is paraphrased on arrival.
-- A nightly rollup at 04:00 distills day  week  month  year into schema-validated cards; facts that change get rewritten, not piled up.
+- A nightly rollup at 04:00 distills day → week → month → year into schema-validated cards; facts that change get rewritten, not piled up.
 - One core file, `CORE.md` (≤1,200 chars), rides in every prompt — Iva knows you before it searches anything.
 
 Full architecture and search internals: [docs/memory.md](docs/memory.md).
@@ -172,7 +172,7 @@ Default model is deepseek-v4-pro, 131k context. On Go it runs about $9/mo all-in
 
 #### v0.3.12
 
-- ⏰ One-off reminders arrive again — the system timer crashed before the message could be sent; delivery now runs on plain JS under any Node.
+- One-off reminders arrive again — the system timer crashed before the message could be sent; delivery now runs on plain JS under any Node.
 - Vault health no longer decays from raw daily transcripts — the score counts only the cards Iva actually maintains; an "up" link to a not-yet-created weekly summary isn't broken until its scheduled day, and audio attachments aren't broken links at all.
 - Cards no longer pile up dated "## Update" sections — writes carry explicit operations now: one Log, one Related, displaced facts go to a dated History; the nightly cleanup migrates old piles on its own.
 
@@ -202,7 +202,7 @@ Default model is deepseek-v4-pro, 131k context. On Go it runs about $9/mo all-in
 #### v0.3.8
 
 - Iva works with Google Tasks — add, view and close a task.
-- Connected Google earlier? Tap "Reconnect" in /menu  Google to grant access to Tasks.
+- Connected Google earlier? Tap "Reconnect" in /menu → Google to grant access to Tasks.
 
 #### v0.3.7
 
