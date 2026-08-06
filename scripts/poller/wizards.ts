@@ -48,17 +48,8 @@ type WizardTransport = (
   body: Record<string, unknown>,
 ) => Promise<TelegramResult>;
 const wizardTg = tg as unknown as WizardTransport;
-function displayError(value: unknown): string {
-  if (value instanceof Error) return value.message;
-  if (typeof value === "string") return value;
-  if (
-    typeof value === "number" ||
-    typeof value === "boolean" ||
-    typeof value === "bigint"
-  )
-    return `${value}`;
-  return Object.prototype.toString.call(value);
-}
+const errorMessage = (error: unknown) =>
+  (error as { message?: unknown } | null | undefined)?.message;
 type WizardSnapshot = {
   msgId?: number | null;
   step?: string;
@@ -77,7 +68,10 @@ type WizardSnapshot = {
 // дифф визарда минимальный, а стейт-семантика (ключ chatId:userId, TTL 15 мин, identity-replace,
 // edit-in-place) дословно та же.
 const flows = createFlows({ tg: wizardTg, log });
-const getWizard = (chatId: FlowId, userId: FlowId): WizardState | null =>
+const getWizard = (
+  chatId: FlowId | undefined,
+  userId: FlowId,
+): WizardState | null =>
   flows.get(chatId as number, userId as number) as WizardState | null;
 const newWizard = (
   chatId: FlowId,
@@ -102,12 +96,12 @@ const wizardIsCurrent = (st: WizardState) =>
 // A network result belongs to the wizard object that started it. The slot can be
 // replaced while the request is pending (Cancel, /menu, another /model), so both
 // success and error must be discarded before either path mutates or renders state.
-export async function runWizardRequest(
+export async function runWizardRequest<T>(
   st: unknown,
-  request: () => Promise<unknown>,
+  request: () => Promise<T>,
   isCurrent: (state: unknown) => boolean = (state) =>
     wizardIsCurrent(state as WizardState),
-): Promise<WizardRequestResult<unknown>> {
+): Promise<WizardRequestResult<T>> {
   try {
     const value = await request();
     return isCurrent(st) ? { ok: true, value } : { stale: true };
@@ -302,10 +296,7 @@ async function handleThinkCmd(
       dataDir: DATA_DIR_ABS,
     }),
   );
-  const options = await resolveThinkCatalogLoad(
-    st,
-    loaded as WizardRequestResult<ModelOption[]>,
-  );
+  const options = await resolveThinkCatalogLoad(st, loaded);
   if (options === null) return;
   const option = options.find((candidate) => candidate.id === model);
   if (!option)
@@ -419,7 +410,7 @@ async function showModelScreen(st: WizardState) {
   if (!loaded.ok) {
     return showModelValidationError(st, loaded.error);
   }
-  const options = loaded.value as ModelOption[];
+  const options = loaded.value;
   const current = env[cat.modelVar];
   st.modelOptions = selectableWizardOptions(options, current);
   st.step = "models";
@@ -495,9 +486,11 @@ function startCodexLogin(st: WizardState) {
       return endWizard(
         st,
         tr(
-          "Login failed: " + displayError(e) + "\nSend /model to try again.",
+          "Login failed: " +
+            String(errorMessage(e)) +
+            "\nSend /model to try again.",
           "Вход не удался: " +
-            displayError(e) +
+            String(errorMessage(e)) +
             "\nОтправь /model, чтобы попробовать снова.",
         ),
         menuRow(),
@@ -569,8 +562,8 @@ async function handleKeyMessage(
     await wizScreen(
       st,
       tr(
-        `Key rejected (${displayError(err)}). Send another key or tap «Cancel».`,
-        `Ключ не принят (${displayError(err)}). Пришли другой ключ или нажми «Отмена».`,
+        `Key rejected (${err}). Send another key or tap «Cancel».`,
+        `Ключ не принят (${err}). Пришли другой ключ или нажми «Отмена».`,
       ),
       [cancelRow()],
     );
@@ -652,7 +645,7 @@ async function handleWizardCallback(cq: {
   await tg("answerCallbackQuery", { callback_query_id: cq.id });
   if (ALLOWED.size === 0 || !ALLOWED.has(from)) return true; // swallow untrusted taps
   const action = cq.data.replace(/^iva_(model|think):/, "");
-  const st = getWizard(chatId ?? 0, from);
+  const st = getWizard(chatId, from);
   // No state (bridge restarted / TTL) or a tap on an older wizard message → stale.
   if (isStaleWizard(st, messageId) || st === null) {
     await tg("editMessageText", {
@@ -733,8 +726,8 @@ async function handleWizardCallback(cq: {
         await endWizard(
           st,
           tr(
-            "Couldn't save .env: " + String(e),
-            "Не удалось сохранить .env: " + String(e),
+            "Couldn't save .env: " + String(errorMessage(e)),
+            "Не удалось сохранить .env: " + String(errorMessage(e)),
           ),
           menuRow(),
         );
@@ -769,8 +762,8 @@ async function handleWizardCallback(cq: {
       await endWizard(
         st,
         tr(
-          "Couldn't save .env: " + String(e),
-          "Не удалось сохранить .env: " + String(e),
+          "Couldn't save .env: " + String(errorMessage(e)),
+          "Не удалось сохранить .env: " + String(errorMessage(e)),
         ),
         menuRow(),
       );
@@ -806,7 +799,7 @@ async function handleWizardCallback(cq: {
     if (ok) {
       const { provider, model, effort } = await currentConfig();
       await reply(
-        chatId ?? 0,
+        chatId as number,
         tr(
           `Done — the new configuration is active: ${provider} · ${model} · thinking: ${effortLabel(effort)}.`,
           `Готово — новая конфигурация активна: ${provider} · ${model} · размышления: ${effortLabel(effort)}.`,
@@ -814,7 +807,7 @@ async function handleWizardCallback(cq: {
       );
     } else {
       await reply(
-        chatId ?? 0,
+        chatId as number,
         tr(
           "Couldn't restart (systemctl). Check the service on the server.",
           "Не удалось перезапустить (systemctl). Проверь сервис на сервере.",

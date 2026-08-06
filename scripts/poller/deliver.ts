@@ -89,7 +89,7 @@ async function deliver(
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "X-Telegram-Bot-Api-Secret-Token": SECRET ?? "",
+          "X-Telegram-Bot-Api-Secret-Token": SECRET as string,
         },
         body: JSON.stringify(outgoing),
         ...(timeoutMs === undefined

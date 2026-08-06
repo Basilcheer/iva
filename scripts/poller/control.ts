@@ -308,7 +308,7 @@ async function handleControl(update: TelegramUpdate) {
   // (or a file-capable secret): a document/photo could be the secret itself and must not reach eve.
   // A non-secret await (e.g. the memory interview) lets a non-text message fall through unchanged.
   if (msg?.from) {
-    const pending = getWizard(msg.chat?.id as number, String(msg.from.id));
+    const pending = getWizard(msg.chat?.id, String(msg.from.id));
     const a = isAwaitText(pending?.awaitText) ? pending.awaitText : null;
     if (pending && a) {
       if (text.startsWith("/")) {
