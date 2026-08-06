@@ -687,3 +687,10 @@ the Node event loop is blocked` assertion once. Two later sequential suites hit
   skips; coverage is 73.48% lines, 79.27% branches, and 71.64% functions, a
   +0.66 / +0.23 / +0.11 percentage-point delta from PR-1. Every remaining local
   and Python 3.12 gate was repeated successfully on this final tree.
+- 2026-08-06 Asia/Tashkent: A second coverage run on the same final tree kept
+  the stable 604 / 600 / 0 / 4 test result but reported 73.46% lines, 79.29%
+  branches, and 71.64% functions. The preceding percentages are therefore one
+  observed run, not invariant values: the verified range is 73.46-73.48% lines,
+  79.27-79.29% branches, and 71.64% functions, with a conservative delta from
+  PR-1 of at least +0.64 / +0.23 / +0.11 percentage points. Every observation
+  remains above the enforced coverage baseline.
