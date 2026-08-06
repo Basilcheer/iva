@@ -1153,6 +1153,41 @@ void test("group routing validates exact Telegram entities across Unicode and ma
   );
 });
 
+void test("group command routing ignores null Telegram entities", () => {
+  const update: TelegramQueueUpdate = {
+    update_id: 1,
+    message: {
+      message_id: 1,
+      date: 1,
+      chat: { id: -100, type: "supergroup" },
+      from: { id: 42, is_bot: false },
+      text: "/task@my_bot",
+      entities: [
+        null,
+        {
+          type: "bot_command",
+          offset: 0,
+          length: "/task@my_bot".length,
+        },
+      ],
+    },
+  };
+  const options = {
+    allowedUserIds: new Set(["42"]),
+    botUsername: "my_bot",
+  };
+  const message = update.message;
+  assert.ok(message);
+  const nullOnly = {
+    ...update,
+    message: { ...message, entities: [null] },
+  };
+
+  assert.doesNotThrow(() => shouldQueueBusyUpdate(nullOnly, options));
+  assert.equal(shouldQueueBusyUpdate(nullOnly, options), false);
+  assert.equal(shouldQueueBusyUpdate(update, options), true);
+});
+
 void test("__proto__ is persisted as a queue data key without prototype mutation or loss", async (t) => {
   const file = await queueFile(t);
   await enqueueQueueFile(

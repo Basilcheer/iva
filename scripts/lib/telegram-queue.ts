@@ -622,10 +622,10 @@ function isBotCommand(
   if (entities !== undefined) {
     if (!Array.isArray(entities)) return false;
     return entities.some((entity: unknown) => {
-      const candidate = entity as Record<string, unknown>;
+      const candidate = entity as Record<string, unknown> | null;
       if (
-        candidate.type !== "bot_command" ||
-        candidate.offset !== 0 ||
+        candidate?.type !== "bot_command" ||
+        candidate?.offset !== 0 ||
         !validEntityRange(text, entity)
       ) {
         return false;
