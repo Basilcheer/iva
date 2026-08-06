@@ -134,9 +134,11 @@ export function accountFromIdToken(idToken: string): {
   } catch {
     /* нет клейма — вернём пустое */
   }
+  const accountId = auth.chatgpt_account_id;
+  const planType = auth.chatgpt_plan_type;
   return {
-    accountId: (auth.chatgpt_account_id || null) as string | null,
-    planType: (auth.chatgpt_plan_type || null) as string | null,
+    accountId: typeof accountId === "string" && accountId ? accountId : null,
+    planType: typeof planType === "string" && planType ? planType : null,
   };
 }
 
