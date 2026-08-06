@@ -965,3 +965,11 @@ the Node event loop is blocked` assertion once. Two later sequential suites hit
   lines, 79.15% branches, and 73.01% functions; lint, formatting, typecheck,
   exact 44/44 ratchet, ten-line shim, build, replica, both Python suites, pinned
   uv 0.8.3 lock reproduction, and all Python 3.12 userbot checks.
+- 2026-08-06 Asia/Tashkent: PR-7 starts from PR-6 merge `b1b1b27`. Earlier
+  batches already converted twelve of the fourteen planned menu production
+  modules, leaving only `menu/index.mjs` and `menu/service.mjs`, plus
+  `service.test.mjs`. Their direct pre-conversion suites cover 29/29 behaviors,
+  so no new characterization commit is required. Separate worktrees own the
+  two production modules and their direct test changes; the lead owns the
+  cross-lane `index -> service` link, the poller menu importer, stale-reference
+  scan, ratchet reduction from 44 to 41, integration review, and full gates.
