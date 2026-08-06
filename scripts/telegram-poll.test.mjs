@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 // so importing it here is side-effect-free. A dummy token keeps the API base a harmless string.
 process.env.TELEGRAM_BOT_TOKEN ??= "test:token";
 delete process.env.TELEGRAM_DIRECT_ACCEPTANCE_TIMEOUT_MS;
+const directMainModule = await import("./poller/main.mjs");
 const {
   readCappedStream,
   handleAwaitNonText,
@@ -87,6 +88,11 @@ function routeDeps(overrides = {}) {
     ...overrides,
   };
 }
+
+test("poller main is directly importable without starting the poll loop", () => {
+  assert.deepEqual(Object.keys(directMainModule), ["main"]);
+  assert.equal(typeof directMainModule.main, "function");
+});
 
 test("routeMessageUpdate enqueues and acknowledges one busy update", async () => {
   let enqueued = 0;
