@@ -20,8 +20,8 @@ What helps:
 - What an attacker can reach — vault contents, keys, the Telegram account, the host.
 - Reproduction steps, or the smallest input that triggers it.
 
-Expect a first reply within 72 hours. Once a fix ships, the advisory is published and
-you are credited unless you ask otherwise.
+Expect a first reply within a few days — if a week passes in silence, ping again. Once a
+fix ships, the advisory is published and you are credited unless you ask otherwise.
 
 ## Supported versions
 
@@ -35,6 +35,8 @@ Update button in Telegram) — running an old tag is not a supported configurati
 - The allowlist letting a non-listed Telegram user through.
 - Privilege escalation on the host from anything the agent processes.
 - Anything that bypasses the userbot anti-ban guardrail from inside the agent.
+- The install and update path — anything that gets code onto a host through
+  `install.sh` or `iva update`, including the spend governor and the restart guard.
 
 ## What is not in scope
 
