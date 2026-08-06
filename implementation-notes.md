@@ -1121,3 +1121,17 @@ the Node event loop is blocked` assertion once. Two later sequential suites hit
   formatting inputs. The overdue temporary `telegram-poll.d.mts` bridge was
   removed after its two typed test consumers switched to explicit dynamic
   module boundaries; no tracked `.d.mts` or `.mts` declaration remains.
+- 2026-08-06 Asia/Tashkent: The complete pre-pull PR-9 gate set is green on
+  Node 24.19.0. The full suite reports 689 total tests, 685 passed, zero failed,
+  and four expected macOS skips. Coverage is 76.94% lines, 79.52% branches, and
+  74.48% functions, a PR-8 delta of +1.02 / +0.47 / +1.26 percentage points.
+  Lint, formatting, typecheck, build, exact 8/8 `.mjs` ratchet, zero declaration
+  bridges, and diff checks pass. Replica exits zero after its documented
+  cross-restart resume notice, proves reset retirement, and finishes `OK` with
+  five provider requests.
+- 2026-08-06 Asia/Tashkent: CI-equivalent Python gates also pass: Autograph
+  343/343, security-defense 45/45, deterministic userbot lock reproduction with
+  uv 0.8.3, strict hashed environment sync, userbot guardrails, health, and
+  Python 3.12.13 byte-compilation. The two approved handoff files remain the
+  only untracked paths, no protected file is present in the PR range, and all
+  PR-9 commit messages are free of AI attribution.
