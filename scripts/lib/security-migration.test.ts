@@ -21,7 +21,7 @@ import { fileURLToPath } from "node:url";
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "../..");
 const STABLE_BEARER = "a".repeat(43);
 
-test("old install migration deduplicates a stable bearer and writes a loopback unit", async (t) => {
+void test("old install migration deduplicates a stable bearer and writes a loopback unit", async (t) => {
   const dir = await mkdtemp(join(tmpdir(), "iva-security-migration-"));
   t.after(() => rm(dir, { recursive: true, force: true }));
 

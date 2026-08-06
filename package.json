@@ -29,7 +29,7 @@
     "format:check": "prettier . --check",
     "test": "node --test --test-concurrency=4",
     "test:coverage": "node --test --test-concurrency=4 --experimental-test-coverage --test-coverage-lines=72 --test-coverage-branches=79 --test-coverage-functions=71",
-    "test:security": "node --test agent/lib/eve-auth.test.ts scripts/lib/assistant-auth.test.ts scripts/lib/listener-security.test.ts scripts/lib/security-migration.test.mjs",
+    "test:security": "node --test agent/lib/eve-auth.test.ts scripts/lib/assistant-auth.test.ts scripts/lib/listener-security.test.ts scripts/lib/security-migration.test.ts",
     "test:update-ui": "node --test scripts/lib/update-ui.test.ts scripts/lib/update-check.test.ts",
     "postinstall": "patch-package"
   },
