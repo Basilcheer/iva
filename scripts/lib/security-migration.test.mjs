@@ -7,6 +7,7 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  realpath,
   rm,
   stat,
   symlink,
@@ -84,7 +85,18 @@ test("old install migration deduplicates a stable bearer and writes a loopback u
     join(home, ".config/systemd/user/iva.service"),
     "utf8",
   );
+  const canonicalProject = await realpath(project);
   assert.match(unit, /eve\.js start --host 127\.0\.0\.1/);
+  assert.equal(
+    unit.match(/^WorkingDirectory=(.*)$/m)?.[1],
+    canonicalProject,
+    "the generated unit is rooted in the sandbox project",
+  );
+  assert.equal(
+    unit.match(/^EnvironmentFile=(.*)$/m)?.[1],
+    join(canonicalProject, ".env"),
+    "the generated unit reads the sandbox environment file",
+  );
 
   const second = runMigration();
   assert.equal(second.status, 0, second.stderr || second.stdout);
