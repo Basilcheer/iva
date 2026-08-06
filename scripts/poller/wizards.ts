@@ -11,7 +11,7 @@ import {
 } from "../lib/model-validation.ts";
 import { getAccessToken, runDeviceCodeLogin } from "../lib/codex-oauth.ts";
 import { compactNumber, modelSummary } from "../lib/model-summary.ts";
-import { getLang, tr } from "#lib/i18n.mjs";
+import { getLang, tr } from "#lib/i18n.ts";
 import { readEnvValues, upsertEnv } from "../lib/env-file.ts";
 import { createFlows } from "../lib/tg-flow.ts";
 import type { ModelOption } from "../lib/model-catalog.ts";

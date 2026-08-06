@@ -8,9 +8,9 @@
 
 import { statSync } from "node:fs";
 import { join } from "node:path";
-import { readSettings } from "./settings.mjs";
+import { readSettings } from "./settings.ts";
 
-// Тот же путь, что в settings.mjs (от cwd, не от import.meta.url — см. там про
+// Тот же путь, что в settings.ts (от cwd, не от import.meta.url — см. там про
 // authored-modules-кэш eve). Нужен для statSync-дросселя ниже.
 const DATA_DIR_RAW = process.env.ASSISTANT_DATA_DIR ?? "data";
 const DATA_DIR = DATA_DIR_RAW.startsWith("/")
@@ -22,17 +22,29 @@ const SETTINGS_FILE = join(DATA_DIR, "settings.json");
 // на КАЖДЫЙ tr() (а их сотни за ход) — лишний сисколл, поэтому проверку файла
 // дросселируем до ~2с: между проверками отдаём закэшированный язык, ошибки stat глотаем.
 const CHECK_INTERVAL_MS = 2000;
-const cache = { lang: null, mtimeMs: -1, checkedAt: 0 };
+type Language = "ru" | "en";
+type Command = {
+  readonly command: string;
+  readonly en: string;
+  readonly ru: string;
+  readonly args?: { readonly en: string; readonly ru: string };
+};
+
+const cache: { lang: Language | null; mtimeMs: number; checkedAt: number } = {
+  lang: null,
+  mtimeMs: -1,
+  checkedAt: 0,
+};
 
 // settings.language ("ru"|"en") → env AGENT_LANGUAGE → "ru". Незнакомые значения
 // в settings проваливаются к env, незнакомый env — к дефолту "ru".
-function resolveLang() {
+function resolveLang(): Language {
   const fromSettings = readSettings().language;
   if (fromSettings === "ru" || fromSettings === "en") return fromSettings;
   return process.env.AGENT_LANGUAGE === "en" ? "en" : "ru";
 }
 
-export function getLang() {
+export function getLang(): Language {
   const now = Date.now();
   if (cache.lang !== null && now - cache.checkedAt < CHECK_INTERVAL_MS)
     return cache.lang;
@@ -50,13 +62,14 @@ export function getLang() {
 }
 
 // Идиома репо: выбор перевода двумя литералами на месте вызова (не словари по ключам).
-export const tr = (en, ru) => (getLang() === "ru" ? ru : en);
+export const tr = (en: string, ru: string): string =>
+  getLang() === "ru" ? ru : en;
 
 // ЕДИНЫЙ список команд для helpText() и setMyCommands. Порядок = порядок в /help и
 // в синем меню. args (опц.) — подсказка аргументов: попадает только в /help, не в
 // описание команды Telegram (там аргументов быть не должно). Никаких /clear и /compact —
 // как в текущем HELP.
-export const COMMANDS = [
+export const COMMANDS: ReadonlyArray<Command> = [
   { command: "menu", en: "settings menu", ru: "меню настроек" },
   { command: "help", en: "this list", ru: "этот список" },
   {
@@ -109,9 +122,9 @@ export const COMMANDS = [
 ];
 
 // Текст /help на текущем языке. Генерится на каждый вызов (язык мог смениться).
-export function helpText() {
+export function helpText(): string {
   const isRu = getLang() === "ru";
-  const pick = (en, ru) => (isRu ? ru : en);
+  const pick = (en: string, ru: string): string => (isRu ? ru : en);
   const lines = COMMANDS.map((c) => {
     const hint = c.args ? ` ${pick(c.args.en, c.args.ru)}` : "";
     return `/${c.command}${hint} — ${pick(c.en, c.ru)}`;
@@ -122,7 +135,9 @@ export function helpText() {
 // Массив для setMyCommands на конкретном языке (мост зовёт дважды: default=en и
 // language_code:"ru"), поэтому язык здесь явный, а не через getLang(). Описания без
 // подсказок аргументов — Telegram показывает только имя команды и описание.
-export function botCommands(lang) {
+export function botCommands(
+  lang: string,
+): Array<{ command: string; description: string }> {
   const isRu = lang === "ru";
   return COMMANDS.map((c) => ({
     command: c.command,

@@ -24,6 +24,22 @@ import {
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 
+type StatusRecord = {
+  generation?: number;
+  status?: string;
+  updatedAt?: number;
+  [key: string]: unknown;
+};
+type StatusPatch = Record<string, unknown>;
+type Lock = { lock: string; token: string };
+
+const errorCode = (error: unknown): string | undefined =>
+  error !== null && typeof error === "object" && "code" in error
+    ? typeof error.code === "string"
+      ? error.code
+      : undefined
+    : undefined;
+
 // Путь от cwd, как в usage.ts, а НЕ от import.meta.url: канал инлайнится в кэш
 // authored-modules eve, откуда «две папки вверх» указывают в node_modules/.cache.
 // Оба процесса (iva.service и мост) стартуют из одного WorkingDirectory (корень установки Ивы).
@@ -33,7 +49,7 @@ const DATA_DIR = DATA_DIR_RAW.startsWith("/")
   : join(process.cwd(), DATA_DIR_RAW);
 const LEGACY_STATUS_FILE = join(DATA_DIR, "run-status.json");
 const STATUS_DIR = join(DATA_DIR, "run-status.d");
-const positiveMs = (raw, fallback) => {
+const positiveMs = (raw: string | undefined, fallback: number): number => {
   const value = Number(raw);
   return Number.isFinite(value) && value > 0 ? value : fallback;
 };
@@ -54,45 +70,50 @@ export const RUN_STALE_MS = Number(
   process.env.IVA_RUN_STALE_MS ?? 30 * 60 * 1000,
 );
 
-export function chatKeyOf(chatId, threadId) {
+export function chatKeyOf(
+  chatId: string | number,
+  threadId?: string | number | null,
+): string {
   return `${chatId}:${threadId ?? ""}`;
 }
 
-function statusFileOf(chatKey) {
+function statusFileOf(chatKey: string): string {
   return join(
     STATUS_DIR,
     `${Buffer.from(chatKey, "utf8").toString("base64url")}.json`,
   );
 }
 
-function readObject(file) {
+function readObject(file: string): StatusRecord | null {
   try {
-    const parsed = JSON.parse(readFileSync(file, "utf8"));
+    const parsed: unknown = JSON.parse(readFileSync(file, "utf8"));
     if (
       typeof parsed !== "object" ||
       parsed === null ||
       Array.isArray(parsed)
     ) {
       const error = new Error(`${file} does not contain a JSON object`);
-      error.code = "ERR_RUN_STATUS_SCHEMA";
+      Object.assign(error, { code: "ERR_RUN_STATUS_SCHEMA" });
       throw error;
     }
-    return parsed;
+    return parsed as StatusRecord;
   } catch (error) {
-    if (error?.code === "ENOENT") return null;
+    if (errorCode(error) === "ENOENT") return null;
     throw error;
   }
 }
 
-function isCorruptStatus(error) {
+function isCorruptStatus(error: unknown): boolean {
   return (
-    error instanceof SyntaxError || error?.code === "ERR_RUN_STATUS_SCHEMA"
+    error instanceof SyntaxError || errorCode(error) === "ERR_RUN_STATUS_SCHEMA"
   );
 }
 
-function readLegacy(chatKey) {
+function readLegacy(chatKey: string): StatusRecord | null {
   try {
-    return readObject(LEGACY_STATUS_FILE)?.[chatKey] ?? null;
+    const legacy = readObject(LEGACY_STATUS_FILE);
+    const value = legacy?.[chatKey];
+    return isRecord(value) ? value : null;
   } catch (error) {
     // Старый код считал битый whole-map пустым. Чтение остаётся совместимым,
     // но новый код legacy-файл не переписывает и не рискует остальными чатами.
@@ -101,7 +122,11 @@ function readLegacy(chatKey) {
   }
 }
 
-function readPerChat(chatKey) {
+function isRecord(value: unknown): value is StatusRecord {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function readPerChat(chatKey: string): StatusRecord | null {
   const file = statusFileOf(chatKey);
   try {
     return readObject(file);
@@ -112,17 +137,17 @@ function readPerChat(chatKey) {
       renameSync(file, backup);
     } catch (error) {
       // Another process may have quarantined the same file after our read.
-      if (error?.code !== "ENOENT") throw error;
+      if (errorCode(error) !== "ENOENT") throw error;
     }
     return null;
   }
 }
 
-function readCurrent(chatKey) {
+function readCurrent(chatKey: string): StatusRecord | null {
   return readPerChat(chatKey) ?? readLegacy(chatKey);
 }
 
-function acquireChatLock(file) {
+function acquireChatLock(file: string): Lock {
   mkdirSync(STATUS_DIR, { recursive: true });
   const lock = `${file}.lock`;
   const token = randomUUID();
@@ -140,14 +165,14 @@ function acquireChatLock(file) {
       }
       return { lock, token };
     } catch (error) {
-      if (error?.code !== "EEXIST") throw error;
+      if (errorCode(error) !== "EEXIST") throw error;
       try {
         if (Date.now() - statSync(lock).mtimeMs > LOCK_STALE_MS) {
           rmSync(lock, { force: true });
           continue;
         }
       } catch (statError) {
-        if (statError?.code !== "ENOENT") throw statError;
+        if (errorCode(statError) !== "ENOENT") throw statError;
         continue;
       }
       if (Date.now() >= deadline) {
@@ -159,7 +184,7 @@ function acquireChatLock(file) {
   }
 }
 
-function releaseChatLock({ lock, token }) {
+function releaseChatLock({ lock, token }: Lock): void {
   try {
     if (readFileSync(lock, "utf8") !== token) return;
     rmSync(lock, { force: true });
@@ -168,7 +193,7 @@ function releaseChatLock({ lock, token }) {
   }
 }
 
-function writeCurrent(file, value) {
+function writeCurrent(file: string, value: StatusRecord): void {
   mkdirSync(STATUS_DIR, { recursive: true });
   const tmp = `${file}.tmp-${process.pid}-${randomUUID()}`;
   try {
@@ -183,22 +208,25 @@ function writeCurrent(file, value) {
   }
 }
 
-export function getChatStatus(chatKey) {
+export function getChatStatus(chatKey: string): StatusRecord | null {
   return readCurrent(chatKey);
 }
 
 // Снимок всех per-chat записей для фонового обслуживания мостом.
 // Служебные lock/tmp/corrupt файлы и legacy whole-map сюда не попадают.
-export function listChatStatuses() {
-  let names;
+export function listChatStatuses(): Array<{
+  chatKey: string;
+  status: StatusRecord;
+}> {
+  let names: string[];
   try {
     names = readdirSync(STATUS_DIR);
   } catch (error) {
-    if (error?.code === "ENOENT") return [];
+    if (errorCode(error) === "ENOENT") return [];
     throw error;
   }
 
-  const records = [];
+  const records: Array<{ chatKey: string; status: StatusRecord }> = [];
   for (const name of names) {
     if (!name.endsWith(".json")) continue;
     const encoded = name.slice(0, -".json".length);
@@ -212,14 +240,18 @@ export function listChatStatuses() {
 }
 
 // true, когда по chatKey реально идёт ход (running и не протух).
-export function isRunning(chatKey, now = Date.now()) {
+export function isRunning(chatKey: string, now = Date.now()): boolean {
   const st = getChatStatus(chatKey);
   return Boolean(
     st && st.status === "running" && now - (st.updatedAt ?? 0) < RUN_STALE_MS,
   );
 }
 
-function updateChatStatus(chatKey, patch, expected) {
+function updateChatStatus(
+  chatKey: string,
+  patch: StatusPatch,
+  expected: StatusPatch | null,
+): StatusRecord | null {
   const file = statusFileOf(chatKey);
   const lock = acquireChatLock(file);
   try {
@@ -234,10 +266,12 @@ function updateChatStatus(chatKey, patch, expected) {
       return null;
     }
     const previousGeneration =
-      Number.isSafeInteger(prev.generation) && prev.generation >= 0
+      typeof prev.generation === "number" &&
+      Number.isSafeInteger(prev.generation) &&
+      prev.generation >= 0
         ? prev.generation
         : 0;
-    const next = {
+    const next: StatusRecord = {
       ...prev,
       ...patch,
       generation: previousGeneration + 1,
@@ -253,12 +287,19 @@ function updateChatStatus(chatKey, patch, expected) {
 }
 
 // Частичное обновление записи chatKey; null-поля в patch удаляют ключ.
-export function setChatStatus(chatKey, patch) {
-  return updateChatStatus(chatKey, patch, null);
+export function setChatStatus(
+  chatKey: string,
+  patch: StatusPatch,
+): StatusRecord {
+  return updateChatStatus(chatKey, patch, null) as StatusRecord;
 }
 
 // Atomic compare-and-set для terminal Eve events: reset может успеть удалить
 // sessionId между ранним read и записью позднего события.
-export function setChatStatusIf(chatKey, expected, patch) {
+export function setChatStatusIf(
+  chatKey: string,
+  expected: StatusPatch,
+  patch: StatusPatch,
+): StatusRecord | null {
   return updateChatStatus(chatKey, patch, expected);
 }

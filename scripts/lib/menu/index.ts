@@ -12,7 +12,7 @@
 // verbs: o(навигация) x(закрыть) pg:<n> rf(обновить) + data-вербы экрана (set key rs go
 // q:<i>:<v> skip fin redo apply do).
 
-import { getLang } from "#lib/i18n.mjs";
+import { getLang } from "#lib/i18n.ts";
 
 import root from "./root.ts";
 import search from "./search.ts";

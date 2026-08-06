@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-floating-promises -- Node's test runner owns test registration promises. */
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -20,10 +21,10 @@ const dataDir = mkdtempSync(join(tmpdir(), "iva-run-status-"));
 process.env.ASSISTANT_DATA_DIR = dataDir;
 process.env.IVA_RUN_STATUS_LOCK_STALE_MS = "300";
 process.env.IVA_RUN_STATUS_LOCK_TIMEOUT_MS = "150";
-const modulePath = fileURLToPath(new URL("./run-status.mjs", import.meta.url));
-const status = await import(
+const modulePath = fileURLToPath(new URL("./run-status.ts", import.meta.url));
+const status = (await import(
   `${pathToFileURL(modulePath).href}?test=${Date.now()}`
-);
+)) as typeof import("./run-status.ts");
 
 test("legacy whole-map is read and each touched key migrates independently", () => {
   const legacy = join(dataDir, "run-status.json");
@@ -35,11 +36,11 @@ test("legacy whole-map is read and each touched key migrates independently", () 
     }),
   );
 
-  assert.equal(status.getChatStatus("legacy-a:").sessionId, "a");
+  assert.equal(status.getChatStatus("legacy-a:")?.sessionId, "a");
   status.setChatStatus("legacy-a:", { status: "idle", sessionId: null });
 
   // The untouched key remains available from the legacy file.
-  assert.equal(status.getChatStatus("legacy-b:7").sessionId, "b");
+  assert.equal(status.getChatStatus("legacy-b:7")?.sessionId, "b");
   // Once migrated, the per-chat file wins over stale legacy bytes.
   writeFileSync(
     legacy,
@@ -48,8 +49,8 @@ test("legacy whole-map is read and each touched key migrates independently", () 
       "legacy-b:7": { status: "running", sessionId: "b" },
     }),
   );
-  assert.equal(status.getChatStatus("legacy-a:").status, "idle");
-  assert.equal(status.getChatStatus("legacy-a:").sessionId, undefined);
+  assert.equal(status.getChatStatus("legacy-a:")?.status, "idle");
+  assert.equal(status.getChatStatus("legacy-a:")?.sessionId, undefined);
 });
 
 test("distinct chats survive bounded concurrent writers", async () => {
@@ -69,7 +70,7 @@ test("distinct chats survive bounded concurrent writers", async () => {
   const runs = Array.from(
     { length: workers },
     (_, worker) =>
-      new Promise((resolve, reject) => {
+      new Promise<void>((resolve, reject) => {
         const child = spawn(
           process.execPath,
           [
@@ -123,8 +124,8 @@ test("conditional update checks sessionId under the same per-chat lock", () => {
     ),
     null,
   );
-  assert.equal(status.getChatStatus("cas:").status, "running");
-  assert.equal(status.getChatStatus("cas:").turnId, "fresh-turn");
+  assert.equal(status.getChatStatus("cas:")?.status, "running");
+  assert.equal(status.getChatStatus("cas:")?.turnId, "fresh-turn");
 
   assert.ok(
     status.setChatStatusIf(
@@ -133,7 +134,7 @@ test("conditional update checks sessionId under the same per-chat lock", () => {
       { status: "idle", sessionId: null, turnId: null },
     ),
   );
-  assert.equal(status.getChatStatus("cas:").status, "idle");
+  assert.equal(status.getChatStatus("cas:")?.status, "idle");
 });
 
 test("each accepted status write advances a monotonic per-chat generation", () => {
@@ -162,11 +163,13 @@ test("per-chat status enumeration returns decoded keys and records", () => {
   );
 
   const records = status.listChatStatuses();
-  const listed = records.find(({ chatKey }) => chatKey === "listed:-7");
+  const listed = records.find(
+    ({ chatKey }: { chatKey: string }) => chatKey === "listed:-7",
+  );
   assert.equal(listed?.status.status, "running");
   assert.equal(listed?.status.sessionId, "listed-session");
   assert.equal(
-    records.some(({ chatKey }) => chatKey === ""),
+    records.some(({ chatKey }: { chatKey: string }) => chatKey === ""),
     false,
   );
 });
@@ -183,7 +186,7 @@ test("a stale per-chat lock is reclaimed after a crashed writer", () => {
 
   status.setChatStatus(key, { status: "running", sessionId: "successor" });
 
-  assert.equal(status.getChatStatus(key).sessionId, "successor");
+  assert.equal(status.getChatStatus(key)?.sessionId, "successor");
   assert.equal(existsSync(lock), false);
   assert.equal(
     readdirSync(dir).some((name) => name.includes(".tmp-")),
@@ -224,9 +227,12 @@ test("one corrupt per-chat file is quarantined without blocking neighbors", () =
   writeFileSync(file, corrupt, { mode: 0o600 });
 
   assert.equal(status.getChatStatus(corruptKey), null);
-  assert.equal(status.getChatStatus(neighborKey).sessionId, "neighbor-session");
+  assert.equal(
+    status.getChatStatus(neighborKey)?.sessionId,
+    "neighbor-session",
+  );
   status.setChatStatus(corruptKey, { status: "idle" });
-  assert.equal(status.getChatStatus(corruptKey).status, "idle");
+  assert.equal(status.getChatStatus(corruptKey)?.status, "idle");
 
   const backups = readdirSync(dir).filter((name) =>
     name.startsWith(`${encoded}.json.corrupt-`),
@@ -254,7 +260,11 @@ test(
     try {
       assert.throws(
         () => status.getChatStatus(key),
-        (error) => error?.code === "EACCES",
+        (error: unknown) =>
+          error !== null &&
+          typeof error === "object" &&
+          "code" in error &&
+          error.code === "EACCES",
       );
       assert.equal(existsSync(file), true);
       assert.equal(

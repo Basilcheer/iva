@@ -92,7 +92,7 @@ process.env.TELEGRAM_WEBHOOK_SECRET_TOKEN = "test-secret";
 
 const [pollModule, runStatusModule] = (await Promise.all([
   import(`./telegram-poll.mjs?reset-test=${Date.now()}`),
-  import(`#lib/run-status.mjs?reset-test=${Date.now()}`),
+  import(`#lib/run-status.ts?reset-test=${Date.now()}`),
 ])) as [unknown, unknown];
 const {
   clearPrivateResetIntent,

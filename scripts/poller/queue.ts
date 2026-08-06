@@ -9,7 +9,7 @@ import type {
   TelegramQueueMessage,
   TelegramQueueUpdate,
 } from "../lib/telegram-queue.ts";
-import { toChannelLocalToken } from "#lib/telegram-continuation-token.mjs";
+import { toChannelLocalToken } from "#lib/telegram-continuation-token.ts";
 import {
   clearTelegramResetIntent,
   loadTelegramResetIntents,
@@ -22,8 +22,8 @@ import {
   RUN_STALE_MS,
   setChatStatus,
   setChatStatusIf,
-} from "#lib/run-status.mjs";
-import { tr } from "#lib/i18n.mjs";
+} from "#lib/run-status.ts";
+import { tr } from "#lib/i18n.ts";
 import { DATA_DIR, SECRET, RESET_ROUTE, log } from "./config.ts";
 import { tg } from "./transport.ts";
 

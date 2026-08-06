@@ -93,7 +93,7 @@ const coreModulePath: string = "./core.ts";
 const { default: core } = (await import(coreModulePath)) as {
   default: CoreScreen;
 };
-const runStatus = (await import("#lib/run-status.mjs")) as RunStatus;
+const runStatus = (await import("#lib/run-status.ts")) as RunStatus;
 
 after(() => {
   if (previousDataDir === undefined) delete process.env.ASSISTANT_DATA_DIR;

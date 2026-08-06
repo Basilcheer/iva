@@ -1,6 +1,6 @@
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { TELEGRAM_ACCEPTANCE_ROUTE } from "#lib/telegram-acceptance.mjs";
+import { TELEGRAM_ACCEPTANCE_ROUTE } from "#lib/telegram-acceptance.ts";
 
 export const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 export const NODE = process.execPath;
@@ -51,7 +51,7 @@ export const ALLOWED = new Set(
     .filter(Boolean),
 );
 
-// LANG/t/HELP убраны: язык теперь динамический (getLang из i18n.mjs, реагирует на
+// LANG/t/HELP убраны: язык теперь динамический (getLang из i18n.ts, реагирует на
 // data/settings.json без рестарта), /help генерится helpText() из общей таблицы COMMANDS.
 
 export const sleep = (ms: number): Promise<void> =>

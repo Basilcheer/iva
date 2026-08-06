@@ -10,7 +10,7 @@
 import { readFileSync } from "node:fs";
 import { execFile } from "node:child_process";
 import { join } from "node:path";
-import { readSettings } from "#lib/settings.mjs";
+import { readSettings } from "#lib/settings.ts";
 
 const PER_PAGE = 8;
 const CACHE_TTL_MS = 60_000;
@@ -70,7 +70,7 @@ function formatLastSuccess(entry: RollupEntry | undefined, T: Translate) {
 
 function digestEnabled() {
   // readSettings() resolves data/settings.json from ASSISTANT_DATA_DIR/cwd itself (see
-  // agent/lib/settings.mjs) — same file agent/schedules/digest.ts reads at fire time,
+  // agent/lib/settings.ts) — same file agent/schedules/digest.ts reads at fire time,
   // so this always reflects the toggle digest.ts itself would see on its next tick.
   try {
     const settings = readSettings() as {

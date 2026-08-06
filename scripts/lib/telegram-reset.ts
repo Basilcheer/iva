@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-unnecessary-type-assertion -- conversion keeps the injectable fetch boundary source-compatible. */
 import { telegramContinuationToken } from "eve/channels/telegram";
-import { toChannelLocalToken } from "#lib/telegram-continuation-token.mjs";
+import { toChannelLocalToken } from "#lib/telegram-continuation-token.ts";
 
 type Status = Record<string, unknown> | null | undefined;
 type TelegramMessage = {

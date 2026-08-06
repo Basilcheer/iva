@@ -1,9 +1,16 @@
+/* eslint-disable @typescript-eslint/no-floating-promises, @typescript-eslint/require-await -- Node's test runner owns registration promises and the harness preserves production async seams. */
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { telegramChannel } from "eve/channels/telegram";
+import type {
+  TelegramChannelState,
+  TelegramContext,
+  TelegramMessage,
+} from "eve/channels/telegram";
+import type { RouteHandlerArgs, Session } from "eve/channels";
 import {
   createQueueItem,
   enqueueItem,
@@ -15,19 +22,76 @@ import {
   handleAcceptedTelegramWebhook,
   TELEGRAM_QUEUE_RECEIPT_FIELD,
   wrapTelegramQueueOnMessage,
-} from "./telegram-acceptance.mjs";
+} from "./telegram-acceptance.ts";
 
 const WEBHOOK_SECRET = "test-secret";
-const fakeBotToken = (id, label) =>
+type TestUpdate = {
+  update_id: number;
+  message: {
+    message_id: number;
+    date: number;
+    chat: { id: number; type: string };
+    from: { id: number; is_bot: boolean; first_name: string };
+    text?: string;
+    [key: string]: unknown;
+  };
+};
+type DeliveryResult = true | false | "handled";
+type SendImpl = (
+  update: TestUpdate,
+  input: unknown,
+  options: unknown,
+) => Promise<unknown>;
+type DeliveryOptions = {
+  webhookVerifier?: (
+    request: Request,
+    rawBody: string,
+  ) => Promise<string | boolean>;
+  onMessage?: (context: TelegramContext, message: TelegramMessage) => unknown;
+  marked?: boolean;
+  webhookSecretHeader?: string;
+  completedUpdatesFile?: string;
+};
+type DrainReadyQueueHeads = (
+  options: Record<string, unknown>,
+) => Promise<number>;
+
+const isCompletedLedger = (
+  value: unknown,
+): value is { botId: string; updates: number[] } =>
+  value !== null &&
+  typeof value === "object" &&
+  "botId" in value &&
+  typeof value.botId === "string" &&
+  "updates" in value &&
+  Array.isArray(value.updates) &&
+  value.updates.every((id) => typeof id === "number");
+
+const fakeBotToken = (id: number, label: string): string =>
   `${id}:${Buffer.from(label).toString("base64url")}`;
+const fakeSession = (id: string): Session => ({
+  id,
+  continuationToken: id,
+  cancel: () => {
+    throw new Error("not used");
+  },
+  getEventStream: () => {
+    throw new Error("not used");
+  },
+  getStreamTailIndex: () => {
+    throw new Error("not used");
+  },
+});
 process.env.TELEGRAM_BOT_TOKEN = fakeBotToken(999, "acceptance-default");
 process.env.TELEGRAM_WEBHOOK_SECRET_TOKEN = WEBHOOK_SECRET;
 process.env.TELEGRAM_ALLOWED_USER_IDS = "42";
 process.env.TELEGRAM_POLL_SETTLE_MS = "0";
 const { drainReadyQueueHeads } =
-  await import("../../scripts/telegram-poll.mjs");
+  (await import("../../scripts/telegram-poll.mjs")) as {
+    drainReadyQueueHeads: DrainReadyQueueHeads;
+  };
 
-const privateUpdate = (updateId, text) => ({
+const privateUpdate = (updateId: number, text?: string): TestUpdate => ({
   update_id: updateId,
   message: {
     message_id: updateId,
@@ -38,17 +102,21 @@ const privateUpdate = (updateId, text) => ({
   },
 });
 
-function deferred() {
-  let resolve;
-  let reject;
-  const promise = new Promise((yes, no) => {
+function deferred(): {
+  promise: Promise<unknown>;
+  resolve: (value: unknown) => void;
+  reject: (reason?: unknown) => void;
+} {
+  let resolve: (value: unknown) => void = () => {};
+  let reject: (reason?: unknown) => void = () => {};
+  const promise = new Promise<unknown>((yes, no) => {
     resolve = yes;
     reject = no;
   });
   return { promise, resolve, reject };
 }
 
-async function waitFor(predicate, label) {
+async function waitFor(predicate: () => boolean, label: string): Promise<void> {
   for (let attempt = 0; attempt < 100; attempt++) {
     if (predicate()) return;
     await new Promise((resolve) => setTimeout(resolve, 5));
@@ -57,7 +125,7 @@ async function waitFor(predicate, label) {
 }
 
 function productionTelegramDelivery(
-  sendImpl,
+  sendImpl: SendImpl,
   {
     webhookVerifier,
     onMessage = () => ({ auth: null }),
@@ -67,14 +135,16 @@ function productionTelegramDelivery(
       mkdtempSync(join(tmpdir(), "iva-completed-updates-test-")),
       "completed-updates.json",
     ),
-  } = {},
-) {
+  }: DeliveryOptions = {},
+): (update: TestUpdate) => Promise<DeliveryResult> {
   const channel = telegramChannel({
     credentials: {
       webhookVerifier:
         webhookVerifier ?? (async (_request, rawBody) => rawBody),
     },
-    onMessage: wrapTelegramQueueOnMessage(onMessage),
+    onMessage: wrapTelegramQueueOnMessage(
+      onMessage as Parameters<typeof wrapTelegramQueueOnMessage>[0],
+    ),
   });
   const route = channel.routes.find(
     (candidate) =>
@@ -84,7 +154,37 @@ function productionTelegramDelivery(
   );
   assert.ok(route && route.transport !== "websocket");
 
-  return async (update) => {
+  return async (update: TestUpdate) => {
+    const routeArgs: RouteHandlerArgs<TelegramChannelState> = {
+      send: async (input, options) => {
+        await sendImpl(update, input, options);
+        return fakeSession(`test-session-${update.update_id}`);
+      },
+      resolveActiveSession: () => {
+        throw new Error("not used");
+      },
+      cancel: () => {
+        throw new Error("not used");
+      },
+      clear: () => {
+        throw new Error("not used");
+      },
+      compact: () => {
+        throw new Error("not used");
+      },
+      reset: () => {
+        throw new Error("not used");
+      },
+      getSession: () => {
+        throw new Error("not used");
+      },
+      receive: () => {
+        throw new Error("not used");
+      },
+      params: {},
+      waitUntil: () => {},
+      requestIp: "127.0.0.1",
+    };
     const response = await handleAcceptedTelegramWebhook(
       route.handler,
       new Request("http://iva.test/eve/v1/telegram/accepted", {
@@ -95,21 +195,7 @@ function productionTelegramDelivery(
         },
         body: JSON.stringify(marked ? addTelegramQueueReceipt(update) : update),
       }),
-      {
-        send: (input, options) => sendImpl(update, input, options),
-        resolveActiveSession: async () => undefined,
-        cancel: async () => ({ status: "no_active_turn" }),
-        reset: async () => ({ status: "no_active_session" }),
-        getSession: () => {
-          throw new Error("not used");
-        },
-        receive: async () => {
-          throw new Error("not used");
-        },
-        params: {},
-        waitUntil: () => {},
-        requestIp: "127.0.0.1",
-      },
+      routeArgs,
       { completedUpdatesFile },
     );
     return response.ok
@@ -134,7 +220,7 @@ test("intentional authored no-send accepts queued location, then the later text 
     "1:",
     createQueueItem(privateUpdate(102, "after location"), 2),
   ).document;
-  const sent = [];
+  const sent: number[] = [];
   const deliverImpl = productionTelegramDelivery(
     async (update) => {
       sent.push(update.update_id);
@@ -150,7 +236,7 @@ test("intentional authored no-send accepts queued location, then the later text 
       },
     },
   );
-  const acknowledgeImpl = async (key, updateId) => {
+  const acknowledgeImpl = async (key: string, updateId: number) => {
     document = removeQueueHead(document, key, updateId);
   };
   const inFlight = new Map();
@@ -166,7 +252,7 @@ test("intentional authored no-send accepts queued location, then the later text 
     }),
     1,
   );
-  assert.equal(queueHead(document, "1:").updateId, 102);
+  assert.equal(queueHead(document, "1:")?.updateId, 102);
   assert.deepEqual(sent, []);
 
   assert.equal(
@@ -261,11 +347,34 @@ test("acceptance route preserves Telegram auth failure and rejects malformed no-
       body: "{broken",
     }),
     {
-      send: async () => {
+      send: () => {
         sendCalls++;
-        return { id: "must-not-run" };
+        throw new Error("must not run");
       },
+      resolveActiveSession: () => {
+        throw new Error("must not run");
+      },
+      cancel: () => {
+        throw new Error("must not run");
+      },
+      clear: () => {
+        throw new Error("must not run");
+      },
+      compact: () => {
+        throw new Error("must not run");
+      },
+      reset: () => {
+        throw new Error("must not run");
+      },
+      getSession: () => {
+        throw new Error("must not run");
+      },
+      receive: () => {
+        throw new Error("must not run");
+      },
+      params: {},
       waitUntil: () => {},
+      requestIp: "127.0.0.1",
     },
   );
   assert.equal(malformed.ok, false);
@@ -283,7 +392,7 @@ test("production Telegram deferred failure retains the head and cannot start the
     "1:",
     createQueueItem(privateUpdate(102, "second"), 2),
   ).document;
-  const attempts = [];
+  const attempts: number[] = [];
 
   const remaining = await drainReadyQueueHeads({
     loadImpl: async () => document,
@@ -292,7 +401,7 @@ test("production Telegram deferred failure retains the head and cannot start the
       attempts.push(update.update_id);
       throw new Error("injected Eve acceptance failure");
     }),
-    acknowledgeImpl: async (key, updateId) => {
+    acknowledgeImpl: async (key: string, updateId: number) => {
       document = removeQueueHead(document, key, updateId);
     },
     settleUntil: new Map(),
@@ -300,7 +409,7 @@ test("production Telegram deferred failure retains the head and cannot start the
   });
 
   assert.equal(remaining, 2);
-  assert.equal(queueHead(document, "1:").updateId, 101);
+  assert.equal(queueHead(document, "1:")?.updateId, 101);
   assert.deepEqual(attempts, [101]);
 });
 
@@ -315,7 +424,7 @@ test("production Telegram receipt removes exactly one head only after Eve send r
     createQueueItem(privateUpdate(102, "second"), 2),
   ).document;
   const acceptance = deferred();
-  const attempts = [];
+  const attempts: number[] = [];
 
   const drain = drainReadyQueueHeads({
     loadImpl: async () => document,
@@ -324,7 +433,7 @@ test("production Telegram receipt removes exactly one head only after Eve send r
       attempts.push(update.update_id);
       return acceptance.promise;
     }),
-    acknowledgeImpl: async (key, updateId) => {
+    acknowledgeImpl: async (key: string, updateId: number) => {
       document = removeQueueHead(document, key, updateId);
     },
     settleUntil: new Map(),
@@ -332,12 +441,12 @@ test("production Telegram receipt removes exactly one head only after Eve send r
   });
 
   await waitFor(() => attempts.length === 1, "the first delivery attempt");
-  assert.equal(queueHead(document, "1:").updateId, 101);
+  assert.equal(queueHead(document, "1:")?.updateId, 101);
   assert.deepEqual(attempts, [101]);
 
   acceptance.resolve({ id: "accepted-session" });
   assert.equal(await drain, 1);
-  assert.equal(queueHead(document, "1:").updateId, 102);
+  assert.equal(queueHead(document, "1:")?.updateId, 102);
   assert.deepEqual(
     attempts,
     [101],
@@ -388,7 +497,7 @@ test("a completed update is handled from disk without invoking the authored hand
     {
       completedUpdatesFile,
       webhookSecretHeader: "wrong-secret",
-      webhookVerifier: async (request) =>
+      webhookVerifier: async (request): Promise<boolean> =>
         request.headers.get("x-telegram-bot-api-secret-token") ===
         WEBHOOK_SECRET,
       onMessage: () => {
@@ -456,7 +565,10 @@ test("the completed-update ledger keeps the latest 200 ids", async () => {
   );
 
   assert.equal(await delivery(privateUpdate(999, "newest")), true);
-  const completed = JSON.parse(readFileSync(completedUpdatesFile, "utf8"));
+  const completed: unknown = JSON.parse(
+    readFileSync(completedUpdatesFile, "utf8"),
+  );
+  assert.ok(isCompletedLedger(completed));
   assert.equal(completed.botId, "999");
   assert.equal(completed.updates.length, 200);
   assert.equal(completed.updates.includes(0), false);
@@ -516,10 +628,11 @@ test("missing webhook secret disables deduplication and reports it once", async 
   const completedUpdatesFile = join(root, "completed-updates.json");
   const priorSecret = process.env.TELEGRAM_WEBHOOK_SECRET_TOKEN;
   const priorError = console.error;
-  const logs = [];
+  const logs: string[] = [];
   let sends = 0;
   delete process.env.TELEGRAM_WEBHOOK_SECRET_TOKEN;
-  console.error = (...parts) => logs.push(parts.join(" "));
+  console.error = (...parts: unknown[]) =>
+    logs.push(parts.map(String).join(" "));
   try {
     const delivery = productionTelegramDelivery(
       async () => ({ id: `accepted-${++sends}` }),
