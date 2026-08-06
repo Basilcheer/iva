@@ -10,7 +10,7 @@
 import { readFileSync } from "node:fs";
 import { execFile } from "node:child_process";
 import { join } from "node:path";
-import { readSettings } from "#lib/settings.mjs";
+import { readSettings } from "#lib/settings.ts";
 
 const PER_PAGE = 8;
 const CACHE_TTL_MS = 60_000;

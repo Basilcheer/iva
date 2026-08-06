@@ -3,7 +3,7 @@ import {
   TELEGRAM_ACCEPTANCE_KIND_HEADER,
 } from "#lib/telegram-acceptance.mjs";
 import { classifyDeliverStatus } from "../lib/deliver-policy.ts";
-import { tr } from "#lib/i18n.mjs";
+import { tr } from "#lib/i18n.ts";
 import {
   ROUTE,
   ACCEPTANCE_ROUTE,

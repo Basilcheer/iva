@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-floating-promises -- Node's test runner owns registrations. */
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -12,14 +13,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
-// settings.mjs фиксирует каталог данных на импорте, поэтому ASSISTANT_DATA_DIR ставим
+// settings.ts фиксирует каталог данных на импорте, поэтому ASSISTANT_DATA_DIR ставим
 // ДО динамического импорта. Абсолютный temp-путь заодно уводит запись подальше от
 // репо (ветку прода трогать нельзя) и минует cwd-относительную ветку — её проверяем
 // отдельным подпроцессом ниже.
 const DATA_DIR = mkdtempSync(join(tmpdir(), "iva-settings-"));
 process.env.ASSISTANT_DATA_DIR = DATA_DIR;
 const SETTINGS_FILE = join(DATA_DIR, "settings.json");
-const { readSettings, writeSettings } = await import("./settings.mjs");
+const { readSettings, writeSettings } = await import("./settings.ts");
 
 function reset() {
   rmSync(SETTINGS_FILE, { force: true });
@@ -89,10 +90,10 @@ test("data dir defaults to <cwd>/data for a relative ASSISTANT_DATA_DIR", () => 
   // Абсолютный ASSISTANT_DATA_DIR у родителя минует эту ветку, поэтому проверяем её
   // в отдельном процессе с cwd=temp и без ASSISTANT_DATA_DIR (дефолт "data").
   const cwd = mkdtempSync(join(tmpdir(), "iva-settings-cwd-"));
-  const url = pathToFileURL(join(import.meta.dirname, "settings.mjs")).href;
+  const url = pathToFileURL(join(import.meta.dirname, "settings.ts")).href;
   const code =
     'const { writeSettings } = await import(process.env.__URL); writeSettings({ language: "en" });';
-  const env = { ...process.env, __URL: url };
+  const env: NodeJS.ProcessEnv = { ...process.env, __URL: url };
   delete env.ASSISTANT_DATA_DIR;
   execFileSync(process.execPath, ["--input-type=module", "-e", code], {
     env,

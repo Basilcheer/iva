@@ -1,4 +1,4 @@
-import { botCommands, helpText, tr } from "#lib/i18n.mjs";
+import { botCommands, helpText, tr } from "#lib/i18n.ts";
 import { continuationTokenForControl } from "../lib/telegram-reset.ts";
 import { getChatStatus, isRunning } from "#lib/run-status.mjs";
 import { readEnvFresh } from "../lib/env-file.ts";

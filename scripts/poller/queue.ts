@@ -23,7 +23,7 @@ import {
   setChatStatus,
   setChatStatusIf,
 } from "#lib/run-status.mjs";
-import { tr } from "#lib/i18n.mjs";
+import { tr } from "#lib/i18n.ts";
 import { DATA_DIR, SECRET, RESET_ROUTE, log } from "./config.ts";
 import { tg } from "./transport.ts";
 

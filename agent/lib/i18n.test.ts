@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-floating-promises -- Node's test runner owns registrations. */
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -8,7 +9,21 @@ import { pathToFileURL } from "node:url";
 
 // getLang() читает env/файл на импорте и кэширует язык на ~2с, поэтому каждый сценарий
 // гоняем в СВЕЖЕМ процессе: чистый модуль, чистое окно кэша, свои env/settings.json.
-const I18N_URL = pathToFileURL(join(import.meta.dirname, "i18n.mjs")).href;
+const I18N_URL = pathToFileURL(join(import.meta.dirname, "i18n.ts")).href;
+
+type ProbeOptions = {
+  language?: string;
+  agentLanguage?: string;
+  corrupt?: string;
+};
+type ProbeResult = {
+  lang: string;
+  word: string;
+  help: string;
+  commands: string[];
+  botEn: Array<{ command: string; description: string }>;
+  botRu: Array<{ command: string; description: string }>;
+};
 
 const PROBE = `
 const m = await import(process.env.__I18N_URL);
@@ -23,13 +38,17 @@ process.stdout.write(JSON.stringify({
 `;
 
 // language: строка → пишем settings.json {language}; corrupt: строка → пишем как есть.
-function probe({ language, agentLanguage, corrupt } = {}) {
+function probe({
+  language,
+  agentLanguage,
+  corrupt,
+}: ProbeOptions = {}): ProbeResult {
   const dataDir = mkdtempSync(join(tmpdir(), "iva-i18n-"));
   if (corrupt !== undefined)
     writeFileSync(join(dataDir, "settings.json"), corrupt);
   else if (language !== undefined)
     writeFileSync(join(dataDir, "settings.json"), JSON.stringify({ language }));
-  const env = {
+  const env: NodeJS.ProcessEnv = {
     ...process.env,
     __I18N_URL: I18N_URL,
     ASSISTANT_DATA_DIR: dataDir,
@@ -41,7 +60,7 @@ function probe({ language, agentLanguage, corrupt } = {}) {
     ["--input-type=module", "-e", PROBE],
     { env, encoding: "utf8" },
   );
-  return JSON.parse(out);
+  return JSON.parse(out) as ProbeResult;
 }
 
 test("default language is ru without settings or env", () => {

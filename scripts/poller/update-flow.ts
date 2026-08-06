@@ -10,7 +10,7 @@ import {
 } from "../lib/update-check.ts";
 import { modelSummary } from "../lib/model-summary.ts";
 import { acquireUpdateLock, releaseUpdateLock } from "../lib/update-safety.ts";
-import { getLang, tr } from "#lib/i18n.mjs";
+import { getLang, tr } from "#lib/i18n.ts";
 import {
   ALLOWED,
   DATA_DIR,

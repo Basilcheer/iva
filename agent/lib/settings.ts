@@ -9,6 +9,8 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
+type Settings = Record<string, unknown>;
+
 // Путь от cwd, а НЕ от import.meta.url: канал инлайнится в кэш authored-modules eve,
 // откуда относительные пути указывают в node_modules/.cache (см. run-status.mjs:14-18).
 // Оба процесса (iva.service и мост) стартуют из одного WorkingDirectory (корень установки Ивы).
@@ -19,10 +21,12 @@ const DATA_DIR = DATA_DIR_RAW.startsWith("/")
 const SETTINGS_FILE = join(DATA_DIR, "settings.json");
 
 // {} при отсутствии/битом файле — вызывающий код всегда получает объект.
-export function readSettings() {
+export function readSettings(): Settings {
   try {
-    const parsed = JSON.parse(readFileSync(SETTINGS_FILE, "utf8"));
-    return typeof parsed === "object" && parsed !== null ? parsed : {};
+    const parsed: unknown = JSON.parse(readFileSync(SETTINGS_FILE, "utf8"));
+    return typeof parsed === "object" && parsed !== null
+      ? (parsed as Settings)
+      : {};
   } catch {
     return {};
   }
@@ -30,7 +34,7 @@ export function readSettings() {
 
 // Частичное обновление: patch мержится поверх текущего, null-поля удаляют ключ.
 // Возвращает получившийся объект. Запись атомарна (tmp+rename).
-export function writeSettings(patch) {
+export function writeSettings(patch: Settings): Settings {
   const next = { ...readSettings(), ...patch };
   for (const k of Object.keys(next)) if (next[k] === null) delete next[k];
   mkdirSync(DATA_DIR, { recursive: true });

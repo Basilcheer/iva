@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 
-const MODULE_URL = new URL("./schedule-paths.mts", import.meta.url).href;
+const MODULE_URL = new URL("./schedule-paths.ts", import.meta.url).href;
 const PROBE_PROGRAM = `
   const { resolvePaths, memoryRollupJob } =
     await import(process.env.SCHEDULE_PATHS_URL);

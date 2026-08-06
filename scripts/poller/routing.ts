@@ -20,7 +20,7 @@ import {
   RUN_STALE_MS,
   setChatStatusIf,
 } from "#lib/run-status.mjs";
-import { tr } from "#lib/i18n.mjs";
+import { tr } from "#lib/i18n.ts";
 import {
   ACCEPTANCE_ROUTE,
   ALLOWED,

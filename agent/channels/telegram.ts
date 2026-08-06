@@ -51,9 +51,9 @@ import {
   setChatStatusIf,
 } from "../lib/run-status.mjs";
 // Двуязычие: tr(en, ru) отдаёт строку по текущему языку (data/settings.json → env
-// AGENT_LANGUAGE). i18n.mjs живёт в agent/lib — это уже не кросс-импорт, в отличие от
+// AGENT_LANGUAGE). i18n.ts живёт в agent/lib — это уже не кросс-импорт, в отличие от
 // telegram-format выше.
-import { tr } from "../lib/i18n.mjs";
+import { tr } from "../lib/i18n.js";
 import { buildTelegramReplyContext } from "../../scripts/lib/telegram-reply-context.ts";
 import { handleTelegramResetRequest } from "../../scripts/lib/telegram-reset-route.ts";
 // Eve отдаёт обработчикам событий токен с именем канала впереди, а reset-роут клеит его

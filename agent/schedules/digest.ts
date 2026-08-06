@@ -6,8 +6,8 @@
 // digestSchedule.enabled is explicitly true. No lockPath: the digest doesn't touch
 // vault/CORE.md or MOC.md, so it doesn't need to serialize with the memory rollups.
 import { defineSchedule } from "eve/schedules";
-import { readSettings } from "../lib/settings.mjs";
-import { resolvePaths } from "../lib/schedule-paths.mjs";
+import { readSettings } from "../lib/settings.js";
+import { resolvePaths } from "../lib/schedule-paths.js";
 import { runScheduledJob } from "../../scripts/lib/schedule-runner.ts";
 
 export default defineSchedule({
