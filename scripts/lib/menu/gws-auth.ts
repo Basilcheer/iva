@@ -46,7 +46,7 @@ function textValue(value: unknown): string {
   return value === null || value === undefined ? "" : String(value);
 }
 
-// --- Pure parsers (unit-tested in gws-auth.test.mjs) ---
+// --- Pure parsers (unit-tested in gws-auth.test.ts) ---
 
 // From gws stdout, pull the Google consent URL and the loopback port it registered.
 // Returns { url, port } once gws has printed them, else null.

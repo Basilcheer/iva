@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-floating-promises, @typescript-eslint/require-await -- Node's test runner owns registrations and injected service doubles preserve asynchronous boundaries. */
 import test from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdtempSync } from "node:fs";
@@ -5,52 +6,101 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import service, { commandSpec } from "./service.mjs";
+import service, {
+  commandSpec,
+  type ExecFileImplementation,
+  type MenuServiceContext,
+  type MenuServiceState,
+  type MenuServiceView,
+} from "./service.ts";
 import root from "./root.ts";
-import { SCREENS } from "./index.mjs";
-import { LOADERS, currentRun, resetForTests } from "./svc-run.ts";
+import {
+  LOADERS,
+  cancelRun,
+  currentRun,
+  resetForTests,
+  startProcess,
+  type RunOptions,
+} from "./svc-run.ts";
 import { acquireUpdateLock, releaseUpdateLock } from "../update-safety.ts";
 
-// стенд как в menu-screens.test.mjs + захват прямых tg-вызовов раннера
-function makeCtx({ lang = "ru", deps = {} } = {}) {
-  const rendered = [];
-  const tgCalls = [];
+const { SCREENS } = (await import("./index.ts")) as {
+  SCREENS: Record<string, unknown>;
+};
+
+type TestState = MenuServiceState & {
+  flow: "menu";
+  page: number;
+  awaitText: null;
+  data: Record<string, unknown>;
+  _last?: MenuServiceView;
+};
+type TelegramBody = Record<string, unknown> & {
+  text?: string;
+  entities?: Array<{ custom_emoji_id?: string }>;
+  reply_markup?: unknown;
+};
+type TelegramCall = { method: string; body: TelegramBody };
+type Harness = {
+  ctx: MenuServiceContext;
+  rendered: MenuServiceView[];
+  tgCalls: TelegramCall[];
+  st: TestState | null;
+};
+type TestDeps = Partial<MenuServiceContext["deps"]>;
+
+// стенд как в menu-screens.test.ts + захват прямых tg-вызовов раннера
+function makeCtx({
+  lang = "ru",
+  deps = {},
+}: { lang?: string; deps?: TestDeps } = {}): Harness {
+  const rendered: MenuServiceView[] = [];
+  const tgCalls: TelegramCall[] = [];
+  let state: TestState | null = null;
   const flows = {
-    screen: async (st, text, rows) => {
-      st.msgId ??= 1;
-      st._last = { text, rows };
+    screen: async (
+      st: MenuServiceState,
+      text: string,
+      rows: MenuServiceView["rows"],
+    ) => {
+      const testState = st as TestState;
+      testState.msgId ??= 1;
+      testState._last = { text, rows };
       rendered.push({ text, rows });
     },
-    end: async (st, text, rows) => {
-      st._last = { text, rows };
-      rendered.push({ text, rows });
-    },
-    get: () => harness.st,
+    get: () => state,
     touch: () => {},
   };
-  const ctx = {
+  const ctx: MenuServiceContext = {
     tg: async (method, body) => {
       tgCalls.push({ method, body });
       return { ok: true, result: {} };
     },
-    deps,
+    deps: { root: "", envPath: "", dataDir: "", ...deps },
     flows,
-    lang,
-    tr: (en, ru) => (lang === "ru" ? ru : en),
-    getLang: () => lang,
-    btn: (text, data) => ({ text, callback_data: data }),
+    tr: (en: string, ru: string) => (lang === "ru" ? ru : en),
+    btn: (text: string, data: string) => ({ text, callback_data: data }),
     backRow: () => [{ text: "‹ Назад", callback_data: "iva_menu:r:o" }],
-    show: async (st, sid) => {
+    show: async (st: MenuServiceState, sid: string) => {
       st.screen = sid;
       const v = await service.render(st, ctx);
-      if (v) await flows.screen(st, v.text, v.rows);
+      await flows.screen(st, v.text, v.rows);
     },
   };
-  const harness = { ctx, flows, rendered, tgCalls, st: null };
-  return harness;
+  return {
+    ctx,
+    rendered,
+    tgCalls,
+    get st() {
+      return state;
+    },
+    set st(next: TestState | null) {
+      state = next;
+    },
+  };
 }
 
-const newState = (over = {}) => ({
+const newState = (over: Partial<TestState> = {}): TestState => ({
   flow: "menu",
   chatId: 10,
   userId: "20",
@@ -62,7 +112,7 @@ const newState = (over = {}) => ({
   ...over,
 });
 
-const waitFor = async (fn, ms = 3000) => {
+const waitFor = async (fn: () => boolean, ms = 3000): Promise<void> => {
   const until = Date.now() + ms;
   while (Date.now() < until) {
     if (fn()) return;
@@ -71,7 +121,11 @@ const waitFor = async (fn, ms = 3000) => {
   throw new Error("waitFor timeout");
 };
 
-const fastRun = { tickMs: 15, timeoutMs: 5000, pollMs: 5 };
+const fastRun = {
+  tickMs: 15,
+  timeoutMs: 5000,
+  pollMs: 5,
+} satisfies Partial<RunOptions>;
 
 test("svc зарегистрирован в движке, root ведёт на него, Закрыть в своём ряду", () => {
   assert.equal(SCREENS.svc, service);
@@ -81,6 +135,7 @@ test("svc зарегистрирован в движке, root ведёт на �
   const closeRow = view.rows.find((r) =>
     r.some((b) => b.callback_data === "iva_menu:r:x"),
   );
+  assert.ok(closeRow);
   assert.equal(closeRow.length, 1);
 });
 
@@ -103,6 +158,36 @@ test("render idle: четыре команды и Назад, ru/en", async () =
   }
 });
 
+test("render snapshots the current run before returning its promise", async (t) => {
+  resetForTests();
+  t.after(() => {
+    cancelRun();
+    resetForTests();
+  });
+  const h = makeCtx({ lang: "en" });
+  const st = newState();
+  h.st = st;
+
+  const pendingView = service.render(st, h.ctx);
+  const run = startProcess(
+    "doc",
+    { argv: [process.execPath, "-e", "setTimeout(() => {}, 2000)"] },
+    {
+      tg: h.ctx.tg,
+      chatId: st.chatId,
+      messageId: st.msgId,
+      loader: LOADERS.doc,
+      progressView: () => ({ text: "running" }),
+      ...fastRun,
+    },
+  );
+  assert.ok(run);
+
+  const view = await pendingView;
+  assert.match(view.text, /Maintenance/);
+  assert.doesNotMatch(view.text, /running/);
+});
+
 test("подтверждение: c:<cmd> рисует описание и ▶ go:<cmd>", async () => {
   resetForTests();
   const h = makeCtx();
@@ -110,6 +195,7 @@ test("подтверждение: c:<cmd> рисует описание и ▶ g
   h.st = st;
   for (const cmd of ["doc", "cln", "mem"]) {
     await service.on("c", [cmd], st, h.ctx);
+    assert.ok(st._last);
     const data = st._last.rows.flat().map((b) => b.callback_data);
     assert.ok(data.includes(`iva_menu:svc:go:${cmd}`));
     assert.ok(data.includes("iva_menu:svc:o")); // Назад к списку
@@ -118,7 +204,7 @@ test("подтверждение: c:<cmd> рисует описание и ▶ g
 
 test("up: хендофф в deps.handleUpdateCheck с chatId", async () => {
   resetForTests();
-  let called = null;
+  let called: string | number | null = null;
   const h = makeCtx({
     deps: {
       handleUpdateCheck: (chatId) => {
@@ -142,6 +228,7 @@ test("cln: cleanup.py берётся из репо, cwd — vault", async () => 
     deps: { root: repoRoot, envPath: join(dataDir, ".env") },
   });
   const spec = await commandSpec("cln", h.ctx);
+  assert.equal(spec.kind, "proc");
   assert.deepEqual(spec.argv.slice(0, 2), ["uv", "run"]);
   assert.equal(spec.argv[2], join(repoRoot, "scripts/autograph/cleanup.py"));
   assert.ok(existsSync(spec.argv[2]), `нет скрипта: ${spec.argv[2]}`);
@@ -170,8 +257,12 @@ test("go:doc: прогресс с 🟥-entity, финал ✅ с кнопкой 
   await waitFor(() => currentRun()?.status === "done");
   await waitFor(() => h.tgCalls.some((c) => /✅/.test(c.body.text || "")));
   const rich = h.tgCalls.find((c) => c.body.entities);
+  assert.ok(rich);
+  assert.ok(rich.body.entities);
   assert.equal(rich.body.entities[0].custom_emoji_id, LOADERS.doc.id);
   const final = h.tgCalls.filter((c) => /✅/.test(c.body.text || "")).at(-1);
+  assert.ok(final);
+  assert.ok(final.body.text);
   assert.match(final.body.text, /Диагностика пройдена/);
   assert.ok(JSON.stringify(final.body.reply_markup).includes("iva_menu:svc:o"));
 });
@@ -201,10 +292,12 @@ test("go:cln: сводка парсит финальную строку cleanup"
   await service.on("go", ["cln"], st, h.ctx);
   await waitFor(() =>
     h.tgCalls.some(
-      (c) => /Чистка/.test(c.body.text || "") && /✅/.test(c.body.text),
+      (c) => /Чистка/.test(c.body.text || "") && /✅/.test(c.body.text || ""),
     ),
   );
   const final = h.tgCalls.filter((c) => /✅/.test(c.body.text || "")).at(-1);
+  assert.ok(final);
+  assert.ok(final.body.text);
   assert.match(final.body.text, /3 файл/);
   assert.match(final.body.text, /224(\.0)? МБ/);
 });
@@ -213,12 +306,18 @@ test("go:mem: юнит через systemctl, финал «Цикл памяти 
   resetForTests();
   const dataDir = mkdtempSync(join(tmpdir(), "iva-data-"));
   const active = ["activating", "inactive"];
-  const execFileImpl = (cmd, args, o, cb) => {
+  const execFileImpl: ExecFileImplementation = (
+    cmd,
+    args,
+    _options,
+    callback,
+  ) => {
     const a = args.join(" ");
-    if (a.includes("start")) return cb(null, "");
-    if (a.includes("is-active")) return cb(null, active.shift() ?? "inactive");
-    if (cmd === "journalctl") return cb(null, "done\n");
-    return cb(null, "");
+    if (a.includes("start")) return callback(null, "", "");
+    if (a.includes("is-active"))
+      return callback(null, active.shift() ?? "inactive", "");
+    if (cmd === "journalctl") return callback(null, "done\n", "");
+    return callback(null, "", "");
   };
   const h = makeCtx({
     deps: {
@@ -258,6 +357,7 @@ test("busy-гейт: второй go при running — экран «Уже ид
   const first = currentRun();
   await service.on("go", ["cln"], st, h.ctx);
   assert.equal(currentRun(), first); // новый не стартовал
+  assert.ok(st._last);
   assert.match(st._last.text, /Уже идёт|идёт/i);
   // отмена через ab
   await service.on("ab", [], st, h.ctx);
@@ -285,6 +385,7 @@ test("update-lock: занят — go:doc не стартует, текст пр�
   h.st = st;
   await service.on("go", ["doc"], st, h.ctx);
   assert.equal(currentRun(), null);
+  assert.ok(st._last);
   assert.match(st._last.text, /обновлени/i);
   releaseUpdateLock(lock);
 });

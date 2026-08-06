@@ -16,19 +16,69 @@ import {
   startUnit,
   elapsed,
   tailText,
+  type ExecFileImplementation,
+  type RunOptions,
+  type ServiceRun,
 } from "./svc-run.ts";
 
-const CMDS = new Set(["doc", "cln", "mem"]);
+type ServiceCommand = "doc" | "cln" | "mem";
+type MenuButton = { text: string; callback_data: string };
+type ServiceStatus = "running" | "failed" | "cancelled" | "timeout" | "done";
+type CommandSpec =
+  | { kind: "proc"; argv: string[]; cwd?: string }
+  | { kind: "unit"; unit: string };
+
+export type MenuServiceView = { text: string; rows: MenuButton[][] };
+export type MenuServiceState = {
+  chatId: string | number;
+  userId: string;
+  screen: string;
+  msgId: number;
+};
+type ServiceRunOverrides = Partial<
+  Pick<
+    RunOptions,
+    "tickMs" | "timeoutMs" | "pollMs" | "spawnImpl" | "execFileImpl"
+  >
+>;
+export type MenuServiceContext = {
+  tg: RunOptions["tg"];
+  deps: {
+    root: string;
+    envPath: string;
+    dataDir: string;
+    svcSpec?: (cmd: ServiceCommand, ctx: MenuServiceContext) => CommandSpec;
+    svcRun?: ServiceRunOverrides;
+    handleUpdateCheck?: (chatId: string | number) => unknown;
+  };
+  flows: {
+    get: (chatId: string | number, userId: string) => MenuServiceState | null;
+    screen: (
+      state: MenuServiceState,
+      text: string,
+      rows: MenuButton[][],
+    ) => Promise<unknown>;
+  };
+  tr: (english: string, russian: string) => string;
+  btn: (text: string, callbackData: string) => MenuButton;
+  backRow: (screen: string) => MenuButton[];
+  show: (state: MenuServiceState, screen: string) => Promise<unknown>;
+};
+
+const CMDS = new Set<ServiceCommand>(["doc", "cln", "mem"]);
 const MEM_UNIT = "iva-memory-doctor.service";
 
-const label = (cmd, T) =>
+const isServiceCommand = (cmd: string | undefined): cmd is ServiceCommand =>
+  cmd !== undefined && CMDS.has(cmd as ServiceCommand);
+
+const label = (cmd: ServiceCommand, T: MenuServiceContext["tr"]): string =>
   ({
     doc: T("🩺 Doctor", "🩺 Доктор"),
     cln: T("🧹 Vault cleanup", "🧹 Чистка vault"),
     mem: T("🌙 Night memory cycle", "🌙 Ночной цикл"),
   })[cmd];
 
-const describe = (cmd, T) =>
+const describe = (cmd: ServiceCommand, T: MenuServiceContext["tr"]): string =>
   ({
     doc: T(
       "Diagnoses and auto-repairs the install: units, timers, port, .env, build.\nUsually 10–60 seconds (up to minutes if a rebuild is needed).",
@@ -47,7 +97,10 @@ const describe = (cmd, T) =>
 // Командные строки. deps.svcSpec — тестовая подмена (argv на быстрые node -e).
 // Экспортируется ради теста: реальный argv кнопки иначе ничем не покрыт (так и уехал
 // в 0.3.2 путь в vault, которого у части юзеров не было).
-export async function commandSpec(cmd, ctx) {
+export async function commandSpec(
+  cmd: ServiceCommand,
+  ctx: MenuServiceContext,
+): Promise<CommandSpec> {
   if (ctx.deps.svcSpec) return ctx.deps.svcSpec(cmd, ctx);
   const root = ctx.deps.root;
   if (cmd === "doc")
@@ -78,7 +131,10 @@ export async function commandSpec(cmd, ctx) {
   return { kind: "unit", unit: MEM_UNIT };
 }
 
-function progressView(run, ctx) {
+function progressView(
+  run: ServiceRun,
+  ctx: MenuServiceContext,
+): MenuServiceView {
   const T = ctx.tr;
   const step = run.lastLine || T("Working…", "Работаю…");
   return {
@@ -90,7 +146,7 @@ function progressView(run, ctx) {
 // Финальная сводка. Чистка: парсим «cleanup (applied): N file(s), X bytes …» → файлы и МБ.
 // Режим в выводе cleanup.py — applied/dry-run (не apply): ошибёшься — сводка молча
 // деградирует до дежурного «Готово».
-function summaryText(run, ctx) {
+function summaryText(run: ServiceRun, ctx: MenuServiceContext): string {
   const T = ctx.tr;
   const name = label(run.cmd, T);
   const took = elapsed(run);
@@ -145,18 +201,27 @@ function summaryText(run, ctx) {
   return tail ? `${head} · ${took}\n\n${tail}` : `${head} · ${took}`;
 }
 
-function lastRunLine(run, ctx) {
+function lastRunLine(run: ServiceRun, ctx: MenuServiceContext): string {
   const T = ctx.tr;
-  const icon =
-    { done: "✅", failed: "⚠️", cancelled: "✖", timeout: "⏳" }[run.status] ||
-    "•";
+  const icon = (
+    {
+      running: "•",
+      done: "✅",
+      failed: "⚠️",
+      cancelled: "✖",
+      timeout: "⏳",
+    } satisfies Record<ServiceStatus, string>
+  )[run.status];
   return T(
     `${icon} Last run: ${label(run.cmd, T)} · ${elapsed(run)}`,
     `${icon} Последний запуск: ${label(run.cmd, T)} · ${elapsed(run)}`,
   );
 }
 
-function idleView(st, ctx) {
+function idleView(
+  _state: MenuServiceState,
+  ctx: MenuServiceContext,
+): MenuServiceView {
   const T = ctx.tr;
   const lines = [
     T("🛠 Maintenance", "🛠 Обслуживание"),
@@ -184,7 +249,11 @@ function idleView(st, ctx) {
   };
 }
 
-async function startCommand(cmd, st, ctx) {
+async function startCommand(
+  cmd: ServiceCommand,
+  st: MenuServiceState,
+  ctx: MenuServiceContext,
+): Promise<unknown> {
   const T = ctx.tr;
   // Гейт 1: уже занято — показать прогресс текущего.
   const running = currentRun();
@@ -213,7 +282,7 @@ async function startCommand(cmd, st, ctx) {
   }
   const spec = await commandSpec(cmd, ctx);
   const over = ctx.deps.svcRun || {};
-  const opts = {
+  const opts: RunOptions = {
     tg: ctx.tg,
     chatId: st.chatId,
     messageId: st.msgId,
@@ -221,7 +290,7 @@ async function startCommand(cmd, st, ctx) {
     attached: () =>
       ctx.flows.get(st.chatId, st.userId) === st && st.screen === "svc",
     progressView: (run) => progressView(run, ctx),
-    onFinish: async (run) => {
+    onFinish: async (run: ServiceRun) => {
       // Итог рисуем, только если юзер всё ещё на экране svc — иначе сводка ждёт в render.
       if (!(ctx.flows.get(st.chatId, st.userId) === st && st.screen === "svc"))
         return;
@@ -246,7 +315,9 @@ async function startCommand(cmd, st, ctx) {
       : startProcess(cmd, spec, opts);
   if (!run) {
     // гонка: кто-то успел стартовать между гейтом и стартом
-    const v = progressView(currentRun(), ctx);
+    const activeRun = currentRun();
+    if (!activeRun) return;
+    const v = progressView(activeRun, ctx);
     return ctx.flows.screen(
       st,
       T(`Already running:\n${v.text}`, `Уже идёт:\n${v.text}`),
@@ -255,23 +326,33 @@ async function startCommand(cmd, st, ctx) {
   }
 }
 
-export default {
+const service = {
   parent: "r",
-  async render(st, ctx) {
+  // eslint-disable-next-line @typescript-eslint/require-await -- async preserves the original synchronous run snapshot before returning a Promise.
+  async render(
+    st: MenuServiceState,
+    ctx: MenuServiceContext,
+  ): Promise<MenuServiceView> {
     const run = currentRun();
-    if (run && run.status === "running") return progressView(run, ctx);
-    return idleView(st, ctx);
+    return run && run.status === "running"
+      ? progressView(run, ctx)
+      : idleView(st, ctx);
   },
-  async on(verb, args, st, ctx) {
+  async on(
+    verb: string,
+    args: string[],
+    st: MenuServiceState,
+    ctx: MenuServiceContext,
+  ): Promise<unknown> {
     const T = ctx.tr;
-    if (verb === "c" && CMDS.has(args[0])) {
+    if (verb === "c" && isServiceCommand(args[0])) {
       const cmd = args[0];
       return ctx.flows.screen(st, `${label(cmd, T)}\n\n${describe(cmd, T)}`, [
         [ctx.btn(T("▶ Run", "▶ Запустить"), `iva_menu:svc:go:${cmd}`)],
         [ctx.btn(T("‹ Back", "‹ Назад"), "iva_menu:svc:o")],
       ]);
     }
-    if (verb === "go" && CMDS.has(args[0]))
+    if (verb === "go" && isServiceCommand(args[0]))
       return startCommand(args[0], st, ctx);
     if (verb === "ab") {
       if (cancelRun())
@@ -281,3 +362,6 @@ export default {
     if (verb === "up") return ctx.deps.handleUpdateCheck?.(st.chatId);
   },
 };
+
+export { type ExecFileImplementation };
+export default service;

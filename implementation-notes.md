@@ -965,3 +965,46 @@ the Node event loop is blocked` assertion once. Two later sequential suites hit
   lines, 79.15% branches, and 73.01% functions; lint, formatting, typecheck,
   exact 44/44 ratchet, ten-line shim, build, replica, both Python suites, pinned
   uv 0.8.3 lock reproduction, and all Python 3.12 userbot checks.
+- 2026-08-06 Asia/Tashkent: PR-7 starts from PR-6 merge `b1b1b27`. Earlier
+  batches already converted twelve of the fourteen planned menu production
+  modules, leaving only `menu/index.mjs` and `menu/service.mjs`, plus
+  `service.test.mjs`. Their direct pre-conversion suites cover 29/29 behaviors,
+  so no new characterization commit is required. Separate worktrees own the
+  two production modules and their direct test changes; the lead owns the
+  cross-lane `index -> service` link, the poller menu importer, stale-reference
+  scan, ratchet reduction from 44 to 41, integration review, and full gates.
+- 2026-08-06 Asia/Tashkent: PR-7 index lane converts only the menu registry and
+  its dynamic-import test path. `service.mjs` remains in the neighbouring lane,
+  so index loads that existing path through a typed dynamic-import boundary
+  rather than adding a stale declaration or changing the service module. The
+  registry keeps the prior runtime function guards while gaining strict local
+  structural types; no menu behavior is intentionally changed.
+- 2026-08-06 Asia/Tashkent: Independent PR-7 semantic review found one small but
+  observable conversion drift in the service renderer. Replacing the original
+  `async render()` body with `Promise.resolve().then()` delayed `currentRun()`
+  until the next microtask. A regression test first demonstrated the changed
+  snapshot, then the implementation restored the original synchronous
+  pre-await read with one narrow `require-await` exception. The combined direct
+  menu suites now pass 30/30; no other behavior or import drift was found.
+- 2026-08-06 Asia/Tashkent: The final pre-pull PR-7 gate set is green. Node 24
+  reports 668 total tests, 664 passed, zero failed, and four expected macOS
+  skips. Coverage is 75.78% lines, 79.20% branches, and 73.03% functions, a
+  final PR-6 delta of +0.16 / +0.05 / +0.02 percentage points. Lint,
+  formatting, typecheck, build, exact 41/41 ratchet, absence of tracked menu
+  `.mjs`, Autograph 343/343, security-defense 45/45, pinned uv 0.8.3 lock
+  reproduction, and all Python 3.12.13 userbot guardrail, health, and compile
+  checks pass. Replica exits zero after its documented cross-restart
+  known-issue notice, proves reset retirement, and finishes `OK` with five
+  provider requests. The two approved untracked handoff files remain outside
+  Git, and the five PR-7 commits contain no AI attribution.
+- 2026-08-06 Asia/Tashkent: The required pull/rebase found `origin/main` still
+  at the PR-6 merge, so PR-7 commits were not rewritten. The complete gate set
+  was repeated on the committed post-pull tree: Node 24 again reports 668
+  total, 664 passed, zero failed, and four expected macOS skips; coverage again
+  measures 75.78% lines, 79.20% branches, and 73.03% functions. Lint,
+  formatting, typecheck, build, exact 41/41 ratchet, no tracked menu `.mjs`,
+  Autograph 343/343, and security-defense 45/45 pass. The userbot lock was
+  reproduced with the CI-pinned uv 0.8.3, then synced and tested under Python
+  3.12.13; guardrail, health, and py_compile checks pass. Replica repeated the
+  same documented cross-restart known-issue notice, proved reset retirement,
+  printed final `OK`, and exited zero.

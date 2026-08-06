@@ -65,7 +65,7 @@ type Log = {
   on: Array<{ sid: string; verb: string; args: string[] }>;
   texts: Array<{ sid: string; text: string }>;
 };
-const indexModulePath: string = "./index.mjs";
+const indexModulePath: string = "./index.ts";
 const { createMenu } = (await import(indexModulePath)) as {
   createMenu: (options: Record<string, unknown>) => Menu;
 };
