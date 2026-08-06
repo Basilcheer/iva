@@ -979,3 +979,21 @@ the Node event loop is blocked` assertion once. Two later sequential suites hit
   rather than adding a stale declaration or changing the service module. The
   registry keeps the prior runtime function guards while gaining strict local
   structural types; no menu behavior is intentionally changed.
+- 2026-08-06 Asia/Tashkent: Independent PR-7 semantic review found one small but
+  observable conversion drift in the service renderer. Replacing the original
+  `async render()` body with `Promise.resolve().then()` delayed `currentRun()`
+  until the next microtask. A regression test first demonstrated the changed
+  snapshot, then the implementation restored the original synchronous
+  pre-await read with one narrow `require-await` exception. The combined direct
+  menu suites now pass 30/30; no other behavior or import drift was found.
+- 2026-08-06 Asia/Tashkent: The final pre-pull PR-7 gate set is green. Node 24
+  reports 668 total tests, 664 passed, zero failed, and four expected macOS
+  skips. Coverage is 75.78% lines, 79.20% branches, and 73.03% functions, a
+  final PR-6 delta of +0.16 / +0.05 / +0.02 percentage points. Lint,
+  formatting, typecheck, build, exact 41/41 ratchet, absence of tracked menu
+  `.mjs`, Autograph 343/343, security-defense 45/45, pinned uv 0.8.3 lock
+  reproduction, and all Python 3.12.13 userbot guardrail, health, and compile
+  checks pass. Replica exits zero after its documented cross-restart
+  known-issue notice, proves reset retirement, and finishes `OK` with five
+  provider requests. The two approved untracked handoff files remain outside
+  Git, and the five PR-7 commits contain no AI attribution.
