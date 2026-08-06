@@ -70,8 +70,9 @@ body:
     attributes:
       label: Logs
       description: |
-        `iva logs` (agent) or `iva logs poll` (Telegram bridge) usually has it.
-        **Strip your tokens, keys and chat IDs before pasting.**
+        `iva logs poll` (the Telegram bridge) is the safe one — it logs no message text.
+        Avoid pasting `iva logs`: on a provider error the agent's log can contain your
+        `CORE.md`, retrieved cards and the message itself. Strip tokens, keys and chat IDs.
       render: shell
   - type: checkboxes
     id: checks

@@ -7,8 +7,9 @@ from an actual install is worth more than a drive-by PR, so start wherever you a
 
 Open an [issue](https://github.com/smixs/iva/issues/new/choose) and include the version
 (`iva version`), how you installed, and what you expected instead. If it involves a
-message the assistant handled, `iva logs` (agent) and `iva logs poll` (Telegram bridge)
-usually contain the answer — strip your tokens first.
+message the assistant handled, `iva logs poll` (the Telegram bridge) usually contains the
+answer and logs no message text. The agent log, `iva logs`, can carry your memory and the
+message itself when a provider call fails — read it locally, don't paste it into an issue.
 
 Security problems do not go in issues. See [SECURITY.md](SECURITY.md).
 
