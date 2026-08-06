@@ -9,7 +9,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 
 const {
   default: bash,
@@ -19,6 +19,9 @@ const {
 } = await import("../agent/tools/bash.ts");
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const HAS_SETSID =
+  spawnSync("sh", ["-c", "command -v setsid"], { stdio: "ignore" }).status ===
+  0;
 
 function shellQuote(value) {
   return `'${String(value).replaceAll("'", "'\\''")}'`;
@@ -575,66 +578,78 @@ test("descendant cleanup after a normal shell exit does not report a timeout", a
   }
 });
 
-test("a setsid process outside the owned group cannot hold result pipes open", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "iva-bash-setsid-bounded-"));
-  const pidFile = join(dir, "child.pid");
-  let pid = null;
-  try {
-    const result = await within(
-      bash.execute({
-        command: escapedProcessGroupCommand(pidFile),
-        timeoutMs: 1_000,
-      }),
-      1_800,
-      "a process outside the owned group held inherited output pipes open",
-    );
-    pid = await waitForPid(pidFile);
-    assert.equal(result.exitCode, 0);
-    assert.equal(result.timedOut, undefined);
-    assert.equal(
-      isAlive(pid),
-      true,
-      "setsid must place the process outside the owned group",
-    );
-  } finally {
-    pid ??= readPid(pidFile);
-    if (isAlive(pid)) process.kill(pid, "SIGKILL");
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
+test(
+  "a setsid process outside the owned group cannot hold result pipes open",
+  {
+    skip: !HAS_SETSID,
+  },
+  async () => {
+    const dir = mkdtempSync(join(tmpdir(), "iva-bash-setsid-bounded-"));
+    const pidFile = join(dir, "child.pid");
+    let pid = null;
+    try {
+      const result = await within(
+        bash.execute({
+          command: escapedProcessGroupCommand(pidFile),
+          timeoutMs: 1_000,
+        }),
+        1_800,
+        "a process outside the owned group held inherited output pipes open",
+      );
+      pid = await waitForPid(pidFile);
+      assert.equal(result.exitCode, 0);
+      assert.equal(result.timedOut, undefined);
+      assert.equal(
+        isAlive(pid),
+        true,
+        "setsid must place the process outside the owned group",
+      );
+    } finally {
+      pid ??= readPid(pidFile);
+      if (isAlive(pid)) process.kill(pid, "SIGKILL");
+      rmSync(dir, { recursive: true, force: true });
+    }
+  },
+);
 
-test("timeout settles when a setsid process outside the owned group inherits output pipes", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "iva-bash-setsid-timeout-"));
-  const pidFile = join(dir, "child.pid");
-  const execution = bash.execute({
-    command: escapedProcessGroupCommand(pidFile, { wait: true }),
-    timeoutMs: 100,
-  });
-  let pid = null;
-  try {
-    pid = await waitForPid(pidFile);
-    const result = await within(
-      execution,
-      1_800,
-      "bash timeout did not settle after a setsid descendant inherited its pipes",
-    );
-    assert.equal(result.timedOut, true);
-    assert.equal(
-      isAlive(pid),
-      true,
-      "setsid must place the process outside the owned group",
-    );
-  } finally {
-    pid ??= readPid(pidFile);
-    if (isAlive(pid)) process.kill(pid, "SIGKILL");
-    await within(
-      execution.catch(() => {}),
-      1_000,
-      "bash execution did not settle after test cleanup",
-    );
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
+test(
+  "timeout settles when a setsid process outside the owned group inherits output pipes",
+  {
+    skip: !HAS_SETSID,
+  },
+  async () => {
+    const dir = mkdtempSync(join(tmpdir(), "iva-bash-setsid-timeout-"));
+    const pidFile = join(dir, "child.pid");
+    const execution = bash.execute({
+      command: escapedProcessGroupCommand(pidFile, { wait: true }),
+      timeoutMs: 100,
+    });
+    let pid = null;
+    try {
+      pid = await waitForPid(pidFile);
+      const result = await within(
+        execution,
+        1_800,
+        "bash timeout did not settle after a setsid descendant inherited its pipes",
+      );
+      assert.equal(result.timedOut, true);
+      assert.equal(
+        isAlive(pid),
+        true,
+        "setsid must place the process outside the owned group",
+      );
+    } finally {
+      pid ??= readPid(pidFile);
+      if (isAlive(pid)) process.kill(pid, "SIGKILL");
+      await within(
+        execution.catch(() => {}),
+        1_000,
+        "bash execution did not settle after test cleanup",
+      );
+      rmSync(dir, { recursive: true, force: true });
+    }
+  },
+);
 
 test("timeout leaves no TERM-resistant child PID behind", async () => {
   const dir = mkdtempSync(join(tmpdir(), "iva-bash-reap-"));
