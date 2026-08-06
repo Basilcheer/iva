@@ -30,7 +30,7 @@ import { routeMessageUpdate, drainReadyQueueHeads } from "./poller/routing.mjs";
 import {
   handleUpdateCheck,
   handleUpdateCallback,
-} from "./poller/update-flow.mjs";
+} from "./poller/update-flow.ts";
 import {
   runWizardRequest,
   isStaleWizard,

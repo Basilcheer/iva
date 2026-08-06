@@ -22,7 +22,7 @@ import { chatKey } from "./offset.ts";
 import { deliver } from "./deliver.mjs";
 import { performScopedReset } from "./queue.mjs";
 import { deliverDirectUpdate } from "./routing.mjs";
-import { handleUpdateCallback, handleUpdateCheck } from "./update-flow.mjs";
+import { handleUpdateCallback, handleUpdateCheck } from "./update-flow.ts";
 import {
   endWizard,
   flows,

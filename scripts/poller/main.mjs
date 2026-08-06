@@ -24,7 +24,7 @@ import {
   reconcileScopedResetIntents,
 } from "./queue.mjs";
 import { drainReadyQueueHeads, routeMessageUpdate } from "./routing.mjs";
-import { removeStaleUpdateJobs } from "./update-flow.mjs";
+import { removeStaleUpdateJobs } from "./update-flow.ts";
 import { handleControl, registerBotCommands } from "./control.mjs";
 
 const rawCollectQuietMs = Number(
