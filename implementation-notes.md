@@ -644,3 +644,9 @@ the Node event loop is blocked` assertion once. Two later sequential suites hit
   `Error.message`. A separate regression fix restores the original behavior for
   error-like objects and empty `Error` messages; focused tests now preserve both
   cases without changing cleanup control flow.
+- 2026-08-06 Asia/Tashkent: Review also found that converting
+  `schedule-runner.d.mts` into the implementation had accidentally made the
+  options argument optional to TypeScript callers. An exported overload restores
+  the declaration's required options contract while the implementation keeps its
+  pre-existing runtime default for untyped JavaScript callers. A compile-time
+  regression assertion guards both sides of that compatibility boundary.

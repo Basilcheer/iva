@@ -214,6 +214,10 @@ export async function withStatusLock<T>(
   }
 }
 
+export function runScheduledJob(
+  options: RunScheduledJobOptions,
+): Promise<RunScheduledJobResult>;
+
 export async function runScheduledJob(
   {
     name,

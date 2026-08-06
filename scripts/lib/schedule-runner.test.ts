@@ -16,6 +16,12 @@ import {
   type RunScheduledJobResult,
 } from "./schedule-runner.ts";
 
+function typecheckRequiredOptions(): void {
+  // @ts-expect-error The pre-conversion declaration required an options object.
+  void runScheduledJob();
+}
+void typecheckRequiredOptions;
+
 interface SeenSpawn {
   readonly cmd: string;
   readonly args: readonly string[];
