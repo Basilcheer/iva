@@ -1237,3 +1237,20 @@ the Node event loop is blocked` assertion once. Two later sequential suites hit
   lock reproduction, and all Python 3.12 userbot checks pass. The two protected
   handoff files remain the only untracked paths and are absent from the PR
   range; commit messages and bodies contain no AI attribution.
+- 2026-08-06 Asia/Tashkent: PR-10 CodeRabbit review identified two safe
+  boundary cleanups: the runtime side-effect import test now reuses the module
+  URL directly instead of round-tripping an already encoded pathname, and the
+  update transaction result type now requires the stdout/stderr strings that
+  its production adapter always returns. The direct stdout split intentionally
+  preserves the original JavaScript failure semantics rather than introducing
+  an empty-string fallback. The suggested omission of the thirtieth failed
+  health-check sleep is declined because the pre-conversion loop sleeps after
+  every unsuccessful probe, including the last; changing that deadline belongs
+  in a separate behavioral change, not this zero-semantics extraction. The
+  committed review-fix tree passes all 715 Node tests (711 passed, zero failed,
+  four expected macOS skips) and measures 76.14% lines, 79.04% branches, and
+  73.28% functions, a final change from PR-9 of -0.81 / -0.53 / -1.20
+  percentage points. Build, replica, Autograph 343/343, security-defense 45/45,
+  the uv 0.8.3 lock reproduction, and the strict Python 3.12 userbot gates are
+  green. Independent semantic review confirms that the runtime output is
+  unchanged; only the adapter's erased TypeScript contract is narrower.

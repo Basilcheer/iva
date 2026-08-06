@@ -11,7 +11,6 @@ import {
 import { mkdtemp, rm } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { pathToFileURL } from "node:url";
 import test from "node:test";
 import { createCliRuntime } from "./runtime.ts";
 
@@ -117,7 +116,7 @@ test("import is side-effect free and factory evaluation snapshots env and color"
   process.env.TERM = "xterm-256color";
   process.env[snapshotKey] = "at-import";
   const imported = (await import(
-    `${pathToFileURL(RUNTIME_MODULE.pathname).href}?side-effect=${Date.now()}`
+    `${RUNTIME_MODULE.href}?side-effect=${Date.now()}`
   )) as typeof import("./runtime.ts");
 
   delete process.env.NO_COLOR;

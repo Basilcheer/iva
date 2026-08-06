@@ -40,8 +40,8 @@ type UpdateVersions = {
 
 type CommandResult = {
   readonly code: number;
-  readonly stdout?: string;
-  readonly stderr?: string;
+  readonly stdout: string;
+  readonly stderr: string;
 };
 
 type UpdateTransaction = {
@@ -353,7 +353,7 @@ export function createUpdateCommand({
             "--name-only",
             `${versions.beforeHead}..${versions.afterHead}`,
           );
-          const files = (diff.stdout as string).split("\n");
+          const files = diff.stdout.split("\n");
           if (
             files.includes("package.json") ||
             files.includes("package-lock.json")

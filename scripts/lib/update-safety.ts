@@ -14,12 +14,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join, resolve, sep } from "node:path";
-import {
-  persistUpdateBranch,
-  resolveUpdateTarget,
-  type Git,
-  type GitResult,
-} from "./update-channel.ts";
+import { persistUpdateBranch, resolveUpdateTarget } from "./update-channel.ts";
 
 const LOCK_TTL_MS = 6 * 60 * 60 * 1000;
 
@@ -232,7 +227,7 @@ export function createUpdateTransaction({
 
   const run = (command: string, args: string[]): Promise<CommandResult> =>
     runCommand(command, args, { cwd: root, env: commandEnv, logFile, verbose });
-  const git: Git = (...args: string[]): Promise<GitResult> => run("git", args);
+  const git = (...args: string[]): Promise<CommandResult> => run("git", args);
   const mustGit = async (...args: string[]): Promise<string> => {
     const result = await git(...args);
     if (result.code !== 0)
