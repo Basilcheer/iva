@@ -1,5 +1,10 @@
 # Implementation notes
 
+Current-path references in undated sections follow the post-migration TypeScript
+tree. Dated PR-0 through PR-12 entries are an append-only migration record and may
+name deleted `.mjs` implementations when describing the tree that existed at that
+point in history; they are not instructions to recreate those paths.
+
 ## Telegram direct-delivery acceptance (#87 / #91)
 
 - Every bridge-originated message update, including reply-to-bot bypasses and the
@@ -108,7 +113,7 @@
 
 ## Checked systemd activation (IVA-003 / #54)
 
-- All CLI systemd mutations now go through `scripts/lib/systemd-control.mjs`. A non-zero
+- All CLI systemd mutations now go through `scripts/lib/systemd-control.ts`. A non-zero
   command raises a sanitized error with a fixed per-unit journal hint; captured command
   output and process environment are never copied into diagnostics.
 - Activation is idempotent and succeeds only after every requested unit reports both
@@ -308,7 +313,7 @@
   segment, because group chat ids are negative and the token shape is Eve's contract, not our
   heuristic. It is idempotent, so it can be applied at every boundary:
   - on write — `agent/channels/telegram.ts` (turn start, turn finish, `session.waiting`),
-    `scripts/lib/telegram-turn-start.mjs` (both the claim and the adoption path) and the
+    `scripts/lib/telegram-turn-start.ts` (both the claim and the adoption path) and the
     reset tombstone in `completeScopedResetState`;
   - on read — `continuationTokenForControl`, the stale-run reaper (which reads
     `status.continuationToken` directly) and `reconcileScopedResetIntents` (a durable intent
@@ -317,10 +322,10 @@
     needing a migration.
 - On an Eve bump: re-check what `channel.continuationToken` yields in event handlers. If Eve
   ever hands out the channel-local token there, the helper stays correct (it is idempotent),
-  but `scripts/lib/telegram-reset.test.mjs` is the place that pins the expectation. If the
-  channel name ever changes, `NAMESPACE` in `scripts/lib/telegram-continuation-token.mjs`
+  but `scripts/lib/telegram-reset.test.ts` is the place that pins the expectation. If the
+  channel name ever changes, `NAMESPACE` in `scripts/lib/telegram-continuation-token.ts`
   must change with it.
-- The reaper fixture in `scripts/telegram-poll.test.mjs` deliberately keeps a namespaced
+- The reaper fixture in `scripts/telegram-poll.test.ts` deliberately keeps a namespaced
   `continuationToken`: that is what pre-fix versions wrote, and the assertion pins that a
   reset goes out channel-local anyway.
 - A token that does not look channel-local after the strip (`^-?\d+(:|$)`) is reported to the
@@ -348,7 +353,7 @@
 - `contextFromSubagent` marks the honest fallback: a turn made only of subagent records (the
   outer turn was cancelled or failed) renders as `context ~19 800 (subagent step)` instead of
   passing a subagent's input off as the chat context.
-- `scripts/replica-smoke.mjs` runs a reset canary against the real framework: seed a marker,
+- `scripts/replica-smoke.ts` runs a reset canary against the real framework: seed a marker,
   `session.reset()`, return with the same continuation token and assert the marker is gone.
   It guards Eve's documented contract ("reset retires a session so its continuation starts
   fresh"), which 0.27.13 honours — the `/new` failure was Iva's token shape, not Eve's reset.
@@ -451,9 +456,10 @@
 ## fix/reminder-node-runtime
 
 - Kept the security gate deterministic and dependency-free.
-- Made the pure JavaScript module canonical so operational `.mjs` scripts work
-  with stock Node runtimes that do not load TypeScript.
-- Preserved the agent import contract through a thin TypeScript re-export.
+- The supported Node 24 runtime now executes the canonical TypeScript module
+  directly. Permanent `.mjs` launchers remain logic-free compatibility paths
+  only where the installer, CLI, or systemd contract requires them.
+- Preserved the agent and operational import contracts across that migration.
 - Reminder persistence across reboot remains tracked separately in issue #117.
 
 ## fix/memory-health-contract
@@ -1354,3 +1360,12 @@ update` before and after merge) and was not run by Codex.
   is not a native filesystem path on Windows. The expected config root now uses
   `dirname(fileURLToPath(configUrl))`, matching `import.meta.dirname` on every
   supported platform without changing production behavior.
+- 2026-08-06 19:06 Asia/Tashkent: Post-migration review follow-ups are split
+  into two sequential PRs. The first restores static poller imports and precise
+  Telegram update types, hardens the nullable entity edge, restores the lost
+  usage-accounting invariants, and tightens TypeScript/coverage/documentation
+  guardrails. The second is release-only: version 0.3.13, bilingual README
+  updates, and the matching changelog/release metadata. Two isolated worktrees
+  own the poller/runtime and migration-hygiene lanes; the integration branch
+  alone owns this log and publication. The protected untracked migration plan
+  and `LEARNINGS.md` remain outside both PRs.
