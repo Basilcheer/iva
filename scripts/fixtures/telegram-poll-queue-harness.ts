@@ -60,7 +60,7 @@ if (!existsSync(offsetFile))
 let queueDirSyncAttempts = 0;
 let queueDirSyncSuccesses = 0;
 
-const statusModulePath = "#lib/run-status.mjs";
+const statusModulePath = "#lib/run-status.ts";
 const status = (await import(statusModulePath)) as RunStatusModule;
 const privateKey = "1:";
 const groupKey = "-100:";

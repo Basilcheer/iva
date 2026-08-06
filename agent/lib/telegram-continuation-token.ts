@@ -22,7 +22,10 @@ const CHANNEL_LOCAL_SHAPE = /^-?\d+(:|$)/;
  * Приводит continuationToken к channel-local виду: срезает префикс канала, если он есть.
  * Идемпотентна — на уже локальном токене ("123::", "-1001:7:42") это no-op.
  */
-export function toChannelLocalToken(token, { warn = console.error } = {}) {
+export function toChannelLocalToken(
+  token: string,
+  { warn = console.error }: { warn?: (message: string) => void } = {},
+): string {
   if (typeof token !== "string" || token.length === 0) return token;
   const local = token.startsWith(NAMESPACE)
     ? token.slice(NAMESPACE.length)

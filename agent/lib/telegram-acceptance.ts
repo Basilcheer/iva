@@ -1,6 +1,11 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { join } from "node:path";
+import type {
+  TelegramContext,
+  TelegramInboundResultOrPromise,
+  TelegramMessage,
+} from "eve/channels/telegram";
 import {
   acquireLock,
   loadJsonStrict,
@@ -12,17 +17,32 @@ export const TELEGRAM_ACCEPTANCE_ROUTE = "/eve/v1/telegram/accepted";
 export const TELEGRAM_QUEUE_RECEIPT_FIELD = "iva_durable_queue_receipt";
 export const TELEGRAM_ACCEPTANCE_KIND_HEADER = "x-iva-telegram-acceptance";
 
-const receiptContext = new AsyncLocalStorage();
+type ReceiptContext = { receipt: string | null; handled: boolean };
+type CompletedLedger = { botId: string; updates: number[] };
+type AcceptedWebhookOptions = { completedUpdatesFile?: string };
+type AcceptedWebhookArgs = {
+  send: (...args: never[]) => Promise<unknown>;
+  waitUntil: (task: Promise<unknown>) => void;
+};
+type AcceptedWebhookHandler = (
+  request: Request,
+  args: never,
+) => Promise<Response>;
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+const receiptContext = new AsyncLocalStorage<ReceiptContext>();
 const RECEIPT_PATTERN = /^[a-f0-9]{32}$/u;
 const BOT_ID_PATTERN = /^(?<id>[1-9]\d*):/u;
 const COMPLETED_UPDATES_LIMIT = 200;
 let missingWebhookSecretReported = false;
 
-function validReceipt(value) {
+function validReceipt(value: unknown): value is string {
   return typeof value === "string" && RECEIPT_PATTERN.test(value);
 }
 
-function hasValidWebhookSecret(request) {
+function hasValidWebhookSecret(request: Request): boolean {
   const expected = process.env.TELEGRAM_WEBHOOK_SECRET_TOKEN;
   if (!expected) {
     if (!missingWebhookSecretReported) {
@@ -40,24 +60,20 @@ function hasValidWebhookSecret(request) {
   return left.length === right.length && timingSafeEqual(left, right);
 }
 
-function configuredBotId() {
+function configuredBotId(): string | null {
   return (
     BOT_ID_PATTERN.exec(process.env.TELEGRAM_BOT_TOKEN ?? "")?.groups?.id ??
     null
   );
 }
 
-export function addTelegramQueueReceipt(
-  update,
+export function addTelegramQueueReceipt<T extends Record<string, unknown>>(
+  update: T,
   receipt = randomBytes(16).toString("hex"),
-) {
+): T {
   if (
-    typeof update !== "object" ||
-    update === null ||
-    Array.isArray(update) ||
-    typeof update.message !== "object" ||
-    update.message === null ||
-    Array.isArray(update.message) ||
+    !isRecord(update) ||
+    !isRecord(update.message) ||
     !validReceipt(receipt)
   ) {
     throw new Error(
@@ -73,7 +89,15 @@ export function addTelegramQueueReceipt(
   };
 }
 
-export function wrapTelegramQueueOnMessage(onMessage) {
+export function wrapTelegramQueueOnMessage(
+  onMessage: (
+    context: TelegramContext,
+    message: TelegramMessage,
+  ) => TelegramInboundResultOrPromise,
+): (
+  context: TelegramContext,
+  message: TelegramMessage,
+) => Promise<Awaited<TelegramInboundResultOrPromise>> {
   return async (context, message) => {
     const raw = message?.raw;
     const receipt =
@@ -96,14 +120,22 @@ export function wrapTelegramQueueOnMessage(onMessage) {
   };
 }
 
-async function metadataFromRequest(request) {
+async function metadataFromRequest(
+  request: Request,
+): Promise<{ receipt: string | null; updateId: number | null }> {
   try {
-    const body = await request.clone().json();
-    const receipt = body?.message?.[TELEGRAM_QUEUE_RECEIPT_FIELD];
+    const body: unknown = await request.clone().json();
+    const receipt =
+      isRecord(body) && isRecord(body.message)
+        ? body.message[TELEGRAM_QUEUE_RECEIPT_FIELD]
+        : undefined;
     return {
       receipt: validReceipt(receipt) ? receipt : null,
       updateId:
-        Number.isSafeInteger(body?.update_id) && body.update_id >= 0
+        isRecord(body) &&
+        typeof body.update_id === "number" &&
+        Number.isSafeInteger(body.update_id) &&
+        body.update_id >= 0
           ? body.update_id
           : null,
     };
@@ -112,21 +144,22 @@ async function metadataFromRequest(request) {
   }
 }
 
-function validCompletedLedger(value) {
+function validCompletedLedger(value: unknown): CompletedLedger {
   if (
-    typeof value !== "object" ||
-    value === null ||
-    Array.isArray(value) ||
+    !isRecord(value) ||
     typeof value.botId !== "string" ||
     !Array.isArray(value.updates) ||
     !value.updates.every((id) => Number.isSafeInteger(id) && id >= 0)
   ) {
     throw new Error("completed Telegram update ledger has invalid schema");
   }
-  return value;
+  return value as CompletedLedger;
 }
 
-async function loadCompletedLedger(file, botId) {
+async function loadCompletedLedger(
+  file: string,
+  botId: string,
+): Promise<{ ledger: CompletedLedger; recovered: boolean }> {
   try {
     return {
       ledger: validCompletedLedger(
@@ -135,7 +168,10 @@ async function loadCompletedLedger(file, botId) {
       recovered: false,
     };
   } catch (error) {
-    const message = String(error?.message ?? error);
+    const message =
+      error !== null && typeof error === "object" && "message" in error
+        ? String(error.message)
+        : String(error);
     if (
       !message.includes("damaged (invalid JSON)") &&
       !message.includes("ledger has invalid schema")
@@ -149,7 +185,10 @@ async function loadCompletedLedger(file, botId) {
   }
 }
 
-async function withCompletedLedger(file, fn) {
+async function withCompletedLedger<T>(
+  file: string,
+  fn: () => Promise<T>,
+): Promise<T> {
   const lock = `${file}.lock`;
   const token = await acquireLock(lock);
   try {
@@ -159,7 +198,11 @@ async function withCompletedLedger(file, fn) {
   }
 }
 
-async function hasCompletedUpdate(file, botId, updateId) {
+async function hasCompletedUpdate(
+  file: string,
+  botId: string,
+  updateId: number,
+): Promise<boolean> {
   return withCompletedLedger(file, async () => {
     const { ledger, recovered } = await loadCompletedLedger(file, botId);
     if (recovered) await saveJsonAtomic(file, ledger);
@@ -167,7 +210,11 @@ async function hasCompletedUpdate(file, botId, updateId) {
   });
 }
 
-async function recordCompletedUpdate(file, botId, updateId) {
+async function recordCompletedUpdate(
+  file: string,
+  botId: string,
+  updateId: number,
+): Promise<void> {
   return withCompletedLedger(file, async () => {
     const { ledger, recovered } = await loadCompletedLedger(file, botId);
     const current = ledger.botId === botId ? ledger.updates : [];
@@ -184,18 +231,12 @@ async function recordCompletedUpdate(file, botId, updateId) {
 // send(). The polling bridge needs a stronger receipt for durable FIFO replay:
 // this wrapper runs the authored channel handler unchanged, but waits until its
 // real Eve send has resolved before returning success.
-/**
- * @param {(request: Request, args: any) => Promise<Response>} handler
- * @param {Request} request
- * @param {any} args
- * @returns {Promise<Response>}
- */
 export async function handleAcceptedTelegramWebhook(
-  handler,
-  request,
-  args,
-  options = {},
-) {
+  handler: AcceptedWebhookHandler,
+  request: Request,
+  args: AcceptedWebhookArgs,
+  options: AcceptedWebhookOptions = {},
+): Promise<Response> {
   const { receipt, updateId } = await metadataFromRequest(request);
   const authenticated = hasValidWebhookSecret(request);
   const botId = configuredBotId();
@@ -215,21 +256,20 @@ export async function handleAcceptedTelegramWebhook(
     });
   }
   return receiptContext.run({ receipt, handled: false }, async () => {
-    /** @type {Promise<unknown>[]} */
-    const background = [];
+    const background: Promise<unknown>[] = [];
     let accepted = false;
 
     const response = await handler(request, {
       ...args,
-      send: async (...sendArgs) => {
+      send: async (...sendArgs: never[]) => {
         const session = await args.send(...sendArgs);
         accepted = true;
         return session;
       },
-      waitUntil: (task) => {
+      waitUntil: (task: Promise<unknown>) => {
         background.push(Promise.resolve(task));
       },
-    });
+    } as never);
 
     if (!response.ok) return response;
     await Promise.allSettled(background);

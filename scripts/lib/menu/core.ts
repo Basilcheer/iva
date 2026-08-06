@@ -15,7 +15,7 @@ import {
   saveInterview,
   buildDistillMessage,
 } from "../core-interview.ts";
-import { isRunning, chatKeyOf } from "#lib/run-status.mjs";
+import { isRunning, chatKeyOf } from "#lib/run-status.ts";
 
 const SID = "core";
 const PARENT = "r";

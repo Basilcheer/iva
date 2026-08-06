@@ -10,7 +10,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { after } from "node:test";
-import { addTelegramQueueReceipt } from "../agent/lib/telegram-acceptance.mjs";
+import { addTelegramQueueReceipt } from "../agent/lib/telegram-acceptance.ts";
 
 const root = mkdtempSync(join(tmpdir(), "iva-media-identity-test-"));
 const dataDir = join(root, "data");
