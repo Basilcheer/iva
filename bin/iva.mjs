@@ -10,7 +10,6 @@ import {
   readFileSync,
   writeFileSync,
   mkdirSync,
-  mkdtempSync,
   rmSync,
   readdirSync,
   chmodSync,
@@ -27,14 +26,8 @@ import {
   loadTelegramJob,
   removeTelegramJob,
 } from "../scripts/lib/telegram-status.ts";
-import { parseEnvText } from "../scripts/lib/env-file.ts";
 import { classifyAgentListeners } from "../scripts/lib/listener-security.ts";
 import { readMemoryMaintenanceReport } from "../scripts/lib/memory-maintenance.ts";
-import {
-  applyConfigTransaction,
-  probeEveHealth,
-  recoverConfigTransaction,
-} from "../scripts/lib/config-transaction.ts";
 import { userbotSyncArgs } from "../scripts/lib/userbot-deps.ts";
 import { probeUserbotHealth } from "../scripts/lib/userbot-health.ts";
 import {
@@ -46,15 +39,16 @@ import {
 } from "../scripts/lib/update-safety.ts";
 import { createCliRuntime } from "../scripts/cli/runtime.ts";
 import { createCliSystemd } from "../scripts/cli/systemd.ts";
+import { createConfigCommand } from "../scripts/cli/config.ts";
 
 const runtime = createCliRuntime(
   join(dirname(fileURLToPath(import.meta.url)), ".."),
 );
+const cliSystemd = createCliSystemd(runtime);
 const {
   ROOT,
   ENV_PATH,
   UNIT_DIR,
-  NODE,
   NPM,
   childEnv,
   SERVICES,
@@ -90,7 +84,8 @@ const {
   removeUnits,
   migrateEnv,
   restartServices,
-} = createCliSystemd(runtime);
+} = cliSystemd;
+const cmdConfig = createConfigCommand(runtime, cliSystemd);
 
 // ANSI tree like during install. The only source of the art is install.sh (heredoc
 // IVA_TREE); we read it from there so as not to spawn a copy. In a real terminal we add
@@ -511,83 +506,6 @@ async function cmdUpdate(args) {
     if (userbotRollbackSnapshot)
       rmSync(userbotRollbackSnapshot, { force: true });
     await removeTelegramJob(loadedJob?.path);
-  }
-}
-
-async function cmdConfig(args = []) {
-  requireSystemd();
-  const restartConfiguredServices = () => {
-    // Units embed IVA_PORT, so both apply and rollback must regenerate them from
-    // whichever .env is currently live before the checked restart. The candidate
-    // already carries a valid bearer; skipping its migration here also keeps a
-    // rollback snapshot byte-exact for older installations.
-    writeUnits({ ensureBearer: false });
-    systemd.restart(SERVICES);
-  };
-
-  const recovered = await recoverConfigTransaction(
-    { envPath: ENV_PATH, services: SERVICES },
-    { restart: restartConfiguredServices },
-  );
-  if (recovered)
-    ok("Recovered the previous configuration and restarted services");
-  if (args.includes("--recover")) {
-    if (!recovered) ok("No pending configuration recovery");
-    return;
-  }
-
-  const candidateDir = mkdtempSync(join(tmpdir(), "iva-config-"));
-  const candidatePath = join(candidateDir, ".env");
-  try {
-    const r = run(NODE, ["scripts/setup.mjs"], {
-      env: { ...childEnv, IVA_CONFIG_OUTPUT: candidatePath },
-    });
-    if (r.status !== 0) {
-      process.exitCode = r.status ?? 1;
-      return;
-    }
-    if (!(await confirm("Apply settings and restart services now?", true))) {
-      warn("Configuration unchanged");
-      return;
-    }
-
-    const nextText = readFileSync(candidatePath, "utf8");
-    const nextEnv = parseEnvText(nextText);
-    const provider = nextEnv.MODEL_PROVIDER;
-    const selected = {
-      ollama: ["OLLAMA_MODEL", "OLLAMA_API_KEY"],
-      opencode: ["OPENCODE_MODEL", "OPENCODE_API_KEY"],
-      openrouter: ["OPENROUTER_MODEL", "OPENROUTER_API_KEY"],
-      codex: ["CODEX_MODEL", null],
-    }[provider];
-    if (!selected)
-      throw new Error("candidate configuration has an invalid model provider");
-    const port = Number(nextEnv.IVA_PORT || DEFAULT_PORT);
-    if (!Number.isInteger(port) || port < 1 || port > 65535) {
-      throw new Error("candidate configuration has an invalid IVA_PORT");
-    }
-
-    await applyConfigTransaction(
-      {
-        envPath: ENV_PATH,
-        nextText,
-        selection: {
-          provider,
-          model: nextEnv[selected[0]],
-          key: selected[1] ? nextEnv[selected[1]] : undefined,
-          dataDir: dataDirAbs(nextEnv),
-        },
-        services: SERVICES,
-        healthUrl: `http://127.0.0.1:${port}/eve/v1/health`,
-      },
-      {
-        restart: restartConfiguredServices,
-        health: (url) => probeEveHealth(url),
-      },
-    );
-    ok("Configuration applied; agent and Telegram bridge are active");
-  } finally {
-    rmSync(candidateDir, { recursive: true, force: true });
   }
 }
 
