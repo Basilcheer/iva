@@ -51,7 +51,7 @@ export const ALLOWED = new Set(
     .filter(Boolean),
 );
 
-// LANG/t/HELP убраны: язык теперь динамический (getLang из i18n.mjs, реагирует на
+// LANG/t/HELP убраны: язык теперь динамический (getLang из i18n.ts, реагирует на
 // data/settings.json без рестарта), /help генерится helpText() из общей таблицы COMMANDS.
 
 export const sleep = (ms: number): Promise<void> =>

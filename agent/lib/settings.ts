@@ -3,7 +3,7 @@
 //
 // Зачем отдельный файл, а не .env: язык интерфейса меняется кнопкой в /menu и должен
 // применяться мгновенно, без рестарта, обоими процессами. Файл крошечный, пишем
-// атомарно (tmp+rename) — тот же приём, что run-status.mjs, чтобы читатель никогда
+// атомарно (tmp+rename) — тот же приём, что run-status.ts, чтобы читатель никогда
 // не увидел полуфайл.
 
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
@@ -12,7 +12,7 @@ import { join } from "node:path";
 type Settings = Record<string, unknown>;
 
 // Путь от cwd, а НЕ от import.meta.url: канал инлайнится в кэш authored-modules eve,
-// откуда относительные пути указывают в node_modules/.cache (см. run-status.mjs:14-18).
+// откуда относительные пути указывают в node_modules/.cache (см. run-status.ts:14-18).
 // Оба процесса (iva.service и мост) стартуют из одного WorkingDirectory (корень установки Ивы).
 const DATA_DIR_RAW = process.env.ASSISTANT_DATA_DIR ?? "data";
 const DATA_DIR = DATA_DIR_RAW.startsWith("/")
