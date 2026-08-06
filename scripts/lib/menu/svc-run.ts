@@ -245,7 +245,9 @@ function finish(run: ServiceRun, status: RunStatus, opts: RunOptions): void {
   run.status = status;
   run.finishedAt = Date.now();
   if (run._timer) clearInterval(run._timer);
-  void Promise.resolve(opts.onFinish?.(run)).catch(() => {});
+  void Promise.resolve()
+    .then(() => opts.onFinish?.(run))
+    .catch(() => {});
 }
 
 export function startProcess(

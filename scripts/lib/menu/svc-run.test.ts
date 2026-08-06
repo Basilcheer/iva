@@ -241,6 +241,24 @@ test("attached()=false: тикер молчит, процесс всё равн�
   assert.equal(calls.filter((c) => c.method === "editMessageText").length, 0);
 });
 
+test("a synchronous onFinish failure is contained after process completion", async () => {
+  resetForTests();
+  const { tg } = makeTg();
+  const run = startProcess(
+    "doc",
+    { argv: [process.execPath, "-e", "process.exit(0)"] },
+    baseOpts(tg, {
+      onFinish: () => {
+        throw new Error("injected synchronous finish failure");
+      },
+    }),
+  );
+
+  assert.ok(run);
+  await waitFor(() => run.status !== "running");
+  assert.equal(run.status, "done");
+});
+
 test("startUnit: oneshot activating→inactive = done, журнал в tail", async () => {
   resetForTests();
   const { tg } = makeTg();

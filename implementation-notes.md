@@ -732,3 +732,16 @@ the Node event loop is blocked` assertion once. Two later sequential suites hit
   range is therefore 74.14-74.16% lines, 79.52-79.55% branches, and 71.87%
   functions, with conservative improvement over PR-2 of at least
   +0.66 / +0.23 / +0.23 percentage points.
+- 2026-08-06 Asia/Tashkent: CodeRabbit identified a pre-existing service-runner
+  defect outside the conversion itself: `Promise.resolve(onFinish())` evaluates
+  a synchronous callback before the promise exists, so a thrown completion hook
+  could escape a child-process event and crash the bridge. A separate bugfix
+  invokes the hook inside `.then()` and retains the rejection catch. The focused
+  regression test failed on the inherited implementation and passes after the
+  fix; the conversion commit remains unchanged. Post-fix verification is clean:
+  633 tests, 629 passed, zero failed, and four expected macOS skips; coverage is
+  74.14% lines, 79.55% branches, and 71.97% functions, with a conservative
+  PR-2 delta of at least +0.66 / +0.23 / +0.33 percentage points. Lint,
+  formatting, the exact 95/95 `.mjs` ratchet, typecheck, build, replica,
+  autograph 343/343, security-defense 45/45, deterministic userbot lock, and
+  Python 3.12 userbot guardrail/health/compile gates all pass.
