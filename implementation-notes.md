@@ -1193,3 +1193,47 @@ the Node event loop is blocked` assertion once. Two later sequential suites hit
   will place characterization before extraction. The shared runtime/systemd API
   is integrated and reviewed before update, config, and doctor are assigned to
   parallel ownership lanes.
+- 2026-08-06 Asia/Tashkent: PR-10 integration moves the shared runtime, systemd
+  lifecycle, update, config, and doctor logic into `scripts/cli/*.ts` while the
+  remaining service/account/userbot/router commands stay in the mixed
+  `bin/iva.mjs` dispatcher for PR-11. Config, doctor, and update were implemented
+  in three isolated worktrees, wired into the executable by the lead, then
+  autosquashed into separate atomic conversion commits. Each rewritten
+  conversion commit was checked in a detached temporary worktree with its
+  focused tests, typecheck, and lint; after the final review regression tests,
+  the combined production dispatcher passes 715 tests (711 passed, zero failed,
+  four expected macOS skips).
+- 2026-08-06 Asia/Tashkent: Independent semantic review found one narrow
+  conversion drift before push: two type-boundary `String()` calls made a
+  truthy `Symbol`-valued `error.message` safe even though the original template
+  interpolation throws. The runtime coercions were removed in favor of erased
+  type assertions, and direct tests now preserve both the post-commit and outer
+  catch behaviors for `Symbol` messages. The final focused update/entrypoint
+  suite passes 23/23; independent config/doctor and PR-scope audits are clean.
+- 2026-08-06 Asia/Tashkent: The first full coverage run under concurrent audit
+  load hit the unchanged `userbot-health-cli.test.mjs` 1.5-second probe deadline
+  once (708/713). Its immediate isolated coverage rerun passed in 619 ms, and a
+  clean repeated full coverage suite passed all 715 tests. The final repeated
+  measurement is 76.15% lines, 79.04% branches, and 73.28% functions, a change
+  from merged PR-9 of -0.80 / -0.53 / -1.20 percentage points while retaining
+  the monotonic configured thresholds of 72 / 79 / 71. The exact tracked `.mjs`
+  count and ratchet are both seven; no `.d.mts` or `.mts` remains.
+- 2026-08-06 Asia/Tashkent: The complete pre-pull PR-10 gate set is green on
+  Node 24.19.0: lint, formatting, typecheck, 715-test full suite, coverage,
+  exact 7/7 `.mjs` ratchet, zero declarations, diff checks, Eve build, and
+  replica. Replica emitted only the documented cross-restart resume notice,
+  proved reset retirement, and exited `OK` with five provider requests.
+  Autograph and security-defense tests pass; the userbot lock reproduces with
+  CI-pinned uv 0.8.3. The host's default Python is 3.13, so the disposable
+  userbot environment was explicitly recreated under Python 3.12.13 before the
+  strict hashed sync, guardrail, health, and byte-compilation gates; all pass.
+- 2026-08-06 Asia/Tashkent: The required fetch and pull/rebase found
+  `origin/main` still at the PR-9 merge `ab0ae84`, so no PR-10 commit was
+  rewritten. The complete post-pull gate set is green on the committed tree:
+  Node again reports 715 total tests, 711 passed, zero failed, and four expected
+  skips; coverage is 76.15% lines, 79.04% branches, and 73.28% functions.
+  Lint, formatting, exact 7/7 ratchet, zero declarations, typecheck, diff
+  checks, build, replica, Autograph 343/343, security-defense 45/45, uv 0.8.3
+  lock reproduction, and all Python 3.12 userbot checks pass. The two protected
+  handoff files remain the only untracked paths and are absent from the PR
+  range; commit messages and bodies contain no AI attribution.
