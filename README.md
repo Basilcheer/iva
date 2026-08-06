@@ -91,7 +91,7 @@ The bot is half of Telegram. The other half is your personal account: connect th
 
 - **All of Telegram** — groups, channels, unreads, search and the full history of your personal account.
 - **Onboarding in chat** — tell the bot to connect your Telegram, scan a QR. No terminal.
-- **Anti-ban guardrail on the server** — FloodWait compliance, a randomized delay after every send, and a circuit-breaker that pauses sending after three warnings in a day. The agent can't bypass it: the rules live in the proxy, not in a prompt.
+- **Anti-ban guardrail on the server** — FloodWait compliance, a randomized delay after every send, and a circuit-breaker that pauses sending after three warnings in a day. It is enforced in the proxy rather than asked for in a prompt, and it wraps the three outbound calls that actually get accounts flagged: messages, files, forwards. Joins, invites, contact imports and reactions are not wrapped — those limits live in the skill file, which is a prompt.
 - **Read-only mode** — one `.env` switch and Iva can read and search but physically cannot send.
 
 > [!WARNING]

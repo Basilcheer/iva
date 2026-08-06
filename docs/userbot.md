@@ -17,8 +17,10 @@ natively (`agent/connections/telegram-userbot.ts`).
 > A **built-in anti-ban guardrail is enforced server-side** (`guardrails.py`) — not just
 > advice: FloodWait compliance (wait ×1.3, retry once), a randomized delay after every send
 > (fixed-interval bots get flagged), and a circuit-breaker that pauses sending after 3
-> FloodWaits in 24h. The agent physically cannot bypass it. Limits are still per-account, so
-> behave like a human. Full rules: `agent/skills/telegram-userbot/safety.md`.
+> FloodWaits in 24h. It wraps `send_message`, `send_file` and `forward_messages` — the agent
+> cannot talk past those. Raw-API writes (joins, invites, contact imports, reactions) are not
+> wrapped: their limits live in the skill file, which is a prompt, so treat them as advisory.
+> Limits are still per-account, so behave like a human. Full rules: `agent/skills/telegram-userbot/safety.md`.
 
 ## Connect — just chat with the bot
 
