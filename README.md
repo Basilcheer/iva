@@ -113,6 +113,14 @@ curl -fsSL https://raw.githubusercontent.com/smixs/iva/main/install.sh | bash
 2. Run the installer and answer its questions.
 3. Message your bot. The wizard picks your Telegram ID out of that message, finishes setup, and Iva confirms right in the chat that it's live.
 
+> [!TIP]
+> Piping a script into `bash` deserves a look first. Read it, then run the copy you read:
+>
+> ```bash
+> curl -fsSL https://raw.githubusercontent.com/smixs/iva/main/install.sh -o install.sh
+> less install.sh && bash install.sh
+> ```
+
 Headless installs take `--skip-setup` or `--non-interactive`. Wizard walkthrough and an SSH primer for first-time VPS owners: [docs/install.md](docs/install.md).
 
 <details>
