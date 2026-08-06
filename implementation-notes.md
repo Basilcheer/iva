@@ -1214,8 +1214,8 @@ the Node event loop is blocked` assertion once. Two later sequential suites hit
   load hit the unchanged `userbot-health-cli.test.mjs` 1.5-second probe deadline
   once (708/713). Its immediate isolated coverage rerun passed in 619 ms, and a
   clean repeated full coverage suite passed all 715 tests. The final repeated
-  measurement is 76.15% lines, 79.04% branches, and 73.28% functions, a change
-  from merged PR-9 of -0.80 / -0.53 / -1.20 percentage points while retaining
+  measurement is 76.14% lines, 79.04% branches, and 73.28% functions, a change
+  from merged PR-9 of -0.81 / -0.53 / -1.20 percentage points while retaining
   the monotonic configured thresholds of 72 / 79 / 71. The exact tracked `.mjs`
   count and ratchet are both seven; no `.d.mts` or `.mts` remains.
 - 2026-08-06 Asia/Tashkent: The complete pre-pull PR-10 gate set is green on
@@ -1231,7 +1231,7 @@ the Node event loop is blocked` assertion once. Two later sequential suites hit
   `origin/main` still at the PR-9 merge `ab0ae84`, so no PR-10 commit was
   rewritten. The complete post-pull gate set is green on the committed tree:
   Node again reports 715 total tests, 711 passed, zero failed, and four expected
-  skips; coverage is 76.15% lines, 79.04% branches, and 73.28% functions.
+  skips; coverage is 76.14% lines, 79.04% branches, and 73.28% functions.
   Lint, formatting, exact 7/7 ratchet, zero declarations, typecheck, diff
   checks, build, replica, Autograph 343/343, security-defense 45/45, uv 0.8.3
   lock reproduction, and all Python 3.12 userbot checks pass. The two protected
