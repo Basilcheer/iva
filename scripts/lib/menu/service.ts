@@ -328,16 +328,15 @@ async function startCommand(
 
 const service = {
   parent: "r",
-  render(
+  // eslint-disable-next-line @typescript-eslint/require-await -- async preserves the original synchronous run snapshot before returning a Promise.
+  async render(
     st: MenuServiceState,
     ctx: MenuServiceContext,
   ): Promise<MenuServiceView> {
-    return Promise.resolve().then(() => {
-      const run = currentRun();
-      return run && run.status === "running"
-        ? progressView(run, ctx)
-        : idleView(st, ctx);
-    });
+    const run = currentRun();
+    return run && run.status === "running"
+      ? progressView(run, ctx)
+      : idleView(st, ctx);
   },
   async on(
     verb: string,

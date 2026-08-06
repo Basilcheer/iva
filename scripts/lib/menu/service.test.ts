@@ -16,8 +16,10 @@ import service, {
 import root from "./root.ts";
 import {
   LOADERS,
+  cancelRun,
   currentRun,
   resetForTests,
+  startProcess,
   type RunOptions,
 } from "./svc-run.ts";
 import { acquireUpdateLock, releaseUpdateLock } from "../update-safety.ts";
@@ -154,6 +156,36 @@ test("render idle: четыре команды и Назад, ru/en", async () =
       assert.ok(data.includes(cb), `${lang}: ${cb}`);
     assert.match(view.text, lang === "ru" ? /Обслуживание/ : /Maintenance/);
   }
+});
+
+test("render snapshots the current run before returning its promise", async (t) => {
+  resetForTests();
+  t.after(() => {
+    cancelRun();
+    resetForTests();
+  });
+  const h = makeCtx({ lang: "en" });
+  const st = newState();
+  h.st = st;
+
+  const pendingView = service.render(st, h.ctx);
+  const run = startProcess(
+    "doc",
+    { argv: [process.execPath, "-e", "setTimeout(() => {}, 2000)"] },
+    {
+      tg: h.ctx.tg,
+      chatId: st.chatId,
+      messageId: st.msgId,
+      loader: LOADERS.doc,
+      progressView: () => ({ text: "running" }),
+      ...fastRun,
+    },
+  );
+  assert.ok(run);
+
+  const view = await pendingView;
+  assert.match(view.text, /Maintenance/);
+  assert.doesNotMatch(view.text, /running/);
 });
 
 test("подтверждение: c:<cmd> рисует описание и ▶ go:<cmd>", async () => {
