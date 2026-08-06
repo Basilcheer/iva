@@ -33,9 +33,10 @@ loading.
 ```bash
 git clone https://github.com/smixs/iva.git ~/iva && cd ~/iva
 npm install
-cp .env.example .env     # fill in a bot token and one model provider
-npm run build            # eve build — needed after every agent/ change
-npm start
+cp .env.example .env && chmod 600 .env   # fill in a bot token and one model provider
+npm run build                            # eve build — needed after every agent/ change
+npm start                                # the agent
+npm run poll                             # second terminal: the Telegram bridge
 ```
 
 `npm run dev` runs the agent with reload. `npm start` does **not** rebuild, so if a
