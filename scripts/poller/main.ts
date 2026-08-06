@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-base-to-string -- Telegram response descriptions retain source-compatible permissive coercion. */
 import {
   COLLECT_QUIET_MS,
   collectorOffer,
@@ -28,7 +27,7 @@ import { fastForwardOffset, loadOffset, saveOffset } from "./offset.ts";
 type ErrorLike = { message?: unknown };
 type TelegramResponse = {
   ok?: unknown;
-  description?: unknown;
+  description?: string;
   result?: TelegramQueueUpdate[];
 };
 type QueueModule = {
@@ -52,18 +51,16 @@ type ControlModule = {
   [name: string]: unknown;
 };
 
-// @ts-expect-error -- The queue module remains JavaScript until its migration PR.
-const queue = (await import("./queue.mjs")) as unknown as QueueModule;
-// @ts-expect-error -- The routing module remains JavaScript until its migration PR.
-const routing = (await import("./routing.mjs")) as unknown as RoutingModule;
-const updateFlow = (await import(
-  // @ts-expect-error -- The update-flow module remains JavaScript until its migration PR.
-  "./update-flow.mjs"
-)) as unknown as UpdateFlowModule;
-// @ts-expect-error -- The control module remains JavaScript until its migration PR.
-const control = (await import("./control.mjs")) as unknown as ControlModule;
-// @ts-expect-error -- The wizards module remains JavaScript until its migration PR.
-const wizards = (await import("./wizards.mjs")) as Record<string, unknown>;
+const queueModulePath = "./queue.mjs";
+const routingModulePath = "./routing.mjs";
+const updateFlowModulePath = "./update-flow.mjs";
+const controlModulePath = "./control.mjs";
+const wizardsModulePath = "./wizards.mjs";
+const queue = (await import(queueModulePath)) as QueueModule;
+const routing = (await import(routingModulePath)) as RoutingModule;
+const updateFlow = (await import(updateFlowModulePath)) as UpdateFlowModule;
+const control = (await import(controlModulePath)) as ControlModule;
+const wizards = (await import(wizardsModulePath)) as Record<string, unknown>;
 const { QUEUE_FILE, reapStaleRuns, reconcileScopedResetIntents } = queue;
 const { drainReadyQueueHeads, routeMessageUpdate } = routing;
 const { removeStaleUpdateJobs } = updateFlow;

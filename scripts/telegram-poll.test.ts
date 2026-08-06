@@ -1,13 +1,128 @@
-/* eslint-disable @typescript-eslint/ban-ts-comment, @typescript-eslint/no-floating-promises, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-return, @typescript-eslint/require-await -- This characterization suite preserves pre-existing JavaScript-shaped doubles while adjacent modules migrate in later PRs. */
-// @ts-nocheck -- See the scoped lint rationale above.
+/* eslint-disable @typescript-eslint/no-floating-promises, @typescript-eslint/require-await -- Node's test runner owns registrations and the doubles intentionally retain asynchronous production boundaries. */
 import assert from "node:assert/strict";
 import { test } from "node:test";
+
+type Update = {
+  update_id: number;
+  message?: { [key: string]: unknown };
+  callback_query?: { [key: string]: unknown };
+  [key: string]: unknown;
+};
+type StatusRecord = {
+  status: string;
+  generation: number;
+  updatedAt: number;
+  [key: string]: unknown;
+};
+type InFlight = { state: string };
+type AcceptanceFailure = {
+  kind: string;
+  status: string | number;
+  attempt: number;
+};
+type DeliverOptions = {
+  timeoutMs?: number;
+  retryAcceptanceTimeout?: boolean;
+  onAcceptanceFailure: (failure: AcceptanceFailure) => Promise<void>;
+};
+type RouteOptions = {
+  chatKeyImpl: (update: Update) => string;
+  loadQueueImpl: () => Promise<{
+    version: number;
+    queues: Record<string, unknown>;
+  }>;
+  runningImpl: (chatKey: string) => boolean;
+  inFlight: Map<string, InFlight>;
+  queueCountImpl: () => number;
+  replyToBotImpl: (message: unknown) => boolean;
+  shouldQueueImpl: (update: Update) => boolean;
+  enqueueImpl: (chatKey: string, update: Update) => Promise<{ count: number }>;
+  acknowledgeImpl: (update: Update, count: number) => Promise<void>;
+  deliverImpl: (update: Update, options: DeliverOptions) => Promise<boolean>;
+  statusImpl: (chatKey: string) => StatusRecord | null;
+  setStatusIfImpl: (
+    chatKey: string,
+    expected: Record<string, unknown>,
+    patch: Record<string, unknown>,
+  ) => Record<string, unknown> | null;
+  sendFailureImpl: (chatKey: string, text: string) => Promise<unknown>;
+  deleteMessageImpl: (chatKey: string, messageId: number) => Promise<unknown>;
+  now: () => number;
+  trImpl: (english: string, russian: string) => string;
+  logImpl: (...parts: unknown[]) => void;
+};
+type ReaperStatus = { chatKey: string; status: StatusRecord };
+type ReaperOptions = {
+  listStatusesImpl: () => Promise<ReaperStatus[]>;
+  setStatusIfImpl: (
+    chatKey: string,
+    expected: Record<string, unknown>,
+    patch: Record<string, unknown>,
+  ) => Record<string, unknown> | null;
+  resetImpl: (chatKey: string, token: string) => Promise<unknown>;
+  sendImpl: (chatKey: string, text: string) => Promise<unknown>;
+  deleteMessageImpl: (chatKey: string, messageId: number) => Promise<unknown>;
+  now: () => number;
+  inFlight: Map<string, InFlight>;
+  staleMs: number;
+  trImpl: (english: string, russian: string) => string;
+  logImpl: (...parts: unknown[]) => void;
+};
+type NonTextIo = {
+  deleteSecret: (chatId: unknown, messageId: number) => Promise<boolean>;
+  reply: (chatId: unknown, text: string) => Promise<void>;
+  download: (fileId: string) => Promise<string>;
+  deliver: (text: string) => Promise<void>;
+};
+type WizardState = Record<string, unknown>;
+type WizardSaveDeps = {
+  readEnv: () => Promise<Record<string, string>>;
+  validate: (selection: WizardState) => Promise<unknown>;
+  write: (updates: Record<string, string | null>) => Promise<unknown>;
+};
+type PollModule = {
+  readCappedStream: (body: unknown, maxBytes: number) => Promise<string | null>;
+  handleAwaitNonText: (
+    message: unknown,
+    pending: unknown,
+    io: NonTextIo,
+  ) => Promise<boolean>;
+  isStaleWizard: (state: WizardState | null, messageId: number) => boolean;
+  wizardActionAllowed: (state: WizardState, action: string) => boolean;
+  selectWizardModel: (state: WizardState, rawIndex: string) => unknown;
+  selectWizardEffort: (state: WizardState, value: string) => boolean;
+  runWizardRequest: (
+    state: WizardState,
+    request: () => Promise<unknown>,
+    isCurrent: (candidate: WizardState) => boolean,
+  ) => Promise<unknown>;
+  resolveThinkCatalogLoad: (
+    state: WizardState,
+    result: { ok: boolean; error?: unknown },
+    showError: (state: WizardState, error: unknown) => Promise<void>,
+  ) => Promise<unknown>;
+  reapStaleRuns: (options: ReaperOptions) => Promise<number>;
+  routeMessageUpdate: (
+    update: Update,
+    options: RouteOptions,
+  ) => Promise<string>;
+  selectableWizardOptions: (
+    options: Array<{ id: string; [key: string]: unknown }>,
+    current: string,
+  ) => Array<{ id: string; [key: string]: unknown }>;
+  validateAndSaveWizard: (
+    state: WizardState,
+    deps: WizardSaveDeps,
+  ) => Promise<void>;
+  main: () => Promise<void>;
+};
 
 // telegram-poll.mjs reads env at import and guards its poll loop behind a direct-execution check,
 // so importing it here is side-effect-free. A dummy token keeps the API base a harmless string.
 process.env.TELEGRAM_BOT_TOKEN ??= "test:token";
 delete process.env.TELEGRAM_DIRECT_ACCEPTANCE_TIMEOUT_MS;
 const directMainModule = await import("./poller/main.ts");
+const pollModulePath = "./telegram-poll.mjs";
 const {
   readCappedStream,
   handleAwaitNonText,
@@ -22,11 +137,11 @@ const {
   selectableWizardOptions,
   validateAndSaveWizard,
   main: shimMain,
-} = await import("./telegram-poll.mjs");
+} = (await import(pollModulePath)) as PollModule;
 
 const enc = new TextEncoder();
-function streamOf(...parts) {
-  return new ReadableStream({
+function streamOf(...parts: Array<string | Uint8Array>) {
+  return new ReadableStream<Uint8Array>({
     start(controller) {
       for (const p of parts)
         controller.enqueue(typeof p === "string" ? enc.encode(p) : p);
@@ -37,14 +152,19 @@ function streamOf(...parts) {
 
 // A recording double for handleAwaitNonText's I/O: captures call order, returns fixed content.
 // deleteOk controls whether the (mocked) Telegram deletion is reported as successful.
-function recorder(content = '{"installed":{}}', { deleteOk = true } = {}) {
-  const calls = [];
-  const io = {
-    deleteSecret: async (_c, id) => {
+type Call = [kind: string, ...details: unknown[]];
+
+function recorder(
+  content = '{"installed":{}}',
+  { deleteOk = true }: { deleteOk?: boolean } = {},
+) {
+  const calls: Call[] = [];
+  const io: NonTextIo = {
+    deleteSecret: async (_chatId, id) => {
       calls.push(["delete", id]);
       return deleteOk;
     },
-    reply: async (_c, text) => {
+    reply: async (_chatId, text) => {
       calls.push(["reply", text]);
     },
     download: async (fileId) => {
@@ -69,12 +189,12 @@ const routedUpdate = {
   },
 };
 
-function routeDeps(overrides = {}) {
+function routeDeps(overrides: Partial<RouteOptions> = {}): RouteOptions {
   return {
     chatKeyImpl: () => "1:",
     loadQueueImpl: async () => ({ version: 1, queues: {} }),
     runningImpl: () => false,
-    inFlight: new Map(),
+    inFlight: new Map<string, InFlight>(),
     queueCountImpl: () => 0,
     replyToBotImpl: () => false,
     shouldQueueImpl: () => true,
@@ -147,12 +267,12 @@ test("routeMessageUpdate sends one idle update through paced delivery", async ()
 });
 
 test("a direct acceptance timeout is rejected after one cleanup and notification", async () => {
-  let current = {
+  let current: StatusRecord = {
     status: "idle",
     generation: 4,
     updatedAt: 900,
   };
-  const calls = [];
+  const calls: Call[] = [];
   let deliveries = 0;
   let timeoutReports = 0;
   const result = await routeMessageUpdate(
@@ -213,12 +333,12 @@ test("a direct acceptance timeout is rejected after one cleanup and notification
 });
 
 test("direct acceptance failures clear each matching ingress and notify the chat once", async () => {
-  let current = {
+  let current: StatusRecord = {
     status: "idle",
     generation: 4,
     updatedAt: 900,
   };
-  const calls = [];
+  const calls: Call[] = [];
   const result = await routeMessageUpdate(
     routedUpdate,
     routeDeps({
@@ -298,7 +418,7 @@ test("direct acceptance failures clear each matching ingress and notify the chat
 });
 
 test("reply-to-bot bypass clears its failed early status before delivery returns", async () => {
-  let current = {
+  let current: StatusRecord = {
     status: "running",
     generation: 7,
     updatedAt: 1_900,
@@ -356,7 +476,7 @@ test("reply-to-bot bypass clears its failed early status before delivery returns
 });
 
 test("direct failure cleanup never clobbers a turn that acquired a session", async () => {
-  let current = {
+  let current: StatusRecord = {
     status: "idle",
     generation: 2,
     updatedAt: 900,
@@ -463,7 +583,10 @@ const staleStatus = {
   statusMessageId: 77,
 };
 
-function reaperDeps(statuses, overrides = {}) {
+function reaperDeps(
+  statuses: ReaperStatus[],
+  overrides: Partial<ReaperOptions> = {},
+): ReaperOptions {
   return {
     listStatusesImpl: async () => statuses,
     setStatusIfImpl: () => ({ status: "idle" }),
@@ -480,7 +603,7 @@ function reaperDeps(statuses, overrides = {}) {
 }
 
 test("reapStaleRuns flips one stale run, resets Eve, notifies, and removes working status", async () => {
-  const calls = [];
+  const calls: Call[] = [];
   const reaped = await reapStaleRuns(
     reaperDeps([{ chatKey: "1:", status: staleStatus }], {
       setStatusIfImpl: (key, expected, patch) => {
@@ -500,8 +623,8 @@ test("reapStaleRuns flips one stale run, resets Eve, notifies, and removes worki
     "1:",
     { status: "running", generation: 7, updatedAt: reaperNow - 31_000 },
   ]);
-  assert.equal(calls[0][3].status, "idle");
-  assert.equal(calls[0][3].resetAt, reaperNow);
+  assert.equal((calls[0][3] as StatusRecord).status, "idle");
+  assert.equal((calls[0][3] as StatusRecord).resetAt, reaperNow);
   assert.deepEqual(calls.slice(1), [
     // Сброс уходит channel-local, хотя в статусе лежит namespaced-токен.
     ["reset", "1:", "1::"],
@@ -587,7 +710,7 @@ test("reapStaleRuns skips chats while their queue head is mid-drain", async () =
 });
 
 test("reapStaleRuns swallows and logs a notification failure", async () => {
-  const logs = [];
+  const logs: string[] = [];
   let deleted = 0;
   const reaped = await reapStaleRuns(
     reaperDeps([{ chatKey: "1:", status: staleStatus }], {
@@ -710,7 +833,7 @@ test("secret prompt + non-file attachment (photo) → deleted with an ack, not d
 });
 
 test("stale wizard callbacks are rejected by message and screen step", () => {
-  const st = { msgId: 42, step: "models" };
+  const st: WizardState = { msgId: 42, step: "models" };
   assert.equal(isStaleWizard(st, 41), true);
   assert.equal(isStaleWizard(st, 42), false);
   assert.equal(isStaleWizard(null, 42), true);
@@ -779,9 +902,9 @@ test("stale current model stays display-only while a live current remains select
 });
 
 test("Cancel during a rejected model fetch discards the stale error path", async () => {
-  const st = { chatId: 1, userId: "2" };
-  let active = st;
-  let rejectFetch;
+  const st: WizardState = { chatId: 1, userId: "2" };
+  let active: WizardState | null = st;
+  let rejectFetch: (reason?: unknown) => void = () => undefined;
   const pending = runWizardRequest(
     st,
     () =>
@@ -797,7 +920,7 @@ test("Cancel during a rejected model fetch discards the stale error path", async
 });
 
 test("/think catalog failure keeps the wizard and routes to Retry/Back error state", async () => {
-  const st = { step: "loading", removed: false };
+  const st: WizardState = { step: "loading", removed: false };
   const failure = Object.assign(new Error("catalog offline"), {
     code: "catalog_unavailable",
   });
@@ -820,7 +943,7 @@ test("/think catalog failure keeps the wizard and routes to Retry/Back error sta
 });
 
 test("catalog change before save preserves the old env", async () => {
-  const writes = [];
+  const writes: Array<Record<string, string | null>> = [];
   await assert.rejects(
     validateAndSaveWizard(
       {
@@ -850,8 +973,8 @@ test("catalog change before save preserves the old env", async () => {
 });
 
 test("provider, model, effort and pending key persist in one atomic write", async () => {
-  const validations = [];
-  const writes = [];
+  const validations: WizardState[] = [];
+  const writes: Array<Record<string, string | null>> = [];
   await validateAndSaveWizard(
     {
       flow: "model",
