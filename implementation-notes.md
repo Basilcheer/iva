@@ -615,3 +615,8 @@ the Node event loop is blocked` assertion once. Two later sequential suites hit
 - 2026-08-06 07:02 Asia/Tashkent: The next complete local suite passed cleanly
   after transfer: 594 passed, zero failed, and four expected platform skips (two
   existing `flock` skips plus the two unavailable-`setsid` cases).
+- 2026-08-06 07:08 Asia/Tashkent: The first post-rebase full-suite retry hit the
+  pre-existing 1.5-second `userbot-health-cli` probe budget once, returning
+  `probe_timeout` under full-suite load. The PR-2 conversion does not touch that
+  path; three immediate isolated reruns passed in 675, 590, and 584 ms. A clean
+  full-suite retry remains required before push.
