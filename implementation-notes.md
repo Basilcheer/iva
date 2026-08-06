@@ -1369,3 +1369,26 @@ update` before and after merge) and was not run by Codex.
   own the poller/runtime and migration-hygiene lanes; the integration branch
   alone owns this log and publication. The protected untracked migration plan
   and `LEARNINGS.md` remain outside both PRs.
+- 2026-08-06 19:31 Asia/Tashkent: The poller, routing, control, and menu seams
+  now use static imports and their real exported types. A shared Telegram update
+  model replaces the handwritten module contracts; `getUpdates.result` remains
+  `unknown` until a structural guard accepts the batch, so malformed data neither
+  enters the collector nor advances the durable offset. The public poller export
+  set is unchanged, an independent import-graph audit found no cycle or new
+  import-time side effect, and the integrated Node 24 targeted suite passes
+  188/188. The nullable command-entity fix stays separate and fail-closed:
+  `[null]` is ignored while a later valid `bot_command` is still recognized.
+- 2026-08-06 19:31 Asia/Tashkent: Native Node coverage include globs filter
+  modules loaded by the tests but do not materialize untouched production files.
+  The policy therefore makes only two explicit guarantees: coverage is filtered
+  to loaded `agent/**/*.ts` and `scripts/**/*.ts` production modules, and a
+  path-inventory ratchet forces remeasurement whenever the current 138 production
+  paths change. The separately measured 29-path blind-spot snapshot is documented,
+  not presented as a dynamic import-graph proof. A skeptical review caught literal
+  single quotes that could yield an empty 100% report under `cmd.exe`, substring
+  checks that admitted conflicting flags, and floors that were still too close to
+  the measurement. Cross-platform double-quoted globs, exact command equality,
+  aligned fixture traversal, and floors of 75 / 77 / 71 replace them. The final
+  Node 24 lane run reports 76.72% lines, 78.94% branches, and 72.50% functions,
+  leaving 1.72 / 1.94 / 1.50 percentage points of headroom; these figures use a
+  different denominator and are not a regression comparison with the old totals.
