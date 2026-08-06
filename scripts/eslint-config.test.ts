@@ -1,7 +1,9 @@
 /* eslint-disable @typescript-eslint/no-floating-promises -- Node's test runner owns registrations. */
 
 import assert from "node:assert/strict";
+import { dirname } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 const EXPECTED_IGNORES = [
   ".output/",
@@ -80,7 +82,7 @@ test("ESLint config preserves the migration lint policy", async () => {
   assert.equal(parserOptions.projectService, true);
   assert.equal(
     parserOptions.tsconfigRootDir,
-    new URL("..", import.meta.url).pathname.slice(0, -1),
+    dirname(fileURLToPath(configUrl)),
   );
 
   const rules = requireRecord(typescriptConfig.rules, "TypeScript rules");

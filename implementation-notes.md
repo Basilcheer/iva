@@ -1349,3 +1349,8 @@ update` before and after merge) and was not run by Codex.
   strict hashed userbot sync, guardrails, health, and `py_compile`. Range diff
   checks confirm both protected handoff files are absent and all PR-12 commits
   contain no AI attribution.
+- 2026-08-06 Asia/Tashkent: CodeRabbit's completed PR-12 review found one valid
+  portability issue in the new ESLint characterization test: URL `.pathname`
+  is not a native filesystem path on Windows. The expected config root now uses
+  `dirname(fileURLToPath(configUrl))`, matching `import.meta.dirname` on every
+  supported platform without changing production behavior.
