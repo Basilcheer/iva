@@ -1064,3 +1064,14 @@ the Node event loop is blocked` assertion once. Two later sequential suites hit
   Replica exits zero after its documented cross-restart known-issue notice,
   proves reset retirement, and finishes `OK` with five provider requests. The
   two approved untracked handoff files remain outside Git.
+- 2026-08-06 Asia/Tashkent: The required fetch and pull/rebase found
+  `origin/main` still at the PR-7 merge `d083bcc`, so no PR-8 commit was
+  rewritten. The complete post-pull gate set is green on the committed tree:
+  Node 24 again reports 672 total, 668 passed, zero failed, and four expected
+  macOS skips; coverage is 75.92% lines, 79.05% branches, and 73.22% functions,
+  a PR-7 delta of +0.14 / -0.15 / +0.19 percentage points. Lint, formatting,
+  typecheck, build, exact 32/32 ratchet, stale-reference and diff checks,
+  replica, Autograph 343/343, security-defense 45/45, pinned uv 0.8.3 lock
+  reproduction, and all Python 3.12 userbot checks pass. An independent final
+  range audit found no behavior, scope, history, protected-file, or attribution
+  blocker.
