@@ -466,7 +466,7 @@ export async function reapStaleRuns({
     if (
       typeof key !== "string" ||
       status?.status !== "running" ||
-      now() - (typeof status.updatedAt === "number" ? status.updatedAt : 0) <=
+      now() - ((status.updatedAt as number | null | undefined) ?? 0) <=
         staleMs ||
       inFlight.has(key)
     ) {
