@@ -1101,7 +1101,9 @@ the Node event loop is blocked` assertion once. Two later sequential suites hit
   implementation to `.ts`. Three non-overlapping worktrees own security/format,
   setup/init-vault, and internal entries/tests; the lead owns check-update,
   ratchet integration, cross-lane review, and final gates. Missing direct
-  behavior is characterized against the original `.mjs` before each conversion.
+  behavior is characterized against the original `.mjs` before conversion where
+  the original entrypoint can be imported safely; the setup exception is
+  documented below.
 - 2026-08-06 Asia/Tashkent: PR-9 integration completed the planned source set:
   `security-gate` and `telegram-format` are canonical TypeScript; `setup`,
   `init-vault`, and `check-update` retain their permanent `.mjs` entry paths
@@ -1111,6 +1113,16 @@ the Node event loop is blocked` assertion once. Two later sequential suites hit
   conversions. The exact tracked `.mjs` count is now eight, matching the PR-9
   ratchet target; the only two bin-coupled `.mjs` tests remain assigned to
   PR-10 and PR-11.
+- 2026-08-06 Asia/Tashkent: PR-9 has one explicit TDD process deviation. The
+  original `setup.mjs` unconditionally starts the interactive wizard, opens
+  `/dev/tty`, and requires real provider/Telegram credentials and network calls
+  to complete, so a safe pre-conversion direct-import characterization was not
+  added. Existing dependency-level setup tests remained green; after extraction,
+  the pure OpenRouter helper gained direct tests, and an independent differential
+  harness matched 8,852 normal and malformed response shapes against the original
+  implementation. This avoids a brittle PTY/credential harness but means those
+  helper tests live in the setup conversion commit rather than a preceding
+  characterization commit.
 - 2026-08-06 Asia/Tashkent: Cross-lane review rejected several seemingly safer
   conversion changes because they altered malformed-input or thrown-value
   behavior. Setup provider/Telegram JSON access, check-update diagnostics,
@@ -1135,3 +1147,15 @@ the Node event loop is blocked` assertion once. Two later sequential suites hit
   Python 3.12.13 byte-compilation. The two approved handoff files remain the
   only untracked paths, no protected file is present in the PR range, and all
   PR-9 commit messages are free of AI attribution.
+- 2026-08-06 Asia/Tashkent: The required fetch and pull/rebase found
+  `origin/main` still at the PR-8 merge `5985f22`, so no PR-9 commit was
+  rewritten. The complete post-pull gate set is green on the committed tree:
+  Node 24 again reports 689 total tests, 685 passed, zero failed, and four
+  expected macOS skips; the final repeated coverage run is 76.95% lines, 79.57%
+  branches, and 74.48% functions, a final PR-8 delta of +1.03 / +0.52 / +1.26
+  percentage points.
+  Lint, formatting, exact 8/8 ratchet, zero declarations, typecheck, build,
+  replica, Autograph 343/343, security-defense 45/45, uv 0.8.3 lock
+  reproduction, and all Python 3.12 userbot checks pass. Replica again emitted
+  only the documented cross-restart resume notice before proving reset
+  retirement and exiting zero with five provider requests.
