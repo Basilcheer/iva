@@ -936,3 +936,16 @@ the Node event loop is blocked` assertion once. Two later sequential suites hit
   pinned uv 0.8.3, strict hashed environment sync, guardrails, health, and
   py_compile. The committed diff from the PR-5 merge and the working diff are
   whitespace-clean; the two approved untracked handoff files remain outside Git.
+- 2026-08-06 Asia/Tashkent: `origin/main` remained at the PR-5 merge during the
+  required pull/rebase, so no commits were rewritten. The entire gate set was
+  repeated on the committed post-pull tree: Node 24 reports 667 total, 663
+  passed, zero failed, and four expected macOS skips; coverage is 75.57% lines,
+  79.12% branches, and 73.01% functions. Against PR-5 this is -0.34 / +0.04 /
+  -0.55 percentage points. Lint, formatting, exact 44/44 ratchet, the ten-line
+  shim check, typecheck, build, replica, Autograph 343/343, security-defense
+  45/45, uv 0.8.3 lock reproduction, and Python 3.12.13 userbot
+  guardrail/health/compile checks all pass. Replica again emitted only its
+  documented cross-restart known-issue notice before the successful reset and
+  final `OK`; the process exited zero. Two independent final read-only reviews
+  found no scope, semantics, stale-import, attribution, or diff-integrity
+  blocker.
