@@ -661,3 +661,10 @@ the Node event loop is blocked` assertion once. Two later sequential suites hit
   function object instead of invoking it. A separate regression fix normalizes
   string and factory nonces at the write boundary; a direct test proves that
   each write asks the factory for a fresh value.
+- 2026-08-06 Asia/Tashkent: Final PR-2 verification after all review fixes is
+  clean: the exact suite reports 601 tests, 597 passed, zero failed, and four
+  expected macOS skips. Coverage is 73.46% lines, 79.22% branches, and 71.69%
+  functions; the delta from PR-1 is +0.64, +0.18, and +0.16 percentage points.
+  Lint, formatting, the 116/116 `.mjs` ratchet, typecheck, build, replica,
+  autograph 343/343, security-defense 45/45, deterministic userbot lock, and
+  Python 3.12 userbot guardrail/health/compile gates all pass.
