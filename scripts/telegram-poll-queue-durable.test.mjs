@@ -10,7 +10,7 @@ const HARNESS = join(ROOT, "scripts/fixtures/telegram-poll-queue-harness.mjs");
 const [queueRuntime, routingRuntime, deliverRuntime] = await Promise.all([
   import("./poller/queue.mjs"),
   import("./poller/routing.mjs"),
-  import("./poller/deliver.mjs"),
+  import("./poller/deliver.ts"),
 ]);
 
 function makeDataDir(t, label) {
@@ -68,9 +68,7 @@ test("direct queue runtime normalizes a namespaced reset token", async () => {
   );
 
   assert.deepEqual(result, { ok: true, status: "reset" });
-  assert.deepEqual(requests, [
-    { chatKey: "1:", continuationToken: "1::" },
-  ]);
+  assert.deepEqual(requests, [{ chatKey: "1:", continuationToken: "1::" }]);
 });
 
 test("direct routing runtime durably queues a busy private update", async () => {
@@ -122,8 +120,7 @@ test("direct delivery runtime requires the accepted-route receipt", async (t) =>
       ok: true,
       status: 204,
       headers: {
-        get: (name) =>
-          name === "x-iva-telegram-acceptance" ? "turn" : null,
+        get: (name) => (name === "x-iva-telegram-acceptance" ? "turn" : null),
       },
     };
   };
