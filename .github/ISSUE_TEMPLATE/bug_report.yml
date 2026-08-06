@@ -35,7 +35,7 @@ body:
     attributes:
       label: Version
       description: Output of `iva version`.
-      placeholder: "0.3.12 (a1b2c3d)"
+      placeholder: "iva 0.3.12 · commit a1b2c3d"
     validations:
       required: true
   - type: dropdown
@@ -74,7 +74,7 @@ body:
     attributes:
       label: Logs
       description: |
-        `journalctl --user -u iva-bridge -n 100 --no-pager` usually has it.
+        `iva logs` (agent) or `iva logs poll` (Telegram bridge) usually has it.
         **Strip your tokens, keys and chat IDs before pasting.**
       render: shell
   - type: checkboxes

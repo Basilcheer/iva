@@ -7,7 +7,7 @@ from an actual install is worth more than a drive-by PR, so start wherever you a
 
 Open an [issue](https://github.com/smixs/iva/issues/new/choose) and include the version
 (`iva version`), how you installed, and what you expected instead. If it involves a
-message the assistant handled, the relevant lines from `journalctl --user -u iva-bridge`
+message the assistant handled, `iva logs` (agent) and `iva logs poll` (Telegram bridge)
 usually contain the answer — strip your tokens first.
 
 Security problems do not go in issues. See [SECURITY.md](SECURITY.md).
