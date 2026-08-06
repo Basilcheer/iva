@@ -30,11 +30,19 @@ Update button in Telegram) — running an old tag is not a supported configurati
 
 ## What is in scope
 
-- Prompt injection that survives the inbound sanitizer and makes the agent act.
-- Secret leakage past the redaction gate — into chat, logs or vault files.
+- Prompt injection that survives the inbound sanitizer and makes the agent act. The
+  sanitizer covers Telegram text, captions and transcripts; web results, document
+  bodies and userbot-read chats reach the model unscreened, and reports about that
+  path are welcome too.
+- Secret leakage past the redaction gate — into chat, logs or vault files. Note the
+  gate screens the Telegram reply: the agent's shell inherits the process environment,
+  so a hijacked turn can read your keys directly. That is why the inbound gate and the
+  allowlist carry the weight.
 - The allowlist letting a non-listed Telegram user through.
 - Privilege escalation on the host from anything the agent processes.
-- Anything that bypasses the userbot anti-ban guardrail from inside the agent.
+- A bypass of the userbot guardrail's wrapped calls (`send_message`, `send_file`,
+  `forward_messages`). Raw-API writes — joins, invites, contact imports, reactions —
+  are knowingly not wrapped; that gap is documented, not a vulnerability.
 - The install and update path — anything that gets code onto a host through
   `install.sh` or `iva update`, including the spend governor and the restart guard.
 
@@ -49,6 +57,8 @@ Update button in Telegram) — running an old tag is not a supported configurati
 
 ## The honest boundary
 
-Your vault is a private git repo on your own server. The model and transcription are
-cloud APIs you pick and pay for: their operators see the text you send them. Iva does
-not phone home, and no telemetry is collected.
+Your vault is a private git repo on your own server — and once `gh` is authenticated on
+that server, the nightly doctor mirrors it to a private `iva-vault` repo under your
+GitHub account. The model and transcription are cloud APIs you pick and pay for: their
+operators see the text you send them. Iva does not phone home, and no telemetry is
+collected.
