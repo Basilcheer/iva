@@ -92,7 +92,8 @@ The bot is half of Telegram. The other half is your personal account: connect th
 - **Anti-ban guardrail on the server** — FloodWait compliance, a randomized delay after every send, and a circuit-breaker that pauses sending after three warnings in a day. The agent can't bypass it: the rules live in the proxy, not in a prompt.
 - **Read-only mode** — one `.env` switch and Iva can read and search but physically cannot send.
 
-Automating a personal account is against Telegram's ToS: opt-in, at your own risk, and reading is far safer than sending. Details: [docs/userbot.md](docs/userbot.md).
+> [!WARNING]
+> Automating a personal account is against Telegram's ToS and can get the account limited or banned. The userbot is opt-in, beta, and used at your own risk — reading is far safer than sending. Details: [docs/userbot.md](docs/userbot.md).
 
 ## Security & privacy
 
