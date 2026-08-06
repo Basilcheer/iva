@@ -62,7 +62,7 @@ The bridge long-polls Telegram, so no public HTTPS, domain or webhook is needed.
 - **Google Workspace** — Gmail, Calendar, Drive, Sheets, Docs and Tasks from chat via the `gws` CLI; installed for you, with a guided key setup right in the conversation.
 - **Skills & MCP** — drop one file to add a procedure or connect an MCP server; keys stay in `.env`.
 - **Personal Telegram — userbot (beta)** — read and send from your _own_ account, not just the bot; connect by chat (QR, no terminal). Rough and buggy — opt-in, **at your own risk**. A server-side anti-ban guardrail (FloodWait compliance + randomized pacing + circuit-breaker) is enforced, not just advised. [Details](docs/userbot.md).
-- **Safe to forward** — forwarded text, captions and voice transcripts pass an injection screen before the model reads them; a flagged payload is marked as data, not obeyed as an instruction.
+- **Safe to forward** — forwarded text, captions and voice transcripts pass an injection screen before the model reads them. A flagged message or transcript reaches the model tagged as data rather than as an instruction; for media captions the screen runs but the tag does not travel with it yet.
 - **Token accounting** — every model step is logged; `/usage` reports it for free.
 
 </details>
