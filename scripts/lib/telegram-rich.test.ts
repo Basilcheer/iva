@@ -1,4 +1,4 @@
-// Self-check for needsRichMessage — run: node scripts/lib/telegram-rich.test.mjs
+// Self-check for needsRichMessage — run: node scripts/lib/telegram-rich.test.ts
 import { strict as assert } from "node:assert";
 import { needsRichMessage } from "./telegram-format.mjs";
 

@@ -152,7 +152,7 @@ test("first boot (no status file): seeds a baseline (seededAt, NOT lastSuccessAt
     "first boot must never run a catch-up job (storm protection)",
   );
   const status = JSON.parse(await readFile(statusPath, "utf8"));
-  // Keyed "memory-<period>" — the same name schedule-runner.mjs actually records a real
+  // Keyed "memory-<period>" — the same name schedule-runner.ts actually records a real
   // run under (the `name` each agent/schedules/memory-*.ts passes), not the bare period.
   for (const period of ["daily", "weekly", "monthly", "yearly"]) {
     const entry = status[`memory-${period}`];

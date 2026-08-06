@@ -1,4 +1,6 @@
-import test, { after } from "node:test";
+/* eslint-disable @typescript-eslint/require-await -- async test doubles preserve production promise boundaries */
+/* eslint-disable @typescript-eslint/prefer-promise-reject-errors -- regression cases preserve non-Error boundary failures */
+import test, { after, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { spawn } from "node:child_process";
@@ -30,7 +32,76 @@ import {
   shouldQueueBusyUpdate,
   TELEGRAM_QUEUE_ACK_ROLLED_BACK,
   TELEGRAM_QUEUE_FATAL_DURABILITY,
-} from "./telegram-queue.mjs";
+  writeQueueFileAtomic,
+  type TelegramQueueDocument,
+  type TelegramQueueUpdate,
+} from "./telegram-queue.ts";
+
+type InFlightGate = {
+  state: string;
+  [key: string]: unknown;
+};
+
+type DrainOptions = {
+  loadImpl: () => Promise<TelegramQueueDocument>;
+  runningImpl: (chatKey: string) => boolean;
+  deliverImpl: (
+    update: TelegramQueueUpdate,
+    options: { timeoutMs: number },
+  ) => Promise<boolean>;
+  acknowledgeImpl: (chatKey: string, updateId: number) => Promise<void>;
+  settleUntil: Map<string, number>;
+  inFlight?: Map<string, InFlightGate>;
+  statusImpl?: () => unknown;
+  now?: () => number;
+  gateWaitMs?: number;
+  rotationState?: { afterKey: string | null };
+  passBudgetMs?: number;
+  deliveryTimeoutMs?: number;
+  legacyAllowedUserIds?: ReadonlySet<string>;
+};
+
+type RouteMessageOptions = {
+  chatKeyImpl: (update: TelegramQueueUpdate) => string;
+  loadQueueImpl: () => Promise<TelegramQueueDocument>;
+  runningImpl: (chatKey: string) => boolean;
+  inFlight: Map<string, InFlightGate>;
+  queueCountImpl: typeof queueCount;
+  replyToBotImpl: (message: unknown) => boolean;
+  shouldQueueImpl: (update: TelegramQueueUpdate) => boolean;
+  enqueueImpl: (
+    chatKey: string,
+    update: TelegramQueueUpdate,
+  ) => Promise<{ count: number }>;
+  acknowledgeImpl: (
+    update: TelegramQueueUpdate,
+    count: number,
+  ) => Promise<void>;
+  deliverImpl: (update: TelegramQueueUpdate) => Promise<boolean>;
+};
+
+type PollModule = {
+  drainReadyQueueHeads: (options: DrainOptions) => Promise<number>;
+  routeMessageUpdate: (
+    update: TelegramQueueUpdate,
+    options: RouteMessageOptions,
+  ) => Promise<string>;
+};
+
+type PrivateUpdate = {
+  update_id: number;
+  message: {
+    message_id: number;
+    date: number;
+    chat: { id: number; type: string };
+    from: {
+      id: number;
+      is_bot: boolean;
+      first_name: string;
+    };
+    text: string;
+  };
+};
 
 process.env.TELEGRAM_BOT_TOKEN ??= "999:test-token";
 process.env.TELEGRAM_WEBHOOK_SECRET_TOKEN ??= "test-secret";
@@ -38,12 +109,12 @@ process.env.TELEGRAM_ALLOWED_USER_IDS = "42";
 process.env.TELEGRAM_POLL_SETTLE_MS = "0";
 const statusDataDir = mkdtempSync(join(tmpdir(), "iva-telegram-queue-status-"));
 process.env.ASSISTANT_DATA_DIR = statusDataDir;
-after(() => rmSync(statusDataDir, { recursive: true, force: true }));
+void after(() => rmSync(statusDataDir, { recursive: true, force: true }));
 const status = await import("#lib/run-status.mjs");
 const { drainReadyQueueHeads, routeMessageUpdate } =
-  await import("../telegram-poll.mjs");
+  (await import("../telegram-poll.mjs")) as PollModule;
 
-const privateUpdate = (updateId, text) => ({
+const privateUpdate = (updateId: number, text: string): PrivateUpdate => ({
   update_id: updateId,
   message: {
     message_id: updateId,
@@ -54,13 +125,13 @@ const privateUpdate = (updateId, text) => ({
   },
 });
 
-async function queueFile(t) {
+async function queueFile(t: TestContext): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), "iva-telegram-queue-"));
   t.after(() => rm(dir, { recursive: true, force: true }));
   return join(dir, "telegram-queue.json");
 }
 
-async function waitForFile(file, timeoutMs = 2_000) {
+async function waitForFile(file: string, timeoutMs = 2_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (existsSync(file)) return;
@@ -69,7 +140,69 @@ async function waitForFile(file, timeoutMs = 2_000) {
   assert.fail(`timed out waiting for ${file}`);
 }
 
-test("versioned FIFO items preserve update ids, order and duplicate retries across reload", async (t) => {
+void test("atomic queue writes invoke a fresh nonce factory per write", async (t) => {
+  const file = await queueFile(t);
+  let calls = 0;
+  const options = {
+    nonce: () => `nonce-${(calls += 1)}`,
+  };
+
+  await writeQueueFileAtomic(file, { version: 1, queues: {} }, options);
+  await writeQueueFileAtomic(file, { version: 1, queues: {} }, options);
+
+  assert.equal(calls, 2);
+});
+
+void test("queue reads preserve nullish non-Error failures", async () => {
+  const firstSentinel = Symbol("not rejected");
+  let firstCaught: unknown = firstSentinel;
+  try {
+    await loadQueueFile("/virtual/queue.json", {
+      readFileImpl: () => Promise.reject(null),
+    });
+  } catch (error) {
+    firstCaught = error;
+  }
+  assert.equal(firstCaught, null);
+
+  const missing = Object.assign(new Error("missing"), { code: "ENOENT" });
+  const secondSentinel = Symbol("not rejected");
+  let secondCaught: unknown = secondSentinel;
+  let reads = 0;
+  try {
+    await loadQueueFile("/virtual/queue.json", {
+      readFileImpl: () =>
+        (reads += 1) === 1
+          ? Promise.reject(missing)
+          : Promise.reject(undefined),
+    });
+  } catch (error) {
+    secondCaught = error;
+  }
+  assert.equal(reads, 2);
+  assert.equal(secondCaught, undefined);
+});
+
+void test("legacy quarantine preserves a null link failure", async (t) => {
+  const file = await queueFile(t);
+  await writeFile(file, JSON.stringify({ "-100:": ["legacy group text"] }));
+  const sentinel = Symbol("not rejected");
+  let caught: unknown = sentinel;
+
+  try {
+    await migrateQueueFile(file, {
+      linkImpl: () => Promise.reject(null),
+      quarantineNow: () => 1,
+      quarantineNonce: () => "fixed",
+    });
+  } catch (error) {
+    caught = error;
+  }
+
+  assert.equal(caught, null);
+});
+
+void test("versioned FIFO items preserve update ids, order and duplicate retries across reload", async (t) => {
   const file = await queueFile(t);
   await enqueueQueueFile(file, "1:", privateUpdate(101, "first"), {
     now: () => 1,
@@ -103,7 +236,7 @@ test("versioned FIFO items preserve update ids, order and duplicate retries acro
   );
 });
 
-test("failed head removal leaves the whole FIFO byte-for-byte intact", async (t) => {
+void test("failed head removal leaves the whole FIFO byte-for-byte intact", async (t) => {
   const file = await queueFile(t);
   await enqueueQueueFile(file, "1:", privateUpdate(101, "first"));
   await enqueueQueueFile(file, "1:", privateUpdate(102, "second"));
@@ -120,10 +253,10 @@ test("failed head removal leaves the whole FIFO byte-for-byte intact", async (t)
 
   assert.equal(await readFile(file, "utf8"), before);
   const { document } = await loadQueueFile(file, { strict: true });
-  assert.equal(queueHead(document, "1:").updateId, 101);
+  assert.equal(queueHead(document, "1:")!.updateId, 101);
 });
 
-test("ack directory-sync failure durably rolls back the original FIFO head", async (t) => {
+void test("ack directory-sync failure durably rolls back the original FIFO head", async (t) => {
   const file = await queueFile(t);
   await enqueueQueueFile(file, "1:", privateUpdate(101, "first"));
   await enqueueQueueFile(file, "1:", privateUpdate(102, "second"));
@@ -145,7 +278,8 @@ test("ack directory-sync failure durably rolls back the original FIFO head", asy
         };
       },
     }),
-    (error) => error?.code === TELEGRAM_QUEUE_ACK_ROLLED_BACK,
+    (error: unknown) =>
+      (error as NodeJS.ErrnoException).code === TELEGRAM_QUEUE_ACK_ROLLED_BACK,
   );
 
   assert.equal(
@@ -160,7 +294,7 @@ test("ack directory-sync failure durably rolls back the original FIFO head", asy
   );
 });
 
-test("SIGKILL after acknowledgement rename restores the pending original queue on load", async (t) => {
+void test("SIGKILL after acknowledgement rename restores the pending original queue on load", async (t) => {
   const file = await queueFile(t);
   const marker = join(dirname(file), "ack-renamed");
   await enqueueQueueFile(file, "1:", privateUpdate(101, "first"));
@@ -204,7 +338,7 @@ test("SIGKILL after acknowledgement rename restores the pending original queue o
   assert.equal(existsSync(`${file}.ack-pending`), false);
 });
 
-test("failed ack rollback becomes fatal and stops drain before another queue", async (t) => {
+void test("failed ack rollback becomes fatal and stops drain before another queue", async (t) => {
   const file = await queueFile(t);
   await enqueueQueueFile(file, "1:", privateUpdate(101, "first"));
   await enqueueQueueFile(file, "1:", privateUpdate(102, "second"));
@@ -227,13 +361,14 @@ test("failed ack rollback becomes fatal and stops drain before another queue", a
         };
       },
     }),
-    (error) => error?.code === TELEGRAM_QUEUE_FATAL_DURABILITY,
+    (error: unknown) =>
+      (error as NodeJS.ErrnoException).code === TELEGRAM_QUEUE_FATAL_DURABILITY,
   );
 
   const fatal = Object.assign(new Error("ack durability is unknown"), {
     code: TELEGRAM_QUEUE_FATAL_DURABILITY,
   });
-  const delivered = [];
+  const delivered: number[] = [];
   const document = {
     version: 1,
     queues: Object.fromEntries([
@@ -259,7 +394,7 @@ test("failed ack rollback becomes fatal and stops drain before another queue", a
   assert.deepEqual(delivered, [101]);
 });
 
-test("drain keeps the head before acceptance and advances exactly one item after acceptance", async () => {
+void test("drain keeps the head before acceptance and advances exactly one item after acceptance", async () => {
   let document = enqueueItem(
     enqueueItem(
       { version: 1, queues: {} },
@@ -269,9 +404,12 @@ test("drain keeps the head before acceptance and advances exactly one item after
     "1:",
     createQueueItem(privateUpdate(102, "second"), 2),
   ).document;
-  const delivered = [];
+  const delivered: number[] = [];
   const loadImpl = async () => document;
-  const acknowledgeImpl = async (key, updateId) => {
+  const acknowledgeImpl: DrainOptions["acknowledgeImpl"] = async (
+    key,
+    updateId,
+  ) => {
     document = removeQueueHead(document, key, updateId);
   };
 
@@ -286,7 +424,7 @@ test("drain keeps the head before acceptance and advances exactly one item after
     settleUntil: new Map(),
   });
   assert.equal(rejectedCount, 2);
-  assert.equal(queueHead(document, "1:").updateId, 101);
+  assert.equal(queueHead(document, "1:")!.updateId, 101);
 
   const acceptedCount = await drainReadyQueueHeads({
     loadImpl,
@@ -299,7 +437,7 @@ test("drain keeps the head before acceptance and advances exactly one item after
     settleUntil: new Map(),
   });
   assert.equal(acceptedCount, 1);
-  assert.equal(queueHead(document, "1:").updateId, 102);
+  assert.equal(queueHead(document, "1:")!.updateId, 102);
   assert.deepEqual(
     delivered,
     [101, 101],
@@ -307,7 +445,7 @@ test("drain keeps the head before acceptance and advances exactly one item after
   );
 });
 
-test("an accepted head must observe its turn running and then idle before the next FIFO head", async () => {
+void test("an accepted head must observe its turn running and then idle before the next FIFO head", async () => {
   let document = enqueueItem(
     enqueueItem(
       { version: 1, queues: {} },
@@ -318,9 +456,9 @@ test("an accepted head must observe its turn running and then idle before the ne
     createQueueItem(privateUpdate(102, "second"), 2),
   ).document;
   let running = false;
-  const delivered = [];
-  const inFlight = new Map();
-  const options = {
+  const delivered: number[] = [];
+  const inFlight = new Map<string, InFlightGate>();
+  const options: DrainOptions = {
     loadImpl: async () => document,
     runningImpl: () => running,
     deliverImpl: async (update) => {
@@ -357,7 +495,7 @@ test("an accepted head must observe its turn running and then idle before the ne
   assert.deepEqual(delivered, [101, 102]);
 });
 
-test("drain removes an orphaned running gate after the last queued turn becomes idle", async () => {
+void test("drain removes an orphaned running gate after the last queued turn becomes idle", async () => {
   const key = "1:";
   let document = enqueueItem(
     { version: 1, queues: {} },
@@ -365,9 +503,9 @@ test("drain removes an orphaned running gate after the last queued turn becomes 
     createQueueItem(privateUpdate(101, "queued"), 1),
   ).document;
   let running = false;
-  const delivered = [];
-  const inFlight = new Map();
-  const options = {
+  const delivered: number[] = [];
+  const inFlight = new Map<string, InFlightGate>();
+  const options: DrainOptions = {
     loadImpl: async () => document,
     runningImpl: () => running,
     deliverImpl: async (update) => {
@@ -418,7 +556,7 @@ test("drain removes an orphaned running gate after the last queued turn becomes 
   assert.deepEqual(delivered, [101, 102]);
 });
 
-test("a completed run-status generation releases a turn whose running state fell between polls", async () => {
+void test("a completed run-status generation releases a turn whose running state fell between polls", async () => {
   let document = enqueueItem(
     enqueueItem(
       { version: 1, queues: {} },
@@ -429,8 +567,8 @@ test("a completed run-status generation releases a turn whose running state fell
     createQueueItem(privateUpdate(102, "second"), 2),
   ).document;
   let currentStatus = { status: "idle", generation: 10 };
-  const delivered = [];
-  const options = {
+  const delivered: number[] = [];
+  const options: DrainOptions = {
     loadImpl: async () => document,
     statusImpl: () => currentStatus,
     runningImpl: () => currentStatus.status === "running",
@@ -454,7 +592,7 @@ test("a completed run-status generation releases a turn whose running state fell
   assert.deepEqual(delivered, [101, 102]);
 });
 
-test("an accepted turn with no observable status transition releases only after the stale bound", async () => {
+void test("an accepted turn with no observable status transition releases only after the stale bound", async () => {
   let document = enqueueItem(
     enqueueItem(
       { version: 1, queues: {} },
@@ -465,8 +603,8 @@ test("an accepted turn with no observable status transition releases only after 
     createQueueItem(privateUpdate(102, "second"), 2),
   ).document;
   let nowMs = 1_000;
-  const delivered = [];
-  const options = {
+  const delivered: number[] = [];
+  const options: DrainOptions = {
     loadImpl: async () => document,
     statusImpl: () => ({ status: "idle", generation: 5 }),
     runningImpl: () => false,
@@ -493,9 +631,9 @@ test("an accepted turn with no observable status transition releases only after 
   assert.deepEqual(delivered, [101, 102]);
 });
 
-test("a drain pass has one global delivery budget and rotates a stalled first key", async () => {
+void test("a drain pass has one global delivery budget and rotates a stalled first key", async () => {
   let nowMs = 0;
-  const attempts = [];
+  const attempts: [number, number][] = [];
   const rotationState = { afterKey: null };
   const document = {
     version: 1,
@@ -507,11 +645,11 @@ test("a drain pass has one global delivery budget and rotates a stalled first ke
       }),
     ),
   };
-  const options = {
+  const options: DrainOptions = {
     loadImpl: async () => document,
     runningImpl: () => false,
     deliverImpl: async (update, { timeoutMs }) => {
-      attempts.push([update.message.chat.id, timeoutMs]);
+      attempts.push([update.message!.chat!.id as number, timeoutMs]);
       nowMs += timeoutMs;
       return false;
     },
@@ -546,7 +684,7 @@ test("a drain pass has one global delivery budget and rotates a stalled first ke
   ]);
 });
 
-test("a missing terminal event becomes drainable after the run-status TTL", async () => {
+void test("a missing terminal event becomes drainable after the run-status TTL", async () => {
   const key = "9:";
   status.setChatStatus(key, {
     status: "running",
@@ -554,13 +692,16 @@ test("a missing terminal event becomes drainable after the run-status TTL", asyn
     sessionId: "orphaned-session",
     turnId: "orphaned-turn",
   });
-  const staleAt = status.getChatStatus(key).updatedAt + status.RUN_STALE_MS + 1;
+  const staleAt =
+    (status.getChatStatus(key) as { updatedAt: number }).updatedAt +
+    status.RUN_STALE_MS +
+    1;
   let document = enqueueItem(
     { version: 1, queues: {} },
     key,
     createQueueItem(privateUpdate(301, "recover after stale status"), 1),
   ).document;
-  const delivered = [];
+  const delivered: number[] = [];
 
   const remaining = await drainReadyQueueHeads({
     loadImpl: async () => document,
@@ -579,7 +720,7 @@ test("a missing terminal event becomes drainable after the run-status TTL", asyn
   assert.equal(remaining, 0);
 });
 
-test("legacy string arrays preserve private owner text but never invent a group author", async (t) => {
+void test("legacy string arrays preserve private owner text but never invent a group author", async (t) => {
   const file = await queueFile(t);
   await writeFile(
     file,
@@ -599,9 +740,9 @@ test("legacy string arrays preserve private owner text but never invent a group 
   const privateReplay = materializeQueueItem("42:", document.queues["42:"][0], {
     legacyAllowedUserIds: new Set(["42"]),
   });
-  assert.equal(privateReplay.message.text, "first");
-  assert.equal(privateReplay.message.chat.id, 42);
-  assert.equal(privateReplay.message.from.id, 42);
+  assert.equal(privateReplay!.message!.text, "first");
+  assert.equal(privateReplay!.message!.chat!.id, 42);
+  assert.equal(privateReplay!.message!.from!.id, 42);
   const legacyGroupItem = normalizeQueueDocument({
     "-100:7": ["topic follow-up"],
   }).document.queues["-100:7"][0];
@@ -612,7 +753,9 @@ test("legacy string arrays preserve private owner text but never invent a group 
     null,
   );
 
-  const persisted = JSON.parse(await readFile(file, "utf8"));
+  const persisted = JSON.parse(
+    await readFile(file, "utf8"),
+  ) as unknown as TelegramQueueDocument;
   assert.equal(persisted.version, 1);
   assert.equal(queueCount(persisted), 2);
   const [quarantineName] = (await readdir(dirname(file))).filter((name) =>
@@ -620,12 +763,12 @@ test("legacy string arrays preserve private owner text but never invent a group 
   );
   const quarantined = JSON.parse(
     await readFile(join(dirname(file), quarantineName), "utf8"),
-  );
+  ) as unknown as TelegramQueueDocument;
   assert.equal(queueCount(quarantined), 1);
   assert.equal(quarantined.queues["-100:7"][0].legacyText, "topic follow-up");
 });
 
-test("legacy group quarantine failure leaves the original queue active for retry", async (t) => {
+void test("legacy group quarantine failure leaves the original queue active for retry", async (t) => {
   const file = await queueFile(t);
   const original = JSON.stringify({
     "42:": ["private follow-up"],
@@ -654,7 +797,7 @@ test("legacy group quarantine failure leaves the original queue active for retry
   );
 });
 
-test("failed active migration keeps both the old queue and its group quarantine", async (t) => {
+void test("failed active migration keeps both the old queue and its group quarantine", async (t) => {
   const file = await queueFile(t);
   const original = JSON.stringify({
     "42:": ["private follow-up"],
@@ -678,22 +821,22 @@ test("failed active migration keeps both the old queue and its group quarantine"
   );
   const quarantined = JSON.parse(
     await readFile(join(dirname(file), quarantineName), "utf8"),
-  );
+  ) as unknown as TelegramQueueDocument;
   assert.equal(
     quarantined.queues["-100:"][0].legacyText,
     "group text with unknown author",
   );
 });
 
-test("separate legacy migrations never overwrite an earlier group quarantine", async (t) => {
+void test("separate legacy migrations never overwrite an earlier group quarantine", async (t) => {
   const file = await queueFile(t);
   const first = JSON.stringify({ "-100:": ["first byte set"] });
   const second = JSON.stringify({ "-100:": ["second byte set"] });
-  const logged = [];
+  const logged: string[] = [];
   const options = {
     quarantineNow: () => 123,
     quarantineNonce: () => "same",
-    onLegacyQuarantine: (path) => logged.push(path),
+    onLegacyQuarantine: (path: string) => logged.push(path),
   };
 
   await writeFile(file, first);
@@ -706,7 +849,12 @@ test("separate legacy migrations never overwrite an earlier group quarantine", a
   assert.match(logged[0], /\.legacy-unattributed-/);
   assert.match(logged[1], /\.legacy-unattributed-/);
   const preserved = await Promise.all(
-    logged.map(async (path) => JSON.parse(await readFile(path, "utf8"))),
+    logged.map(
+      async (path) =>
+        JSON.parse(
+          await readFile(path, "utf8"),
+        ) as unknown as TelegramQueueDocument,
+    ),
   );
   assert.deepEqual(
     preserved.map((document) => document.queues["-100:"][0].legacyText),
@@ -714,12 +862,12 @@ test("separate legacy migrations never overwrite an earlier group quarantine", a
   );
 });
 
-test("drain leaves legacy group text with unknown author undelivered", async () => {
+void test("drain leaves legacy group text with unknown author undelivered", async () => {
   let document = normalizeQueueDocument({
     "-100:": ["unaddressed group text"],
   }).document;
-  const delivered = [];
-  const acknowledged = [];
+  const delivered: TelegramQueueUpdate[] = [];
+  const acknowledged: [string, number][] = [];
 
   const remaining = await drainReadyQueueHeads({
     loadImpl: async () => document,
@@ -740,12 +888,12 @@ test("drain leaves legacy group text with unknown author undelivered", async () 
   assert.deepEqual(acknowledged, []);
   assert.equal(remaining, 1);
   assert.equal(
-    queueHead(document, "-100:").legacyText,
+    queueHead(document, "-100:")!.legacyText,
     "unaddressed group text",
   );
 });
 
-test("queued media and quoted metadata replay from the durable update without transformation", async (t) => {
+void test("queued media and quoted metadata replay from the durable update without transformation", async (t) => {
   const file = await queueFile(t);
   const update = {
     update_id: 201,
@@ -767,15 +915,19 @@ test("queued media and quoted metadata replay from the durable update without tr
   const { document } = await loadQueueFile(file, { strict: true });
 
   assert.deepEqual(
-    materializeQueueItem("1:", queueHead(document, "1:")),
+    materializeQueueItem("1:", queueHead(document, "1:")!),
     update,
   );
 });
 
-test("busy routing is fail-closed and keeps addressed private, group and topic updates", () => {
+void test("busy routing is fail-closed and keeps addressed private, group and topic updates", () => {
   const allowedUserIds = new Set(["42"]);
   const options = { allowedUserIds, botUsername: "my_bot" };
-  const group = (text, threadId, userId = 42) => ({
+  const group = (
+    text: string,
+    threadId?: number,
+    userId = 42,
+  ): TelegramQueueUpdate => ({
     update_id: 1,
     message: {
       message_id: 1,
@@ -818,9 +970,11 @@ test("busy routing is fail-closed and keeps addressed private, group and topic u
   assert.equal(shouldQueueBusyUpdate(group("@my_bot_suffix"), options), false);
 });
 
-test("busy group routing sees mentions and commands in collected iva_parts", () => {
+void test("busy group routing sees mentions and commands in collected iva_parts", () => {
   const options = { allowedUserIds: new Set(["42"]), botUsername: "my_bot" };
-  const collected = (text) => ({
+  const collected = (
+    text: string,
+  ): TelegramQueueUpdate & { message: { iva_parts: unknown[] } } => ({
     update_id: 2,
     message: {
       message_id: 1,
@@ -865,9 +1019,9 @@ test("busy group routing sees mentions and commands in collected iva_parts", () 
   assert.equal(shouldQueueBusyUpdate(malformed, options), false);
 });
 
-test("group routing validates exact Telegram entities across Unicode and malformed input", () => {
+void test("group routing validates exact Telegram entities across Unicode and malformed input", () => {
   const options = { allowedUserIds: new Set(["42"]), botUsername: "my_bot" };
-  const group = (text, entities) => ({
+  const group = (text: string, entities: unknown): TelegramQueueUpdate => ({
     update_id: 1,
     message: {
       message_id: 1,
@@ -953,7 +1107,7 @@ test("group routing validates exact Telegram entities across Unicode and malform
   );
 });
 
-test("__proto__ is persisted as a queue data key without prototype mutation or loss", async (t) => {
+void test("__proto__ is persisted as a queue data key without prototype mutation or loss", async (t) => {
   const file = await queueFile(t);
   await enqueueQueueFile(
     file,
@@ -965,7 +1119,7 @@ test("__proto__ is persisted as a queue data key without prototype mutation or l
   assert.equal(Object.hasOwn(document.queues, "__proto__"), true);
   assert.equal(Object.getPrototypeOf(document.queues), Object.prototype);
   assert.equal(queueCount(document, "__proto__"), 1);
-  assert.equal(queueHead(document, "__proto__").updateId, 401);
+  assert.equal(queueHead(document, "__proto__")!.updateId, 401);
   assert.deepEqual(queueKeys(document), ["__proto__"]);
 
   await acknowledgeQueueHead(file, "__proto__", 401);

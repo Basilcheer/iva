@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { keptSetupWritePlan } from "./setup-keep.mjs";
+import { keptSetupWritePlan } from "./setup-keep.ts";
 
-test("keeping byte-equivalent setup skips the full model-config rewrite", () => {
+void test("keeping byte-equivalent setup skips the full model-config rewrite", () => {
   const existing = {
     AGENT_LANGUAGE: "en",
     MODEL_PROVIDER: "openrouter",

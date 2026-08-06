@@ -9,7 +9,7 @@
 // Jan 1 still serializes instead of racing on CORE.md/MOC.md.
 import { defineSchedule } from "eve/schedules";
 import { memoryRollupJob } from "../lib/schedule-paths.mjs";
-import { runScheduledJob } from "../../scripts/lib/schedule-runner.mjs";
+import { runScheduledJob } from "../../scripts/lib/schedule-runner.ts";
 
 export default defineSchedule({
   cron: "0 4 * * *",

@@ -7,9 +7,31 @@ import {
   collectorRestore,
   collectorTakeExpired,
   createCollector,
-} from "./telegram-collect.mjs";
+  type TelegramCollectUpdate,
+} from "./telegram-collect.ts";
 
-function update(updateId, text, options = {}) {
+interface UpdateOptions {
+  chatId?: number;
+  threadId?: number;
+  fromId?: number;
+  mediaGroupId?: string;
+}
+
+function update(
+  updateId: number,
+  text: string,
+  options: UpdateOptions = {},
+): TelegramCollectUpdate & {
+  message: {
+    message_id: number;
+    date: number;
+    chat: { id: number; type: string };
+    from: { id: number; is_bot: boolean };
+    text: string;
+    message_thread_id?: number;
+    media_group_id?: string;
+  };
+} {
   const { chatId = 1, threadId, fromId = 42, mediaGroupId } = options;
   return {
     update_id: updateId,
@@ -25,7 +47,7 @@ function update(updateId, text, options = {}) {
   };
 }
 
-test("a solitary part flushes as the original update verbatim", () => {
+void test("a solitary part flushes as the original update verbatim", () => {
   const collector = createCollector();
   const original = update(1, "one");
 
@@ -40,7 +62,7 @@ test("a solitary part flushes as the original update verbatim", () => {
   assert.equal(collectorPending(collector), 0);
 });
 
-test("two text messages merge in message_id order with the maximum update_id", () => {
+void test("two text messages merge in message_id order with the maximum update_id", () => {
   const collector = createCollector();
   const laterMessage = update(10, "second");
   laterMessage.message.message_id = 20;
@@ -52,9 +74,9 @@ test("two text messages merge in message_id order with the maximum update_id", (
   const [flushed] = collectorTakeExpired(collector, 900);
 
   assert.equal(flushed.update_id, 11);
-  assert.equal(flushed.message.message_id, 10);
+  assert.equal(flushed.message!.message_id, 10);
   assert.deepEqual(
-    flushed.message.iva_parts.map((part) => [part.message_id, part.text]),
+    flushed.message!.iva_parts!.map((part) => [part.message_id, part.text]),
     [
       [10, "first"],
       [20, "second"],
@@ -63,7 +85,7 @@ test("two text messages merge in message_id order with the maximum update_id", (
   assert.equal(Object.hasOwn(earlierMessage.message, "iva_parts"), false);
 });
 
-test("each offer resets the trailing quiet window", () => {
+void test("each offer resets the trailing quiet window", () => {
   const collector = createCollector();
   collectorOffer(collector, update(1, "first"), 0);
   assert.deepEqual(collectorTakeExpired(collector, 799), []);
@@ -73,7 +95,7 @@ test("each offer resets the trailing quiet window", () => {
   assert.equal(collectorTakeExpired(collector, 1599).length, 1);
 });
 
-test("a last media-group part uses the longer quiet window", () => {
+void test("a last media-group part uses the longer quiet window", () => {
   const collector = createCollector();
   collectorOffer(collector, update(1, "caption", { mediaGroupId: "album" }), 0);
 
@@ -81,7 +103,7 @@ test("a last media-group part uses the longer quiet window", () => {
   assert.equal(collectorTakeExpired(collector, 1500).length, 1);
 });
 
-test("chat, topic and sender are all part of the collector key", () => {
+void test("chat, topic and sender are all part of the collector key", () => {
   const collector = createCollector();
   const owner = update(1, "owner", { chatId: -100, threadId: 7, fromId: 42 });
   const guest = update(2, "guest", { chatId: -100, threadId: 7, fromId: 7 });
@@ -96,12 +118,12 @@ test("chat, topic and sender are all part of the collector key", () => {
   assert.equal(flushed[1], guest);
 });
 
-test("part, character and age caps force a ready update", () => {
+void test("part, character and age caps force a ready update", () => {
   const byParts = createCollector({ maxParts: 2 });
   collectorOffer(byParts, update(1, "a"), 0);
   const partReady = collectorOffer(byParts, update(2, "b"), 1);
   assert.equal(partReady.status, "ready");
-  assert.equal(partReady.update.message.iva_parts.length, 2);
+  assert.equal(partReady.update.message!.iva_parts!.length, 2);
 
   const byChars = createCollector({ maxChars: 3 });
   collectorOffer(byChars, update(3, "ab"), 0);
@@ -112,7 +134,7 @@ test("part, character and age caps force a ready update", () => {
   assert.equal(collectorOffer(byAge, update(6, "new"), 10).status, "ready");
 });
 
-test("an enqueue failure can restore the exact flushed update for immediate retry", () => {
+void test("an enqueue failure can restore the exact flushed update for immediate retry", () => {
   const collector = createCollector();
   collectorOffer(collector, update(1, "first"), 0);
   collectorOffer(collector, update(2, "second"), 1);
@@ -123,7 +145,7 @@ test("an enqueue failure can restore the exact flushed update for immediate retr
   assert.equal(collectorTakeExpired(collector, 801)[0], flushed);
 });
 
-test("quietMs zero disables collection and returns the untouched update", () => {
+void test("quietMs zero disables collection and returns the untouched update", () => {
   const collector = createCollector({ quietMs: 0 });
   const original = update(1, "now");
 

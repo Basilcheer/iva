@@ -4,7 +4,11 @@
 // and records the outcome to a status file so `iva doctor` and the /menu → crons screen
 // can see it. Never throws: eve's schedule runner and the fire-and-forget migration hook
 // both need a promise that always settles.
-import { spawn } from "node:child_process";
+import {
+  spawn,
+  type ChildProcess,
+  type SpawnOptions,
+} from "node:child_process";
 import {
   mkdirSync,
   readFileSync,
@@ -33,23 +37,85 @@ const LOCK_RETRY_ATTEMPTS = 25;
 const LOCK_RETRY_DELAY_MS = 20;
 const OWNER_STARTED_AT = Math.round(Date.now() - process.uptime() * 1000);
 
-function reservationOwnerIsDead(entry) {
+interface ScheduleStatusEntry {
+  readonly inProgressSince?: number;
+  readonly ownerPid?: number;
+  readonly ownerStartedAt?: number;
+  readonly lastSuccessAt?: number;
+  readonly [key: string]: unknown;
+}
+
+type ScheduleStatus = Record<string, ScheduleStatusEntry>;
+
+type SpawnImplementation = (
+  command: string,
+  args: readonly string[],
+  options: SpawnOptions,
+) => ChildProcess;
+
+export interface RunScheduledJobOptions {
+  readonly name: string;
+  readonly argv: readonly string[];
+  readonly root?: string;
+  readonly nodeBin?: string;
+  readonly lockPath?: string;
+  readonly timeoutMs?: number;
+  readonly killGraceMs?: number;
+  readonly guardMs?: number;
+  readonly statusPath?: string;
+  readonly env?: NodeJS.ProcessEnv;
+  readonly spawnImpl?: SpawnImplementation;
+  readonly killImpl?: (pid: number, signal: NodeJS.Signals) => unknown;
+  readonly now?: () => number;
+  readonly log?: (...args: unknown[]) => void;
+}
+
+export interface RunScheduledJobResult {
+  readonly skipped: boolean;
+  readonly ok: boolean;
+  readonly code?: number | null;
+  readonly signal?: NodeJS.Signals | null;
+  readonly error?: unknown;
+}
+
+interface SpawnOutcome {
+  readonly code: number | null;
+  readonly signal: NodeJS.Signals | null;
+  readonly tail: string;
+  readonly error?: unknown;
+}
+
+function errorCode(error: unknown): unknown {
+  return (error as { code?: unknown } | null | undefined)?.code;
+}
+
+function errorMessage(error: unknown): string {
+  return (error as { message: string }).message;
+}
+
+function reservationOwnerIsDead(
+  entry: ScheduleStatusEntry | undefined,
+): boolean {
+  const ownerPid = entry?.ownerPid;
   if (
-    !Number.isSafeInteger(entry?.ownerPid) ||
-    entry.ownerPid <= 0 ||
+    !Number.isSafeInteger(ownerPid) ||
+    (ownerPid as number) <= 0 ||
     typeof entry?.ownerStartedAt !== "number"
   ) {
     return false;
   }
   try {
-    process.kill(entry.ownerPid, 0);
+    process.kill(ownerPid as number, 0);
     return false;
   } catch (error) {
-    return error?.code === "ESRCH";
+    return errorCode(error) === "ESRCH";
   }
 }
 
-function ownsReservation(entry, startedAt) {
+function ownsReservation(
+  entry: ScheduleStatusEntry | undefined,
+  startedAt: number,
+): boolean {
   return (
     entry?.inProgressSince === startedAt &&
     entry?.ownerPid === process.pid &&
@@ -59,16 +125,21 @@ function ownsReservation(entry, startedAt) {
 
 // Shared with schedule-migration.mjs — one status file, one implementation of how it's
 // safely read/written/locked, rather than two copies that could drift.
-export function readStatus(statusPath) {
+export function readStatus(statusPath: string): ScheduleStatus {
   try {
-    const parsed = JSON.parse(readFileSync(statusPath, "utf8"));
-    return typeof parsed === "object" && parsed !== null ? parsed : {};
+    const parsed: unknown = JSON.parse(readFileSync(statusPath, "utf8"));
+    return typeof parsed === "object" && parsed !== null
+      ? (parsed as ScheduleStatus)
+      : {};
   } catch {
     return {};
   }
 }
 
-export function writeStatusAtomic(statusPath, data) {
+export function writeStatusAtomic(
+  statusPath: string,
+  data: ScheduleStatus,
+): void {
   mkdirSync(dirname(statusPath), { recursive: true });
   // Unique per call (pid + random), not a single shared "<statusPath>.tmp": two
   // concurrent writers (this schedule-runner call and, in principle, another one
@@ -88,7 +159,7 @@ export function writeStatusAtomic(statusPath, data) {
   }
 }
 
-function tailLines(tail, n = 5) {
+function tailLines(tail: string, n = 5): string {
   return tail
     .split("\n")
     .map((l) => l.trim())
@@ -106,7 +177,10 @@ function tailLines(tail, n = 5) {
 // O_EXCL (the "wx" flag) makes lock *acquisition* itself atomic. `fn` receives whether
 // the lock was actually acquired — on the rare exhausted-retries path we still run `fn`
 // (best-effort, logged by the caller) rather than leaving admission unchecked forever.
-export async function withStatusLock(statusPath, fn) {
+export async function withStatusLock<T>(
+  statusPath: string,
+  fn: (acquired: boolean) => T | PromiseLike<T>,
+): Promise<T> {
   const lockPath = `${statusPath}.lock`;
   let acquired = false;
   for (let attempt = 0; attempt < LOCK_RETRY_ATTEMPTS && !acquired; attempt++) {
@@ -115,7 +189,7 @@ export async function withStatusLock(statusPath, fn) {
       writeFileSync(lockPath, String(process.pid), { flag: "wx" });
       acquired = true;
     } catch (error) {
-      if (error.code !== "EEXIST") throw error;
+      if (errorCode(error) !== "EEXIST") throw error;
       try {
         if (Date.now() - statSync(lockPath).mtimeMs >= LOCK_STALE_MS) {
           rmSync(lockPath, { force: true });
@@ -140,22 +214,30 @@ export async function withStatusLock(statusPath, fn) {
   }
 }
 
-export async function runScheduledJob({
-  name,
-  argv,
-  root,
-  nodeBin,
-  lockPath,
-  timeoutMs = DEFAULT_TIMEOUT_MS,
-  killGraceMs = DEFAULT_KILL_GRACE_MS,
-  guardMs = GUARD_MS,
-  statusPath,
-  env = process.env,
-  spawnImpl = spawn,
-  killImpl = (pid, signal) => process.kill(pid, signal),
-  now = () => Date.now(),
-  log = (...a) => console.log(new Date().toISOString(), ...a),
-} = {}) {
+export function runScheduledJob(
+  options: RunScheduledJobOptions,
+): Promise<RunScheduledJobResult>;
+
+export async function runScheduledJob(
+  {
+    name,
+    argv,
+    root,
+    nodeBin,
+    lockPath,
+    timeoutMs = DEFAULT_TIMEOUT_MS,
+    killGraceMs = DEFAULT_KILL_GRACE_MS,
+    guardMs = GUARD_MS,
+    statusPath,
+    env = process.env,
+    spawnImpl = spawn,
+    killImpl = (pid: number, signal: NodeJS.Signals) =>
+      process.kill(pid, signal),
+    now = () => Date.now(),
+    log = (...args: unknown[]) =>
+      console.log(new Date().toISOString(), ...args),
+  }: RunScheduledJobOptions = {} as RunScheduledJobOptions,
+): Promise<RunScheduledJobResult> {
   let reserved = false;
   let startedAt = now();
   try {
@@ -224,13 +306,13 @@ export async function runScheduledJob({
 
     log(`schedule-runner: ${name} start`);
 
-    const cmd = lockPath ? "flock" : nodeBin;
+    const cmd = lockPath ? "flock" : (nodeBin as string);
     const args = lockPath
-      ? ["-w", "900", lockPath, nodeBin, "--env-file=.env", ...argv]
+      ? ["-w", "900", lockPath, nodeBin as string, "--env-file=.env", ...argv]
       : ["--env-file=.env", ...argv];
 
-    const outcome = await new Promise((resolve) => {
-      let child;
+    const outcome = await new Promise<SpawnOutcome>((resolve) => {
+      let child: ChildProcess;
       try {
         // detached: true makes the child the leader of its OWN process group (POSIX
         // setpgid) instead of sharing ours. That matters specifically for the flock-
@@ -251,7 +333,7 @@ export async function runScheduledJob({
       }
 
       let tail = "";
-      const onData = (chunk) => {
+      const onData = (chunk: { toString(): string }) => {
         tail = (tail + chunk.toString()).slice(-TAIL_MAX);
       };
       child.stdout?.on("data", onData);
@@ -260,7 +342,7 @@ export async function runScheduledJob({
       // Signal the process GROUP (negative pid), not just this one pid — see the
       // detached:true comment above. Falls back to a direct child.kill if the group
       // signal fails for any reason (e.g. the child already reaped its own group).
-      const killGroup = (signal) => {
+      const killGroup = (signal: NodeJS.Signals): void => {
         const pid = child.pid;
         try {
           if (pid) killImpl(-pid, signal);
@@ -275,8 +357,8 @@ export async function runScheduledJob({
       };
 
       let settled = false;
-      let hardTimer;
-      const settle = (result) => {
+      let hardTimer: NodeJS.Timeout | undefined;
+      const settle = (result: SpawnOutcome): void => {
         if (settled) return;
         settled = true;
         clearTimeout(killTimer);
@@ -324,7 +406,9 @@ export async function runScheduledJob({
     if (outcome.tail)
       log(`schedule-runner: ${name} tail: ${tailLines(outcome.tail)}`);
     if (outcome.error)
-      log(`schedule-runner: ${name} spawn error: ${outcome.error.message}`);
+      log(
+        `schedule-runner: ${name} spawn error: ${errorMessage(outcome.error)}`,
+      );
 
     if (statusPath) {
       const completed = await withStatusLock(statusPath, (acquired) => {
@@ -368,7 +452,9 @@ export async function runScheduledJob({
     return { skipped: false, ok, code: outcome.code, signal: outcome.signal };
   } catch (error) {
     try {
-      log(`schedule-runner: ${name} unexpected failure: ${error.message}`);
+      log(
+        `schedule-runner: ${name} unexpected failure: ${errorMessage(error)}`,
+      );
     } catch {
       // logging itself must never be able to throw out of this function
     }

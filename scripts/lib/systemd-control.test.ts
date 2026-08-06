@@ -1,5 +1,5 @@
 import { strict as assert } from "node:assert";
-import test from "node:test";
+import test, { type TestContext } from "node:test";
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import {
@@ -15,14 +15,22 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import * as systemdControl from "./systemd-control.mjs";
+import * as systemdControl from "./systemd-control.ts";
 
 const { createSystemdControl } = systemdControl;
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "../..");
 const SECRET = "iva-systemd-test-secret-do-not-log";
 
-async function fixture(t) {
+interface RunCommandOptions {
+  readonly args?: readonly string[];
+  readonly exit?: number;
+  readonly failAction?: string;
+  readonly inactiveUnit?: string;
+  readonly failedUnit?: string;
+}
+
+async function fixture(t: TestContext) {
   const dir = await mkdtemp(join(tmpdir(), "iva-systemd-activation-"));
   t.after(() => rm(dir, { recursive: true, force: true }));
 
@@ -106,14 +114,14 @@ async function fixture(t) {
   await chmod(fakeSystemctl, 0o755);
 
   const runCommand = (
-    command,
+    command: string,
     {
       args = [],
       exit = 0,
       failAction = "",
       inactiveUnit = "",
       failedUnit = "",
-    } = {},
+    }: RunCommandOptions = {},
   ) =>
     spawnSync(
       process.execPath,
@@ -143,26 +151,26 @@ async function fixture(t) {
     project,
     runStart: (exit = 0) => runCommand("start", { exit }),
     runCommand,
-    async seedQuarantineFailure() {
+    seedQuarantineFailure: async () => {
       const eveDir = join(project, ".eve");
       await mkdir(join(eveDir, ".workflow-data"), { recursive: true });
       await chmod(eveDir, 0o500);
     },
-    async seedUnit(unit) {
+    seedUnit: async (unit: string) => {
       await writeFile(join(state, `${unit}.enabled`), "");
       await writeFile(join(state, `${unit}.active`), "");
     },
   };
 }
 
-test("iva start propagates a systemctl enable failure", async (t) => {
+void test("iva start propagates a systemctl enable failure", async (t) => {
   const { runStart } = await fixture(t);
   const result = runStart(1);
 
   assert.equal(result.status, 1, result.stderr || result.stdout);
 });
 
-test("iva start does not print success after a systemctl enable failure", async (t) => {
+void test("iva start does not print success after a systemctl enable failure", async (t) => {
   const { runStart } = await fixture(t);
   const result = runStart(1);
   const output = `${result.stdout}\n${result.stderr}`;
@@ -170,7 +178,7 @@ test("iva start does not print success after a systemctl enable failure", async 
   assert.doesNotMatch(output, /Started and enabled at boot/);
 });
 
-test("iva start is idempotent when systemctl reports success", async (t) => {
+void test("iva start is idempotent when systemctl reports success", async (t) => {
   const { calls, runStart } = await fixture(t);
   const first = runStart();
   assert.equal(first.status, 0, first.stderr || first.stdout);
@@ -183,7 +191,7 @@ test("iva start is idempotent when systemctl reports success", async (t) => {
   assert.deepEqual(allCalls.slice(firstCalls.length), firstCalls);
 });
 
-test("iva start diagnostics do not expose .env secrets", async (t) => {
+void test("iva start diagnostics do not expose .env secrets", async (t) => {
   const { runStart } = await fixture(t);
   const result = runStart(1);
   const output = `${result.stdout}\n${result.stderr}`;
@@ -191,7 +199,7 @@ test("iva start diagnostics do not expose .env secrets", async (t) => {
   assert.doesNotMatch(output, new RegExp(SECRET));
 });
 
-test("iva start reports the exact unit journal after activation fails", async (t) => {
+void test("iva start reports the exact unit journal after activation fails", async (t) => {
   const { runStart } = await fixture(t);
   const result = runStart(1);
   const output = `${result.stdout}\n${result.stderr}`;
@@ -200,7 +208,7 @@ test("iva start reports the exact unit journal after activation fails", async (t
   assert.doesNotMatch(output, /fake systemctl failure/);
 });
 
-test("iva start waits for enabled and active postconditions", async (t) => {
+void test("iva start waits for enabled and active postconditions", async (t) => {
   const { runCommand } = await fixture(t);
   const result = runCommand("start", { inactiveUnit: "iva.service" });
   const output = `${result.stdout}\n${result.stderr}`;
@@ -210,7 +218,7 @@ test("iva start waits for enabled and active postconditions", async (t) => {
   assert.doesNotMatch(output, /Started and enabled at boot/);
 });
 
-test("installer activation seam uses the same checked CLI path", async (t) => {
+void test("installer activation seam uses the same checked CLI path", async (t) => {
   const { runCommand } = await fixture(t);
   const result = runCommand("_activate-units", { exit: 1 });
 
@@ -220,7 +228,7 @@ test("installer activation seam uses the same checked CLI path", async (t) => {
   assert.doesNotMatch(installer, /^\s*systemctl --user enable --now/m);
 });
 
-test("doctor reports checked activation failures and keeps its summary", async (t) => {
+void test("doctor reports checked activation failures and keeps its summary", async (t) => {
   const { runCommand } = await fixture(t);
   const result = runCommand("doctor", { exit: 1, failAction: "enable" });
   const output = `${result.stdout}\n${result.stderr}`;
@@ -231,7 +239,7 @@ test("doctor reports checked activation failures and keeps its summary", async (
   assert.doesNotMatch(output, /Units installed, enabled and active/);
 });
 
-test("doctor checks installed memory services and reports failed ones with a journal hint", async (t) => {
+void test("doctor checks installed memory services and reports failed ones with a journal hint", async (t) => {
   // daily/weekly/monthly/yearly moved to in-process eve schedules (agent/schedules/memory-*.ts,
   // see scripts/lib/schedule-migration.mjs) — doctor stays the only external systemd watchdog.
   const { calls, runCommand } = await fixture(t);
@@ -253,7 +261,7 @@ test("doctor checks installed memory services and reports failed ones with a jou
   );
 });
 
-test("doctor checks all four rollup periods against their own staleness threshold", async (t) => {
+void test("doctor checks all four rollup periods against their own staleness threshold", async (t) => {
   const { project, runCommand } = await fixture(t);
   const now = Date.now();
   await mkdir(join(project, "data"), { recursive: true });
@@ -278,7 +286,7 @@ test("doctor checks all four rollup periods against their own staleness threshol
   assert.match(output, /memory-yearly schedule last succeeded/);
 });
 
-test("doctor warns on a non-zero last exit code even right after a fresh success", async (t) => {
+void test("doctor warns on a non-zero last exit code even right after a fresh success", async (t) => {
   const { project, runCommand } = await fixture(t);
   const now = Date.now();
   await mkdir(join(project, "data"), { recursive: true });
@@ -299,7 +307,7 @@ test("doctor warns on a non-zero last exit code even right after a fresh success
   assert.match(output, /memory-daily schedule's last run exited 1/);
 });
 
-test("legacy memory-timer cleanup is skipped when the current build doesn't contain the eve schedules yet", async (t) => {
+void test("legacy memory-timer cleanup is skipped when the current build doesn't contain the eve schedules yet", async (t) => {
   const { home, project, runCommand } = await fixture(t);
   const unitDir = join(home, ".config/systemd/user");
   await mkdir(unitDir, { recursive: true });
@@ -320,7 +328,7 @@ test("legacy memory-timer cleanup is skipped when the current build doesn't cont
   );
 });
 
-test("a build that only bundles LEGACY_MEMORY_UNITS strings (not the compiled schedules) still counts as stale", async (t) => {
+void test("a build that only bundles LEGACY_MEMORY_UNITS strings (not the compiled schedules) still counts as stale", async (t) => {
   // Regression test: instrumentation.ts always imports schedule-migration.mjs, whose
   // LEGACY_MEMORY_UNITS array contains "iva-memory-daily.service" — which itself
   // contains "memory-daily" as a substring. A marker that was just the bare string
@@ -349,10 +357,10 @@ test("a build that only bundles LEGACY_MEMORY_UNITS strings (not the compiled sc
 // Mirrors the actual shape Nitro's schedule-task wrapper compiles (see a real
 // `.output/server/_virtual/*.schedule.mjs`) — the description string embeds the
 // schedule's own source path, which is what BUILD_SCHEDULE_MARKERS looks for.
-const scheduleDescriptionMjs = (period) =>
+const scheduleDescriptionMjs = (period: string): string =>
   `var eve_schedule_default = { meta: { description: 'Run eve schedule "memory-${period}" from "schedules/memory-${period}.ts".' } };\n`;
 
-test("legacy memory-timer cleanup proceeds once the build actually contains ALL FOUR memory schedules", async (t) => {
+void test("legacy memory-timer cleanup proceeds once the build actually contains ALL FOUR memory schedules", async (t) => {
   const { calls, home, project, runCommand } = await fixture(t);
   const unitDir = join(home, ".config/systemd/user");
   await mkdir(unitDir, { recursive: true });
@@ -383,7 +391,7 @@ test("legacy memory-timer cleanup proceeds once the build actually contains ALL 
   );
 });
 
-test("a PARTIAL build (only memory-daily compiled) still counts as stale — legacy units are preserved", async (t) => {
+void test("a PARTIAL build (only memory-daily compiled) still counts as stale — legacy units are preserved", async (t) => {
   // Regression test: a build that's missing weekly/monthly/yearly (interrupted build,
   // one schedule file failed to compile, etc.) must NOT let removeLegacyMemoryUnits()
   // tear down systemd timers for periods that have no working in-process replacement in
@@ -418,7 +426,7 @@ test("a PARTIAL build (only memory-daily compiled) still counts as stale — leg
   }
 });
 
-test("doctor surfaces problems from a fresh nightly memory report", async (t) => {
+void test("doctor surfaces problems from a fresh nightly memory report", async (t) => {
   const { project, runCommand } = await fixture(t);
   const graph = join(project, "vault/.graph");
   await mkdir(graph, { recursive: true });
@@ -442,7 +450,7 @@ test("doctor surfaces problems from a fresh nightly memory report", async (t) =>
   assert.doesNotMatch(output, /unknown=99/);
 });
 
-test("userbot setup restarts an already enabled and active unit for new desired config", async (t) => {
+void test("userbot setup restarts an already enabled and active unit for new desired config", async (t) => {
   const { calls, envPath, runCommand, seedUnit } = await fixture(t);
   await seedUnit("iva-telegram-userbot.service");
   await writeFile(
@@ -465,13 +473,14 @@ test("userbot setup restarts an already enabled and active unit for new desired 
   assert.ok(restartAt > enableAt, systemctlCalls.join("\n"));
 });
 
-test("every systemd mutation rejects a non-zero command", () => {
+void test("every systemd mutation rejects a non-zero command", () => {
   const control = createSystemdControl({
     run: () => ({ code: 1, out: "", err: `ignored ${SECRET}` }),
   });
 
-  const rejectsSafely = (action) =>
+  const rejectsSafely = (action: () => unknown) =>
     assert.throws(action, (error) => {
+      assert.ok(error instanceof Error);
       assert.doesNotMatch(error.message, new RegExp(SECRET));
       return true;
     });
@@ -484,7 +493,7 @@ test("every systemd mutation rejects a non-zero command", () => {
   rejectsSafely(() => control.daemonReload());
 });
 
-test("iva reset keeps quarantine-only and restart-only diagnostics distinct", async (t) => {
+void test("iva reset keeps quarantine-only and restart-only diagnostics distinct", async (t) => {
   await t.test("quarantine failure only", async (t) => {
     const { runCommand, seedQuarantineFailure } = await fixture(t);
     await seedQuarantineFailure();
@@ -507,7 +516,7 @@ test("iva reset keeps quarantine-only and restart-only diagnostics distinct", as
   });
 });
 
-test("iva reset reports both failures when quarantine and restart fail", async (t) => {
+void test("iva reset reports both failures when quarantine and restart fail", async (t) => {
   const { runCommand, seedQuarantineFailure } = await fixture(t);
   await seedQuarantineFailure();
   const result = runCommand("reset", { exit: 1, failAction: "restart" });
@@ -520,8 +529,8 @@ test("iva reset reports both failures when quarantine and restart fail", async (
   assert.doesNotMatch(output, /fake systemctl failure/);
 });
 
-test("unit removal finishes every cleanup step before reporting aggregated failures", () => {
-  const calls = [];
+void test("unit removal finishes every cleanup step before reporting aggregated failures", () => {
+  const calls: string[] = [];
   const units = ["iva.service", "iva-update-check.timer"];
   let successReported = false;
 
@@ -564,4 +573,45 @@ test("unit removal finishes every cleanup step before reporting aggregated failu
     "reload",
     "reset",
   ]);
+});
+
+void test("unit removal preserves legacy cleanup error normalization", () => {
+  const errorLike = Object.assign(Object.create(null) as object, {
+    message: "permission denied",
+  });
+
+  assert.throws(
+    () =>
+      systemdControl.cleanupSystemdUnits({
+        units: ["iva.service"],
+        disable: () => {
+          // eslint-disable-next-line @typescript-eslint/only-throw-error -- legacy cleanup accepts error-like values from injected system operations
+          throw errorLike;
+        },
+        remove: () => {},
+        reload: () => {
+          throw new Error("");
+        },
+        reset: () => {},
+      }),
+    (error) => {
+      assert.ok(error instanceof AggregateError);
+      assert.match(error.message, /disable iva\.service: permission denied/);
+      assert.match(error.message, /daemon-reload: Error/);
+      return true;
+    },
+  );
+});
+
+void test("systemd errors preserve legacy enumerable property order", () => {
+  const error = new systemdControl.SystemdControlError("failed", {
+    unit: "iva.service",
+    code: 1,
+  });
+
+  assert.deepEqual(Object.keys(error), ["name", "unit", "code"]);
+  assert.equal(
+    JSON.stringify(error),
+    '{"name":"SystemdControlError","unit":"iva.service","code":1}',
+  );
 });

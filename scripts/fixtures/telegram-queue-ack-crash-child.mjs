@@ -1,7 +1,7 @@
 import { writeFileSync } from "node:fs";
 import { rename } from "node:fs/promises";
 
-import { acknowledgeQueueHead } from "../lib/telegram-queue.mjs";
+import { acknowledgeQueueHead } from "../lib/telegram-queue.ts";
 
 const [queueFile, markerFile] = process.argv.slice(2);
 if (!queueFile || !markerFile) {

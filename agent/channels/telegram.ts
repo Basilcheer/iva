@@ -54,7 +54,7 @@ import {
 // AGENT_LANGUAGE). i18n.mjs живёт в agent/lib — это уже не кросс-импорт, в отличие от
 // telegram-format выше.
 import { tr } from "../lib/i18n.mjs";
-import { buildTelegramReplyContext } from "../../scripts/lib/telegram-reply-context.mjs";
+import { buildTelegramReplyContext } from "../../scripts/lib/telegram-reply-context.ts";
 import { handleTelegramResetRequest } from "../../scripts/lib/telegram-reset-route.mjs";
 // Eve отдаёт обработчикам событий токен с именем канала впереди, а reset-роут клеит его
 // сам. Сохраняем только channel-local вид, иначе /new сбрасывает несуществующий токен (#110).

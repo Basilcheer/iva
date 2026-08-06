@@ -3,7 +3,7 @@
 // архетипов → [Принять]/[Заново]. «Принять» пишет vault/PERSONA.md; характер применяется со
 // следующего хода (dynamic-инструкция 25-persona.ts читает файл каждый ход, без рестарта).
 //
-// Весь контент/скоринг — в quiz.mjs; этот экран драйвит опрос вслепую (индексы вопросов и
+// Весь контент/скоринг — в quiz.ts; этот экран драйвит опрос вслепую (индексы вопросов и
 // ответов), поэтому смена формулировок/архетипов не трогает экран.
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -13,7 +13,7 @@ import {
   scoreQuiz,
   quizSummary,
   personaMarkdown,
-} from "../quiz.mjs";
+} from "../quiz.ts";
 
 const SID = "chr";
 const PARENT = "r";

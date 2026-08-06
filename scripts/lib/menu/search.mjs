@@ -9,7 +9,7 @@
 // plain sc("restart","iva.service"), НИКОГДА restartAgent (диалоги в .workflow-data живы).
 
 import { readEnvValues, upsertEnv } from "../env-file.ts";
-import { SEARCH_CATALOG, checkSearchKey } from "../search-catalog.mjs";
+import { SEARCH_CATALOG, checkSearchKey } from "../search-catalog.ts";
 
 const SID = "srch";
 const PARENT = "r";

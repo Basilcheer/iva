@@ -83,7 +83,7 @@ def allowed_image_roots(env_file):
     data_dir = env_value("ASSISTANT_DATA_DIR", env_file) or "data"
     if not os.path.isabs(data_dir):
         data_dir = os.path.join(REPO_ROOT, data_dir)
-    return [REPO_ROOT, os.path.abspath(data_dir)]
+    return [os.path.realpath(REPO_ROOT), os.path.realpath(data_dir)]
 
 
 def _local_path(raw):

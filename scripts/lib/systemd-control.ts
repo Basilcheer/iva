@@ -1,23 +1,59 @@
 const UNIT_RE = /^[A-Za-z0-9_.@:-]+$/;
 
-function safeUnit(unit) {
+interface CommandResult {
+  readonly code?: number | null;
+  readonly status?: number | null;
+  readonly out?: string | Buffer;
+  readonly stdout?: string | Buffer;
+}
+
+interface NormalizedResult {
+  readonly code: number;
+  readonly out: string;
+}
+
+interface SystemdControlOptions {
+  readonly run: (args: readonly string[]) => CommandResult;
+}
+
+interface CleanupOptions {
+  readonly units: readonly string[];
+  readonly disable: (unit: string) => unknown;
+  readonly remove: (unit: string) => unknown;
+  readonly reload: () => unknown;
+  readonly reset: () => unknown;
+}
+
+function errorMessage(error: unknown): string {
+  const message = (error as { readonly message?: unknown } | null | undefined)
+    ?.message;
+  return String(message || error);
+}
+
+function safeUnit(unit: string): string {
   if (!UNIT_RE.test(unit)) throw new Error(`invalid systemd unit: ${unit}`);
   return unit;
 }
 
-function resultOf(result) {
+function resultOf(result: CommandResult | undefined): NormalizedResult {
   return {
     code: result?.code ?? result?.status ?? 1,
     out: String(result?.out ?? result?.stdout ?? "").trim(),
   };
 }
 
-function journalHint(unit) {
+function journalHint(unit: string): string {
   return `journalctl --user -u ${safeUnit(unit)} -n 100 --no-pager`;
 }
 
 export class SystemdControlError extends Error {
-  constructor(message, { unit, code } = {}) {
+  declare readonly unit: string | undefined;
+  declare readonly code: number | undefined;
+
+  constructor(
+    message: string,
+    { unit, code }: { unit?: string; code?: number } = {},
+  ) {
     const suffix = unit ? ` Check: ${journalHint(unit)}` : "";
     super(`${message}${code === undefined ? "" : ` (exit ${code})`}.${suffix}`);
     this.name = "SystemdControlError";
@@ -26,15 +62,19 @@ export class SystemdControlError extends Error {
   }
 }
 
-export function cleanupSystemdUnits({ units, disable, remove, reload, reset }) {
-  const errors = [];
-  const attempt = (label, action) => {
+export function cleanupSystemdUnits({
+  units,
+  disable,
+  remove,
+  reload,
+  reset,
+}: CleanupOptions): string[] {
+  const errors: Error[] = [];
+  const attempt = (label: string, action: () => unknown): void => {
     try {
       action();
     } catch (cause) {
-      errors.push(
-        new Error(`${label}: ${cause?.message || String(cause)}`, { cause }),
-      );
+      errors.push(new Error(`${label}: ${errorMessage(cause)}`, { cause }));
     }
   };
 
@@ -57,13 +97,13 @@ export function cleanupSystemdUnits({ units, disable, remove, reload, reset }) {
   return checkedUnits;
 }
 
-export function createSystemdControl({ run }) {
+export function createSystemdControl({ run }: SystemdControlOptions) {
   if (typeof run !== "function")
     throw new TypeError("systemd control requires run(args)");
 
-  const query = (...args) => resultOf(run(args));
+  const query = (...args: string[]): NormalizedResult => resultOf(run(args));
 
-  function mutate(args, unit) {
+  function mutate(args: string[], unit?: string): NormalizedResult {
     const result = query(...args);
     if (result.code !== 0) {
       throw new SystemdControlError(
@@ -77,19 +117,19 @@ export function createSystemdControl({ run }) {
     return result;
   }
 
-  function isEnabled(unit) {
+  function isEnabled(unit: string): boolean {
     safeUnit(unit);
     const result = query("is-enabled", unit);
     return result.code === 0 && result.out === "enabled";
   }
 
-  function isActive(unit) {
+  function isActive(unit: string): boolean {
     safeUnit(unit);
     const result = query("is-active", unit);
     return result.code === 0 && result.out === "active";
   }
 
-  function requireEnabledActive(unit) {
+  function requireEnabledActive(unit: string): void {
     safeUnit(unit);
     if (!isEnabled(unit)) {
       throw new SystemdControlError(`${unit} did not become enabled`, { unit });
@@ -103,14 +143,14 @@ export function createSystemdControl({ run }) {
     query,
     isEnabled,
     isActive,
-    activate(units) {
+    activate(units: readonly string[]): void {
       for (const unit of units) {
         safeUnit(unit);
         mutate(["enable", "--now", unit], unit);
         requireEnabledActive(unit);
       }
     },
-    restart(units) {
+    restart(units: readonly string[]): void {
       for (const unit of units) {
         safeUnit(unit);
         mutate(["restart", unit], unit);
@@ -122,19 +162,19 @@ export function createSystemdControl({ run }) {
         }
       }
     },
-    stop(units) {
+    stop(units: readonly string[]): void {
       for (const unit of units) {
         safeUnit(unit);
         mutate(["stop", unit], unit);
       }
     },
-    disableNow(units) {
+    disableNow(units: readonly string[]): void {
       for (const unit of units) {
         safeUnit(unit);
         mutate(["disable", "--now", unit], unit);
       }
     },
-    resetFailed(units = []) {
+    resetFailed(units: readonly string[] = []): NormalizedResult | void {
       if (units.length === 0) return mutate(["reset-failed"]);
       for (const unit of units) {
         safeUnit(unit);

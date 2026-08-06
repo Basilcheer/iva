@@ -8,9 +8,31 @@ import {
   RollupTurnTimeoutError,
   resolveTurnTimeoutMs,
   withTurnTimeout,
-} from "./rollup-turn.mjs";
+} from "./rollup-turn.ts";
 
-test("fresh retry requires an explicitly rejected send or confirmed cancellation", () => {
+interface TestTurnResult {
+  readonly events?: readonly { readonly type?: string }[];
+}
+
+interface TestResponse {
+  result(): Promise<TestTurnResult>;
+}
+
+interface RetryPolicyOptions {
+  readonly firstSend: (recordSend: () => void) => Promise<TestResponse>;
+  readonly cancel: () => Promise<{ status?: string }>;
+}
+
+function hasTimeoutCode(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    error.code === "ROLLUP_TURN_TIMEOUT"
+  );
+}
+
+void test("fresh retry requires an explicitly rejected send or confirmed cancellation", () => {
   assert.equal(
     canRetryFresh({
       accepted: false,
@@ -53,11 +75,14 @@ test("fresh retry requires an explicitly rejected send or confirmed cancellation
   );
 });
 
-async function countSendsThroughRetryPolicy({ firstSend, cancel }) {
+async function countSendsThroughRetryPolicy({
+  firstSend,
+  cancel,
+}: RetryPolicyOptions): Promise<number> {
   let sends = 0;
   let accepted = false;
   let sendRejected = false;
-  let acceptedTurnResult;
+  let acceptedTurnResult: Promise<TestTurnResult> | undefined;
   try {
     await withTurnTimeout(
       async () => {
@@ -78,7 +103,7 @@ async function countSendsThroughRetryPolicy({ firstSend, cancel }) {
     );
   } catch (error) {
     // Это точная модель catch-флоу rollup.ts, а не выполнение самого rollup.ts.
-    const hung = error?.code === "ROLLUP_TURN_TIMEOUT";
+    const hung = hasTimeoutCode(error);
     const cancelConfirmed =
       accepted || hung
         ? await cancelTurnAndConfirmQuietly({ cancel }, acceptedTurnResult, {
@@ -90,103 +115,106 @@ async function countSendsThroughRetryPolicy({ firstSend, cancel }) {
   return sends;
 }
 
-test("an accepted hung turn with refused cancellation never sends a fresh retry", async () => {
+void test("an accepted hung turn with refused cancellation never sends a fresh retry", async () => {
   const sends = await countSendsThroughRetryPolicy({
-    firstSend: async (recordSend) => {
+    firstSend: (recordSend) => {
       recordSend();
-      return { result: () => new Promise(() => {}) };
+      return Promise.resolve({
+        result: () => new Promise<TestTurnResult>(() => {}),
+      });
     },
-    cancel: async () => {
-      throw new Error("cancel refused");
-    },
+    cancel: () => Promise.reject(new Error("cancel refused")),
   });
   assert.equal(sends, 1);
 });
 
-test("an accepted cancel response without a terminal cancelled event blocks fresh retry", async () => {
+void test("an accepted cancel response without a terminal cancelled event blocks fresh retry", async () => {
   const sends = await countSendsThroughRetryPolicy({
-    firstSend: async (recordSend) => {
+    firstSend: (recordSend) => {
       recordSend();
-      return { result: () => new Promise(() => {}) };
+      return Promise.resolve({
+        result: () => new Promise<TestTurnResult>(() => {}),
+      });
     },
-    cancel: async () => ({ status: "accepted" }),
+    cancel: () => Promise.resolve({ status: "accepted" }),
   });
   assert.equal(sends, 1);
 });
 
-test("an accepted hung turn retries after the stream confirms turn.cancelled", async () => {
-  let finishTurn;
+void test("an accepted hung turn retries after the stream confirms turn.cancelled", async () => {
+  let finishTurn: (value: TestTurnResult) => void;
   const sends = await countSendsThroughRetryPolicy({
-    firstSend: async (recordSend) => {
+    firstSend: (recordSend) => {
       recordSend();
-      return {
+      return Promise.resolve({
         result: () =>
-          new Promise((resolve) => {
+          new Promise<TestTurnResult>((resolve) => {
             finishTurn = resolve;
           }),
-      };
+      });
     },
-    cancel: async () => {
-      finishTurn({
+    cancel: () => {
+      finishTurn!({
         events: [{ type: "turn.cancelled" }, { type: "session.waiting" }],
       });
-      return { status: "accepted" };
+      return Promise.resolve({ status: "accepted" });
     },
   });
   assert.equal(sends, 2);
 });
 
-test("a hung send with refused cancellation never sends a fresh retry", async () => {
+void test("a hung send with refused cancellation never sends a fresh retry", async () => {
   let cancels = 0;
   const sends = await countSendsThroughRetryPolicy({
     firstSend: async (recordSend) => {
       recordSend();
-      return await new Promise(() => {});
+      return await new Promise<TestResponse>(() => {});
     },
-    cancel: async () => {
+    cancel: () => {
       cancels += 1;
-      return { status: "accepted" };
+      return Promise.resolve({ status: "accepted" });
     },
   });
   assert.equal(sends, 1);
   assert.equal(cancels, 1);
 });
 
-test("a hung send gets one fresh retry when cancel reports no active turn", async () => {
+void test("a hung send gets one fresh retry when cancel reports no active turn", async () => {
   const sends = await countSendsThroughRetryPolicy({
     firstSend: async (recordSend) => {
       recordSend();
-      return await new Promise(() => {});
+      return await new Promise<TestResponse>(() => {});
     },
-    cancel: async () => ({ status: "no_active_turn" }),
+    cancel: () => Promise.resolve({ status: "no_active_turn" }),
   });
   assert.equal(sends, 2);
 });
 
-test("a rejected send gets exactly one fresh retry", async () => {
+void test("a rejected send gets exactly one fresh retry", async () => {
   const sends = await countSendsThroughRetryPolicy({
-    firstSend: async (recordSend) => {
+    firstSend: (recordSend) => {
       recordSend();
-      throw new Error("session gone");
+      return Promise.reject(new Error("session gone"));
     },
-    cancel: async () => {
-      throw new Error("cancel must not be called for an unaccepted turn");
-    },
+    cancel: () =>
+      Promise.reject(
+        new Error("cancel must not be called for an unaccepted turn"),
+      ),
   });
   assert.equal(sends, 2);
 });
 
-test("a turn that finishes in time returns its result", async () => {
-  const result = await withTurnTimeout(async () => "report", {
+void test("a turn that finishes in time returns its result", async () => {
+  const result = await withTurnTimeout(() => Promise.resolve("report"), {
     timeoutMs: 50,
     label: "main-turn",
   });
   assert.equal(result, "report");
 });
 
-test("a hung turn rejects with a labelled timeout error", async () => {
+void test("a hung turn rejects with a labelled timeout error", async () => {
   await assert.rejects(
-    withTurnTimeout(() => new Promise(() => {}), {
+    withTurnTimeout(() => new Promise<never>(() => {}), {
       timeoutMs: 20,
       label: "main-turn",
     }),
@@ -194,21 +222,22 @@ test("a hung turn rejects with a labelled timeout error", async () => {
       assert.ok(e instanceof RollupTurnTimeoutError);
       assert.equal(e.code, "ROLLUP_TURN_TIMEOUT");
       assert.equal(e.label, "main-turn");
+      assert.deepEqual(Object.keys(e), ["name", "code", "label"]);
       return true;
     },
   );
 });
 
-test("the timer is cleared, so the next turn runs right after a win", async () => {
+void test("the timer is cleared, so the next turn runs right after a win", async () => {
   assert.equal(
-    await withTurnTimeout(async () => 1, {
+    await withTurnTimeout(() => Promise.resolve(1), {
       timeoutMs: DEFAULT_TURN_TIMEOUT_MS,
       label: "first",
     }),
     1,
   );
   assert.equal(
-    await withTurnTimeout(async () => 2, {
+    await withTurnTimeout(() => Promise.resolve(2), {
       timeoutMs: DEFAULT_TURN_TIMEOUT_MS,
       label: "second",
     }),
@@ -217,16 +246,16 @@ test("the timer is cleared, so the next turn runs right after a win", async () =
   // Файл теста завершается сам: незачищенный 10-минутный таймер держал бы event loop.
 });
 
-test("the configured timeout is taken only when it is a sane millisecond count", () => {
+void test("the configured timeout is taken only when it is a sane millisecond count", () => {
   assert.equal(resolveTurnTimeoutMs("60000"), 60000);
   assert.equal(resolveTurnTimeoutMs(undefined), DEFAULT_TURN_TIMEOUT_MS);
 });
 
-test("a malformed timeout falls back to the default and warns", () => {
+void test("a malformed timeout falls back to the default and warns", () => {
   // Пустое значение и мусор дают Number() → 0/NaN: без разбора это был бы таймер на 1 мс,
   // то есть мгновенно «зависший» ход на каждой ночи.
   for (const raw of ["", "  ", "abc", "0", "-1", "1.5", String(2 ** 31)]) {
-    const warnings = [];
+    const warnings: string[] = [];
     assert.equal(
       resolveTurnTimeoutMs(raw, { warn: (m) => warnings.push(m) }),
       DEFAULT_TURN_TIMEOUT_MS,
@@ -240,12 +269,12 @@ test("a malformed timeout falls back to the default and warns", () => {
   }
 });
 
-test("a hung cancel is swallowed instead of blocking the retry", async () => {
+void test("a hung cancel is swallowed instead of blocking the retry", async () => {
   const session = { cancel: () => new Promise(() => {}) };
   assert.equal(await cancelTurnQuietly(session, { timeoutMs: 30 }), false);
 });
 
-test("a refused cancel is swallowed too", async () => {
+void test("a refused cancel is swallowed too", async () => {
   // Не начатая сессия бросает синхронно, заклинившая может ответить 500 — оба исхода не наши.
   const throws = {
     cancel: () => {
@@ -253,15 +282,13 @@ test("a refused cancel is swallowed too", async () => {
     },
   };
   const rejects = {
-    cancel: async () => {
-      throw new Error("500 cancel-turn");
-    },
+    cancel: () => Promise.reject(new Error("500 cancel-turn")),
   };
   assert.equal(await cancelTurnQuietly(throws, { timeoutMs: 30 }), false);
   assert.equal(await cancelTurnQuietly(rejects, { timeoutMs: 30 }), false);
 });
 
-test("an accepted cancel reports success", async () => {
-  const session = { cancel: async () => ({ status: "accepted" }) };
+void test("an accepted cancel reports success", async () => {
+  const session = { cancel: () => Promise.resolve({ status: "accepted" }) };
   assert.equal(await cancelTurnQuietly(session, { timeoutMs: 30 }), true);
 });

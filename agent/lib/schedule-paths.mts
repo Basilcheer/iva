@@ -25,7 +25,7 @@ export function resolvePaths(): SchedulePaths {
 export type MemoryPeriod = "daily" | "weekly" | "monthly" | "yearly";
 
 // Same command shape every memory-*.ts schedule spawns: `flock -w 900 .memory.lock node
-// --env-file=.env scripts/memory/rollup.ts <period>` — see scripts/lib/schedule-runner.mjs.
+// --env-file=.env scripts/memory/rollup.ts <period>` — see scripts/lib/schedule-runner.ts.
 export function memoryRollupJob(period: MemoryPeriod) {
   const { root, statusPath, memoryLockPath } = resolvePaths();
   return {

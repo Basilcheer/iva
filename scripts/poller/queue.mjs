@@ -3,13 +3,13 @@ import {
   clearQueueFileKey,
   loadQueueFile,
   writeQueueFileAtomic,
-} from "../lib/telegram-queue.mjs";
+} from "../lib/telegram-queue.ts";
 import { toChannelLocalToken } from "#lib/telegram-continuation-token.mjs";
 import {
   clearTelegramResetIntent,
   loadTelegramResetIntents,
   persistTelegramResetIntent,
-} from "../lib/telegram-reset-intent.mjs";
+} from "../lib/telegram-reset-intent.ts";
 import { requestTelegramReset } from "../lib/telegram-reset.mjs";
 import {
   getChatStatus,

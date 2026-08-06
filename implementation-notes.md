@@ -581,3 +581,116 @@ test` now uses `node --test`.
   in the Git index, the synchronous Docker port probe has no timeout, and
   `upsertEnv` accepts key names outside its parser grammar. Each requires its own
   regression test and behavior commit.
+- 2026-08-06: PR-2 converts 13 additional leaf modules and 11 related tests, removes five
+  superseded declarations, and lowers the `.mjs` ratchet from 138 to 114.
+  `reasoning-levels` is characterized through the model and OAuth suites, while
+  `telegram-reset-intent` was already exercised through the poller queue suites.
+  A separate pre-conversion characterization commit adds its direct durable
+  lifecycle, invalid-record, and filename-integrity cases so the native branch
+  coverage gate has deterministic headroom.
+- 2026-08-06: `telegram-queue.test.ts` still imports the eternal `telegram-poll.mjs` shim
+  before the poller implementation moves to TypeScript. PR-2 adds the narrow
+  temporary `scripts/telegram-poll.d.mts` bridge for the two exports that test
+  consumes; PR-6 must delete it when the poller and shim boundary are converted.
+- 2026-08-06: PR-2 typing review found five pre-existing behavior defects and leaves them for
+  separate TDD fixes: quiz answer lookup accepts inherited/array property names
+  such as `"length"` despite documenting invalid answers as neutral; quiz summary
+  and persona fallback select the WVPF card but still crash on an unknown code;
+  Telegram Markdown placeholder restoration can delete ordinary text matching
+  two spaces, digits, two spaces; the Telegram HTML sanitizer preserves unsafe
+  `javascript:` and `data:` anchor schemes; and outbound security findings retain
+  the first 12 characters of matched credentials in `preview`.
+- 2026-08-06: The first full PR-2 suite, run concurrently with the full typed
+  linter, hit the unrelated timing-sensitive `minimum deadline is enforced while
+the Node event loop is blocked` assertion once. Two later sequential suites hit
+  the same assertion while unrelated VPS builds drove the load average above 11;
+  every isolated rerun passed. The conversion does not touch the bash tool, and a
+  complete clean suite is still required before push.
+- 2026-08-06 07:02 Asia/Tashkent: The first full Node 24 suite after transfer to
+  macOS exposed two pre-existing portability gaps. Rich-post compared realpath
+  candidates against a symlinked `/var` data root, and two Linux process-group
+  tests assumed `setsid` existed. Separate commits `59be5e7` and `63536a6`
+  normalize the media roots and skip only those two cases when `setsid` is absent;
+  the staged PR-2 conversion remained byte-identical at its handoff SHA-256.
+- 2026-08-06 07:02 Asia/Tashkent: The next complete local suite passed cleanly
+  after transfer: 594 passed, zero failed, and four expected platform skips (two
+  existing `flock` skips plus the two unavailable-`setsid` cases).
+- 2026-08-06 07:08 Asia/Tashkent: The first post-rebase full-suite retry hit the
+  pre-existing 1.5-second `userbot-health-cli` probe budget once, returning
+  `probe_timeout` under full-suite load. The PR-2 conversion does not touch that
+  path; three immediate isolated reruns passed in 675, 590, and 584 ms. A clean
+  full-suite retry remains required before push.
+- 2026-08-06 Asia/Tashkent: PR-2 deliberately keeps `security-gate.mjs` and
+  `telegram-format.mjs` canonical, with their `.d.mts` declarations and the
+  agent's thin typed security-gate re-export. One-shot reminder timers still run
+  `telegram-send.mjs` under stock system Node; converting either shared module
+  before that entry point would recreate the 0.3.12 failure where bare Node loads
+  TypeScript before sending. Their production conversion moves with
+  `telegram-send` to preserve the runtime boundary; `security-gate.test.ts` stays
+  converted and exercises the canonical JS module through its restored
+  declaration. The corrected PR-2 scope is 11 production modules, 12 test files,
+  three removed declarations, and an `.mjs` budget of 116.
+- 2026-08-06 Asia/Tashkent: Full-suite discovery on the high-core local machine
+  intermittently starved the existing 1.5-second `userbot-health-cli` integration
+  probe even though repeated isolated runs completed in 584-675 ms. Both Node
+  test scripts now cap file concurrency at four: this preserves automatic test
+  discovery and the production timeout while preventing unrelated test workers
+  from turning the timing assertion into a load-dependent failure. Two
+  successive bounded full suites passed all 598 tests with the four expected
+  platform skips.
+- 2026-08-06 Asia/Tashkent: Independent post-conversion review found that the
+  typed `systemd-control` cleanup helper had narrowed the legacy diagnostic
+  fallback from duck-typed `cause.message || String(cause)` to
+  `Error.message`. A separate regression fix restores the original behavior for
+  error-like objects and empty `Error` messages; focused tests now preserve both
+  cases without changing cleanup control flow.
+- 2026-08-06 Asia/Tashkent: Review also found that converting
+  `schedule-runner.d.mts` into the implementation had accidentally made the
+  options argument optional to TypeScript callers. An exported overload restores
+  the declaration's required options contract while the implementation keeps its
+  pre-existing runtime default for untyped JavaScript callers. A compile-time
+  regression assertion guards both sides of that compatibility boundary.
+- 2026-08-06 Asia/Tashkent: Review confirmed a pre-existing search-key probe
+  leak: Node removes `Authorization` on a cross-origin redirect but forwards the
+  custom Brave and Exa/Parallel credential headers. A separate security commit
+  sets `redirect: "error"`; the existing soft network-failure policy still
+  returns `null`. The same response lifecycle now cancels unread bodies without
+  allowing cancellation failures to change the probe result.
+- 2026-08-06 Asia/Tashkent: The shared Telegram queue options had long accepted
+  a nonce factory for quarantine paths, but atomic queue writes interpolated the
+  function object instead of invoking it. A separate regression fix normalizes
+  string and factory nonces at the write boundary; a direct test proves that
+  each write asks the factory for a fresh value.
+- 2026-08-06 Asia/Tashkent: Final PR-2 verification after all review fixes is
+  clean: the exact suite reports 601 tests, 597 passed, zero failed, and four
+  expected macOS skips. Coverage is 73.46% lines, 79.22% branches, and 71.69%
+  functions; the delta from PR-1 is +0.64, +0.18, and +0.16 percentage points.
+  Lint, formatting, the 116/116 `.mjs` ratchet, typecheck, build, replica,
+  autograph 343/343, security-defense 45/45, deterministic userbot lock, and
+  Python 3.12 userbot guardrail/health/compile gates all pass.
+- 2026-08-06 Asia/Tashkent: Final adversarial review found three queue catch
+  sites where TypeScript assertions had removed the source module's null-safe
+  `error?.code` access at runtime. The separate compatibility fix restores
+  optional access and directly proves that nullish injected filesystem/link
+  failures are rethrown unchanged.
+- 2026-08-06 Asia/Tashkent: Native TypeScript stripping had materialized
+  type-only Error properties before their constructors ran, changing enumerable
+  key order from the source JavaScript. `declare` keeps the fields type-only;
+  constructor assignments now reproduce the original Rollup and systemd error
+  serialization order, covered by direct regression assertions.
+- 2026-08-06 Asia/Tashkent: The earlier PR-2 entries reporting 13 production
+  modules / 11 tests / budget 114 and later 601-test verification are historical
+  pre-boundary and pre-final-review snapshots, not the merge result. The final
+  confirmed scope is 11 production modules, 12 converted test files, three
+  removed declarations, and budget 116. After the last compatibility tests the
+  exact suite is 604 tests, 600 passed, zero failed, and four expected macOS
+  skips; coverage is 73.48% lines, 79.27% branches, and 71.64% functions, a
+  +0.66 / +0.23 / +0.11 percentage-point delta from PR-1. Every remaining local
+  and Python 3.12 gate was repeated successfully on this final tree.
+- 2026-08-06 Asia/Tashkent: A second coverage run on the same final tree kept
+  the stable 604 / 600 / 0 / 4 test result but reported 73.46% lines, 79.29%
+  branches, and 71.64% functions. The preceding percentages are therefore one
+  observed run, not invariant values: the verified range is 73.46-73.48% lines,
+  79.27-79.29% branches, and 71.64% functions, with a conservative delta from
+  PR-1 of at least +0.64 / +0.23 / +0.11 percentage points. Every observation
+  remains above the enforced coverage baseline.

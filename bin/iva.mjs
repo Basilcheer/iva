@@ -39,7 +39,7 @@ import { readMemoryMaintenanceReport } from "../scripts/lib/memory-maintenance.t
 import {
   cleanupSystemdUnits,
   createSystemdControl,
-} from "../scripts/lib/systemd-control.mjs";
+} from "../scripts/lib/systemd-control.ts";
 import { LEGACY_MEMORY_UNITS } from "../scripts/lib/schedule-migration.mjs";
 import {
   applyConfigTransaction,
@@ -1174,7 +1174,7 @@ async function cmdDoctor() {
 
   // daily/weekly/monthly/yearly now run as in-process eve schedules (no systemd unit of
   // their own to query for a failed state, unlike doctor above) — data/rollup-status.json
-  // (scripts/lib/schedule-runner.mjs) is the only record of whether they're actually firing.
+  // (scripts/lib/schedule-runner.ts) is the only record of whether they're actually firing.
   // Threshold gives each cadence a full extra cycle of slack before doctor complains:
   // 26h for the 04:00 daily slot, 8d/32d/370d for weekly/monthly/yearly respectively.
   let rollupStatus = null;
@@ -1194,7 +1194,7 @@ async function cmdDoctor() {
     };
     for (const period of ["daily", "weekly", "monthly", "yearly"]) {
       // "memory-<period>" — the `name` each agent/schedules/memory-*.ts passes to
-      // runScheduledJob, not the bare period (see scripts/lib/schedule-runner.mjs).
+      // runScheduledJob, not the bare period (see scripts/lib/schedule-runner.ts).
       const entry = rollupStatus?.[`memory-${period}`];
       if (!entry) continue; // hasn't fired yet on this install (e.g. yearly, on most installs)
       if (typeof entry.lastSuccessAt === "number") {
