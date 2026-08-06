@@ -1031,3 +1031,36 @@ the Node event loop is blocked` assertion once. Two later sequential suites hit
   worktrees will own non-overlapping language/settings/schedules and
   run-status/Telegram boundaries; the lead owns shared poller/channel importers,
   the ratchet, and final review.
+- 2026-08-06 Asia/Tashkent: The new schedule-paths characterization first
+  exposed only macOS `/var` versus `/private/var` fixture canonicalization; the
+  test now compares real paths and proves all four original-runtime behaviors.
+  The two conversion lanes then passed independently before integration:
+  language/settings/schedules passed 76 focused tests, while run-status and the
+  Telegram acceptance/continuation boundary passed 118. Raw Node consumers use
+  `.ts` specifiers; compiled agent consumers retain NodeNext `.js` specifiers.
+  In particular, raw `#lib/i18n.ts` must import `./settings.ts`: a `.js`
+  specifier fails under stock Node before the Eve build exists.
+- 2026-08-06 Asia/Tashkent: Integration resolved the two shared poller importers
+  as the exact union of both lanes and immediately passed raw imports of all
+  five shared modules, 219 focused tests plus two expected platform skips,
+  typecheck, and build. Both conversion commits remain independently runnable.
+  The finalization commit changes only stale path comments and the ratchet from
+  41 to the exact tracked count of 32. All five obsolete PR-8 declarations are
+  gone; the three remaining `.d.mts` files belong to later compatibility work.
+- 2026-08-06 Asia/Tashkent: Independent semantic review found one strict typing
+  blocker that runtime tests could not expose: the converted Telegram acceptance
+  wrapper had erased Eve's generic `RouteHandlerArgs<TState>` contract through
+  `never`. A separate atomic fix restores the generic handler and args, makes the
+  wrapped object typechecked, and removes the remaining unsafe test-fixture cast.
+  Direct acceptance coverage passes 11/11. Two follow-up read-only reviews found
+  no remaining behavior, import, scope, commit-integrity, or attribution blocker.
+- 2026-08-06 Asia/Tashkent: The final pre-pull PR-8 gate set is green. Node 24
+  reports 672 total tests, 668 passed, zero failed, and four expected macOS
+  skips. Coverage is 75.92% lines, 79.01% branches, and 73.22% functions, a
+  PR-7 delta of +0.14 / -0.19 / +0.19 percentage points. Lint, formatting,
+  typecheck, build, exact 32/32 ratchet, stale-reference scans, Autograph
+  343/343, security-defense 45/45, the CI-pinned uv 0.8.3 lock reproduction,
+  and all Python 3.12 userbot guardrail, health, and compile checks pass.
+  Replica exits zero after its documented cross-restart known-issue notice,
+  proves reset retirement, and finishes `OK` with five provider requests. The
+  two approved untracked handoff files remain outside Git.
