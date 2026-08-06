@@ -1,4 +1,12 @@
-const PROVIDERS = {
+type Env = Record<string, string | undefined>;
+
+type ProviderSettings = {
+  label: string;
+  model: string;
+  context: string;
+};
+
+const PROVIDERS: Record<string, ProviderSettings> = {
   ollama: {
     label: "Ollama",
     model: "OLLAMA_MODEL",
@@ -22,7 +30,12 @@ const PROVIDERS = {
 };
 
 /** Display-only model settings. Setup writes explicit values, so this helper never duplicates runtime defaults. */
-export function modelSummary(env = process.env) {
+export function modelSummary(env: Env = process.env): {
+  provider: string;
+  model: string;
+  contextWindow: number | null;
+  line: string;
+} {
   const id = (env.MODEL_PROVIDER || "ollama").trim().toLowerCase();
   const provider = PROVIDERS[id] || {
     label: id || "Model",
@@ -40,8 +53,10 @@ export function modelSummary(env = process.env) {
   };
 }
 
-export function compactNumber(value) {
-  if (!Number.isFinite(value) || value <= 0) return "?";
+export function compactNumber(value: unknown): string {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return "?";
+  }
   if (value >= 1000 && value % 1000 === 0) return `${value / 1000}k`;
   return new Intl.NumberFormat("en-US").format(value);
 }

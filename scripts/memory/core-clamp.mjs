@@ -1,4 +1,4 @@
-import { CORE_CAP } from "../lib/core-cap.mjs";
+import { CORE_CAP } from "../lib/core-cap.ts";
 
 const SECTION_KIND = new Map([
   ["Пользователь", "user"],

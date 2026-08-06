@@ -19,9 +19,24 @@ import { basename, dirname, join } from "node:path";
 // Lazy value capture + trailing \s*: tolerates CRLF files (a greedy .* would keep the \r).
 const LINE_RE = /^\s*([A-Z0-9_]+)\s*=\s*(.*?)\s*$/;
 
+type EnvValues = Record<string, string>;
+
+interface AtomicWriteHooks {
+  beforeRename?: (temporaryPath: string) => void;
+  beforeDirectorySync?: (parentPath: string) => void;
+}
+
+interface DurabilityError extends Error {
+  code: "EENV_DURABILITY";
+}
+
+function hasErrorCode(error: unknown, code: string): boolean {
+  return (error as { code?: unknown } | null | undefined)?.code === code;
+}
+
 /** Parse .env text → {KEY: value}; surrounding quotes stripped (same regex as setup.mjs). */
-export function parseEnvText(text) {
-  const env = {};
+export function parseEnvText(text: unknown): EnvValues {
+  const env: EnvValues = {};
   for (const line of String(text).split(/\r?\n/)) {
     const m = line.match(LINE_RE);
     if (m) env[m[1]] = m[2].replace(/^["']|["']$/g, "");
@@ -30,11 +45,11 @@ export function parseEnvText(text) {
 }
 
 /** Read .env into {KEY: value}; {} when the file is missing. */
-export async function readEnvValues(path) {
+export async function readEnvValues(path: string): Promise<EnvValues> {
   try {
     return parseEnvText(await readFile(path, "utf8"));
   } catch (error) {
-    if (error?.code === "ENOENT") return {};
+    if (hasErrorCode(error, "ENOENT")) return {};
     throw error;
   }
 }
@@ -42,7 +57,10 @@ export async function readEnvValues(path) {
 // Base env refreshed with the current .env file: file values win, base-only keys survive.
 // For long-running processes (the Telegram bridge) whose process.env snapshot goes stale
 // after the /model wizard edits .env — display code must read through this, not process.env.
-export async function readEnvFresh(path, base = process.env) {
+export async function readEnvFresh(
+  path: string,
+  base: NodeJS.ProcessEnv = process.env,
+): Promise<NodeJS.ProcessEnv> {
   return { ...base, ...(await readEnvValues(path)) };
 }
 
@@ -54,10 +72,10 @@ export async function readEnvFresh(path, base = process.env) {
  * then the parent directory is fsynced so the rename survives a crash.
  */
 export function writeEnvAtomicSync(
-  path,
-  text,
-  { beforeRename, beforeDirectorySync } = {},
-) {
+  path: string,
+  text: unknown,
+  { beforeRename, beforeDirectorySync }: AtomicWriteHooks = {},
+): void {
   if (existsSync(path)) chmodSync(path, 0o600);
   const parent = dirname(path);
   const tmp = join(
@@ -86,9 +104,9 @@ export function writeEnvAtomicSync(
       }
     } catch (cause) {
       const error = new Error(
-        `env file was replaced, but parent directory fsync failed; new bytes are live and crash durability is unconfirmed: ${cause.message}`,
+        `env file was replaced, but parent directory fsync failed; new bytes are live and crash durability is unconfirmed: ${(cause as Error).message}`,
         { cause },
-      );
+      ) as DurabilityError;
       error.code = "EENV_DURABILITY";
       throw error;
     }
@@ -107,7 +125,10 @@ export function writeEnvAtomicSync(
 // appended at the end. Values must be single-line — a multiline paste (e.g. a mangled
 // API key) must fail loudly here, not corrupt .env. Write is atomic (tmp + rename),
 // and every resulting .env is 0600 because it holds secrets.
-export async function upsertEnv(path, updates) {
+export async function upsertEnv(
+  path: string,
+  updates: Record<string, string | null>,
+): Promise<void> {
   for (const [k, v] of Object.entries(updates)) {
     if (v != null && /[\n\r]/.test(String(v)))
       throw new Error(`env value for ${k} contains a newline`);
@@ -116,23 +137,23 @@ export async function upsertEnv(path, updates) {
   try {
     text = await readFile(path, "utf8");
   } catch (error) {
-    if (error?.code !== "ENOENT") throw error;
+    if (!hasErrorCode(error, "ENOENT")) throw error;
     /* no file yet - create from scratch */
   }
   const lines = text.length ? text.split("\n") : [];
   if (lines.length && lines[lines.length - 1] === "") lines.pop(); // trailing newline re-added below
-  const pending = new Map(
+  const pending = new Map<string, string | null>(
     Object.entries(updates).map(([k, v]) => [
       k,
       v == null ? null : String(v).trim(),
     ]),
   );
-  const out = [];
+  const out: string[] = [];
   for (const line of lines) {
     const m = line.match(LINE_RE);
     const k = m?.[1];
     if (k && pending.has(k)) {
-      const v = pending.get(k);
+      const v = pending.get(k)!;
       pending.delete(k); // duplicates of the same key are dropped
       if (v !== null) out.push(`${k}=${v}`);
       continue;

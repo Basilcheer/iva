@@ -1,6 +1,6 @@
 import { readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
-import { modelSummary } from "./model-summary.mjs";
+import { modelSummary } from "./model-summary.ts";
 
 // Small teal loader from https://t.me/addemoji/LoadingStatusByTimDesign.
 // Bots whose owner doesn't have Telegram Premium transparently fall back to ◇.

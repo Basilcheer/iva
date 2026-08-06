@@ -21,7 +21,7 @@ const PROVIDER = process.env.MODEL_PROVIDER ?? "ollama";
 const PROVIDERS = {
   ollama: {
     // OLLAMA_BASE_URL — не пользовательская настройка, а шов для тестов: replica-смоук
-    // подставляет сюда локальный mock-провайдер (scripts/lib/mock-openai-server.mjs).
+    // подставляет сюда локальный mock-провайдер (scripts/lib/mock-openai-server.ts).
     baseURL: process.env.OLLAMA_BASE_URL ?? "https://ollama.com/v1",
     apiKey: process.env.OLLAMA_API_KEY,
     textModel: process.env.OLLAMA_MODEL ?? "deepseek-v4-pro",

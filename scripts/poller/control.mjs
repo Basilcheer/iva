@@ -2,7 +2,7 @@ import { createMenu } from "../lib/menu/index.mjs";
 import { botCommands, helpText, tr } from "#lib/i18n.mjs";
 import { continuationTokenForControl } from "../lib/telegram-reset.mjs";
 import { getChatStatus, isRunning } from "#lib/run-status.mjs";
-import { readEnvFresh } from "../lib/env-file.mjs";
+import { readEnvFresh } from "../lib/env-file.ts";
 import {
   formatUsageReport,
   parseWindow,

@@ -4,27 +4,47 @@
 // проверяет полный путь build → eve → провайдер без сети и настоящей модели.
 // Идея — reference-реализация из stabilization-форка mamysh/iva (PR #7), переписана
 // под upstream с нуля.
-import { createServer } from "node:http";
+import { createServer, type IncomingMessage } from "node:http";
+import { text as consumeText } from "node:stream/consumers";
 
 const MODEL = "iva-replica";
 
-function partText(content) {
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function stringifyContentPart(value: unknown): string {
+  if (value == null) return "";
+  // The mock deliberately mirrors OpenAI content coercion for malformed fixture parts.
+  // eslint-disable-next-line @typescript-eslint/no-base-to-string
+  return String(value);
+}
+
+function partText(content: unknown): string {
   if (typeof content === "string") return content;
   if (Array.isArray(content)) {
     return content
-      .map((p) => (typeof p === "string" ? p : (p?.text ?? "")))
+      .map((part) => {
+        if (typeof part === "string") return part;
+        return isRecord(part) ? stringifyContentPart(part.text) : "";
+      })
       .join(" ");
   }
   return "";
 }
 
-function transcriptText(messages) {
-  return messages.map((m) => partText(m?.content)).join("\n");
+function transcriptText(messages: unknown[]): string {
+  return messages
+    .map((message) => partText(isRecord(message) ? message.content : undefined))
+    .join("\n");
 }
 
-function lastUserText(messages) {
+function lastUserText(messages: unknown[]): string {
   for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i]?.role === "user") return partText(messages[i].content);
+    const message = messages[i];
+    if (isRecord(message) && message.role === "user") {
+      return partText(message.content);
+    }
   }
   return "";
 }
@@ -32,8 +52,9 @@ function lastUserText(messages) {
 // Сценарий: маркер CEDAR-#### сеется фразой "Remember this code", а после рестарта
 // eve должен реплеить историю целиком — тогда маркер найдётся в транскрипте и вернётся
 // в ответе. Так restart/resume проверяется без настоящей памяти модели.
-function chooseResponse(body) {
-  const messages = Array.isArray(body?.messages) ? body.messages : [];
+function chooseResponse(body: unknown): string {
+  const messages =
+    isRecord(body) && Array.isArray(body.messages) ? body.messages : [];
   const last = lastUserText(messages);
   if (/What code did I ask you to remember/i.test(last)) {
     const match = transcriptText(messages).match(/CEDAR-\d+/);
@@ -43,7 +64,7 @@ function chooseResponse(body) {
   return "REPLICA_OK";
 }
 
-function completionJson(text) {
+function completionJson(text: string) {
   return {
     id: "chatcmpl-replica",
     object: "chat.completion",
@@ -60,7 +81,7 @@ function completionJson(text) {
   };
 }
 
-function streamChunks(text) {
+function streamChunks(text: string) {
   const base = {
     id: "chatcmpl-replica",
     object: "chat.completion.chunk",
@@ -87,15 +108,21 @@ function streamChunks(text) {
   ];
 }
 
-async function readBody(req) {
-  const chunks = [];
-  for await (const chunk of req) chunks.push(chunk);
-  return Buffer.concat(chunks).toString("utf8");
+async function readBody(req: IncomingMessage): Promise<string> {
+  return consumeText(req);
 }
 
+export type MockOpenAiServer = {
+  baseUrl: string;
+  requests: unknown[];
+  close(): Promise<void>;
+};
+
 /** Стартует mock-провайдер на 127.0.0.1:0; handle: { baseUrl, requests, close }. */
-export async function startMockOpenAiServer() {
-  const requests = [];
+export async function startMockOpenAiServer(): Promise<MockOpenAiServer> {
+  const requests: unknown[] = [];
+  // Node does not consume the request handler's promise; response completion is handled inside it.
+  // eslint-disable-next-line @typescript-eslint/no-misused-promises
   const server = createServer(async (req, res) => {
     if (req.method !== "POST" || req.url !== "/v1/chat/completions") {
       res.writeHead(404, { "content-type": "application/json" });
@@ -106,9 +133,9 @@ export async function startMockOpenAiServer() {
       );
       return;
     }
-    let body;
+    let body: unknown;
     try {
-      body = JSON.parse(await readBody(req));
+      body = JSON.parse(await readBody(req)) as unknown;
     } catch {
       res.writeHead(400, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: { message: "invalid JSON body" } }));
@@ -116,7 +143,7 @@ export async function startMockOpenAiServer() {
     }
     requests.push(body);
     const text = chooseResponse(body);
-    if (body?.stream) {
+    if (isRecord(body) && body.stream) {
       res.writeHead(200, {
         "content-type": "text/event-stream",
         "cache-control": "no-cache",
@@ -130,14 +157,21 @@ export async function startMockOpenAiServer() {
       res.end(JSON.stringify(completionJson(text)));
     }
   });
-  await new Promise((resolve, reject) => {
+  await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
+    server.listen(0, "127.0.0.1", () => resolve());
   });
-  const { port } = server.address();
+  const address = server.address();
+  if (address === null || typeof address === "string") {
+    throw new Error("Mock OpenAI server did not bind to a TCP port");
+  }
+  const { port } = address;
   return {
     baseUrl: `http://127.0.0.1:${port}/v1`,
     requests,
-    close: () => new Promise((resolve) => server.close(resolve)),
+    close: () =>
+      new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      }),
   };
 }

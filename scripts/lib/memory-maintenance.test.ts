@@ -10,10 +10,10 @@ import {
   readMemoryMaintenanceReport,
   recordSkippedOversize,
   scanOversizeWorkingTreeFiles,
-} from "./memory-maintenance.mjs";
+} from "./memory-maintenance.ts";
 
-test("oversize scan checks modified and untracked non-ignored files before staging", () => {
-  let args;
+void test("oversize scan checks modified and untracked non-ignored files before staging", () => {
+  let args: string[] | undefined;
   const sizes = new Map([
     ["/vault/cards/large.md", GITHUB_BLOB_GUARD_BYTES + 1],
     ["/vault/cards/small.md", GITHUB_BLOB_GUARD_BYTES],
@@ -31,7 +31,7 @@ test("oversize scan checks modified and untracked non-ignored files before stagi
       return {
         isFile: () => true,
         isSymbolicLink: () => false,
-        size: sizes.get(path),
+        size: sizes.get(path)!,
       };
     },
   });
@@ -48,7 +48,7 @@ test("oversize scan checks modified and untracked non-ignored files before stagi
   ]);
 });
 
-test("oversize scan fails closed when git cannot enumerate the working tree", () => {
+void test("oversize scan fails closed when git cannot enumerate the working tree", () => {
   assert.throws(
     () =>
       scanOversizeWorkingTreeFiles({
@@ -62,7 +62,7 @@ test("oversize scan fails closed when git cannot enumerate the working tree", ()
   );
 });
 
-test("git push errors distinguish oversize history, credentials, and other failures", () => {
+void test("git push errors distinguish oversize history, credentials, and other failures", () => {
   assert.equal(
     classifyGitPushError("remote: error: GH001: Large files detected.").kind,
     "oversize",
@@ -89,7 +89,7 @@ test("git push errors distinguish oversize history, credentials, and other failu
   );
 });
 
-test("memory report surfaces known non-zero problem counters and tolerates other shapes", () => {
+void test("memory report surfaces known non-zero problem counters and tolerates other shapes", () => {
   assert.deepEqual(
     memoryReportProblems({
       score: 90,
@@ -111,7 +111,7 @@ test("memory report surfaces known non-zero problem counters and tolerates other
   assert.deepEqual(memoryReportProblems(null), []);
 });
 
-test("memory report freshness and oversize marker are durable", async (t) => {
+void test("memory report freshness and oversize marker are durable", async (t) => {
   const dir = await mkdtemp(join(tmpdir(), "iva-memory-report-"));
   t.after(() => rm(dir, { recursive: true, force: true }));
   const reportPath = join(dir, "enforce-report.json");
@@ -129,7 +129,8 @@ test("memory report freshness and oversize marker are durable", async (t) => {
   });
 
   assert.equal(recordSkippedOversize(reportPath, 4), true);
-  assert.deepEqual(JSON.parse(await readFile(reportPath, "utf8")), {
+  const storedReport: unknown = JSON.parse(await readFile(reportPath, "utf8"));
+  assert.deepEqual(storedReport, {
     review: 2,
     skipped_oversize: 4,
   });

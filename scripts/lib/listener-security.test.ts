@@ -1,7 +1,7 @@
 import { strict as assert } from "node:assert";
-import { classifyAgentListeners } from "./listener-security.mjs";
+import { classifyAgentListeners } from "./listener-security.ts";
 
-const line = (host) => `LISTEN 0 511 ${host}:8723 0.0.0.0:*`;
+const line = (host: string) => `LISTEN 0 511 ${host}:8723 0.0.0.0:*`;
 
 assert.equal(classifyAgentListeners("", 8723), "absent");
 assert.equal(classifyAgentListeners(line("127.0.0.1"), 8723), "loopback");

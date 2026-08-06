@@ -1,6 +1,6 @@
 // Экран «Память» (core memory) меню (/menu → 💾). Показывает выдержку из vault/CORE.md и
 // проводит интервью из 6 свободных вопросов. Мост НЕ дистиллирует сам: он сохраняет сырые
-// ответы (core-interview.mjs → vault/core-interview.md) и отдаёт их иве синтетическим
+// ответы (core-interview.ts → vault/core-interview.md) и отдаёт их иве синтетическим
 // сообщением buildDistillMessage — она своими инструментами ужимает их в ядро и обновляет
 // vault/CORE.md (лимит 1200 симв. — забота модели). Так формат ядра не знает ни мост, ни экран.
 //
@@ -14,7 +14,7 @@ import {
   INTERVIEW,
   saveInterview,
   buildDistillMessage,
-} from "../core-interview.mjs";
+} from "../core-interview.ts";
 import { isRunning, chatKeyOf } from "#lib/run-status.mjs";
 
 const SID = "core";

@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { CORE_CAP } from "./lib/core-cap.mjs";
+import { CORE_CAP } from "./lib/core-cap.ts";
 import { clampCore } from "./memory/core-clamp.mjs";
 
 function fillTo(text, target) {

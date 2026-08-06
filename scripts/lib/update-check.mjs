@@ -8,7 +8,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { join } from "node:path";
-import { notificationChat } from "./notification-chat.mjs";
+import { notificationChat } from "./notification-chat.ts";
 import { resolveUpdateTarget } from "./update-channel.mjs";
 
 export { notificationChat };

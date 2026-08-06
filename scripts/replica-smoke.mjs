@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomBytes } from "node:crypto";
-import { startMockOpenAiServer } from "./lib/mock-openai-server.mjs";
+import { startMockOpenAiServer } from "./lib/mock-openai-server.ts";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const MARKER = "CEDAR-4729";

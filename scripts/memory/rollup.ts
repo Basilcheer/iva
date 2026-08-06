@@ -17,8 +17,8 @@ import {
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Client, type MessageResult, type SessionState } from "eve/client";
-import { CORE_CAP } from "../lib/core-cap.mjs";
-import { notificationChat } from "../lib/notification-chat.mjs";
+import { CORE_CAP } from "../lib/core-cap.ts";
+import { notificationChat } from "../lib/notification-chat.ts";
 import {
   cancelTurnAndConfirmQuietly,
   canRetryFresh,

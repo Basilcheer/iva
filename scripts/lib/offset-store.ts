@@ -4,25 +4,34 @@
 // Маркер delivered сужает окно двойной доставки до единственного апдейта «в полёте»:
 // свежепереигранное (<= delivered, в пределах окна) пропускается — offset двигаем,
 // в eve не шлём.
-const asInt = (v) => (Number.isSafeInteger(v) && v >= 0 ? v : null);
+type OffsetFile = { offset: number; delivered: number | null };
 
-export function parseOffsetFile(raw) {
-  const j = JSON.parse(raw);
-  if (
-    typeof j !== "object" ||
-    j === null ||
-    Array.isArray(j) ||
-    asInt(j.offset) === null ||
-    (j.delivered !== undefined &&
-      j.delivered !== null &&
-      asInt(j.delivered) === null)
-  ) {
-    throw new Error("Telegram offset file has invalid schema");
-  }
-  return { offset: j.offset, delivered: j.delivered ?? null };
+const asInt = (value: unknown): number | null =>
+  typeof value === "number" && Number.isSafeInteger(value) && value >= 0
+    ? value
+    : null;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-export function serializeOffsetFile(offset, delivered) {
+export function parseOffsetFile(raw: string): OffsetFile {
+  const j: unknown = JSON.parse(raw);
+  if (!isRecord(j)) {
+    throw new Error("Telegram offset file has invalid schema");
+  }
+  const offset = asInt(j.offset);
+  const delivered = j.delivered == null ? null : asInt(j.delivered);
+  if (offset === null || (j.delivered != null && delivered === null)) {
+    throw new Error("Telegram offset file has invalid schema");
+  }
+  return { offset, delivered };
+}
+
+export function serializeOffsetFile(
+  offset: number,
+  delivered: number | null,
+): string {
   return JSON.stringify(
     delivered === null ? { offset } : { offset, delivered },
   );
@@ -33,7 +42,10 @@ export function serializeOffsetFile(offset, delivered) {
 // Пропускаем только НЕДАВНО доставленное — в пределах окна от маркера.
 export const DEDUPE_WINDOW = 100_000;
 
-export function alreadyDelivered(updateId, delivered) {
+export function alreadyDelivered(
+  updateId: number,
+  delivered: number | null,
+): boolean {
   return (
     delivered !== null &&
     updateId <= delivered &&

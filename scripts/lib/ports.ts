@@ -14,32 +14,56 @@ import { dirname, join } from "node:path";
 export const DEFAULT_PORT = 8723;
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
+export interface ProbeResult {
+  occupied: boolean;
+  holder?: string;
+}
+
+export interface PortProbe {
+  name: string;
+  check(port: number): Promise<ProbeResult>;
+}
+
+export interface PortCheckResult {
+  port: number;
+  occupied: boolean;
+  holders: string[];
+}
+
+export interface OccupiedPortDetails {
+  port: number;
+  holders: string[];
+}
+
 // ── Probe-контракт (LSP): { name, check(port) -> Promise<{ occupied, holder? }> } ──
 
 // Источник правды: пытаемся сами занять порт — ровно то, что делает eve-сервер на старте.
 export const bindProbe = {
   name: "bind",
-  check(port) {
-    return new Promise((resolve) => {
+  check(port: number): Promise<ProbeResult> {
+    return new Promise<ProbeResult>((resolve) => {
       const srv = net.createServer();
-      srv.once("error", (e) =>
+      srv.once("error", (error) => {
+        const code = (error as NodeJS.ErrnoException).code;
         resolve({
-          occupied: e.code === "EADDRINUSE",
-          holder: e.code === "EADDRINUSE" ? "порт занят" : undefined,
-        }),
-      );
+          occupied: code === "EADDRINUSE",
+          holder: code === "EADDRINUSE" ? "порт занят" : undefined,
+        });
+      });
       srv.once("listening", () =>
         srv.close(() => resolve({ occupied: false })),
       );
       srv.listen(port, "0.0.0.0"); // 0.0.0.0 перекрывает и 127.0.0.1, и чужой wildcard-биндинг
     });
   },
-};
+} satisfies PortProbe;
 
 // Атрибуция (Linux): кто слушает порт — из /proc/net/tcp{,6}. uid=0 → root/docker.
 export const procProbe = {
   name: "proc",
-  async check(port) {
+  // Keep every probe asynchronous even when its implementation uses synchronous sources.
+  // eslint-disable-next-line @typescript-eslint/require-await
+  async check(port: number): Promise<ProbeResult> {
     const hex = port.toString(16).toUpperCase().padStart(4, "0");
     for (const f of ["/proc/net/tcp", "/proc/net/tcp6"]) {
       if (!existsSync(f)) continue;
@@ -52,12 +76,14 @@ export const procProbe = {
     }
     return { occupied: false };
   },
-};
+} satisfies PortProbe;
 
 // Атрибуция: опубликованные docker-порты (именно это сломало :3000 на VPS).
 export const dockerProbe = {
   name: "docker",
-  async check(port) {
+  // Keep every probe asynchronous even when its implementation uses synchronous sources.
+  // eslint-disable-next-line @typescript-eslint/require-await
+  async check(port: number): Promise<ProbeResult> {
     try {
       const out = execFileSync(
         "docker",
@@ -77,15 +103,17 @@ export const dockerProbe = {
     }
     return { occupied: false };
   },
-};
+} satisfies PortProbe;
 
 // ── PortChecker (DIP): зависит от абстракции Probe[], а не от их реализаций ──
 export class PortChecker {
-  constructor(probes) {
+  probes: PortProbe[];
+
+  constructor(probes: PortProbe[]) {
     this.probes = probes;
   }
-  async check(port) {
-    const holders = [];
+  async check(port: number): Promise<PortCheckResult> {
+    const holders: string[] = [];
     let occupied = false;
     for (const p of this.probes) {
       const r = await p.check(port);
@@ -100,10 +128,12 @@ export class PortChecker {
 
 // ── PortSelector: ближайший свободный порт поверх checker ──
 export class PortSelector {
-  constructor(checker) {
+  checker: PortChecker;
+
+  constructor(checker: PortChecker) {
     this.checker = checker;
   }
-  async firstFree(start, span = 50) {
+  async firstFree(start: number, span = 50): Promise<number | null> {
     for (let p = start; p < start + span && p <= 65535; p++) {
       if (!(await this.checker.check(p)).occupied) return p;
     }
@@ -119,7 +149,12 @@ export async function confirmOccupiedCurrentPort({
   currentPort,
   holders = [],
   confirm,
-}) {
+}: {
+  port: number | string;
+  currentPort: number | string;
+  holders?: string[];
+  confirm?: (details: OccupiedPortDetails) => boolean | Promise<boolean>;
+}): Promise<boolean> {
   if (Number(port) !== Number(currentPort)) return false;
   if (typeof confirm !== "function")
     throw new TypeError("occupied port reuse requires confirm(details)");
@@ -127,12 +162,12 @@ export async function confirmOccupiedCurrentPort({
 }
 
 // Готовый чекер со всеми доступными способами детекта.
-export function defaultChecker() {
+export function defaultChecker(): PortChecker {
   return new PortChecker([bindProbe, procProbe, dockerProbe]);
 }
 
 // Читает IVA_PORT из .env (приоритет), затем process.env, иначе дефолт.
-export function readIvaPort() {
+export function readIvaPort(): number {
   const env = join(ROOT, ".env");
   if (existsSync(env)) {
     const m = readFileSync(env, "utf8").match(/^\s*IVA_PORT\s*=\s*(\d+)/m);
