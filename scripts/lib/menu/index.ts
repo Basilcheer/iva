@@ -1,7 +1,7 @@
 // Движок вложенного inline-меню (/menu). Живёт в мосте (out-of-band): работает, пока
 // агент занят, ничего не стоит по токенам, деплой = рестарт только iva-telegram-poll.
 //
-// Экраны — отдельные модули scripts/lib/menu/<name>.mjs; каждый экспортит по умолчанию
+// Экраны — отдельные модули scripts/lib/menu/<name>; каждый экспортит по умолчанию
 // { parent, render(st, ctx) -> {text, rows}, on(verb, args, st, ctx), texts? }. Реестр
 // импортируется статически (SCREENS ниже), но createMenu({screens}) позволяет его
 // подменить — так юнит-тест проверяет ЛОГИКУ движка, не завися от контента экранов.
@@ -24,7 +24,111 @@ import gws from "./gws.ts";
 import crons from "./crons.ts";
 import skills from "./skills.ts";
 import status from "./status.ts";
-import service from "./service.mjs";
+
+type MaybePromise<T> = T | Promise<T>;
+type MenuButton = { text: string; callback_data: string };
+type MenuAwaitText = { kind: string; secret: boolean; [key: string]: unknown };
+type MenuState = {
+  flow: string;
+  msgId: unknown;
+  screen: string;
+  page: number;
+  awaitText: MenuAwaitText | null;
+  [key: string]: unknown;
+};
+type MenuFlows = {
+  get: (chatId: unknown, userId: string) => MenuState | null;
+  start: (
+    chatId: unknown,
+    userId: string,
+    flow: string,
+    extra: Record<string, unknown>,
+  ) => MenuState;
+  touch: (state: MenuState) => void;
+  screen: (
+    state: MenuState,
+    text: string,
+    rows?: Array<MenuButton[]>,
+  ) => Promise<void>;
+  end: (state: MenuState, text: string) => Promise<void>;
+};
+type TelegramResponse = { ok: boolean; [key: string]: unknown };
+type TelegramTransport = (
+  method: string,
+  params: Record<string, unknown>,
+) => Promise<TelegramResponse>;
+type MenuDeps = {
+  allowed?: ReadonlySet<string>;
+  handleModelCmd: (
+    chatId: unknown,
+    userId: string,
+    options: { msgId: unknown },
+  ) => MaybePromise<unknown>;
+  handleThinkCmd: (
+    chatId: unknown,
+    userId: string,
+    options: { msgId: unknown },
+  ) => MaybePromise<unknown>;
+  reply: (chatId: unknown, text: string) => MaybePromise<unknown>;
+  [key: string]: unknown;
+};
+type MenuContext = {
+  flows: MenuFlows;
+  tg: TelegramTransport;
+  deps: MenuDeps;
+  lang: string;
+  tr: (english: string, russian: string) => string;
+  getLang: () => string;
+  btn: (text: string, callbackData: string) => MenuButton;
+  show: (state: MenuState, screen: string) => Promise<void>;
+  backRow: (screen: string) => MenuButton[];
+};
+type MenuView = { text: string; rows: Array<MenuButton[]> };
+type MenuScreen = {
+  render?: (
+    state: MenuState,
+    context: MenuContext,
+  ) => MaybePromise<MenuView | null | undefined>;
+  on?: (
+    verb: string,
+    args: string[],
+    state: MenuState,
+    context: MenuContext,
+  ) => MaybePromise<unknown>;
+  texts?: Record<
+    string,
+    (
+      text: string,
+      message: TelegramMessage,
+      state: MenuState,
+      context: MenuContext,
+    ) => MaybePromise<unknown>
+  >;
+};
+type ScreenRegistry = Record<string, unknown>;
+type CallbackQuery = {
+  id: unknown;
+  from?: { id?: string | number };
+  message?: { chat?: { id?: unknown }; message_id?: unknown };
+  data?: unknown;
+};
+type TelegramMessage = {
+  chat?: { id?: unknown };
+  message_id?: unknown;
+  text?: string;
+};
+type MenuOptions = {
+  flows: MenuFlows;
+  tg: TelegramTransport;
+  deps: MenuDeps;
+  screens?: ScreenRegistry;
+};
+type OpenOptions = { msgId?: unknown };
+type ServiceModule = { default: unknown };
+
+// service remains JavaScript until the neighbouring PR-7 lane converts it.
+const serviceModulePath = "./service.mjs";
+const { default: service } = (await import(serviceModulePath)) as ServiceModule;
 
 // sid → экранный модуль. Псевдо-sid mdl/thk сюда не входят: это хендофф в визарды
 // /model//think (обрабатывается в onCallback ниже до диспатча на экран).
@@ -47,12 +151,17 @@ const PREFIX = "iva_menu:";
 // .env/settings/fs, потому меню само-чинится после рестарта моста или тапа по старому меню.
 const NAV_VERBS = new Set(["o", "pg", "rf"]);
 
-export function createMenu({ flows, tg, deps, screens = SCREENS }) {
+export function createMenu({
+  flows,
+  tg,
+  deps,
+  screens = SCREENS,
+}: MenuOptions) {
   // ctx.lang — снимок языка на момент взаимодействия. tr/getLang берут его, а НЕ глобальный
   // getLang напрямую: сразу после смены языка кнопкой lang.on обновляет ctx.lang, и root
   // перерисовывается уже на новом языке (глобальный mtime-кэш i18n догоняет за ~2с).
   // Ни одной module-level const с переведённой строкой — правило репо соблюдено.
-  const ctx = {
+  const ctx: MenuContext = {
     tg,
     deps,
     flows,
@@ -76,8 +185,8 @@ export function createMenu({ flows, tg, deps, screens = SCREENS }) {
     ],
   };
 
-  async function renderScreen(st) {
-    const mod = screens[st.screen];
+  async function renderScreen(st: MenuState) {
+    const mod = screens[st.screen] as MenuScreen | undefined;
     if (!mod || typeof mod.render !== "function") return;
     const view = await mod.render(st, ctx);
     if (!view) return;
@@ -86,12 +195,12 @@ export function createMenu({ flows, tg, deps, screens = SCREENS }) {
 
   // "iva_menu:srch:set:tavily" -> { sid:"srch", verb:"set", args:["tavily"] }.
   // "iva_menu:mdl" -> { sid:"mdl", verb:undefined, args:[] }.
-  function parse(data) {
+  function parse(data: string) {
     const parts = data.slice(PREFIX.length).split(":");
     return { sid: parts[0], verb: parts[1], args: parts.slice(2) };
   }
 
-  async function onCallback(cq) {
+  async function onCallback(cq: CallbackQuery) {
     const chatId = cq.message?.chat?.id;
     const userId = String(cq.from?.id ?? "");
     const messageId = cq.message?.message_id;
@@ -163,35 +272,37 @@ export function createMenu({ flows, tg, deps, screens = SCREENS }) {
       }
     }
 
-    flows.touch(st); // активные квиз/интервью не протухают на полуслове; заброшенное меню — за 15 мин
+    const active = st!;
+    flows.touch(active); // активные квиз/интервью не протухают на полуслове; заброшенное меню — за 15 мин
     // Любой возврат/обновление экрана (‹ Назад, ‹ Меню, Отмена=o, пагинация, refresh) снимает
     // ждущий ввод: иначе следующее ОБЫЧНОЕ сообщение перехватится как креденшл (secret:true —
     // ещё и удалится из чата). Ручная чистка в search.render остаётся как защита в глубину.
-    if (NAV_VERBS.has(verb)) st.awaitText = null;
+    if (NAV_VERBS.has(verb)) active.awaitText = null;
 
     if (verb === "o") {
-      st.page = 0;
-      await ctx.show(st, sid);
+      active.page = 0;
+      await ctx.show(active, sid);
       return true;
     }
     if (verb === "pg") {
-      st.screen = sid;
-      st.page = Number.parseInt(args[0], 10) || 0;
-      await renderScreen(st);
+      active.screen = sid;
+      active.page = Number.parseInt(args[0], 10) || 0;
+      await renderScreen(active);
       return true;
     }
     if (verb === "rf") {
-      st.screen = sid;
-      await renderScreen(st);
+      active.screen = sid;
+      await renderScreen(active);
       return true;
     }
 
     // Data-верб — экрану sid (тапнутая кнопка принадлежит ему). Экран сам решает, что
     // отрисовать (ctx.show / flows.screen / awaitText). Ошибки экрана НЕ роняют мост:
     // onCallback вызывается из моста через .catch (см. handleControl-интеграцию).
-    st.screen = sid;
-    const mod = screens[sid];
-    if (mod && typeof mod.on === "function") await mod.on(verb, args, st, ctx);
+    active.screen = sid;
+    const mod = screens[sid] as MenuScreen | undefined;
+    if (mod && typeof mod.on === "function")
+      await mod.on(verb, args, active, ctx);
     return true;
   }
 
@@ -203,7 +314,11 @@ export function createMenu({ flows, tg, deps, screens = SCREENS }) {
   // (the bridge deletes a secret file, checks the result, and only then downloads + delivers the
   // content here). Callers must never set it without a confirmed deletion — otherwise a still-visible
   // secret would be processed. When set, we don't try to delete a second time.
-  async function onText(msg, st, opts = {}) {
+  async function onText(
+    msg: TelegramMessage,
+    st: MenuState,
+    opts: { skipDelete?: boolean } = {},
+  ) {
     ctx.lang = getLang();
     if (!st || !st.awaitText) return true;
     const chatId = msg.chat?.id;
@@ -239,7 +354,9 @@ export function createMenu({ flows, tg, deps, screens = SCREENS }) {
         );
       }
     }
-    const handler = screens[st.screen]?.texts?.[a.kind];
+    const handler = (screens[st.screen] as MenuScreen | undefined)?.texts?.[
+      a.kind
+    ];
     if (typeof handler !== "function") {
       await flows.end(
         st,
@@ -257,7 +374,11 @@ export function createMenu({ flows, tg, deps, screens = SCREENS }) {
   // /menu: заводит свежий стейт и рисует root. opts.msgId (опц.) — редактировать существующее
   // сообщение вместо нового (напр. возврат из визарда). Двойной /menu заменяет стейт и
   // best-effort снимает клавиатуру со старого меню — мёртвое сообщение не зовёт на протухшие тапы.
-  async function open(chatId, userId, opts = {}) {
+  async function open(
+    chatId: unknown,
+    userId: unknown,
+    opts: OpenOptions = {},
+  ) {
     ctx.lang = getLang();
     const uid = String(userId);
     const prev = flows.get(chatId, uid);

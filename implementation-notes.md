@@ -973,3 +973,9 @@ the Node event loop is blocked` assertion once. Two later sequential suites hit
   two production modules and their direct test changes; the lead owns the
   cross-lane `index -> service` link, the poller menu importer, stale-reference
   scan, ratchet reduction from 44 to 41, integration review, and full gates.
+- 2026-08-06 Asia/Tashkent: PR-7 index lane converts only the menu registry and
+  its dynamic-import test path. `service.mjs` remains in the neighbouring lane,
+  so index loads that existing path through a typed dynamic-import boundary
+  rather than adding a stale declaration or changing the service module. The
+  registry keeps the prior runtime function guards while gaining strict local
+  structural types; no menu behavior is intentionally changed.
