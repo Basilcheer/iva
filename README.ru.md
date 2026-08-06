@@ -10,8 +10,9 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![built on eve](https://img.shields.io/badge/built%20on-eve-000000?logo=vercel&logoColor=white)](https://eve.dev/docs/introduction)
 [![Node 24](https://img.shields.io/badge/node-24.x-339933?logo=node.js&logoColor=white)](https://nodejs.org)
+[![Last release](https://img.shields.io/github/release-date/smixs/iva?label=last%20release&color=informational)](https://github.com/smixs/iva/releases)
 
-[Юзкейсы](#зачем-люди-ставят-иву) · [Что умеет](#что-умеет) · [Установка](#установка) · [Память](#память---то-что-копится) · [Документация](#документация)
+[Юзкейсы](#зачем-люди-ставят-иву) · [Что умеет](#что-умеет) · [Установка](#установка) · [Память](#память---то-что-копится) · [Что нового](#что-нового) · [Документация](#документация)
 
 </div>
 
