@@ -37,12 +37,12 @@ npm run build            # eve build — needed after every agent/ change
 npm start
 ```
 
-`npm run dev` runs the agent with reload. `eve start` does **not** rebuild, so if a
+`npm run dev` runs the agent with reload. `npm start` does **not** rebuild, so if a
 change under `agent/` seems to do nothing, you skipped `npm run build`.
 
 ## What CI will check
 
-Run this before pushing and there are no surprises:
+These four catch most of it — run them before pushing:
 
 ```bash
 npm run lint
@@ -51,10 +51,21 @@ npm run typecheck
 npm test
 ```
 
-CI also runs the coverage baseline (`npm run test:coverage`), the security suite
-(`npm run test:security`), the userbot guardrail tests, the autograph Python tests, and
-a replica smoke test that installs Iva from scratch against a mock provider. Coverage
-thresholds are floors: they may rise, they do not fall.
+CI runs more on top: `git diff --check` on the PR range (trailing whitespace fails the
+build), the `.mjs` migration budget, `npm run build`, the coverage floors
+(`npm run test:coverage` — lines 76, branches 79.1, functions 72; they may rise, they do
+not fall), `npm run replica` (installs Iva from scratch against a mock provider), the
+autograph tests, the Python security-defense suite, and the userbot guardrail tests.
+
+If you touch `services/telegram-userbot/requirements.in`, regenerate the hash-locked file
+or CI will fail on the diff:
+
+```bash
+uv pip compile services/telegram-userbot/requirements.in \
+  --output-file services/telegram-userbot/requirements.lock \
+  --python-version 3.12 --python-platform x86_64-unknown-linux-gnu \
+  --exclude-newer 2026-07-28T00:00:00Z --generate-hashes
+```
 
 New Node source and tests are TypeScript. The only `.mjs` files in the tree are five
 logic-free entry shims; do not add a sixth.
@@ -78,6 +89,7 @@ config with keys in `.env`. See [docs/extending.md](docs/extending.md).
 
 ## Translations
 
-The README and `docs/` ship in English and Russian (`docs/ru/`). If you change a
-user-facing document, change both or say plainly in the PR that the other one still
-needs doing — a stale translation is worse than an obvious gap.
+The README ships in both languages; `docs/ru/` covers the core pages (install,
+configuration, memory, security, use cases, FAQ) and the rest is English-only. If you
+change a page that exists in both, change both — or say plainly in the PR that the other
+one still needs doing. A stale translation is worse than an obvious gap.
