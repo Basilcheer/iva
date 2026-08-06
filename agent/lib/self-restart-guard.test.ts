@@ -1,14 +1,15 @@
+/* eslint-disable @typescript-eslint/no-floating-promises -- Node's test runner owns registrations. */
 import { strict as assert } from "node:assert";
 import test from "node:test";
 import { selfRestartViolation } from "./self-restart-guard.ts";
 
-const blocked = (cmd) =>
+const blocked = (cmd: string) =>
   assert.notEqual(
     selfRestartViolation(cmd),
     null,
     `должна блокироваться: ${cmd}`,
   );
-const allowed = (cmd) =>
+const allowed = (cmd: string) =>
   assert.equal(
     selfRestartViolation(cmd),
     null,
@@ -95,6 +96,7 @@ test('слова с "iva" внутри и невинные kill не матча�
 
 test("текст отказа объясняет модели, что предложить пользователю", () => {
   const msg = selfRestartViolation("iva restart");
+  assert.ok(msg);
   assert.match(msg, /ЗАБЛОКИРОВАНО/);
   assert.match(msg, /\/restart/);
   assert.match(msg, /#68/);

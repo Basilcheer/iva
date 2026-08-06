@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-floating-promises -- Node's test runner owns registrations. */
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mediaFromRaw, messageParts } from "./telegram-parts.ts";

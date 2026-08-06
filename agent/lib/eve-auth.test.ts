@@ -1,10 +1,11 @@
+/* eslint-disable @typescript-eslint/no-floating-promises -- Node's test runner owns registrations. */
 import { strict as assert } from "node:assert";
 import test from "node:test";
 import { routeAuth } from "eve/channels/auth";
 import { assistantBearerAuth, createEveAuth } from "./eve-auth.ts";
 
 const TOKEN = "test-token";
-const request = (host, token) =>
+const request = (host: string, token?: string) =>
   new Request(`http://${host}/eve/v1/session`, {
     headers: token ? { authorization: `Bearer ${token}` } : {},
   });

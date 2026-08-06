@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-floating-promises -- Node's test runner owns registrations. */
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
@@ -8,6 +9,10 @@ import {
   saveTelegramMediaCacheEntry,
   TELEGRAM_MEDIA_CACHE_LIMIT,
 } from "./telegram-media-cache.ts";
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), "iva-media-cache-test-"));
@@ -65,7 +70,7 @@ test("corrupt media cache is quarantined and recreated without blocking processi
   const { dataDir, vaultDir } = fixture();
   mkdirSync(dataDir, { recursive: true });
   writeFileSync(join(dataDir, "media-cache.json"), "{broken");
-  const logs = [];
+  const logs: string[] = [];
 
   assert.equal(
     await getTelegramMediaCacheEntry("photo-1", {
@@ -105,9 +110,10 @@ test("media cache keeps only the 500 newest entries", async () => {
     { path: "attachments/2026-08-04/photo.jpg", at: 10_000 },
     { dataDir },
   );
-  const stored = JSON.parse(
+  const stored: unknown = JSON.parse(
     readFileSync(join(dataDir, "media-cache.json"), "utf8"),
   );
+  assert.ok(isRecord(stored));
   assert.equal(Object.keys(stored).length, TELEGRAM_MEDIA_CACHE_LIMIT);
   assert.ok(stored.newest);
   assert.equal(stored["old-0"], undefined);
