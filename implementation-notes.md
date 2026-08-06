@@ -1008,3 +1008,26 @@ the Node event loop is blocked` assertion once. Two later sequential suites hit
   3.12.13; guardrail, health, and py_compile checks pass. Replica repeated the
   same documented cross-restart known-issue notice, proved reset retirement,
   printed final `OK`, and exited zero.
+- 2026-08-06 Asia/Tashkent: PR-7 merged as #159 at `d083bcc` after green hosted
+  CI. CodeRabbit returned a successful status context but did not perform a
+  review because the Pro account was under an adaptive fair-use limit; the bot
+  reported a 23-minute wait. Two independent local semantic reviews and a
+  separate hosted-diff audit supplied the review evidence instead.
+- 2026-08-06 Asia/Tashkent: A hosted-history audit completed just after PR-7 was
+  merged and identified a process deviation: the two parallel menu conversion
+  commits and their following integration/fix commits formed a clean final
+  tree, but the intermediate conversion commits were not independently
+  runnable because cross-lane import rewrites landed later. Rewriting merged
+  `main` is not safe. From PR-8 onward, every conversion commit must include all
+  importer rewrites needed for its owned modules and pass its focused suite in
+  isolation before integration; cross-lane shared importers belong in one
+  explicitly runnable integration commit.
+- 2026-08-06 Asia/Tashkent: PR-8 starts from the PR-7 merge `d083bcc`. It owns
+  five shared `agent/lib` runtime modules, four colocated test conversions,
+  `schedule-paths.mts -> .ts`, five declaration removals, and all cross-boundary
+  import rewrites. The exact ratchet target is 32. `schedule-paths.mts` has no
+  direct behavioral test, so its cwd/data/status/lock/job contract is being
+  characterized in a separate commit before any conversion. Two later
+  worktrees will own non-overlapping language/settings/schedules and
+  run-status/Telegram boundaries; the lead owns shared poller/channel importers,
+  the ratchet, and final review.
