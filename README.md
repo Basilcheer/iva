@@ -24,57 +24,6 @@ Iva is a self-hosted Telegram AI assistant with layered memory that turns your m
 curl -fsSL https://raw.githubusercontent.com/smixs/iva/main/install.sh | bash
 ```
 
-## What's New 🔥
-
-<details>
-<summary><b>v0.3.12 · 05.08.2026 — expand four weeks of releases</b></summary>
-
-### 05.08.2026
-
-#### v0.3.12
-
-- ⏰ One-off reminders arrive again — the system timer crashed before the message could be sent; delivery now runs on plain JS under any Node.
-- 📈 Vault health no longer decays from raw daily transcripts — the score counts only the cards Iva actually maintains; an "up" link to a not-yet-created weekly summary isn't broken until its scheduled day, and audio attachments aren't broken links at all.
-- 🗂️ Cards no longer pile up dated "## Update" sections — writes carry explicit operations now: one Log, one Related, displaced facts go to a dated History; the nightly cleanup migrates old piles on its own.
-
-#### v0.3.11
-
-- 📸 Re-sent and queued photos/files are no longer processed twice — one message, one blob, one reply, even while Iva is busy (and no repeated paid vision/transcription calls).
-- 📄 New `documents` skill — send a PDF, DOCX or XLSX and Iva reads it and answers on its content; on request it files the document into your vault library, searchable by meaning.
-- 🌙 Nightly memory and the Telegram queue are hardened against rare failures: a corrupted service file or an unlucky restart no longer loses a night of memory or your queued messages.
-- 🛡️ File-processing errors never leak service details into the chat anymore.
-
-### 04.08.2026
-
-#### v0.3.10
-
-- 🕰️ Nightly memory now runs inside Iva itself (eve schedules) — four systemd timers removed automatically, nothing to do on your side.
-- 🩹 If the server was down at rollup time, the missed run now catches up on the next start.
-- 🌅 Optional morning digest on a schedule — off by default, enable with `digestSchedule.enabled` in `data/settings.json`.
-
-#### v0.3.9
-
-- ⚙️ The eve engine is updated (0.29.5) — more reliable turn cancellation and message delivery around restarts.
-- 🧹 /new truly clears the context — no more "cleared" replies while the old history quietly continues.
-- 📊 /usage now shows the real context size of the last turn instead of a doubled sum.
-
-### 31.07.2026
-
-#### v0.3.8
-
-- ✅ Iva works with Google Tasks — add, view and close a task.
-- 🔑 Connected Google earlier? Tap "Reconnect" in /menu → Google to grant access to Tasks.
-
-#### v0.3.7
-
-- 🛡️ Updates are safer: a broken update no longer touches your working Iva.
-- 🌙 Nightly memory survives a server restart — the morning report arrives even after a reboot.
-- 🧪 Every release goes through a full test install from scratch before it ships.
-
-</details>
-
-Full history — [CHANGELOG.md](CHANGELOG.md).
-
 ## How it works
 
 <img src="assets/iva-flow.webp" alt="How Iva works: voice, text, photos and PDFs fly from Telegram into the willow-tree agent, wired to memory, nightly rollup, cron, reminders, search, web, workspace and docs" width="100%">
@@ -195,6 +144,57 @@ Default model is deepseek-v4-pro, 131k context. On Go it runs about $9/mo all-in
 [Use cases](docs/use-cases.md) · [Install](docs/install.md) · [Configuration](docs/configuration.md) · [Memory](docs/memory.md) · [Providers](docs/providers.md) · [Security](docs/security.md) · [Deploy](docs/deploy.md) · [Commands & CLI](docs/cli.md) · [Menu](docs/menu.md) · [Extending](docs/extending.md) · [FAQ](docs/faq.md) · [Troubleshooting](docs/troubleshooting.md)
 
 Документация на русском → [docs/ru/](docs/ru/)
+
+## What's New 🔥
+
+<details>
+<summary><b>v0.3.12 · 05.08.2026 — expand four weeks of releases</b></summary>
+
+### 05.08.2026
+
+#### v0.3.12
+
+- ⏰ One-off reminders arrive again — the system timer crashed before the message could be sent; delivery now runs on plain JS under any Node.
+- 📈 Vault health no longer decays from raw daily transcripts — the score counts only the cards Iva actually maintains; an "up" link to a not-yet-created weekly summary isn't broken until its scheduled day, and audio attachments aren't broken links at all.
+- 🗂️ Cards no longer pile up dated "## Update" sections — writes carry explicit operations now: one Log, one Related, displaced facts go to a dated History; the nightly cleanup migrates old piles on its own.
+
+#### v0.3.11
+
+- 📸 Re-sent and queued photos/files are no longer processed twice — one message, one blob, one reply, even while Iva is busy (and no repeated paid vision/transcription calls).
+- 📄 New `documents` skill — send a PDF, DOCX or XLSX and Iva reads it and answers on its content; on request it files the document into your vault library, searchable by meaning.
+- 🌙 Nightly memory and the Telegram queue are hardened against rare failures: a corrupted service file or an unlucky restart no longer loses a night of memory or your queued messages.
+- 🛡️ File-processing errors never leak service details into the chat anymore.
+
+### 04.08.2026
+
+#### v0.3.10
+
+- 🕰️ Nightly memory now runs inside Iva itself (eve schedules) — four systemd timers removed automatically, nothing to do on your side.
+- 🩹 If the server was down at rollup time, the missed run now catches up on the next start.
+- 🌅 Optional morning digest on a schedule — off by default, enable with `digestSchedule.enabled` in `data/settings.json`.
+
+#### v0.3.9
+
+- ⚙️ The eve engine is updated (0.29.5) — more reliable turn cancellation and message delivery around restarts.
+- 🧹 /new truly clears the context — no more "cleared" replies while the old history quietly continues.
+- 📊 /usage now shows the real context size of the last turn instead of a doubled sum.
+
+### 31.07.2026
+
+#### v0.3.8
+
+- ✅ Iva works with Google Tasks — add, view and close a task.
+- 🔑 Connected Google earlier? Tap "Reconnect" in /menu → Google to grant access to Tasks.
+
+#### v0.3.7
+
+- 🛡️ Updates are safer: a broken update no longer touches your working Iva.
+- 🌙 Nightly memory survives a server restart — the morning report arrives even after a reboot.
+- 🧪 Every release goes through a full test install from scratch before it ships.
+
+</details>
+
+Full history — [CHANGELOG.md](CHANGELOG.md).
 
 ## Built on
 
