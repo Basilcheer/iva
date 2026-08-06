@@ -15,7 +15,7 @@ import {
 test("wizard lookup preserves Telegram's string user ID", () => {
   const chatId = 4_102_033;
   const userId = "9_104_204";
-  const state = flows.start(chatId, userId as unknown as number, "model");
+  const state = flows.start(chatId, userId, "model");
 
   assert.equal(getWizard(chatId, userId), state);
 });
