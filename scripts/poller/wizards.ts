@@ -21,7 +21,7 @@ import { reply, sc, tg } from "./transport.ts";
 
 type FlowId = number | string;
 
-type WizardState = Omit<TelegramFlowState, "chatId" | "userId" | "msgId"> & {
+type WizardState = TelegramFlowState & {
   chatId: FlowId;
   userId: FlowId;
   msgId: number | null;
@@ -72,26 +72,25 @@ const getWizard = (
   chatId: FlowId | undefined,
   userId: FlowId,
 ): WizardState | null =>
-  flows.get(chatId as number, userId as number) as WizardState | null;
+  flows.get(chatId as number, userId) as WizardState | null;
 const newWizard = (
   chatId: FlowId,
   userId: FlowId,
   flow: string,
   extra: Record<string, unknown> = {},
-): WizardState =>
-  flows.start(chatId as number, userId as number, flow, extra) as WizardState;
+): WizardState => flows.start(chatId, userId, flow, extra) as WizardState;
 const wizScreen = (
   st: WizardState,
   text: string,
   rows?: Array<Array<Record<string, unknown>>>,
-) => flows.screen(st as TelegramFlowState, text, rows);
+) => flows.screen(st, text, rows);
 const endWizard = (
   st: WizardState,
   text: string,
   rows?: Array<Array<Record<string, unknown>>>,
-) => flows.end(st as TelegramFlowState, text, rows);
+) => flows.end(st, text, rows);
 const wizardIsCurrent = (st: WizardState) =>
-  flows.get(st.chatId as number, st.userId as number) === st;
+  flows.get(st.chatId, st.userId) === st;
 
 // A network result belongs to the wizard object that started it. The slot can be
 // replaced while the request is pending (Cancel, /menu, another /model), so both
@@ -478,11 +477,11 @@ function startCodexLogin(st: WizardState) {
     .then(() => {
       // Identity-сверка: flows.get !== st истинно и когда слот заменён (другой /model,
       // /menu), и когда протух по TTL — осиротевшая континуация сама себя отбрасывает.
-      if (flows.get(st.chatId as number, st.userId as number) !== st) return;
+      if (flows.get(st.chatId, st.userId) !== st) return;
       return showModelScreen(st);
     })
     .catch((e: unknown) => {
-      if (flows.get(st.chatId as number, st.userId as number) !== st) return;
+      if (flows.get(st.chatId, st.userId) !== st) return;
       return endWizard(
         st,
         tr(

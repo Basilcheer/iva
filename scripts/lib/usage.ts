@@ -1,6 +1,11 @@
 // Учёт расхода токенов — ЕДИНЫЙ источник правды по формату usage.jsonl, чтению и сводкам.
 // Переиспользуется хуком (запись: agent/hooks/usage.ts), Telegram-мостом и CLI `iva usage`
-// (чтение). Чистый ESM (только node-builtins) — бандлится в eve и работает в bare-node.
+// (чтение). Чистый ESM (только node-builtins) — бандлится в eve и работает в bare-node,
+// как scripts/lib/telegram-format.ts.
+//
+// Лог живёт в data/usage.jsonl (ASSISTANT_DATA_DIR, дефолт ./data) — рядом с tasks.json,
+// gitignored, НЕ в vault (иначе ночной doctor коммитил бы растущий лог в репо памяти).
+// Одна строка JSONL на шаг модели; ход (turn) = несколько шагов, группируем по turnId.
 import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
@@ -193,6 +198,10 @@ const turnKey = (entry: UsageRecord): string =>
 /**
  * Ключ хода для записи инлайн-субагента: ход РОДИТЕЛЯ плюс суффикс с именем субагента.
  * Живёт здесь, а не в хуке, чтобы правило и его чтение не разъезжались.
+ *
+ * Фолбэки повторяют канон самого eve (`turnId.length > 0 ? turnId : turn_<sequence>`):
+ * `ctx.session.turn.id` бывает ПУСТОЙ строкой между ходами, поэтому `??` тут не годится —
+ * пустая строка дала бы ключ "#planner" и склеила бы разные ходы в один.
  */
 export function subagentTurnId(
   turn: TurnLike | undefined,
@@ -274,6 +283,22 @@ export function summarize(
     const source = lastEntry.source;
     let subagent: string | null = null;
     const when = lastEntry.ts;
+    // Вход по шагам хода складывать нельзя: каждый шаг заново отправляет весь контекст,
+    // и сумма (104 632 + 105 537 = 210 169) выглядит как «контекст вырос вдвое». Решение
+    // «пора ли /new» принимают по актуальному размеру контекста — это вход ПОСЛЕДНЕГО
+    // шага основной сессии. Выход суммируется честно: эти токены сгенерированы все.
+    //
+    // Инвариант ключа (agent/hooks/usage.ts): запись субагента несёт turnId вида
+    // "<ход родителя>#<субагент>". Поэтому ход собирается по части до "#" (расход субагента
+    // входит в итог хода), а контекст берётся из записи БЕЗ суффикса — это шаг основной
+    // сессии. Поле subagent проверяем заодно, но лечит оно не всё: довинвариантная запись
+    // субагента несла turnId ребёнка, и если ИМЕННО она оказалась последней, ход определится
+    // по её номеру — то есть, возможно, по давнему одноимённому ходу родителя. Поле спасает
+    // только когда шаг основной сессии попал в ту же группу. В проде таких записей нет.
+    //
+    // Оговорка про кэш: у провайдеров с anthropic-семантикой cacheRead не входит в inputTokens,
+    // и тогда context занижен на величину cacheRead. Оба живых провайдера ивы включают кэш в in,
+    // надёжно отличить одну семантику от другой по логу нельзя — не усложняем.
     let mainContext: number | undefined;
     let anyContext: number | undefined;
     for (const entry of entries) {
@@ -285,6 +310,8 @@ export function summarize(
         subagent = entry.subagent ?? subagent;
       else mainContext = entry.in || 0;
     }
+    // Ход целиком из субагентских записей (шаг основной сессии не дошёл до лога) — показываем
+    // что есть, но помечаем: это не размер контекста основной сессии.
     const context = mainContext ?? anyContext ?? 0;
     return {
       window,
@@ -316,6 +343,7 @@ export function summarize(
     }
     return { window, rows: rowsOf(groups), totals: finalize(total) };
   }
+  // today / week / month — итог + разбивка по источникам и моделям
   const matching = entries.filter((entry) => inWindow(entry, window, now, tz));
   const total = blank();
   const bySource = new Map<string, Accumulator>();
@@ -352,6 +380,7 @@ const SOURCE_LABEL: Record<string, string> = {
   http: "background (cron/digest)",
   unknown: "other",
 };
+// channel.kind приходит как "channel:telegram" (канал) или "http" (eve/client) — нормализуем.
 const sourceLabel = (key: unknown): string => {
   // eslint-disable-next-line @typescript-eslint/no-base-to-string -- Preserve the declaration-era formatter's permissive String coercion.
   const normalized = String(key ?? "").replace(/^channel:/, "");

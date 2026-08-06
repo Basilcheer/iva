@@ -1,5 +1,10 @@
 # Implementation notes
 
+Current-path references in undated sections follow the post-migration TypeScript
+tree. Dated PR-0 through PR-12 entries are an append-only migration record and may
+name deleted `.mjs` implementations when describing the tree that existed at that
+point in history; they are not instructions to recreate those paths.
+
 ## Telegram direct-delivery acceptance (#87 / #91)
 
 - Every bridge-originated message update, including reply-to-bot bypasses and the
@@ -108,7 +113,7 @@
 
 ## Checked systemd activation (IVA-003 / #54)
 
-- All CLI systemd mutations now go through `scripts/lib/systemd-control.mjs`. A non-zero
+- All CLI systemd mutations now go through `scripts/lib/systemd-control.ts`. A non-zero
   command raises a sanitized error with a fixed per-unit journal hint; captured command
   output and process environment are never copied into diagnostics.
 - Activation is idempotent and succeeds only after every requested unit reports both
@@ -308,7 +313,7 @@
   segment, because group chat ids are negative and the token shape is Eve's contract, not our
   heuristic. It is idempotent, so it can be applied at every boundary:
   - on write — `agent/channels/telegram.ts` (turn start, turn finish, `session.waiting`),
-    `scripts/lib/telegram-turn-start.mjs` (both the claim and the adoption path) and the
+    `scripts/lib/telegram-turn-start.ts` (both the claim and the adoption path) and the
     reset tombstone in `completeScopedResetState`;
   - on read — `continuationTokenForControl`, the stale-run reaper (which reads
     `status.continuationToken` directly) and `reconcileScopedResetIntents` (a durable intent
@@ -317,10 +322,10 @@
     needing a migration.
 - On an Eve bump: re-check what `channel.continuationToken` yields in event handlers. If Eve
   ever hands out the channel-local token there, the helper stays correct (it is idempotent),
-  but `scripts/lib/telegram-reset.test.mjs` is the place that pins the expectation. If the
-  channel name ever changes, `NAMESPACE` in `scripts/lib/telegram-continuation-token.mjs`
+  but `scripts/lib/telegram-reset.test.ts` is the place that pins the expectation. If the
+  channel name ever changes, `NAMESPACE` in `scripts/lib/telegram-continuation-token.ts`
   must change with it.
-- The reaper fixture in `scripts/telegram-poll.test.mjs` deliberately keeps a namespaced
+- The reaper fixture in `scripts/telegram-poll.test.ts` deliberately keeps a namespaced
   `continuationToken`: that is what pre-fix versions wrote, and the assertion pins that a
   reset goes out channel-local anyway.
 - A token that does not look channel-local after the strip (`^-?\d+(:|$)`) is reported to the
@@ -348,7 +353,7 @@
 - `contextFromSubagent` marks the honest fallback: a turn made only of subagent records (the
   outer turn was cancelled or failed) renders as `context ~19 800 (subagent step)` instead of
   passing a subagent's input off as the chat context.
-- `scripts/replica-smoke.mjs` runs a reset canary against the real framework: seed a marker,
+- `scripts/replica-smoke.ts` runs a reset canary against the real framework: seed a marker,
   `session.reset()`, return with the same continuation token and assert the marker is gone.
   It guards Eve's documented contract ("reset retires a session so its continuation starts
   fresh"), which 0.27.13 honours — the `/new` failure was Iva's token shape, not Eve's reset.
@@ -451,9 +456,10 @@
 ## fix/reminder-node-runtime
 
 - Kept the security gate deterministic and dependency-free.
-- Made the pure JavaScript module canonical so operational `.mjs` scripts work
-  with stock Node runtimes that do not load TypeScript.
-- Preserved the agent import contract through a thin TypeScript re-export.
+- The supported Node 24 runtime now executes the canonical TypeScript module
+  directly. Permanent `.mjs` launchers remain logic-free compatibility paths
+  only where the installer, CLI, or systemd contract requires them.
+- Preserved the agent and operational import contracts across that migration.
 - Reminder persistence across reboot remains tracked separately in issue #117.
 
 ## fix/memory-health-contract
@@ -1354,3 +1360,49 @@ update` before and after merge) and was not run by Codex.
   is not a native filesystem path on Windows. The expected config root now uses
   `dirname(fileURLToPath(configUrl))`, matching `import.meta.dirname` on every
   supported platform without changing production behavior.
+- 2026-08-06 19:06 Asia/Tashkent: Post-migration review follow-ups are split
+  into two sequential PRs. The first restores static poller imports and precise
+  Telegram update types, hardens the nullable entity edge, restores the lost
+  usage-accounting invariants, and tightens TypeScript/coverage/documentation
+  guardrails. The second is release-only: version 0.3.13, bilingual README
+  updates, and the matching changelog/release metadata. Two isolated worktrees
+  own the poller/runtime and migration-hygiene lanes; the integration branch
+  alone owns this log and publication. The protected untracked migration plan
+  and `LEARNINGS.md` remain outside both PRs.
+- 2026-08-06 19:31 Asia/Tashkent: The poller, routing, control, and menu seams
+  now use static imports and their real exported types. A shared Telegram update
+  model replaces the handwritten module contracts; `getUpdates.result` remains
+  `unknown` until a structural guard accepts the batch, so malformed data neither
+  enters the collector nor advances the durable offset. The public poller export
+  set is unchanged, an independent import-graph audit found no cycle or new
+  import-time side effect, and the integrated Node 24 targeted suite passes
+  188/188. The nullable command-entity fix stays separate and fail-closed:
+  `[null]` is ignored while a later valid `bot_command` is still recognized.
+- 2026-08-06 19:31 Asia/Tashkent: Native Node coverage include globs filter
+  modules loaded by the tests but do not materialize untouched production files.
+  The policy therefore makes only two explicit guarantees: coverage is filtered
+  to loaded `agent/**/*.ts` and `scripts/**/*.ts` production modules, and a
+  path-inventory ratchet forces remeasurement whenever the current 138 production
+  paths change. The separately measured 29-path blind-spot snapshot is documented,
+  not presented as a dynamic import-graph proof. A skeptical review caught literal
+  single quotes that could yield an empty 100% report under `cmd.exe`, substring
+  checks that admitted conflicting flags, and floors that were still too close to
+  the measurement. Cross-platform double-quoted globs, exact command equality,
+  aligned fixture traversal, and floors of 75 / 77 / 71 replace them. The final
+  Node 24 lane run reports 76.72% lines, 78.94% branches, and 72.50% functions,
+  leaving 1.72 / 1.94 / 1.50 percentage points of headroom; these figures use a
+  different denominator and are not a regression comparison with the old totals.
+- 2026-08-06 19:37 Asia/Tashkent: Final integrated verification uses Node
+  24.19.0 after a clean `npm ci`. The complete suite and repeated exact coverage
+  command pass with 793 tests, 789 passed, zero failed, and four expected macOS
+  skips; the final report is 76.64% lines, 79.02% branches, and 72.78% functions
+  against floors of 75 / 77 / 71. Full ESLint, Prettier, typecheck, Eve build,
+  replica smoke, the exact 5/5 `.mjs` ratchet, and zero `.mts` / `.d.mts` checks
+  pass. The first combined lint/format run found one obsolete string-ID cast in
+  `wizards.test.ts` plus one Prettier-only line wrap that neither isolated lane
+  owned; both were committed separately and every affected gate was repeated.
+  Python 3.12 reports Autograph 343/343 and security defense 45/45. The pinned
+  uv 0.8.3 lock reproduces byte-for-byte, and a clean strict hashed userbot sync,
+  guardrail tests, health tests, and `py_compile` all pass. Range checks exclude
+  `LEARNINGS.md` and the untracked migration plan, and all branch commits are free
+  of AI attribution.

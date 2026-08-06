@@ -13,6 +13,7 @@ import { alreadyDelivered } from "../lib/offset-store.ts";
 import {
   isReplyToBot,
   migrateQueueFile,
+  parseTelegramUpdates,
   type TelegramQueueUpdate,
 } from "../lib/telegram-queue.ts";
 import {
@@ -25,44 +26,18 @@ import {
 } from "./config.ts";
 import { tg } from "./transport.ts";
 import { fastForwardOffset, loadOffset, saveOffset } from "./offset.ts";
+import * as queue from "./queue.ts";
+import * as routing from "./routing.ts";
+import * as updateFlow from "./update-flow.ts";
+import * as control from "./control.ts";
+import * as wizards from "./wizards.ts";
 
 type ErrorLike = { message?: unknown };
 type TelegramResponse = {
   ok?: unknown;
   description?: string;
-  result?: TelegramQueueUpdate[];
+  result?: unknown;
 };
-type QueueModule = {
-  QUEUE_FILE: string;
-  reapStaleRuns: () => Promise<void>;
-  reconcileScopedResetIntents: () => Promise<number>;
-  [name: string]: unknown;
-};
-type RoutingModule = {
-  drainReadyQueueHeads: () => Promise<number>;
-  routeMessageUpdate: (update: unknown) => Promise<string>;
-  [name: string]: unknown;
-};
-type UpdateFlowModule = { removeStaleUpdateJobs: () => Promise<void> } & Record<
-  string,
-  unknown
->;
-type ControlModule = {
-  handleControl: (update: unknown) => Promise<boolean>;
-  registerBotCommands: () => Promise<void>;
-  [name: string]: unknown;
-};
-
-const queueModulePath = "./queue.ts";
-const routingModulePath = "./routing.ts";
-const updateFlowModulePath = "./update-flow.ts";
-const controlModulePath = "./control.ts";
-const wizardsModulePath = "./wizards.ts";
-const queue = (await import(queueModulePath)) as QueueModule;
-const routing = (await import(routingModulePath)) as RoutingModule;
-const updateFlow = (await import(updateFlowModulePath)) as UpdateFlowModule;
-const control = (await import(controlModulePath)) as ControlModule;
-const wizards = (await import(wizardsModulePath)) as Record<string, unknown>;
 const { QUEUE_FILE, reapStaleRuns, reconcileScopedResetIntents } = queue;
 const { drainReadyQueueHeads, routeMessageUpdate } = routing;
 const { removeStaleUpdateJobs } = updateFlow;
@@ -167,7 +142,7 @@ export async function main() {
     for (const update of collectorTakeExpired(messageCollector, Date.now())) {
       const routed = await routeMessageUpdate(update);
       if (routed === "delivered") {
-        const updateId = update.update_id as number;
+        const updateId = update.update_id;
         delivered =
           delivered === null ? updateId : Math.max(delivered, updateId);
         await saveOffset(offset, delivered);
@@ -209,8 +184,14 @@ export async function main() {
       await sleep(3000);
       continue;
     }
+    const updates = parseTelegramUpdates(data.result);
+    if (updates === null) {
+      log("getUpdates: invalid result");
+      await sleep(3000);
+      continue;
+    }
     let queueWriteFailed = false;
-    for (const update of data.result || []) {
+    for (const update of updates) {
       // Переигровка после краша (Telegram = at-least-once): этот апдейт уже уходил в eve
       // в прошлой жизни процесса — второй раз не доставляем, только двигаем offset.
       if (alreadyDelivered(update.update_id, delivered)) {
@@ -227,14 +208,10 @@ export async function main() {
         await saveOffset(offset, delivered);
         continue;
       }
-      let candidate: TelegramQueueUpdate | TelegramCollectUpdate = update;
-      let collected = false;
+      let candidate: TelegramQueueUpdate = update;
+      let collectedUpdate: TelegramCollectUpdate | null = null;
       if (update.message && !isReplyToBot(update.message)) {
-        const offered = collectorOffer(
-          messageCollector,
-          update as TelegramCollectUpdate,
-          Date.now(),
-        );
+        const offered = collectorOffer(messageCollector, update, Date.now());
         if (offered.status === "buffered") {
           // The quiet-window buffer is intentionally in-memory. Advancing now avoids
           // replaying every part, but a process crash can lose this one pending burst.
@@ -244,7 +221,7 @@ export async function main() {
         }
         if (offered.status === "ready") {
           candidate = offered.update;
-          collected = true;
+          collectedUpdate = offered.update;
           offset = update.update_id + 1;
           await saveOffset(offset, delivered);
         }
@@ -252,19 +229,16 @@ export async function main() {
 
       const routed = await routeMessageUpdate(candidate);
       if (routed === "enqueue-failed") {
-        if (collected)
-          collectorRestore(
-            messageCollector,
-            candidate as TelegramCollectUpdate,
-          );
+        if (collectedUpdate)
+          collectorRestore(messageCollector, collectedUpdate);
         // Passthrough retains the old durable retry point. Collected parts already
         // advanced offset when buffered and retry from the restored in-memory burst.
         queueWriteFailed = true;
         break;
       }
-      if (!collected) offset = update.update_id + 1;
+      if (!collectedUpdate) offset = update.update_id + 1;
       if (routed === "delivered") {
-        const candidateId = candidate.update_id as number;
+        const candidateId = candidate.update_id;
         delivered =
           delivered === null ? candidateId : Math.max(delivered, candidateId);
       }
