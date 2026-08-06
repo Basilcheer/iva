@@ -25,6 +25,7 @@ import {
   materializeQueueItem,
   migrateQueueFile,
   normalizeQueueDocument,
+  parseTelegramUpdates,
   queueCount,
   queueHead,
   queueKeys,
@@ -153,6 +154,49 @@ void test("atomic queue writes invoke a fresh nonce factory per write", async (t
   await writeQueueFileAtomic(file, { version: 1, queues: {} }, options);
 
   assert.equal(calls, 2);
+});
+
+void test("Telegram update parsing rejects malformed external payloads", () => {
+  const valid = privateUpdate(1, "valid");
+  const callbackOnly = {
+    update_id: 2,
+    callback_query: {
+      id: "callback-2",
+      data: "iva_menu:r:o",
+      from: { id: 42, is_bot: false, username: "owner" },
+      message: {
+        message_id: 9,
+        date: 1,
+        chat: { id: -100, type: "supergroup", title: "Iva" },
+        text: "menu",
+        reply_markup: { inline_keyboard: [] },
+      },
+      chat_instance: "instance-2",
+    },
+    extra_bot_api_field: { preserved: true },
+  };
+
+  assert.deepEqual(parseTelegramUpdates([]), []);
+  assert.deepEqual(parseTelegramUpdates([valid]), [valid]);
+  assert.deepEqual(parseTelegramUpdates([callbackOnly]), [callbackOnly]);
+  assert.equal(parseTelegramUpdates({ result: [valid] }), null);
+  assert.equal(parseTelegramUpdates([{ ...valid, update_id: "1" }]), null);
+  assert.equal(parseTelegramUpdates([{ ...valid, update_id: 1.5 }]), null);
+  assert.equal(
+    parseTelegramUpdates([
+      { ...valid, message: { ...valid.message, text: 42 } },
+    ]),
+    null,
+  );
+  assert.equal(
+    parseTelegramUpdates([
+      {
+        ...valid,
+        callback_query: { id: 42, data: "iva_menu:r:o" },
+      },
+    ]),
+    null,
+  );
 });
 
 void test("queue reads preserve nullish non-Error failures", async () => {
@@ -651,7 +695,7 @@ void test("a drain pass has one global delivery budget and rotates a stalled fir
     loadImpl: async () => document,
     runningImpl: () => false,
     deliverImpl: async (update, { timeoutMs }) => {
-      attempts.push([update.message!.chat!.id as number, timeoutMs]);
+      attempts.push([update.message!.chat!.id, timeoutMs]);
       nowMs += timeoutMs;
       return false;
     },

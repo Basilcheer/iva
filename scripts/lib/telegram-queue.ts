@@ -10,30 +10,155 @@ import {
 import { createHash, randomBytes } from "node:crypto";
 import { dirname } from "node:path";
 
-type TelegramPeer = {
-  id?: string | number;
+export type TelegramId = string | number;
+
+export type TelegramPeer = {
+  id?: TelegramId;
   is_bot?: boolean;
   type?: string;
   [key: string]: unknown;
 };
 
+export type TelegramChat = TelegramPeer & { id: number };
+
+export type TelegramDocument = {
+  file_id: string;
+  file_size?: number;
+  [key: string]: unknown;
+};
+
 export type TelegramQueueMessage = {
   from?: TelegramPeer;
-  chat?: TelegramPeer;
+  chat?: TelegramChat;
   reply_to_message?: TelegramQueueMessage;
-  text?: unknown;
-  caption?: unknown;
+  document?: TelegramDocument;
+  message_id?: number;
+  message_thread_id?: number;
+  date?: number;
+  text?: string;
+  caption?: string;
   entities?: unknown;
   caption_entities?: unknown;
-  iva_parts?: unknown;
+  iva_parts?: TelegramQueueMessage[];
+  [key: string]: unknown;
+};
+
+export type TelegramCallbackQuery = {
+  id: string;
+  data?: string;
+  from?: TelegramPeer;
+  message?: TelegramQueueMessage;
   [key: string]: unknown;
 };
 
 export type TelegramQueueUpdate = {
   update_id: number;
   message?: TelegramQueueMessage;
+  callback_query?: TelegramCallbackQuery;
   [key: string]: unknown;
 };
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function optionalField(
+  value: Record<string, unknown>,
+  key: string,
+  predicate: (candidate: unknown) => boolean,
+): boolean {
+  return !(key in value) || value[key] === undefined || predicate(value[key]);
+}
+
+function isTelegramPeer(value: unknown): value is TelegramPeer {
+  return (
+    isRecord(value) &&
+    optionalField(
+      value,
+      "id",
+      (id) => typeof id === "string" || typeof id === "number",
+    ) &&
+    optionalField(value, "is_bot", (isBot) => typeof isBot === "boolean") &&
+    optionalField(value, "type", (type) => typeof type === "string")
+  );
+}
+
+function isTelegramChat(value: unknown): value is TelegramChat {
+  return isTelegramPeer(value) && typeof value.id === "number";
+}
+
+function isTelegramDocument(value: unknown): value is TelegramDocument {
+  return (
+    isRecord(value) &&
+    typeof value.file_id === "string" &&
+    optionalField(value, "file_size", (size) => typeof size === "number")
+  );
+}
+
+function isTelegramQueueMessageAtDepth(
+  value: unknown,
+  depth: number,
+): value is TelegramQueueMessage {
+  if (!isRecord(value) || depth > 4) return false;
+  const nextMessage = (candidate: unknown) =>
+    isTelegramQueueMessageAtDepth(candidate, depth + 1);
+  return (
+    optionalField(value, "from", isTelegramPeer) &&
+    optionalField(value, "chat", isTelegramChat) &&
+    optionalField(value, "reply_to_message", nextMessage) &&
+    optionalField(value, "document", isTelegramDocument) &&
+    optionalField(value, "message_id", Number.isSafeInteger) &&
+    optionalField(value, "message_thread_id", Number.isSafeInteger) &&
+    optionalField(value, "date", Number.isSafeInteger) &&
+    optionalField(value, "text", (text) => typeof text === "string") &&
+    optionalField(value, "caption", (caption) => typeof caption === "string") &&
+    optionalField(
+      value,
+      "iva_parts",
+      (parts) => Array.isArray(parts) && parts.every(nextMessage),
+    )
+  );
+}
+
+export function isTelegramQueueMessage(
+  value: unknown,
+): value is TelegramQueueMessage {
+  return isTelegramQueueMessageAtDepth(value, 0);
+}
+
+function isTelegramCallbackQuery(
+  value: unknown,
+): value is TelegramCallbackQuery {
+  return (
+    isRecord(value) &&
+    typeof value.id === "string" &&
+    optionalField(value, "data", (data) => typeof data === "string") &&
+    optionalField(value, "from", isTelegramPeer) &&
+    optionalField(value, "message", isTelegramQueueMessage)
+  );
+}
+
+export function isTelegramQueueUpdate(
+  value: unknown,
+): value is TelegramQueueUpdate {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    "update_id" in value &&
+    Number.isSafeInteger(value.update_id) &&
+    optionalField(value, "message", isTelegramQueueMessage) &&
+    optionalField(value, "callback_query", isTelegramCallbackQuery)
+  );
+}
+
+export function parseTelegramUpdates(
+  value: unknown,
+): TelegramQueueUpdate[] | null {
+  return Array.isArray(value) && value.every(isTelegramQueueUpdate)
+    ? value
+    : null;
+}
 
 export type TelegramQueueItem = {
   version: number;
@@ -219,22 +344,16 @@ export function createQueueItem(
   update: unknown,
   now = Date.now(),
 ): TelegramQueueItem {
-  const candidate = update as Record<string, unknown>;
-  if (
-    typeof update !== "object" ||
-    update === null ||
-    Array.isArray(update) ||
-    !Number.isSafeInteger(candidate.update_id)
-  ) {
+  if (!isTelegramQueueUpdate(update)) {
     throw new Error(
       "queued Telegram update must have a safe integer update_id",
     );
   }
   return {
     version: TELEGRAM_QUEUE_ITEM_VERSION,
-    updateId: candidate.update_id as number,
+    updateId: update.update_id,
     enqueuedAt: now,
-    update: cloneJson(candidate) as TelegramQueueUpdate,
+    update: cloneJson(update),
   };
 }
 

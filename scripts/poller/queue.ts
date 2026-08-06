@@ -55,6 +55,14 @@ type SetStatusIfImpl = (
   expected: Record<string, unknown>,
   patch: Record<string, unknown>,
 ) => unknown;
+export type QueuePhase =
+  | { state: "delivering"; baselineGeneration: number }
+  | {
+      state: "awaiting-running";
+      baselineGeneration: number;
+      acceptedAt: number;
+    }
+  | { state: "running"; baselineGeneration: number; generation: number };
 
 const errorMessage = (error: unknown) => (error as ErrorLike).message;
 const withResetPhase = (error: unknown, resetPhase: string) => {
@@ -69,7 +77,7 @@ const withResetPhase = (error: unknown, resetPhase: string) => {
 const QUEUE_FILE = join(DATA_DIR, "telegram-queue.json");
 const RESET_INTENT_DIR = join(DATA_DIR, "telegram-reset-intents");
 const queueSettleUntil = new Map<string, number>();
-const queueInFlight = new Map<string, unknown>();
+const queueInFlight = new Map<string, QueuePhase>();
 const queueDrainRotation: { afterKey: string | null } = { afterKey: null };
 const undrainableLegacyLogged = new Set<string>();
 const QUEUE_DELIVERY_TIMEOUT_MS = 5_000;
@@ -356,7 +364,7 @@ async function clearFailedDirectIngress(
     deleteMessageImpl?: (
       chatKey: string,
       messageId: string | number,
-    ) => Promise<unknown>;
+    ) => unknown;
     now?: () => number;
   },
 ) {

@@ -13,6 +13,13 @@
 // q:<i>:<v> skip fin redo apply do).
 
 import { getLang } from "#lib/i18n.ts";
+import type { TelegramFlowState } from "../tg-flow.ts";
+import type {
+  TelegramCallbackQuery as CallbackQuery,
+  TelegramId,
+  TelegramQueueMessage as TelegramMessage,
+  TelegramQueueUpdate,
+} from "../telegram-queue.ts";
 
 import root from "./root.ts";
 import search from "./search.ts";
@@ -24,52 +31,46 @@ import gws from "./gws.ts";
 import crons from "./crons.ts";
 import skills from "./skills.ts";
 import status from "./status.ts";
+import service from "./service.ts";
 
 type MaybePromise<T> = T | Promise<T>;
 type MenuButton = { text: string; callback_data: string };
 type MenuAwaitText = { kind: string; secret: boolean; [key: string]: unknown };
-type MenuState = {
-  flow: string;
-  msgId: unknown;
-  screen: string;
-  page: number;
-  awaitText: MenuAwaitText | null;
-  [key: string]: unknown;
-};
+type MenuState = TelegramFlowState;
 type MenuFlows = {
-  get: (chatId: unknown, userId: string) => MenuState | null;
-  start: (
-    chatId: unknown,
-    userId: string,
+  get(chatId: TelegramId, userId: TelegramId): MenuState | null;
+  start(
+    chatId: TelegramId,
+    userId: TelegramId,
     flow: string,
     extra: Record<string, unknown>,
-  ) => MenuState;
-  touch: (state: MenuState) => void;
-  screen: (
+  ): MenuState;
+  touch(state: MenuState): void;
+  screen(
     state: MenuState,
     text: string,
     rows?: Array<MenuButton[]>,
-  ) => Promise<void>;
-  end: (state: MenuState, text: string) => Promise<void>;
+  ): Promise<void>;
+  end(state: MenuState, text: string): Promise<void>;
 };
-type TelegramResponse = { ok: boolean; [key: string]: unknown };
 type TelegramTransport = (
   method: string,
   params: Record<string, unknown>,
-) => Promise<TelegramResponse>;
+) => Promise<unknown>;
 type MenuDeps = {
   allowed?: ReadonlySet<string>;
-  handleModelCmd: (
-    chatId: unknown,
-    userId: string,
-    options: { msgId: unknown },
-  ) => MaybePromise<unknown>;
-  handleThinkCmd: (
-    chatId: unknown,
-    userId: string,
-    options: { msgId: unknown },
-  ) => MaybePromise<unknown>;
-  reply: (chatId: unknown, text: string) => MaybePromise<unknown>;
+  deliver(update: TelegramQueueUpdate): MaybePromise<unknown>;
+  handleModelCmd(
+    chatId: number,
+    userId: TelegramId,
+    options: { msgId?: number },
+  ): MaybePromise<unknown>;
+  handleThinkCmd(
+    chatId: number,
+    userId: TelegramId,
+    options: { msgId?: number },
+  ): MaybePromise<unknown>;
+  reply(chatId: number, text: string): MaybePromise<unknown>;
   [key: string]: unknown;
 };
 type MenuContext = {
@@ -106,29 +107,31 @@ type MenuScreen = {
   >;
 };
 type ScreenRegistry = Record<string, unknown>;
-type CallbackQuery = {
-  id: unknown;
-  from?: { id?: string | number };
-  message?: { chat?: { id?: unknown }; message_id?: unknown };
-  data?: unknown;
-};
-type TelegramMessage = {
-  chat?: { id?: unknown };
-  message_id?: unknown;
-  text?: string;
-};
 type MenuOptions = {
   flows: MenuFlows;
   tg: TelegramTransport;
   deps: MenuDeps;
   screens?: ScreenRegistry;
 };
-type OpenOptions = { msgId?: unknown };
-type ServiceModule = { default: unknown };
+type OpenOptions = { msgId?: number };
 
-// Keep the heterogeneous service screen behind the registry's structural boundary.
-const serviceModulePath = "./service.ts";
-const { default: service } = (await import(serviceModulePath)) as ServiceModule;
+function isMenuAwaitText(value: unknown): value is MenuAwaitText {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as { kind?: unknown }).kind === "string" &&
+    typeof (value as { secret?: unknown }).secret === "boolean"
+  );
+}
+
+function telegramCallOk(value: unknown): boolean {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "ok" in value &&
+    value.ok === true
+  );
+}
 
 // sid → экранный модуль. Псевдо-sid mdl/thk сюда не входят: это хендофф в визарды
 // /model//think (обрабатывается в onCallback ниже до диспатча на экран).
@@ -186,7 +189,8 @@ export function createMenu({
   };
 
   async function renderScreen(st: MenuState) {
-    const mod = screens[st.screen] as MenuScreen | undefined;
+    const screen = typeof st.screen === "string" ? st.screen : "";
+    const mod = screens[screen] as MenuScreen | undefined;
     if (!mod || typeof mod.render !== "function") return;
     const view = await mod.render(st, ctx);
     if (!view) return;
@@ -213,6 +217,7 @@ export function createMenu({
     const allowed = deps.allowed;
     if (!allowed || allowed.size === 0 || !allowed.has(userId)) return true;
     if (typeof cq.data !== "string" || !cq.data.startsWith(PREFIX)) return true;
+    if (chatId === undefined || messageId === undefined) return true;
 
     ctx.lang = getLang();
     const { sid, verb, args } = parse(cq.data);
@@ -320,8 +325,10 @@ export function createMenu({
     opts: { skipDelete?: boolean } = {},
   ) {
     ctx.lang = getLang();
-    if (!st || !st.awaitText) return true;
+    const a = isMenuAwaitText(st?.awaitText) ? st.awaitText : null;
+    if (!a) return true;
     const chatId = msg.chat?.id;
+    if (chatId === undefined) return true;
     const text = (msg.text || "").trim();
     flows.touch(st);
     // Команда прерывает ожидание: молча висящий промпт пригласил бы вставить ключ позже,
@@ -336,7 +343,6 @@ export function createMenu({
       );
       return true;
     }
-    const a = st.awaitText;
     if (a.secret && !opts.skipDelete) {
       // delete-message-FIRST (:512-515). При провале удаления — предупреждение как в мосте;
       // текст ошибки НИКОГДА не содержит значение ключа.
@@ -344,7 +350,7 @@ export function createMenu({
         chat_id: chatId,
         message_id: msg.message_id,
       });
-      if (!del.ok) {
+      if (!telegramCallOk(del)) {
         await deps.reply(
           chatId,
           ctx.tr(
@@ -354,7 +360,8 @@ export function createMenu({
         );
       }
     }
-    const handler = (screens[st.screen] as MenuScreen | undefined)?.texts?.[
+    const screen = typeof st.screen === "string" ? st.screen : "";
+    const handler = (screens[screen] as MenuScreen | undefined)?.texts?.[
       a.kind
     ];
     if (typeof handler !== "function") {
@@ -375,8 +382,8 @@ export function createMenu({
   // сообщение вместо нового (напр. возврат из визарда). Двойной /menu заменяет стейт и
   // best-effort снимает клавиатуру со старого меню — мёртвое сообщение не зовёт на протухшие тапы.
   async function open(
-    chatId: unknown,
-    userId: unknown,
+    chatId: TelegramId,
+    userId: TelegramId,
     opts: OpenOptions = {},
   ) {
     ctx.lang = getLang();

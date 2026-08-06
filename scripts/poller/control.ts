@@ -1,5 +1,11 @@
 import { botCommands, helpText, tr } from "#lib/i18n.ts";
 import { continuationTokenForControl } from "../lib/telegram-reset.ts";
+import type {
+  TelegramCallbackQuery,
+  TelegramQueueMessage as TelegramMessage,
+  TelegramQueueUpdate as TelegramUpdate,
+} from "../lib/telegram-queue.ts";
+import type { TelegramFlowState } from "../lib/tg-flow.ts";
 import { getChatStatus, isRunning } from "#lib/run-status.ts";
 import { readEnvFresh } from "../lib/env-file.ts";
 import {
@@ -18,6 +24,9 @@ import {
 } from "./config.ts";
 import { downloadTelegramFile, edit, reply, sc, tg } from "./transport.ts";
 import { chatKey } from "./offset.ts";
+import { deliver } from "./deliver.ts";
+import { performScopedReset } from "./queue.ts";
+import { deliverDirectUpdate } from "./routing.ts";
 import { handleUpdateCallback, handleUpdateCheck } from "./update-flow.ts";
 import {
   endWizard,
@@ -29,30 +38,14 @@ import {
   handleWizardCallback,
   resetMessageCopy,
 } from "./wizards.ts";
+import { createMenu } from "../lib/menu/index.ts";
 
-type TelegramId = string | number;
-type TelegramDocument = { file_id: string; file_size?: number };
-type TelegramMessage = {
-  chat?: { id?: number; type?: string };
-  document?: TelegramDocument;
-  from?: { id?: TelegramId };
-  message_id?: number;
-  message_thread_id?: number;
-  text?: string;
-};
-type TelegramCallbackQuery = {
-  id: string;
-  data?: string;
-  from?: { id?: TelegramId };
-  message?: TelegramMessage;
-};
 type ControlCallbackQuery = TelegramCallbackQuery & { data: string };
-type TelegramUpdate = {
-  update_id?: number;
-  callback_query?: TelegramCallbackQuery;
-  message?: TelegramMessage;
+type PendingFlow = {
+  flow: unknown;
+  awaitText?: unknown;
+  [key: string]: unknown;
 };
-type PendingFlow = { flow: unknown; awaitText?: unknown };
 type AwaitText = { file?: boolean; kind?: string; secret?: boolean };
 type TelegramResult = { ok?: boolean };
 type SentMessage = { message_id: number };
@@ -70,42 +63,11 @@ type NonTextIo = {
     state: PendingFlow,
   ) => Promise<unknown>;
 };
-type Menu = {
-  onCallback: (callback: TelegramCallbackQuery) => Promise<boolean>;
-  onText: (
-    message: TelegramMessage,
-    state: unknown,
-    options?: { skipDelete?: boolean },
-  ) => Promise<boolean>;
-  open: (chatId: TelegramId | undefined, userId: string) => Promise<unknown>;
-};
-type CreateMenu = (options: Record<string, unknown>) => Menu;
-type Deliver = (update: unknown) => Promise<unknown>;
-type DeliverDirectUpdate = (update: unknown) => Promise<string>;
-type PerformScopedReset = (
-  key: string,
-  continuationToken: string,
-  options: { clearQueue: boolean },
-) => Promise<void>;
 type ControlTransport = (
   method: string,
   body: Record<string, unknown>,
 ) => Promise<TelegramResult>;
 
-const menuModulePath: string = "../lib/menu/index.ts";
-const deliverModulePath: string = "./deliver.ts";
-const queueModulePath: string = "./queue.ts";
-const routingModulePath: string = "./routing.ts";
-const { createMenu } = (await import(menuModulePath)) as {
-  createMenu: CreateMenu;
-};
-const { deliver } = (await import(deliverModulePath)) as { deliver: Deliver };
-const { performScopedReset } = (await import(queueModulePath)) as {
-  performScopedReset: PerformScopedReset;
-};
-const { deliverDirectUpdate } = (await import(routingModulePath)) as {
-  deliverDirectUpdate: DeliverDirectUpdate;
-};
 const controlTg = tg as unknown as ControlTransport;
 
 function errorDetails(error: unknown): ErrorDetails {
@@ -130,6 +92,25 @@ function isAwaitText(value: unknown): value is AwaitText {
   return typeof value === "object" && value !== null;
 }
 
+function hasCallbackData(
+  callback: TelegramCallbackQuery,
+): callback is ControlCallbackQuery {
+  return typeof callback.data === "string";
+}
+
+function isTelegramFlowState(value: PendingFlow): value is TelegramFlowState {
+  return (
+    typeof value.flow === "string" &&
+    (typeof value.chatId === "string" || typeof value.chatId === "number") &&
+    (typeof value.userId === "string" || typeof value.userId === "number") &&
+    typeof value.createdAt === "number" &&
+    (value.msgId === null || typeof value.msgId === "number") &&
+    typeof value.page === "number" &&
+    typeof value.data === "object" &&
+    value.data !== null
+  );
+}
+
 const replyTo = (chatId: number | undefined, text: string) =>
   reply(chatId as number, text) as Promise<SentMessage | null>;
 
@@ -152,7 +133,7 @@ const menu = createMenu({
     reply,
     // Синтетическая дистилляция делит acceptance, пейсинг и уборку failed-ingress
     // с обычной прямой доставкой, но намеренно не проходит busy-time FIFO.
-    deliver: (update: unknown) =>
+    deliver: (update) =>
       deliverDirectUpdate(update).then((result) => result === "delivered"),
     log,
     allowed: ALLOWED,
@@ -206,8 +187,10 @@ const nonTextIo: NonTextIo = {
   reply: (chatId: number | undefined, text: string) => replyTo(chatId, text),
   download: (fileId: string, max: number) => downloadTelegramFile(fileId, max),
   // Run the screen's own text handler on downloaded content WITHOUT re-deleting (already deleted).
-  deliver: (text: string, msg: TelegramMessage, st: PendingFlow) =>
-    menu.onText({ ...msg, text }, st, { skipDelete: true }),
+  deliver: async (text: string, msg: TelegramMessage, st: PendingFlow) => {
+    if (!isTelegramFlowState(st)) return true;
+    return menu.onText({ ...msg, text }, st, { skipDelete: true });
+  },
 };
 
 // A non-text message arrived while a menu/wizard awaits a SECRET (the caller gates this to
@@ -276,8 +259,8 @@ export async function handleAwaitNonText(
 async function handleControl(update: TelegramUpdate) {
   // Bridge-owned inline-button taps (/update, /model, /think) — not eve HITL callbacks.
   const cq = update.callback_query;
-  if (cq && typeof cq.data === "string") {
-    const callback = cq as ControlCallbackQuery;
+  if (cq && hasCallbackData(cq)) {
+    const callback = cq;
     if (callback.data.startsWith("iva_update:"))
       return handleUpdateCallback(callback);
     // Wizard errors must not escape: an uncaught throw would crash the bridge and
@@ -338,12 +321,10 @@ async function handleControl(update: TelegramUpdate) {
         });
       } else if (a.secret || a.file) {
         // Non-text while awaiting a secret — never let it reach eve (delete-first inside).
-        return handleAwaitNonText(msg, pending as unknown as PendingFlow).catch(
-          (e: unknown) => {
-            log("menu attachment capture error:", errorDetails(e).message); // never contains the secret value
-            return true;
-          },
-        );
+        return handleAwaitNonText(msg, pending).catch((e: unknown) => {
+          log("menu attachment capture error:", errorDetails(e).message); // never contains the secret value
+          return true;
+        });
       }
       // else: non-secret await + non-text → fall through so eve handles it normally.
     }
@@ -367,6 +348,7 @@ async function handleControl(update: TelegramUpdate) {
   const from = String(msg?.from?.id ?? "");
   if (ALLOWED.size === 0 || !ALLOWED.has(from)) return false; // untrusted — let eve drop it
   const chatId = msg?.chat?.id;
+  if (chatId === undefined) return true;
   // /menu — open the nested settings menu (out-of-band; errors consumed, never reach eve).
   if (cmd === "/menu") {
     await menu
@@ -419,18 +401,18 @@ async function handleControl(update: TelegramUpdate) {
   }
   // /update — check upstream; if newer, offer inline Update/Skip buttons. Out-of-band.
   if (cmd === "/update") {
-    await handleUpdateCheck(chatId as number);
+    await handleUpdateCheck(chatId);
     return true;
   }
   // /model, /think — provider/model/effort wizard (writes .env; applied on restart).
   if (cmd === "/model") {
-    await handleModelCmd(chatId as number, from).catch((e: unknown) =>
+    await handleModelCmd(chatId, from).catch((e: unknown) =>
       log("wizard /model error:", errorDetails(e).message),
     );
     return true;
   }
   if (cmd === "/think") {
-    await handleThinkCmd(chatId as number, from).catch((e: unknown) =>
+    await handleThinkCmd(chatId, from).catch((e: unknown) =>
       log("wizard /think error:", errorDetails(e).message),
     );
     return true;
