@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-const { sanitizeInbound } = await import("./security-gate.ts");
+const { sanitizeInbound } = await import("./security-gate.mjs");
 
 await test("sanitizeInbound reports exact Unicode code points removed at N-1, N and N+1", () => {
   const nMinusOne = sanitizeInbound("🙂".repeat(2), 3);

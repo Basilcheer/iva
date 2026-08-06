@@ -1,6 +1,6 @@
 // Self-check for needsRichMessage — run: node scripts/lib/telegram-rich.test.ts
 import { strict as assert } from "node:assert";
-import { needsRichMessage } from "./telegram-format.ts";
+import { needsRichMessage } from "./telegram-format.mjs";
 
 // Rich: constructs the HTML path can't render → route to sendRichMessage.
 assert.equal(

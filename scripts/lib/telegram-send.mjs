@@ -11,8 +11,8 @@
 // обратную связь в ту же сессию, чтобы он переформатировал следующий отчёт.
 // htmlToPlain (HTML→plain с декодом сущностей) живёт в общем модуле — тот же
 // фолбэк-декодер использует и Telegram-канал (agent/channels/telegram.ts).
-import { toTelegramHtmlChunks, htmlToPlain } from "./telegram-format.ts";
-import { scanOutbound } from "./security-gate.ts";
+import { toTelegramHtmlChunks, htmlToPlain } from "./telegram-format.mjs";
+import { scanOutbound } from "./security-gate.mjs";
 
 async function post(bot, body) {
   const res = await fetch(`https://api.telegram.org/bot${bot}/sendMessage`, {

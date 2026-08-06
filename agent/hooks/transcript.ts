@@ -7,7 +7,7 @@ import { join } from "node:path";
 //
 // Хелпер appendDaily намеренно продублирован из telegram.ts — выносить в общий модуль
 // не стали из-за тривиальности (пара fs-вызовов), а НЕ из-за бандла: относительный
-// импорт из scripts/lib в бандл работает (см. scripts/lib/telegram-format.ts, который
+// импорт из scripts/lib в бандл работает (см. scripts/lib/telegram-format.mjs, который
 // импортируется в telegram.ts). Формат d_brain: `## HH:MM [type]` + контент.
 function appendDaily(type: string, content: string): void {
   const tz = process.env.ASSISTANT_TIMEZONE || undefined;

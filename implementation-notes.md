@@ -620,3 +620,13 @@ the Node event loop is blocked` assertion once. Two later sequential suites hit
   `probe_timeout` under full-suite load. The PR-2 conversion does not touch that
   path; three immediate isolated reruns passed in 675, 590, and 584 ms. A clean
   full-suite retry remains required before push.
+- 2026-08-06 Asia/Tashkent: PR-2 deliberately keeps `security-gate.mjs` and
+  `telegram-format.mjs` canonical, with their `.d.mts` declarations and the
+  agent's thin typed security-gate re-export. One-shot reminder timers still run
+  `telegram-send.mjs` under stock system Node; converting either shared module
+  before that entry point would recreate the 0.3.12 failure where bare Node loads
+  TypeScript before sending. Their production conversion moves with
+  `telegram-send` to preserve the runtime boundary; `security-gate.test.ts` stays
+  converted and exercises the canonical JS module through its restored
+  declaration. The corrected PR-2 scope is 11 production modules, 12 test files,
+  three removed declarations, and an `.mjs` budget of 116.

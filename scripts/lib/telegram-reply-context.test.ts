@@ -6,7 +6,7 @@ import {
 } from "./telegram-reply-context.ts";
 
 const { hasInboundAttackSignal, sanitizeInbound } =
-  await import("./security-gate.ts");
+  await import("./security-gate.mjs");
 
 function buildTelegramReplyContext(rawMessage: unknown): string | null {
   return (

@@ -14,17 +14,12 @@
 // резолвят без проблем — старое поверье про «ломает eve dev 0.11.4» опровергнуто.)
 
 // ── escaping ──────────────────────────────────────────────────────────────────
-const HTML_ESC: Record<string, string> = {
-  "&": "&amp;",
-  "<": "&lt;",
-  ">": "&gt;",
-};
-export const escHtml = (s: unknown): string =>
-  String(s).replace(/[&<>]/g, (c) => HTML_ESC[c]);
+const HTML_ESC = { "&": "&amp;", "<": "&lt;", ">": "&gt;" };
+export const escHtml = (s) => String(s).replace(/[&<>]/g, (c) => HTML_ESC[c]);
 
 // Attribute escaping, IDEMPOTENT: never double-escapes an existing entity.
 const ENTITY = "#[0-9]+|#x[0-9a-fA-F]+|amp|lt|gt|quot";
-const escAttr = (s: unknown): string =>
+const escAttr = (s) =>
   String(s)
     .replace(new RegExp(`&(?!(?:${ENTITY});)`, "g"), "&amp;")
     .replace(/</g, "&lt;")
@@ -35,7 +30,7 @@ const escAttr = (s: unknown): string =>
 // сущности ДЕКОДИРУЕМ обратно (&amp;→&, &lt;→< и т.д.) — иначе в чат уйдут литеральные
 // &amp;/&lt;. amp декодируем ПОСЛЕДНИМ, чтобы не разэкранировать дважды (&amp;lt; → &lt;).
 // NB: это НЕ sanitizeTelegramHtml — тот отдаёт безопасный HTML; здесь голый текст.
-export function htmlToPlain(html: unknown): string {
+export function htmlToPlain(html) {
   return String(html)
     .replace(/<[^>]+>/g, "")
     .replace(/&lt;/g, "<")
@@ -46,8 +41,8 @@ export function htmlToPlain(html: unknown): string {
 
 // ── inline markdown → html ──────────────────────────────────────────────────────
 // Protect inline code first (placeholders), escape the rest, then overlay tags.
-function inlineHtml(text: string): string {
-  const spans: string[] = [];
+function inlineHtml(text) {
+  const spans = [];
   let s = String(text).replace(/`([^`]+)`/g, (_m, c) => {
     spans.push(`<code>${escHtml(c)}</code>`);
     return `  ${spans.length - 1}  `;
@@ -79,7 +74,7 @@ function inlineHtml(text: string): string {
 
 // GFM table separator: |---|:--:|---|
 const TABLE_SEP_RE = /^\s*\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)+\|?\s*$/;
-const tableCells = (l: string): string[] =>
+const tableCells = (l) =>
   l
     .replace(/^\s*\|/, "")
     .replace(/\|\s*$/, "")
@@ -87,7 +82,7 @@ const tableCells = (l: string): string[] =>
     .map((c) => c.trim());
 
 // ── block + inline converter ────────────────────────────────────────────────────
-function convert(md: unknown): string {
+function convert(md) {
   const lines = String(md).replace(/\r\n/g, "\n").split("\n");
   const out = [];
   let i = 0;
@@ -191,28 +186,8 @@ const CLOSE_RE =
   /^<\/(b|strong|i|em|u|ins|s|strike|del|code|pre|blockquote|span|a|tg-spoiler|tg-emoji|tg-time)>/;
 const ENTITY_RE = new RegExp(`^&(?:${ENTITY});`);
 
-interface OpenTag {
-  kind: "open";
-  len: number;
-  name: string;
-  html: string;
-}
-
-interface CloseTag {
-  kind: "close";
-  len: number;
-  name: string;
-}
-
-type TelegramHtmlTag = OpenTag | CloseTag;
-
-interface OpenTagStackEntry {
-  name: string;
-  html: string;
-}
-
 // Returns { kind:'open'|'close', len, name, html } or null if not a valid tag.
-function matchTagAt(s: string): TelegramHtmlTag | null {
+function matchTagAt(s) {
   let m = CLOSE_RE.exec(s);
   if (m) return { kind: "close", len: m[0].length, name: m[1] };
   m =
@@ -273,11 +248,11 @@ function matchTagAt(s: string): TelegramHtmlTag | null {
 // < > & so Telegram's parser can never 400. Repairs crossing via close+reopen,
 // forbids tags inside <code> and any non-<code> tag inside <pre>, balances at EOF.
 // NEVER throws.
-export function sanitizeTelegramHtml(input: unknown): string {
+export function sanitizeTelegramHtml(input) {
   try {
     const s = String(input);
-    const out: string[] = [];
-    const stack: OpenTagStackEntry[] = []; // [{ name, html }]
+    const out = [];
+    const stack = []; // [{ name, html }]
     const n = s.length;
     let i = 0;
     while (i < n) {
@@ -368,8 +343,8 @@ export function sanitizeTelegramHtml(input: unknown): string {
         i += t.len;
         continue;
       } // stray close → drop
-      const reopened: OpenTagStackEntry[] = [];
-      for (let k: number = stack.length - 1; k > idx; k--) {
+      const reopened = [];
+      for (let k = stack.length - 1; k > idx; k--) {
         out.push(`</${stack[k].name}>`);
         reopened.push(stack[k]);
       }
@@ -396,7 +371,7 @@ export function sanitizeTelegramHtml(input: unknown): string {
 }
 
 // ── public converter ──────────────────────────────────────────────────────────────
-export function mdToTelegramHtml(md: unknown): string {
+export function mdToTelegramHtml(md) {
   try {
     return sanitizeTelegramHtml(convert(md));
   } catch {
@@ -412,10 +387,10 @@ export function mdToTelegramHtml(md: unknown): string {
 // Split RAW markdown on blank lines so each chunk's markup stays self-contained.
 // Long paragraphs/lines are hard-split so no source chunk exceeds `limit`
 // (JS string .length already counts UTF-16 code units, matching Telegram).
-export function chunkMarkdown(md: unknown, limit = 3500): string[] {
+export function chunkMarkdown(md, limit = 3500) {
   const text = String(md);
   if (text.length <= limit) return [text];
-  const paras: string[] = [];
+  const paras = [];
   for (const p of text.split(/\n{2,}/)) {
     if (p.length <= limit) {
       paras.push(p);
@@ -430,7 +405,7 @@ export function chunkMarkdown(md: unknown, limit = 3500): string[] {
         paras.push(line.slice(j, j + limit));
     }
   }
-  const chunks: string[] = [];
+  const chunks = [];
   let cur = "";
   for (const p of paras) {
     if (cur && cur.length + p.length + 2 > limit) {
@@ -445,8 +420,8 @@ export function chunkMarkdown(md: unknown, limit = 3500): string[] {
 
 // Tokenize HTML into indivisible atoms (a whole tag, a whole entity, or one char)
 // so a hard split never lands inside a tag or entity.
-function htmlAtoms(s: string): string[] {
-  const atoms: string[] = [];
+function htmlAtoms(s) {
+  const atoms = [];
   const n = s.length;
   let i = 0;
   while (i < n) {
@@ -474,11 +449,11 @@ function htmlAtoms(s: string): string[] {
 
 // Hard-split already-converted HTML to <=limit, on atom boundaries, re-balancing
 // each piece via the safety pass. Reserve headroom for auto-inserted close tags.
-function splitHtmlHard(html: string, limit: number): string[] {
+function splitHtmlHard(html, limit) {
   if (html.length <= limit) return [sanitizeTelegramHtml(html)];
   const reserve = Math.min(200, Math.floor(limit / 4));
   const budget = Math.max(1, limit - reserve);
-  const pieces: string[] = [];
+  const pieces = [];
   let buf = "";
   for (const a of htmlAtoms(html)) {
     if (buf && buf.length + a.length > budget) {
@@ -489,7 +464,7 @@ function splitHtmlHard(html: string, limit: number): string[] {
   }
   if (buf) pieces.push(sanitizeTelegramHtml(buf));
   // Final guarantee: nothing exceeds the hard limit even after re-balancing.
-  const safe: string[] = [];
+  const safe = [];
   for (const p of pieces) {
     if (p.length <= limit) {
       safe.push(p);
@@ -503,11 +478,11 @@ function splitHtmlHard(html: string, limit: number): string[] {
 
 // One-call helper: markdown → array of send-ready, balanced HTML chunks, each
 // guaranteed <= limit. (text=4096, caption=1024). NEVER throws.
-export function toTelegramHtmlChunks(md: unknown, limit = 4096): string[] {
+export function toTelegramHtmlChunks(md, limit = 4096) {
   try {
     const cap = Math.max(1, limit);
     const srcLimit = Math.min(3500, Math.floor(cap * 0.85));
-    const result: string[] = [];
+    const result = [];
     for (const src of chunkMarkdown(md, srcLimit)) {
       const html = mdToTelegramHtml(src);
       if (html.length <= cap) {
@@ -532,7 +507,7 @@ export function toTelegramHtmlChunks(md: unknown, limit = 4096): string[] {
 // render fine in HTML, so — like hermes-agent — we do NOT route on those: normal
 // replies stay on the proven HTML path. Conservative by design: a false negative
 // is just today's behavior; a false positive falls back on API rejection anyway.
-export function needsRichMessage(md: unknown): boolean {
+export function needsRichMessage(md) {
   const s = String(md);
   // GFM table delimiter row: a line of only pipes/dashes/colons/space with a dash run.
   // Plain prose effectively never produces such a line, so this alone is a safe signal.
