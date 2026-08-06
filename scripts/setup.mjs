@@ -13,12 +13,12 @@ import {
   confirmOccupiedCurrentPort,
   defaultChecker,
   PortSelector,
-} from "./lib/ports.mjs";
+} from "./lib/ports.ts";
 import {
   generateAssistantBearer,
   isAssistantBearer,
-} from "./lib/assistant-auth.mjs";
-import { writeEnvAtomicSync } from "./lib/env-file.mjs";
+} from "./lib/assistant-auth.ts";
+import { writeEnvAtomicSync } from "./lib/env-file.ts";
 import {
   authFilePath,
   readAuth,
@@ -96,7 +96,7 @@ const askYesNo = async (q, def = false) => {
 };
 
 // Free-port selection: ask for the desired port, check availability with the same Probe as
-// `check-port` (scripts/lib/ports.mjs); if taken, offer the nearest free one. Closes the root of a
+// `check-port` (scripts/lib/ports.ts); if taken, offer the nearest free one. Closes the root of a
 // bug at setup time — the server won't start on an occupied port.
 async function pickPort(def) {
   const checker = defaultChecker();

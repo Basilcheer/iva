@@ -5,7 +5,7 @@ import { z } from "zod";
 // Скрейпинг DuckDuckGo выкинут: с серверного IP он отдаёт капчу и возвращает пусто.
 // Каждый провайдер — пара чистых функций build()/parse() (SRP); провайдеры лежат в массиве
 // PROVIDERS, а execute() диспетчеризует по нему, не зная реализаций (DIP). Новый бэкенд =
-// добавить элемент в массив, плита fetch/normalize не трогается (OCP). Паттерн scripts/lib/ports.mjs.
+// добавить элемент в массив, плита fetch/normalize не трогается (OCP). Паттерн scripts/lib/ports.ts.
 // САМОДОСТАТОЧНО: только eve/tools, zod, node fetch (без cross-authored import — иначе ломается eve dev).
 // УСТАРЕЛО (см. перенос scripts/lib → agent/lib): гоча про поломку eve dev на cross-authored
 // import не подтвердилась — typecheck/build/replica проходят чисто и с #lib/-алиасом, и с

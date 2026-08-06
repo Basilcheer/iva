@@ -7,7 +7,7 @@ import {
   INTERVIEW,
   saveInterview,
   buildDistillMessage,
-} from "./core-interview.mjs";
+} from "./core-interview.ts";
 
 // Полный набор ответов на все 6 тем — общий для двух групп тестов.
 const QA = [
@@ -19,7 +19,7 @@ const QA = [
   { q: "Что бесит?", a: "Многословие и выдумки" },
 ];
 
-test("INTERVIEW — ровно 6 вопросов с id и двумя языками", () => {
+void test("INTERVIEW — ровно 6 вопросов с id и двумя языками", () => {
   assert.equal(INTERVIEW.length, 6);
   for (const q of INTERVIEW) {
     assert.equal(typeof q.id, "string");
@@ -30,7 +30,7 @@ test("INTERVIEW — ровно 6 вопросов с id и двумя языка
   }
 });
 
-test("saveInterview пишет сырой архив в tmp-vault со всеми ответами", async () => {
+void test("saveInterview пишет сырой архив в tmp-vault со всеми ответами", async () => {
   const vault = mkdtempSync(join(tmpdir(), "iva-core-interview-"));
   const file = await saveInterview(vault, QA);
   assert.equal(file, join(vault, "core-interview.md"));
@@ -42,7 +42,7 @@ test("saveInterview пишет сырой архив в tmp-vault со всем�
   }
 });
 
-test("saveInterview создаёт отсутствующий каталог vault и перезаписывает файл", async () => {
+void test("saveInterview создаёт отсутствующий каталог vault и перезаписывает файл", async () => {
   const base = mkdtempSync(join(tmpdir(), "iva-core-interview-"));
   const vault = join(base, "nested", "vault"); // ещё не существует
   await saveInterview(vault, [{ q: "первый", a: "старый ответ" }]);
@@ -55,7 +55,7 @@ test("saveInterview создаёт отсутствующий каталог vau
   );
 });
 
-test("saveInterview показывает пропущенный ответ прочерком, не роняясь", async () => {
+void test("saveInterview показывает пропущенный ответ прочерком, не роняясь", async () => {
   const vault = mkdtempSync(join(tmpdir(), "iva-core-interview-"));
   const file = await saveInterview(vault, [{ q: "пропущено", a: "" }]);
   const md = readFileSync(file, "utf8");
@@ -63,7 +63,7 @@ test("saveInterview показывает пропущенный ответ пр�
   assert.ok(md.includes("—"));
 });
 
-test("buildDistillMessage (ru) несёт все ответы, лимит 1200 и явное «не выдумывай»", () => {
+void test("buildDistillMessage (ru) несёт все ответы, лимит 1200 и явное «не выдумывай»", () => {
   const msg = buildDistillMessage(QA, "ru");
   assert.ok(msg.includes("[Настройка core memory]"));
   assert.ok(msg.includes("1200"), "лимит 1200 не упомянут");
@@ -75,7 +75,7 @@ test("buildDistillMessage (ru) несёт все ответы, лимит 1200 �
   }
 });
 
-test("buildDistillMessage (en) — английский вариант с тем же лимитом 1200", () => {
+void test("buildDistillMessage (en) — английский вариант с тем же лимитом 1200", () => {
   const msg = buildDistillMessage(QA, "en");
   assert.ok(msg.includes("[Core memory setup]"));
   assert.ok(msg.includes("1200"));
@@ -84,7 +84,7 @@ test("buildDistillMessage (en) — английский вариант с тем
   for (const { a } of QA) assert.ok(msg.includes(a));
 });
 
-test("buildDistillMessage — незнакомый lang сваливается в русский дефолт", () => {
+void test("buildDistillMessage — незнакомый lang сваливается в русский дефолт", () => {
   const msg = buildDistillMessage(QA, undefined);
   assert.ok(msg.includes("[Настройка core memory]"));
 });

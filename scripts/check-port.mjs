@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Iva port preflight check — thin CLI wrapper over scripts/lib/ports.mjs.
+// Iva port preflight check — thin CLI wrapper over scripts/lib/ports.ts.
 //
 //   node scripts/check-port.mjs            # IVA_PORT from .env (or 8723)
 //   node scripts/check-port.mjs 8723       # specific port
@@ -8,7 +8,7 @@
 //
 // Exit code: 0 — free, 1 — occupied, 2 — usage error.
 
-import { defaultChecker, PortSelector, readIvaPort } from "./lib/ports.mjs";
+import { defaultChecker, PortSelector, readIvaPort } from "./lib/ports.ts";
 
 // Reporter: output formatting is decoupled from the check logic (SRP).
 const reporter = {

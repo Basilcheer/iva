@@ -1,11 +1,11 @@
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
-import { parseOffsetFile, serializeOffsetFile } from "../lib/offset-store.mjs";
+import { parseOffsetFile, serializeOffsetFile } from "../lib/offset-store.ts";
 import { OFFSET_FILE, DATA_DIR, log } from "./config.mjs";
 import { tg } from "./transport.mjs";
 
 // offset: null ⇒ no file (first run) — distinguish from a genuine offset 0.
-// delivered: update_id последнего доставленного в eve апдейта (см. offset-store.mjs).
+// delivered: update_id последнего доставленного в eve апдейта (см. offset-store.ts).
 async function loadOffset({
   file = OFFSET_FILE,
   readFileImpl = readFile,

@@ -1,4 +1,4 @@
-// Self-check for env-file — run: node scripts/lib/env-file.test.mjs
+// Self-check for env-file — run: node scripts/lib/env-file.test.ts
 import { strict as assert } from "node:assert";
 import {
   chmod,
@@ -17,7 +17,7 @@ import {
   readEnvValues,
   upsertEnv,
   writeEnvAtomicSync,
-} from "./env-file.mjs";
+} from "./env-file.ts";
 
 const dir = await mkdtemp(join(tmpdir(), "env-file-test-"));
 const p = join(dir, ".env");
@@ -95,7 +95,9 @@ assert.throws(
         throw new Error("injected directory sync failure");
       },
     }),
-  (error) =>
+  (error: unknown) =>
+    error instanceof Error &&
+    "code" in error &&
     error.code === "EENV_DURABILITY" &&
     /file was replaced/.test(error.message) &&
     /durability is unconfirmed/.test(error.message),

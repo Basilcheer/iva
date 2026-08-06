@@ -6,7 +6,7 @@ import {
   collectorTakeExpired,
   createCollector,
 } from "../lib/telegram-collect.mjs";
-import { alreadyDelivered } from "../lib/offset-store.mjs";
+import { alreadyDelivered } from "../lib/offset-store.ts";
 import { isReplyToBot, migrateQueueFile } from "../lib/telegram-queue.mjs";
 import {
   ACCEPTANCE_ROUTE,

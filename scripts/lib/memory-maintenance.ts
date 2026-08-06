@@ -7,6 +7,7 @@ import {
   rmSync,
   statSync,
   writeFileSync,
+  type Stats,
 } from "node:fs";
 import { resolve } from "node:path";
 
@@ -15,11 +16,43 @@ import { resolve } from "node:path";
 export const GITHUB_BLOB_GUARD_BYTES = 90 * 1024 * 1024;
 export const MEMORY_REPORT_MAX_AGE_MS = 48 * 60 * 60 * 1000;
 
-function commandStatus(result) {
+interface GitCommandResult {
+  status?: number | null;
+  code?: number | null;
+  stdout?: string;
+  stderr?: string;
+}
+
+type FileInfo = Pick<Stats, "isFile" | "isSymbolicLink" | "size">;
+
+export interface OversizeWorkingTreeFile {
+  path: string;
+  size: number;
+}
+
+interface OversizeScanOptions {
+  vaultPath: string;
+  runGit: (args: string[]) => GitCommandResult;
+  stat?: (path: string) => FileInfo;
+  limitBytes?: number;
+}
+
+type MemoryProblemKey = "fixed" | "review" | "duplicates" | "skipped_oversize";
+
+export interface MemoryReportProblem {
+  key: MemoryProblemKey;
+  count: number;
+}
+
+export type MemoryMaintenanceReportResult =
+  | { status: "missing" | "stale" | "invalid"; problems: [] }
+  | { status: "fresh"; problems: MemoryReportProblem[] };
+
+function commandStatus(result: GitCommandResult | null | undefined): number {
   return result?.status ?? result?.code ?? 1;
 }
 
-function firstNonEmptyLine(text) {
+function firstNonEmptyLine(text: string | null | undefined): string {
   return (
     String(text ?? "")
       .split(/\r?\n/)
@@ -28,12 +61,21 @@ function firstNonEmptyLine(text) {
   );
 }
 
+function hasErrorCode(error: unknown, code: string): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    error.code === code
+  );
+}
+
 export function scanOversizeWorkingTreeFiles({
   vaultPath,
   runGit,
   stat = lstatSync,
   limitBytes = GITHUB_BLOB_GUARD_BYTES,
-}) {
+}: OversizeScanOptions): OversizeWorkingTreeFile[] {
   const listed = runGit([
     "ls-files",
     "--others",
@@ -53,13 +95,13 @@ export function scanOversizeWorkingTreeFiles({
         .filter(Boolean),
     ),
   ];
-  const oversized = [];
+  const oversized: OversizeWorkingTreeFile[] = [];
   for (const path of paths) {
     let info;
     try {
       info = stat(resolve(vaultPath, path));
     } catch (error) {
-      if (error?.code === "ENOENT") continue; // deleted between git listing and stat
+      if (hasErrorCode(error, "ENOENT")) continue; // deleted between git listing and stat
       throw error;
     }
     // lstat measures the blob stored for a symlink, not the file it points outside the vault to.
@@ -69,11 +111,14 @@ export function scanOversizeWorkingTreeFiles({
   return oversized;
 }
 
-export function formatMegabytes(bytes) {
+export function formatMegabytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-export function classifyGitPushError(stderr) {
+export function classifyGitPushError(stderr: string): {
+  kind: "oversize" | "auth" | "other";
+  firstLine: string;
+} {
   const text = String(stderr ?? "");
   const firstLine = firstNonEmptyLine(text) || "unknown git error";
   if (/GH001|exceeds\s+GitHub(?:\.com)?['’]s\s+file size limit/i.test(text)) {
@@ -89,22 +134,38 @@ export function classifyGitPushError(stderr) {
   return { kind: "other", firstLine };
 }
 
-export function memoryReportProblems(report) {
+export function memoryReportProblems(report: unknown): MemoryReportProblem[] {
   if (!report || typeof report !== "object" || Array.isArray(report)) return [];
-  return ["fixed", "review", "duplicates", "skipped_oversize"]
-    .filter((key) => Number.isFinite(report[key]) && report[key] !== 0)
-    .map((key) => ({ key, count: report[key] }));
+  const fields = report as Record<string, unknown>;
+  const keys: readonly MemoryProblemKey[] = [
+    "fixed",
+    "review",
+    "duplicates",
+    "skipped_oversize",
+  ];
+  return keys.flatMap((key) => {
+    const count = fields[key];
+    return typeof count === "number" && Number.isFinite(count) && count !== 0
+      ? [{ key, count }]
+      : [];
+  });
 }
 
 export function readMemoryMaintenanceReport(
-  reportPath,
-  { now = Date.now(), maxAgeMs = MEMORY_REPORT_MAX_AGE_MS } = {},
-) {
+  reportPath: string,
+  {
+    now = Date.now(),
+    maxAgeMs = MEMORY_REPORT_MAX_AGE_MS,
+  }: {
+    now?: number;
+    maxAgeMs?: number;
+  } = {},
+): MemoryMaintenanceReportResult {
   if (!existsSync(reportPath)) return { status: "missing", problems: [] };
   try {
     const ageMs = now - statSync(reportPath).mtimeMs;
     if (ageMs >= maxAgeMs) return { status: "stale", problems: [] };
-    const report = JSON.parse(readFileSync(reportPath, "utf8"));
+    const report: unknown = JSON.parse(readFileSync(reportPath, "utf8"));
     if (!report || typeof report !== "object" || Array.isArray(report)) {
       return { status: "invalid", problems: [] };
     }
@@ -114,9 +175,12 @@ export function readMemoryMaintenanceReport(
   }
 }
 
-export function recordSkippedOversize(reportPath, count) {
+export function recordSkippedOversize(
+  reportPath: string,
+  count: number,
+): boolean {
   if (!existsSync(reportPath)) return false;
-  let report;
+  let report: unknown;
   try {
     report = JSON.parse(readFileSync(reportPath, "utf8"));
   } catch {
@@ -124,12 +188,13 @@ export function recordSkippedOversize(reportPath, count) {
   }
   if (!report || typeof report !== "object" || Array.isArray(report))
     return false;
+  const fields = report as Record<string, unknown>;
 
   const tmp = `${reportPath}.tmp-${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
   try {
     writeFileSync(
       tmp,
-      `${JSON.stringify({ ...report, skipped_oversize: count }, null, 2)}\n`,
+      `${JSON.stringify({ ...fields, skipped_oversize: count }, null, 2)}\n`,
       "utf8",
     );
     chmodSync(tmp, statSync(reportPath).mode & 0o777);

@@ -567,3 +567,17 @@ test` now uses `node --test`.
 - A local reproduction of the CI userbot gate creates `.venv-userbot/` in the
   repository root. Prettier traversed that generated environment on later local
   runs, so the environment is now explicitly ignored.
+- PR-1 converts 13 leaf modules and 10 dedicated tests, removes three superseded
+  declarations, and lowers the `.mjs` ratchet from 161 to 138. `core-cap`,
+  `model-summary`, and `progress` already have characterization coverage through
+  `core-clamp.test.mjs` and `update-ui.test.mjs`; no pre-conversion test gap was
+  present in this batch.
+- PR-1 keeps permissive runtime coercion at the core-interview and mock-provider
+  fixture boundaries while exposing strict types to callers. Narrow lint
+  suppressions document those two legacy coercions; application JSON boundaries
+  use `unknown` and explicit record guards.
+- PR-1 review identified three pre-existing behavior gaps, deliberately deferred
+  from the conversion commit: the oversize-memory scan omits files present only
+  in the Git index, the synchronous Docker port probe has no timeout, and
+  `upsertEnv` accepts key names outside its parser grammar. Each requires its own
+  regression test and behavior commit.

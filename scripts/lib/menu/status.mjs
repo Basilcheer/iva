@@ -6,7 +6,7 @@
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
-import { readEnvValues } from "../env-file.mjs";
+import { readEnvValues } from "../env-file.ts";
 import { CATALOG } from "../model-catalog.mjs";
 import { SEARCH_CATALOG } from "../search-catalog.mjs";
 import { readEntries, summarize } from "../usage.mjs";

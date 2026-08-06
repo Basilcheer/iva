@@ -2,13 +2,13 @@ import { execFile } from "node:child_process";
 import { join } from "node:path";
 import { mkdir, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
-import { readEnvFresh } from "../lib/env-file.mjs";
+import { readEnvFresh } from "../lib/env-file.ts";
 import {
   inspectUpstream,
   markVersionNotified,
   updateOffer,
 } from "../lib/update-check.mjs";
-import { modelSummary } from "../lib/model-summary.mjs";
+import { modelSummary } from "../lib/model-summary.ts";
 import { acquireUpdateLock, releaseUpdateLock } from "../lib/update-safety.mjs";
 import { getLang, tr } from "#lib/i18n.mjs";
 import {

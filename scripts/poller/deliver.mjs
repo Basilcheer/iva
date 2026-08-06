@@ -2,7 +2,7 @@ import {
   addTelegramQueueReceipt,
   TELEGRAM_ACCEPTANCE_KIND_HEADER,
 } from "#lib/telegram-acceptance.mjs";
-import { classifyDeliverStatus } from "../lib/deliver-policy.mjs";
+import { classifyDeliverStatus } from "../lib/deliver-policy.ts";
 import { tr } from "#lib/i18n.mjs";
 import {
   ROUTE,
@@ -17,7 +17,7 @@ import { tg } from "./transport.mjs";
 import { chatKey } from "./offset.mjs";
 
 // Deliver one update to the local eve (we mimic a webhook). Three failure classes (see
-// deliver-policy.mjs): retry — network/5xx/408/425/429, fast backoff, forever; config —
+// deliver-policy.ts): retry — network/5xx/408/425/429, fast backoff, forever; config —
 // 401/403/404 mean the secret/route is broken, messages must NOT be thrown away, so
 // retry forever with a LONG backoff + alert the owner; drop-class (other 4xx) — eve
 // не даёт надёжного признака «апдейт битый навсегда» (тот же 409 может быть временным

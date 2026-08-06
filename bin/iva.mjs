@@ -21,8 +21,8 @@ import { join, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir, tmpdir } from "node:os";
 import { createInterface } from "node:readline/promises";
-import { modelSummary } from "../scripts/lib/model-summary.mjs";
-import { createTerminalProgress } from "../scripts/lib/progress.mjs";
+import { modelSummary } from "../scripts/lib/model-summary.ts";
+import { createTerminalProgress } from "../scripts/lib/progress.ts";
 import { quarantinePath, resetStateTargets } from "../scripts/lib/wf-store.mjs";
 import {
   createTelegramUpdateReporter,
@@ -32,10 +32,10 @@ import {
 import {
   generateAssistantBearer,
   isAssistantBearer,
-} from "../scripts/lib/assistant-auth.mjs";
-import { parseEnvText, writeEnvAtomicSync } from "../scripts/lib/env-file.mjs";
-import { classifyAgentListeners } from "../scripts/lib/listener-security.mjs";
-import { readMemoryMaintenanceReport } from "../scripts/lib/memory-maintenance.mjs";
+} from "../scripts/lib/assistant-auth.ts";
+import { parseEnvText, writeEnvAtomicSync } from "../scripts/lib/env-file.ts";
+import { classifyAgentListeners } from "../scripts/lib/listener-security.ts";
+import { readMemoryMaintenanceReport } from "../scripts/lib/memory-maintenance.ts";
 import {
   cleanupSystemdUnits,
   createSystemdControl,

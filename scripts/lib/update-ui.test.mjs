@@ -11,8 +11,8 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { modelSummary } from "./model-summary.mjs";
-import { createTerminalProgress } from "./progress.mjs";
+import { modelSummary } from "./model-summary.ts";
+import { createTerminalProgress } from "./progress.ts";
 import {
   createTelegramUpdateReporter,
   UPDATE_LOADER,

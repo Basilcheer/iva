@@ -18,14 +18,14 @@ import {
 } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { CORE_CAP } from "../lib/core-cap.mjs";
+import { CORE_CAP } from "../lib/core-cap.ts";
 import {
   classifyGitPushError,
   formatMegabytes,
   recordSkippedOversize,
   scanOversizeWorkingTreeFiles,
-} from "../lib/memory-maintenance.mjs";
-import { notificationChat } from "../lib/notification-chat.mjs";
+} from "../lib/memory-maintenance.ts";
+import { notificationChat } from "../lib/notification-chat.ts";
 import { clampCore } from "./core-clamp.mjs";
 
 const VAULT = resolve(process.env.ASSISTANT_VAULT_DIR ?? "vault");

@@ -8,7 +8,7 @@
 // (web_search.ts читает process.env), поэтому после записи предлагаем restart-offer —
 // plain sc("restart","iva.service"), НИКОГДА restartAgent (диалоги в .workflow-data живы).
 
-import { readEnvValues, upsertEnv } from "../env-file.mjs";
+import { readEnvValues, upsertEnv } from "../env-file.ts";
 import { SEARCH_CATALOG, checkSearchKey } from "../search-catalog.mjs";
 
 const SID = "srch";

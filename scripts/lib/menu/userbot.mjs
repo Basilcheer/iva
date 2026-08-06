@@ -9,7 +9,7 @@
 // синхронно, показываем заглушку и перерисовываем экран по завершении.
 import { execFile } from "node:child_process";
 import { join } from "node:path";
-import { readEnvValues, upsertEnv } from "../env-file.mjs";
+import { readEnvValues, upsertEnv } from "../env-file.ts";
 import { probeUserbotHealth } from "../userbot-health.mjs";
 
 const SID = "ub";

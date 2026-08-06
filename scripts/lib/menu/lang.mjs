@@ -3,7 +3,7 @@
 // .env AGENT_LANGUAGE, чтобы node --env-file потребители (cron-скрипты, init-vault) были
 // согласованы на своём следующем запуске без правок.
 import { writeSettings } from "#lib/settings.mjs";
-import { upsertEnv } from "../env-file.mjs";
+import { upsertEnv } from "../env-file.ts";
 
 export default {
   parent: "r",

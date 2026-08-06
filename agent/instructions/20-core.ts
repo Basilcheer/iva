@@ -1,7 +1,7 @@
 import { defineDynamic, defineInstructions } from "eve/instructions";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { CORE_CAP } from "../../scripts/lib/core-cap.mjs";
+import { CORE_CAP } from "../../scripts/lib/core-cap.ts";
 import { clampCore } from "../../scripts/memory/core-clamp.mjs";
 
 // Динамическая инструкция: каждый турн инжектит «ядро памяти» (vault/CORE.md) в системный

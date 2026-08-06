@@ -2,7 +2,7 @@ import { strict as assert } from "node:assert";
 import {
   generateAssistantBearer,
   isAssistantBearer,
-} from "./assistant-auth.mjs";
+} from "./assistant-auth.ts";
 
 const first = generateAssistantBearer();
 const second = generateAssistantBearer();

@@ -59,10 +59,25 @@ export const INTERVIEW = [
   },
 ];
 
+type InterviewAnswer = { q?: unknown; a?: unknown };
+
+function asInterviewAnswer(value: unknown): InterviewAnswer {
+  if (
+    value === null ||
+    (typeof value !== "object" && typeof value !== "function")
+  ) {
+    return {};
+  }
+  return { q: Reflect.get(value, "q"), a: Reflect.get(value, "a") };
+}
+
 // Пусто/скип показываем прочерком, чтобы архив читался и не рвал разметку.
-const orDash = (v) => {
-  const s =
-    typeof v === "string" ? v.trim() : v == null ? "" : String(v).trim();
+const orDash = (v: unknown): string => {
+  if (typeof v === "string") return v.trim() || "—";
+  if (v == null) return "—";
+  // Interview archives historically preserve JavaScript coercion for malformed scalar answers.
+  // eslint-disable-next-line @typescript-eslint/no-base-to-string
+  const s = String(v).trim();
   return s === "" ? "—" : s;
 };
 
@@ -70,11 +85,17 @@ const orDash = (v) => {
 // ПЕРЕЗАПИСЬ (одно интервью на юзера, прошлое не копим — актуально то, что сказали сейчас).
 // vaultDir приходит явным параметром (ASSISTANT_VAULT_DIR ?? "vault" считает вызывающий),
 // поэтому в тестах сюда легко подсунуть tmp-каталог. Возвращает путь записанного файла.
-export async function saveInterview(vaultDir, qa) {
+export async function saveInterview(
+  vaultDir: string,
+  qa: unknown,
+): Promise<string> {
   const items = Array.isArray(qa) ? qa : [];
   const stamp = new Date().toISOString(); // машинная дата в UTC — архив не для глаз, для ивы
   const body = items
-    .map((item) => `## ${orDash(item?.q)}\n\n${orDash(item?.a)}`)
+    .map((item) => {
+      const { q, a } = asInterviewAnswer(item);
+      return `## ${orDash(q)}\n\n${orDash(a)}`;
+    })
     .join("\n\n");
   const md = `# Core interview — ${stamp}\n\n${body}\n`;
   await mkdir(vaultDir, { recursive: true });
@@ -87,11 +108,14 @@ export async function saveInterview(vaultDir, qa) {
 // чтобы она сама сжала ответы в ядро. Вежливо, коротко, с ЯВНЫМ «ничего не выдумывай»
 // и упоминанием лимита 1200 (тот же MAX_CHARS, что режет 20-core.ts). lang: "ru"|"en",
 // незнакомое значение → русский (дефолт канала).
-export function buildDistillMessage(qa, lang) {
+export function buildDistillMessage(qa: unknown, lang: unknown): string {
   const items = Array.isArray(qa) ? qa : [];
   const ru = lang !== "en";
   const block = items
-    .map((item, i) => `${i + 1}. ${orDash(item?.q)}\n— ${orDash(item?.a)}`)
+    .map((item, i) => {
+      const { q, a } = asInterviewAnswer(item);
+      return `${i + 1}. ${orDash(q)}\n— ${orDash(a)}`;
+    })
     .join("\n\n");
   if (ru) {
     return [

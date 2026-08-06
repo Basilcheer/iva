@@ -1,5 +1,8 @@
 /** Classify listeners for one TCP port from `ss -H -ltn` output. */
-export function classifyAgentListeners(output, port) {
+export function classifyAgentListeners(
+  output: unknown,
+  port: string | number,
+): "absent" | "loopback" | "exposed" {
   const suffix = `:${port}`;
   const addresses = String(output)
     .split("\n")

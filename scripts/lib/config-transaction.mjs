@@ -8,7 +8,7 @@ import {
   rmSync,
 } from "node:fs";
 import { dirname } from "node:path";
-import { parseEnvText, writeEnvAtomicSync } from "./env-file.mjs";
+import { parseEnvText, writeEnvAtomicSync } from "./env-file.ts";
 import { validateModelSelection } from "./model-validation.mjs";
 
 const JOURNAL_VERSION = 1;

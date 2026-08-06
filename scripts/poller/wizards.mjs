@@ -10,9 +10,9 @@ import {
   validateModelSelection,
 } from "../lib/model-validation.mjs";
 import { getAccessToken, runDeviceCodeLogin } from "../lib/codex-oauth.mjs";
-import { compactNumber, modelSummary } from "../lib/model-summary.mjs";
+import { compactNumber, modelSummary } from "../lib/model-summary.ts";
 import { getLang, tr } from "#lib/i18n.mjs";
-import { readEnvValues, upsertEnv } from "../lib/env-file.mjs";
+import { readEnvValues, upsertEnv } from "../lib/env-file.ts";
 import { createFlows } from "../lib/tg-flow.mjs";
 import { ALLOWED, DATA_DIR_ABS, ENV_PATH, log } from "./config.mjs";
 import { reply, sc, tg } from "./transport.mjs";

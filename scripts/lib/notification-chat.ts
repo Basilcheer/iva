@@ -1,4 +1,6 @@
-export function notificationChat(env = process.env) {
+export function notificationChat(
+  env: Record<string, string | undefined> = process.env,
+): string {
   const digest = String(env.TELEGRAM_DIGEST_CHAT_ID ?? "").trim();
   if (digest) return digest;
   return (
