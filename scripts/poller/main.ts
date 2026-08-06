@@ -52,9 +52,9 @@ type ControlModule = {
 };
 
 const queueModulePath = "./queue.mjs";
-const routingModulePath = "./routing.mjs";
+const routingModulePath = "./routing.ts";
 const updateFlowModulePath = "./update-flow.ts";
-const controlModulePath = "./control.mjs";
+const controlModulePath = "./control.ts";
 const wizardsModulePath = "./wizards.ts";
 const queue = (await import(queueModulePath)) as QueueModule;
 const routing = (await import(routingModulePath)) as RoutingModule;

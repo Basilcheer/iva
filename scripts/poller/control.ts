@@ -93,9 +93,9 @@ type ControlTransport = (
 ) => Promise<TelegramResult>;
 
 const menuModulePath: string = "../lib/menu/index.mjs";
-const deliverModulePath: string = "./deliver.mjs";
+const deliverModulePath: string = "./deliver.ts";
 const queueModulePath: string = "./queue.mjs";
-const routingModulePath: string = "./routing.mjs";
+const routingModulePath: string = "./routing.ts";
 const { createMenu } = (await import(menuModulePath)) as {
   createMenu: CreateMenu;
 };

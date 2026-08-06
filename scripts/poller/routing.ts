@@ -9,6 +9,11 @@ import {
   shouldQueueBusyUpdate,
   TELEGRAM_QUEUE_FATAL_DURABILITY,
 } from "../lib/telegram-queue.ts";
+import type {
+  TelegramQueueDocument,
+  TelegramQueueMessage,
+  TelegramQueueUpdate,
+} from "../lib/telegram-queue.ts";
 import {
   getChatStatus,
   isRunning,
@@ -25,8 +30,73 @@ import {
   log,
 } from "./config.ts";
 import { chatKey } from "./offset.ts";
-import { pacedDeliver } from "./deliver.mjs";
-import {
+import { pacedDeliver } from "./deliver.ts";
+
+type MaybePromise<T> = T | Promise<T>;
+type ErrorLike = { code?: unknown; message?: unknown };
+type Status = Record<string, unknown>;
+type DeliveryResult = boolean | "handled";
+type DeliveryOptions = {
+  onAcceptanceFailure?: (details?: unknown) => MaybePromise<unknown>;
+  timeoutMs?: number;
+  retryAcceptanceTimeout?: boolean;
+  route?: string;
+  acceptedStatus?: number;
+  queueReceipt?: boolean;
+  retry?: boolean;
+};
+type DeliverImpl = (
+  update: TelegramQueueUpdate,
+  options?: DeliveryOptions,
+) => MaybePromise<DeliveryResult>;
+type QueuePhase =
+  | { state: "delivering"; baselineGeneration: number }
+  | {
+      state: "awaiting-running";
+      baselineGeneration: number;
+      acceptedAt: number;
+    }
+  | { state: "running"; baselineGeneration: number; generation: number };
+type StatusImpl = (key: string) => Status | null;
+type SetStatusIfImpl = (
+  key: string,
+  expected: Status,
+  patch: Status,
+) => Status | null;
+type QueueModule = {
+  acknowledgeQueued: (
+    update: TelegramQueueUpdate,
+    count: number,
+  ) => Promise<void>;
+  clearFailedDirectIngress: (
+    key: string,
+    options: {
+      baselineGeneration: number;
+      startedAt: number;
+      statusImpl: StatusImpl;
+      setStatusIfImpl: SetStatusIfImpl;
+      deleteMessageImpl: (
+        key: string,
+        messageId: unknown,
+      ) => MaybePromise<unknown>;
+      now: () => number;
+    },
+  ) => Promise<boolean>;
+  deleteStaleWorkingMessage: (key: string, messageId: unknown) => Promise<void>;
+  loadQueue: () => Promise<TelegramQueueDocument>;
+  QUEUE_DELIVERY_TIMEOUT_MS: number;
+  QUEUE_DRAIN_BUDGET_MS: number;
+  QUEUE_FILE: string;
+  queueDrainRotation: { afterKey: string | null };
+  queueInFlight: Map<string, QueuePhase>;
+  queueSettleUntil: Map<string, number>;
+  sendStaleRunNotice: (key: string, text: string) => Promise<void>;
+  statusGeneration: (status: Status | null | undefined) => number;
+  undrainableLegacyLogged: Set<string>;
+};
+
+const queueModulePath = "./queue.mjs";
+const {
   acknowledgeQueued,
   clearFailedDirectIngress,
   deleteStaleWorkingMessage,
@@ -40,13 +110,33 @@ import {
   sendStaleRunNotice,
   statusGeneration,
   undrainableLegacyLogged,
-} from "./queue.mjs";
+} = (await import(queueModulePath)) as QueueModule;
+
+const errorMessage = (error: unknown) => (error as ErrorLike).message;
+const errorCode = (error: unknown) =>
+  (error as ErrorLike | null | undefined)?.code;
+const pacedDelivery = pacedDeliver as unknown as DeliverImpl;
+
+type DirectDeliveryOptions = {
+  key?: string | null;
+  deliverImpl?: DeliverImpl;
+  statusImpl?: StatusImpl;
+  setStatusIfImpl?: SetStatusIfImpl;
+  sendFailureImpl?: (key: string, text: string) => MaybePromise<unknown>;
+  deleteMessageImpl?: (
+    key: string,
+    messageId: unknown,
+  ) => MaybePromise<unknown>;
+  now?: () => number;
+  trImpl?: (en: string, ru: string) => string;
+  logImpl?: (...parts: unknown[]) => void;
+};
 
 async function deliverDirectUpdate(
-  update,
+  update: TelegramQueueUpdate,
   {
     key = chatKey(update),
-    deliverImpl = pacedDeliver,
+    deliverImpl = pacedDelivery,
     statusImpl = getChatStatus,
     setStatusIfImpl = setChatStatusIf,
     sendFailureImpl = sendStaleRunNotice,
@@ -54,7 +144,7 @@ async function deliverDirectUpdate(
     now = Date.now,
     trImpl = tr,
     logImpl = log,
-  } = {},
+  }: DirectDeliveryOptions = {},
 ) {
   // The acceptance wrapper does not cover callback_query dispatch. Keeping this
   // call option-free also preserves the old webhook path for real callbacks and
@@ -82,7 +172,7 @@ async function deliverDirectUpdate(
     } catch (error) {
       logImpl(
         `direct delivery status cleanup failed for ${key}:`,
-        error.message,
+        errorMessage(error),
       );
     }
 
@@ -97,7 +187,10 @@ async function deliverDirectUpdate(
         ),
       );
     } catch (error) {
-      logImpl(`direct delivery notification failed for ${key}:`, error.message);
+      logImpl(
+        `direct delivery notification failed for ${key}:`,
+        errorMessage(error),
+      );
     }
   };
 
@@ -113,7 +206,7 @@ async function deliverDirectUpdate(
 }
 
 export async function routeMessageUpdate(
-  update,
+  update: TelegramQueueUpdate,
   {
     chatKeyImpl = chatKey,
     loadQueueImpl = loadQueue,
@@ -122,10 +215,10 @@ export async function routeMessageUpdate(
     queueCountImpl = queueCount,
     replyToBotImpl = isReplyToBot,
     shouldQueueImpl = shouldQueueBusyUpdate,
-    enqueueImpl = (key, candidate) =>
+    enqueueImpl = (key: string, candidate: TelegramQueueUpdate) =>
       enqueueQueueFile(QUEUE_FILE, key, candidate),
     acknowledgeImpl = acknowledgeQueued,
-    deliverImpl = pacedDeliver,
+    deliverImpl = pacedDelivery,
     statusImpl = getChatStatus,
     setStatusIfImpl = setChatStatusIf,
     sendFailureImpl = sendStaleRunNotice,
@@ -135,6 +228,41 @@ export async function routeMessageUpdate(
     allowedUserIds = ALLOWED,
     botUsername = BOT_USERNAME,
     logImpl = log,
+  }: {
+    chatKeyImpl?: (update: TelegramQueueUpdate) => string | null;
+    loadQueueImpl?: () => MaybePromise<TelegramQueueDocument>;
+    runningImpl?: (key: string) => boolean;
+    inFlight?: Map<string, QueuePhase>;
+    queueCountImpl?: (queue: TelegramQueueDocument, key?: string) => number;
+    replyToBotImpl?: (message: TelegramQueueMessage) => boolean;
+    shouldQueueImpl?: (
+      update: TelegramQueueUpdate,
+      options: {
+        allowedUserIds: ReadonlySet<string>;
+        botUsername: unknown;
+      },
+    ) => boolean;
+    enqueueImpl?: (
+      key: string,
+      candidate: TelegramQueueUpdate,
+    ) => MaybePromise<{ count: number }>;
+    acknowledgeImpl?: (
+      update: TelegramQueueUpdate,
+      count: number,
+    ) => MaybePromise<unknown>;
+    deliverImpl?: DeliverImpl;
+    statusImpl?: StatusImpl;
+    setStatusIfImpl?: SetStatusIfImpl;
+    sendFailureImpl?: (key: string, text: string) => MaybePromise<unknown>;
+    deleteMessageImpl?: (
+      key: string,
+      messageId: unknown,
+    ) => MaybePromise<unknown>;
+    now?: () => number;
+    trImpl?: (en: string, ru: string) => string;
+    allowedUserIds?: ReadonlySet<string>;
+    botUsername?: unknown;
+    logImpl?: (...parts: unknown[]) => void;
   } = {},
 ) {
   const key = chatKeyImpl(update);
@@ -151,7 +279,7 @@ export async function routeMessageUpdate(
       } catch (error) {
         logImpl(
           `queue enqueue failed for update ${update.update_id}:`,
-          error.message,
+          errorMessage(error),
         );
         return "enqueue-failed";
       }
@@ -177,15 +305,18 @@ export async function drainReadyQueueHeads({
   loadImpl = loadQueue,
   runningImpl = isRunning,
   statusImpl = getChatStatus,
-  deliverImpl = (update, { timeoutMs }) =>
-    pacedDeliver(update, {
+  deliverImpl = (
+    update: TelegramQueueUpdate,
+    { timeoutMs }: DeliveryOptions = {},
+  ) =>
+    pacedDelivery(update, {
       route: ACCEPTANCE_ROUTE,
       acceptedStatus: 204,
       queueReceipt: true,
       retry: false,
       timeoutMs,
     }),
-  acknowledgeImpl = (key, updateId) =>
+  acknowledgeImpl = (key: string, updateId: number) =>
     acknowledgeQueueHead(QUEUE_FILE, key, updateId),
   legacyAllowedUserIds = ALLOWED,
   now = Date.now,
@@ -195,10 +326,25 @@ export async function drainReadyQueueHeads({
   passBudgetMs = QUEUE_DRAIN_BUDGET_MS,
   deliveryTimeoutMs = QUEUE_DELIVERY_TIMEOUT_MS,
   gateWaitMs = RUN_STALE_MS,
+}: {
+  loadImpl?: () => MaybePromise<TelegramQueueDocument>;
+  runningImpl?: (key: string) => boolean;
+  statusImpl?: StatusImpl;
+  deliverImpl?: DeliverImpl;
+  acknowledgeImpl?: (key: string, updateId: number) => MaybePromise<unknown>;
+  legacyAllowedUserIds?: ReadonlySet<string>;
+  now?: () => number;
+  settleUntil?: Map<string, number>;
+  inFlight?: Map<string, QueuePhase>;
+  rotationState?: { afterKey: string | null };
+  passBudgetMs?: number;
+  deliveryTimeoutMs?: number;
+  gateWaitMs?: number;
 } = {}) {
   const snapshot = await loadImpl();
   const keys = [...new Set([...queueKeys(snapshot), ...inFlight.keys()])];
-  const previousIndex = keys.indexOf(rotationState.afterKey);
+  const previousIndex =
+    rotationState.afterKey === null ? -1 : keys.indexOf(rotationState.afterKey);
   const orderedKeys =
     previousIndex < 0
       ? keys
@@ -255,11 +401,14 @@ export async function drainReadyQueueHeads({
     lastAttempted = key;
     const baselineGeneration = currentGeneration;
     inFlight.set(key, { state: "delivering", baselineGeneration });
-    let accepted = false;
+    let accepted: DeliveryResult = false;
     try {
       accepted = await deliverImpl(update, { timeoutMs });
     } catch (error) {
-      log(`queued update ${item.updateId} delivery failed:`, error.message);
+      log(
+        `queued update ${item.updateId} delivery failed:`,
+        errorMessage(error),
+      );
     }
     if (!accepted) {
       inFlight.delete(key);
@@ -293,14 +442,14 @@ export async function drainReadyQueueHeads({
       await acknowledgeImpl(key, item.updateId);
       settleUntil.set(key, now() + Math.max(SETTLE_MS, 0));
     } catch (error) {
-      if (error?.code === TELEGRAM_QUEUE_FATAL_DURABILITY) {
+      if (errorCode(error) === TELEGRAM_QUEUE_FATAL_DURABILITY) {
         inFlight.delete(key);
         rotationState.afterKey = null;
         throw error;
       }
       log(
         `queued update ${item.updateId} ack failed; head retained or restored:`,
-        error.message,
+        errorMessage(error),
       );
     }
   }
