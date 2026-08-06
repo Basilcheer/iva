@@ -7,7 +7,7 @@
 // сравнивается только нормализованный словарь: fields+body для (a),
 // outside[] + [start,end) секций по заголовку для (b).
 
-import "./lib/ts-esm-hooks.mjs";
+import "./lib/ts-esm-hooks.ts";
 import { readdirSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";

@@ -4,9 +4,21 @@
 //
 // Правило репо: ни одной module-level const с переведённой строкой — все подписи собираются
 // в render() через ctx.tr, иначе язык замёрзнет до рестарта.
+interface MenuButton {
+  text: string;
+  callback_data: string;
+}
+
+interface RootContext {
+  btn: (text: string, callbackData: string) => MenuButton;
+  tr: (english: string, russian: string) => string;
+}
+
+type RootState = Record<string, unknown>;
+
 export default {
   parent: null,
-  render(st, ctx) {
+  render(_state: RootState, ctx: RootContext) {
     const b = ctx.btn;
     const T = ctx.tr;
     const rows = [
@@ -44,5 +56,7 @@ export default {
       rows,
     };
   },
-  on() {},
+  on(...args: unknown[]) {
+    void args;
+  },
 };

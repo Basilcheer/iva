@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createFlows } from "../tg-flow.mjs";
+import { createFlows } from "../tg-flow.ts";
 import { createMenu } from "./index.mjs";
 
 // Тестируем ЛОГИКУ движка (парс грамматики, stale-политика, allowlist, close) на фейковом

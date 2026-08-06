@@ -14,7 +14,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join, resolve, sep } from "node:path";
-import { persistUpdateBranch, resolveUpdateTarget } from "./update-channel.mjs";
+import { persistUpdateBranch, resolveUpdateTarget } from "./update-channel.ts";
 
 const LOCK_TTL_MS = 6 * 60 * 60 * 1000;
 

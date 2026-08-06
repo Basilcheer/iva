@@ -10,18 +10,55 @@
 
 const TTL_MS = 15 * 60 * 1000; // как WIZARD_TTL_MS — совпадает с временем жизни codex device-code
 
+export type TelegramFlowResponse = {
+  ok: boolean;
+  result?: { message_id: number };
+  description?: string;
+};
+
+type TelegramFlowTransport = (
+  method: string,
+  params: Record<string, unknown>,
+) => Promise<TelegramFlowResponse>;
+
+type TelegramKeyboard = Array<Array<Record<string, unknown>>>;
+
+export type TelegramFlowState = {
+  flow: string;
+  chatId: number;
+  userId: number;
+  createdAt: number;
+  msgId: number | null;
+  provider: unknown;
+  modelOptions: unknown;
+  model: unknown;
+  efforts: unknown;
+  effort: unknown;
+  step: unknown;
+  awaitText: unknown;
+  screen: unknown;
+  page: number;
+  data: Record<string, unknown>;
+  [key: string]: unknown;
+};
+
+type CreateFlowsOptions = {
+  tg: TelegramFlowTransport;
+  log?: () => void;
+};
+
 // tg(method, params) -> { ok, result, description } (тонкая обёртка над Bot API моста).
 // log принимается по контракту для будущих обработчиков; примитивы ниже не логируют —
 // поведение обязано остаться дословным (тихий фолбэк при неудачной правке).
-export function createFlows({ tg, log = () => {} }) {
+export function createFlows({ tg, log = () => {} }: CreateFlowsOptions) {
   void log;
-  const flows = new Map(); // был `wizards`; ключ `${chatId}:${userId}`
+  const flows = new Map<string, TelegramFlowState>(); // был `wizards`; ключ `${chatId}:${userId}`
 
-  const key = (chatId, userId) => `${chatId}:${userId}`;
+  const key = (chatId: number, userId: number) => `${chatId}:${userId}`;
 
   // getWizard :371 — TTL-очистка при чтении. Континуации (codex-login) сверяют
   // identity: `flows.get(...) !== st` истинно и когда слот заменён, и когда протух.
-  function get(chatId, userId) {
+  function get(chatId: number, userId: number): TelegramFlowState | null {
     const k = key(chatId, userId);
     const st = flows.get(k);
     if (st && Date.now() - st.createdAt > TTL_MS) {
@@ -34,8 +71,13 @@ export function createFlows({ tg, log = () => {} }) {
   // newWizard :383 — identity-replace: перезаписывает любой ждущий флоу этого юзера.
   // Осиротевшие async-континуации старого объекта сверяют identity против стора и
   // сами себя отбрасывают. extra подмешивает поля в свежий стейт (напр. msgId меню).
-  function start(chatId, userId, flow, extra = {}) {
-    const st = {
+  function start(
+    chatId: number,
+    userId: number,
+    flow: string,
+    extra: Record<string, unknown> = {},
+  ): TelegramFlowState {
+    const st: TelegramFlowState = {
       flow,
       chatId,
       userId,
@@ -60,12 +102,16 @@ export function createFlows({ tg, log = () => {} }) {
   // Продлевает жизнь стейта. Зовёт только движок меню на каждом взаимодействии —
   // активные квиз/интервью не протухают на полуслове. Визарды /model//think НЕ
   // трогаются: их TTL намеренно равен времени жизни codex device-code.
-  function touch(st) {
+  function touch(st: TelegramFlowState): void {
     st.createdAt = Date.now();
   }
 
   // wizScreen :393 — правит единственное сообщение флоу на месте (первый раз шлёт).
-  async function screen(st, text, rows) {
+  async function screen(
+    st: TelegramFlowState,
+    text: string,
+    rows?: TelegramKeyboard | null,
+  ): Promise<void> {
     const reply_markup = rows ? { inline_keyboard: rows } : undefined;
     if (st.msgId) {
       const r = await tg("editMessageText", {
@@ -83,12 +129,16 @@ export function createFlows({ tg, log = () => {} }) {
       text,
       reply_markup,
     });
-    if (r.ok) st.msgId = r.result.message_id;
+    if (r.ok) st.msgId = r.result!.message_id;
   }
 
   // endWizard :406 — снимает стейт и показывает финальный экран. НОВОЕ: опциональные
   // rows (терминальный экран может нести кнопку «‹ Меню» — возврат в меню).
-  async function end(st, text, rows) {
+  async function end(
+    st: TelegramFlowState,
+    text: string,
+    rows?: TelegramKeyboard | null,
+  ): Promise<void> {
     flows.delete(key(st.chatId, st.userId));
     await screen(st, text, rows);
   }

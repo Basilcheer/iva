@@ -1,6 +1,7 @@
+/* eslint-disable @typescript-eslint/no-floating-promises -- Node's test runner owns registration promises. */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseAuthChallenge, extractCallbackQuery } from "./gws-auth.mjs";
+import { parseAuthChallenge, extractCallbackQuery } from "./gws-auth.ts";
 
 test("parseAuthChallenge extracts the Google URL and loopback port", () => {
   const log = [
@@ -10,6 +11,7 @@ test("parseAuthChallenge extracts the Google URL and loopback port", () => {
     "",
   ].join("\n");
   const r = parseAuthChallenge(log);
+  assert.ok(r);
   assert.equal(r.port, 44369);
   assert.ok(r.url.startsWith("https://accounts.google.com/o/oauth2/auth?"));
   assert.ok(r.url.includes("redirect_uri=http://localhost:44369"));
@@ -19,6 +21,7 @@ test("parseAuthChallenge accepts 127.0.0.1 loopback", () => {
   const log =
     "go: https://accounts.google.com/o/oauth2/auth?redirect_uri=http://127.0.0.1:51000&x=1";
   const r = parseAuthChallenge(log);
+  assert.ok(r);
   assert.equal(r.port, 51000);
 });
 

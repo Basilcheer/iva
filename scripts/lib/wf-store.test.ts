@@ -16,15 +16,16 @@ import {
   quarantineDir,
   quarantinePath,
   resetStateTargets,
-} from "./wf-store.mjs";
+} from "./wf-store.ts";
 
-test("quarantineDir переименовывает стор в *.trash-<штамп> с содержимым", () => {
+void test("quarantineDir переименовывает стор в *.trash-<штамп> с содержимым", () => {
   const root = mkdtempSync(join(tmpdir(), "wf-store-"));
   const dir = join(root, ".workflow-data");
   mkdirSync(dir);
   writeFileSync(join(dir, "run.json"), "{}");
   const dest = quarantineDir(dir, "2026-01-01T00-00-00-000Z");
   assert.equal(dest, `${dir}.trash-2026-01-01T00-00-00-000Z`);
+  assert.ok(dest);
   assert.ok(!existsSync(dir), "исходная директория должна исчезнуть");
   assert.ok(
     existsSync(join(dest, "run.json")),
@@ -33,7 +34,7 @@ test("quarantineDir переименовывает стор в *.trash-<штам
   assert.equal(statSync(dest).mode & 0o777, 0o700);
 });
 
-test("quarantinePath сохраняет файл и закрывает его права", () => {
+void test("quarantinePath сохраняет файл и закрывает его права", () => {
   const root = mkdtempSync(join(tmpdir(), "wf-store-file-"));
   const file = join(root, "telegram-queue.json");
   writeFileSync(file, '{"chat":["secret"]}');
@@ -42,18 +43,19 @@ test("quarantinePath сохраняет файл и закрывает его п
   const dest = quarantinePath(file, "2026-01-01");
 
   assert.equal(dest, `${file}.trash-2026-01-01`);
+  assert.ok(dest);
   assert.equal(readFileSync(dest, "utf8"), '{"chat":["secret"]}');
   assert.equal(statSync(dest).mode & 0o777, 0o600);
 });
 
-test("quarantinePath на отсутствующем пути — null, ничего не создаёт", () => {
+void test("quarantinePath на отсутствующем пути — null, ничего не создаёт", () => {
   const root = mkdtempSync(join(tmpdir(), "wf-store-"));
   const dir = join(root, ".workflow-data");
   assert.equal(quarantinePath(dir), null);
   assert.deepEqual(readdirSync(root), []);
 });
 
-test("старые directory-карантины ротируются, свежие остаются", () => {
+void test("старые directory-карантины ротируются, свежие остаются", () => {
   const root = mkdtempSync(join(tmpdir(), "wf-store-"));
   const dir = join(root, "store");
   for (const stamp of ["2026-01-01", "2026-01-02", "2026-01-03"]) {
@@ -66,7 +68,7 @@ test("старые directory-карантины ротируются, свежи
   ]);
 });
 
-test("старые file-карантины ротируются по тому же правилу", () => {
+void test("старые file-карантины ротируются по тому же правилу", () => {
   const root = mkdtempSync(join(tmpdir(), "wf-store-file-"));
   const file = join(root, "run-status.json");
   for (const stamp of ["2026-01-01", "2026-01-02", "2026-01-03"]) {
@@ -79,7 +81,7 @@ test("старые file-карантины ротируются по тому ж
   ]);
 });
 
-test("одинаковый operation stamp не перезаписывает существующий карантин", () => {
+void test("одинаковый operation stamp не перезаписывает существующий карантин", () => {
   const root = mkdtempSync(join(tmpdir(), "wf-store-collision-"));
   const file = join(root, "telegram-queue.json");
   writeFileSync(file, "first");
@@ -89,11 +91,13 @@ test("одинаковый operation stamp не перезаписывает с�
 
   assert.equal(first, `${file}.trash-same-stamp`);
   assert.equal(second, `${file}.trash-same-stamp-1`);
+  assert.ok(first);
+  assert.ok(second);
   assert.equal(readFileSync(first, "utf8"), "first");
   assert.equal(readFileSync(second, "utf8"), "second");
 });
 
-test("global reset plan includes workflow and all Telegram control-state targets", () => {
+void test("global reset plan includes workflow and all Telegram control-state targets", () => {
   const root = "/srv/iva";
   const data = "/var/lib/iva";
   assert.deepEqual(resetStateTargets(root, data), [

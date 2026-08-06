@@ -31,7 +31,7 @@ import {
   validateModelSelection,
 } from "./lib/model-validation.mjs";
 import { keptSetupWritePlan } from "./lib/setup-keep.ts";
-import { validateTimeZone } from "./lib/timezone.mjs";
+import { validateTimeZone } from "./lib/timezone.ts";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const SOURCE_ENV_PATH = join(ROOT, ".env");

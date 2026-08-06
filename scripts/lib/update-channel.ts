@@ -1,18 +1,36 @@
 export const DEFAULT_UPDATE_BRANCH = "main";
 export const UPDATE_BRANCH_CONFIG = "iva.updateBranch";
 
-function output(result) {
+export type GitResult = {
+  code: number;
+  stdout?: string;
+  stderr?: string;
+};
+
+export type Git = (...args: string[]) => Promise<GitResult>;
+
+type ResolveUpdateTargetOptions = {
+  git?: Git;
+  remote?: string;
+  defaultBranch?: string;
+};
+
+function output(result: GitResult): string {
   return String(result?.stdout ?? "").trim();
 }
 
-async function requireGit(git, ...args) {
+async function requireGit(git: Git, ...args: string[]): Promise<string> {
   const result = await git(...args);
   if (result.code !== 0)
     throw new Error(result.stderr || result.stdout || `git ${args[0]} failed`);
   return output(result);
 }
 
-async function fetchBranch(git, remote, branch) {
+async function fetchBranch(
+  git: Git,
+  remote: string,
+  branch: string,
+): Promise<string> {
   const valid = await git("check-ref-format", "--branch", branch);
   if (valid.code !== 0) throw new Error(`invalid update branch: ${branch}`);
   const fetched = await git("fetch", "--prune", remote, `refs/heads/${branch}`);
@@ -25,7 +43,7 @@ export async function resolveUpdateTarget({
   git,
   remote = "origin",
   defaultBranch = DEFAULT_UPDATE_BRANCH,
-} = {}) {
+}: ResolveUpdateTargetOptions = {}) {
   if (typeof git !== "function")
     throw new Error("update target resolver requires git");
   const currentBranch = await requireGit(
@@ -82,6 +100,9 @@ export async function resolveUpdateTarget({
   };
 }
 
-export async function persistUpdateBranch(git, branch) {
+export async function persistUpdateBranch(
+  git: Git,
+  branch: string,
+): Promise<void> {
   await requireGit(git, "config", "--local", UPDATE_BRANCH_CONFIG, branch);
 }

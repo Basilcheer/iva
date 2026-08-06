@@ -6,16 +6,60 @@ import { join } from "node:path";
 
 const PER_PAGE = 8;
 
+interface MenuButton {
+  text: string;
+  callback_data: string;
+}
+
+interface SkillsContext {
+  deps: { root: string };
+  tr: (english: string, russian: string) => string;
+  btn: (text: string, callbackData: string) => MenuButton;
+  backRow: (screenId: string) => MenuButton[];
+}
+
+interface SkillsState {
+  page?: number;
+}
+
+interface Skill {
+  name?: unknown;
+  description?: unknown;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function skillFrom(value: unknown): Skill {
+  return isRecord(value) ? value : {};
+}
+
+function displayText(value: unknown, fallback: string): string {
+  if (value === null || value === undefined) return fallback;
+  if (typeof value === "string") return value;
+  if (
+    typeof value === "number" ||
+    typeof value === "boolean" ||
+    typeof value === "bigint"
+  ) {
+    return String(value);
+  }
+  // eslint-disable-next-line @typescript-eslint/no-base-to-string -- JSON values retain the JavaScript screen's original String coercion.
+  return String(value);
+}
+
 export default {
   parent: "r",
-  render(st, ctx) {
+  render(st: SkillsState, ctx: SkillsContext) {
     const T = ctx.tr;
-    let skills;
+    let skills: unknown[] | null;
     try {
-      const data = JSON.parse(
+      const data: unknown = JSON.parse(
         readFileSync(join(ctx.deps.root, ".eve/agent-summary.json"), "utf8"),
       );
-      skills = Array.isArray(data?.skills) ? data.skills : [];
+      const candidate = isRecord(data) ? data.skills : undefined;
+      skills = Array.isArray(candidate) ? candidate : [];
     } catch {
       skills = null; // файла нет / битый — отличаем от «список пуст»
     }
@@ -42,16 +86,17 @@ export default {
     st.page = page;
     const body = skills
       .slice(page * PER_PAGE, page * PER_PAGE + PER_PAGE)
-      .map((s) => {
-        const name = String(s?.name ?? "?");
-        const desc = String(s?.description ?? "")
+      .map((value) => {
+        const skill = skillFrom(value);
+        const name = displayText(skill.name, "?");
+        const desc = displayText(skill.description, "")
           .replace(/\s+/g, " ")
           .trim()
           .slice(0, 60);
         return `• ${name}${desc ? ` — ${desc}` : ""}`;
       })
       .join("\n");
-    const rows = [];
+    const rows: MenuButton[][] = [];
     if (pages > 1) {
       rows.push([
         ctx.btn("‹", `iva_menu:sk:pg:${page > 0 ? page - 1 : 0}`),
@@ -68,5 +113,7 @@ export default {
       rows,
     };
   },
-  on() {},
+  on(...args: unknown[]) {
+    void args;
+  },
 };

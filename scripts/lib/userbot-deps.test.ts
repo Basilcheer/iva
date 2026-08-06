@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { userbotSyncArgs } from "./userbot-deps.mjs";
+import { userbotSyncArgs } from "./userbot-deps.ts";
 
-test("userbot install enforces hashes and exact environment sync", () => {
+void test("userbot install enforces hashes and exact environment sync", () => {
   assert.deepEqual(
     userbotSyncArgs({
       pythonPath: "/tmp/venv/bin/python",
@@ -21,7 +21,7 @@ test("userbot install enforces hashes and exact environment sync", () => {
   );
 });
 
-test("unhashed requirements are rejected during normal setup and update", () => {
+void test("unhashed requirements are rejected during normal setup and update", () => {
   assert.throws(
     () =>
       userbotSyncArgs({
@@ -33,7 +33,7 @@ test("unhashed requirements are rejected during normal setup and update", () => 
   );
 });
 
-test("rollback syncs the exact frozen environment and removes extras", () => {
+void test("rollback syncs the exact frozen environment and removes extras", () => {
   assert.deepEqual(
     userbotSyncArgs({
       pythonPath: "/tmp/venv/bin/python",

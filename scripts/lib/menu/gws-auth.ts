@@ -16,12 +16,42 @@ import { existsSync, openSync, closeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 
+export interface AuthChallenge {
+  url: string;
+  port: number;
+}
+
+export interface AuthSession extends AuthChallenge {
+  pid: number | undefined;
+  logPath: string;
+}
+
+export interface RelayResult {
+  ok: boolean;
+  status: number | undefined;
+  error?: string;
+}
+
+interface StartAuthOptions {
+  services?: string;
+  timeoutMs?: number;
+}
+
+interface RelayCodeOptions {
+  timeoutMs?: number;
+}
+
+function textValue(value: unknown): string {
+  // eslint-disable-next-line @typescript-eslint/no-base-to-string -- Preserve the legacy parser's String coercion for arbitrary inputs.
+  return value === null || value === undefined ? "" : String(value);
+}
+
 // --- Pure parsers (unit-tested in gws-auth.test.mjs) ---
 
 // From gws stdout, pull the Google consent URL and the loopback port it registered.
 // Returns { url, port } once gws has printed them, else null.
-export function parseAuthChallenge(logText) {
-  const text = String(logText ?? "");
+export function parseAuthChallenge(logText: unknown): AuthChallenge | null {
+  const text = textValue(logText);
   const url = text.match(/https:\/\/accounts\.google\.com\/[^\s]+/)?.[0];
   const port = text.match(
     /redirect_uri=http:\/\/(?:localhost|127\.0\.0\.1):(\d+)/,
@@ -32,8 +62,8 @@ export function parseAuthChallenge(logText) {
 
 // Normalize whatever the user pasted back into the raw callback query string (must carry `code`).
 // Accepts a full redirect URL, a bare `code=...&...` query, or a bare `4/...` authorization code.
-export function extractCallbackQuery(input) {
-  const text = String(input ?? "").trim();
+export function extractCallbackQuery(input: unknown): string | null {
+  const text = textValue(input).trim();
   if (!text) return null;
 
   let query = null;
@@ -71,7 +101,8 @@ export function childEnv() {
   return { ...process.env, PATH: path };
 }
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const sleep = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
 
 // Services we request at login. Single source of truth: the menu shows the same list to the user.
 export const AUTH_SERVICES = "gmail,calendar,drive,tasks";
@@ -82,7 +113,7 @@ export const AUTH_SERVICES = "gmail,calendar,drive,tasks";
 export async function startAuth({
   services = AUTH_SERVICES,
   timeoutMs = 6000,
-} = {}) {
+}: StartAuthOptions = {}): Promise<AuthSession | null> {
   const logPath = join(
     tmpdir(),
     `iva-gws-auth-${process.pid}-${Date.now()}.log`,
@@ -123,7 +154,11 @@ export async function startAuth({
 
 // Replay the callback query against the loopback listener on the server, completing the flow gws
 // is waiting on. Returns { ok, status }.
-export function relayCode(port, query, { timeoutMs = 8000 } = {}) {
+export function relayCode(
+  port: number,
+  query: string,
+  { timeoutMs = 8000 }: RelayCodeOptions = {},
+): Promise<RelayResult> {
   return new Promise((resolve) => {
     const req = httpRequest(
       {
@@ -134,11 +169,12 @@ export function relayCode(port, query, { timeoutMs = 8000 } = {}) {
         timeout: timeoutMs,
       },
       (res) => {
+        const status = res.statusCode;
         res.resume();
         res.on("end", () =>
           resolve({
-            ok: res.statusCode >= 200 && res.statusCode < 400,
-            status: res.statusCode,
+            ok: (status ?? 0) >= 200 && (status ?? 0) < 400,
+            status,
           }),
         );
       },
@@ -147,7 +183,9 @@ export function relayCode(port, query, { timeoutMs = 8000 } = {}) {
       req.destroy();
       resolve({ ok: false, status: 0 });
     });
-    req.on("error", (e) => resolve({ ok: false, status: 0, error: e.message }));
+    req.on("error", (error) =>
+      resolve({ ok: false, status: 0, error: error.message }),
+    );
     req.end();
   });
 }

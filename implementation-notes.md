@@ -694,3 +694,60 @@ the Node event loop is blocked` assertion once. Two later sequential suites hit
   79.27-79.29% branches, and 71.64% functions, with a conservative delta from
   PR-1 of at least +0.64 / +0.23 / +0.11 percentage points. Every observation
   remains above the enforced coverage baseline.
+- 2026-08-06 Asia/Tashkent: PR-3 adds characterization tests for the four leaf
+  modules that lacked direct coverage before conversion: update-channel,
+  ts-esm-hooks, menu/root, and menu/skills. They are isolated in three atomic
+  test commits and pass 26/26 on Node 24.19.0 before any production rename.
+- 2026-08-06 Asia/Tashkent: PR-3 conversion work is partitioned into three
+  file-owned local worktrees (core resolver/channel, runtime data helpers, and
+  menu leaves). Only the final integrated branch will reach GitHub. This keeps
+  the required PR sequence intact and avoids spending CodeRabbit's five-PR-per-
+  hour allowance on intermediate work; no manual bot review pings are used.
+- 2026-08-06 Asia/Tashkent: The core worktree transport branch was accidentally
+  pushed to origin despite the local-only integration boundary. It never had a
+  PR and therefore triggered no CodeRabbit review; the exact remote branch was
+  verified and deleted immediately after its commit was integrated locally.
+- 2026-08-06 Asia/Tashkent: Lead review of the integrated PR-3 conversion found
+  type-only contract narrowing that the green runtime suite could not expose:
+  `UsageRecord` had become readonly and `summarize` no longer accepted the
+  declaration's dynamic string window. The implementation now preserves those
+  public TypeScript contracts while retaining precise overloads; direct compile-
+  time/runtime tests cover mutable records, dynamic windows, and the legacy
+  missing-source fallback. The same review removed conversion-only optional
+  child-stream/kill guards and restored exact null-safe coercion semantics at
+  the usage and workflow-store boundaries.
+- 2026-08-06 Asia/Tashkent: Final pre-commit PR-3 verification is clean on Node
+  24.19.0: 632 tests, 628 passed, zero failed, and four expected macOS skips.
+  Coverage is 74.14% lines, 79.52% branches, and 71.87% functions, a conservative
+  increase of at least +0.66 / +0.23 / +0.23 percentage points over the highest
+  observed merged PR-2 baseline. Lint, formatting, the exact 95/95 `.mjs`
+  ratchet, typecheck, build, replica, autograph 343/343, security-defense 45/45,
+  deterministic userbot lock, and Python 3.12 userbot guardrail/health/compile
+  gates all pass. Scope is 13 production modules, 12 converted test files, and
+  three removed declarations.
+- 2026-08-06 Asia/Tashkent: `origin/main` remained at the PR-2 merge during the
+  required PR-3 rebase. Every local and Python 3.12 gate was repeated on the
+  committed tree. The second coverage run again reports 632 / 628 / 0 / 4 and
+  74.16% lines, 79.55% branches, 71.87% functions. The verified PR-3 coverage
+  range is therefore 74.14-74.16% lines, 79.52-79.55% branches, and 71.87%
+  functions, with conservative improvement over PR-2 of at least
+  +0.66 / +0.23 / +0.23 percentage points.
+- 2026-08-06 Asia/Tashkent: CodeRabbit identified a pre-existing service-runner
+  defect outside the conversion itself: `Promise.resolve(onFinish())` evaluates
+  a synchronous callback before the promise exists, so a thrown completion hook
+  could escape a child-process event and crash the bridge. A separate bugfix
+  invokes the hook inside `.then()` and retains the rejection catch. The focused
+  regression test failed on the inherited implementation and passes after the
+  fix; the conversion commit remains unchanged. Post-fix verification is clean:
+  633 tests, 629 passed, zero failed, and four expected macOS skips; coverage is
+  74.14% lines, 79.55% branches, and 71.97% functions, with a conservative
+  PR-2 delta of at least +0.66 / +0.23 / +0.33 percentage points. Lint,
+  formatting, the exact 95/95 `.mjs` ratchet, typecheck, build, replica,
+  autograph 343/343, security-defense 45/45, deterministic userbot lock, and
+  Python 3.12 userbot guardrail/health/compile gates all pass. CodeRabbit's
+  incremental review also noted that the first regression could pass without
+  proving the hook ran; the test now records and asserts the callback invocation
+  before checking that its synchronous failure was contained. The strengthened
+  test leaves the suite at 633 / 629 / 0 / 4; its final coverage run reports
+  74.14% lines, 79.56% branches, and 71.97% functions, extending the verified
+  PR-3 range to 74.14-74.16 / 79.52-79.56 / 71.87-71.97%.

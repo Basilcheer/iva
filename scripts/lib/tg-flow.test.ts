@@ -1,22 +1,31 @@
+/* eslint-disable @typescript-eslint/require-await -- async test double preserves the transport contract. */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createFlows } from "./tg-flow.mjs";
+import { createFlows, type TelegramFlowResponse } from "./tg-flow.ts";
+
+type TelegramCall = {
+  method: string;
+  params: Record<string, unknown>;
+};
 
 // Мок Bot API: копит вызовы и отвечает по очереди из responses (или ok по умолчанию).
 // Каждый ответ — то, что реально возвращает мостовая обёртка tg(): { ok, result, description }.
-function makeTg(responses = []) {
-  const calls = [];
+function makeTg(responses: TelegramFlowResponse[] = []) {
+  const calls: TelegramCall[] = [];
   let auto = 100;
-  const tg = async (method, params) => {
+  const tg = async (
+    method: string,
+    params: Record<string, unknown>,
+  ): Promise<TelegramFlowResponse> => {
     calls.push({ method, params });
-    if (responses.length) return responses.shift();
+    if (responses.length) return responses.shift()!;
     // По умолчанию — успех; sendMessage выдаёт растущий message_id.
     return { ok: true, result: { message_id: auto++ } };
   };
   return { tg, calls };
 }
 
-test("start сеет полный стейт и кладёт его в стор под ключом chatId:userId", () => {
+void test("start сеет полный стейт и кладёт его в стор под ключом chatId:userId", () => {
   const { tg } = makeTg();
   const flows = createFlows({ tg });
   const st = flows.start(10, 20, "model");
@@ -46,7 +55,7 @@ test("start сеет полный стейт и кладёт его в стор 
   assert.equal(flows.get(10, 20), st);
 });
 
-test("start(...extra) подмешивает поля (msgId меню) в свежий стейт", () => {
+void test("start(...extra) подмешивает поля (msgId меню) в свежий стейт", () => {
   const { tg } = makeTg();
   const flows = createFlows({ tg });
   const st = flows.start(1, 2, "menu", { msgId: 555, screen: "r" });
@@ -55,7 +64,7 @@ test("start(...extra) подмешивает поля (msgId меню) в све
   assert.equal(st.flow, "menu");
 });
 
-test("screen без msgId шлёт новое сообщение и запоминает message_id", async () => {
+void test("screen без msgId шлёт новое сообщение и запоминает message_id", async () => {
   const { tg, calls } = makeTg([{ ok: true, result: { message_id: 777 } }]);
   const flows = createFlows({ tg });
   const st = flows.start(5, 6, "think");
@@ -68,7 +77,7 @@ test("screen без msgId шлёт новое сообщение и запоми
   assert.equal(st.msgId, 777);
 });
 
-test("screen с msgId правит на месте, без фолбэка при ok", async () => {
+void test("screen с msgId правит на месте, без фолбэка при ok", async () => {
   const { tg, calls } = makeTg([{ ok: true }]);
   const flows = createFlows({ tg });
   const st = flows.start(5, 6, "think");
@@ -81,7 +90,7 @@ test("screen с msgId правит на месте, без фолбэка при
   assert.equal(st.msgId, 42);
 });
 
-test("«not modified» на правке считается успехом — фолбэка нет", async () => {
+void test("«not modified» на правке считается успехом — фолбэка нет", async () => {
   const { tg, calls } = makeTg([
     { ok: false, description: "Bad Request: message is not modified" },
   ]);
@@ -94,7 +103,7 @@ test("«not modified» на правке считается успехом — �
   assert.equal(st.msgId, 42);
 });
 
-test("правка не удалась (сообщение удалено) — фолбэк на новое сообщение с новым msgId", async () => {
+void test("правка не удалась (сообщение удалено) — фолбэк на новое сообщение с новым msgId", async () => {
   const { tg, calls } = makeTg([
     { ok: false, description: "Bad Request: message to edit not found" },
     { ok: true, result: { message_id: 900 } },
@@ -109,7 +118,7 @@ test("правка не удалась (сообщение удалено) — �
   assert.equal(st.msgId, 900);
 });
 
-test("identity-replace: повторный start заменяет слот; старый объект больше не в сторе", () => {
+void test("identity-replace: повторный start заменяет слот; старый объект больше не в сторе", () => {
   const { tg } = makeTg();
   const flows = createFlows({ tg });
   const first = flows.start(1, 2, "model");
@@ -120,7 +129,7 @@ test("identity-replace: повторный start заменяет слот; ст
   assert.equal(flows.get(1, 2) !== first, true);
 });
 
-test("get чистит протухший по TTL стейт и отдаёт null; touch продлевает жизнь", () => {
+void test("get чистит протухший по TTL стейт и отдаёт null; touch продлевает жизнь", () => {
   const { tg } = makeTg();
   const flows = createFlows({ tg });
   const st = flows.start(3, 4, "model");
@@ -135,7 +144,7 @@ test("get чистит протухший по TTL стейт и отдаёт nu
   assert.equal(flows.get(3, 4), st2);
 });
 
-test("end снимает стейт и рисует финальный экран с опциональными rows", async () => {
+void test("end снимает стейт и рисует финальный экран с опциональными rows", async () => {
   const { tg, calls } = makeTg([{ ok: true }]);
   const flows = createFlows({ tg });
   const st = flows.start(7, 8, "menu");
@@ -148,7 +157,7 @@ test("end снимает стейт и рисует финальный экра�
   assert.deepEqual(calls[0].params.reply_markup, { inline_keyboard: menuRow });
 });
 
-test("end без rows — терминальный экран без клавиатуры", async () => {
+void test("end без rows — терминальный экран без клавиатуры", async () => {
   const { tg, calls } = makeTg([{ ok: true, result: { message_id: 5 } }]);
   const flows = createFlows({ tg });
   const st = flows.start(7, 8, "model"); // msgId=null -> уйдёт как sendMessage
