@@ -119,6 +119,21 @@ export async function inspectUpstream({
   );
   const versionComparison = compareStableVersions(localVersion, remoteVersion);
   const hasCommitUpdate = behind > 0 && local !== remoteHead;
+  const hasVersionUpdate = hasCommitUpdate && versionComparison === 1;
+  if (hasVersionUpdate && remoteVersion !== null) {
+    return {
+      branch: target.branch,
+      currentBranch: target.currentBranch,
+      legacyMigration: target.legacyMigration,
+      local,
+      remote: remoteHead,
+      behind,
+      localVersion,
+      remoteVersion,
+      hasCommitUpdate,
+      hasVersionUpdate: true as const,
+    };
+  }
   return {
     branch: target.branch,
     currentBranch: target.currentBranch,
@@ -129,7 +144,7 @@ export async function inspectUpstream({
     localVersion,
     remoteVersion,
     hasCommitUpdate,
-    hasVersionUpdate: hasCommitUpdate && versionComparison === 1,
+    hasVersionUpdate: false as const,
   };
 }
 

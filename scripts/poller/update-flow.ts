@@ -118,7 +118,7 @@ export async function handleUpdateCheck(
     updateOffer(info.localVersion, info.remoteVersion, getLang()).replyMarkup,
   );
   if (offered && info.hasVersionUpdate) {
-    await markNotifiedImpl(DATA_DIR, info.remoteVersion as string).catch(
+    await markNotifiedImpl(DATA_DIR, info.remoteVersion).catch(
       (error: unknown) =>
         log("update notification state failed:", (error as ErrorLike).message),
     );
