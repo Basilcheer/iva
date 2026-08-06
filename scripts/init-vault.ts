@@ -1,4 +1,4 @@
-//
+// Initialize the LIVE memory vault from the template.
 //   node scripts/init-vault.mjs
 //
 // The live vault (ASSISTANT_VAULT_DIR, default ./vault) is a SEPARATE private git repo:

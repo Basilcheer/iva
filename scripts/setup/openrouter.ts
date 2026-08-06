@@ -6,7 +6,7 @@ type OpenRouterError = {
 type OpenRouterBody = { error?: OpenRouterError };
 type RawProviderError = { error?: unknown; message?: unknown };
 
-export function openrouterErrReason(body: unknown, status: number): string {
+export function openrouterErrReason(body: unknown, status: number): unknown {
   // This deliberately mirrors the former JavaScript property accesses.  These
   // values come from a provider response, and coercing malformed shapes into a
   // harmless fallback would change the error shown by setup.
@@ -37,5 +37,5 @@ export function openrouterErrReason(body: unknown, status: number): string {
       reason = provider ? `${String(inner)} (${provider})` : String(inner);
     }
   }
-  return reason as string;
+  return reason;
 }

@@ -1159,3 +1159,22 @@ the Node event loop is blocked` assertion once. Two later sequential suites hit
   reproduction, and all Python 3.12 userbot checks pass. Replica again emitted
   only the documented cross-restart resume notice before proving reset
   retirement and exiting zero with five provider requests.
+- 2026-08-06 Asia/Tashkent: Hosted CI passed PR-9 on the first push. The
+  CodeRabbit review found one lost comment header, one dishonest OpenRouter
+  callback return type, and PR-9-introduced duplication in update-check result
+  construction; those review fixes preserve runtime behavior. Its test-token
+  hardening suggestion is also accepted as a test-only no-op. The review also
+  surfaced four pre-existing behaviors that are deliberately not changed in
+  this zero-semantics batch: init-vault treats `git init`/`git add` failures as
+  fatal while only an initial commit failure is non-fatal; setup accepts
+  non-numeric manual Telegram allowlist entries; setup serializes embedded
+  newlines in inherited environment values; and an empty Ollama catalog reaches
+  `pickFromList([])` before final validation rejects the missing model. The
+  suggested catch-and-continue init-vault patch would falsely report an
+  initialized backup repository, while the three interactive setup fixes need a
+  safe dependency-injected test seam rather than an unsafe credential/network
+  PTY harness. The reasoning-strip modernization suggestion is also declined:
+  its flat usage, string finish reason, and async factories intentionally match
+  the original JavaScript runtime fixture; replacing them with current SDK V4
+  shapes would change characterization semantics. These deferred defects remain
+  candidates for separate test-first bugfix work after the migration.
