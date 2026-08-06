@@ -5,7 +5,12 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { telegramChannel } from "eve/channels/telegram";
-import type { TelegramContext, TelegramMessage } from "eve/channels/telegram";
+import type {
+  TelegramChannelState,
+  TelegramContext,
+  TelegramMessage,
+} from "eve/channels/telegram";
+import type { RouteHandlerArgs, Session } from "eve/channels";
 import {
   createQueueItem,
   enqueueItem,
@@ -64,6 +69,19 @@ const isCompletedLedger = (
 
 const fakeBotToken = (id: number, label: string): string =>
   `${id}:${Buffer.from(label).toString("base64url")}`;
+const fakeSession = (id: string): Session => ({
+  id,
+  continuationToken: id,
+  cancel: () => {
+    throw new Error("not used");
+  },
+  getEventStream: () => {
+    throw new Error("not used");
+  },
+  getStreamTailIndex: () => {
+    throw new Error("not used");
+  },
+});
 process.env.TELEGRAM_BOT_TOKEN = fakeBotToken(999, "acceptance-default");
 process.env.TELEGRAM_WEBHOOK_SECRET_TOKEN = WEBHOOK_SECRET;
 process.env.TELEGRAM_ALLOWED_USER_IDS = "42";
@@ -137,6 +155,36 @@ function productionTelegramDelivery(
   assert.ok(route && route.transport !== "websocket");
 
   return async (update: TestUpdate) => {
+    const routeArgs: RouteHandlerArgs<TelegramChannelState> = {
+      send: async (input, options) => {
+        await sendImpl(update, input, options);
+        return fakeSession(`test-session-${update.update_id}`);
+      },
+      resolveActiveSession: () => {
+        throw new Error("not used");
+      },
+      cancel: () => {
+        throw new Error("not used");
+      },
+      clear: () => {
+        throw new Error("not used");
+      },
+      compact: () => {
+        throw new Error("not used");
+      },
+      reset: () => {
+        throw new Error("not used");
+      },
+      getSession: () => {
+        throw new Error("not used");
+      },
+      receive: () => {
+        throw new Error("not used");
+      },
+      params: {},
+      waitUntil: () => {},
+      requestIp: "127.0.0.1",
+    };
     const response = await handleAcceptedTelegramWebhook(
       route.handler,
       new Request("http://iva.test/eve/v1/telegram/accepted", {
@@ -147,22 +195,7 @@ function productionTelegramDelivery(
         },
         body: JSON.stringify(marked ? addTelegramQueueReceipt(update) : update),
       }),
-      {
-        send: (input: unknown, options: unknown) =>
-          sendImpl(update, input, options),
-        resolveActiveSession: async () => undefined,
-        cancel: async () => ({ status: "no_active_turn" }),
-        reset: async () => ({ status: "no_active_session" }),
-        getSession: () => {
-          throw new Error("not used");
-        },
-        receive: async () => {
-          throw new Error("not used");
-        },
-        params: {},
-        waitUntil: () => {},
-        requestIp: "127.0.0.1",
-      } as never,
+      routeArgs,
       { completedUpdatesFile },
     );
     return response.ok
@@ -314,11 +347,34 @@ test("acceptance route preserves Telegram auth failure and rejects malformed no-
       body: "{broken",
     }),
     {
-      send: async () => {
+      send: () => {
         sendCalls++;
-        return { id: "must-not-run" };
+        throw new Error("must not run");
       },
+      resolveActiveSession: () => {
+        throw new Error("must not run");
+      },
+      cancel: () => {
+        throw new Error("must not run");
+      },
+      clear: () => {
+        throw new Error("must not run");
+      },
+      compact: () => {
+        throw new Error("must not run");
+      },
+      reset: () => {
+        throw new Error("must not run");
+      },
+      getSession: () => {
+        throw new Error("must not run");
+      },
+      receive: () => {
+        throw new Error("must not run");
+      },
+      params: {},
       waitUntil: () => {},
+      requestIp: "127.0.0.1",
     },
   );
   assert.equal(malformed.ok, false);

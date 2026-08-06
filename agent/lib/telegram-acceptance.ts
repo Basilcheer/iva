@@ -6,6 +6,7 @@ import type {
   TelegramInboundResultOrPromise,
   TelegramMessage,
 } from "eve/channels/telegram";
+import type { RouteHandlerArgs } from "eve/channels";
 import {
   acquireLock,
   loadJsonStrict,
@@ -20,13 +21,9 @@ export const TELEGRAM_ACCEPTANCE_KIND_HEADER = "x-iva-telegram-acceptance";
 type ReceiptContext = { receipt: string | null; handled: boolean };
 type CompletedLedger = { botId: string; updates: number[] };
 type AcceptedWebhookOptions = { completedUpdatesFile?: string };
-type AcceptedWebhookArgs = {
-  send: (...args: never[]) => Promise<unknown>;
-  waitUntil: (task: Promise<unknown>) => void;
-};
-type AcceptedWebhookHandler = (
+type AcceptedWebhookHandler<TState> = (
   request: Request,
-  args: never,
+  args: RouteHandlerArgs<TState>,
 ) => Promise<Response>;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -231,10 +228,10 @@ async function recordCompletedUpdate(
 // send(). The polling bridge needs a stronger receipt for durable FIFO replay:
 // this wrapper runs the authored channel handler unchanged, but waits until its
 // real Eve send has resolved before returning success.
-export async function handleAcceptedTelegramWebhook(
-  handler: AcceptedWebhookHandler,
+export async function handleAcceptedTelegramWebhook<TState>(
+  handler: AcceptedWebhookHandler<TState>,
   request: Request,
-  args: AcceptedWebhookArgs,
+  args: RouteHandlerArgs<TState>,
   options: AcceptedWebhookOptions = {},
 ): Promise<Response> {
   const { receipt, updateId } = await metadataFromRequest(request);
@@ -259,9 +256,9 @@ export async function handleAcceptedTelegramWebhook(
     const background: Promise<unknown>[] = [];
     let accepted = false;
 
-    const response = await handler(request, {
+    const wrappedArgs: RouteHandlerArgs<TState> = {
       ...args,
-      send: async (...sendArgs: never[]) => {
+      send: async (...sendArgs: Parameters<typeof args.send>) => {
         const session = await args.send(...sendArgs);
         accepted = true;
         return session;
@@ -269,7 +266,8 @@ export async function handleAcceptedTelegramWebhook(
       waitUntil: (task: Promise<unknown>) => {
         background.push(Promise.resolve(task));
       },
-    } as never);
+    };
+    const response = await handler(request, wrappedArgs);
 
     if (!response.ok) return response;
     await Promise.allSettled(background);
