@@ -5,7 +5,8 @@
 # `iva userbot setup` (она же собирает venv и генерирует токен). Без TELEGRAM_API_ID/HASH
 # в .env serve.py завершится с понятной ошибкой — поэтому не в авто-enable списке.
 #
-# Плейсхолдеры __PROJECT_DIR__/__PYTHON_BIN__ подставляет writeUnits() (bin/iva.mjs).
+# Плейсхолдеры __PROJECT_DIR__/__PYTHON_BIN__ подставляет writeUnits()
+# (scripts/cli/systemd.ts; bin/iva.mjs остаётся внешним entry shim).
 [Unit]
 Description=Iva Telegram userbot MCP proxy (Telethon session owner)
 After=network-online.target iva.service

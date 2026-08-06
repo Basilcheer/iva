@@ -81,7 +81,7 @@ export const CATALOG: Record<string, ProviderCatalogEntry> = {
     keyVar: "OPENCODE_API_KEY",
     modelVar: "OPENCODE_MODEL",
     def: "deepseek-v4-pro",
-    // Mirrors OPENCODE_MODELS in setup.mjs (bare IDs, no "opencode-go/" prefix).
+    // Mirrors OPENCODE_MODELS in scripts/setup/main.ts (bare IDs, no "opencode-go/" prefix).
     models: [
       "deepseek-v4-pro",
       "deepseek-v4-flash",
@@ -110,7 +110,7 @@ export const CATALOG: Record<string, ProviderCatalogEntry> = {
     def: "openai/gpt-5.1",
     // Always static (300+ live models don't fit inline buttons). Curated known-good
     // slugs only: every model here must support tool calling — Iva sends tool
-    // definitions each turn (see the live test in setup.mjs for the full check).
+    // definitions each turn (see the live test in scripts/setup/main.ts for the full check).
     models: [
       "openai/gpt-5.1",
       "anthropic/claude-sonnet-4.5",
@@ -274,7 +274,7 @@ export async function fetchModels(
   );
 }
 
-// Cheap key validity probe (same lenient policy as setup.mjs: network flake ⇒ accept).
+// Cheap key validity probe (same lenient policy as scripts/setup/main.ts: network flake ⇒ accept).
 // Returns null when the key looks fine, or a short human-readable reason.
 export async function checkKey(
   provider: string,

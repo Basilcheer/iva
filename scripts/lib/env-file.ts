@@ -1,5 +1,5 @@
 // Surgical .env editor for the Telegram bridge (/model, /think).
-// Unlike setup.mjs's writeEnv (full rewrite in a fixed key order, drops comments),
+// Unlike scripts/setup/main.ts's writeEnv (full rewrite in a fixed key order, drops comments),
 // this edits lines in place: comments, blank lines, unknown keys and order survive.
 import {
   chmodSync,
@@ -34,7 +34,7 @@ function hasErrorCode(error: unknown, code: string): boolean {
   return (error as { code?: unknown } | null | undefined)?.code === code;
 }
 
-/** Parse .env text → {KEY: value}; surrounding quotes stripped (same regex as setup.mjs). */
+/** Parse .env text → {KEY: value}; surrounding quotes stripped (same regex as setup/main.ts). */
 export function parseEnvText(text: unknown): EnvValues {
   const env: EnvValues = {};
   for (const line of String(text).split(/\r?\n/)) {

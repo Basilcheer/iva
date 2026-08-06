@@ -7,7 +7,8 @@
 //   2. fire-and-forget the systemd → eve-schedules migration (retire the old memory-rollup
 //      timers, catch up a missed period). This is the one reliable point in the codebase
 //      that always runs on the NEW server, even right after an `iva update` executed by
-//      the OLD CLI (bin/iva.mjs cmdUpdate doesn't know about eve schedules at all).
+//      the OLD CLI process (started through the permanent bin/iva.mjs shim) doesn't
+//      know about eve schedules at all.
 //
 // setup() runs before eve's own HTTP listener is guaranteed to be accepting connections.
 // A catch-up run spawns scripts/memory/rollup.ts, which opens an eve/client Client

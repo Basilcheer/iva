@@ -117,8 +117,8 @@ type PollModule = {
   main: () => Promise<void>;
 };
 
-// telegram-poll.mjs reads env at import and guards its poll loop behind a direct-execution check,
-// so importing it here is side-effect-free. A dummy token keeps the API base a harmless string.
+// poller/main.ts reads env at import, while the permanent telegram-poll.mjs shim delegates
+// through a direct-execution guard. A dummy token keeps the API base a harmless string.
 process.env.TELEGRAM_BOT_TOKEN ??= "test:token";
 delete process.env.TELEGRAM_DIRECT_ACCEPTANCE_TIMEOUT_MS;
 const directMainModule = await import("./poller/main.ts");

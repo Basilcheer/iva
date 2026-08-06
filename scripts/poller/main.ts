@@ -1,3 +1,5 @@
+import { fileURLToPath } from "node:url";
+
 import {
   COLLECT_QUIET_MS,
   collectorOffer,
@@ -270,4 +272,15 @@ export async function main() {
     }
     if (queueWriteFailed) await sleep(3000);
   }
+}
+
+export function runEntrypoint(
+  moduleUrl: string,
+  executedPath: string | undefined = process.argv[1],
+): void {
+  if (fileURLToPath(moduleUrl) !== executedPath) return;
+  void main().catch((error: unknown) => {
+    console.error("telegram-poll fatal:", error);
+    process.exit(1);
+  });
 }

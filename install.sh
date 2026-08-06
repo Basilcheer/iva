@@ -596,7 +596,7 @@ if ! command -v systemctl >/dev/null 2>&1; then
 elif [ ! -f .env ]; then
   warn "$(t "No .env — not setting up autostart. First: npm run setup, then re-run install.sh." "Нет .env — автозапуск не настраиваю. Сначала: npm run setup, потом перезапустите install.sh.")"
 elif prompt_yes_no "$(t "Set up autostart via systemd (service + watchdog timers)?" "Завести автозапуск через systemd (сервис + сторожевые таймеры)?")" yes; then
-  # Delegate writing the units to the iva CLI — the single source of truth (see bin/iva.mjs writeUnits).
+  # Delegate writing the units to the iva CLI — the single source of truth is scripts/cli/systemd.ts.
   step "$(t "Installing systemd units (via the iva CLI)…" "Ставлю systemd-юниты (через iva CLI)…")"
   node "$PROJECT_DIR/bin/iva.mjs" _install-units || die "$(t "couldn't write the systemd units" "не удалось записать systemd-юниты")"
   node "$PROJECT_DIR/bin/iva.mjs" _activate-units \

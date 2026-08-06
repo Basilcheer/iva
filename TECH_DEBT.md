@@ -59,10 +59,13 @@ from `data/settings.json` at fire time), but there's still no menu-driven opt-in
 — enabling or disabling it is a raw `settings.json` edit. Worth exposing in `/menu`
 alongside the other settings.
 
-## 8. Future `.mjs` → TypeScript conversion
+## 8. TypeScript-only Node source
 
-New scripts under `agent/lib` should land as TypeScript; existing `.mjs` files there
-are candidates for conversion as they're touched, not a scheduled migration.
+The repository migration is complete. New Node.js source and tests must be TypeScript;
+JavaScript modules must not be added. Five permanent, logic-free `.mjs` entry shims keep
+externally installed paths stable: `bin/iva.mjs` and
+`scripts/{telegram-poll,check-update,setup,init-vault}.mjs`. All implementation belongs
+in the TypeScript modules behind those shims.
 
 ## 9. Upstream feature request: catch-up for missed schedule runs
 
@@ -70,7 +73,7 @@ If the box is down when an eve schedule would have fired, the run is simply skip
 — there's no catch-up on next start, unlike systemd's `Persistent=true` timers. Worth
 filing as a feature request against `vercel/eve`.
 
-**Workaround implemented here**: `scripts/lib/schedule-migration.mjs`, run fire-and-forget
+**Workaround implemented here**: `scripts/lib/schedule-migration.ts`, run fire-and-forget
 from `agent/instrumentation.ts` on every server start, replaces `Persistent=true` for the
 four memory-rollup schedules (`agent/schedules/memory-*.ts`). It compares each period's
 last recorded success (`data/rollup-status.json`) against its most recent
@@ -89,9 +92,9 @@ upstream, remove the workarounds rather than leaving them as permanent scaffoldi
 ## 11. Cron/name metadata duplicated across schedules, migration, and the menu
 
 The same 5 schedule names + cron expressions are hand-maintained in three places:
-`agent/schedules/*.ts` (the actual cron strings), `scripts/lib/schedule-migration.mjs`'s
+`agent/schedules/*.ts` (the actual cron strings), `scripts/lib/schedule-migration.ts`'s
 `PERIOD_SCHEDULE` (hour/minute per period, for catch-up math), and
-`scripts/lib/menu/crons.mjs`'s `EVE_SCHEDULES` (for the /menu → ⏰ display). Changing one
+`scripts/lib/menu/crons.ts`'s `EVE_SCHEDULES` (for the /menu → ⏰ display). Changing one
 schedule's cadence means remembering to update up to three files by hand; a missed one
 would make the menu display (or the catch-up math) silently wrong. Fixing this properly
 means either introducing a single shared schedule-metadata source all three read from, or

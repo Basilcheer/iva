@@ -1304,3 +1304,53 @@ the Node event loop is blocked` assertion once. Two later sequential suites hit
   delta is +0.96 / +0.16 / -0.77 percentage points. Commit messages and bodies
   contain no AI attribution; the two protected handoff files remain untracked
   and absent from the branch diff.
+- 2026-08-06 Asia/Tashkent: PR-12 starts from the PR-11 merge `861c320`. The
+  final work is split into an isolated ESLint-config conversion lane and two
+  independent read-only audits for live `.mjs` references and all six acceptance
+  criteria; the integration branch owns policy/docs cleanup, final evidence, and
+  GitHub delivery. References to the five permanent external entry shims remain
+  an explicit allowlist, while stale source/test conventions and paths must be
+  removed. The owner-only live `iva doctor` and `iva update` checks remain
+  deliberately outside Codex execution.
+- 2026-08-06 Asia/Tashkent: Final coverage enforcement moves from the PR-0
+  floors 72 / 79 / 71 to 76 / 79.1 / 72. Node 24 accepts the decimal branch
+  threshold. All three dimensions therefore tighten while retaining headroom
+  below the measured PR-11 range of 77.10 / 79.17-79.20 / 72.51; this proves
+  growth against every PR-0 baseline metric without setting a timing-sensitive
+  floor at the exact observed value.
+- 2026-08-06 Asia/Tashkent: PR-12 leaves exactly the five permanent entry shims
+  (`bin/iva.mjs` plus `scripts/{telegram-poll,check-update,setup,init-vault}.mjs`),
+  at 8 / 4 / 5 / 3 / 2 lines respectively and with no control-flow, logging, or
+  exit logic. The final ESLint config now runs as native stripped TypeScript via
+  ESLint's `unstable_native_nodejs_ts_config` flag, so no runtime dependency was
+  added. Temporary child-process fixtures were also renamed to `.ts`; the final
+  live-reference audit contains only the five stable shim paths, Eve build
+  artifacts, and migration-policy enforcement. Tracked `.d.mts` and `.mts`
+  counts are both zero, and the ratchet is exactly 5 / 5.
+- 2026-08-06 Asia/Tashkent: PR-12 pre-rebase verification is green on Node
+  24.19.0 and npm 11.17.0: lint, Prettier, typecheck, Eve build, and replica
+  smoke (`OK`, five mock-provider requests) pass; the complete suite reports
+  784 passed, zero failed, and four expected macOS skips out of 788. Coverage is
+  77.20 / 79.28 / 72.80 against the new 76 / 79.1 / 72 floors. One earlier
+  coverage attempt hit the pre-existing `bash-tool` timing boundary before a
+  background child wrote its PID; the exact test passed in isolation and the
+  subsequent complete coverage run passed. Autograph is 343/343, security
+  defense is 45/45, uv 0.8.3 reproduces the Python 3.12 x86_64 Linux lock
+  byte-for-byte, and the strict hashed userbot sync, guardrails, health, and
+  `py_compile` checks pass. Acceptance criteria 1-5 are therefore locally
+  evidenced; criterion 6 remains explicitly owner-only (`iva doctor` / `iva
+update` before and after merge) and was not run by Codex.
+- 2026-08-06 Asia/Tashkent: `origin/main` remained at the PR-11 merge
+  `861c320`, so the required pull/rebase was a no-op. The complete post-sync
+  gate set then passed after a clean `npm ci`: 784 passed, zero failed, four
+  expected macOS skips; coverage 77.21 / 79.29 / 72.80; lint, Prettier, mjs
+  ratchet 5/5, typecheck, build, replica (`OK`, five provider requests),
+  Autograph 343/343, security defense 45/45, byte-identical uv 0.8.3 lock,
+  strict hashed userbot sync, guardrails, health, and `py_compile`. Range diff
+  checks confirm both protected handoff files are absent and all PR-12 commits
+  contain no AI attribution.
+- 2026-08-06 Asia/Tashkent: CodeRabbit's completed PR-12 review found one valid
+  portability issue in the new ESLint characterization test: URL `.pathname`
+  is not a native filesystem path on Windows. The expected config root now uses
+  `dirname(fileURLToPath(configUrl))`, matching `import.meta.dirname` on every
+  supported platform without changing production behavior.

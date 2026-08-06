@@ -1,6 +1,7 @@
 // OAuth-ядро для входа по подписке OpenAI (ChatGPT Plus/Pro/Team) — как в официальном codex CLI.
-// ЕДИНЫЙ источник правды: импортируется и из bare-node (bin/iva.mjs, scripts/setup.mjs),
-// и из бандла eve (agent/provider.ts, agent/vision.ts) — как scripts/lib/usage.ts.
+// ЕДИНЫЙ источник правды: импортируется и из bare-node CLI/setup модулей
+// (scripts/cli/account.ts, scripts/setup/main.ts), и из бандла eve
+// (agent/provider.ts, agent/vision.ts) — как scripts/lib/usage.ts.
 // Чистый ESM, только node-builtins (crypto/fs/http/child_process); типы — в этом модуле.
 //
 // Протокол (reverse-engineered из openai/codex, публичный client_id):
@@ -453,7 +454,7 @@ export async function login(
 }
 
 // ── модели подписки и их reasoning levels (один запрос /models) ────────────
-// Telegram строит оба экрана из одного ответа. setup.mjs использует тонкий
+// Telegram строит оба экрана из одного ответа. scripts/setup/main.ts использует тонкий
 // listCodexModels() ниже и не платит вторым запросом за тот же каталог.
 const MODEL_LIST_KEYS = /^(models?|model_presets|presets|items|data)$/i;
 const CANONICAL_REASONING_LEVELS = new Set(CANONICAL_REASONING_EFFORTS);
