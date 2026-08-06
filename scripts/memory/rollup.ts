@@ -26,7 +26,7 @@ import {
   resolveTurnTimeoutMs,
   withTurnTimeout,
 } from "../lib/rollup-turn.ts";
-import { sendTelegramHtml } from "../lib/telegram-send.mjs";
+import { sendTelegramHtml } from "../lib/telegram-send.ts";
 
 type Period = "daily" | "weekly" | "monthly" | "yearly";
 

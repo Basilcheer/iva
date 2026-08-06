@@ -13,7 +13,7 @@
 // module breakdown). This file only re-exports the public surface and keeps the
 // direct-execution guard so `node scripts/telegram-poll.mjs` still works unchanged.
 import { fileURLToPath } from "node:url";
-import { readCappedStream } from "./poller/transport.mjs";
+import { readCappedStream } from "./poller/transport.ts";
 import {
   loadQueue,
   writeQueueAtomic,

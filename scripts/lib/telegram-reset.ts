@@ -1,7 +1,29 @@
+/* eslint-disable @typescript-eslint/no-unnecessary-type-assertion -- conversion keeps the injectable fetch boundary source-compatible. */
 import { telegramContinuationToken } from "eve/channels/telegram";
 import { toChannelLocalToken } from "#lib/telegram-continuation-token.mjs";
 
-function storedToken(status) {
+type Status = Record<string, unknown> | null | undefined;
+type TelegramMessage = {
+  chat?: { id?: unknown; type?: unknown };
+  message_id?: unknown;
+  message_thread_id?: unknown;
+  reply_to_message?: {
+    from?: { is_bot?: unknown; id?: unknown };
+    message_id?: unknown;
+  };
+};
+type Update = {
+  message?: TelegramMessage;
+  callback_query?: { message?: TelegramMessage; [key: string]: unknown };
+};
+type FetchResponse = {
+  ok: boolean;
+  status: number;
+  json: () => Promise<unknown>;
+};
+type FetchImpl = (url: string, init: RequestInit) => Promise<FetchResponse>;
+
+function storedToken(status: Status) {
   const token = status?.continuationToken;
   if (typeof token !== "string" || token.length === 0) return null;
   // Статусы, записанные до фикса #110, хранят токен с именем канала впереди.
@@ -14,7 +36,11 @@ function storedToken(status) {
  * New installs persist it from the Telegram event context. The private-chat
  * fallback makes upgrades from pre-0.27 Eve work before the first new turn.
  */
-export function continuationTokenForControl(update, status, botUserId) {
+export function continuationTokenForControl(
+  update: Update,
+  status: Status,
+  botUserId?: string | number,
+) {
   const message = update?.message ?? update?.callback_query?.message;
   if (!message) return storedToken(status);
   const chatId = message?.chat?.id;
@@ -32,9 +58,9 @@ export function continuationTokenForControl(update, status, botUserId) {
       reply.message_id !== undefined
     ) {
       return telegramContinuationToken({
-        chatId,
-        messageThreadId,
-        conversationId: reply.message_id,
+        chatId: chatId as string | number,
+        messageThreadId: messageThreadId as number | undefined,
+        conversationId: reply.message_id as string | number | undefined,
       });
     }
     // An explicit reply to another actor must not silently reset the last Iva
@@ -46,7 +72,10 @@ export function continuationTokenForControl(update, status, botUserId) {
   if (stored !== null) return stored;
 
   if (message.chat?.type === "private") {
-    return telegramContinuationToken({ chatId, messageThreadId });
+    return telegramContinuationToken({
+      chatId: chatId as string | number,
+      messageThreadId: messageThreadId as number | undefined,
+    });
   }
 
   // A standalone legacy group command cannot reconstruct the old conversation
@@ -62,8 +91,14 @@ export async function requestTelegramReset({
   url,
   secret,
   continuationToken,
-  fetchImpl = fetch,
+  fetchImpl = fetch as unknown as FetchImpl,
   timeoutMs = 15_000,
+}: {
+  url: string;
+  secret: string;
+  continuationToken: string;
+  fetchImpl?: FetchImpl;
+  timeoutMs?: number;
 }) {
   const response = await fetchImpl(url, {
     method: "POST",
@@ -77,7 +112,7 @@ export async function requestTelegramReset({
   if (!response.ok)
     throw new Error(`Eve reset route returned HTTP ${response.status}`);
 
-  const body = await response.json();
+  const body = (await response.json()) as { ok?: unknown; status?: unknown };
   if (
     body?.ok !== true ||
     (body.status !== "reset" && body.status !== "no_active_session")

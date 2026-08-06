@@ -1,9 +1,28 @@
+/* eslint-disable @typescript-eslint/no-base-to-string -- Telegram payload fields retain source-compatible permissive coercion. */
 import { execFile } from "node:child_process";
 import { API, TOKEN, log } from "./config.ts";
 
+type TelegramResponse = {
+  ok?: unknown;
+  description?: unknown;
+  result?: unknown;
+};
+type Reader = {
+  read: () => Promise<{ done: boolean; value?: Uint8Array }>;
+  cancel: () => Promise<unknown>;
+};
+type StreamBody = { getReader: () => Reader };
+type ErrorLike = { message?: unknown };
+
+const errorMessage = (error: unknown) => (error as ErrorLike).message;
+
 // Every Bot API call carries a deadline — a hung response must never stall the single polling loop.
 // The default suits normal calls; getUpdates overrides it to sit above its own long-poll window.
-async function tg(method, body, { timeoutMs = 30_000 } = {}) {
+async function tg(
+  method: string,
+  body: unknown,
+  { timeoutMs = 30_000 }: { timeoutMs?: number } = {},
+): Promise<unknown> {
   const res = await fetch(`${API}/${method}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -17,15 +36,17 @@ async function tg(method, body, { timeoutMs = 30_000 } = {}) {
 // the running total exceeds maxBytes, so an oversized (or size-unknown) body is never fully buffered.
 // The caller passes an already time-bounded body (see downloadTelegramFile) so a hung socket mid-read
 // aborts the read too. Returns null on over-size or a read error. Pure — unit-tested off the network.
-export async function readCappedStream(body, maxBytes) {
-  if (!body || typeof body.getReader !== "function") return null;
-  const reader = body.getReader();
-  const chunks = [];
+export async function readCappedStream(body: unknown, maxBytes: number) {
+  if (!body || typeof (body as StreamBody).getReader !== "function")
+    return null;
+  const reader = (body as StreamBody).getReader();
+  const chunks: Buffer[] = [];
   let total = 0;
   try {
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
+      if (value === undefined) return null;
       total += value.length;
       if (total > maxBytes) {
         await reader.cancel().catch(() => {});
@@ -42,17 +63,19 @@ export async function readCappedStream(body, maxBytes) {
 // Download a Telegram file's bytes as UTF-8 text (getFile → file download), hard-capped at maxBytes and
 // deadline-bounded at every step (getFile call, the download connection, and the streamed read — a size
 // cap alone doesn't save the loop from a stalled socket). Returns null on any failure or over-size.
-async function downloadTelegramFile(fileId, maxBytes) {
+async function downloadTelegramFile(fileId: string, maxBytes: number) {
   try {
     const info = await tg(
       "getFile",
       { file_id: fileId },
       { timeoutMs: 10_000 },
     );
-    const filePath = info?.result?.file_path;
-    if (!filePath) return null;
+    const filePath = (info as TelegramResponse | null)?.result as
+      { file_path?: unknown } | undefined;
+    const path = filePath?.file_path;
+    if (!path) return null;
     const res = await fetch(
-      `https://api.telegram.org/file/bot${TOKEN}/${filePath}`,
+      `https://api.telegram.org/file/bot${TOKEN}/${String(path)}`,
       {
         signal: AbortSignal.timeout(15_000),
       },
@@ -67,33 +90,47 @@ async function downloadTelegramFile(fileId, maxBytes) {
     return null;
   }
 }
-async function reply(chatId, text) {
+async function reply(chatId: number | string, text: string) {
   try {
-    const data = await tg("sendMessage", { chat_id: chatId, text });
-    if (!data.ok) throw new Error(data.description || "sendMessage failed");
+    const data = (await tg("sendMessage", {
+      chat_id: chatId,
+      text,
+    })) as TelegramResponse;
+    if (!data.ok)
+      throw new Error(String(data.description || "sendMessage failed"));
     return data.result;
-  } catch (e) {
-    log("reply failed:", e.message);
+  } catch (error) {
+    log("reply failed:", errorMessage(error));
     return null;
   }
 }
 
-async function edit(chatId, messageId, text, replyMarkup) {
+async function edit(
+  chatId: number | string,
+  messageId: number,
+  text: string,
+  replyMarkup?: unknown,
+) {
   try {
-    const body = { chat_id: chatId, message_id: messageId, text };
+    const body: Record<string, unknown> = {
+      chat_id: chatId,
+      message_id: messageId,
+      text,
+    };
     if (replyMarkup !== undefined) body.reply_markup = replyMarkup;
-    const data = await tg("editMessageText", body);
-    if (!data.ok) throw new Error(data.description || "editMessageText failed");
+    const data = (await tg("editMessageText", body)) as TelegramResponse;
+    if (!data.ok)
+      throw new Error(String(data.description || "editMessageText failed"));
     return data.result;
-  } catch (e) {
-    if (!/message is not modified/i.test(e.message))
-      log("edit failed:", e.message);
+  } catch (error) {
+    if (!/message is not modified/i.test(String(errorMessage(error))))
+      log("edit failed:", errorMessage(error));
     return null;
   }
 }
 
-const sc = (...args) =>
-  new Promise((resolve) =>
+const sc = (...args: string[]) =>
+  new Promise<boolean>((resolve) =>
     execFile("systemctl", ["--user", ...args], (err) => resolve(!err)),
   );
 

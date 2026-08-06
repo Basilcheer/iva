@@ -3,7 +3,7 @@
 //
 // Requires: a running agent (eve start) and the TELEGRAM_BOT_TOKEN, TELEGRAM_DIGEST_CHAT_ID variables.
 import { Client } from "eve/client";
-import { sendTelegramHtml } from "./lib/telegram-send.mjs";
+import { sendTelegramHtml } from "./lib/telegram-send.ts";
 
 const PORT = process.env.IVA_PORT ?? "8723";
 const HOST = process.env.ASSISTANT_HOST ?? `http://127.0.0.1:${PORT}`;

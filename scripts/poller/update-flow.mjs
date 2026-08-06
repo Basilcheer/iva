@@ -7,9 +7,9 @@ import {
   inspectUpstream,
   markVersionNotified,
   updateOffer,
-} from "../lib/update-check.mjs";
+} from "../lib/update-check.ts";
 import { modelSummary } from "../lib/model-summary.ts";
-import { acquireUpdateLock, releaseUpdateLock } from "../lib/update-safety.mjs";
+import { acquireUpdateLock, releaseUpdateLock } from "../lib/update-safety.ts";
 import { getLang, tr } from "#lib/i18n.mjs";
 import {
   ALLOWED,
@@ -20,7 +20,7 @@ import {
   UPDATE_JOB_TTL_MS,
   log,
 } from "./config.ts";
-import { edit, reply, tg } from "./transport.mjs";
+import { edit, reply, tg } from "./transport.ts";
 
 // ── self-update (/update) ──────────────────────────────────────────────────
 // Run `iva update` in its OWN transient systemd scope, so it survives the restart of

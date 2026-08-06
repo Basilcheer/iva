@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-floating-promises, @typescript-eslint/require-await -- Node's test runner owns registrations and test doubles return promises. */
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -5,7 +6,7 @@ type Transport = {
   readCappedStream: (body: unknown, maxBytes: number) => Promise<string | null>;
 };
 
-const transportModulePath = "./transport.mjs";
+const transportModulePath = "./transport.ts";
 const { readCappedStream } = (await import(transportModulePath)) as Transport;
 const encoder = new TextEncoder();
 
@@ -40,7 +41,8 @@ test("readCappedStream cancels and rejects an oversized body before buffering th
 test("readCappedStream returns null when its reader fails", async () => {
   const body = {
     getReader: () => ({
-      read: async (): Promise<never> => Promise.reject(new Error("read failed")),
+      read: async (): Promise<never> =>
+        Promise.reject(new Error("read failed")),
       cancel: async () => undefined,
     }),
   };

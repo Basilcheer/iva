@@ -7,7 +7,7 @@
 // render сам решает, что показать: идёт процесс → прогресс; иначе список.
 import { join } from "node:path";
 import { readEnvValues } from "../env-file.ts";
-import { acquireUpdateLock, releaseUpdateLock } from "../update-safety.mjs";
+import { acquireUpdateLock, releaseUpdateLock } from "../update-safety.ts";
 import {
   LOADERS,
   currentRun,

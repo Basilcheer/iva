@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-unnecessary-type-assertion -- conversion keeps source-compatible runtime indexing. */
 // Экран статуса: одна карта — версия, провайдер·модель·размышления, поиск+ключ, язык,
 // userbot, Google, расход за сегодня. Быстрые поля (env/файлы) читаются синхронно в первом
 // рендере; общая userbot-проба systemd/HTTP/Telethon НЕ ждётся синхронно — сначала
@@ -12,29 +13,70 @@ import { SEARCH_CATALOG } from "../search-catalog.ts";
 import { readEntries, summarize } from "../usage.ts";
 import { probeUserbotHealth } from "../userbot-health.ts";
 
-function version(root) {
+type Env = Record<string, string | undefined>;
+type VersionPackage = { version?: unknown };
+type StatusState = { chatId: unknown; userId: unknown; screen: string };
+type Health = { state?: string };
+type MenuContext = {
+  deps: {
+    root: string;
+    envPath: string;
+    dataDir: string;
+    probeUserbotHealth?: (options: {
+      root: string;
+      port: string;
+    }) => Promise<Health>;
+  };
+  flows: {
+    get: (chatId: unknown, userId: unknown) => StatusState | null;
+    screen: (
+      state: StatusState,
+      text: string,
+      rows: Array<Array<unknown>>,
+    ) => Promise<unknown>;
+  };
+  getLang: () => string;
+  tr: (en: string, ru: string) => string;
+  btn: (text: string, callbackData: string) => unknown;
+  backRow: (screen: string) => Array<unknown>;
+};
+
+function version(root: string) {
   try {
-    return (
-      JSON.parse(readFileSync(join(root, "package.json"), "utf8")).version ||
-      "?"
-    );
+    const parsed = JSON.parse(
+      readFileSync(join(root, "package.json"), "utf8"),
+    ) as VersionPackage;
+    return typeof parsed.version === "string" ? parsed.version : "?";
   } catch {
     return "?";
   }
 }
 
-const groupThousands = (n) =>
+const groupThousands = (n: string | number | undefined) =>
   String(n ?? 0).replace(/\B(?=(\d{3})+(?!\d))/g, " ");
 
-function usageToday(dataDir, tz, T) {
+function usageToday(
+  dataDir: string,
+  tz: string | undefined,
+  T: MenuContext["tr"],
+) {
   try {
     const agg = summarize(readEntries(dataDir), {
       window: "today",
       now: Date.now(),
       tz,
     });
-    const total = agg?.totals?.total || 0;
-    const turns = agg?.totals?.turns || 0;
+    const totals = (
+      agg as { totals?: { total?: unknown; turns?: unknown } } | null
+    )?.totals;
+    const total =
+      typeof totals?.total === "number" || typeof totals?.total === "string"
+        ? totals.total
+        : 0;
+    const turns =
+      typeof totals?.turns === "number" || typeof totals?.turns === "string"
+        ? totals.turns
+        : 0;
     return T(
       `${groupThousands(total)} tokens · ${turns} turns`,
       `${groupThousands(total)} токенов · ${turns} ходов`,
@@ -45,11 +87,19 @@ function usageToday(dataDir, tz, T) {
 }
 
 // Собирает быстрые поля (без медленной пробы) — переиспользуется первым рендером и async-edit'ом.
-function fastFields(env, ctx) {
-  const provider = CATALOG[env.MODEL_PROVIDER] ? env.MODEL_PROVIDER : "ollama";
-  const cat = CATALOG[provider];
-  const searchProv = env.SEARCH_PROVIDER || "tavily";
-  const searchCat = SEARCH_CATALOG[searchProv];
+function fastFields(env: Env, ctx: MenuContext) {
+  const provider =
+    typeof env.MODEL_PROVIDER === "string" &&
+    Object.hasOwn(CATALOG, env.MODEL_PROVIDER)
+      ? env.MODEL_PROVIDER
+      : "ollama";
+  const cat = CATALOG[provider as keyof typeof CATALOG];
+  const searchProv =
+    typeof env.SEARCH_PROVIDER === "string" &&
+    Object.hasOwn(SEARCH_CATALOG, env.SEARCH_PROVIDER)
+      ? env.SEARCH_PROVIDER
+      : "tavily";
+  const searchCat = SEARCH_CATALOG[searchProv as keyof typeof SEARCH_CATALOG];
   return {
     version: version(ctx.deps.root),
     provider,
@@ -63,7 +113,11 @@ function fastFields(env, ctx) {
   };
 }
 
-function buildView(d, health, ctx) {
+function buildView(
+  d: ReturnType<typeof fastFields>,
+  health: Health | null,
+  ctx: MenuContext,
+) {
   const T = ctx.tr;
   const labels = {
     off: T("off", "выкл"),
@@ -72,7 +126,10 @@ function buildView(d, health, ctx) {
     unauthorized: T("login required", "нужен вход"),
     ready: T("ready", "готов"),
   };
-  const ub = health === null ? "…" : labels[health.state] || labels.unreachable;
+  const ub =
+    health === null
+      ? "…"
+      : labels[health.state as keyof typeof labels] || labels.unreachable;
   const lines = [
     T("📊 Status", "📊 Статус"),
     "",
@@ -102,15 +159,15 @@ function buildView(d, health, ctx) {
 
 export default {
   parent: "r",
-  async render(st, ctx) {
-    const env = await readEnvValues(ctx.deps.envPath);
+  async render(st: StatusState, ctx: MenuContext) {
+    const env = (await readEnvValues(ctx.deps.envPath)) as Env;
     const d = fastFields(env, ctx);
 
     // Медленную пробу гоним ОТДЕЛЬНО и правим сообщение по готовности — только если экран
     // всё ещё текущий (пользователь не ушёл в другой раздел / не закрыл меню).
     const probe = ctx.deps.probeUserbotHealth || probeUserbotHealth;
     probe({ root: ctx.deps.root, port: env.TELEGRAM_MCP_PORT || "8724" })
-      .then((result) => {
+      .then((result: Health) => {
         if (ctx.flows.get(st.chatId, st.userId) === st && st.screen === "st") {
           const v = buildView(d, result, ctx);
           return ctx.flows.screen(st, v.text, v.rows);

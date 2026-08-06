@@ -16,8 +16,8 @@ import {
   log,
   sleep,
 } from "./config.ts";
-import { tg } from "./transport.mjs";
-import { fastForwardOffset, loadOffset, saveOffset } from "./offset.mjs";
+import { tg } from "./transport.ts";
+import { fastForwardOffset, loadOffset, saveOffset } from "./offset.ts";
 import {
   QUEUE_FILE,
   reapStaleRuns,

@@ -24,7 +24,7 @@ import {
   SETTLE_MS,
   log,
 } from "./config.ts";
-import { chatKey } from "./offset.mjs";
+import { chatKey } from "./offset.ts";
 import { pacedDeliver } from "./deliver.mjs";
 import {
   acknowledgeQueued,

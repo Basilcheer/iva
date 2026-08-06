@@ -28,7 +28,7 @@ import {
   createTelegramUpdateReporter,
   loadTelegramJob,
   removeTelegramJob,
-} from "../scripts/lib/telegram-status.mjs";
+} from "../scripts/lib/telegram-status.ts";
 import {
   generateAssistantBearer,
   isAssistantBearer,
@@ -55,7 +55,7 @@ import {
   createUpdateLog,
   createUpdateTransaction,
   releaseUpdateLock,
-} from "../scripts/lib/update-safety.mjs";
+} from "../scripts/lib/update-safety.ts";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const ENV_PATH = join(ROOT, ".env");
@@ -716,7 +716,7 @@ async function cmdUpdate(args) {
 
     await phaseStart("fetch");
     // Только fetch + классификация, HEAD не двигается: живая установка меняется лишь после
-    // успешной сборки кандидата в worktree (см. buildCandidate в update-safety.mjs).
+    // успешной сборки кандидата в worktree (см. buildCandidate в update-safety.ts).
     const update = await tx.resolveTarget();
     if (!update.changed && !force) {
       await tx.restoreLocalChanges();

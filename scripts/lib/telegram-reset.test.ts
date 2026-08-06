@@ -1,11 +1,15 @@
+/* eslint-disable @typescript-eslint/no-floating-promises, @typescript-eslint/require-await -- Node's test runner owns registrations and test doubles return promises. */
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
   continuationTokenForControl,
   requestTelegramReset,
-} from "./telegram-reset.mjs";
+} from "./telegram-reset.ts";
 import { toChannelLocalToken } from "#lib/telegram-continuation-token.mjs";
 import { handleTelegramResetRequest } from "./telegram-reset-route.ts";
+
+type FetchCall = { url: string; init: RequestInit };
+type ResetInput = { continuationToken: string; reason?: string };
 
 test("stored Eve token wins for groups and forum topics", () => {
   const update = {
@@ -105,8 +109,8 @@ test("reply to a different bot never selects the stored Iva conversation", () =>
 });
 
 test("reset client sends the exact token and accepts duplicate no-active result", async () => {
-  const calls = [];
-  const fetchImpl = async (url, init) => {
+  const calls: FetchCall[] = [];
+  const fetchImpl = async (url: string, init: RequestInit) => {
     calls.push({ url, init });
     return Response.json({ ok: true, status: "no_active_session" });
   };
@@ -119,10 +123,16 @@ test("reset client sends the exact token and accepts duplicate no-active result"
   assert.equal(result.status, "no_active_session");
   assert.equal(calls.length, 1);
   assert.equal(
-    calls[0].init.headers["X-Telegram-Bot-Api-Secret-Token"],
+    (calls[0]?.init.headers as Record<string, string>)[
+      "X-Telegram-Bot-Api-Secret-Token"
+    ],
     "secret",
   );
-  assert.deepEqual(JSON.parse(calls[0].init.body), {
+  const requestBody = calls[0]?.init.body;
+  assert.equal(typeof requestBody, "string");
+  if (typeof requestBody !== "string")
+    throw new Error("expected string request body");
+  assert.deepEqual(JSON.parse(requestBody), {
     continuationToken: "-1001:7:55",
   });
 });
@@ -149,10 +159,10 @@ test("reset client rejects HTTP and malformed success responses", async () => {
 });
 
 test("Telegram reset route authenticates and forwards the exact raw token", async () => {
-  const calls = [];
-  const reset = async (input) => {
+  const calls: ResetInput[] = [];
+  const reset = async (input: ResetInput) => {
     calls.push(input);
-    return { status: "reset", previousSessionId: "session-1" };
+    return { status: "reset" as const, previousSessionId: "session-1" };
   };
   const response = await handleTelegramResetRequest(
     new Request("http://local/eve/v1/telegram/reset", {
@@ -183,7 +193,7 @@ test("Telegram reset route rejects bad auth and bad input before reset", async (
   let called = false;
   const reset = async () => {
     called = true;
-    return { status: "no_active_session" };
+    return { status: "no_active_session" as const };
   };
   const unauthorized = await handleTelegramResetRequest(
     new Request("http://local/reset", {
@@ -267,10 +277,10 @@ test("normalization strips the channel prefix and nothing else", () => {
   // eve неймспейсит токен ровно один раз, а довфиксные значения одинарные, — но именно
   // такую строку собирал reset-роут из нашего токена, и она обязана схлопываться в один
   // проход, а не превращаться в "telegram:…" от повторной нормализации.
-  const warnings = [];
+  const warnings: string[] = [];
   assert.equal(
     toChannelLocalToken("telegram:telegram:7091451031::", {
-      warn: (m) => warnings.push(m),
+      warn: (message: string) => warnings.push(message),
     }),
     "telegram:7091451031::",
   );
@@ -284,8 +294,8 @@ test("normalization strips the channel prefix and nothing else", () => {
 test("an unexpected token shape is reported instead of silently passed on", () => {
   // Не throw: поведение не меняем, но следующая смена формы токена станет громкой
   // строкой в journalctl, а не тихим повторением #110.
-  const warnings = [];
-  const warn = (message) => warnings.push(message);
+  const warnings: string[] = [];
+  const warn = (message: string) => warnings.push(message);
 
   assert.equal(
     toChannelLocalToken("slack:C123:456", { warn }),
@@ -300,7 +310,7 @@ test("an unexpected token shape is reported instead of silently passed on", () =
   assert.match(warnings[1], /unexpected shape: "telegram:not-a-chat-id"/);
 
   // Нормальные токены молчат, включая групповые с минусом и пустое значение.
-  const quiet = [];
+  const quiet: string[] = [];
   for (const token of [
     "7091451031::",
     "-1001:77:42",
@@ -308,7 +318,9 @@ test("an unexpected token shape is reported instead of silently passed on", () =
     "123",
     "",
   ]) {
-    toChannelLocalToken(token, { warn: (m) => quiet.push(m) });
+    toChannelLocalToken(token, {
+      warn: (message: string) => quiet.push(message),
+    });
   }
   assert.deepEqual(quiet, []);
 });

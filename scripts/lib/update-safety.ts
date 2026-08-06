@@ -14,16 +14,59 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join, resolve, sep } from "node:path";
-import { persistUpdateBranch, resolveUpdateTarget } from "./update-channel.ts";
+import {
+  persistUpdateBranch,
+  resolveUpdateTarget,
+  type Git,
+  type GitResult,
+} from "./update-channel.ts";
 
 const LOCK_TTL_MS = 6 * 60 * 60 * 1000;
 
+type CommandResult = { code: number; stdout: string; stderr: string };
+type CommandOptions = {
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+  logFile?: string;
+  verbose?: boolean;
+};
+type UpdateLock = { ok: boolean; path: string; owner: string | null };
+type UpdateTarget = Awaited<ReturnType<typeof resolveUpdateTarget>> & {
+  remote: string;
+  plan: "none" | "fast-forward" | "rebase";
+  changed: boolean;
+};
+type UpdateCandidate = {
+  staging: string;
+  targetSha: string;
+  depsChanged: boolean;
+};
+type UpdateTransactionOptions = {
+  root: string;
+  dataDir: string;
+  envPath: string;
+  verbose?: boolean;
+  logFile?: string;
+  env?: NodeJS.ProcessEnv;
+};
+
+function readJsonObject(text: string): Record<string, unknown> | null {
+  try {
+    const value: unknown = JSON.parse(text);
+    return value && typeof value === "object"
+      ? (value as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 export function runCommand(
-  command,
-  args,
-  { cwd, env = process.env, logFile, verbose = false } = {},
-) {
-  return new Promise((resolve) => {
+  command: string,
+  args: string[],
+  { cwd, env = process.env, logFile, verbose = false }: CommandOptions = {},
+): Promise<CommandResult> {
+  return new Promise<CommandResult>((resolve) => {
     const child = spawn(command, args, {
       cwd,
       env,
@@ -31,9 +74,13 @@ export function runCommand(
     });
     let stdout = "";
     let stderr = "";
-    const collect = (kind, stream, target) => {
-      stream.on("data", (chunk) => {
-        const text = chunk.toString();
+    const collect = (
+      kind: "out" | "err",
+      stream: NodeJS.ReadableStream,
+      target: NodeJS.WriteStream,
+    ) => {
+      stream.on("data", (chunk: unknown) => {
+        const text = String(chunk);
         if (kind === "out") stdout += text;
         else stderr += text;
         if (logFile) appendFileSync(logFile, text);
@@ -59,7 +106,7 @@ function safeTimestamp(date = new Date()) {
   return date.toISOString().replace(/[:.]/g, "-");
 }
 
-export function createUpdateLog(dataDir, now = new Date()) {
+export function createUpdateLog(dataDir: string, now = new Date()): string {
   const dir = join(dataDir, "logs");
   mkdirSync(dir, { recursive: true });
   const file = join(dir, `update-${safeTimestamp(now)}.log`);
@@ -73,7 +120,7 @@ export function createUpdateLog(dataDir, now = new Date()) {
   return file;
 }
 
-export function acquireUpdateLock(dataDir, owner) {
+export function acquireUpdateLock(dataDir: string, owner: string): UpdateLock {
   mkdirSync(dataDir, { recursive: true });
   const path = join(dataDir, "update.lock");
   const claim = () => {
@@ -93,18 +140,25 @@ export function acquireUpdateLock(dataDir, owner) {
   };
   try {
     return claim();
-  } catch (error) {
+  } catch (caught) {
+    const error = caught as NodeJS.ErrnoException;
     if (error.code !== "EEXIST") throw error;
   }
   try {
-    const current = JSON.parse(readFileSync(join(path, "owner.json"), "utf8"));
-    if (current.owner === owner) return { ok: true, path, owner };
+    const current = readJsonObject(
+      readFileSync(join(path, "owner.json"), "utf8"),
+    );
+    if (current?.owner === owner) return { ok: true, path, owner };
     const age = Date.now() - statSync(path).mtimeMs;
     if (age > LOCK_TTL_MS) {
       rmSync(path, { recursive: true, force: true });
       return claim();
     }
-    return { ok: false, path, owner: current.owner || null };
+    return {
+      ok: false,
+      path,
+      owner: typeof current?.owner === "string" ? current.owner : null,
+    };
   } catch {
     const age = Date.now() - statSync(path).mtimeMs;
     if (age <= LOCK_TTL_MS) return { ok: false, path, owner: null };
@@ -113,20 +167,26 @@ export function acquireUpdateLock(dataDir, owner) {
   }
 }
 
-export function releaseUpdateLock(lock) {
+export function releaseUpdateLock(lock: UpdateLock | null | undefined): void {
   if (!lock?.ok || !lock.path) return;
   try {
-    const current = JSON.parse(
+    const current = readJsonObject(
       readFileSync(join(lock.path, "owner.json"), "utf8"),
     );
-    if (current.owner !== lock.owner) return;
+    if (current?.owner !== lock.owner) return;
   } catch {
     return;
   }
   rmSync(lock.path, { recursive: true, force: true });
 }
 
-export async function commitThenRunPostCommit({ commit, postCommit }) {
+export async function commitThenRunPostCommit({
+  commit,
+  postCommit,
+}: {
+  commit: () => Promise<void>;
+  postCommit: () => Promise<void>;
+}): Promise<{ ok: true } | { ok: false; error: unknown }> {
   await commit();
   try {
     await postCommit();
@@ -136,9 +196,10 @@ export async function commitThenRunPostCommit({ commit, postCommit }) {
   }
 }
 
-function parseVersion(text) {
+function parseVersion(text: string): string | null {
   try {
-    return JSON.parse(text).version || null;
+    const value = readJsonObject(text)?.version;
+    return typeof value === "string" ? value : null;
   } catch {
     return null;
   }
@@ -151,7 +212,7 @@ export function createUpdateTransaction({
   verbose = false,
   logFile,
   env = process.env,
-}) {
+}: UpdateTransactionOptions) {
   const commandEnv = { ...env };
   let originalHead = "";
   let branch = "";
@@ -163,22 +224,22 @@ export function createUpdateTransaction({
   let envBackup = "";
   let outputBackup = "";
   let changed = false;
-  let originalUntracked = [];
-  let cachedTarget = null;
-  let candidate = null;
+  let originalUntracked: string[] = [];
+  let cachedTarget: UpdateTarget | null = null;
+  let candidate: UpdateCandidate | null = null;
   let nodeModulesBackup = "";
   let outputTouched = false;
 
-  const run = (command, args) =>
+  const run = (command: string, args: string[]): Promise<CommandResult> =>
     runCommand(command, args, { cwd: root, env: commandEnv, logFile, verbose });
-  const git = (...args) => run("git", args);
-  const mustGit = async (...args) => {
+  const git: Git = (...args: string[]): Promise<GitResult> => run("git", args);
+  const mustGit = async (...args: string[]): Promise<string> => {
     const result = await git(...args);
     if (result.code !== 0)
       throw new Error(
         result.stderr || result.stdout || `git ${args[0]} failed`,
       );
-    return result.stdout;
+    return result.stdout ?? "";
   };
 
   async function protect() {
@@ -226,7 +287,7 @@ export function createUpdateTransaction({
     const target = await resolveUpdateTarget({ git });
     updateBranch = target.branch;
     const remote = target.targetHead;
-    let plan = "none";
+    let plan: UpdateTarget["plan"] = "none";
     if (remote !== originalHead) {
       if (
         (await git("merge-base", "--is-ancestor", originalHead, remote))
@@ -246,6 +307,7 @@ export function createUpdateTransaction({
 
   async function fetchAndIntegrate() {
     const target = cachedTarget ?? (await resolveTarget());
+    if (!target) throw new Error("update target could not be resolved");
     if (target.plan === "none") return { ...target, changed: false };
     if (target.plan === "fast-forward") {
       await mustGit("merge", "--ff-only", target.remote);
@@ -274,7 +336,9 @@ export function createUpdateTransaction({
   // Только для чистого fast-forward без локальных правок: тогда итоговый HEAD гарантированно
   // равен SHA кандидата. Rebase локальных коммитов / грязное дерево / force-пересборка идут
   // прежним in-place путём (не жжём лишний билд на слабом VPS).
-  async function buildCandidate({ npm = "npm" } = {}) {
+  async function buildCandidate({
+    npm = "npm",
+  }: { npm?: string } = {}): Promise<UpdateCandidate | null> {
     if (!cachedTarget)
       throw new Error("resolveTarget must run before buildCandidate");
     if (cachedTarget.plan !== "fast-forward" || hadLocalChanges) return null;
@@ -342,7 +406,7 @@ export function createUpdateTransaction({
 
   // Перенос артефактов кандидата в живой корень. Только rename внутри root (одна ФС, атомарно).
   // false — вызывающий обязан собрать in-place, как раньше.
-  async function promoteCandidate() {
+  async function promoteCandidate(): Promise<boolean> {
     if (!candidate) return false;
     if (!existsSync(join(candidate.staging, ".output"))) return false;
     const head = await mustGit("rev-parse", "HEAD");
@@ -418,7 +482,7 @@ export function createUpdateTransaction({
   async function dropExactStash() {
     if (!stashOid) return;
     const list = await git("stash", "list", "--format=%H %gd");
-    const match = list.stdout
+    const match = (list.stdout ?? "")
       .split("\n")
       .map((line) => line.trim().split(/\s+/, 2))
       .find(([oid]) => oid === stashOid);
@@ -447,11 +511,11 @@ export function createUpdateTransaction({
     return {
       beforeHead: originalHead,
       afterHead,
-      beforeVersion: parseVersion(beforeText.stdout)
-        ? `v${parseVersion(beforeText.stdout)}`
+      beforeVersion: parseVersion(beforeText.stdout ?? "")
+        ? `v${parseVersion(beforeText.stdout ?? "")}`
         : "previous build",
-      afterVersion: parseVersion(afterText.stdout)
-        ? `v${parseVersion(afterText.stdout)}`
+      afterVersion: parseVersion(afterText.stdout ?? "")
+        ? `v${parseVersion(afterText.stdout ?? "")}`
         : "new build",
     };
   }

@@ -13,8 +13,8 @@ import {
   sleep,
   log,
 } from "./config.ts";
-import { tg } from "./transport.mjs";
-import { chatKey } from "./offset.mjs";
+import { tg } from "./transport.ts";
+import { chatKey } from "./offset.ts";
 
 // Deliver one update to the local eve (we mimic a webhook). Three failure classes (see
 // deliver-policy.ts): retry — network/5xx/408/425/429, fast backoff, forever; config —

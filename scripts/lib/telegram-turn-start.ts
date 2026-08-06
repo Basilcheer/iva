@@ -1,8 +1,77 @@
 import { randomUUID } from "node:crypto";
 import { toChannelLocalToken } from "#lib/telegram-continuation-token.mjs";
 
-const durationFromIngress = (ingressAt, at) =>
-  Number.isFinite(ingressAt) && Number.isFinite(at) && at >= ingressAt
+type ChatStatus = Record<string, unknown> | null;
+type GetStatus = (chatKey: string) => ChatStatus;
+type SetStatus = (chatKey: string, patch: Record<string, unknown>) => unknown;
+type SetStatusIf = (
+  chatKey: string,
+  expected: Record<string, unknown>,
+  patch: Record<string, unknown>,
+) => unknown;
+
+export interface PublishTelegramEarlyStatusOptions {
+  chatKey: string;
+  ingressId?: string;
+  now?: () => number;
+  setStatusImpl: SetStatus;
+  setStatusIfImpl: SetStatusIf;
+  sendWorkingStatusImpl: (options: {
+    canStop: false;
+  }) => Promise<number | null | undefined>;
+  removeWorkingStatusImpl?: (messageId: number) => Promise<unknown>;
+  onWorkingStatusError?: (error: unknown) => void;
+}
+
+export interface PublishTelegramTurnStartedOptions {
+  chatKey: string;
+  continuationToken: string;
+  sessionId: string;
+  turnId: string;
+  now?: () => number;
+  getStatusImpl: GetStatus;
+  setStatusIfImpl: SetStatusIf;
+  sendWorkingStatusImpl?: (options: {
+    canStop: true;
+  }) => Promise<number | null | undefined>;
+  enableWorkingStatusStopImpl?: (messageId: number) => Promise<unknown>;
+  removeWorkingStatusImpl?: (messageId: number) => Promise<unknown>;
+  onWorkingStatusError?: (error: unknown) => void;
+}
+
+export interface AbandonTelegramEarlyStatusOptions {
+  chatKey: string;
+  ingressId: string;
+  getStatusImpl: GetStatus;
+  setStatusIfImpl: SetStatusIf;
+  removeWorkingStatusImpl?: (messageId: number) => Promise<unknown>;
+  onWorkingStatusError?: (error: unknown) => void;
+}
+
+export interface EmitTelegramTurnLatencyOptions {
+  chatKey: string;
+  sessionId: string;
+  deliveryAt: number;
+  delivered: boolean;
+  getStatusImpl: GetStatus;
+  setStatusIfImpl: SetStatusIf;
+  logImpl?: (line: string) => void;
+}
+
+export interface MarkTelegramFirstOutputOptions {
+  chatKey: string;
+  sessionId: string;
+  now?: () => number;
+  getStatusImpl: GetStatus;
+  setStatusIfImpl: SetStatusIf;
+}
+
+const durationFromIngress = (ingressAt: unknown, at: unknown): number | null =>
+  typeof ingressAt === "number" &&
+  Number.isFinite(ingressAt) &&
+  typeof at === "number" &&
+  Number.isFinite(at) &&
+  at >= ingressAt
     ? at - ingressAt
     : null;
 
@@ -15,7 +84,7 @@ export async function publishTelegramEarlyStatus({
   sendWorkingStatusImpl,
   removeWorkingStatusImpl = async () => {},
   onWorkingStatusError = () => {},
-}) {
+}: PublishTelegramEarlyStatusOptions): Promise<string | null> {
   const ingressAt = now();
   try {
     setStatusImpl(chatKey, {
@@ -73,7 +142,7 @@ export async function publishTelegramTurnStarted({
   enableWorkingStatusStopImpl = async () => {},
   removeWorkingStatusImpl = async () => {},
   onWorkingStatusError = () => {},
-}) {
+}: PublishTelegramTurnStartedOptions): Promise<boolean> {
   // Обработчики событий eve отдают токен с именем канала впереди. В статусе он должен
   // лежать только channel-local: reset-роут клеит имя канала сам (#110).
   const continuationToken = toChannelLocalToken(rawContinuationToken);
@@ -149,7 +218,7 @@ export async function publishTelegramTurnStarted({
     if (!adopted) return false;
     if (current.statusMessageId !== undefined) {
       try {
-        await enableWorkingStatusStopImpl(current.statusMessageId);
+        await enableWorkingStatusStopImpl(current.statusMessageId as number);
       } catch (error) {
         onWorkingStatusError(error);
       }
@@ -168,7 +237,7 @@ export async function abandonTelegramEarlyStatus({
   setStatusIfImpl,
   removeWorkingStatusImpl = async () => {},
   onWorkingStatusError = () => {},
-}) {
+}: AbandonTelegramEarlyStatusOptions): Promise<boolean> {
   const current = getStatusImpl(chatKey);
   if (
     current?.status !== "running" ||
@@ -194,7 +263,7 @@ export async function abandonTelegramEarlyStatus({
   if (!cleared) return false;
   if (current.statusMessageId !== undefined) {
     try {
-      await removeWorkingStatusImpl(current.statusMessageId);
+      await removeWorkingStatusImpl(current.statusMessageId as number);
     } catch (error) {
       onWorkingStatusError(error);
     }
@@ -208,7 +277,7 @@ export function markTelegramFirstOutput({
   now = Date.now,
   getStatusImpl,
   setStatusIfImpl,
-}) {
+}: MarkTelegramFirstOutputOptions): boolean {
   const current = getStatusImpl(chatKey);
   if (
     current?.status !== "running" ||
@@ -234,7 +303,7 @@ export function emitTelegramTurnLatency({
   getStatusImpl,
   setStatusIfImpl,
   logImpl = console.log,
-}) {
+}: EmitTelegramTurnLatencyOptions): boolean {
   if (delivered !== true) return false;
   const current = getStatusImpl(chatKey);
   if (

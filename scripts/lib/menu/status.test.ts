@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-floating-promises, @typescript-eslint/require-await -- Node's test runner owns registrations and test doubles return promises. */
 import assert from "node:assert/strict";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -21,7 +22,11 @@ type StatusContext = {
   };
   flows: {
     get: (chatId: number, userId: string) => StatusState | null;
-    screen: (state: StatusState, text: string, rows: unknown[][]) => Promise<void>;
+    screen: (
+      state: StatusState,
+      text: string,
+      rows: unknown[][],
+    ) => Promise<void>;
   };
   getLang: () => string;
   tr: (en: string, ru: string) => string;
@@ -29,7 +34,7 @@ type StatusContext = {
   backRow: (screen: string) => Array<Record<string, string>>;
 };
 
-const statusModulePath = "./status.mjs";
+const statusModulePath = "./status.ts";
 const status = (await import(statusModulePath)) as { default: StatusScreen };
 
 function deferred<T>() {

@@ -19,11 +19,11 @@ import search from "./search.ts";
 import lang from "./lang.ts";
 import character from "./character.ts";
 import core from "./core.ts";
-import userbot from "./userbot.mjs";
+import userbot from "./userbot.ts";
 import gws from "./gws.ts";
 import crons from "./crons.ts";
 import skills from "./skills.ts";
-import status from "./status.mjs";
+import status from "./status.ts";
 import service from "./service.mjs";
 
 // sid → экранный модуль. Псевдо-sid mdl/thk сюда не входят: это хендофф в визарды
