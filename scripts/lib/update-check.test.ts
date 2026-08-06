@@ -307,13 +307,16 @@ test("systemd templates schedule a persistent 10:00 local check and lifecycle co
     join(root, "deploy", "iva-telegram-poll.service"),
     "utf8",
   );
-  const cli = readFileSync(join(root, "bin", "iva.mjs"), "utf8");
   const cliRuntime = readFileSync(
     join(root, "scripts", "cli", "runtime.ts"),
     "utf8",
   );
   const cliSystemd = readFileSync(
     join(root, "scripts", "cli", "systemd.ts"),
+    "utf8",
+  );
+  const cliUpdate = readFileSync(
+    join(root, "scripts", "cli", "update.ts"),
     "utf8",
   );
   const installer = readFileSync(join(root, "install.sh"), "utf8");
@@ -326,7 +329,7 @@ test("systemd templates schedule a persistent 10:00 local check and lifecycle co
     /const TIMERS = \[\.\.\.MEMORY_TIMERS, UPDATE_TIMER\]/,
   );
   assert.match(cliSystemd, /replaceAll\("__TIMEZONE__", timezone\)/);
-  assert.match(cli, /systemd\.activate\(\[UPDATE_TIMER\]\)/);
+  assert.match(cliUpdate, /systemd\.activate\(\[UPDATE_TIMER\]\)/);
   assert.match(installer, /bin\/iva\.mjs" _activate-units/);
   assert.match(
     pollService,
@@ -335,22 +338,22 @@ test("systemd templates schedule a persistent 10:00 local check and lifecycle co
 });
 
 test("a post-commit timer failure exits without rollback or a false update claim", () => {
-  const cli = readFileSync(
-    new URL("../../bin/iva.mjs", import.meta.url),
+  const cliUpdate = readFileSync(
+    new URL("../cli/update.ts", import.meta.url),
     "utf8",
   );
 
   assert.match(
-    cli,
+    cliUpdate,
     /Iva is ready, but the automatic update timer could not be activated/,
   );
-  assert.doesNotMatch(cli, /timerFailure: "Iva updated/);
+  assert.doesNotMatch(cliUpdate, /timerFailure: "Iva updated/);
   assert.match(
-    cli,
-    /const finalizeUpdate = async \(\) => \{[\s\S]*?commitThenRunPostCommit[\s\S]*?terminal\.fail\(text\.timerFailure\)[\s\S]*?process\.exitCode = 1;[\s\S]*?return false;/,
+    cliUpdate,
+    /const finalizeUpdate = async \(\): Promise<boolean> => \{[\s\S]*?commitThenRunPostCommit[\s\S]*?terminal\.fail\(text\.timerFailure\)[\s\S]*?process\.exitCode = 1;[\s\S]*?return false;/,
   );
   assert.equal(
-    cli.match(/if \(!\(await finalizeUpdate\(\)\)\) return;/g)?.length,
+    cliUpdate.match(/if \(!\(await finalizeUpdate\(\)\)\) return;/g)?.length,
     2,
   );
 });

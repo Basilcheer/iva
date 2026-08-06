@@ -4,7 +4,6 @@
 //
 // SINGLE source of truth for systemd units and activation: install.sh delegates here
 // (`iva _install-units` + `_activate-units`), and CLI/doctor reuse the same paths.
-import { spawnSync } from "node:child_process";
 import {
   existsSync,
   readFileSync,
@@ -16,28 +15,15 @@ import {
 import { randomBytes } from "node:crypto";
 import { join, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
-import { homedir, tmpdir } from "node:os";
-import { modelSummary } from "../scripts/lib/model-summary.ts";
-import { createTerminalProgress } from "../scripts/lib/progress.ts";
+import { homedir } from "node:os";
 import { quarantinePath, resetStateTargets } from "../scripts/lib/wf-store.ts";
-import {
-  createTelegramUpdateReporter,
-  loadTelegramJob,
-  removeTelegramJob,
-} from "../scripts/lib/telegram-status.ts";
 import { userbotSyncArgs } from "../scripts/lib/userbot-deps.ts";
 import { probeUserbotHealth } from "../scripts/lib/userbot-health.ts";
-import {
-  acquireUpdateLock,
-  commitThenRunPostCommit,
-  createUpdateLog,
-  createUpdateTransaction,
-  releaseUpdateLock,
-} from "../scripts/lib/update-safety.ts";
 import { createCliRuntime } from "../scripts/cli/runtime.ts";
 import { createCliSystemd } from "../scripts/cli/systemd.ts";
 import { createConfigCommand } from "../scripts/cli/config.ts";
 import { createDoctorCommand } from "../scripts/cli/doctor.ts";
+import { createUpdateCommand } from "../scripts/cli/update.ts";
 
 const runtime = createCliRuntime(
   join(dirname(fileURLToPath(import.meta.url)), ".."),
@@ -45,9 +31,6 @@ const runtime = createCliRuntime(
 const cliSystemd = createCliSystemd(runtime);
 const {
   ROOT,
-  ENV_PATH,
-  NPM,
-  childEnv,
   SERVICES,
   UPDATE_TIMER,
   TIMERS,
@@ -55,7 +38,6 @@ const {
   USERBOT_DIR,
   VENV_PY,
   TOKEN_FILE,
-  DEFAULT_PORT,
   C,
   ok,
   warn,
@@ -72,10 +54,15 @@ const {
   requireSystemd,
   writeEnvVars,
 } = runtime;
-const { writeUnits, activateUnits, removeUnits, migrateEnv, restartServices } =
-  cliSystemd;
+const { writeUnits, activateUnits, removeUnits, restartServices } = cliSystemd;
 const cmdConfig = createConfigCommand(runtime, cliSystemd);
 const cmdDoctor = createDoctorCommand(runtime, cliSystemd);
+const cmdUpdate = createUpdateCommand({
+  runtime,
+  systemdLifecycle: cliSystemd,
+  showTree,
+  restartUserbotIfActive,
+});
 
 // ANSI tree like during install. The only source of the art is install.sh (heredoc
 // IVA_TREE); we read it from there so as not to spawn a copy. In a real terminal we add
@@ -208,297 +195,6 @@ async function showTree() {
 }
 
 // ── commands ───────────────────────────────────────────────────────────────
-async function cmdUpdate(args) {
-  const force = args.includes("--force");
-  const verbose = args.includes("--verbose");
-  const telegramJobAt = args.indexOf("--telegram-job");
-  const telegramJobId = telegramJobAt >= 0 ? args[telegramJobAt + 1] || "" : "";
-  const locale =
-    (readEnv().AGENT_LANGUAGE || process.env.AGENT_LANGUAGE) === "ru"
-      ? "ru"
-      : "en";
-  const text =
-    locale === "ru"
-      ? {
-          protect: [
-            "Сохраняю ваши изменения",
-            "Изменения сохранены",
-            "Не удалось сохранить изменения",
-          ],
-          fetch: [
-            "Получаю обновление",
-            "Обновление получено",
-            "Не удалось получить обновление",
-          ],
-          build: ["Собираю Iva", "Iva собрана", "Не удалось собрать Iva"],
-          timerFailure:
-            "Iva готова, но таймер автоматических обновлений не удалось активировать",
-          current: "Iva уже обновлена",
-        }
-      : {
-          protect: [
-            "Saving your changes",
-            "Changes saved",
-            "Couldn't save your changes",
-          ],
-          fetch: [
-            "Getting the update",
-            "Update received",
-            "Couldn't get the update",
-          ],
-          build: ["Building Iva", "Iva built", "Couldn't build Iva"],
-          timerFailure:
-            "Iva is ready, but the automatic update timer could not be activated",
-          current: "Iva is already up to date",
-        };
-
-  await showTree();
-  const env = readEnv();
-  const dataDir = dataDirAbs(env);
-  const loadedJob = await loadTelegramJob(dataDir, telegramJobId);
-  const reporter = loadedJob
-    ? createTelegramUpdateReporter({
-        token: env.TELEGRAM_BOT_TOKEN,
-        job: loadedJob.job,
-        env,
-      })
-    : null;
-  const terminal = createTerminalProgress({ verbose });
-  const owner = telegramJobId || `cli-${process.pid}-${Date.now()}`;
-  const lock = acquireUpdateLock(dataDir, owner);
-  if (!lock.ok) {
-    terminal.fail(
-      locale === "ru" ? "Обновление уже идёт" : "An update is already running",
-    );
-    reporter?.dispose();
-    await removeTelegramJob(loadedJob?.path);
-    process.exitCode = 1;
-    return;
-  }
-
-  const logFile = createUpdateLog(dataDir);
-  const tx = createUpdateTransaction({
-    root: ROOT,
-    dataDir,
-    envPath: ENV_PATH,
-    verbose,
-    logFile,
-    env: childEnv,
-  });
-  let phase = "protect";
-  let userbotUpdateAttempted = false;
-  let userbotRollbackSnapshot = null;
-  let versions = {
-    beforeVersion: "the previous version",
-    afterVersion: "the new version",
-  };
-  const phaseStart = async (name) => {
-    phase = name;
-    terminal.start(text[name][0]);
-    await reporter?.start(name);
-  };
-  const phaseDone = async (name) => {
-    terminal.done(text[name][1]);
-    await reporter?.done(name);
-  };
-  const ensureUpdateTimer = async () => {
-    if (!hasSystemd()) return;
-    writeUnits();
-    systemd.activate([UPDATE_TIMER]);
-  };
-  const finalizeUpdate = async () => {
-    const finalized = await commitThenRunPostCommit({
-      commit: () => tx.commit(),
-      postCommit: ensureUpdateTimer,
-    });
-    if (finalized.ok) return true;
-
-    const detail = finalized.error?.message || String(finalized.error);
-    terminal.fail(text.timerFailure);
-    terminal.info(detail);
-    await reporter?.postCommitFailure(detail);
-    process.exitCode = 1;
-    return false;
-  };
-
-  try {
-    await phaseStart("protect");
-    await tx.protect();
-    await phaseDone("protect");
-
-    await phaseStart("fetch");
-    // Только fetch + классификация, HEAD не двигается: живая установка меняется лишь после
-    // успешной сборки кандидата в worktree (см. buildCandidate в update-safety.ts).
-    const update = await tx.resolveTarget();
-    if (!update.changed && !force) {
-      await tx.restoreLocalChanges();
-      versions = await tx.versions();
-      await phaseDone("fetch");
-      if (!(await finalizeUpdate())) return;
-      terminal.info(`✅ ${text.current} (${versions.afterVersion})`);
-      await reporter?.complete({
-        ...versions,
-        changedLocal: tx.hadLocalChanges,
-      });
-      return;
-    }
-    await phaseDone("fetch");
-
-    await phaseStart("build");
-    const candidate = await tx.buildCandidate({ npm: NPM });
-    const integrated = await tx.fetchAndIntegrate();
-    await tx.restoreLocalChanges();
-    versions = await tx.versions();
-    migrateEnv({ quiet: true });
-    // The streaming cleaner repairs cards the old frontmatter writer bloated to GBs (those
-    // OOM-kill the agent and the nightly doctor, so waiting for the doctor is not an option).
-    // The script comes from the freshly updated repo, so it is always the current version —
-    // best-effort: it never fails an update.
-    try {
-      const vaultRel = readEnv().ASSISTANT_VAULT_DIR || "vault";
-      const vaultDir = vaultRel.startsWith("/")
-        ? vaultRel
-        : join(ROOT, vaultRel);
-      const cleanupScript = join(ROOT, "scripts/autograph/cleanup.py");
-      const cleaned = spawnSync("uv", ["run", cleanupScript, ".", "--apply"], {
-        cwd: vaultDir,
-        encoding: "utf8",
-        env: childEnv,
-      });
-      if (cleaned.status === 0 && !cleaned.stdout.includes(" 0 file(s)"))
-        terminal.info(`🧹 ${cleaned.stdout.trim().split("\n").pop()}`);
-    } catch {
-      // Vault cleanup is best-effort and must not fail an update.
-    }
-    const promoted = candidate ? await tx.promoteCandidate() : false;
-    if (!promoted) {
-      if (integrated.changed) {
-        const diff = await tx.git(
-          "diff",
-          "--name-only",
-          `${versions.beforeHead}..${versions.afterHead}`,
-        );
-        const files = diff.stdout.split("\n");
-        if (
-          files.includes("package.json") ||
-          files.includes("package-lock.json")
-        ) {
-          const install = await tx.run(NPM, [
-            existsSync(join(ROOT, "package-lock.json")) ? "ci" : "install",
-          ]);
-          if (install.code !== 0)
-            throw new Error("dependency installation failed");
-        }
-      }
-      tx.backupOutput();
-      const build = await tx.run(NPM, ["run", "build"]);
-      if (build.code !== 0) throw new Error("build failed");
-    }
-
-    // Best-effort helper for an integration that has no active local service.
-    await tx.run(NPM, ["i", "-g", "@googleworkspace/cli@latest"]);
-
-    if (hasSystemd()) {
-      writeUnits();
-      systemd.restart(SERVICES);
-      let healthy = false;
-      const port = (readEnv().IVA_PORT || DEFAULT_PORT).trim();
-      for (let attempt = 0; attempt < 30; attempt++) {
-        const active = SERVICES.every((service) => systemd.isActive(service));
-        try {
-          const response = await fetch(`http://127.0.0.1:${port}/`, {
-            signal: AbortSignal.timeout(2000),
-          });
-          if (active && response.ok) {
-            healthy = true;
-            break;
-          }
-        } catch {
-          // Transient health-check failures are retried until the deadline.
-        }
-        await new Promise((resolve) => setTimeout(resolve, 1000));
-      }
-      if (!healthy) throw new Error("health check failed");
-      if (systemd.isActive(SVC_USERBOT)) {
-        const frozen = cap("uv", ["pip", "freeze", "--python", VENV_PY], {
-          cwd: USERBOT_DIR,
-        });
-        if (frozen.code !== 0 || !frozen.out)
-          throw new Error(
-            "userbot: не удалось сохранить dependency snapshot перед обновлением",
-          );
-        userbotRollbackSnapshot = join(
-          tmpdir(),
-          `iva-userbot-before-update-${process.pid}-${Date.now()}.txt`,
-        );
-        writeFileSync(userbotRollbackSnapshot, `${frozen.out}\n`, {
-          mode: 0o600,
-        });
-        userbotUpdateAttempted = true;
-        restartUserbotIfActive({ quiet: true, knownActive: true });
-      }
-    }
-
-    await phaseDone("build");
-    if (!(await finalizeUpdate())) return;
-    const model = modelSummary(readEnv());
-    terminal.info(`✅ Iva ${locale === "ru" ? "обновлена" : "updated"}`);
-    terminal.info(
-      `${versions.beforeVersion} → ${versions.afterVersion} · ${model.provider}/${model.model}`,
-    );
-    await reporter?.complete({ ...versions, changedLocal: tx.hadLocalChanges });
-  } catch (error) {
-    terminal.fail(text[phase][2]);
-    let rollbackOk = true;
-    let codeRollbackOk = true;
-    try {
-      await tx.rollback();
-    } catch {
-      rollbackOk = false;
-      codeRollbackOk = false;
-    }
-    // Пока живые .output/node_modules не тронуты (упал кандидат или интеграция),
-    // здоровые сервисы не перезапускаем.
-    if (phase === "build" && tx.outputTouched && hasSystemd()) {
-      try {
-        writeUnits();
-        systemd.restart(SERVICES);
-      } catch {
-        rollbackOk = false;
-      }
-      if (userbotUpdateAttempted && codeRollbackOk) {
-        try {
-          restartUserbotIfActive({
-            quiet: true,
-            knownActive: true,
-            requirementsPath: userbotRollbackSnapshot,
-            requireHashes: false,
-          });
-        } catch {
-          rollbackOk = false;
-        }
-      }
-    }
-    await reporter?.fail(phase, versions.beforeVersion);
-    terminal.info(
-      `${error.message}. ${locale === "ru" ? "Откат" : "Rollback"}: ${rollbackOk ? "OK" : "FAILED"}. ${locale === "ru" ? "Лог" : "Log"}: ${logFile}`,
-    );
-    process.exitCode = 1;
-  } finally {
-    try {
-      await tx.teardownCandidate();
-    } catch {
-      // Candidate teardown is best-effort during final cleanup.
-    }
-    terminal.dispose();
-    reporter?.dispose();
-    releaseUpdateLock(lock);
-    if (userbotRollbackSnapshot)
-      rmSync(userbotRollbackSnapshot, { force: true });
-    await removeTelegramJob(loadedJob?.path);
-  }
-}
-
 function cmdStatus() {
   requireSystemd();
   run("systemctl", ["--user", "status", "--no-pager", "-n", "5", ...SERVICES]);
