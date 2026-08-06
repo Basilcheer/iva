@@ -638,3 +638,9 @@ the Node event loop is blocked` assertion once. Two later sequential suites hit
   from turning the timing assertion into a load-dependent failure. Two
   successive bounded full suites passed all 598 tests with the four expected
   platform skips.
+- 2026-08-06 Asia/Tashkent: Independent post-conversion review found that the
+  typed `systemd-control` cleanup helper had narrowed the legacy diagnostic
+  fallback from duck-typed `cause.message || String(cause)` to
+  `Error.message`. A separate regression fix restores the original behavior for
+  error-like objects and empty `Error` messages; focused tests now preserve both
+  cases without changing cleanup control flow.

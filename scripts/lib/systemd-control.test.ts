@@ -574,3 +574,31 @@ void test("unit removal finishes every cleanup step before reporting aggregated 
     "reset",
   ]);
 });
+
+void test("unit removal preserves legacy cleanup error normalization", () => {
+  const errorLike = Object.assign(Object.create(null) as object, {
+    message: "permission denied",
+  });
+
+  assert.throws(
+    () =>
+      systemdControl.cleanupSystemdUnits({
+        units: ["iva.service"],
+        disable: () => {
+          // eslint-disable-next-line @typescript-eslint/only-throw-error -- legacy cleanup accepts error-like values from injected system operations
+          throw errorLike;
+        },
+        remove: () => {},
+        reload: () => {
+          throw new Error("");
+        },
+        reset: () => {},
+      }),
+    (error) => {
+      assert.ok(error instanceof AggregateError);
+      assert.match(error.message, /disable iva\.service: permission denied/);
+      assert.match(error.message, /daemon-reload: Error/);
+      return true;
+    },
+  );
+});

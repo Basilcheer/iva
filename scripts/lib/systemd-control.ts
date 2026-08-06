@@ -25,7 +25,9 @@ interface CleanupOptions {
 }
 
 function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  const message = (error as { readonly message?: unknown } | null | undefined)
+    ?.message;
+  return String(message || error);
 }
 
 function safeUnit(unit: string): string {
