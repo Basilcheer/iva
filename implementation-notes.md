@@ -725,3 +725,10 @@ the Node event loop is blocked` assertion once. Two later sequential suites hit
   deterministic userbot lock, and Python 3.12 userbot guardrail/health/compile
   gates all pass. Scope is 13 production modules, 12 converted test files, and
   three removed declarations.
+- 2026-08-06 Asia/Tashkent: `origin/main` remained at the PR-2 merge during the
+  required PR-3 rebase. Every local and Python 3.12 gate was repeated on the
+  committed tree. The second coverage run again reports 632 / 628 / 0 / 4 and
+  74.16% lines, 79.55% branches, 71.87% functions. The verified PR-3 coverage
+  range is therefore 74.14-74.16% lines, 79.52-79.55% branches, and 71.87%
+  functions, with conservative improvement over PR-2 of at least
+  +0.66 / +0.23 / +0.23 percentage points.
