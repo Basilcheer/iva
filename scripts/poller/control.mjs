@@ -32,7 +32,7 @@ import {
   handleThinkCmd,
   handleWizardCallback,
   resetMessageCopy,
-} from "./wizards.mjs";
+} from "./wizards.ts";
 
 // Движок /menu: делит session-store (flows) с визардами /model//think. deps — мост отдаёт
 // экранам всё нужное (пути, systemctl, доставку в eve, allowlist, хендофф в визарды).
