@@ -997,3 +997,14 @@ the Node event loop is blocked` assertion once. Two later sequential suites hit
   known-issue notice, proves reset retirement, and finishes `OK` with five
   provider requests. The two approved untracked handoff files remain outside
   Git, and the five PR-7 commits contain no AI attribution.
+- 2026-08-06 Asia/Tashkent: The required pull/rebase found `origin/main` still
+  at the PR-6 merge, so PR-7 commits were not rewritten. The complete gate set
+  was repeated on the committed post-pull tree: Node 24 again reports 668
+  total, 664 passed, zero failed, and four expected macOS skips; coverage again
+  measures 75.78% lines, 79.20% branches, and 73.03% functions. Lint,
+  formatting, typecheck, build, exact 41/41 ratchet, no tracked menu `.mjs`,
+  Autograph 343/343, and security-defense 45/45 pass. The userbot lock was
+  reproduced with the CI-pinned uv 0.8.3, then synced and tested under Python
+  3.12.13; guardrail, health, and py_compile checks pass. Replica repeated the
+  same documented cross-restart known-issue notice, proved reset retirement,
+  printed final `OK`, and exited zero.
