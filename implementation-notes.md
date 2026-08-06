@@ -1340,3 +1340,12 @@ the Node event loop is blocked` assertion once. Two later sequential suites hit
   `py_compile` checks pass. Acceptance criteria 1-5 are therefore locally
   evidenced; criterion 6 remains explicitly owner-only (`iva doctor` / `iva
 update` before and after merge) and was not run by Codex.
+- 2026-08-06 Asia/Tashkent: `origin/main` remained at the PR-11 merge
+  `861c320`, so the required pull/rebase was a no-op. The complete post-sync
+  gate set then passed after a clean `npm ci`: 784 passed, zero failed, four
+  expected macOS skips; coverage 77.21 / 79.29 / 72.80; lint, Prettier, mjs
+  ratchet 5/5, typecheck, build, replica (`OK`, five provider requests),
+  Autograph 343/343, security defense 45/45, byte-identical uv 0.8.3 lock,
+  strict hashed userbot sync, guardrails, health, and `py_compile`. Range diff
+  checks confirm both protected handoff files are absent and all PR-12 commits
+  contain no AI attribution.
