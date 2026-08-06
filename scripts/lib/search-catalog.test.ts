@@ -7,7 +7,10 @@ import { SEARCH_CATALOG, checkSearchKey } from "./search-catalog.ts";
 type FetchProbe = (
   input: string | URL | Request,
   init?: RequestInit,
-) => Promise<{ status: number }>;
+) => Promise<{
+  status: number;
+  body?: { cancel: () => Promise<void> } | null;
+}>;
 
 async function withFetch<T>(
   impl: FetchProbe,
@@ -108,4 +111,31 @@ void test("проба несёт ключ в запросе, но причина
       assert.doesNotMatch(reason, /top-secret-value/); // но не в текст причины
     },
   );
+});
+
+void test("credential probes reject redirects and release response bodies", async () => {
+  for (const status of [200, 401, 403]) {
+    let seen: RequestInit | undefined;
+    let cancelCalls = 0;
+    await withFetch(
+      (_url, options) => {
+        seen = options;
+        return Promise.resolve({
+          status,
+          body: {
+            cancel: () => {
+              cancelCalls += 1;
+              return Promise.resolve();
+            },
+          },
+        });
+      },
+      async () => {
+        const result = await checkSearchKey("brave", "secret-key");
+        assert.equal(seen?.redirect, "error");
+        assert.equal(result === null, status === 200);
+      },
+    );
+    assert.equal(cancelCalls, 1);
+  }
 });

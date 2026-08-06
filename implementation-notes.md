@@ -650,3 +650,9 @@ the Node event loop is blocked` assertion once. Two later sequential suites hit
   the declaration's required options contract while the implementation keeps its
   pre-existing runtime default for untyped JavaScript callers. A compile-time
   regression assertion guards both sides of that compatibility boundary.
+- 2026-08-06 Asia/Tashkent: Review confirmed a pre-existing search-key probe
+  leak: Node removes `Authorization` on a cross-origin redirect but forwards the
+  custom Brave and Exa/Parallel credential headers. A separate security commit
+  sets `redirect: "error"`; the existing soft network-failure policy still
+  returns `null`. The same response lifecycle now cancels unread bodies without
+  allowing cancellation failures to change the probe result.

@@ -90,11 +90,16 @@ export async function checkSearchKey(provider: string, key: string) {
       method: req.method,
       headers: req.headers,
       body: req.body,
+      redirect: "error",
       signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     });
-    if (res.status === 401 || res.status === 403)
-      return `провайдер отверг ключ (${res.status})`;
-    return null;
+    try {
+      if (res.status === 401 || res.status === 403)
+        return `провайдер отверг ключ (${res.status})`;
+      return null;
+    } finally {
+      await res.body?.cancel().catch(() => {});
+    }
   } catch {
     return null; // сеть/таймаут — ключ не наказываем
   }
