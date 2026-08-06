@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-base-to-string -- Telegram response descriptions retain source-compatible permissive coercion. */
 import {
   COLLECT_QUIET_MS,
   collectorOffer,
@@ -5,9 +6,14 @@ import {
   collectorRestore,
   collectorTakeExpired,
   createCollector,
+  type TelegramCollectUpdate,
 } from "../lib/telegram-collect.ts";
 import { alreadyDelivered } from "../lib/offset-store.ts";
-import { isReplyToBot, migrateQueueFile } from "../lib/telegram-queue.ts";
+import {
+  isReplyToBot,
+  migrateQueueFile,
+  type TelegramQueueUpdate,
+} from "../lib/telegram-queue.ts";
 import {
   ACCEPTANCE_ROUTE,
   ROUTE,
@@ -18,14 +24,76 @@ import {
 } from "./config.ts";
 import { tg } from "./transport.ts";
 import { fastForwardOffset, loadOffset, saveOffset } from "./offset.ts";
-import {
-  QUEUE_FILE,
-  reapStaleRuns,
-  reconcileScopedResetIntents,
-} from "./queue.mjs";
-import { drainReadyQueueHeads, routeMessageUpdate } from "./routing.mjs";
-import { removeStaleUpdateJobs } from "./update-flow.ts";
-import { handleControl, registerBotCommands } from "./control.mjs";
+
+type ErrorLike = { message?: unknown };
+type TelegramResponse = {
+  ok?: unknown;
+  description?: unknown;
+  result?: TelegramQueueUpdate[];
+};
+type QueueModule = {
+  QUEUE_FILE: string;
+  reapStaleRuns: () => Promise<void>;
+  reconcileScopedResetIntents: () => Promise<number>;
+  [name: string]: unknown;
+};
+type RoutingModule = {
+  drainReadyQueueHeads: () => Promise<number>;
+  routeMessageUpdate: (update: unknown) => Promise<string>;
+  [name: string]: unknown;
+};
+type UpdateFlowModule = { removeStaleUpdateJobs: () => Promise<void> } & Record<
+  string,
+  unknown
+>;
+type ControlModule = {
+  handleControl: (update: unknown) => Promise<boolean>;
+  registerBotCommands: () => Promise<void>;
+  [name: string]: unknown;
+};
+
+// @ts-expect-error -- The queue module remains JavaScript until its migration PR.
+const queue = (await import("./queue.mjs")) as unknown as QueueModule;
+// @ts-expect-error -- The routing module remains JavaScript until its migration PR.
+const routing = (await import("./routing.mjs")) as unknown as RoutingModule;
+const updateFlow = (await import(
+  // @ts-expect-error -- The update-flow module remains JavaScript until its migration PR.
+  "./update-flow.mjs"
+)) as unknown as UpdateFlowModule;
+// @ts-expect-error -- The control module remains JavaScript until its migration PR.
+const control = (await import("./control.mjs")) as unknown as ControlModule;
+// @ts-expect-error -- The wizards module remains JavaScript until its migration PR.
+const wizards = (await import("./wizards.mjs")) as Record<string, unknown>;
+const { QUEUE_FILE, reapStaleRuns, reconcileScopedResetIntents } = queue;
+const { drainReadyQueueHeads, routeMessageUpdate } = routing;
+const { removeStaleUpdateJobs } = updateFlow;
+const { handleControl, registerBotCommands } = control;
+
+export { readCappedStream } from "./transport.ts";
+export const loadQueue = queue.loadQueue;
+export const writeQueueAtomic = queue.writeQueueAtomic;
+export const completeScopedResetState = queue.completeScopedResetState;
+export const persistPrivateResetIntent = queue.persistPrivateResetIntent;
+export const loadPrivateResetIntents = queue.loadPrivateResetIntents;
+export const clearPrivateResetIntent = queue.clearPrivateResetIntent;
+export const releaseScopedContinuation = queue.releaseScopedContinuation;
+export const performScopedReset = queue.performScopedReset;
+export { reconcileScopedResetIntents, reapStaleRuns };
+export { routeMessageUpdate, drainReadyQueueHeads };
+export const handleUpdateCheck = updateFlow.handleUpdateCheck;
+export const handleUpdateCallback = updateFlow.handleUpdateCallback;
+export const runWizardRequest = wizards.runWizardRequest;
+export const isStaleWizard = wizards.isStaleWizard;
+export const wizardActionAllowed = wizards.wizardActionAllowed;
+export const selectWizardModel = wizards.selectWizardModel;
+export const selectWizardEffort = wizards.selectWizardEffort;
+export const selectableWizardOptions = wizards.selectableWizardOptions;
+export const resolveThinkCatalogLoad = wizards.resolveThinkCatalogLoad;
+export const validateAndSaveWizard = wizards.validateAndSaveWizard;
+export const resetMessageCopy = wizards.resetMessageCopy;
+export const handleAwaitNonText = control.handleAwaitNonText;
+
+const errorMessage = (error: unknown) => (error as ErrorLike).message;
 
 const rawCollectQuietMs = Number(
   process.env.TELEGRAM_COLLECT_QUIET_MS ?? COLLECT_QUIET_MS,
@@ -63,19 +131,23 @@ export async function main() {
   // Читаем offset ДО любого destructive Telegram-вызова: EACCES/EIO/битый JSON
   // останавливают мост, пока backlog ещё цел. Только подтверждённый ENOENT означает
   // first run и разрешает drop_pending=true.
-  let { offset, delivered } = await loadOffset();
+  const storedOffset = await loadOffset();
+  let offset = storedOffset.offset ?? 0;
+  let { delivered } = storedOffset;
   // First run (no offset file) — drop the accumulated install backlog (drop_pending=true),
   // so old messages don't replay in a batch → parallel sessions on one chat (HookConflict).
   // On subsequent starts we do NOT drop the backlog (don't lose messages that arrived while the bridge was down).
-  const firstRun = offset === null;
-  const dw = await tg("deleteWebhook", { drop_pending_updates: firstRun });
+  const firstRun = storedOffset.offset === null;
+  const dw = (await tg("deleteWebhook", {
+    drop_pending_updates: firstRun,
+  })) as TelegramResponse;
   log(
     "deleteWebhook:",
     dw.ok ? `ok (drop_pending=${firstRun})` : dw.description,
   );
   await registerBotCommands();
 
-  if (offset === null) {
+  if (firstRun) {
     offset = await fastForwardOffset();
     log("first run — offset past the tail of the queue:", offset);
     await saveOffset(offset);
@@ -88,18 +160,17 @@ export async function main() {
     // Telegram long-poll so terminal/stale run-status changes trigger drain quickly.
     try {
       await reapStaleRuns();
-    } catch (e) {
-      log("stale run reaper failed:", e.message);
+    } catch (error) {
+      log("stale run reaper failed:", errorMessage(error));
     }
     let pendingQueueCount = await drainReadyQueueHeads();
     let collectorWriteFailed = false;
     for (const update of collectorTakeExpired(messageCollector, Date.now())) {
       const routed = await routeMessageUpdate(update);
       if (routed === "delivered") {
+        const updateId = update.update_id as number;
         delivered =
-          delivered === null
-            ? update.update_id
-            : Math.max(delivered, update.update_id);
+          delivered === null ? updateId : Math.max(delivered, updateId);
         await saveOffset(offset, delivered);
       } else if (routed === "queued") {
         pendingQueueCount = Math.max(1, pendingQueueCount);
@@ -114,9 +185,9 @@ export async function main() {
     }
     const pollSeconds =
       pendingQueueCount > 0 || collectorPending(messageCollector) > 0 ? 1 : 30;
-    let data;
+    let data: TelegramResponse;
     try {
-      data = await tg(
+      data = (await tg(
         "getUpdates",
         {
           offset,
@@ -124,16 +195,16 @@ export async function main() {
           allowed_updates: ["message", "callback_query"],
         },
         { timeoutMs: pollSeconds > 1 ? 40_000 : 10_000 },
-      );
-    } catch (e) {
-      log("getUpdates network:", e.message);
+      )) as TelegramResponse;
+    } catch (error) {
+      log("getUpdates network:", errorMessage(error));
       await sleep(3000);
       continue;
     }
     if (!data.ok) {
       log("getUpdates:", data.description);
       // 409/conflict — a webhook is left somewhere; remove it and try again.
-      if (/409|conflict|webhook/i.test(data.description || "")) {
+      if (/409|conflict|webhook/i.test(String(data.description || ""))) {
         await tg("deleteWebhook", { drop_pending_updates: false });
       }
       await sleep(3000);
@@ -157,10 +228,14 @@ export async function main() {
         await saveOffset(offset, delivered);
         continue;
       }
-      let candidate = update;
+      let candidate: TelegramQueueUpdate | TelegramCollectUpdate = update;
       let collected = false;
       if (update.message && !isReplyToBot(update.message)) {
-        const offered = collectorOffer(messageCollector, update, Date.now());
+        const offered = collectorOffer(
+          messageCollector,
+          update as TelegramCollectUpdate,
+          Date.now(),
+        );
         if (offered.status === "buffered") {
           // The quiet-window buffer is intentionally in-memory. Advancing now avoids
           // replaying every part, but a process crash can lose this one pending burst.
@@ -178,7 +253,11 @@ export async function main() {
 
       const routed = await routeMessageUpdate(candidate);
       if (routed === "enqueue-failed") {
-        if (collected) collectorRestore(messageCollector, candidate);
+        if (collected)
+          collectorRestore(
+            messageCollector,
+            candidate as TelegramCollectUpdate,
+          );
         // Passthrough retains the old durable retry point. Collected parts already
         // advanced offset when buffered and retry from the restored in-memory burst.
         queueWriteFailed = true;
@@ -186,10 +265,9 @@ export async function main() {
       }
       if (!collected) offset = update.update_id + 1;
       if (routed === "delivered") {
+        const candidateId = candidate.update_id as number;
         delivered =
-          delivered === null
-            ? candidate.update_id
-            : Math.max(delivered, candidate.update_id);
+          delivered === null ? candidateId : Math.max(delivered, candidateId);
       }
       await saveOffset(offset, delivered);
     }

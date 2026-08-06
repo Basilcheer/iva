@@ -1,11 +1,13 @@
-import { test } from "node:test";
+/* eslint-disable @typescript-eslint/ban-ts-comment, @typescript-eslint/no-floating-promises, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-return, @typescript-eslint/require-await -- This characterization suite preserves pre-existing JavaScript-shaped doubles while adjacent modules migrate in later PRs. */
+// @ts-nocheck -- See the scoped lint rationale above.
 import assert from "node:assert/strict";
+import { test } from "node:test";
 
 // telegram-poll.mjs reads env at import and guards its poll loop behind a direct-execution check,
 // so importing it here is side-effect-free. A dummy token keeps the API base a harmless string.
 process.env.TELEGRAM_BOT_TOKEN ??= "test:token";
 delete process.env.TELEGRAM_DIRECT_ACCEPTANCE_TIMEOUT_MS;
-const directMainModule = await import("./poller/main.mjs");
+const directMainModule = await import("./poller/main.ts");
 const {
   readCappedStream,
   handleAwaitNonText,
@@ -19,6 +21,7 @@ const {
   routeMessageUpdate,
   selectableWizardOptions,
   validateAndSaveWizard,
+  main: shimMain,
 } = await import("./telegram-poll.mjs");
 
 const enc = new TextEncoder();
@@ -90,8 +93,8 @@ function routeDeps(overrides = {}) {
 }
 
 test("poller main is directly importable without starting the poll loop", () => {
-  assert.deepEqual(Object.keys(directMainModule), ["main"]);
   assert.equal(typeof directMainModule.main, "function");
+  assert.equal(directMainModule.main, shimMain);
 });
 
 test("routeMessageUpdate enqueues and acknowledges one busy update", async () => {
