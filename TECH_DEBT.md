@@ -81,7 +81,7 @@ grows a native catch-up story.
 
 ## 10. Rollup-turn workarounds for vercel/eve#1450
 
-`scripts/lib/rollup-turn.mjs` and the timeout/safety-net logic in
+`scripts/lib/rollup-turn.ts` and the timeout/safety-net logic in
 `scripts/memory/rollup.ts` work around an open upstream bug
 ([vercel/eve#1450](https://github.com/vercel/eve/issues/1450)). Once that's fixed
 upstream, remove the workarounds rather than leaving them as permanent scaffolding.
