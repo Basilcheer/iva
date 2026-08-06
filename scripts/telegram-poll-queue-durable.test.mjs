@@ -6,7 +6,7 @@ import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 
 const ROOT = resolve(import.meta.dirname, "..");
-const HARNESS = join(ROOT, "scripts/fixtures/telegram-poll-queue-harness.mjs");
+const HARNESS = join(ROOT, "scripts/fixtures/telegram-poll-queue-harness.ts");
 const [queueRuntime, routingRuntime, deliverRuntime] = await Promise.all([
   import("./poller/queue.ts"),
   import("./poller/routing.ts"),
