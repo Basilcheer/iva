@@ -459,7 +459,7 @@ void test("style-matched integration: a real fake systemctl on PATH, tmpdir HOME
   await writeFile(fakeSystemctl, `#!/bin/sh\necho "$@" >> "${log}"\nexit 0\n`);
   await chmod(fakeSystemctl, 0o755);
 
-  const script = join(dir, "run.mjs");
+  const script = join(dir, "run.ts");
   await writeFile(
     script,
     [

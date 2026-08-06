@@ -65,7 +65,7 @@ function collectLogs() {
 void test("direct run (no lockPath): success writes lastSuccessAt and does not touch other entries", async (t) => {
   const root = await scaffold();
   t.after(() => {});
-  await writeFile(join(root, "ok.mjs"), "process.exit(0);\n");
+  await writeFile(join(root, "ok.ts"), "process.exit(0);\n");
   const statusPath = join(root, "data/rollup-status.json");
   await mkdir(join(root, "data"), { recursive: true });
   await writeFile(
@@ -77,7 +77,7 @@ void test("direct run (no lockPath): success writes lastSuccessAt and does not t
   const { log, lines } = collectLogs();
   const result = await runScheduledJob({
     name: "memory-daily",
-    argv: ["ok.mjs"],
+    argv: ["ok.ts"],
     root,
     nodeBin: process.execPath,
     statusPath,
@@ -113,7 +113,7 @@ void test("direct run (no lockPath): success writes lastSuccessAt and does not t
 
 void test("non-zero exit: lastExitCode recorded, lastSuccessAt left untouched", async () => {
   const root = await scaffold();
-  await writeFile(join(root, "fail.mjs"), "process.exit(7);\n");
+  await writeFile(join(root, "fail.ts"), "process.exit(7);\n");
   const statusPath = join(root, "data/rollup-status.json");
   await mkdir(join(root, "data"), { recursive: true });
   await writeFile(
@@ -125,7 +125,7 @@ void test("non-zero exit: lastExitCode recorded, lastSuccessAt left untouched", 
   const { log } = collectLogs();
   const result = await runScheduledJob({
     name: "memory-daily",
-    argv: ["fail.mjs"],
+    argv: ["fail.ts"],
     root,
     nodeBin: process.execPath,
     statusPath,
@@ -145,7 +145,7 @@ void test("non-zero exit: lastExitCode recorded, lastSuccessAt left untouched", 
 
 void test("guard: a lastSuccessAt inside the 2h window skips the job without spawning", async () => {
   const root = await scaffold();
-  await writeFile(join(root, "boom.mjs"), "process.exit(1);\n"); // would fail loudly if actually spawned
+  await writeFile(join(root, "boom.ts"), "process.exit(1);\n"); // would fail loudly if actually spawned
   const statusPath = join(root, "data/rollup-status.json");
   await mkdir(join(root, "data"), { recursive: true });
   const recentSuccess = Date.now() - 5 * 60 * 1000; // 5 minutes ago
@@ -159,7 +159,7 @@ void test("guard: a lastSuccessAt inside the 2h window skips the job without spa
   const { log, lines } = collectLogs();
   const result = await runScheduledJob({
     name: "memory-daily",
-    argv: ["boom.mjs"],
+    argv: ["boom.ts"],
     root,
     nodeBin: process.execPath,
     statusPath,
@@ -183,7 +183,7 @@ void test("guard: a lastSuccessAt inside the 2h window skips the job without spa
 
 void test("guard: a lastSuccessAt older than 2h runs normally", async () => {
   const root = await scaffold();
-  await writeFile(join(root, "ok.mjs"), "process.exit(0);\n");
+  await writeFile(join(root, "ok.ts"), "process.exit(0);\n");
   const statusPath = join(root, "data/rollup-status.json");
   await mkdir(join(root, "data"), { recursive: true });
   const oldSuccess = Date.now() - 3 * 60 * 60 * 1000; // 3 hours ago
@@ -195,7 +195,7 @@ void test("guard: a lastSuccessAt older than 2h runs normally", async () => {
 
   const result = await runScheduledJob({
     name: "memory-daily",
-    argv: ["ok.mjs"],
+    argv: ["ok.ts"],
     root,
     nodeBin: process.execPath,
     statusPath,
@@ -208,7 +208,7 @@ void test("guard: a lastSuccessAt older than 2h runs normally", async () => {
 
 void test("lockPath given: the spawned command is flock-wrapped in the documented shape", async () => {
   const root = await scaffold();
-  await writeFile(join(root, "ok.mjs"), "process.exit(0);\n");
+  await writeFile(join(root, "ok.ts"), "process.exit(0);\n");
   const lockPath = join(root, ".memory.lock");
   const statusPath = join(root, "data/rollup-status.json");
   await mkdir(join(root, "data"), { recursive: true });
@@ -226,7 +226,7 @@ void test("lockPath given: the spawned command is flock-wrapped in the documente
       seen = { cmd, args, opts };
       // Actually run something trivial regardless of the (unrunnable) recorded command,
       // so the promise still settles quickly and deterministically.
-      return realSpawn(process.execPath, [join(root, "ok.mjs")], opts);
+      return realSpawn(process.execPath, [join(root, "ok.ts")], opts);
     },
   });
 
@@ -246,7 +246,7 @@ void test("lockPath given: the spawned command is flock-wrapped in the documente
 
 void test("no lockPath: the spawned command invokes nodeBin directly (digest case)", async () => {
   const root = await scaffold();
-  await writeFile(join(root, "ok.mjs"), "process.exit(0);\n");
+  await writeFile(join(root, "ok.ts"), "process.exit(0);\n");
   const statusPath = join(root, "data/rollup-status.json");
 
   let seen: Pick<SeenSpawn, "cmd" | "args"> | null = null;
@@ -259,7 +259,7 @@ void test("no lockPath: the spawned command invokes nodeBin directly (digest cas
     log: () => {},
     spawnImpl: (cmd, args, opts) => {
       seen = { cmd, args };
-      return realSpawn(process.execPath, [join(root, "ok.mjs")], opts);
+      return realSpawn(process.execPath, [join(root, "ok.ts")], opts);
     },
   });
 
@@ -272,13 +272,13 @@ void test(
   { skip: !existsSync("/usr/bin/flock") },
   async () => {
     const root = await scaffold();
-    await writeFile(join(root, "ok.mjs"), "process.exit(0);\n");
+    await writeFile(join(root, "ok.ts"), "process.exit(0);\n");
     const statusPath = join(root, "data/rollup-status.json");
     await mkdir(join(root, "data"), { recursive: true });
 
     const result = await runScheduledJob({
       name: "memory-daily",
-      argv: ["ok.mjs"],
+      argv: ["ok.ts"],
       root,
       nodeBin: process.execPath,
       lockPath: join(root, ".memory.lock"),
@@ -307,7 +307,7 @@ void test("timeout: SIGTERM first, escalates to SIGKILL after the grace window",
   // (code=null, signal="SIGTERM") instead of ever needing the SIGKILL escalation this
   // test exists to exercise.
   await writeFile(
-    join(root, "stubborn.mjs"),
+    join(root, "stubborn.ts"),
     [
       "import { writeFileSync } from 'node:fs';",
       `process.on('SIGTERM', () => { writeFileSync(${JSON.stringify(sigtermMarker)}, 'x'); });`,
@@ -324,7 +324,7 @@ void test("timeout: SIGTERM first, escalates to SIGKILL after the grace window",
   // tiny fraction of that — plenty of margin without meaningfully slowing the suite.
   const result = await runScheduledJob({
     name: "memory-daily",
-    argv: ["stubborn.mjs", marker],
+    argv: ["stubborn.ts", marker],
     root,
     nodeBin: process.execPath,
     statusPath,
@@ -410,7 +410,7 @@ void test(
     // Ignores SIGTERM (forces the SIGKILL escalation) and never exits on its own — a stand-in
     // for a wedged rollup that would otherwise keep the flock lock held via its inherited fd.
     await writeFile(
-      join(root, "stubborn.mjs"),
+      join(root, "stubborn.ts"),
       "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);\n",
     );
     const lockPath = join(root, ".memory.lock");
@@ -418,7 +418,7 @@ void test(
 
     const result = await runScheduledJob({
       name: "memory-daily",
-      argv: ["stubborn.mjs", marker],
+      argv: ["stubborn.ts", marker],
       root,
       nodeBin: process.execPath,
       lockPath,
@@ -463,7 +463,7 @@ void test(
 void test("double entry: two concurrent calls for the same name only run once (inProgressSince admission guard)", async () => {
   const root = await scaffold();
   await writeFile(
-    join(root, "slow.mjs"),
+    join(root, "slow.ts"),
     "await new Promise((r) => setTimeout(r, 250)); process.exit(0);\n",
   );
   const statusPath = join(root, "data/rollup-status.json");
@@ -471,7 +471,7 @@ void test("double entry: two concurrent calls for the same name only run once (i
   const call = () =>
     runScheduledJob({
       name: "memory-daily",
-      argv: ["slow.mjs"],
+      argv: ["slow.ts"],
       root,
       nodeBin: process.execPath,
       statusPath,
@@ -512,7 +512,7 @@ void test("double entry: two concurrent calls for the same name only run once (i
 
 void test("a stale inProgressSince (older than timeoutMs — a presumed crash) does not block a new run forever", async () => {
   const root = await scaffold();
-  await writeFile(join(root, "ok.mjs"), "process.exit(0);\n");
+  await writeFile(join(root, "ok.ts"), "process.exit(0);\n");
   const statusPath = join(root, "data/rollup-status.json");
   await mkdir(join(root, "data"), { recursive: true });
   const staleStart = Date.now() - 10_000; // "started" 10s ago
@@ -524,7 +524,7 @@ void test("a stale inProgressSince (older than timeoutMs — a presumed crash) d
 
   const result = await runScheduledJob({
     name: "memory-daily",
-    argv: ["ok.mjs"],
+    argv: ["ok.ts"],
     root,
     nodeBin: process.execPath,
     statusPath,
@@ -542,7 +542,7 @@ void test("a stale inProgressSince (older than timeoutMs — a presumed crash) d
 
 void test("a fresh reservation owned by a dead process is recovered immediately", async () => {
   const root = await scaffold();
-  await writeFile(join(root, "ok.mjs"), "process.exit(0);\n");
+  await writeFile(join(root, "ok.ts"), "process.exit(0);\n");
   const statusPath = join(root, "data/rollup-status.json");
   await mkdir(join(root, "data"), { recursive: true });
   await writeFile(
@@ -558,7 +558,7 @@ void test("a fresh reservation owned by a dead process is recovered immediately"
 
   const result = await runScheduledJob({
     name: "memory-daily",
-    argv: ["ok.mjs"],
+    argv: ["ok.ts"],
     root,
     nodeBin: process.execPath,
     statusPath,
@@ -571,7 +571,7 @@ void test("a fresh reservation owned by a dead process is recovered immediately"
 
 void test("a fresh reservation owned by a live process still blocks duplicate entry", async () => {
   const root = await scaffold();
-  await writeFile(join(root, "boom.mjs"), "process.exit(1);\n");
+  await writeFile(join(root, "boom.ts"), "process.exit(1);\n");
   const statusPath = join(root, "data/rollup-status.json");
   await mkdir(join(root, "data"), { recursive: true });
   await writeFile(
@@ -588,7 +588,7 @@ void test("a fresh reservation owned by a live process still blocks duplicate en
 
   const result = await runScheduledJob({
     name: "memory-daily",
-    argv: ["boom.mjs"],
+    argv: ["boom.ts"],
     root,
     nodeBin: process.execPath,
     statusPath,
@@ -608,7 +608,7 @@ void test("completion and finally do not modify status when their lock acquisiti
   const statusPath = join(root, "data/rollup-status.json");
   await mkdir(join(root, "data"), { recursive: true });
   await writeFile(
-    join(root, "hold-status-lock.mjs"),
+    join(root, "hold-status-lock.ts"),
     [
       "import { writeFileSync } from 'node:fs';",
       `writeFileSync(${JSON.stringify(`${statusPath}.lock`)}, 'held');`,
@@ -619,7 +619,7 @@ void test("completion and finally do not modify status when their lock acquisiti
 
   const result = await runScheduledJob({
     name: "memory-daily",
-    argv: ["hold-status-lock.mjs"],
+    argv: ["hold-status-lock.ts"],
     root,
     nodeBin: process.execPath,
     statusPath,
@@ -640,7 +640,7 @@ void test("no lockPath: a clean exit right after SIGTERM cancels the pending har
   // be canceled — left dangling, it would risk firing later against a since-reused pid.
   const root = await scaffold();
   await writeFile(
-    join(root, "graceful.mjs"),
+    join(root, "graceful.ts"),
     "process.on('SIGTERM', () => { process.exit(0); });\nsetInterval(() => {}, 1000);\n",
   );
   const statusPath = join(root, "data/rollup-status.json");
@@ -653,7 +653,7 @@ void test("no lockPath: a clean exit right after SIGTERM cancels the pending har
   // "SIGTERM") instead of the handler's process.exit(0) this test actually checks for.
   const result = await runScheduledJob({
     name: "digest",
-    argv: ["graceful.mjs"],
+    argv: ["graceful.ts"],
     root,
     nodeBin: process.execPath,
     statusPath,
@@ -680,7 +680,7 @@ void test("no lockPath: a clean exit right after SIGTERM cancels the pending har
 
 void test("if the status lock can't be acquired, the run is deferred: no unlocked reservation write, nothing spawned", async () => {
   const root = await scaffold();
-  await writeFile(join(root, "boom.mjs"), "process.exit(1);\n"); // would fail loudly if actually spawned
+  await writeFile(join(root, "boom.ts"), "process.exit(1);\n"); // would fail loudly if actually spawned
   const statusPath = join(root, "data/rollup-status.json");
   await mkdir(join(root, "data"), { recursive: true });
   // Pre-hold the lock file with a FRESH mtime so withStatusLock's staleness-steal never
@@ -691,7 +691,7 @@ void test("if the status lock can't be acquired, the run is deferred: no unlocke
   const { log, lines } = collectLogs();
   const result = await runScheduledJob({
     name: "memory-daily",
-    argv: ["boom.mjs"],
+    argv: ["boom.ts"],
     root,
     nodeBin: process.execPath,
     statusPath,

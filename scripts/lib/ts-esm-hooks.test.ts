@@ -53,7 +53,7 @@ void test("resolves a missing sibling.js import to an existing sibling.ts", asyn
 
 void test("keeps an existing sibling.js ahead of sibling.ts", async (t) => {
   const directory = await makeFixture(t);
-  const entryPath = join(directory, "entry.mjs");
+  const entryPath = join(directory, "entry.ts");
   await writeFile(
     entryPath,
     'import value from "./sibling.js";\nconsole.log(value);\n',
@@ -74,7 +74,7 @@ void test("keeps an existing sibling.js ahead of sibling.ts", async (t) => {
 
 void test("preserves standard bare, non-file, and unresolved resolution", async (t) => {
   const directory = await makeFixture(t);
-  const entryPath = join(directory, "entry.mjs");
+  const entryPath = join(directory, "entry.ts");
   await writeFile(
     entryPath,
     [
