@@ -69,7 +69,7 @@ type Screen = {
 const characterScreen = character as unknown as Screen;
 const searchScreen = search as unknown as Screen;
 
-// ── лёгкий стенд ctx по контракту движка (index.mjs), но без самого движка ──────────────
+// ── лёгкий стенд ctx по контракту движка (index.ts), но без самого движка ───────────────
 // flows.screen/end пишут в st._last и накапливают рендеры; ctx.show зовёт render модуля из
 // переданного реестра. Хватает, чтобы гонять render/on/texts экранов в изоляции.
 function makeCtx({

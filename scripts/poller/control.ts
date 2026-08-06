@@ -92,7 +92,7 @@ type ControlTransport = (
   body: Record<string, unknown>,
 ) => Promise<TelegramResult>;
 
-const menuModulePath: string = "../lib/menu/index.mjs";
+const menuModulePath: string = "../lib/menu/index.ts";
 const deliverModulePath: string = "./deliver.ts";
 const queueModulePath: string = "./queue.ts";
 const routingModulePath: string = "./routing.ts";

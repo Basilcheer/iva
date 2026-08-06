@@ -5,7 +5,6 @@ import { existsSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createRequire } from "node:module";
 
 import service, {
   commandSpec,
@@ -23,8 +22,7 @@ import {
 } from "./svc-run.ts";
 import { acquireUpdateLock, releaseUpdateLock } from "../update-safety.ts";
 
-const require = createRequire(import.meta.url);
-const { SCREENS } = require("./index.mjs") as {
+const { SCREENS } = (await import("./index.ts")) as {
   SCREENS: Record<string, unknown>;
 };
 
@@ -49,7 +47,7 @@ type Harness = {
 };
 type TestDeps = Partial<MenuServiceContext["deps"]>;
 
-// стенд как в menu-screens.test.mjs + захват прямых tg-вызовов раннера
+// стенд как в menu-screens.test.ts + захват прямых tg-вызовов раннера
 function makeCtx({
   lang = "ru",
   deps = {},

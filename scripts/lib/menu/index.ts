@@ -126,8 +126,8 @@ type MenuOptions = {
 type OpenOptions = { msgId?: unknown };
 type ServiceModule = { default: unknown };
 
-// service remains JavaScript until the neighbouring PR-7 lane converts it.
-const serviceModulePath = "./service.mjs";
+// Keep the heterogeneous service screen behind the registry's structural boundary.
+const serviceModulePath = "./service.ts";
 const { default: service } = (await import(serviceModulePath)) as ServiceModule;
 
 // sid → экранный модуль. Псевдо-sid mdl/thk сюда не входят: это хендофф в визарды
