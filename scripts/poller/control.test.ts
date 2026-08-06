@@ -1,9 +1,14 @@
+/* eslint-disable @typescript-eslint/no-floating-promises, @typescript-eslint/require-await -- Node owns test registration; async doubles preserve the I/O boundary. */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { handleAwaitNonText } from "./control.mjs";
+import { handleAwaitNonText } from "./control.ts";
+
+type Event = string | [string, string, number | undefined, string | undefined];
+type CaptureMessage = { message_id?: number };
+type CaptureState = { flow: unknown; awaitText?: unknown };
 
 test("secret document capture deletes before download and never reaches Eve", async () => {
-  const events = [];
+  const events: Event[] = [];
   const io = {
     deleteSecret: async () => {
       events.push("delete");
@@ -13,8 +18,17 @@ test("secret document capture deletes before download and never reaches Eve", as
       events.push("download");
       return "client secret";
     },
-    deliver: async (text, message, state) => {
-      events.push(["deliver", text, message.message_id, state.awaitText.kind]);
+    deliver: async (
+      text: string,
+      message: CaptureMessage,
+      state: CaptureState,
+    ) => {
+      events.push([
+        "deliver",
+        text,
+        message.message_id,
+        (state.awaitText as { kind?: string } | undefined)?.kind,
+      ]);
     },
     reply: async () => assert.fail("must not reply after a successful capture"),
   };
@@ -38,7 +52,7 @@ test("secret document capture deletes before download and never reaches Eve", as
 });
 
 test("failed deletion consumes a secret document without downloading it", async () => {
-  const events = [];
+  const events: Event[] = [];
   const consumed = await handleAwaitNonText(
     {
       message_id: 8,

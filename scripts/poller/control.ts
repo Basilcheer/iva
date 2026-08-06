@@ -1,4 +1,3 @@
-import { createMenu } from "../lib/menu/index.mjs";
 import { botCommands, helpText, tr } from "#lib/i18n.mjs";
 import { continuationTokenForControl } from "../lib/telegram-reset.ts";
 import { getChatStatus, isRunning } from "#lib/run-status.mjs";
@@ -19,9 +18,6 @@ import {
 } from "./config.ts";
 import { downloadTelegramFile, edit, reply, sc, tg } from "./transport.ts";
 import { chatKey } from "./offset.ts";
-import { deliver } from "./deliver.mjs";
-import { performScopedReset } from "./queue.mjs";
-import { deliverDirectUpdate } from "./routing.mjs";
 import { handleUpdateCallback, handleUpdateCheck } from "./update-flow.ts";
 import {
   endWizard,
@@ -33,6 +29,115 @@ import {
   handleWizardCallback,
   resetMessageCopy,
 } from "./wizards.ts";
+
+type TelegramId = string | number;
+type TelegramDocument = { file_id: string; file_size?: number };
+type TelegramMessage = {
+  chat?: { id?: number; type?: string };
+  document?: TelegramDocument;
+  from?: { id?: TelegramId };
+  message_id?: number;
+  message_thread_id?: number;
+  text?: string;
+};
+type TelegramCallbackQuery = {
+  id: string;
+  data?: string;
+  from?: { id?: TelegramId };
+  message?: TelegramMessage;
+};
+type ControlCallbackQuery = TelegramCallbackQuery & { data: string };
+type TelegramUpdate = {
+  update_id?: number;
+  callback_query?: TelegramCallbackQuery;
+  message?: TelegramMessage;
+};
+type PendingFlow = { flow: unknown; awaitText?: unknown };
+type AwaitText = { file?: boolean; kind?: string; secret?: boolean };
+type TelegramResult = { ok?: boolean };
+type SentMessage = { message_id: number };
+type ErrorDetails = { message?: unknown; resetPhase?: unknown };
+type NonTextIo = {
+  deleteSecret: (
+    chatId: number | undefined,
+    messageId: number | undefined,
+  ) => Promise<boolean>;
+  reply: (chatId: number | undefined, text: string) => Promise<unknown>;
+  download: (fileId: string, maxBytes: number) => Promise<string | null>;
+  deliver: (
+    text: string,
+    message: TelegramMessage,
+    state: PendingFlow,
+  ) => Promise<unknown>;
+};
+type Menu = {
+  onCallback: (callback: TelegramCallbackQuery) => Promise<boolean>;
+  onText: (
+    message: TelegramMessage,
+    state: unknown,
+    options?: { skipDelete?: boolean },
+  ) => Promise<boolean>;
+  open: (chatId: TelegramId | undefined, userId: string) => Promise<unknown>;
+};
+type CreateMenu = (options: Record<string, unknown>) => Menu;
+type Deliver = (update: unknown) => Promise<unknown>;
+type DeliverDirectUpdate = (update: unknown) => Promise<string>;
+type PerformScopedReset = (
+  key: string,
+  continuationToken: string,
+  options: { clearQueue: boolean },
+) => Promise<void>;
+type ControlTransport = (
+  method: string,
+  body: Record<string, unknown>,
+) => Promise<TelegramResult>;
+
+const menuModulePath: string = "../lib/menu/index.mjs";
+const deliverModulePath: string = "./deliver.mjs";
+const queueModulePath: string = "./queue.mjs";
+const routingModulePath: string = "./routing.mjs";
+const { createMenu } = (await import(menuModulePath)) as {
+  createMenu: CreateMenu;
+};
+const { deliver } = (await import(deliverModulePath)) as { deliver: Deliver };
+const { performScopedReset } = (await import(queueModulePath)) as {
+  performScopedReset: PerformScopedReset;
+};
+const { deliverDirectUpdate } = (await import(routingModulePath)) as {
+  deliverDirectUpdate: DeliverDirectUpdate;
+};
+const controlTg = tg as unknown as ControlTransport;
+
+function errorDetails(error: unknown): ErrorDetails {
+  return typeof error === "object" && error !== null ? error : {};
+}
+
+function errorMessage(error: unknown): string {
+  const message = errorDetails(error).message;
+  if (typeof message === "string") return message;
+  if (message === undefined) return "undefined";
+  if (message === null) return "null";
+  if (
+    typeof message === "number" ||
+    typeof message === "boolean" ||
+    typeof message === "bigint"
+  )
+    return `${message}`;
+  return Object.prototype.toString.call(message);
+}
+
+function isAwaitText(value: unknown): value is AwaitText {
+  return typeof value === "object" && value !== null;
+}
+
+const replyTo = (chatId: number | undefined, text: string) =>
+  reply(chatId as number, text) as Promise<SentMessage | null>;
+
+const editMessage = (
+  chatId: number | undefined,
+  messageId: number,
+  text: string,
+) => edit(chatId as number, messageId, text);
 
 // Движок /menu: делит session-store (flows) с визардами /model//think. deps — мост отдаёт
 // экранам всё нужное (пути, systemctl, доставку в eve, allowlist, хендофф в визарды).
@@ -47,7 +152,7 @@ const menu = createMenu({
     reply,
     // Синтетическая дистилляция делит acceptance, пейсинг и уборку failed-ingress
     // с обычной прямой доставкой, но намеренно не проходит busy-time FIFO.
-    deliver: (update) =>
+    deliver: (update: unknown) =>
       deliverDirectUpdate(update).then((result) => result === "delivered"),
     log,
     allowed: ALLOWED,
@@ -66,20 +171,23 @@ async function registerBotCommands() {
       commands: botCommands("ru"),
       language_code: "ru",
     });
-  } catch (e) {
-    log("setMyCommands failed:", e.message);
+  } catch (e: unknown) {
+    log("setMyCommands failed:", errorDetails(e).message);
   }
 }
 
 // Delete a message carrying a secret, warning the user if Telegram won't let us — a rejected secret
 // must never silently linger in the chat (mirrors the delete-first path in menu.onText).
-async function deleteSecretMessage(chatId, messageId) {
-  const del = await tg("deleteMessage", {
+async function deleteSecretMessage(
+  chatId: number | undefined,
+  messageId: number | undefined,
+) {
+  const del = await controlTg("deleteMessage", {
     chat_id: chatId,
     message_id: messageId,
   }).catch(() => ({ ok: false }));
   if (!del?.ok) {
-    await reply(
+    await replyTo(
       chatId,
       tr(
         "Couldn't delete your message — please delete it manually.",
@@ -92,12 +200,13 @@ async function deleteSecretMessage(chatId, messageId) {
 
 // Default I/O for handleAwaitNonText — injectable so the delete→download ordering and the
 // "never reaches eve" contract can be unit-tested with mocks.
-const nonTextIo = {
-  deleteSecret: (chatId, id) => deleteSecretMessage(chatId, id),
-  reply: (chatId, text) => reply(chatId, text),
-  download: (fileId, max) => downloadTelegramFile(fileId, max),
+const nonTextIo: NonTextIo = {
+  deleteSecret: (chatId: number | undefined, id: number | undefined) =>
+    deleteSecretMessage(chatId, id),
+  reply: (chatId: number | undefined, text: string) => replyTo(chatId, text),
+  download: (fileId: string, max: number) => downloadTelegramFile(fileId, max),
   // Run the screen's own text handler on downloaded content WITHOUT re-deleting (already deleted).
-  deliver: (text, msg, st) =>
+  deliver: (text: string, msg: TelegramMessage, st: PendingFlow) =>
     menu.onText({ ...msg, text }, st, { skipDelete: true }),
 };
 
@@ -107,9 +216,13 @@ const nonTextIo = {
 // crucially the message is DELETED FIRST, before the download, so the secret doesn't linger in the
 // chat for the download's duration. Anything else is deleted with a clear ack telling the user how
 // to send it. Always returns true (the update is consumed, not delivered).
-export async function handleAwaitNonText(msg, pending, io = nonTextIo) {
+export async function handleAwaitNonText(
+  msg: TelegramMessage,
+  pending: PendingFlow,
+  io: NonTextIo = nonTextIo,
+) {
   const chatId = msg.chat?.id;
-  const a = pending.awaitText;
+  const a = isAwaitText(pending.awaitText) ? pending.awaitText : null;
   const MAX_BYTES = 256 * 1024;
   if (a?.file && msg.document && pending.flow === "menu") {
     if ((msg.document.file_size ?? 0) > MAX_BYTES) {
@@ -160,23 +273,28 @@ export async function handleAwaitNonText(msg, pending, io = nonTextIo) {
 
 // Control commands are handled by the BRIDGE (out-of-band) — they work even if the agent is stuck.
 // Trusted IDs only. Returns true if the command was handled (we do NOT deliver it to eve).
-async function handleControl(update) {
+async function handleControl(update: TelegramUpdate) {
   // Bridge-owned inline-button taps (/update, /model, /think) — not eve HITL callbacks.
   const cq = update.callback_query;
   if (cq && typeof cq.data === "string") {
-    if (cq.data.startsWith("iva_update:")) return handleUpdateCallback(cq);
+    const callback = cq as ControlCallbackQuery;
+    if (callback.data.startsWith("iva_update:"))
+      return handleUpdateCallback(callback);
     // Wizard errors must not escape: an uncaught throw would crash the bridge and
     // re-poll the update after restart. Consume the tap either way.
-    if (cq.data.startsWith("iva_model:") || cq.data.startsWith("iva_think:")) {
-      return handleWizardCallback(cq).catch((e) => {
-        log("wizard callback error:", e.message);
+    if (
+      callback.data.startsWith("iva_model:") ||
+      callback.data.startsWith("iva_think:")
+    ) {
+      return handleWizardCallback(callback).catch((e: unknown) => {
+        log("wizard callback error:", errorDetails(e).message);
         return true;
       });
     }
     // /menu: тот же принцип consume-on-error — тап меню всегда проглатывается (в eve не уходит).
-    if (cq.data.startsWith("iva_menu:")) {
-      return menu.onCallback(cq).catch((e) => {
-        log("menu callback error:", e.message);
+    if (callback.data.startsWith("iva_menu:")) {
+      return menu.onCallback(callback).catch((e: unknown) => {
+        log("menu callback error:", errorDetails(e).message);
         return true;
       });
     }
@@ -190,9 +308,9 @@ async function handleControl(update) {
   // (or a file-capable secret): a document/photo could be the secret itself and must not reach eve.
   // A non-secret await (e.g. the memory interview) lets a non-text message fall through unchanged.
   if (msg?.from) {
-    const pending = getWizard(msg.chat?.id, String(msg.from.id));
-    const a = pending?.awaitText;
-    if (a) {
+    const pending = getWizard(msg.chat?.id as number, String(msg.from.id));
+    const a = isAwaitText(pending?.awaitText) ? pending.awaitText : null;
+    if (pending && a) {
       if (text.startsWith("/")) {
         await endWizard(
           pending,
@@ -204,23 +322,28 @@ async function handleControl(update) {
       } else if (text) {
         if (pending.flow === "menu") {
           // Menu screens own their capture (interview / key intake / gws JSON / ubcred).
-          return menu.onText(msg, pending).catch((e) => {
-            log("menu capture error:", e.message); // e.message never contains a secret value
+          return menu.onText(msg, pending).catch((e: unknown) => {
+            log("menu capture error:", errorDetails(e).message); // e.message never contains a secret value
             return true;
           });
         }
         // /model wizard key intake — consume the update even on failure (the key must never
         // be re-polled into eve). handleKeyMessage stays the wizard's own handler.
-        return handleKeyMessage(msg, pending).catch((e) => {
-          log("wizard key error:", e.message); // e.message never contains the key value
+        return handleKeyMessage(
+          msg as { chat: { id: number }; message_id: number; text: string },
+          pending,
+        ).catch((e: unknown) => {
+          log("wizard key error:", errorDetails(e).message); // e.message never contains the key value
           return true;
         });
       } else if (a.secret || a.file) {
         // Non-text while awaiting a secret — never let it reach eve (delete-first inside).
-        return handleAwaitNonText(msg, pending).catch((e) => {
-          log("menu attachment capture error:", e.message); // never contains the secret value
-          return true;
-        });
+        return handleAwaitNonText(msg, pending as unknown as PendingFlow).catch(
+          (e: unknown) => {
+            log("menu attachment capture error:", errorDetails(e).message); // never contains the secret value
+            return true;
+          },
+        );
       }
       // else: non-secret await + non-text → fall through so eve handles it normally.
     }
@@ -246,11 +369,13 @@ async function handleControl(update) {
   const chatId = msg?.chat?.id;
   // /menu — open the nested settings menu (out-of-band; errors consumed, never reach eve).
   if (cmd === "/menu") {
-    await menu.open(chatId, from).catch((e) => log("menu error:", e.message));
+    await menu
+      .open(chatId, from)
+      .catch((e: unknown) => log("menu error:", errorDetails(e).message));
     return true;
   }
   if (cmd === "/help") {
-    await reply(chatId, helpText());
+    await replyTo(chatId, helpText());
     return true;
   }
   // /stop — interrupt the current turn. Same path as the ⏹ Stop button: we synthesize a
@@ -260,7 +385,7 @@ async function handleControl(update) {
   if (cmd === "/stop") {
     const key = chatKey(update);
     if (!key || !isRunning(key)) {
-      await reply(
+      await replyTo(
         chatId,
         tr("Nothing is running right now.", "Сейчас ничего не выполняется."),
       );
@@ -270,7 +395,7 @@ async function handleControl(update) {
       update_id: 0,
       callback_query: {
         id: `ivastop-${Date.now()}`, // synthetic: answerCallbackQuery on it fails, channel tolerates
-        from: msg.from,
+        from: msg?.from,
         message: msg, // carries chat/thread — the channel derives chatKey from here
         data: "iva_cancel",
       },
@@ -286,27 +411,27 @@ async function handleControl(update) {
         now: Date.now(),
         tz: process.env.ASSISTANT_TIMEZONE,
       });
-      await reply(chatId, formatUsageReport(agg));
-    } catch (e) {
-      await reply(chatId, "Couldn't read the usage log: " + e.message);
+      await replyTo(chatId, formatUsageReport(agg));
+    } catch (e: unknown) {
+      await replyTo(chatId, "Couldn't read the usage log: " + errorMessage(e));
     }
     return true;
   }
   // /update — check upstream; if newer, offer inline Update/Skip buttons. Out-of-band.
   if (cmd === "/update") {
-    await handleUpdateCheck(chatId);
+    await handleUpdateCheck(chatId as number);
     return true;
   }
   // /model, /think — provider/model/effort wizard (writes .env; applied on restart).
   if (cmd === "/model") {
-    await handleModelCmd(chatId, from).catch((e) =>
-      log("wizard /model error:", e.message),
+    await handleModelCmd(chatId as number, from).catch((e: unknown) =>
+      log("wizard /model error:", errorDetails(e).message),
     );
     return true;
   }
   if (cmd === "/think") {
-    await handleThinkCmd(chatId, from).catch((e) =>
-      log("wizard /think error:", e.message),
+    await handleThinkCmd(chatId as number, from).catch((e: unknown) =>
+      log("wizard /think error:", errorDetails(e).message),
     );
     return true;
   }
@@ -314,13 +439,17 @@ async function handleControl(update) {
   // then restarts the agent process; histories and queues of other chats survive.
   const key = chatKey(update);
   const continuationToken = key
-    ? continuationTokenForControl(update, getChatStatus(key), BOT_USER_ID)
+    ? continuationTokenForControl(
+        update,
+        getChatStatus(key),
+        BOT_USER_ID ?? undefined,
+      )
     : null;
   const resetCopy = resetMessageCopy(cmd, await readEnvFresh(ENV_PATH));
-  const status = await reply(chatId, resetCopy.pending);
+  const status = await replyTo(chatId, resetCopy.pending);
   if (!continuationToken || !key) {
     if (status) {
-      await edit(
+      await editMessage(
         chatId,
         status.message_id,
         tr(
@@ -340,16 +469,16 @@ async function handleControl(update) {
       // messages belonging to other group conversation anchors.
       clearQueue: clearsPrivateQueue,
     });
-  } catch (e) {
-    log(
-      `scoped reset ${e.resetPhase ?? "unknown"} failed for ${key}:`,
-      e.message,
-    );
+  } catch (e: unknown) {
+    const error = errorDetails(e);
+    const resetPhase =
+      typeof error.resetPhase === "string" ? error.resetPhase : "unknown";
+    log(`scoped reset ${resetPhase} failed for ${key}:`, error.message);
     if (status) {
-      await edit(
+      await editMessage(
         chatId,
         status.message_id,
-        e.resetPhase === "remote"
+        error.resetPhase === "remote"
           ? tr(
               "⚠️ Couldn't confirm this conversation reset. Recovery will retry automatically.",
               "⚠️ Не удалось подтвердить сброс диалога. Восстановление повторит его автоматически.",
@@ -369,7 +498,7 @@ async function handleControl(update) {
 
   if (cmd === "/restart" && !(await sc("restart", "iva.service"))) {
     if (status) {
-      await edit(
+      await editMessage(
         chatId,
         status.message_id,
         tr(
@@ -380,7 +509,7 @@ async function handleControl(update) {
     }
     return true;
   }
-  if (status) await edit(chatId, status.message_id, resetCopy.complete);
+  if (status) await editMessage(chatId, status.message_id, resetCopy.complete);
   return true;
 }
 
