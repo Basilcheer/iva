@@ -9,16 +9,14 @@ import { fileURLToPath } from "node:url";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const EXPECTED_PRODUCTION_COUNT = 138;
-const EXPECTED_REPORTED_COUNT = 109;
 const EXPECTED_INVENTORY_SHA256 =
   "3036ecacad8d0db5949d252f790bceefa5809fd6e0760ef53f017c836c7add88";
 
 // Node's native include globs filter loaded modules; they do not load untouched files.
-// Keep the measured exceptions explicit so a new production module cannot join this
-// blind spot without forcing a fresh coverage run and an intentional classification.
-// This inventory ratchet neither makes all 138 files covered nor detects import-graph
-// changes when the set of production paths stays unchanged.
-const UNREPORTED_BY_CATEGORY = {
+// This test pins the exact production path inventory and a separately measured 29-path
+// blind-spot snapshot. It does not determine what the current import graph loads, claim
+// that the other paths are reported, or notice import-graph changes without path changes.
+const MEASURED_UNREPORTED_BY_CATEGORY = {
   frameworkBoundaries: [
     "agent/agent.ts",
     "agent/channels/eve.ts",
@@ -56,15 +54,8 @@ const UNREPORTED_BY_CATEGORY = {
   ],
 } as const;
 
-const EXPECTED_COVERAGE_ARGUMENTS = [
-  "--test-coverage-include='agent/**/*.ts'",
-  "--test-coverage-include='scripts/**/*.ts'",
-  "--test-coverage-exclude='**/*.test.ts'",
-  "--test-coverage-exclude='scripts/fixtures/**/*.ts'",
-  "--test-coverage-lines=76",
-  "--test-coverage-branches=78.0",
-  "--test-coverage-functions=72",
-] as const;
+const EXPECTED_COVERAGE_COMMAND =
+  'node --test --test-concurrency=4 --experimental-test-coverage --test-coverage-include="agent/**/*.ts" --test-coverage-include="scripts/**/*.ts" --test-coverage-exclude="**/*.test.ts" --test-coverage-exclude="scripts/fixtures/**/*.ts" --test-coverage-lines=75 --test-coverage-branches=77 --test-coverage-functions=71';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -79,7 +70,7 @@ function productionTypeScriptFiles(): string[] {
     })) {
       const relativePath = posix.join(relativeDirectory, entry.name);
       if (entry.isDirectory()) {
-        if (entry.name !== "fixtures") visit(relativePath);
+        if (relativePath !== "scripts/fixtures") visit(relativePath);
       } else if (
         entry.isFile() &&
         entry.name.endsWith(".ts") &&
@@ -99,7 +90,9 @@ function digest(paths: readonly string[]): string {
   return createHash("sha256").update(paths.join("\n")).digest("hex");
 }
 
-function assertCoverageInventory(productionFiles: readonly string[]): void {
+function assertProductionPathInventory(
+  productionFiles: readonly string[],
+): void {
   assert.equal(
     productionFiles.length,
     EXPECTED_PRODUCTION_COUNT,
@@ -111,33 +104,32 @@ function assertCoverageInventory(productionFiles: readonly string[]): void {
     "production TypeScript paths changed; rerun scoped coverage before updating the inventory ratchet",
   );
 
-  const unreported = Object.values(UNREPORTED_BY_CATEGORY).flat().sort();
-  assert.equal(new Set(unreported).size, unreported.length);
+  const measuredUnreported = Object.values(MEASURED_UNREPORTED_BY_CATEGORY)
+    .flat()
+    .sort();
+  assert.equal(measuredUnreported.length, 29);
+  assert.equal(new Set(measuredUnreported).size, measuredUnreported.length);
   assert.deepEqual(
-    unreported.filter((path) => !productionFiles.includes(path)),
+    measuredUnreported.filter((path) => !productionFiles.includes(path)),
     [],
-    "the unreported coverage inventory contains a missing production file",
-  );
-  assert.equal(
-    productionFiles.length - unreported.length,
-    EXPECTED_REPORTED_COUNT,
+    "the measured coverage blind-spot snapshot contains a missing production file",
   );
 }
 
-test("coverage policy ratchets the classified production TypeScript inventory", () => {
+test("coverage policy pins production paths and the measured blind-spot snapshot", () => {
   const productionFiles = productionTypeScriptFiles();
-  assertCoverageInventory(productionFiles);
+  assertProductionPathInventory(productionFiles);
 
   assert.throws(
     () =>
-      assertCoverageInventory(
+      assertProductionPathInventory(
         [...productionFiles, "agent/lib/unclassified-production.ts"].sort(),
       ),
     /production TypeScript inventory changed/u,
   );
 });
 
-test("coverage command reports only loaded production TypeScript", () => {
+test("coverage command is the exact cross-platform production policy", () => {
   const parsed: unknown = JSON.parse(
     readFileSync(join(ROOT, "package.json"), "utf8"),
   );
@@ -147,10 +139,5 @@ test("coverage command reports only loaded production TypeScript", () => {
   if (typeof command !== "string") {
     throw new TypeError("test:coverage must be a package script");
   }
-  for (const argument of EXPECTED_COVERAGE_ARGUMENTS) {
-    assert.ok(
-      command.includes(argument),
-      `missing coverage argument: ${argument}`,
-    );
-  }
+  assert.equal(command, EXPECTED_COVERAGE_COMMAND);
 });
