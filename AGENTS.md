@@ -10,7 +10,13 @@ recurring problems should become skills, not mechanisms.
 
 Build: `npm run build` (eve build — required after any `agent/*` change; `eve start`
 does NOT rebuild). Typecheck: `npm run typecheck`. Tests: `node --test` over
-`*.test.mjs` (see `test:security`, `test:update-ui` scripts).
+`*.test.ts` (see `test:security`, `test:update-ui` scripts).
+
+All new Node.js source and tests must be TypeScript. The only tracked `.mjs` files
+are the five permanent, logic-free external entry shims: `bin/iva.mjs` and
+`scripts/{telegram-poll,check-update,setup,init-vault}.mjs`. Their implementations
+live in the adjacent TypeScript modules; do not add new `.mjs` files or move those
+stable entry paths.
 
 Commit messages must describe only the code change — no AI/tool attribution of any
 kind (no Co-Authored-By bots, no "Generated with" footers). See CLAUDE.md.

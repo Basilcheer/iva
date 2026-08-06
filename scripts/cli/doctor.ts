@@ -80,7 +80,7 @@ export function createDoctorCommand(
       badN++;
     }
 
-    // 2. .env + required keys (the same REQUIRED logic as in scripts/setup.mjs)
+    // 2. .env + required keys (the same REQUIRED logic as in scripts/setup/main.ts)
     if (!existsSync(ENV_PATH)) {
       bad(".env missing — run: iva config");
       badN++;

@@ -4,7 +4,7 @@ Iva runs on one VPS as two systemd user services, two systemd watchdog timers, a
 
 ## Transport: long polling
 
-Telegram never connects to your server. `scripts/telegram-poll.mjs` long-polls `getUpdates` and POSTs each update to the local eve webhook (`http://127.0.0.1:8723/eve/v1/telegram`) with the shared `X-Telegram-Bot-Api-Secret-Token` header. Telegram sees an ordinary bot; the channel code is unchanged. No public HTTPS, no domain, no reverse proxy.
+Telegram never connects to your server. The permanent `scripts/telegram-poll.mjs` entry shim starts the TypeScript bridge in `scripts/poller/main.ts`, which long-polls `getUpdates` and POSTs each update to the local eve webhook (`http://127.0.0.1:8723/eve/v1/telegram`) with the shared `X-Telegram-Bot-Api-Secret-Token` header. Telegram sees an ordinary bot; the channel code is unchanged. No public HTTPS, no domain, no reverse proxy.
 
 The bridge also gives you:
 
@@ -29,7 +29,7 @@ Note: `getUpdates` — which the setup wizard uses to discover your user ID — 
 
 ## systemd units
 
-`bin/iva.mjs` is the single source of truth for every unit. Any restart through the `iva` CLI regenerates them first, so `Environment=PORT` always matches `IVA_PORT` in `.env`. Don't hand-edit `~/.config/systemd/user/iva-*` — edits get overwritten. If you write your own unit instead, bake the port literally (`Environment=PORT=8723`): systemd will not expand `$IVA_PORT` from an `EnvironmentFile`.
+`scripts/cli/systemd.ts` is the single source of truth for every unit; the permanent `bin/iva.mjs` entry shim delegates to the TypeScript CLI. Any restart through the `iva` CLI regenerates the units first, so `Environment=PORT` always matches `IVA_PORT` in `.env`. Don't hand-edit `~/.config/systemd/user/iva-*` — edits get overwritten. If you write your own unit instead, bake the port literally (`Environment=PORT=8723`): systemd will not expand `$IVA_PORT` from an `EnvironmentFile`.
 
 The unit starts eve with `--host 127.0.0.1`, and a hand-written one must do the same. Setting `HOST` in the environment is insufficient because `eve start` overwrites `HOST`/`NITRO_HOST` for the process it spawns. Iva also requires the generated `ASSISTANT_BEARER` on Eve session routes. `localDev()` is included only under `eve dev`, which sets `EVE_DEV=1`; production does not use the client-controlled `Host` header as authentication.
 
@@ -80,7 +80,7 @@ The four memory-rollup cadences moved off systemd and run as `agent/schedules/*.
 | `memory-yearly`  | `25 4 1 1 *` (Jan 1, 04:25) | monthlies → yearly summary (silent)                                                              |
 | `digest`         | `0 8 * * *` (08:00 daily)   | morning digest — **off by default**, enable via `digestSchedule.enabled` in `data/settings.json` |
 
-Each one is a thin spawner (`scripts/lib/schedule-runner.ts`): it runs the exact same command the old timer did (`flock -w 900 .memory.lock node --env-file=.env scripts/memory/rollup.ts <period>`), under a hard timeout, and records the outcome to `data/rollup-status.json`. `iva.service` sets `Environment=TZ` from `ASSISTANT_TIMEZONE` (`ivaServiceBody()` in `bin/iva.mjs`), so cron expressions above tick in the configured local time, not the host's system TZ — Nitro's schedule runner carries no timezone of its own otherwise.
+Each one is a thin spawner (`scripts/lib/schedule-runner.ts`): it runs the exact same command the old timer did (`flock -w 900 .memory.lock node --env-file=.env scripts/memory/rollup.ts <period>`), under a hard timeout, and records the outcome to `data/rollup-status.json`. `iva.service` sets `Environment=TZ` from `ASSISTANT_TIMEZONE` (`ivaServiceBody()` in `scripts/cli/systemd.ts`), so cron expressions above tick in the configured local time, not the host's system TZ — Nitro's schedule runner carries no timezone of its own otherwise.
 
 Nitro's scheduled-task runner has no `Persistent=true` equivalent, so a period missed while the server was down does **not** auto-fire on its own. `scripts/lib/schedule-migration.ts` replaces that: on every server start it compares each period's last recorded success against its most recent scheduled point and, if it's stale and still within a grace window (20h daily / 3d weekly / 7d monthly / 14d yearly), runs it once. A brand-new install seeds a baseline and runs nothing on its first boot, so installing never triggers an immediate storm of catch-up jobs. The same start-up hook also retires the old `iva-memory-{daily,weekly,monthly,yearly}.{service,timer}` units on any existing install, by exact name only — any unrelated timer you've set up yourself is left alone.
 

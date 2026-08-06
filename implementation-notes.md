@@ -1304,3 +1304,17 @@ the Node event loop is blocked` assertion once. Two later sequential suites hit
   delta is +0.96 / +0.16 / -0.77 percentage points. Commit messages and bodies
   contain no AI attribution; the two protected handoff files remain untracked
   and absent from the branch diff.
+- 2026-08-06 Asia/Tashkent: PR-12 starts from the PR-11 merge `861c320`. The
+  final work is split into an isolated ESLint-config conversion lane and two
+  independent read-only audits for live `.mjs` references and all six acceptance
+  criteria; the integration branch owns policy/docs cleanup, final evidence, and
+  GitHub delivery. References to the five permanent external entry shims remain
+  an explicit allowlist, while stale source/test conventions and paths must be
+  removed. The owner-only live `iva doctor` and `iva update` checks remain
+  deliberately outside Codex execution.
+- 2026-08-06 Asia/Tashkent: Final coverage enforcement moves from the PR-0
+  floors 72 / 79 / 71 to 76 / 79.1 / 72. Node 24 accepts the decimal branch
+  threshold. All three dimensions therefore tighten while retaining headroom
+  below the measured PR-11 range of 77.10 / 79.17-79.20 / 72.51; this proves
+  growth against every PR-0 baseline metric without setting a timing-sensitive
+  floor at the exact observed value.

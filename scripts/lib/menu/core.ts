@@ -4,7 +4,8 @@
 // сообщением buildDistillMessage — она своими инструментами ужимает их в ядро и обновляет
 // vault/CORE.md (лимит 1200 симв. — забота модели). Так формат ядра не знает ни мост, ни экран.
 //
-// ВАЖНО про синтетический deliver: он идёт в eve в обход busy-гейта моста (telegram-poll.mjs:805).
+// ВАЖНО про синтетический deliver: он идёт в eve в обход busy-гейта моста
+// (scripts/poller/control.ts).
 // Если по чату уже идёт ход — второй апдейт на том же continuation-token даст HookConflictError.
 // Поэтому перед deliver ОБЯЗАТЕЛЬНА проверка isRunning(chatKey): занято → не доставляем, а
 // честно говорим сохранить и повторить, когда ива освободится.
@@ -168,7 +169,8 @@ async function finish(st: MenuState, ctx: MenuContext) {
     );
   }
 
-  // Синтетическое сообщение «от имени юзера» (как /stop синтезирует callback, telegram-poll.mjs:697-706).
+  // Синтетическое сообщение «от имени юзера» (как /stop синтезирует callback в
+  // scripts/poller/control.ts).
   // Реальные chat/from стэшим из ответа интервью; при пустом интервью синтезируем из st.
   const from = iv.from ?? { id: Number(st.userId), is_bot: false };
   const chat = iv.chat ?? {
