@@ -79,7 +79,7 @@ logic-free entry shims; do not add a sixth.
 - Tests come with the change. Bug fixes get a test that fails without the fix.
 - Touching the update path (`iva update`, `data/settings.json`, anything persisted)?
   Say in the PR how an older install upgrades. Self-hosters arrive from arbitrary old
-  versions, and the update runs under the *previous* CLI.
+  versions, and the update runs under the _previous_ CLI.
 - Docs live in `docs/`. A user-visible change that is not documented is unfinished.
 
 ## Adding a skill or an MCP server
