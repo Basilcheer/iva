@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-floating-promises -- Node's test runner owns registrations. */
 
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { dirname } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -36,6 +37,18 @@ function requireNamedConfig(
     `${name} config`,
   );
 }
+
+test("TypeScript config enforces type-only imports", () => {
+  const configUrl = new URL("../tsconfig.json", import.meta.url);
+  const parsed: unknown = JSON.parse(readFileSync(configUrl, "utf8"));
+  const config = requireRecord(parsed, "TypeScript config");
+  const compilerOptions = requireRecord(
+    config.compilerOptions,
+    "TypeScript compiler options",
+  );
+
+  assert.equal(compilerOptions.verbatimModuleSyntax, true);
+});
 
 test("ESLint config preserves the migration lint policy", async () => {
   const configUrl = new URL("../eslint.config.ts", import.meta.url);
