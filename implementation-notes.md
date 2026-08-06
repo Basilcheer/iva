@@ -1294,3 +1294,13 @@ the Node event loop is blocked` assertion once. Two later sequential suites hit
   userbot lock reproduces byte-for-byte with CI-pinned uv 0.8.3, and a freshly
   recreated Python 3.12 environment passes strict hashed sync, guardrails,
   health tests, and byte compilation.
+- 2026-08-06 Asia/Tashkent: `git pull --rebase origin main` confirmed that the
+  branch is current on the PR-10 merge. After autosquashing both userbot test
+  fixups, the final atomic history passes the complete gate set again: 781/785
+  Node tests with zero failures, coverage 77.10 / 79.20 / 72.51, lint,
+  formatting, exact 6/6 ratchet, zero declarations, typecheck, diff checks,
+  build, replica, Autograph 343/343, security-defense 45/45, the uv 0.8.3 lock
+  reproduction, and strict Python 3.12 userbot checks. The final PR-10 coverage
+  delta is +0.96 / +0.16 / -0.77 percentage points. Commit messages and bodies
+  contain no AI attribution; the two protected handoff files remain untracked
+  and absent from the branch diff.
