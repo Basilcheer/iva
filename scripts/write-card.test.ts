@@ -1,6 +1,7 @@
+/* eslint-disable @typescript-eslint/no-floating-promises -- Node's test runner owns registrations. */
 // Тесты write_card: слияние вместо перезаписи, идентичность по H1 (легаси-слаги),
 // алиасы типов, безопасный YAML, конфликт кандидатов.
-// Запуск: node --test scripts/write-card.test.mjs  (TS импортируется напрямую — Node 24
+// Запуск: node --test scripts/write-card.test.ts  (TS импортируется напрямую — Node 24
 // стрипает типы; отдельная сборка не нужна).
 
 import "./lib/ts-esm-hooks.ts";
@@ -31,11 +32,29 @@ cpSync(join(REPO, "vault-template", "schema.json"), join(VAULT, "schema.json"));
 process.on("exit", () => rmSync(VAULT, { recursive: true, force: true }));
 
 // Модуль читает схему на импорте — env выставлен выше.
-const writeCard = (await import(join(REPO, "agent", "tools", "write_card.ts")))
-  .default;
-const call = (args) => writeCard.execute(writeCard.inputSchema.parse(args));
+const writeCardModule = (await import(
+  join(REPO, "agent", "tools", "write_card.ts")
+)) as typeof import("../agent/tools/write_card.ts");
+const writeCard = writeCardModule.default;
+type WriteCardInput = Parameters<typeof writeCard.execute>[0];
+type WriteCardResult = {
+  action: string;
+  candidates: unknown[];
+  error: string;
+  file: string;
+  matchedBy: string;
+  ok: boolean;
+  type: string;
+};
+type ParseSchema<T> = { parse: (value: unknown) => T };
+const inputSchema =
+  writeCard.inputSchema as unknown as ParseSchema<WriteCardInput>;
+const testTool = writeCard as unknown as {
+  execute: (input: WriteCardInput) => Promise<WriteCardResult>;
+};
+const call = (args: unknown) => testTool.execute(inputSchema.parse(args));
 
-const read = (rel) => readFileSync(join(VAULT, rel), "utf8");
+const read = (rel: string) => readFileSync(join(VAULT, rel), "utf8");
 
 // Реальная карточка: без title во frontmatter, свёрнутый скаляр description, латинский
 // легаси-слаг при кириллическом H1, поля вне схемы тула (tier/relevance/phone/…).
@@ -99,17 +118,17 @@ test("повторный write_card сливает карточку: поля в
   );
   assert.ok(out.includes("400 USD"), "новый текст не дописан");
   // description обновлён и не задвоен (исторический баг свёрнутых скаляров).
-  assert.equal(out.match(/^description:/gm).length, 1);
+  assert.equal(out.match(/^description:/gm)!.length, 1);
   assert.ok(
     !out.includes("Связалась через Telegram с предложением услуг."),
     "старый description остался",
   );
   // Теги слиты, а не заменены.
-  const tags = /^tags: \[(.*)\]$/m.exec(out)[1];
+  const tags = /^tags: \[(.*)\]$/m.exec(out)![1];
   assert.ok(tags.includes("freelancer") && tags.includes("ai-content"));
   // Один frontmatter, один H1.
-  assert.equal(out.match(/^---$/gm).length, 2);
-  assert.equal(out.match(/^# /gm).length, 1);
+  assert.equal(out.match(/^---$/gm)!.length, 2);
+  assert.equal(out.match(/^# /gm)!.length, 1);
 });
 
 test("тот же body второй раз не дублируется", async () => {
@@ -125,7 +144,7 @@ test("тот же body второй раз не дублируется", async (
   const second = await call(args);
   assert.equal(second.action, "updated");
   const out = read(second.file);
-  assert.equal(out.match(/TTL 300 секунд/g).length, 1);
+  assert.equal(out.match(/TTL 300 секунд/g)!.length, 1);
   assert.ok(!out.includes("## Обновление"));
 });
 
@@ -144,7 +163,7 @@ test("алиас типа person → contact применяется до вал�
 
 test("алиас в тип вне тула (daily) по-прежнему отклоняется", () => {
   assert.throws(() =>
-    writeCard.inputSchema.parse({
+    inputSchema.parse({
       type: "daily",
       title: "x",
       description: "x",
@@ -157,7 +176,7 @@ test("алиас в тип вне тула (daily) по-прежнему отк�
 test("description длиннее 500 символов отклоняется с просьбой сократить", () => {
   assert.throws(
     () =>
-      writeCard.inputSchema.parse({
+      inputSchema.parse({
         type: "note",
         title: "Слишком длинное описание",
         description: "x".repeat(501),
@@ -171,7 +190,7 @@ test("description длиннее 500 символов отклоняется с 
 test("history_entry принимает только одну строку", () => {
   assert.throws(
     () =>
-      writeCard.inputSchema.parse({
+      inputSchema.parse({
         operation: "SUPERSEDE",
         type: "note",
         title: "Многострочная история",
@@ -202,7 +221,7 @@ test("tags и domain квотируются, если содержат YAML-сп
 
 test("несколько кандидатов по заголовку → отказ без записи", async () => {
   const dir = join(VAULT, "cards", "notes");
-  const card = (h1) =>
+  const card = (h1: string) =>
     `---\ntype: note\nstatus: active\n---\n\n# ${h1}\n\nтекст\n`;
   writeFileSync(join(dir, "dup-a.md"), card("Дубль Тема"), "utf8");
   writeFileSync(join(dir, "dup-b.md"), card("Дубль Тема (второй)"), "utf8");
@@ -240,8 +259,8 @@ test("related дописываются в существующую секцию 
     related: ["majento", "aimasters"],
   });
   const out = read(first.file);
-  assert.equal(out.match(/^## Related$/gm).length, 1);
-  assert.equal(out.match(/\[\[majento\]\]/g).length, 1);
+  assert.equal(out.match(/^## Related$/gm)!.length, 1);
+  assert.equal(out.match(/\[\[majento\]\]/g)!.length, 1);
   assert.ok(out.includes("[[aimasters]]"));
 });
 
@@ -268,7 +287,7 @@ test("явные UPDATE складываются в единственный Log
     body: "Добавлен второй непротиворечивый факт.",
   });
   const out = read(created.file);
-  assert.equal(out.match(/^## Log$/gm).length, 1);
+  assert.equal(out.match(/^## Log$/gm)!.length, 1);
   assert.equal(out.match(/^## (?:Обновление|Update) /gm), null);
   assert.match(out, /^- \d{4}-\d{2}-\d{2}: Добавлен первый/m);
   assert.match(out, /^- \d{4}-\d{2}-\d{2}: Добавлен второй/m);
@@ -422,7 +441,7 @@ test("fenced структурные заголовки остаются кодо
   const out = read(created.file);
   assert.ok(out.includes(fenced), "code example must remain byte-identical");
   assert.equal(
-    out.match(/^## Related$/gm).length,
+    out.match(/^## Related$/gm)!.length,
     2,
     "one fenced example plus one real section",
   );
@@ -439,7 +458,7 @@ test("fenced структурные заголовки остаются кодо
   const updated = read(created.file);
   assert.ok(updated.includes(fenced));
   assert.equal(
-    updated.match(/^## Log$/gm).length,
+    updated.match(/^## Log$/gm)!.length,
     2,
     "one fenced example plus one real section",
   );
@@ -464,14 +483,14 @@ test("Related дедуплицирует target по alias/anchor и не счи
     related: ["cards/notes/hub#other|Other", "cards/notes/sibling"],
   });
   const out = read(created.file);
-  assert.equal(out.match(/^## Related$/gm).length, 1);
-  assert.equal(out.match(/\[\[cards\/notes\/hub#/g).length, 1);
+  assert.equal(out.match(/^## Related$/gm)!.length, 1);
+  assert.equal(out.match(/\[\[cards\/notes\/hub#/g)!.length, 1);
   assert.equal(
-    out.match(/\[\[cards\/notes\/hub\]\]/g).length,
+    out.match(/\[\[cards\/notes\/hub\]\]/g)!.length,
     1,
     "prose link remains separate",
   );
-  assert.equal(out.match(/\[\[cards\/notes\/sibling\]\]/g).length, 1);
+  assert.equal(out.match(/\[\[cards\/notes\/sibling\]\]/g)!.length, 1);
 });
 
 test("SUPERSEDE требует history_entry, заменяет truth и сохраняет History", async () => {
@@ -525,9 +544,9 @@ test("SUPERSEDE требует history_entry, заменяет truth и сохр
   const current = out.split("## History")[0];
   assert.match(current, /Current owner: Bob/);
   assert.doesNotMatch(current, /Current owner: Alice/);
-  assert.equal(out.match(/^## History$/gm).length, 1);
-  assert.equal(out.match(/^## Log$/gm).length, 1);
-  assert.equal(out.match(/^## Related$/gm).length, 1);
+  assert.equal(out.match(/^## History$/gm)!.length, 1);
+  assert.equal(out.match(/^## Log$/gm)!.length, 1);
+  assert.equal(out.match(/^## Related$/gm)!.length, 1);
   assert.match(out, /Initial owner Carol/);
   assert.ok(
     out.includes(
@@ -601,15 +620,15 @@ test("legacy replace_body требует непустой History prefix и до
   });
   assert.equal(replaced.action, "replaced");
   const out = read(created.file);
-  assert.equal(out.match(/2025-01-01: Truth v0/g).length, 1);
-  assert.equal(out.match(/2026-08-05: Truth v1/g).length, 1);
+  assert.equal(out.match(/2025-01-01: Truth v0/g)!.length, 1);
+  assert.equal(out.match(/2026-08-05: Truth v1/g)!.length, 1);
   assert.match(out, /Truth v2/);
 });
 
 // ─── лок и атомарная запись ────────────────────────────────────────────────
-const { acquireLock, atomicWrite } = await import(
+const { acquireLock, atomicWrite } = (await import(
   join(REPO, "agent", "lib", "card-store.ts")
-);
+)) as typeof import("../agent/lib/card-store.ts");
 
 test("лок сериализует запись: второй захват ждёт и падает по таймауту", () => {
   const file = join(VAULT, "cards", "notes", "lock-probe.md");
