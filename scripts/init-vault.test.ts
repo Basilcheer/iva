@@ -1,11 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -118,7 +113,10 @@ void test("init-vault preserves an existing vault on repeated runs", async (t) =
 
   assert.equal(first.status, 0, first.stderr);
   assert.equal(second.status, 0, second.stderr);
-  assert.match(second.stdout, /vault already has data, skipping template copy/u);
+  assert.match(
+    second.stdout,
+    /vault already has data, skipping template copy/u,
+  );
   assert.equal(readFileSync(join(vault, "personal.md"), "utf8"), "keep this\n");
   assert.equal(existsSync(join(vault, "CORE.en.md")), false);
 });
@@ -136,8 +134,14 @@ void test("init-vault leaves a non-empty pre-existing vault untouched", async (t
   });
 
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /vault already has data, skipping template copy/u);
-  assert.equal(readFileSync(join(vault, "personal.md"), "utf8"), "private memory\n");
+  assert.match(
+    result.stdout,
+    /vault already has data, skipping template copy/u,
+  );
+  assert.equal(
+    readFileSync(join(vault, "personal.md"), "utf8"),
+    "private memory\n",
+  );
   assert.equal(existsSync(join(vault, "CORE.md")), false);
   assert.equal(existsSync(join(vault, ".git")), true);
   assert.equal(
