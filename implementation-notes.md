@@ -744,4 +744,10 @@ the Node event loop is blocked` assertion once. Two later sequential suites hit
   PR-2 delta of at least +0.66 / +0.23 / +0.33 percentage points. Lint,
   formatting, the exact 95/95 `.mjs` ratchet, typecheck, build, replica,
   autograph 343/343, security-defense 45/45, deterministic userbot lock, and
-  Python 3.12 userbot guardrail/health/compile gates all pass.
+  Python 3.12 userbot guardrail/health/compile gates all pass. CodeRabbit's
+  incremental review also noted that the first regression could pass without
+  proving the hook ran; the test now records and asserts the callback invocation
+  before checking that its synchronous failure was contained. The strengthened
+  test leaves the suite at 633 / 629 / 0 / 4; its final coverage run reports
+  74.14% lines, 79.56% branches, and 71.97% functions, extending the verified
+  PR-3 range to 74.14-74.16 / 79.52-79.56 / 71.87-71.97%.

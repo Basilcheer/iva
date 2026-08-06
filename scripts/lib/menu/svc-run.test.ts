@@ -244,11 +244,13 @@ test("attached()=false: тикер молчит, процесс всё равн�
 test("a synchronous onFinish failure is contained after process completion", async () => {
   resetForTests();
   const { tg } = makeTg();
+  let finishCalled = false;
   const run = startProcess(
     "doc",
     { argv: [process.execPath, "-e", "process.exit(0)"] },
     baseOpts(tg, {
       onFinish: () => {
+        finishCalled = true;
         throw new Error("injected synchronous finish failure");
       },
     }),
@@ -256,6 +258,7 @@ test("a synchronous onFinish failure is contained after process completion", asy
 
   assert.ok(run);
   await waitFor(() => run.status !== "running");
+  assert.equal(finishCalled, true);
   assert.equal(run.status, "done");
 });
 
