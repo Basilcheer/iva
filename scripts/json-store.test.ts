@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-floating-promises -- Node's test runner owns registrations. */
 // Тесты примитивов agent/lib/json-store.ts (лок, атомарная запись, бэкап битого JSON).
 // Импорт .ts напрямую: Node 24 стрипает типы без флагов при явном .ts-специфкаторе.
 import test from "node:test";

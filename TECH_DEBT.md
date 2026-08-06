@@ -121,7 +121,7 @@ vs `scripts/autograph/common.py`; (b) the fence-aware H1/H2 section scanner adde
 once in both parsers simultaneously (blank line inside a folded block, fixed in 0.3.11).
 RESOLVED after 0.3.12: shared golden fixtures live in
 `scripts/autograph/tests/golden/` (input Markdown + expected normalized JSON per case);
-both `scripts/golden-parsers.test.mjs` (CI node glob) and
+both `scripts/golden-parsers.test.ts` (CI node glob) and
 `scripts/autograph/tests/test_autograph.py` assert against the same expectations. The
 result shapes differ (TS returns fields, Python returns a tuple), so fixtures compare a
 normalized form only: fields+body for frontmatter, outside[] plus [start,end) section

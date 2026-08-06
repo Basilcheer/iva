@@ -1,9 +1,25 @@
+/* eslint-disable @typescript-eslint/no-floating-promises -- Node's test runner owns registrations. */
 import test from "node:test";
 import assert from "node:assert/strict";
 import { pathToFileURL } from "node:url";
 import { join } from "node:path";
 
-const errorModule = await import(
+type ErrorClassifierModule = {
+  classifyModelCallError(error: unknown): string;
+};
+
+function isErrorClassifierModule(
+  value: unknown,
+): value is ErrorClassifierModule {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "classifyModelCallError" in value &&
+    typeof value.classifyModelCallError === "function"
+  );
+}
+
+const errorModule: unknown = await import(
   pathToFileURL(
     join(
       process.cwd(),
@@ -11,6 +27,7 @@ const errorModule = await import(
     ),
   ).href
 );
+assert.ok(isErrorClassifierModule(errorModule));
 
 test("deterministic AI SDK prompt and tool errors terminate the Eve session", () => {
   for (const name of [

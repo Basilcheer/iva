@@ -2123,7 +2123,7 @@ def main():
                  f"'{section}' not found in prompt")
 
         # ═══════════════════════════════════════════════════════
-        # GOLDEN FIXTURES — те же файлы читает scripts/golden-parsers.test.mjs;
+        # GOLDEN FIXTURES — те же файлы читает scripts/golden-parsers.test.ts;
         # оба раннера сверяются с одним ожиданием, чтобы TS/Python-диалекты
         # frontmatter и fence-сканера не разъезжались молча (TECH_DEBT §13)
         # ═══════════════════════════════════════════════════════

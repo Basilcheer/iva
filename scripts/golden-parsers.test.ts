@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-floating-promises -- Node's test runner owns registrations. */
 // Golden-фикстуры двуязычных парсер-пар (TECH_DEBT §13). Те же файлы читает
 // scripts/autograph/tests/test_autograph.py — оба раннера сверяются с ОДНИМ
 // ожиданием, поэтому диалекты TS/Python не могут разъехаться молча:
@@ -23,7 +24,11 @@ const GOLDEN = join(
   "autograph/tests/golden",
 );
 
-function cases(sub) {
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function cases(sub: "frontmatter" | "sections") {
   const dir = join(GOLDEN, sub);
   return readdirSync(dir)
     .filter((f) => f.endsWith(".md"))
@@ -32,7 +37,7 @@ function cases(sub) {
       input: readFileSync(join(dir, f), "utf8"),
       expected: JSON.parse(
         readFileSync(join(dir, f.replace(/\.md$/, ".json")), "utf8"),
-      ),
+      ) as unknown,
     }));
 }
 
@@ -42,6 +47,7 @@ test("golden: каталог frontmatter не пуст", () => {
 });
 for (const { name, input, expected } of frontmatterCases) {
   test(`golden frontmatter: ${name}`, () => {
+    assert.ok(isRecord(expected));
     const parsed = parseFrontmatter(input);
     assert.deepEqual(parsed.fields, expected.fields);
     assert.equal(parsed.body, expected.body);
@@ -54,9 +60,13 @@ test("golden: каталог sections не пуст", () => {
 });
 for (const { name, input, expected } of sectionCases) {
   test(`golden sections: ${name}`, () => {
+    assert.ok(isRecord(expected));
+    assert.ok(Array.isArray(expected.outside));
+    assert.ok(isRecord(expected.sections));
     const lines = input.split("\n");
     assert.deepEqual(outsideFences(lines), expected.outside);
     for (const [heading, ranges] of Object.entries(expected.sections)) {
+      assert.ok(Array.isArray(ranges));
       assert.deepEqual(
         h2Sections(lines, heading).map((s) => [s.start, s.end]),
         ranges,

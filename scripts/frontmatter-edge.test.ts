@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-floating-promises -- Node's test runner owns registrations. */
 // Краевые случаи frontmatter.ts, найденные ревью: запятые в квотированных элементах
 // flow-списка, YAML-неоднозначные скаляры, одиночный пробел как continuation, пустая
 // строка внутри перезаписываемого folded-блока.
@@ -9,13 +10,16 @@ import {
 } from "../agent/lib/frontmatter.ts";
 
 test("flow-список: запятая внутри кавычек не рвёт элемент (полный round-trip)", () => {
-  const { fields } = parseFrontmatter(
+  const parsed = parseFrontmatter(
     '---\ntags: [work, "a, b", plain]\n---\nbody',
   );
+  assert.ok(parsed.fields);
+  const { fields } = parsed;
   assert.deepEqual(fields.tags, ["work", "a, b", "plain"]);
   // parse → write → parse: значение обязано пережить полный цикл без искажений.
   const rewritten = writeFrontmatter(fields, []);
   const again = parseFrontmatter(`---\n${rewritten}\n---\nbody`);
+  assert.ok(again.fields);
   assert.deepEqual(again.fields.tags, ["work", "a, b", "plain"]);
 });
 
@@ -52,6 +56,7 @@ test("одиночный пробел — тоже continuation, а не нов�
   const { fields } = parseFrontmatter(
     "---\ndescription: >-\n line one\n line two\nstatus: active\n---\nb",
   );
+  assert.ok(fields);
   assert.equal(fields.description, "line one line two");
   assert.equal(fields.status, "active");
 });
@@ -84,12 +89,14 @@ test("folded >- сохраняет абзацы через parse → write → p
   const source =
     "---\ndescription: >-\n  Первый абзац\n\n  Второй абзац\n\n\n  Третий абзац\nstatus: active\n---\nbody";
   const first = parseFrontmatter(source);
+  assert.ok(first.fields);
   assert.equal(
     first.fields.description,
     "Первый абзац\nВторой абзац\n\nТретий абзац",
   );
   const written = writeFrontmatter(first.fields, first.lines);
   const second = parseFrontmatter(`---\n${written}\n---\nbody`);
+  assert.ok(second.fields);
   assert.equal(second.fields.description, first.fields.description);
   assert.equal(second.fields.status, "active");
 });
@@ -98,9 +105,11 @@ test("literal |- сохраняет пустую строку между абз�
   const source =
     "---\nnote: |-\n  Строка один\n\n  Строка два\nkind: note\n---\nbody";
   const first = parseFrontmatter(source);
+  assert.ok(first.fields);
   assert.equal(first.fields.note, "Строка один\n\nСтрока два");
   const written = writeFrontmatter(first.fields, first.lines);
   const second = parseFrontmatter(`---\n${written}\n---\nbody`);
+  assert.ok(second.fields);
   assert.equal(second.fields.note, first.fields.note);
   assert.equal(second.fields.kind, "note");
 });

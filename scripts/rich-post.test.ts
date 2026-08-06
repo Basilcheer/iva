@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-floating-promises -- Node's test runner owns registrations. */
 // Интеграционные тесты send_rich.py (subprocess): офлайновый dry-run, гейт --allow-upload,
 // media-гейт (только картинки/видео из разрешённых корней), allowlist получателей,
 // отсутствие --token.
@@ -30,7 +31,7 @@ function makeCtx({
   return { dir, envFile };
 }
 
-function runScript(args, ctx = makeCtx()) {
+function runScript(args: string[], ctx = makeCtx()) {
   const env = {
     PATH: process.env.PATH,
     HOME: process.env.HOME,
