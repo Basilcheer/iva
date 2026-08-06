@@ -30,73 +30,8 @@ import {
   log,
 } from "./config.ts";
 import { chatKey } from "./offset.ts";
-import { pacedDeliver } from "./deliver.ts";
-
-type MaybePromise<T> = T | Promise<T>;
-type ErrorLike = { code?: unknown; message?: unknown };
-type Status = Record<string, unknown>;
-type DeliveryResult = boolean | "handled";
-type DeliveryOptions = {
-  onAcceptanceFailure?: (details?: unknown) => MaybePromise<unknown>;
-  timeoutMs?: number;
-  retryAcceptanceTimeout?: boolean;
-  route?: string;
-  acceptedStatus?: number;
-  queueReceipt?: boolean;
-  retry?: boolean;
-};
-type DeliverImpl = (
-  update: TelegramQueueUpdate,
-  options?: DeliveryOptions,
-) => MaybePromise<DeliveryResult>;
-type QueuePhase =
-  | { state: "delivering"; baselineGeneration: number }
-  | {
-      state: "awaiting-running";
-      baselineGeneration: number;
-      acceptedAt: number;
-    }
-  | { state: "running"; baselineGeneration: number; generation: number };
-type StatusImpl = (key: string) => Status | null;
-type SetStatusIfImpl = (
-  key: string,
-  expected: Status,
-  patch: Status,
-) => Status | null;
-type QueueModule = {
-  acknowledgeQueued: (
-    update: TelegramQueueUpdate,
-    count: number,
-  ) => Promise<void>;
-  clearFailedDirectIngress: (
-    key: string,
-    options: {
-      baselineGeneration: number;
-      startedAt: number;
-      statusImpl: StatusImpl;
-      setStatusIfImpl: SetStatusIfImpl;
-      deleteMessageImpl: (
-        key: string,
-        messageId: unknown,
-      ) => MaybePromise<unknown>;
-      now: () => number;
-    },
-  ) => Promise<boolean>;
-  deleteStaleWorkingMessage: (key: string, messageId: unknown) => Promise<void>;
-  loadQueue: () => Promise<TelegramQueueDocument>;
-  QUEUE_DELIVERY_TIMEOUT_MS: number;
-  QUEUE_DRAIN_BUDGET_MS: number;
-  QUEUE_FILE: string;
-  queueDrainRotation: { afterKey: string | null };
-  queueInFlight: Map<string, QueuePhase>;
-  queueSettleUntil: Map<string, number>;
-  sendStaleRunNotice: (key: string, text: string) => Promise<void>;
-  statusGeneration: (status: Status | null | undefined) => number;
-  undrainableLegacyLogged: Set<string>;
-};
-
-const queueModulePath = "./queue.ts";
-const {
+import { pacedDeliver, type DeliverOptions } from "./deliver.ts";
+import {
   acknowledgeQueued,
   clearFailedDirectIngress,
   deleteStaleWorkingMessage,
@@ -110,12 +45,27 @@ const {
   sendStaleRunNotice,
   statusGeneration,
   undrainableLegacyLogged,
-} = (await import(queueModulePath)) as QueueModule;
+} from "./queue.ts";
+import type { QueuePhase } from "./queue.ts";
 
+type MaybePromise<T> = T | Promise<T>;
+type ErrorLike = { code?: unknown; message?: unknown };
+type Status = Record<string, unknown>;
+type DeliveryResult = Awaited<ReturnType<typeof pacedDeliver>>;
+type DeliverImpl = (
+  update: TelegramQueueUpdate,
+  options?: DeliverOptions,
+) => MaybePromise<DeliveryResult>;
+type StatusImpl = (key: string) => Status | null;
+type SetStatusIfImpl = (
+  key: string,
+  expected: Status,
+  patch: Status,
+) => Status | null;
 const errorMessage = (error: unknown) => (error as ErrorLike).message;
 const errorCode = (error: unknown) =>
   (error as ErrorLike | null | undefined)?.code;
-const pacedDelivery = pacedDeliver as unknown as DeliverImpl;
+const pacedDelivery: DeliverImpl = pacedDeliver;
 
 type DirectDeliveryOptions = {
   key?: string | null;
@@ -125,7 +75,7 @@ type DirectDeliveryOptions = {
   sendFailureImpl?: (key: string, text: string) => MaybePromise<unknown>;
   deleteMessageImpl?: (
     key: string,
-    messageId: unknown,
+    messageId: string | number,
   ) => MaybePromise<unknown>;
   now?: () => number;
   trImpl?: (en: string, ru: string) => string;
@@ -205,6 +155,9 @@ async function deliverDirectUpdate(
   return accepted ? "delivered" : "rejected";
 }
 
+export type RouteMessageResult =
+  "delivered" | "rejected" | "dropped" | "enqueue-failed" | "queued";
+
 export async function routeMessageUpdate(
   update: TelegramQueueUpdate,
   {
@@ -256,7 +209,7 @@ export async function routeMessageUpdate(
     sendFailureImpl?: (key: string, text: string) => MaybePromise<unknown>;
     deleteMessageImpl?: (
       key: string,
-      messageId: unknown,
+      messageId: string | number,
     ) => MaybePromise<unknown>;
     now?: () => number;
     trImpl?: (en: string, ru: string) => string;
@@ -264,7 +217,7 @@ export async function routeMessageUpdate(
     botUsername?: unknown;
     logImpl?: (...parts: unknown[]) => void;
   } = {},
-) {
+): Promise<RouteMessageResult> {
   const key = chatKeyImpl(update);
   if (update.message && key !== null && !replyToBotImpl(update.message)) {
     const queue = await loadQueueImpl();
@@ -307,7 +260,7 @@ export async function drainReadyQueueHeads({
   statusImpl = getChatStatus,
   deliverImpl = (
     update: TelegramQueueUpdate,
-    { timeoutMs }: DeliveryOptions = {},
+    { timeoutMs }: DeliverOptions = {},
   ) =>
     pacedDelivery(update, {
       route: ACCEPTANCE_ROUTE,

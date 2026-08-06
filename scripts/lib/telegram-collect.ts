@@ -1,27 +1,16 @@
+import type {
+  TelegramQueueMessage,
+  TelegramQueueUpdate,
+} from "./telegram-queue.ts";
+
 export const COLLECT_QUIET_MS = 800;
 export const COLLECT_MEDIA_QUIET_MS = 1500;
 export const COLLECT_MAX_PARTS = 20;
 export const COLLECT_MAX_CHARS = 50_000;
 export const COLLECT_MAX_AGE_MS = 10_000;
 
-export interface TelegramCollectMessage {
-  message_id?: unknown;
-  date?: unknown;
-  chat?: { id?: string | number; [key: string]: unknown };
-  from?: { id?: string | number; [key: string]: unknown };
-  message_thread_id?: string | number;
-  media_group_id?: unknown;
-  text?: unknown;
-  caption?: unknown;
-  iva_parts?: TelegramCollectMessage[];
-  [key: string]: unknown;
-}
-
-export interface TelegramCollectUpdate {
-  update_id?: unknown;
-  message?: TelegramCollectMessage;
-  [key: string]: unknown;
-}
+export type TelegramCollectMessage = TelegramQueueMessage;
+export type TelegramCollectUpdate = TelegramQueueUpdate;
 
 interface CollectorOptions {
   quietMs?: unknown;

@@ -15,14 +15,11 @@ import {
 } from "./config.ts";
 import { tg } from "./transport.ts";
 import { chatKey } from "./offset.ts";
+import type { TelegramQueueUpdate } from "../lib/telegram-queue.ts";
 
-type TelegramUpdate = Record<string, unknown> & {
-  update_id?: unknown;
-  message?: unknown;
-  callback_query?: unknown;
-};
+type TelegramUpdate = TelegramQueueUpdate;
 type ErrorLike = { message?: unknown; name?: unknown };
-type DeliverOptions = {
+export type DeliverOptions = {
   route?: string;
   acceptedStatus?: number;
   queueReceipt?: boolean;
@@ -256,7 +253,7 @@ async function pacedDeliver(update: TelegramUpdate, options?: DeliverOptions) {
     options?.timeoutMs === undefined
       ? null
       : Date.now() + Math.max(0, options.timeoutMs);
-  const key = chatKey(update as Parameters<typeof chatKey>[0]);
+  const key = chatKey(update);
   if (key !== null && SETTLE_MS > 0) {
     const prev = lastDeliverAt.get(key);
     if (prev !== undefined) {

@@ -16,6 +16,8 @@ export type TelegramFlowResponse = {
   description?: string;
 };
 
+export type TelegramFlowId = string | number;
+
 type TelegramFlowTransport = (
   method: string,
   params: Record<string, unknown>,
@@ -25,8 +27,8 @@ type TelegramKeyboard = Array<Array<Record<string, unknown>>>;
 
 export type TelegramFlowState = {
   flow: string;
-  chatId: number;
-  userId: number;
+  chatId: TelegramFlowId;
+  userId: TelegramFlowId;
   createdAt: number;
   msgId: number | null;
   provider: unknown;
@@ -54,11 +56,15 @@ export function createFlows({ tg, log = () => {} }: CreateFlowsOptions) {
   void log;
   const flows = new Map<string, TelegramFlowState>(); // был `wizards`; ключ `${chatId}:${userId}`
 
-  const key = (chatId: number, userId: number) => `${chatId}:${userId}`;
+  const key = (chatId: TelegramFlowId, userId: TelegramFlowId) =>
+    `${chatId}:${userId}`;
 
   // getWizard :371 — TTL-очистка при чтении. Континуации (codex-login) сверяют
   // identity: `flows.get(...) !== st` истинно и когда слот заменён, и когда протух.
-  function get(chatId: number, userId: number): TelegramFlowState | null {
+  function get(
+    chatId: TelegramFlowId,
+    userId: TelegramFlowId,
+  ): TelegramFlowState | null {
     const k = key(chatId, userId);
     const st = flows.get(k);
     if (st && Date.now() - st.createdAt > TTL_MS) {
@@ -72,8 +78,8 @@ export function createFlows({ tg, log = () => {} }: CreateFlowsOptions) {
   // Осиротевшие async-континуации старого объекта сверяют identity против стора и
   // сами себя отбрасывают. extra подмешивает поля в свежий стейт (напр. msgId меню).
   function start(
-    chatId: number,
-    userId: number,
+    chatId: TelegramFlowId,
+    userId: TelegramFlowId,
     flow: string,
     extra: Record<string, unknown> = {},
   ): TelegramFlowState {
