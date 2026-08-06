@@ -91,7 +91,7 @@ The bot is half of Telegram. The other half is your personal account: connect th
 
 - **All of Telegram** — groups, channels, unreads, search and the full history of your personal account.
 - **Onboarding in chat** — tell the bot to connect your Telegram, scan a QR. No terminal.
-- **Anti-ban guardrail on the server** — FloodWait compliance, a randomized delay after every send, and a circuit-breaker that pauses sending after three warnings in a day. It is enforced in the proxy rather than asked for in a prompt, and it wraps the three outbound calls that actually get accounts flagged: messages, files, forwards. Joins, invites, contact imports and reactions are not wrapped — those limits live in the skill file, which is a prompt.
+- **Anti-ban guardrail on the server** — FloodWait compliance, a randomized delay after every send, and a circuit-breaker that pauses sending after three FloodWaits in 24 hours. It is enforced in the proxy rather than asked for in a prompt, and it wraps the three outbound calls that actually get accounts flagged: messages, files, forwards. Joins, invites, contact imports and reactions are not wrapped — those limits live in the skill file, which is a prompt.
 - **Read-only mode** — one `.env` switch and Iva can read and search but physically cannot send.
 
 > [!WARNING]
@@ -121,7 +121,7 @@ Install as a normal user, not as root — Iva's shell tool runs as whoever insta
 
 Three messages, and you can watch the memory work:
 
-1. Send a voice note about your day — anything, out loud. Then look in `~/iva/vault/daily/` on the server: your words are sitting there in plain markdown, dated, yours. No other assistant hands you the file.
+1. Send a voice note about your day — anything, out loud. Then look in `daily/` inside your vault on the server: your words are sitting there in plain markdown, dated, yours. No other assistant hands you the file.
 2. Tell it something a colleague would remember: `Marina at Acme wants the revised quote by Friday — she never picks up the phone.`
 3. Ask for it back the way a person would: `how should I follow up with Marina?` — the answer comes from the card Iva just wrote, not from the last few messages.
 
@@ -161,7 +161,7 @@ Default model is deepseek-v4-pro, 131k context. On Go it runs about $9/mo all-in
 ## What's New
 
 <details>
-<summary><b>v0.3.12 · 05.08.2026 — expand four weeks of releases</b></summary>
+<summary><b>v0.3.12 · 05.08.2026 — expand the latest releases</b></summary>
 
 ### 05.08.2026
 
