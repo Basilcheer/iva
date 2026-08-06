@@ -21,6 +21,7 @@ function streamOf(...parts: string[]) {
 
 test("readCappedStream keeps an exactly capped UTF-8 body", async () => {
   assert.equal(await readCappedStream(streamOf("test"), 4), "test");
+  assert.equal(await readCappedStream(streamOf("€"), 3), "€");
 });
 
 test("readCappedStream cancels and rejects an oversized body before buffering the rest", async () => {
