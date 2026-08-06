@@ -609,7 +609,8 @@ export async function loadQueueFile(
   try {
     pendingRaw = await readFileImpl(pendingFile, "utf8");
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    if ((error as NodeJS.ErrnoException | null | undefined)?.code !== "ENOENT")
+      throw error;
   }
   if (pendingRaw !== undefined) {
     // A pending document is the last fully durable pre-ack state. Restore it
@@ -632,7 +633,9 @@ export async function loadQueueFile(
   try {
     raw = await readFileImpl(file, "utf8");
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+    if (
+      (error as NodeJS.ErrnoException | null | undefined)?.code === "ENOENT"
+    ) {
       return {
         document: emptyQueueDocument(),
         migrated: false,
@@ -746,7 +749,10 @@ async function writeLegacyQuarantine(
       });
       return path;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      if (
+        (error as NodeJS.ErrnoException | null | undefined)?.code !== "EEXIST"
+      )
+        throw error;
     }
   }
   throw new Error(

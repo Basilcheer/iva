@@ -1,4 +1,5 @@
 /* eslint-disable @typescript-eslint/require-await -- async test doubles preserve production promise boundaries */
+/* eslint-disable @typescript-eslint/prefer-promise-reject-errors -- regression cases preserve non-Error boundary failures */
 import test, { after, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
@@ -150,6 +151,55 @@ void test("atomic queue writes invoke a fresh nonce factory per write", async (t
   await writeQueueFileAtomic(file, { version: 1, queues: {} }, options);
 
   assert.equal(calls, 2);
+});
+
+void test("queue reads preserve nullish non-Error failures", async () => {
+  const firstSentinel = Symbol("not rejected");
+  let firstCaught: unknown = firstSentinel;
+  try {
+    await loadQueueFile("/virtual/queue.json", {
+      readFileImpl: () => Promise.reject(null),
+    });
+  } catch (error) {
+    firstCaught = error;
+  }
+  assert.equal(firstCaught, null);
+
+  const missing = Object.assign(new Error("missing"), { code: "ENOENT" });
+  const secondSentinel = Symbol("not rejected");
+  let secondCaught: unknown = secondSentinel;
+  let reads = 0;
+  try {
+    await loadQueueFile("/virtual/queue.json", {
+      readFileImpl: () =>
+        (reads += 1) === 1
+          ? Promise.reject(missing)
+          : Promise.reject(undefined),
+    });
+  } catch (error) {
+    secondCaught = error;
+  }
+  assert.equal(reads, 2);
+  assert.equal(secondCaught, undefined);
+});
+
+void test("legacy quarantine preserves a null link failure", async (t) => {
+  const file = await queueFile(t);
+  await writeFile(file, JSON.stringify({ "-100:": ["legacy group text"] }));
+  const sentinel = Symbol("not rejected");
+  let caught: unknown = sentinel;
+
+  try {
+    await migrateQueueFile(file, {
+      linkImpl: () => Promise.reject(null),
+      quarantineNow: () => 1,
+      quarantineNonce: () => "fixed",
+    });
+  } catch (error) {
+    caught = error;
+  }
+
+  assert.equal(caught, null);
 });
 
 void test("versioned FIFO items preserve update ids, order and duplicate retries across reload", async (t) => {

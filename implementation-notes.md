@@ -668,3 +668,8 @@ the Node event loop is blocked` assertion once. Two later sequential suites hit
   Lint, formatting, the 116/116 `.mjs` ratchet, typecheck, build, replica,
   autograph 343/343, security-defense 45/45, deterministic userbot lock, and
   Python 3.12 userbot guardrail/health/compile gates all pass.
+- 2026-08-06 Asia/Tashkent: Final adversarial review found three queue catch
+  sites where TypeScript assertions had removed the source module's null-safe
+  `error?.code` access at runtime. The separate compatibility fix restores
+  optional access and directly proves that nullish injected filesystem/link
+  failures are rethrown unchanged.
