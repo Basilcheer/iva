@@ -175,7 +175,7 @@ Default model is deepseek-v4-pro, 131k context. On Go it runs about $9/mo all-in
 
 #### v0.3.12
 
-- One-off reminders arrive again — the system timer crashed before the message could be sent; delivery now runs on plain JS under any Node.
+- One-off reminders arrive again — the system timer crashed before the message could be sent; delivery now stays on a stock-Node-compatible path.
 - Vault health no longer decays from raw daily transcripts — the score counts only the cards Iva actually maintains; an "up" link to a not-yet-created weekly summary isn't broken until its scheduled day, and audio attachments aren't broken links at all.
 - Cards no longer pile up dated "## Update" sections — writes carry explicit operations now: one Log, one Related, displaced facts go to a dated History; the nightly cleanup migrates old piles on its own.
 

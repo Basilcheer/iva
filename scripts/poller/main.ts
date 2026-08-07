@@ -12,6 +12,7 @@ import {
 import { alreadyDelivered } from "../lib/offset-store.ts";
 import {
   isReplyToBot,
+  invalidTelegramUpdatesDiagnostic,
   migrateQueueFile,
   parseTelegramUpdates,
   type TelegramQueueUpdate,
@@ -186,7 +187,10 @@ export async function main() {
     }
     const updates = parseTelegramUpdates(data.result);
     if (updates === null) {
-      log("getUpdates: invalid result");
+      log(
+        "getUpdates: invalid result",
+        JSON.stringify(invalidTelegramUpdatesDiagnostic(data.result)),
+      );
       await sleep(3000);
       continue;
     }

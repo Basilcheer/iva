@@ -21,6 +21,7 @@ import {
   createQueueItem,
   enqueueItem,
   enqueueQueueFile,
+  invalidTelegramUpdatesDiagnostic,
   loadQueueFile,
   materializeQueueItem,
   migrateQueueFile,
@@ -196,6 +197,34 @@ void test("Telegram update parsing rejects malformed external payloads", () => {
       },
     ]),
     null,
+  );
+});
+
+void test("invalid Telegram update diagnostics identify the item without logging content", () => {
+  const valid = privateUpdate(1, "valid");
+  const malformed = {
+    ...privateUpdate(2, "secret message text"),
+    update_id: "2",
+  };
+
+  assert.deepEqual(invalidTelegramUpdatesDiagnostic(undefined), {
+    index: null,
+    updateId: null,
+    item: { type: "undefined" },
+  });
+  const diagnostic = invalidTelegramUpdatesDiagnostic([valid, malformed]);
+  assert.deepEqual(diagnostic, {
+    index: 1,
+    updateId: "2",
+    item: {
+      type: "object",
+      keys: ["message", "update_id"],
+      messageKeys: ["chat", "date", "from", "message_id", "text"],
+    },
+  });
+  assert.equal(
+    JSON.stringify(diagnostic).includes("secret message text"),
+    false,
   );
 });
 
