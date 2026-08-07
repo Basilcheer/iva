@@ -160,6 +160,59 @@ export function parseTelegramUpdates(
     : null;
 }
 
+export type InvalidTelegramUpdatesDiagnostic = {
+  index: number | null;
+  updateId: string | number | null;
+  item: {
+    type: string;
+    keys?: string[];
+    messageKeys?: string[];
+    callbackQueryKeys?: string[];
+  };
+};
+
+export function invalidTelegramUpdatesDiagnostic(
+  value: unknown,
+): InvalidTelegramUpdatesDiagnostic | null {
+  if (!Array.isArray(value))
+    return {
+      index: null,
+      updateId: null,
+      item: { type: value === null ? "null" : typeof value },
+    };
+  const index = value.findIndex((item) => !isTelegramQueueUpdate(item));
+  if (index < 0) return null;
+  const item: unknown = value[index];
+  if (!isRecord(item))
+    return {
+      index,
+      updateId: null,
+      item: {
+        type:
+          item === null ? "null" : Array.isArray(item) ? "array" : typeof item,
+      },
+    };
+  const rawUpdateId = item.update_id;
+  const updateId =
+    typeof rawUpdateId === "string" || typeof rawUpdateId === "number"
+      ? rawUpdateId
+      : null;
+  return {
+    index,
+    updateId,
+    item: {
+      type: "object",
+      keys: Object.keys(item).sort(),
+      ...(isRecord(item.message)
+        ? { messageKeys: Object.keys(item.message).sort() }
+        : {}),
+      ...(isRecord(item.callback_query)
+        ? { callbackQueryKeys: Object.keys(item.callback_query).sort() }
+        : {}),
+    },
+  };
+}
+
 export type TelegramQueueItem = {
   version: number;
   updateId: number;
