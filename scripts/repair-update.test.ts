@@ -97,6 +97,7 @@ function repairFixture({
   for (const relative of [
     "scripts/cli/update.ts",
     "scripts/lib/update-safety.ts",
+    "scripts/lib/custom-layer.ts",
     "scripts/lib/telegram-status.ts",
   ])
     writeFileSync(join(seed, relative), `base ${relative}\n`);
@@ -113,6 +114,7 @@ function repairFixture({
   for (const relative of [
     "scripts/cli/update.ts",
     "scripts/lib/update-safety.ts",
+    "scripts/lib/custom-layer.ts",
     "scripts/lib/telegram-status.ts",
   ])
     writeFileSync(join(seed, relative), `target ${relative}\n`);
@@ -233,6 +235,7 @@ void test("repair follows the configured update channel", () => {
   for (const relative of [
     "scripts/cli/update.ts",
     "scripts/lib/update-safety.ts",
+    "scripts/lib/custom-layer.ts",
     "scripts/lib/telegram-status.ts",
   ])
     writeFileSync(join(fixture.seed, relative), `stable ${relative}\n`);
