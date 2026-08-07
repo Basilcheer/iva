@@ -70,10 +70,16 @@ void test("repair bootstrap validates runtime input before filesystem access", (
 type RepairFixture = {
   temp: string;
   remote: string;
+  seed: string;
   local: string;
+  baseHead: string;
 };
 
-function repairFixture(): RepairFixture {
+function repairFixture({
+  updaterScript = 'import { execFileSync } from "node:child_process";\n' +
+    'execFileSync("git", ["reset", "--hard", "origin/main"], { stdio: "ignore" });\n' +
+    "process.exitCode = 1;\n",
+}: { updaterScript?: string } = {}): RepairFixture {
   const temp = mkdtempSync(join(tmpdir(), "iva-repair-flow-"));
   const remote = join(temp, "remote.git");
   const seed = join(temp, "seed");
@@ -87,12 +93,7 @@ function repairFixture(): RepairFixture {
   mkdirSync(join(seed, "scripts/lib"), { recursive: true });
   writeFileSync(join(seed, "package.json"), '{"name":"iva"}\n');
   writeFileSync(join(seed, "user.txt"), "base\n");
-  writeFileSync(
-    join(seed, "bin/iva.mjs"),
-    'import { execFileSync } from "node:child_process";\n' +
-      'execFileSync("git", ["reset", "--hard", "origin/main"], { stdio: "ignore" });\n' +
-      "process.exitCode = 1;\n",
-  );
+  writeFileSync(join(seed, "bin/iva.mjs"), updaterScript);
   for (const relative of [
     "scripts/cli/update.ts",
     "scripts/lib/update-safety.ts",
@@ -101,6 +102,7 @@ function repairFixture(): RepairFixture {
     writeFileSync(join(seed, relative), `base ${relative}\n`);
   git(seed, "add", ".");
   git(seed, "commit", "-m", "base");
+  const baseHead = git(seed, "rev-parse", "HEAD");
   git(seed, "remote", "add", "origin", remote);
   git(seed, "push", "-u", "origin", "main");
   git(temp, "clone", "--branch", "main", remote, local);
@@ -117,7 +119,7 @@ function repairFixture(): RepairFixture {
   git(seed, "add", ".");
   git(seed, "commit", "-m", "target");
   git(seed, "push", "origin", "main");
-  return { temp, remote, local };
+  return { temp, remote, seed, local, baseHead };
 }
 
 function withRepairGit(
@@ -136,7 +138,9 @@ function withRepairGit(
       "  exit 0\n" +
       "fi\n" +
       'if [ "$1" = "fetch" ]; then\n' +
-      '  exec "$IVA_TEST_REAL_GIT" fetch "$IVA_TEST_REMOTE" +main:refs/remotes/origin/main\n' +
+      "  for IVA_TEST_REF do :; done\n" +
+      "  IVA_TEST_BRANCH=${IVA_TEST_REF#refs/heads/}\n" +
+      '  exec "$IVA_TEST_REAL_GIT" fetch "$IVA_TEST_REMOTE" "+refs/heads/$IVA_TEST_BRANCH:refs/remotes/origin/$IVA_TEST_BRANCH"\n' +
       "fi\n" +
       'if [ "$1" = "stash" ] && [ "$2" = "push" ] && [ "$IVA_TEST_STASH_FAIL" = "1" ]; then\n' +
       "  exit 97\n" +
@@ -215,5 +219,41 @@ void test("repair restores dirty state when updater changes HEAD then fails", ()
   assert.equal(
     readFileSync(join(fixture.local, "local-only.txt"), "utf8"),
     "local untracked\n",
+  );
+});
+
+void test("repair follows the configured update channel", () => {
+  const fixture = repairFixture({
+    updaterScript:
+      'import { execFileSync } from "node:child_process";\n' +
+      'execFileSync("git", ["reset", "--hard", "origin/stable"], { stdio: "ignore" });\n',
+  });
+  git(fixture.seed, "checkout", "-b", "stable", fixture.baseHead);
+  writeFileSync(join(fixture.seed, "stable.txt"), "stable target\n");
+  for (const relative of [
+    "scripts/cli/update.ts",
+    "scripts/lib/update-safety.ts",
+    "scripts/lib/telegram-status.ts",
+  ])
+    writeFileSync(join(fixture.seed, relative), `stable ${relative}\n`);
+  git(fixture.seed, "add", ".");
+  git(fixture.seed, "commit", "-m", "stable target");
+  const stableHead = git(fixture.seed, "rev-parse", "HEAD");
+  git(fixture.seed, "push", "origin", "stable");
+  git(fixture.local, "config", "--local", "iva.updateBranch", "stable");
+
+  withRepairGit(fixture, {}, () => {
+    assert.doesNotThrow(() =>
+      runRepairUpdate({
+        inputRoot: fixture.local,
+        expectedTarget: stableHead,
+      }),
+    );
+  });
+
+  assert.equal(git(fixture.local, "rev-parse", "HEAD"), stableHead);
+  assert.equal(
+    readFileSync(join(fixture.local, "stable.txt"), "utf8"),
+    "stable target\n",
   );
 });

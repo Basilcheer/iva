@@ -8,6 +8,7 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  rmSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -1026,6 +1027,88 @@ test("dirty update activates the new build and archives conflicting HTML", async
   );
 });
 
+test("an untracked path claimed upstream preserves the local copy and activates core", async () => {
+  const fx = candidateFixture();
+  writeFileSync(join(fx.local, "claimed.txt"), "local untracked\n");
+  const target = pushUpstream(
+    fx.seed,
+    (seed) => writeFileSync(join(seed, "claimed.txt"), "upstream tracked\n"),
+    "claim local path",
+  );
+
+  const tx = candidateTx(fx);
+  await tx.protect();
+  await tx.resolveTarget();
+  const candidate = await tx.buildCandidate({ npm: "npm" });
+  assert.ok(candidate);
+  assert.equal(candidate.customization, "fallback");
+  await tx.fetchAndIntegrate();
+  const restored = await tx.restoreLocalChanges();
+  assert.ok(restored.status === "preserved");
+  assert.equal(await tx.promoteCandidate(), true);
+  await tx.commit();
+  await tx.teardownCandidate();
+
+  assert.equal(git(fx.local, "rev-parse", "HEAD"), target);
+  assert.equal(
+    readFileSync(join(fx.local, "claimed.txt"), "utf8"),
+    "upstream tracked\n",
+  );
+  assert.equal(
+    JSON.parse(readFileSync(join(restored.recoveryDir, "report.json"), "utf8"))
+      .reason,
+    "stash-apply-failed",
+  );
+  assert.notEqual(git(fx.local, "stash", "list"), "");
+});
+
+test("conflict resolution treats a pathspec-shaped filename literally", async () => {
+  const fx = candidateFixture({
+    buildScript:
+      "node -e \"const f=require('node:fs');f.mkdirSync('.output/server',{recursive:true});" +
+      "f.writeFileSync('.output/server/marker.txt',f.readFileSync('agent.txt','utf8').trim())\"",
+  });
+  const magicPath = ":(glob)**";
+  writeFileSync(join(fx.seed, magicPath), "stock magic\n");
+  writeFileSync(join(fx.seed, "agent.txt"), "stock agent\n");
+  git(fx.seed, "add", ".");
+  git(fx.seed, "commit", "-m", "add literal pathspec fixture");
+  git(fx.seed, "push", "origin", "main");
+  git(fx.local, "pull", "--ff-only");
+  writeFileSync(join(fx.local, magicPath), "local magic\n");
+  writeFileSync(join(fx.local, "agent.txt"), "local agent\n");
+  pushUpstream(
+    fx.seed,
+    (seed) => writeFileSync(join(seed, magicPath), "upstream magic\n"),
+    "conflict literal pathspec",
+  );
+
+  const tx = candidateTx(fx);
+  await tx.protect();
+  await tx.resolveTarget();
+  const candidate = await tx.buildCandidate({ npm: "npm" });
+  assert.ok(candidate);
+  await tx.fetchAndIntegrate();
+  const restored = await tx.restoreLocalChanges();
+  assert.ok(restored.status === "conflicted");
+  assert.deepEqual(
+    restored.conflicts.map(({ path }) => path),
+    [magicPath],
+  );
+  assert.equal(await tx.promoteCandidate(), true);
+  await tx.commit();
+  await tx.teardownCandidate();
+
+  assert.equal(
+    readFileSync(join(fx.local, ".output/server/marker.txt"), "utf8"),
+    "local agent",
+  );
+  assert.equal(
+    readFileSync(join(fx.local, "agent.txt"), "utf8"),
+    "local agent\n",
+  );
+});
+
 test("a broken local customization falls back to the verified new core", async () => {
   const fx = candidateFixture({
     buildScript:
@@ -1195,6 +1278,58 @@ test("changed lockfile installs candidate dependencies and promotes fresh node_m
     name.startsWith("node_modules.iva-backup-"),
   );
   assert.deepEqual(leftovers, []);
+});
+
+test("rollback removes promoted dependencies when the old install had none", async () => {
+  const fx = candidateFixture();
+  const npmLock = (cwd: string) =>
+    execFileSync(
+      "npm",
+      ["install", "--package-lock-only", "--no-audit", "--no-fund"],
+      { cwd, encoding: "utf8" },
+    );
+  const writeDep = (seed: string, version: string) => {
+    mkdirSync(join(seed, "dep"), { recursive: true });
+    writeFileSync(
+      join(seed, "dep/package.json"),
+      JSON.stringify({ name: "dep", version }),
+    );
+  };
+  writeDep(fx.seed, "1.0.0");
+  const pkg = JSON.parse(readFileSync(join(fx.seed, "package.json"), "utf8"));
+  pkg.dependencies = { dep: "file:dep" };
+  writeFileSync(join(fx.seed, "package.json"), JSON.stringify(pkg));
+  npmLock(fx.seed);
+  git(fx.seed, "add", ".");
+  git(fx.seed, "commit", "-m", "lockfile");
+  git(fx.seed, "push", "origin", "main");
+  git(fx.local, "pull", "--ff-only");
+  rmSync(join(fx.local, "node_modules"), { recursive: true, force: true });
+  writeDep(fx.seed, "1.1.0");
+  npmLock(fx.seed);
+  git(fx.seed, "add", ".");
+  git(fx.seed, "commit", "-m", "bump deps");
+  git(fx.seed, "push", "origin", "main");
+
+  const originalHead = git(fx.local, "rev-parse", "HEAD");
+  const tx = candidateTx(fx);
+  await tx.protect();
+  await tx.resolveTarget();
+  const candidate = await tx.buildCandidate({ npm: "npm" });
+  assert.ok(candidate);
+  assert.equal(candidate.depsChanged, true);
+  await tx.fetchAndIntegrate();
+  assert.equal(await tx.promoteCandidate(), true);
+  assert.equal(existsSync(join(fx.local, "node_modules/dep")), true);
+  await tx.rollback();
+  await tx.teardownCandidate();
+
+  assert.equal(git(fx.local, "rev-parse", "HEAD"), originalHead);
+  assert.equal(existsSync(join(fx.local, "node_modules")), false);
+  assert.equal(
+    readFileSync(join(fx.local, ".output/server/marker.txt"), "utf8"),
+    "live",
+  );
 });
 
 test("local commits skip the candidate and keep the in-place path", async () => {
