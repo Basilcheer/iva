@@ -275,6 +275,7 @@ export function createUpdateTransaction({
   let cachedTarget: UpdateTarget | null = null;
   let candidate: UpdateCandidate | null = null;
   let nodeModulesBackup = "";
+  let promotedNodeModulesWithoutBackup = false;
   let outputTouched = false;
 
   const run = (command: string, args: string[]): Promise<CommandResult> =>
@@ -330,6 +331,7 @@ export function createUpdateTransaction({
           ? await runCommand(
               "git",
               [
+                "--literal-pathspecs",
                 "restore",
                 "--source=HEAD",
                 "--staged",
@@ -341,7 +343,14 @@ export function createUpdateTransaction({
             )
           : await runCommand(
               "git",
-              ["rm", "-f", "--ignore-unmatch", "--", path],
+              [
+                "--literal-pathspecs",
+                "rm",
+                "-f",
+                "--ignore-unmatch",
+                "--",
+                path,
+              ],
               { cwd, env: commandEnv },
             );
       if (resolved.code !== 0)
@@ -367,7 +376,13 @@ export function createUpdateTransaction({
     revision: string,
     path: string,
   ): Promise<string | null> => {
-    const result = await git("ls-tree", revision, "--", path);
+    const result = await git(
+      "--literal-pathspecs",
+      "ls-tree",
+      revision,
+      "--",
+      path,
+    );
     if (result.code !== 0 || !result.stdout) return null;
     return result.stdout.split(/\s+/, 1)[0] || null;
   };
@@ -550,7 +565,7 @@ export function createUpdateTransaction({
       stashApplied = true;
       return { status: "applied", conflicts: [] };
     }
-    if (result.code !== 0 && conflicts.length === 0)
+    if (result.code !== 0 && conflicts.length === 0 && !fallbackReason)
       throw new Error(
         result.stderr || "local changes could not be restored safely",
       );
@@ -561,8 +576,8 @@ export function createUpdateTransaction({
     });
     preserveStash = true;
     if (fallbackReason) {
-      await mustGit("reset", "--hard", "HEAD");
       removeOriginalUntracked();
+      await mustGit("reset", "--hard", "HEAD");
       return {
         status: "preserved",
         conflicts: archived.conflictReports,
@@ -670,15 +685,15 @@ export function createUpdateTransaction({
           if (cleanNodeModules)
             renameSync(cleanNodeModules, join(staging, "node_modules"));
         }
-        await runCommand("git", ["reset", "--hard", "HEAD"], {
-          cwd: staging,
-          env: commandEnv,
-        });
         for (const relative of originalUntracked)
           rmSync(safeChild(staging, relative), {
             recursive: true,
             force: true,
           });
+        await runCommand("git", ["reset", "--hard", "HEAD"], {
+          cwd: staging,
+          env: commandEnv,
+        });
         candidate = {
           staging,
           targetSha,
@@ -773,9 +788,12 @@ export function createUpdateTransaction({
     if (candidate.depsChanged) {
       // Свежие node_modules обязаны существовать в staging; иначе безопаснее пересобрать in-place.
       if (!existsSync(join(candidate.staging, "node_modules"))) return false;
-      nodeModulesBackup = join(root, `node_modules.iva-backup-${Date.now()}`);
-      if (existsSync(join(root, "node_modules")))
+      if (existsSync(join(root, "node_modules"))) {
+        nodeModulesBackup = join(root, `node_modules.iva-backup-${Date.now()}`);
         renameSync(join(root, "node_modules"), nodeModulesBackup);
+      } else {
+        promotedNodeModulesWithoutBackup = true;
+      }
       renameSync(
         join(candidate.staging, "node_modules"),
         join(root, "node_modules"),
@@ -822,7 +840,10 @@ export function createUpdateTransaction({
       rmSync(join(root, "node_modules"), { recursive: true, force: true });
       renameSync(nodeModulesBackup, join(root, "node_modules"));
       nodeModulesBackup = "";
+    } else if (promotedNodeModulesWithoutBackup) {
+      rmSync(join(root, "node_modules"), { recursive: true, force: true });
     }
+    promotedNodeModulesWithoutBackup = false;
     restoreOutput();
     if (stashOid) {
       // A failed stash apply can leave a subset of the original untracked files behind.
@@ -853,6 +874,7 @@ export function createUpdateTransaction({
       rmSync(nodeModulesBackup, { recursive: true, force: true });
       nodeModulesBackup = "";
     }
+    promotedNodeModulesWithoutBackup = false;
     if (!preserveStash) await dropExactStash();
     if (updateBranch) await persistUpdateBranch(git, updateBranch);
     if (backupRef) await git("update-ref", "-d", backupRef);

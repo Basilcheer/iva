@@ -16,6 +16,8 @@ const BOOTSTRAP_FILES = [
   "scripts/lib/update-safety.ts",
   "scripts/lib/telegram-status.ts",
 ] as const;
+const DEFAULT_UPDATE_BRANCH = "main";
+const UPDATE_BRANCH_CONFIG = "iva.updateBranch";
 
 type Checkout = { root: string; origin: string };
 
@@ -42,6 +44,15 @@ function gitOk(root: string, ...args: string[]): boolean {
       stdio: "ignore",
     }).status === 0
   );
+}
+
+function optionalGit(root: string, ...args: string[]): string | null {
+  const result = spawnSync("git", args, {
+    cwd: root,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  return result.status === 0 ? String(result.stdout ?? "").trim() : null;
 }
 
 export function isOfficialIvaOrigin(value: string): boolean {
@@ -84,6 +95,37 @@ export function validateOfficialCheckout(inputRoot: string): Checkout {
   if (!isOfficialIvaOrigin(origin))
     throw new Error("origin is not the official smixs/iva repository");
   return { root, origin };
+}
+
+function fetchRepairBranch(root: string, branch: string): string {
+  if (!gitOk(root, "check-ref-format", "--branch", branch))
+    throw new Error(`invalid update branch: ${branch}`);
+  git(root, "fetch", "--prune", "origin", `refs/heads/${branch}`);
+  const target = git(root, "rev-parse", "FETCH_HEAD^{commit}");
+  if (!/^[0-9a-f]{40}$/.test(target))
+    throw new Error(`origin/${branch} did not resolve to a commit SHA`);
+  return target;
+}
+
+function resolveRepairTarget(root: string): string {
+  const configured = optionalGit(
+    root,
+    "config",
+    "--local",
+    "--get",
+    UPDATE_BRANCH_CONFIG,
+  );
+  if (configured) return fetchRepairBranch(root, configured);
+
+  const currentBranch = git(root, "rev-parse", "--abbrev-ref", "HEAD");
+  if (!currentBranch || currentBranch === "HEAD")
+    throw new Error("detached HEAD: switch to the update branch first");
+  if (currentBranch !== DEFAULT_UPDATE_BRANCH) {
+    const defaultTarget = fetchRepairBranch(root, DEFAULT_UPDATE_BRANCH);
+    if (gitOk(root, "merge-base", "--is-ancestor", "HEAD", defaultTarget))
+      return defaultTarget;
+  }
+  return fetchRepairBranch(root, currentBranch);
 }
 
 function safeChild(root: string, relative: string): string {
@@ -160,15 +202,12 @@ export function runRepairUpdate(
   let originalStateCaptured = !status;
 
   try {
-    git(root, "fetch", "--prune", "origin", "main");
-    const target = git(root, "rev-parse", "origin/main^{commit}");
-    if (!/^[0-9a-f]{40}$/.test(target))
-      throw new Error("origin/main did not resolve to a commit SHA");
+    const target = resolveRepairTarget(root);
     if (expectedTarget && expectedTarget !== target)
-      throw new Error("origin/main does not match the requested repair SHA");
+      throw new Error("update target does not match the requested repair SHA");
     if (!gitOk(root, "merge-base", "--is-ancestor", originalHead, target))
       throw new Error(
-        "the current checkout cannot fast-forward to origin/main",
+        "the current checkout cannot fast-forward to the update target",
       );
 
     if (status) {
