@@ -1,6 +1,13 @@
 import { execFile } from "node:child_process";
 import { join } from "node:path";
-import { mkdir, readdir, rm, stat, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  readFile,
+  readdir,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import { readEnvFresh } from "../lib/env-file.ts";
 import {
@@ -37,6 +44,10 @@ type UpdateCallbackQuery = {
 };
 type LaunchResult = { ok: boolean; msg: string };
 type ErrorLike = { message?: unknown };
+type RecoveryReport = {
+  schema: "iva-update-conflicts/v1";
+  conflicts: { path: string }[];
+};
 
 // ── self-update (/update) ──────────────────────────────────────────────────
 // Run `iva update` in its OWN transient systemd scope, so it survives the restart of
@@ -148,6 +159,94 @@ async function removeStaleUpdateJobs(): Promise<void> {
   );
 }
 
+async function showSavedUpdateConflicts(
+  bundleId: string,
+  chatId: string | number,
+  messageId: number,
+): Promise<void> {
+  if (
+    !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(bundleId) ||
+    bundleId === "." ||
+    bundleId === ".."
+  ) {
+    await edit(
+      chatId,
+      messageId,
+      tr("⚠️ Invalid recovery bundle", "⚠️ Неверный пакет восстановления"),
+    );
+    return;
+  }
+  let report: RecoveryReport;
+  try {
+    const parsed: unknown = JSON.parse(
+      await readFile(
+        join(DATA_DIR, "update-conflicts", bundleId, "report.json"),
+        "utf8",
+      ),
+    );
+    if (
+      !parsed ||
+      typeof parsed !== "object" ||
+      (parsed as { schema?: unknown }).schema !== "iva-update-conflicts/v1" ||
+      !Array.isArray((parsed as { conflicts?: unknown }).conflicts)
+    )
+      throw new Error("invalid recovery report");
+    const conflicts = (parsed as { conflicts: unknown[] }).conflicts;
+    if (
+      conflicts.some(
+        (item) =>
+          !item ||
+          typeof item !== "object" ||
+          typeof (item as { path?: unknown }).path !== "string",
+      )
+    )
+      throw new Error("invalid conflict list");
+    report = parsed as RecoveryReport;
+  } catch {
+    await edit(
+      chatId,
+      messageId,
+      tr(
+        "⚠️ Saved update details are unavailable",
+        "⚠️ Детали обновления недоступны",
+      ),
+    );
+    return;
+  }
+  const visible = report.conflicts.slice(0, 10).map(({ path }) => `- ${path}`);
+  if (report.conflicts.length > visible.length) {
+    const remaining = report.conflicts.length - visible.length;
+    visible.push(
+      tr(`- ${remaining} more conflict(s)`, `- Ещё конфликтов: ${remaining}`),
+    );
+  }
+  const details =
+    visible.length > 0
+      ? tr(
+          `Saved local conflicts:\n${visible.join("\n")}`,
+          `Сохранённые локальные конфликты:\n${visible.join("\n")}`,
+        )
+      : tr(
+          "Your local changes are saved in full.",
+          "Ваши локальные изменения сохранены целиком.",
+        );
+  await edit(
+    chatId,
+    messageId,
+    [
+      tr("✅ The new Iva core is active.", "✅ Новое ядро Iva активно."),
+      "",
+      details,
+      "",
+      tr(
+        "Tell Iva: “restore my update changes”.",
+        "Напишите Иве: «восстанови мои изменения после обновления».",
+      ),
+    ].join("\n"),
+    { inline_keyboard: [] },
+  );
+}
+
 // Inline-button taps for the /update flow. Handled by the bridge; never delivered to eve.
 export async function handleUpdateCallback(
   cq: UpdateCallbackQuery,
@@ -164,6 +263,14 @@ export async function handleUpdateCallback(
       messageId as number,
       tr("– Update postponed", "– Обновление отложено"),
       { inline_keyboard: [] },
+    );
+    return true;
+  }
+  if (action.startsWith("conflicts:")) {
+    await showSavedUpdateConflicts(
+      action.slice("conflicts:".length),
+      chatId as string | number,
+      messageId as number,
     );
     return true;
   }

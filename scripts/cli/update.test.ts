@@ -121,6 +121,7 @@ function transactionFixture(events: string[], state: TransactionState) {
     },
     restoreLocalChanges: async () => {
       events.push("tx.restoreLocalChanges");
+      return { status: "none" as const, conflicts: [] as const };
     },
     versions: async () => {
       events.push("tx.versions");

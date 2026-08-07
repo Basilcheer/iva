@@ -8,6 +8,7 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  rmSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -28,7 +29,9 @@ type TelegramBody = {
   message_id?: number;
   text?: string;
   entities?: { custom_emoji_id?: string }[];
-  reply_markup?: { inline_keyboard: { callback_data: string }[][] };
+  reply_markup?: {
+    inline_keyboard: { text?: string; callback_data: string }[][];
+  };
 };
 type TelegramCall = { method: string | undefined; body: TelegramBody };
 type MockResponse = {
@@ -154,6 +157,91 @@ test("Telegram update edits one message through every phase and final result", a
   assert.match(edits[3]?.body.text ?? "", /Iva обновлена/);
   assert.match(edits[3]?.body.text ?? "", /OpenAI · gpt-5.5/);
   assert.equal(edits[3].body.entities, undefined);
+});
+
+test("Telegram reports a successful core update when local files conflict", async () => {
+  const calls: TelegramCall[] = [];
+  const fetchImpl: MockFetch = async (url, init) => {
+    calls.push({ method: url.split("/").at(-1), body: JSON.parse(init.body) });
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ ok: true, result: {} }),
+    };
+  };
+  const reporter = createTelegramUpdateReporter({
+    token: "token",
+    job: { chatId: 1, messageId: 100, locale: "ru" },
+    fetchImpl,
+  });
+  assert.ok(reporter);
+  await reporter.complete({
+    beforeVersion: "v0.3.13",
+    afterVersion: "v0.3.13",
+    changedLocal: true,
+    restoreReport: {
+      status: "conflicted",
+      stashOid: "abc",
+      recoveryDir:
+        "/srv/iva/data/update-conflicts/2026-08-06T12-00-00-000Z-deadbeef1234",
+      conflicts: [
+        {
+          path: "docs/index.html",
+          baseMode: "100644",
+          localMode: "100644",
+          upstreamMode: "100644",
+        },
+        {
+          path: "docs/ru/index.html",
+          baseMode: "100644",
+          localMode: "100644",
+          upstreamMode: "100644",
+        },
+      ],
+    },
+  });
+
+  const final = calls.at(-1)?.body;
+  assert.match(final?.text ?? "", /✅ Iva обновлена/);
+  assert.match(final?.text ?? "", /Новое ядро активно/);
+  assert.doesNotMatch(final?.text ?? "", /Не удалось собрать/);
+  assert.equal(
+    final?.reply_markup?.inline_keyboard[0]?.[0]?.callback_data,
+    "iva_update:conflicts:2026-08-06T12-00-00-000Z-deadbeef1234",
+  );
+});
+
+test("Telegram omits an oversized recovery callback", async () => {
+  const calls: TelegramCall[] = [];
+  const fetchImpl: MockFetch = async (url, init) => {
+    calls.push({ method: url.split("/").at(-1), body: JSON.parse(init.body) });
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ ok: true, result: {} }),
+    };
+  };
+  const reporter = createTelegramUpdateReporter({
+    token: "token",
+    job: { chatId: 1, messageId: 100, locale: "en" },
+    fetchImpl,
+  });
+  assert.ok(reporter);
+  await reporter.complete({
+    beforeVersion: "v0.3.13",
+    afterVersion: "v0.3.13",
+    changedLocal: true,
+    restoreReport: {
+      status: "preserved",
+      stashOid: "abc",
+      recoveryDir: `/srv/iva/data/update-conflicts/${"x".repeat(64)}`,
+      conflicts: [],
+    },
+  });
+
+  const final = calls.at(-1)?.body;
+  assert.match(final?.text ?? "", /Iva updated/);
+  assert.equal(final?.reply_markup, undefined);
 });
 
 test("Telegram does not recreate phase messages after the active message was deleted", async () => {
@@ -671,7 +759,7 @@ function updateFixture() {
   return { temp, remote, seed, local, data };
 }
 
-test("stash conflict rolls back HEAD, output and user files byte-for-byte", async () => {
+test("stash conflict report can still roll back user files byte-for-byte", async () => {
   const { temp, seed, local, data } = updateFixture();
   const originalHead = git(local, "rev-parse", "HEAD");
   writeFileSync(join(local, "tracked.txt"), "user version\n");
@@ -693,7 +781,8 @@ test("stash conflict rolls back HEAD, output and user files byte-for-byte", asyn
   });
   await tx.protect();
   await tx.fetchAndIntegrate();
-  await assert.rejects(() => tx.restoreLocalChanges(), /conflict/);
+  const restored = await tx.restoreLocalChanges();
+  assert.ok(restored.status === "conflicted");
   tx.backupOutput();
   mkdirSync(join(local, ".output"));
   writeFileSync(join(local, ".output", "server"), "bad build");
@@ -854,6 +943,252 @@ test("update candidate builds in a worktree and is promoted after a clean fast-f
   assert.equal(git(fx.local, "worktree", "list").split("\n").length, 1);
 });
 
+test("dirty update activates the new build and archives conflicting HTML", async () => {
+  const fx = candidateFixture({
+    buildScript:
+      "node -e \"const f=require('node:fs');f.mkdirSync('.output/server',{recursive:true});" +
+      "f.writeFileSync('.output/server/marker.txt',f.readFileSync('agent.txt','utf8').trim())\"",
+  });
+  writeFileSync(join(fx.seed, "agent.txt"), "stock agent\n");
+  mkdirSync(join(fx.seed, "docs/ru"), { recursive: true });
+  writeFileSync(join(fx.seed, "docs/index.html"), "stock en\n");
+  writeFileSync(join(fx.seed, "docs/ru/index.html"), "stock ru\n");
+  git(fx.seed, "add", ".");
+  git(fx.seed, "commit", "-m", "add authored fixture");
+  git(fx.seed, "push", "origin", "main");
+  git(fx.local, "pull", "--ff-only");
+
+  writeFileSync(join(fx.local, "agent.txt"), "local agent\n");
+  writeFileSync(join(fx.local, "docs/index.html"), "local en\n");
+  writeFileSync(join(fx.local, "docs/ru/index.html"), "local ru\n");
+  const target = pushUpstream(
+    fx.seed,
+    (seed) => {
+      writeFileSync(join(seed, "docs/index.html"), "upstream en\n");
+      writeFileSync(join(seed, "docs/ru/index.html"), "upstream ru\n");
+    },
+    "update core and docs",
+  );
+
+  const tx = candidateTx(fx);
+  await tx.protect();
+  await tx.resolveTarget();
+  const candidate = await tx.buildCandidate({ npm: "npm" });
+  assert.ok(candidate, "dirty fast-forward must still produce a candidate");
+  await tx.fetchAndIntegrate();
+  const restored = await tx.restoreLocalChanges();
+  assert.equal(restored.status, "conflicted");
+  assert.deepEqual(
+    restored.conflicts.map(({ path }) => path),
+    ["docs/index.html", "docs/ru/index.html"],
+  );
+  assert.equal(await tx.promoteCandidate(), true);
+  await tx.commit();
+  await tx.teardownCandidate();
+
+  assert.equal(git(fx.local, "rev-parse", "HEAD"), target);
+  assert.equal(
+    readFileSync(join(fx.local, ".output/server/marker.txt"), "utf8"),
+    "local agent",
+  );
+  assert.equal(
+    readFileSync(join(fx.local, "docs/index.html"), "utf8"),
+    "upstream en\n",
+  );
+  assert.equal(
+    readFileSync(join(fx.local, "docs/ru/index.html"), "utf8"),
+    "upstream ru\n",
+  );
+  assert.equal(
+    readFileSync(join(restored.recoveryDir, "base/docs/index.html"), "utf8"),
+    "stock en\n",
+  );
+  assert.equal(
+    readFileSync(join(restored.recoveryDir, "local/docs/index.html"), "utf8"),
+    "local en\n",
+  );
+  assert.equal(
+    readFileSync(
+      join(restored.recoveryDir, "upstream/docs/index.html"),
+      "utf8",
+    ),
+    "upstream en\n",
+  );
+  assert.equal(existsSync(join(restored.recoveryDir, "changes.patch")), true);
+  assert.equal(existsSync(join(restored.recoveryDir, "report.json")), true);
+  assert.notEqual(
+    git(fx.local, "stash", "list"),
+    "",
+    "a recovery stash is retained until the user resolves the conflict",
+  );
+  assert.doesNotMatch(
+    git(fx.local, "status", "--porcelain=v1"),
+    /^(UU|AA|DD|AU|UA|DU|UD) /m,
+  );
+});
+
+test("an untracked path claimed upstream preserves the local copy and activates core", async () => {
+  const fx = candidateFixture();
+  writeFileSync(join(fx.local, "claimed.txt"), "local untracked\n");
+  const target = pushUpstream(
+    fx.seed,
+    (seed) => writeFileSync(join(seed, "claimed.txt"), "upstream tracked\n"),
+    "claim local path",
+  );
+
+  const tx = candidateTx(fx);
+  await tx.protect();
+  await tx.resolveTarget();
+  const candidate = await tx.buildCandidate({ npm: "npm" });
+  assert.ok(candidate);
+  assert.equal(candidate.customization, "fallback");
+  await tx.fetchAndIntegrate();
+  const restored = await tx.restoreLocalChanges();
+  assert.ok(restored.status === "preserved");
+  assert.equal(await tx.promoteCandidate(), true);
+  await tx.commit();
+  await tx.teardownCandidate();
+
+  assert.equal(git(fx.local, "rev-parse", "HEAD"), target);
+  assert.equal(
+    readFileSync(join(fx.local, "claimed.txt"), "utf8"),
+    "upstream tracked\n",
+  );
+  assert.equal(
+    JSON.parse(readFileSync(join(restored.recoveryDir, "report.json"), "utf8"))
+      .reason,
+    "stash-apply-failed",
+  );
+  assert.notEqual(git(fx.local, "stash", "list"), "");
+});
+
+test("conflict resolution treats a pathspec-shaped filename literally", async () => {
+  const fx = candidateFixture({
+    buildScript:
+      "node -e \"const f=require('node:fs');f.mkdirSync('.output/server',{recursive:true});" +
+      "f.writeFileSync('.output/server/marker.txt',f.readFileSync('agent.txt','utf8').trim())\"",
+  });
+  const magicPath = ":(glob)**";
+  writeFileSync(join(fx.seed, magicPath), "stock magic\n");
+  writeFileSync(join(fx.seed, "agent.txt"), "stock agent\n");
+  git(fx.seed, "add", ".");
+  git(fx.seed, "commit", "-m", "add literal pathspec fixture");
+  git(fx.seed, "push", "origin", "main");
+  git(fx.local, "pull", "--ff-only");
+  writeFileSync(join(fx.local, magicPath), "local magic\n");
+  writeFileSync(join(fx.local, "agent.txt"), "local agent\n");
+  pushUpstream(
+    fx.seed,
+    (seed) => writeFileSync(join(seed, magicPath), "upstream magic\n"),
+    "conflict literal pathspec",
+  );
+
+  const tx = candidateTx(fx);
+  await tx.protect();
+  await tx.resolveTarget();
+  const candidate = await tx.buildCandidate({ npm: "npm" });
+  assert.ok(candidate);
+  await tx.fetchAndIntegrate();
+  const restored = await tx.restoreLocalChanges();
+  assert.ok(restored.status === "conflicted");
+  assert.deepEqual(
+    restored.conflicts.map(({ path }) => path),
+    [magicPath],
+  );
+  assert.equal(await tx.promoteCandidate(), true);
+  await tx.commit();
+  await tx.teardownCandidate();
+
+  assert.equal(
+    readFileSync(join(fx.local, ".output/server/marker.txt"), "utf8"),
+    "local agent",
+  );
+  assert.equal(
+    readFileSync(join(fx.local, "agent.txt"), "utf8"),
+    "local agent\n",
+  );
+});
+
+test("a broken local customization falls back to the verified new core", async () => {
+  const fx = candidateFixture({
+    buildScript:
+      "node -e \"const f=require('node:fs');const v=f.readFileSync('agent.txt','utf8').trim();" +
+      "if(v==='broken local'){process.exit(1)}f.mkdirSync('.output/server',{recursive:true});" +
+      "f.writeFileSync('.output/server/marker.txt',v)\"",
+  });
+  writeFileSync(join(fx.seed, "agent.txt"), "stock agent\n");
+  git(fx.seed, "add", "agent.txt");
+  git(fx.seed, "commit", "-m", "add agent fixture");
+  git(fx.seed, "push", "origin", "main");
+  git(fx.local, "pull", "--ff-only");
+  writeFileSync(join(fx.local, "agent.txt"), "broken local\n");
+  const target = pushUpstream(
+    fx.seed,
+    (seed) => writeFileSync(join(seed, "upstream.txt"), "new core\n"),
+    "update core",
+  );
+
+  const tx = candidateTx(fx);
+  await tx.protect();
+  await tx.resolveTarget();
+  const candidate = await tx.buildCandidate({ npm: "npm" });
+  assert.ok(candidate);
+  assert.equal(candidate.customization, "fallback");
+  await tx.fetchAndIntegrate();
+  const restored = await tx.restoreLocalChanges();
+  assert.ok(restored.status === "preserved");
+  assert.equal(await tx.promoteCandidate(), true);
+  await tx.commit();
+  await tx.teardownCandidate();
+
+  assert.equal(git(fx.local, "rev-parse", "HEAD"), target);
+  assert.equal(
+    readFileSync(join(fx.local, "agent.txt"), "utf8"),
+    "stock agent\n",
+  );
+  assert.equal(
+    readFileSync(join(fx.local, ".output/server/marker.txt"), "utf8"),
+    "stock agent",
+  );
+  assert.equal(
+    JSON.parse(readFileSync(join(restored.recoveryDir, "report.json"), "utf8"))
+      .reason,
+    "custom-build-failed",
+  );
+  assert.notEqual(git(fx.local, "stash", "list"), "");
+});
+
+test("a custom build with no output keeps the verified clean candidate", async () => {
+  const fx = candidateFixture();
+  const pkg = JSON.parse(readFileSync(join(fx.local, "package.json"), "utf8"));
+  pkg.scripts.build = 'node -e "process.exit(0)"';
+  writeFileSync(join(fx.local, "package.json"), JSON.stringify(pkg));
+  const target = pushUpstream(
+    fx.seed,
+    (seed) => writeFileSync(join(seed, "core.txt"), "new core\n"),
+    "update core",
+  );
+
+  const tx = candidateTx(fx);
+  await tx.protect();
+  await tx.resolveTarget();
+  const candidate = await tx.buildCandidate({ npm: "npm" });
+  assert.ok(candidate);
+  assert.equal(candidate.customization, "fallback");
+  await tx.fetchAndIntegrate();
+  const restored = await tx.restoreLocalChanges();
+  assert.ok(restored.status === "preserved");
+  assert.equal(await tx.promoteCandidate(), true);
+  await tx.commit();
+  await tx.teardownCandidate();
+
+  assert.equal(git(fx.local, "rev-parse", "HEAD"), target);
+  assert.equal(
+    readFileSync(join(fx.local, ".output/server/marker.txt"), "utf8"),
+    "base",
+  );
+});
+
 test("broken candidate build aborts before the live checkout is touched", async () => {
   const fx = candidateFixture();
   pushUpstream(
@@ -943,6 +1278,58 @@ test("changed lockfile installs candidate dependencies and promotes fresh node_m
     name.startsWith("node_modules.iva-backup-"),
   );
   assert.deepEqual(leftovers, []);
+});
+
+test("rollback removes promoted dependencies when the old install had none", async () => {
+  const fx = candidateFixture();
+  const npmLock = (cwd: string) =>
+    execFileSync(
+      "npm",
+      ["install", "--package-lock-only", "--no-audit", "--no-fund"],
+      { cwd, encoding: "utf8" },
+    );
+  const writeDep = (seed: string, version: string) => {
+    mkdirSync(join(seed, "dep"), { recursive: true });
+    writeFileSync(
+      join(seed, "dep/package.json"),
+      JSON.stringify({ name: "dep", version }),
+    );
+  };
+  writeDep(fx.seed, "1.0.0");
+  const pkg = JSON.parse(readFileSync(join(fx.seed, "package.json"), "utf8"));
+  pkg.dependencies = { dep: "file:dep" };
+  writeFileSync(join(fx.seed, "package.json"), JSON.stringify(pkg));
+  npmLock(fx.seed);
+  git(fx.seed, "add", ".");
+  git(fx.seed, "commit", "-m", "lockfile");
+  git(fx.seed, "push", "origin", "main");
+  git(fx.local, "pull", "--ff-only");
+  rmSync(join(fx.local, "node_modules"), { recursive: true, force: true });
+  writeDep(fx.seed, "1.1.0");
+  npmLock(fx.seed);
+  git(fx.seed, "add", ".");
+  git(fx.seed, "commit", "-m", "bump deps");
+  git(fx.seed, "push", "origin", "main");
+
+  const originalHead = git(fx.local, "rev-parse", "HEAD");
+  const tx = candidateTx(fx);
+  await tx.protect();
+  await tx.resolveTarget();
+  const candidate = await tx.buildCandidate({ npm: "npm" });
+  assert.ok(candidate);
+  assert.equal(candidate.depsChanged, true);
+  await tx.fetchAndIntegrate();
+  assert.equal(await tx.promoteCandidate(), true);
+  assert.equal(existsSync(join(fx.local, "node_modules/dep")), true);
+  await tx.rollback();
+  await tx.teardownCandidate();
+
+  assert.equal(git(fx.local, "rev-parse", "HEAD"), originalHead);
+  assert.equal(existsSync(join(fx.local, "node_modules")), false);
+  assert.equal(
+    readFileSync(join(fx.local, ".output/server/marker.txt"), "utf8"),
+    "live",
+  );
 });
 
 test("local commits skip the candidate and keep the in-place path", async () => {

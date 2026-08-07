@@ -1,6 +1,7 @@
 import { readFile, rm } from "node:fs/promises";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { modelSummary } from "./model-summary.ts";
+import type { RestoreReport } from "./update-safety.ts";
 
 type UpdatePhase = "protect" | "fetch" | "build";
 type TelegramJob = {
@@ -33,6 +34,7 @@ type Reporter = {
     beforeVersion: string;
     afterVersion: string;
     changedLocal?: boolean;
+    restoreReport?: RestoreReport;
   }): Promise<void>;
   dispose(): void;
 };
@@ -58,6 +60,11 @@ const COPY = {
       "Iva is ready, but the automatic update timer could not be activated",
     final: "✅ Iva updated",
     preserved: "Local changes: preserved",
+    conflicted: (count: number) =>
+      `⚠️ ${count} local file(s) conflicted with the update. The new core is active; your versions are stored safely.`,
+    preservedInactive:
+      "⚠️ Local customizations did not build. The new core is active; your changes are stored safely.",
+    review: "Review saved changes",
     failure: (version: string) =>
       `Iva is still running ${version}.\nYour settings and changes are preserved.\nRetry: /update`,
   },
@@ -77,6 +84,11 @@ const COPY = {
       "Iva готова, но таймер автоматических обновлений не удалось активировать",
     final: "✅ Iva обновлена",
     preserved: "Локальные изменения: сохранены",
+    conflicted: (count: number) =>
+      `⚠️ Конфликт локальных файлов: ${count}. Новое ядро активно; ваши версии надёжно сохранены.`,
+    preservedInactive:
+      "⚠️ Локальные доработки не собрались. Новое ядро активно; ваши изменения надёжно сохранены.",
+    review: "Посмотреть сохранённые изменения",
     failure: (version: string) =>
       `Iva продолжает работать на ${version}.\nВаши настройки и изменения сохранены.\nПовторить: /update`,
   },
@@ -200,11 +212,15 @@ export function createTelegramUpdateReporter({
     await edit({ text: `${UPDATE_LOADER.fallback} ${text}` });
   }
 
-  async function finish(text: string): Promise<void> {
-    if ((await edit({ text })).ok) return;
+  async function finish(
+    text: string,
+    replyMarkup?: Record<string, unknown>,
+  ): Promise<void> {
+    const body = replyMarkup ? { text, reply_markup: replyMarkup } : { text };
+    if ((await edit(body)).ok) return;
     if (!uiLost) return;
     try {
-      await call("sendMessage", { chat_id: activeJob.chatId, text });
+      await call("sendMessage", { chat_id: activeJob.chatId, ...body });
     } catch {
       // The final status notification is best-effort after the original UI is lost.
     }
@@ -234,9 +250,11 @@ export function createTelegramUpdateReporter({
     async complete({
       beforeVersion,
       afterVersion,
+      restoreReport,
     }: {
       beforeVersion: string;
       afterVersion: string;
+      restoreReport?: RestoreReport;
     }) {
       const model = modelSummary(env);
       const lines = [
@@ -246,7 +264,27 @@ export function createTelegramUpdateReporter({
         `${lang === "ru" ? "Модель" : "Model"}: ${model.line}`,
       ];
       lines.push(copy.preserved);
-      await finish(lines.join("\n"));
+      let replyMarkup: Record<string, unknown> | undefined;
+      if (
+        restoreReport?.status === "conflicted" ||
+        restoreReport?.status === "preserved"
+      ) {
+        lines.push(
+          "",
+          restoreReport.status === "conflicted"
+            ? copy.conflicted(restoreReport.conflicts.length)
+            : copy.preservedInactive,
+        );
+        const bundleId = basename(restoreReport.recoveryDir);
+        const callbackData = `iva_update:conflicts:${bundleId}`;
+        if (Buffer.byteLength(callbackData, "utf8") <= 64)
+          replyMarkup = {
+            inline_keyboard: [
+              [{ text: copy.review, callback_data: callbackData }],
+            ],
+          };
+      }
+      await finish(lines.join("\n"), replyMarkup);
     },
     dispose() {},
   };
