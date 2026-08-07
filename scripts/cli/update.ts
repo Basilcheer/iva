@@ -18,6 +18,7 @@ import {
   createUpdateLog,
   createUpdateTransaction,
   releaseUpdateLock,
+  type RestoreReport,
 } from "../lib/update-safety.ts";
 import type { createCliRuntime } from "./runtime.ts";
 import type { createCliSystemd } from "./systemd.ts";
@@ -47,7 +48,7 @@ type CommandResult = {
 type UpdateTransaction = {
   protect(): Promise<unknown>;
   resolveTarget(): Promise<{ changed: boolean }>;
-  restoreLocalChanges(): Promise<unknown>;
+  restoreLocalChanges(): Promise<RestoreReport>;
   versions(): Promise<UpdateVersions>;
   buildCandidate(options: { npm: string }): Promise<object | null>;
   fetchAndIntegrate(): Promise<{ changed: boolean }>;
@@ -68,7 +69,10 @@ type TelegramReporter = {
   fail(phase: UpdatePhase, beforeVersion: string): Promise<void>;
   postCommitFailure(message: string): Promise<void>;
   complete(
-    versions: UpdateVersions & { changedLocal?: boolean },
+    versions: UpdateVersions & {
+      changedLocal?: boolean;
+      restoreReport?: RestoreReport;
+    },
   ): Promise<void>;
   dispose(): void;
 };
@@ -264,6 +268,7 @@ export function createUpdateCommand({
       beforeVersion: "the previous version",
       afterVersion: "the new version",
     };
+    let restoreReport: RestoreReport;
     const phaseStart = async (name: UpdatePhase): Promise<void> => {
       state.phase = name;
       terminal.start(text[name][0]);
@@ -306,7 +311,7 @@ export function createUpdateCommand({
       // успешной сборки кандидата в worktree (см. buildCandidate в update-safety.ts).
       const update = await tx.resolveTarget();
       if (!update.changed && !force) {
-        await tx.restoreLocalChanges();
+        restoreReport = await tx.restoreLocalChanges();
         versions = await tx.versions();
         await phaseDone("fetch");
         if (!(await finalizeUpdate())) return;
@@ -314,6 +319,7 @@ export function createUpdateCommand({
         await reporter?.complete({
           ...versions,
           changedLocal: tx.hadLocalChanges,
+          restoreReport,
         });
         return;
       }
@@ -322,7 +328,7 @@ export function createUpdateCommand({
       await phaseStart("build");
       const candidate = await tx.buildCandidate({ npm: NPM });
       const integrated = await tx.fetchAndIntegrate();
-      await tx.restoreLocalChanges();
+      restoreReport = await tx.restoreLocalChanges();
       versions = await tx.versions();
       migrateEnv({ quiet: true });
       // The streaming cleaner repairs cards the old frontmatter writer bloated to GBs (those
@@ -424,6 +430,7 @@ export function createUpdateCommand({
       await reporter?.complete({
         ...versions,
         changedLocal: tx.hadLocalChanges,
+        restoreReport,
       });
     } catch (error) {
       terminal.fail(text[state.phase][2]);

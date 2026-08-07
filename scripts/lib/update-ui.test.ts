@@ -28,7 +28,9 @@ type TelegramBody = {
   message_id?: number;
   text?: string;
   entities?: { custom_emoji_id?: string }[];
-  reply_markup?: { inline_keyboard: { callback_data: string }[][] };
+  reply_markup?: {
+    inline_keyboard: { text?: string; callback_data: string }[][];
+  };
 };
 type TelegramCall = { method: string | undefined; body: TelegramBody };
 type MockResponse = {
@@ -154,6 +156,58 @@ test("Telegram update edits one message through every phase and final result", a
   assert.match(edits[3]?.body.text ?? "", /Iva обновлена/);
   assert.match(edits[3]?.body.text ?? "", /OpenAI · gpt-5.5/);
   assert.equal(edits[3].body.entities, undefined);
+});
+
+test("Telegram reports a successful core update when local files conflict", async () => {
+  const calls: TelegramCall[] = [];
+  const fetchImpl: MockFetch = async (url, init) => {
+    calls.push({ method: url.split("/").at(-1), body: JSON.parse(init.body) });
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ ok: true, result: {} }),
+    };
+  };
+  const reporter = createTelegramUpdateReporter({
+    token: "token",
+    job: { chatId: 1, messageId: 100, locale: "ru" },
+    fetchImpl,
+  });
+  assert.ok(reporter);
+  await reporter.complete({
+    beforeVersion: "v0.3.13",
+    afterVersion: "v0.3.13",
+    changedLocal: true,
+    restoreReport: {
+      status: "conflicted",
+      stashOid: "abc",
+      recoveryDir:
+        "/srv/iva/data/update-conflicts/2026-08-06T12-00-00-000Z-deadbeef1234",
+      conflicts: [
+        {
+          path: "docs/index.html",
+          baseMode: "100644",
+          localMode: "100644",
+          upstreamMode: "100644",
+        },
+        {
+          path: "docs/ru/index.html",
+          baseMode: "100644",
+          localMode: "100644",
+          upstreamMode: "100644",
+        },
+      ],
+    },
+  });
+
+  const final = calls.at(-1)?.body;
+  assert.match(final?.text ?? "", /✅ Iva обновлена/);
+  assert.match(final?.text ?? "", /Новое ядро активно/);
+  assert.doesNotMatch(final?.text ?? "", /Не удалось собрать/);
+  assert.equal(
+    final?.reply_markup?.inline_keyboard[0]?.[0]?.callback_data,
+    "iva_update:conflicts:2026-08-06T12-00-00-000Z-deadbeef1234",
+  );
 });
 
 test("Telegram does not recreate phase messages after the active message was deleted", async () => {
@@ -671,7 +725,7 @@ function updateFixture() {
   return { temp, remote, seed, local, data };
 }
 
-test("stash conflict rolls back HEAD, output and user files byte-for-byte", async () => {
+test("stash conflict report can still roll back user files byte-for-byte", async () => {
   const { temp, seed, local, data } = updateFixture();
   const originalHead = git(local, "rev-parse", "HEAD");
   writeFileSync(join(local, "tracked.txt"), "user version\n");
@@ -693,7 +747,8 @@ test("stash conflict rolls back HEAD, output and user files byte-for-byte", asyn
   });
   await tx.protect();
   await tx.fetchAndIntegrate();
-  await assert.rejects(() => tx.restoreLocalChanges(), /conflict/);
+  const restored = await tx.restoreLocalChanges();
+  assert.equal(restored.status, "conflicted");
   tx.backupOutput();
   mkdirSync(join(local, ".output"));
   writeFileSync(join(local, ".output", "server"), "bad build");
@@ -936,6 +991,55 @@ test("dirty update activates the new build and archives conflicting HTML", async
     git(fx.local, "status", "--porcelain=v1"),
     /^(UU|AA|DD|AU|UA|DU|UD) /m,
   );
+});
+
+test("a broken local customization falls back to the verified new core", async () => {
+  const fx = candidateFixture({
+    buildScript:
+      "node -e \"const f=require('node:fs');const v=f.readFileSync('agent.txt','utf8').trim();" +
+      "if(v==='broken local'){process.exit(1)}f.mkdirSync('.output/server',{recursive:true});" +
+      "f.writeFileSync('.output/server/marker.txt',v)\"",
+  });
+  writeFileSync(join(fx.seed, "agent.txt"), "stock agent\n");
+  git(fx.seed, "add", "agent.txt");
+  git(fx.seed, "commit", "-m", "add agent fixture");
+  git(fx.seed, "push", "origin", "main");
+  git(fx.local, "pull", "--ff-only");
+  writeFileSync(join(fx.local, "agent.txt"), "broken local\n");
+  const target = pushUpstream(
+    fx.seed,
+    (seed) => writeFileSync(join(seed, "upstream.txt"), "new core\n"),
+    "update core",
+  );
+
+  const tx = candidateTx(fx);
+  await tx.protect();
+  await tx.resolveTarget();
+  const candidate = await tx.buildCandidate({ npm: "npm" });
+  assert.ok(candidate);
+  assert.equal(candidate.customization, "fallback");
+  await tx.fetchAndIntegrate();
+  const restored = await tx.restoreLocalChanges();
+  assert.ok(restored.status === "preserved");
+  assert.equal(await tx.promoteCandidate(), true);
+  await tx.commit();
+  await tx.teardownCandidate();
+
+  assert.equal(git(fx.local, "rev-parse", "HEAD"), target);
+  assert.equal(
+    readFileSync(join(fx.local, "agent.txt"), "utf8"),
+    "stock agent\n",
+  );
+  assert.equal(
+    readFileSync(join(fx.local, ".output/server/marker.txt"), "utf8"),
+    "stock agent",
+  );
+  assert.equal(
+    JSON.parse(readFileSync(join(restored.recoveryDir, "report.json"), "utf8"))
+      .reason,
+    "custom-build-failed",
+  );
+  assert.notEqual(git(fx.local, "stash", "list"), "");
 });
 
 test("broken candidate build aborts before the live checkout is touched", async () => {

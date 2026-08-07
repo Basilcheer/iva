@@ -35,7 +35,24 @@ type UpdateCandidate = {
   staging: string;
   targetSha: string;
   depsChanged: boolean;
+  customization: "clean" | "applied" | "conflicted" | "fallback";
+  conflicts: string[];
+  fallbackReason: "stash-apply-failed" | "custom-build-failed" | null;
 };
+export type RestoreConflict = {
+  path: string;
+  baseMode: string | null;
+  localMode: string | null;
+  upstreamMode: string | null;
+};
+export type RestoreReport =
+  | { status: "none" | "applied"; conflicts: readonly [] }
+  | {
+      status: "conflicted" | "preserved";
+      conflicts: RestoreConflict[];
+      recoveryDir: string;
+      stashOid: string;
+    };
 type UpdateTransactionOptions = {
   root: string;
   dataDir: string;
@@ -94,6 +111,40 @@ export function runCommand(
         stderr: stderr.trim(),
       }),
     );
+  });
+}
+
+function runCommandBuffer(
+  command: string,
+  args: string[],
+  { cwd, env = process.env }: Pick<CommandOptions, "cwd" | "env"> = {},
+): Promise<{ code: number; stdout: Buffer; stderr: string }> {
+  return new Promise((resolve) => {
+    const child = spawn(command, args, {
+      cwd,
+      env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const stdout: Buffer[] = [];
+    let stderr = "";
+    child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
+    child.stderr.on("data", (chunk: unknown) => {
+      stderr += String(chunk);
+    });
+    child.on("error", (error) => {
+      resolve({
+        code: 1,
+        stdout: Buffer.concat(stdout),
+        stderr: error.message,
+      });
+    });
+    child.on("close", (code) => {
+      resolve({
+        code: code ?? 1,
+        stdout: Buffer.concat(stdout),
+        stderr: stderr.trim(),
+      });
+    });
   });
 }
 
@@ -216,6 +267,7 @@ export function createUpdateTransaction({
   let stashOid = "";
   let hadLocalChanges = false;
   let stashApplied = false;
+  let preserveStash = false;
   let envBackup = "";
   let outputBackup = "";
   let changed = false;
@@ -235,6 +287,178 @@ export function createUpdateTransaction({
         result.stderr || result.stdout || `git ${args[0]} failed`,
       );
     return result.stdout ?? "";
+  };
+
+  const safeChild = (base: string, ...parts: string[]): string => {
+    const basePath = resolve(base);
+    const target = resolve(base, ...parts);
+    if (target !== basePath && !target.startsWith(`${basePath}${sep}`))
+      throw new Error("unsafe path in update recovery data");
+    return target;
+  };
+
+  const removeOriginalUntracked = (): void => {
+    for (const relative of originalUntracked) {
+      const target = safeChild(root, relative);
+      rmSync(target, { recursive: true, force: true });
+    }
+  };
+
+  const unmergedPaths = async (cwd = root): Promise<string[]> => {
+    const result = await runCommand(
+      "git",
+      ["diff", "--name-only", "--diff-filter=U", "-z"],
+      { cwd, env: commandEnv },
+    );
+    if (result.code !== 0)
+      throw new Error(result.stderr || "couldn't inspect update conflicts");
+    return result.stdout.split("\0").filter(Boolean).sort();
+  };
+
+  const resolveConflictsToHead = async (
+    paths: readonly string[],
+    cwd = root,
+  ): Promise<void> => {
+    for (const path of paths) {
+      const existsAtHead = await runCommand(
+        "git",
+        ["cat-file", "-e", `HEAD:${path}`],
+        { cwd, env: commandEnv },
+      );
+      const resolved =
+        existsAtHead.code === 0
+          ? await runCommand(
+              "git",
+              [
+                "restore",
+                "--source=HEAD",
+                "--staged",
+                "--worktree",
+                "--",
+                path,
+              ],
+              { cwd, env: commandEnv },
+            )
+          : await runCommand(
+              "git",
+              ["rm", "-f", "--ignore-unmatch", "--", path],
+              { cwd, env: commandEnv },
+            );
+      if (resolved.code !== 0)
+        throw new Error(resolved.stderr || `couldn't resolve ${path}`);
+      if (existsAtHead.code !== 0)
+        rmSync(safeChild(cwd, path), { recursive: true, force: true });
+    }
+  };
+
+  const gitBlob = async (
+    revision: string,
+    path: string,
+  ): Promise<Buffer | null> => {
+    const result = await runCommandBuffer(
+      "git",
+      ["show", `${revision}:${path}`],
+      { cwd: root, env: commandEnv },
+    );
+    return result.code === 0 ? result.stdout : null;
+  };
+
+  const gitMode = async (
+    revision: string,
+    path: string,
+  ): Promise<string | null> => {
+    const result = await git("ls-tree", revision, "--", path);
+    if (result.code !== 0 || !result.stdout) return null;
+    return result.stdout.split(/\s+/, 1)[0] || null;
+  };
+
+  const writeRecoveryBlob = (
+    recoveryDir: string,
+    side: "base" | "local" | "upstream",
+    path: string,
+    contents: Buffer | null,
+  ): void => {
+    if (!contents) return;
+    const target = safeChild(recoveryDir, side, path);
+    mkdirSync(resolve(target, ".."), { recursive: true, mode: 0o700 });
+    writeFileSync(target, contents, { mode: 0o600 });
+    chmodSync(target, 0o600);
+  };
+
+  const archiveLocalChanges = async ({
+    conflicts,
+    reason,
+  }: {
+    conflicts: readonly string[];
+    reason: "conflict" | "stash-apply-failed" | "custom-build-failed";
+  }): Promise<{
+    recoveryDir: string;
+    conflictReports: RestoreConflict[];
+  }> => {
+    const shortTarget = (cachedTarget?.remote || "unknown").slice(0, 12);
+    const recoveryDir = join(
+      dataDir,
+      "update-conflicts",
+      `${safeTimestamp()}-${shortTarget}`,
+    );
+    mkdirSync(recoveryDir, { recursive: true, mode: 0o700 });
+    chmodSync(recoveryDir, 0o700);
+    const conflictReports: RestoreConflict[] = [];
+    for (const path of conflicts) {
+      const stashBlob = await gitBlob(stashOid, path);
+      const localRevision = stashBlob !== null ? stashOid : `${stashOid}^3`;
+      const [base, local, upstream, baseMode, localMode, upstreamMode] =
+        await Promise.all([
+          gitBlob(originalHead, path),
+          stashBlob !== null
+            ? Promise.resolve(stashBlob)
+            : gitBlob(localRevision, path),
+          gitBlob("HEAD", path),
+          gitMode(originalHead, path),
+          gitMode(localRevision, path),
+          gitMode("HEAD", path),
+        ]);
+      writeRecoveryBlob(recoveryDir, "base", path, base);
+      writeRecoveryBlob(recoveryDir, "local", path, local);
+      writeRecoveryBlob(recoveryDir, "upstream", path, upstream);
+      conflictReports.push({
+        path,
+        baseMode,
+        localMode,
+        upstreamMode,
+      });
+    }
+    const patch = await runCommandBuffer(
+      "git",
+      ["diff", "--binary", "--full-index", originalHead, stashOid],
+      { cwd: root, env: commandEnv },
+    );
+    if (patch.code !== 0)
+      throw new Error(patch.stderr || "couldn't archive local update patch");
+    const patchPath = join(recoveryDir, "changes.patch");
+    writeFileSync(patchPath, patch.stdout, { mode: 0o600 });
+    chmodSync(patchPath, 0o600);
+    const reportPath = join(recoveryDir, "report.json");
+    writeFileSync(
+      reportPath,
+      `${JSON.stringify(
+        {
+          schema: "iva-update-conflicts/v1",
+          createdAt: new Date().toISOString(),
+          reason,
+          beforeHead: originalHead,
+          afterHead: cachedTarget?.remote || null,
+          stashOid,
+          originalUntracked,
+          conflicts: conflictReports,
+        },
+        null,
+        2,
+      )}\n`,
+      { mode: 0o600 },
+    );
+    chmodSync(reportPath, 0o600);
+    return { recoveryDir, conflictReports };
   };
 
   async function protect() {
@@ -317,35 +541,57 @@ export function createUpdateTransaction({
     return { ...target, changed };
   }
 
-  async function restoreLocalChanges() {
-    if (!stashOid) return;
+  async function restoreLocalChanges(): Promise<RestoreReport> {
+    if (!stashOid) return { status: "none", conflicts: [] };
     const result = await git("stash", "apply", "--index", stashOid);
-    if (result.code !== 0)
-      throw new Error("local changes conflict with the updated source");
-    stashApplied = true;
+    const conflicts = result.code === 0 ? [] : await unmergedPaths();
+    const fallbackReason = candidate?.fallbackReason;
+    if (result.code === 0 && !fallbackReason) {
+      stashApplied = true;
+      return { status: "applied", conflicts: [] };
+    }
+    if (result.code !== 0 && conflicts.length === 0)
+      throw new Error(
+        result.stderr || "local changes could not be restored safely",
+      );
+
+    const archived = await archiveLocalChanges({
+      conflicts,
+      reason: fallbackReason || "conflict",
+    });
+    preserveStash = true;
+    if (fallbackReason) {
+      await mustGit("reset", "--hard", "HEAD");
+      removeOriginalUntracked();
+      return {
+        status: "preserved",
+        conflicts: archived.conflictReports,
+        recoveryDir: archived.recoveryDir,
+        stashOid,
+      };
+    }
+    await resolveConflictsToHead(conflicts);
+    return {
+      status: "conflicted",
+      conflicts: archived.conflictReports,
+      recoveryDir: archived.recoveryDir,
+      stashOid,
+    };
   }
 
-  // Сборка кандидата обновления в detached worktree (ROOT/.iva-update/staging), не трогая
-  // живую установку: пока кандидат не собрался, ни .output, ни node_modules, ни HEAD не
-  // меняются — сломанный target приводит к раннему abort с нетронутой ивой.
-  // Только для чистого fast-forward без локальных правок: тогда итоговый HEAD гарантированно
-  // равен SHA кандидата. Rebase локальных коммитов / грязное дерево / force-пересборка идут
-  // прежним in-place путём (не жжём лишний билд на слабом VPS).
+  // Build the clean target first, then layer the protected local stash onto the detached
+  // worktree. Conflicts are resolved to the new core there, so unrelated customizations can
+  // still be built. The clean output remains available as a fallback throughout the process.
   async function buildCandidate({
     npm = "npm",
   }: { npm?: string } = {}): Promise<UpdateCandidate | null> {
     if (!cachedTarget)
       throw new Error("resolveTarget must run before buildCandidate");
-    if (cachedTarget.plan !== "fast-forward" || hadLocalChanges) return null;
+    if (cachedTarget.plan !== "fast-forward") return null;
+    const targetSha = cachedTarget.remote;
     const staging = join(root, ".iva-update", "staging");
     await teardownCandidate();
-    const added = await git(
-      "worktree",
-      "add",
-      "--detach",
-      staging,
-      cachedTarget.remote,
-    );
+    const added = await git("worktree", "add", "--detach", staging, targetSha);
     if (added.code !== 0)
       throw new Error(
         added.stderr || "couldn't prepare the update candidate worktree",
@@ -354,16 +600,16 @@ export function createUpdateTransaction({
       const depsDiff = await mustGit(
         "diff",
         "--name-only",
-        `${originalHead}..${cachedTarget.remote}`,
+        `${originalHead}..${targetSha}`,
         "--",
         "package.json",
         "package-lock.json",
       );
       // Отсутствие живых node_modules (битая/недоустановленная инсталляция) лечим так же,
       // как смену лока: полной установкой зависимостей в staging.
-      const depsChanged =
+      const coreDepsChanged =
         Boolean(depsDiff.trim()) || !existsSync(join(root, "node_modules"));
-      if (depsChanged) {
+      if (coreDepsChanged) {
         const install = await runCommand(
           npm,
           [existsSync(join(staging, "package-lock.json")) ? "ci" : "install"],
@@ -391,7 +637,125 @@ export function createUpdateTransaction({
       });
       if (build.code !== 0)
         throw new Error("candidate build failed — live installation untouched");
-      candidate = { staging, targetSha: cachedTarget.remote, depsChanged };
+      if (!existsSync(join(staging, ".output")))
+        throw new Error(
+          "candidate build produced no output — live installation untouched",
+        );
+
+      candidate = {
+        staging,
+        targetSha,
+        depsChanged: coreDepsChanged,
+        customization: "clean",
+        conflicts: [],
+        fallbackReason: null,
+      };
+      if (!stashOid) return candidate;
+
+      const cleanOutput = join(staging, ".output.iva-core");
+      renameSync(join(staging, ".output"), cleanOutput);
+      let cleanNodeModules = "";
+      let customDepsChanged = false;
+      const restoreCleanCandidate = async (
+        conflicts: string[],
+        fallbackReason: "stash-apply-failed" | "custom-build-failed",
+      ) => {
+        rmSync(join(staging, ".output"), { recursive: true, force: true });
+        renameSync(cleanOutput, join(staging, ".output"));
+        if (customDepsChanged) {
+          rmSync(join(staging, "node_modules"), {
+            recursive: true,
+            force: true,
+          });
+          if (cleanNodeModules)
+            renameSync(cleanNodeModules, join(staging, "node_modules"));
+        }
+        await runCommand("git", ["reset", "--hard", "HEAD"], {
+          cwd: staging,
+          env: commandEnv,
+        });
+        for (const relative of originalUntracked)
+          rmSync(safeChild(staging, relative), {
+            recursive: true,
+            force: true,
+          });
+        candidate = {
+          staging,
+          targetSha,
+          depsChanged: coreDepsChanged,
+          customization: "fallback",
+          conflicts,
+          fallbackReason,
+        };
+      };
+
+      const applied = await runCommand(
+        "git",
+        ["stash", "apply", "--index", stashOid],
+        { cwd: staging, env: commandEnv, logFile, verbose },
+      );
+      const conflicts = applied.code === 0 ? [] : await unmergedPaths(staging);
+      if (applied.code !== 0 && conflicts.length === 0) {
+        await restoreCleanCandidate([], "stash-apply-failed");
+        return candidate;
+      }
+      if (conflicts.length > 0)
+        await resolveConflictsToHead(conflicts, staging);
+
+      const customDependencyDiff = await runCommand(
+        "git",
+        [
+          "diff",
+          "--name-only",
+          "HEAD",
+          "--",
+          "package.json",
+          "package-lock.json",
+        ],
+        { cwd: staging, env: commandEnv },
+      );
+      if (customDependencyDiff.code !== 0)
+        throw new Error("couldn't inspect customized dependencies");
+      customDepsChanged = Boolean(customDependencyDiff.stdout.trim());
+      if (customDepsChanged) {
+        const currentNodeModules = join(staging, "node_modules");
+        if (existsSync(currentNodeModules)) {
+          const cleanDependencyPath = join(staging, "node_modules.iva-core");
+          renameSync(currentNodeModules, cleanDependencyPath);
+          cleanNodeModules = cleanDependencyPath;
+        }
+        const install = await runCommand(
+          npm,
+          [existsSync(join(staging, "package-lock.json")) ? "ci" : "install"],
+          { cwd: staging, env: commandEnv, logFile, verbose },
+        );
+        if (install.code !== 0) {
+          await restoreCleanCandidate(conflicts, "custom-build-failed");
+          return candidate;
+        }
+      }
+
+      const customBuild = await runCommand(npm, ["run", "build"], {
+        cwd: staging,
+        env: commandEnv,
+        logFile,
+        verbose,
+      });
+      if (customBuild.code !== 0) {
+        await restoreCleanCandidate(conflicts, "custom-build-failed");
+        return candidate;
+      }
+      rmSync(cleanOutput, { recursive: true, force: true });
+      if (cleanNodeModules)
+        rmSync(cleanNodeModules, { recursive: true, force: true });
+      candidate = {
+        staging,
+        targetSha,
+        depsChanged: coreDepsChanged || customDepsChanged,
+        customization: conflicts.length > 0 ? "conflicted" : "applied",
+        conflicts,
+        fallbackReason: null,
+      };
       return candidate;
     } catch (error) {
       await teardownCandidate();
@@ -410,7 +774,8 @@ export function createUpdateTransaction({
       // Свежие node_modules обязаны существовать в staging; иначе безопаснее пересобрать in-place.
       if (!existsSync(join(candidate.staging, "node_modules"))) return false;
       nodeModulesBackup = join(root, `node_modules.iva-backup-${Date.now()}`);
-      renameSync(join(root, "node_modules"), nodeModulesBackup);
+      if (existsSync(join(root, "node_modules")))
+        renameSync(join(root, "node_modules"), nodeModulesBackup);
       renameSync(
         join(candidate.staging, "node_modules"),
         join(root, "node_modules"),
@@ -461,14 +826,9 @@ export function createUpdateTransaction({
     restoreOutput();
     if (stashOid) {
       // A failed stash apply can leave a subset of the original untracked files behind.
-      // Remove only paths proven to be present in the still-retained stash, then re-apply
-      // them on the exact original HEAD. Never use git clean or a broad directory target.
-      const rootPath = `${resolve(root)}${sep}`;
-      for (const relative of originalUntracked) {
-        const target = resolve(root, relative);
-        if (target.startsWith(rootPath))
-          rmSync(target, { recursive: true, force: true });
-      }
+      // Remove every path recorded before protect(), then re-apply the stash on the exact
+      // original HEAD. Never use git clean or a broad directory target.
+      removeOriginalUntracked();
       const reapplied = await git("stash", "apply", "--index", stashOid);
       stashApplied = reapplied.code === 0;
     }
@@ -493,7 +853,7 @@ export function createUpdateTransaction({
       rmSync(nodeModulesBackup, { recursive: true, force: true });
       nodeModulesBackup = "";
     }
-    await dropExactStash();
+    if (!preserveStash) await dropExactStash();
     if (updateBranch) await persistUpdateBranch(git, updateBranch);
     if (backupRef) await git("update-ref", "-d", backupRef);
     if (envBackup) rmSync(envBackup, { force: true });
