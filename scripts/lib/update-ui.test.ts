@@ -210,6 +210,39 @@ test("Telegram reports a successful core update when local files conflict", asyn
   );
 });
 
+test("Telegram omits an oversized recovery callback", async () => {
+  const calls: TelegramCall[] = [];
+  const fetchImpl: MockFetch = async (url, init) => {
+    calls.push({ method: url.split("/").at(-1), body: JSON.parse(init.body) });
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ ok: true, result: {} }),
+    };
+  };
+  const reporter = createTelegramUpdateReporter({
+    token: "token",
+    job: { chatId: 1, messageId: 100, locale: "en" },
+    fetchImpl,
+  });
+  assert.ok(reporter);
+  await reporter.complete({
+    beforeVersion: "v0.3.13",
+    afterVersion: "v0.3.13",
+    changedLocal: true,
+    restoreReport: {
+      status: "preserved",
+      stashOid: "abc",
+      recoveryDir: `/srv/iva/data/update-conflicts/${"x".repeat(64)}`,
+      conflicts: [],
+    },
+  });
+
+  const final = calls.at(-1)?.body;
+  assert.match(final?.text ?? "", /Iva updated/);
+  assert.equal(final?.reply_markup, undefined);
+});
+
 test("Telegram does not recreate phase messages after the active message was deleted", async () => {
   const calls: TelegramCall[] = [];
   const fetchImpl: MockFetch = async (url, init) => {
@@ -1040,6 +1073,37 @@ test("a broken local customization falls back to the verified new core", async (
     "custom-build-failed",
   );
   assert.notEqual(git(fx.local, "stash", "list"), "");
+});
+
+test("a custom build with no output keeps the verified clean candidate", async () => {
+  const fx = candidateFixture();
+  const pkg = JSON.parse(readFileSync(join(fx.local, "package.json"), "utf8"));
+  pkg.scripts.build = 'node -e "process.exit(0)"';
+  writeFileSync(join(fx.local, "package.json"), JSON.stringify(pkg));
+  const target = pushUpstream(
+    fx.seed,
+    (seed) => writeFileSync(join(seed, "core.txt"), "new core\n"),
+    "update core",
+  );
+
+  const tx = candidateTx(fx);
+  await tx.protect();
+  await tx.resolveTarget();
+  const candidate = await tx.buildCandidate({ npm: "npm" });
+  assert.ok(candidate);
+  assert.equal(candidate.customization, "fallback");
+  await tx.fetchAndIntegrate();
+  const restored = await tx.restoreLocalChanges();
+  assert.ok(restored.status === "preserved");
+  assert.equal(await tx.promoteCandidate(), true);
+  await tx.commit();
+  await tx.teardownCandidate();
+
+  assert.equal(git(fx.local, "rev-parse", "HEAD"), target);
+  assert.equal(
+    readFileSync(join(fx.local, ".output/server/marker.txt"), "utf8"),
+    "base",
+  );
 });
 
 test("broken candidate build aborts before the live checkout is touched", async () => {
