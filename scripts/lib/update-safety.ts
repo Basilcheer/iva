@@ -14,6 +14,17 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join, resolve, sep } from "node:path";
+import {
+  archiveInvalidCustomLayer,
+  captureCustomLayer,
+  commitCustomLayer,
+  discardCustomLayer,
+  ensureCustomRecoveryBundle,
+  materializeCustomLayer,
+  rebaseBuildOutput,
+  readCustomManifest,
+  type MaterializedCustomLayer,
+} from "./custom-layer.ts";
 import { persistUpdateBranch, resolveUpdateTarget } from "./update-channel.ts";
 
 const LOCK_TTL_MS = 6 * 60 * 60 * 1000;
@@ -37,7 +48,14 @@ type UpdateCandidate = {
   depsChanged: boolean;
   customization: "clean" | "applied" | "conflicted" | "fallback";
   conflicts: string[];
-  fallbackReason: "stash-apply-failed" | "custom-build-failed" | null;
+  coreConflicts: string[];
+  customConflicts: string[];
+  fallbackReason:
+    | "stash-apply-failed"
+    | "custom-build-failed"
+    | "custom-layer-invalid"
+    | null;
+  customRecoveryDir: string | null;
 };
 export type RestoreConflict = {
   path: string;
@@ -265,6 +283,7 @@ export function createUpdateTransaction({
   let updateBranch = "";
   let backupRef = "";
   let stashOid = "";
+  let recoveryStashOid = "";
   let hadLocalChanges = false;
   let stashApplied = false;
   let preserveStash = false;
@@ -277,6 +296,9 @@ export function createUpdateTransaction({
   let nodeModulesBackup = "";
   let promotedNodeModulesWithoutBackup = false;
   let outputTouched = false;
+  let capturedCustomPaths: string[] = [];
+  let materializedCustomLayer: MaterializedCustomLayer | null = null;
+  let invalidCustomRecoveryDir: string | null = null;
 
   const run = (command: string, args: string[]): Promise<CommandResult> =>
     runCommand(command, args, { cwd: root, env: commandEnv, logFile, verbose });
@@ -405,11 +427,18 @@ export function createUpdateTransaction({
     reason,
   }: {
     conflicts: readonly string[];
-    reason: "conflict" | "stash-apply-failed" | "custom-build-failed";
+    reason:
+      | "conflict"
+      | "stash-apply-failed"
+      | "custom-build-failed"
+      | "custom-layer-invalid";
   }): Promise<{
     recoveryDir: string;
     conflictReports: RestoreConflict[];
   }> => {
+    const protectedStash = recoveryStashOid || stashOid;
+    if (!protectedStash)
+      throw new Error("no protected stash is available for recovery");
     const shortTarget = (cachedTarget?.remote || "unknown").slice(0, 12);
     const recoveryDir = join(
       dataDir,
@@ -420,8 +449,9 @@ export function createUpdateTransaction({
     chmodSync(recoveryDir, 0o700);
     const conflictReports: RestoreConflict[] = [];
     for (const path of conflicts) {
-      const stashBlob = await gitBlob(stashOid, path);
-      const localRevision = stashBlob !== null ? stashOid : `${stashOid}^3`;
+      const stashBlob = await gitBlob(protectedStash, path);
+      const localRevision =
+        stashBlob !== null ? protectedStash : `${protectedStash}^3`;
       const [base, local, upstream, baseMode, localMode, upstreamMode] =
         await Promise.all([
           gitBlob(originalHead, path),
@@ -445,7 +475,7 @@ export function createUpdateTransaction({
     }
     const patch = await runCommandBuffer(
       "git",
-      ["diff", "--binary", "--full-index", originalHead, stashOid],
+      ["diff", "--binary", "--full-index", originalHead, protectedStash],
       { cwd: root, env: commandEnv },
     );
     if (patch.code !== 0)
@@ -463,7 +493,7 @@ export function createUpdateTransaction({
           reason,
           beforeHead: originalHead,
           afterHead: cachedTarget?.remote || null,
-          stashOid,
+          stashOid: protectedStash,
           originalUntracked,
           conflicts: conflictReports,
         },
@@ -510,9 +540,69 @@ export function createUpdateTransaction({
         "--message",
         message,
       );
-      stashOid = await mustGit("rev-parse", "refs/stash");
+      recoveryStashOid = await mustGit("rev-parse", "refs/stash");
+      try {
+        const captured = captureCustomLayer({
+          root,
+          dataDir,
+          baseRevision: originalHead,
+          stashRevision: recoveryStashOid,
+        });
+        capturedCustomPaths = captured.paths;
+      } catch (error) {
+        invalidCustomRecoveryDir = archiveInvalidCustomLayer({
+          dataDir,
+          targetRevision: originalHead,
+          error,
+        });
+      }
+
+      // Re-apply the exact full stash on its original HEAD, remove only authored paths,
+      // then create the smaller restore stash. The full stash remains the rollback source
+      // until commit, while authored files now live canonically under data/custom/.
+      const reapplied = await git(
+        "stash",
+        "apply",
+        "--index",
+        recoveryStashOid,
+      );
+      if (reapplied.code !== 0) {
+        removeOriginalUntracked();
+        await mustGit("reset", "--hard", originalHead);
+        throw new Error(
+          reapplied.stderr || "couldn't prepare local customizations",
+        );
+      }
+      if (capturedCustomPaths.length > 0)
+        await resolveConflictsToHead(capturedCustomPaths);
+      const remaining = await mustGit("status", "--porcelain=v1");
+      if (remaining.trim()) {
+        await mustGit(
+          "stash",
+          "push",
+          "--include-untracked",
+          "--message",
+          `${message}-core-patch`,
+        );
+        stashOid = await mustGit("rev-parse", "refs/stash");
+      }
+    } else {
+      try {
+        captureCustomLayer({ root, dataDir, baseRevision: originalHead });
+      } catch (error) {
+        invalidCustomRecoveryDir = archiveInvalidCustomLayer({
+          dataDir,
+          targetRevision: originalHead,
+          error,
+        });
+      }
     }
-    return { originalHead, branch, hadLocalChanges, stashOid };
+    return {
+      originalHead,
+      branch,
+      hadLocalChanges,
+      stashOid: recoveryStashOid || stashOid,
+    };
   }
 
   // Fetch + классификация плана интеграции БЕЗ движения HEAD. Отдельный шаг, чтобы
@@ -557,13 +647,38 @@ export function createUpdateTransaction({
   }
 
   async function restoreLocalChanges(): Promise<RestoreReport> {
-    if (!stashOid) return { status: "none", conflicts: [] };
+    const customConflicts = candidate?.customConflicts ?? [];
+    const customRecoveryDir = candidate?.customRecoveryDir;
+    const fallbackReason = candidate?.fallbackReason;
+    const customConflictReport = (): RestoreReport | null => {
+      if (!customRecoveryDir || customConflicts.length === 0) return null;
+      if (recoveryStashOid) preserveStash = true;
+      return {
+        status: fallbackReason ? "preserved" : "conflicted",
+        conflicts: customConflicts.map((path) => ({
+          path,
+          baseMode: null,
+          localMode: null,
+          upstreamMode: null,
+        })),
+        recoveryDir: customRecoveryDir,
+        stashOid: recoveryStashOid,
+      };
+    };
+    if (!stashOid) {
+      const customReport = customConflictReport();
+      if (customReport) return customReport;
+      if (capturedCustomPaths.length > 0 && !fallbackReason) {
+        stashApplied = true;
+        return { status: "applied", conflicts: [] };
+      }
+      return { status: "none", conflicts: [] };
+    }
     const result = await git("stash", "apply", "--index", stashOid);
     const conflicts = result.code === 0 ? [] : await unmergedPaths();
-    const fallbackReason = candidate?.fallbackReason;
     if (result.code === 0 && !fallbackReason) {
       stashApplied = true;
-      return { status: "applied", conflicts: [] };
+      return customConflictReport() ?? { status: "applied", conflicts: [] };
     }
     if (result.code !== 0 && conflicts.length === 0 && !fallbackReason)
       throw new Error(
@@ -582,7 +697,7 @@ export function createUpdateTransaction({
         status: "preserved",
         conflicts: archived.conflictReports,
         recoveryDir: archived.recoveryDir,
-        stashOid,
+        stashOid: recoveryStashOid || stashOid,
       };
     }
     await resolveConflictsToHead(conflicts);
@@ -590,7 +705,7 @@ export function createUpdateTransaction({
       status: "conflicted",
       conflicts: archived.conflictReports,
       recoveryDir: archived.recoveryDir,
-      stashOid,
+      stashOid: recoveryStashOid || stashOid,
     };
   }
 
@@ -644,7 +759,7 @@ export function createUpdateTransaction({
       }
       // Паритет с in-place сборкой: она идёт в cwd, где лежит .env.
       if (existsSync(envPath)) symlinkSync(envPath, join(staging, ".env"));
-      const build = await runCommand(npm, ["run", "build"], {
+      const build = await runCommand(npm, ["run", "build:core"], {
         cwd: staging,
         env: commandEnv,
         logFile,
@@ -656,6 +771,11 @@ export function createUpdateTransaction({
         throw new Error(
           "candidate build produced no output — live installation untouched",
         );
+      rebaseBuildOutput({
+        outputDir: join(staging, ".output"),
+        buildRoot: staging,
+        appRoot: root,
+      });
 
       candidate = {
         staging,
@@ -663,18 +783,60 @@ export function createUpdateTransaction({
         depsChanged: coreDepsChanged,
         customization: "clean",
         conflicts: [],
+        coreConflicts: [],
+        customConflicts: [],
         fallbackReason: null,
+        customRecoveryDir: null,
       };
-      if (!stashOid) return candidate;
+      let hasCanonicalCustomizations = false;
+      if (!invalidCustomRecoveryDir) {
+        try {
+          hasCanonicalCustomizations =
+            Object.keys(readCustomManifest(dataDir).entries).length > 0;
+        } catch (error) {
+          invalidCustomRecoveryDir = archiveInvalidCustomLayer({
+            dataDir,
+            targetRevision: targetSha,
+            error,
+          });
+        }
+      }
+      if (!stashOid && !hasCanonicalCustomizations && !invalidCustomRecoveryDir)
+        return candidate;
 
       const cleanOutput = join(staging, ".output.iva-core");
       renameSync(join(staging, ".output"), cleanOutput);
       let cleanNodeModules = "";
       let customDepsChanged = false;
+      let customRecoveryDir: string | null = invalidCustomRecoveryDir;
       const restoreCleanCandidate = async (
-        conflicts: string[],
+        coreConflicts: string[],
         fallbackReason: "stash-apply-failed" | "custom-build-failed",
       ) => {
+        let customConflicts = invalidCustomRecoveryDir
+          ? ["custom/manifest.json"]
+          : [];
+        customRecoveryDir = invalidCustomRecoveryDir;
+        if (materializedCustomLayer) {
+          if (fallbackReason === "custom-build-failed") {
+            // The recovery helper updates the pending manifest with conflict state;
+            // commitCustomLayer persists it after the clean output is promoted.
+            customRecoveryDir = ensureCustomRecoveryBundle({
+              result: materializedCustomLayer,
+              root: staging,
+              targetRevision: targetSha,
+              reason: "custom-build-failed",
+            });
+            customConflicts = Object.keys(
+              materializedCustomLayer.manifest.entries,
+            ).sort();
+            // The failing customization is unknown, so expose every materialized entry
+            // as a conservative recovery list rather than claiming merge conflicts.
+          }
+        }
+        const recoveryConflicts = [
+          ...new Set([...coreConflicts, ...customConflicts]),
+        ].sort();
         rmSync(join(staging, ".output"), { recursive: true, force: true });
         renameSync(cleanOutput, join(staging, ".output"));
         if (customDepsChanged) {
@@ -699,23 +861,29 @@ export function createUpdateTransaction({
           targetSha,
           depsChanged: coreDepsChanged,
           customization: "fallback",
-          conflicts,
+          conflicts: recoveryConflicts,
+          coreConflicts,
+          customConflicts,
           fallbackReason,
+          customRecoveryDir,
         };
       };
 
-      const applied = await runCommand(
-        "git",
-        ["stash", "apply", "--index", stashOid],
-        { cwd: staging, env: commandEnv, logFile, verbose },
-      );
-      const conflicts = applied.code === 0 ? [] : await unmergedPaths(staging);
-      if (applied.code !== 0 && conflicts.length === 0) {
-        await restoreCleanCandidate([], "stash-apply-failed");
-        return candidate;
+      let conflicts: string[] = [];
+      if (stashOid) {
+        const applied = await runCommand(
+          "git",
+          ["stash", "apply", "--index", stashOid],
+          { cwd: staging, env: commandEnv, logFile, verbose },
+        );
+        conflicts = applied.code === 0 ? [] : await unmergedPaths(staging);
+        if (applied.code !== 0 && conflicts.length === 0) {
+          await restoreCleanCandidate([], "stash-apply-failed");
+          return candidate;
+        }
+        if (conflicts.length > 0)
+          await resolveConflictsToHead(conflicts, staging);
       }
-      if (conflicts.length > 0)
-        await resolveConflictsToHead(conflicts, staging);
 
       const customDependencyDiff = await runCommand(
         "git",
@@ -750,16 +918,36 @@ export function createUpdateTransaction({
         }
       }
 
-      const customBuild = await runCommand(npm, ["run", "build"], {
+      if (hasCanonicalCustomizations) {
+        materializedCustomLayer = materializeCustomLayer({
+          root: staging,
+          dataDir,
+          targetRevision: targetSha,
+        });
+        customRecoveryDir = materializedCustomLayer.recoveryDir;
+      }
+      const customConflicts =
+        materializedCustomLayer?.conflicts ??
+        (invalidCustomRecoveryDir ? ["custom/manifest.json"] : []);
+      const allConflicts = [
+        ...new Set([...conflicts, ...customConflicts]),
+      ].sort();
+      const customBuild = await runCommand(npm, ["run", "build:core"], {
         cwd: staging,
         env: commandEnv,
         logFile,
         verbose,
       });
       if (customBuild.code !== 0 || !existsSync(join(staging, ".output"))) {
-        await restoreCleanCandidate(conflicts, "custom-build-failed");
+        await restoreCleanCandidate(allConflicts, "custom-build-failed");
         return candidate;
       }
+      rebaseBuildOutput({
+        outputDir: join(staging, ".output"),
+        buildRoot: staging,
+        appRoot: root,
+        agentRoot: materializedCustomLayer?.runtimeRoot,
+      });
       rmSync(cleanOutput, { recursive: true, force: true });
       if (cleanNodeModules)
         rmSync(cleanNodeModules, { recursive: true, force: true });
@@ -767,9 +955,18 @@ export function createUpdateTransaction({
         staging,
         targetSha,
         depsChanged: coreDepsChanged || customDepsChanged,
-        customization: conflicts.length > 0 ? "conflicted" : "applied",
-        conflicts,
-        fallbackReason: null,
+        customization: invalidCustomRecoveryDir
+          ? "fallback"
+          : allConflicts.length > 0
+            ? "conflicted"
+            : "applied",
+        conflicts: allConflicts,
+        coreConflicts: conflicts,
+        customConflicts,
+        fallbackReason: invalidCustomRecoveryDir
+          ? "custom-layer-invalid"
+          : null,
+        customRecoveryDir,
       };
       return candidate;
     } catch (error) {
@@ -807,6 +1004,10 @@ export function createUpdateTransaction({
   // Идемпотентный teardown: безопасен до создания worktree, после переноса артефактов и
   // при остатках от упавшего прошлого апдейта.
   async function teardownCandidate() {
+    if (materializedCustomLayer) {
+      discardCustomLayer(materializedCustomLayer);
+      materializedCustomLayer = null;
+    }
     const stagingRoot = join(root, ".iva-update");
     await git("worktree", "remove", "--force", join(stagingRoot, "staging"));
     await git("worktree", "prune");
@@ -830,6 +1031,10 @@ export function createUpdateTransaction({
   }
 
   async function rollback() {
+    if (materializedCustomLayer) {
+      discardCustomLayer(materializedCustomLayer);
+      materializedCustomLayer = null;
+    }
     await git("rebase", "--abort");
     if (originalHead) await git("reset", "--hard", originalHead);
     if (envBackup && existsSync(envBackup)) {
@@ -845,27 +1050,42 @@ export function createUpdateTransaction({
     }
     promotedNodeModulesWithoutBackup = false;
     restoreOutput();
-    if (stashOid) {
+    const protectedStash = recoveryStashOid || stashOid;
+    if (protectedStash) {
       // A failed stash apply can leave a subset of the original untracked files behind.
       // Remove every path recorded before protect(), then re-apply the stash on the exact
       // original HEAD. Never use git clean or a broad directory target.
       removeOriginalUntracked();
-      const reapplied = await git("stash", "apply", "--index", stashOid);
+      const reapplied = await git("stash", "apply", "--index", protectedStash);
       stashApplied = reapplied.code === 0;
     }
   }
 
-  async function dropExactStash() {
-    if (!stashOid) return;
+  async function dropExactStash(oid: string) {
+    if (!oid) return;
     const list = await git("stash", "list", "--format=%H %gd");
+    if (list.code !== 0) {
+      if (logFile)
+        appendFileSync(
+          logFile,
+          `could not list recovery stashes: ${list.stderr || list.stdout}\n`,
+        );
+      return;
+    }
     const match = (list.stdout ?? "")
       .split("\n")
       .map((line) => line.trim().split(/\s+/, 2))
-      .find(([oid]) => oid === stashOid);
+      .find(([candidateOid]) => candidateOid === oid);
     if (match?.[1]) await git("stash", "drop", match[1]);
+    else if (logFile)
+      appendFileSync(logFile, `recovery stash not found for cleanup: ${oid}\n`);
   }
 
   async function commit() {
+    if (materializedCustomLayer) {
+      commitCustomLayer(materializedCustomLayer);
+      materializedCustomLayer = null;
+    }
     if (outputBackup) {
       rmSync(outputBackup, { recursive: true, force: true });
       outputBackup = "";
@@ -875,7 +1095,10 @@ export function createUpdateTransaction({
       nodeModulesBackup = "";
     }
     promotedNodeModulesWithoutBackup = false;
-    if (!preserveStash) await dropExactStash();
+    if (!preserveStash) {
+      await dropExactStash(stashOid);
+      await dropExactStash(recoveryStashOid);
+    }
     if (updateBranch) await persistUpdateBranch(git, updateBranch);
     if (backupRef) await git("update-ref", "-d", backupRef);
     if (envBackup) rmSync(envBackup, { force: true });

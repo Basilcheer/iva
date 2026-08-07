@@ -34,6 +34,7 @@ agent/skills/**/*.pem
 
 # Update candidate worktree (iva update)
 /.iva-update/
+/.iva-build/
 
 # Maintainer working notes — kept local, not part of the public repo
 /implementation-notes.md
