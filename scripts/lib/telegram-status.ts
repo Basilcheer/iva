@@ -39,11 +39,11 @@ type Reporter = {
   dispose(): void;
 };
 
-// Small teal loader from https://t.me/addemoji/LoadingStatusByTimDesign.
+// Animated triangle loader from https://t.me/addemoji/iconemoji1.
 // Bots whose owner doesn't have Telegram Premium transparently fall back to ◇.
 export const UPDATE_LOADER = {
-  alt: "🟩",
-  customEmojiId: "5256127530271786963",
+  alt: "🔺",
+  customEmojiId: "5980787993139481991",
   fallback: "◇",
 };
 

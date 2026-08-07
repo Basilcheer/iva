@@ -14,12 +14,12 @@ import {
   type ExecFileOptions,
 } from "node:child_process";
 
-// Лоадеры из t.me/addemoji/LoadingStatusByTimDesign — набор /update (🟩) и working-status
-// (🔵); id — первые в своей цветовой группе, как у двух уже используемых. Не переводы.
+// Лоадеры из t.me/addemoji/iconemoji1 — набор /update (🔺) и working-status
+// (💬). Не переводы.
 export const LOADERS = {
-  doc: { alt: "🟥", id: "5255894270597941229", fallback: "◇" },
-  cln: { alt: "🟨", id: "5255975857796695002", fallback: "◇" },
-  mem: { alt: "🟪", id: "5256218768262056531", fallback: "◇" },
+  doc: { alt: "🔄", id: "5888544366342967214", fallback: "◇" },
+  cln: { alt: "🟢", id: "5818812952362356039", fallback: "◇" },
+  mem: { alt: "🟡", id: "5947553854030614234", fallback: "◇" },
 };
 
 export const TIMEOUT_MS = { doc: 600_000, cln: 1_800_000, mem: 3_600_000 };

@@ -105,7 +105,7 @@ Three read-only screens.
 - **🌙 Night memory cycle** — starts the nightly `iva-memory-doctor.service` right now instead of 05:00; it runs as the same systemd unit, so it survives bridge restarts.
 - **🔄 Update** — hands off to the existing `/update` flow (check → confirm buttons → an update that survives its own restart).
 
-Every command asks for confirmation, then shows live progress in the same message — an animated loader from the same custom-emoji pack the update flow uses (red for doctor, yellow for cleanup, purple for the memory cycle; plain ◇ when the bot owner has no Premium), the current step and elapsed time, with a ✖ Cancel button. One command runs at a time, and doctor/cleanup refuse to start while an update is in progress. The final summary is a single line with numbers (files cleaned and MB freed, ok/warn counts) plus the output tail when something failed.
+Every command asks for confirmation, then shows live progress in the same message — an animated loader from the same custom-emoji pack the update flow uses (a swirl for doctor, green for cleanup, an orange spinner for the memory cycle; plain ◇ when the bot owner has no Premium), the current step and elapsed time, with a ✖ Cancel button. One command runs at a time, and doctor/cleanup refuse to start while an update is in progress. The final summary is a single line with numbers (files cleaned and MB freed, ok/warn counts) plus the output tail when something failed.
 
 ## When it expires
 

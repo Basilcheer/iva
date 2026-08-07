@@ -657,12 +657,12 @@ function stoppedText(): string {
 }
 
 // Анимированный лоадер статуса — тот же набор, что у /update
-// (t.me/addemoji/LoadingStatusByTimDesign), но синий круг вместо зелёного квадрата,
-// чтобы «Работаю…» визуально отличался от обновления. Без Premium у владельца бота
+// (t.me/addemoji/iconemoji1), печатающие точки, чтобы «Работаю…» визуально
+// отличался от обновления. Без Premium у владельца бота
 // Telegram вернёт 400 на custom_emoji — тогда навсегда падаем на обычные ⏳.
 const WORK_LOADER = {
-  alt: "🔵",
-  customEmojiId: "5258372840389888502",
+  alt: "💬",
+  customEmojiId: "5818797194127346654",
   fallback: "⏳",
 };
 let workLoaderSupported = true;

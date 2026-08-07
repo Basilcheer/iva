@@ -236,7 +236,7 @@ test("cln: cleanup.py берётся из репо, cwd — vault", async () => 
   assert.equal(spec.cwd, join(repoRoot, "vault"));
 });
 
-test("go:doc: прогресс с 🟥-entity, финал ✅ с кнопкой Назад", async () => {
+test("go:doc: прогресс с 🔄-entity, финал ✅ с кнопкой Назад", async () => {
   resetForTests();
   const dataDir = mkdtempSync(join(tmpdir(), "iva-data-"));
   const h = makeCtx({
