@@ -854,6 +854,90 @@ test("update candidate builds in a worktree and is promoted after a clean fast-f
   assert.equal(git(fx.local, "worktree", "list").split("\n").length, 1);
 });
 
+test("dirty update activates the new build and archives conflicting HTML", async () => {
+  const fx = candidateFixture({
+    buildScript:
+      "node -e \"const f=require('node:fs');f.mkdirSync('.output/server',{recursive:true});" +
+      "f.writeFileSync('.output/server/marker.txt',f.readFileSync('agent.txt','utf8').trim())\"",
+  });
+  writeFileSync(join(fx.seed, "agent.txt"), "stock agent\n");
+  mkdirSync(join(fx.seed, "docs/ru"), { recursive: true });
+  writeFileSync(join(fx.seed, "docs/index.html"), "stock en\n");
+  writeFileSync(join(fx.seed, "docs/ru/index.html"), "stock ru\n");
+  git(fx.seed, "add", ".");
+  git(fx.seed, "commit", "-m", "add authored fixture");
+  git(fx.seed, "push", "origin", "main");
+  git(fx.local, "pull", "--ff-only");
+
+  writeFileSync(join(fx.local, "agent.txt"), "local agent\n");
+  writeFileSync(join(fx.local, "docs/index.html"), "local en\n");
+  writeFileSync(join(fx.local, "docs/ru/index.html"), "local ru\n");
+  const target = pushUpstream(
+    fx.seed,
+    (seed) => {
+      writeFileSync(join(seed, "docs/index.html"), "upstream en\n");
+      writeFileSync(join(seed, "docs/ru/index.html"), "upstream ru\n");
+    },
+    "update core and docs",
+  );
+
+  const tx = candidateTx(fx);
+  await tx.protect();
+  await tx.resolveTarget();
+  const candidate = await tx.buildCandidate({ npm: "npm" });
+  assert.ok(candidate, "dirty fast-forward must still produce a candidate");
+  await tx.fetchAndIntegrate();
+  const restored = await tx.restoreLocalChanges();
+  assert.equal(restored.status, "conflicted");
+  assert.deepEqual(
+    restored.conflicts.map(({ path }) => path),
+    ["docs/index.html", "docs/ru/index.html"],
+  );
+  assert.equal(await tx.promoteCandidate(), true);
+  await tx.commit();
+  await tx.teardownCandidate();
+
+  assert.equal(git(fx.local, "rev-parse", "HEAD"), target);
+  assert.equal(
+    readFileSync(join(fx.local, ".output/server/marker.txt"), "utf8"),
+    "local agent",
+  );
+  assert.equal(
+    readFileSync(join(fx.local, "docs/index.html"), "utf8"),
+    "upstream en\n",
+  );
+  assert.equal(
+    readFileSync(join(fx.local, "docs/ru/index.html"), "utf8"),
+    "upstream ru\n",
+  );
+  assert.equal(
+    readFileSync(join(restored.recoveryDir, "base/docs/index.html"), "utf8"),
+    "stock en\n",
+  );
+  assert.equal(
+    readFileSync(join(restored.recoveryDir, "local/docs/index.html"), "utf8"),
+    "local en\n",
+  );
+  assert.equal(
+    readFileSync(
+      join(restored.recoveryDir, "upstream/docs/index.html"),
+      "utf8",
+    ),
+    "upstream en\n",
+  );
+  assert.equal(existsSync(join(restored.recoveryDir, "changes.patch")), true);
+  assert.equal(existsSync(join(restored.recoveryDir, "report.json")), true);
+  assert.notEqual(
+    git(fx.local, "stash", "list"),
+    "",
+    "a recovery stash is retained until the user resolves the conflict",
+  );
+  assert.doesNotMatch(
+    git(fx.local, "status", "--porcelain=v1"),
+    /^(UU|AA|DD|AU|UA|DU|UD) /m,
+  );
+});
+
 test("broken candidate build aborts before the live checkout is touched", async () => {
   const fx = candidateFixture();
   pushUpstream(
