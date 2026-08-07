@@ -14,6 +14,7 @@ import { z } from "zod";
 const BOOTSTRAP_FILES = [
   "scripts/cli/update.ts",
   "scripts/lib/update-safety.ts",
+  "scripts/lib/custom-layer.ts",
   "scripts/lib/telegram-status.ts",
 ] as const;
 const DEFAULT_UPDATE_BRANCH = "main";

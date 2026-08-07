@@ -8,8 +8,9 @@ Design philosophy (skill vs code, thin harness, the wheel principle): docs/philo
 Before wiring a new feature into code, check it against that document — most
 recurring problems should become skills, not mechanisms.
 
-Build: `npm run build` (eve build — required after any `agent/*` change; `eve start`
-does NOT rebuild). Typecheck: `npm run typecheck`. Tests: `node --test` over
+Build: `npm run build` (materializes `data/custom/agent` in a disposable tree) or
+`npm run build:core` for a maintainer-only core build. A build is required after any authored
+agent change; `eve start` does NOT rebuild. Typecheck: `npm run typecheck`. Tests: `node --test` over
 `*.test.ts` (see `test:security`, `test:update-ui` scripts).
 
 All new Node.js source and tests must be TypeScript. The only tracked `.mjs` files
@@ -46,10 +47,10 @@ kind (no Co-Authored-By bots, no "Generated with" footers). See CLAUDE.md.
   `data/settings.json` or other persisted formats that is not
   backward-compatible — self-host users upgrade from arbitrary older versions.
 - **Rebuild-sensitive changes.** Changes under `agent/` alter runtime behavior only
-  after `eve build` (`eve start` does not rebuild). Any PR touching `agent/*` must
+  after `npm run build` (`eve start` does not rebuild). Any PR touching `agent/*` must
   account for a rebuild in its deploy/testing story; flag runtime-testing claims
   for `agent/*` changes that lack a rebuild step, and update-flow or deploy scripts
-  that start the service after changing `agent/*` without running `eve build`.
+  that start the service after changing `agent/*` without running `npm run build`.
 - **Tool inputs are validated — and constrained.** Agent tools take zod-validated
   inputs, but schema validation alone is not input safety: a validated string can
   still carry command injection or path traversal. Flag new or changed tool

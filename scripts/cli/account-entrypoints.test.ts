@@ -9,6 +9,7 @@ import {
   readFile,
   realpath,
   rm,
+  symlink,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -38,6 +39,11 @@ async function createAccountFixture(t: TestContext): Promise<AccountFixture> {
   await cp(join(ROOT, "scripts"), join(project, "scripts"), {
     recursive: true,
   });
+  await symlink(
+    join(ROOT, "node_modules"),
+    join(project, "node_modules"),
+    "dir",
+  );
 
   const fakeShell = join(fakeBin, "sh");
   await writeFile(fakeShell, "#!/bin/sh\nexit 0\n");

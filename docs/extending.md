@@ -1,10 +1,18 @@
 # Extending
 
-Everything Iva does is a file in `agent/`. Drop a new one, rebuild, restart — eve picks it up. No plugin API, no registry. On the server every change ships the same way: `npm run build`, then `iva restart` ([cli.md](./cli.md)).
+Everything Iva does is a file in an `agent/` tree. The bundled files in `agent/` belong to the updateable
+core; your authored layer lives in `data/custom/agent/`. `npm run build` combines both in a disposable
+tree, then `iva restart` activates the result ([cli.md](./cli.md)). The live source checkout stays clean,
+so an update cannot be blocked by a customized skill or HTML file. Existing local edits in the authored
+paths are migrated automatically on the first update.
 
 ## Adding a skill
 
-Skills are markdown procedures in `agent/skills/` that the model loads on demand. The frontmatter `description` is the only part the model sees before loading — write it as a trigger condition ("Use when…"), not a summary. Two shapes work: a flat `<name>.md`, or a `<name>/` directory with a `SKILL.md` plus supporting files. The eight bundled skills are your templates, simplest first:
+Skills are markdown procedures in `data/custom/agent/skills/` that the model loads on demand. The
+frontmatter `description` is the only part the model sees before loading - write it as a trigger
+condition ("Use when…"), not a summary. Two shapes work: a flat `<name>.md`, or a `<name>/` directory
+with a `SKILL.md` plus supporting files. Iva loads both your custom skills and the bundled skills in
+`agent/skills/`; bundled skills are read-only templates, simplest first:
 
 - 📋 **morning-digest.md** — one tool call (`tasks`), grouping rules, output format. Copy this for any "call a tool, format the result" job.
 - 🔎 **web-research.md** — a 4-step chain: `web_search` → pick 2–4 sources → `web_fetch` each → synthesize with links.
@@ -15,13 +23,18 @@ Skills are markdown procedures in `agent/skills/` that the model loads on demand
 - 📡 **telegram-userbot/** — a guarded personal-account workflow with a separate safety reference.
 - 🎨 **rich-post/** — a directory skill for rich Telegram posts with supporting references.
 
-⚠️ Skills go in `agent/skills/` and nowhere else — never in a `.claude/` directory (`~/.claude/skills/`, `vault/.claude/skills/`). That is a different tool's layout; Iva does not read it, so a skill placed there simply never loads.
+⚠️ Your skills go in `data/custom/agent/skills/` and nowhere else - never in a `.claude/` directory
+(`~/.claude/skills/`, `vault/.claude/skills/`). That is a different tool's layout; Iva does not read it.
 
-If Iva should reach for your skill unprompted, name it in `agent/instructions.md` — that's how the bundled skills get triggered.
+If Iva should reach for your skill unprompted, name it in
+`data/custom/agent/instructions.md`. Copy `agent/instructions.md` there before the first edit if the
+custom file does not exist yet.
 
 ## MCP connections
 
-Drop `agent/connections/<name>.ts` — the filename becomes the connection name. `example.ts.txt` in that folder is the inert template (the `.txt` suffix keeps eve from loading it half-configured):
+Drop `data/custom/agent/connections/<name>.ts` - the filename becomes the connection name.
+`agent/connections/example.ts.txt` is the inert bundled template (the `.txt` suffix keeps eve from
+loading it half-configured):
 
 ```ts
 import { defineMcpClientConnection } from "eve/connections";
@@ -38,9 +51,20 @@ export default defineMcpClientConnection({
 
 The model discovers the server's tools through the built-in `connection_search` and calls them as `connection__<name>__<tool>`. The URL and token stay on the runtime side: keys live in `.env` and are never visible to the model.
 
+## Custom tools
+
+Put a tool in `data/custom/agent/tools/<name>.ts`. Use the bundled files in `agent/tools/` as
+read-only examples. Every input must have a zod schema, enum-like values need explicit allowlists,
+and file paths must be resolved and bounded to their permitted root. Keep credentials in `.env`.
+The disposable build compiles custom tools together with core tools without copying their source into
+the live checkout.
+
 ## Subagents
 
-A subagent is `agent/subagents/<name>/` with an `agent.ts` and its own `instructions.md`. The bundled `planner` is the pattern: its `description` tells the main agent when to delegate ("break a large goal into steps"), and a zod `outputSchema` forces a structured, validated reply instead of prose:
+A subagent is `data/custom/agent/subagents/<name>/` with an `agent.ts` and its own `instructions.md`.
+The bundled `agent/subagents/planner` is the pattern: its `description` tells the main agent when to
+delegate ("break a large goal into steps"), and a zod `outputSchema` forces a structured, validated
+reply instead of prose:
 
 ```ts
 outputSchema: z.object({
@@ -55,7 +79,14 @@ A subagent brings its own provider and model: the planner pins Ollama Cloud (`OL
 
 ## Changing the character
 
-Iva's voice lives in exactly one file: `agent/instructions.md` — tone, rules, tool preferences, hard limits. Edit it directly. It is deliberately language-neutral: the reply language comes from `AGENT_LANGUAGE` in `.env`, read at startup by `agent/instructions/05-language.ts` (changing it needs a rebuild + restart). The other files in `agent/instructions/` are machinery, not character — `10-map.md` (memory protocol), `20-core.ts` (injects the vault's CORE.md), `now.ts` (date/time). The old rule that `05-language.ts` must import only `eve/instructions` and `process.env` came from an eve 0.11.4 dev-mode bug, fixed in later Eve releases (see gotchas below) — cross-imports are safe now; the file simply has no reason to grow.
+Iva's voice lives in exactly one customizable file: `data/custom/agent/instructions.md` - tone, rules,
+tool preferences and hard limits. Start by copying the bundled `agent/instructions.md`. The reply
+language still comes from `AGENT_LANGUAGE` in `.env`. The files in `agent/instructions/` are core
+machinery and are not part of the customization layer.
+
+If an upstream edit overlaps yours, Iva activates the new core and saves all three versions under
+`data/update-conflicts/`. Tell Iva "restore my update changes" or «верни мои изменения после
+обновления» to load the recovery skill and merge them from chat.
 
 What Iva knows about _you_ is memory, not code — that's `CORE.md` in the vault ([memory.md](./memory.md)).
 
@@ -64,6 +95,7 @@ What Iva knows about _you_ is memory, not code — that's `CORE.md` in the vault
 ```bash
 npm ci        # postinstall applies patches/eve+0.29.5.patch
 npm run dev   # eve dev TUI, server on http://127.0.0.1:2000
+npm run build:core  # maintainer build of the current source tree
 npm exec -- eve dev --no-ui --logs all   # headless
 ```
 

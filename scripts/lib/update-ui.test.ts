@@ -3,6 +3,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import {
+  chmodSync,
   existsSync,
   mkdtempSync,
   mkdirSync,
@@ -811,6 +812,41 @@ test("stash conflict report can still roll back user files byte-for-byte", async
   assert.equal(existsSync(join(local, ".output.iva-backup")), false);
 });
 
+test("protect cleans a partial tree when the recovery stash cannot be applied", async (t) => {
+  const fx = candidateFixture();
+  t.after(() => rmSync(fx.temp, { recursive: true, force: true }));
+  writeFileSync(join(fx.local, "tracked.txt"), "user version\n");
+  writeFileSync(join(fx.local, "local-only.txt"), "user file\n");
+  const bin = join(fx.temp, "failing-git");
+  mkdirSync(bin);
+  const wrapper = join(bin, "git");
+  const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+  writeFileSync(
+    wrapper,
+    "#!/bin/sh\n" +
+      'if [ "$1" = "stash" ] && [ "$2" = "apply" ]; then\n' +
+      "  printf 'partial\\n' > tracked.txt\n" +
+      "  printf 'partial\\n' > local-only.txt\n" +
+      "  exit 1\n" +
+      "fi\n" +
+      `exec ${JSON.stringify(realGit)} "$@"\n`,
+  );
+  chmodSync(wrapper, 0o755);
+  const tx = createUpdateTransaction({
+    root: fx.local,
+    dataDir: fx.data,
+    envPath: join(fx.local, ".env"),
+    env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}` },
+  });
+
+  await assert.rejects(() => tx.protect(), /prepare local customizations/u);
+
+  assert.equal(readFileSync(join(fx.local, "tracked.txt"), "utf8"), "base\n");
+  assert.equal(existsSync(join(fx.local, "local-only.txt")), false);
+  assert.equal(git(fx.local, "status", "--porcelain=v1"), "");
+  assert.notEqual(git(fx.local, "stash", "list"), "");
+});
+
 test("conflicting local commits abort rebase and restore the original branch", async () => {
   const { temp, seed, local, data } = updateFixture();
   writeFileSync(join(local, "tracked.txt"), "local commit\n");
@@ -872,7 +908,7 @@ function candidateFixture({
     JSON.stringify({
       name: "fixture",
       version: "1.0.0",
-      scripts: { build: buildScript },
+      scripts: { build: buildScript, "build:core": buildScript },
     }),
   );
   writeFileSync(join(seed, "tracked.txt"), "base\n");
@@ -941,6 +977,222 @@ test("update candidate builds in a worktree and is promoted after a clean fast-f
   assert.equal(existsSync(join(fx.local, ".iva-update")), false);
   assert.equal(git(fx.local, "stash", "list"), "");
   assert.equal(git(fx.local, "worktree", "list").split("\n").length, 1);
+});
+
+test("canonical authored customizations build from data while the live checkout stays clean", async () => {
+  const fx = candidateFixture({
+    buildScript:
+      "node -e \"const f=require('node:fs');f.mkdirSync('.output/server',{recursive:true});" +
+      "f.writeFileSync('.output/server/marker.txt',f.readFileSync('agent/instructions.md','utf8').trim())\"",
+  });
+  mkdirSync(join(fx.seed, "agent/skills/stock"), { recursive: true });
+  writeFileSync(join(fx.seed, "agent/instructions.md"), "stock voice\n");
+  writeFileSync(join(fx.seed, "agent/skills/stock/SKILL.md"), "stock skill\n");
+  git(fx.seed, "add", ".");
+  git(fx.seed, "commit", "-m", "add authored core");
+  git(fx.seed, "push", "origin", "main");
+  git(fx.local, "pull", "--ff-only");
+
+  writeFileSync(join(fx.local, "agent/instructions.md"), "my voice\n");
+  mkdirSync(join(fx.local, "agent/skills/local"), { recursive: true });
+  writeFileSync(join(fx.local, "agent/skills/local/SKILL.md"), "local skill\n");
+  const target = pushUpstream(
+    fx.seed,
+    (seed) => writeFileSync(join(seed, "new-core.txt"), "new core\n"),
+    "update core",
+  );
+
+  const tx = candidateTx(fx);
+  await tx.protect();
+  await tx.resolveTarget();
+  const candidate = await tx.buildCandidate({ npm: "npm" });
+  assert.ok(candidate);
+  assert.equal(candidate.customization, "applied");
+  await tx.fetchAndIntegrate();
+  const restored = await tx.restoreLocalChanges();
+  assert.equal(restored.status, "applied");
+  assert.equal(await tx.promoteCandidate(), true);
+  await tx.commit();
+  await tx.teardownCandidate();
+
+  assert.equal(git(fx.local, "rev-parse", "HEAD"), target);
+  assert.equal(
+    readFileSync(join(fx.local, "agent/instructions.md"), "utf8"),
+    "stock voice\n",
+  );
+  assert.equal(
+    existsSync(join(fx.local, "agent/skills/local/SKILL.md")),
+    false,
+  );
+  assert.equal(
+    readFileSync(join(fx.data, "custom/agent/instructions.md"), "utf8"),
+    "my voice\n",
+  );
+  assert.equal(
+    readFileSync(join(fx.data, "custom/agent/skills/local/SKILL.md"), "utf8"),
+    "local skill\n",
+  );
+  assert.equal(
+    readFileSync(join(fx.local, ".output/server/marker.txt"), "utf8"),
+    "my voice",
+  );
+  assert.equal(git(fx.local, "status", "--porcelain=v1"), "");
+  assert.equal(git(fx.local, "stash", "list"), "");
+});
+
+test("an authored conflict activates new core and stays recoverable from the canonical layer", async () => {
+  const fx = candidateFixture({
+    buildScript:
+      "node -e \"const f=require('node:fs');f.mkdirSync('.output/server',{recursive:true});" +
+      "f.writeFileSync('.output/server/marker.txt',f.readFileSync('agent/instructions.md','utf8').trim())\"",
+  });
+  mkdirSync(join(fx.seed, "agent"), { recursive: true });
+  writeFileSync(join(fx.seed, "agent/instructions.md"), "stock voice\n");
+  git(fx.seed, "add", ".");
+  git(fx.seed, "commit", "-m", "add authored core");
+  git(fx.seed, "push", "origin", "main");
+  git(fx.local, "pull", "--ff-only");
+  writeFileSync(join(fx.local, "agent/instructions.md"), "my voice\n");
+  const target = pushUpstream(
+    fx.seed,
+    (seed) =>
+      writeFileSync(join(seed, "agent/instructions.md"), "upstream voice\n"),
+    "update authored core",
+  );
+
+  const tx = candidateTx(fx);
+  await tx.protect();
+  await tx.resolveTarget();
+  const candidate = await tx.buildCandidate({ npm: "npm" });
+  assert.ok(candidate);
+  assert.equal(candidate.customization, "conflicted");
+  assert.deepEqual(candidate.conflicts, ["agent/instructions.md"]);
+  await tx.fetchAndIntegrate();
+  const restored = await tx.restoreLocalChanges();
+  assert.equal(restored.status, "conflicted");
+  assert.deepEqual(
+    restored.conflicts.map(({ path }) => path),
+    ["agent/instructions.md"],
+  );
+  assert.equal(await tx.promoteCandidate(), true);
+  await tx.commit();
+  await tx.teardownCandidate();
+
+  assert.equal(git(fx.local, "rev-parse", "HEAD"), target);
+  assert.equal(
+    readFileSync(join(fx.local, "agent/instructions.md"), "utf8"),
+    "upstream voice\n",
+  );
+  assert.equal(
+    readFileSync(join(fx.data, "custom/agent/instructions.md"), "utf8"),
+    "my voice\n",
+  );
+  assert.equal(
+    readFileSync(join(fx.local, ".output/server/marker.txt"), "utf8"),
+    "upstream voice",
+  );
+  assert.equal(
+    JSON.parse(readFileSync(join(restored.recoveryDir, "report.json"), "utf8"))
+      .schema,
+    "iva-update-conflicts/v1",
+  );
+  assert.equal(git(fx.local, "status", "--porcelain=v1"), "");
+  assert.equal(
+    git(fx.local, "stash", "list", "--format=%H"),
+    restored.stashOid,
+    "the full recovery stash remains available while the conflict is unresolved",
+  );
+});
+
+test("an invalid custom manifest falls back to new core with a recovery bundle", async () => {
+  const fx = candidateFixture();
+  mkdirSync(join(fx.data, "custom"), { recursive: true });
+  writeFileSync(join(fx.data, "custom/manifest.json"), "{broken json\n");
+  const target = pushUpstream(
+    fx.seed,
+    (seed) => writeFileSync(join(seed, "tracked.txt"), "v2\n"),
+    "update core",
+  );
+
+  const tx = candidateTx(fx);
+  await tx.protect();
+  await tx.resolveTarget();
+  const candidate = await tx.buildCandidate({ npm: "npm" });
+  assert.ok(candidate);
+  assert.equal(candidate.customization, "fallback");
+  await tx.fetchAndIntegrate();
+  const restored = await tx.restoreLocalChanges();
+  assert.equal(restored.status, "preserved");
+  assert.equal(await tx.promoteCandidate(), true);
+  await tx.commit();
+  await tx.teardownCandidate();
+
+  assert.equal(git(fx.local, "rev-parse", "HEAD"), target);
+  assert.equal(
+    readFileSync(join(fx.local, ".output/server/marker.txt"), "utf8"),
+    "v2",
+  );
+  assert.equal(
+    JSON.parse(readFileSync(join(restored.recoveryDir, "report.json"), "utf8"))
+      .reason,
+    "custom-layer-invalid",
+  );
+  assert.equal(
+    readFileSync(join(fx.data, "custom/manifest.json"), "utf8"),
+    "{broken json\n",
+  );
+});
+
+test("a canonical customization that does not build stays inactive and recoverable", async () => {
+  const fx = candidateFixture({
+    buildScript:
+      "node -e \"const f=require('node:fs');const v=f.readFileSync('agent/instructions.md','utf8').trim();" +
+      "if(v==='broken local'){process.exit(1)}f.mkdirSync('.output/server',{recursive:true});" +
+      "f.writeFileSync('.output/server/marker.txt',v)\"",
+  });
+  mkdirSync(join(fx.seed, "agent"), { recursive: true });
+  writeFileSync(join(fx.seed, "agent/instructions.md"), "stock voice\n");
+  git(fx.seed, "add", ".");
+  git(fx.seed, "commit", "-m", "add authored core");
+  git(fx.seed, "push", "origin", "main");
+  git(fx.local, "pull", "--ff-only");
+  writeFileSync(join(fx.local, "agent/instructions.md"), "broken local\n");
+  pushUpstream(
+    fx.seed,
+    (seed) => writeFileSync(join(seed, "new-core.txt"), "new core\n"),
+    "update core",
+  );
+
+  const tx = candidateTx(fx);
+  await tx.protect();
+  await tx.resolveTarget();
+  const candidate = await tx.buildCandidate({ npm: "npm" });
+  assert.ok(candidate);
+  assert.equal(candidate.customization, "fallback");
+  await tx.fetchAndIntegrate();
+  const restored = await tx.restoreLocalChanges();
+  assert.equal(restored.status, "preserved");
+  assert.equal(await tx.promoteCandidate(), true);
+  await tx.commit();
+  await tx.teardownCandidate();
+
+  assert.equal(
+    readFileSync(join(fx.local, ".output/server/marker.txt"), "utf8"),
+    "stock voice",
+  );
+  const manifest = JSON.parse(
+    readFileSync(join(fx.data, "custom/manifest.json"), "utf8"),
+  );
+  assert.ok(manifest.entries["agent/instructions.md"].conflict);
+  assert.equal(
+    readFileSync(join(fx.data, "custom/agent/instructions.md"), "utf8"),
+    "broken local\n",
+  );
+  assert.equal(git(fx.local, "status", "--porcelain=v1"), "");
+  assert.equal(
+    readFileSync(join(fx.local, "agent/instructions.md"), "utf8"),
+    "stock voice\n",
+  );
 });
 
 test("dirty update activates the new build and archives conflicting HTML", async () => {
@@ -1161,7 +1413,7 @@ test("a broken local customization falls back to the verified new core", async (
 test("a custom build with no output keeps the verified clean candidate", async () => {
   const fx = candidateFixture();
   const pkg = JSON.parse(readFileSync(join(fx.local, "package.json"), "utf8"));
-  pkg.scripts.build = 'node -e "process.exit(0)"';
+  pkg.scripts["build:core"] = 'node -e "process.exit(0)"';
   writeFileSync(join(fx.local, "package.json"), JSON.stringify(pkg));
   const target = pushUpstream(
     fx.seed,
@@ -1196,7 +1448,7 @@ test("broken candidate build aborts before the live checkout is touched", async 
     (seed) => {
       const pkg = JSON.parse(readFileSync(join(seed, "package.json"), "utf8"));
       pkg.version = "1.1.0";
-      pkg.scripts.build = 'node -e "process.exit(1)"';
+      pkg.scripts["build:core"] = 'node -e "process.exit(1)"';
       writeFileSync(join(seed, "package.json"), JSON.stringify(pkg));
     },
     "broken build",
