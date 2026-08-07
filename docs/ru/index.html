@@ -1,359 +1,586 @@
 <!doctype html>
 <html lang="ru">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Iva — личный AI-агент с долговременной памятью</title>
-    <meta
-      name="description"
-      content="Iva — личный AI-агент с долговременной памятью на eve, агентном фреймворке Vercel. Живёт в Telegram, ставится одной командой, около $9 в месяц. Open-source, на открытых моделях: DeepSeek, Kimi, GLM."
-    />
-    <meta
-      name="keywords"
-      content="AI агент, персональный AI, личный ассистент, долговременная память, Telegram бот, self-hosted, open source, DeepSeek, Ollama, ИИ агент, второй мозг"
-    />
-    <meta name="author" content="smixs" />
-    <meta name="robots" content="index, follow" />
-    <meta name="theme-color" content="#0a0a0a" />
-    <link rel="canonical" href="https://smixs.github.io/iva/ru/" />
-    <link rel="alternate" hreflang="en" href="https://smixs.github.io/iva/" />
-    <link
-      rel="alternate"
-      hreflang="ru"
-      href="https://smixs.github.io/iva/ru/"
-    />
-    <link
-      rel="alternate"
-      hreflang="x-default"
-      href="https://smixs.github.io/iva/"
-    />
-    <link rel="icon" type="image/png" href="../favicon.png" />
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Iva — лучший личный AI-ассистент для Telegram</title>
+<meta name="description" content="Iva — лучший личный AI-ассистент для Telegram: open-source self-hosted ассистент, живущий в вашем чате. Многослойная память, которая складывается в хранилище, совместимое с Obsidian, голос, зрение, веб-поиск, Google Workspace, ваш личный аккаунт через юзербот. Одна команда, ваш сервер, бесплатно и open source.">
+<meta name="keywords" content="личный AI-ассистент для Telegram, AI-ассистент в Telegram, Telegram юзербот AI, self-hosted AI-ассистент, личный AI-агент, AI-агент с памятью, open source AI-ассистент, второй мозг, Obsidian хранилище AI">
+<meta name="author" content="smixs">
+<meta name="robots" content="index, follow">
+<meta name="theme-color" content="#000000">
+<link rel="canonical" href="https://smixs.github.io/iva/ru/">
+<link rel="alternate" hreflang="en" href="https://smixs.github.io/iva/">
+<link rel="alternate" hreflang="ru" href="https://smixs.github.io/iva/ru/">
+<link rel="alternate" hreflang="x-default" href="https://smixs.github.io/iva/">
+<link rel="icon" type="image/png" href="../favicon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:ital,wdth,wght@1,125,900&family=Geologica:wght@200;300;500&display=swap" rel="stylesheet">
 
-    <!-- Open Graph -->
-    <meta property="og:type" content="website" />
-    <meta property="og:site_name" content="Iva" />
-    <meta property="og:locale" content="ru_RU" />
-    <meta property="og:locale:alternate" content="en_US" />
-    <meta
-      property="og:title"
-      content="Iva — личный AI-агент с долговременной памятью"
-    />
-    <meta
-      property="og:description"
-      content="Личный AI-агент с долговременной памятью на eve (фреймворк Vercel). Ставится одной командой, помнит про вас всё, около $9 в месяц. Open-source, на открытых моделях."
-    />
-    <meta property="og:url" content="https://smixs.github.io/iva/ru/" />
-    <meta
-      property="og:image"
-      content="https://smixs.github.io/iva/iva-og.png"
-    />
-    <meta property="og:image:type" content="image/png" />
-    <meta property="og:image:width" content="1280" />
-    <meta property="og:image:height" content="640" />
-    <meta
-      property="og:image:alt"
-      content="Iva — личный AI-агент с долговременной памятью"
-    />
+<!-- Open Graph -->
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Iva">
+<meta property="og:locale" content="ru_RU">
+<meta property="og:locale:alternate" content="en_US">
+<meta property="og:title" content="Iva — лучший личный AI-ассистент для Telegram">
+<meta property="og:description" content="Open-source AI-ассистент, живущий в вашем Telegram. Многослойная память, которая складывается в хранилище, принадлежащее вам, голос, зрение, ваш личный аккаунт. Одна команда, ваш сервер, бесплатно и open source.">
+<meta property="og:url" content="https://smixs.github.io/iva/ru/">
+<meta property="og:image" content="https://smixs.github.io/iva/iva-og.jpg">
+<meta property="og:image:type" content="image/jpeg">
+<meta property="og:image:width" content="1280">
+<meta property="og:image:height" content="640">
+<meta property="og:image:alt" content="Iva — лучший личный AI-ассистент для Telegram">
 
-    <!-- Twitter -->
-    <meta name="twitter:card" content="summary_large_image" />
-    <meta
-      name="twitter:title"
-      content="Iva — личный AI-агент с долговременной памятью"
-    />
-    <meta
-      name="twitter:description"
-      content="Личный AI-агент с долговременной памятью на eve. Ставится одной командой, помнит про вас всё, около $9 в месяц."
-    />
-    <meta
-      name="twitter:image"
-      content="https://smixs.github.io/iva/iva-og.png"
-    />
-    <meta
-      name="twitter:image:alt"
-      content="Iva — личный AI-агент с долговременной памятью"
-    />
+<!-- Twitter -->
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Iva — лучший личный AI-ассистент для Telegram">
+<meta name="twitter:description" content="Open-source AI-ассистент, живущий в вашем Telegram. Многослойная память, голос, зрение, ваш личный аккаунт. Одна команда, ваш сервер, бесплатно и open source.">
+<meta name="twitter:image" content="https://smixs.github.io/iva/iva-og.jpg">
+<meta name="twitter:image:alt" content="Iva — лучший личный AI-ассистент для Telegram">
 
-    <script type="application/ld+json">
-      {
-        "@context": "https://schema.org",
-        "@type": "SoftwareApplication",
-        "name": "Iva",
-        "alternateName": "Iva — личный AI-агент",
-        "description": "Личный AI-агент с долговременной памятью на eve, агентном фреймворке Vercel. Живёт в Telegram, ставится одной командой, около $9 в месяц. Open-source, на открытых моделях.",
-        "applicationCategory": "DeveloperApplication",
-        "operatingSystem": "Linux, macOS",
-        "url": "https://smixs.github.io/iva/ru/",
-        "image": "https://smixs.github.io/iva/iva-og.png",
-        "softwareVersion": "0.1.7",
-        "license": "https://github.com/smixs/iva/blob/main/LICENSE",
-        "codeRepository": "https://github.com/smixs/iva",
-        "author": {
-          "@type": "Person",
-          "name": "smixs",
-          "url": "https://github.com/smixs"
-        },
-        "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
-      }
-    </script>
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "Iva",
+  "alternateName": "Iva — личный AI-ассистент для Telegram",
+  "description": "Open-source self-hosted AI-ассистент, живущий в Telegram. Многослойная память, которая складывается в хранилище, совместимое с Obsidian, голос, зрение, веб-поиск, Google Workspace, режим личного аккаунта. Ставится одной командой. Бесплатна и open source.",
+  "applicationCategory": "DeveloperApplication",
+  "operatingSystem": "Linux, macOS",
+  "url": "https://smixs.github.io/iva/ru/",
+  "image": "https://smixs.github.io/iva/iva-og.jpg",
+  "softwareVersion": "0.3.13",
+  "license": "https://github.com/smixs/iva/blob/main/LICENSE",
+  "codeRepository": "https://github.com/smixs/iva",
+  "inLanguage": ["en", "ru"],
+  "featureList": [
+    "Многослойная долговременная память: день в листьях, недели и месяцы в ветвях, годы в кольцах",
+    "Хранилище в обычном markdown, совместимое с Obsidian и принадлежащее вам",
+    "Расшифровка голосовых и видео, зрение для фото",
+    "Режим личного аккаунта Telegram (юзербот) с подключением по QR",
+    "Панель настроек /menu: все настройки в одном сообщении, ноль токенов",
+    "Четыре провайдера моделей: OpenCode Go, Ollama Cloud, OpenRouter, OpenAI",
+    "Веб-поиск: Tavily, Exa, Parallel, Brave",
+    "Google Workspace: Gmail, Календарь, Drive, Таблицы, Документы, Задачи",
+    "Проверка prompt-инъекций и вычистка секретов",
+    "Задачи, напоминания, утренний дайджест, расписания"
+  ],
+  "author": { "@type": "Person", "name": "smixs", "url": "https://github.com/smixs" },
+  "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
+}
+</script>
 
-    <style>
-      :root {
-        color-scheme: dark;
-      }
-      * {
-        box-sizing: border-box;
-      }
-      body {
-        margin: 0;
-        background: #0a0a0a;
-        color: #e8e8e8;
-        font:
-          17px/1.6 -apple-system,
-          BlinkMacSystemFont,
-          "Segoe UI",
-          Roboto,
-          Helvetica,
-          Arial,
-          sans-serif;
-        -webkit-font-smoothing: antialiased;
-      }
-      a {
-        color: #5fd3c4;
-        text-decoration: none;
-      }
-      a:hover {
-        text-decoration: underline;
-      }
-      .wrap {
-        max-width: 860px;
-        margin: 0 auto;
-        padding: 0 20px 80px;
-      }
-      .lang {
-        text-align: right;
-        padding-top: 16px;
-        font-size: 14px;
-        color: #777;
-      }
-      .lang a {
-        color: #9aa0a0;
-      }
-      .lang b {
-        color: #e8e8e8;
-      }
-      header {
-        text-align: center;
-        padding-top: 8px;
-      }
-      header img {
-        width: 100%;
-        max-width: 1000px;
-        height: auto;
-        border-radius: 12px;
-      }
-      h1 {
-        font-size: 0;
-        margin: 0;
-      }
-      .tagline {
-        font-size: 22px;
-        font-weight: 600;
-        margin: 28px 0 8px;
-      }
-      .sub {
-        color: #9aa0a0;
-        margin: 0 0 28px;
-      }
-      .cta {
-        display: inline-block;
-        background: #1f6f64;
-        color: #fff;
-        padding: 12px 22px;
-        border-radius: 10px;
-        font-weight: 600;
-        margin: 6px;
-      }
-      .cta.alt {
-        background: #1a1a1a;
-        border: 1px solid #333;
-      }
-      pre {
-        background: #141414;
-        border: 1px solid #262626;
-        border-radius: 10px;
-        padding: 16px;
-        overflow-x: auto;
-        text-align: left;
-      }
-      code {
-        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-        font-size: 15px;
-      }
-      h2 {
-        font-size: 22px;
-        margin: 48px 0 14px;
-      }
-      ul {
-        padding-left: 0;
-        list-style: none;
-      }
-      li {
-        margin: 10px 0;
-      }
-      .feat b {
-        color: #fff;
-      }
-      .tree {
-        background: #141414;
-        border: 1px solid #262626;
-        border-radius: 10px;
-        padding: 16px;
-        white-space: pre;
-        overflow-x: auto;
-        color: #9aa0a0;
-        font-size: 14px;
-        line-height: 1.5;
-      }
-      footer {
-        text-align: center;
-        color: #777;
-        margin-top: 64px;
-        font-size: 14px;
-      }
-    </style>
-  </head>
-  <body>
-    <div class="wrap">
-      <p class="lang"><a href="../">English</a> · <b>Русский</b></p>
-      <header>
-        <img
-          src="../iva-header.webp"
-          alt="Iva — личный AI-агент с долговременной памятью"
-          width="1200"
-          height="676"
-        />
-        <h1>Iva — личный AI-агент с долговременной памятью</h1>
-        <p class="tagline">
-          Личный AI-агент с долговременной памятью. Ставится одной командой на
-          сервер за $4 и помнит про вас всё.
-        </p>
-        <p class="sub">
-          Живёт в Telegram. Собран на
-          <a href="https://eve.dev/docs/introduction">eve</a>, агентном
-          фреймворке Vercel. Около $9 в месяц.
-        </p>
-        <p>
-          <a class="cta" href="https://github.com/smixs/iva"
-            >Открыть на GitHub</a
-          >
-          <a
-            class="cta alt"
-            href="https://github.com/smixs/iva/blob/main/README.ru.md#установка"
-            >Как установить</a
-          >
-        </p>
-      </header>
+<style>
+  :root {
+    color-scheme: dark;
+    --text: #f2f3f4;
+    --muted: rgba(255,255,255,.56);
+    --faint: rgba(255,255,255,.38);
+    --hairline: rgba(255,255,255,.14);
+    --hairline-soft: rgba(255,255,255,.08);
+    --green: #86a96f;
+    --teal: #7fd8cc;
+    --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  }
+  * { box-sizing: border-box; margin: 0; }
+  html { scroll-behavior: smooth; }
+  body {
+    background: #000; color: var(--text);
+    font-family: 'Geologica', system-ui, sans-serif; font-weight: 300;
+    font-size: 17px; line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--text); text-decoration: none; }
+  img { max-width: 100%; height: auto; display: block; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  ::selection { background: rgba(134,169,111,.35); }
 
-      <h2>Установка одной командой</h2>
-      <pre><code>curl -fsSL https://raw.githubusercontent.com/smixs/iva/main/install.sh | bash</code></pre>
+  .wrap { max-width: 1200px; margin: 0 auto; padding: 0 clamp(20px, 4vw, 48px); }
 
-      <h2>Почему Iva</h2>
-      <p>
-        OpenClaw, Hermes, nanobot - хороших агентов хватает. Зачем ещё один?
-        Затем, что каждый сваливает на вас одну и ту же гору выбора: какую
-        модель, какую память, какой поиск, как всё связать. Слишком много выбора
-        - вот настоящая проблема. Поэтому выбор я сделал сам: постоянно тестирую
-        агентов, модели, связки и харнесы, оставляю самое лучшее и собираю в Iva
-        - лучшее из всех агентов в одном. Открытый код на открытых моделях
-        (DeepSeek, Kimi, GLM), модель выбираете вы по имени, ваш ключ, без
-        наценки. Как Linux Mint среди AI-агентов: одна команда - и всё работает.
-        Агентов много, а этот - мой. Теперь и ваш.
-      </p>
+  /* ---------- Liquid glass ---------- */
+  .liquid-glass {
+    background: rgba(255,255,255,0.01);
+    background-blend-mode: luminosity;
+    backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);
+    box-shadow: inset 0 1px 1px rgba(255,255,255,0.1);
+    position: relative; overflow: hidden; border-radius: 9999px;
+  }
+  .liquid-glass::before {
+    content: ""; position: absolute; inset: 0; border-radius: inherit; padding: 1.4px;
+    background: linear-gradient(180deg, rgba(255,255,255,.45) 0%, rgba(255,255,255,.15) 20%, rgba(255,255,255,0) 40%, rgba(255,255,255,0) 60%, rgba(255,255,255,.15) 80%, rgba(255,255,255,.45) 100%);
+    -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+    -webkit-mask-composite: xor; mask-composite: exclude; pointer-events: none;
+  }
 
-      <h2>Что умеет</h2>
-      <ul class="feat">
-        <li>
-          🎙️ <b>Голос и видео</b> - расшифровывает голосовые и кружки, понимает
-          речь на любом языке.
-        </li>
-        <li>
-          🧠 <b>Долгая память</b> - дерево из обычных файлов, без тяжёлых баз
-          данных.
-        </li>
-        <li>🔎 <b>Быстрый поиск</b> - находит нужное за секунды.</li>
-        <li>
-          ⏰ <b>По расписанию</b> - дайджест дня или недели, регулярные задачи,
-          сводка по почте, вовремя.
-        </li>
-        <li>
-          🔔 <b>Напоминания</b> - скажете, о чём и когда, и Iva не даст забыть.
-        </li>
-        <li>
-          🤖 <b>Выбор модели</b> - DeepSeek, Kimi, GLM и другие открытые модели.
-        </li>
-        <li>
-          🌐 <b>Умеет больше</b> - ищет в интернете, открывает сайты, водит
-          браузер, подключается к MCP.
-        </li>
-        <li>
-          🔒 <b>Приватность</b> - код и память остаются на вашем сервере, не в
-          чужом облаке.
-        </li>
-      </ul>
+  /* ---------- Nav ---------- */
+  nav { position: fixed; top: 20px; left: 50%; transform: translateX(-50%); z-index: 50; white-space: nowrap; }
+  .nav-pill { display: flex; align-items: center; gap: 22px; padding: 11px 22px; }
+  .nav-logo { display: flex; align-items: center; gap: 9px; font-family: 'Archivo', sans-serif; font-style: italic; font-weight: 900; font-stretch: 125%; letter-spacing: .04em; font-size: 15px; }
+  .nav-logo svg { width: 17px; height: 17px; color: var(--green); }
+  .nav-links { display: flex; align-items: center; gap: 18px; }
+  .nav-links a { font-size: 13.5px; font-weight: 300; color: rgba(255,255,255,.7); transition: color 180ms var(--ease-out); }
+  .nav-links a:hover { color: #fff; }
+  .nav-gh {
+    font-size: 13.5px; font-weight: 500; color: #fff !important; padding: 7px 16px; border-radius: 9999px;
+    background: rgba(255,255,255,.08); box-shadow: inset 0 1px 1px rgba(255,255,255,.15);
+    transition: transform 160ms var(--ease-out), box-shadow 200ms var(--ease-out);
+  }
+  .nav-gh:active { transform: scale(0.96); }
+  @media (hover: hover) and (pointer: fine) {
+    .nav-gh:hover { transform: scale(1.04); box-shadow: inset 0 1px 1px rgba(255,255,255,.2), 0 0 16px 2px rgba(255,255,255,.12); }
+  }
+  @media (max-width: 760px) { .nav-links a:not(.nav-gh):not(.nav-ru) { display: none; } }
 
-      <h2>Память - то, что копится</h2>
-      <p>
-        Память Iva устроена как дерево (а <em>ива</em> - это дерево). Это
-        «low-context memory» по замыслу: в модель никогда не грузится вся
-        история, только крошечное ядро плюс то, что нужно под задачу - находится
-        обычным поиском по файлам.
-      </p>
-      <div class="tree">
-        🪵 СТВОЛ - год + карточки людей, проектов, решений ╱ ╲ 🌿 ВЕТВИ -
-        месячные выжимки, собранные из недель, из дней ╱ ╲ 🍃 ЛИСТЬЯ - полный,
-        дословный транскрипт каждого дня
-      </div>
-      <p>
-        Каждую ночь Iva сворачивает листья в выжимки и собирает их вверх по
-        веткам - иерархический DAG выжимок, который сжимает старые дни, сохраняя
-        указатель на каждый оригинал. Над памятью я работаю дольше всего (<a
-          href="https://github.com/smixs/agent-second-brain"
-          >agent-second-brain</a
-        >
-        → <a href="https://github.com/smixs/autograph/tree/main">autograph</a> →
-        Iva), в основе - пейпер
-        <a href="https://papers.voltropy.com/LCM"
-          >LCM: Lossless Context Management</a
-        >
-        плюс куча практики. Одна из лучших схем памяти у личного агента сегодня.
-        Ноль инфраструктуры, всё читаемо и git-diff-аемо - никакой векторной БД,
-        которую надо запускать и оплачивать.
-      </p>
+  /* ---------- Hero ---------- */
+  .hero { position: relative; min-height: 100svh; display: flex; flex-direction: column; overflow: hidden; }
+  .hero-bg { position: absolute; inset: -3%; z-index: 0; will-change: transform; }
+  .hero-bg img { width: 100%; height: 100%; object-fit: cover; object-position: center 38%; }
+  .hero-bg::after {
+    content: ""; position: absolute; inset: 0;
+    background: linear-gradient(180deg, rgba(0,0,0,.55) 0%, rgba(0,0,0,.16) 34%, rgba(0,0,0,.3) 66%, #000 100%);
+  }
+  .hero-mid { position: relative; z-index: 2; flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 120px 20px 0; }
+  .hero h1 {
+    font-family: 'Archivo', sans-serif; font-style: italic; font-weight: 900; font-stretch: 125%;
+    font-size: clamp(84px, 16.5vw, 230px); line-height: .92; letter-spacing: -0.015em; color: #fff;
+    padding-right: .06em;
+  }
+  .hero-sub { margin-top: 26px; font-size: clamp(13px, 1.6vw, 15px); font-weight: 400; letter-spacing: .22em; text-transform: uppercase; color: rgba(255,255,255,.82); }
+  .hero-bottom { position: relative; z-index: 2; display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; padding: 0 clamp(20px, 4vw, 48px) 46px; }
+  .hero-note { font-size: 13.5px; font-weight: 300; color: rgba(255,255,255,.75); max-width: 230px; line-height: 1.55; }
+  .hero-note.right { text-align: right; }
+  .hero-cta { position: absolute; left: 50%; transform: translateX(-50%); bottom: 46px; display: flex; flex-direction: column; align-items: center; gap: 18px; }
+  .cta-row { display: flex; align-items: center; gap: 12px; }
+  .btn {
+    display: inline-block; font-size: 14px; font-weight: 500; border-radius: 9999px; padding: 13px 26px;
+    transition: transform 180ms var(--ease-out), box-shadow 220ms var(--ease-out);
+  }
+  .btn:active { transform: scale(0.97); }
+  .btn-primary { background: #fff; color: #000; }
+  .btn-glass { color: #fff; }
+  @media (hover: hover) and (pointer: fine) {
+    .btn-primary:hover { transform: scale(1.03); box-shadow: 0 0 24px 4px rgba(255,255,255,.25); }
+    .btn-glass:hover { transform: scale(1.03); box-shadow: inset 0 1px 1px rgba(255,255,255,.2), 0 0 20px 2px rgba(255,255,255,.07); }
+  }
+  .hero-install { display: flex; align-items: center; gap: 12px; padding: 10px 12px 10px 20px; border-radius: 9999px; max-width: min(92vw, 640px); }
+  .hero-install code { font-size: 12.5px; color: rgba(255,255,255,.85); white-space: nowrap; overflow-x: auto; scrollbar-width: none; }
+  .hero-install button {
+    flex-shrink: 0; background: rgba(255,255,255,.1); border: 0; border-radius: 9999px; color: rgba(255,255,255,.85);
+    font: 500 12px 'Geologica', sans-serif; letter-spacing: .06em; padding: 7px 14px; cursor: pointer; min-width: 74px;
+    transition: transform 140ms var(--ease-out), color 180ms var(--ease-out), background 180ms var(--ease-out);
+  }
+  .hero-install button:active { transform: scale(0.95); }
+  @media (hover: hover) and (pointer: fine) { .hero-install button:hover { background: rgba(255,255,255,.18); color: #fff; } }
+  .hero-install button.done { color: #bfe3b0; }
+  .hero-meta { font-size: 12px; letter-spacing: .18em; text-transform: uppercase; color: rgba(255,255,255,.5); }
+  .hero-meta a { color: rgba(255,255,255,.7); }
+  .hero-meta a:hover { color: #fff; }
+  @media (max-width: 900px) {
+    .hero-note { display: none; }
+    .hero-cta { position: static; transform: none; margin: 0 auto; padding-bottom: 46px; }
+    .hero-bottom { justify-content: center; padding-bottom: 0; }
+  }
 
-      <h2>Провайдеры и цена</h2>
-      <p>
-        Бесплатный и открытый. Платите только за маленький всегда включённый
-        сервер (дроплет за $4 - 1 ядро, 512 МБ, 10 ГБ) и одну подписку на модель
-        - OpenCode Go (~$5/мес) или Ollama Cloud (~$20/мес), оба
-        OpenAI-совместимы, ваш ключ. Около $9 в месяц со всем. Голос работает на
-        <a href="https://console.deepgram.com">Deepgram</a> (бесплатный
-        стартовый кредит).
-      </p>
+  /* Hero entrance — the one authored moment (CSS-only, no-JS safe) */
+  @media (prefers-reduced-motion: no-preference) {
+    .hero h1, .hero-sub, .hero-cta > *, .hero-note {
+      opacity: 1; transform: none;
+      transition: opacity 900ms var(--ease-out), transform 900ms var(--ease-out);
+    }
+    .hero-sub { transition-delay: 120ms; }
+    .hero-cta > :nth-child(1) { transition-delay: 220ms; }
+    .hero-cta > :nth-child(2) { transition-delay: 300ms; }
+    .hero-cta > :nth-child(3) { transition-delay: 380ms; }
+    .hero-note { transition-delay: 480ms; }
+    @starting-style {
+      .hero h1, .hero-sub, .hero-cta > *, .hero-note { opacity: 0; transform: translateY(18px); }
+    }
+  }
 
-      <p style="text-align: center; margin-top: 40px">
-        <a class="cta" href="https://github.com/smixs/iva">Поставить Iva →</a>
-      </p>
+  /* ---------- Sections ---------- */
+  section { padding-block: clamp(84px, 11vw, 150px); }
+  .sec-label {
+    font-family: 'Geologica', system-ui, sans-serif; font-weight: 200;
+    font-size: clamp(34px, 4.8vw, 58px); line-height: 1.08; letter-spacing: -0.01em; color: #fff;
+    text-wrap: balance;
+  }
+  .display {
+    font-size: 13px; font-weight: 500; letter-spacing: .22em; text-transform: uppercase; color: var(--muted);
+    margin-top: 20px; display: flex; align-items: baseline; gap: 18px;
+  }
+  .display::after { content: ""; flex: 0 0 44px; border-top: 1px solid var(--hairline); transform: translateY(-4px); }
+  .sec-copy { margin-top: 22px; max-width: 620px; color: var(--muted); font-size: 16.5px; }
+  .sec-copy a, .spec dd a { border-bottom: 1px solid var(--hairline); transition: border-color 180ms var(--ease-out), color 180ms var(--ease-out); }
+  .sec-copy a:hover, .spec dd a:hover { color: var(--teal); border-color: var(--teal); }
+  .plate { margin-top: clamp(40px, 5vw, 64px); }
+  .plate img { width: 100%; }
+  .plate-caption { margin-top: 14px; font-size: 11.5px; letter-spacing: .16em; text-transform: uppercase; color: var(--faint); display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+  .plate-caption a { color: var(--faint); border-bottom: 1px solid var(--hairline-soft); }
+  .plate-caption a:hover { color: var(--teal); border-color: var(--teal); }
 
-      <footer>
-        Собран на <a href="https://eve.dev/docs/introduction">eve</a> ·
-        Open-source · MIT ·
-        <a href="https://github.com/smixs/iva">github.com/smixs/iva</a><br />
-        Вырос из проекта
-        <a href="https://github.com/smixs/agent-second-brain"
-          >agent-second-brain</a
-        >
-      </footer>
+  /* Spec sheet rows — museum catalog, not cards */
+  .spec { margin: clamp(36px, 5vw, 56px) 0 0; }
+  .spec > div {
+    display: grid; grid-template-columns: 220px 1fr; gap: 12px 40px;
+    border-top: 1px solid var(--hairline-soft); padding: 20px 0;
+  }
+  .spec dt { font-size: 12.5px; font-weight: 500; letter-spacing: .16em; text-transform: uppercase; color: var(--text); padding-top: 3px; }
+  .spec dd { color: var(--muted); font-size: 16px; }
+  .spec dd b { color: var(--text); font-weight: 500; }
+  .spec dd code { font-size: .85em; color: var(--teal); }
+  .spec .path { display: block; margin-top: 4px; font-family: ui-monospace, Menlo, monospace; font-size: 12px; color: var(--faint); }
+  @media (max-width: 700px) { .spec > div { grid-template-columns: 1fr; gap: 6px; } }
+
+  /* Quotes — what people ask */
+  .asks { margin-top: clamp(36px, 5vw, 56px); }
+  .asks blockquote {
+    border-top: 1px solid var(--hairline-soft); padding: 26px 0;
+    display: grid; grid-template-columns: 1fr 280px; gap: 10px 40px; align-items: baseline;
+  }
+  .asks p {
+    font-family: 'Geologica', system-ui, sans-serif; font-weight: 200; font-size: clamp(20px, 2.4vw, 28px); line-height: 1.3; color: #fff;
+  }
+  .asks cite { font-style: normal; font-size: 12.5px; letter-spacing: .2em; text-transform: uppercase; color: var(--faint); text-align: right; }
+  @media (max-width: 700px) { .asks blockquote { grid-template-columns: 1fr; } .asks cite { text-align: left; } }
+
+  /* Install steps — the sequence carries the numbers */
+  .steps { counter-reset: n; margin-top: clamp(36px, 5vw, 56px); max-width: 720px; padding: 0; }
+  .steps li { list-style: none; border-top: 1px solid var(--hairline-soft); padding: 24px 0 24px 72px; position: relative; color: var(--muted); }
+  .steps li b { color: var(--text); font-weight: 500; display: block; margin-bottom: 4px; letter-spacing: .04em; }
+  .steps li::before {
+    counter-increment: n; content: "0" counter(n);
+    position: absolute; left: 0; top: 26px;
+    font-family: ui-monospace, Menlo, monospace; font-size: 13px; color: var(--green); letter-spacing: .1em;
+  }
+  .install-line { margin-top: 40px; display: flex; align-items: center; gap: 12px; padding: 12px 14px 12px 22px; border-radius: 9999px; max-width: 680px; }
+  .install-line code { font-size: 13px; color: rgba(255,255,255,.85); white-space: nowrap; overflow-x: auto; scrollbar-width: none; flex: 1; }
+  .install-line button {
+    flex-shrink: 0; background: #fff; border: 0; border-radius: 9999px; color: #000;
+    font: 500 12.5px 'Geologica', sans-serif; letter-spacing: .06em; padding: 9px 18px; cursor: pointer; min-width: 78px;
+    transition: transform 140ms var(--ease-out), box-shadow 200ms var(--ease-out);
+  }
+  .install-line button:active { transform: scale(0.95); }
+  @media (hover: hover) and (pointer: fine) { .install-line button:hover { transform: scale(1.04); box-shadow: 0 0 18px 2px rgba(255,255,255,.2); } }
+
+  /* ---------- Footer ---------- */
+  .footer { border-top: 1px solid var(--hairline-soft); padding: 56px clamp(20px, 4vw, 48px) 72px; }
+  .footer-in { max-width: 1200px; margin: 0 auto; display: flex; justify-content: space-between; gap: 32px; flex-wrap: wrap; }
+  .footer .fcol { font-size: 13.5px; color: var(--faint); line-height: 2.1; }
+  .footer .fcol span { display: block; font-size: 11.5px; letter-spacing: .26em; text-transform: uppercase; color: var(--muted); margin-bottom: 10px; }
+  .footer a { color: var(--muted); transition: color 180ms var(--ease-out); }
+  .footer a:hover { color: #fff; }
+
+  /* ---------- Scroll reveals (JS-gated, no-JS safe) ---------- */
+  .js .plate { transition: opacity 900ms var(--ease-out), filter 900ms var(--ease-out), transform 900ms var(--ease-out); }
+  .js .plate:not(.in) { opacity: 0; filter: blur(10px); transform: translateY(14px); }
+  .js :is(.spec, .asks, .steps) > * { transition: opacity 600ms var(--ease-out), transform 600ms var(--ease-out); transition-delay: calc(var(--i, 0) * 70ms); }
+  .js :is(.spec, .asks, .steps):not(.in) > * { opacity: 0; transform: translateY(10px); }
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    .js .plate, .js :is(.spec, .asks, .steps) > * { transition: opacity 250ms ease; }
+    .js .plate:not(.in) { filter: none; transform: none; }
+    .js :is(.spec, .asks, .steps):not(.in) > * { transform: none; }
+  }
+</style>
+</head>
+<body>
+
+<nav aria-label="Основная навигация">
+  <div class="liquid-glass nav-pill">
+    <a class="nav-logo" href="#" aria-label="Iva, на главную">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v16"/><path d="M12 7c-1.2-2.2-3.6-3-6-2.6.5 2.6 2.8 3.8 6 2.6z"/><path d="M12 11c1.2-2.2 3.6-3 6-2.6-.5 2.6-2.8 3.8-6 2.6z"/><path d="M12 15c-1-1.8-3-2.5-5-2.2.4 2.2 2.3 3.2 5 2.2z"/></svg>
+      IVA
+    </a>
+    <div class="nav-links">
+      <a href="#memory">Память</a>
+      <a href="#works">Как работает</a>
+      <a href="#userbot">Юзербот</a>
+      <a class="nav-ru" href="../" lang="en" hreflang="en">EN</a>
+      <a class="nav-gh" href="https://github.com/smixs/iva">GitHub</a>
     </div>
-  </body>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="hero-bg" id="parallax">
+    <img src="../iva-hero.webp" alt="" width="2000" height="1131" fetchpriority="high">
+  </div>
+  <div class="hero-mid">
+    <h1>IVA</h1>
+    <p class="hero-sub">Лучший личный AI-ассистент для Telegram</p>
+  </div>
+  <div class="hero-bottom">
+    <p class="hero-note">Личный ассистент, живущий в вашем чате. Вы говорите, она записывает, помнит и действует.</p>
+    <div class="hero-cta">
+      <div class="cta-row">
+        <a class="btn btn-primary" href="https://github.com/smixs/iva/blob/main/README.ru.md">Установить за 5 минут</a>
+        <a class="btn btn-glass liquid-glass" href="https://github.com/smixs/iva">Открыть на GitHub</a>
+      </div>
+      <div class="liquid-glass hero-install">
+        <code id="cmd">curl -fsSL https://raw.githubusercontent.com/smixs/iva/main/install.sh | bash</code>
+        <button id="copy" type="button" aria-label="Скопировать команду установки">Копировать</button>
+      </div>
+      <p class="hero-meta">v0.3.13 · Бесплатно · Open source · MIT · собрана на <a href="https://eve.dev/docs/introduction">eve</a></p>
+    </div>
+    <p class="hero-note right">Ставится проще некуда, настраивается до мелочей. Вплоть до работы от вашего личного аккаунта.</p>
+  </div>
+</header>
+
+<main>
+
+<section id="memory">
+  <div class="wrap">
+    <h2 class="sec-label">Дерево памяти</h2>
+    <p class="display">Каждый чат становится вашим хранилищем</p>
+    <p class="sec-copy">Ива не просто отвечает, она раскладывает. Голосовые, фото, пересланные посты и решения становятся обычными markdown-карточками, которые она действительно помнит: на вашем сервере, в хранилище, совместимом с Obsidian.</p>
+    <div class="plate">
+      <img src="../iva-memory-tree.webp" alt="Как Ива помнит: день в листе, недели и месяцы в ветвях, годы в годовых кольцах вокруг CORE.md" width="1676" height="719" loading="lazy" decoding="async">
+      <p class="plate-caption"><span>Как Ива помнит</span><span>Дневные логи, ночная дистилляция</span></p>
+    </div>
+    <dl class="spec">
+      <div style="--i:0">
+        <dt>Листья</dt>
+        <dd>Дословный транскрипт каждого дня, вместе с ответами Ивы. На входе ничего не пересказывается.<span class="path">daily/YYYY-MM-DD.md</span></dd>
+      </div>
+      <div style="--i:1">
+        <dt>Ветви</dt>
+        <dd>Сводки, которые ночная сборка в 04:00 сворачивает вверх: день → неделя → месяц → год. Изменившиеся факты переписываются, а не копятся.<span class="path">summaries/daily/ · weekly/ · monthly/ · yearly/</span></dd>
+      </div>
+      <div style="--i:2">
+        <dt>Ствол</dt>
+        <dd><code>CORE.md</code>, дистиллированный профиль до 1200 символов, который едет в каждом промпте, плюс типизированные карточки: контакты, проекты, решения, идеи. Ива знает вас ещё до всякого поиска.<span class="path">CORE.md · cards/</span></dd>
+      </div>
+      <div style="--i:3">
+        <dt>Поиск</dt>
+        <dd>BM25 на встроенном в Node SQLite плюс переранжировка по графу связей, на любом языке; один ключ включает векторный гибрид. <a href="https://github.com/smixs/iva/blob/main/docs/ru/memory.md">Полная архитектура</a>.</dd>
+      </div>
+    </dl>
+  </div>
+</section>
+
+<section id="works">
+  <div class="wrap">
+    <h2 class="sec-label">Как работает</h2>
+    <p class="display">Без домена, без вебхука, без посредников</p>
+    <p class="sec-copy">Мост опрашивает Telegram через long-poll, так что хватает любого маленького VPS. Голосовые, тексты, фото и PDF летят внутрь; память, расписания, поиск, веб и Google Workspace отвечают обратно. Всё на вашей машине.</p>
+    <div class="plate">
+      <img src="../iva-flow.webp" alt="Как работает Ива: голосовые, тексты, фото и PDF летят из Telegram в агента-иву, а вокруг память, ночная сборка, cron, напоминания, поиск, веб, workspace и документы" width="1676" height="719" loading="lazy" decoding="async">
+      <p class="plate-caption"><span>Telegram → агент → хранилище</span><span>Работают два systemd-сервиса</span></p>
+    </div>
+  </div>
+</section>
+
+<section id="asks">
+  <div class="wrap">
+    <h2 class="sec-label">О чём просят Иву</h2>
+    <div class="asks">
+      <blockquote style="--i:0">
+        <p>«О чём мы договорились с клиентом X по последней поставке?»</p>
+        <cite>Находится за секунды, месяцы спустя</cite>
+      </blockquote>
+      <blockquote style="--i:1">
+        <p>«Пятиминутное голосовое из машины.»</p>
+        <cite>Список задач, черновик письма, карточка встречи</cite>
+      </blockquote>
+      <blockquote style="--i:2">
+        <p>«Собери КП из этого прайса и отправь клиенту.»</p>
+        <cite>Готовый Google Doc, ссылка в чате</cite>
+      </blockquote>
+    </div>
+    <div class="plate">
+      <img src="../iva-use-cases.webp" alt="О чём просят Иву: восемь бытовых запросов: от голосового, ставшего задачами, до ресёрча с источниками и сказки на ночь с продолжением" width="1676" height="719" loading="lazy" decoding="async">
+      <p class="plate-caption"><span>Восемь из многих</span><span><a href="https://github.com/smixs/iva/blob/main/docs/ru/use-cases.md">25+ живых сценариев →</a></span></p>
+    </div>
+  </div>
+</section>
+
+<section id="features">
+  <div class="wrap">
+    <h2 class="sec-label">Возможности</h2>
+    <p class="display">Полноценный ассистент в одном чате</p>
+    <dl class="spec">
+      <div style="--i:0">
+        <dt>Голос</dt>
+        <dd>Голосовые, аудио и видеосообщения расшифровывает Deepgram nova-3; русский, английский и узбекский определяет сама.</dd>
+      </div>
+      <div style="--i:1">
+        <dt>Зрение</dt>
+        <dd>Фото описывает vision-модель вашего же провайдера. Ни лишнего ключа, ни лишнего счёта.</dd>
+      </div>
+      <div style="--i:2">
+        <dt>Живые ответы</dt>
+        <dd>Таблицы, чек-листы, сворачиваемые блоки и формулы рендерятся прямо в Telegram.</dd>
+      </div>
+      <div style="--i:3">
+        <dt>Документы</dt>
+        <dd>Пришлите PDF, DOCX или XLSX. Ива прочитает, ответит по содержимому и по просьбе сложит документ в хранилище с поиском по смыслу.</dd>
+      </div>
+      <div style="--i:4">
+        <dt>Личный CRM</dt>
+        <dd>Кто ваши люди, о чём договорились, когда напомнить. Карточки решений хранят и само «почему».</dd>
+      </div>
+      <div style="--i:5">
+        <dt>Веб-поиск</dt>
+        <dd>Четыре провайдера на выбор: Tavily, Exa, Parallel или Brave. Ключ вводится прямо в чате.</dd>
+      </div>
+      <div style="--i:6">
+        <dt>Google Workspace</dt>
+        <dd>Gmail, Календарь, Drive, Таблицы, Документы и Задачи из чата. Ставится сам, а подключение ключа проходите по шагам прямо в переписке.</dd>
+      </div>
+      <div style="--i:7">
+        <dt>Задачи и дайджест</dt>
+        <dd>Приоритеты, сроки, напоминания и утренний дайджест, который здоровается с вами раньше кофе.</dd>
+      </div>
+      <div style="--i:8">
+        <dt>Скиллы и MCP</dt>
+        <dd>Один markdown-файл, чтобы добавить процедуру, или любой MCP-сервер; ключи остаются в <code>.env</code>.</dd>
+      </div>
+      <div style="--i:9">
+        <dt>Ваша модель</dt>
+        <dd>Четыре провайдера на выбор: OpenCode Go, Ollama Cloud, OpenRouter или ваша подписка ChatGPT. Ваши ключи, ваш выбор.</dd>
+      </div>
+      <div style="--i:10">
+        <dt>Самообновление</dt>
+        <dd>Тихая ежедневная проверка, потом <b>Обновить</b> одной кнопкой в Telegram: поэтапно, с откатом. <code>/usage</code> бесплатно показывает каждый токен.</dd>
+      </div>
+    </dl>
+  </div>
+</section>
+
+<section id="menu">
+  <div class="wrap">
+    <h2 class="sec-label">/menu</h2>
+    <p class="display">Одно сообщение. Все настройки. Ноль токенов</p>
+    <p class="sec-copy">Модель и глубина размышлений, веб-поиск, язык, характер, память, юзербот, Google, таймеры, обслуживание. Одно живое сообщение, которое работает, даже когда Ива занята, и не тратит ни токена.</p>
+    <div class="plate">
+      <img src="../iva-menu.webp" alt="Панель /menu: физические хромированные тумблеры модели, размышлений, поиска, языка, памяти, юзербота и таймеров на пластине дымчатого стекла" width="1800" height="771" loading="lazy" decoding="async">
+      <p class="plate-caption"><span>Настройки как пульт управления</span><span>Работает, даже когда Ива занята</span></p>
+    </div>
+  </div>
+</section>
+
+<section id="userbot">
+  <div class="wrap">
+    <h2 class="sec-label">Юзербот</h2>
+    <p class="display">Секретарь внутри Telegram</p>
+    <p class="sec-copy">Подключите юзербот, и Ива работает от вашего личного аккаунта как секретарь: читает групповые чаты, до которых у вас не доходят руки, собирает их в сводки, ловит сообщения, где нужны именно вы, и отвечает от вашего имени.</p>
+    <div class="plate">
+      <img src="../iva-userbot.webp" alt="Секретарь внутри Telegram: юзербот читает групповые чаты с вашего аккаунта, собирает сводки и отвечает от вашего имени под серверным анти-бан ограничителем" width="1676" height="838" loading="lazy" decoding="async">
+      <p class="plate-caption"><span>Ваш аккаунт работает на вас</span><span>Ограничитель вшит на сервере</span></p>
+    </div>
+    <dl class="spec">
+      <div style="--i:0">
+        <dt>Весь Telegram</dt>
+        <dd>Группы, каналы, непрочитанное, поиск и вся история личного аккаунта.</dd>
+      </div>
+      <div style="--i:1">
+        <dt>Подключение в чате</dt>
+        <dd>Напишите боту «подключи мой Telegram», отсканируйте QR. Терминал не нужен.</dd>
+      </div>
+      <div style="--i:2">
+        <dt>Анти-бан ограничитель</dt>
+        <dd>Пауза по FloodWait, случайные задержки и circuit-breaker вшиты на сервере, а не попрошены в промпте.</dd>
+      </div>
+      <div style="--i:3">
+        <dt>Режим только чтение</dt>
+        <dd>Один переключатель в <code>.env</code>, и Ива читает и ищет, но отправить физически не может.</dd>
+      </div>
+    </dl>
+  </div>
+</section>
+
+<section id="security">
+  <div class="wrap">
+    <h2 class="sec-label">Безопасность</h2>
+    <p class="display">Защита на входе и на выходе</p>
+    <p class="sec-copy">Вы будете пересылать Иве чужое: ссылки, PDF, чьи-то сообщения. Входящий контент проходит санитайзер prompt-инъекций, каждый ответ идёт через гейт вычистки секретов, а allowlist закрыт по умолчанию: пустой список не отвечает никому. Ваша память живёт в приватном git-репозитории, который принадлежит вам. <a href="https://github.com/smixs/iva/blob/main/docs/ru/security.md">Устройство гейтов</a>.</p>
+    <div class="plate">
+      <img src="../iva-security-gate.webp" alt="Недоверенный ввод из Telegram, веба и почты проходит гейт безопасности: заражённые сообщения падают в отсев, до хранилища доходит только чистый контекст" width="1676" height="719" loading="lazy" decoding="async">
+      <p class="plate-caption"><span>Недоверенное на входе, чистое на выходе</span><span>Ссылки, PDF и пересылки сначала проходят гейт</span></p>
+    </div>
+  </div>
+</section>
+
+<section id="install">
+  <div class="wrap">
+    <h2 class="sec-label">Установка</h2>
+    <p class="display">Запуск за пять минут</p>
+    <ol class="steps">
+      <li style="--i:0"><b>Возьмите токен</b>Напишите <a href="https://t.me/BotFather">@BotFather</a> в Telegram, создайте бота, скопируйте токен.</li>
+      <li style="--i:1"><b>Запустите одну команду</b>Любая машина с Ubuntu/Debian: свежий VPS или свой компьютер. Установщик спрашивает, вы отвечаете.</li>
+      <li style="--i:2"><b>Напишите своему боту</b>Мастер достанет ваш Telegram ID из этого сообщения, закончит настройку, и Ива прямо в чате подтвердит, что работает.</li>
+    </ol>
+    <div class="liquid-glass install-line">
+      <code id="cmd2">curl -fsSL https://raw.githubusercontent.com/smixs/iva/main/install.sh | bash</code>
+      <button id="copy2" type="button" aria-label="Скопировать команду установки">Копировать</button>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer class="footer">
+  <div class="footer-in">
+    <div class="fcol">
+      <span>Iva</span>
+      Open source · <a href="https://github.com/smixs/iva/blob/main/LICENSE">MIT</a><br>
+      Собрана на <a href="https://eve.dev/docs/introduction">eve</a>, агентном фреймворке Vercel<br>
+      Выросла из <a href="https://github.com/smixs/agent-second-brain">agent-second-brain</a>
+    </div>
+    <div class="fcol">
+      <span>Документация</span>
+      <a href="https://github.com/smixs/iva/blob/main/docs/ru/use-cases.md">25+ юзкейсов</a><br>
+      <a href="https://github.com/smixs/iva/blob/main/docs/ru/memory.md">Память</a> · <a href="https://github.com/smixs/iva/blob/main/docs/ru/security.md">Безопасность</a> · <a href="https://github.com/smixs/iva/blob/main/docs/ru/faq.md">FAQ</a><br>
+      <a href="https://github.com/smixs/iva/blob/main/docs/ru/install.md">Гид по установке</a>
+    </div>
+    <div class="fcol">
+      <span>Ещё</span>
+      <a href="https://github.com/smixs/iva">github.com/smixs/iva</a><br>
+      <a href="https://github.com/smixs/iva/releases">Релизы</a> · <a href="https://github.com/smixs/iva/blob/main/CHANGELOG.md">Changelog</a><br>
+      <a href="../" lang="en" hreflang="en">English version</a>
+    </div>
+  </div>
+</footer>
+
+<script>
+document.documentElement.classList.add('js');
+
+var io = new IntersectionObserver(function (entries) {
+  entries.forEach(function (e) {
+    if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target); }
+  });
+}, { rootMargin: '0px 0px -8% 0px' });
+document.querySelectorAll('.plate, .spec, .asks, .steps').forEach(function (el) { io.observe(el); });
+
+function wireCopy(btnId, cmdId) {
+  var btn = document.getElementById(btnId);
+  if (!btn) return;
+  btn.addEventListener('click', function () {
+    navigator.clipboard.writeText(document.getElementById(cmdId).textContent).then(function () {
+      btn.textContent = 'Скопировано'; btn.classList.add('done');
+      setTimeout(function () { btn.textContent = 'Копировать'; btn.classList.remove('done'); }, 1600);
+    });
+  });
+}
+wireCopy('copy', 'cmd');
+wireCopy('copy2', 'cmd2');
+
+(function () {
+  var el = document.getElementById('parallax');
+  if (!el || matchMedia('(prefers-reduced-motion: reduce)').matches || !matchMedia('(hover: hover)').matches) return;
+  var tx = 0, ty = 0, cx = 0, cy = 0, s = 14, raf;
+  addEventListener('mousemove', function (e) {
+    tx = (e.clientX / innerWidth - 0.5) * 2 * s;
+    ty = (e.clientY / innerHeight - 0.5) * 2 * s;
+    if (!raf) loop();
+  }, { passive: true });
+  function loop() {
+    cx += (tx - cx) * 0.06; cy += (ty - cy) * 0.06;
+    el.style.transform = 'translate3d(' + cx.toFixed(2) + 'px,' + cy.toFixed(2) + 'px,0)';
+    raf = (Math.abs(tx - cx) > 0.05 || Math.abs(ty - cy) > 0.05) ? requestAnimationFrame(loop) : null;
+  }
+})();
+</script>
+</body>
 </html>
