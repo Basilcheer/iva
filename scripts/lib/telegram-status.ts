@@ -276,16 +276,13 @@ export function createTelegramUpdateReporter({
             : copy.preservedInactive,
         );
         const bundleId = basename(restoreReport.recoveryDir);
-        replyMarkup = {
-          inline_keyboard: [
-            [
-              {
-                text: copy.review,
-                callback_data: `iva_update:conflicts:${bundleId}`,
-              },
+        const callbackData = `iva_update:conflicts:${bundleId}`;
+        if (Buffer.byteLength(callbackData, "utf8") <= 64)
+          replyMarkup = {
+            inline_keyboard: [
+              [{ text: copy.review, callback_data: callbackData }],
             ],
-          ],
-        };
+          };
       }
       await finish(lines.join("\n"), replyMarkup);
     },

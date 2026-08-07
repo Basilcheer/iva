@@ -69,15 +69,17 @@ test("saved update view explains a preserved change set with no conflicts", asyn
     join(bundleDir, "report.json"),
     JSON.stringify({ schema: "iva-update-conflicts/v1", conflicts: [] }),
   );
-  const calls: { method: string | undefined; body: Record<string, unknown> }[] =
-    [];
+  const calls: { method: string | undefined; body: unknown }[] = [];
   const previousFetch = mutableGlobal.fetch;
-  mutableGlobal.fetch = async (url, init) => {
+  mutableGlobal.fetch = (url, init) => {
+    const body: unknown = JSON.parse(init.body ?? "{}");
     calls.push({
       method: url.split("/").at(-1),
-      body: JSON.parse(init.body ?? "{}"),
+      body,
     });
-    return { json: async () => ({ ok: true, result: {} }) };
+    return Promise.resolve({
+      json: () => Promise.resolve({ ok: true, result: {} }),
+    });
   };
   try {
     await handleUpdateCallback({
@@ -91,6 +93,13 @@ test("saved update view explains a preserved change set with no conflicts", asyn
   }
 
   const edit = calls.find((call) => call.method === "editMessageText");
-  assert.match(String(edit?.body.text ?? ""), /saved in full/i);
-  assert.doesNotMatch(String(edit?.body.text ?? ""), /Saved local conflicts:/);
+  const text =
+    edit?.body &&
+    typeof edit.body === "object" &&
+    "text" in edit.body &&
+    typeof edit.body.text === "string"
+      ? edit.body.text
+      : "";
+  assert.match(text, /saved in full/i);
+  assert.doesNotMatch(text, /Saved local conflicts:/);
 });

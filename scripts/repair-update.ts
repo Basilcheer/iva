@@ -9,6 +9,7 @@ import {
 } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { z } from "zod";
 
 const BOOTSTRAP_FILES = [
   "scripts/cli/update.ts",
@@ -17,6 +18,14 @@ const BOOTSTRAP_FILES = [
 ] as const;
 
 type Checkout = { root: string; origin: string };
+
+const RepairOptionsSchema = z.strictObject({
+  inputRoot: z.string().min(1).optional(),
+  expectedTarget: z
+    .string()
+    .regex(/^[0-9a-f]{40}$/)
+    .optional(),
+});
 
 function git(root: string, ...args: string[]): string {
   return execFileSync("git", args, {
@@ -128,13 +137,15 @@ function restoreOriginalState({
   }
 }
 
-export function runRepairUpdate({
-  inputRoot = process.cwd(),
-  expectedTarget,
-}: {
-  inputRoot?: string;
-  expectedTarget?: string;
-} = {}): void {
+export function runRepairUpdate(
+  options: {
+    inputRoot?: string;
+    expectedTarget?: string;
+  } = {},
+): void {
+  const parsed = RepairOptionsSchema.parse(options);
+  const inputRoot = parsed.inputRoot ?? process.cwd();
+  const { expectedTarget } = parsed;
   if (Number(process.versions.node.split(".")[0]) < 24)
     throw new Error("Iva update repair requires Node 24 or newer");
   const { root } = validateOfficialCheckout(inputRoot);
@@ -146,7 +157,7 @@ export function runRepairUpdate({
         .filter(Boolean)
     : [];
   let originalStash = "";
-  let launched = false;
+  let originalStateCaptured = !status;
 
   try {
     git(root, "fetch", "--prune", "origin", "main");
@@ -170,6 +181,7 @@ export function runRepairUpdate({
         `iva-repair-bootstrap-${new Date().toISOString()}`,
       );
       originalStash = git(root, "rev-parse", "refs/stash");
+      originalStateCaptured = true;
     }
     installBootstrapFiles(root, target);
     if (originalStash) {
@@ -192,7 +204,6 @@ export function runRepairUpdate({
       }
     }
 
-    launched = true;
     const update = spawnSync(
       process.execPath,
       [join(root, "bin/iva.mjs"), "update", "--force", "--verbose"],
@@ -209,13 +220,7 @@ export function runRepairUpdate({
         : "Iva updated.\n",
     );
   } catch (error) {
-    let currentHead = "";
-    try {
-      currentHead = git(root, "rev-parse", "HEAD");
-    } catch {
-      // An unreadable HEAD is unsafe, so attempt recovery from the known commit.
-    }
-    if (!launched || !currentHead || currentHead === originalHead) {
+    if (originalStateCaptured) {
       try {
         restoreOriginalState({
           root,

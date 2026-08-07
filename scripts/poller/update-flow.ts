@@ -220,13 +220,29 @@ async function showSavedUpdateConflicts(
       tr(`- ${remaining} more conflict(s)`, `- Ещё конфликтов: ${remaining}`),
     );
   }
+  const details =
+    visible.length > 0
+      ? tr(
+          `Saved local conflicts:\n${visible.join("\n")}`,
+          `Сохранённые локальные конфликты:\n${visible.join("\n")}`,
+        )
+      : tr(
+          "Your local changes are saved in full.",
+          "Ваши локальные изменения сохранены целиком.",
+        );
   await edit(
     chatId,
     messageId,
-    tr(
-      `✅ The new Iva core is active.\n\nSaved local conflicts:\n${visible.join("\n")}\n\nTell Iva: “restore my update changes”.`,
-      `✅ Новое ядро Iva активно.\n\nСохранённые локальные конфликты:\n${visible.join("\n")}\n\nНапишите Иве: «восстанови мои изменения после обновления».`,
-    ),
+    [
+      tr("✅ The new Iva core is active.", "✅ Новое ядро Iva активно."),
+      "",
+      details,
+      "",
+      tr(
+        "Tell Iva: “restore my update changes”.",
+        "Напишите Иве: «восстанови мои изменения после обновления».",
+      ),
+    ].join("\n"),
     { inline_keyboard: [] },
   );
 }

@@ -781,7 +781,7 @@ test("stash conflict report can still roll back user files byte-for-byte", async
   await tx.protect();
   await tx.fetchAndIntegrate();
   const restored = await tx.restoreLocalChanges();
-  assert.equal(restored.status, "conflicted");
+  assert.ok(restored.status === "conflicted");
   tx.backupOutput();
   mkdirSync(join(local, ".output"));
   writeFileSync(join(local, ".output", "server"), "bad build");

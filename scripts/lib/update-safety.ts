@@ -741,7 +741,7 @@ export function createUpdateTransaction({
         logFile,
         verbose,
       });
-      if (customBuild.code !== 0) {
+      if (customBuild.code !== 0 || !existsSync(join(staging, ".output"))) {
         await restoreCleanCandidate(conflicts, "custom-build-failed");
         return candidate;
       }
