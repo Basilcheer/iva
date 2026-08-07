@@ -45,7 +45,8 @@ origin="$(git -C "$INSTALL_DIR" remote get-url origin)"
 if is_official_remote "$origin"; then
   is_official_remote "$REPO_URL" || die "repository URL is not github.com/smixs/iva"
 elif [ "${REPO_URL#/}" != "$REPO_URL" ] && [ "$origin" = "$REPO_URL" ] && [ -d "$REPO_URL" ]; then
-  git --git-dir="$REPO_URL" rev-parse --is-bare-repository >/dev/null 2>&1 || die "invalid local test repository"
+  [ "$(git --git-dir="$REPO_URL" rev-parse --is-bare-repository 2>/dev/null)" = "true" ] \
+    || die "invalid local test repository"
 else
   die "origin is not github.com/smixs/iva"
 fi
@@ -136,6 +137,7 @@ done < <(find "$INSTALL_DIR" -maxdepth 1 -type f -name '.env.*' -print0)
 
 mkdir -p -- "$candidate/data/update-recovery/$stamp"
 recovery="$candidate/data/update-recovery/$stamp"
+chmod 700 -- "$candidate/data/update-recovery" "$recovery"
 final_recovery="$INSTALL_DIR/data/update-recovery/$stamp"
 cp -- "$state_dir/changes.patch" "$recovery/changes.patch"
 cp -- "$state_dir/untracked.zlist" "$recovery/untracked.zlist"

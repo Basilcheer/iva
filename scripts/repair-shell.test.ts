@@ -208,8 +208,9 @@ void test("repair falls back to clean core when customized dependencies fail", (
       readFileSync(join(install, "data/settings.json"), "utf8"),
       '{"saved":true}\n',
     );
-    assert.throws(() =>
-      readFileSync(join(install, "scripts/custom-telegram-button.ts")),
+    assert.throws(
+      () => readFileSync(join(install, "scripts/custom-telegram-button.ts")),
+      { code: "ENOENT" },
     );
     assert.equal(readFileSync(`${npmState}.log`, "utf8"), "ci\nci\nbuild\n");
     const backup = output.match(/Your complete backup: (.+)/)?.[1];
