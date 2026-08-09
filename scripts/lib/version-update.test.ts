@@ -2,6 +2,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
+import { createServer } from "node:http";
 import {
   existsSync,
   mkdirSync,
@@ -18,6 +19,7 @@ import {
   fixtureProbe,
   fixtureRunner,
 } from "../fixtures/version-update-harness.ts";
+import { DEFAULT_PORT } from "./ports.ts";
 import { createVersionStore, layoutFor } from "./version-store.ts";
 import { runVersionUpdate, type UpdateOutcome } from "./version-update.ts";
 
@@ -653,25 +655,28 @@ test("a restart that fails leaves an update the next run can finish", async (t) 
   ]);
 });
 
-test("a probe port taken by somebody else is retried, not held against the version", async (t) => {
+test("the probe is started on a port nothing is listening on", async (t) => {
   const iva = world(t);
-  let attempts = 0;
+  // The port this process would reach for first, taken by somebody else - the
+  // second updater on the box, or anything at all.
+  const taken = DEFAULT_PORT + 100 + (process.pid % 100);
+  const squatter = createServer();
+  await new Promise<void>((resolve) =>
+    squatter.listen(taken, "0.0.0.0", resolve),
+  );
+  t.after(() => new Promise((resolve) => squatter.close(resolve)));
+
+  const ports: number[] = [];
   const outcome = updated(
     await iva.update({
       probe: (_dir, port) => {
-        attempts += 1;
-        return Promise.resolve(
-          attempts === 1
-            ? {
-                ok: false,
-                log: `Error: listen EADDRINUSE: address already in use 127.0.0.1:${port}`,
-              }
-            : { ok: true, log: "" },
-        );
+        ports.push(port);
+        return Promise.resolve({ ok: true, log: "" });
       },
     }),
   );
-  assert.equal(attempts, 2);
+  assert.deepEqual(ports.length, 1, "the version is started once, not retried");
+  assert.notEqual(ports[0], taken);
   assert.equal(createVersionStore(iva.home).currentName(), outcome.version);
 });
 

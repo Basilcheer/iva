@@ -12,12 +12,14 @@ import {
 import { dirname, join, relative, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { isAuthoredPath } from "./authored-paths.ts";
+import { probeEnvironment, probeVersion } from "./health-probe.ts";
 import {
-  portWasTaken,
-  probeEnvironment,
-  probeVersion,
-} from "./health-probe.ts";
-import { DEFAULT_PORT } from "./ports.ts";
+  bindProbe,
+  DEFAULT_PORT,
+  PortChecker,
+  PortSelector,
+  procProbe,
+} from "./ports.ts";
 import {
   acquireUpdateLock,
   createVersionStore,
@@ -155,21 +157,16 @@ export function builtWith(
     : "stock";
 }
 
-/** Prove the version starts, from its own directory. A taken port is worth another port. */
-async function proveStarts(
-  dir: string,
-  probe: Probe,
-  log: Say,
-): Promise<Health> {
-  // The pid spreads two updaters on one box apart without any coordination.
-  const first = DEFAULT_PORT + 100 + (process.pid % 100);
-  let health: Health = { ok: false, log: "the version was never started" };
-  for (let port = first; port < first + 5; port++) {
-    health = await probe(dir, port);
-    if (health.ok || !portWasTaken(health.log)) break;
-    log(`probe port ${port} was taken; retrying above it`);
-  }
-  return health;
+/**
+ * A port to start the version on. The pid spreads two updaters on one box apart,
+ * and the selector steps over whatever is already listening, so there is nothing
+ * to retry. Not the docker probe: it shells out per port, and a docker-published
+ * port is a listening socket like any other to the two that are left.
+ */
+function probePort(): Promise<number | null> {
+  return new PortSelector(new PortChecker([bindProbe, procProbe])).firstFree(
+    DEFAULT_PORT + 100 + (process.pid % 100),
+  );
 }
 
 /**
@@ -275,7 +272,10 @@ export async function finishVersionUpdate({
     // that is about to be thrown away must not have touched the installation.
     const scratch = store.sandboxState(name);
     try {
-      return await proveStarts(dir, check, log);
+      const port = await probePort();
+      return port === null
+        ? { ok: false, log: "no free port to start the version on" }
+        : await check(dir, port);
     } finally {
       rmSync(scratch, { recursive: true, force: true });
     }

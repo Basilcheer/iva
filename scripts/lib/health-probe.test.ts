@@ -12,11 +12,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "node:http";
-import {
-  portWasTaken,
-  probeEnvironment,
-  probeVersion,
-} from "./health-probe.ts";
+import { probeEnvironment, probeVersion } from "./health-probe.ts";
 
 const PROBE_PORT = 18730;
 
@@ -208,5 +204,5 @@ test("a foreign server on the probe port never passes for the version", async (t
   );
   const result = await probe(dir, {}, 3000);
   assert.equal(result.ok, false, result.log);
-  assert.equal(portWasTaken(result.log), true, result.log);
+  assert.match(result.log, /the probe port was already answering/u);
 });

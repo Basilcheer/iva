@@ -8,11 +8,6 @@ const LOG_TAIL = 4000;
 export const PROBE_FLAG = "IVA_HEALTH_PROBE";
 const BUSY_PORT = "the probe port was already answering";
 
-/** Whether a failed probe blames the port rather than the version: retry higher. */
-export function portWasTaken(log: string): boolean {
-  return log.includes(BUSY_PORT) || log.includes("EADDRINUSE");
-}
-
 /** Whatever answers on the port, or null when nothing does in time. */
 async function answering(port: number, ms = 1000): Promise<Response | null> {
   try {
