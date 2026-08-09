@@ -354,14 +354,34 @@ function canonicalHistoryEntry(historyEntry: string, date: string): string {
     : `- ${date}: ${entry}`;
 }
 
-function historyEndsWith(body: string, entry: string): boolean {
+function lastHistoryEntry(body: string): string | undefined {
   const lines = body.split("\n");
   const sections = h2Sections(lines, "History");
-  if (sections.length !== 1) return false;
+  if (sections.length !== 1) return undefined;
   const content = lines
     .slice(sections[0].start + 1, sections[0].end)
     .filter((line) => line.trim());
-  return content.at(-1)?.trim() === entry.trim();
+  return content.at(-1)?.trim();
+}
+
+function historyEndsWith(body: string, entry: string): boolean {
+  return lastHistoryEntry(body) === entry.trim();
+}
+
+/** То же вытеснение, что уже стоит в хвосте Истории. Датированную строку сверяем
+ * целиком: две даты у одного факта - два разных вытеснения. Недатированную сверяем
+ * по тексту факта, иначе её повтор на следующие сутки уедет в архив второй строкой
+ * под новой датой. Дальше хвоста дедуп не идёт - это уничтожало бы свидетельства. */
+function repeatsHistoryTail(
+  historyEntry: string,
+  dated: string,
+  tail: string | undefined,
+): boolean {
+  if (tail === undefined) return false;
+  if (tail === dated.trim()) return true;
+  const fact = historyEntry.trim().replace(/^[-*]\s+/, "");
+  if (/^\d{4}-\d{2}-\d{2}:/.test(fact)) return false;
+  return tail.replace(/^[-*]\s+\d{4}-\d{2}-\d{2}:\s*/, "") === fact;
 }
 
 function appendLog(body: string, incoming: string, date: string): string {
@@ -486,10 +506,10 @@ function replaceCompiledTruth(
     // Один вытесненный факт - одна строка. Модель, дописавшая ## History в body
     // (секция принадлежит write_card), и реплей уже выполненного вызова подают
     // тот же факт вторым путём; хвост Истории решает, новый он или нет.
-    const alreadyLast = pending.length
-      ? pending.at(-1)?.trim() === dated.trim()
-      : historyEndsWith(oldBody, dated);
-    if (!alreadyLast) additions.set("history", [...pending, dated]);
+    const tail = pending.at(-1)?.trim() ?? lastHistoryEntry(oldBody);
+    if (!repeatsHistoryTail(historyEntry, dated, tail)) {
+      additions.set("history", [...pending, dated]);
+    }
   }
 
   for (const [key, lines] of additions) {
