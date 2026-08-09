@@ -359,11 +359,17 @@ export default defineTool({
           error: `${effectiveOperation} требует существующую карточку ${rel}.`,
         };
       }
-      const legacyHistoryInBody = hasH2Section(body, "History");
+      // Легаси-путь «## History прямо в body» есть только у вызова без operation —
+      // ровно так его различает и mergeCard. Без этого условия явный SUPERSEDE с
+      // History в body проваливался в store и возвращался английским исключением.
+      const legacyReplaceBody =
+        operation === undefined &&
+        replace_body === true &&
+        hasH2Section(body, "History");
       if (
         effectiveOperation === "SUPERSEDE" &&
-        !history_entry &&
-        !legacyHistoryInBody
+        !history_entry?.trim() &&
+        !legacyReplaceBody
       ) {
         return {
           ok: false,
