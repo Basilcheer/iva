@@ -2,6 +2,8 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { classifyAgentListeners } from "../lib/listener-security.ts";
 import { readMemoryMaintenanceReport } from "../lib/memory-maintenance.ts";
+import { classifyRoot } from "../lib/version-layout.ts";
+import { createVersionStore } from "../lib/version-store.ts";
 import type { createCliRuntime } from "./runtime.ts";
 import type { createCliSystemd } from "./systemd.ts";
 
@@ -168,6 +170,15 @@ export function createDoctorCommand(
         bad("Build failed");
         badN++;
       }
+    }
+
+    // An update whose flip landed but whose restart or migrations did not: the
+    // daily check cannot see it, because upstream and the active version agree.
+    const store = createVersionStore(classifyRoot(ROOT).home);
+    const active = store.currentName();
+    if (active && store.settled() !== active) {
+      warn(`update to ${active} never finished — run: iva update`);
+      warnN++;
     }
 
     if (!hasSystemd()) {
