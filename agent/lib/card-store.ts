@@ -443,28 +443,30 @@ function replaceCompiledTruth(
           "SUPERSEDE requires exactly one unambiguous ## History section",
         );
       }
-      if (!content.some((line) => line.trim())) {
+      // История сравнивается по строкам-фактам: пустая строка между буллетами -
+      // форматирование, а не свидетельство, и не должна ни ломать сверку префикса,
+      // ни копиться в архиве.
+      const entries = content.filter((line) => line.trim());
+      if (!entries.length) {
         throw new Error(
           "SUPERSEDE replacement ## History must contain the displaced fact",
         );
       }
+      content = entries;
       if (oldHistory.length === 1) {
-        const oldContent = oldLines.slice(
-          oldHistory[0].start + 1,
-          oldHistory[0].end,
-        );
-        while (oldContent.length && !oldContent.at(-1)?.trim())
-          oldContent.pop();
-        const prefixMatches = oldContent.every(
-          (line, index) => content[index] === line,
+        const oldEntries = oldLines
+          .slice(oldHistory[0].start + 1, oldHistory[0].end)
+          .filter((line) => line.trim());
+        const prefixMatches = oldEntries.every(
+          (line, index) => entries[index]?.trim() === line.trim(),
         );
         if (!prefixMatches) {
           throw new Error(
             "SUPERSEDE replacement ## History must preserve existing History as an exact prefix",
           );
         }
-        content = content.slice(oldContent.length);
-        if (!content.some((line) => line.trim()) && !historyEntry?.trim()) {
+        content = entries.slice(oldEntries.length);
+        if (!content.length && !historyEntry?.trim()) {
           throw new Error(
             "SUPERSEDE replacement ## History must append the displaced fact",
           );
@@ -480,7 +482,14 @@ function replaceCompiledTruth(
   }
   if (historyEntry?.trim()) {
     const dated = canonicalHistoryEntry(historyEntry, date);
-    additions.set("history", [...(additions.get("history") ?? []), dated]);
+    const pending = additions.get("history") ?? [];
+    // Один вытесненный факт - одна строка. Модель, дописавшая ## History в body
+    // (секция принадлежит write_card), и реплей уже выполненного вызова подают
+    // тот же факт вторым путём; хвост Истории решает, новый он или нет.
+    const alreadyLast = pending.length
+      ? pending.at(-1)?.trim() === dated.trim()
+      : historyEndsWith(oldBody, dated);
+    if (!alreadyLast) additions.set("history", [...pending, dated]);
   }
 
   for (const [key, lines] of additions) {
@@ -691,7 +700,7 @@ export function mergeCard(input: MergeInput): MergeResult {
     !!historyEntry?.trim() &&
     historyEndsWith(oldBody, canonicalHistoryEntry(historyEntry, date));
   if (operation === "SUPERSEDE") {
-    newBody = `\n${replaceCompiledTruth(oldBody, trimmedBody, replayed ? undefined : historyEntry, date).trim()}\n`;
+    newBody = `\n${replaceCompiledTruth(oldBody, trimmedBody, historyEntry, date).trim()}\n`;
   } else if (!bodyContains(oldBody, trimmedBody)) {
     newBody = appendLog(newBody, trimmedBody, date);
     appended = true;
