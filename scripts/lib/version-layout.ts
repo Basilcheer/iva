@@ -98,8 +98,8 @@ export function gitRootFor(install: Install): string {
 /**
  * A shim that resolves paths and nothing else, so it never has to be rewritten
  * again: the active version, else the tree it was installed from (what a
- * half-finished bridge leaves), else the version the installation settled on -
- * a lost `current` must take neither the command that repairs it nor the release
+ * half-finished bridge leaves), else the version the installation settled on - a
+ * lost `current` must take neither the command that repairs it nor the release
  * down with it. install.sh writes this same script; the two stay in step.
  */
 export function shimScript(home: string, node: string): string {

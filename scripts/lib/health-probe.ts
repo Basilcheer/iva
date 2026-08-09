@@ -17,14 +17,13 @@ export function portWasTaken(log: string): boolean {
   return log.includes(BUSY_PORT) || log.includes("EADDRINUSE");
 }
 
-async function answering(port: number): Promise<boolean> {
+/** Whatever answers on the port, or null when nothing does in time. */
+async function answering(port: number, ms = 1000): Promise<Response | null> {
   try {
-    await fetch(`http://127.0.0.1:${port}/`, {
-      signal: AbortSignal.timeout(1000),
-    });
-    return true;
+    const url = `http://127.0.0.1:${port}/`;
+    return await fetch(url, { signal: AbortSignal.timeout(ms) });
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -57,7 +56,7 @@ export function probeEnvironment(
     values = parseEnvText(readFileSync(envPath, "utf8"));
   } catch {
     // No .env yet is a valid installation state, and an unreadable one is the
-    // service's problem to report, not a reason to refuse to check the version.
+    // service's problem to report, not a reason to skip the check.
   }
   return {
     ...values,
@@ -104,7 +103,7 @@ export async function probeVersion({
     env: { ...process.env, ...env, PORT: String(port) },
     stdio: ["ignore", "pipe", "pipe"],
   });
-  const collect = (chunk: unknown) => {
+  const collect = (chunk: unknown): void => {
     log = `${log}${String(chunk)}`.slice(-LOG_TAIL);
   };
   child.stdout.on("data", collect);
@@ -123,14 +122,7 @@ export async function probeVersion({
   const deadline = Date.now() + timeoutMs;
   let ok = false;
   while (!ok && !exit && Date.now() < deadline) {
-    try {
-      const response = await fetch(`http://127.0.0.1:${port}/`, {
-        signal: AbortSignal.timeout(Math.min(intervalMs * 4, 2000)),
-      });
-      ok = response.ok;
-    } catch {
-      // Not listening yet is the normal case for most of the startup window.
-    }
+    ok = (await answering(port, Math.min(intervalMs * 4, 2000)))?.ok ?? false;
     await wait(intervalMs);
     // Somebody else can still have taken the port in the meantime; the answer is
     // only the version's if the version is alive to have given it.
@@ -139,14 +131,13 @@ export async function probeVersion({
 
   // Captured before the shutdown below turns every run into an "exited" one.
   const crash = exit as { code: number | null; signal: string | null } | null;
-  if (!crash) {
+  if (crash) await stopped;
+  else {
     child.kill("SIGTERM");
-    // The port has to be free before the real service takes it, so escalate rather than hope.
+    // The port has to be free before the real service takes it: escalate, do not hope.
     const killer = setTimeout(() => child.kill("SIGKILL"), stopGraceMs);
     await stopped;
     clearTimeout(killer);
-  } else {
-    await stopped;
   }
   if (ok) return { ok: true, log };
   const reason = crash
