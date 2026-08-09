@@ -10,6 +10,7 @@ import {
   readdirSync,
   realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
@@ -490,9 +491,48 @@ test("a rollback is a symlink flip and a restart, with no build and no network",
     "nothing was deleted",
   );
   assert.match(result.stdout, new RegExp(`${second} → ${first}`, "u"));
+  // Nothing pins a version, so the release just rolled back from is still what
+  // the next update resolves to. Saying so is the difference between a rollback
+  // and a mystery when it comes back.
+  assert.match(result.stdout, /can bring that version back/u);
   // And forward again: the pair is symmetric, so a bad rollback is not a trap.
   assert.equal(iva.iva(["rollback"]).status, 0);
   assert.equal(active(iva), second);
+});
+
+test("a rollback aims the older version's state back at the installation", (t) => {
+  const iva = world(t);
+  update(iva);
+  const first = String(active(iva));
+  iva.publish((tree) =>
+    writeFileSync(
+      join(tree, "scripts/feature.mjs"),
+      "export const feature = 2;\n",
+    ),
+  );
+  update(iva);
+
+  // What a probe killed halfway through leaves on the version it was proving:
+  // state links into a scratch directory the next sweep has already taken away.
+  const dir = join(iva.home, "versions", first);
+  for (const name of ["data", "vault", ".eve/.workflow-data"]) {
+    rmSync(join(dir, name), { recursive: true, force: true });
+    symlinkSync(join(iva.home, ".probe-gone", name), join(dir, name));
+  }
+
+  const result = iva.iva(["rollback"]);
+  assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+  assert.equal(active(iva), first);
+  for (const [name, target] of [
+    ["data", join(iva.home, "data")],
+    ["vault", join(iva.home, "vault")],
+    [".eve/.workflow-data", join(iva.home, ".eve/.workflow-data")],
+  ])
+    assert.equal(
+      realpathSync(join(dir, name)),
+      realpathSync(target),
+      `${name} still points at scratch`,
+    );
 });
 
 test("--force installs and builds the version that is already running", (t) => {

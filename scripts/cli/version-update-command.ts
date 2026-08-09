@@ -184,12 +184,18 @@ export function createVersionUpdateCommand(
     }
     try {
       const from = store.currentName();
+      // Whatever a killed probe left this version's state links pointing at,
+      // activation aims them back at the installation - a way back that comes up
+      // on a scratch directory that no longer exists is not a way back.
       store.activate(previous);
       systemdLifecycle.restartServices();
       // This installation is now settled on the older version; without saying so,
       // the next update would think it still owed the move it just undid.
       store.settle(previous);
       runtime.ok(`${from ?? "the broken version"} → ${previous}`);
+      // Nothing here pins a version, and the release this went back from is still
+      // what upstream resolves to.
+      runtime.warn("the next `iva update` can bring that version back");
     } finally {
       lock.release();
     }
