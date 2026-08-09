@@ -238,6 +238,12 @@ export function createVersionStore(home: string) {
   function activate(name: string): void {
     const dir = versionDir(name);
     if (!isComplete(name)) throw new Error(`version ${name} is incomplete`);
+    // A version that is about to run gets the installation's state, whatever its
+    // links were left pointing at. A probe aims them at a scratch directory, and
+    // an update killed during one leaves a finished version - the target of a
+    // rollback, or one prepared but never activated - pointing at a directory the
+    // next sweep takes away.
+    linkState(dir);
     const flip = join(home, `${FLIP_PREFIX}${process.pid}-${Date.now()}`);
     rmSync(flip, { recursive: true, force: true });
     symlinkSync(dir, flip);
@@ -335,9 +341,6 @@ export function createVersionStore(home: string) {
     const chosen = settled();
     const pick = list().find((entry) => entry.name === chosen) ?? list()[0];
     if (!pick) return null;
-    // A probe leaves a version pointing at scratch state; a version that runs
-    // borrows the installation's.
-    linkState(pick.dir);
     activate(pick.name);
     return pick.name;
   }

@@ -416,6 +416,30 @@ test("re-proving a finished version leaves the version, not the version's grave"
   assert.equal(existsSync(scratch), false);
 });
 
+test("activating a version aims its state at the installation, whatever it was probed on", (t) => {
+  const root = home(t);
+  const store = createVersionStore(root);
+  const layout = layoutFor(root);
+  const name = "0.3.15-bbbbbbbbbbbb";
+  const dir = store.stage(name);
+  store.complete(name);
+  // Killed while proving this version - a downgrade, or one prepared and never
+  // flipped: its state links are left aimed at a scratch directory that the next
+  // sweep removes. Rolling back onto it must not start a service on those.
+  const scratch = store.sandboxState(name);
+  rmSync(scratch, { recursive: true, force: true });
+  writeFileSync(layout.env, "IVA_PORT=8723\n");
+  mkdirSync(layout.data, { recursive: true });
+  writeFileSync(join(layout.data, "state.json"), "{}");
+
+  store.activate(name);
+
+  assert.equal(store.currentName(), name);
+  assert.equal(realpathSync(join(dir, "data")), realpathSync(layout.data));
+  assert.equal(realpathSync(join(dir, ".env")), realpathSync(layout.env));
+  assert.equal(readFileSync(join(dir, "data/state.json"), "utf8"), "{}");
+});
+
 test("a version links .env before there is one, so a later write lands outside", (t) => {
   const root = home(t);
   const store = createVersionStore(root);

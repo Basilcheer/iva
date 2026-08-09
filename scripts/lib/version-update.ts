@@ -327,8 +327,7 @@ export async function finishVersionUpdate({
       );
       return { status: "unhealthy", version: name, log: health.log };
     }
-    // Proved: from here the version is allowed to see the installation's state.
-    store.linkState(dir);
+    // Proved: activating it is what lets it see the installation's own state.
     store.complete(name);
     store.activate(name);
   }
