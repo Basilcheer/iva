@@ -1,5 +1,5 @@
-import { cpSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
-import { dirname, join, resolve, sep } from "node:path";
+import { cpSync, mkdirSync, readdirSync, rmSync } from "node:fs";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { probeVersion } from "./health-probe.ts";
 import { runMigrations } from "./migrations.ts";
 import { DEFAULT_PORT, PortChecker, PortSelector, bindProbe } from "./ports.ts";
@@ -21,6 +21,7 @@ export type UpdateOutcome =
   | { status: "busy" }
   | { status: "current"; version: string }
   | { status: "unhealthy"; version: string; log: string }
+  | { status: "failed"; message: string }
   | {
       status: "updated";
       version: string;
@@ -32,20 +33,23 @@ export type UpdateOutcome =
 
 type Store = ReturnType<typeof createVersionStore>;
 
+/** The active version plus one to roll back to; disks on these boxes are small. */
+const KEEP = 2;
+
 type FinishOptions = {
   readonly home: string;
   /** The staged version to build, prove and activate. */
   readonly name: string;
   readonly run: Runner;
-  readonly npm?: string;
   readonly probe?: (
     dir: string,
     port: number,
   ) => Promise<{ ok: boolean; log: string }>;
   readonly restart?: (root: string) => Promise<void>;
+  /** Layout changes the installation itself needs: the shim, the old checkout. */
+  readonly adopt?: () => void;
   readonly notify?: (message: string) => void;
   readonly log?: (message: string) => void;
-  readonly keep?: number;
   readonly store?: Store;
 };
 
@@ -61,22 +65,44 @@ export type VersionUpdateOptions = Omit<FinishOptions, "name"> & {
 
 /** Every regular file under `data/custom`, as paths relative to it. */
 function customFiles(customDir: string): string[] {
-  const walk = (relativeDir: string): string[] => {
-    const base = join(customDir, relativeDir);
-    let names: string[];
-    try {
-      names = readdirSync(base);
-    } catch {
-      return [];
-    }
-    return names.flatMap((name) => {
-      const child = relativeDir ? join(relativeDir, name) : name;
-      return statSync(join(base, name)).isDirectory()
-        ? walk(child)
-        : [child.split(sep).join("/")];
-    });
-  };
-  return walk("").sort();
+  try {
+    return readdirSync(customDir, { recursive: true, withFileTypes: true })
+      .filter((entry) => entry.isFile())
+      .map((entry) =>
+        join(relative(customDir, entry.parentPath), entry.name)
+          .split(sep)
+          .join("/"),
+      )
+      .sort();
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Prove the version starts, from its own directory, on a port nothing else holds.
+ *
+ * The port is chosen and then taken, so another process can win the race in
+ * between; that says nothing about the version, so it is worth another port
+ * rather than a verdict.
+ */
+async function proveStarts(
+  dir: string,
+  probe: (dir: string, port: number) => Promise<{ ok: boolean; log: string }>,
+  log: (message: string) => void,
+): Promise<{ ok: boolean; log: string }> {
+  // Bind is the only probe worth asking here: the docker probe shells out and can
+  // block for a long time on a host whose daemon is unreachable.
+  const selector = new PortSelector(new PortChecker([bindProbe]));
+  let start = DEFAULT_PORT + 100;
+  for (let attempt = 1; ; attempt++) {
+    const port = (await selector.firstFree(start)) ?? start;
+    const health = await probe(dir, port);
+    if (health.ok || attempt === 3 || !health.log.includes("EADDRINUSE"))
+      return health;
+    log(`probe port ${port} was taken; retrying above it`);
+    start = port + 1;
+  }
 }
 
 /**
@@ -92,7 +118,6 @@ export async function runVersionUpdate(
     resolveTarget,
     handoff,
     log = () => {},
-    keep = 2,
     store = createVersionStore(home),
   } = options;
   const lock = acquireUpdateLock(store.layout.data);
@@ -104,8 +129,11 @@ export async function runVersionUpdate(
 
     const target = await resolveTarget();
     const name = versionName(target.version, target.sha);
-    if (name === store.currentName()) {
-      store.gc(keep);
+    // Nothing to do only once the installation has finished moving onto it. A flip
+    // whose migrations, restart or layout changes never happened is an update
+    // still owed, and reporting it as done is what strands an installation.
+    if (name === store.currentName() && store.settled() === name) {
+      store.gc(KEEP);
       return { status: "current", version: name };
     }
 
@@ -131,53 +159,56 @@ export async function runVersionUpdate(
  * The half of an update that the new version runs about itself: install, build,
  * prove, flip, migrate, restart. Split out so it can be executed by the code that
  * was just fetched instead of the code that is being replaced.
+ *
+ * Two commit points, both replayable. The flip decides which code runs; the
+ * settle marker decides whether the installation has finished moving onto it.
+ * Everything between them is written to be safe to run twice, because a crash
+ * there means the next `iva update` runs it again.
  */
 export async function finishVersionUpdate({
   home,
   name,
   run,
-  npm = "npm",
   probe = (dir, port) => probeVersion({ dir, port }),
   restart = async () => {},
+  adopt = () => {},
   notify = () => {},
   log = () => {},
-  keep = 2,
   store = createVersionStore(home),
 }: FinishOptions): Promise<UpdateOutcome> {
   const dir = join(store.layout.versions, name);
-  const previous = store.currentName();
+  const active = store.currentName();
   let custom: "none" | "applied" | "stock" = "none";
-  if (store.list().some((entry) => entry.name === name)) {
-    // A previous run built and finished this version but never got to activate it.
-    log(`reusing prepared version ${name}`);
+
+  if (active === name) {
+    // The flip happened, the rest did not: pick the update up where it stopped.
+    log(`finishing the move onto ${name}`);
   } else {
-    try {
-      custom = await buildVersion({ store, name, dir, run, npm, notify, log });
-    } catch (error) {
-      // A failed build is worth megabytes on a small disk, and nothing points at it.
-      rmSync(dir, { recursive: true, force: true });
-      throw error;
+    if (store.list().some((entry) => entry.name === name)) {
+      // A previous run built and finished this version but never got to activate it.
+      log(`reusing prepared version ${name}`);
+    } else {
+      try {
+        custom = await buildVersion({ store, name, dir, run, notify, log });
+      } catch (error) {
+        // A failed build is worth megabytes on a small disk, and nothing points at it.
+        rmSync(dir, { recursive: true, force: true });
+        throw error;
+      }
     }
+    const health = await proveStarts(dir, probe, log);
+    if (!health.ok) {
+      // Nothing points at it, so removing it is the whole rollback.
+      rmSync(dir, { recursive: true, force: true });
+      notify(
+        `update to ${name} did not start; staying on ${active ?? "the current version"}`,
+      );
+      return { status: "unhealthy", version: name, log: health.log };
+    }
+    store.complete(name);
+    store.activate(name);
   }
 
-  // Bind is the only probe worth asking here: the docker probe shells out and can
-  // block for a long time on a host whose daemon is unreachable.
-  const port =
-    (await new PortSelector(new PortChecker([bindProbe])).firstFree(
-      DEFAULT_PORT + 100,
-    )) ?? DEFAULT_PORT + 100;
-  const health = await probe(dir, port);
-  if (!health.ok) {
-    // Nothing points at it, so removing it is the whole rollback.
-    rmSync(dir, { recursive: true, force: true });
-    notify(
-      `update to ${name} did not start; staying on ${previous ?? "the current version"}`,
-    );
-    return { status: "unhealthy", version: name, log: health.log };
-  }
-
-  store.complete(name);
-  store.activate(name);
   // Before the restart: the service must never open state that the new version
   // still expects to migrate.
   const migrations = await runMigrations({
@@ -187,8 +218,19 @@ export async function finishVersionUpdate({
     log,
   });
   await restart(store.layout.current);
-  const removed = store.gc(keep);
-  return { status: "updated", version: name, previous, custom, migrations, removed };
+  // After the restart: until the service runs the new version, the old checkout
+  // is still what a failed restart falls back to, so it is not ours to remove yet.
+  adopt();
+  const removed = store.gc(KEEP);
+  store.settle(name);
+  return {
+    status: "updated",
+    version: name,
+    previous: active === name ? null : active,
+    custom,
+    migrations,
+    removed,
+  };
 }
 
 async function buildVersion({
@@ -196,7 +238,6 @@ async function buildVersion({
   name,
   dir,
   run,
-  npm,
   notify,
   log,
 }: {
@@ -204,10 +245,10 @@ async function buildVersion({
   name: string;
   dir: string;
   run: Runner;
-  npm: string;
   notify: (message: string) => void;
   log: (message: string) => void;
 }): Promise<"none" | "applied" | "stock"> {
+  const npm = "npm";
   const install = async (): Promise<void> => {
     const installed = await run(npm, ["ci", "--no-audit", "--no-fund"], dir);
     if (installed.code !== 0)

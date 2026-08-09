@@ -3,16 +3,19 @@ import {
   existsSync,
   lstatSync,
   mkdirSync,
+  readFileSync,
   readdirSync,
   realpathSync,
   renameSync,
   rmSync,
   statSync,
   symlinkSync,
+  writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
 
 const INCOMPLETE = ".iva-incomplete";
+const SETTLED = "active.json";
 /** Directories a version borrows from the installation instead of owning. */
 export const STATE_DIRS = ["data", "vault", ".eve", ".workflow-data"];
 const FLIP_PREFIX = ".current.iva-flip-";
@@ -211,6 +214,36 @@ export function createVersionStore(home: string) {
     }
   }
 
+  /**
+   * The version the installation has fully moved onto: flipped, migrated,
+   * restarted. `current` says which code runs; this says the move is done, and an
+   * update is owed as long as the two disagree.
+   */
+  function settled(): string | null {
+    try {
+      const parsed: unknown = JSON.parse(
+        readFileSync(join(layout.data, SETTLED), "utf8"),
+      );
+      const name = (parsed as { version?: unknown } | null)?.version;
+      return typeof name === "string" ? name : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Written last in an update, so an interrupted one is replayed rather than lost. */
+  function settle(name: string): void {
+    mkdirSync(layout.data, { recursive: true });
+    const marker = join(layout.data, SETTLED);
+    const temp = `${marker}.${process.pid}.tmp`;
+    writeFileSync(
+      temp,
+      `${JSON.stringify({ schema: "iva-active/v1", version: name })}\n`,
+      { mode: 0o600 },
+    );
+    renameSync(temp, marker);
+  }
+
   /** Remove what an interrupted update can leave behind. Never touches a version. */
   function sweep(): string[] {
     const stale: string[] = [];
@@ -287,7 +320,10 @@ export function createVersionStore(home: string) {
       join(home, name),
     ]);
     for (const [, target] of links) mkdirSync(target, { recursive: true });
-    if (existsSync(layout.env)) links.push([".env", layout.env]);
+    // Linked even when it does not exist yet: the link dangles harmlessly, and a
+    // later `iva config` writes the real file outside the version instead of into
+    // one that the next flip drops.
+    links.push([".env", layout.env]);
     for (const [name, target] of links) {
       const link = join(dir, name);
       rmSync(link, { recursive: true, force: true });
@@ -305,6 +341,8 @@ export function createVersionStore(home: string) {
     reset,
     complete,
     activate,
+    settled,
+    settle,
     sweep,
     gc,
     heal,

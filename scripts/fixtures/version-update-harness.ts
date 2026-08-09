@@ -106,6 +106,12 @@ async function main(): Promise<void> {
       ),
     run: fixtureRunner(hook),
     probe: fixtureProbe(hook),
+    // The steps after the flip are killable too, and each of them has to be
+    // finishable by the run that comes next.
+    restart: () => hook("restart"),
+    adopt: () => {
+      writeFileSync(join(home, "adopted"), "");
+    },
   });
   process.stdout.write(`${JSON.stringify(outcome)}\n`);
 }

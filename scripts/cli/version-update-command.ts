@@ -84,7 +84,10 @@ export function createVersionUpdateCommand(
         })
       : null;
     const store = createVersionStore(install.home);
-    const before = store.currentName() ?? "the previous version";
+    // The last version the installation actually settled on: after an interrupted
+    // update `current` already names the new one, which would report as "X → X".
+    const before =
+      store.settled() ?? store.currentName() ?? "the previous version";
     const reportDir = mkdtempSync(join(tmpdir(), "iva-update-"));
     const report = join(reportDir, "outcome.json");
 
@@ -176,6 +179,9 @@ export function createVersionUpdateCommand(
       const from = store.currentName();
       store.activate(previous);
       systemdLifecycle.restartServices();
+      // This installation is now settled on the older version; without saying so,
+      // the next update would think it still owed the move it just undid.
+      store.settle(previous);
       runtime.ok(`${from ?? "the broken version"} → ${previous}`);
     } finally {
       lock.release();
@@ -217,9 +223,11 @@ async function finishReport({
     });
     return;
   }
-  if (outcome.status === "unhealthy") {
+  if (outcome.status === "unhealthy" || outcome.status === "failed") {
     terminal.fail(text.failed);
-    terminal.info(outcome.log);
+    terminal.info(
+      outcome.status === "unhealthy" ? outcome.log : outcome.message,
+    );
     await reporter?.fail("build", before);
     process.exitCode = 1;
     return;

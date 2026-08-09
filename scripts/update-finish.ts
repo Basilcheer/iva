@@ -24,14 +24,14 @@ export async function main(argv: readonly string[]): Promise<number> {
   const layout = layoutFor(home);
   const lock = adoptUpdateLock(layout.data);
   const log = (message: string): void => console.log(`  ${message}`);
-  const notify = (message: string): void => console.log(`! ${message}`);
+  let outcome: UpdateOutcome;
   try {
-    const outcome = await finishVersionUpdate({
+    outcome = await finishVersionUpdate({
       home,
       name,
       run: commandRunner(verbose),
       log,
-      notify,
+      notify: (message) => console.log(`! ${message}`),
       restart: async (root) => {
         const { createCliRuntime } = await import("./cli/runtime.ts");
         const { createCliSystemd } = await import("./cli/systemd.ts");
@@ -42,23 +42,26 @@ export async function main(argv: readonly string[]): Promise<number> {
         runtime.systemd.activate([runtime.UPDATE_TIMER]);
         await Promise.resolve();
       },
+      adopt: () => {
+        writeShim(home, log);
+        if (existsSync(join(home, ".git")))
+          for (const removed of retireCheckout(home)) log(`retired ${removed}`);
+      },
     });
-    if (outcome.status === "updated") {
-      writeShim(home, log);
-      if (existsSync(join(home, ".git")))
-        for (const removed of retireCheckout(home)) log(`retired ${removed}`);
-    }
-    const report = process.env.IVA_UPDATE_OUTCOME;
-    if (report) writeFileSync(report, JSON.stringify(outcome));
-    return report ? 0 : reportLocally(outcome);
+  } catch (error) {
+    // The caller is another process: a stack trace on its terminal explains
+    // nothing, and the update stays where the next run can pick it up.
+    outcome = {
+      status: "failed",
+      message: error instanceof Error ? error.message : String(error),
+    };
   } finally {
     lock.release();
   }
-}
-
-function reportLocally(outcome: UpdateOutcome): number {
-  console.log(JSON.stringify(outcome));
-  return outcome.status === "unhealthy" ? 1 : 0;
+  const report = process.env.IVA_UPDATE_OUTCOME;
+  if (report) writeFileSync(report, JSON.stringify(outcome));
+  else console.log(JSON.stringify(outcome));
+  return outcome.status === "updated" ? 0 : 1;
 }
 
 if (isEntrypoint(import.meta.url))

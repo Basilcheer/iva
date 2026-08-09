@@ -241,6 +241,36 @@ test("killing an update leaves the running version alone and the next run cleans
   assert.notEqual(active(iva), healthy);
 });
 
+test("an update whose restart fails is finished by the next one", (t) => {
+  const iva = world(t);
+  const name = `0.3.15-${iva.git(iva.home, ["rev-parse", "HEAD"]).slice(0, 12)}`;
+
+  // No user session on the box: systemctl restart fails, the way it does on a VPS
+  // without lingering. The flip has already happened by then.
+  const broken = iva.iva(["update"], { IVA_TEST_SYSTEMCTL_FAIL: "1" });
+  const failure = `${broken.stdout}${broken.stderr}`;
+  assert.equal(broken.status, 1, failure);
+  assert.match(failure, /Couldn't complete the update/u);
+  assert.match(failure, /restart iva\.service failed/u);
+  assert.doesNotMatch(failure, /^\s+at .*:\d+:\d+/mu, "no raw stack trace");
+  assert.equal(active(iva), name);
+  // Nothing that follows the restart ran, so the old checkout is still intact.
+  assert.ok(existsSync(join(iva.home, ".git")));
+  assert.doesNotMatch(readFileSync(iva.shim, "utf8"), /current\/bin/u);
+
+  // The user runs `iva update` again - still through their old shim - and it
+  // finishes the move instead of claiming there is nothing to do.
+  const output = update(iva);
+  assert.equal(active(iva), name, output);
+  assert.match(
+    readFileSync(iva.shim, "utf8"),
+    /\$IVA_ROOT\/current\/bin\/iva\.mjs/u,
+  );
+  assert.equal(existsSync(join(iva.home, ".git")), false);
+  assert.match(readFileSync(iva.systemctlLog, "utf8"), /restart .*iva\.service/u);
+  assert.match(iva.iva(["update"]).stdout, /already up to date/u);
+});
+
 test("two updates at once let exactly one of them work", async (t) => {
   const iva = world(t);
   update(iva);

@@ -26,10 +26,19 @@ const HARNESS = join(
   "../fixtures/version-update-harness.ts",
 );
 
-const MIGRATION = `import { appendFileSync } from "node:fs";
+/**
+ * A migration that records that it ran - and, in the interruption harness, hangs
+ * before doing so, which is the only moment where a killed update has already
+ * flipped the symlink.
+ */
+const migration = (id: string) => `import { appendFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-export default function up(context) {
-  appendFileSync(join(context.dataDir, "migrated.log"), "001\\n");
+export default async function up(context) {
+  if (process.env.IVA_TEST_STALL === "migrate") {
+    writeFileSync(process.env.IVA_TEST_MARKER, "migrate");
+    await new Promise(() => {});
+  }
+  appendFileSync(join(context.dataDir, "migrated.log"), "${id}\\n");
 }
 `;
 
@@ -60,7 +69,7 @@ function world(t: { after(fn: () => void): void }): World {
   mkdirSync(join(repo, "scripts/migrations"), { recursive: true });
   mkdirSync(join(repo, "agent"), { recursive: true });
   writeFileSync(join(repo, "agent/agent.ts"), "export const agent = 1;\n");
-  writeFileSync(join(repo, "scripts/migrations/001-note.ts"), MIGRATION);
+  writeFileSync(join(repo, "scripts/migrations/001-note.ts"), migration("001"));
 
   const state: World = {
     home,
@@ -347,6 +356,110 @@ test("an update killed while building is cleaned up by the next run", async (t) 
     readdirSync(store.layout.versions).sort(),
     [first.version, outcome.version].sort(),
   );
+});
+
+test("an update killed after the flip is finished by the next run", async (t) => {
+  const iva = world(t);
+  const first = updated(await iva.update());
+  writeFileSync(join(iva.repo, "agent/agent.ts"), "export const agent = 2;\n");
+  writeFileSync(
+    join(iva.repo, "scripts/migrations/002-note.ts"),
+    migration("002"),
+  );
+  iva.release("0.3.15");
+  const store = createVersionStore(iva.home);
+  const { current, data } = layoutFor(iva.home);
+  const name = `0.3.15-${iva.target.sha.slice(0, 12)}`;
+  const log = (): string => readFileSync(join(data, "migrated.log"), "utf8");
+
+  // Killed while migrating: `current` already names the new version, and nothing
+  // that comes after the flip has happened.
+  await killAt(iva.home, "migrate", iva.target);
+  assert.equal(store.currentName(), name);
+  assert.equal(store.settled(), first.version, "the move is not finished");
+  assert.equal(log(), "001\n");
+
+  // Killed again, at the restart, with the migration now applied.
+  await killAt(iva.home, "restart", iva.target);
+  assert.equal(store.settled(), first.version);
+  assert.equal(log(), "001\n002\n");
+  assert.equal(existsSync(join(iva.home, "adopted")), false);
+
+  let builds = 0;
+  const outcome = updated(
+    await iva.update({
+      run: fixtureRunner(() => {
+        builds += 1;
+        return Promise.resolve();
+      }),
+      adopt: () => writeFileSync(join(iva.home, "adopted"), ""),
+    }),
+  );
+  assert.equal(outcome.version, name);
+  assert.equal(builds, 0, "the version that already runs is not rebuilt");
+  assert.equal(log(), "001\n002\n", "an applied migration is not replayed");
+  assert.ok(existsSync(join(iva.home, "adopted")));
+  assert.deepEqual(iva.restarts, [current, current]);
+  assert.equal(store.settled(), name);
+  // Only now is the update over.
+  assert.deepEqual(await iva.update(), { status: "current", version: name });
+});
+
+test("a restart that fails leaves an update the next run can finish", async (t) => {
+  const iva = world(t);
+  const first = updated(await iva.update());
+  writeFileSync(join(iva.repo, "agent/agent.ts"), "export const agent = 2;\n");
+  iva.release("0.3.15");
+  const store = createVersionStore(iva.home);
+  const name = `0.3.15-${iva.target.sha.slice(0, 12)}`;
+
+  await assert.rejects(
+    iva.update({
+      restart: () => Promise.reject(new Error("Failed to connect to bus")),
+    }),
+    /Failed to connect to bus/,
+  );
+  assert.equal(store.currentName(), name);
+  assert.equal(store.settled(), first.version);
+
+  let builds = 0;
+  const outcome = updated(
+    await iva.update({
+      run: fixtureRunner(() => {
+        builds += 1;
+        return Promise.resolve();
+      }),
+    }),
+  );
+  assert.equal(outcome.version, name);
+  assert.equal(builds, 0);
+  assert.equal(store.settled(), name);
+  assert.deepEqual(iva.restarts, [
+    layoutFor(iva.home).current,
+    layoutFor(iva.home).current,
+  ]);
+});
+
+test("a probe port taken by somebody else is retried, not held against the version", async (t) => {
+  const iva = world(t);
+  let attempts = 0;
+  const outcome = updated(
+    await iva.update({
+      probe: (_dir, port) => {
+        attempts += 1;
+        return Promise.resolve(
+          attempts === 1
+            ? {
+                ok: false,
+                log: `Error: listen EADDRINUSE: address already in use 127.0.0.1:${port}`,
+              }
+            : { ok: true, log: "" },
+        );
+      },
+    }),
+  );
+  assert.equal(attempts, 2);
+  assert.equal(createVersionStore(iva.home).currentName(), outcome.version);
 });
 
 test("a version prepared but never activated is reused instead of rebuilt", async (t) => {

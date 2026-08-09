@@ -93,6 +93,10 @@ for (const name of readdirSync(process.env.IVA_TEST_MODULES)) {
 const SYSTEMCTL = `#!/bin/sh
 printf '%s\\n' "$*" >> "$IVA_TEST_SYSTEMCTL"
 [ "$1" = "--user" ] && shift
+if [ -n "$IVA_TEST_SYSTEMCTL_FAIL" ] && [ "$1" = "restart" ]; then
+  printf 'Failed to connect to bus: No such file or directory\\n' >&2
+  exit 1
+fi
 [ "$1" = "is-enabled" ] && printf 'enabled\\n'
 [ "$1" = "is-active" ] && printf 'active\\n'
 exit 0
@@ -107,7 +111,10 @@ export type World = {
   readonly upstream: string;
   readonly systemctlLog: string;
   /** Run the user's `iva` command, always through the shim they actually have. */
-  iva(args: readonly string[]): SpawnSyncReturns<string>;
+  iva(
+    args: readonly string[],
+    env?: Readonly<Record<string, string>>,
+  ): SpawnSyncReturns<string>;
   /** The same command, without blocking - the only way to overlap two of them. */
   ivaAsync(args: readonly string[]): Promise<{ code: number; output: string }>;
   /** Publish a new upstream commit, optionally editing the tree first. */
@@ -240,8 +247,12 @@ export function createWorld(): World {
     upstream,
     systemctlLog,
     git,
-    iva: (args) =>
-      spawnSync(shim, [...args], { cwd: dir, encoding: "utf8", env: childEnv }),
+    iva: (args, env = {}) =>
+      spawnSync(shim, [...args], {
+        cwd: dir,
+        encoding: "utf8",
+        env: { ...childEnv, ...env },
+      }),
     ivaAsync: (args) =>
       new Promise((resolve) => {
         const child = spawn(shim, [...args], { cwd: dir, env: childEnv });
