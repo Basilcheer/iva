@@ -535,7 +535,7 @@ test("a rollback aims the older version's state back at the installation", (t) =
     );
 });
 
-test("--force installs and builds the version that is already running", (t) => {
+test("--force installs the running release again, beside the version that runs", (t) => {
   const iva = world(t);
   update(iva);
   const name = String(active(iva));
@@ -549,13 +549,35 @@ test("--force installs and builds the version that is already running", (t) => {
   assert.match(noop.stdout, /already up to date/u);
   assert.equal(existsSync(built), false);
 
+  rmSync(iva.startsLog, { force: true });
   const forced = iva.iva(["update", "--force"]);
   assert.equal(forced.status, 0, `${forced.stdout}${forced.stderr}`);
-  assert.match(forced.stdout, new RegExp(`rebuilding ${name}`, "u"));
-  assert.equal(active(iva), name);
-  assert.ok(existsSync(built), "the version was built again");
-  // Repair, not replacement: the same version directory, not a second one.
-  assert.deepEqual(readdirSync(join(iva.home, "versions")), [name]);
+
+  // A rebuild is an install like any other: its own directory, proved from that
+  // directory before anything points at it, then the flip.
+  const rebuilt = `${name}~2`;
+  assert.equal(active(iva), rebuilt);
+  assert.ok(
+    existsSync(join(iva.home, "versions", rebuilt, ".output/built.json")),
+    "the rebuild was built",
+  );
+  const starts = readFileSync(iva.startsLog, "utf8")
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line) as { cwd: string; probe: string });
+  assert.deepEqual(
+    starts.map((start) => [start.cwd, start.probe]),
+    [[join(iva.home, "versions", rebuilt), "1"]],
+  );
+  // The tree the service was running from was never installed into or built in:
+  // it is as broken as it was, and it is still the way back.
+  assert.equal(existsSync(built), false);
+  assert.deepEqual(
+    readdirSync(join(iva.home, "versions")).sort(),
+    [name, rebuilt].sort(),
+  );
+  // The rebuild is the same release, so the next ordinary update has nothing to do.
+  assert.match(iva.iva(["update"]).stdout, /already up to date/u);
 });
 
 test("the CLI reports the commit of the active version once there is no working tree", (t) => {

@@ -704,6 +704,70 @@ test("a version prepared but never activated is reused instead of rebuilt", asyn
   assert.equal(builds, 0, "a finished version must not be built twice");
 });
 
+test("--force rebuilds the running release beside it, never inside it", async (t) => {
+  const iva = world(t);
+  const first = updated(await iva.update());
+  const store = createVersionStore(iva.home);
+  const live = join(store.layout.versions, first.version);
+  // What `--force` is for: the commit and data/custom are unchanged, so an
+  // ordinary update has nothing to offer, and the version that runs is broken.
+  rmSync(join(live, ".output"), { recursive: true, force: true });
+
+  const probed: string[] = [];
+  const forced = updated(
+    await iva.update({
+      force: true,
+      probe: (dir, port) => {
+        probed.push(dir);
+        return fixtureProbe()(dir, port);
+      },
+    }),
+  );
+
+  assert.equal(forced.version, `${first.version}~2`);
+  assert.equal(forced.previous, first.version);
+  // Proved before the flip, like every other version - and proved somewhere the
+  // service was not running from.
+  assert.deepEqual(probed, [join(store.layout.versions, forced.version)]);
+  assert.equal(store.currentName(), forced.version);
+  assert.ok(
+    existsSync(
+      join(store.layout.versions, forced.version, ".output/server.mjs"),
+    ),
+  );
+  // The directory the service was running from was not rebuilt, emptied or
+  // touched: it is still there, exactly as broken as it was, as the way back.
+  assert.equal(existsSync(join(live, ".output")), false);
+  assert.ok(existsSync(join(live, "node_modules")));
+  assert.equal(store.previousName(), first.version);
+  // A rebuild is the same release, so the next ordinary update has nothing to do.
+  assert.deepEqual(await iva.update(), {
+    status: "current",
+    version: forced.version,
+  });
+});
+
+test("a forced rebuild that does not start leaves the running version live", async (t) => {
+  const iva = world(t);
+  const first = updated(await iva.update());
+  const store = createVersionStore(iva.home);
+  const live = join(store.layout.versions, first.version);
+
+  const outcome = await iva.update({
+    force: true,
+    probe: () => Promise.resolve({ ok: false, log: "boom" }),
+  });
+
+  assert.equal(outcome.status, "unhealthy");
+  assert.equal(store.currentName(), first.version);
+  // The candidate was garbage nothing pointed at; the running version keeps its
+  // tree, its dependencies and its build, and nothing was restarted over it.
+  assert.deepEqual(readdirSync(store.layout.versions), [first.version]);
+  for (const path of ["node_modules", ".output/server.mjs", "agent/agent.ts"])
+    assert.ok(existsSync(join(live, path)), path);
+  assert.equal(iva.restarts.length, 1, "only the first update restarted");
+});
+
 test("a broken current link is healed before the update decides what to do", async (t) => {
   const iva = world(t);
   const first = updated(await iva.update());

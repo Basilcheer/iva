@@ -20,6 +20,7 @@ import { acquireUpdateLock } from "./update-lock.ts";
 import {
   createVersionStore,
   parseVersionName,
+  releaseOf,
   versionName,
 } from "./version-store.ts";
 
@@ -63,14 +64,14 @@ type FinishOptions = {
   readonly adopt?: () => void;
   readonly notify?: (message: string) => void;
   readonly log?: (message: string) => void;
-  /** `--force`: install and build this version again even where it already exists. */
-  readonly force?: boolean;
   readonly store?: Store;
 };
 
 export type VersionUpdateOptions = Omit<FinishOptions, "name"> & {
   /** Fetches into the mirror and reports what should run next. */
   readonly resolveTarget: () => Promise<{ sha: string; version: string }>;
+  /** `--force`: build this release again, even where a build of it already runs. */
+  readonly force?: boolean;
   /**
    * Hands the staged version over to the code that version ships, so that a fix
    * to the second half of an update arrives with the release that contains it.
@@ -210,17 +211,32 @@ export async function runVersionUpdate(
     // differs again on the next run, which is one more update - never a version
     // that quietly disagrees with `data/custom` forever.
     const { digest } = customOverlay(join(store.layout.data, "custom"));
-    const name = versionName(target.version, target.sha, digest);
+    const release = versionName(target.version, target.sha, digest);
+    const active = store.currentName();
     // Nothing to do only once the installation has finished moving onto it. A flip
     // whose migrations, restart or layout changes never happened is an update
     // still owed, and reporting it as done is what strands an installation - and
     // `--force` is how somebody says the version that runs is broken anyway.
-    if (!force && name === store.currentName() && store.settled() === name) {
+    if (
+      !force &&
+      active &&
+      releaseOf(active) === release &&
+      store.settled() === active
+    ) {
       store.gc(KEEP);
-      return { status: "current", version: name };
+      return { status: "current", version: active };
     }
 
-    if (!store.list().some((entry) => entry.name === name)) {
+    // A build of this release that is already finished is reused - that is what
+    // makes taking a customization back out a symlink flip rather than a build.
+    // `--force` is the one thing that refuses it: it is how somebody says the
+    // build on disk is broken, so it gets a fresh directory instead of a rebuild
+    // of the tree the service is running from.
+    const finished = force
+      ? undefined
+      : store.list().find((entry) => releaseOf(entry.name) === release);
+    const name = finished?.name ?? store.nextBuild(release);
+    if (!finished) {
       const dir = store.stage(name);
       try {
         await store.materialize({ sha: target.sha, dir });
@@ -260,7 +276,6 @@ export async function finishVersionUpdate({
   adopt = () => {},
   notify = () => {},
   log = () => {},
-  force = false,
   store = createVersionStore(home),
 }: FinishOptions): Promise<UpdateOutcome> {
   const dir = join(store.layout.versions, name);
@@ -300,14 +315,6 @@ export async function finishVersionUpdate({
   // Either already running, or built and finished by a run that never got to
   // activate it. Both mean the tree is there and only what follows is owed.
   const prepared = store.list().some((entry) => entry.name === name);
-  if (force && prepared) {
-    // A version's tree comes back byte for byte from its commit, so the only
-    // parts of it that can go wrong are the ones npm produced: the dependencies
-    // and the build output. Both are replaced where they lie - emptying the
-    // directory first would empty the one the service is running from.
-    log(`rebuilding ${name}`);
-    await compile(dir, run);
-  }
   if (active === name) {
     // The flip happened, the rest did not: pick the update up where it stopped.
     log(`finishing the move onto ${name}`);

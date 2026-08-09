@@ -63,9 +63,9 @@ export function createVersionUpdateCommand(
 
   async function run(args: readonly string[]): Promise<void> {
     const verbose = args.includes("--verbose");
-    // `--force` reaches the new version's updater too: what it repairs - the
-    // dependencies and the build output of a version that already exists - only
-    // exists on the other side of the handoff.
+    // `--force` is decided here and never travels: it only says that a build of
+    // this release already on disk may not be reused, and what follows the
+    // handoff is the ordinary install of the directory this half staged.
     const force = args.includes("--force");
     const telegramJobAt = args.indexOf("--telegram-job");
     const jobId = telegramJobAt >= 0 ? (args[telegramJobAt + 1] ?? "") : "";
@@ -114,7 +114,7 @@ export function createVersionUpdateCommand(
           void reporter?.start("build");
           // The progress spinner and the new version's own output must not share a line.
           terminal.dispose();
-          return Promise.resolve(handoff(name, report, { verbose, force }));
+          return Promise.resolve(handoff(name, report, verbose));
         },
       });
       await finishReport({ outcome, terminal, reporter, text, before });
@@ -135,7 +135,7 @@ export function createVersionUpdateCommand(
   function handoff(
     name: string,
     report: string,
-    flags: { verbose: boolean; force: boolean },
+    verbose: boolean,
   ): UpdateOutcome {
     const dir = join(install.home, "versions", name);
     const result = spawnSync(
@@ -144,8 +144,7 @@ export function createVersionUpdateCommand(
         join(dir, "scripts/update-finish.ts"),
         install.home,
         name,
-        ...(flags.verbose ? ["--verbose"] : []),
-        ...(flags.force ? ["--force"] : []),
+        ...(verbose ? ["--verbose"] : []),
       ],
       {
         cwd: dir,

@@ -23,6 +23,7 @@ import {
   createVersionStore,
   layoutFor,
   parseVersionName,
+  releaseOf,
   versionName,
 } from "./version-store.ts";
 
@@ -56,6 +57,7 @@ test("version names carry the release, the commit and the customization", () => 
     version: "0.3.15",
     sha: "0123456789ab",
     overlay: null,
+    build: 1,
   });
   // The same commit with a customization is a different version, or a user's
   // edit would resolve to the version that is already running.
@@ -67,7 +69,21 @@ test("version names carry the release, the commit and the customization", () => 
     version: "0.3.15",
     sha: "0123456789ab",
     overlay: "beefcafe",
+    build: 1,
   });
+  // A rebuild of the same code is another directory, not another release: it
+  // carries a build number, and `releaseOf` is what sees through it.
+  assert.equal(
+    versionName("0.3.15", sha, "beefcafe", 2),
+    "0.3.15-0123456789ab+beefcafe~2",
+  );
+  assert.equal(parseVersionName("0.3.15-0123456789ab~3")?.build, 3);
+  assert.equal(
+    releaseOf("0.3.15-0123456789ab+beefcafe~2"),
+    "0.3.15-0123456789ab+beefcafe",
+  );
+  assert.equal(releaseOf("0.3.15-0123456789ab"), "0.3.15-0123456789ab");
+  assert.equal(parseVersionName("0.3.15-0123456789ab~"), null);
   assert.equal(parseVersionName("0.3.15-0123456789ab/../etc"), null);
   assert.equal(parseVersionName("0.3.15-0123456789ab+"), null);
   assert.equal(parseVersionName("0.3.15-0123456789ab+zzzzzzzz"), null);
@@ -238,6 +254,23 @@ test("two updates racing on the same version let exactly one stage it", (t) => {
   assert.throws(() => store.stage("0.3.14-aaaaaaaaaaaa"), /active/);
   assert.throws(() => store.stage("../escape"), /invalid version/);
   assert.equal(store.currentName(), "0.3.14-aaaaaaaaaaaa");
+});
+
+test("a rebuild of the running release gets a directory the running one does not own", (t) => {
+  const store = createVersionStore(home(t));
+  install(store, "0.3.14-aaaaaaaaaaaa");
+  store.activate("0.3.14-aaaaaaaaaaaa");
+
+  const rebuild = store.nextBuild("0.3.14-aaaaaaaaaaaa");
+  assert.equal(rebuild, "0.3.14-aaaaaaaaaaaa~2");
+  assert.equal(releaseOf(rebuild), "0.3.14-aaaaaaaaaaaa");
+  // Staging it is legal precisely because it is not the directory that runs.
+  store.stage(rebuild);
+  assert.equal(store.nextBuild("0.3.14-aaaaaaaaaaaa"), "0.3.14-aaaaaaaaaaaa~3");
+  assert.equal(store.currentName(), "0.3.14-aaaaaaaaaaaa");
+  // A release with nothing on disk keeps its plain name.
+  assert.equal(store.nextBuild("0.3.15-bbbbbbbbbbbb"), "0.3.15-bbbbbbbbbbbb");
+  assert.throws(() => store.nextBuild("../escape"), /invalid version/);
 });
 
 test("a failure to write the staging directory leaves the installation untouched", (t) => {

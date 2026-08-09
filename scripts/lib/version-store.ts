@@ -35,7 +35,7 @@ const FLIP_PREFIX = ".current.iva-flip-";
 /** Names in `home` that only an interrupted update can leave behind. */
 const LEFTOVER_PREFIXES = [FLIP_PREFIX, ".probe-"];
 const VERSION_NAME =
-  /^(\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?)-([0-9a-f]{12})(?:\+([0-9a-f]{8}))?$/;
+  /^(\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?)-([0-9a-f]{12})(?:\+([0-9a-f]{8}))?(?:~(\d+))?$/;
 
 export type Layout = {
   /** Installation root, the only path a user ever has to know. */
@@ -75,22 +75,43 @@ export function layoutFor(home: string): Layout {
  * built. Without it, changing a file in `data/custom` would produce the name of a
  * version that already exists, and the change would wait for an unrelated release
  * to reach the service.
+ *
+ * `build` numbers directories that hold the same code: a rebuild of a release
+ * whose dependencies or build output went bad is installed beside the running one
+ * like every other version, so it needs a name of its own.
  */
 export function versionName(
   version: string,
   sha: string,
   overlay: string | null = null,
+  build = 1,
 ): string {
-  return `${version}-${sha.slice(0, 12)}${overlay ? `+${overlay}` : ""}`;
+  return `${version}-${sha.slice(0, 12)}${overlay ? `+${overlay}` : ""}${build > 1 ? `~${build}` : ""}`;
 }
 
-export function parseVersionName(
-  name: string,
-): { version: string; sha: string; overlay: string | null } | null {
+export function parseVersionName(name: string): {
+  version: string;
+  sha: string;
+  overlay: string | null;
+  build: number;
+} | null {
   const match = VERSION_NAME.exec(name);
   return match
-    ? { version: match[1], sha: match[2], overlay: match[3] ?? null }
+    ? {
+        version: match[1],
+        sha: match[2],
+        overlay: match[3] ?? null,
+        build: match[4] ? Number(match[4]) : 1,
+      }
     : null;
+}
+
+/** The release a directory is a build of; two builds of one release run the same code. */
+export function releaseOf(name: string): string {
+  const parsed = parseVersionName(name);
+  return parsed
+    ? versionName(parsed.version, parsed.sha, parsed.overlay)
+    : name;
 }
 
 function pipe(
@@ -197,6 +218,28 @@ export function createVersionStore(home: string) {
   function previousName(): string | null {
     const active = currentName();
     return list().find((entry) => entry.name !== active)?.name ?? null;
+  }
+
+  /**
+   * A free directory name for the next build of a release.
+   *
+   * `--force` says the version that runs is broken: it is rebuilt the way every
+   * version is installed - beside the running one, proved before anything points
+   * at it - so it needs a directory the running one does not own.
+   */
+  function nextBuild(release: string): string {
+    const parsed = parseVersionName(release);
+    if (!parsed) throw new Error(`invalid version: ${release}`);
+    for (let build = 1; build <= 99; build++) {
+      const name = versionName(
+        parsed.version,
+        parsed.sha,
+        parsed.overlay,
+        build,
+      );
+      if (!existsSync(join(layout.versions, name))) return name;
+    }
+    throw new Error(`too many builds of ${release} on disk`);
   }
 
   /** Claim a version directory. Fails loudly rather than touching anything live. */
@@ -427,6 +470,7 @@ export function createVersionStore(home: string) {
     list,
     currentName,
     previousName,
+    nextBuild,
     stage,
     reset,
     complete,

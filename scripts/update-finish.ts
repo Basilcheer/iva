@@ -21,7 +21,6 @@ export async function main(argv: readonly string[]): Promise<number> {
   const [home, name, ...flags] = argv;
   if (!home || !name) throw new Error("usage: update-finish <home> <version>");
   const verbose = flags.includes("--verbose");
-  const force = flags.includes("--force");
   const layout = layoutFor(home);
   const lock = adoptUpdateLock(layout.data);
   const log = (message: string): void => console.log(`  ${message}`);
@@ -31,7 +30,6 @@ export async function main(argv: readonly string[]): Promise<number> {
       home,
       name,
       run: commandRunner(verbose),
-      force,
       log,
       notify: (message) => console.log(`! ${message}`),
       restart: async (root) => {
