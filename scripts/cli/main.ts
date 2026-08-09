@@ -61,6 +61,12 @@ export function createCliMain(root: string) {
   });
   // Installations move to immutable versions; a development checkout keeps the
   // in-place updater, which is also what the bridge era still needs on the way in.
+  //
+  // The move therefore takes two `iva update` runs, and that is not a bug to fix
+  // here: the first one is executed entirely by the code the user already has -
+  // the old stash-and-rebase updater, which knows nothing about versions - and
+  // all it can do is bring this file onto their disk. The second run is the first
+  // one that reaches this routing, and it is the one that converts the layout.
   const versionUpdate = createVersionUpdateCommand(runtime, systemdLifecycle);
   const cmdUpdate = (args: readonly string[]): Promise<void> =>
     versionUpdate.active() ? versionUpdate.run(args) : legacyUpdate(args);
