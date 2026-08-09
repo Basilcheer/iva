@@ -13,19 +13,25 @@ const ARTIFACTS = [
   ".worktrees",
   "node_modules",
 ];
+/** First path segment, for both `agent/tools/x.ts` and a bare `install.sh`. */
+function topLevel(path: string): string {
+  return path.split("/", 1)[0] ?? "";
+}
+
 /** Never removed, whatever git says about them. */
-const KEEP = new Set([...STATE_DIRS, ".env", "current", "repo", "versions"]);
+const KEEP = new Set([
+  ...STATE_DIRS.map(topLevel),
+  ".env",
+  "current",
+  "repo",
+  "versions",
+]);
 
 function git(home: string, args: string[]): string {
   return execFileSync("git", ["-C", home, ...args], {
     encoding: "utf8",
     maxBuffer: 1 << 24,
   });
-}
-
-/** First path segment, for both `agent/tools/x.ts` and a bare `install.sh`. */
-function topLevel(path: string): string {
-  return path.split("/", 1)[0] ?? "";
 }
 
 /**

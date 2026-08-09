@@ -28,6 +28,7 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import { defineInstrumentation } from "eve/instrumentation";
 import { probeEveHealth } from "../scripts/lib/config-transaction.ts";
+import { PROBE_FLAG } from "../scripts/lib/health-probe.ts";
 import { runScheduleMigration } from "../scripts/lib/schedule-migration.ts";
 import { validateTimeZone } from "../scripts/lib/timezone.ts";
 
@@ -56,6 +57,15 @@ export default defineInstrumentation({
       );
     }
     process.env.TZ = tz;
+
+    // `iva update` starts this same server from a candidate version to prove it comes
+    // up, then throws the candidate away if it does not. That start must stay passive:
+    // the migration retires systemd units and can spawn a rollup, on behalf of code the
+    // installation has not accepted. The real start right after the flip runs it.
+    if (process.env[PROBE_FLAG]) {
+      log("schedule-migration: skipped, this start is an update's health probe");
+      return;
+    }
 
     // Never let this block or fail server startup: wrap synchronously, and treat the
     // whole async chain below as fire-and-forget with its own catch.

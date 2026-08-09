@@ -314,6 +314,56 @@ test("state directories are shared into a version instead of copied", (t) => {
   assert.equal(readFileSync(join(dir, "data/state.json"), "utf8"), "{}");
 });
 
+test("a version being probed writes to scratch state, not the installation's", (t) => {
+  const root = home(t);
+  const store = createVersionStore(root);
+  const layout = layoutFor(root);
+  const name = "0.3.15-bbbbbbbbbbbb";
+  const dir = store.stage(name);
+  store.linkState(dir);
+  writeFileSync(layout.env, "IVA_PORT=8723\n");
+  mkdirSync(join(layout.data, "custom"), { recursive: true });
+  writeFileSync(join(root, ".eve/.workflow-data/open-run.json"), "{}");
+
+  store.sandboxState(name);
+  // What a started server writes goes through the links, and has to land in the
+  // sandbox: a version that is only being proved is not the installation yet.
+  writeFileSync(join(dir, "data/started.log"), "started\n");
+  writeFileSync(join(dir, ".eve/.workflow-data/started.log"), "re-enqueued\n");
+  assert.equal(existsSync(join(layout.data, "started.log")), false);
+  assert.equal(existsSync(join(root, ".eve/.workflow-data/started.log")), false);
+  assert.equal(readFileSync(join(root, ".eve/.workflow-data/open-run.json"), "utf8"), "{}");
+  // The installation's own .env is read even by a probe - that is the point of it.
+  assert.equal(realpathSync(join(dir, ".env")), realpathSync(layout.env));
+
+  // Proved: the state links go back to the installation, and the sandbox goes away
+  // with the marker that made the version incomplete while it was being proved.
+  store.linkState(dir);
+  store.complete(name);
+  assert.equal(realpathSync(join(dir, "data")), realpathSync(layout.data));
+  assert.equal(
+    realpathSync(join(dir, ".eve/.workflow-data")),
+    realpathSync(join(root, ".eve/.workflow-data")),
+  );
+  assert.equal(existsSync(join(dir, ".iva-incomplete")), false);
+});
+
+test("a version killed while it was being probed is swept, never activated", (t) => {
+  const store = createVersionStore(home(t));
+  const name = "0.3.15-bbbbbbbbbbbb";
+  const dir = store.stage(name);
+  store.linkState(dir);
+  store.complete(name);
+  // The one moment a finished version goes back to scratch state: it is probed
+  // again after an interrupted run left it built but not activated.
+  store.sandboxState(name);
+
+  assert.deepEqual(store.list(), []);
+  assert.throws(() => store.activate(name), /incomplete/);
+  assert.deepEqual(store.sweep(), [name]);
+  assert.equal(existsSync(dir), false);
+});
+
 test("a version links .env before there is one, so a later write lands outside", (t) => {
   const root = home(t);
   const store = createVersionStore(root);

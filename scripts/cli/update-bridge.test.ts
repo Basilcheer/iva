@@ -3,10 +3,12 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import {
+  appendFileSync,
   existsSync,
   mkdirSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -127,6 +129,9 @@ test("a version that builds but does not start is never activated", (t) => {
   const iva = world(t);
   update(iva);
   const healthy = active(iva);
+  const store = join(iva.home, ".eve/.workflow-data");
+  rmSync(join(store, "started.log"), { force: true });
+  rmSync(join(iva.home, "data/started.log"), { force: true });
 
   iva.publish((tree) =>
     writeFileSync(join(tree, "scripts/feature.mjs"), "// START_BREAK\n"),
@@ -137,6 +142,56 @@ test("a version that builds but does not start is never activated", (t) => {
   assert.match(output, /provider\.ts/u);
   assert.equal(active(iva), healthy);
   assert.deepEqual(readdirSync(join(iva.home, "versions")), [healthy]);
+  // It got as far as opening its state before it died - and none of that reached
+  // the installation, which is still being served by the version that works.
+  assert.equal(existsSync(join(store, "started.log")), false, output);
+  assert.equal(existsSync(join(iva.home, "data/started.log")), false, output);
+});
+
+test("the health probe runs on scratch state, with the service's own environment", (t) => {
+  const iva = world(t);
+  // A run the live service is in the middle of. A probe that borrowed the real
+  // store would re-enqueue it from a version that may be deleted a second later.
+  const store = join(iva.home, ".eve/.workflow-data");
+  mkdirSync(store, { recursive: true });
+  writeFileSync(join(store, "open-run.json"), '{"status":"running"}\n');
+  appendFileSync(join(iva.home, ".env"), "IVA_ENV_MARK=from-dotenv\n");
+
+  const output = update(iva);
+  // systemctl is a stub here, so the only server that really started is the probe.
+  const starts = readFileSync(iva.startsLog, "utf8")
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line) as Record<string, string>);
+  assert.equal(starts.length, 1, output);
+  const [probe] = starts;
+  assert.equal(probe.probe, "1", output);
+  // The .env systemd hands the unit through EnvironmentFile, or the probe proves
+  // a version starts under a configuration nobody runs.
+  assert.equal(probe.envMark, "from-dotenv");
+  // Both spellings of the port are the probe's own: code that reaches for
+  // IVA_PORT to talk to "the server" must not reach the live one.
+  assert.equal(probe.ivaPort, probe.port);
+  assert.notEqual(probe.ivaPort, "8723");
+  // Everything it wrote landed in scratch state.
+  assert.notEqual(probe.store, realpathSync(store));
+  assert.notEqual(probe.data, realpathSync(join(iva.home, "data")));
+  assert.equal(existsSync(join(store, "started.log")), false);
+  assert.equal(existsSync(join(iva.home, "data/started.log")), false);
+  assert.equal(
+    readFileSync(join(store, "open-run.json"), "utf8"),
+    '{"status":"running"}\n',
+  );
+
+  // Once proved, the version runs on the installation's own state - and keeps no
+  // scratch directory around.
+  const dir = join(iva.home, "versions", String(active(iva)));
+  assert.equal(realpathSync(join(dir, ".eve/.workflow-data")), realpathSync(store));
+  assert.equal(
+    realpathSync(join(dir, "data")),
+    realpathSync(join(iva.home, "data")),
+  );
+  assert.equal(existsSync(join(dir, ".iva-incomplete")), false);
 });
 
 test("a customization that does not build leaves the service on the stock build", (t) => {

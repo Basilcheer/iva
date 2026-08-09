@@ -1,7 +1,11 @@
 import { spawn } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { parseEnvText } from "./env-file.ts";
 
 const LOG_TAIL = 4000;
+/** Set for the probe only; the code that runs on boot reads it to stay passive. */
+export const PROBE_FLAG = "IVA_HEALTH_PROBE";
 const BUSY_PORT = "the probe port was already answering";
 
 /**
@@ -39,6 +43,33 @@ export type ProbeOptions = {
 };
 
 export type ProbeResult = { readonly ok: boolean; readonly log: string };
+
+/**
+ * The environment the service is started with, adjusted for a probe.
+ *
+ * systemd hands the unit the `.env` through `EnvironmentFile=`, so a probe
+ * without it proves a version starts under a configuration nobody runs. The port
+ * is the probe's own in both spellings: code that reaches for `IVA_PORT` to talk
+ * to "the server" has to reach this one, never the live service.
+ */
+export function probeEnvironment(
+  envPath: string,
+  port: number,
+): Record<string, string> {
+  let values: Record<string, string> = {};
+  try {
+    values = parseEnvText(readFileSync(envPath, "utf8"));
+  } catch {
+    // No .env yet is a valid installation state, and an unreadable one is the
+    // service's problem to report, not a reason to refuse to check the version.
+  }
+  return {
+    ...values,
+    PORT: String(port),
+    IVA_PORT: String(port),
+    [PROBE_FLAG]: "1",
+  };
+}
 
 const wait = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));

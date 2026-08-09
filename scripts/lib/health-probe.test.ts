@@ -12,7 +12,11 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "node:http";
-import { portWasTaken, probeVersion } from "./health-probe.ts";
+import {
+  portWasTaken,
+  probeEnvironment,
+  probeVersion,
+} from "./health-probe.ts";
 
 const PROBE_PORT = 18730;
 
@@ -53,6 +57,33 @@ function probe(
     intervalMs: 50,
   });
 }
+
+test("the probe environment is the service's, with the probe's own port", (t) => {
+  const dir = versionDir(t, "");
+  const env = join(dir, ".env");
+  writeFileSync(
+    env,
+    'MODEL_PROVIDER=anthropic\nIVA_PORT=8723\nTELEGRAM_BOT_TOKEN="42:secret"\n',
+  );
+
+  const probeEnv = probeEnvironment(env, 8901);
+  // What systemd hands the unit through EnvironmentFile - a probe without it
+  // would prove a version starts under a configuration nobody runs.
+  assert.equal(probeEnv.MODEL_PROVIDER, "anthropic");
+  assert.equal(probeEnv.TELEGRAM_BOT_TOKEN, "42:secret");
+  // Both spellings of the port name the probe's server, never the live one.
+  assert.equal(probeEnv.PORT, "8901");
+  assert.equal(probeEnv.IVA_PORT, "8901");
+  assert.equal(probeEnv.IVA_HEALTH_PROBE, "1");
+
+  // An installation without an .env is still worth checking a version against.
+  const bare = probeEnvironment(join(dir, "missing.env"), 8901);
+  assert.deepEqual(bare, {
+    PORT: "8901",
+    IVA_PORT: "8901",
+    IVA_HEALTH_PROBE: "1",
+  });
+});
 
 test("a healthy build answers on the probe port and is stopped again", async (t) => {
   const dir = versionDir(t, SERVER);

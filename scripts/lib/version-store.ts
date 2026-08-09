@@ -16,8 +16,20 @@ import { dirname, join } from "node:path";
 
 const INCOMPLETE = ".iva-incomplete";
 const SETTLED = "active.json";
-/** Directories a version borrows from the installation instead of owning. */
-export const STATE_DIRS = ["data", "vault", ".eve", ".workflow-data"];
+/**
+ * Directories a version borrows from the installation instead of owning.
+ *
+ * Only eve's durable store is shared out of `.eve`, not the whole directory: the
+ * rest of it is a build cache keyed by the code, so it belongs to the version
+ * that built it - and sharing it would hand a version that is still being proved
+ * the runs of the service that is running right now.
+ */
+export const STATE_DIRS = [
+  "data",
+  "vault",
+  ".eve/.workflow-data",
+  ".workflow-data",
+];
 const FLIP_PREFIX = ".current.iva-flip-";
 const VERSION_NAME = /^(\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?)-([0-9a-f]{12})$/;
 
@@ -306,24 +318,49 @@ export function createVersionStore(home: string) {
     );
   }
 
-  /** State lives outside the versions tree; a version only borrows it. */
-  function linkState(dir: string): void {
-    // .eve holds eve's workflow store (and .workflow-data the one older builds used):
-    // shared, or every update would drop the conversations that were open during it.
+  /**
+   * State lives outside the versions tree; a version only borrows it.
+   *
+   * `stateHome` is the installation itself for a version that runs, and a scratch
+   * directory while a version is only being proved - see `sandboxState`.
+   */
+  function linkState(dir: string, stateHome: string = home): void {
+    // The workflow store is shared, or every update would drop the conversations
+    // that were open during it (.workflow-data is where older builds kept it).
     const links: [string, string][] = STATE_DIRS.map((name) => [
       name,
-      join(home, name),
+      join(stateHome, name),
     ]);
     for (const [, target] of links) mkdirSync(target, { recursive: true });
-    // Linked even when it does not exist yet: the link dangles harmlessly, and a
-    // later `iva config` writes the real file outside the version instead of into
-    // one that the next flip drops.
+    // The .env is the installation's in both modes: reading it is what makes a
+    // probe meaningful, and a later `iva config` has to write through the link to
+    // the real file instead of into a version that the next flip drops.
     links.push([".env", layout.env]);
     for (const [name, target] of links) {
       const link = join(dir, name);
       rmSync(link, { recursive: true, force: true });
+      mkdirSync(dirname(link), { recursive: true });
       symlinkSync(target, link);
     }
+  }
+
+  /**
+   * Point a version's state at scratch directories for the duration of its health
+   * probe.
+   *
+   * The probe starts the real server, and a server started on the live state
+   * re-enqueues the runs of the service that is still handling them - from a
+   * candidate that may be deleted a second later. So a version is only allowed to
+   * see the installation's state once it has earned the right to run on it.
+   *
+   * The sandbox lives inside the incomplete marker: it is removed with it, and a
+   * run killed mid-probe leaves a directory the next sweep takes away rather than
+   * a version whose state points into nowhere.
+   */
+  function sandboxState(name: string): void {
+    const dir = versionDir(name);
+    mkdirSync(join(dir, INCOMPLETE), { recursive: true });
+    linkState(dir, join(dir, INCOMPLETE, "state"));
   }
 
   return {
@@ -342,5 +379,6 @@ export function createVersionStore(home: string) {
     heal,
     materialize,
     linkState,
+    sandboxState,
   };
 }

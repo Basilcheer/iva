@@ -54,15 +54,41 @@ mkdirSync(join(process.cwd(), ".output"), { recursive: true });
 writeFileSync(join(process.cwd(), ".output/built.json"), JSON.stringify(sources(process.cwd()).length));
 `;
 
+/**
+ * The dependency the health probe and the service both start.
+ *
+ * Like the real one it writes to the state it is given the moment it comes up -
+ * eve re-enqueues the open runs from its durable store on every start - so a
+ * probe that borrowed the installation's state leaves fingerprints in it.
+ */
 const EVE = `#!/usr/bin/env node
 import { createServer } from "node:http";
-import { existsSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { sources } from "../../../scripts/source-scan.mjs";
 if (!existsSync(join(process.cwd(), ".output/built.json"))) {
   process.stderr.write("no build output\\n");
   process.exit(1);
 }
+const store = join(process.cwd(), ".eve/.workflow-data");
+mkdirSync(store, { recursive: true });
+appendFileSync(join(store, "started.log"), "re-enqueued active runs\\n");
+appendFileSync(join(process.cwd(), "data/started.log"), "started\\n");
+if (process.env.IVA_TEST_STARTS)
+  appendFileSync(
+    process.env.IVA_TEST_STARTS,
+    JSON.stringify({
+      cwd: process.cwd(),
+      probe: process.env.IVA_HEALTH_PROBE ?? "",
+      port: process.env.PORT,
+      ivaPort: process.env.IVA_PORT,
+      envMark: process.env.IVA_ENV_MARK ?? "",
+      store: realpathSync(store),
+      data: realpathSync(join(process.cwd(), "data")),
+    }) + "\\n",
+  );
+// After the store is opened, like the real thing: a start that crashes here has
+// already touched whatever state it was given.
 const mark = ["START", "BREAK"].join("_");
 const broken = sources(process.cwd()).filter(([, text]) => text.includes(mark));
 if (broken.length) {
@@ -110,6 +136,8 @@ export type World = {
   readonly shim: string;
   readonly upstream: string;
   readonly systemctlLog: string;
+  /** One JSON line per server start, probe or service, in the order they happened. */
+  readonly startsLog: string;
   /** Run the user's `iva` command, always through the shim they actually have. */
   iva(
     args: readonly string[],
@@ -201,6 +229,7 @@ export function createWorld(): World {
   const fakeHome = join(dir, "home");
   const bin = join(dir, "bin");
   const systemctlLog = join(dir, "systemctl.log");
+  const startsLog = join(dir, "starts.log");
 
   git(dir, ["init", "--bare", "--initial-branch=main", upstream]);
   mkdirSync(source, { recursive: true });
@@ -235,6 +264,7 @@ export function createWorld(): World {
     TERM: "dumb",
     AGENT_LANGUAGE: "en",
     IVA_TEST_SYSTEMCTL: systemctlLog,
+    IVA_TEST_STARTS: startsLog,
     IVA_TEST_EVE: EVE,
     IVA_TEST_MODULES: join(REPO, "node_modules"),
   };
@@ -246,6 +276,7 @@ export function createWorld(): World {
     shim,
     upstream,
     systemctlLog,
+    startsLog,
     git,
     iva: (args, env = {}) =>
       spawnSync(shim, [...args], {

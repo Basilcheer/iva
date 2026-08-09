@@ -1,6 +1,6 @@
 import { cpSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
-import { portWasTaken, probeVersion } from "./health-probe.ts";
+import { portWasTaken, probeEnvironment, probeVersion } from "./health-probe.ts";
 import { runMigrations } from "./migrations.ts";
 import { DEFAULT_PORT, PortChecker, PortSelector, bindProbe } from "./ports.ts";
 import { acquireUpdateLock } from "./update-lock.ts";
@@ -176,7 +176,7 @@ export async function finishVersionUpdate({
   home,
   name,
   run,
-  probe = (dir, port) => probeVersion({ dir, port }),
+  probe,
   restart = async () => {},
   adopt = () => {},
   notify = () => {},
@@ -185,6 +185,14 @@ export async function finishVersionUpdate({
 }: FinishOptions): Promise<UpdateOutcome> {
   const dir = join(store.layout.versions, name);
   const active = store.currentName();
+  const check =
+    probe ??
+    ((target: string, port: number) =>
+      probeVersion({
+        dir: target,
+        port,
+        env: probeEnvironment(store.layout.env, port),
+      }));
   let custom: "none" | "applied" | "stock" = "none";
 
   if (active === name) {
@@ -203,7 +211,10 @@ export async function finishVersionUpdate({
         throw error;
       }
     }
-    const health = await proveStarts(dir, probe, log);
+    // The probe is a real server start, so it runs on scratch state: an update
+    // that is about to be thrown away must not have touched the installation.
+    store.sandboxState(name);
+    const health = await proveStarts(dir, check, log);
     if (!health.ok) {
       // Nothing points at it, so removing it is the whole rollback.
       rmSync(dir, { recursive: true, force: true });
@@ -212,6 +223,8 @@ export async function finishVersionUpdate({
       );
       return { status: "unhealthy", version: name, log: health.log };
     }
+    // Proved: from here the version is allowed to see the installation's state.
+    store.linkState(dir);
     store.complete(name);
     store.activate(name);
   }
