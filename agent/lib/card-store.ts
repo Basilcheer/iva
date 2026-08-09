@@ -665,13 +665,10 @@ export function mergeCard(input: MergeInput): MergeResult {
   }
   // Незакрытый фенс делает кодом всё до конца тела, и гейт заголовков ниже перестаёт
   // видеть ## History/## Log за ним. Искать заголовки внутри открытого фенса нечем -
-  // такое тело отклоняется целиком (легаси-путь replace_body здесь не участвует).
-  if (
-    (operation === "ADD" ||
-      operation === "UPDATE" ||
-      (operation === "SUPERSEDE" && input.operation !== undefined)) &&
-    hasUnclosedFence(trimmedBody)
-  ) {
+  // такое тело отклоняется целиком, включая легаси-путь replace_body: он единственный,
+  // через который открытый фенс попадал в карточку и ломал её следующий SUPERSEDE.
+  // NOOP тела не пишет вовсе, поэтому его фенс никого не касается.
+  if (operation !== "NOOP" && hasUnclosedFence(trimmedBody)) {
     throw new Error(`${operation} body must close every code fence`);
   }
   // Секции карточки принадлежат write_card: H1 - заголовку, ## History/## Log -
@@ -736,6 +733,14 @@ export function mergeCard(input: MergeInput): MergeResult {
 
   const parsed = parseFrontmatter(existing);
   const oldBody = parsed.body;
+  // Тот же принцип со стороны диска: открытый фенс в лежащей карточке уводит её
+  // ## History в код, границ секций нет - замена Compiled Truth молча снесла бы весь
+  // append-only архив. Отказ; фенс в карточке чинит человек.
+  if (operation === "SUPERSEDE" && hasUnclosedFence(oldBody)) {
+    throw new Error(
+      "existing card body leaves a code fence open; close it before SUPERSEDE",
+    );
+  }
   if (
     operation === "UPDATE" &&
     hasOutsideHeading(

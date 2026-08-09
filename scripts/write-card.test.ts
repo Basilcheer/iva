@@ -754,6 +754,104 @@ test("незакрытый фенс отклоняется на ADD, UPDATE и S
   assert.match(out, /^ {2}## History$/m);
 });
 
+test("открытый фенс в лежащей карточке отклоняет SUPERSEDE, а не съедает History", async () => {
+  const base = {
+    operation: "ADD",
+    type: "note",
+    title: "Фенс в карточке",
+    description: "в теле карточки остался открытый фенс",
+    tags: ["note", "fence"],
+    body: "Owner: Alice.",
+  };
+  const created = await call(base);
+  assert.equal(created.ok, true);
+  // Карточка с опечаткой: фенс открыт выше ## History, поэтому весь архив читается как
+  // код. Замена Compiled Truth без гейта стёрла бы обе записи молча.
+  const poisoned =
+    `${read(created.file).trimEnd()}\n\n` +
+    "```yaml\nowner: Alice\n\n" +
+    "## History\n\n- 2026-01-01: Owner Alice\n- 2026-03-01: Owner Zed\n";
+  writeFileSync(join(VAULT, created.file), poisoned);
+
+  const rejected = await call({
+    ...base,
+    operation: "SUPERSEDE",
+    body: "Owner: Carol.",
+    history_entry: "2026-08-01: Owner: Bob.",
+  });
+  assert.equal(rejected.ok, false);
+  assert.match(rejected.error, /existing card body leaves a code fence open/);
+  assert.equal(read(created.file), poisoned);
+
+  const rejectedLegacy = await call({
+    ...base,
+    operation: undefined,
+    replace_body: true,
+    body: "Owner: Carol.",
+    history_entry: "2026-08-01: Owner: Bob.",
+  });
+  assert.equal(rejectedLegacy.ok, false);
+  assert.match(
+    rejectedLegacy.error,
+    /existing card body leaves a code fence open/,
+  );
+  assert.equal(read(created.file), poisoned);
+});
+
+test("легаси replace_body не сажает открытый фенс в карточку", async () => {
+  const base = {
+    operation: "ADD",
+    type: "note",
+    title: "Легаси фенс",
+    description: "легаси-путь с незакрытым фенсом",
+    tags: ["note", "fence"],
+    body: "Owner: Alice.",
+  };
+  const created = await call(base);
+  writeFileSync(
+    join(VAULT, created.file),
+    `${read(created.file).trimEnd()}\n\n## History\n\n- 2026-01-01: Owner Zed\n`,
+  );
+  const before = read(created.file);
+
+  const rejected = await call({
+    ...base,
+    operation: undefined,
+    replace_body: true,
+    body: "Owner: Mallory.\n\n```text\n## History\n- 1999-01-01: подделка",
+    history_entry: "2026-08-01: Owner: Alice.",
+  });
+  assert.equal(rejected.ok, false);
+  assert.match(rejected.error, /must close every code fence/);
+  assert.equal(read(created.file), before);
+
+  // Тот же легаси-вызов с закрытым фенсом и корректным History-префиксом проходит,
+  // и в карточке не остаётся открытого фенса для следующего SUPERSEDE.
+  const replaced = await call({
+    ...base,
+    operation: undefined,
+    replace_body: true,
+    body:
+      "Owner: Mallory.\n\n```text\nпример\n```\n\n" +
+      "## History\n\n- 2026-01-01: Owner Zed\n- 2026-08-01: Owner: Alice.",
+  });
+  assert.equal(replaced.action, "replaced");
+  const out = read(created.file);
+  assert.equal(out.match(/```/g)!.length, 2, "фенс в карточке закрыт");
+
+  const next = await call({
+    ...base,
+    operation: "SUPERSEDE",
+    body: "Owner: Bob.",
+    history_entry: "2026-08-02: Owner: Mallory.",
+  });
+  assert.equal(next.action, "replaced");
+  const after = read(created.file);
+  assert.match(after, /- 2026-01-01: Owner Zed/);
+  assert.match(after, /- 2026-08-01: Owner: Alice\./);
+  assert.match(after, /- 2026-08-02: Owner: Mallory\./);
+});
+
 test("Related дедуплицирует target по alias/anchor и не считает ссылку в prose", async () => {
   const base = {
     operation: "ADD",
