@@ -714,13 +714,19 @@ test("SUPERSEDE требует history_entry, заменяет truth и сохр
     title: "Смена владельца",
     description: "текущий владелец Alice",
     tags: ["note", "owner"],
-    body:
-      "Current owner: Alice\n\n## Evidence\n\n```text\nowner: Alice\n```\n\n" +
-      "## Log\n- 2026-07-01: Ownership confirmed\n\n" +
-      "## History\n\n- 2025: Initial owner Carol\n  Continued detail\n",
+    body: "Current owner: Alice",
     related: ["cards/contacts/alice"],
   };
   const created = await call(base);
+  // Секции карточки принадлежат write_card, а не модели: ADD не принимает H2 в body,
+  // поэтому исходное состояние с Evidence/Log/History кладём на диск напрямую.
+  writeFileSync(
+    join(VAULT, created.file),
+    `${read(created.file).trimEnd()}\n\n` +
+      "## Evidence\n\n```text\nowner: Alice\n```\n\n" +
+      "## Log\n- 2026-07-01: Ownership confirmed\n\n" +
+      "## History\n\n- 2025: Initial owner Carol\n  Continued detail\n",
+  );
   const before = read(created.file);
   const rejected = await call({
     ...base,
@@ -794,9 +800,13 @@ test("SUPERSEDE заменяет явно названную custom-секцию
     title: "Явная замена секции",
     description: "проверка preserve replace semantics",
     tags: ["note", "supersede"],
-    body: "Truth v1\n\n## Evidence\nold evidence\n\n## Notes\nkeep me",
+    body: "Truth v1",
   };
   const created = await call(base);
+  writeFileSync(
+    join(VAULT, created.file),
+    `${read(created.file).trimEnd()}\n\n## Evidence\nold evidence\n\n## Notes\nkeep me\n`,
+  );
   const result = await call({
     ...base,
     operation: "SUPERSEDE",
@@ -818,9 +828,13 @@ test("legacy replace_body требует непустой History prefix и до
     title: "Legacy History prefix",
     description: "проверка безопасной совместимости replace body",
     tags: ["note", "legacy"],
-    body: "Truth v1\n\n## History\n\n- 2025-01-01: Truth v0",
+    body: "Truth v1",
   };
   const created = await call(base);
+  writeFileSync(
+    join(VAULT, created.file),
+    `${read(created.file).trimEnd()}\n\n## History\n\n- 2025-01-01: Truth v0\n`,
+  );
   const before = read(created.file);
 
   for (const body of [
@@ -942,6 +956,29 @@ test("card-store держит полную матрицу historyEntry как е
         historyEntry: "x".repeat(HISTORY_ENTRY_CAP + 1),
       }),
     /must not exceed/,
+  );
+});
+
+test("ADD отклоняет структурные секции в body, не создавая карточку", async () => {
+  const base = {
+    operation: "ADD",
+    type: "note",
+    title: "Выдуманный архив",
+    description: "проверка структурных границ add",
+    tags: ["note", "add"],
+  };
+  for (const body of [
+    "Текущая истина.\n\n## History\n\n- 2020-01-01: сидел в тюрьме",
+    "Текущая истина.\n\n## Log\n- 2020-01-01: подделанная запись",
+    "Текущая истина.\n\n# Второй заголовок",
+  ]) {
+    const rejected = await call({ ...base, body });
+    assert.equal(rejected.ok, false);
+    assert.match(rejected.error, /without H1\/H2 headings/);
+  }
+  assert.equal(
+    existsSync(join(VAULT, "cards", "notes", `${slugify(base.title)}.md`)),
+    false,
   );
 });
 

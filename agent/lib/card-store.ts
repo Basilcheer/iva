@@ -654,11 +654,14 @@ export function mergeCard(input: MergeInput): MergeResult {
       `historyEntry must not exceed ${HISTORY_ENTRY_CAP} characters`,
     );
   }
+  // Секции карточки принадлежат write_card: H1 - заголовку, ## History/## Log -
+  // append-only архивам. Тело, которое сочинила модель, несёт факт и только факт, иначе
+  // выдуманный архив въезжает в карточку соседним полем и вычистить его уже нечем.
   if (
-    operation === "UPDATE" &&
+    (operation === "ADD" || operation === "UPDATE") &&
     hasOutsideHeading(trimmedBody, /^ {0,3}#{1,2}\s+/)
   ) {
-    throw new Error("UPDATE body must be a fact without H1/H2 headings");
+    throw new Error(`${operation} body must be a fact without H1/H2 headings`);
   }
   if (operation === "NOOP") {
     if (existing === undefined)
