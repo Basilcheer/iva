@@ -49,12 +49,12 @@ Autograph keeps **one card per subject**: when a fact changes, the existing card
 updated in place rather than duplicated (see `references/update-in-place.md`). Three
 frontmatter/body conventions support this:
 
-| Field / section             | Meaning                                                                                                                  |
-| --------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `updated: YYYY-MM-DD`       | Date a Compiled-Truth value last changed. Recency key for dedup merges (`updated > created > last_accessed`).            |
-| `status: superseded`        | Whole card retired. Must be present in the type's status enum.                                                           |
-| `superseded_by: [[card]]`   | Pointer to the replacement card.                                                                                         |
-| `## History` (body section) | Append-only log of old values, one dated line each: `- 2026-03→2026-06 · company: TDI Group`. Never edited or reordered. |
+| Field / section             | Meaning                                                                                                                                   |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `updated: YYYY-MM-DD`       | Date a Compiled-Truth value last changed. Recency key for dedup merges (`updated > created > last_accessed`).                             |
+| `status: superseded`        | Whole card retired. Must be present in the type's status enum.                                                                            |
+| `superseded_by: [[card]]`   | Pointer to the replacement card.                                                                                                          |
+| `## History` (body section) | Append-only log of old values, one dated line each: `- 2026-06-01: company: TDI Group (held 2026-03→2026-06)`. Never edited or reordered. |
 
 Optional: `confidence: EXTRACTED | INFERRED | AMBIGUOUS` — certainty of a captured fact.
 

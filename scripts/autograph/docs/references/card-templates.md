@@ -62,7 +62,9 @@ superseded_by: [[new-project-card]]
 ## Card with History (a fact changed — see references/update-in-place.md)
 
 Compiled Truth (frontmatter + top of description) holds the current value; old values
-move to an append-only `## History` section, never edited:
+move to an append-only `## History` section, never edited, one line per displaced
+value: `- {YYYY-MM-DD}: {fact}`. Cards written through Iva's `write_card` get this
+section from the tool — pass the displaced fact as `history_entry` instead.
 
 ```markdown
 ---
@@ -80,8 +82,8 @@ Creative director at Globex.
 
 ## History
 
-- 2026-03→2026-06 · company: TDI Group
-- 2026-01→2026-06 · role: Art Director
+- 2026-06-01: company: TDI Group (held 2026-03→2026-06)
+- 2026-06-01: role: Art Director (held 2026-01→2026-06)
 ```
 
 ## Linking Protocol (ОБЯЗАТЕЛЬНО при создании карточки)

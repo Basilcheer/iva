@@ -43,7 +43,7 @@ status flipped):
    ```markdown
    ## History
 
-   - 2026-03→2026-06 · company: TDI Group
+   - 2026-06-01: company: TDI Group (held 2026-03→2026-06)
    ```
 3. Set `updated: YYYY-MM-DD` to the change date.
 
@@ -52,7 +52,12 @@ Rules:
 - **Never leave two contradictory current values** on the same subject. Do NOT just
   append the new fact and leave the old one standing.
 - `## History` is **append-only** — never edit or reorder existing lines.
-- Date range: `{from YYYY-MM}→{to YYYY-MM} · {field}: {old value}`.
+- One line format for every writer: `- {YYYY-MM-DD}: {fact}`, dated by the day the
+  value stopped being current. `dedup.py` writes the same shape when a recency merge
+  displaces a value, so a card never mixes two kinds of History bullet.
+- When a tool owns the section — Iva's `write_card` — hand it the displaced fact
+  through `history_entry` (`- ` and the date belong to the tool) and never write the
+  `## History` heading into the card body yourself.
 
 ## 4. Whole-card obsolescence
 

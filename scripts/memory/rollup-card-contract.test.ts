@@ -34,10 +34,15 @@ void test("daily rollup prompt exposes the same four card operations as dbrain",
     "Pass history_entry only for SUPERSEDE",
     "write_card owns the '## History' section",
   ]) {
-    assert.match(rollup, new RegExp(fragment.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    assert.match(
+      rollup,
+      new RegExp(fragment.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
+    );
   }
 
-  const processInstructions = read("instructions/dbrain-processor/phases/process.md");
+  const processInstructions = read(
+    "instructions/dbrain-processor/phases/process.md",
+  );
   for (const operation of ["ADD", "UPDATE", "SUPERSEDE", "NOOP"]) {
     assert.match(processInstructions, new RegExp(`\\*\\*${operation}\\*\\*`));
   }
@@ -47,8 +52,22 @@ void test("daily rollup prompt exposes the same four card operations as dbrain",
   );
 });
 
+/** Bullets shown as History examples: inline code spans and lines that open with a
+ * list marker and then a date, plus anything still using the retired `·` separator. */
+function historyBullets(text: string): string[] {
+  const spans = [...text.matchAll(/`([^`\n]+)`/g)].map((match) => match[1]);
+  const lines = text.split("\n").map((line) => line.trim());
+  return [...spans, ...lines].filter(
+    (candidate) => /^- \d/.test(candidate) || candidate.includes(" · "),
+  );
+}
+
 void test("dbrain phase and its reference teach one history_entry contract", () => {
-  for (const name of ["phases/process.md", "references/classification.md"]) {
+  for (const name of [
+    "phases/process.md",
+    "references/classification.md",
+    "references/card-templates.md",
+  ]) {
     const text = read(`instructions/dbrain-processor/${name}`);
     assert.match(
       text,
@@ -68,6 +87,34 @@ void test("dbrain phase and its reference teach one history_entry contract", () 
       );
     }
   }
+});
+
+/** The dbrain instructions send the model to the autograph references for canonical
+ * card shapes, and the nightly dedup merge appends to the same section. Both must show
+ * the one line format write_card stores, or the model learns to write a second one. */
+void test("autograph references and the dedup merge keep one History line format", () => {
+  for (const name of [
+    "SKILL.md",
+    "references/update-in-place.md",
+    "references/card-templates.md",
+    "references/schema-reference.md",
+  ]) {
+    const text = read(`../autograph/docs/${name}`);
+    for (const bullet of historyBullets(text)) {
+      assert.match(
+        bullet,
+        /^- \d{4}-\d{2}-\d{2}: \S/,
+        `autograph ${name} shows "${bullet}" where a History line must read - YYYY-MM-DD: fact`,
+      );
+    }
+  }
+
+  const dedup = read("../autograph/dedup.py");
+  assert.match(
+    dedup,
+    /return f"- \{when\}: \{field\}: \{val\}\{held\}"/,
+    "dedup.py must append History lines dated the same way write_card dates them",
+  );
 });
 
 void test("every nightly mechanical path runs bounded cleanup before whole-file enforce", () => {

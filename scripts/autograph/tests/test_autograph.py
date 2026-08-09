@@ -2020,7 +2020,7 @@ def main():
         test("recency: old value goes to ## History",
              '## History' in rc_body and 'company: ACME' in rc_body, f"got: {rc_body}")
         test("recency: History line format",
-             '- 2026-03→2026-06 · company: ACME' in rc_body,
+             '- 2026-06-01: company: ACME (held 2026-03→2026-06)' in rc_body,
              f"got: {rc_body}")
 
         # canonical newer / tie → canon kept, extra's losing value still recorded (no data loss)
@@ -2038,8 +2038,8 @@ def main():
              'company: ACME' in c2_body, f"got: {c2_body}")
 
         # append_history preserves existing lines (append-only)
-        appended = append_history("# X\n\n## History\n- 2025-01→2025-02 · role: Old\n",
-                                  ["- 2026-03→2026-06 · company: ACME"])
+        appended = append_history("# X\n\n## History\n- 2025-02-01: role: Old (held 2025-01→2025-02)\n",
+                                  ["- 2026-06-01: company: ACME (held 2026-03→2026-06)"])
         test("append_history keeps existing History lines",
              'role: Old' in appended and 'company: ACME' in appended, f"got: {appended}")
 

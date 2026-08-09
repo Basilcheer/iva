@@ -274,11 +274,22 @@ def summarize_manifest(clusters: list[dict]) -> dict:
     }
 
 
-def _history_line(from_date: str, to_date: str, field: str, val) -> str:
-    """A dated ## History line: `- 2026-03→2026-06 · company: TDI Group`."""
-    fm_ym = (from_date or '')[:7] or '????-??'
-    to_ym = (to_date or '')[:7] or '????-??'
-    return f"- {fm_ym}→{to_ym} · {field}: {val}"
+def _year_month(value: str) -> str:
+    """`2026-03-01` → `2026-03`; anything that is not a date → '' (unknown)."""
+    return value[:7] if re.match(r'\d{4}-\d{2}', value or '') else ''
+
+
+def _history_line(from_date: str, to_date: str, field: str, val, today: str) -> str:
+    """A dated ## History line: `- 2026-06-01: company: TDI Group (held 2026-03→2026-06)`.
+
+    One format across writers: this is the shape write_card stores, so a card never
+    ends up with two kinds of History bullet. The leading date is when the value
+    stopped being current; the span is dropped when a card carries no usable dates.
+    """
+    when = to_date if re.match(r'\d{4}-\d{2}-\d{2}$', to_date or '') else today
+    since, until = _year_month(from_date), _year_month(to_date)
+    held = f" (held {since}→{until})" if since and until else ''
+    return f"- {when}: {field}: {val}{held}"
 
 
 def append_history(body: str, lines: list[str]) -> str:
@@ -331,13 +342,15 @@ def merge_content(canonical_path: Path, extra_paths: list[Path],
             if key in conflict and canon_val and val and str(canon_val) != str(val):
                 if extra_date and (not canon_date or extra_date > canon_date):
                     # extra is newer → it wins; old canon value → History
-                    history_lines.append(_history_line(canon_date, extra_date, key, canon_val))
+                    history_lines.append(
+                        _history_line(canon_date, extra_date, key, canon_val, today))
                     canon_fm[key] = val
                     canon_fm['updated'] = today
                     changed = True
                 else:
                     # canon newer, or tie/missing dates → keep canon; extra's value → History
-                    history_lines.append(_history_line(extra_date, canon_date or today, key, val))
+                    history_lines.append(
+                        _history_line(extra_date, canon_date or today, key, val, today))
                 continue
             # Non-conflict: take richer/non-empty values
             if not canon_val and val:
