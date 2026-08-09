@@ -243,9 +243,9 @@ test("a customization that does not build leaves the service on the stock build"
   const iva = world(t);
   update(iva);
 
-  mkdirSync(join(iva.home, "data/custom/scripts"), { recursive: true });
+  mkdirSync(join(iva.home, "data/custom/agent/tools"), { recursive: true });
   writeFileSync(
-    join(iva.home, "data/custom/scripts/feature.mjs"),
+    join(iva.home, "data/custom/agent/tools/feature.mjs"),
     "// BUILD_BREAK\n",
   );
   const sha = iva.publish();
@@ -255,25 +255,25 @@ test("a customization that does not build leaves the service on the stock build"
   assert.match(output, /stock build/u);
   // The user's file is untouched, and the version that runs does not contain it.
   assert.equal(
-    readFileSync(join(iva.home, "data/custom/scripts/feature.mjs"), "utf8"),
+    readFileSync(join(iva.home, "data/custom/agent/tools/feature.mjs"), "utf8"),
     "// BUILD_BREAK\n",
   );
   assert.equal(
-    existsSync(join(iva.home, "versions", name, "scripts/feature.mjs")),
+    existsSync(join(iva.home, "versions", name, "agent/tools/feature.mjs")),
     false,
   );
 });
 
 test("a customization that builds is part of the version that runs", (t) => {
   const iva = world(t);
-  mkdirSync(join(iva.home, "data/custom/scripts"), { recursive: true });
+  mkdirSync(join(iva.home, "data/custom/agent/tools"), { recursive: true });
   writeFileSync(
-    join(iva.home, "data/custom/scripts/feature.mjs"),
+    join(iva.home, "data/custom/agent/tools/feature.mjs"),
     "export const feature = 'mine';\n",
   );
   const output = update(iva);
   assert.equal(
-    readFileSync(join(iva.home, "current/scripts/feature.mjs"), "utf8"),
+    readFileSync(join(iva.home, "current/agent/tools/feature.mjs"), "utf8"),
     "export const feature = 'mine';\n",
     output,
   );
