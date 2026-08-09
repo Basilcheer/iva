@@ -194,6 +194,36 @@ test("the health probe runs on scratch state, with the service's own environment
   assert.equal(existsSync(join(dir, ".iva-incomplete")), false);
 });
 
+test("the second half of an update is run by the version being installed", (t) => {
+  const iva = world(t);
+  update(iva);
+  const installed = readFileSync(
+    join(iva.home, "current/scripts/update-finish.ts"),
+    "utf8",
+  );
+  assert.doesNotMatch(installed, /finished-by/u);
+
+  // The release changes the updater itself. A fix to the second half of an update
+  // is only worth anything if it works in the release that carries it, so the code
+  // that must run here is the one that has just been fetched.
+  const sha = iva.publish((tree) => {
+    const path = join(tree, "scripts/update-finish.ts");
+    writeFileSync(
+      path,
+      readFileSync(path, "utf8").replace(
+        'const verbose = flags.includes("--verbose");',
+        'const verbose = flags.includes("--verbose");\n' +
+          '  writeFileSync(join(home, "finished-by"), name);',
+      ),
+    );
+  });
+
+  const output = update(iva);
+  const name = `0.3.15-${sha.slice(0, 12)}`;
+  assert.equal(active(iva), name, output);
+  assert.equal(readFileSync(join(iva.home, "finished-by"), "utf8"), name);
+});
+
 test("a customization that does not build leaves the service on the stock build", (t) => {
   const iva = world(t);
   update(iva);

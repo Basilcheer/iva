@@ -304,6 +304,34 @@ test("a build failure keeps the running version and removes the candidate", asyn
   assert.deepEqual(readdirSync(store.layout.versions), [first.version]);
 });
 
+test("a build that fills the disk gives the space back and says what happened", async (t) => {
+  const iva = world(t);
+  const first = updated(await iva.update());
+  iva.release("0.3.15");
+
+  // A small VPS runs out of room mid-build. The half-written version is the one
+  // thing on the box that is safe to delete, and the reason has to reach the user
+  // or they will just run the update again into the same wall.
+  await assert.rejects(
+    iva.update({
+      run: (command, args, cwd) =>
+        args[1] === "build"
+          ? Promise.resolve({
+              code: 1,
+              output: "ENOSPC: no space left on device, write '.output/server.mjs'",
+            })
+          : fixtureRunner()(command, args, cwd),
+    }),
+    /ENOSPC/,
+  );
+  const store = createVersionStore(iva.home);
+  assert.equal(store.currentName(), first.version);
+  assert.deepEqual(readdirSync(store.layout.versions), [first.version]);
+
+  // With room again, the same update goes through - nothing was left claiming it.
+  assert.equal(updated(await iva.update()).previous, first.version);
+});
+
 test("a second update refuses to run while the first one holds the lock", async (t) => {
   const iva = world(t);
   let release = (): void => {};
