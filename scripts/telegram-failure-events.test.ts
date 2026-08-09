@@ -289,7 +289,11 @@ test("session.waiting after normal cleanup or for a stale session is a no-op", a
   const chatId = "705";
   const key = chatKeyOf(chatId);
   // Обычный финал: turn.completed уже прибрал статус — парковка ничего не трогает.
-  setChatStatus(key, { status: "idle", sessionId: null, statusMessageId: null });
+  setChatStatus(key, {
+    status: "idle",
+    sessionId: null,
+    statusMessageId: null,
+  });
   const before = apiCalls.length;
   await emitSessionWaiting({ chatId, sessionId: "already-cleaned" });
   assert.equal(callsSince(before, "deleteMessage").length, 0);

@@ -424,7 +424,9 @@ void test("losing the claim race to a new live turn skips the early status", asy
 
 void test("randomized interleaving never steals a fresh running turn (seed exposed)", async () => {
   const seed = Number(process.env.IVA_TEST_SEED ?? Date.now() % 100_000);
-  console.log(`randomized early-status seed: ${seed} (IVA_TEST_SEED to replay)`);
+  console.log(
+    `randomized early-status seed: ${seed} (IVA_TEST_SEED to replay)`,
+  );
   let lcg = seed >>> 0;
   const rand = () => {
     lcg = (lcg * 1664525 + 1013904223) >>> 0;
