@@ -538,6 +538,24 @@ export function resolveOperation(input: OperationInput): CardOperation {
   return input.existing === undefined ? "ADD" : "UPDATE";
 }
 
+/**
+ * Легаси-путь, где вытесненная истина приходит секцией `## History` внутри body:
+ * только вызов БЕЗ operation с replace_body. У явного SUPERSEDE его нет - там
+ * вытесненный факт передаётся через historyEntry. Тул и стор обязаны решать это
+ * одинаково, иначе один пускает вызов, а второй роняет его английским исключением.
+ */
+export function isLegacyHistoryReplace(
+  operation: CardOperation | undefined,
+  replaceBody: boolean | undefined,
+  body: string,
+): boolean {
+  return (
+    operation === undefined &&
+    replaceBody === true &&
+    hasH2Section(body.trim(), "History")
+  );
+}
+
 export interface MergeInput extends OperationInput {
   title: string;
   fields: FmFields; // поля, которые тул реально знает и обновляет
@@ -627,11 +645,7 @@ export function mergeCard(input: MergeInput): MergeResult {
   if (
     operation === "SUPERSEDE" &&
     !historyEntry?.trim() &&
-    !(
-      input.operation === undefined &&
-      replaceBody === true &&
-      hasH2Section(trimmedBody, "History")
-    )
+    !isLegacyHistoryReplace(input.operation, replaceBody, trimmedBody)
   ) {
     throw new Error(
       "SUPERSEDE requires historyEntry or a legacy ## History section",

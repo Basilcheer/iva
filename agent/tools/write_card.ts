@@ -5,11 +5,10 @@ import { join, relative, sep } from "node:path";
 import {
   acquireLock,
   atomicWrite,
-  hasH2Section,
+  isLegacyHistoryReplace,
   mergeCard,
   resolveCard,
   resolveOperation,
-  type CardOperation,
 } from "../lib/card-store.js";
 
 // Строго типизированная запись карточки памяти. Заменяет «write_file по наитию» для карточек:
@@ -53,12 +52,13 @@ const normalizeTags = (tags: string[]): string[] => [
  * для текста, который модель могла нафантазировать. Сбой sink'а (закрытый stderr, EPIPE)
  * гасится: карточка уже записана, и журнал не имеет права превратить успех в отказ.
  */
-function logIgnoredHistoryEntry(operation: CardOperation): void {
+function logIgnoredHistoryEntry(): void {
   try {
     console.warn(
       JSON.stringify({
         event: "write_card_input_normalized",
-        operation,
+        // Вытеснять нечего только у новой карточки, а её создаёт лишь ADD.
+        operation: "ADD",
         ignored_field: "history_entry",
       }),
     );
@@ -360,17 +360,10 @@ export default defineTool({
           error: `${effectiveOperation} требует существующую карточку ${rel}.`,
         };
       }
-      // Легаси-путь «## History прямо в body» есть только у вызова без operation —
-      // ровно так его различает и mergeCard. Без этого условия явный SUPERSEDE с
-      // History в body проваливался в store и возвращался английским исключением.
-      const legacyReplaceBody =
-        operation === undefined &&
-        replace_body === true &&
-        hasH2Section(body, "History");
       if (
         effectiveOperation === "SUPERSEDE" &&
         !history_entry?.trim() &&
-        !legacyReplaceBody
+        !isLegacyHistoryReplace(operation, replace_body === true, body)
       ) {
         return {
           ok: false,
@@ -399,7 +392,7 @@ export default defineTool({
         historyEntry: history_entry,
       });
       if (action !== "noop") atomicWrite(file, content);
-      if (ignoredHistoryEntry) logIgnoredHistoryEntry(effectiveOperation);
+      if (ignoredHistoryEntry) logIgnoredHistoryEntry();
       return {
         ok: true,
         file: rel,
