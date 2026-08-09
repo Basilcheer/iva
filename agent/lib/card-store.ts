@@ -204,7 +204,7 @@ export function h2Sections(lines: string[], heading: string): H2Section[] {
   });
 }
 
-export function hasH2Section(body: string, heading: string): boolean {
+function hasH2Section(body: string, heading: string): boolean {
   return h2Sections(body.split("\n"), heading).length > 0;
 }
 
@@ -364,8 +364,14 @@ function lastHistoryEntry(body: string): string | undefined {
   return content.at(-1)?.trim();
 }
 
-function historyEndsWith(body: string, entry: string): boolean {
-  return lastHistoryEntry(body) === entry.trim();
+/** Текст факта без буллета и без ведущей даты записи - общая форма для сверки
+ * с хвостом Истории. Дата в хвосте необязательна: строки, оставленные легаси-картой
+ * или механическим слиянием autograph, приходят без неё. */
+function historyFact(line: string): string {
+  return line
+    .trim()
+    .replace(/^[-*]\s+/, "")
+    .replace(/^\d{4}-\d{2}-\d{2}:\s*/, "");
 }
 
 /** То же вытеснение, что уже стоит в хвосте Истории. Датированную строку сверяем
@@ -378,10 +384,10 @@ function repeatsHistoryTail(
   tail: string | undefined,
 ): boolean {
   if (tail === undefined) return false;
-  if (tail === dated.trim()) return true;
+  if (tail.trim() === dated.trim()) return true;
   const fact = historyEntry.trim().replace(/^[-*]\s+/, "");
   if (/^\d{4}-\d{2}-\d{2}:/.test(fact)) return false;
-  return tail.replace(/^[-*]\s+\d{4}-\d{2}-\d{2}:\s*/, "") === fact;
+  return historyFact(tail) === fact;
 }
 
 function appendLog(body: string, incoming: string, date: string): string {
@@ -732,7 +738,11 @@ export function mergeCard(input: MergeInput): MergeResult {
   const replayed =
     operation === "SUPERSEDE" &&
     !!historyEntry?.trim() &&
-    historyEndsWith(oldBody, canonicalHistoryEntry(historyEntry, date));
+    repeatsHistoryTail(
+      historyEntry,
+      canonicalHistoryEntry(historyEntry, date),
+      lastHistoryEntry(oldBody),
+    );
   if (operation === "SUPERSEDE") {
     newBody = `\n${replaceCompiledTruth(oldBody, trimmedBody, historyEntry, date).trim()}\n`;
   } else if (!bodyContains(oldBody, trimmedBody)) {
