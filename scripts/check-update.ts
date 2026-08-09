@@ -1,6 +1,8 @@
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isEntrypoint } from "./lib/entrypoint.ts";
+import { classifyRoot, gitRootFor } from "./lib/version-layout.ts";
+import { createVersionStore, parseVersionName } from "./lib/version-store.ts";
 import { acquireUpdateLock, releaseUpdateLock } from "./lib/update-safety.ts";
 import {
   inspectUpstream,
@@ -23,7 +25,10 @@ type SendUpdateRequest = {
 type DailyUpdateOptions = {
   root?: string;
   env?: UpdateEnvironment;
-  inspectImpl?: (options: { root: string }) => Promise<UpdateInfo>;
+  inspectImpl?: (options: {
+    root: string;
+    head?: string;
+  }) => Promise<UpdateInfo>;
   sendImpl?: (request: SendUpdateRequest) => Promise<unknown>;
   readStateImpl?: typeof readNotifiedVersion;
   writeStateImpl?: typeof markVersionNotified;
@@ -53,7 +58,14 @@ export async function runDailyUpdateCheck({
   );
   if (!lock.ok) return { status: "update-running" as const };
   try {
-    const info = await inspectImpl({ root });
+    // On the immutable layout nothing runs from a working tree: upstream is read from
+    // the mirror, and "what is installed" is the commit the active version was built from.
+    const install = classifyRoot(root);
+    const active = createVersionStore(install.home).currentName();
+    const info = await inspectImpl({
+      root: gitRootFor(install),
+      head: (active && parseVersionName(active)?.sha) || "HEAD",
+    });
     if (!info.hasVersionUpdate) return { status: "current" as const, info };
     if ((await readStateImpl(storage)) === info.remoteVersion) {
       return { status: "already-notified" as const, info };

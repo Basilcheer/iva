@@ -7,6 +7,7 @@ import { createCliSystemd } from "./systemd.ts";
 import { createTreeRenderer } from "./tree.ts";
 import { createUpdateCommand } from "./update.ts";
 import { createUserbotCommands } from "./userbot.ts";
+import { createVersionUpdateCommand } from "./version-update-command.ts";
 
 export type CliCommand = (args: readonly string[]) => unknown;
 
@@ -52,12 +53,17 @@ export function createCliMain(root: string) {
   const services = createServiceCommands(runtime, systemdLifecycle);
   const cmdConfig = createConfigCommand(runtime, systemdLifecycle);
   const cmdDoctor = createDoctorCommand(runtime, systemdLifecycle);
-  const cmdUpdate = createUpdateCommand({
+  const legacyUpdate = createUpdateCommand({
     runtime,
     systemdLifecycle,
     showTree: tree.showTree,
     restartUserbotIfActive: userbot.restartUserbotIfActive,
   });
+  // Installations move to immutable versions; a development checkout keeps the
+  // in-place updater, which is also what the bridge era still needs on the way in.
+  const versionUpdate = createVersionUpdateCommand(runtime);
+  const cmdUpdate = (args: readonly string[]): Promise<void> =>
+    versionUpdate.active() ? versionUpdate.run(args) : legacyUpdate(args);
   const { C, SERVICES, TIMERS, bad, ok } = runtime;
 
   function cmdHelp(): void {

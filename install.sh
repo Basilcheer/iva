@@ -577,7 +577,9 @@ ASSISTANT_VAULT_DIR="$VAULT_DIR_REL" node scripts/init-vault.mjs || warn "$(t "i
 # ─────────────────────────────────────────────────────────────────────────
 step "$(t "Installing the iva command in ~/.local/bin…" "Ставлю команду iva в ~/.local/bin…")"
 mkdir -p "$HOME/.local/bin"
-printf '#!/usr/bin/env bash\nexec "%s" "%s/bin/iva.mjs" "$@"\n' "$(command -v node)" "$PROJECT_DIR" > "$HOME/.local/bin/iva"
+# Path resolution only, so the same shim keeps working once the install moves to
+# ~/iva/versions/<version> behind the `current` symlink.
+printf '#!/bin/sh\nIVA_ROOT="%s"\nif [ -f "$IVA_ROOT/current/bin/iva.mjs" ]; then\n  IVA_ROOT="$IVA_ROOT/current"\nfi\nexec "%s" "$IVA_ROOT/bin/iva.mjs" "$@"\n' "$PROJECT_DIR" "$(command -v node)" > "$HOME/.local/bin/iva"
 chmod +x "$HOME/.local/bin/iva"
 case ":$PATH:" in
   *":$HOME/.local/bin:"*) ok "$(t "The iva command is ready — try: iva help" "Команда iva готова — попробуй: iva help")" ;;
