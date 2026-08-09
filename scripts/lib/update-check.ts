@@ -13,7 +13,10 @@ import { resolveUpdateTarget, type GitResult } from "./update-channel.ts";
 
 export { notificationChat };
 
-type GitCommand = (root: string, args: string[]) => Promise<GitResult | string>;
+export type GitCommand = (
+  root: string,
+  args: string[],
+) => Promise<GitResult | string>;
 type UpdateOffer = {
   text: string;
   replyMarkup: { inline_keyboard: { text: string; callback_data: string }[][] };
@@ -28,7 +31,8 @@ type TelegramFetch = (
   init: { method: string; headers: Record<string, string>; body: string },
 ) => Promise<TelegramResponse>;
 
-function git(root: string, args: string[]): Promise<GitResult> {
+/** git in a directory, never throwing: the caller decides what a failure means. */
+export function gitAt(root: string, args: string[]): Promise<GitResult> {
   return new Promise((resolve) => {
     execFile(
       "git",
@@ -53,7 +57,7 @@ async function requireGit(gitImpl: GitCommand, root: string, args: string[]) {
   return result.stdout ?? "";
 }
 
-function packageVersion(jsonText: string): string | null {
+export function packageVersion(jsonText: string): string | null {
   try {
     const parsed: unknown = JSON.parse(jsonText);
     const version =
@@ -91,8 +95,16 @@ export function compareStableVersions(
 export async function inspectUpstream({
   root,
   remote = "origin",
-  gitImpl = git,
-}: { root?: string; remote?: string; gitImpl?: GitCommand } = {}) {
+  // The installed commit. On the immutable layout the repository is a mirror whose
+  // own HEAD moves with the remote, so the running version has to be named here.
+  head = "HEAD",
+  gitImpl = gitAt,
+}: {
+  root?: string;
+  remote?: string;
+  head?: string;
+  gitImpl?: GitCommand;
+} = {}) {
   if (!root) throw new Error("update check requires a repository root");
   const run = async (...args: string[]): Promise<GitResult> => {
     const result = await gitImpl(root, args);
@@ -101,18 +113,18 @@ export async function inspectUpstream({
       : result;
   };
   const target = await resolveUpdateTarget({ git: run, remote });
-  const local = await requireGit(gitImpl, root, ["rev-parse", "HEAD"]);
+  const local = await requireGit(gitImpl, root, ["rev-parse", head]);
   const remoteHead = target.targetHead ?? "";
   const behind =
     Number(
       await requireGit(gitImpl, root, [
         "rev-list",
         "--count",
-        `HEAD..${remoteHead}`,
+        `${head}..${remoteHead}`,
       ]),
     ) || 0;
   const localVersion = packageVersion(
-    await requireGit(gitImpl, root, ["show", "HEAD:package.json"]),
+    await requireGit(gitImpl, root, ["show", `${head}:package.json`]),
   );
   const remoteVersion = packageVersion(
     await requireGit(gitImpl, root, ["show", `${remoteHead}:package.json`]),
