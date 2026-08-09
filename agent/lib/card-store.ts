@@ -344,11 +344,14 @@ function removeH2Sections(body: string, heading: string): string {
   return output.join("\n").replace(/\s+$/, "") + "\n";
 }
 
+/** История хранится как `- YYYY-MM-DD: факт`. Дата, которую назвала модель, считается
+ * своей независимо от буллета — иначе в append-only архив навсегда уезжает вторая дата
+ * поверх первой. Строку без даты датируем днём записи. */
 function canonicalHistoryEntry(historyEntry: string, date: string): string {
-  const entry = historyEntry.trim();
-  return /^[-*]\s+\d{4}-\d{2}-\d{2}:/.test(entry)
-    ? entry
-    : `- ${date}: ${entry.replace(/^[-*]\s+/, "")}`;
+  const entry = historyEntry.trim().replace(/^[-*]\s+/, "");
+  return /^\d{4}-\d{2}-\d{2}:/.test(entry)
+    ? `- ${entry}`
+    : `- ${date}: ${entry}`;
 }
 
 function historyEndsWith(body: string, entry: string): boolean {
@@ -680,24 +683,15 @@ export function mergeCard(input: MergeInput): MergeResult {
 
   let newBody = operation === "UPDATE" ? collapseLogSections(oldBody) : oldBody;
   let appended = false;
+  // A confirmed-cancel rollup retry can replay the exact completed tool call. Only that
+  // fixed point is suppressed: the same canonical entry already ends History, so the
+  // truth behind it is displaced already. Global History dedup would destroy evidence.
+  const replayed =
+    operation === "SUPERSEDE" &&
+    !!historyEntry?.trim() &&
+    historyEndsWith(oldBody, canonicalHistoryEntry(historyEntry, date));
   if (operation === "SUPERSEDE") {
-    // A confirmed-cancel rollup retry can replay the exact completed tool call.
-    // Suppress only that fixed point: the same canonical History tail and an
-    // otherwise byte-identical card. Global History dedup would destroy evidence.
-    if (
-      historyEntry?.trim() &&
-      historyEndsWith(oldBody, canonicalHistoryEntry(historyEntry, date))
-    ) {
-      let replayBody = `\n${replaceCompiledTruth(oldBody, trimmedBody, undefined, date).trim()}\n`;
-      if (!extractH1(replayBody))
-        replayBody = `# ${title}\n\n${replayBody.replace(/^\s+/, "")}`;
-      replayBody = mergeRelated(replayBody, related ?? []);
-      const replayContent = `---\n${fmText}\n---\n${replayBody.replace(/\s*$/, "")}\n`;
-      if (replayContent === existing) {
-        return { content: existing, action: "noop" };
-      }
-    }
-    newBody = `\n${replaceCompiledTruth(oldBody, trimmedBody, historyEntry, date).trim()}\n`;
+    newBody = `\n${replaceCompiledTruth(oldBody, trimmedBody, replayed ? undefined : historyEntry, date).trim()}\n`;
   } else if (!bodyContains(oldBody, trimmedBody)) {
     newBody = appendLog(newBody, trimmedBody, date);
     appended = true;
@@ -709,6 +703,8 @@ export function mergeCard(input: MergeInput): MergeResult {
   if (beforeRelated !== newBody) appended = true;
 
   const content = `---\n${fmText}\n---\n${newBody.replace(/\s*$/, "")}\n`;
+  if (replayed && content === existing)
+    return { content: existing, action: "noop" };
   return {
     content,
     action:
