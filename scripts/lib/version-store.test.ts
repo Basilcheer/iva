@@ -312,3 +312,30 @@ test("state directories are shared into a version instead of copied", (t) => {
   store.linkState(dir);
   assert.equal(readFileSync(join(dir, "data/state.json"), "utf8"), "{}");
 });
+
+test("resetting a staged version clears it without giving up the claim", (t) => {
+  const store = createVersionStore(home(t));
+  install(store, "0.3.14-aaaaaaaaaaaa");
+  store.activate("0.3.14-aaaaaaaaaaaa");
+
+  const dir = store.stage("0.3.15-bbbbbbbbbbbb");
+  mkdirSync(join(dir, "agent"), { recursive: true });
+  writeFileSync(join(dir, "agent/broken.ts"), "does not compile");
+  store.linkState(dir);
+
+  assert.equal(store.reset("0.3.15-bbbbbbbbbbbb"), dir);
+  assert.deepEqual(readdirSync(dir), [".iva-incomplete"]);
+  assert.deepEqual(
+    store.list().map((entry) => entry.name),
+    ["0.3.14-aaaaaaaaaaaa"],
+  );
+  // The shared state the version borrowed is untouched by the reset.
+  assert.equal(existsSync(layoutFor(store.layout.home).data), true);
+
+  // A finished version is never someone's scratch space.
+  assert.throws(() => store.reset("0.3.14-aaaaaaaaaaaa"), /complete/);
+  assert.equal(
+    readFileSync(join(store.currentDir()!, "marker.txt"), "utf8"),
+    "0.3.14-aaaaaaaaaaaa",
+  );
+});

@@ -177,6 +177,17 @@ export function createVersionStore(home: string) {
     });
   }
 
+  /** Empty a staged version so it can be rebuilt without losing the claim on it. */
+  function reset(name: string): string {
+    const dir = versionDir(name);
+    if (isComplete(name)) throw new Error(`version ${name} is complete`);
+    for (const entry of readdirSync(dir)) {
+      if (entry === INCOMPLETE) continue;
+      rmSync(join(dir, entry), { recursive: true, force: true });
+    }
+    return dir;
+  }
+
   /** Point `current` at a finished version with one rename. */
   function activate(name: string): void {
     const dir = versionDir(name);
@@ -288,6 +299,7 @@ export function createVersionStore(home: string) {
     currentDir,
     previousName,
     stage,
+    reset,
     complete,
     activate,
     sweep,
