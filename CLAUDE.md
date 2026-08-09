@@ -1,5 +1,14 @@
 # CLAUDE.md — Iva
 
+## Локальный режим - высший приоритет
+
+- Команда - Шима и активный агент. Работа идёт прямо в текущем checkout и текущей ветке.
+- Разработка, самопроверка, сборка и тесты выполняются локально.
+- Запрещены GitHub Actions, CI-сервисы, pull request, merge gates, branch protection, CodeRabbit, review-боты и внешний SDLC pipeline.
+- GitHub используется только для прямой синхронизации, когда Шима явно просит commit или push.
+- Не создавать process checklist, implementation journal, handoff и remote review loop без отдельного запроса.
+- В локальных тестах приоритет у мусорного ввода, тупых повторных действий пользователя, duplicate/stale/out-of-order событий, гонок, прерываний, retry, restart, timeout, partial writes, отсутствующих зависимостей и сломанных/частичных сборок. Randomized tests обязаны показывать seed.
+
 Guidance for Claude Code working in this repository.
 
 ## 🚫 Commit messages — СТРОГО ЗАПРЕЩЕНО упоминать Claude
