@@ -21,7 +21,8 @@ For each item:
    - Match, genuinely new and compatible fact → **UPDATE**. The tool appends one
      dated bullet under the card's single `## Log`.
    - Match, new fact contradicts current truth → **SUPERSEDE**. Pass the complete
-     new Compiled Truth in `body` and the displaced old fact in `history_entry`.
+     new Compiled Truth in `body` and the displaced old fact in `history_entry`
+     as a single dated line, `YYYY-MM-DD: fact` (the fact's own date, not today's).
      The tool rewrites current truth and preserves one append-only `## History`.
      Never pass `history_entry` with ADD, UPDATE, or NOOP.
      See `references/classification.md` → "ADD / UPDATE / SUPERSEDE / NOOP".

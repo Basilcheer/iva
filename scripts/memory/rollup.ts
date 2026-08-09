@@ -111,7 +111,8 @@ function buildPrompt(p: Period, now: string): string {
         `or NOOP (already known). Pass history_entry only for SUPERSEDE, never for ADD, UPDATE, or NOOP. ` +
         `On SUPERSEDE: REWRITE the card's current value (frontmatter + top description) to the new fact ` +
         `and pass the OLD value through history_entry as a single dated line ` +
-        `(e.g. '- 2026-07-31: TDI Group (held 2026-03→06)'); write_card owns the '## History' section. ` +
+        `'YYYY-MM-DD: fact' (e.g. '2026-07-31: TDI Group (held 2026-03→06)') — the fact's own date, ` +
+        `not today's; write_card owns the '## History' section. ` +
         `Never leave two contradictory CURRENT values; History is append-only, never edited. ` +
         `Tag each fact's certainty with 'confidence:' — EXTRACTED (user stated it directly) or ` +
         `INFERRED (you deduced it). ` +

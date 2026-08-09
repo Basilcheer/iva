@@ -225,7 +225,8 @@ export default defineTool({
       .string()
       .optional()
       .describe(
-        "ТОЛЬКО для SUPERSEDE: датированная строка о прежней истине, переносимая в ## History. " +
+        "ТОЛЬКО для SUPERSEDE: одна строка о прежней истине, переносимая в ## History, " +
+          "в формате 'YYYY-MM-DD: факт' (своя дата сохраняется; без неё ставится сегодняшняя). " +
           "На ADD отбрасывается как шум, на UPDATE/NOOP — ошибка.",
       ),
     confidence: z
@@ -238,8 +239,8 @@ export default defineTool({
       .boolean()
       .optional()
       .describe(
-        "ТОЛЬКО для SUPERSEDE: заменить body целиком (сам перенеси старое значение в ## History). " +
-          "Без флага body дописывается, противоречащие факты так не исправить.",
+        "Легаси-путь для вызова БЕЗ operation: заменить body целиком, ## History при этом " +
+          "приходит внутри body. С явным operation не нужен — SUPERSEDE и так заменяет body.",
       ),
   }),
   // eslint-disable-next-line @typescript-eslint/require-await -- Preserve the established Promise-returning Eve tool contract.
