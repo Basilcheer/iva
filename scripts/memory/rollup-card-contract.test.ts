@@ -1,5 +1,5 @@
 import { strict as assert } from "node:assert";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -151,6 +151,53 @@ void test("autograph references and the dedup merge keep one History line format
     dedup,
     /return f"- \{when\}: \{field\}: \{val\}\{held\}"/,
     "dedup.py must append History lines dated the same way write_card dates them",
+  );
+});
+
+/** Headings shown inside a fenced card example. Cards go through `write_card`, which
+ * refuses an ADD or UPDATE body carrying H1/H2, so such an example teaches a call the
+ * tool rejects and the fact is lost. Summaries are written as plain files, not through
+ * the tool, so their own headings stay legal. */
+function cardExampleHeadings(text: string): string[] {
+  return [...text.matchAll(/```[a-z]*\n([\s\S]*?)```/g)]
+    .map((match) => match[1])
+    .filter((block) => {
+      const type = /^type: *(\S+)/m.exec(block)?.[1];
+      return type !== undefined && !type.endsWith("summary");
+    })
+    .flatMap((block) => block.split("\n"))
+    .filter((line) => /^ {0,3}#{1,2}\s+/.test(line));
+}
+
+void test("dbrain card examples and the daily prompt keep a card body free of H1/H2", () => {
+  const root = "instructions/dbrain-processor";
+  const pages = readdirSync(join(HERE, root), { recursive: true })
+    .map(String)
+    .filter((name) => name.endsWith(".md"));
+  assert.ok(pages.length > 0, `${root} must hold the instruction pages`);
+  for (const page of pages) {
+    for (const heading of cardExampleHeadings(read(join(root, page)))) {
+      assert.fail(
+        `${root}/${page} shows "${heading}" in a card example, a body write_card refuses`,
+      );
+    }
+  }
+
+  for (const page of [
+    "phases/process.md",
+    "references/classification.md",
+    "references/card-templates.md",
+  ]) {
+    assert.match(
+      read(`${root}/${page}`),
+      /no H1\/H2 headings/,
+      `${page} must teach a card body without H1/H2`,
+    );
+  }
+  assert.match(
+    promptText(read("rollup.ts")),
+    /no H1\/H2 headings/,
+    "the daily prompt must teach a card body without H1/H2",
   );
 });
 
