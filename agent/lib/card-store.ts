@@ -550,7 +550,7 @@ function replaceCompiledTruth(
 export type CardOperation = "ADD" | "UPDATE" | "SUPERSEDE" | "NOOP";
 export const HISTORY_ENTRY_CAP = 500;
 
-export interface OperationInput {
+interface OperationInput {
   /** Операция, названная вызывающим; undefined — легаси-вызов без operation. */
   operation?: CardOperation;
   /** SUPERSEDE: заменить body целиком (frontmatter всё равно сливается). */
