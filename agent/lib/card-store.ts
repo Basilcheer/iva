@@ -344,6 +344,23 @@ function removeH2Sections(body: string, heading: string): string {
   return output.join("\n").replace(/\s+$/, "") + "\n";
 }
 
+function canonicalHistoryEntry(historyEntry: string, date: string): string {
+  const entry = historyEntry.trim();
+  return /^[-*]\s+\d{4}-\d{2}-\d{2}:/.test(entry)
+    ? entry
+    : `- ${date}: ${entry.replace(/^[-*]\s+/, "")}`;
+}
+
+function historyEndsWith(body: string, entry: string): boolean {
+  const lines = body.split("\n");
+  const sections = h2Sections(lines, "History");
+  if (sections.length !== 1) return false;
+  const content = lines
+    .slice(sections[0].start + 1, sections[0].end)
+    .filter((line) => line.trim());
+  return content.at(-1)?.trim() === entry.trim();
+}
+
 function appendLog(body: string, incoming: string, date: string): string {
   const oldEntries = sectionContent(body, "Log");
   const withoutLogs = removeH2Sections(body, "Log");
@@ -459,10 +476,7 @@ function replaceCompiledTruth(
     }
   }
   if (historyEntry?.trim()) {
-    const entry = historyEntry.trim();
-    const dated = /^[-*]\s+\d{4}-\d{2}-\d{2}:/.test(entry)
-      ? entry
-      : `- ${date}: ${entry.replace(/^[-*]\s+/, "")}`;
+    const dated = canonicalHistoryEntry(historyEntry, date);
     additions.set("history", [...(additions.get("history") ?? []), dated]);
   }
 
@@ -490,6 +504,7 @@ function replaceCompiledTruth(
 }
 
 export type CardOperation = "ADD" | "UPDATE" | "SUPERSEDE" | "NOOP";
+export const HISTORY_ENTRY_CAP = 500;
 
 export interface MergeInput {
   /** Содержимое существующего файла (undefined — карточки ещё нет). */
@@ -513,6 +528,8 @@ export interface MergeInput {
 export interface MergeResult {
   content: string;
   action: "created" | "updated" | "merged" | "replaced" | "noop";
+  /** Model noise discarded because a new card has no displaced truth. */
+  ignoredHistoryEntry?: true;
 }
 
 export function mergeCard(input: MergeInput): MergeResult {
@@ -540,8 +557,28 @@ export function mergeCard(input: MergeInput): MergeResult {
   if (replaceBody && operation !== "SUPERSEDE") {
     throw new Error("replaceBody is valid only for SUPERSEDE");
   }
-  if (historyEntry && /[\r\n]/.test(historyEntry)) {
+  if (
+    historyEntry !== undefined &&
+    operation !== "ADD" &&
+    operation !== "SUPERSEDE"
+  ) {
+    throw new Error("historyEntry is valid only for SUPERSEDE");
+  }
+  if (
+    operation === "SUPERSEDE" &&
+    historyEntry !== undefined &&
+    /[\r\n]/.test(historyEntry)
+  ) {
     throw new Error("historyEntry must be a single line");
+  }
+  if (
+    operation === "SUPERSEDE" &&
+    historyEntry !== undefined &&
+    historyEntry.trim().length > HISTORY_ENTRY_CAP
+  ) {
+    throw new Error(
+      `historyEntry must not exceed ${HISTORY_ENTRY_CAP} characters`,
+    );
   }
   if (
     operation === "UPDATE" &&
@@ -550,6 +587,7 @@ export function mergeCard(input: MergeInput): MergeResult {
     throw new Error("UPDATE body must be a fact without H1/H2 headings");
   }
   if (operation === "NOOP") {
+    if (existing === undefined) throw new Error("NOOP requires an existing card");
     return { content: existing ?? "", action: "noop" };
   }
   if (operation === "ADD" && existing !== undefined) {
@@ -561,13 +599,32 @@ export function mergeCard(input: MergeInput): MergeResult {
   ) {
     throw new Error(`${operation} requires an existing card`);
   }
+  if (
+    operation === "SUPERSEDE" &&
+    !historyEntry?.trim() &&
+    !(
+      input.operation === undefined &&
+      replaceBody === true &&
+      hasH2Section(trimmedBody, "History")
+    )
+  ) {
+    throw new Error(
+      "SUPERSEDE requires historyEntry or a legacy ## History section",
+    );
+  }
 
   if (existing === undefined) {
     const all: FmFields = { ...fields, ...(initialFields || {}) };
     const fm = ["---", writeFrontmatter(all, []), "---", ""].join("\n");
     let out = `${fm}\n# ${title}\n\n${trimmedBody}\n`;
     if (related && related.length) out = mergeRelated(out, related);
-    return { content: out, action: "created" };
+    return {
+      content: out,
+      action: "created",
+      ...(historyEntry !== undefined
+        ? { ignoredHistoryEntry: true as const }
+        : {}),
+    };
   }
 
   const parsed = parseFrontmatter(existing);
@@ -611,6 +668,22 @@ export function mergeCard(input: MergeInput): MergeResult {
   let newBody = operation === "UPDATE" ? collapseLogSections(oldBody) : oldBody;
   let appended = false;
   if (operation === "SUPERSEDE") {
+    // A confirmed-cancel rollup retry can replay the exact completed tool call.
+    // Suppress only that fixed point: the same canonical History tail and an
+    // otherwise byte-identical card. Global History dedup would destroy evidence.
+    if (
+      historyEntry?.trim() &&
+      historyEndsWith(oldBody, canonicalHistoryEntry(historyEntry, date))
+    ) {
+      let replayBody = `\n${replaceCompiledTruth(oldBody, trimmedBody, undefined, date).trim()}\n`;
+      if (!extractH1(replayBody))
+        replayBody = `# ${title}\n\n${replayBody.replace(/^\s+/, "")}`;
+      replayBody = mergeRelated(replayBody, related ?? []);
+      const replayContent = `---\n${fmText}\n---\n${replayBody.replace(/\s*$/, "")}\n`;
+      if (replayContent === existing) {
+        return { content: existing, action: "noop" };
+      }
+    }
     newBody = `\n${replaceCompiledTruth(oldBody, trimmedBody, historyEntry, date).trim()}\n`;
   } else if (!bodyContains(oldBody, trimmedBody)) {
     newBody = appendLog(newBody, trimmedBody, date);

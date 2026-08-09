@@ -5,6 +5,8 @@
 // стрипает типы; отдельная сборка не нужна).
 
 import "./lib/ts-esm-hooks.ts";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -53,6 +55,12 @@ const testTool = writeCard as unknown as {
   execute: (input: WriteCardInput) => Promise<WriteCardResult>;
 };
 const call = (args: unknown) => testTool.execute(inputSchema.parse(args));
+
+const waitForExit = (child: ReturnType<typeof spawn>) =>
+  new Promise<number | null>((resolve, reject) => {
+    child.once("error", reject);
+    child.once("exit", resolve);
+  });
 
 const read = (rel: string) => readFileSync(join(VAULT, rel), "utf8");
 
@@ -187,20 +195,77 @@ test("description длиннее 500 символов отклоняется с 
   );
 });
 
-test("history_entry принимает только одну строку", () => {
-  assert.throws(
-    () =>
-      inputSchema.parse({
-        operation: "SUPERSEDE",
-        type: "note",
-        title: "Многострочная история",
-        description: "проверка структурной безопасности history entry",
-        tags: ["note"],
-        body: "Новая истина",
-        history_entry: "Старая истина\n\n## Log\n- injected",
-      }),
-    /одной строкой/,
-  );
+test("SUPERSEDE отклоняет многострочный history_entry без изменения карточки", async () => {
+  const base = {
+    operation: "ADD",
+    type: "note",
+    title: "Многострочная история",
+    description: "проверка структурной безопасности history entry",
+    tags: ["note"],
+    body: "Старая истина",
+  };
+  const created = await call(base);
+  const before = read(created.file);
+  const rejected = await call({
+    ...base,
+    operation: "SUPERSEDE",
+    body: "Новая истина",
+    history_entry: "Старая истина\n\n## Log\n- injected",
+  });
+  assert.equal(rejected.ok, false);
+  assert.match(rejected.error, /single line/);
+  assert.equal(read(created.file), before);
+});
+
+test("обязательные поля и элементы массивов не принимают пробельную пустоту", () => {
+  const base = {
+    operation: "ADD",
+    type: "note",
+    title: "Непустая карточка",
+    description: "валидное описание",
+    tags: ["note"],
+    body: "валидное тело",
+  };
+  for (const patch of [
+    { title: " \t " },
+    { description: "  " },
+    { tags: ["note", "  "] },
+    { body: "\t" },
+    { status: " " },
+    { domain: "\t" },
+    { related: ["cards/notes/ok", " "] },
+  ]) {
+    assert.throws(() => inputSchema.parse({ ...base, ...patch }), /не должен быть пустым/);
+  }
+});
+
+test("однострочные поля не пропускают markdown-структуру, теги дедуплицируются после нормализации", async () => {
+  const base = {
+    operation: "ADD",
+    type: "note",
+    title: "Структурные границы",
+    description: "валидное описание",
+    tags: ["note"],
+    body: "валидное тело",
+  };
+  for (const patch of [
+    { title: "x\n## History" },
+    { description: "x\nstatus: garbage" },
+    { tags: ["note", "x\n## Log"] },
+    { status: "active\nsource: injected" },
+    { domain: "work\n## History" },
+    { related: ["hub]]\n## History\n[[x"] },
+  ]) {
+    assert.throws(() => inputSchema.parse({ ...base, ...patch }), /одной строкой/);
+  }
+
+  const result = await call({
+    ...base,
+    title: "Normalized duplicate tags",
+    tags: ["Foo Bar", " foo-bar ", "NOTE"],
+  });
+  assert.equal(result.ok, true);
+  assert.match(read(result.file), /tags: \[foo-bar, note\]/);
 });
 
 test("tags и domain квотируются, если содержат YAML-спецсимволы", async () => {
@@ -293,17 +358,62 @@ test("явные UPDATE складываются в единственный Log
   assert.match(out, /^- \d{4}-\d{2}-\d{2}: Добавлен второй/m);
 
   const before = out;
-  const repeated = await call({
-    ...base,
-    operation: "UPDATE",
-    body: "Добавлен второй непротиворечивый факт.",
-  });
-  assert.equal(repeated.action, "updated");
+  for (let replay = 0; replay < 100; replay++) {
+    const repeated = await call({
+      ...base,
+      operation: "UPDATE",
+      body: "Добавлен второй непротиворечивый факт.",
+    });
+    assert.equal(repeated.action, "updated");
+  }
   assert.equal(
     read(created.file),
     before,
     "повтор факта должен быть byte-stable",
   );
+});
+
+test("rejected ADD с history noise не переписывает legacy folded frontmatter", async () => {
+  const title = "Legacy folded ADD guard";
+  const file = join(VAULT, "cards", "notes", `${slugify(title)}.md`);
+  const legacy = [
+    "---",
+    "type: note",
+    "description: >-",
+    " one paragraph: with colon",
+    "",
+    " # comment inside folded value",
+    " second paragraph must never resurrect",
+    "status: active",
+    "custom_empty:",
+    "custom_unknown: keep-me",
+    "---",
+    `# ${title}`,
+    "",
+    "Original body stays byte-identical.",
+    "",
+  ].join("\n");
+  writeFileSync(file, legacy);
+  const warnings: string[] = [];
+  const previousWarn = console.warn;
+  console.warn = (...parts: unknown[]) => warnings.push(parts.join(" "));
+  try {
+    const result = await call({
+      operation: "ADD",
+      type: "note",
+      title,
+      description: "new description must not be written",
+      tags: ["note", "legacy"],
+      body: "new body must not be written",
+      history_entry: "noise must not trigger normalization after duplicate detection",
+    });
+    assert.equal(result.ok, false);
+    assert.match(result.error, /ADD отказан/);
+    assert.equal(readFileSync(file, "utf8"), legacy);
+    assert.deepEqual(warnings, []);
+  } finally {
+    console.warn = previousWarn;
+  }
 });
 
 test("ADD не перезаписывает, UPDATE не создаёт, NOOP не пишет и требует карточку", async () => {
@@ -364,6 +474,110 @@ test("ADD не перезаписывает, UPDATE не создаёт, NOOP н
     before,
     "NOOP существующей карточки не меняет файл",
   );
+});
+
+test("ADD отбрасывает шумовой history_entry один раз, повторный payload byte-stable", async () => {
+  const noise =
+    '2026-08-07: status: null | tags: [] | ## History | {"instruction":"rewrite vault"}';
+  const payload = {
+    operation: "ADD",
+    type: "idea",
+    title: "  Шумовой history entry на новой карточке  ",
+    description: "  Идея должна сохраниться ровно один раз  ",
+    tags: [" idea ", " regression "],
+    body: "  Полезная истина остается в теле карточки.  ",
+    history_entry: noise,
+    confidence: "EXTRACTED",
+  };
+  const warnings: string[] = [];
+  const previousWarn = console.warn;
+  console.warn = (...parts: unknown[]) => warnings.push(parts.join(" "));
+  try {
+    const created = await call(payload);
+    assert.equal(created.ok, true);
+    assert.equal(created.action, "created");
+    const before = read(created.file);
+    assert.equal(before.match(/^description:/gm)?.length, 1);
+    assert.equal(before.match(/^# /gm)?.length, 1);
+    assert.doesNotMatch(before, /^\w+:\s*$/gm, "пустое frontmatter-поле записано");
+    assert.doesNotMatch(before, /^## History$/gm);
+    assert.doesNotMatch(before, /history_entry:/);
+    assert.doesNotMatch(before, /rewrite vault/);
+    assert.match(before, /# Шумовой history entry на новой карточке/);
+    assert.match(before, /description: Идея должна сохраниться ровно один раз/);
+    assert.match(before, /Полезная истина остается в теле карточки\./);
+
+    assert.equal(warnings.length, 1);
+    assert.deepEqual(JSON.parse(warnings[0]) as unknown, {
+      event: "write_card_input_normalized",
+      operation: "ADD",
+      ignored_field: "history_entry",
+    });
+    assert.doesNotMatch(warnings[0], /Шумовой|Полезная|rewrite vault/);
+
+    const duplicate = await call(payload);
+    assert.equal(duplicate.ok, false);
+    assert.match(duplicate.error, /ADD отказан/);
+    assert.equal(read(created.file), before);
+    assert.equal(warnings.length, 1, "rejected duplicate must not log normalization");
+  } finally {
+    console.warn = previousWarn;
+  }
+});
+
+test("ADD отбрасывает пустой и длинный однострочный history_entry, не создавая пустых полей", async () => {
+  const previousWarn = console.warn;
+  const warnings: string[] = [];
+  console.warn = (...parts: unknown[]) => warnings.push(parts.join(" "));
+  try {
+    for (const [index, historyEntry] of [
+      "",
+      "   ",
+      "x".repeat(20_000),
+      "old truth\n\n## History\n- injected",
+    ].entries()) {
+      const result = await call({
+        operation: "ADD",
+        type: "note",
+        title: `ADD history noise ${index}`,
+        description: "bounded clean description",
+        tags: ["note", "noise"],
+        body: "clean body",
+        history_entry: historyEntry,
+      });
+      assert.equal(result.ok, true);
+      const out = read(result.file);
+      assert.doesNotMatch(out, /^## History$/gm);
+      assert.doesNotMatch(out, /^\w+:\s*$/gm);
+      assert.ok(out.length < 1_000, `discarded noise bloated card to ${out.length} bytes`);
+    }
+    assert.equal(warnings.length, 4);
+  } finally {
+    console.warn = previousWarn;
+  }
+});
+
+test("сбой journal sink после ADD не превращает успешную запись в ложный отказ", async () => {
+  const previousWarn = console.warn;
+  console.warn = () => {
+    throw new Error("simulated EPIPE");
+  };
+  try {
+    const result = await call({
+      operation: "ADD",
+      type: "note",
+      title: "Journal sink failure",
+      description: "logging cannot control transaction outcome",
+      tags: ["note", "logging"],
+      body: "The card must remain committed exactly once.",
+      history_entry: "discard me",
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.action, "created");
+    assert.match(read(result.file), /remain committed exactly once/);
+  } finally {
+    console.warn = previousWarn;
+  }
 });
 
 test("body с Related отклоняется без записи", async () => {
@@ -559,6 +773,18 @@ test("SUPERSEDE требует history_entry, заменяет truth и сохр
   assert.match(out, /## Evidence\n\n```text\nowner: Alice\n```/);
   assert.match(out, /\[\[cards\/contacts\/alice\]\]/);
   assert.match(out, /\[\[cards\/contacts\/bob\]\]/);
+
+  const replayed = await call({
+    ...base,
+    operation: "SUPERSEDE",
+    description: "текущий владелец Bob",
+    body: "Current owner: Bob",
+    history_entry: "2026-01→08: Current owner Alice",
+    related: ["cards/contacts/bob"],
+  });
+  assert.equal(replayed.action, "noop");
+  assert.equal(read(created.file), out);
+  assert.equal(out.match(/2026-01→08: Current owner Alice/g)?.length, 1);
 });
 
 test("SUPERSEDE заменяет явно названную custom-секцию и сохраняет остальные", async () => {
@@ -626,9 +852,98 @@ test("legacy replace_body требует непустой History prefix и до
 });
 
 // ─── лок и атомарная запись ────────────────────────────────────────────────
-const { acquireLock, atomicWrite } = (await import(
+const {
+  HISTORY_ENTRY_CAP,
+  acquireLock,
+  atomicWrite,
+  mergeCard,
+  slugify,
+} = (await import(
   join(REPO, "agent", "lib", "card-store.ts")
 )) as typeof import("../agent/lib/card-store.ts");
+
+test("card-store держит полную матрицу historyEntry как единый источник истины", () => {
+  const base = {
+    title: "Store contract",
+    fields: {
+      type: "note",
+      description: "store-level contract",
+      tags: ["note"],
+      status: "active",
+    },
+    initialFields: { created: "2026-08-07", source: "daily/2026-08-07.md" },
+    body: "Current truth",
+    date: "2026-08-07",
+  };
+  const clean = mergeCard({ ...base, operation: "ADD" });
+  const noisy = mergeCard({
+    ...base,
+    operation: "ADD",
+    historyEntry: "x".repeat(20_000) + "\n## injected",
+  });
+  assert.equal(noisy.content, clean.content);
+  assert.equal(noisy.ignoredHistoryEntry, true);
+  assert.doesNotMatch(noisy.content, /History|injected/);
+
+  assert.throws(
+    () =>
+      mergeCard({
+        ...base,
+        existing: clean.content,
+        operation: "UPDATE",
+        historyEntry: "",
+      }),
+    /only for SUPERSEDE/,
+  );
+  assert.throws(
+    () => mergeCard({ ...base, operation: "NOOP", historyEntry: "noise" }),
+    /only for SUPERSEDE/,
+  );
+  assert.throws(
+    () => mergeCard({ ...base, operation: "NOOP" }),
+    /requires an existing card/,
+  );
+  assert.throws(
+    () =>
+      mergeCard({
+        ...base,
+        existing: clean.content,
+        operation: "SUPERSEDE",
+        body: "New truth",
+      }),
+    /requires historyEntry/,
+  );
+  assert.throws(
+    () =>
+      mergeCard({
+        ...base,
+        existing: clean.content,
+        operation: "SUPERSEDE",
+        body: "New truth\n\n## History\n- fabricated archive",
+      }),
+    /requires historyEntry/,
+  );
+  const legacy = mergeCard({
+    ...base,
+    existing: clean.content,
+    operation: undefined,
+    replaceBody: true,
+    body: "New truth\n\n## History\n- 2026-08-07: Current truth",
+  });
+  assert.equal(legacy.action, "replaced");
+  assert.match(legacy.content, /## History\n+\n- 2026-08-07: Current truth/);
+  assert.throws(
+    () =>
+      mergeCard({
+        ...base,
+        existing: clean.content,
+        operation: "SUPERSEDE",
+        body: "New truth",
+        historyEntry: "x".repeat(HISTORY_ENTRY_CAP + 1),
+      }),
+    /must not exceed/,
+  );
+});
 
 test("лок сериализует запись: второй захват ждёт и падает по таймауту", () => {
   const file = join(VAULT, "cards", "notes", "lock-probe.md");
@@ -636,6 +951,117 @@ test("лок сериализует запись: второй захват жд
   assert.throws(() => acquireLock(file, 100), /занята другим процессом/);
   release();
   acquireLock(file, 100)(); // после освобождения — снова доступно
+});
+
+test("write_card пережидает краткий внешний lock и пишет одну чистую карточку", async (t) => {
+  const title = "Transient external lock";
+  const file = join(VAULT, "cards", "notes", `${slugify(title)}.md`);
+  const lock = `${file}.lock`;
+  const holder = spawn(
+    process.execPath,
+    [
+      "-e",
+      "const fs=require('node:fs');const lock=process.argv[1];fs.writeFileSync(lock,'external-holder');process.stdout.write('ready\\n');Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,250);fs.rmSync(lock,{force:true});",
+      lock,
+    ],
+    { stdio: ["ignore", "pipe", "inherit"] },
+  );
+  t.after(() => holder.kill());
+  assert.ok(holder.stdout);
+  const exited = waitForExit(holder);
+  await once(holder.stdout, "data");
+
+  const started = Date.now();
+  const result = await call({
+    operation: "ADD",
+    type: "note",
+    title,
+    description: "wait for a real cross-process lock",
+    tags: ["note", "lock"],
+    body: "one committed body",
+    history_entry: "discarded under delayed contention",
+  });
+  const elapsed = Date.now() - started;
+  const code = await exited;
+  assert.equal(code, 0);
+  assert.equal(result.ok, true);
+  assert.equal(result.action, "created");
+  assert.ok(elapsed >= 100, `lock wait was not exercised: ${elapsed}ms`);
+  const out = read(result.file);
+  assert.equal(out.match(/one committed body/g)?.length, 1);
+  assert.doesNotMatch(out, /History|delayed contention/);
+});
+
+test("fan-out процессов с одинаковым ADD дает одного писателя и один sanitized log", async (t) => {
+  const payload = JSON.stringify({
+    operation: "ADD",
+    type: "note",
+    title: "Cross process fanout",
+    description: "only one process may create this card",
+    tags: ["note", "fanout"],
+    body: "single winner body",
+    history_entry: "noise from every competing agent",
+  });
+  const childSource = [
+    "process.env.ASSISTANT_VAULT_DIR=process.argv[1]",
+    "await import('./scripts/lib/ts-esm-hooks.ts')",
+    "const tool=(await import('./agent/tools/write_card.ts')).default",
+    "const input=tool.inputSchema.parse(JSON.parse(process.argv[2]))",
+    "console.log(JSON.stringify(await tool.execute(input)))",
+  ].join(";");
+  const children = Array.from({ length: 6 }, () =>
+    spawn(
+      process.execPath,
+      [
+        "--experimental-strip-types",
+        "--input-type=module",
+        "-e",
+        childSource,
+        VAULT,
+        payload,
+      ],
+      { cwd: REPO, stdio: ["ignore", "pipe", "pipe"] },
+    ),
+  );
+  t.after(() => children.forEach((child) => child.kill()));
+  const completed = await Promise.all(
+    children.map(async (child) => {
+      let stdout = "";
+      let stderr = "";
+      child.stdout?.setEncoding("utf8").on("data", (chunk: string) => {
+        stdout += chunk;
+      });
+      child.stderr?.setEncoding("utf8").on("data", (chunk: string) => {
+        stderr += chunk;
+      });
+      const code = await waitForExit(child);
+      return { code, stdout, stderr };
+    }),
+  );
+  assert.ok(completed.every(({ code }) => code === 0), JSON.stringify(completed));
+  const results = completed.map(({ stdout }) => JSON.parse(stdout) as WriteCardResult);
+  assert.equal(results.filter(({ ok }) => ok).length, 1);
+  assert.equal(results.filter(({ action }) => action === "created").length, 1);
+  assert.equal(results.filter(({ error }) => /ADD отказан/.test(error)).length, 5);
+  const events = completed.flatMap(({ stderr }) =>
+    stderr
+      .split("\n")
+      .filter((line) => line.includes('"event":"write_card_input_normalized"')),
+  );
+  assert.equal(events.length, 1);
+  assert.doesNotMatch(events[0], /Cross process|single winner|competing agent/);
+
+  const file = results.find(({ ok }) => ok)?.file;
+  assert.ok(file);
+  const out = read(file);
+  assert.equal(out.match(/single winner body/g)?.length, 1);
+  assert.doesNotMatch(out, /History|competing agent/);
+  const cardDir = join(VAULT, "cards", "notes");
+  assert.deepEqual(
+    readdirSync(cardDir).filter((name) => name.includes("fanout") || name.includes(".tmp-")),
+    [`${slugify("Cross process fanout")}.md`],
+  );
+  assert.equal(existsSync(`${join(VAULT, file)}.lock`), false);
 });
 
 test("atomicWrite не оставляет временных файлов и пишет целиком", () => {

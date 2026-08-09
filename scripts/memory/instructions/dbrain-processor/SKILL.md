@@ -69,6 +69,7 @@ of the vault, and take the vault directory as an argument (`vault` = `$ASSISTANT
 
 ```bash
 # dry-run first, then --apply
+uv run scripts/autograph/cleanup.py vault --apply                         # bounded repair before whole-file readers
 uv run scripts/autograph/enforce.py vault vault/schema.json --apply   # schema compliance + autofix
 uv run scripts/autograph/graph.py fix vault vault/schema.json --apply # repair broken wiki-links
 uv run scripts/autograph/engine.py touch vault/summaries/daily/YYYY-MM-DD.md

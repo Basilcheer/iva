@@ -23,6 +23,7 @@ For each item:
    - Match, new fact contradicts current truth → **SUPERSEDE**. Pass the complete
      new Compiled Truth in `body` and the displaced old fact in `history_entry`.
      The tool rewrites current truth and preserves one append-only `## History`.
+     Never pass `history_entry` with ADD, UPDATE, or NOOP.
      See `references/classification.md` → "ADD / UPDATE / SUPERSEDE / NOOP".
      Never use `UPDATE` to hide a contradiction in chronology.
    - Tag each written card with `confidence: EXTRACTED|INFERRED` (see

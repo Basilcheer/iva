@@ -78,6 +78,7 @@ summary: summaries/daily/YYYY-MM-DD.md
 From the project root, with the vault as an argument (dry-run, then `--apply`):
 
 ```bash
+uv run scripts/autograph/cleanup.py vault --apply
 uv run scripts/autograph/enforce.py vault vault/schema.json --apply
 uv run scripts/autograph/graph.py fix vault vault/schema.json --apply
 uv run scripts/autograph/engine.py touch vault/summaries/daily/YYYY-MM-DD.md
