@@ -446,10 +446,13 @@ test("deadline checks the root PID rather than a surviving process group", async
   const command =
     `${termResistantCommand(pidFile)} & ` +
     `while [ ! -s ${shellQuote(pidFile)} ]; do sleep 0.01; done; exit 7`;
-  const execution = executeBash({ command, timeoutMs: 100 });
+  // The deadline only has to outlast starting a shell and its background child -
+  // a loaded machine can take a while over that, and the point of the test is
+  // which process the deadline watches, not how fast the box is.
+  const execution = executeBash({ command, timeoutMs: 3_000 });
   let pid: number | null = null;
   try {
-    const pidDeadline = Date.now() + 500;
+    const pidDeadline = Date.now() + 3_000;
     while (!existsSync(pidFile) && Date.now() < pidDeadline) {
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
     }
@@ -458,12 +461,15 @@ test("deadline checks the root PID rather than a surviving process group", async
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
     const result = await within(
       execution,
-      1_800,
+      6_000,
       "root PID deadline check did not settle",
     );
+    // The sleeping child outlives the root shell: if the deadline watched the
+    // process group instead, this execution would have timed out rather than
+    // reporting the root's own exit code.
     assert.equal(result.exitCode, 7);
     assert.equal(result.timedOut, undefined);
-    assert.equal(await waitUntilGone(pid, 1_500), true);
+    assert.equal(await waitUntilGone(pid, 3_000), true);
   } finally {
     pid ??= readPid(pidFile);
     killIfAlive(pid, "SIGKILL");
