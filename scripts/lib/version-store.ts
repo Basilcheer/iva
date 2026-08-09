@@ -162,7 +162,7 @@ export function createVersionStore(home: string) {
       mkdirSync(dir);
     } catch (caught) {
       if ((caught as NodeJS.ErrnoException).code === "EEXIST")
-        throw new Error(`version ${name} already exists`);
+        throw new Error(`version ${name} already exists`, { cause: caught });
       throw caught;
     }
     // Written last: a directory without it is a version, with it it is garbage.
@@ -201,7 +201,7 @@ export function createVersionStore(home: string) {
   /** Remove what an interrupted update can leave behind. Never touches a version. */
   function sweep(): string[] {
     const stale: string[] = [];
-    let names: string[] = [];
+    let names: string[];
     try {
       names = readdirSync(layout.versions);
     } catch {
