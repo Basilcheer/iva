@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { SHIM_PATH, shimScript } from "./version-layout.ts";
+import { SHIM_PATH, shimPointsAt, shimScript } from "./version-layout.ts";
 import { STATE_DIRS } from "./version-store.ts";
 
 /** Build leftovers of a checkout: not tracked, not state, never worth keeping. */
@@ -40,7 +40,7 @@ export function writeShim(home: string, log: (message: string) => void): void {
     // A missing shim is written below; the command has to exist either way.
   }
   if (existing.includes("$IVA_ROOT/current/bin/iva.mjs")) return;
-  if (existing && !existing.includes(home)) return; // someone else's `iva`
+  if (existing && !shimPointsAt(existing, home)) return; // someone else's `iva`
   mkdirSync(dirname(SHIM_PATH), { recursive: true });
   writeFileSync(SHIM_PATH, shimScript(home, process.execPath));
   chmodSync(SHIM_PATH, 0o755);
@@ -76,8 +76,10 @@ export function retireCheckout(home: string): string[] {
   if (!tracked.includes("package.json")) return [];
 
   const removed: string[] = [];
-  for (const name of [...tracked, ...ARTIFACTS]) {
-    if (KEEP.has(name) || dirty.has(name)) continue;
+  // Artifacts unconditionally: they are rebuilt, never authored, and the history
+  // in .git is already mirrored into repo/.
+  for (const name of [...tracked.filter((name) => !dirty.has(name)), ...ARTIFACTS]) {
+    if (KEEP.has(name)) continue;
     const path = join(home, name);
     if (!existsSync(path)) continue;
     rmSync(path, { recursive: true, force: true });

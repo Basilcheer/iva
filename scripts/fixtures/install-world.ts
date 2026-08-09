@@ -1,0 +1,264 @@
+import {
+  execFileSync,
+  spawn,
+  spawnSync,
+  type SpawnSyncReturns,
+} from "node:child_process";
+import {
+  chmodSync,
+  cpSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const REPO = join(dirname(fileURLToPath(import.meta.url)), "../..");
+
+/**
+ * A build that fails on broken source, like the real one - and a start that can
+ * fail on source the build accepted, which is the seam every custom-layer
+ * incident went through: `eve start` re-reads the authored TypeScript from its
+ * own directory, so a green build has never proven that the service comes up.
+ */
+const SCAN = `import { readdirSync, lstatSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+export function sources(dir, prefix = "") {
+  return readdirSync(dir).flatMap((name) => {
+    if (name === "node_modules" || name === ".output" || name === ".git") return [];
+    const full = join(dir, name);
+    const stat = lstatSync(full);
+    if (stat.isSymbolicLink()) return [];
+    const relative = prefix ? prefix + "/" + name : name;
+    if (stat.isDirectory()) return sources(full, relative);
+    return name.endsWith(".mjs") || name.endsWith(".ts") ? [[relative, readFileSync(full, "utf8")]] : [];
+  });
+}
+`;
+
+const BUILD = `import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { sources } from "./source-scan.mjs";
+// Assembled, so the marker in this file is not itself a broken source file.
+const mark = ["BUILD", "BREAK"].join("_");
+const broken = sources(process.cwd()).filter(([, text]) => text.includes(mark));
+if (broken.length) {
+  process.stderr.write("cannot compile " + broken.map(([name]) => name).join(", ") + "\\n");
+  process.exit(1);
+}
+mkdirSync(join(process.cwd(), ".output"), { recursive: true });
+writeFileSync(join(process.cwd(), ".output/built.json"), JSON.stringify(sources(process.cwd()).length));
+`;
+
+const EVE = `#!/usr/bin/env node
+import { createServer } from "node:http";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+import { sources } from "../../../scripts/source-scan.mjs";
+if (!existsSync(join(process.cwd(), ".output/built.json"))) {
+  process.stderr.write("no build output\\n");
+  process.exit(1);
+}
+const mark = ["START", "BREAK"].join("_");
+const broken = sources(process.cwd()).filter(([, text]) => text.includes(mark));
+if (broken.length) {
+  process.stderr.write("Cannot find module '../scripts/lib/provider.ts' in " + broken[0][0] + "\\n");
+  process.exit(1);
+}
+createServer((_request, response) => response.writeHead(200).end("ok")).listen(
+  Number(process.env.PORT),
+  "127.0.0.1",
+);
+`;
+
+/** postinstall: the dependency the health probe starts, plus the real node_modules. */
+const INSTALL_EVE = `import { mkdirSync, readdirSync, symlinkSync, writeFileSync, chmodSync } from "node:fs";
+import { join } from "node:path";
+const modules = join(process.cwd(), "node_modules");
+mkdirSync(join(modules, "eve/bin"), { recursive: true });
+writeFileSync(join(modules, "eve/bin/eve.js"), process.env.IVA_TEST_EVE);
+chmodSync(join(modules, "eve/bin/eve.js"), 0o755);
+for (const name of readdirSync(process.env.IVA_TEST_MODULES)) {
+  if (name === "eve") continue;
+  try {
+    symlinkSync(join(process.env.IVA_TEST_MODULES, name), join(modules, name));
+  } catch {}
+}
+`;
+
+const SYSTEMCTL = `#!/bin/sh
+printf '%s\\n' "$*" >> "$IVA_TEST_SYSTEMCTL"
+[ "$1" = "--user" ] && shift
+[ "$1" = "is-enabled" ] && printf 'enabled\\n'
+[ "$1" = "is-active" ] && printf 'active\\n'
+exit 0
+`;
+
+export type World = {
+  readonly dir: string;
+  /** The installation root, and after the bridge also the layout home. */
+  readonly home: string;
+  readonly fakeHome: string;
+  readonly shim: string;
+  readonly upstream: string;
+  readonly systemctlLog: string;
+  /** Run the user's `iva` command, always through the shim they actually have. */
+  iva(args: readonly string[]): SpawnSyncReturns<string>;
+  /** The same command, without blocking - the only way to overlap two of them. */
+  ivaAsync(args: readonly string[]): Promise<{ code: number; output: string }>;
+  /** Publish a new upstream commit, optionally editing the tree first. */
+  publish(edit?: (tree: string) => void): string;
+  git(cwd: string, args: readonly string[]): string;
+};
+
+function git(cwd: string, args: readonly string[]): string {
+  return execFileSync("git", [...args], {
+    cwd,
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      GIT_AUTHOR_NAME: "iva",
+      GIT_AUTHOR_EMAIL: "iva@example.com",
+      GIT_COMMITTER_NAME: "iva",
+      GIT_COMMITTER_EMAIL: "iva@example.com",
+    },
+  }).trim();
+}
+
+function seed(tree: string): void {
+  for (const path of [
+    "bin",
+    "scripts/cli",
+    "scripts/lib",
+    "scripts/migrations",
+    "deploy",
+  ])
+    cpSync(join(REPO, path), join(tree, path), {
+      recursive: true,
+      filter: (source) => !source.endsWith(".test.ts"),
+    });
+  cpSync(join(REPO, "scripts/update-finish.ts"), join(tree, "scripts/update-finish.ts"));
+  writeFileSync(join(tree, "scripts/source-scan.mjs"), SCAN);
+  writeFileSync(join(tree, "scripts/build-stub.mjs"), BUILD);
+  writeFileSync(join(tree, "scripts/install-eve.mjs"), INSTALL_EVE);
+  writeFileSync(
+    join(tree, "package.json"),
+    `${JSON.stringify(
+      {
+        name: "iva",
+        version: "0.3.15",
+        private: true,
+        type: "module",
+        scripts: {
+          build: "node scripts/build-stub.mjs",
+          postinstall: "node scripts/install-eve.mjs",
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  writeFileSync(
+    join(tree, "package-lock.json"),
+    `${JSON.stringify(
+      {
+        name: "iva",
+        version: "0.3.15",
+        lockfileVersion: 3,
+        requires: true,
+        packages: { "": { name: "iva", version: "0.3.15" } },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+}
+
+/**
+ * A whole Iva installation as a user has it: a git checkout, the shim on PATH,
+ * state next to the code, and an upstream to update from. Everything the update
+ * touches is real here - git, npm, the symlinks, the spawned processes - so the
+ * only stand-ins are the dependency the probe starts and systemctl.
+ */
+export function createWorld(): World {
+  // Resolved: a temporary directory is behind a symlink on macOS, and every path
+  // the update writes down is the resolved one.
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "iva-world-")));
+  const upstream = join(dir, "upstream.git");
+  const source = join(dir, "source");
+  const home = join(dir, "iva");
+  const fakeHome = join(dir, "home");
+  const bin = join(dir, "bin");
+  const systemctlLog = join(dir, "systemctl.log");
+
+  git(dir, ["init", "--bare", "--initial-branch=main", upstream]);
+  mkdirSync(source, { recursive: true });
+  seed(source);
+  git(source, ["init", "--initial-branch=main"]);
+  git(source, ["remote", "add", "origin", upstream]);
+  git(source, ["add", "-A"]);
+  git(source, ["commit", "-m", "initial"]);
+  git(source, ["push", "-q", "origin", "main"]);
+
+  git(dir, ["clone", "-q", upstream, home]);
+  git(home, ["config", "iva.updateBranch", "main"]);
+  for (const name of ["data", "vault", ".eve"])
+    mkdirSync(join(home, name), { recursive: true });
+  writeFileSync(join(home, ".env"), "AGENT_LANGUAGE=en\nIVA_PORT=8723\n");
+  // An installed checkout has its dependencies; a version installs its own.
+  symlinkSync(join(REPO, "node_modules"), join(home, "node_modules"));
+
+  mkdirSync(join(fakeHome, ".local/bin"), { recursive: true });
+  const shim = join(fakeHome, ".local/bin/iva");
+  // Exactly what install.sh wrote before the bridge existed.
+  writeFileSync(shim, `#!/usr/bin/env bash\nexec "${process.execPath}" "${home}/bin/iva.mjs" "$@"\n`);
+  chmodSync(shim, 0o755);
+  mkdirSync(bin, { recursive: true });
+  writeFileSync(join(bin, "systemctl"), SYSTEMCTL);
+  chmodSync(join(bin, "systemctl"), 0o755);
+
+  const childEnv = {
+    PATH: `${bin}:${dirname(process.execPath)}:/usr/bin:/bin:/usr/sbin`,
+    HOME: fakeHome,
+    NO_COLOR: "1",
+    TERM: "dumb",
+    AGENT_LANGUAGE: "en",
+    IVA_TEST_SYSTEMCTL: systemctlLog,
+    IVA_TEST_EVE: EVE,
+    IVA_TEST_MODULES: join(REPO, "node_modules"),
+  };
+
+  return {
+    dir,
+    home,
+    fakeHome,
+    shim,
+    upstream,
+    systemctlLog,
+    git,
+    iva: (args) =>
+      spawnSync(shim, [...args], { cwd: dir, encoding: "utf8", env: childEnv }),
+    ivaAsync: (args) =>
+      new Promise((resolve) => {
+        const child = spawn(shim, [...args], { cwd: dir, env: childEnv });
+        let output = "";
+        const collect = (chunk: unknown): void => {
+          output += String(chunk);
+        };
+        child.stdout.on("data", collect);
+        child.stderr.on("data", collect);
+        child.on("close", (code) => resolve({ code: code ?? 1, output }));
+      }),
+    publish: (edit) => {
+      edit?.(source);
+      git(source, ["add", "-A"]);
+      git(source, ["commit", "--allow-empty", "-m", "update"]);
+      git(source, ["push", "-q", "origin", "main"]);
+      return git(source, ["rev-parse", "HEAD"]);
+    },
+  };
+}

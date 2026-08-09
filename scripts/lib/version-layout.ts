@@ -52,10 +52,21 @@ export function isManagedInstall(
 ): boolean {
   if (install.kind === "version") return true;
   try {
-    return readFileSync(shimPath, "utf8").includes(`${install.home}/bin/iva.mjs`);
+    return shimPointsAt(readFileSync(shimPath, "utf8"), install.home);
   } catch {
     return false;
   }
+}
+
+/**
+ * Whether a shim script runs this installation. The paths it spells out are
+ * compared resolved: the path an `iva` was installed with can reach the same
+ * tree through a symlink.
+ */
+export function shimPointsAt(shim: string, home: string): boolean {
+  return [...shim.matchAll(/"([^"]+)"/gu)]
+    .map((match) => real(match[1]))
+    .some((path) => path === home || path.startsWith(`${home}/`));
 }
 
 /** The git directory to ask about upstream: the mirror once one exists. */
@@ -66,8 +77,9 @@ export function gitRootFor(install: Install): string {
 
 /**
  * A shim that resolves paths and nothing else, so it never has to be rewritten
- * again: it prefers the active version and falls back to the tree it was
- * installed from, which is exactly the state a half-finished bridge leaves.
+ * again: the active version, else the tree it was installed from (the state a
+ * half-finished bridge leaves), else the newest version there is - because a
+ * lost `current` must not take the command that repairs it down with it.
  */
 export function shimScript(home: string, node: string): string {
   return [
@@ -75,6 +87,10 @@ export function shimScript(home: string, node: string): string {
     `IVA_ROOT="${home}"`,
     'if [ -f "$IVA_ROOT/current/bin/iva.mjs" ]; then',
     '  IVA_ROOT="$IVA_ROOT/current"',
+    'elif [ ! -f "$IVA_ROOT/bin/iva.mjs" ]; then',
+    '  for candidate in "$IVA_ROOT"/versions/*; do',
+    '    [ -f "$candidate/bin/iva.mjs" ] && IVA_ROOT="$candidate"',
+    "  done",
     "fi",
     `exec "${node}" "$IVA_ROOT/bin/iva.mjs" "$@"`,
     "",

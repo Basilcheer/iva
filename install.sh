@@ -578,8 +578,20 @@ ASSISTANT_VAULT_DIR="$VAULT_DIR_REL" node scripts/init-vault.mjs || warn "$(t "i
 step "$(t "Installing the iva command in ~/.local/bin…" "Ставлю команду iva в ~/.local/bin…")"
 mkdir -p "$HOME/.local/bin"
 # Path resolution only, so the same shim keeps working once the install moves to
-# ~/iva/versions/<version> behind the `current` symlink.
-printf '#!/bin/sh\nIVA_ROOT="%s"\nif [ -f "$IVA_ROOT/current/bin/iva.mjs" ]; then\n  IVA_ROOT="$IVA_ROOT/current"\nfi\nexec "%s" "$IVA_ROOT/bin/iva.mjs" "$@"\n' "$PROJECT_DIR" "$(command -v node)" > "$HOME/.local/bin/iva"
+# ~/iva/versions/<version> behind the `current` symlink - and keeps working even if
+# that symlink is lost, which is what makes `iva update` able to repair it.
+{
+  printf '#!/bin/sh\n'
+  printf 'IVA_ROOT="%s"\n' "$PROJECT_DIR"
+  printf 'if [ -f "$IVA_ROOT/current/bin/iva.mjs" ]; then\n'
+  printf '  IVA_ROOT="$IVA_ROOT/current"\n'
+  printf 'elif [ ! -f "$IVA_ROOT/bin/iva.mjs" ]; then\n'
+  printf '  for candidate in "$IVA_ROOT"/versions/*; do\n'
+  printf '    [ -f "$candidate/bin/iva.mjs" ] && IVA_ROOT="$candidate"\n'
+  printf '  done\n'
+  printf 'fi\n'
+  printf 'exec "%s" "$IVA_ROOT/bin/iva.mjs" "$@"\n' "$(command -v node)"
+} > "$HOME/.local/bin/iva"
 chmod +x "$HOME/.local/bin/iva"
 case ":$PATH:" in
   *":$HOME/.local/bin:"*) ok "$(t "The iva command is ready — try: iva help" "Команда iva готова — попробуй: iva help")" ;;
