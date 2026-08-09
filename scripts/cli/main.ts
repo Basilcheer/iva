@@ -61,7 +61,7 @@ export function createCliMain(root: string) {
   });
   // Installations move to immutable versions; a development checkout keeps the
   // in-place updater, which is also what the bridge era still needs on the way in.
-  const versionUpdate = createVersionUpdateCommand(runtime);
+  const versionUpdate = createVersionUpdateCommand(runtime, systemdLifecycle);
   const cmdUpdate = (args: readonly string[]): Promise<void> =>
     versionUpdate.active() ? versionUpdate.run(args) : legacyUpdate(args);
   const { C, SERVICES, TIMERS, bad, ok } = runtime;
@@ -74,6 +74,7 @@ ${C.b}Commands:${C.x}
   ${C.c}iva update${C.x}         update: git pull + build + restart
   ${C.c}iva config${C.x}         configure: model, Telegram, Deepgram, TZ, vault
   ${C.c}iva login${C.x} [--browser]  sign in to an OpenAI subscription (ChatGPT) for MODEL_PROVIDER=codex
+  ${C.c}iva rollback${C.x}       go back to the previous version (symlink flip + restart)
   ${C.c}iva doctor${C.x}         diagnose and safely auto-repair the install
   ${C.c}iva status${C.x}         status of services and memory timers
   ${C.c}iva restart${C.x}        restart the agent and Telegram bridge
@@ -91,6 +92,7 @@ ${C.b}Commands:${C.x}
 
   const commands: Readonly<Record<string, CliCommand>> = {
     update: cmdUpdate,
+    rollback: versionUpdate.rollback,
     userbot: userbot.cmdUserbot,
     config: cmdConfig,
     login: account.cmdLogin,

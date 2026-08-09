@@ -264,3 +264,34 @@ test("a broken current symlink is repaired instead of blocking the update", (t) 
   assert.equal(active(iva), healthy, output);
   assert.match(output, /already up to date/u);
 });
+
+test("a rollback is a symlink flip and a restart, with no build and no network", (t) => {
+  const iva = world(t);
+  update(iva);
+  const first = String(active(iva));
+  iva.publish((tree) =>
+    writeFileSync(join(tree, "scripts/feature.mjs"), "export const feature = 2;\n"),
+  );
+  update(iva);
+  const second = String(active(iva));
+  rmSync(iva.upstream, { recursive: true, force: true });
+
+  const result = iva.iva(["rollback"]);
+  assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+  assert.equal(active(iva), first);
+  assert.ok(existsSync(join(iva.home, "versions", second)), "nothing was deleted");
+  assert.match(result.stdout, new RegExp(`${second} → ${first}`, "u"));
+  // And forward again: the pair is symmetric, so a bad rollback is not a trap.
+  assert.equal(iva.iva(["rollback"]).status, 0);
+  assert.equal(active(iva), second);
+});
+
+test("a rollback with nothing to go back to changes nothing", (t) => {
+  const iva = world(t);
+  update(iva);
+  const only = active(iva);
+  const result = iva.iva(["rollback"]);
+  assert.equal(result.status, 1);
+  assert.match(result.stdout, /no previous version/u);
+  assert.equal(active(iva), only);
+});

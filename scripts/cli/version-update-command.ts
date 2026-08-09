@@ -15,6 +15,7 @@ import {
   type Install,
 } from "../lib/version-layout.ts";
 import { ensureMirror, resolveTarget } from "../lib/version-mirror.ts";
+import { acquireUpdateLock } from "../lib/update-lock.ts";
 import { createVersionStore } from "../lib/version-store.ts";
 import { runVersionUpdate, type UpdateOutcome } from "../lib/version-update.ts";
 import type { createCliRuntime } from "./runtime.ts";
@@ -57,7 +58,10 @@ const COPY: Record<"en" | "ru", UpdateCopy> = {
  * That is what makes an updater fix arrive with the release that carries it
  * instead of the one after it.
  */
-export function createVersionUpdateCommand(runtime: CliRuntime) {
+export function createVersionUpdateCommand(
+  runtime: CliRuntime,
+  systemdLifecycle: { restartServices: () => void },
+) {
   const install: Install = classifyRoot(runtime.ROOT);
 
   async function run(args: readonly string[]): Promise<void> {
@@ -149,10 +153,40 @@ export function createVersionUpdateCommand(runtime: CliRuntime) {
     }
   }
 
+  /**
+   * Go back to the version that ran before this one. No git, no build, no
+   * network: the previous version is still on disk, so this is one symlink and
+   * one restart.
+   */
+  function rollback(): void {
+    const store = createVersionStore(install.home);
+    const previous = store.previousName();
+    if (!previous) {
+      runtime.bad("no previous version to go back to");
+      process.exitCode = 1;
+      return;
+    }
+    const lock = acquireUpdateLock(store.layout.data);
+    if (!lock) {
+      runtime.bad("an update is already running");
+      process.exitCode = 1;
+      return;
+    }
+    try {
+      const from = store.currentName();
+      store.activate(previous);
+      systemdLifecycle.restartServices();
+      runtime.ok(`${from ?? "the broken version"} → ${previous}`);
+    } finally {
+      lock.release();
+    }
+  }
+
   return {
     /** Only a real installation is converted; a development checkout is left alone. */
     active: (): boolean => isManagedInstall(install),
     run,
+    rollback,
   };
 }
 
