@@ -33,7 +33,8 @@ export const STATE_DIRS = [
 const FLIP_PREFIX = ".current.iva-flip-";
 /** Names in `home` that only an interrupted update can leave behind. */
 const LEFTOVER_PREFIXES = [FLIP_PREFIX, ".probe-"];
-const VERSION_NAME = /^(\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?)-([0-9a-f]{12})$/;
+const VERSION_NAME =
+  /^(\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?)-([0-9a-f]{12})(?:\+([0-9a-f]{8}))?$/;
 
 export type Layout = {
   /** Installation root, the only path a user ever has to know. */
@@ -65,15 +66,30 @@ export function layoutFor(home: string): Layout {
   };
 }
 
-export function versionName(version: string, sha: string): string {
-  return `${version}-${sha.slice(0, 12)}`;
+/**
+ * What a version is: a release, the commit it was built from, and - when the user
+ * has customized the installation - a digest of the files they wrote.
+ *
+ * The overlay belongs in the identity because it is part of the tree that gets
+ * built. Without it, changing a file in `data/custom` would produce the name of a
+ * version that already exists, and the change would wait for an unrelated release
+ * to reach the service.
+ */
+export function versionName(
+  version: string,
+  sha: string,
+  overlay: string | null = null,
+): string {
+  return `${version}-${sha.slice(0, 12)}${overlay ? `+${overlay}` : ""}`;
 }
 
 export function parseVersionName(
   name: string,
-): { version: string; sha: string } | null {
+): { version: string; sha: string; overlay: string | null } | null {
   const match = VERSION_NAME.exec(name);
-  return match ? { version: match[1], sha: match[2] } : null;
+  return match
+    ? { version: match[1], sha: match[2], overlay: match[3] ?? null }
+    : null;
 }
 
 function pipe(

@@ -37,7 +37,8 @@ const COPY: Record<"en" | "ru", UpdateCopy> = {
     build: ["Building Iva", "Iva built"],
     current: "Iva is already up to date",
     failed: "Couldn't complete the update",
-    forced: "--force is ignored: a version is rebuilt only for a new commit",
+    forced:
+      "--force is ignored: a version is rebuilt when its commit or your data/custom changes",
     busy: "An update is already running",
   },
   ru: {
@@ -46,7 +47,7 @@ const COPY: Record<"en" | "ru", UpdateCopy> = {
     current: "Iva уже обновлена",
     failed: "Не удалось завершить обновление",
     forced:
-      "--force игнорируется: версия пересобирается только под новый коммит",
+      "--force игнорируется: версия пересобирается под новый коммит или изменения в data/custom",
     busy: "Обновление уже идёт",
   },
 };

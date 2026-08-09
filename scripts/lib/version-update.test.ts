@@ -305,6 +305,108 @@ test("the custom layer's own bookkeeping is not mistaken for the user's code", a
   assert.equal(existsSync(join(data, "planted.txt")), false);
 });
 
+test("a customization added after a release is a version of its own", async (t) => {
+  const iva = world(t);
+  const stock = updated(await iva.update());
+  assert.equal(stock.custom, "none");
+
+  // No new commit and no --force: the only thing that changed is the user's file.
+  // Without an identity of its own it would resolve to the version already running
+  // and never reach the service.
+  customFile(iva.home, "agent/connections/mine.ts", "export const mine = 1;\n");
+  const applied = updated(await iva.update());
+  assert.equal(applied.custom, "applied");
+  assert.equal(applied.previous, stock.version);
+  assert.equal(
+    readFileSync(join(iva.home, "current/agent/connections/mine.ts"), "utf8"),
+    "export const mine = 1;\n",
+  );
+  // The same tree twice is not a rebuild.
+  assert.deepEqual(await iva.update(), {
+    status: "current",
+    version: applied.version,
+  });
+
+  // An edit to the same file is another version again.
+  customFile(iva.home, "agent/connections/mine.ts", "export const mine = 2;\n");
+  const edited = updated(await iva.update());
+  assert.notEqual(edited.version, applied.version);
+  assert.equal(
+    readFileSync(join(iva.home, "current/agent/connections/mine.ts"), "utf8"),
+    "export const mine = 2;\n",
+  );
+});
+
+test("removing a customization goes back to the stock version already on disk", async (t) => {
+  const iva = world(t);
+  const stock = updated(await iva.update());
+  customFile(iva.home, "agent/connections/mine.ts", "export const mine = 1;\n");
+  assert.notEqual(updated(await iva.update()).version, stock.version);
+
+  rmSync(join(layoutFor(iva.home).data, "custom/agent/connections/mine.ts"), {
+    force: true,
+  });
+  let builds = 0;
+  const back = updated(
+    await iva.update({
+      run: fixtureRunner(() => {
+        builds += 1;
+        return Promise.resolve();
+      }),
+    }),
+  );
+  assert.equal(back.version, stock.version);
+  assert.equal(back.custom, "none");
+  assert.equal(builds, 0, "the stock version was still on disk");
+  assert.equal(
+    existsSync(join(iva.home, "current/agent/connections/mine.ts")),
+    false,
+  );
+});
+
+test("a customization that builds but does not start leaves the service on the stock build", async (t) => {
+  const iva = world(t);
+  const first = updated(await iva.update());
+  customFile(iva.home, "agent/connections/mine.ts", "export const mine = 1;\n");
+
+  // The build accepts it and the start refuses it: the shape of every custom-layer
+  // incident, because the service compiles the authored sources again on start.
+  const outcome = updated(
+    await iva.update({
+      probe: (dir, port) =>
+        existsSync(join(dir, "agent/connections/mine.ts"))
+          ? Promise.resolve({
+              ok: false,
+              log: "Cannot find module '../scripts/lib/provider.ts'",
+            })
+          : fixtureProbe()(dir, port),
+    }),
+  );
+
+  assert.equal(outcome.custom, "stock");
+  assert.equal(outcome.previous, first.version);
+  const store = createVersionStore(iva.home);
+  assert.equal(store.currentName(), outcome.version);
+  assert.equal(
+    existsSync(join(iva.home, "current/agent/connections/mine.ts")),
+    false,
+  );
+  assert.match(iva.notices.join("\n"), /does not start[\s\S]*stock build/u);
+  // The file is still the user's, and the version that failed with it is not
+  // rebuilt on every update until they change it.
+  assert.equal(
+    readFileSync(
+      join(layoutFor(iva.home).data, "custom/agent/connections/mine.ts"),
+      "utf8",
+    ),
+    "export const mine = 1;\n",
+  );
+  assert.deepEqual(await iva.update(), {
+    status: "current",
+    version: outcome.version,
+  });
+});
+
 test("a customization that does not build never keeps the service down", async (t) => {
   const iva = world(t);
   customFile(iva.home, "agent/connections/mine.ts", "BREAK this build\n");

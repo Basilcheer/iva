@@ -250,8 +250,14 @@ test("a customization that does not build leaves the service on the stock build"
   );
   const sha = iva.publish();
   const output = update(iva);
-  const name = `0.3.15-${sha.slice(0, 12)}`;
-  assert.equal(active(iva), name, output);
+  const name = String(active(iva));
+  // The version keeps the name it was staged under, customization digest and all,
+  // so a customization known to be broken here is tried once and not every update.
+  assert.match(
+    name,
+    new RegExp(`^0\\.3\\.15-${sha.slice(0, 12)}\\+`, "u"),
+    output,
+  );
   assert.match(output, /stock build/u);
   // The user's file is untouched, and the version that runs does not contain it.
   assert.equal(
@@ -276,6 +282,50 @@ test("a customization that builds is part of the version that runs", (t) => {
     readFileSync(join(iva.home, "current/agent/tools/feature.mjs"), "utf8"),
     "export const feature = 'mine';\n",
     output,
+  );
+});
+
+test("a customization reaches the service without waiting for a release", (t) => {
+  const iva = world(t);
+  update(iva);
+  const stock = String(active(iva));
+  const tool = join(iva.home, "data/custom/agent/tools/feature.mjs");
+  mkdirSync(join(iva.home, "data/custom/agent/tools"), { recursive: true });
+
+  // Nothing upstream changed: the user added a tool, which is the whole point of
+  // data/custom and used to need a release from somebody else to take effect.
+  writeFileSync(tool, "export const feature = 'mine';\n");
+  const applied = update(iva);
+  assert.notEqual(active(iva), stock, applied);
+  assert.equal(
+    readFileSync(join(iva.home, "current/agent/tools/feature.mjs"), "utf8"),
+    "export const feature = 'mine';\n",
+    applied,
+  );
+  assert.match(iva.iva(["update"]).stdout, /already up to date/u);
+
+  // And one the build accepts but the start refuses: the service comes up on the
+  // stock tree instead, and the next release is not blocked behind the user's file.
+  writeFileSync(tool, "// START_BREAK\n");
+  const fallback = update(iva);
+  assert.match(fallback, /stock build/u);
+  assert.equal(
+    existsSync(join(iva.home, "current/agent/tools/feature.mjs")),
+    false,
+    fallback,
+  );
+  assert.equal(readFileSync(tool, "utf8"), "// START_BREAK\n");
+  const sha = iva.publish((tree) =>
+    writeFileSync(
+      join(tree, "scripts/feature.mjs"),
+      "export const next = 1;\n",
+    ),
+  );
+  const next = update(iva);
+  assert.match(
+    String(active(iva)),
+    new RegExp(`^0\\.3\\.15-${sha.slice(0, 12)}`, "u"),
+    next,
   );
 });
 

@@ -49,16 +49,28 @@ function age(dir: string, secondsAgo: number): void {
   utimesSync(dir, when, when);
 }
 
-test("version names carry the release and a 12-character commit", () => {
-  assert.equal(
-    versionName("0.3.15", "0123456789abcdef0123456789abcdef01234567"),
-    "0.3.15-0123456789ab",
-  );
+test("version names carry the release, the commit and the customization", () => {
+  const sha = "0123456789abcdef0123456789abcdef01234567";
+  assert.equal(versionName("0.3.15", sha), "0.3.15-0123456789ab");
   assert.deepEqual(parseVersionName("0.3.15-0123456789ab"), {
     version: "0.3.15",
     sha: "0123456789ab",
+    overlay: null,
+  });
+  // The same commit with a customization is a different version, or a user's
+  // edit would resolve to the version that is already running.
+  assert.equal(
+    versionName("0.3.15", sha, "beefcafe"),
+    "0.3.15-0123456789ab+beefcafe",
+  );
+  assert.deepEqual(parseVersionName("0.3.15-0123456789ab+beefcafe"), {
+    version: "0.3.15",
+    sha: "0123456789ab",
+    overlay: "beefcafe",
   });
   assert.equal(parseVersionName("0.3.15-0123456789ab/../etc"), null);
+  assert.equal(parseVersionName("0.3.15-0123456789ab+"), null);
+  assert.equal(parseVersionName("0.3.15-0123456789ab+zzzzzzzz"), null);
   assert.equal(parseVersionName(".incomplete"), null);
   assert.equal(parseVersionName("node_modules"), null);
   assert.equal(parseVersionName("0.3.15-XYZ"), null);

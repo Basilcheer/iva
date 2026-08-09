@@ -1,4 +1,12 @@
-import { cpSync, mkdirSync, readdirSync, rmSync } from "node:fs";
+import { createHash } from "node:crypto";
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+} from "node:fs";
 import { dirname, join, relative, sep } from "node:path";
 import { isAuthoredPath } from "./authored-paths.ts";
 import {
@@ -94,6 +102,51 @@ function customFiles(customDir: string): string[] {
 }
 
 /**
+ * The overlay to build into a version: the authored files, plus a digest that
+ * changes whenever any of them does.
+ *
+ * The digest is what gives a customization an identity of its own, so that
+ * editing `data/custom` produces a version to build instead of resolving to the
+ * one that already runs.
+ */
+function customOverlay(customDir: string): {
+  files: string[];
+  digest: string | null;
+} {
+  const hash = createHash("sha256");
+  const files: string[] = [];
+  for (const path of customFiles(customDir)) {
+    let body: Buffer;
+    try {
+      body = readFileSync(join(customDir, path));
+    } catch {
+      // Deleted between the listing and the read: it is not part of the overlay.
+      continue;
+    }
+    files.push(path);
+    hash.update(`${path}\0${body.length}\0`);
+    hash.update(body);
+  }
+  return {
+    files,
+    digest: files.length > 0 ? hash.digest("hex").slice(0, 8) : null,
+  };
+}
+
+/** What a version already on disk was built with, judged by what is in its tree. */
+function builtWith(
+  dir: string,
+  name: string,
+  customDir: string,
+): "none" | "applied" | "stock" {
+  if (!parseVersionName(name)?.overlay) return "none";
+  const files = customFiles(customDir);
+  return files.length > 0 && files.every((path) => existsSync(join(dir, path)))
+    ? "applied"
+    : "stock";
+}
+
+/**
  * Prove the version starts, from its own directory, on a port nothing else holds.
  *
  * The port is chosen and then taken, so another process can win the race in
@@ -149,7 +202,12 @@ export async function runVersionUpdate(
     store.heal();
 
     const target = await resolveTarget();
-    const name = versionName(target.version, target.sha);
+    // The customization is half of what gets built, so it is half of what the
+    // version is called. Edited while an update is in flight, the digest simply
+    // differs again on the next run, which is one more update - never a version
+    // that quietly disagrees with `data/custom` forever.
+    const { digest } = customOverlay(join(store.layout.data, "custom"));
+    const name = versionName(target.version, target.sha, digest);
     // Nothing to do only once the installation has finished moving onto it. A flip
     // whose migrations, restart or layout changes never happened is an update
     // still owed, and reporting it as done is what strands an installation.
@@ -210,29 +268,57 @@ export async function finishVersionUpdate({
         port,
         env: probeEnvironment(store.layout.env, port),
       }));
-  let custom: "none" | "applied" | "stock" = "none";
+  let custom = builtWith(dir, name, join(store.layout.data, "custom"));
+  /** Nothing points at a version being built, so a failure is only garbage - and
+   * megabytes of it on a small disk. */
+  const discardOnFailure = async <T>(work: () => Promise<T>): Promise<T> => {
+    try {
+      return await work();
+    } catch (error) {
+      rmSync(dir, { recursive: true, force: true });
+      throw error;
+    }
+  };
+  const prove = async (): Promise<{ ok: boolean; log: string }> => {
+    // The probe is a real server start, so it runs on scratch state: an update
+    // that is about to be thrown away must not have touched the installation.
+    const scratch = store.sandboxState(name);
+    try {
+      return await proveStarts(dir, check, log);
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  };
 
   if (active === name) {
     // The flip happened, the rest did not: pick the update up where it stopped.
     log(`finishing the move onto ${name}`);
   } else {
-    if (store.list().some((entry) => entry.name === name)) {
-      // A previous run built and finished this version but never got to activate it.
-      log(`reusing prepared version ${name}`);
-    } else {
-      try {
-        custom = await buildVersion({ store, name, dir, run, notify, log });
-      } catch (error) {
-        // A failed build is worth megabytes on a small disk, and nothing points at it.
-        rmSync(dir, { recursive: true, force: true });
-        throw error;
-      }
+    // A previous run built and finished this version but never got to activate it.
+    const prepared = store.list().some((entry) => entry.name === name);
+    if (prepared) log(`reusing prepared version ${name}`);
+    else
+      custom = await discardOnFailure(() =>
+        buildVersion({ store, name, dir, run, notify, log }),
+      );
+    let health = await prove();
+    // A green build is not a start: the service compiles the authored TypeScript
+    // again when it comes up, so a customization can pass the build and still
+    // bring the service down. That is the user's code failing, and a release must
+    // not be held hostage to it - so the same version is rebuilt without it.
+    if (!health.ok && custom === "applied" && !prepared) {
+      log(
+        "the customized version does not start; building it without the overlay",
+      );
+      await discardOnFailure(() => buildStock({ store, name, dir, run }));
+      custom = "stock";
+      const broken = health.log;
+      health = await prove();
+      if (health.ok)
+        notify(
+          `your customization in data/custom does not start against this version, so Iva is running the stock build:\n${broken.slice(-1500)}`,
+        );
     }
-    // The probe is a real server start, so it runs on scratch state: an update
-    // that is about to be thrown away must not have touched the installation.
-    const scratch = store.sandboxState(name);
-    const health = await proveStarts(dir, check, log);
-    rmSync(scratch, { recursive: true, force: true });
     if (!health.ok) {
       // Nothing points at it, so removing it is the whole rollback.
       rmSync(dir, { recursive: true, force: true });
@@ -271,6 +357,18 @@ export async function finishVersionUpdate({
   };
 }
 
+async function install(dir: string, run: Runner): Promise<void> {
+  const installed = await run("npm", ["ci", "--no-audit", "--no-fund"], dir);
+  if (installed.code !== 0)
+    throw new Error(`dependency installation failed:\n${installed.output}`);
+}
+
+/** Build the tree in place; returns what the build said when it refused to. */
+async function build(dir: string, run: Runner): Promise<string | null> {
+  const built = await run("npm", ["run", "build"], dir);
+  return built.code === 0 ? null : built.output;
+}
+
 async function buildVersion({
   store,
   name,
@@ -286,45 +384,60 @@ async function buildVersion({
   notify: (message: string) => void;
   log: (message: string) => void;
 }): Promise<"none" | "applied" | "stock"> {
-  const npm = "npm";
-  const install = async (): Promise<void> => {
-    const installed = await run(npm, ["ci", "--no-audit", "--no-fund"], dir);
-    if (installed.code !== 0)
-      throw new Error(`dependency installation failed:\n${installed.output}`);
-  };
-  await install();
-
+  await install(dir, run);
   const customDir = join(store.layout.data, "custom");
-  const overlay = customFiles(customDir);
-  if (overlay.length === 0) {
-    const built = await run(npm, ["run", "build"], dir);
-    if (built.code !== 0) throw new Error(`build failed:\n${built.output}`);
+  const { files } = customOverlay(customDir);
+  const failIfBroken = (failure: string | null): void => {
+    if (failure) throw new Error(`build failed:\n${failure}`);
+  };
+  if (files.length === 0) {
+    failIfBroken(await build(dir, run));
     return "none";
   }
 
-  for (const relativePath of overlay) {
+  for (const relativePath of files) {
     // Confined to the version by `isAuthoredPath`: it rejects anything absolute,
     // anything that climbs out with `..`, and everything outside `agent/`.
     const target = join(dir, relativePath);
     mkdirSync(dirname(target), { recursive: true });
     cpSync(join(customDir, relativePath), target);
   }
-  log(`applied ${overlay.length} customized file(s)`);
-  const customized = await run(npm, ["run", "build"], dir);
-  if (customized.code === 0) return "applied";
+  log(`applied ${files.length} customized file(s)`);
+  const failure = await build(dir, run);
+  if (!failure) return "applied";
 
   // The user's own code must never keep the service down: rebuild the stock tree in
   // place and say so. The customization stays untouched in data/custom.
-  log("customized build failed; falling back to the stock build");
-  const sha = parseVersionName(name)?.sha ?? "";
-  store.reset(name);
-  await store.materialize({ sha, dir });
-  store.linkState(dir);
-  await install();
-  const stock = await run(npm, ["run", "build"], dir);
-  if (stock.code !== 0) throw new Error(`build failed:\n${stock.output}`);
+  log("the customized build failed; building this version without the overlay");
+  await buildStock({ store, name, dir, run });
   notify(
-    `your customization in data/custom does not build against this version, so Iva is running the stock build:\n${customized.output.slice(-1500)}`,
+    `your customization in data/custom does not build against this version, so Iva is running the stock build:\n${failure.slice(-1500)}`,
   );
   return "stock";
+}
+
+/**
+ * Rebuild a staged version from its commit alone, dropping the overlay.
+ *
+ * The directory keeps the name it was staged under - customization included - so
+ * that a customization known not to work here is tried once, not on every update
+ * until the user changes it.
+ */
+async function buildStock({
+  store,
+  name,
+  dir,
+  run,
+}: {
+  store: Store;
+  name: string;
+  dir: string;
+  run: Runner;
+}): Promise<void> {
+  store.reset(name);
+  await store.materialize({ sha: parseVersionName(name)?.sha ?? "", dir });
+  store.linkState(dir);
+  await install(dir, run);
+  const failure = await build(dir, run);
+  if (failure) throw new Error(`build failed:\n${failure}`);
 }
