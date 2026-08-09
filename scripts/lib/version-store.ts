@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import {
   existsSync,
   lstatSync,
@@ -31,6 +31,8 @@ export const STATE_DIRS = [
   ".workflow-data",
 ];
 const FLIP_PREFIX = ".current.iva-flip-";
+/** Names in `home` that only an interrupted update can leave behind. */
+const LEFTOVER_PREFIXES = [FLIP_PREFIX, ".probe-"];
 const VERSION_NAME = /^(\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?)-([0-9a-f]{12})$/;
 
 export type Layout = {
@@ -80,13 +82,7 @@ function pipe(
 ): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     let stderr = "";
-    let pending = 2;
-    const fail = (message: string) =>
-      reject(new Error(`materialize failed: ${message.trim() || "unknown"}`));
-    const settle = (code: number | null) => {
-      if (code !== 0) return fail(stderr);
-      if (--pending === 0) resolve();
-    };
+    let failed = false;
     const from = spawn(producer.command, producer.args, {
       cwd: producer.cwd,
       stdio: ["ignore", "pipe", "pipe"],
@@ -95,15 +91,37 @@ function pipe(
       cwd: consumer.cwd,
       stdio: ["pipe", "ignore", "pipe"],
     });
+    const fail = (message: string): void => {
+      stderr += message;
+      if (failed) return;
+      failed = true;
+      // The caller removes the directory a failed materialize wrote into, so
+      // neither end may still be writing to it when this promise settles.
+      for (const child of [from, to]) child.kill("SIGKILL");
+    };
+    const running = new Set<ChildProcess>([from, to]);
+    const settle = (child: ChildProcess): void => {
+      running.delete(child);
+      if (running.size > 0) return;
+      if (failed)
+        reject(new Error(`materialize failed: ${stderr.trim() || "unknown"}`));
+      else resolve();
+    };
     for (const stream of [from.stderr, to.stderr])
       stream.on("data", (chunk: unknown) => {
         stderr += String(chunk);
       });
-    from.on("error", (error) => fail(error.message));
-    to.on("error", (error) => fail(error.message));
+    for (const child of [from, to]) {
+      child.on("error", (error) => {
+        fail(error.message);
+        settle(child);
+      });
+      child.on("close", (code) => {
+        if (code !== 0) fail("");
+        settle(child);
+      });
+    }
     from.stdout.pipe(to.stdin);
-    from.on("close", settle);
-    to.on("close", settle);
   });
 }
 
@@ -266,7 +284,8 @@ export function createVersionStore(home: string) {
       stale.push(name);
     }
     for (const name of readdirSync(home).sort()) {
-      if (!name.startsWith(FLIP_PREFIX)) continue;
+      if (!LEFTOVER_PREFIXES.some((prefix) => name.startsWith(prefix)))
+        continue;
       rmSync(join(home, name), { recursive: true, force: true });
       stale.push(name);
     }
@@ -294,10 +313,17 @@ export function createVersionStore(home: string) {
   function heal(): string | null {
     const active = currentName();
     if (active) return active;
-    const newest = list()[0];
-    if (!newest) return null;
-    activate(newest.name);
-    return newest.name;
+    // The version the installation last settled on, not the newest one on disk:
+    // after a rollback the newest is exactly the version that was rejected, and
+    // healing must not quietly put it back.
+    const chosen = settled();
+    const pick = list().find((entry) => entry.name === chosen) ?? list()[0];
+    if (!pick) return null;
+    // A probe leaves a version pointing at scratch state; a version that runs
+    // borrows the installation's.
+    linkState(pick.dir);
+    activate(pick.name);
+    return pick.name;
   }
 
   /** Fill a staged directory with the exact tree of one commit, without git state. */
@@ -353,14 +379,17 @@ export function createVersionStore(home: string) {
    * candidate that may be deleted a second later. So a version is only allowed to
    * see the installation's state once it has earned the right to run on it.
    *
-   * The sandbox lives inside the incomplete marker: it is removed with it, and a
-   * run killed mid-probe leaves a directory the next sweep takes away rather than
-   * a version whose state points into nowhere.
+   * The scratch state lives beside the versions, never inside the one being
+   * proved: a version that is already finished - the target of a downgrade, or
+   * one a previous run prepared - must not be marked incomplete for the duration
+   * of a check, or a kill during it hands the next sweep a good version to
+   * delete. What a kill leaves instead is a scratch directory the next sweep
+   * takes away.
    */
-  function sandboxState(name: string): void {
-    const dir = versionDir(name);
-    mkdirSync(join(dir, INCOMPLETE), { recursive: true });
-    linkState(dir, join(dir, INCOMPLETE, "state"));
+  function sandboxState(name: string): string {
+    const scratch = join(home, `.probe-${process.pid}-${Date.now()}`);
+    linkState(versionDir(name), scratch);
+    return scratch;
   }
 
   return {

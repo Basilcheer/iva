@@ -230,8 +230,9 @@ export async function finishVersionUpdate({
     }
     // The probe is a real server start, so it runs on scratch state: an update
     // that is about to be thrown away must not have touched the installation.
-    store.sandboxState(name);
+    const scratch = store.sandboxState(name);
     const health = await proveStarts(dir, check, log);
+    rmSync(scratch, { recursive: true, force: true });
     if (!health.ok) {
       // Nothing points at it, so removing it is the whole rollback.
       rmSync(dir, { recursive: true, force: true });

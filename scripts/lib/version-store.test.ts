@@ -18,7 +18,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import {
   createVersionStore,
   layoutFor,
@@ -191,6 +191,30 @@ test("a missing, dangling or foreign current link is healed onto the newest vers
   assert.equal(store.heal(), null);
 });
 
+test("healing goes back to the version the installation settled on", (t) => {
+  const root = home(t);
+  const store = createVersionStore(root);
+  const layout = layoutFor(root);
+  age(install(store, "0.3.14-aaaaaaaaaaaa"), 600);
+  install(store, "0.3.15-bbbbbbbbbbbb");
+  // A rollback: onto the older version, and said so.
+  store.activate("0.3.14-aaaaaaaaaaaa");
+  store.settle("0.3.14-aaaaaaaaaaaa");
+  // The state links a rollback leaves are the installation's; a probe's are not.
+  store.linkState(
+    join(layout.versions, "0.3.14-aaaaaaaaaaaa"),
+    join(root, "gone"),
+  );
+  rmSync(layout.current, { force: true });
+
+  // Never the newest on disk: that is the version the rollback rejected.
+  assert.equal(store.heal(), "0.3.14-aaaaaaaaaaaa");
+  assert.equal(
+    realpathSync(join(root, "current/data")),
+    realpathSync(layout.data),
+  );
+});
+
 test("two updates racing on the same version let exactly one stage it", (t) => {
   const store = createVersionStore(home(t));
   install(store, "0.3.14-aaaaaaaaaaaa");
@@ -325,19 +349,29 @@ test("a version being probed writes to scratch state, not the installation's", (
   mkdirSync(join(layout.data, "custom"), { recursive: true });
   writeFileSync(join(root, ".eve/.workflow-data/open-run.json"), "{}");
 
-  store.sandboxState(name);
+  const scratch = store.sandboxState(name);
+  assert.equal(
+    dirname(scratch),
+    root,
+    "scratch state belongs outside versions",
+  );
   // What a started server writes goes through the links, and has to land in the
   // sandbox: a version that is only being proved is not the installation yet.
   writeFileSync(join(dir, "data/started.log"), "started\n");
   writeFileSync(join(dir, ".eve/.workflow-data/started.log"), "re-enqueued\n");
   assert.equal(existsSync(join(layout.data, "started.log")), false);
-  assert.equal(existsSync(join(root, ".eve/.workflow-data/started.log")), false);
-  assert.equal(readFileSync(join(root, ".eve/.workflow-data/open-run.json"), "utf8"), "{}");
+  assert.equal(
+    existsSync(join(root, ".eve/.workflow-data/started.log")),
+    false,
+  );
+  assert.equal(
+    readFileSync(join(root, ".eve/.workflow-data/open-run.json"), "utf8"),
+    "{}",
+  );
   // The installation's own .env is read even by a probe - that is the point of it.
   assert.equal(realpathSync(join(dir, ".env")), realpathSync(layout.env));
 
-  // Proved: the state links go back to the installation, and the sandbox goes away
-  // with the marker that made the version incomplete while it was being proved.
+  // Proved: the state links go back to the installation.
   store.linkState(dir);
   store.complete(name);
   assert.equal(realpathSync(join(dir, "data")), realpathSync(layout.data));
@@ -348,20 +382,26 @@ test("a version being probed writes to scratch state, not the installation's", (
   assert.equal(existsSync(join(dir, ".iva-incomplete")), false);
 });
 
-test("a version killed while it was being probed is swept, never activated", (t) => {
-  const store = createVersionStore(home(t));
+test("re-proving a finished version leaves the version, not the version's grave", (t) => {
+  const root = home(t);
+  const store = createVersionStore(root);
   const name = "0.3.15-bbbbbbbbbbbb";
   const dir = store.stage(name);
   store.linkState(dir);
   store.complete(name);
-  // The one moment a finished version goes back to scratch state: it is probed
-  // again after an interrupted run left it built but not activated.
-  store.sandboxState(name);
+  // A finished version goes back to scratch state whenever it is proved again:
+  // a downgrade onto it, or an interrupted run that built it but never flipped.
+  const scratch = store.sandboxState(name);
 
-  assert.deepEqual(store.list(), []);
-  assert.throws(() => store.activate(name), /incomplete/);
-  assert.deepEqual(store.sweep(), [name]);
-  assert.equal(existsSync(dir), false);
+  // Being checked is not being unfinished. A kill right here used to hand the
+  // next sweep the very version the installation was going back to.
+  assert.deepEqual(
+    store.list().map((entry) => entry.name),
+    [name],
+  );
+  assert.deepEqual(store.sweep(), [basename(scratch)]);
+  assert.equal(existsSync(dir), true);
+  assert.equal(existsSync(scratch), false);
 });
 
 test("a version links .env before there is one, so a later write lands outside", (t) => {
