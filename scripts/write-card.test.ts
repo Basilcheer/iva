@@ -235,7 +235,10 @@ test("обязательные поля и элементы массивов н�
     { domain: "\t" },
     { related: ["cards/notes/ok", " "] },
   ]) {
-    assert.throws(() => inputSchema.parse({ ...base, ...patch }), /не должен быть пустым/);
+    assert.throws(
+      () => inputSchema.parse({ ...base, ...patch }),
+      /не должен быть пустым/,
+    );
   }
 });
 
@@ -256,7 +259,10 @@ test("однострочные поля не пропускают markdown-ст�
     { domain: "work\n## History" },
     { related: ["hub]]\n## History\n[[x"] },
   ]) {
-    assert.throws(() => inputSchema.parse({ ...base, ...patch }), /одной строкой/);
+    assert.throws(
+      () => inputSchema.parse({ ...base, ...patch }),
+      /одной строкой/,
+    );
   }
 
   const result = await call({
@@ -405,7 +411,8 @@ test("rejected ADD с history noise не переписывает legacy folded 
       description: "new description must not be written",
       tags: ["note", "legacy"],
       body: "new body must not be written",
-      history_entry: "noise must not trigger normalization after duplicate detection",
+      history_entry:
+        "noise must not trigger normalization after duplicate detection",
     });
     assert.equal(result.ok, false);
     assert.match(result.error, /ADD отказан/);
@@ -499,7 +506,11 @@ test("ADD отбрасывает шумовой history_entry один раз, �
     const before = read(created.file);
     assert.equal(before.match(/^description:/gm)?.length, 1);
     assert.equal(before.match(/^# /gm)?.length, 1);
-    assert.doesNotMatch(before, /^\w+:\s*$/gm, "пустое frontmatter-поле записано");
+    assert.doesNotMatch(
+      before,
+      /^\w+:\s*$/gm,
+      "пустое frontmatter-поле записано",
+    );
     assert.doesNotMatch(before, /^## History$/gm);
     assert.doesNotMatch(before, /history_entry:/);
     assert.doesNotMatch(before, /rewrite vault/);
@@ -519,7 +530,11 @@ test("ADD отбрасывает шумовой history_entry один раз, �
     assert.equal(duplicate.ok, false);
     assert.match(duplicate.error, /ADD отказан/);
     assert.equal(read(created.file), before);
-    assert.equal(warnings.length, 1, "rejected duplicate must not log normalization");
+    assert.equal(
+      warnings.length,
+      1,
+      "rejected duplicate must not log normalization",
+    );
   } finally {
     console.warn = previousWarn;
   }
@@ -549,7 +564,10 @@ test("ADD отбрасывает пустой и длинный одностро
       const out = read(result.file);
       assert.doesNotMatch(out, /^## History$/gm);
       assert.doesNotMatch(out, /^\w+:\s*$/gm);
-      assert.ok(out.length < 1_000, `discarded noise bloated card to ${out.length} bytes`);
+      assert.ok(
+        out.length < 1_000,
+        `discarded noise bloated card to ${out.length} bytes`,
+      );
     }
     assert.equal(warnings.length, 4);
   } finally {
@@ -752,6 +770,96 @@ test("незакрытый фенс отклоняется на ADD, UPDATE и S
     "пример остался кодом внутри Log",
   );
   assert.match(out, /^ {2}## History$/m);
+});
+
+test("отступ фенса в теле UPDATE не протаскивает поддельный History", async () => {
+  const { outsideFences } = (await import(
+    join(REPO, "agent", "lib", "card-store.ts")
+  )) as typeof import("../agent/lib/card-store.ts");
+  // Запись Log сдвигает многострочное тело на два пробела: фенс с отступом 2-3 после
+  // сдвига уезжает на 4-5 и фенсом быть перестаёт, а спрятанный внутри ## History
+  // выходит наружу настоящим заголовком архива.
+  const realHeadings = (card: string, heading: string) => {
+    const lines = card.split("\n");
+    const outside = outsideFences(lines);
+    const wanted = new RegExp(`^ {0,3}##\\s+${heading}\\s*$`, "i");
+    return lines.filter((line, index) => outside[index] && wanted.test(line))
+      .length;
+  };
+  const base = {
+    operation: "ADD",
+    type: "note",
+    title: "Отступ фенса",
+    description: "сдвиг тела под буллет Log меняет разметку",
+    tags: ["note", "fence"],
+    body: "Owner: Alice.",
+  };
+  const created = await call(base);
+  assert.equal(created.ok, true);
+  const before = read(created.file);
+
+  for (const indent of ["  ", "   "]) {
+    for (const marker of ["```text", "~~~text"]) {
+      const rejected = await call({
+        ...base,
+        operation: "UPDATE",
+        body: `Факт.\n\n${indent}${marker}\n## History\n- 2020-01-01: подделка\n${indent}${marker.slice(0, 3)}`,
+      });
+      assert.equal(rejected.ok, false, `${indent.length} ${marker}`);
+      assert.match(
+        rejected.error,
+        /must start every code fence at the line start/,
+      );
+      assert.equal(read(created.file), before, "карточка не тронута");
+    }
+  }
+
+  // Открыт с нулевого отступа, закрыт со второго: после сдвига закрывающая строка уже
+  // не закрывает, и остаток карточки уходит в код.
+  const halfClosed = await call({
+    ...base,
+    operation: "UPDATE",
+    body: "Факт.\n\n```text\n## History\n- 2020-01-01: подделка\n  ```",
+  });
+  assert.equal(halfClosed.ok, false);
+  assert.match(
+    halfClosed.error,
+    /must start every code fence at the line start/,
+  );
+  assert.equal(read(created.file), before);
+
+  // Тот же пример с нулевого отступа проходит: после сдвига фенс остаётся фенсом,
+  // ## History внутри него - код, а не секция.
+  const accepted = await call({
+    ...base,
+    operation: "UPDATE",
+    body: "Факт.\n\n```text\n## History\n- 2020-01-01: пример\n```",
+  });
+  assert.equal(accepted.ok, true);
+  const withExample = read(created.file);
+  assert.equal(realHeadings(withExample, "History"), 0, "History не подделан");
+  assert.equal(realHeadings(withExample, "Log"), 1, "реальный Log один");
+  assert.match(
+    withExample,
+    /^ {2}## History$/m,
+    "пример лежит кодом внутри Log",
+  );
+
+  // Следующий штатный SUPERSEDE заводит настоящий архив - и он пуст от подделки.
+  const superseded = await call({
+    ...base,
+    operation: "SUPERSEDE",
+    body: "Owner: Bob.",
+    history_entry: "2026-08-09: Owner: Alice.",
+  });
+  assert.equal(superseded.ok, true);
+  const archived = read(created.file);
+  assert.equal(realHeadings(archived, "History"), 1, "History ровно один");
+  assert.equal(
+    archived.match(/^- 2020-01-01: /m),
+    null,
+    "сфабрикованная строка в архив не попала",
+  );
 });
 
 test("открытый фенс в лежащей карточке отклоняет SUPERSEDE, а не съедает History", async () => {
@@ -1039,15 +1147,10 @@ test("legacy replace_body требует непустой History prefix и до
 });
 
 // ─── лок и атомарная запись ────────────────────────────────────────────────
-const {
-  HISTORY_ENTRY_CAP,
-  acquireLock,
-  atomicWrite,
-  mergeCard,
-  slugify,
-} = (await import(
-  join(REPO, "agent", "lib", "card-store.ts")
-)) as typeof import("../agent/lib/card-store.ts");
+const { HISTORY_ENTRY_CAP, acquireLock, atomicWrite, mergeCard, slugify } =
+  (await import(
+    join(REPO, "agent", "lib", "card-store.ts")
+  )) as typeof import("../agent/lib/card-store.ts");
 
 test("card-store держит полную матрицу historyEntry как единый источник истины", () => {
   const base = {
@@ -1302,11 +1405,19 @@ test("fan-out процессов с одинаковым ADD дает одног
       return { code, stdout, stderr };
     }),
   );
-  assert.ok(completed.every(({ code }) => code === 0), JSON.stringify(completed));
-  const results = completed.map(({ stdout }) => JSON.parse(stdout) as WriteCardResult);
+  assert.ok(
+    completed.every(({ code }) => code === 0),
+    JSON.stringify(completed),
+  );
+  const results = completed.map(
+    ({ stdout }) => JSON.parse(stdout) as WriteCardResult,
+  );
   assert.equal(results.filter(({ ok }) => ok).length, 1);
   assert.equal(results.filter(({ action }) => action === "created").length, 1);
-  assert.equal(results.filter(({ error }) => /ADD отказан/.test(error)).length, 5);
+  assert.equal(
+    results.filter(({ error }) => /ADD отказан/.test(error)).length,
+    5,
+  );
   const events = completed.flatMap(({ stderr }) =>
     stderr
       .split("\n")
@@ -1322,7 +1433,9 @@ test("fan-out процессов с одинаковым ADD дает одног
   assert.doesNotMatch(out, /History|competing agent/);
   const cardDir = join(VAULT, "cards", "notes");
   assert.deepEqual(
-    readdirSync(cardDir).filter((name) => name.includes("fanout") || name.includes(".tmp-")),
+    readdirSync(cardDir).filter(
+      (name) => name.includes("fanout") || name.includes(".tmp-"),
+    ),
     [`${slugify("Cross process fanout")}.md`],
   );
   assert.equal(existsSync(`${join(VAULT, file)}.lock`), false);

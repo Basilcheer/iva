@@ -401,15 +401,22 @@ function repeatsHistoryTail(
   return historyFact(tail) === fact;
 }
 
+/** Многострочное тело ложится под буллет Log со сдвигом на два пробела. Судить его надо
+ * ровно в этом виде: сдвиг меняет разметку, а карточка хранит результат сдвига. */
+function logEntryLines(incoming: string, date: string): string[] {
+  const incomingLines = incoming.trim().split("\n");
+  return incomingLines.length === 1
+    ? [`- ${date}: ${incomingLines[0]}`]
+    : [`- ${date}:`, ...incomingLines.map((line) => `  ${line}`)];
+}
+
 function appendLog(body: string, incoming: string, date: string): string {
   const oldEntries = sectionContent(body, "Log");
   const withoutLogs = removeH2Sections(body, "Log");
-  const incomingLines = incoming.trim().split("\n");
-  const entry =
-    incomingLines.length === 1
-      ? `- ${date}: ${incomingLines[0]}`
-      : [`- ${date}:`, ...incomingLines.map((line) => `  ${line}`)].join("\n");
-  return replaceH2Sections(withoutLogs, "Log", [...oldEntries, entry]);
+  return replaceH2Sections(withoutLogs, "Log", [
+    ...oldEntries,
+    logEntryLines(incoming, date).join("\n"),
+  ]);
 }
 
 function collapseLogSections(body: string): string {
@@ -679,6 +686,26 @@ export function mergeCard(input: MergeInput): MergeResult {
     hasOutsideHeading(trimmedBody, /^ {0,3}#{1,2}\s+/)
   ) {
     throw new Error(`${operation} body must be a fact without H1/H2 headings`);
+  }
+  // Гейты выше судят сырое тело, а UPDATE кладёт его в карточку сдвинутым на два пробела
+  // под буллет Log. Фенс с отступом 2-3 после сдвига уезжает на 4-5 и фенсом быть
+  // перестаёт: его содержимое выходит наружу, и спрятанный внутри ## History становится
+  // настоящим заголовком append-only архива. Поэтому запись судим в том виде, в каком
+  // она ляжет в карточку.
+  if (operation === "UPDATE") {
+    const entry = logEntryLines(trimmedBody, date);
+    const scanned = scanFences(entry);
+    if (
+      scanned.open ||
+      entry.some(
+        (line, index) =>
+          scanned.outside[index] && /^ {0,3}#{1,2}\s+/.test(line),
+      )
+    ) {
+      throw new Error(
+        "UPDATE body must start every code fence at the line start; a Log entry indents the body by two spaces",
+      );
+    }
   }
   if (operation === "NOOP") {
     if (existing === undefined)
