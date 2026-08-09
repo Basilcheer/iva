@@ -982,6 +982,42 @@ test("ADD отклоняет структурные секции в body, не �
   );
 });
 
+test("реплей SUPERSEDE через полночь остаётся noop, а не переставляет updated", () => {
+  const base = {
+    title: "Cross midnight replay",
+    fields: {
+      type: "note",
+      description: "проверка реплея на следующие сутки",
+      tags: ["note"],
+      status: "active",
+    },
+    initialFields: { created: "2026-08-07", source: "daily/2026-08-07.md" },
+    body: "Truth v1",
+    date: "2026-08-07",
+  };
+  const created = mergeCard({ ...base, operation: "ADD" });
+  const supersede = {
+    ...base,
+    existing: created.content,
+    operation: "SUPERSEDE" as const,
+    body: "Truth v2",
+    historyEntry: "2026-08-07: Truth v1",
+  };
+  const replaced = mergeCard(supersede);
+  assert.equal(replaced.action, "replaced");
+  assert.match(replaced.content, /^updated: 2026-08-07$/m);
+
+  // Тот же вызов, повторённый на следующие сутки: единственное отличие - сегодняшний
+  // `updated:`, и переписывать ради него карточку нельзя.
+  const replayed = mergeCard({
+    ...supersede,
+    existing: replaced.content,
+    date: "2026-08-08",
+  });
+  assert.equal(replayed.action, "noop");
+  assert.equal(replayed.content, replaced.content);
+});
+
 test("лок сериализует запись: второй захват ждёт и падает по таймауту", () => {
   const file = join(VAULT, "cards", "notes", "lock-probe.md");
   const release = acquireLock(file);

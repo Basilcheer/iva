@@ -735,10 +735,6 @@ export function mergeCard(input: MergeInput): MergeResult {
   }
   updates.updated = date;
 
-  const fmText = parsed.fields
-    ? writeFrontmatter(updates, parsed.lines)
-    : writeFrontmatter(updates, []);
-
   let newBody = operation === "UPDATE" ? collapseLogSections(oldBody) : oldBody;
   let appended = false;
   // A confirmed-cancel rollup retry can replay the exact completed tool call. Only that
@@ -764,8 +760,21 @@ export function mergeCard(input: MergeInput): MergeResult {
   newBody = mergeRelated(newBody, related ?? []);
   if (beforeRelated !== newBody) appended = true;
 
-  const content = `---\n${fmText}\n---\n${newBody.replace(/\s*$/, "")}\n`;
-  if (replayed && content === existing)
+  const render = (stamp: string) =>
+    `---\n${writeFrontmatter(
+      { ...updates, updated: stamp },
+      parsed.fields ? parsed.lines : [],
+    )}\n---\n${newBody.replace(/\s*$/, "")}\n`;
+  const content = render(date);
+  // Реплей, перешагнувший полночь, отличается от лежащей карточки только сегодняшним
+  // `updated:`. Записать файл ради одной этой строки - выдать за изменение то, что
+  // изменением не является, поэтому дату исключаем из сверки.
+  const previousStamp = parsed.fields?.updated;
+  if (
+    replayed &&
+    (content === existing ||
+      (typeof previousStamp === "string" && render(previousStamp) === existing))
+  )
     return { content: existing, action: "noop" };
   return {
     content,
