@@ -1,5 +1,6 @@
 import { isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isEntrypoint } from "./lib/entrypoint.ts";
 import { z } from "zod";
 import {
   listCustomConflicts,
@@ -68,5 +69,4 @@ export function runCustomRecovery(args: readonly string[]): void {
   }
 }
 
-if (resolve(process.argv[1] ?? "") === resolve(fileURLToPath(import.meta.url)))
-  runCustomRecovery(process.argv.slice(2));
+if (isEntrypoint(import.meta.url)) runCustomRecovery(process.argv.slice(2));

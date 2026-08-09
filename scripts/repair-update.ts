@@ -8,7 +8,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
-import { fileURLToPath } from "node:url";
+import { isEntrypoint } from "./lib/entrypoint.ts";
 import { z } from "zod";
 
 const BOOTSTRAP_FILES = [
@@ -286,8 +286,7 @@ function argument(name: string): string | undefined {
   return value;
 }
 
-const invokedPath = process.argv[1] ? realpathSync(process.argv[1]) : "";
-if (invokedPath === realpathSync(fileURLToPath(import.meta.url))) {
+if (isEntrypoint(import.meta.url)) {
   try {
     runRepairUpdate({
       inputRoot: argument("--root") || process.cwd(),

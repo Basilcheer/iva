@@ -1,5 +1,6 @@
-import { dirname, join, resolve } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isEntrypoint } from "./lib/entrypoint.ts";
 import { acquireUpdateLock, releaseUpdateLock } from "./lib/update-safety.ts";
 import {
   inspectUpstream,
@@ -72,12 +73,7 @@ export async function runDailyUpdateCheck({
 }
 
 export async function main(entryUrl = import.meta.url): Promise<void> {
-  if (
-    !process.argv[1] ||
-    resolve(process.argv[1]) !== fileURLToPath(entryUrl)
-  ) {
-    return;
-  }
+  if (!isEntrypoint(entryUrl)) return;
   try {
     const result = await runDailyUpdateCheck();
     if (result.status === "notified") {

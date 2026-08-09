@@ -12,6 +12,7 @@ import {
 } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isEntrypoint } from "./lib/entrypoint.ts";
 import {
   archiveInvalidCustomLayer,
   captureCustomLayer,
@@ -198,5 +199,4 @@ export function buildWithCustomLayer(): void {
   }
 }
 
-if (resolve(process.argv[1] ?? "") === resolve(fileURLToPath(import.meta.url)))
-  buildWithCustomLayer();
+if (isEntrypoint(import.meta.url)) buildWithCustomLayer();
