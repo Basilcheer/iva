@@ -645,3 +645,14 @@ test("atomicWrite не оставляет временных файлов и п�
   assert.equal(readFileSync(file, "utf8"), "содержимое\n");
   assert.equal(readdirSync(dir).filter((n) => n.includes(".tmp-")).length, 0);
 });
+
+it("should allow ADD operation even if history_entry is passed by LLM", async () => {
+  const result = await writeCard({
+    title: "Test Card",
+    type: "note",
+    operation: "ADD",
+    body: "Test content",
+    history_entry: "Extraneous history from LLM",
+  });
+  expect(result.ok).toBe(true);
+});

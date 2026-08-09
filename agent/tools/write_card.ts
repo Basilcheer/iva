@@ -284,11 +284,8 @@ export default defineTool({
         error: "replace_body допустим только для SUPERSEDE.",
       };
     }
-    if (history_entry && operation && operation !== "SUPERSEDE") {
-      return {
-        ok: false,
-        error: "history_entry допустим только для SUPERSEDE.",
-      };
+    if (operation && operation !== "SUPERSEDE") {
+      history_entry = undefined;
     }
     if (operation === "SUPERSEDE" && !history_entry) {
       return {
@@ -309,11 +306,8 @@ export default defineTool({
         : undefined;
       const effectiveOperation =
         operation ?? (replace_body ? "SUPERSEDE" : existing ? "UPDATE" : "ADD");
-      if (history_entry && effectiveOperation !== "SUPERSEDE") {
-        return {
-          ok: false,
-          error: "history_entry допустим только для SUPERSEDE.",
-        };
+      if (effectiveOperation !== "SUPERSEDE") {
+        history_entry = undefined;
       }
       if (effectiveOperation === "ADD" && existing !== undefined) {
         return {
