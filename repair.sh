@@ -140,7 +140,7 @@ done < <(find "$INSTALL_DIR" -maxdepth 1 -type f -name '.env.*' -print0)
 
 mkdir -p -- "$candidate/data/update-recovery/$stamp"
 recovery="$candidate/data/update-recovery/$stamp"
-# BSD chmod has no "--" end-of-options marker; both paths are absolute, so it is not needed.
+# Both paths are absolute, so no end-of-options marker is needed to keep them apart from flags.
 chmod 700 "$candidate/data/update-recovery" "$recovery"
 final_recovery="$INSTALL_DIR/data/update-recovery/$stamp"
 cp -- "$state_dir/changes.patch" "$recovery/changes.patch"

@@ -260,3 +260,28 @@ void test("repair follows the configured update channel", () => {
     "stable target\n",
   );
 });
+
+void test("repair accepts an updater that activated a version instead of moving HEAD", () => {
+  // What the bridge does to an install the repair is bootstrapping: the working
+  // tree stays where it was and `current` is what says the target is live.
+  const fixture = repairFixture({
+    updaterScript:
+      'import { execFileSync } from "node:child_process";\n' +
+      'import { mkdirSync, symlinkSync } from "node:fs";\n' +
+      'import { join } from "node:path";\n' +
+      'const sha = execFileSync("git", ["rev-parse", "origin/main"], { encoding: "utf8" }).trim();\n' +
+      'const dir = join(process.cwd(), "versions", `0.3.15-${sha.slice(0, 12)}`);\n' +
+      "mkdirSync(dir, { recursive: true });\n" +
+      'symlinkSync(dir, join(process.cwd(), "current"));\n',
+  });
+  const head = git(fixture.local, "rev-parse", "HEAD");
+  const target = git(fixture.seed, "rev-parse", "HEAD");
+
+  withRepairGit(fixture, {}, () => {
+    assert.doesNotThrow(() =>
+      runRepairUpdate({ inputRoot: fixture.local, expectedTarget: target }),
+    );
+  });
+
+  assert.equal(git(fixture.local, "rev-parse", "HEAD"), head);
+});
