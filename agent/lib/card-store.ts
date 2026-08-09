@@ -274,12 +274,7 @@ function replaceH2Sections(
     output.push(lines[index]);
     index++;
   }
-  return (
-    output
-      .join("\n")
-      .replace(/\n{3,}/g, "\n\n")
-      .replace(/\s+$/, "") + "\n"
-  );
+  return output.join("\n").replace(/\s+$/, "") + "\n";
 }
 
 /** Keep exactly one Related section and deduplicate targets ignoring alias/anchor. */
