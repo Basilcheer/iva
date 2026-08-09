@@ -8,6 +8,7 @@ import {
   readFileSync,
   readdirSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -46,6 +47,31 @@ void test("quarantinePath сохраняет файл и закрывает ег
   assert.ok(dest);
   assert.equal(readFileSync(dest, "utf8"), '{"chat":["secret"]}');
   assert.equal(statSync(dest).mode & 0o777, 0o600);
+});
+
+void test("стор, который версия видит по симлинку, карантинится по-настоящему", () => {
+  const root = mkdtempSync(join(tmpdir(), "wf-store-link-"));
+  // Как в версионном layout: код живёт в версии, стор — в установке.
+  const store = join(root, ".eve/.workflow-data");
+  const version = join(root, "versions/0.3.15/.eve");
+  mkdirSync(store, { recursive: true });
+  mkdirSync(version, { recursive: true });
+  writeFileSync(join(store, "run.json"), '{"status":"running"}');
+  symlinkSync(store, join(version, ".workflow-data"));
+
+  const dest = quarantinePath(join(version, ".workflow-data"), "2026-01-01");
+
+  // Переименована сама директория стора, а не ссылка на неё: иначе reset ничего не
+  // чистит, а следующий апдейт возвращает те же зависшие прогоны.
+  assert.equal(dest, `${store}.trash-2026-01-01`);
+  assert.equal(
+    readFileSync(join(String(dest), "run.json"), "utf8"),
+    '{"status":"running"}',
+  );
+  assert.deepEqual(readdirSync(store), []);
+  // Ссылка не висит: сервис снова может писать через неё.
+  writeFileSync(join(version, ".workflow-data/run.json"), "{}");
+  assert.deepEqual(readdirSync(store), ["run.json"]);
 });
 
 void test("quarantinePath на отсутствующем пути — null, ничего не создаёт", () => {
