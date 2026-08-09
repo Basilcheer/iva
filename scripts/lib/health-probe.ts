@@ -9,11 +9,9 @@ export const PROBE_FLAG = "IVA_HEALTH_PROBE";
 const BUSY_PORT = "the probe port was already answering";
 
 /**
- * Whether a failed probe blames the port rather than the version.
- *
- * Two processes can pick the same free port between checking it and taking it,
- * and a health check that another server answers proves nothing at all - so this
- * verdict is worth another port, never a "the version does not start".
+ * Whether a failed probe blames the port rather than the version. Two processes
+ * can pick the same free port, and a check another server answered proves
+ * nothing - so this verdict is worth another port, never a verdict.
  */
 export function portWasTaken(log: string): boolean {
   return log.includes(BUSY_PORT) || log.includes("EADDRINUSE");
@@ -45,12 +43,10 @@ export type ProbeOptions = {
 export type ProbeResult = { readonly ok: boolean; readonly log: string };
 
 /**
- * The environment the service is started with, adjusted for a probe.
- *
- * systemd hands the unit the `.env` through `EnvironmentFile=`, so a probe
- * without it proves a version starts under a configuration nobody runs. The port
- * is the probe's own in both spellings: code that reaches for `IVA_PORT` to talk
- * to "the server" has to reach this one, never the live service.
+ * The environment the service is started with, adjusted for a probe. systemd
+ * hands the unit the `.env`, so a probe without it proves a version starts under
+ * a configuration nobody runs. The port is the probe's own in both spellings, or
+ * code reaching for `IVA_PORT` would talk to the live service.
  */
 export function probeEnvironment(
   envPath: string,
@@ -75,11 +71,10 @@ const wait = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
- * Start a built version from its final directory and wait for it to answer.
- *
- * This is the only check that can tell "the build succeeded" apart from "the
- * service starts": the server bundles TypeScript from its own paths at startup,
- * so a staging-only check has repeatedly passed for a build that then crash-looped.
+ * Start a built version from its final directory and wait for it to answer. This
+ * is the only check that tells "the build succeeded" apart from "the service
+ * starts": the server bundles TypeScript from its own paths at startup, so a
+ * staging-only check has repeatedly passed for a build that then crash-looped.
  */
 export async function probeVersion({
   dir,

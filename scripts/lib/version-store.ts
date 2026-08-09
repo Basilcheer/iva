@@ -17,19 +17,12 @@ import { dirname, join } from "node:path";
 const INCOMPLETE = ".iva-incomplete";
 const SETTLED = "active.json";
 /**
- * Directories a version borrows from the installation instead of owning.
- *
- * Only eve's durable store is shared out of `.eve`, not the whole directory: the
- * rest of it is a build cache keyed by the code, so it belongs to the version
- * that built it - and sharing it would hand a version that is still being proved
- * the runs of the service that is running right now.
+ * Directories a version borrows from the installation instead of owning. Only
+ * eve's durable store is shared out of `.eve`: the rest is a build cache keyed by
+ * the code, so it belongs to the version that built it.
  */
 export const STATE_DIRS = ["data", "vault", ".eve/.workflow-data"];
-/**
- * Where older builds kept the workflow store. Linked where an installation still
- * has one and never created, so a fresh install does not grow an empty directory
- * whose only meaning is "this box predates the move".
- */
+/** Where older builds kept the workflow store: linked where one is, never created. */
 export const LEGACY_STATE_DIRS = [".workflow-data"];
 const FLIP_PREFIX = ".current.iva-flip-";
 /** Names in `home` that only an interrupted update can leave behind. */
@@ -72,13 +65,9 @@ export function layoutFor(home: string): Layout {
  * has customized the installation - a digest of the files they wrote.
  *
  * The overlay belongs in the identity because it is part of the tree that gets
- * built. Without it, changing a file in `data/custom` would produce the name of a
- * version that already exists, and the change would wait for an unrelated release
- * to reach the service.
- *
- * `build` numbers directories that hold the same code: a rebuild of a release
- * whose dependencies or build output went bad is installed beside the running one
- * like every other version, so it needs a name of its own.
+ * built: without it a user's edit resolves to the version already running.
+ * `build` numbers directories holding the same code - a rebuild of a release
+ * whose npm artifacts went bad is installed beside the running one.
  */
 export function versionName(
   version: string,
@@ -165,10 +154,9 @@ function pipe(
 
 /**
  * Immutable version directories plus one symlink that says which of them runs.
- *
- * Every mutation is either confined to a directory nothing points at yet, or a
- * single atomic rename, so an interrupted update can only ever leave garbage
- * behind - never a half-changed installation.
+ * Every mutation is confined to a directory nothing points at yet, or is a single
+ * atomic rename, so an interrupted update leaves garbage and never a half-changed
+ * installation.
  */
 export function createVersionStore(home: string) {
   const layout = layoutFor(home);
@@ -221,11 +209,9 @@ export function createVersionStore(home: string) {
   }
 
   /**
-   * A free directory name for the next build of a release.
-   *
-   * `--force` says the version that runs is broken: it is rebuilt the way every
-   * version is installed - beside the running one, proved before anything points
-   * at it - so it needs a directory the running one does not own.
+   * A free directory name for the next build of a release. `--force` says the
+   * version that runs is broken, and it is rebuilt the way every version is
+   * installed: beside the running one, in a directory that one does not own.
    */
   function nextBuild(release: string): string {
     const parsed = parseVersionName(release);
@@ -282,11 +268,8 @@ export function createVersionStore(home: string) {
   function activate(name: string): void {
     const dir = versionDir(name);
     if (!isComplete(name)) throw new Error(`version ${name} is incomplete`);
-    // A version that is about to run gets the installation's state, whatever its
-    // links were left pointing at. A probe aims them at a scratch directory, and
-    // an update killed during one leaves a finished version - the target of a
-    // rollback, or one prepared but never activated - pointing at a directory the
-    // next sweep takes away.
+    // Whatever a killed probe left the links pointing at, a version that is about
+    // to run gets the installation's own state back.
     linkState(dir);
     const flip = join(home, `${FLIP_PREFIX}${process.pid}-${Date.now()}`);
     rmSync(flip, { recursive: true, force: true });
@@ -307,8 +290,7 @@ export function createVersionStore(home: string) {
 
   /**
    * The version the installation has fully moved onto: flipped, migrated,
-   * restarted. `current` says which code runs; this says the move is done, and an
-   * update is owed as long as the two disagree.
+   * restarted. An update is owed as long as this and `current` disagree.
    */
   function settled(): string | null {
     try {
@@ -408,10 +390,9 @@ export function createVersionStore(home: string) {
   }
 
   /**
-   * State lives outside the versions tree; a version only borrows it.
-   *
-   * `stateHome` is the installation itself for a version that runs, and a scratch
-   * directory while a version is only being proved - see `sandboxState`.
+   * State lives outside the versions tree; a version only borrows it. `stateHome`
+   * is the installation for a version that runs, and a scratch directory while
+   * one is only being proved - see `sandboxState`.
    */
   function linkState(dir: string, stateHome: string = home): void {
     // The workflow store is shared, or every update would drop the conversations
@@ -421,19 +402,17 @@ export function createVersionStore(home: string) {
       join(stateHome, name),
     ]);
     for (const name of LEGACY_STATE_DIRS) {
-      // Cleared even where nothing replaces it: a link left by an earlier pass
-      // would survive into a probe still pointing at the state that is live.
+      // Cleared even where nothing replaces it, or a link from an earlier pass
+      // survives into a probe still pointing at the state that is live.
       rmSync(join(dir, name), { recursive: true, force: true });
-      // Asked of the installation, never of the scratch state a probe runs on:
-      // a box that has one keeps it, sandboxed like the rest, and a box that
-      // never had one grows an empty legacy directory in neither place.
+      // Asked of the installation, never of a probe's scratch state: a box that
+      // never had one must not grow an empty legacy directory in either place.
       if (existsSync(join(home, name)))
         links.push([name, join(stateHome, name)]);
     }
     for (const [, target] of links) mkdirSync(target, { recursive: true });
     // The .env is the installation's in both modes: reading it is what makes a
-    // probe meaningful, and a later `iva config` has to write through the link to
-    // the real file instead of into a version that the next flip drops.
+    // probe meaningful, and `iva config` has to write through to the real file.
     links.push([".env", layout.env]);
     for (const [name, target] of links) {
       const link = join(dir, name);
@@ -444,20 +423,13 @@ export function createVersionStore(home: string) {
   }
 
   /**
-   * Point a version's state at scratch directories for the duration of its health
-   * probe.
+   * Point a version's state at scratch directories while its probe runs. The
+   * probe starts the real server, which re-enqueues the runs the live service is
+   * still handling - from a candidate that may be deleted a second later.
    *
-   * The probe starts the real server, and a server started on the live state
-   * re-enqueues the runs of the service that is still handling them - from a
-   * candidate that may be deleted a second later. So a version is only allowed to
-   * see the installation's state once it has earned the right to run on it.
-   *
-   * The scratch state lives beside the versions, never inside the one being
-   * proved: a version that is already finished - the target of a downgrade, or
-   * one a previous run prepared - must not be marked incomplete for the duration
-   * of a check, or a kill during it hands the next sweep a good version to
-   * delete. What a kill leaves instead is a scratch directory the next sweep
-   * takes away.
+   * The scratch lives beside the versions, never inside the one being proved: a
+   * finished version must not be marked incomplete for the duration of a check,
+   * or a kill during it hands the next sweep a good version to delete.
    */
   function sandboxState(name: string): string {
     const scratch = join(home, `.probe-${process.pid}-${Date.now()}`);

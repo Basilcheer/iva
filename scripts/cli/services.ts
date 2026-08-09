@@ -87,7 +87,9 @@ export function createServiceCommands(
     const customDir = join(store.layout.data, "custom");
     const digest = customOverlay(customDir).digest;
     if (parseVersionName(active)?.overlay !== digest) {
-      warn("data/custom changed since this version was built - run: iva update");
+      warn(
+        "data/custom changed since this version was built - run: iva update",
+      );
       return;
     }
     // The version carries the digest of a customization that then failed to

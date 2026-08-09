@@ -33,11 +33,9 @@ function alive(pid: number | undefined): boolean {
 }
 
 /**
- * Serialize updates with one atomic mkdir.
- *
- * A lock whose owner process is gone is stale immediately: an update killed with
- * SIGKILL must not block the retry that cleans up after it. The age fallback only
- * covers a pid that got recycled by another program.
+ * Serialize updates with one atomic mkdir. A lock whose owner is gone is stale at
+ * once - an update killed with SIGKILL must not block the retry that cleans up
+ * after it - and the age fallback only covers a pid another program recycled.
  */
 function own(path: string): UpdateLock {
   writeFileSync(
@@ -57,9 +55,8 @@ function own(path: string): UpdateLock {
 }
 
 /**
- * Take over a held lock. The process that finishes the update owns it, so killing
- * the process that started the update cannot make the lock look abandoned while
- * the work is still running.
+ * Take over a held lock: the process that finishes the update owns it, so killing
+ * the one that started it cannot make the lock look abandoned mid-flight.
  */
 export function adoptUpdateLock(dataDir: string): UpdateLock {
   const path = join(dataDir, "update.lock");

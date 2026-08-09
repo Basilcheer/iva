@@ -11,9 +11,9 @@ import { resolveUpdateTarget } from "./update-channel.ts";
 export type Target = { readonly sha: string; readonly version: string };
 
 /**
- * A bare mirror of the repository, cloned from the checkout that is being
- * converted. Nothing ever runs from it, so an update can rewrite it freely, and
- * it needs no network to be created.
+ * A bare mirror of the repository, cloned from the checkout being converted.
+ * Nothing runs from it, so an update can rewrite it freely and needs no network
+ * to create it.
  */
 export async function ensureMirror({
   home,

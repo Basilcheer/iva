@@ -80,13 +80,9 @@ export type VersionUpdateOptions = Omit<FinishOptions, "name"> & {
 };
 
 /**
- * The files the user authored, as paths relative to `data/custom`.
- *
- * Only the authored paths: the rest of that directory is the custom layer's own
- * bookkeeping - the manifest, base blobs, recovery bundles - and copying it into
- * the version would both lie about how much was customized and, for anything
- * under `data/`, write straight through a state symlink into the installation
- * that is still running.
+ * The files the user authored, as paths relative to `data/custom`. The rest of
+ * that directory is the custom layer's own bookkeeping, and copying anything
+ * under `data/` would write through a state symlink into the running install.
  */
 function customFiles(customDir: string): string[] {
   try {
@@ -106,11 +102,8 @@ function customFiles(customDir: string): string[] {
 
 /**
  * The overlay to build into a version: the authored files, plus a digest that
- * changes whenever any of them does.
- *
- * The digest is what gives a customization an identity of its own, so that
- * editing `data/custom` produces a version to build instead of resolving to the
- * one that already runs.
+ * changes whenever any of them does. The digest is what makes an edit to
+ * `data/custom` a version to build instead of the one that already runs.
  */
 export function customOverlay(customDir: string): {
   files: string[];
@@ -151,10 +144,8 @@ export function builtWith(
 
 /**
  * Prove the version starts, from its own directory, on a port nothing else holds.
- *
- * The port is chosen and then taken, so another process can win the race in
- * between; that says nothing about the version, so it is worth another port
- * rather than a verdict.
+ * A port lost between choosing it and taking it says nothing about the version,
+ * so it is worth another port rather than a verdict.
  */
 async function proveStarts(
   dir: string,
@@ -179,13 +170,13 @@ async function proveStarts(
 }
 
 /**
- * One update, expressed as: build a new immutable version, prove it starts, flip
- * a symlink, then move the installation onto it.
+ * One update: build a new immutable version, prove it starts, flip a symlink,
+ * then move the installation onto it.
  *
- * Nothing before the flip touches the running version, so an interruption there
- * leaves it exactly as it was and costs the next run a sweep. Nothing after the
- * flip is allowed to be a one-shot either: the next run replays whatever did not
- * finish, because an installation half moved is the one state with no way out.
+ * Nothing before the flip touches the running version, so an interruption costs
+ * the next run a sweep and nothing else. Nothing after the flip is a one-shot
+ * either - the next run replays it, because an installation half moved is the one
+ * state with no way out.
  */
 export async function runVersionUpdate(
   options: VersionUpdateOptions,
@@ -227,11 +218,9 @@ export async function runVersionUpdate(
       return { status: "current", version: active };
     }
 
-    // A build of this release that is already finished is reused - that is what
-    // makes taking a customization back out a symlink flip rather than a build.
-    // `--force` is the one thing that refuses it: it is how somebody says the
-    // build on disk is broken, so it gets a fresh directory instead of a rebuild
-    // of the tree the service is running from.
+    // Reusing a finished build of this release is what makes taking a
+    // customization back out a symlink flip rather than a build. `--force` is the
+    // one thing that refuses it: the build on disk is what it calls broken.
     const finished = force
       ? undefined
       : store.list().find((entry) => releaseOf(entry.name) === release);
@@ -258,14 +247,13 @@ export async function runVersionUpdate(
 }
 
 /**
- * The half of an update that the new version runs about itself: install, build,
- * prove, flip, migrate, restart. Split out so it can be executed by the code that
- * was just fetched instead of the code that is being replaced.
+ * The half of an update the new version runs about itself: install, build, prove,
+ * flip, migrate, restart. Split out so the code that was just fetched runs it
+ * rather than the code being replaced.
  *
- * Two commit points, both replayable. The flip decides which code runs; the
- * settle marker decides whether the installation has finished moving onto it.
- * Everything between them is written to be safe to run twice, because a crash
- * there means the next `iva update` runs it again.
+ * Two commit points, both replayable: the flip decides which code runs, the
+ * settle marker decides whether the move is finished. Everything between them is
+ * safe to run twice, because a crash there means the next run does it again.
  */
 export async function finishVersionUpdate({
   home,
@@ -344,10 +332,8 @@ export async function finishVersionUpdate({
     }
     if (!health.ok) {
       // A candidate this run built is garbage nothing points at, so removing it
-      // is the whole rollback. A version that was already finished before this
-      // run is somebody's way back - the target of a downgrade, or the stock
-      // version left on disk when a customization is taken out again - and a
-      // failed probe is not a licence to take it off the disk.
+      // is the whole rollback. A version finished before this run is somebody's
+      // way back, and a failed probe is no licence to take it off the disk.
       if (!prepared) rmSync(dir, { recursive: true, force: true });
       notify(
         `update to ${name} did not start; staying on ${active ?? "the current version"}`,
@@ -450,11 +436,9 @@ async function buildVersion({
 }
 
 /**
- * Rebuild a staged version from its commit alone, dropping the overlay.
- *
- * The directory keeps the name it was staged under - customization included - so
- * that a customization known not to work here is tried once, not on every update
- * until the user changes it.
+ * Rebuild a staged version from its commit alone, dropping the overlay. The
+ * directory keeps the name it was staged under, customization included, so a
+ * customization known not to work here is tried once and not on every update.
  */
 async function buildStock({
   store,

@@ -17,9 +17,8 @@ export type Install = {
   readonly kind: "version" | "checkout";
   readonly home: string;
   /**
-   * How the running tree should be addressed by anything it writes down (systemd
-   * units, the shim): `<home>/current` for a version, so those never name a
-   * directory that the next update garbage-collects.
+   * How anything that writes the tree down - systemd units, the shim - must
+   * address it: `<home>/current` for a version, never a collectable directory.
    */
   readonly root: string;
 };
@@ -35,12 +34,9 @@ export function real(path: string): string {
 
 /**
  * What a symlink names, whether or not the target exists yet; any other path
- * unchanged.
- *
- * One hop, not a full resolve: this is for writing *through* a link. On the
- * versioned layout a version's `.env` and workflow store are links to the
- * installation's, and replacing the link with a file is how a version keeps
- * state the next flip then drops.
+ * unchanged. One hop, not a full resolve: this is for writing *through* a link,
+ * because replacing a version's `.env` link with a file is how a version keeps
+ * state that the next flip drops.
  */
 export function throughLink(path: string): string {
   try {
@@ -69,8 +65,7 @@ export function classifyRoot(root: string): Install {
 
 /**
  * Whether this tree is somebody's installation rather than a development
- * checkout. Only an installation may be converted to the immutable layout - a
- * checkout has to keep behaving like a checkout.
+ * checkout: only an installation may be converted to the immutable layout.
  */
 export function isManagedInstall(
   install: Install,
@@ -85,9 +80,8 @@ export function isManagedInstall(
 }
 
 /**
- * Whether a shim script runs this installation. The paths it spells out are
- * compared resolved: the path an `iva` was installed with can reach the same
- * tree through a symlink.
+ * Whether a shim script runs this installation. Paths are compared resolved: an
+ * `iva` can have been installed with a path that reaches the tree through a link.
  */
 export function shimPointsAt(shim: string, home: string): boolean {
   return [...shim.matchAll(/"([^"]+)"/gu)]
@@ -103,14 +97,10 @@ export function gitRootFor(install: Install): string {
 
 /**
  * A shim that resolves paths and nothing else, so it never has to be rewritten
- * again: the active version, else the tree it was installed from (the state a
- * half-finished bridge leaves), else the version the installation last settled
- * on - because a lost `current` must not take the command that repairs it down
- * with it, and must not silently run an older release either. `iva update`
- * heals `current` from the same marker.
- *
- * install.sh writes the same script for installations that never had a
- * `current` to lose; the two have to stay in step.
+ * again: the active version, else the tree it was installed from (what a
+ * half-finished bridge leaves), else the version the installation settled on -
+ * a lost `current` must take neither the command that repairs it nor the release
+ * down with it. install.sh writes this same script; the two stay in step.
  */
 export function shimScript(home: string, node: string): string {
   return [

@@ -48,12 +48,10 @@ const COPY: Record<"en" | "ru", UpdateCopy> = {
 };
 
 /**
- * `iva update` on the immutable layout.
- *
- * This half only fetches and unpacks the new version; the moment its files exist,
- * the update continues inside the new version's own `scripts/update-finish.ts`.
- * That is what makes an updater fix arrive with the release that carries it
- * instead of the one after it.
+ * `iva update` on the immutable layout. This half only fetches and unpacks the
+ * new version; from the moment its files exist the update continues inside that
+ * version's own `scripts/update-finish.ts`, which is what makes an updater fix
+ * arrive with the release carrying it instead of the one after it.
  */
 export function createVersionUpdateCommand(
   runtime: CliRuntime,
@@ -163,9 +161,8 @@ export function createVersionUpdateCommand(
   }
 
   /**
-   * Go back to the version that ran before this one. No git, no build, no
-   * network: the previous version is still on disk, so this is one symlink and
-   * one restart.
+   * Go back to the version that ran before this one: no git, no build, no
+   * network, just one symlink and one restart.
    */
   function rollback(): void {
     const store = createVersionStore(install.home);
