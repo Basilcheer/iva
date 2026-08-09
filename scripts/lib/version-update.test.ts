@@ -164,7 +164,8 @@ test("a first update builds a version, proves it starts and activates it", async
     readFileSync(join(iva.home, "current/agent/agent.ts"), "utf8"),
     "export const agent = 1;\n",
   );
-  assert.deepEqual(iva.restarts, [store.currentDir()]);
+  // The restart targets `current`, never the version directory a later flip replaces.
+  assert.deepEqual(iva.restarts, [layoutFor(iva.home).current]);
   assert.equal(
     readFileSync(join(layoutFor(iva.home).data, "migrated.log"), "utf8"),
     "001\n",

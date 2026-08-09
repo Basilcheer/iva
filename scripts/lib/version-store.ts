@@ -13,6 +13,8 @@ import {
 import { dirname, join } from "node:path";
 
 const INCOMPLETE = ".iva-incomplete";
+/** Directories a version borrows from the installation instead of owning. */
+export const STATE_DIRS = ["data", "vault", ".eve", ".workflow-data"];
 const FLIP_PREFIX = ".current.iva-flip-";
 const VERSION_NAME = /^(\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?)-([0-9a-f]{12})$/;
 
@@ -278,12 +280,13 @@ export function createVersionStore(home: string) {
 
   /** State lives outside the versions tree; a version only borrows it. */
   function linkState(dir: string): void {
-    mkdirSync(layout.data, { recursive: true });
-    mkdirSync(layout.vault, { recursive: true });
-    const links: [string, string][] = [
-      ["data", layout.data],
-      ["vault", layout.vault],
-    ];
+    // .eve holds eve's workflow store (and .workflow-data the one older builds used):
+    // shared, or every update would drop the conversations that were open during it.
+    const links: [string, string][] = STATE_DIRS.map((name) => [
+      name,
+      join(home, name),
+    ]);
+    for (const [, target] of links) mkdirSync(target, { recursive: true });
     if (existsSync(layout.env)) links.push([".env", layout.env]);
     for (const [name, target] of links) {
       const link = join(dir, name);

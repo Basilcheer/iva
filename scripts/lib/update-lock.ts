@@ -39,20 +39,40 @@ function alive(pid: number | undefined): boolean {
  * SIGKILL must not block the retry that cleans up after it. The age fallback only
  * covers a pid that got recycled by another program.
  */
+function own(path: string): UpdateLock {
+  writeFileSync(
+    join(path, "owner.json"),
+    JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }),
+    { mode: 0o600 },
+  );
+  return {
+    path,
+    // Only the process named in the lock may drop it, so a handoff cannot end with
+    // the previous owner deleting the new owner's lock.
+    release: () => {
+      if (holder(path).pid === process.pid)
+        rmSync(path, { recursive: true, force: true });
+    },
+  };
+}
+
+/**
+ * Take over a held lock. The process that finishes the update owns it, so killing
+ * the process that started the update cannot make the lock look abandoned while
+ * the work is still running.
+ */
+export function adoptUpdateLock(dataDir: string): UpdateLock {
+  const path = join(dataDir, "update.lock");
+  mkdirSync(path, { recursive: true });
+  return own(path);
+}
+
 export function acquireUpdateLock(dataDir: string): UpdateLock | null {
   mkdirSync(dataDir, { recursive: true });
   const path = join(dataDir, "update.lock");
   const claim = (): UpdateLock => {
     mkdirSync(path);
-    writeFileSync(
-      join(path, "owner.json"),
-      JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }),
-      { mode: 0o600 },
-    );
-    return {
-      path,
-      release: () => rmSync(path, { recursive: true, force: true }),
-    };
+    return own(path);
   };
   try {
     return claim();
