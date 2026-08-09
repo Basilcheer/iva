@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import {
   existsSync,
   lstatSync,
@@ -60,12 +61,45 @@ export function classifyRoot(root: string): Install {
   return { kind: "checkout", home: dir, root: dir };
 }
 
-/** Only somebody's installation may be converted to the immutable layout. */
+/**
+ * A tree somebody develops in, told apart from an installation by its git
+ * history: install.sh clones one branch and never commits into it, so an
+ * installation has a single local branch, no commits of its own, and is never a
+ * linked worktree.
+ */
+function isDevelopmentCheckout(home: string): boolean {
+  const dot = lstatSync(join(home, ".git"), { throwIfNoEntry: false });
+  if (!dot) return false;
+  if (!dot.isDirectory()) return true; // a linked worktree: nobody installs one
+  const git = (...args: string[]): string | null => {
+    try {
+      return execFileSync("git", ["-C", home, ...args], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      }).trim();
+    } catch {
+      return null;
+    }
+  };
+  const heads = git("for-each-ref", "--format=%(refname)", "refs/heads");
+  if (heads === null) return false;
+  return (
+    heads.split("\n").filter(Boolean).length > 1 ||
+    Number(git("rev-list", "--count", "@{upstream}..HEAD")) > 0
+  );
+}
+
+/**
+ * Only somebody's installation may be converted to the immutable layout. The
+ * conversion retires the working tree it finds, so a checkout somebody develops
+ * in is left on the in-place updater even when their shim points at it.
+ */
 export function isManagedInstall(
   install: Install,
   shimPath: string = SHIM_PATH,
 ): boolean {
   if (install.kind === "version") return true;
+  if (isDevelopmentCheckout(install.home)) return false;
   try {
     return shimPointsAt(readFileSync(shimPath, "utf8"), install.home);
   } catch {

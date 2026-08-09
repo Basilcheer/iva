@@ -15,7 +15,11 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { shimScript } from "./version-layout.ts";
+import {
+  classifyRoot,
+  isManagedInstall,
+  shimScript,
+} from "./version-layout.ts";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "../..");
 
@@ -56,6 +60,53 @@ test("a shim without `current` runs the version the installation settled on", (t
   // And an active version outranks both.
   symlinkSync(join(home, "versions/0.3.9-bbbbbbbbbbbb"), join(home, "current"));
   assert.equal(run(), "0.3.9-bbbbbbbbbbbb");
+});
+
+test("a checkout somebody develops in is never converted, however the shim points", (t) => {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "iva-managed-")));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const git = (cwd: string, ...args: string[]): string =>
+    execFileSync("git", args, {
+      cwd,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        GIT_AUTHOR_NAME: "iva",
+        GIT_AUTHOR_EMAIL: "iva@example.com",
+        GIT_COMMITTER_NAME: "iva",
+        GIT_COMMITTER_EMAIL: "iva@example.com",
+      },
+    }).trim();
+  const upstream = join(dir, "upstream.git");
+  const source = join(dir, "source");
+  const home = join(dir, "iva");
+  git(dir, "init", "--bare", "--initial-branch=main", upstream);
+  mkdirSync(source, { recursive: true });
+  writeFileSync(join(source, "package.json"), "{}\n");
+  git(source, "init", "--initial-branch=main");
+  git(source, "add", "-A");
+  git(source, "commit", "-m", "initial");
+  git(source, "push", "-q", upstream, "main");
+  git(dir, "clone", "-q", upstream, home);
+
+  // Exactly what install.sh leaves behind: one branch, nothing of the user's own
+  // on top of it, and a shim on PATH that runs it.
+  const shim = join(dir, "iva-shim");
+  writeFileSync(shim, shimScript(home, process.execPath));
+  const managed = (): boolean => isManagedInstall(classifyRoot(home), shim);
+  assert.equal(managed(), true);
+
+  // A branch of their own: a working tree, not an installation. Converting it
+  // would retire the checkout somebody is working in.
+  git(home, "checkout", "-q", "-b", "feature");
+  assert.equal(managed(), false);
+
+  // And commits of their own on the branch that tracks upstream.
+  git(home, "checkout", "-q", "main");
+  git(home, "branch", "-D", "feature");
+  assert.equal(managed(), true);
+  git(home, "commit", "-q", "--allow-empty", "-m", "mine");
+  assert.equal(managed(), false);
 });
 
 test("install.sh writes the same shim the bridge does", (t) => {
