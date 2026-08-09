@@ -946,6 +946,24 @@ test("card-store держит полную матрицу historyEntry как е
   });
   assert.equal(legacy.action, "replaced");
   assert.match(legacy.content, /## History\n+\n- 2026-08-07: Current truth/);
+  for (const forged of [
+    "New truth\n\n## History\n- 1999-01-01: fabricated archive",
+    "New truth\n\n## Log\n- 1998-05-05: fabricated log",
+    "New truth\n\n# Second title",
+  ]) {
+    assert.throws(
+      () =>
+        mergeCard({
+          ...base,
+          existing: clean.content,
+          operation: "SUPERSEDE",
+          body: forged,
+          historyEntry: "2026-08-08: Current truth",
+        }),
+      /SUPERSEDE body must be a fact/,
+      forged,
+    );
+  }
   assert.throws(
     () =>
       mergeCard({

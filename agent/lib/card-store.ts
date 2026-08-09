@@ -686,6 +686,19 @@ export function mergeCard(input: MergeInput): MergeResult {
       "SUPERSEDE requires historyEntry or a legacy ## History section",
     );
   }
+  // Тело SUPERSEDE переписывает Compiled Truth, поэтому свои H2 ему разрешены, а H1 и
+  // структурные архивы - нет: иначе модель дописывает в append-only ## History строки с
+  // произвольными датами, и вычистить их уже нечем. Легаси-путь (replace_body без
+  // operation) не трогаем - там ## History и есть способ передать вытесненный факт.
+  if (
+    operation === "SUPERSEDE" &&
+    input.operation !== undefined &&
+    hasOutsideHeading(trimmedBody, /^ {0,3}(?:#\s+|##\s+(?:History|Log)\s*$)/i)
+  ) {
+    throw new Error(
+      "SUPERSEDE body must be a fact without an H1 or a ## History/## Log heading",
+    );
+  }
 
   if (existing === undefined) {
     const all: FmFields = { ...fields, ...(initialFields || {}) };
