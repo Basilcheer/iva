@@ -29,8 +29,17 @@ export async function ensureMirror({
   const staging = `${repo}.staging-${process.pid}`;
   rmSync(staging, { recursive: true, force: true });
   try {
-    await requireGit(git, home, ["clone", "--mirror", join(checkout, ".git"), staging]);
-    const origin = await requireGit(git, checkout, ["remote", "get-url", "origin"]);
+    await requireGit(git, home, [
+      "clone",
+      "--mirror",
+      join(checkout, ".git"),
+      staging,
+    ]);
+    const origin = await requireGit(git, checkout, [
+      "remote",
+      "get-url",
+      "origin",
+    ]);
     await requireGit(git, staging, ["remote", "set-url", "origin", origin]);
     const branch = await git(checkout, [
       "config",
@@ -41,7 +50,11 @@ export async function ensureMirror({
     const configured =
       typeof branch === "string" ? branch.trim() : (branch.stdout ?? "").trim();
     if (configured)
-      await requireGit(git, staging, ["config", "iva.updateBranch", configured]);
+      await requireGit(git, staging, [
+        "config",
+        "iva.updateBranch",
+        configured,
+      ]);
     renameSync(staging, repo);
   } catch (error) {
     rmSync(staging, { recursive: true, force: true });

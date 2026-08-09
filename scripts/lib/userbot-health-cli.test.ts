@@ -95,16 +95,20 @@ void test("iva userbot diagnose --json returns the shared ready state without se
   await writeFile(join(project, ".env"), `TELEGRAM_MCP_PORT=${port}\n`);
 
   const diagnose = () =>
-    run(process.execPath, [join(project, "bin/iva.mjs"), "userbot", "diagnose", "--json"], {
-      cwd: project,
-      env: {
-        ...process.env,
-        HOME: join(dir, "home"),
-        NO_COLOR: "1",
-        PATH: `${fakeBin}:/usr/bin:/bin`,
+    run(
+      process.execPath,
+      [join(project, "bin/iva.mjs"), "userbot", "diagnose", "--json"],
+      {
+        cwd: project,
+        env: {
+          ...process.env,
+          HOME: join(dir, "home"),
+          NO_COLOR: "1",
+          PATH: `${fakeBin}:/usr/bin:/bin`,
+        },
+        encoding: "utf8",
       },
-      encoding: "utf8",
-    });
+    );
   // The probe gives a local service 1500 ms. A machine busy running the rest of
   // this suite can stall that long on its own, and a starved event loop is not
   // the thing under test - so one timeout is retried, anything else is a failure.

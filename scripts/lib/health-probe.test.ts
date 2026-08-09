@@ -193,7 +193,10 @@ test("a foreign server on the probe port never passes for the version", async (t
   );
   t.after(() => new Promise((resolve) => squatter.close(resolve)));
 
-  const dir = versionDir(t, 'process.stderr.write("boom\\n");\nprocess.exit(1);\n');
+  const dir = versionDir(
+    t,
+    'process.stderr.write("boom\\n");\nprocess.exit(1);\n',
+  );
   const result = await probe(dir, {}, 3000);
   assert.equal(result.ok, false, result.log);
   assert.equal(portWasTaken(result.log), true, result.log);

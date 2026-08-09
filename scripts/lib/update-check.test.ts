@@ -381,5 +381,7 @@ test("on the versioned layout the daily check reads the mirror and names the ins
   });
   assert.equal(result.status, "current");
   // The mirror's own HEAD follows the remote, so the active version has to be named.
-  assert.deepEqual(asked, [{ root: join(home, "repo"), head: sha.slice(0, 12) }]);
+  assert.deepEqual(asked, [
+    { root: join(home, "repo"), head: sha.slice(0, 12) },
+  ]);
 });

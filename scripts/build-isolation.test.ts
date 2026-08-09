@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-floating-promises -- Node's test runner owns registration promises */
 import { strict as assert } from "node:assert";
 import { execFileSync, spawnSync } from "node:child_process";
 import {

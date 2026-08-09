@@ -44,7 +44,10 @@ test("the first update moves the installation onto versions and keeps its state"
   assert.equal(active(iva), name, output);
 
   const dir = join(iva.home, "versions", name);
-  assert.ok(existsSync(join(dir, ".output/built.json")), "the version was built");
+  assert.ok(
+    existsSync(join(dir, ".output/built.json")),
+    "the version was built",
+  );
   // State stayed outside the version and is reachable from inside it.
   assert.equal(
     readFileSync(join(dir, "data/cards.json"), "utf8"),
@@ -63,13 +66,19 @@ test("the first update moves the installation onto versions and keeps its state"
 
   // The shim resolves the active version, and the units name `current` so that
   // garbage-collecting this version later cannot break them.
-  assert.match(readFileSync(iva.shim, "utf8"), /\$IVA_ROOT\/current\/bin\/iva\.mjs/u);
+  assert.match(
+    readFileSync(iva.shim, "utf8"),
+    /\$IVA_ROOT\/current\/bin\/iva\.mjs/u,
+  );
   const unit = readFileSync(
     join(iva.fakeHome, ".config/systemd/user/iva.service"),
     "utf8",
   );
   assert.match(unit, new RegExp(`WorkingDirectory=${iva.home}/current$`, "mu"));
-  assert.match(unit, new RegExp(`${iva.home}/current/node_modules/eve/bin/eve\\.js`, "u"));
+  assert.match(
+    unit,
+    new RegExp(`${iva.home}/current/node_modules/eve/bin/eve\\.js`, "u"),
+  );
   const systemctl = readFileSync(iva.systemctlLog, "utf8");
   assert.match(systemctl, /restart .*iva\.service/u);
   // The auto-update timer has to survive the move, or the install goes quiet.
@@ -88,7 +97,10 @@ test("a second update flips to the new version, keeps the previous one and re-ru
   const marker = readFileSync(join(iva.home, "data/migrations.json"), "utf8");
 
   const sha = iva.publish((tree) =>
-    writeFileSync(join(tree, "scripts/feature.mjs"), "export const feature = 2;\n"),
+    writeFileSync(
+      join(tree, "scripts/feature.mjs"),
+      "export const feature = 2;\n",
+    ),
   );
   const output = update(iva);
   const second = `0.3.15-${sha.slice(0, 12)}`;
@@ -186,7 +198,10 @@ test("the health probe runs on scratch state, with the service's own environment
   // Once proved, the version runs on the installation's own state - and keeps no
   // scratch directory around.
   const dir = join(iva.home, "versions", String(active(iva)));
-  assert.equal(realpathSync(join(dir, ".eve/.workflow-data")), realpathSync(store));
+  assert.equal(
+    realpathSync(join(dir, ".eve/.workflow-data")),
+    realpathSync(store),
+  );
   assert.equal(
     realpathSync(join(dir, "data")),
     realpathSync(join(iva.home, "data")),
@@ -269,7 +284,10 @@ test("a downgrade is an ordinary update", (t) => {
   update(iva);
   const first = String(active(iva));
   const sha = iva.publish((tree) =>
-    writeFileSync(join(tree, "scripts/feature.mjs"), "export const feature = 2;\n"),
+    writeFileSync(
+      join(tree, "scripts/feature.mjs"),
+      "export const feature = 2;\n",
+    ),
   );
   update(iva);
   assert.equal(active(iva), `0.3.15-${sha.slice(0, 12)}`);
@@ -292,7 +310,10 @@ test("killing an update leaves the running version alone and the next run cleans
   update(iva);
   const healthy = String(active(iva));
   iva.publish((tree) =>
-    writeFileSync(join(tree, "scripts/feature.mjs"), "export const feature = 2;\n"),
+    writeFileSync(
+      join(tree, "scripts/feature.mjs"),
+      "export const feature = 2;\n",
+    ),
   );
 
   const child = spawn(iva.shim, ["update"], {
@@ -353,7 +374,10 @@ test("an update whose restart fails is finished by the next one", (t) => {
     /\$IVA_ROOT\/current\/bin\/iva\.mjs/u,
   );
   assert.equal(existsSync(join(iva.home, ".git")), false);
-  assert.match(readFileSync(iva.systemctlLog, "utf8"), /restart .*iva\.service/u);
+  assert.match(
+    readFileSync(iva.systemctlLog, "utf8"),
+    /restart .*iva\.service/u,
+  );
   assert.match(iva.iva(["update"]).stdout, /already up to date/u);
 });
 
@@ -361,12 +385,22 @@ test("two updates at once let exactly one of them work", async (t) => {
   const iva = world(t);
   update(iva);
   iva.publish((tree) =>
-    writeFileSync(join(tree, "scripts/feature.mjs"), "export const feature = 2;\n"),
+    writeFileSync(
+      join(tree, "scripts/feature.mjs"),
+      "export const feature = 2;\n",
+    ),
   );
 
-  const outcomes = await Promise.all([iva.ivaAsync(["update"]), iva.ivaAsync(["update"])]);
+  const outcomes = await Promise.all([
+    iva.ivaAsync(["update"]),
+    iva.ivaAsync(["update"]),
+  ]);
   const report = outcomes.map((outcome) => outcome.output).join("\n---\n");
-  assert.equal(outcomes.filter((outcome) => outcome.code === 0).length, 1, report);
+  assert.equal(
+    outcomes.filter((outcome) => outcome.code === 0).length,
+    1,
+    report,
+  );
   assert.ok(/already running/u.test(report), report);
   // The loser changed nothing: one built version, one flip.
   assert.equal(readdirSync(join(iva.home, "versions")).length, 2, report);
@@ -389,7 +423,10 @@ test("a rollback is a symlink flip and a restart, with no build and no network",
   update(iva);
   const first = String(active(iva));
   iva.publish((tree) =>
-    writeFileSync(join(tree, "scripts/feature.mjs"), "export const feature = 2;\n"),
+    writeFileSync(
+      join(tree, "scripts/feature.mjs"),
+      "export const feature = 2;\n",
+    ),
   );
   update(iva);
   const second = String(active(iva));
@@ -398,7 +435,10 @@ test("a rollback is a symlink flip and a restart, with no build and no network",
   const result = iva.iva(["rollback"]);
   assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
   assert.equal(active(iva), first);
-  assert.ok(existsSync(join(iva.home, "versions", second)), "nothing was deleted");
+  assert.ok(
+    existsSync(join(iva.home, "versions", second)),
+    "nothing was deleted",
+  );
   assert.match(result.stdout, new RegExp(`${second} → ${first}`, "u"));
   // And forward again: the pair is symmetric, so a bad rollback is not a trap.
   assert.equal(iva.iva(["rollback"]).status, 0);

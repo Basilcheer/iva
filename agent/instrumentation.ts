@@ -63,7 +63,9 @@ export default defineInstrumentation({
     // the migration retires systemd units and can spawn a rollup, on behalf of code the
     // installation has not accepted. The real start right after the flip runs it.
     if (process.env[PROBE_FLAG]) {
-      log("schedule-migration: skipped, this start is an update's health probe");
+      log(
+        "schedule-migration: skipped, this start is an update's health probe",
+      );
       return;
     }
 

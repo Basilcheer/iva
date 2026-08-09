@@ -176,7 +176,10 @@ function seed(tree: string): void {
       recursive: true,
       filter: (source) => !source.endsWith(".test.ts"),
     });
-  cpSync(join(REPO, "scripts/update-finish.ts"), join(tree, "scripts/update-finish.ts"));
+  cpSync(
+    join(REPO, "scripts/update-finish.ts"),
+    join(tree, "scripts/update-finish.ts"),
+  );
   writeFileSync(join(tree, "scripts/source-scan.mjs"), SCAN);
   writeFileSync(join(tree, "scripts/build-stub.mjs"), BUILD);
   writeFileSync(join(tree, "scripts/install-eve.mjs"), INSTALL_EVE);
@@ -251,7 +254,10 @@ export function createWorld(): World {
   mkdirSync(join(fakeHome, ".local/bin"), { recursive: true });
   const shim = join(fakeHome, ".local/bin/iva");
   // Exactly what install.sh wrote before the bridge existed.
-  writeFileSync(shim, `#!/usr/bin/env bash\nexec "${process.execPath}" "${home}/bin/iva.mjs" "$@"\n`);
+  writeFileSync(
+    shim,
+    `#!/usr/bin/env bash\nexec "${process.execPath}" "${home}/bin/iva.mjs" "$@"\n`,
+  );
   chmodSync(shim, 0o755);
   mkdirSync(bin, { recursive: true });
   writeFileSync(join(bin, "systemctl"), SYSTEMCTL);

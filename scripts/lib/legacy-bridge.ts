@@ -1,5 +1,12 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join } from "node:path";
 import { SHIM_PATH, shimPointsAt, shimScript } from "./version-layout.ts";
 import { STATE_DIRS } from "./version-store.ts";
@@ -84,7 +91,10 @@ export function retireCheckout(home: string): string[] {
   const removed: string[] = [];
   // Artifacts unconditionally: they are rebuilt, never authored, and the history
   // in .git is already mirrored into repo/.
-  for (const name of [...tracked.filter((name) => !dirty.has(name)), ...ARTIFACTS]) {
+  for (const name of [
+    ...tracked.filter((name) => !dirty.has(name)),
+    ...ARTIFACTS,
+  ]) {
     if (KEEP.has(name)) continue;
     const path = join(home, name);
     if (!existsSync(path)) continue;
