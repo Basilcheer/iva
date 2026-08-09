@@ -252,7 +252,9 @@ function replaceH2Sections(
 ): string {
   const lines = body.split("\n");
   const sections = h2Sections(lines, heading);
-  const canonical = [`## ${heading}`, ...content];
+  // Heading, blank line, entries - the shape the rest of the card already uses, so a
+  // rewritten section never ends up glued to the next heading.
+  const canonical = [`## ${heading}`, "", ...content];
   if (!sections.length) {
     return `${body.replace(/\s+$/, "")}\n\n${canonical.join("\n")}\n`;
   }
@@ -265,14 +267,19 @@ function replaceH2Sections(
   for (let index = 0; index < lines.length;) {
     const end = byStart.get(index);
     if (end !== undefined) {
-      if (index === first) output.push(...canonical);
+      if (index === first) output.push(...canonical, "");
       index = end;
       continue;
     }
     output.push(lines[index]);
     index++;
   }
-  return output.join("\n").replace(/\s+$/, "") + "\n";
+  return (
+    output
+      .join("\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .replace(/\s+$/, "") + "\n"
+  );
 }
 
 /** Keep exactly one Related section and deduplicate targets ignoring alias/anchor. */
@@ -528,7 +535,11 @@ function replaceCompiledTruth(
       block = { key, heading, lines: [`## ${heading}`] };
       blocks.push(block);
     }
-    if (block.lines.at(-1)?.trim()) block.lines.push("");
+    // Blank line after the heading, none between entries: otherwise every SUPERSEDE
+    // adds one more blank to the archive and the list renders loose.
+    while (block.lines.length > 1 && !block.lines.at(-1)?.trim())
+      block.lines.pop();
+    if (/^ {0,3}#{1,6}\s/.test(block.lines.at(-1) ?? "")) block.lines.push("");
     block.lines.push(...lines);
   }
 
