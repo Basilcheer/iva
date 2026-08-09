@@ -1,10 +1,11 @@
 import { spawnSync, type SpawnSyncOptions } from "node:child_process";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { writeEnvAtomicSync } from "../lib/env-file.ts";
 import { createSystemdControl } from "../lib/systemd-control.ts";
+import { parseVersionName } from "../lib/version-store.ts";
 
 type CaptureOptions = Omit<SpawnSyncOptions, "encoding"> & {
   readonly encoding?: BufferEncoding;
@@ -129,8 +130,12 @@ export function createCliRuntime(root: string) {
   const scQ = (...args: string[]): CaptureResult =>
     cap("systemctl", ["--user", ...args]);
   const systemd = createSystemdControl({ run: (args) => scQ(...args) });
+  // On the immutable layout there is no working tree to ask: the commit a version
+  // was built from is part of its directory name.
   const gitHead = (): string =>
-    cap("git", ["rev-parse", "--short", "HEAD"]).out;
+    cap("git", ["rev-parse", "--short", "HEAD"]).out ||
+    parseVersionName(basename(resolveLink(ROOT)))?.sha ||
+    "";
 
   function readEnv(): EnvValues {
     const env: EnvValues = {};

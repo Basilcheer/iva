@@ -286,6 +286,15 @@ test("a rollback is a symlink flip and a restart, with no build and no network",
   assert.equal(active(iva), second);
 });
 
+test("the CLI reports the commit of the active version once there is no working tree", (t) => {
+  const iva = world(t);
+  const sha = iva.git(iva.home, ["rev-parse", "HEAD"]);
+  update(iva);
+  const version = iva.iva(["version"]);
+  assert.equal(version.status, 0, version.stderr);
+  assert.match(version.stdout, new RegExp(`commit ${sha.slice(0, 12)}`, "u"));
+});
+
 test("a rollback with nothing to go back to changes nothing", (t) => {
   const iva = world(t);
   update(iva);
