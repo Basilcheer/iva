@@ -134,9 +134,8 @@ function sameFile(one: string, other: string): boolean {
 }
 
 /**
- * What a version already on disk was built with, judged by what is in its tree.
- * By contents, not by names: a stock tree has files of its own at authored paths
- * - `agent/instructions.md` is one - so the file being there proves nothing.
+ * What a version on disk was built with, by contents and not by names: a stock tree
+ * has files at authored paths too, `agent/instructions.md` above all.
  */
 export function builtWith(
   dir: string,
@@ -152,10 +151,9 @@ export function builtWith(
 }
 
 /**
- * A port to start the version on. The pid spreads two updaters on one box apart,
- * and the selector steps over whatever is already listening, so there is nothing
- * to retry. Not the docker probe: it shells out per port, and a docker-published
- * port is a listening socket like any other to the two that are left.
+ * A port to start the version on: the pid spreads two updaters apart, the selector
+ * steps over what is listening. Not the docker probe - it shells out per port, and
+ * a published port is a listening socket to the other two anyway.
  */
 function probePort(): Promise<number | null> {
   return new PortSelector(new PortChecker([bindProbe, procProbe])).firstFree(
@@ -187,13 +185,12 @@ export async function runVersionUpdate(
     store.heal();
 
     const target = await resolveTarget();
-    // The customization is half of what gets built, so it is half of what the
-    // version is called. Edited mid-update, the digest differs again next run.
+    // Half of what gets built, so half of what the version is called: edited
+    // mid-update, the digest simply differs again on the next run.
     const { digest } = customOverlay(join(store.layout.data, "custom"));
     const release = versionName(target.version, target.sha, digest);
     const active = store.currentName();
-    // Nothing to do only once the move is finished: a flip whose migrations,
-    // restart or layout changes never ran is an update still owed.
+    // Finished, not just flipped: unrun migrations are an update still owed.
     const settled =
       active && releaseOf(active) === release && store.settled() === active;
     if (settled && !force) {
@@ -201,12 +198,12 @@ export async function runVersionUpdate(
       return { status: "current", version: active };
     }
 
-    // Reusing a finished build makes taking a customization back out a flip, not a
-    // build. `--force` refuses it: the build already there is the broken one.
+    // Reusing a finished build makes dropping a customization a flip, not a build.
+    // `--force` refuses it: the build already there is the broken one.
     const finished = force
       ? undefined
-      : store.list().find((entry) => releaseOf(entry.name) === release);
-    const name = finished?.name ?? store.nextBuild(release);
+      : store.list().find((name) => releaseOf(name) === release);
+    const name = finished ?? store.nextBuild(release);
     if (!finished) {
       const dir = store.stage(name);
       try {
@@ -221,17 +218,15 @@ export async function runVersionUpdate(
       ? await handoff(name)
       : await finishVersionUpdate({ ...options, name, store });
   } finally {
-    // After a handoff the child adopted this lock and dropped it; release only
-    // removes a lock this process still owns, so both orders are safe.
+    // A handoff leaves the child owning this lock; release only drops one's own.
     lock.release();
   }
 }
 
 /**
- * The half of an update the new version runs about itself: install, build, prove,
- * flip, migrate, restart - split out so the code just fetched runs it rather than
- * the code being replaced. The flip decides which code runs, the settle marker
- * whether the move is finished; both are replayable.
+ * The half of an update the new version runs about itself - install, build, prove,
+ * flip, migrate, restart - so the code just fetched runs it instead of the code
+ * being replaced. The flip decides what runs, the marker whether the move is done.
  */
 export async function finishVersionUpdate({
   home,
@@ -247,14 +242,11 @@ export async function finishVersionUpdate({
   const dir = join(store.layout.versions, name);
   const customDir = join(store.layout.data, "custom");
   const active = store.currentName();
+  const env = store.layout.env;
   const check: Probe =
     probe ??
-    ((target, port) =>
-      probeVersion({
-        dir: target,
-        port,
-        env: probeEnvironment(store.layout.env, port, target),
-      }));
+    ((at, port) =>
+      probeVersion({ dir: at, port, env: probeEnvironment(env, port, at) }));
   let custom = builtWith(dir, name, customDir);
   /** A version being built is garbage nothing points at: a failure takes it away. */
   const discard = (error: unknown): never => {
@@ -262,22 +254,20 @@ export async function finishVersionUpdate({
     throw error;
   };
   const prove = async (): Promise<Health> => {
-    // The probe is a real server start, so it runs on scratch state: an update
-    // that is about to be thrown away must not have touched the installation.
+    // A real server start, on scratch state: an update about to be thrown away
+    // must not have touched the installation.
     const scratch = store.sandboxState(name);
     try {
       const port = await probePort();
-      return port === null
-        ? { ok: false, log: "no free port to start the version on" }
-        : await check(dir, port);
+      if (port === null) return { ok: false, log: "no free port for a probe" };
+      return await check(dir, port);
     } finally {
       rmSync(scratch, { recursive: true, force: true });
     }
   };
 
-  // Either already running, or built and finished by a run that never got to
-  // activate it. Both mean the tree is there and only what follows is owed.
-  const prepared = store.list().some((entry) => entry.name === name);
+  // Built by a run that never activated it: the tree is there, the rest is owed.
+  const prepared = store.list().includes(name);
   if (active === name) {
     // The flip happened, the rest did not: pick the update up where it stopped.
     log(`finishing the move onto ${name}`);
@@ -287,7 +277,7 @@ export async function finishVersionUpdate({
       custom = await buildVersion(store, name, run, notify, log).catch(discard);
     let health = await prove();
     // A green build is not a start: the service compiles the authored TypeScript
-    // again when it comes up. A release is not held hostage to the user's code.
+    // again when it comes up, and a release is not the user's code to hold up.
     if (!health.ok && custom === "applied" && !prepared) {
       log("the customized version does not start; rebuilding without it");
       await buildStock(store, name, run).catch(discard);
@@ -297,8 +287,8 @@ export async function finishVersionUpdate({
       if (health.ok) notify(stockNotice("start against", broken));
     }
     if (!health.ok) {
-      // A candidate this run built is garbage nothing points at. A version
-      // finished earlier is somebody's way back: a failed probe never takes it.
+      // Garbage nothing points at - unless an earlier run finished it, in which
+      // case it is somebody's way back and a failed probe never takes it.
       if (!prepared) rmSync(dir, { recursive: true, force: true });
       notify(
         `update to ${name} did not start; staying on ${active ?? "the current version"}`,
@@ -310,8 +300,7 @@ export async function finishVersionUpdate({
     store.activate(name);
   }
 
-  // Before the restart: the service must never open state that the new version
-  // still expects to migrate.
+  // Before the restart: the service must not open state still to be migrated.
   const migrations = await runMigrations({
     dir: join(dir, "scripts/migrations"),
     dataDir: store.layout.data,
@@ -319,8 +308,8 @@ export async function finishVersionUpdate({
     log,
   });
   await restart(store.layout.current);
-  // After the restart: until the service runs the new version, the old checkout
-  // is still what a failed restart falls back to, so it is not ours to remove yet.
+  // After it: until the service runs the new version, the old checkout is what a
+  // failed restart falls back to, so it is not ours to remove any earlier.
   adopt();
   const removed = store.gc(KEEP);
   store.settle(name);
@@ -381,9 +370,8 @@ async function buildVersion(
 }
 
 /**
- * Rebuild a staged version from its commit alone, dropping the overlay. It keeps
- * the name it was staged under, digest included, so a customization known not to
- * work here is tried once and not on every update.
+ * Rebuild a staged version from its commit alone, under the name it was staged
+ * with, digest and all: a customization known not to work here is tried once.
  */
 async function buildStock(
   store: Store,
@@ -406,22 +394,18 @@ function appliedMigrations(dataDir: string): string[] {
 }
 
 /**
- * Apply the migrations this version ships and has not applied yet. The marker only
- * avoids repeat work: correctness rests on each migration being idempotent, so a
- * lost or corrupted marker stays a recoverable state.
+ * The migrations this version ships and has not applied. The marker only avoids
+ * repeat work - each migration is idempotent, so losing it stays recoverable.
  */
 export async function runMigrations({
   dir,
   dataDir,
   context,
-  load = (path) =>
-    import(pathToFileURL(path).href) as Promise<{ default: Migration }>,
   log,
 }: {
   readonly dir: string;
   readonly dataDir: string;
   readonly context: MigrationContext;
-  readonly load?: (path: string) => Promise<{ default: Migration }>;
   readonly log?: Say;
 }): Promise<string[]> {
   let files: string[];
@@ -437,7 +421,9 @@ export async function runMigrations({
     if (applied.includes(name)) continue;
     log?.(`migration ${name}`);
     try {
-      const module = await load(join(dir, `${name}.ts`));
+      const module = (await import(
+        pathToFileURL(join(dir, `${name}.ts`)).href
+      )) as { default: Migration };
       await module.default(context);
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);

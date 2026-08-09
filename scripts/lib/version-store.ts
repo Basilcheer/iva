@@ -41,11 +41,7 @@ export function layoutFor(home: string) {
   };
 }
 
-/**
- * A release, its commit, and a digest of the files the user authored - those are
- * built into the tree too. `build` numbers directories holding the same code, so
- * `--force` installs a release again beside the one that runs.
- */
+/** Release, commit and a digest of the user's files; `build` numbers rebuilds of one. */
 export function versionName(
   version: string,
   sha: string,
@@ -82,9 +78,9 @@ function unpack(command: string, args: string[], cwd: string): void {
 }
 
 /**
- * Immutable version directories plus one symlink that says which of them runs.
- * Every mutation is confined to a directory nothing points at yet, or is one
- * atomic rename: an interruption leaves garbage, never a half-changed install.
+ * Immutable version directories plus one symlink saying which runs. Every mutation
+ * is confined to a directory nothing points at, or is one atomic rename: an
+ * interruption leaves garbage, never a half-changed installation.
  */
 export function createVersionStore(home: string) {
   const layout = layoutFor(home);
@@ -108,14 +104,15 @@ export function createVersionStore(home: string) {
   };
 
   /** Finished versions, newest first. */
-  function list(): { name: string; dir: string; mtimeMs: number }[] {
+  function list(): string[] {
     return names()
       .filter((name) => parseVersionName(name) && isComplete(name))
-      .map((name) => {
-        const dir = join(layout.versions, name);
-        return { name, dir, mtimeMs: statSync(dir).mtimeMs };
-      })
-      .sort((a, b) => b.mtimeMs - a.mtimeMs || b.name.localeCompare(a.name));
+      .map((name) => ({
+        name,
+        at: statSync(join(layout.versions, name)).mtimeMs,
+      }))
+      .sort((a, b) => b.at - a.at || b.name.localeCompare(a.name))
+      .map((entry) => entry.name);
   }
 
   /** The active version; null when the link is missing, dangling or foreign. */
@@ -136,7 +133,7 @@ export function createVersionStore(home: string) {
 
   function previousName(): string | null {
     const active = currentName();
-    return list().find((entry) => entry.name !== active)?.name ?? null;
+    return list().find((name) => name !== active) ?? null;
   }
 
   /** A free directory for the next build of a release, beside the running one. */
@@ -240,13 +237,11 @@ export function createVersionStore(home: string) {
     const active = currentName();
     const kept = new Set(active ? [active] : []);
     const finished = list();
-    for (const entry of finished) {
+    for (const name of finished) {
       if (kept.size >= Math.max(keep, 1)) break;
-      kept.add(entry.name);
+      kept.add(name);
     }
-    const removed = finished
-      .map((entry) => entry.name)
-      .filter((name) => !kept.has(name));
+    const removed = finished.filter((name) => !kept.has(name));
     for (const name of removed)
       rmSync(join(layout.versions, name), { recursive: true, force: true });
     return removed.sort();
@@ -256,13 +251,12 @@ export function createVersionStore(home: string) {
   function heal(): string | null {
     const active = currentName();
     if (active) return active;
-    // The version last settled on, not the newest on disk: after a rollback the
-    // newest is the version that was rejected, and healing must not restore it.
+    // Not the newest on disk: after a rollback that one is the rejected version.
     const chosen = settled();
-    const pick = list().find((entry) => entry.name === chosen) ?? list()[0];
+    const pick = list().find((name) => name === chosen) ?? list()[0];
     if (!pick) return null;
-    activate(pick.name);
-    return pick.name;
+    activate(pick);
+    return pick;
   }
 
   /** Fill a staged directory with the exact tree of one commit, without git state. */
@@ -278,10 +272,7 @@ export function createVersionStore(home: string) {
     }
   }
 
-  /**
-   * State lives outside the versions tree; a version only borrows it. `stateHome` is
-   * the installation for a version that runs, scratch for one being proved.
-   */
+  /** State outlives versions: `stateHome` is the installation, or scratch for a probe. */
   function linkState(dir: string, stateHome: string = home): void {
     const links = STATE_DIRS.map((name): [string, string] => [
       name,
@@ -289,15 +280,15 @@ export function createVersionStore(home: string) {
     ]);
     for (const name of LEGACY_STATE_DIRS) {
       // Cleared even where nothing replaces it, or a link from an earlier pass
-      // survives into a probe still aimed at live state. Asked of the install,
-      // never of the scratch: a box without a legacy store never grows one.
+      // survives into a probe aimed at live state. Asked of the install, never
+      // of the scratch: a box without a legacy store never grows one.
       rmSync(join(dir, name), { recursive: true, force: true });
       if (existsSync(join(home, name)))
         links.push([name, join(stateHome, name)]);
     }
     for (const [, target] of links) mkdirSync(target, { recursive: true });
-    // The .env is the installation's in both modes: reading it is what makes a
-    // probe meaningful, and `iva config` has to write through to the real file.
+    // The .env is the installation's in both modes: a probe under a configuration
+    // nobody runs proves nothing, and `iva config` writes through to the real file.
     links.push([".env", layout.env]);
     for (const [name, target] of links) {
       const link = join(dir, name);
@@ -308,10 +299,9 @@ export function createVersionStore(home: string) {
   }
 
   /**
-   * Point a version's state at scratch while its probe runs: the probe starts the
-   * real server, which would otherwise re-enqueue what the live service is doing.
-   * The scratch sits beside the versions, never inside the one being proved, so a
-   * kill during a check cannot hand the next sweep a good version to delete.
+   * State for a probe: the real server starts and would re-enqueue what the live one
+   * is doing. Beside the versions, never inside the one being proved, or a kill
+   * mid-check hands the next sweep a good version to delete.
    */
   function sandboxState(name: string): string {
     const scratch = join(home, `.probe-${process.pid}-${Date.now()}`);
@@ -380,8 +370,7 @@ function own(path: string): UpdateLock {
   writeJson(join(path, "owner.json"), { pid: process.pid, startedAt });
   return {
     path,
-    // Never another process's lock: a handoff must not end with the process that
-    // started the update deleting the lock its successor now holds.
+    // Never another process's lock: a handoff ends with the successor holding it.
     release: () => {
       if (ownerPid(path) === process.pid)
         rmSync(path, { recursive: true, force: true });
@@ -398,8 +387,8 @@ export function adoptUpdateLock(dataDir: string): UpdateLock {
 
 /**
  * Serialize updates with one atomic mkdir. A lock whose owner is gone is stale at
- * once - a SIGKILLed update must not block the retry that cleans up after it -
- * and the age fallback only covers a pid another program recycled.
+ * once - a SIGKILLed update must not block the retry that cleans up after it - and
+ * age is only a fallback for an owner that cannot be read.
  */
 export function acquireUpdateLock(dataDir: string): UpdateLock | null {
   mkdirSync(dataDir, { recursive: true });

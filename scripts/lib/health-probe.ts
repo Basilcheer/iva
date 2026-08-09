@@ -33,13 +33,11 @@ export type ProbeOptions = {
 export type ProbeResult = { readonly ok: boolean; readonly log: string };
 
 /**
- * The environment the service is started with, adjusted for a probe. systemd hands
- * the unit the `.env`, so a probe without it proves a version starts under a
- * configuration nobody runs. The port is the probe's own in both spellings, or
- * code reaching for `IVA_PORT` would talk to the live service. The state
- * directories are the version's own, because that `.env` is free to name absolute
- * paths - and then every write of a start that is about to be thrown away would
- * land in the live installation instead of the probe's scratch.
+ * The environment the service starts with, adjusted for a probe: the `.env` systemd
+ * hands the unit, or the check proves a version under a configuration nobody runs;
+ * the probe's own port in both spellings, or code reaching for `IVA_PORT` talks to
+ * the live service; and the version's own state directories, because that `.env`
+ * may name absolute ones and a start about to be thrown away writes as it comes up.
  */
 export function probeEnvironment(
   envPath: string,
@@ -66,10 +64,9 @@ const wait = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
- * Start a built version from its final directory and wait for it to answer. This is
- * the only check that tells "the build succeeded" apart from "the service starts":
- * the server bundles TypeScript from its own paths at startup, so a staging-only
- * check has repeatedly passed for a build that then crash-looped.
+ * Start a built version from its final directory and wait for it to answer: the only
+ * check that tells "the build succeeded" from "the service starts", because the
+ * server bundles TypeScript from its own paths as it comes up.
  */
 export async function probeVersion({
   dir,

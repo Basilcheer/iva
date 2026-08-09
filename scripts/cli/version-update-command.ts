@@ -15,12 +15,7 @@ import {
   removeTelegramJob,
 } from "../lib/telegram-status.ts";
 import { resolveUpdateTarget } from "../lib/update-channel.ts";
-import {
-  gitAt,
-  packageVersion,
-  requireGit,
-  type GitCommand,
-} from "../lib/update-check.ts";
+import { gitAt, packageVersion, requireGit } from "../lib/update-check.ts";
 import { classifyRoot, isManagedInstall } from "../lib/version-layout.ts";
 import { acquireUpdateLock, createVersionStore } from "../lib/version-store.ts";
 import {
@@ -34,33 +29,25 @@ import { COPY } from "./update.ts";
 type CliRuntime = ReturnType<typeof createCliRuntime>;
 
 /** A bare mirror, cloned from the checkout: nothing runs from it, so it is free to rewrite. */
-export async function ensureMirror({
-  home,
-  checkout,
-  git = gitAt,
-}: {
-  home: string;
-  checkout: string;
-  git?: GitCommand;
-}): Promise<string> {
+export async function ensureMirror(
+  home: string,
+  checkout: string,
+): Promise<string> {
   const repo = join(home, "repo");
   if (existsSync(repo)) return repo;
   const staging = `${repo}.staging-${process.pid}`;
   rmSync(staging, { recursive: true, force: true });
+  const git = (root: string, args: string[]): Promise<string> =>
+    requireGit(gitAt, root, args);
   try {
-    const source = join(checkout, ".git");
-    await requireGit(git, home, ["clone", "--mirror", source, staging]);
-    const origin = await requireGit(git, checkout, [
-      "remote",
-      "get-url",
-      "origin",
-    ]);
-    await requireGit(git, staging, ["remote", "set-url", "origin", origin]);
+    await git(home, ["clone", "--mirror", join(checkout, ".git"), staging]);
+    const origin = await git(checkout, ["remote", "get-url", "origin"]);
+    await git(staging, ["remote", "set-url", "origin", origin]);
+    // The branch an installation follows belongs to it, not to the clone.
     const key = "iva.updateBranch";
-    const branch = await git(checkout, ["config", "--local", "--get", key]);
-    const value = typeof branch === "string" ? branch : (branch.stdout ?? "");
-    if (value.trim())
-      await requireGit(git, staging, ["config", key, value.trim()]);
+    const branch = (await gitAt(checkout, ["config", "--local", "--get", key]))
+      .stdout;
+    if (branch) await git(staging, ["config", key, branch]);
     renameSync(staging, repo);
   } catch (error) {
     rmSync(staging, { recursive: true, force: true });
@@ -73,30 +60,21 @@ export async function ensureMirror({
  * What the next version is built from. An unreachable remote is not a failure: the
  * newest mirrored commit is the honest answer, so an offline update is a no-op.
  */
-export async function resolveTarget({
-  repo,
-  git = gitAt,
-}: {
-  repo: string;
-  git?: GitCommand;
-}): Promise<{ sha: string; version: string }> {
-  let sha: string | undefined;
+export async function resolveTarget(
+  repo: string,
+): Promise<{ sha: string; version: string }> {
+  let sha = "";
   try {
     const target = await resolveUpdateTarget({
-      git: (...args) => {
-        const result = git(repo, args);
-        return Promise.resolve(result).then((value) =>
-          typeof value === "string" ? { code: 0, stdout: value } : value,
-        );
-      },
+      git: (...args) => gitAt(repo, args),
     });
-    sha = target.targetHead;
+    sha = target.targetHead ?? "";
   } catch {
     // Offline, or a remote that refuses the fetch.
   }
-  if (!sha) sha = await requireGit(git, repo, ["rev-parse", "HEAD"]);
+  if (!sha) sha = await requireGit(gitAt, repo, ["rev-parse", "HEAD"]);
   const version = packageVersion(
-    await requireGit(git, repo, ["show", `${sha}:package.json`]),
+    await requireGit(gitAt, repo, ["show", `${sha}:package.json`]),
   );
   if (!version) throw new Error(`no package version at ${sha}`);
   return { sha, version };
@@ -104,9 +82,8 @@ export async function resolveTarget({
 
 /**
  * `iva update` on the immutable layout. This half only fetches and unpacks the new
- * version; from there the update continues inside that version's own
- * `scripts/update-finish.ts`, so an updater fix arrives with the release
- * carrying it instead of the one after it.
+ * version; it continues inside that version's own `scripts/update-finish.ts`, so
+ * an updater fix arrives with the release carrying it and not the one after.
  */
 export function createVersionUpdateCommand(
   runtime: CliRuntime,
@@ -116,8 +93,8 @@ export function createVersionUpdateCommand(
 
   async function run(args: readonly string[]): Promise<void> {
     const verbose = args.includes("--verbose");
-    // `--force` is decided here and never travels: it only says a build of this
-    // release already on disk may not be reused.
+    // Decided here and never travelling: a build of this release already on disk
+    // may not be reused.
     const force = args.includes("--force");
     const jobAt = args.indexOf("--telegram-job");
     const env = runtime.readEnv();
@@ -155,14 +132,11 @@ export function createVersionUpdateCommand(
     try {
       terminal.start(text.fetch[0]);
       await reporter?.start("fetch");
-      const repo = await ensureMirror({
-        home: install.home,
-        checkout: install.home,
-      });
+      const repo = await ensureMirror(install.home, install.home);
       const outcome = await runVersionUpdate({
         home: install.home,
         store,
-        resolveTarget: () => resolveTarget({ repo }),
+        resolveTarget: () => resolveTarget(repo),
         run: commandRunner(verbose),
         force,
         log: (message) => terminal.info(message),
@@ -192,8 +166,7 @@ export function createVersionUpdateCommand(
       } else {
         terminal.done(text.build[1]);
         terminal.info(`✅ ${outcome.previous ?? before} → ${outcome.version}`);
-        // A version built without the overlay runs stock code; saying so is what
-        // keeps the user from believing a skill of theirs is live.
+        // Or the user goes on believing a skill of theirs is live.
         if (outcome.custom === "stock") terminal.info(`⚠️ ${text.stock}`);
         await reporter?.complete({
           beforeVersion: outcome.previous ?? before,
@@ -252,16 +225,14 @@ export function createVersionUpdateCommand(
     }
     try {
       const from = store.currentName();
-      // Activation aims this version's state links back at the installation: a way
-      // back that comes up on a deleted scratch directory is not a way back.
+      // Activation aims this version's state back at the installation: a way back
+      // that comes up on a deleted scratch directory is not a way back.
       store.activate(previous);
       systemdLifecycle.restartServices();
-      // Settled on the older version; without saying so, the next update would
-      // think it still owed the move it just undid.
+      // Or the next update believes it still owes the move this just undid.
       store.settle(previous);
       runtime.ok(`${from ?? "the broken version"} → ${previous}`);
-      // Nothing here pins a version, and the release this went back from is still
-      // what upstream resolves to.
+      // Nothing pins a version: upstream still resolves to the one left behind.
       runtime.warn("the next `iva update` can bring that version back");
     } finally {
       lock.release();

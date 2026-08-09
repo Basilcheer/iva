@@ -18,6 +18,7 @@ import {
   adoptUpdateLock,
   layoutFor,
   LEGACY_STATE_DIRS,
+  readJson,
   STATE_DIRS,
 } from "./lib/version-store.ts";
 import {
@@ -29,14 +30,8 @@ import {
 type Say = (message: string) => void;
 
 /** Build leftovers of a checkout: not tracked, not state, never worth keeping. */
-const ARTIFACTS = [
-  ".git",
-  ".iva-build",
-  ".iva-update",
-  ".output",
-  ".worktrees",
-  "node_modules",
-];
+const ARTIFACTS =
+  ".git .iva-build .iva-update .output .worktrees node_modules".split(" ");
 
 /** First path segment, for both `agent/tools/x.ts` and a bare `install.sh`. */
 function topLevel(path: string): string {
@@ -46,10 +41,7 @@ function topLevel(path: string): string {
 /** Never removed, whatever git says about them. */
 const KEEP = new Set([
   ...[...STATE_DIRS, ...LEGACY_STATE_DIRS].map(topLevel),
-  ".env",
-  "current",
-  "repo",
-  "versions",
+  ...".env current repo versions".split(" "),
 ]);
 
 function git(home: string, args: string[]): string {
@@ -76,10 +68,9 @@ export function writeShim(home: string, log: Say): void {
 }
 
 /**
- * Remove the working tree the installation used to run from, now that a version
- * runs instead. Only files git accounts for are removed, and only where the
- * checkout is clean: what the user added or edited stays where they left it,
- * because this is a layout change and not a right to delete their work.
+ * Remove the working tree the installation ran from, now that a version runs
+ * instead. Only files git accounts for and only where they are unedited: a layout
+ * change is not a right to delete what the user put there.
  */
 export function retireCheckout(home: string): string[] {
   let tracked: string[];
@@ -102,8 +93,7 @@ export function retireCheckout(home: string): string[] {
   if (!tracked.includes("package.json")) return [];
 
   const removed: string[] = [];
-  // Artifacts unconditionally: they are rebuilt, never authored, and the history
-  // in .git is already mirrored into repo/.
+  // Artifacts unconditionally: rebuilt, never authored, and .git is mirrored.
   for (const name of [
     ...tracked.filter((name) => !dirty.has(name)),
     ...ARTIFACTS,
@@ -118,30 +108,21 @@ export function retireCheckout(home: string): string[] {
 }
 
 /**
- * Files the custom layer of the checkout era recorded as deleted. The overlay
- * that replaces it only ever adds files, so those deletions come undone with the
- * conversion, and a user who removed a stock skill has to be told it is back.
+ * Files the custom layer of the checkout era recorded as deleted. The overlay that
+ * replaces it only adds, so a deletion comes undone and has to be reported.
  */
 export function tombstoned(home: string): string[] {
-  try {
-    const parsed: unknown = JSON.parse(
-      readFileSync(join(home, "data/custom/manifest.json"), "utf8"),
-    );
-    const entries =
-      (parsed as { entries?: Record<string, { tombstone?: boolean }> } | null)
-        ?.entries ?? {};
-    return Object.keys(entries)
-      .filter((path) => entries[path]?.tombstone)
-      .sort();
-  } catch {
-    return [];
-  }
+  const entries = (readJson(join(home, "data/custom/manifest.json")).entries ??
+    {}) as Record<string, { tombstone?: boolean } | undefined>;
+  return Object.keys(entries)
+    .filter((path) => entries[path]?.tombstone)
+    .sort();
 }
 
 /**
  * The second half of an update, run by the version being installed: install,
- * build, probe, flip, migrate, restart and retire the old checkout are the new
- * code's own logic, so a fix to any of it ships in the release carrying it.
+ * build, probe, flip, migrate, restart and retire the old checkout all belong to
+ * the new code, so a fix to any of them ships in the release carrying it.
  */
 export async function main(argv: readonly string[]): Promise<number> {
   const [home, name, ...flags] = argv;
@@ -161,8 +142,7 @@ export async function main(argv: readonly string[]): Promise<number> {
       restart: async (root) => {
         const { createCliRuntime } = await import("./cli/runtime.ts");
         const { createCliSystemd } = await import("./cli/systemd.ts");
-        // Units name `current`, never a version directory, so they survive every
-        // later flip and garbage collection without being rewritten.
+        // Units name `current`: they survive every later flip unrewritten.
         const runtime = createCliRuntime(root);
         createCliSystemd(runtime).restartServices();
         runtime.systemd.activate([runtime.UPDATE_TIMER]);
@@ -180,8 +160,8 @@ export async function main(argv: readonly string[]): Promise<number> {
       },
     });
   } catch (error) {
-    // The caller is another process: a stack trace on its terminal explains
-    // nothing, and the update stays where the next run can pick it up.
+    // The caller is another process: a stack trace explains nothing there, and
+    // the update stays where the next run can pick it up.
     outcome = {
       status: "failed",
       message: error instanceof Error ? error.message : String(error),

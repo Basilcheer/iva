@@ -113,10 +113,7 @@ test("an interrupted stage leaves the active version untouched and is swept late
   const staged = store.stage("0.3.15-bbbbbbbbbbbb");
   writeFileSync(join(staged, "half-built.txt"), "partial");
 
-  assert.deepEqual(
-    store.list().map((entry) => entry.name),
-    ["0.3.14-aaaaaaaaaaaa"],
-  );
+  assert.deepEqual(store.list(), ["0.3.14-aaaaaaaaaaaa"]);
   assert.equal(store.currentName(), "0.3.14-aaaaaaaaaaaa");
   assert.throws(() => store.activate("0.3.15-bbbbbbbbbbbb"), /incomplete/);
 
@@ -143,13 +140,10 @@ test("sweep keeps complete versions and the active one, and clears stale flip li
 
   assert.deepEqual(store.sweep(), [".current.iva-flip-1234"]);
   assert.equal(existsSync(join(root, ".current.iva-flip-1234")), false);
-  assert.deepEqual(
-    store
-      .list()
-      .map((entry) => entry.name)
-      .sort(),
-    ["0.3.14-aaaaaaaaaaaa", "0.3.15-bbbbbbbbbbbb"],
-  );
+  assert.deepEqual(store.list().sort(), [
+    "0.3.14-aaaaaaaaaaaa",
+    "0.3.15-bbbbbbbbbbbb",
+  ]);
   assert.equal(store.currentName(), "0.3.15-bbbbbbbbbbbb");
 });
 
@@ -303,13 +297,10 @@ test("garbage collection keeps the active version and the rollback target", (t) 
   store.activate("0.3.13-333333333333");
 
   assert.deepEqual(store.gc(2), ["0.3.11-111111111111", "0.3.12-222222222222"]);
-  assert.deepEqual(
-    store
-      .list()
-      .map((entry) => entry.name)
-      .sort(),
-    ["0.3.13-333333333333", "0.3.14-444444444444"],
-  );
+  assert.deepEqual(store.list().sort(), [
+    "0.3.13-333333333333",
+    "0.3.14-444444444444",
+  ]);
   assert.equal(store.currentName(), "0.3.13-333333333333");
   // Idempotent: a second collection has nothing left to drop.
   assert.deepEqual(store.gc(2), []);
@@ -466,10 +457,7 @@ test("re-proving a finished version leaves the version, not the version's grave"
 
   // Being checked is not being unfinished. A kill right here used to hand the
   // next sweep the very version the installation was going back to.
-  assert.deepEqual(
-    store.list().map((entry) => entry.name),
-    [name],
-  );
+  assert.deepEqual(store.list(), [name]);
   assert.deepEqual(store.sweep(), [basename(scratch)]);
   assert.equal(existsSync(dir), true);
   assert.equal(existsSync(scratch), false);
@@ -522,10 +510,7 @@ test("resetting a staged version clears it without giving up the claim", (t) => 
 
   assert.equal(store.reset("0.3.15-bbbbbbbbbbbb"), dir);
   assert.deepEqual(readdirSync(dir), [".iva-incomplete"]);
-  assert.deepEqual(
-    store.list().map((entry) => entry.name),
-    ["0.3.14-aaaaaaaaaaaa"],
-  );
+  assert.deepEqual(store.list(), ["0.3.14-aaaaaaaaaaaa"]);
   // The shared state the version borrowed is untouched by the reset.
   assert.equal(existsSync(layoutFor(store.layout.home).data), true);
 

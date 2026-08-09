@@ -32,9 +32,8 @@ export function real(path: string): string {
 }
 
 /**
- * What a symlink names, whether or not the target exists yet. One hop, not a full
- * resolve: this is for writing *through* a link, because replacing a version's
- * `.env` link with a file is how a version keeps state the next flip drops.
+ * What a symlink names, target or no target. One hop, not a full resolve: writing
+ * *through* the link is what keeps a version from turning shared state into its own.
  */
 export function throughLink(path: string): string {
   try {
@@ -62,27 +61,25 @@ export function classifyRoot(root: string): Install {
 }
 
 /**
- * A tree somebody develops in, told apart from an installation by its git
- * history: install.sh clones one branch and never commits into it, so an
- * installation has a single local branch, no commits of its own, and is never a
- * linked worktree.
+ * A tree somebody develops in, told from an installation by its git history:
+ * install.sh clones one branch and never commits into it, so an installation has
+ * one local branch, nothing of its own on top, and is never a linked worktree.
  */
 function isDevelopmentCheckout(home: string): boolean {
   const dot = lstatSync(join(home, ".git"), { throwIfNoEntry: false });
   if (!dot) return false;
   if (!dot.isDirectory()) return true; // a linked worktree: nobody installs one
-  const git = (...args: string[]): string | null => {
+  const git = (...args: string[]): string => {
     try {
       return execFileSync("git", ["-C", home, ...args], {
         encoding: "utf8",
         stdio: ["ignore", "pipe", "ignore"],
       }).trim();
     } catch {
-      return null;
+      return ""; // Not a repository this process can read: not one to protect.
     }
   };
   const heads = git("for-each-ref", "--format=%(refname)", "refs/heads");
-  if (heads === null) return false;
   return (
     heads.split("\n").filter(Boolean).length > 1 ||
     Number(git("rev-list", "--count", "@{upstream}..HEAD")) > 0
@@ -121,9 +118,8 @@ export function gitRootFor(install: Install): string {
 }
 
 /**
- * True when `moduleUrl` names the module the process was started with. Both sides
- * are resolved: a string compare lies on macOS (`/tmp` is a link) and under the
- * versioned layout, where the launcher passes a path below `current`.
+ * Whether `moduleUrl` is the module the process was started with. Both sides are
+ * resolved: a string compare lies on macOS and below `current`.
  */
 export function isEntrypoint(moduleUrl: string): boolean {
   const invoked = process.argv[1];
@@ -131,11 +127,10 @@ export function isEntrypoint(moduleUrl: string): boolean {
 }
 
 /**
- * A shim that resolves paths and nothing else, so it never has to be rewritten
- * again: the active version, else the tree it was installed from (what a
- * half-finished bridge leaves), else the version the installation settled on - a
- * lost `current` must take neither the repair command nor the release down with
- * it. install.sh writes this same script; the two stay in step.
+ * A shim that resolves paths and nothing else, so it is never rewritten again: the
+ * active version, else the tree it was installed from (what a half-finished bridge
+ * leaves), else the version last settled on - a lost `current` must take neither
+ * the repair command nor the release with it. install.sh writes the same script.
  */
 export function shimScript(home: string, node: string): string {
   return [
