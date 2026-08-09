@@ -586,9 +586,14 @@ mkdir -p "$HOME/.local/bin"
   printf 'if [ -f "$IVA_ROOT/current/bin/iva.mjs" ]; then\n'
   printf '  IVA_ROOT="$IVA_ROOT/current"\n'
   printf 'elif [ ! -f "$IVA_ROOT/bin/iva.mjs" ]; then\n'
-  printf '  for candidate in "$IVA_ROOT"/versions/*; do\n'
-  printf '    [ -f "$candidate/bin/iva.mjs" ] && IVA_ROOT="$candidate"\n'
-  printf '  done\n'
+  printf '  settled=$(sed -n '\''s/.*"version":"\\([^"]*\\)".*/\\1/p'\'' "$IVA_ROOT/data/active.json" 2>/dev/null)\n'
+  printf '  if [ -n "$settled" ] && [ -f "$IVA_ROOT/versions/$settled/bin/iva.mjs" ]; then\n'
+  printf '    IVA_ROOT="$IVA_ROOT/versions/$settled"\n'
+  printf '  else\n'
+  printf '    for candidate in "$IVA_ROOT"/versions/*; do\n'
+  printf '      [ -f "$candidate/bin/iva.mjs" ] && IVA_ROOT="$candidate"\n'
+  printf '    done\n'
+  printf '  fi\n'
   printf 'fi\n'
   printf 'exec "%s" "$IVA_ROOT/bin/iva.mjs" "$@"\n' "$(command -v node)"
 } > "$HOME/.local/bin/iva"

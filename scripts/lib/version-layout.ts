@@ -104,8 +104,13 @@ export function gitRootFor(install: Install): string {
 /**
  * A shim that resolves paths and nothing else, so it never has to be rewritten
  * again: the active version, else the tree it was installed from (the state a
- * half-finished bridge leaves), else the newest version there is - because a
- * lost `current` must not take the command that repairs it down with it.
+ * half-finished bridge leaves), else the version the installation last settled
+ * on - because a lost `current` must not take the command that repairs it down
+ * with it, and must not silently run an older release either. `iva update`
+ * heals `current` from the same marker.
+ *
+ * install.sh writes the same script for installations that never had a
+ * `current` to lose; the two have to stay in step.
  */
 export function shimScript(home: string, node: string): string {
   return [
@@ -114,9 +119,14 @@ export function shimScript(home: string, node: string): string {
     'if [ -f "$IVA_ROOT/current/bin/iva.mjs" ]; then',
     '  IVA_ROOT="$IVA_ROOT/current"',
     'elif [ ! -f "$IVA_ROOT/bin/iva.mjs" ]; then',
-    '  for candidate in "$IVA_ROOT"/versions/*; do',
-    '    [ -f "$candidate/bin/iva.mjs" ] && IVA_ROOT="$candidate"',
-    "  done",
+    `  settled=$(sed -n 's/.*"version":"\\([^"]*\\)".*/\\1/p' "$IVA_ROOT/data/active.json" 2>/dev/null)`,
+    '  if [ -n "$settled" ] && [ -f "$IVA_ROOT/versions/$settled/bin/iva.mjs" ]; then',
+    '    IVA_ROOT="$IVA_ROOT/versions/$settled"',
+    "  else",
+    '    for candidate in "$IVA_ROOT"/versions/*; do',
+    '      [ -f "$candidate/bin/iva.mjs" ] && IVA_ROOT="$candidate"',
+    "    done",
+    "  fi",
     "fi",
     `exec "${node}" "$IVA_ROOT/bin/iva.mjs" "$@"`,
     "",
