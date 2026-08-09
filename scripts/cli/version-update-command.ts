@@ -45,7 +45,8 @@ const COPY: Record<"en" | "ru", UpdateCopy> = {
     build: ["Собираю Iva", "Iva собрана"],
     current: "Iva уже обновлена",
     failed: "Не удалось завершить обновление",
-    forced: "--force игнорируется: версия пересобирается только под новый коммит",
+    forced:
+      "--force игнорируется: версия пересобирается только под новый коммит",
     busy: "Обновление уже идёт",
   },
 };
@@ -69,7 +70,8 @@ export function createVersionUpdateCommand(
     const telegramJobAt = args.indexOf("--telegram-job");
     const jobId = telegramJobAt >= 0 ? (args[telegramJobAt + 1] ?? "") : "";
     const env = runtime.readEnv();
-    const locale = (env.AGENT_LANGUAGE || process.env.AGENT_LANGUAGE) === "ru" ? "ru" : "en";
+    const locale =
+      (env.AGENT_LANGUAGE || process.env.AGENT_LANGUAGE) === "ru" ? "ru" : "en";
     const text = COPY[locale];
     const terminal = createTerminalProgress({ verbose });
     const job = await loadTelegramJob(runtime.dataDirAbs(env), jobId);
@@ -130,7 +132,11 @@ export function createVersionUpdateCommand(
   }
 
   /** Run the new version's updater, in its own process, from its own directory. */
-  function handoff(name: string, report: string, verbose: boolean): UpdateOutcome {
+  function handoff(
+    name: string,
+    report: string,
+    verbose: boolean,
+  ): UpdateOutcome {
     const dir = join(install.home, "versions", name);
     const result = spawnSync(
       process.execPath,

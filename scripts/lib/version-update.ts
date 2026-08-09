@@ -1,6 +1,10 @@
 import { cpSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
-import { portWasTaken, probeEnvironment, probeVersion } from "./health-probe.ts";
+import {
+  portWasTaken,
+  probeEnvironment,
+  probeVersion,
+} from "./health-probe.ts";
 import { runMigrations } from "./migrations.ts";
 import { DEFAULT_PORT, PortChecker, PortSelector, bindProbe } from "./ports.ts";
 import { acquireUpdateLock } from "./update-lock.ts";
@@ -158,6 +162,9 @@ export async function runVersionUpdate(
       ? await handoff(name)
       : await finishVersionUpdate({ ...options, name, store });
   } finally {
+    // After a handoff the child has adopted this lock and already dropped it;
+    // release only removes a lock this process still owns, so the pair is safe in
+    // either order and in both processes.
     lock.release();
   }
 }
