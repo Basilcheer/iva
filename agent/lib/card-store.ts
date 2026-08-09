@@ -161,7 +161,7 @@ interface NamedH2Section extends H2Section {
   key: string;
 }
 
-export function outsideFences(lines: string[]): boolean[] {
+function scanFences(lines: string[]): { outside: boolean[]; open: boolean } {
   const outside = Array(lines.length).fill(true) as boolean[];
   let fence: { marker: "`" | "~"; length: number } | null = null;
   for (let index = 0; index < lines.length; index++) {
@@ -182,7 +182,16 @@ export function outsideFences(lines: string[]): boolean[] {
     outside[index] = false;
     fence = { marker: open[1][0] as "`" | "~", length: open[1].length };
   }
-  return outside;
+  return { outside, open: fence !== null };
+}
+
+export function outsideFences(lines: string[]): boolean[] {
+  return scanFences(lines).outside;
+}
+
+/** Незакрытый фенс уводит остаток документа в код — заголовков за ним уже не видно. */
+function hasUnclosedFence(body: string): boolean {
+  return scanFences(body.split("\n")).open;
 }
 
 export function h2Sections(lines: string[], heading: string): H2Section[] {
@@ -653,6 +662,17 @@ export function mergeCard(input: MergeInput): MergeResult {
     throw new Error(
       `historyEntry must not exceed ${HISTORY_ENTRY_CAP} characters`,
     );
+  }
+  // Незакрытый фенс делает кодом всё до конца тела, и гейт заголовков ниже перестаёт
+  // видеть ## History/## Log за ним. Искать заголовки внутри открытого фенса нечем -
+  // такое тело отклоняется целиком (легаси-путь replace_body здесь не участвует).
+  if (
+    (operation === "ADD" ||
+      operation === "UPDATE" ||
+      (operation === "SUPERSEDE" && input.operation !== undefined)) &&
+    hasUnclosedFence(trimmedBody)
+  ) {
+    throw new Error(`${operation} body must close every code fence`);
   }
   // Секции карточки принадлежат write_card: H1 - заголовку, ## History/## Log -
   // append-only архивам. Тело, которое сочинила модель, несёт факт и только факт, иначе

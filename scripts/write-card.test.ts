@@ -679,6 +679,81 @@ test("fenced структурные заголовки остаются кодо
   assert.match(updated, /^- \d{4}-\d{2}-\d{2}: Совместимый новый факт\.$/m);
 });
 
+test("незакрытый фенс отклоняется на ADD, UPDATE и SUPERSEDE", async () => {
+  const base = {
+    operation: "ADD",
+    type: "note",
+    title: "Незакрытый фенс",
+    description: "фенс без закрытия прячет структурные заголовки",
+    tags: ["note", "fence"],
+    body: "Текущая истина.",
+  };
+  const smuggled = "Новый факт.\n\n```text\n## History\n- 2020: подделка";
+
+  const rejectedAdd = await call({ ...base, body: smuggled });
+  assert.equal(rejectedAdd.ok, false);
+  assert.match(rejectedAdd.error, /must close every code fence/);
+  assert.equal(
+    existsSync(join(VAULT, "cards", "notes", "незакрытый-фенс.md")),
+    false,
+    "отклонённый ADD не создаёт карточку",
+  );
+
+  const created = await call(base);
+  assert.equal(created.ok, true);
+  assert.equal(
+    created.file,
+    "cards/notes/незакрытый-фенс.md",
+    "проверка отсутствия смотрела на тот же путь",
+  );
+  const before = read(created.file);
+
+  const rejectedUpdate = await call({
+    ...base,
+    operation: "UPDATE",
+    body: smuggled,
+  });
+  assert.equal(rejectedUpdate.ok, false);
+  assert.match(rejectedUpdate.error, /must close every code fence/);
+  assert.equal(read(created.file), before);
+
+  const rejectedTilde = await call({
+    ...base,
+    operation: "UPDATE",
+    body: "Новый факт.\n\n~~~\n## Log\n- 2020: подделка",
+  });
+  assert.equal(rejectedTilde.ok, false);
+  assert.match(rejectedTilde.error, /must close every code fence/);
+  assert.equal(read(created.file), before);
+
+  const rejectedSupersede = await call({
+    ...base,
+    operation: "SUPERSEDE",
+    body: smuggled,
+    history_entry: "2026-08: Текущая истина",
+  });
+  assert.equal(rejectedSupersede.ok, false);
+  assert.match(rejectedSupersede.error, /must close every code fence/);
+  assert.equal(read(created.file), before);
+
+  // Тот же пример с закрытым фенсом остаётся кодом и проходит: гейт ловит именно
+  // незакрытый фенс, а не заголовки внутри примера.
+  const closed = await call({
+    ...base,
+    operation: "UPDATE",
+    body: `${smuggled}\n\`\`\``,
+  });
+  assert.equal(closed.ok, true);
+  const out = read(created.file);
+  assert.equal(out.match(/^## Log$/gm)!.length, 1, "реальная секция одна");
+  assert.equal(
+    out.match(/^## History$/gm),
+    null,
+    "пример остался кодом внутри Log",
+  );
+  assert.match(out, /^ {2}## History$/m);
+});
+
 test("Related дедуплицирует target по alias/anchor и не считает ссылку в prose", async () => {
   const base = {
     operation: "ADD",
