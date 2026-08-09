@@ -762,6 +762,7 @@ function updateFixture() {
 
 test("stash conflict report can still roll back user files byte-for-byte", async () => {
   const { temp, seed, local, data } = updateFixture();
+  const logFile = join(temp, "log");
   const originalHead = git(local, "rev-parse", "HEAD");
   writeFileSync(join(local, "tracked.txt"), "user version\n");
   writeFileSync(join(local, "custom.bin"), Buffer.from([0, 1, 2, 255]));
@@ -778,7 +779,7 @@ test("stash conflict report can still roll back user files byte-for-byte", async
     root: local,
     dataDir: data,
     envPath: join(local, ".env"),
-    logFile: join(temp, "log"),
+    logFile,
   });
   await tx.protect();
   await tx.fetchAndIntegrate();
@@ -810,6 +811,11 @@ test("stash conflict report can still roll back user files byte-for-byte", async
     "protective stash is retained after rollback",
   );
   assert.equal(existsSync(join(local, ".output.iva-backup")), false);
+  assert.doesNotMatch(
+    readFileSync(logFile, "utf8"),
+    /No rebase in progress/u,
+    "ordinary rollback must not emit a false rebase failure",
+  );
 });
 
 test("protect cleans a partial tree when the recovery stash cannot be applied", async (t) => {
@@ -872,6 +878,44 @@ test("conflicting local commits abort rebase and restore the original branch", a
     "local commit\n",
   );
   assert.equal(git(local, "status", "--porcelain=v1"), "");
+});
+
+test("rollback leaves a paused git am session intact", async (t) => {
+  const { temp, seed, local, data } = updateFixture();
+  t.after(() => rmSync(temp, { recursive: true, force: true }));
+  writeFileSync(join(seed, "tracked.txt"), "mail patch\n");
+  git(seed, "add", "tracked.txt");
+  git(seed, "commit", "-m", "mail patch");
+  const patch = execFileSync("git", ["format-patch", "-1", "--stdout"], {
+    cwd: seed,
+  });
+  const patchFile = join(temp, "mail.patch");
+  writeFileSync(patchFile, patch);
+
+  writeFileSync(join(local, "tracked.txt"), "local conflict\n");
+  git(local, "add", "tracked.txt");
+  git(local, "commit", "-m", "local conflict");
+  const tx = createUpdateTransaction({
+    root: local,
+    dataDir: data,
+    envPath: join(local, ".env"),
+    logFile: join(temp, "log"),
+  });
+  await tx.protect();
+  assert.throws(() =>
+    execFileSync("git", ["am", patchFile], {
+      cwd: local,
+      stdio: ["ignore", "pipe", "pipe"],
+    }),
+  );
+  const gitDir = join(local, git(local, "rev-parse", "--git-dir"));
+  const applying = join(gitDir, "rebase-apply", "applying");
+  assert.equal(existsSync(applying), true);
+
+  await tx.rollback();
+
+  assert.equal(existsSync(applying), true);
+  git(local, "am", "--abort");
 });
 
 // --- Worktree-кандидат апдейта (buildCandidate/promoteCandidate) ---------------------------

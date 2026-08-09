@@ -1035,7 +1035,17 @@ export function createUpdateTransaction({
       discardCustomLayer(materializedCustomLayer);
       materializedCustomLayer = null;
     }
-    await git("rebase", "--abort");
+    const gitDirResult = await git("rev-parse", "--git-dir");
+    if (gitDirResult.code === 0) {
+      const gitDir = resolve(root, gitDirResult.stdout.trim());
+      const rebaseApply = join(gitDir, "rebase-apply");
+      if (
+        existsSync(join(gitDir, "rebase-merge")) ||
+        (existsSync(rebaseApply) &&
+          !existsSync(join(rebaseApply, "applying")))
+      )
+        await git("rebase", "--abort");
+    }
     if (originalHead) await git("reset", "--hard", originalHead);
     if (envBackup && existsSync(envBackup)) {
       copyFileSync(envBackup, envPath);
