@@ -43,9 +43,12 @@ For each item:
    - `description` is a search snippet (what/why), never a title repeat.
    - `tags`: 2–5, lowercase, kebab-case.
    - `created: YYYY-MM-DD` and `source: daily/YYYY-MM-DD.md`.
-4. **Body.** A few sentences of context. Never put `## Related` in `body`; collect
-   relation targets and pass them through the `related` argument. Quote the transcript
-   only as needed; link back with `source: daily/YYYY-MM-DD.md` in frontmatter.
+4. **Body.** A few sentences of context — facts only, with no H1/H2 headings; a
+   `body` carrying one is refused. `write_card` builds the card's structure itself:
+   the `#` title, the dated `## Log`, `## Related`, and the append-only `## History`.
+   Collect relation targets and pass them through the `related` argument. Quote the
+   transcript only as needed; link back with `source: daily/YYYY-MM-DD.md` in
+   frontmatter.
 5. **Reread.** After each non-NOOP call, reread the returned file. Confirm current
    truth is current, and that it contains at most one `## Log`, at most one
    `## Related`, and no dated `## Обновление` / `## Update` heading.

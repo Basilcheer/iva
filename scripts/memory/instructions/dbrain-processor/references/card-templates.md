@@ -7,7 +7,9 @@ Frontmatter per type. `type` and `status` MUST exist in
 The canonical generic templates live in
 `scripts/autograph/docs/references/card-templates.md` — these are the dbrain-specific
 shapes. Nightly cards are written by `write_card`, so its contract wins over any
-hand-editing recipe you read there: `write_card` owns the `## History` section — pass
+hand-editing recipe you read there: the `body` you pass is plain facts with
+no H1/H2 headings — the tool builds the card's `#` title, its `## Log` and
+`## Related`, and `write_card` owns the `## History` section. Pass
 a displaced fact through `history_entry` as a single dated line, `YYYY-MM-DD: fact`
 (for example `2026-07-31: TDI Group (held 2026-03→06)`), and never write that heading
 into `body`. Never pass `history_entry` with ADD, UPDATE, or NOOP.
@@ -80,13 +82,10 @@ status: active
 created: YYYY-MM-DD
 source: daily/YYYY-MM-DD.md
 ---
-
-## Decision
-…
-
-## Rationale
-…
 ```
+
+Body: what was decided and why, in prose — no `## Decision` / `## Rationale`
+headings, `write_card` refuses a body that carries any.
 
 ## Anti-patterns
 

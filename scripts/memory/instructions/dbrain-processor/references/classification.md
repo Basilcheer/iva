@@ -62,6 +62,10 @@ For every fact, pick one operation:
   If a whole card is obsolete (project renamed, decision reverted), set `status: superseded`
   and add `superseded_by: [[new-card]]`.
 
+Whatever the operation, the `body` you pass is facts only, with no H1/H2 headings —
+`write_card` builds the card's structure (the `#` title, `## Log`, `## Related`,
+`## History`) and refuses a body that carries a heading of its own.
+
 The deterministic scan `.graph/supersede-candidates.json` lists same-entity cards with
 conflicting fields — resolve each by superseding the stale one.
 

@@ -113,6 +113,9 @@ function buildPrompt(p: Period, now: string): string {
         `and pass the OLD value through history_entry as a single dated line ` +
         `'YYYY-MM-DD: fact' (e.g. '2026-07-31: TDI Group (held 2026-03→06)') — the fact's own date, ` +
         `not today's; write_card owns the '## History' section. ` +
+        `A card 'body' is facts only, with no H1/H2 headings: write_card builds the card ` +
+        `structure itself (the title, '## Log', '## Related', '## History') and refuses a body ` +
+        `that carries a heading of its own. ` +
         `Never leave two contradictory CURRENT values; History is append-only, never edited. ` +
         `Tag each fact's certainty with 'confidence:' — EXTRACTED (user stated it directly) or ` +
         `INFERRED (you deduced it). ` +
