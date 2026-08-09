@@ -31,7 +31,9 @@ const HARNESS = join(
  * before doing so, which is the only moment where a killed update has already
  * flipped the symlink.
  */
-const migration = (id: string) => `import { appendFileSync, writeFileSync } from "node:fs";
+const migration = (
+  id: string,
+) => `import { appendFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 export default async function up(context) {
   if (process.env.IVA_TEST_STALL === "migrate") {
@@ -253,6 +255,25 @@ test("a customization that builds is layered into the new version", async (t) =>
   assert.deepEqual(iva.notices, []);
 });
 
+test("the custom layer's own bookkeeping is not mistaken for the user's code", async (t) => {
+  const iva = world(t);
+  const data = layoutFor(iva.home).data;
+  customFile(iva.home, "agent/connections/mine.ts", "export const mine = 1;\n");
+  // What PR #169 keeps next to the authored files, plus the shape that used to
+  // reach the running installation: `data/` in a version is a link to this one.
+  customFile(iva.home, "manifest.json", '{"schema":"iva-custom/v1"}\n');
+  customFile(iva.home, "bases/abc", "old\n");
+  customFile(iva.home, "data/planted.txt", "planted\n");
+  const logged: string[] = [];
+
+  const outcome = updated(await iva.update({ log: (m) => logged.push(m) }));
+  assert.equal(outcome.custom, "applied");
+  assert.ok(logged.includes("applied 1 customized file(s)"), logged.join("\n"));
+  for (const path of ["manifest.json", "bases/abc"])
+    assert.equal(existsSync(join(iva.home, "current", path)), false, path);
+  assert.equal(existsSync(join(data, "planted.txt")), false);
+});
+
 test("a customization that does not build never keeps the service down", async (t) => {
   const iva = world(t);
   customFile(iva.home, "agent/connections/mine.ts", "BREAK this build\n");
@@ -318,7 +339,8 @@ test("a build that fills the disk gives the space back and says what happened", 
         args[1] === "build"
           ? Promise.resolve({
               code: 1,
-              output: "ENOSPC: no space left on device, write '.output/server.mjs'",
+              output:
+                "ENOSPC: no space left on device, write '.output/server.mjs'",
             })
           : fixtureRunner()(command, args, cwd),
     }),

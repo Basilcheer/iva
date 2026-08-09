@@ -1,5 +1,6 @@
 import { cpSync, mkdirSync, readdirSync, rmSync } from "node:fs";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { dirname, join, relative, sep } from "node:path";
+import { isAuthoredPath } from "./custom-layer.ts";
 import {
   portWasTaken,
   probeEnvironment,
@@ -67,7 +68,15 @@ export type VersionUpdateOptions = Omit<FinishOptions, "name"> & {
   readonly handoff?: (name: string) => Promise<UpdateOutcome>;
 };
 
-/** Every regular file under `data/custom`, as paths relative to it. */
+/**
+ * The files the user authored, as paths relative to `data/custom`.
+ *
+ * Only the authored paths: the rest of that directory is the custom layer's own
+ * bookkeeping - the manifest, base blobs, recovery bundles - and copying it into
+ * the version would both lie about how much was customized and, for anything
+ * under `data/`, write straight through a state symlink into the installation
+ * that is still running.
+ */
 function customFiles(customDir: string): string[] {
   try {
     return readdirSync(customDir, { recursive: true, withFileTypes: true })
@@ -77,6 +86,7 @@ function customFiles(customDir: string): string[] {
           .split(sep)
           .join("/"),
       )
+      .filter(isAuthoredPath)
       .sort();
   } catch {
     return [];
@@ -292,9 +302,9 @@ async function buildVersion({
   }
 
   for (const relativePath of overlay) {
-    const target = resolve(dir, relativePath);
-    if (!target.startsWith(`${resolve(dir)}${sep}`))
-      throw new Error(`custom file escapes the version: ${relativePath}`);
+    // Confined to the version by `isAuthoredPath`: it rejects anything absolute,
+    // anything that climbs out with `..`, and everything outside `agent/`.
+    const target = join(dir, relativePath);
     mkdirSync(dirname(target), { recursive: true });
     cpSync(join(customDir, relativePath), target);
   }
