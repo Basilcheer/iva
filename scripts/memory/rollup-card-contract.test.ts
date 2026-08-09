@@ -15,28 +15,65 @@ function assertBefore(text: string, first: string, second: string): void {
   assert.ok(firstAt < secondAt, `${first} must precede ${second}`);
 }
 
-/** Inline code spans carrying a real date: instructions may show a history entry
- * only in the shape write_card stores, otherwise the model writes a second date. */
-function datedExamples(text: string): string[] {
+/** Quoted spans carrying a real date: instructions and the prompt may show a history
+ * entry only in the shape write_card stores, otherwise the model writes a second date. */
+function datedExamples(text: string, span = /`([^`\n]+)`/g): string[] {
   const prose = text.replace(/```[\s\S]*?```/g, "");
-  return [...prose.matchAll(/`([^`\n]+)`/g)]
+  return [...prose.matchAll(span)]
     .map((match) => match[1])
-    .filter((span) => /\d{4}-\d{2}/.test(span) && span.includes(":"));
+    .filter(
+      (candidate) => /\d{4}-\d{2}/.test(candidate) && candidate.includes(":"),
+    );
+}
+
+/** Prompt quoting: 'like this'. The lookarounds skip the apostrophes prose spends on
+ * "card's" and "today's", which would otherwise pair up and shift every span. */
+const QUOTED = /(?<![A-Za-z0-9])'([^'\n]+?)'(?![A-Za-z0-9])/g;
+
+/** The daily prompt as the model receives it: adjacent template chunks joined, so an
+ * example split across source lines reads as the one span the model will see. */
+function promptText(source: string): string {
+  return source.replace(/`\s*\+\s*`/g, "");
 }
 
 void test("daily rollup prompt exposes the same four card operations as dbrain", () => {
-  const rollup = read("rollup.ts");
+  const prompt = promptText(read("rollup.ts"));
   for (const fragment of [
     "ADD (new)",
     "UPDATE (existing subject, compatible new fact)",
     "SUPERSEDE (contradicts a current value)",
     "NOOP (already known)",
     "Pass history_entry only for SUPERSEDE",
+    "the fact's own date, not today's",
     "write_card owns the '## History' section",
   ]) {
     assert.match(
-      rollup,
+      prompt,
       new RegExp(fragment.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
+    );
+  }
+
+  // The SUPERSEDE rule is where the prompt shows a history entry; every dated example
+  // there must read the way write_card stores the line, bullet and section excluded.
+  assertBefore(
+    prompt,
+    "Pass history_entry only for SUPERSEDE",
+    "write_card owns the '## History' section",
+  );
+  const supersedeRule = prompt.slice(
+    prompt.indexOf("Pass history_entry only for SUPERSEDE"),
+    prompt.indexOf("write_card owns the '## History' section"),
+  );
+  const examples = datedExamples(supersedeRule, QUOTED);
+  assert.ok(
+    examples.length > 0,
+    "the SUPERSEDE rule must show a dated history_entry example",
+  );
+  for (const example of examples) {
+    assert.match(
+      example,
+      /^\d{4}-\d{2}-\d{2}: \S/,
+      `rollup.ts shows "${example}" where a history entry must read YYYY-MM-DD: fact`,
     );
   }
 
