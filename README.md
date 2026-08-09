@@ -161,7 +161,15 @@ Default model is deepseek-v4-pro, 131k context. On Go it runs about $9/mo all-in
 ## What's New
 
 <details>
-<summary><b>v0.3.13 · 06.08.2026 — expand the latest releases</b></summary>
+<summary><b>v0.3.14 · 09.08.2026 — expand the latest releases</b></summary>
+
+### 09.08.2026
+
+#### v0.3.14
+
+- The "Working…" indicator with its Stop button now always disappears once the reply arrives — replying to one of Iva's messages while she was still busy used to leave the previous indicator stuck in the chat forever.
+- Crashed and parked turns clean up after themselves now: an orphaned indicator is deleted instead of waiting for a manual cleanup.
+- All five status loaders switched to animated emoji (typing dots for a working turn), and a dirty install no longer rolls back a healthy update — local changes are kept as a recovery bundle.
 
 ### 06.08.2026
 
@@ -185,20 +193,6 @@ Default model is deepseek-v4-pro, 131k context. On Go it runs about $9/mo all-in
 - New `documents` skill — send a PDF, DOCX or XLSX and Iva reads it and answers on its content; on request it files the document into your vault library, searchable by meaning.
 - Nightly memory and the Telegram queue are hardened against rare failures: a corrupted service file or an unlucky restart no longer loses a night of memory or your queued messages.
 - File-processing errors never leak service details into the chat anymore.
-
-### 04.08.2026
-
-#### v0.3.10
-
-- Nightly memory now runs inside Iva itself (eve schedules) — four systemd timers removed automatically, nothing to do on your side.
-- If the server was down at rollup time, the missed run now catches up on the next start.
-- Optional morning digest on a schedule — off by default, enable with `digestSchedule.enabled` in `data/settings.json`.
-
-#### v0.3.9
-
-- The eve engine is updated (0.29.5) — more reliable turn cancellation and message delivery around restarts.
-- /new truly clears the context — no more "cleared" replies while the old history quietly continues.
-- /usage now shows the real context size of the last turn instead of a doubled sum.
 
 </details>
 
