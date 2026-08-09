@@ -19,7 +19,7 @@ type RunOptions = {
 };
 
 /** Names already applied. An unreadable marker means "nothing", never a crash. */
-export function appliedMigrations(dataDir: string): string[] {
+function appliedMigrations(dataDir: string): string[] {
   try {
     const parsed: unknown = JSON.parse(
       readFileSync(join(dataDir, MARKER), "utf8"),

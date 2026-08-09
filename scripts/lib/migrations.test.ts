@@ -12,7 +12,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { appliedMigrations, runMigrations } from "./migrations.ts";
+import { runMigrations } from "./migrations.ts";
 
 type Fixture = {
   dir: string;
@@ -21,6 +21,7 @@ type Fixture = {
   write(name: string, body: string): void;
   run(): Promise<string[]>;
   entries(): string[];
+  applied(): string[];
 };
 
 function fixture(t: { after(fn: () => void): void }): Fixture {
@@ -41,6 +42,18 @@ function fixture(t: { after(fn: () => void): void }): Fixture {
       existsSync(log)
         ? readFileSync(log, "utf8").split("\n").filter(Boolean)
         : [],
+    // Read straight off the disk: the marker outlives the process that wrote it,
+    // so the module's own reader must not be the one judging what it recorded.
+    applied: () => {
+      try {
+        const marker: unknown = JSON.parse(
+          readFileSync(join(dataDir, "migrations.json"), "utf8"),
+        );
+        return (marker as { applied: string[] }).applied;
+      } catch {
+        return [];
+      }
+    },
   };
 }
 
@@ -70,7 +83,7 @@ test("migrations run once, in order, and record what was applied", async (t) => 
     "010-tenth",
   ]);
   assert.deepEqual(migrations.entries(), ["first", "second", "tenth"]);
-  assert.deepEqual(appliedMigrations(migrations.dataDir), [
+  assert.deepEqual(migrations.applied(), [
     "001-first",
     "002-second",
     "010-tenth",
@@ -108,12 +121,12 @@ test("a failing migration stops the run and keeps earlier ones recorded", async 
 
   await assert.rejects(migrations.run(), /002-broken.*disk is full/s);
   assert.deepEqual(migrations.entries(), ["first", "broken"]);
-  assert.deepEqual(appliedMigrations(migrations.dataDir), ["001-first"]);
+  assert.deepEqual(migrations.applied(), ["001-first"]);
 
   // The failure is not recorded, so the next run retries it rather than skipping ahead.
   await assert.rejects(migrations.run(), /002-broken/);
   assert.deepEqual(migrations.entries(), ["first", "broken", "broken"]);
-  assert.deepEqual(appliedMigrations(migrations.dataDir), ["001-first"]);
+  assert.deepEqual(migrations.applied(), ["001-first"]);
 });
 
 test("an unreadable marker replays migrations, which must therefore be idempotent", async (t) => {
@@ -133,7 +146,7 @@ test("an unreadable marker replays migrations, which must therefore be idempoten
   await migrations.run();
   writeFileSync(join(migrations.dataDir, "migrations.json"), "{not json");
 
-  assert.deepEqual(appliedMigrations(migrations.dataDir), []);
+  assert.deepEqual(migrations.applied(), []);
   assert.deepEqual(await migrations.run(), ["001-first"]);
   assert.deepEqual(migrations.entries(), ["first"]);
 });
