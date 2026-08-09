@@ -12,7 +12,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runMigrations } from "./migrations.ts";
+import { runMigrations } from "./version-update.ts";
 
 type Fixture = {
   dir: string;

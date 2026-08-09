@@ -8,11 +8,7 @@ const LOG_TAIL = 4000;
 export const PROBE_FLAG = "IVA_HEALTH_PROBE";
 const BUSY_PORT = "the probe port was already answering";
 
-/**
- * Whether a failed probe blames the port rather than the version. Two processes
- * can pick the same free port, and a check another server answered proves
- * nothing - so this verdict is worth another port, never a verdict.
- */
+/** Whether a failed probe blames the port rather than the version: retry higher. */
 export function portWasTaken(log: string): boolean {
   return log.includes(BUSY_PORT) || log.includes("EADDRINUSE");
 }
@@ -28,7 +24,7 @@ async function answering(port: number, ms = 1000): Promise<Response | null> {
 }
 
 export type ProbeOptions = {
-  /** The version directory, used both as cwd and as the source of the command. */
+  /** The version directory: both the cwd and the source of the command. */
   readonly dir: string;
   readonly port: number;
   readonly command?: string;
@@ -42,9 +38,9 @@ export type ProbeOptions = {
 export type ProbeResult = { readonly ok: boolean; readonly log: string };
 
 /**
- * The environment the service is started with, adjusted for a probe. systemd
- * hands the unit the `.env`, so a probe without it proves a version starts under
- * a configuration nobody runs. The port is the probe's own in both spellings, or
+ * The environment the service is started with, adjusted for a probe. systemd hands
+ * the unit the `.env`, so a probe without it proves a version starts under a
+ * configuration nobody runs. The port is the probe's own in both spellings, or
  * code reaching for `IVA_PORT` would talk to the live service.
  */
 export function probeEnvironment(
@@ -55,8 +51,7 @@ export function probeEnvironment(
   try {
     values = parseEnvText(readFileSync(envPath, "utf8"));
   } catch {
-    // No .env yet is a valid installation state, and an unreadable one is the
-    // service's problem to report, not a reason to skip the check.
+    // A missing .env is a valid state; an unreadable one is the service's to report.
   }
   return {
     ...values,
@@ -70,10 +65,10 @@ const wait = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
- * Start a built version from its final directory and wait for it to answer. This
- * is the only check that tells "the build succeeded" apart from "the service
- * starts": the server bundles TypeScript from its own paths at startup, so a
- * staging-only check has repeatedly passed for a build that then crash-looped.
+ * Start a built version from its final directory and wait for it to answer. This is
+ * the only check that tells "the build succeeded" apart from "the service starts":
+ * the server bundles TypeScript from its own paths at startup, so a staging-only
+ * check has repeatedly passed for a build that then crash-looped.
  */
 export async function probeVersion({
   dir,
@@ -90,8 +85,7 @@ export async function probeVersion({
   intervalMs = 500,
   stopGraceMs = 5000,
 }: ProbeOptions): Promise<ProbeResult> {
-  // Asked before anything is started: whatever answers now cannot be the version,
-  // and a check against it would pass for a build that never came up.
+  // Whatever answers before anything is started cannot be the version.
   if (await answering(port))
     return { ok: false, log: `${BUSY_PORT} on ${port}` };
 
@@ -124,9 +118,7 @@ export async function probeVersion({
   while (!ok && !exit && Date.now() < deadline) {
     ok = (await answering(port, Math.min(intervalMs * 4, 2000)))?.ok ?? false;
     await wait(intervalMs);
-    // Somebody else can still have taken the port in the meantime; the answer is
-    // only the version's if the version is alive to have given it.
-    if (ok && exit) ok = false;
+    if (ok && exit) ok = false; // The answer is only the version's if it is alive.
   }
 
   // Captured before the shutdown below turns every run into an "exited" one.

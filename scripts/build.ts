@@ -12,7 +12,6 @@ import {
 } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { isEntrypoint } from "./lib/entrypoint.ts";
 import {
   archiveInvalidCustomLayer,
   captureCustomLayer,
@@ -23,7 +22,7 @@ import {
   rebaseBuildOutput,
   type MaterializedCustomLayer,
 } from "./lib/custom-layer.ts";
-import { classifyRoot } from "./lib/version-layout.ts";
+import { classifyRoot, isEntrypoint } from "./lib/version-layout.ts";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const BUILD_ROOT = join(ROOT, ".iva-build");

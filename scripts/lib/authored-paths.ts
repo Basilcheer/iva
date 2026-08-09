@@ -1,11 +1,9 @@
 import { posix } from "node:path";
 
 /**
- * Which files in an Iva tree are the user's to own.
- *
- * Its own module, and deliberately free of dependencies: the updater decides
- * what to overlay onto a new version before that version has a `node_modules`,
- * so anything it reaches for at load time has to be node built-ins only.
+ * Which files in an Iva tree are the user's to own. Deliberately free of
+ * dependencies: the updater decides what to overlay before the new version has a
+ * `node_modules`, so it may only reach for node built-ins at load time.
  */
 const AUTHORED_PREFIXES = [
   "agent/skills/",

@@ -7,6 +7,7 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { parseVersionName } from "./version-store.ts";
 
 /** The one command users have on their PATH; rewritten at most once, by the bridge. */
@@ -16,10 +17,7 @@ export type Install = {
   /** `version` - already on the immutable layout; `checkout` - still a git working tree. */
   readonly kind: "version" | "checkout";
   readonly home: string;
-  /**
-   * How anything that writes the tree down - systemd units, the shim - must
-   * address it: `<home>/current` for a version, never a collectable directory.
-   */
+  /** How units and the shim must address the tree: never a collectable directory. */
   readonly root: string;
 };
 
@@ -33,10 +31,9 @@ export function real(path: string): string {
 }
 
 /**
- * What a symlink names, whether or not the target exists yet; any other path
- * unchanged. One hop, not a full resolve: this is for writing *through* a link,
- * because replacing a version's `.env` link with a file is how a version keeps
- * state that the next flip drops.
+ * What a symlink names, whether or not the target exists yet. One hop, not a full
+ * resolve: this is for writing *through* a link, because replacing a version's
+ * `.env` link with a file is how a version keeps state the next flip drops.
  */
 export function throughLink(path: string): string {
   try {
@@ -63,10 +60,7 @@ export function classifyRoot(root: string): Install {
   return { kind: "checkout", home: dir, root: dir };
 }
 
-/**
- * Whether this tree is somebody's installation rather than a development
- * checkout: only an installation may be converted to the immutable layout.
- */
+/** Only somebody's installation may be converted to the immutable layout. */
 export function isManagedInstall(
   install: Install,
   shimPath: string = SHIM_PATH,
@@ -79,10 +73,7 @@ export function isManagedInstall(
   }
 }
 
-/**
- * Whether a shim script runs this installation. Paths are compared resolved: an
- * `iva` can have been installed with a path that reaches the tree through a link.
- */
+/** Whether a shim script runs this installation, comparing paths resolved. */
 export function shimPointsAt(shim: string, home: string): boolean {
   return [...shim.matchAll(/"([^"]+)"/gu)]
     .map((match) => real(match[1]))
@@ -96,11 +87,21 @@ export function gitRootFor(install: Install): string {
 }
 
 /**
+ * True when `moduleUrl` names the module the process was started with. Both sides
+ * are resolved: a string compare lies on macOS (`/tmp` is a link) and under the
+ * versioned layout, where the launcher passes a path below `current`.
+ */
+export function isEntrypoint(moduleUrl: string): boolean {
+  const invoked = process.argv[1];
+  return invoked ? real(invoked) === real(fileURLToPath(moduleUrl)) : false;
+}
+
+/**
  * A shim that resolves paths and nothing else, so it never has to be rewritten
  * again: the active version, else the tree it was installed from (what a
  * half-finished bridge leaves), else the version the installation settled on - a
- * lost `current` must take neither the command that repairs it nor the release
- * down with it. install.sh writes this same script; the two stay in step.
+ * lost `current` must take neither the repair command nor the release down with
+ * it. install.sh writes this same script; the two stay in step.
  */
 export function shimScript(home: string, node: string): string {
   return [

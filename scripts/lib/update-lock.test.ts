@@ -12,7 +12,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { acquireUpdateLock } from "./update-lock.ts";
+import { acquireUpdateLock } from "./version-store.ts";
 
 function dataDir(t: { after(fn: () => void): void }): string {
   const dir = mkdtempSync(join(tmpdir(), "iva-lock-"));

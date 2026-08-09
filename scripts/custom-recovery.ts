@@ -1,6 +1,6 @@
 import { isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { isEntrypoint } from "./lib/entrypoint.ts";
+import { isEntrypoint } from "./lib/version-layout.ts";
 import { z } from "zod";
 import {
   listCustomConflicts,

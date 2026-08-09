@@ -8,7 +8,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
-import { isEntrypoint } from "./lib/entrypoint.ts";
+import { isEntrypoint } from "./lib/version-layout.ts";
 import { createVersionStore, parseVersionName } from "./lib/version-store.ts";
 import { z } from "zod";
 

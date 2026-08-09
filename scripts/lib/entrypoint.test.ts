@@ -12,9 +12,9 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { isEntrypoint } from "./entrypoint.ts";
+import { isEntrypoint } from "./version-layout.ts";
 
-const HELPER = fileURLToPath(new URL("./entrypoint.ts", import.meta.url));
+const HELPER = fileURLToPath(new URL("./version-layout.ts", import.meta.url));
 
 test("isEntrypoint recognises the started module behind a symlinked directory", (t) => {
   const temp = mkdtempSync(join(tmpdir(), "iva-entrypoint-"));

@@ -1,9 +1,15 @@
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { isEntrypoint } from "./lib/entrypoint.ts";
-import { classifyRoot, gitRootFor } from "./lib/version-layout.ts";
-import { createVersionStore, parseVersionName } from "./lib/version-store.ts";
-import { acquireUpdateLock } from "./lib/update-lock.ts";
+import {
+  classifyRoot,
+  gitRootFor,
+  isEntrypoint,
+} from "./lib/version-layout.ts";
+import {
+  acquireUpdateLock,
+  createVersionStore,
+  parseVersionName,
+} from "./lib/version-store.ts";
 import {
   inspectUpstream,
   markVersionNotified,

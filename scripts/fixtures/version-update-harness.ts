@@ -7,7 +7,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
-import { isEntrypoint } from "../lib/entrypoint.ts";
+import { isEntrypoint } from "../lib/version-layout.ts";
 import { probeVersion } from "../lib/health-probe.ts";
 import { runVersionUpdate, type Runner } from "../lib/version-update.ts";
 

@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   cpSync,
@@ -5,19 +6,21 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
+  writeFileSync,
 } from "node:fs";
 import { dirname, join, relative, sep } from "node:path";
+import { pathToFileURL } from "node:url";
 import { isAuthoredPath } from "./authored-paths.ts";
 import {
   portWasTaken,
   probeEnvironment,
   probeVersion,
 } from "./health-probe.ts";
-import { runMigrations } from "./migrations.ts";
 import { DEFAULT_PORT } from "./ports.ts";
-import { acquireUpdateLock } from "./update-lock.ts";
 import {
+  acquireUpdateLock,
   createVersionStore,
   parseVersionName,
   releaseOf,
@@ -56,6 +59,12 @@ export type UpdateOutcome =
 const KEEP = 2;
 const INSTALL = ["ci", "--no-audit", "--no-fund"];
 const BUILD = ["run", "build"];
+const MIGRATION_FILE = /^\d{3}-[a-z0-9-]+\.ts$/;
+const MIGRATION_MARKER = "migrations.json";
+const OUTPUT_TAIL = 20_000;
+
+export type MigrationContext = Record<string, unknown>;
+export type Migration = (context: MigrationContext) => void | Promise<void>;
 
 type FinishOptions = {
   readonly home: string;
@@ -76,15 +85,11 @@ type UpdateOptions = Omit<FinishOptions, "name"> & {
   readonly resolveTarget: () => Promise<{ sha: string; version: string }>;
   /** `--force`: build this release again, even where a build of it already runs. */
   readonly force?: boolean;
-  /**
-   * Hands the staged version to the code that version ships, so that a fix to the
-   * second half of an update arrives with the release that carries it.
-   */
+  /** Hands the staged version to the updater that version ships. */
   readonly handoff?: (name: string) => Promise<UpdateOutcome>;
 };
 
-/** The files the user authored, relative to `data/custom`; the rest of that
- * directory is the custom layer's own bookkeeping. */
+/** The files the user authored; the rest of `data/custom` is the layer's bookkeeping. */
 function customFiles(customDir: string): string[] {
   try {
     return readdirSync(customDir, { recursive: true, withFileTypes: true })
@@ -101,11 +106,7 @@ function customFiles(customDir: string): string[] {
   }
 }
 
-/**
- * The authored files plus a digest that changes whenever any of them does. The
- * digest is what makes an edit to `data/custom` a version to build instead of
- * the version that already runs.
- */
+/** The authored files and a digest of them: an edit to `data/custom` is a version. */
 export function customOverlay(customDir: string): {
   files: string[];
   digest: string | null;
@@ -123,8 +124,10 @@ export function customOverlay(customDir: string): {
     hash.update(`${path}\0${body.length}\0`);
     hash.update(body);
   }
-  const digest = files.length > 0 ? hash.digest("hex").slice(0, 8) : null;
-  return { files, digest };
+  return {
+    files,
+    digest: files.length > 0 ? hash.digest("hex").slice(0, 8) : null,
+  };
 }
 
 /** What a version already on disk was built with, judged by what is in its tree. */
@@ -140,11 +143,7 @@ export function builtWith(
     : "stock";
 }
 
-/**
- * Prove the version starts, from its own directory. A port taken between the
- * check and the start says nothing about the version, so it is worth another
- * port rather than a verdict; the probe itself is what recognises a busy one.
- */
+/** Prove the version starts, from its own directory. A taken port is worth another port. */
 async function proveStarts(
   dir: string,
   probe: Probe,
@@ -162,10 +161,9 @@ async function proveStarts(
 }
 
 /**
- * One update: build a new immutable version, prove it starts, flip a symlink,
- * then move the installation onto it. Nothing before the flip touches the running
- * version, and nothing after it is a one-shot - the next run replays it, because
- * an installation half moved is the one state with no way out.
+ * One update: build a new immutable version, prove it starts, flip a symlink, then
+ * move the installation onto it. Nothing before the flip touches the running
+ * version, and nothing after it is a one-shot - the next run replays it.
  */
 export async function runVersionUpdate(
   options: UpdateOptions,
@@ -200,8 +198,8 @@ export async function runVersionUpdate(
       return { status: "current", version: active };
     }
 
-    // Reusing a finished build of this release makes taking a customization back
-    // out a flip rather than a build. `--force` refuses it: that build is broken.
+    // Reusing a finished build makes taking a customization back out a flip, not a
+    // build. `--force` refuses it: the build already there is the broken one.
     const finished = force
       ? undefined
       : store.list().find((entry) => releaseOf(entry.name) === release);
@@ -229,8 +227,8 @@ export async function runVersionUpdate(
 /**
  * The half of an update the new version runs about itself: install, build, prove,
  * flip, migrate, restart - split out so the code just fetched runs it rather than
- * the code being replaced. Two commit points, both replayable: the flip decides
- * which code runs, the settle marker decides whether the move is finished.
+ * the code being replaced. The flip decides which code runs, the settle marker
+ * whether the move is finished; both are replayable.
  */
 export async function finishVersionUpdate({
   home,
@@ -244,6 +242,7 @@ export async function finishVersionUpdate({
   store = createVersionStore(home),
 }: FinishOptions): Promise<UpdateOutcome> {
   const dir = join(store.layout.versions, name);
+  const customDir = join(store.layout.data, "custom");
   const active = store.currentName();
   const check: Probe =
     probe ??
@@ -253,8 +252,7 @@ export async function finishVersionUpdate({
         port,
         env: probeEnvironment(store.layout.env, port),
       }));
-  const build = { store, name, dir, run, notify, log };
-  let custom = builtWith(dir, name, join(store.layout.data, "custom"));
+  let custom = builtWith(dir, name, customDir);
   /** A version being built is garbage nothing points at: a failure takes it away. */
   const discard = (error: unknown): never => {
     rmSync(dir, { recursive: true, force: true });
@@ -279,14 +277,14 @@ export async function finishVersionUpdate({
     log(`finishing the move onto ${name}`);
   } else {
     if (prepared) log(`reusing prepared version ${name}`);
-    else custom = await buildVersion(build).catch(discard);
+    else
+      custom = await buildVersion(store, name, run, notify, log).catch(discard);
     let health = await prove();
     // A green build is not a start: the service compiles the authored TypeScript
-    // again when it comes up, so a customization can pass the build and still
-    // bring the service down. A release is not held hostage to the user's code.
+    // again when it comes up. A release is not held hostage to the user's code.
     if (!health.ok && custom === "applied" && !prepared) {
       log("the customized version does not start; rebuilding without it");
-      await buildStock(build).catch(discard);
+      await buildStock(store, name, run).catch(discard);
       custom = "stock";
       const broken = health.log;
       health = await prove();
@@ -296,8 +294,9 @@ export async function finishVersionUpdate({
       // A candidate this run built is garbage nothing points at. A version
       // finished earlier is somebody's way back: a failed probe never takes it.
       if (!prepared) rmSync(dir, { recursive: true, force: true });
-      const staying = active ?? "the current version";
-      notify(`update to ${name} did not start; staying on ${staying}`);
+      notify(
+        `update to ${name} did not start; staying on ${active ?? "the current version"}`,
+      );
       return { status: "unhealthy", version: name, log: health.log };
     }
     // Proved: activating it is what lets it see the installation's own state.
@@ -333,36 +332,29 @@ function stockNotice(verb: string, failure: string): string {
   return `your customization in data/custom does not ${verb} this version, so Iva is running the stock build:\n${failure.slice(-1500)}`;
 }
 
-type Build = {
-  store: Store;
-  name: string;
-  dir: string;
-  run: Runner;
-  notify: Say;
-  log: Say;
-};
-
-/** One npm step in place: its output when it failed, null when it did not. */
+/** One npm step in place; the step's own output is the failure report. */
 async function npmStep(
   dir: string,
   run: Runner,
   args: readonly string[],
-): Promise<string | null> {
+  what: string,
+): Promise<void> {
   const done = await run("npm", args, dir);
-  return done.code === 0 ? null : done.output;
-}
-
-async function install(dir: string, run: Runner): Promise<void> {
-  const failure = await npmStep(dir, run, INSTALL);
-  if (failure) throw new Error(`dependency installation failed:\n${failure}`);
+  if (done.code !== 0) throw new Error(`${what} failed:\n${done.output}`);
 }
 
 /** Build a staged version with the user's files in it, or without them if they break it. */
-async function buildVersion(options: Build): Promise<Custom> {
-  const { store, dir, run, notify, log } = options;
+async function buildVersion(
+  store: Store,
+  name: string,
+  run: Runner,
+  notify: Say,
+  log: Say,
+): Promise<Custom> {
+  const dir = join(store.layout.versions, name);
   const customDir = join(store.layout.data, "custom");
   const { files } = customOverlay(customDir);
-  await install(dir, run);
+  await npmStep(dir, run, INSTALL, "dependency installation");
   for (const path of files) {
     // Confined to the version by `isAuthoredPath`: it rejects anything absolute,
     // anything that climbs out with `..`, and everything outside `agent/`.
@@ -370,28 +362,120 @@ async function buildVersion(options: Build): Promise<Custom> {
     cpSync(join(customDir, path), join(dir, path));
   }
   if (files.length > 0) log(`applied ${files.length} customized file(s)`);
-  const failure = await npmStep(dir, run, BUILD);
-  if (!failure) return files.length > 0 ? "applied" : "none";
-  if (files.length === 0) throw new Error(`build failed:\n${failure}`);
+  const built = await run("npm", BUILD, dir);
+  if (built.code === 0) return files.length > 0 ? "applied" : "none";
+  if (files.length === 0) throw new Error(`build failed:\n${built.output}`);
 
   // The user's own code must never keep the service down: rebuild the stock tree
   // in place and say so. The customization stays untouched in data/custom.
   log("the customized build failed; rebuilding this version without it");
-  await buildStock(options);
-  notify(stockNotice("build against", failure));
+  await buildStock(store, name, run);
+  notify(stockNotice("build against", built.output));
   return "stock";
 }
 
 /**
  * Rebuild a staged version from its commit alone, dropping the overlay. It keeps
- * the name it was staged under, customization included, so a customization known
- * not to work here is tried once and not on every update.
+ * the name it was staged under, digest included, so a customization known not to
+ * work here is tried once and not on every update.
  */
-async function buildStock({ store, name, dir, run }: Build): Promise<void> {
-  store.reset(name);
+async function buildStock(
+  store: Store,
+  name: string,
+  run: Runner,
+): Promise<void> {
+  const dir = store.reset(name);
   await store.materialize({ sha: parseVersionName(name)?.sha ?? "", dir });
   store.linkState(dir);
-  await install(dir, run);
-  const failure = await npmStep(dir, run, BUILD);
-  if (failure) throw new Error(`build failed:\n${failure}`);
+  await npmStep(dir, run, INSTALL, "dependency installation");
+  await npmStep(dir, run, BUILD, "build");
+}
+
+/** Names already applied. An unreadable marker means "nothing", never a crash. */
+function appliedMigrations(dataDir: string): string[] {
+  try {
+    const parsed: unknown = JSON.parse(
+      readFileSync(join(dataDir, MIGRATION_MARKER), "utf8"),
+    );
+    const applied = (parsed as { applied?: unknown } | null)?.applied;
+    return Array.isArray(applied)
+      ? applied.filter((name): name is string => typeof name === "string")
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Apply the migrations this version ships and has not applied yet. The marker only
+ * avoids repeat work: correctness rests on each migration being idempotent, so a
+ * lost or corrupted marker stays a recoverable state.
+ */
+export async function runMigrations({
+  dir,
+  dataDir,
+  context,
+  load = (path) =>
+    import(pathToFileURL(path).href) as Promise<{ default: Migration }>,
+  log,
+}: {
+  readonly dir: string;
+  readonly dataDir: string;
+  readonly context: MigrationContext;
+  readonly load?: (path: string) => Promise<{ default: Migration }>;
+  readonly log?: Say;
+}): Promise<string[]> {
+  let files: string[];
+  try {
+    files = readdirSync(dir).filter((name) => MIGRATION_FILE.test(name));
+  } catch {
+    return [];
+  }
+  const applied = appliedMigrations(dataDir);
+  const done: string[] = [];
+  const marker = join(dataDir, MIGRATION_MARKER);
+  for (const name of files.sort().map((file) => file.slice(0, -3))) {
+    if (applied.includes(name)) continue;
+    log?.(`migration ${name}`);
+    try {
+      const module = await load(join(dir, `${name}.ts`));
+      await module.default(context);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new Error(`migration ${name} failed: ${detail}`, { cause: error });
+    }
+    done.push(name);
+    const body = {
+      schema: "iva-migrations/v1",
+      applied: [...applied, ...done],
+    };
+    const temp = `${marker}.${process.pid}.tmp`;
+    writeFileSync(temp, `${JSON.stringify(body, null, 2)}\n`, { mode: 0o600 });
+    renameSync(temp, marker);
+  }
+  return done;
+}
+
+/** npm as a `Runner`: silent unless it fails, when its output is the report. */
+export function commandRunner(verbose: boolean): Runner {
+  return (command, args, cwd) =>
+    new Promise<CommandResult>((resolve) => {
+      const io = verbose ? "inherit" : "pipe";
+      const child = spawn(command, [...args], {
+        cwd,
+        env: {
+          ...process.env,
+          PATH: `${dirname(process.execPath)}:${process.env.PATH ?? ""}`,
+        },
+        stdio: ["ignore", io, io],
+      });
+      let output = "";
+      const collect = (chunk: unknown): void => {
+        output = `${output}${String(chunk)}`.slice(-OUTPUT_TAIL);
+      };
+      child.stdout?.on("data", collect);
+      child.stderr?.on("data", collect);
+      child.on("error", (error) => resolve({ code: 1, output: error.message }));
+      child.on("close", (code) => resolve({ code: code ?? 1, output }));
+    });
 }

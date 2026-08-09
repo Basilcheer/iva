@@ -1,19 +1,33 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { commandRunner } from "../lib/command-runner.ts";
 import { createTerminalProgress } from "../lib/progress.ts";
 import {
   createTelegramUpdateReporter,
   loadTelegramJob,
   removeTelegramJob,
 } from "../lib/telegram-status.ts";
+import { resolveUpdateTarget } from "../lib/update-channel.ts";
+import {
+  gitAt,
+  packageVersion,
+  requireGit,
+  type GitCommand,
+} from "../lib/update-check.ts";
 import { classifyRoot, isManagedInstall } from "../lib/version-layout.ts";
-import { ensureMirror, resolveTarget } from "../lib/version-mirror.ts";
-import { acquireUpdateLock } from "../lib/update-lock.ts";
-import { createVersionStore } from "../lib/version-store.ts";
-import { runVersionUpdate, type UpdateOutcome } from "../lib/version-update.ts";
+import { acquireUpdateLock, createVersionStore } from "../lib/version-store.ts";
+import {
+  commandRunner,
+  runVersionUpdate,
+  type UpdateOutcome,
+} from "../lib/version-update.ts";
 import type { createCliRuntime } from "./runtime.ts";
 
 type CliRuntime = ReturnType<typeof createCliRuntime>;
@@ -37,11 +51,80 @@ const COPY = {
   },
 } as const;
 
+/** A bare mirror, cloned from the checkout: nothing runs from it, so it is free to rewrite. */
+export async function ensureMirror({
+  home,
+  checkout,
+  git = gitAt,
+}: {
+  home: string;
+  checkout: string;
+  git?: GitCommand;
+}): Promise<string> {
+  const repo = join(home, "repo");
+  if (existsSync(repo)) return repo;
+  const staging = `${repo}.staging-${process.pid}`;
+  rmSync(staging, { recursive: true, force: true });
+  try {
+    const source = join(checkout, ".git");
+    await requireGit(git, home, ["clone", "--mirror", source, staging]);
+    const origin = await requireGit(git, checkout, [
+      "remote",
+      "get-url",
+      "origin",
+    ]);
+    await requireGit(git, staging, ["remote", "set-url", "origin", origin]);
+    const key = "iva.updateBranch";
+    const branch = await git(checkout, ["config", "--local", "--get", key]);
+    const value = typeof branch === "string" ? branch : (branch.stdout ?? "");
+    if (value.trim())
+      await requireGit(git, staging, ["config", key, value.trim()]);
+    renameSync(staging, repo);
+  } catch (error) {
+    rmSync(staging, { recursive: true, force: true });
+    throw error;
+  }
+  return repo;
+}
+
 /**
- * `iva update` on the immutable layout. This half only fetches and unpacks the
- * new version; from the moment its files exist the update continues inside that
- * version's own `scripts/update-finish.ts`, which is what makes an updater fix
- * arrive with the release carrying it instead of the one after it.
+ * What the next version is built from. An unreachable remote is not a failure: the
+ * newest mirrored commit is the honest answer, so an offline update is a no-op.
+ */
+export async function resolveTarget({
+  repo,
+  git = gitAt,
+}: {
+  repo: string;
+  git?: GitCommand;
+}): Promise<{ sha: string; version: string }> {
+  let sha: string | undefined;
+  try {
+    const target = await resolveUpdateTarget({
+      git: (...args) => {
+        const result = git(repo, args);
+        return Promise.resolve(result).then((value) =>
+          typeof value === "string" ? { code: 0, stdout: value } : value,
+        );
+      },
+    });
+    sha = target.targetHead;
+  } catch {
+    // Offline, or a remote that refuses the fetch.
+  }
+  if (!sha) sha = await requireGit(git, repo, ["rev-parse", "HEAD"]);
+  const version = packageVersion(
+    await requireGit(git, repo, ["show", `${sha}:package.json`]),
+  );
+  if (!version) throw new Error(`no package version at ${sha}`);
+  return { sha, version };
+}
+
+/**
+ * `iva update` on the immutable layout. This half only fetches and unpacks the new
+ * version; from there the update continues inside that version's own
+ * `scripts/update-finish.ts`, so an updater fix arrives with the release
+ * carrying it instead of the one after it.
  */
 export function createVersionUpdateCommand(
   runtime: CliRuntime,
@@ -51,9 +134,8 @@ export function createVersionUpdateCommand(
 
   async function run(args: readonly string[]): Promise<void> {
     const verbose = args.includes("--verbose");
-    // `--force` is decided here and never travels: it only says that a build of
-    // this release already on disk may not be reused, and what follows the
-    // handoff is the ordinary install of the directory this half staged.
+    // `--force` is decided here and never travels: it only says a build of this
+    // release already on disk may not be reused.
     const force = args.includes("--force");
     const jobAt = args.indexOf("--telegram-job");
     const env = runtime.readEnv();
@@ -128,9 +210,8 @@ export function createVersionUpdateCommand(
       } else {
         terminal.done(text.build[1]);
         terminal.info(`✅ ${outcome.previous ?? before} → ${outcome.version}`);
-        // A version built without the overlay - reused from disk or rebuilt after
-        // the user's code failed - runs stock code, and only saying so keeps them
-        // from believing a skill of theirs is live.
+        // A version built without the overlay runs stock code; saying so is what
+        // keeps the user from believing a skill of theirs is live.
         if (outcome.custom === "stock") terminal.info(`⚠️ ${text.stock}`);
         await reporter?.complete({
           beforeVersion: outcome.previous ?? before,
@@ -173,10 +254,7 @@ export function createVersionUpdateCommand(
     }
   }
 
-  /**
-   * Go back to the version that ran before this one: no git, no build, no
-   * network, just one symlink and one restart.
-   */
+  /** Back to the version that ran before: no git, no build, no network. */
   function rollback(): void {
     const store = createVersionStore(install.home);
     const previous = store.previousName();
@@ -192,13 +270,12 @@ export function createVersionUpdateCommand(
     }
     try {
       const from = store.currentName();
-      // Whatever a killed probe left this version's state links pointing at,
-      // activation aims them back at the installation - a way back that comes up
-      // on a scratch directory that no longer exists is not a way back.
+      // Activation aims this version's state links back at the installation: a way
+      // back that comes up on a deleted scratch directory is not a way back.
       store.activate(previous);
       systemdLifecycle.restartServices();
-      // This installation is now settled on the older version; without saying so,
-      // the next update would think it still owed the move it just undid.
+      // Settled on the older version; without saying so, the next update would
+      // think it still owed the move it just undid.
       store.settle(previous);
       runtime.ok(`${from ?? "the broken version"} → ${previous}`);
       // Nothing here pins a version, and the release this went back from is still
