@@ -118,6 +118,27 @@ export function retireCheckout(home: string): string[] {
 }
 
 /**
+ * Files the custom layer of the checkout era recorded as deleted. The overlay
+ * that replaces it only ever adds files, so those deletions come undone with the
+ * conversion, and a user who removed a stock skill has to be told it is back.
+ */
+export function tombstoned(home: string): string[] {
+  try {
+    const parsed: unknown = JSON.parse(
+      readFileSync(join(home, "data/custom/manifest.json"), "utf8"),
+    );
+    const entries =
+      (parsed as { entries?: Record<string, { tombstone?: boolean }> } | null)
+        ?.entries ?? {};
+    return Object.keys(entries)
+      .filter((path) => entries[path]?.tombstone)
+      .sort();
+  } catch {
+    return [];
+  }
+}
+
+/**
  * The second half of an update, run by the version being installed: install,
  * build, probe, flip, migrate, restart and retire the old checkout are the new
  * code's own logic, so a fix to any of it ships in the release carrying it.
@@ -128,6 +149,7 @@ export async function main(argv: readonly string[]): Promise<number> {
   const verbose = flags.includes("--verbose");
   const lock = adoptUpdateLock(layoutFor(home).data);
   const log: Say = (message) => console.log(`  ${message}`);
+  const notify: Say = (message) => console.log(`! ${message}`);
   let outcome: UpdateOutcome;
   try {
     outcome = await finishVersionUpdate({
@@ -135,7 +157,7 @@ export async function main(argv: readonly string[]): Promise<number> {
       name,
       run: commandRunner(verbose),
       log,
-      notify: (message) => console.log(`! ${message}`),
+      notify,
       restart: async (root) => {
         const { createCliRuntime } = await import("./cli/runtime.ts");
         const { createCliSystemd } = await import("./cli/systemd.ts");
@@ -148,8 +170,13 @@ export async function main(argv: readonly string[]): Promise<number> {
       },
       adopt: () => {
         writeShim(home, log);
-        if (existsSync(join(home, ".git")))
-          for (const removed of retireCheckout(home)) log(`retired ${removed}`);
+        if (!existsSync(join(home, ".git"))) return;
+        const back = tombstoned(home);
+        if (back.length > 0)
+          notify(
+            `a version cannot have a file of Iva's own deleted from it, so ${back.length} you had removed are back: ${back.join(", ")}`,
+          );
+        for (const removed of retireCheckout(home)) log(`retired ${removed}`);
       },
     });
   } catch (error) {

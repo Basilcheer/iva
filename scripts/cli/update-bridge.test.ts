@@ -39,8 +39,23 @@ test("the first update moves the installation onto versions and keeps its state"
   const iva = world(t);
   const sha = iva.git(iva.home, ["rev-parse", "HEAD"]);
   writeFileSync(join(iva.home, "data/cards.json"), '{"kept":true}\n');
+  // The custom layer of the checkout era could record a stock file as deleted.
+  // Nothing carries that across, so the file comes back and the user is told.
+  mkdirSync(join(iva.home, "data/custom"), { recursive: true });
+  writeFileSync(
+    join(iva.home, "data/custom/manifest.json"),
+    JSON.stringify({
+      schema: "iva-custom/v1",
+      entries: {
+        "agent/skills/stock/SKILL.md": { tombstone: true },
+        "agent/tools/kept.ts": { tombstone: false },
+      },
+    }),
+  );
 
   const output = update(iva);
+  assert.match(output, /agent\/skills\/stock\/SKILL\.md/u);
+  assert.doesNotMatch(output, /agent\/tools\/kept\.ts/u);
   const name = `0.3.15-${sha.slice(0, 12)}`;
   assert.equal(active(iva), name, output);
 
