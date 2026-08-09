@@ -587,7 +587,8 @@ export function mergeCard(input: MergeInput): MergeResult {
     throw new Error("UPDATE body must be a fact without H1/H2 headings");
   }
   if (operation === "NOOP") {
-    if (existing === undefined) throw new Error("NOOP requires an existing card");
+    if (existing === undefined)
+      throw new Error("NOOP requires an existing card");
     return { content: existing ?? "", action: "noop" };
   }
   if (operation === "ADD" && existing !== undefined) {
