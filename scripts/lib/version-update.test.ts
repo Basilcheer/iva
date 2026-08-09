@@ -12,7 +12,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   fixtureProbe,
@@ -155,6 +155,37 @@ async function killAt(
   child.kill("SIGKILL");
   await exited;
 }
+
+test("the new version's updater runs before there is a node_modules to run with", () => {
+  // It is started in a version directory that has just been unpacked, so the
+  // whole graph it reaches on the way to `npm ci` has to be built-ins and files
+  // from the tree itself. One import of a package is a crash with no update.
+  const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+  const seen = new Set<string>();
+  const queue = [join(root, "update-finish.ts")];
+  const foreign: string[] = [];
+  while (queue.length > 0) {
+    const file = queue.pop()!;
+    if (seen.has(file)) continue;
+    seen.add(file);
+    const source = readFileSync(file, "utf8");
+    const specifiers = [
+      ...source.matchAll(/^\s*(?:import|export)[^"]*?from\s*"([^"]+)"/gmu),
+      ...source.matchAll(/^\s*import\s+"([^"]+)"/gmu),
+      ...source.matchAll(/\bimport\("([^"]+)"\)/gu),
+    ];
+    for (const [, specifier] of specifiers) {
+      if (specifier.startsWith("node:")) continue;
+      if (!specifier.startsWith(".")) {
+        foreign.push(`${relative(root, file)} -> ${specifier}`);
+        continue;
+      }
+      queue.push(join(dirname(file), specifier));
+    }
+  }
+  assert.deepEqual(foreign, []);
+  assert.ok(seen.size > 5, "the import graph was not walked");
+});
 
 test("a first update builds a version, proves it starts and activates it", async (t) => {
   const iva = world(t);

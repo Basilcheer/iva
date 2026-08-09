@@ -1,6 +1,6 @@
 import { cpSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import { dirname, join, relative, sep } from "node:path";
-import { isAuthoredPath } from "./custom-layer.ts";
+import { isAuthoredPath } from "./authored-paths.ts";
 import {
   portWasTaken,
   probeEnvironment,

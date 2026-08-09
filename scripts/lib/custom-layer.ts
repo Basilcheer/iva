@@ -24,15 +24,12 @@ import {
   sep,
 } from "node:path";
 import { z } from "zod";
+import { isAuthoredPath } from "./authored-paths.ts";
+
+export { isAuthoredPath };
 
 const CUSTOM_SCHEMA = "iva-custom/v1" as const;
 const GIT_MAX_BUFFER = 64 * 1024 * 1024;
-const AUTHORED_PREFIXES = [
-  "agent/skills/",
-  "agent/connections/",
-  "agent/tools/",
-  "agent/subagents/",
-] as const;
 const AUTHORED_PATHSPECS = [
   "agent/instructions.md",
   "agent/skills",
@@ -105,28 +102,6 @@ function safeChild(base: string, relative: string): string {
   if (target !== basePath && !target.startsWith(`${basePath}${sep}`))
     throw new Error(`unsafe customization path: ${relative}`);
   return target;
-}
-
-function normalizedRelativePath(value: string): string | null {
-  if (!value || value.includes("\\") || posix.isAbsolute(value)) return null;
-  const normalized = posix.normalize(value);
-  if (
-    normalized !== value ||
-    normalized === "." ||
-    normalized === ".." ||
-    normalized.startsWith("../")
-  )
-    return null;
-  return normalized;
-}
-
-export function isAuthoredPath(value: string): boolean {
-  const path = normalizedRelativePath(value);
-  if (!path) return false;
-  return (
-    path === "agent/instructions.md" ||
-    AUTHORED_PREFIXES.some((prefix) => path.startsWith(prefix))
-  );
 }
 
 function writePrivateFile(path: string, contents: Buffer | string): void {
