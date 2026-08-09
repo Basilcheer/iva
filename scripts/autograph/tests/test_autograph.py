@@ -327,6 +327,7 @@ def main():
             build_link_index, resolve_link_target, collect_duplicate_groups, is_hub_path,
             get_conflict_fields, get_identity_config, card_recency_date, normalize_identity_value
         )
+        from cleanup import clean_file
 
         # 1.1 schema loading
         schema = load_schema(schema_path)
@@ -559,6 +560,32 @@ def main():
              and 'paragraph break' not in rebuilt_p
              and 'description: new' in rebuilt_p and 'status: active' in rebuilt_p,
              f"got: {rebuilt_p!r}")
+
+        # The bounded-memory cleaner is the first nightly step. It must share the
+        # same one-space continuation dialect or a historic 2^N card can bypass
+        # cleanup and then be skipped by enforce's oversize guard.
+        cleanup_single = tmp / 'cleanup-single-space.md'
+        repeated_unit = 'Subscriber/contact: interested in total life-tracking'
+        cleanup_body = '# Body\n\nExact body bytes stay untouched.\n'
+        cleanup_single.write_text(
+            '---\ntype: note\ndescription: >-\n '
+            + repeated_unit + ' ' + repeated_unit
+            + '\nstatus: active\n---\n' + cleanup_body
+        )
+        cleaned = clean_file(cleanup_single, apply=True)
+        cleaned_text = cleanup_single.read_text()
+        cleaned_fm, cleaned_body, _ = parse_frontmatter(cleaned_text)
+        test("cleanup repairs single-space repeated description",
+             cleaned is not None
+             and cleaned_fm.get('description') == repeated_unit,
+             cleaned_text[:500])
+        test("cleanup preserves body byte-for-byte",
+             cleaned_body == cleanup_body,
+             repr(cleaned_body))
+        cleaned_snapshot = cleanup_single.read_bytes()
+        test("second cleanup pass is byte-stable",
+             clean_file(cleanup_single, apply=True) is None
+             and cleanup_single.read_bytes() == cleaned_snapshot)
 
         # 1.16 deterministic link resolver
         resolver_vault = tmp / 'resolver-vault'

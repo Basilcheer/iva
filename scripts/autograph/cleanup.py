@@ -129,7 +129,9 @@ def clean_file(md: Path, apply: bool):
             raw_line, truncated = item
             line = raw_line.decode('utf-8', errors='ignore')
             stripped = line.strip()
-            indented = line.startswith('  ') or line.startswith('\t')
+            # Keep parity with the canonical TS/Python frontmatter parsers:
+            # YAML block continuations may use a single leading space.
+            indented = line.startswith((' ', '\t'))
 
             if in_desc and (indented or truncated):
                 if truncated or len(line) > BLOCK_SMALL:
