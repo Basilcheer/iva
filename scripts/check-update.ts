@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import { isEntrypoint } from "./lib/entrypoint.ts";
 import { classifyRoot, gitRootFor } from "./lib/version-layout.ts";
 import { createVersionStore, parseVersionName } from "./lib/version-store.ts";
-import { acquireUpdateLock, releaseUpdateLock } from "./lib/update-safety.ts";
+import { acquireUpdateLock } from "./lib/update-lock.ts";
 import {
   inspectUpstream,
   markVersionNotified,
@@ -52,11 +52,11 @@ export async function runDailyUpdateCheck({
   if (!token || !chatId) return { status: "not-configured" as const };
 
   const storage = dataDir(root, env);
-  const lock = acquireUpdateLock(
-    storage,
-    `daily-check-${process.pid}-${Date.now()}`,
-  );
-  if (!lock.ok) return { status: "update-running" as const };
+  // The same lock the updater itself takes, with the same rules about when a
+  // holder counts as gone: two answers to that question on one file is how a
+  // crashed update ends up blocking the daily check for hours.
+  const lock = acquireUpdateLock(storage);
+  if (!lock) return { status: "update-running" as const };
   try {
     // On the immutable layout nothing runs from a working tree: upstream is read from
     // the mirror, and "what is installed" is the commit the active version was built from.
@@ -80,7 +80,7 @@ export async function runDailyUpdateCheck({
     await writeStateImpl(storage, info.remoteVersion);
     return { status: "notified" as const, info };
   } finally {
-    releaseUpdateLock(lock);
+    lock.release();
   }
 }
 

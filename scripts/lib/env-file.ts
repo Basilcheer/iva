@@ -7,30 +7,18 @@ import {
   existsSync,
   fchmodSync,
   fsyncSync,
-  lstatSync,
   openSync,
-  readlinkSync,
   renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, join } from "node:path";
+import { throughLink } from "./version-layout.ts";
 
 // Lazy value capture + trailing \s*: tolerates CRLF files (a greedy .* would keep the \r).
 const LINE_RE = /^\s*([A-Z0-9_]+)\s*=\s*(.*?)\s*$/;
-
-/** What a symlink names, whether or not it exists yet; any other path unchanged. */
-function throughLink(path: string): string {
-  try {
-    return lstatSync(path).isSymbolicLink()
-      ? resolve(dirname(path), readlinkSync(path))
-      : path;
-  } catch {
-    return path;
-  }
-}
 
 type EnvValues = Record<string, string>;
 

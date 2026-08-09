@@ -1,6 +1,12 @@
-import { existsSync, readFileSync, realpathSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  readFileSync,
+  readlinkSync,
+  realpathSync,
+} from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { parseVersionName } from "./version-store.ts";
 
 /** The one command users have on their PATH; rewritten at most once, by the bridge. */
@@ -18,9 +24,29 @@ export type Install = {
   readonly root: string;
 };
 
-function real(path: string): string {
+/** Where a path really leads, or the path itself when nothing is there yet. */
+export function real(path: string): string {
   try {
     return realpathSync(path);
+  } catch {
+    return path;
+  }
+}
+
+/**
+ * What a symlink names, whether or not the target exists yet; any other path
+ * unchanged.
+ *
+ * One hop, not a full resolve: this is for writing *through* a link. On the
+ * versioned layout a version's `.env` and workflow store are links to the
+ * installation's, and replacing the link with a file is how a version keeps
+ * state the next flip then drops.
+ */
+export function throughLink(path: string): string {
+  try {
+    return lstatSync(path).isSymbolicLink()
+      ? resolve(dirname(path), readlinkSync(path))
+      : path;
   } catch {
     return path;
   }

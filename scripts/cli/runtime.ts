@@ -1,10 +1,11 @@
 import { spawnSync, type SpawnSyncOptions } from "node:child_process";
-import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { writeEnvAtomicSync } from "../lib/env-file.ts";
 import { createSystemdControl } from "../lib/systemd-control.ts";
+import { real } from "../lib/version-layout.ts";
 import { parseVersionName } from "../lib/version-store.ts";
 
 type CaptureOptions = Omit<SpawnSyncOptions, "encoding"> & {
@@ -29,21 +30,13 @@ type RuntimeColors = {
   readonly x: string;
 };
 
-function resolveLink(path: string): string {
-  try {
-    return realpathSync(path);
-  } catch {
-    return path;
-  }
-}
-
 /** Create the shared, side-effect-free-at-import runtime used by the Iva CLI. */
 export function createCliRuntime(root: string) {
   const ROOT = root;
   // Through the symlink: on the immutable layout `<root>/.env` points at the
   // installation's own file, and an atomic write would otherwise replace the link
   // with a copy that the next version never sees.
-  const ENV_PATH = resolveLink(join(ROOT, ".env"));
+  const ENV_PATH = real(join(ROOT, ".env"));
   const UNIT_DIR = join(homedir(), ".config/systemd/user");
   const NODE = process.execPath;
   const NODE_BIN_DIR = dirname(NODE);
@@ -134,7 +127,7 @@ export function createCliRuntime(root: string) {
   // was built from is part of its directory name.
   const gitHead = (): string =>
     cap("git", ["rev-parse", "--short", "HEAD"]).out ||
-    parseVersionName(basename(resolveLink(ROOT)))?.sha ||
+    parseVersionName(basename(real(ROOT)))?.sha ||
     "";
 
   function readEnv(): EnvValues {

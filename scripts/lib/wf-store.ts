@@ -7,11 +7,11 @@ import {
   lstatSync,
   mkdirSync,
   readdirSync,
-  readlinkSync,
   renameSync,
   rmSync,
 } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, join } from "node:path";
+import { throughLink } from "./version-layout.ts";
 
 export const TRASH_KEEP = 2;
 
@@ -25,19 +25,6 @@ function pathStat(path: string) {
   } catch (error) {
     if (hasErrorCode(error, "ENOENT")) return null;
     throw error;
-  }
-}
-
-// Куда путь ведёт на самом деле. В версионном layout стор внутри версии — симлинк на
-// стор установки: переименовать саму ссылку значит оставить состояние жить (и вернуть
-// его следующим апдейтом, который перелинкует версию на тот же каталог).
-function throughLink(path: string): string {
-  try {
-    return lstatSync(path).isSymbolicLink()
-      ? resolve(dirname(path), readlinkSync(path))
-      : path;
-  } catch {
-    return path;
   }
 }
 
