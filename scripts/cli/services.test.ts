@@ -170,11 +170,11 @@ void test("restart says so when data/custom is not in the version that runs", (t
     join(customDir, "agent/tools/mine.ts"),
     "export const m = 1;\n",
   );
-  const restart = (name: string, overlay = false): string[] => {
+  const restart = (name: string, installed?: string): string[] => {
     const dir = store.stage(name);
-    if (overlay) {
+    if (installed !== undefined) {
       mkdirSync(join(dir, "agent/tools"), { recursive: true });
-      writeFileSync(join(dir, "agent/tools/mine.ts"), "export const m = 1;\n");
+      writeFileSync(join(dir, "agent/tools/mine.ts"), installed);
     }
     store.complete(name);
     store.activate(name);
@@ -204,8 +204,20 @@ void test("restart says so when data/custom is not in the version that runs", (t
     ),
   );
 
+  // The same, where the release ships a file of its own at that path - which
+  // half the authored paths are. The file is there and it is not the user's, so
+  // the presence of a file says nothing and the contents say everything.
+  assert.ok(
+    restart(`0.3.15-dddddddddddd+${digest}`, "export const m = 0;\n").includes(
+      "runtime.warn:data/custom is not in the version that runs: it did not build or start - fix it and run: iva update",
+    ),
+  );
+
   // The version that was really built with it has nothing to say.
-  const built = restart(`0.3.15-cccccccccccc+${digest}`, true);
+  const built = restart(
+    `0.3.15-cccccccccccc+${digest}`,
+    "export const m = 1;\n",
+  );
   assert.equal(
     built.some((event) => event.startsWith("runtime.warn:")),
     false,

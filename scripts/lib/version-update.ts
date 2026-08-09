@@ -2,7 +2,6 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   cpSync,
-  existsSync,
   mkdirSync,
   readFileSync,
   readdirSync,
@@ -130,7 +129,19 @@ export function customOverlay(customDir: string): {
   };
 }
 
-/** What a version already on disk was built with, judged by what is in its tree. */
+function sameFile(one: string, other: string): boolean {
+  try {
+    return readFileSync(one).equals(readFileSync(other));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * What a version already on disk was built with, judged by what is in its tree.
+ * By contents, not by names: a stock tree has files of its own at authored paths
+ * - `agent/instructions.md` is one - so the file being there proves nothing.
+ */
 export function builtWith(
   dir: string,
   name: string,
@@ -138,7 +149,8 @@ export function builtWith(
 ): Custom {
   if (!parseVersionName(name)?.overlay) return "none";
   const files = customFiles(customDir);
-  return files.length > 0 && files.every((path) => existsSync(join(dir, path)))
+  return files.length > 0 &&
+    files.every((path) => sameFile(join(dir, path), join(customDir, path)))
     ? "applied"
     : "stock";
 }
