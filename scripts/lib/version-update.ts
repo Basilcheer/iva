@@ -109,7 +109,7 @@ function customFiles(customDir: string): string[] {
  * editing `data/custom` produces a version to build instead of resolving to the
  * one that already runs.
  */
-function customOverlay(customDir: string): {
+export function customOverlay(customDir: string): {
   files: string[];
   digest: string | null;
 } {

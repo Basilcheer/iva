@@ -1,5 +1,16 @@
 import assert from "node:assert/strict";
+import {
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
+import { createVersionStore } from "../lib/version-store.ts";
+import { customOverlay } from "../lib/version-update.ts";
 import { createCliRuntime } from "./runtime.ts";
 import { createServiceCommands } from "./services.ts";
 import type { createCliSystemd } from "./systemd.ts";
@@ -12,6 +23,7 @@ type SystemdLifecycle = Pick<
 type Dependencies = NonNullable<Parameters<typeof createServiceCommands>[2]>;
 
 type RuntimeOptions = {
+  readonly root?: string;
   readonly dataDir?: string;
   readonly requireSystemd?: () => void;
   readonly runStatus?: number;
@@ -30,13 +42,14 @@ class ExitSignal extends Error {
 function runtimeFixture(
   events: string[],
   {
+    root = "/srv/iva",
     dataDir = "/srv/iva/data",
     requireSystemd = () => events.push("runtime.requireSystemd"),
     runStatus = 0,
     stop = (units) => events.push(`systemd.stop:${units.join(",")}`),
   }: RuntimeOptions = {},
 ): Runtime {
-  const base = createCliRuntime("/srv/iva");
+  const base = createCliRuntime(root);
   const run: Runtime["run"] = (command, args) => {
     events.push(`runtime.run:${command}:${args.join("|")}`);
     return { status: runStatus } as ReturnType<Runtime["run"]>;
@@ -145,6 +158,47 @@ void test("restart, start and stop report success only after their lifecycle act
     "systemd.stop:iva.service,iva-telegram-poll.service",
     "runtime.ok:Stopped",
   ]);
+});
+
+void test("restart says so when data/custom is not in the version that runs", (t) => {
+  const home = realpathSync(mkdtempSync(join(tmpdir(), "iva-services-")));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const store = createVersionStore(home);
+  const customDir = join(home, "data/custom");
+  mkdirSync(join(customDir, "agent/tools"), { recursive: true });
+  writeFileSync(
+    join(customDir, "agent/tools/mine.ts"),
+    "export const m = 1;\n",
+  );
+  const restart = (name: string): string[] => {
+    store.stage(name);
+    store.complete(name);
+    store.activate(name);
+    const events: string[] = [];
+    createServiceCommands(
+      runtimeFixture(events, { root: join(home, "versions", name) }),
+      lifecycleFixture(events),
+    ).cmdRestart();
+    return events;
+  };
+
+  // A restart is not a build: the version that runs was made before this file
+  // existed, and saying nothing is how a user concludes their skill is broken.
+  assert.ok(
+    restart("0.3.15-aaaaaaaaaaaa").includes(
+      "runtime.warn:data/custom changed since this version was built - run: iva update",
+    ),
+  );
+
+  // The version that was built with it has nothing to say.
+  const built = restart(
+    `0.3.15-bbbbbbbbbbbb+${customOverlay(customDir).digest}`,
+  );
+  assert.equal(
+    built.some((event) => event.startsWith("runtime.warn:")),
+    false,
+    built.join("\n"),
+  );
 });
 
 void test("service action failures propagate without printing success", () => {

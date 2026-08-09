@@ -1,4 +1,7 @@
-import { relative } from "node:path";
+import { join, relative } from "node:path";
+import { classifyRoot, isManagedInstall } from "../lib/version-layout.ts";
+import { createVersionStore, parseVersionName } from "../lib/version-store.ts";
+import { customOverlay } from "../lib/version-update.ts";
 import {
   quarantinePath as defaultQuarantinePath,
   resetStateTargets as defaultResetStateTargets,
@@ -66,6 +69,24 @@ export function createServiceCommands(
     requireSystemd();
     restartServices(); // regenerate the unit before restart → PORT stays in sync with IVA_PORT in .env
     ok("Restarted: iva + telegram-poll");
+    warnUnbuiltCustom();
+  }
+
+  /**
+   * A restart runs the version that is installed; it never builds one. Editing
+   * `data/custom` therefore changes nothing until the version containing it is
+   * built, and silence is the worst possible answer to somebody who has just
+   * written a skill and restarted to see it work.
+   */
+  function warnUnbuiltCustom(): void {
+    const install = classifyRoot(ROOT);
+    if (!isManagedInstall(install)) return;
+    const store = createVersionStore(install.home);
+    const active = store.currentName();
+    const built = active ? parseVersionName(active)?.overlay : null;
+    if (built === customOverlay(join(store.layout.data, "custom")).digest)
+      return;
+    warn("data/custom changed since this version was built - run: iva update");
   }
 
   // Full reset: stop services, quarantine workflow + Telegram control state, bring it back up.
