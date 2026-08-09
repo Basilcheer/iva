@@ -68,7 +68,10 @@ test("the first update moves the installation onto versions and keeps its state"
   );
   assert.match(unit, new RegExp(`WorkingDirectory=${iva.home}/current$`, "mu"));
   assert.match(unit, new RegExp(`${iva.home}/current/node_modules/eve/bin/eve\\.js`, "u"));
-  assert.match(readFileSync(iva.systemctlLog, "utf8"), /restart .*iva\.service/u);
+  const systemctl = readFileSync(iva.systemctlLog, "utf8");
+  assert.match(systemctl, /restart .*iva\.service/u);
+  // The auto-update timer has to survive the move, or the install goes quiet.
+  assert.match(systemctl, /enable --now iva-update-check\.timer/u);
   // The port migration is recorded once, against the installation's data.
   assert.match(
     readFileSync(join(iva.home, "data/migrations.json"), "utf8"),

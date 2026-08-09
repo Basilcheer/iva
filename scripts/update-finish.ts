@@ -37,9 +37,9 @@ export async function main(argv: readonly string[]): Promise<number> {
         const { createCliSystemd } = await import("./cli/systemd.ts");
         // Units name `current`, never a version directory, so they survive every
         // later flip and garbage collection without being rewritten.
-        const systemd = createCliSystemd(createCliRuntime(root));
-        systemd.writeUnits();
-        systemd.restartServices();
+        const runtime = createCliRuntime(root);
+        createCliSystemd(runtime).restartServices();
+        runtime.systemd.activate([runtime.UPDATE_TIMER]);
         await Promise.resolve();
       },
     });
