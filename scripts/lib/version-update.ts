@@ -269,8 +269,10 @@ export async function finishVersionUpdate({
         env: probeEnvironment(store.layout.env, port),
       }));
   let custom = builtWith(dir, name, join(store.layout.data, "custom"));
-  /** Nothing points at a version being built, so a failure is only garbage - and
-   * megabytes of it on a small disk. */
+  /**
+   * Nothing points at a version being built, so a failure leaves only garbage -
+   * and megabytes of it on a small disk.
+   */
   const discardOnFailure = async <T>(work: () => Promise<T>): Promise<T> => {
     try {
       return await work();
