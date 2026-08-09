@@ -11,7 +11,8 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { probeVersion } from "./health-probe.ts";
+import { createServer } from "node:http";
+import { portWasTaken, probeVersion } from "./health-probe.ts";
 
 const PROBE_PORT = 18730;
 
@@ -148,4 +149,21 @@ test("a missing command is a failed probe, not a crash", async (t) => {
   assert.equal(result.ok, false);
   assert.match(result.log, /ENOENT|does-not-exist/);
   assert.equal(existsSync(join(dir, "started.json")), false);
+});
+
+test("a foreign server on the probe port never passes for the version", async (t) => {
+  // Two updates on one box can pick the same free port between checking it and
+  // taking it, and then a crash-looping version gets a 200 from the other one.
+  const squatter = createServer((_request, response) => {
+    response.writeHead(200).end("not the version");
+  });
+  await new Promise<void>((resolve) =>
+    squatter.listen(PROBE_PORT, "127.0.0.1", resolve),
+  );
+  t.after(() => new Promise((resolve) => squatter.close(resolve)));
+
+  const dir = versionDir(t, 'process.stderr.write("boom\\n");\nprocess.exit(1);\n');
+  const result = await probe(dir, {}, 3000);
+  assert.equal(result.ok, false, result.log);
+  assert.equal(portWasTaken(result.log), true, result.log);
 });

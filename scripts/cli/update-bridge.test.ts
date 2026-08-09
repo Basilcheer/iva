@@ -132,8 +132,9 @@ test("a version that builds but does not start is never activated", (t) => {
     writeFileSync(join(tree, "scripts/feature.mjs"), "// START_BREAK\n"),
   );
   const result = iva.iva(["update"]);
-  assert.equal(result.status, 1);
-  assert.match(`${result.stdout}${result.stderr}`, /provider\.ts/u);
+  const output = `${result.stdout}${result.stderr}`;
+  assert.equal(result.status, 1, output);
+  assert.match(output, /provider\.ts/u);
   assert.equal(active(iva), healthy);
   assert.deepEqual(readdirSync(join(iva.home, "versions")), [healthy]);
 });

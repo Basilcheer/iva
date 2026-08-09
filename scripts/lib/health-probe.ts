@@ -2,6 +2,29 @@ import { spawn } from "node:child_process";
 import { join } from "node:path";
 
 const LOG_TAIL = 4000;
+const BUSY_PORT = "the probe port was already answering";
+
+/**
+ * Whether a failed probe blames the port rather than the version.
+ *
+ * Two processes can pick the same free port between checking it and taking it,
+ * and a health check that another server answers proves nothing at all - so this
+ * verdict is worth another port, never a "the version does not start".
+ */
+export function portWasTaken(log: string): boolean {
+  return log.includes(BUSY_PORT) || log.includes("EADDRINUSE");
+}
+
+async function answering(port: number): Promise<boolean> {
+  try {
+    await fetch(`http://127.0.0.1:${port}/`, {
+      signal: AbortSignal.timeout(1000),
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 export type ProbeOptions = {
   /** The version directory, used both as cwd and as the source of the command. */
@@ -42,6 +65,11 @@ export async function probeVersion({
   intervalMs = 500,
   stopGraceMs = 5000,
 }: ProbeOptions): Promise<ProbeResult> {
+  // Asked before anything is started: whatever answers now cannot be the version,
+  // and a check against it would pass for a build that never came up.
+  if (await answering(port))
+    return { ok: false, log: `${BUSY_PORT} on ${port}` };
+
   let log = "";
   let exit: { code: number | null; signal: NodeJS.Signals | null } | null =
     null;
@@ -77,7 +105,10 @@ export async function probeVersion({
     } catch {
       // Not listening yet is the normal case for most of the startup window.
     }
-    if (!ok) await wait(intervalMs);
+    await wait(intervalMs);
+    // Somebody else can still have taken the port in the meantime; the answer is
+    // only the version's if the version is alive to have given it.
+    if (ok && exit) ok = false;
   }
 
   // Captured before the shutdown below turns every run into an "exited" one.

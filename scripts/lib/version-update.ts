@@ -1,6 +1,6 @@
 import { cpSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
-import { probeVersion } from "./health-probe.ts";
+import { portWasTaken, probeVersion } from "./health-probe.ts";
 import { runMigrations } from "./migrations.ts";
 import { DEFAULT_PORT, PortChecker, PortSelector, bindProbe } from "./ports.ts";
 import { acquireUpdateLock } from "./update-lock.ts";
@@ -94,21 +94,28 @@ async function proveStarts(
   // Bind is the only probe worth asking here: the docker probe shells out and can
   // block for a long time on a host whose daemon is unreachable.
   const selector = new PortSelector(new PortChecker([bindProbe]));
-  let start = DEFAULT_PORT + 100;
-  for (let attempt = 1; ; attempt++) {
+  // Two updaters on one box would otherwise scan from the same port and keep
+  // colliding on it; the pid spreads them apart without any coordination.
+  let start = DEFAULT_PORT + 100 + (process.pid % 100);
+  let health = { ok: false, log: "the version was never started" };
+  for (let attempt = 1; attempt <= 5; attempt++) {
     const port = (await selector.firstFree(start)) ?? start;
-    const health = await probe(dir, port);
-    if (health.ok || attempt === 3 || !health.log.includes("EADDRINUSE"))
-      return health;
+    health = await probe(dir, port);
+    if (health.ok || !portWasTaken(health.log)) break;
     log(`probe port ${port} was taken; retrying above it`);
     start = port + 1;
   }
+  return health;
 }
 
 /**
- * One update, expressed as: build a new immutable version, prove it starts, then
- * flip a symlink. Nothing here mutates the running version, so an interruption at
- * any point leaves it exactly as it was and only costs the next run a sweep.
+ * One update, expressed as: build a new immutable version, prove it starts, flip
+ * a symlink, then move the installation onto it.
+ *
+ * Nothing before the flip touches the running version, so an interruption there
+ * leaves it exactly as it was and costs the next run a sweep. Nothing after the
+ * flip is allowed to be a one-shot either: the next run replays whatever did not
+ * finish, because an installation half moved is the one state with no way out.
  */
 export async function runVersionUpdate(
   options: VersionUpdateOptions,
