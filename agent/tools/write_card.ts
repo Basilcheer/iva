@@ -220,7 +220,7 @@ export default defineTool({
       .describe("Вики-цели связей [[...]] (vault-пути или слаги), опционально"),
     body: nonBlank("body").describe(
       "Тело карточки в markdown: только факты, без заголовков H1/H2 — заголовок, " +
-        "## History, ## Log и ## Related ведёт сам тул (на ADD и UPDATE они отклоняются)",
+        "## History, ## Log и ## Related ведёт сам тул и отклоняет их в body",
     ),
     history_entry: z
       .string()
