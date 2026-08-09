@@ -19,6 +19,9 @@ command -v node >/dev/null 2>&1 || die "Node.js is required"
 
 node_major="$(node -p 'process.versions.node.split(".")[0]')"
 [ "$node_major" -ge 24 ] || die "Node 24 or newer is required"
+if [ ! -d "$INSTALL_DIR/.git" ] && [ -d "$INSTALL_DIR/versions" ]; then
+  die "$INSTALL_DIR already runs versioned installs: use 'iva update', or 'iva rollback' to return to the previous version"
+fi
 [ -d "$INSTALL_DIR/.git" ] || die "Iva was not found at $INSTALL_DIR"
 
 INSTALL_DIR="$(cd "$INSTALL_DIR" && pwd -P)"
