@@ -23,7 +23,9 @@ For each item:
    - Match, new fact contradicts current truth → **SUPERSEDE**. Pass the complete
      new Compiled Truth in `body` and the displaced old fact in `history_entry`
      as a single dated line, `YYYY-MM-DD: fact` (the fact's own date, not today's).
-     The tool rewrites current truth and preserves one append-only `## History`.
+     The tool rewrites current truth and keeps one append-only History:
+     `write_card` owns the `## History` section, so never write that heading
+     into `body` yourself.
      Never pass `history_entry` with ADD, UPDATE, or NOOP.
      See `references/classification.md` → "ADD / UPDATE / SUPERSEDE / NOOP".
      Never use `UPDATE` to hide a contradiction in chronology.

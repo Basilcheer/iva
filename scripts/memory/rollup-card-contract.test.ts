@@ -15,6 +15,15 @@ function assertBefore(text: string, first: string, second: string): void {
   assert.ok(firstAt < secondAt, `${first} must precede ${second}`);
 }
 
+/** Inline code spans carrying a real date: instructions may show a history entry
+ * only in the shape write_card stores, otherwise the model writes a second date. */
+function datedExamples(text: string): string[] {
+  const prose = text.replace(/```[\s\S]*?```/g, "");
+  return [...prose.matchAll(/`([^`\n]+)`/g)]
+    .map((match) => match[1])
+    .filter((span) => /\d{4}-\d{2}/.test(span) && span.includes(":"));
+}
+
 void test("daily rollup prompt exposes the same four card operations as dbrain", () => {
   const rollup = read("rollup.ts");
   for (const fragment of [
@@ -36,6 +45,29 @@ void test("daily rollup prompt exposes the same four card operations as dbrain",
     processInstructions,
     /Never pass `history_entry` with ADD, UPDATE, or NOOP\./,
   );
+});
+
+void test("dbrain phase and its reference teach one history_entry contract", () => {
+  for (const name of ["phases/process.md", "references/classification.md"]) {
+    const text = read(`instructions/dbrain-processor/${name}`);
+    assert.match(
+      text,
+      /`write_card` owns the `## History` section/,
+      `${name} must leave the ## History section to write_card`,
+    );
+    assert.match(
+      text,
+      /Never pass `history_entry` with ADD, UPDATE, or NOOP\./,
+      `${name} must keep history_entry on SUPERSEDE only`,
+    );
+    for (const example of datedExamples(text)) {
+      assert.match(
+        example,
+        /^\d{4}-\d{2}-\d{2}: \S/,
+        `${name} shows "${example}" where a history entry must read YYYY-MM-DD: fact`,
+      );
+    }
+  }
 });
 
 void test("every nightly mechanical path runs bounded cleanup before whole-file enforce", () => {
