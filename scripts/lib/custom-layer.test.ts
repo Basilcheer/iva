@@ -64,6 +64,17 @@ function fixture(t: TestContext): {
   );
   write(root, "agent/skills/stock/SKILL.md", "stock skill\n");
   write(root, "agent/tools/stock.ts", "export default 'stock';\n");
+  write(
+    root,
+    "agent/provider.ts",
+    'import { runtimeValue } from "../scripts/lib/runtime-dependency.ts";\n' +
+      "export default runtimeValue;\n",
+  );
+  write(
+    root,
+    "scripts/lib/runtime-dependency.ts",
+    'export const runtimeValue = "ready";\n',
+  );
   write(root, "scripts/core.ts", "export {};\n");
   git(root, "add", ".");
   git(root, "commit", "-m", "base");
@@ -225,6 +236,14 @@ test("materialization applies clean three-way merges and advances the manifest a
   assert.equal(
     readFileSync(join(result.runtimeRoot, "agent/instructions.md"), "utf8"),
     "tone: mine\nkeep-a\nkeep-b\ncore: upstream\n",
+  );
+  assert.equal(
+    readFileSync(
+      join(result.runtimeRoot, "scripts/lib/runtime-dependency.ts"),
+      "utf8",
+    ),
+    'export const runtimeValue = "ready";\n',
+    "stable runtime keeps the external source dependency imported by agent/provider.ts",
   );
 });
 
