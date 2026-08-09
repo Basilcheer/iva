@@ -73,7 +73,10 @@ if (!existsSync(join(process.cwd(), ".output/built.json"))) {
 const store = join(process.cwd(), ".eve/.workflow-data");
 mkdirSync(store, { recursive: true });
 appendFileSync(join(store, "started.log"), "re-enqueued active runs\\n");
-appendFileSync(join(process.cwd(), "data/started.log"), "started\\n");
+// Where the real agent keeps its cards: the .env variable when there is one,
+// which on a live installation is free to be an absolute path.
+const data = process.env.ASSISTANT_DATA_DIR || join(process.cwd(), "data");
+appendFileSync(join(data, "started.log"), "started\\n");
 if (process.env.IVA_TEST_STARTS)
   appendFileSync(
     process.env.IVA_TEST_STARTS,
@@ -84,7 +87,7 @@ if (process.env.IVA_TEST_STARTS)
       ivaPort: process.env.IVA_PORT,
       envMark: process.env.IVA_ENV_MARK ?? "",
       store: realpathSync(store),
-      data: realpathSync(join(process.cwd(), "data")),
+      data: realpathSync(data),
     }) + "\\n",
   );
 // After the store is opened, like the real thing: a start that crashes here has

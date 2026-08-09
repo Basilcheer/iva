@@ -250,7 +250,7 @@ export async function finishVersionUpdate({
       probeVersion({
         dir: target,
         port,
-        env: probeEnvironment(store.layout.env, port),
+        env: probeEnvironment(store.layout.env, port, target),
       }));
   let custom = builtWith(dir, name, customDir);
   /** A version being built is garbage nothing points at: a failure takes it away. */

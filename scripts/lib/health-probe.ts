@@ -41,11 +41,15 @@ export type ProbeResult = { readonly ok: boolean; readonly log: string };
  * The environment the service is started with, adjusted for a probe. systemd hands
  * the unit the `.env`, so a probe without it proves a version starts under a
  * configuration nobody runs. The port is the probe's own in both spellings, or
- * code reaching for `IVA_PORT` would talk to the live service.
+ * code reaching for `IVA_PORT` would talk to the live service. The state
+ * directories are the version's own, because that `.env` is free to name absolute
+ * paths - and then every write of a start that is about to be thrown away would
+ * land in the live installation instead of the probe's scratch.
  */
 export function probeEnvironment(
   envPath: string,
   port: number,
+  dir: string,
 ): Record<string, string> {
   let values: Record<string, string> = {};
   try {
@@ -55,6 +59,8 @@ export function probeEnvironment(
   }
   return {
     ...values,
+    ASSISTANT_DATA_DIR: join(dir, "data"),
+    ASSISTANT_VAULT_DIR: join(dir, "vault"),
     PORT: String(port),
     IVA_PORT: String(port),
     [PROBE_FLAG]: "1",

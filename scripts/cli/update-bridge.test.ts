@@ -168,7 +168,13 @@ test("the health probe runs on scratch state, with the service's own environment
   const store = join(iva.home, ".eve/.workflow-data");
   mkdirSync(store, { recursive: true });
   writeFileSync(join(store, "open-run.json"), '{"status":"running"}\n');
-  appendFileSync(join(iva.home, ".env"), "IVA_ENV_MARK=from-dotenv\n");
+  // The state paths spelled out absolutely, as `iva config` writes them: fed to
+  // the probe unchanged they would aim a throwaway start at the live vault.
+  appendFileSync(
+    join(iva.home, ".env"),
+    `IVA_ENV_MARK=from-dotenv\nASSISTANT_DATA_DIR=${join(iva.home, "data")}\n` +
+      `ASSISTANT_VAULT_DIR=${join(iva.home, "vault")}\n`,
+  );
 
   const output = update(iva);
   // systemctl is a stub here, so the only server that really started is the probe.

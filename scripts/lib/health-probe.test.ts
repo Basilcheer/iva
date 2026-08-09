@@ -63,10 +63,13 @@ test("the probe environment is the service's, with the probe's own port", (t) =>
   const env = join(dir, ".env");
   writeFileSync(
     env,
-    'MODEL_PROVIDER=anthropic\nIVA_PORT=8723\nTELEGRAM_BOT_TOKEN="42:secret"\n',
+    "MODEL_PROVIDER=anthropic\nIVA_PORT=8723\n" +
+      'TELEGRAM_BOT_TOKEN="42:secret"\n' +
+      "ASSISTANT_DATA_DIR=/home/user/iva/data\n" +
+      "ASSISTANT_VAULT_DIR=/home/user/iva/vault\n",
   );
 
-  const probeEnv = probeEnvironment(env, 8901);
+  const probeEnv = probeEnvironment(env, 8901, dir);
   // What systemd hands the unit through EnvironmentFile - a probe without it
   // would prove a version starts under a configuration nobody runs.
   assert.equal(probeEnv.MODEL_PROVIDER, "anthropic");
@@ -75,10 +78,16 @@ test("the probe environment is the service's, with the probe's own port", (t) =>
   assert.equal(probeEnv.PORT, "8901");
   assert.equal(probeEnv.IVA_PORT, "8901");
   assert.equal(probeEnv.IVA_HEALTH_PROBE, "1");
+  // And the state it opens is the version's own, whatever absolute paths that
+  // .env names: those are the live installation's, and a probe is thrown away.
+  assert.equal(probeEnv.ASSISTANT_DATA_DIR, join(dir, "data"));
+  assert.equal(probeEnv.ASSISTANT_VAULT_DIR, join(dir, "vault"));
 
   // An installation without an .env is still worth checking a version against.
-  const bare = probeEnvironment(join(dir, "missing.env"), 8901);
+  const bare = probeEnvironment(join(dir, "missing.env"), 8901, dir);
   assert.deepEqual(bare, {
+    ASSISTANT_DATA_DIR: join(dir, "data"),
+    ASSISTANT_VAULT_DIR: join(dir, "vault"),
     PORT: "8901",
     IVA_PORT: "8901",
     IVA_HEALTH_PROBE: "1",
