@@ -96,7 +96,7 @@ test("an interrupted stage leaves the active version untouched and is swept late
   assert.equal(existsSync(staged), false);
   assert.equal(store.currentName(), "0.3.14-aaaaaaaaaaaa");
   assert.equal(
-    readFileSync(join(store.currentDir()!, "marker.txt"), "utf8"),
+    readFileSync(join(store.layout.current, "marker.txt"), "utf8"),
     "0.3.14-aaaaaaaaaaaa",
   );
 });
@@ -166,7 +166,7 @@ test("a missing, dangling or foreign current link is healed onto the newest vers
   // Dangling: the target was removed by hand.
   rmSync(layout.current, { force: true });
   symlinkSync(join(layout.versions, "0.3.99-cccccccccccc"), layout.current);
-  assert.equal(store.currentDir(), null);
+  assert.equal(store.currentName(), null);
   assert.equal(store.heal(), "0.3.15-bbbbbbbbbbbb");
 
   // Foreign: pointing outside the versions tree is not a valid installation.
@@ -347,7 +347,7 @@ test("resetting a staged version clears it without giving up the claim", (t) => 
   // A finished version is never someone's scratch space.
   assert.throws(() => store.reset("0.3.14-aaaaaaaaaaaa"), /complete/);
   assert.equal(
-    readFileSync(join(store.currentDir()!, "marker.txt"), "utf8"),
+    readFileSync(join(store.layout.current, "marker.txt"), "utf8"),
     "0.3.14-aaaaaaaaaaaa",
   );
 });

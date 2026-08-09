@@ -49,7 +49,12 @@ export function gitAt(root: string, args: string[]): Promise<GitResult> {
   });
 }
 
-async function requireGit(gitImpl: GitCommand, root: string, args: string[]) {
+/** A git call whose output is required: a non-zero exit becomes the error it printed. */
+export async function requireGit(
+  gitImpl: GitCommand,
+  root: string,
+  args: string[],
+) {
   const result = await gitImpl(root, args);
   if (typeof result === "string") return result;
   if (result.code !== 0)

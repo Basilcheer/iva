@@ -3,23 +3,12 @@ import { join } from "node:path";
 import {
   gitAt,
   packageVersion,
+  requireGit,
   type GitCommand,
 } from "./update-check.ts";
 import { resolveUpdateTarget } from "./update-channel.ts";
 
 export type Target = { readonly sha: string; readonly version: string };
-
-async function require_(
-  git: GitCommand,
-  root: string,
-  args: string[],
-): Promise<string> {
-  const result = await git(root, args);
-  const output = typeof result === "string" ? result : (result.stdout ?? "");
-  if (typeof result !== "string" && result.code !== 0)
-    throw new Error(result.stderr || output || `git ${args[0]} failed`);
-  return output.trim();
-}
 
 /**
  * A bare mirror of the repository, cloned from the checkout that is being
@@ -40,9 +29,9 @@ export async function ensureMirror({
   const staging = `${repo}.staging-${process.pid}`;
   rmSync(staging, { recursive: true, force: true });
   try {
-    await require_(git, home, ["clone", "--mirror", join(checkout, ".git"), staging]);
-    const origin = await require_(git, checkout, ["remote", "get-url", "origin"]);
-    await require_(git, staging, ["remote", "set-url", "origin", origin]);
+    await requireGit(git, home, ["clone", "--mirror", join(checkout, ".git"), staging]);
+    const origin = await requireGit(git, checkout, ["remote", "get-url", "origin"]);
+    await requireGit(git, staging, ["remote", "set-url", "origin", origin]);
     const branch = await git(checkout, [
       "config",
       "--local",
@@ -52,7 +41,7 @@ export async function ensureMirror({
     const configured =
       typeof branch === "string" ? branch.trim() : (branch.stdout ?? "").trim();
     if (configured)
-      await require_(git, staging, ["config", "iva.updateBranch", configured]);
+      await requireGit(git, staging, ["config", "iva.updateBranch", configured]);
     renameSync(staging, repo);
   } catch (error) {
     rmSync(staging, { recursive: true, force: true });
@@ -87,9 +76,9 @@ export async function resolveTarget({
   } catch {
     // Offline, or a remote that refuses the fetch.
   }
-  if (!sha) sha = await require_(git, repo, ["rev-parse", "HEAD"]);
+  if (!sha) sha = await requireGit(git, repo, ["rev-parse", "HEAD"]);
   const version = packageVersion(
-    await require_(git, repo, ["show", `${sha}:package.json`]),
+    await requireGit(git, repo, ["show", `${sha}:package.json`]),
   );
   if (!version) throw new Error(`no package version at ${sha}`);
   return { sha, version };

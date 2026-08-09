@@ -147,11 +147,6 @@ export function createVersionStore(home: string) {
     return parseVersionName(name) && isComplete(name) ? name : null;
   }
 
-  function currentDir(): string | null {
-    const name = currentName();
-    return name ? join(layout.versions, name) : null;
-  }
-
   function previousName(): string | null {
     const active = currentName();
     return list().find((entry) => entry.name !== active)?.name ?? null;
@@ -335,7 +330,6 @@ export function createVersionStore(home: string) {
     layout,
     list,
     currentName,
-    currentDir,
     previousName,
     stage,
     reset,
