@@ -3,7 +3,6 @@ import { toChannelLocalToken } from "#lib/telegram-continuation-token.ts";
 
 type ChatStatus = Record<string, unknown> | null;
 type GetStatus = (chatKey: string) => ChatStatus;
-type SetStatus = (chatKey: string, patch: Record<string, unknown>) => unknown;
 type SetStatusIf = (
   chatKey: string,
   expected: Record<string, unknown>,
@@ -14,7 +13,8 @@ export interface PublishTelegramEarlyStatusOptions {
   chatKey: string;
   ingressId?: string;
   now?: () => number;
-  setStatusImpl: SetStatus;
+  staleMs?: number;
+  getStatusImpl: GetStatus;
   setStatusIfImpl: SetStatusIf;
   sendWorkingStatusImpl: (options: {
     canStop: false;
@@ -79,30 +79,68 @@ export async function publishTelegramEarlyStatus({
   chatKey,
   ingressId = randomUUID(),
   now = Date.now,
-  setStatusImpl,
+  staleMs = 30 * 60_000,
+  getStatusImpl,
   setStatusIfImpl,
   sendWorkingStatusImpl,
   removeWorkingStatusImpl = async () => {},
   onWorkingStatusError = () => {},
 }: PublishTelegramEarlyStatusOptions): Promise<string | null> {
   const ingressAt = now();
+  // Мост пропускает реплаи на сообщения бота мимо busy-очереди, поэтому сюда можно
+  // попасть, пока предыдущий ход ещё бежит. Безусловный overwrite крал у него
+  // sessionId+statusMessageId: терминальная уборка проходила мимо CAS и «Работаю…/Стоп»
+  // оставался в чате навсегда. Живой ход не трогаем — его индикатор уже на экране,
+  // а свой этот ход получит в turn.started. Клейм — CAS по generation, чтобы
+  // конкурирующий ingress не украл состояние между read и write.
+  let claimed = null;
+  let orphanMessageId: number | undefined;
   try {
-    setStatusImpl(chatKey, {
-      status: "running",
-      ingressId,
-      ingressAt,
-      statusAt: null,
-      turnAt: null,
-      firstOutputAt: null,
-      sessionId: null,
-      turnId: null,
-      statusMessageId: null,
-      latencyLogged: null,
-      resetAt: null,
-    });
+    for (let attempt = 0; attempt < 3 && !claimed; attempt++) {
+      const current = getStatusImpl(chatKey);
+      if (
+        current?.status === "running" &&
+        typeof current.updatedAt === "number" &&
+        ingressAt - current.updatedAt < staleMs
+      ) {
+        return null;
+      }
+      // Протухший running: после overwrite его индикатор больше никто не найдёт —
+      // прибираем сами (best-effort, как в reaper).
+      orphanMessageId =
+        current?.status === "running" &&
+        typeof current.statusMessageId === "number"
+          ? current.statusMessageId
+          : undefined;
+      claimed = setStatusIfImpl(
+        chatKey,
+        { generation: current?.generation },
+        {
+          status: "running",
+          ingressId,
+          ingressAt,
+          statusAt: null,
+          turnAt: null,
+          firstOutputAt: null,
+          sessionId: null,
+          turnId: null,
+          statusMessageId: null,
+          latencyLogged: null,
+          resetAt: null,
+        },
+      );
+    }
   } catch (error) {
     onWorkingStatusError(error);
     return null;
+  }
+  if (!claimed) return null;
+  if (orphanMessageId !== undefined) {
+    try {
+      await removeWorkingStatusImpl(orphanMessageId);
+    } catch (error) {
+      onWorkingStatusError(error);
+    }
   }
 
   let statusMessageId;

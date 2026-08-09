@@ -55,7 +55,7 @@ void test("a trusted dispatch creates one status before a fake 20-second pre-tur
     chatKey: "1:",
     ingressId: "ingress-1",
     now: () => nowMs++,
-    setStatusImpl: store.set,
+    getStatusImpl: store.get,
     setStatusIfImpl: store.cas,
     sendWorkingStatusImpl: (options) => {
       sends++;
@@ -101,7 +101,7 @@ void test("working-status failure never blocks turn adoption", async () => {
   await publishTelegramEarlyStatus({
     chatKey: "1:",
     ingressId: "ingress-1",
-    setStatusImpl: store.set,
+    getStatusImpl: store.get,
     setStatusIfImpl: store.cas,
     sendWorkingStatusImpl: () =>
       Promise.reject(new Error("Telegram unavailable")),
@@ -131,7 +131,7 @@ void test("a reset racing a late early-status response cannot revive the old ses
   const publishing = publishTelegramEarlyStatus({
     chatKey: "1:",
     ingressId: "ingress-1",
-    setStatusImpl: store.set,
+    getStatusImpl: store.get,
     setStatusIfImpl: store.cas,
     sendWorkingStatusImpl: () => working.promise,
     removeWorkingStatusImpl: (messageId) => {
@@ -228,6 +228,351 @@ void test("latency logging emits one allowlisted JSON record with no sensitive f
   );
 });
 
+// --- Гонка «реплай во время бегущего хода» (кейс залипшего «Работаю…/Стоп») ---
+// Мост пропускает реплаи на сообщения бота мимо busy-очереди, поэтому ранний статус
+// обязан не красть состояние живого хода: иначе его finishStatus теряет statusMessageId
+// и индикатор первого хода остаётся в чате навсегда.
+
+void test("early status during a live running turn does not steal its indicator", async () => {
+  const store = statusStore({
+    status: "running",
+    sessionId: "session-A",
+    turnId: "turn-A",
+    statusMessageId: 41,
+    ingressAt: 9_000,
+    updatedAt: 10_000,
+    generation: 5,
+  });
+  let sends = 0;
+
+  const ingressId = await publishTelegramEarlyStatus({
+    chatKey: "1:",
+    ingressId: "ingress-B",
+    now: () => 11_000,
+    staleMs: 30 * 60_000,
+    getStatusImpl: store.get,
+    setStatusIfImpl: store.cas,
+    sendWorkingStatusImpl: () => {
+      sends++;
+      return Promise.resolve(99);
+    },
+  });
+
+  assert.equal(ingressId, null);
+  assert.equal(sends, 0);
+  assert.equal(store.get().sessionId, "session-A");
+  assert.equal(store.get().statusMessageId, 41);
+  // Терминальная уборка бегущего хода (контракт finishStatus) обязана пройти.
+  const cleaned = store.cas(
+    "1:",
+    { sessionId: "session-A" },
+    { status: "idle", sessionId: null, turnId: null, statusMessageId: null },
+  );
+  assert.notEqual(cleaned, null);
+});
+
+void test("early status over a stale running turn claims the chat and removes the orphan indicator", async () => {
+  const store = statusStore({
+    status: "running",
+    sessionId: "session-dead",
+    statusMessageId: 55,
+    updatedAt: 0,
+    generation: 7,
+  });
+  const removed: number[] = [];
+
+  const ingressId = await publishTelegramEarlyStatus({
+    chatKey: "1:",
+    ingressId: "ingress-B",
+    now: () => 31 * 60_000,
+    staleMs: 30 * 60_000,
+    getStatusImpl: store.get,
+    setStatusIfImpl: store.cas,
+    sendWorkingStatusImpl: () => Promise.resolve(77),
+    removeWorkingStatusImpl: (messageId) => {
+      removed.push(messageId);
+      return Promise.resolve();
+    },
+  });
+
+  assert.equal(ingressId, "ingress-B");
+  assert.deepEqual(removed, [55]);
+  assert.equal(store.get().status, "running");
+  assert.equal(store.get().ingressId, "ingress-B");
+  assert.equal(store.get().sessionId, undefined);
+  assert.equal(store.get().statusMessageId, 77);
+});
+
+void test("a duplicate early ingress while the previous one is fresh does not stack indicators", async () => {
+  const store = statusStore({
+    status: "running",
+    ingressId: "ingress-prev",
+    statusMessageId: 60,
+    updatedAt: 9_000,
+    generation: 3,
+  });
+  let sends = 0;
+
+  const ingressId = await publishTelegramEarlyStatus({
+    chatKey: "1:",
+    ingressId: "ingress-dup",
+    now: () => 10_000,
+    staleMs: 30 * 60_000,
+    getStatusImpl: store.get,
+    setStatusIfImpl: store.cas,
+    sendWorkingStatusImpl: () => {
+      sends++;
+      return Promise.resolve(88);
+    },
+  });
+
+  assert.equal(ingressId, null);
+  assert.equal(sends, 0);
+  assert.equal(store.get().ingressId, "ingress-prev");
+  assert.equal(store.get().statusMessageId, 60);
+});
+
+void test("early status still claims an idle chat with a reset tombstone", async () => {
+  const store = statusStore({ status: "idle", resetAt: 2_000, generation: 9 });
+
+  const ingressId = await publishTelegramEarlyStatus({
+    chatKey: "1:",
+    ingressId: "ingress-1",
+    now: () => 5_000,
+    staleMs: 30 * 60_000,
+    getStatusImpl: store.get,
+    setStatusIfImpl: store.cas,
+    sendWorkingStatusImpl: () => Promise.resolve(77),
+  });
+
+  assert.equal(ingressId, "ingress-1");
+  assert.equal(store.get().status, "running");
+  assert.equal(store.get().resetAt, undefined);
+  assert.equal(store.get().statusMessageId, 77);
+});
+
+void test("a broken status read fails safe: no send, no state change", async () => {
+  const store = statusStore({
+    status: "running",
+    sessionId: "session-A",
+    statusMessageId: 41,
+    updatedAt: 10_000,
+  });
+  const errors: string[] = [];
+  let sends = 0;
+
+  const ingressId = await publishTelegramEarlyStatus({
+    chatKey: "1:",
+    ingressId: "ingress-B",
+    now: () => 11_000,
+    getStatusImpl: () => {
+      throw new Error("status store unreadable");
+    },
+    setStatusIfImpl: store.cas,
+    sendWorkingStatusImpl: () => {
+      sends++;
+      return Promise.resolve(99);
+    },
+    onWorkingStatusError: (error) =>
+      errors.push(error instanceof Error ? error.message : String(error)),
+  });
+
+  assert.equal(ingressId, null);
+  assert.equal(sends, 0);
+  assert.deepEqual(errors, ["status store unreadable"]);
+  assert.equal(store.get().statusMessageId, 41);
+});
+
+void test("losing the claim race to a new live turn skips the early status", async () => {
+  // Между read и CAS другой процесс успел начать живой ход — клейм обязан
+  // отступить, не отправив второй индикатор и не тронув чужое состояние.
+  const store = statusStore({ status: "idle", generation: 4 });
+  let sends = 0;
+  let interposed = false;
+
+  const ingressId = await publishTelegramEarlyStatus({
+    chatKey: "1:",
+    ingressId: "ingress-B",
+    now: () => 10_000,
+    staleMs: 30 * 60_000,
+    getStatusImpl: store.get,
+    setStatusIfImpl: (key, expected, patch) => {
+      if (!interposed) {
+        interposed = true;
+        store.set(key, {
+          status: "running",
+          sessionId: "session-raced",
+          statusMessageId: 70,
+          updatedAt: 10_000,
+          generation: 5,
+        });
+        return null;
+      }
+      return store.cas(key, expected, patch);
+    },
+    sendWorkingStatusImpl: () => {
+      sends++;
+      return Promise.resolve(99);
+    },
+  });
+
+  assert.equal(ingressId, null);
+  assert.equal(sends, 0);
+  assert.equal(store.get().sessionId, "session-raced");
+  assert.equal(store.get().statusMessageId, 70);
+});
+
+void test("randomized interleaving never steals a fresh running turn (seed exposed)", async () => {
+  const seed = Number(process.env.IVA_TEST_SEED ?? Date.now() % 100_000);
+  console.log(`randomized early-status seed: ${seed} (IVA_TEST_SEED to replay)`);
+  let lcg = seed >>> 0;
+  const rand = () => {
+    lcg = (lcg * 1664525 + 1013904223) >>> 0;
+    return lcg / 2 ** 32;
+  };
+  const STALE_MS = 30 * 60_000;
+
+  for (let i = 0; i < 200; i++) {
+    const kind = rand();
+    const nowMs = 1_000_000;
+    const initial: Status =
+      kind < 0.4
+        ? {
+            status: "running",
+            sessionId: `session-${i}`,
+            statusMessageId: 500 + i,
+            updatedAt: nowMs - Math.floor(rand() * STALE_MS * 2),
+            generation: i,
+          }
+        : kind < 0.6
+          ? {
+              status: "running",
+              ingressId: `prev-${i}`,
+              statusMessageId: 500 + i,
+              updatedAt: nowMs - Math.floor(rand() * STALE_MS * 2),
+              generation: i,
+            }
+          : kind < 0.8
+            ? { status: "idle", generation: i }
+            : { status: "idle", resetAt: nowMs - 1_000, generation: i };
+    const wasFreshRunning =
+      initial.status === "running" &&
+      nowMs - (initial.updatedAt as number) < STALE_MS;
+    const hadIndicator = initial.statusMessageId as number | undefined;
+    const store = statusStore({ ...initial });
+    const removed: number[] = [];
+    let sends = 0;
+
+    const ingressId = await publishTelegramEarlyStatus({
+      chatKey: "1:",
+      ingressId: `ingress-${i}`,
+      now: () => nowMs,
+      staleMs: STALE_MS,
+      getStatusImpl: store.get,
+      setStatusIfImpl: store.cas,
+      sendWorkingStatusImpl: () => {
+        sends++;
+        return Promise.resolve(9_000 + i);
+      },
+      removeWorkingStatusImpl: (messageId) => {
+        removed.push(messageId);
+        return Promise.resolve();
+      },
+    });
+
+    if (wasFreshRunning) {
+      assert.equal(ingressId, null, `seed ${seed} iter ${i}: stole a live run`);
+      assert.equal(sends, 0, `seed ${seed} iter ${i}: extra indicator sent`);
+      assert.deepEqual(
+        store.get(),
+        initial,
+        `seed ${seed} iter ${i}: live state mutated`,
+      );
+    } else {
+      assert.equal(ingressId, `ingress-${i}`, `seed ${seed} iter ${i}`);
+      assert.equal(store.get().status, "running", `seed ${seed} iter ${i}`);
+      if (hadIndicator !== undefined) {
+        assert.deepEqual(
+          removed,
+          [hadIndicator],
+          `seed ${seed} iter ${i}: orphan indicator leaked`,
+        );
+      }
+      assert.equal(
+        store.get().statusMessageId,
+        9_000 + i,
+        `seed ${seed} iter ${i}`,
+      );
+    }
+  }
+});
+
+void test("a queued reply's turn starting on an idle chat sends its own stoppable indicator", async () => {
+  // Новый маршрут второго сообщения: ранний статус пропущен (чат был занят живым
+  // ходом), индикатор обязан появиться на turn.started и штатно убираться терминалом.
+  const store = statusStore({ status: "idle", generation: 12 });
+  const stopFlags: boolean[] = [];
+
+  const started = await publishTelegramTurnStarted({
+    chatKey: "1:",
+    continuationToken: "1::",
+    sessionId: "session-B",
+    turnId: "turn-B",
+    now: () => 20_000,
+    getStatusImpl: store.get,
+    setStatusIfImpl: store.cas,
+    sendWorkingStatusImpl: (options) => {
+      stopFlags.push(options.canStop);
+      return Promise.resolve(120);
+    },
+  });
+
+  assert.equal(started, true);
+  assert.deepEqual(stopFlags, [true]);
+  assert.equal(store.get().statusMessageId, 120);
+  const cleaned = store.cas(
+    "1:",
+    { sessionId: "session-B" },
+    { status: "idle", sessionId: null, turnId: null, statusMessageId: null },
+  );
+  assert.notEqual(cleaned, null);
+  assert.equal(store.get().statusMessageId, undefined);
+});
+
+void test("an indicator whose send raced the turn's own finish is removed, not leaked", async () => {
+  // Ход успел завершиться (терминал прибрал статус), пока Bot API отвечал на
+  // sendMessage индикатора — привязка не проходит, сообщение обязано удалиться.
+  const working = deferred<number>();
+  const store = statusStore({ status: "idle", generation: 2 });
+  const removed: number[] = [];
+
+  const starting = publishTelegramTurnStarted({
+    chatKey: "1:",
+    continuationToken: "1::",
+    sessionId: "session-C",
+    turnId: "turn-C",
+    getStatusImpl: store.get,
+    setStatusIfImpl: store.cas,
+    sendWorkingStatusImpl: () => working.promise,
+    removeWorkingStatusImpl: (messageId) => {
+      removed.push(messageId);
+      return Promise.resolve();
+    },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  // Терминальная уборка хода (контракт finishStatus) проходит до ответа Bot API.
+  store.cas(
+    "1:",
+    { sessionId: "session-C" },
+    { status: "idle", sessionId: null, turnId: null, statusMessageId: null },
+  );
+  working.resolve(130);
+
+  assert.equal(await starting, true);
+  assert.deepEqual(removed, [130]);
+  assert.equal(store.get().statusMessageId, undefined);
+});
+
 void test("a namespaced token from Eve is stored channel-local (#110)", async () => {
   // Реальное значение с прода: обработчики событий eve отдают токен с именем канала
   // впереди. Если сохранить его как есть, /new сбрасывает "telegram:telegram:…" —
@@ -251,7 +596,7 @@ void test("a namespaced token from Eve is stored channel-local (#110)", async ()
   await publishTelegramEarlyStatus({
     chatKey: "-1001:77",
     ingressId: "ingress-1",
-    setStatusImpl: adopted.set,
+    getStatusImpl: adopted.get,
     setStatusIfImpl: adopted.cas,
     sendWorkingStatusImpl: () => Promise.resolve(null),
   });

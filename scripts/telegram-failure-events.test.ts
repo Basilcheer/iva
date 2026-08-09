@@ -47,6 +47,10 @@ type FailureAdapter = {
     data: Record<string, unknown>,
     context: unknown,
   ) => void | Promise<void>;
+  "session.waiting": (
+    data: Record<string, unknown>,
+    context: unknown,
+  ) => void | Promise<void>;
 };
 
 const apiCalls: ApiCall[] = [];
@@ -141,6 +145,13 @@ async function emitSessionFailed(
 ) {
   const context = eventContext(options);
   await adapter["session.failed"](data, context.value);
+}
+
+async function emitSessionWaiting(options: EventOptions) {
+  const context = eventContext(options);
+  await contextStorage.run(context.ctx, () =>
+    adapter["session.waiting"]({}, context.value),
+  );
 }
 
 function callsSince(index: number, method: string) {
@@ -243,6 +254,60 @@ test("session.failed clears its run-status and deduplicates repeated delivery", 
 
   await emitSessionFailed(data, { chatId, sessionId });
   assert.equal(callsSince(before, "sendMessage").length, 1);
+});
+
+// session.waiting — страховка при потерянном terminal-событии (краш хода): парковка
+// сессии обязана не только снять busy-флаг, но и удалить осиротевший «Работаю…/Стоп»,
+// иначе индикатор висит в чате до ручной уборки.
+test("session.waiting after a lost terminal event deletes the orphan working indicator", async () => {
+  const chatId = "704";
+  const sessionId = "parked-session-lost-terminal";
+  const key = chatKeyOf(chatId);
+  setChatStatus(key, {
+    status: "running",
+    sessionId,
+    turnId: "turn_0",
+    statusMessageId: 66,
+    ingressId: "ingress-704",
+  });
+  const before = apiCalls.length;
+
+  await emitSessionWaiting({ chatId, sessionId });
+
+  const status = getChatStatus(key);
+  assert.equal(status!.status, "idle");
+  assert.equal(status!.sessionId, undefined);
+  assert.equal(status!.turnId, undefined);
+  assert.equal(status!.statusMessageId, undefined);
+  assert.equal(status!.ingressId, undefined);
+  const deletes = callsSince(before, "deleteMessage");
+  assert.equal(deletes.length, 1);
+  assert.equal(deletes[0].body!.message_id, 66);
+});
+
+test("session.waiting after normal cleanup or for a stale session is a no-op", async () => {
+  const chatId = "705";
+  const key = chatKeyOf(chatId);
+  // Обычный финал: turn.completed уже прибрал статус — парковка ничего не трогает.
+  setChatStatus(key, { status: "idle", sessionId: null, statusMessageId: null });
+  const before = apiCalls.length;
+  await emitSessionWaiting({ chatId, sessionId: "already-cleaned" });
+  assert.equal(callsSince(before, "deleteMessage").length, 0);
+  assert.equal(getChatStatus(key)!.status, "idle");
+
+  // Запоздавший session.waiting старой сессии не должен убить бегущий новый ход.
+  setChatStatus(key, {
+    status: "running",
+    sessionId: "newer-session",
+    turnId: "turn_1",
+    statusMessageId: 90,
+  });
+  await emitSessionWaiting({ chatId, sessionId: "stale-session" });
+  const status = getChatStatus(key);
+  assert.equal(status!.status, "running");
+  assert.equal(status!.sessionId, "newer-session");
+  assert.equal(status!.statusMessageId, 90);
+  assert.equal(callsSince(before, "deleteMessage").length, 0);
 });
 
 test("turn.failed claims notification before an overlapping session.failed can post", async () => {
