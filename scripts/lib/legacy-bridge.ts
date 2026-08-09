@@ -9,7 +9,7 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 import { SHIM_PATH, shimPointsAt, shimScript } from "./version-layout.ts";
-import { STATE_DIRS } from "./version-store.ts";
+import { LEGACY_STATE_DIRS, STATE_DIRS } from "./version-store.ts";
 
 /** Build leftovers of a checkout: not tracked, not state, never worth keeping. */
 const ARTIFACTS = [
@@ -27,7 +27,7 @@ function topLevel(path: string): string {
 
 /** Never removed, whatever git says about them. */
 const KEEP = new Set([
-  ...STATE_DIRS.map(topLevel),
+  ...[...STATE_DIRS, ...LEGACY_STATE_DIRS].map(topLevel),
   ".env",
   "current",
   "repo",

@@ -24,12 +24,13 @@ const SETTLED = "active.json";
  * that built it - and sharing it would hand a version that is still being proved
  * the runs of the service that is running right now.
  */
-export const STATE_DIRS = [
-  "data",
-  "vault",
-  ".eve/.workflow-data",
-  ".workflow-data",
-];
+export const STATE_DIRS = ["data", "vault", ".eve/.workflow-data"];
+/**
+ * Where older builds kept the workflow store. Linked where an installation still
+ * has one and never created, so a fresh install does not grow an empty directory
+ * whose only meaning is "this box predates the move".
+ */
+export const LEGACY_STATE_DIRS = [".workflow-data"];
 const FLIP_PREFIX = ".current.iva-flip-";
 /** Names in `home` that only an interrupted update can leave behind. */
 const LEFTOVER_PREFIXES = [FLIP_PREFIX, ".probe-"];
@@ -376,6 +377,16 @@ export function createVersionStore(home: string) {
       name,
       join(stateHome, name),
     ]);
+    for (const name of LEGACY_STATE_DIRS) {
+      // Cleared even where nothing replaces it: a link left by an earlier pass
+      // would survive into a probe still pointing at the state that is live.
+      rmSync(join(dir, name), { recursive: true, force: true });
+      // Asked of the installation, never of the scratch state a probe runs on:
+      // a box that has one keeps it, sandboxed like the rest, and a box that
+      // never had one grows an empty legacy directory in neither place.
+      if (existsSync(join(home, name)))
+        links.push([name, join(stateHome, name)]);
+    }
     for (const [, target] of links) mkdirSync(target, { recursive: true });
     // The .env is the installation's in both modes: reading it is what makes a
     // probe meaningful, and a later `iva config` has to write through the link to
