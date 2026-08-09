@@ -9,11 +9,7 @@ import {
   loadTelegramJob,
   removeTelegramJob,
 } from "../lib/telegram-status.ts";
-import {
-  classifyRoot,
-  isManagedInstall,
-  type Install,
-} from "../lib/version-layout.ts";
+import { classifyRoot, isManagedInstall } from "../lib/version-layout.ts";
 import { ensureMirror, resolveTarget } from "../lib/version-mirror.ts";
 import { acquireUpdateLock } from "../lib/update-lock.ts";
 import { createVersionStore } from "../lib/version-store.ts";
@@ -22,21 +18,14 @@ import type { createCliRuntime } from "./runtime.ts";
 
 type CliRuntime = ReturnType<typeof createCliRuntime>;
 
-type UpdateCopy = {
-  readonly fetch: readonly [string, string];
-  readonly build: readonly [string, string];
-  readonly current: string;
-  readonly failed: string;
-  readonly busy: string;
-};
-
-const COPY: Record<"en" | "ru", UpdateCopy> = {
+const COPY = {
   en: {
     fetch: ["Getting the update", "Update received"],
     build: ["Building Iva", "Iva built"],
     current: "Iva is already up to date",
     failed: "Couldn't complete the update",
     busy: "An update is already running",
+    stock: "your customization in data/custom is not in this version",
   },
   ru: {
     fetch: ["Получаю обновление", "Обновление получено"],
@@ -44,8 +33,9 @@ const COPY: Record<"en" | "ru", UpdateCopy> = {
     current: "Iva уже обновлена",
     failed: "Не удалось завершить обновление",
     busy: "Обновление уже идёт",
+    stock: "ваша доработка в data/custom не входит в эту версию",
   },
-};
+} as const;
 
 /**
  * `iva update` on the immutable layout. This half only fetches and unpacks the
@@ -57,7 +47,7 @@ export function createVersionUpdateCommand(
   runtime: CliRuntime,
   systemdLifecycle: { restartServices: () => void },
 ) {
-  const install: Install = classifyRoot(runtime.ROOT);
+  const install = classifyRoot(runtime.ROOT);
 
   async function run(args: readonly string[]): Promise<void> {
     const verbose = args.includes("--verbose");
@@ -65,14 +55,15 @@ export function createVersionUpdateCommand(
     // this release already on disk may not be reused, and what follows the
     // handoff is the ordinary install of the directory this half staged.
     const force = args.includes("--force");
-    const telegramJobAt = args.indexOf("--telegram-job");
-    const jobId = telegramJobAt >= 0 ? (args[telegramJobAt + 1] ?? "") : "";
+    const jobAt = args.indexOf("--telegram-job");
     const env = runtime.readEnv();
-    const locale =
-      (env.AGENT_LANGUAGE || process.env.AGENT_LANGUAGE) === "ru" ? "ru" : "en";
-    const text = COPY[locale];
+    const language = env.AGENT_LANGUAGE || process.env.AGENT_LANGUAGE;
+    const text = COPY[language === "ru" ? "ru" : "en"];
     const terminal = createTerminalProgress({ verbose });
-    const job = await loadTelegramJob(runtime.dataDirAbs(env), jobId);
+    const job = await loadTelegramJob(
+      runtime.dataDirAbs(env),
+      jobAt >= 0 ? (args[jobAt + 1] ?? "") : "",
+    );
     const reporter = job
       ? createTelegramUpdateReporter({
           // The reporter is the runtime boundary that validates a persisted job.
@@ -90,6 +81,12 @@ export function createVersionUpdateCommand(
       store.settled() ?? store.currentName() ?? "the previous version";
     const reportDir = mkdtempSync(join(tmpdir(), "iva-update-"));
     const report = join(reportDir, "outcome.json");
+    const failed = async (detail: string): Promise<void> => {
+      terminal.fail(text.failed);
+      terminal.info(detail);
+      await reporter?.fail("build", before);
+      process.exitCode = 1;
+    };
 
     try {
       terminal.start(text.fetch[0]);
@@ -110,17 +107,38 @@ export function createVersionUpdateCommand(
           void reporter?.done("fetch");
           terminal.start(text.build[0]);
           void reporter?.start("build");
-          // The progress spinner and the new version's own output must not share a line.
+          // The spinner and the new version's own output must not share a line.
           terminal.dispose();
           return Promise.resolve(handoff(name, report, verbose));
         },
       });
-      await finishReport({ outcome, terminal, reporter, text, before });
+
+      if (outcome.status === "busy") {
+        terminal.fail(text.busy);
+        process.exitCode = 1;
+      } else if (outcome.status === "unhealthy") await failed(outcome.log);
+      else if (outcome.status === "failed") await failed(outcome.message);
+      else if (outcome.status === "current") {
+        terminal.done(text.fetch[1]);
+        terminal.info(`✅ ${text.current} (${outcome.version})`);
+        await reporter?.complete({
+          beforeVersion: outcome.version,
+          afterVersion: outcome.version,
+        });
+      } else {
+        terminal.done(text.build[1]);
+        terminal.info(`✅ ${outcome.previous ?? before} → ${outcome.version}`);
+        // A version built without the overlay - reused from disk or rebuilt after
+        // the user's code failed - runs stock code, and only saying so keeps them
+        // from believing a skill of theirs is live.
+        if (outcome.custom === "stock") terminal.info(`⚠️ ${text.stock}`);
+        await reporter?.complete({
+          beforeVersion: outcome.previous ?? before,
+          afterVersion: outcome.version,
+        });
+      }
     } catch (error) {
-      terminal.fail(text.failed);
-      terminal.info((error as { message?: string }).message ?? String(error));
-      await reporter?.fail("build", before);
-      process.exitCode = 1;
+      await failed((error as { message?: string }).message ?? String(error));
     } finally {
       rmSync(reportDir, { recursive: true, force: true });
       terminal.dispose();
@@ -136,14 +154,10 @@ export function createVersionUpdateCommand(
     verbose: boolean,
   ): UpdateOutcome {
     const dir = join(install.home, "versions", name);
+    const args = [join(dir, "scripts/update-finish.ts"), install.home, name];
     const result = spawnSync(
       process.execPath,
-      [
-        join(dir, "scripts/update-finish.ts"),
-        install.home,
-        name,
-        ...(verbose ? ["--verbose"] : []),
-      ],
+      verbose ? [...args, "--verbose"] : args,
       {
         cwd: dir,
         stdio: "inherit",
@@ -154,9 +168,8 @@ export function createVersionUpdateCommand(
     try {
       return JSON.parse(readFileSync(report, "utf8")) as UpdateOutcome;
     } catch {
-      throw new Error(
-        `the new version's updater exited with code ${result.status ?? "unknown"}`,
-      );
+      const code = result.status ?? "unknown";
+      throw new Error(`the new version's updater exited with code ${code}`);
     }
   }
 
@@ -167,14 +180,13 @@ export function createVersionUpdateCommand(
   function rollback(): void {
     const store = createVersionStore(install.home);
     const previous = store.previousName();
-    if (!previous) {
-      runtime.bad("no previous version to go back to");
-      process.exitCode = 1;
-      return;
-    }
-    const lock = acquireUpdateLock(store.layout.data);
-    if (!lock) {
-      runtime.bad("an update is already running");
+    const lock = previous ? acquireUpdateLock(store.layout.data) : null;
+    if (!previous || !lock) {
+      runtime.bad(
+        previous
+          ? "an update is already running"
+          : "no previous version to go back to",
+      );
       process.exitCode = 1;
       return;
     }
@@ -203,48 +215,4 @@ export function createVersionUpdateCommand(
     run,
     rollback,
   };
-}
-
-async function finishReport({
-  outcome,
-  terminal,
-  reporter,
-  text,
-  before,
-}: {
-  outcome: UpdateOutcome;
-  terminal: ReturnType<typeof createTerminalProgress>;
-  reporter: ReturnType<typeof createTelegramUpdateReporter> | null;
-  text: UpdateCopy;
-  before: string;
-}): Promise<void> {
-  if (outcome.status === "busy") {
-    terminal.fail(text.busy);
-    process.exitCode = 1;
-    return;
-  }
-  if (outcome.status === "current") {
-    terminal.done(text.fetch[1]);
-    terminal.info(`✅ ${text.current} (${outcome.version})`);
-    await reporter?.complete({
-      beforeVersion: outcome.version,
-      afterVersion: outcome.version,
-    });
-    return;
-  }
-  if (outcome.status === "unhealthy" || outcome.status === "failed") {
-    terminal.fail(text.failed);
-    terminal.info(
-      outcome.status === "unhealthy" ? outcome.log : outcome.message,
-    );
-    await reporter?.fail("build", before);
-    process.exitCode = 1;
-    return;
-  }
-  terminal.done(text.build[1]);
-  terminal.info(`✅ ${outcome.previous ?? before} → ${outcome.version}`);
-  await reporter?.complete({
-    beforeVersion: outcome.previous ?? before,
-    afterVersion: outcome.version,
-  });
 }
