@@ -1,14 +1,6 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import {
-  cpSync,
-  mkdirSync,
-  readFileSync,
-  readdirSync,
-  renameSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { cpSync, mkdirSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { dirname, join, relative, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { isAuthoredPath } from "./authored-paths.ts";
@@ -24,8 +16,10 @@ import {
   acquireUpdateLock,
   createVersionStore,
   parseVersionName,
+  readJson,
   releaseOf,
   versionName,
+  writeJson,
 } from "./version-store.ts";
 
 export type CommandResult = { readonly code: number; readonly output: string };
@@ -91,7 +85,7 @@ type UpdateOptions = Omit<FinishOptions, "name"> & {
 };
 
 /** The files the user authored; the rest of `data/custom` is the layer's bookkeeping. */
-function customFiles(customDir: string): string[] {
+function authored(customDir: string): string[] {
   try {
     return readdirSync(customDir, { recursive: true, withFileTypes: true })
       .filter((entry) => entry.isFile())
@@ -114,7 +108,7 @@ export function customOverlay(customDir: string): {
 } {
   const hash = createHash("sha256");
   const files: string[] = [];
-  for (const path of customFiles(customDir)) {
+  for (const path of authored(customDir)) {
     let body: Buffer;
     try {
       body = readFileSync(join(customDir, path));
@@ -150,7 +144,7 @@ export function builtWith(
   customDir: string,
 ): Custom {
   if (!parseVersionName(name)?.overlay) return "none";
-  const files = customFiles(customDir);
+  const { files } = customOverlay(customDir);
   return files.length > 0 &&
     files.every((path) => sameFile(join(dir, path), join(customDir, path)))
     ? "applied"
@@ -405,17 +399,10 @@ async function buildStock(
 
 /** Names already applied. An unreadable marker means "nothing", never a crash. */
 function appliedMigrations(dataDir: string): string[] {
-  try {
-    const parsed: unknown = JSON.parse(
-      readFileSync(join(dataDir, MIGRATION_MARKER), "utf8"),
-    );
-    const applied = (parsed as { applied?: unknown } | null)?.applied;
-    return Array.isArray(applied)
-      ? applied.filter((name): name is string => typeof name === "string")
-      : [];
-  } catch {
-    return [];
-  }
+  const applied = readJson(join(dataDir, MIGRATION_MARKER)).applied;
+  return Array.isArray(applied)
+    ? applied.filter((name): name is string => typeof name === "string")
+    : [];
 }
 
 /**
@@ -457,13 +444,10 @@ export async function runMigrations({
       throw new Error(`migration ${name} failed: ${detail}`, { cause: error });
     }
     done.push(name);
-    const body = {
+    writeJson(marker, {
       schema: "iva-migrations/v1",
       applied: [...applied, ...done],
-    };
-    const temp = `${marker}.${process.pid}.tmp`;
-    writeFileSync(temp, `${JSON.stringify(body, null, 2)}\n`, { mode: 0o600 });
-    renameSync(temp, marker);
+    });
   }
   return done;
 }

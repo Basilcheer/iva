@@ -29,27 +29,9 @@ import {
   type UpdateOutcome,
 } from "../lib/version-update.ts";
 import type { createCliRuntime } from "./runtime.ts";
+import { COPY } from "./update.ts";
 
 type CliRuntime = ReturnType<typeof createCliRuntime>;
-
-const COPY = {
-  en: {
-    fetch: ["Getting the update", "Update received"],
-    build: ["Building Iva", "Iva built"],
-    current: "Iva is already up to date",
-    failed: "Couldn't complete the update",
-    busy: "An update is already running",
-    stock: "your customization in data/custom is not in this version",
-  },
-  ru: {
-    fetch: ["Получаю обновление", "Обновление получено"],
-    build: ["Собираю Iva", "Iva собрана"],
-    current: "Iva уже обновлена",
-    failed: "Не удалось завершить обновление",
-    busy: "Обновление уже идёт",
-    stock: "ваша доработка в data/custom не входит в эту версию",
-  },
-} as const;
 
 /** A bare mirror, cloned from the checkout: nothing runs from it, so it is free to rewrite. */
 export async function ensureMirror({

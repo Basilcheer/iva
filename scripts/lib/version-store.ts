@@ -340,7 +340,8 @@ export function createVersionStore(home: string) {
   };
 }
 
-function readJson(path: string): Record<string, unknown> {
+/** A JSON file that may be missing or corrupt; an unreadable one is empty. */
+export function readJson(path: string): Record<string, unknown> {
   try {
     const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
     return (parsed as Record<string, unknown> | null) ?? {};
@@ -350,7 +351,7 @@ function readJson(path: string): Record<string, unknown> {
 }
 
 /** Written through a rename, so a reader never sees half a marker. */
-function writeJson(path: string, body: unknown): void {
+export function writeJson(path: string, body: unknown): void {
   const temp = `${path}.${process.pid}.tmp`;
   writeFileSync(temp, `${JSON.stringify(body)}\n`, { mode: 0o600 });
   renameSync(temp, path);

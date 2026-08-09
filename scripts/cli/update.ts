@@ -30,6 +30,9 @@ type UpdatePhase = "protect" | "fetch" | "build";
 type UpdateCopy = Record<UpdatePhase, readonly [string, string, string]> & {
   readonly timerFailure: string;
   readonly current: string;
+  readonly busy: string;
+  readonly failed: string;
+  readonly stock: string;
 };
 
 type UpdateVersions = {
@@ -127,7 +130,8 @@ type CreateUpdateCommandOptions = {
   readonly operations?: Partial<UpdateOperations>;
 };
 
-const COPY: Record<"en" | "ru", UpdateCopy> = {
+/** The words both updaters speak: one scenario, one vocabulary. */
+export const COPY: Record<"en" | "ru", UpdateCopy> = {
   ru: {
     protect: [
       "Сохраняю ваши изменения",
@@ -143,6 +147,9 @@ const COPY: Record<"en" | "ru", UpdateCopy> = {
     timerFailure:
       "Iva готова, но таймер автоматических обновлений не удалось активировать",
     current: "Iva уже обновлена",
+    busy: "Обновление уже идёт",
+    failed: "Не удалось завершить обновление",
+    stock: "ваша доработка в data/custom не входит в эту версию",
   },
   en: {
     protect: [
@@ -155,6 +162,9 @@ const COPY: Record<"en" | "ru", UpdateCopy> = {
     timerFailure:
       "Iva is ready, but the automatic update timer could not be activated",
     current: "Iva is already up to date",
+    busy: "An update is already running",
+    failed: "Couldn't complete the update",
+    stock: "your customization in data/custom is not in this version",
   },
 };
 
@@ -241,11 +251,7 @@ export function createUpdateCommand({
     const owner = telegramJobId || `cli-${process.pid}-${Date.now()}`;
     const lock = ops.acquireUpdateLock(dataDir, owner);
     if (!lock.ok) {
-      terminal.fail(
-        locale === "ru"
-          ? "Обновление уже идёт"
-          : "An update is already running",
-      );
+      terminal.fail(text.busy);
       reporter?.dispose();
       await ops.removeTelegramJob(loadedJob?.path);
       process.exitCode = 1;
