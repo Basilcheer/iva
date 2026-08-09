@@ -170,8 +170,12 @@ void test("restart says so when data/custom is not in the version that runs", (t
     join(customDir, "agent/tools/mine.ts"),
     "export const m = 1;\n",
   );
-  const restart = (name: string): string[] => {
-    store.stage(name);
+  const restart = (name: string, overlay = false): string[] => {
+    const dir = store.stage(name);
+    if (overlay) {
+      mkdirSync(join(dir, "agent/tools"), { recursive: true });
+      writeFileSync(join(dir, "agent/tools/mine.ts"), "export const m = 1;\n");
+    }
     store.complete(name);
     store.activate(name);
     const events: string[] = [];
@@ -190,10 +194,18 @@ void test("restart says so when data/custom is not in the version that runs", (t
     ),
   );
 
-  // The version that was built with it has nothing to say.
-  const built = restart(
-    `0.3.15-bbbbbbbbbbbb+${customOverlay(customDir).digest}`,
+  // A version whose name carries the digest but whose tree does not carry the
+  // file: the customization failed to build or start and the stock tree was
+  // installed under that name. This is the case a user is most sure about.
+  const digest = customOverlay(customDir).digest;
+  assert.ok(
+    restart(`0.3.15-bbbbbbbbbbbb+${digest}`).includes(
+      "runtime.warn:data/custom is not in the version that runs: it did not build or start - fix it and run: iva update",
+    ),
   );
+
+  // The version that was really built with it has nothing to say.
+  const built = restart(`0.3.15-cccccccccccc+${digest}`, true);
   assert.equal(
     built.some((event) => event.startsWith("runtime.warn:")),
     false,

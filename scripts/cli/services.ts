@@ -1,7 +1,7 @@
 import { join, relative } from "node:path";
 import { classifyRoot, isManagedInstall } from "../lib/version-layout.ts";
 import { createVersionStore, parseVersionName } from "../lib/version-store.ts";
-import { customOverlay } from "../lib/version-update.ts";
+import { builtWith, customOverlay } from "../lib/version-update.ts";
 import {
   quarantinePath as defaultQuarantinePath,
   resetStateTargets as defaultResetStateTargets,
@@ -83,10 +83,25 @@ export function createServiceCommands(
     if (!isManagedInstall(install)) return;
     const store = createVersionStore(install.home);
     const active = store.currentName();
-    const built = active ? parseVersionName(active)?.overlay : null;
-    if (built === customOverlay(join(store.layout.data, "custom")).digest)
+    if (!active) return;
+    const customDir = join(store.layout.data, "custom");
+    const digest = customOverlay(customDir).digest;
+    if (parseVersionName(active)?.overlay !== digest) {
+      warn("data/custom changed since this version was built - run: iva update");
       return;
-    warn("data/custom changed since this version was built - run: iva update");
+    }
+    // The version carries the digest of a customization that then failed to
+    // build or start, so the stock tree was installed under that name. Nothing
+    // about the digest says so - only the files in the tree do - and this is the
+    // case where a user is most sure their skill should be running.
+    if (
+      digest &&
+      builtWith(join(store.layout.versions, active), active, customDir) !==
+        "applied"
+    )
+      warn(
+        "data/custom is not in the version that runs: it did not build or start - fix it and run: iva update",
+      );
   }
 
   // Full reset: stop services, quarantine workflow + Telegram control state, bring it back up.

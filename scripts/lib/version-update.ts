@@ -137,7 +137,7 @@ export function customOverlay(customDir: string): {
 }
 
 /** What a version already on disk was built with, judged by what is in its tree. */
-function builtWith(
+export function builtWith(
   dir: string,
   name: string,
   customDir: string,
