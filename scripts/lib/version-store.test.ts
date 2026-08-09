@@ -10,6 +10,7 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  readlinkSync,
   realpathSync,
   rmSync,
   symlinkSync,
@@ -311,6 +312,17 @@ test("state directories are shared into a version instead of copied", (t) => {
   // Re-linking an already linked version is a no-op, not an EEXIST failure.
   store.linkState(dir);
   assert.equal(readFileSync(join(dir, "data/state.json"), "utf8"), "{}");
+});
+
+test("a version links .env before there is one, so a later write lands outside", (t) => {
+  const root = home(t);
+  const store = createVersionStore(root);
+  const dir = store.stage("0.3.15-bbbbbbbbbbbb");
+  store.linkState(dir);
+
+  assert.equal(existsSync(layoutFor(root).env), false);
+  assert.equal(lstatSync(join(dir, ".env")).isSymbolicLink(), true);
+  assert.equal(readlinkSync(join(dir, ".env")), layoutFor(root).env);
 });
 
 test("resetting a staged version clears it without giving up the claim", (t) => {

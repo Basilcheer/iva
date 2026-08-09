@@ -1,7 +1,9 @@
 // Self-check for env-file — run: node scripts/lib/env-file.test.ts
 import { strict as assert } from "node:assert";
+import { lstatSync, symlinkSync } from "node:fs";
 import {
   chmod,
+  mkdir,
   mkdtemp,
   readFile,
   writeFile,
@@ -128,6 +130,25 @@ assert.deepEqual(
   { A: "1" },
   "missing file → base as-is",
 );
+
+// A version directory borrows .env from the installation through a symlink, so a
+// write has to follow the link instead of replacing it with a copy that the next
+// update drops - including a link whose target does not exist yet.
+const versionDir = join(dir, "version");
+await mkdir(versionDir);
+const shared = join(dir, "shared.env");
+await writeFile(shared, "SHARED=1\n");
+symlinkSync(shared, join(versionDir, ".env"));
+writeEnvAtomicSync(join(versionDir, ".env"), "SHARED=2\n");
+assert.equal(
+  lstatSync(join(versionDir, ".env")).isSymbolicLink(),
+  true,
+  "the link survived the write",
+);
+assert.equal(await readFile(shared, "utf8"), "SHARED=2\n");
+symlinkSync(join(dir, "later.env"), join(versionDir, "dangling.env"));
+writeEnvAtomicSync(join(versionDir, "dangling.env"), "LATER=1\n");
+assert.equal(await readFile(join(dir, "later.env"), "utf8"), "LATER=1\n");
 
 await rm(dir, { recursive: true, force: true });
 console.log("env-file: all assertions passed");
