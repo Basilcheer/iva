@@ -27,7 +27,6 @@ type UpdateCopy = {
   readonly build: readonly [string, string];
   readonly current: string;
   readonly failed: string;
-  readonly forced: string;
   readonly busy: string;
 };
 
@@ -37,8 +36,6 @@ const COPY: Record<"en" | "ru", UpdateCopy> = {
     build: ["Building Iva", "Iva built"],
     current: "Iva is already up to date",
     failed: "Couldn't complete the update",
-    forced:
-      "--force is ignored: a version is rebuilt when its commit or your data/custom changes",
     busy: "An update is already running",
   },
   ru: {
@@ -46,8 +43,6 @@ const COPY: Record<"en" | "ru", UpdateCopy> = {
     build: ["Собираю Iva", "Iva собрана"],
     current: "Iva уже обновлена",
     failed: "Не удалось завершить обновление",
-    forced:
-      "--force игнорируется: версия пересобирается под новый коммит или изменения в data/custom",
     busy: "Обновление уже идёт",
   },
 };
@@ -68,6 +63,10 @@ export function createVersionUpdateCommand(
 
   async function run(args: readonly string[]): Promise<void> {
     const verbose = args.includes("--verbose");
+    // `--force` reaches the new version's updater too: what it repairs - the
+    // dependencies and the build output of a version that already exists - only
+    // exists on the other side of the handoff.
+    const force = args.includes("--force");
     const telegramJobAt = args.indexOf("--telegram-job");
     const jobId = telegramJobAt >= 0 ? (args[telegramJobAt + 1] ?? "") : "";
     const env = runtime.readEnv();
@@ -94,7 +93,6 @@ export function createVersionUpdateCommand(
     const reportDir = mkdtempSync(join(tmpdir(), "iva-update-"));
     const report = join(reportDir, "outcome.json");
 
-    if (args.includes("--force")) terminal.info(text.forced);
     try {
       terminal.start(text.fetch[0]);
       await reporter?.start("fetch");
@@ -107,6 +105,7 @@ export function createVersionUpdateCommand(
         store,
         resolveTarget: () => resolveTarget({ repo }),
         run: commandRunner(verbose),
+        force,
         log: (message) => terminal.info(message),
         handoff: (name) => {
           terminal.done(text.fetch[1]);
@@ -115,7 +114,7 @@ export function createVersionUpdateCommand(
           void reporter?.start("build");
           // The progress spinner and the new version's own output must not share a line.
           terminal.dispose();
-          return Promise.resolve(handoff(name, report, verbose));
+          return Promise.resolve(handoff(name, report, { verbose, force }));
         },
       });
       await finishReport({ outcome, terminal, reporter, text, before });
@@ -136,7 +135,7 @@ export function createVersionUpdateCommand(
   function handoff(
     name: string,
     report: string,
-    verbose: boolean,
+    flags: { verbose: boolean; force: boolean },
   ): UpdateOutcome {
     const dir = join(install.home, "versions", name);
     const result = spawnSync(
@@ -145,7 +144,8 @@ export function createVersionUpdateCommand(
         join(dir, "scripts/update-finish.ts"),
         install.home,
         name,
-        ...(verbose ? ["--verbose"] : []),
+        ...(flags.verbose ? ["--verbose"] : []),
+        ...(flags.force ? ["--force"] : []),
       ],
       {
         cwd: dir,

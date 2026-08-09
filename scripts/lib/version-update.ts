@@ -63,6 +63,8 @@ type FinishOptions = {
   readonly adopt?: () => void;
   readonly notify?: (message: string) => void;
   readonly log?: (message: string) => void;
+  /** `--force`: install and build this version again even where it already exists. */
+  readonly force?: boolean;
   readonly store?: Store;
 };
 
@@ -191,6 +193,7 @@ export async function runVersionUpdate(
     home,
     resolveTarget,
     handoff,
+    force = false,
     log = () => {},
     store = createVersionStore(home),
   } = options;
@@ -210,8 +213,9 @@ export async function runVersionUpdate(
     const name = versionName(target.version, target.sha, digest);
     // Nothing to do only once the installation has finished moving onto it. A flip
     // whose migrations, restart or layout changes never happened is an update
-    // still owed, and reporting it as done is what strands an installation.
-    if (name === store.currentName() && store.settled() === name) {
+    // still owed, and reporting it as done is what strands an installation - and
+    // `--force` is how somebody says the version that runs is broken anyway.
+    if (!force && name === store.currentName() && store.settled() === name) {
       store.gc(KEEP);
       return { status: "current", version: name };
     }
@@ -256,6 +260,7 @@ export async function finishVersionUpdate({
   adopt = () => {},
   notify = () => {},
   log = () => {},
+  force = false,
   store = createVersionStore(home),
 }: FinishOptions): Promise<UpdateOutcome> {
   const dir = join(store.layout.versions, name);
@@ -292,12 +297,21 @@ export async function finishVersionUpdate({
     }
   };
 
+  // Either already running, or built and finished by a run that never got to
+  // activate it. Both mean the tree is there and only what follows is owed.
+  const prepared = store.list().some((entry) => entry.name === name);
+  if (force && prepared) {
+    // A version's tree comes back byte for byte from its commit, so the only
+    // parts of it that can go wrong are the ones npm produced: the dependencies
+    // and the build output. Both are replaced where they lie - emptying the
+    // directory first would empty the one the service is running from.
+    log(`rebuilding ${name}`);
+    await compile(dir, run);
+  }
   if (active === name) {
     // The flip happened, the rest did not: pick the update up where it stopped.
     log(`finishing the move onto ${name}`);
   } else {
-    // A previous run built and finished this version but never got to activate it.
-    const prepared = store.list().some((entry) => entry.name === name);
     if (prepared) log(`reusing prepared version ${name}`);
     else
       custom = await discardOnFailure(() =>
@@ -374,6 +388,13 @@ async function build(dir: string, run: Runner): Promise<string | null> {
   return built.code === 0 ? null : built.output;
 }
 
+/** Install and build a tree in place, refusing to go on with a broken one. */
+async function compile(dir: string, run: Runner): Promise<void> {
+  await install(dir, run);
+  const failure = await build(dir, run);
+  if (failure) throw new Error(`build failed:\n${failure}`);
+}
+
 async function buildVersion({
   store,
   name,
@@ -442,7 +463,5 @@ async function buildStock({
   store.reset(name);
   await store.materialize({ sha: parseVersionName(name)?.sha ?? "", dir });
   store.linkState(dir);
-  await install(dir, run);
-  const failure = await build(dir, run);
-  if (failure) throw new Error(`build failed:\n${failure}`);
+  await compile(dir, run);
 }

@@ -495,6 +495,29 @@ test("a rollback is a symlink flip and a restart, with no build and no network",
   assert.equal(active(iva), second);
 });
 
+test("--force installs and builds the version that is already running", (t) => {
+  const iva = world(t);
+  update(iva);
+  const name = String(active(iva));
+  const built = join(iva.home, "versions", name, ".output/built.json");
+
+  // A version whose build output was lost: the commit is right, `current` is
+  // right, and the service cannot come up. Nothing about the commit or
+  // data/custom changed, so an ordinary update has nothing to offer.
+  rmSync(built, { force: true });
+  const noop = iva.iva(["update"]);
+  assert.match(noop.stdout, /already up to date/u);
+  assert.equal(existsSync(built), false);
+
+  const forced = iva.iva(["update", "--force"]);
+  assert.equal(forced.status, 0, `${forced.stdout}${forced.stderr}`);
+  assert.match(forced.stdout, new RegExp(`rebuilding ${name}`, "u"));
+  assert.equal(active(iva), name);
+  assert.ok(existsSync(built), "the version was built again");
+  // Repair, not replacement: the same version directory, not a second one.
+  assert.deepEqual(readdirSync(join(iva.home, "versions")), [name]);
+});
+
 test("the CLI reports the commit of the active version once there is no working tree", (t) => {
   const iva = world(t);
   const sha = iva.git(iva.home, ["rev-parse", "HEAD"]);
