@@ -8,6 +8,8 @@ import {
   hasH2Section,
   mergeCard,
   resolveCard,
+  resolveOperation,
+  type CardOperation,
 } from "../lib/card-store.js";
 
 // Строго типизированная запись карточки памяти. Заменяет «write_file по наитию» для карточек:
@@ -26,6 +28,44 @@ const CARD_TYPE_DIR: Record<string, string> = {
   note: "notes",
 };
 const DESC_CAP = 500;
+
+// Границы входа: пробельная пустота даёт карточку без имени/описания, а перевод строки в
+// однострочном поле уезжает в frontmatter или в разметку и превращается в новую секцию.
+// Оба случая отклоняются на входе, а не «чинятся» молча; нормализация — в execute.
+const nonBlank = (label: string) =>
+  z
+    .string()
+    .refine((v) => v.trim().length > 0, `${label} не должен быть пустым`);
+
+const singleLine = (label: string) =>
+  nonBlank(label).refine(
+    (v) => !/[\r\n]/.test(v),
+    `${label} должен быть одной строкой`,
+  );
+
+/** lowercase-kebab + дедуп ПОСЛЕ нормализации: «Foo Bar» и « foo-bar » — один тег. */
+const normalizeTags = (tags: string[]): string[] => [
+  ...new Set(tags.map((t) => t.trim().toLowerCase().replace(/\s+/g, "-"))),
+];
+
+/**
+ * След отброшенного входа: только имена полей, без содержимого карточки — журнал не место
+ * для текста, который модель могла нафантазировать. Сбой sink'а (закрытый stderr, EPIPE)
+ * гасится: карточка уже записана, и журнал не имеет права превратить успех в отказ.
+ */
+function logIgnoredHistoryEntry(operation: CardOperation): void {
+  try {
+    console.warn(
+      JSON.stringify({
+        event: "write_card_input_normalized",
+        operation,
+        ignored_field: "history_entry",
+      }),
+    );
+  } catch {
+    /* журнал недоступен — на записанную карточку это не влияет */
+  }
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -154,49 +194,39 @@ export default defineTool({
       .describe(
         "Тип карточки (строго из списка; алиасы вроде person/company → contact применяются автоматически)",
       ),
-    title: z
-      .string()
-      .min(1)
-      .describe("Имя/заголовок сущности (пойдёт в имя файла и заголовок)"),
-    description: z
-      .string()
-      .min(1)
+    title: singleLine("title").describe(
+      "Имя/заголовок сущности (пойдёт в имя файла и заголовок)",
+    ),
+    description: singleLine("description")
       .max(
         DESC_CAP,
         `description слишком длинное: максимум ${DESC_CAP} символов; сократи его и повтори вызов`,
       )
       .describe("Краткая выжимка что/зачем (1–2 фразы, для поиска)"),
     tags: z
-      .array(z.string())
+      .array(singleLine("tag"))
       .min(1)
       .max(6)
       .describe("2–5 тегов, lowercase-kebab"),
-    status: z
-      .string()
+    status: singleLine("status")
       .optional()
       .describe("Статус жизненного цикла (валидируется по типу)"),
-    domain: z
-      .string()
+    domain: singleLine("domain")
       .optional()
       .describe("Домен (work/personal/…), опционально"),
     related: z
-      .array(z.string())
+      .array(singleLine("related"))
       .optional()
       .describe("Вики-цели связей [[...]] (vault-пути или слаги), опционально"),
-    body: z
-      .string()
-      .min(1)
-      .describe("Тело карточки в markdown (контекст, факты)"),
+    body: nonBlank("body").describe(
+      "Тело карточки в markdown (контекст, факты)",
+    ),
     history_entry: z
       .string()
-      .min(1)
-      .refine(
-        (value) => !/[\r\n]/.test(value),
-        "history_entry должен быть одной строкой",
-      )
       .optional()
       .describe(
-        "Для SUPERSEDE: датированная строка о прежней истине, переносимая в ## History",
+        "ТОЛЬКО для SUPERSEDE: датированная строка о прежней истине, переносимая в ## History. " +
+          "На ADD отбрасывается как шум, на UPDATE/NOOP — ошибка.",
       ),
     confidence: z
       .enum(["EXTRACTED", "INFERRED", "AMBIGUOUS"])
@@ -213,20 +243,25 @@ export default defineTool({
       ),
   }),
   // eslint-disable-next-line @typescript-eslint/require-await -- Preserve the established Promise-returning Eve tool contract.
-  async execute({
-    operation,
-    type,
-    title,
-    description,
-    tags,
-    status,
-    domain,
-    related,
-    body,
-    history_entry,
-    confidence,
-    replace_body,
-  }) {
+  async execute(input) {
+    const {
+      operation,
+      type,
+      body,
+      related,
+      history_entry,
+      confidence,
+      replace_body,
+    } = input;
+    // Схема гарантирует непустоту и однострочность; обрезка — здесь, чтобы в файл не уехали
+    // краевые пробелы (они заставили бы квотировать скаляр и сломали бы заголовок).
+    // related нормализует mergeRelated, body — mergeCard.
+    const title = input.title.trim();
+    const description = input.description.trim();
+    const status = input.status?.trim();
+    const domain = input.domain?.trim();
+    const tags = normalizeTags(input.tags);
+
     // Валидация статуса против схемы типа (жёстко — иначе модель придумает статус).
     const allowed = SCHEMA.status[type] || ["active"];
     const st = status && allowed.includes(status) ? status : allowed[0];
@@ -257,7 +292,7 @@ export default defineTool({
     const rel = relative(VAULT(), file).split(sep).join("/");
 
     if (operation === "NOOP") {
-      if (replace_body || history_entry) {
+      if (replace_body || history_entry !== undefined) {
         return {
           ok: false,
           error: "NOOP не принимает replace_body или history_entry.",
@@ -284,18 +319,6 @@ export default defineTool({
         error: "replace_body допустим только для SUPERSEDE.",
       };
     }
-    if (history_entry && operation && operation !== "SUPERSEDE") {
-      return {
-        ok: false,
-        error: "history_entry допустим только для SUPERSEDE.",
-      };
-    }
-    if (operation === "SUPERSEDE" && !history_entry) {
-      return {
-        ok: false,
-        error: "SUPERSEDE требует history_entry с прежней истиной.",
-      };
-    }
 
     mkdirSync(dir, { recursive: true });
 
@@ -307,9 +330,14 @@ export default defineTool({
       const existing = existsSync(file)
         ? readFileSync(file, "utf8")
         : undefined;
-      const effectiveOperation =
-        operation ?? (replace_body ? "SUPERSEDE" : existing ? "UPDATE" : "ADD");
-      if (history_entry && effectiveOperation !== "SUPERSEDE") {
+      const effectiveOperation = resolveOperation({
+        operation,
+        replaceBody: replace_body,
+        existing,
+      });
+      // history_entry несёт вытесненную истину, которой у ADD ещё нет: там он шум и молча
+      // отбрасывается (с записью в журнал), а у UPDATE — попытка подделать архив.
+      if (history_entry !== undefined && effectiveOperation === "UPDATE") {
         return {
           ok: false,
           error: "history_entry допустим только для SUPERSEDE.",
@@ -343,13 +371,13 @@ export default defineTool({
             "SUPERSEDE требует history_entry; legacy replace_body должен содержать ## History.",
         };
       }
-      const { content, action } = mergeCard({
+      const { content, action, ignoredHistoryEntry } = mergeCard({
         existing,
         title,
         fields: {
           type,
           description,
-          tags: tags.map((t) => t.toLowerCase().replace(/\s+/g, "-")),
+          tags,
           status: st,
           confidence: confidence || "EXTRACTED",
           ...(domain ? { domain } : {}),
@@ -359,10 +387,12 @@ export default defineTool({
         related,
         date: today(),
         replaceBody: replace_body === true,
-        operation: effectiveOperation,
+        // Сырая operation: по её отсутствию mergeCard узнаёт легаси-путь replace_body.
+        operation,
         historyEntry: history_entry,
       });
       if (action !== "noop") atomicWrite(file, content);
+      if (ignoredHistoryEntry) logIgnoredHistoryEntry(effectiveOperation);
       return {
         ok: true,
         file: rel,
