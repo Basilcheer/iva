@@ -322,8 +322,12 @@ export async function finishVersionUpdate({
         );
     }
     if (!health.ok) {
-      // Nothing points at it, so removing it is the whole rollback.
-      rmSync(dir, { recursive: true, force: true });
+      // A candidate this run built is garbage nothing points at, so removing it
+      // is the whole rollback. A version that was already finished before this
+      // run is somebody's way back - the target of a downgrade, or the stock
+      // version left on disk when a customization is taken out again - and a
+      // failed probe is not a licence to take it off the disk.
+      if (!prepared) rmSync(dir, { recursive: true, force: true });
       notify(
         `update to ${name} did not start; staying on ${active ?? "the current version"}`,
       );

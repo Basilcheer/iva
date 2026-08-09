@@ -364,6 +364,36 @@ test("removing a customization goes back to the stock version already on disk", 
   );
 });
 
+test("a failed probe never removes a finished version the installation can go back to", async (t) => {
+  const iva = world(t);
+  const stock = updated(await iva.update());
+  customFile(iva.home, "agent/connections/mine.ts", "export const mine = 1;\n");
+  const customized = updated(await iva.update());
+
+  // Taking the customization back out resolves to the stock version still on
+  // disk. It is finished, it ran before, and it is the one thing a rollback has
+  // to go back to - so a probe that fails against it says the probe went wrong,
+  // not that the version may be deleted.
+  rmSync(join(layoutFor(iva.home).data, "custom/agent/connections/mine.ts"), {
+    force: true,
+  });
+  const outcome = await iva.update({
+    probe: () => Promise.resolve({ ok: false, log: "boom" }),
+  });
+
+  assert.equal(outcome.status, "unhealthy");
+  const store = createVersionStore(iva.home);
+  assert.equal(store.currentName(), customized.version);
+  assert.deepEqual(
+    readdirSync(store.layout.versions).sort(),
+    [customized.version, stock.version].sort(),
+  );
+  assert.equal(store.previousName(), stock.version);
+  // And it is still a version, not a directory left behind: it activates.
+  store.activate(stock.version);
+  assert.equal(store.currentName(), stock.version);
+});
+
 test("a customization that builds but does not start leaves the service on the stock build", async (t) => {
   const iva = world(t);
   const first = updated(await iva.update());
