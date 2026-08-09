@@ -506,9 +506,27 @@ function replaceCompiledTruth(
 export type CardOperation = "ADD" | "UPDATE" | "SUPERSEDE" | "NOOP";
 export const HISTORY_ENTRY_CAP = 500;
 
-export interface MergeInput {
+export interface OperationInput {
+  /** Операция, названная вызывающим; undefined — легаси-вызов без operation. */
+  operation?: CardOperation;
+  /** SUPERSEDE: заменить body целиком (frontmatter всё равно сливается). */
+  replaceBody?: boolean;
   /** Содержимое существующего файла (undefined — карточки ещё нет). */
   existing?: string;
+}
+
+/**
+ * Единственный источник вывода операции: явная operation, иначе легаси-автодетект.
+ * Вызывающий обязан передавать в mergeCard сырую operation — по её отсутствию
+ * отличается легаси-путь replace_body, где ## History приходит внутри body.
+ */
+export function resolveOperation(input: OperationInput): CardOperation {
+  if (input.operation) return input.operation;
+  if (input.replaceBody) return "SUPERSEDE";
+  return input.existing === undefined ? "ADD" : "UPDATE";
+}
+
+export interface MergeInput extends OperationInput {
   title: string;
   fields: FmFields; // поля, которые тул реально знает и обновляет
   /** Поля только для новой карточки (created/source) — при merge не трогаются. */
@@ -517,10 +535,6 @@ export interface MergeInput {
   related?: string[];
   /** Дата для маркера дописанного блока. */
   date: string;
-  /** SUPERSEDE: заменить body целиком (frontmatter всё равно сливается). */
-  replaceBody?: boolean;
-  /** Explicit operation; omitted callers retain legacy auto-detection. */
-  operation?: CardOperation;
   /** One dated fact moved out of Compiled Truth during SUPERSEDE. */
   historyEntry?: string;
 }
@@ -545,9 +559,7 @@ export function mergeCard(input: MergeInput): MergeResult {
     historyEntry,
   } = input;
   const trimmedBody = body.trim();
-  const operation =
-    input.operation ??
-    (replaceBody ? "SUPERSEDE" : existing === undefined ? "ADD" : "UPDATE");
+  const operation = resolveOperation(input);
 
   if (h2Sections(trimmedBody.split("\n"), "Related").length) {
     throw new Error(
