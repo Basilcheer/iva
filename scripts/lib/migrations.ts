@@ -36,19 +36,15 @@ function appliedMigrations(dataDir: string): string[] {
 function recordApplied(dataDir: string, applied: readonly string[]): void {
   const marker = join(dataDir, MARKER);
   const temp = `${marker}.${process.pid}.tmp`;
-  writeFileSync(
-    temp,
-    `${JSON.stringify({ schema: "iva-migrations/v1", applied }, null, 2)}\n`,
-    { mode: 0o600 },
-  );
+  const body = JSON.stringify({ schema: "iva-migrations/v1", applied }, null, 2);
+  writeFileSync(temp, `${body}\n`, { mode: 0o600 });
   renameSync(temp, marker);
 }
 
 /**
- * Apply the migrations this version ships and has not applied yet.
- *
- * The marker only avoids repeat work; correctness rests on each migration being
- * idempotent, because a lost or corrupted marker must stay a recoverable state.
+ * Apply the migrations this version ships and has not applied yet. The marker
+ * only avoids repeat work; correctness rests on each migration being idempotent,
+ * because a lost or corrupted marker must stay a recoverable state.
  */
 export async function runMigrations({
   dir,
@@ -65,22 +61,20 @@ export async function runMigrations({
     return [];
   }
   const applied = appliedMigrations(dataDir);
+  const done: string[] = [];
   const pending = files
     .sort()
     .map((file) => file.slice(0, -3))
     .filter((name) => !applied.includes(name));
 
-  const done: string[] = [];
   for (const name of pending) {
     log?.(`migration ${name}`);
     try {
       const module = await load(join(dir, `${name}.ts`));
       await module.default(context);
     } catch (error) {
-      throw new Error(
-        `migration ${name} failed: ${error instanceof Error ? error.message : String(error)}`,
-        { cause: error },
-      );
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new Error(`migration ${name} failed: ${detail}`, { cause: error });
     }
     done.push(name);
     recordApplied(dataDir, [...applied, ...done]);

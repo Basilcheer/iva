@@ -41,20 +41,11 @@ export async function ensureMirror({
       "origin",
     ]);
     await requireGit(git, staging, ["remote", "set-url", "origin", origin]);
-    const branch = await git(checkout, [
-      "config",
-      "--local",
-      "--get",
-      "iva.updateBranch",
-    ]);
-    const configured =
-      typeof branch === "string" ? branch.trim() : (branch.stdout ?? "").trim();
-    if (configured)
-      await requireGit(git, staging, [
-        "config",
-        "iva.updateBranch",
-        configured,
-      ]);
+    const key = "iva.updateBranch";
+    const branch = await git(checkout, ["config", "--local", "--get", key]);
+    const value = typeof branch === "string" ? branch : (branch.stdout ?? "");
+    const configured = value.trim();
+    if (configured) await requireGit(git, staging, ["config", key, configured]);
     renameSync(staging, repo);
   } catch (error) {
     rmSync(staging, { recursive: true, force: true });

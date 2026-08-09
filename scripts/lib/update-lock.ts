@@ -11,12 +11,12 @@ const STALE_MS = 60 * 60 * 1000;
 
 export type UpdateLock = { readonly path: string; release(): void };
 
-function holder(path: string): { pid?: number; startedAt?: string } {
+function holder(path: string): { pid?: number } {
   try {
-    const parsed: unknown = JSON.parse(
+    const owner: unknown = JSON.parse(
       readFileSync(join(path, "owner.json"), "utf8"),
     );
-    return parsed ?? {};
+    return (owner as { pid?: number } | null) ?? {};
   } catch {
     return {};
   }
@@ -32,21 +32,16 @@ function alive(pid: number | undefined): boolean {
   }
 }
 
-/**
- * Serialize updates with one atomic mkdir. A lock whose owner is gone is stale at
- * once - an update killed with SIGKILL must not block the retry that cleans up
- * after it - and the age fallback only covers a pid another program recycled.
- */
+/** Write down who holds the lock; only that process may drop it again. */
 function own(path: string): UpdateLock {
-  writeFileSync(
-    join(path, "owner.json"),
-    JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }),
-    { mode: 0o600 },
-  );
+  const owner = { pid: process.pid, startedAt: new Date().toISOString() };
+  writeFileSync(join(path, "owner.json"), JSON.stringify(owner), {
+    mode: 0o600,
+  });
   return {
     path,
-    // Only the process named in the lock may drop it, so a handoff cannot end with
-    // the previous owner deleting the new owner's lock.
+    // Never another process's lock: a handoff must not end with the process that
+    // started the update deleting the lock its successor now holds.
     release: () => {
       if (holder(path).pid === process.pid)
         rmSync(path, { recursive: true, force: true });
@@ -64,6 +59,11 @@ export function adoptUpdateLock(dataDir: string): UpdateLock {
   return own(path);
 }
 
+/**
+ * Serialize updates with one atomic mkdir. A lock whose owner is gone is stale at
+ * once - an update killed with SIGKILL must not block the retry that cleans up
+ * after it - and the age fallback only covers a pid another program recycled.
+ */
 export function acquireUpdateLock(dataDir: string): UpdateLock | null {
   mkdirSync(dataDir, { recursive: true });
   const path = join(dataDir, "update.lock");
@@ -79,7 +79,7 @@ export function acquireUpdateLock(dataDir: string): UpdateLock | null {
   const owner = holder(path);
   if (alive(owner.pid)) return null;
   if (!owner.pid) {
-    // No readable owner: age is the only thing left that can tell live from abandoned.
+    // No readable owner: age is all that is left to tell live from abandoned.
     let age: number;
     try {
       age = Date.now() - statSync(path).mtimeMs;
@@ -92,7 +92,6 @@ export function acquireUpdateLock(dataDir: string): UpdateLock | null {
   try {
     return claim();
   } catch {
-    // Another retry won the race for the same abandoned lock.
-    return null;
+    return null; // Another retry won the race for the same abandoned lock.
   }
 }

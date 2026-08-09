@@ -14,23 +14,12 @@ const AUTHORED_PREFIXES = [
   "agent/subagents/",
 ] as const;
 
-/** A relative path that stays inside the tree, or null. */
-function normalizedRelativePath(value: string): string | null {
-  if (!value || value.includes("\\") || posix.isAbsolute(value)) return null;
-  const normalized = posix.normalize(value);
-  if (
-    normalized !== value ||
-    normalized === "." ||
-    normalized === ".." ||
-    normalized.startsWith("../")
-  )
-    return null;
-  return normalized;
-}
-
 export function isAuthoredPath(value: string): boolean {
-  const path = normalizedRelativePath(value);
-  if (!path) return false;
+  // Nothing absolute, nothing that climbs out with `..`, nothing outside `agent/`.
+  if (!value || value.includes("\\") || posix.isAbsolute(value)) return false;
+  const path = posix.normalize(value);
+  if (path !== value || path === "." || path === ".." || path.startsWith("../"))
+    return false;
   return (
     path === "agent/instructions.md" ||
     AUTHORED_PREFIXES.some((prefix) => path.startsWith(prefix))
