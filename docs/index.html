@@ -1,587 +1,1394 @@
 <!doctype html>
 <html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Iva — the best personal AI assistant for Telegram</title>
-<meta name="description" content="Iva is the best personal AI assistant for Telegram: an open-source, self-hosted assistant that lives in your chat. Layered memory that becomes an Obsidian-compatible vault, voice, vision, web search, Google Workspace, your own account via userbot. One command, your server, free and open source.">
-<meta name="keywords" content="personal AI assistant for Telegram, Telegram AI assistant, Telegram userbot AI, self-hosted AI assistant, personal AI agent, AI agent with memory, open source AI assistant, second brain, Obsidian vault AI">
-<meta name="author" content="smixs">
-<meta name="robots" content="index, follow">
-<meta name="yandex-verification" content="a68136518ad24ff6">
-<meta name="theme-color" content="#000000">
-<link rel="canonical" href="https://smixs.github.io/iva/">
-<link rel="alternate" hreflang="en" href="https://smixs.github.io/iva/">
-<link rel="alternate" hreflang="ru" href="https://smixs.github.io/iva/ru/">
-<link rel="alternate" hreflang="x-default" href="https://smixs.github.io/iva/">
-<link rel="icon" type="image/png" href="favicon.png">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Archivo:ital,wdth,wght@1,125,900&family=Geologica:wght@200;300;500&display=swap" rel="stylesheet">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Iva — the best personal AI assistant for Telegram</title>
+    <meta
+      name="description"
+      content="Iva is the best personal AI assistant for Telegram: an open-source, self-hosted assistant that lives in your chat. Layered memory that becomes an Obsidian-compatible vault, voice, vision, web search, Google Workspace, your own account via userbot. One command, your server, free and open source."
+    />
+    <meta
+      name="keywords"
+      content="personal AI assistant for Telegram, Telegram AI assistant, Telegram userbot AI, self-hosted AI assistant, personal AI agent, AI agent with memory, open source AI assistant, second brain, Obsidian vault AI"
+    />
+    <meta name="author" content="smixs" />
+    <meta name="robots" content="index, follow" />
+    <meta name="yandex-verification" content="a68136518ad24ff6" />
+    <meta name="theme-color" content="#000000" />
+    <link rel="canonical" href="https://smixs.github.io/iva/" />
+    <link rel="alternate" hreflang="en" href="https://smixs.github.io/iva/" />
+    <link
+      rel="alternate"
+      hreflang="ru"
+      href="https://smixs.github.io/iva/ru/"
+    />
+    <link
+      rel="alternate"
+      hreflang="x-default"
+      href="https://smixs.github.io/iva/"
+    />
+    <link rel="icon" type="image/png" href="favicon.png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Archivo:ital,wdth,wght@1,125,900&family=Geologica:wght@200;300;500&display=swap"
+      rel="stylesheet"
+    />
 
-<!-- Open Graph -->
-<meta property="og:type" content="website">
-<meta property="og:site_name" content="Iva">
-<meta property="og:locale" content="en_US">
-<meta property="og:locale:alternate" content="ru_RU">
-<meta property="og:title" content="Iva — the best personal AI assistant for Telegram">
-<meta property="og:description" content="Open-source AI assistant that lives in your Telegram. Layered memory that becomes a vault you own, voice, vision, your own account. One command, your server, free and open source.">
-<meta property="og:url" content="https://smixs.github.io/iva/">
-<meta property="og:image" content="https://smixs.github.io/iva/iva-og.jpg">
-<meta property="og:image:type" content="image/jpeg">
-<meta property="og:image:width" content="1280">
-<meta property="og:image:height" content="640">
-<meta property="og:image:alt" content="Iva — the best personal AI assistant for Telegram">
+    <!-- Open Graph -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Iva" />
+    <meta property="og:locale" content="en_US" />
+    <meta property="og:locale:alternate" content="ru_RU" />
+    <meta
+      property="og:title"
+      content="Iva — the best personal AI assistant for Telegram"
+    />
+    <meta
+      property="og:description"
+      content="Open-source AI assistant that lives in your Telegram. Layered memory that becomes a vault you own, voice, vision, your own account. One command, your server, free and open source."
+    />
+    <meta property="og:url" content="https://smixs.github.io/iva/" />
+    <meta
+      property="og:image"
+      content="https://smixs.github.io/iva/iva-og.jpg"
+    />
+    <meta property="og:image:type" content="image/jpeg" />
+    <meta property="og:image:width" content="1280" />
+    <meta property="og:image:height" content="640" />
+    <meta
+      property="og:image:alt"
+      content="Iva — the best personal AI assistant for Telegram"
+    />
 
-<!-- Twitter -->
-<meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Iva — the best personal AI assistant for Telegram">
-<meta name="twitter:description" content="Open-source AI assistant that lives in your Telegram. Layered memory, voice, vision, your own account. One command, your server, free and open source.">
-<meta name="twitter:image" content="https://smixs.github.io/iva/iva-og.jpg">
-<meta name="twitter:image:alt" content="Iva — the best personal AI assistant for Telegram">
+    <!-- Twitter -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta
+      name="twitter:title"
+      content="Iva — the best personal AI assistant for Telegram"
+    />
+    <meta
+      name="twitter:description"
+      content="Open-source AI assistant that lives in your Telegram. Layered memory, voice, vision, your own account. One command, your server, free and open source."
+    />
+    <meta
+      name="twitter:image"
+      content="https://smixs.github.io/iva/iva-og.jpg"
+    />
+    <meta
+      name="twitter:image:alt"
+      content="Iva — the best personal AI assistant for Telegram"
+    />
 
-<script type="application/ld+json">
-{
-  "@context": "https://schema.org",
-  "@type": "SoftwareApplication",
-  "name": "Iva",
-  "alternateName": "Iva — personal AI assistant for Telegram",
-  "description": "Open-source, self-hosted AI assistant that lives in Telegram. Layered memory that compounds into an Obsidian-compatible vault, voice, vision, web search, Google Workspace, personal-account mode. Installs with one command. Free and open source.",
-  "applicationCategory": "DeveloperApplication",
-  "operatingSystem": "Linux, macOS",
-  "url": "https://smixs.github.io/iva/",
-  "image": "https://smixs.github.io/iva/iva-og.jpg",
-  "softwareVersion": "0.3.13",
-  "license": "https://github.com/smixs/iva/blob/main/LICENSE",
-  "codeRepository": "https://github.com/smixs/iva",
-  "inLanguage": ["en", "ru"],
-  "featureList": [
-    "Layered long-term memory: a leaf is a day, branches are weeks and months, rings are years",
-    "Obsidian-compatible plain-markdown vault you own",
-    "Voice and video transcription, vision for photos",
-    "Personal Telegram account mode (userbot) with QR onboarding",
-    "Settings panel /menu — every setting in one message, zero tokens",
-    "Four model providers: OpenCode Go, Ollama Cloud, OpenRouter, OpenAI",
-    "Web search: Tavily, Exa, Parallel, Brave",
-    "Google Workspace: Gmail, Calendar, Drive, Sheets, Docs, Tasks",
-    "Prompt-injection screening and secret redaction",
-    "Tasks, reminders, morning digest, schedules"
-  ],
-  "author": { "@type": "Person", "name": "smixs", "url": "https://github.com/smixs" },
-  "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
-}
-</script>
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "Iva",
+        "alternateName": "Iva — personal AI assistant for Telegram",
+        "description": "Open-source, self-hosted AI assistant that lives in Telegram. Layered memory that compounds into an Obsidian-compatible vault, voice, vision, web search, Google Workspace, personal-account mode. Installs with one command. Free and open source.",
+        "applicationCategory": "DeveloperApplication",
+        "operatingSystem": "Linux, macOS",
+        "url": "https://smixs.github.io/iva/",
+        "image": "https://smixs.github.io/iva/iva-og.jpg",
+        "softwareVersion": "0.3.13",
+        "license": "https://github.com/smixs/iva/blob/main/LICENSE",
+        "codeRepository": "https://github.com/smixs/iva",
+        "inLanguage": ["en", "ru"],
+        "featureList": [
+          "Layered long-term memory: a leaf is a day, branches are weeks and months, rings are years",
+          "Obsidian-compatible plain-markdown vault you own",
+          "Voice and video transcription, vision for photos",
+          "Personal Telegram account mode (userbot) with QR onboarding",
+          "Settings panel /menu — every setting in one message, zero tokens",
+          "Four model providers: OpenCode Go, Ollama Cloud, OpenRouter, OpenAI",
+          "Web search: Tavily, Exa, Parallel, Brave",
+          "Google Workspace: Gmail, Calendar, Drive, Sheets, Docs, Tasks",
+          "Prompt-injection screening and secret redaction",
+          "Tasks, reminders, morning digest, schedules"
+        ],
+        "author": {
+          "@type": "Person",
+          "name": "smixs",
+          "url": "https://github.com/smixs"
+        },
+        "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
+      }
+    </script>
 
-<style>
-  :root {
-    color-scheme: dark;
-    --text: #f2f3f4;
-    --muted: rgba(255,255,255,.56);
-    --faint: rgba(255,255,255,.38);
-    --hairline: rgba(255,255,255,.14);
-    --hairline-soft: rgba(255,255,255,.08);
-    --green: #86a96f;
-    --teal: #7fd8cc;
-    --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
-  }
-  * { box-sizing: border-box; margin: 0; }
-  html { scroll-behavior: smooth; }
-  body {
-    background: #000; color: var(--text);
-    font-family: 'Geologica', system-ui, sans-serif; font-weight: 300;
-    font-size: 17px; line-height: 1.65;
-    -webkit-font-smoothing: antialiased;
-  }
-  a { color: var(--text); text-decoration: none; }
-  img { max-width: 100%; height: auto; display: block; }
-  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-  ::selection { background: rgba(134,169,111,.35); }
+    <style>
+      :root {
+        color-scheme: dark;
+        --text: #f2f3f4;
+        --muted: rgba(255, 255, 255, 0.56);
+        --faint: rgba(255, 255, 255, 0.38);
+        --hairline: rgba(255, 255, 255, 0.14);
+        --hairline-soft: rgba(255, 255, 255, 0.08);
+        --green: #86a96f;
+        --teal: #7fd8cc;
+        --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+      }
+      * {
+        box-sizing: border-box;
+        margin: 0;
+      }
+      html {
+        scroll-behavior: smooth;
+      }
+      body {
+        background: #000;
+        color: var(--text);
+        font-family: "Geologica", system-ui, sans-serif;
+        font-weight: 300;
+        font-size: 17px;
+        line-height: 1.65;
+        -webkit-font-smoothing: antialiased;
+      }
+      a {
+        color: var(--text);
+        text-decoration: none;
+      }
+      img {
+        max-width: 100%;
+        height: auto;
+        display: block;
+      }
+      code {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+      ::selection {
+        background: rgba(134, 169, 111, 0.35);
+      }
 
-  .wrap { max-width: 1200px; margin: 0 auto; padding: 0 clamp(20px, 4vw, 48px); }
+      .wrap {
+        max-width: 1200px;
+        margin: 0 auto;
+        padding: 0 clamp(20px, 4vw, 48px);
+      }
 
-  /* ---------- Liquid glass ---------- */
-  .liquid-glass {
-    background: rgba(255,255,255,0.01);
-    background-blend-mode: luminosity;
-    backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);
-    box-shadow: inset 0 1px 1px rgba(255,255,255,0.1);
-    position: relative; overflow: hidden; border-radius: 9999px;
-  }
-  .liquid-glass::before {
-    content: ""; position: absolute; inset: 0; border-radius: inherit; padding: 1.4px;
-    background: linear-gradient(180deg, rgba(255,255,255,.45) 0%, rgba(255,255,255,.15) 20%, rgba(255,255,255,0) 40%, rgba(255,255,255,0) 60%, rgba(255,255,255,.15) 80%, rgba(255,255,255,.45) 100%);
-    -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
-    -webkit-mask-composite: xor; mask-composite: exclude; pointer-events: none;
-  }
+      /* ---------- Liquid glass ---------- */
+      .liquid-glass {
+        background: rgba(255, 255, 255, 0.01);
+        background-blend-mode: luminosity;
+        backdrop-filter: blur(4px);
+        -webkit-backdrop-filter: blur(4px);
+        box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.1);
+        position: relative;
+        overflow: hidden;
+        border-radius: 9999px;
+      }
+      .liquid-glass::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        border-radius: inherit;
+        padding: 1.4px;
+        background: linear-gradient(
+          180deg,
+          rgba(255, 255, 255, 0.45) 0%,
+          rgba(255, 255, 255, 0.15) 20%,
+          rgba(255, 255, 255, 0) 40%,
+          rgba(255, 255, 255, 0) 60%,
+          rgba(255, 255, 255, 0.15) 80%,
+          rgba(255, 255, 255, 0.45) 100%
+        );
+        -webkit-mask:
+          linear-gradient(#fff 0 0) content-box,
+          linear-gradient(#fff 0 0);
+        -webkit-mask-composite: xor;
+        mask-composite: exclude;
+        pointer-events: none;
+      }
 
-  /* ---------- Nav ---------- */
-  nav { position: fixed; top: 20px; left: 50%; transform: translateX(-50%); z-index: 50; white-space: nowrap; }
-  .nav-pill { display: flex; align-items: center; gap: 22px; padding: 11px 22px; }
-  .nav-logo { display: flex; align-items: center; gap: 9px; font-family: 'Archivo', sans-serif; font-style: italic; font-weight: 900; font-stretch: 125%; letter-spacing: .04em; font-size: 15px; }
-  .nav-logo svg { width: 17px; height: 17px; color: var(--green); }
-  .nav-links { display: flex; align-items: center; gap: 18px; }
-  .nav-links a { font-size: 13.5px; font-weight: 300; color: rgba(255,255,255,.7); transition: color 180ms var(--ease-out); }
-  .nav-links a:hover { color: #fff; }
-  .nav-gh {
-    font-size: 13.5px; font-weight: 500; color: #fff !important; padding: 7px 16px; border-radius: 9999px;
-    background: rgba(255,255,255,.08); box-shadow: inset 0 1px 1px rgba(255,255,255,.15);
-    transition: transform 160ms var(--ease-out), box-shadow 200ms var(--ease-out);
-  }
-  .nav-gh:active { transform: scale(0.96); }
-  @media (hover: hover) and (pointer: fine) {
-    .nav-gh:hover { transform: scale(1.04); box-shadow: inset 0 1px 1px rgba(255,255,255,.2), 0 0 16px 2px rgba(255,255,255,.12); }
-  }
-  @media (max-width: 760px) { .nav-links a:not(.nav-gh):not(.nav-ru) { display: none; } }
+      /* ---------- Nav ---------- */
+      nav {
+        position: fixed;
+        top: 20px;
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 50;
+        white-space: nowrap;
+      }
+      .nav-pill {
+        display: flex;
+        align-items: center;
+        gap: 22px;
+        padding: 11px 22px;
+      }
+      .nav-logo {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        font-family: "Archivo", sans-serif;
+        font-style: italic;
+        font-weight: 900;
+        font-stretch: 125%;
+        letter-spacing: 0.04em;
+        font-size: 15px;
+      }
+      .nav-logo svg {
+        width: 17px;
+        height: 17px;
+        color: var(--green);
+      }
+      .nav-links {
+        display: flex;
+        align-items: center;
+        gap: 18px;
+      }
+      .nav-links a {
+        font-size: 13.5px;
+        font-weight: 300;
+        color: rgba(255, 255, 255, 0.7);
+        transition: color 180ms var(--ease-out);
+      }
+      .nav-links a:hover {
+        color: #fff;
+      }
+      .nav-gh {
+        font-size: 13.5px;
+        font-weight: 500;
+        color: #fff !important;
+        padding: 7px 16px;
+        border-radius: 9999px;
+        background: rgba(255, 255, 255, 0.08);
+        box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.15);
+        transition:
+          transform 160ms var(--ease-out),
+          box-shadow 200ms var(--ease-out);
+      }
+      .nav-gh:active {
+        transform: scale(0.96);
+      }
+      @media (hover: hover) and (pointer: fine) {
+        .nav-gh:hover {
+          transform: scale(1.04);
+          box-shadow:
+            inset 0 1px 1px rgba(255, 255, 255, 0.2),
+            0 0 16px 2px rgba(255, 255, 255, 0.12);
+        }
+      }
+      @media (max-width: 760px) {
+        .nav-links a:not(.nav-gh):not(.nav-ru) {
+          display: none;
+        }
+      }
 
-  /* ---------- Hero ---------- */
-  .hero { position: relative; min-height: 100svh; display: flex; flex-direction: column; overflow: hidden; }
-  .hero-bg { position: absolute; inset: -7%; z-index: 0; will-change: transform; }
-  .hero-bg img { width: 100%; height: 100%; object-fit: cover; object-position: center 38%; }
-  .hero-bg::after {
-    content: ""; position: absolute; inset: 0;
-    background: linear-gradient(180deg, rgba(0,0,0,.55) 0%, rgba(0,0,0,.16) 34%, rgba(0,0,0,.3) 66%, #000 100%);
-  }
-  .hero-mid { position: relative; z-index: 2; flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 120px 20px 0; }
-  .hero h1 {
-    font-family: 'Archivo', sans-serif; font-style: italic; font-weight: 900; font-stretch: 125%;
-    font-size: clamp(84px, 16.5vw, 230px); line-height: .92; letter-spacing: -0.015em; color: #fff;
-    padding-right: .06em;
-  }
-  .hero-sub { margin-top: 26px; font-size: clamp(13px, 1.6vw, 15px); font-weight: 400; letter-spacing: .34em; text-transform: uppercase; color: rgba(255,255,255,.82); }
-  .hero-bottom { position: relative; z-index: 2; display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; padding: 0 clamp(20px, 4vw, 48px) 46px; }
-  .hero-note { font-size: 13.5px; font-weight: 300; color: rgba(255,255,255,.75); max-width: 230px; line-height: 1.55; }
-  .hero-note.right { text-align: right; }
-  .hero-cta { position: absolute; left: 50%; transform: translateX(-50%); bottom: 46px; display: flex; flex-direction: column; align-items: center; gap: 18px; }
-  .cta-row { display: flex; align-items: center; gap: 12px; }
-  .btn {
-    display: inline-block; font-size: 14px; font-weight: 500; border-radius: 9999px; padding: 13px 26px;
-    transition: transform 180ms var(--ease-out), box-shadow 220ms var(--ease-out);
-  }
-  .btn:active { transform: scale(0.97); }
-  .btn-primary { background: #fff; color: #000; }
-  .btn-glass { color: #fff; }
-  @media (hover: hover) and (pointer: fine) {
-    .btn-primary:hover { transform: scale(1.03); box-shadow: 0 0 24px 4px rgba(255,255,255,.25); }
-    .btn-glass:hover { transform: scale(1.03); box-shadow: inset 0 1px 1px rgba(255,255,255,.2), 0 0 20px 2px rgba(255,255,255,.07); }
-  }
-  .hero-install { display: flex; align-items: center; gap: 12px; padding: 10px 12px 10px 20px; border-radius: 9999px; max-width: min(92vw, 640px); }
-  .hero-install code { font-size: 12.5px; color: rgba(255,255,255,.85); white-space: nowrap; overflow-x: auto; scrollbar-width: none; }
-  .hero-install button {
-    flex-shrink: 0; background: rgba(255,255,255,.1); border: 0; border-radius: 9999px; color: rgba(255,255,255,.85);
-    font: 500 12px 'Geologica', sans-serif; letter-spacing: .06em; padding: 7px 14px; cursor: pointer; min-width: 74px;
-    transition: transform 140ms var(--ease-out), color 180ms var(--ease-out), background 180ms var(--ease-out);
-  }
-  .hero-install button:active { transform: scale(0.95); }
-  @media (hover: hover) and (pointer: fine) { .hero-install button:hover { background: rgba(255,255,255,.18); color: #fff; } }
-  .hero-install button.done { color: #bfe3b0; }
-  .hero-meta { font-size: 12px; letter-spacing: .18em; text-transform: uppercase; color: rgba(255,255,255,.5); }
-  .hero-meta a { color: rgba(255,255,255,.7); }
-  .hero-meta a:hover { color: #fff; }
-  @media (max-width: 900px) {
-    .hero-note { display: none; }
-    .hero-cta { position: static; transform: none; margin: 0 auto; padding-bottom: 46px; }
-    .hero-bottom { justify-content: center; padding-bottom: 0; }
-  }
+      /* ---------- Hero ---------- */
+      .hero {
+        position: relative;
+        min-height: 100svh;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+      .hero-bg {
+        position: absolute;
+        inset: -7%;
+        z-index: 0;
+        will-change: transform;
+      }
+      .hero-bg img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        object-position: center 38%;
+      }
+      .hero-bg::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background: linear-gradient(
+          180deg,
+          rgba(0, 0, 0, 0.55) 0%,
+          rgba(0, 0, 0, 0.16) 34%,
+          rgba(0, 0, 0, 0.3) 66%,
+          #000 100%
+        );
+      }
+      .hero-mid {
+        position: relative;
+        z-index: 2;
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+        padding: 120px 20px 0;
+      }
+      .hero h1 {
+        font-family: "Archivo", sans-serif;
+        font-style: italic;
+        font-weight: 900;
+        font-stretch: 125%;
+        font-size: clamp(84px, 16.5vw, 230px);
+        line-height: 0.92;
+        letter-spacing: -0.015em;
+        color: #fff;
+        padding-right: 0.06em;
+      }
+      .hero-sub {
+        margin-top: 26px;
+        font-size: clamp(13px, 1.6vw, 15px);
+        font-weight: 400;
+        letter-spacing: 0.34em;
+        text-transform: uppercase;
+        color: rgba(255, 255, 255, 0.82);
+      }
+      .hero-bottom {
+        position: relative;
+        z-index: 2;
+        display: flex;
+        align-items: flex-end;
+        justify-content: space-between;
+        gap: 24px;
+        padding: 0 clamp(20px, 4vw, 48px) 46px;
+      }
+      .hero-note {
+        font-size: 13.5px;
+        font-weight: 300;
+        color: rgba(255, 255, 255, 0.75);
+        max-width: 230px;
+        line-height: 1.55;
+      }
+      .hero-note.right {
+        text-align: right;
+      }
+      .hero-cta {
+        position: absolute;
+        left: 50%;
+        transform: translateX(-50%);
+        bottom: 46px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 18px;
+      }
+      .cta-row {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+      .btn {
+        display: inline-block;
+        font-size: 14px;
+        font-weight: 500;
+        border-radius: 9999px;
+        padding: 13px 26px;
+        transition:
+          transform 180ms var(--ease-out),
+          box-shadow 220ms var(--ease-out);
+      }
+      .btn:active {
+        transform: scale(0.97);
+      }
+      .btn-primary {
+        background: #fff;
+        color: #000;
+      }
+      .btn-glass {
+        color: #fff;
+      }
+      @media (hover: hover) and (pointer: fine) {
+        .btn-primary:hover {
+          transform: scale(1.03);
+          box-shadow: 0 0 24px 4px rgba(255, 255, 255, 0.25);
+        }
+        .btn-glass:hover {
+          transform: scale(1.03);
+          box-shadow:
+            inset 0 1px 1px rgba(255, 255, 255, 0.2),
+            0 0 20px 2px rgba(255, 255, 255, 0.07);
+        }
+      }
+      .hero-install {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 10px 12px 10px 20px;
+        border-radius: 9999px;
+        max-width: min(92vw, 640px);
+      }
+      .hero-install code {
+        font-size: 12.5px;
+        color: rgba(255, 255, 255, 0.85);
+        white-space: nowrap;
+        overflow-x: auto;
+        scrollbar-width: none;
+      }
+      .hero-install button {
+        flex-shrink: 0;
+        background: rgba(255, 255, 255, 0.1);
+        border: 0;
+        border-radius: 9999px;
+        color: rgba(255, 255, 255, 0.85);
+        font:
+          500 12px "Geologica",
+          sans-serif;
+        letter-spacing: 0.06em;
+        padding: 7px 14px;
+        cursor: pointer;
+        min-width: 74px;
+        transition:
+          transform 140ms var(--ease-out),
+          color 180ms var(--ease-out),
+          background 180ms var(--ease-out);
+      }
+      .hero-install button:active {
+        transform: scale(0.95);
+      }
+      @media (hover: hover) and (pointer: fine) {
+        .hero-install button:hover {
+          background: rgba(255, 255, 255, 0.18);
+          color: #fff;
+        }
+      }
+      .hero-install button.done {
+        color: #bfe3b0;
+      }
+      .hero-meta {
+        font-size: 12px;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+        color: rgba(255, 255, 255, 0.5);
+      }
+      .hero-meta a {
+        color: rgba(255, 255, 255, 0.7);
+      }
+      .hero-meta a:hover {
+        color: #fff;
+      }
+      @media (max-width: 900px) {
+        .hero-note {
+          display: none;
+        }
+        .hero-cta {
+          position: static;
+          transform: none;
+          margin: 0 auto;
+          padding-bottom: 46px;
+        }
+        .hero-bottom {
+          justify-content: center;
+          padding-bottom: 0;
+        }
+      }
 
-  /* Hero entrance — the one authored moment (CSS-only, no-JS safe) */
-  @media (prefers-reduced-motion: no-preference) {
-    .hero h1, .hero-sub, .hero-cta > *, .hero-note {
-      opacity: 1; transform: none;
-      transition: opacity 900ms var(--ease-out), transform 900ms var(--ease-out);
-    }
-    .hero-sub { transition-delay: 120ms; }
-    .hero-cta > :nth-child(1) { transition-delay: 220ms; }
-    .hero-cta > :nth-child(2) { transition-delay: 300ms; }
-    .hero-cta > :nth-child(3) { transition-delay: 380ms; }
-    .hero-note { transition-delay: 480ms; }
-    @starting-style {
-      .hero h1, .hero-sub, .hero-cta > *, .hero-note { opacity: 0; transform: translateY(18px); }
-    }
-  }
+      /* Hero entrance — the one authored moment (CSS-only, no-JS safe) */
+      @media (prefers-reduced-motion: no-preference) {
+        .hero h1,
+        .hero-sub,
+        .hero-cta > *,
+        .hero-note {
+          opacity: 1;
+          transform: none;
+          transition:
+            opacity 900ms var(--ease-out),
+            transform 900ms var(--ease-out);
+        }
+        .hero-sub {
+          transition-delay: 120ms;
+        }
+        .hero-cta > :nth-child(1) {
+          transition-delay: 220ms;
+        }
+        .hero-cta > :nth-child(2) {
+          transition-delay: 300ms;
+        }
+        .hero-cta > :nth-child(3) {
+          transition-delay: 380ms;
+        }
+        .hero-note {
+          transition-delay: 480ms;
+        }
+        @starting-style {
+          .hero h1,
+          .hero-sub,
+          .hero-cta > *,
+          .hero-note {
+            opacity: 0;
+            transform: translateY(18px);
+          }
+        }
+      }
 
-  /* ---------- Sections ---------- */
-  section { padding-block: clamp(84px, 11vw, 150px); scroll-margin-top: 84px; }
-  .sec-label {
-    font-family: 'Geologica', system-ui, sans-serif; font-weight: 200;
-    font-size: clamp(34px, 4.8vw, 58px); line-height: 1.08; letter-spacing: -0.01em; color: #fff;
-    text-wrap: balance;
-  }
-  .display {
-    font-size: 13px; font-weight: 500; letter-spacing: .3em; text-transform: uppercase; color: var(--muted);
-    margin-top: 20px; display: flex; align-items: baseline; gap: 18px;
-  }
-  .display::after { content: ""; flex: 0 0 44px; border-top: 1px solid var(--hairline); transform: translateY(-4px); }
-  .sec-copy { margin-top: 22px; max-width: 620px; color: var(--muted); font-size: 16.5px; }
-  .sec-copy a, .spec dd a { border-bottom: 1px solid var(--hairline); transition: border-color 180ms var(--ease-out), color 180ms var(--ease-out); }
-  .sec-copy a:hover, .spec dd a:hover { color: var(--teal); border-color: var(--teal); }
-  .plate { margin-top: clamp(40px, 5vw, 64px); }
-  .plate img { width: 100%; }
-  .plate-caption { margin-top: 14px; font-size: 11.5px; letter-spacing: .22em; text-transform: uppercase; color: var(--faint); display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
-  .plate-caption a { color: var(--faint); border-bottom: 1px solid var(--hairline-soft); }
-  .plate-caption a:hover { color: var(--teal); border-color: var(--teal); }
+      /* ---------- Sections ---------- */
+      section {
+        padding-block: clamp(84px, 11vw, 150px);
+        scroll-margin-top: 84px;
+      }
+      .sec-label {
+        font-family: "Geologica", system-ui, sans-serif;
+        font-weight: 200;
+        font-size: clamp(34px, 4.8vw, 58px);
+        line-height: 1.08;
+        letter-spacing: -0.01em;
+        color: #fff;
+        text-wrap: balance;
+      }
+      .display {
+        font-size: 13px;
+        font-weight: 500;
+        letter-spacing: 0.3em;
+        text-transform: uppercase;
+        color: var(--muted);
+        margin-top: 20px;
+        display: flex;
+        align-items: baseline;
+        gap: 18px;
+      }
+      .display::after {
+        content: "";
+        flex: 0 0 44px;
+        border-top: 1px solid var(--hairline);
+        transform: translateY(-4px);
+      }
+      .sec-copy {
+        margin-top: 22px;
+        max-width: 620px;
+        color: var(--muted);
+        font-size: 16.5px;
+      }
+      .sec-copy a,
+      .spec dd a {
+        border-bottom: 1px solid var(--hairline);
+        transition:
+          border-color 180ms var(--ease-out),
+          color 180ms var(--ease-out);
+      }
+      .sec-copy a:hover,
+      .spec dd a:hover {
+        color: var(--teal);
+        border-color: var(--teal);
+      }
+      .plate {
+        margin-top: clamp(40px, 5vw, 64px);
+      }
+      .plate img {
+        width: 100%;
+      }
+      .plate-caption {
+        margin-top: 14px;
+        font-size: 11.5px;
+        letter-spacing: 0.22em;
+        text-transform: uppercase;
+        color: var(--faint);
+        display: flex;
+        justify-content: space-between;
+        gap: 16px;
+        flex-wrap: wrap;
+      }
+      .plate-caption a {
+        color: var(--faint);
+        border-bottom: 1px solid var(--hairline-soft);
+      }
+      .plate-caption a:hover {
+        color: var(--teal);
+        border-color: var(--teal);
+      }
 
-  /* Spec sheet rows — museum catalog, not cards */
-  .spec { margin: clamp(36px, 5vw, 56px) 0 0; }
-  .spec > div {
-    display: grid; grid-template-columns: 220px 1fr; gap: 12px 40px;
-    border-top: 1px solid var(--hairline-soft); padding: 20px 0;
-  }
-  .spec dt { font-size: 12.5px; font-weight: 500; letter-spacing: .22em; text-transform: uppercase; color: var(--text); padding-top: 3px; }
-  .spec dd { color: var(--muted); font-size: 16px; }
-  .spec dd b { color: var(--text); font-weight: 500; }
-  .spec dd code { font-size: .85em; color: var(--teal); }
-  .spec .path { display: block; margin-top: 4px; font-family: ui-monospace, Menlo, monospace; font-size: 12px; color: var(--faint); }
-  @media (max-width: 700px) { .spec > div { grid-template-columns: 1fr; gap: 6px; } }
+      /* Spec sheet rows — museum catalog, not cards */
+      .spec {
+        margin: clamp(36px, 5vw, 56px) 0 0;
+      }
+      .spec > div {
+        display: grid;
+        grid-template-columns: 220px 1fr;
+        gap: 12px 40px;
+        border-top: 1px solid var(--hairline-soft);
+        padding: 20px 0;
+      }
+      .spec dt {
+        font-size: 12.5px;
+        font-weight: 500;
+        letter-spacing: 0.22em;
+        text-transform: uppercase;
+        color: var(--text);
+        padding-top: 3px;
+      }
+      .spec dd {
+        color: var(--muted);
+        font-size: 16px;
+      }
+      .spec dd b {
+        color: var(--text);
+        font-weight: 500;
+      }
+      .spec dd code {
+        font-size: 0.85em;
+        color: var(--teal);
+      }
+      .spec .path {
+        display: block;
+        margin-top: 4px;
+        font-family: ui-monospace, Menlo, monospace;
+        font-size: 12px;
+        color: var(--faint);
+      }
+      @media (max-width: 700px) {
+        .spec > div {
+          grid-template-columns: 1fr;
+          gap: 6px;
+        }
+      }
 
-  /* Quotes — what people ask */
-  .asks { margin-top: clamp(36px, 5vw, 56px); }
-  .asks blockquote {
-    border-top: 1px solid var(--hairline-soft); padding: 26px 0;
-    display: grid; grid-template-columns: 1fr 280px; gap: 10px 40px; align-items: baseline;
-  }
-  .asks p {
-    font-family: 'Geologica', system-ui, sans-serif; font-weight: 200; font-size: clamp(20px, 2.4vw, 28px); line-height: 1.3; color: #fff;
-  }
-  .asks cite { font-style: normal; font-size: 12.5px; letter-spacing: .2em; text-transform: uppercase; color: var(--faint); text-align: right; }
-  @media (max-width: 700px) { .asks blockquote { grid-template-columns: 1fr; } .asks cite { text-align: left; } }
+      /* Quotes — what people ask */
+      .asks {
+        margin-top: clamp(36px, 5vw, 56px);
+      }
+      .asks blockquote {
+        border-top: 1px solid var(--hairline-soft);
+        padding: 26px 0;
+        display: grid;
+        grid-template-columns: 1fr 280px;
+        gap: 10px 40px;
+        align-items: baseline;
+      }
+      .asks p {
+        font-family: "Geologica", system-ui, sans-serif;
+        font-weight: 200;
+        font-size: clamp(20px, 2.4vw, 28px);
+        line-height: 1.3;
+        color: #fff;
+      }
+      .asks cite {
+        font-style: normal;
+        font-size: 12.5px;
+        letter-spacing: 0.2em;
+        text-transform: uppercase;
+        color: var(--faint);
+        text-align: right;
+      }
+      @media (max-width: 700px) {
+        .asks blockquote {
+          grid-template-columns: 1fr;
+        }
+        .asks cite {
+          text-align: left;
+        }
+      }
 
-  /* Install steps — the sequence carries the numbers */
-  .steps { counter-reset: n; margin-top: clamp(36px, 5vw, 56px); max-width: 720px; padding: 0; }
-  .steps li { list-style: none; border-top: 1px solid var(--hairline-soft); padding: 24px 0 24px 72px; position: relative; color: var(--muted); }
-  .steps li b { color: var(--text); font-weight: 500; display: block; margin-bottom: 4px; letter-spacing: .04em; }
-  .steps li::before {
-    counter-increment: n; content: "0" counter(n);
-    position: absolute; left: 0; top: 26px;
-    font-family: ui-monospace, Menlo, monospace; font-size: 13px; color: var(--green); letter-spacing: .1em;
-  }
-  .install-line { margin-top: 40px; display: flex; align-items: center; gap: 12px; padding: 12px 14px 12px 22px; border-radius: 9999px; max-width: 680px; }
-  .install-line code { font-size: 13px; color: rgba(255,255,255,.85); white-space: nowrap; overflow-x: auto; scrollbar-width: none; flex: 1; }
-  .install-line button {
-    flex-shrink: 0; background: #fff; border: 0; border-radius: 9999px; color: #000;
-    font: 500 12.5px 'Geologica', sans-serif; letter-spacing: .06em; padding: 9px 18px; cursor: pointer; min-width: 78px;
-    transition: transform 140ms var(--ease-out), box-shadow 200ms var(--ease-out);
-  }
-  .install-line button:active { transform: scale(0.95); }
-  @media (hover: hover) and (pointer: fine) { .install-line button:hover { transform: scale(1.04); box-shadow: 0 0 18px 2px rgba(255,255,255,.2); } }
+      /* Install steps — the sequence carries the numbers */
+      .steps {
+        counter-reset: n;
+        margin-top: clamp(36px, 5vw, 56px);
+        max-width: 720px;
+        padding: 0;
+      }
+      .steps li {
+        list-style: none;
+        border-top: 1px solid var(--hairline-soft);
+        padding: 24px 0 24px 72px;
+        position: relative;
+        color: var(--muted);
+      }
+      .steps li b {
+        color: var(--text);
+        font-weight: 500;
+        display: block;
+        margin-bottom: 4px;
+        letter-spacing: 0.04em;
+      }
+      .steps li::before {
+        counter-increment: n;
+        content: "0" counter(n);
+        position: absolute;
+        left: 0;
+        top: 26px;
+        font-family: ui-monospace, Menlo, monospace;
+        font-size: 13px;
+        color: var(--green);
+        letter-spacing: 0.1em;
+      }
+      .install-line {
+        margin-top: 40px;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 12px 14px 12px 22px;
+        border-radius: 9999px;
+        max-width: 680px;
+      }
+      .install-line code {
+        font-size: 13px;
+        color: rgba(255, 255, 255, 0.85);
+        white-space: nowrap;
+        overflow-x: auto;
+        scrollbar-width: none;
+        flex: 1;
+      }
+      .install-line button {
+        flex-shrink: 0;
+        background: #fff;
+        border: 0;
+        border-radius: 9999px;
+        color: #000;
+        font:
+          500 12.5px "Geologica",
+          sans-serif;
+        letter-spacing: 0.06em;
+        padding: 9px 18px;
+        cursor: pointer;
+        min-width: 78px;
+        transition:
+          transform 140ms var(--ease-out),
+          box-shadow 200ms var(--ease-out);
+      }
+      .install-line button:active {
+        transform: scale(0.95);
+      }
+      @media (hover: hover) and (pointer: fine) {
+        .install-line button:hover {
+          transform: scale(1.04);
+          box-shadow: 0 0 18px 2px rgba(255, 255, 255, 0.2);
+        }
+      }
 
-  /* ---------- Footer ---------- */
-  .footer { border-top: 1px solid var(--hairline-soft); padding: 56px clamp(20px, 4vw, 48px) 72px; }
-  .footer-in { max-width: 1200px; margin: 0 auto; display: flex; justify-content: space-between; gap: 32px; flex-wrap: wrap; }
-  .footer .fcol { font-size: 13.5px; color: var(--faint); line-height: 2.1; }
-  .footer .fcol span { display: block; font-size: 11.5px; letter-spacing: .26em; text-transform: uppercase; color: var(--muted); margin-bottom: 10px; }
-  .footer a { color: var(--muted); transition: color 180ms var(--ease-out); }
-  .footer a:hover { color: #fff; }
+      /* ---------- Footer ---------- */
+      .footer {
+        border-top: 1px solid var(--hairline-soft);
+        padding: 56px clamp(20px, 4vw, 48px) 72px;
+      }
+      .footer-in {
+        max-width: 1200px;
+        margin: 0 auto;
+        display: flex;
+        justify-content: space-between;
+        gap: 32px;
+        flex-wrap: wrap;
+      }
+      .footer .fcol {
+        font-size: 13.5px;
+        color: var(--faint);
+        line-height: 2.1;
+      }
+      .footer .fcol span {
+        display: block;
+        font-size: 11.5px;
+        letter-spacing: 0.26em;
+        text-transform: uppercase;
+        color: var(--muted);
+        margin-bottom: 10px;
+      }
+      .footer a {
+        color: var(--muted);
+        transition: color 180ms var(--ease-out);
+      }
+      .footer a:hover {
+        color: #fff;
+      }
 
-  /* ---------- Scroll reveals (JS-gated, no-JS safe) ---------- */
-  .js .plate { transition: opacity 900ms var(--ease-out), filter 900ms var(--ease-out), transform 900ms var(--ease-out); }
-  .js .plate:not(.in) { opacity: 0; filter: blur(10px); transform: translateY(14px); }
-  .js :is(.spec, .asks, .steps) > * { transition: opacity 600ms var(--ease-out), transform 600ms var(--ease-out); transition-delay: calc(var(--i, 0) * 70ms); }
-  .js :is(.spec, .asks, .steps):not(.in) > * { opacity: 0; transform: translateY(10px); }
-  @media (prefers-reduced-motion: reduce) {
-    html { scroll-behavior: auto; }
-    .js .plate, .js :is(.spec, .asks, .steps) > * { transition: opacity 250ms ease; }
-    .js .plate:not(.in) { filter: none; transform: none; }
-    .js :is(.spec, .asks, .steps):not(.in) > * { transform: none; }
-  }
-</style>
-</head>
-<body>
-
-<nav aria-label="Main">
-  <div class="liquid-glass nav-pill">
-    <a class="nav-logo" href="#" aria-label="Iva — home">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v16"/><path d="M12 7c-1.2-2.2-3.6-3-6-2.6.5 2.6 2.8 3.8 6 2.6z"/><path d="M12 11c1.2-2.2 3.6-3 6-2.6-.5 2.6-2.8 3.8-6 2.6z"/><path d="M12 15c-1-1.8-3-2.5-5-2.2.4 2.2 2.3 3.2 5 2.2z"/></svg>
-      IVA
-    </a>
-    <div class="nav-links">
-      <a href="#memory">Memory</a>
-      <a href="#works">How it works</a>
-      <a href="#userbot">Userbot</a>
-      <a class="nav-ru" href="ru/" lang="ru" hreflang="ru">RU</a>
-      <a class="nav-gh" href="https://github.com/smixs/iva">GitHub</a>
-    </div>
-  </div>
-</nav>
-
-<header class="hero">
-  <div class="hero-bg" id="parallax">
-    <img src="iva-hero.webp" alt="" width="2000" height="1131" fetchpriority="high">
-  </div>
-  <div class="hero-mid">
-    <h1>IVA</h1>
-    <p class="hero-sub">The best personal AI assistant for Telegram</p>
-  </div>
-  <div class="hero-bottom">
-    <p class="hero-note">A personal assistant living in your chat. You talk, it files, remembers and acts.</p>
-    <div class="hero-cta">
-      <div class="cta-row">
-        <a class="btn btn-primary" href="https://github.com/smixs/iva#install">Install in 5 minutes</a>
-        <a class="btn btn-glass liquid-glass" href="https://github.com/smixs/iva">Open on GitHub</a>
+      /* ---------- Scroll reveals (JS-gated, no-JS safe) ---------- */
+      .js .plate {
+        transition:
+          opacity 900ms var(--ease-out),
+          filter 900ms var(--ease-out),
+          transform 900ms var(--ease-out);
+      }
+      .js .plate:not(.in) {
+        opacity: 0;
+        filter: blur(10px);
+        transform: translateY(14px);
+      }
+      .js :is(.spec, .asks, .steps) > * {
+        transition:
+          opacity 600ms var(--ease-out),
+          transform 600ms var(--ease-out);
+        transition-delay: calc(var(--i, 0) * 70ms);
+      }
+      .js :is(.spec, .asks, .steps):not(.in) > * {
+        opacity: 0;
+        transform: translateY(10px);
+      }
+      @media (prefers-reduced-motion: reduce) {
+        html {
+          scroll-behavior: auto;
+        }
+        .js .plate,
+        .js :is(.spec, .asks, .steps) > * {
+          transition: opacity 250ms ease;
+        }
+        .js .plate:not(.in) {
+          filter: none;
+          transform: none;
+        }
+        .js :is(.spec, .asks, .steps):not(.in) > * {
+          transform: none;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <nav aria-label="Main">
+      <div class="liquid-glass nav-pill">
+        <a class="nav-logo" href="#" aria-label="Iva — home">
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.6"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <path d="M12 4v16" />
+            <path d="M12 7c-1.2-2.2-3.6-3-6-2.6.5 2.6 2.8 3.8 6 2.6z" />
+            <path d="M12 11c1.2-2.2 3.6-3 6-2.6-.5 2.6-2.8 3.8-6 2.6z" />
+            <path d="M12 15c-1-1.8-3-2.5-5-2.2.4 2.2 2.3 3.2 5 2.2z" />
+          </svg>
+          IVA
+        </a>
+        <div class="nav-links">
+          <a href="#memory">Memory</a>
+          <a href="#works">How it works</a>
+          <a href="#userbot">Userbot</a>
+          <a class="nav-ru" href="ru/" lang="ru" hreflang="ru">RU</a>
+          <a class="nav-gh" href="https://github.com/smixs/iva">GitHub</a>
+        </div>
       </div>
-      <div class="liquid-glass hero-install">
-        <code id="cmd">curl -fsSL https://raw.githubusercontent.com/smixs/iva/main/install.sh | bash</code>
-        <button id="copy" type="button" aria-label="Copy install command">Copy</button>
-      </div>
-      <p class="hero-meta">v0.3.13 · Free · Open source · MIT · built on <a href="https://eve.dev/docs/introduction">eve</a></p>
-    </div>
-    <p class="hero-note right">Dead simple to run, endlessly customizable. Down to working from your own account.</p>
-  </div>
-</header>
+    </nav>
 
-<main>
+    <header class="hero">
+      <div class="hero-bg" id="parallax">
+        <img
+          src="iva-hero.webp"
+          alt=""
+          width="2000"
+          height="1131"
+          fetchpriority="high"
+        />
+      </div>
+      <div class="hero-mid">
+        <h1>IVA</h1>
+        <p class="hero-sub">The best personal AI assistant for Telegram</p>
+      </div>
+      <div class="hero-bottom">
+        <p class="hero-note">
+          A personal assistant living in your chat. You talk, it files,
+          remembers and acts.
+        </p>
+        <div class="hero-cta">
+          <div class="cta-row">
+            <a
+              class="btn btn-primary"
+              href="https://github.com/smixs/iva#install"
+              >Install in 5 minutes</a
+            >
+            <a
+              class="btn btn-glass liquid-glass"
+              href="https://github.com/smixs/iva"
+              >Open on GitHub</a
+            >
+          </div>
+          <div class="liquid-glass hero-install">
+            <code id="cmd"
+              >curl -fsSL
+              https://raw.githubusercontent.com/smixs/iva/main/install.sh |
+              bash</code
+            >
+            <button id="copy" type="button" aria-label="Copy install command">
+              Copy
+            </button>
+          </div>
+          <p class="hero-meta">
+            v0.3.13 · Free · Open source · MIT · built on
+            <a href="https://eve.dev/docs/introduction">eve</a>
+          </p>
+        </div>
+        <p class="hero-note right">
+          Dead simple to run, endlessly customizable. Down to working from your
+          own account.
+        </p>
+      </div>
+    </header>
 
-<section id="memory">
-  <div class="wrap">
-    <h2 class="sec-label">The Memory Tree</h2>
-    <p class="display">Every chat becomes a vault you own</p>
-    <p class="sec-copy">Iva doesn't just answer, it files. Voice notes, photos, forwarded posts and decisions become plain-markdown cards it actually remembers, on your server, in an Obsidian-compatible vault.</p>
-    <div class="plate">
-      <img src="iva-memory-tree.webp" alt="How Iva remembers: a leaf is a day, branches are weeks and months, tree rings are years around CORE.md" width="1676" height="719" loading="lazy" decoding="async">
-      <p class="plate-caption"><span>How Iva remembers</span><span>Daily logs, distilled nightly</span></p>
-    </div>
-    <dl class="spec">
-      <div style="--i:0">
-        <dt>Leaves</dt>
-        <dd>The word-for-word transcript of each day, Iva's replies included. Nothing is paraphrased on arrival.<span class="path">daily/YYYY-MM-DD.md</span></dd>
-      </div>
-      <div style="--i:1">
-        <dt>Branches</dt>
-        <dd>Summaries folded upward every night at 04:00: day → week → month → year. Facts that change get rewritten, not piled up.<span class="path">summaries/daily/ · weekly/ · monthly/ · yearly/</span></dd>
-      </div>
-      <div style="--i:2">
-        <dt>Trunk</dt>
-        <dd><code>CORE.md</code>, a distilled profile under 1,200 characters that rides in every prompt, plus typed cards: contacts, projects, decisions, ideas. Iva knows you before it searches anything.<span class="path">CORE.md · cards/</span></dd>
-      </div>
-      <div style="--i:3">
-        <dt>Search</dt>
-        <dd>BM25 on Node's built-in SQLite plus a link-graph rerank, any language; one key turns on the vector hybrid. <a href="https://github.com/smixs/iva/blob/main/docs/memory.md">Full architecture</a>.</dd>
-      </div>
-    </dl>
-  </div>
-</section>
+    <main>
+      <section id="memory">
+        <div class="wrap">
+          <h2 class="sec-label">The Memory Tree</h2>
+          <p class="display">Every chat becomes a vault you own</p>
+          <p class="sec-copy">
+            Iva doesn't just answer, it files. Voice notes, photos, forwarded
+            posts and decisions become plain-markdown cards it actually
+            remembers, on your server, in an Obsidian-compatible vault.
+          </p>
+          <div class="plate">
+            <img
+              src="iva-memory-tree.webp"
+              alt="How Iva remembers: a leaf is a day, branches are weeks and months, tree rings are years around CORE.md"
+              width="1676"
+              height="719"
+              loading="lazy"
+              decoding="async"
+            />
+            <p class="plate-caption">
+              <span>How Iva remembers</span
+              ><span>Daily logs, distilled nightly</span>
+            </p>
+          </div>
+          <dl class="spec">
+            <div style="--i: 0">
+              <dt>Leaves</dt>
+              <dd>
+                The word-for-word transcript of each day, Iva's replies
+                included. Nothing is paraphrased on arrival.<span class="path"
+                  >daily/YYYY-MM-DD.md</span
+                >
+              </dd>
+            </div>
+            <div style="--i: 1">
+              <dt>Branches</dt>
+              <dd>
+                Summaries folded upward every night at 04:00: day → week → month
+                → year. Facts that change get rewritten, not piled up.<span
+                  class="path"
+                  >summaries/daily/ · weekly/ · monthly/ · yearly/</span
+                >
+              </dd>
+            </div>
+            <div style="--i: 2">
+              <dt>Trunk</dt>
+              <dd>
+                <code>CORE.md</code>, a distilled profile under 1,200 characters
+                that rides in every prompt, plus typed cards: contacts,
+                projects, decisions, ideas. Iva knows you before it searches
+                anything.<span class="path">CORE.md · cards/</span>
+              </dd>
+            </div>
+            <div style="--i: 3">
+              <dt>Search</dt>
+              <dd>
+                BM25 on Node's built-in SQLite plus a link-graph rerank, any
+                language; one key turns on the vector hybrid.
+                <a href="https://github.com/smixs/iva/blob/main/docs/memory.md"
+                  >Full architecture</a
+                >.
+              </dd>
+            </div>
+          </dl>
+        </div>
+      </section>
 
-<section id="works">
-  <div class="wrap">
-    <h2 class="sec-label">How it works</h2>
-    <p class="display">No domain, no webhook, no middleman</p>
-    <p class="sec-copy">The bridge long-polls Telegram, so any small VPS is enough. Voice, text, photos and PDFs fly in; memory, schedules, search, web and Google Workspace answer back. Everything on your box.</p>
-    <div class="plate">
-      <img src="iva-flow.webp" alt="How Iva works: voice, text, photos and PDFs fly from Telegram into the willow-tree agent, wired to memory, nightly rollup, cron, reminders, search, web, workspace and docs" width="1676" height="719" loading="lazy" decoding="async">
-      <p class="plate-caption"><span>Telegram → agent → vault</span><span>Runs as two systemd services</span></p>
-    </div>
-  </div>
-</section>
+      <section id="works">
+        <div class="wrap">
+          <h2 class="sec-label">How it works</h2>
+          <p class="display">No domain, no webhook, no middleman</p>
+          <p class="sec-copy">
+            The bridge long-polls Telegram, so any small VPS is enough. Voice,
+            text, photos and PDFs fly in; memory, schedules, search, web and
+            Google Workspace answer back. Everything on your box.
+          </p>
+          <div class="plate">
+            <img
+              src="iva-flow.webp"
+              alt="How Iva works: voice, text, photos and PDFs fly from Telegram into the willow-tree agent, wired to memory, nightly rollup, cron, reminders, search, web, workspace and docs"
+              width="1676"
+              height="719"
+              loading="lazy"
+              decoding="async"
+            />
+            <p class="plate-caption">
+              <span>Telegram → agent → vault</span
+              ><span>Runs as two systemd services</span>
+            </p>
+          </div>
+        </div>
+      </section>
 
-<section id="asks">
-  <div class="wrap">
-    <h2 class="sec-label">What people ask Iva</h2>
-    <div class="asks">
-      <blockquote style="--i:0">
-        <p>"What did we agree with client X about the last shipment?"</p>
-        <cite>Found in seconds, months later</cite>
-      </blockquote>
-      <blockquote style="--i:1">
-        <p>"A five-minute voice note from the car."</p>
-        <cite>A task list, a draft email, a meeting card</cite>
-      </blockquote>
-      <blockquote style="--i:2">
-        <p>"Make a quote from this price list and send it to the client."</p>
-        <cite>A finished Google Doc, link in the chat</cite>
-      </blockquote>
-    </div>
-    <div class="plate">
-      <img src="iva-use-cases.webp" alt="What people ask Iva: eight everyday requests, from a voice note turned into tasks to research with sources and a bedtime story that continues tomorrow" width="1676" height="719" loading="lazy" decoding="async">
-      <p class="plate-caption"><span>Eight of many</span><span><a href="https://github.com/smixs/iva/blob/main/docs/use-cases.md">25+ real scenarios →</a></span></p>
-    </div>
-  </div>
-</section>
+      <section id="asks">
+        <div class="wrap">
+          <h2 class="sec-label">What people ask Iva</h2>
+          <div class="asks">
+            <blockquote style="--i: 0">
+              <p>"What did we agree with client X about the last shipment?"</p>
+              <cite>Found in seconds, months later</cite>
+            </blockquote>
+            <blockquote style="--i: 1">
+              <p>"A five-minute voice note from the car."</p>
+              <cite>A task list, a draft email, a meeting card</cite>
+            </blockquote>
+            <blockquote style="--i: 2">
+              <p>
+                "Make a quote from this price list and send it to the client."
+              </p>
+              <cite>A finished Google Doc, link in the chat</cite>
+            </blockquote>
+          </div>
+          <div class="plate">
+            <img
+              src="iva-use-cases.webp"
+              alt="What people ask Iva: eight everyday requests, from a voice note turned into tasks to research with sources and a bedtime story that continues tomorrow"
+              width="1676"
+              height="719"
+              loading="lazy"
+              decoding="async"
+            />
+            <p class="plate-caption">
+              <span>Eight of many</span
+              ><span
+                ><a
+                  href="https://github.com/smixs/iva/blob/main/docs/use-cases.md"
+                  >25+ real scenarios →</a
+                ></span
+              >
+            </p>
+          </div>
+        </div>
+      </section>
 
-<section id="features">
-  <div class="wrap">
-    <h2 class="sec-label">Features</h2>
-    <p class="display">A full assistant, one chat away</p>
-    <dl class="spec">
-      <div style="--i:0">
-        <dt>Voice</dt>
-        <dd>Voice, audio and video notes transcribed with Deepgram nova-3; auto-detects English, Russian, Uzbek.</dd>
-      </div>
-      <div style="--i:1">
-        <dt>Vision</dt>
-        <dd>Photos described by your provider's own vision model. No extra key, no extra bill.</dd>
-      </div>
-      <div style="--i:2">
-        <dt>Rich replies</dt>
-        <dd>Tables, checklists, collapsible blocks and formulas render natively in Telegram.</dd>
-      </div>
-      <div style="--i:3">
-        <dt>Documents</dt>
-        <dd>Send a PDF, DOCX or XLSX. Iva reads it, answers on its content and can file it into the vault, searchable by meaning.</dd>
-      </div>
-      <div style="--i:4">
-        <dt>Personal CRM</dt>
-        <dd>Who your people are, what you agreed, when to follow up. Decision cards keep the why.</dd>
-      </div>
-      <div style="--i:5">
-        <dt>Web search</dt>
-        <dd>Four pluggable providers: Tavily, Exa, Parallel or Brave. The key goes in right in the chat.</dd>
-      </div>
-      <div style="--i:6">
-        <dt>Google Workspace</dt>
-        <dd>Gmail, Calendar, Drive, Sheets, Docs and Tasks from chat. Installed for you, with a guided key setup in the conversation.</dd>
-      </div>
-      <div style="--i:7">
-        <dt>Tasks &amp; digest</dt>
-        <dd>Priorities, due dates, reminders and a morning digest that greets you before coffee.</dd>
-      </div>
-      <div style="--i:8">
-        <dt>Skills &amp; MCP</dt>
-        <dd>Drop one markdown file to add a procedure, or connect any MCP server; keys stay in <code>.env</code>.</dd>
-      </div>
-      <div style="--i:9">
-        <dt>Your model</dt>
-        <dd>Four providers to choose from: OpenCode Go, Ollama Cloud, OpenRouter, or your own ChatGPT subscription. Your keys, your choice.</dd>
-      </div>
-      <div style="--i:10">
-        <dt>Self-updating</dt>
-        <dd>A quiet daily check, then one-tap <b>Update</b> in Telegram, staged, with rollback. <code>/usage</code> reports every token for free.</dd>
-      </div>
-    </dl>
-  </div>
-</section>
+      <section id="features">
+        <div class="wrap">
+          <h2 class="sec-label">Features</h2>
+          <p class="display">A full assistant, one chat away</p>
+          <dl class="spec">
+            <div style="--i: 0">
+              <dt>Voice</dt>
+              <dd>
+                Voice, audio and video notes transcribed with Deepgram nova-3;
+                auto-detects English, Russian, Uzbek.
+              </dd>
+            </div>
+            <div style="--i: 1">
+              <dt>Vision</dt>
+              <dd>
+                Photos described by your provider's own vision model. No extra
+                key, no extra bill.
+              </dd>
+            </div>
+            <div style="--i: 2">
+              <dt>Rich replies</dt>
+              <dd>
+                Tables, checklists, collapsible blocks and formulas render
+                natively in Telegram.
+              </dd>
+            </div>
+            <div style="--i: 3">
+              <dt>Documents</dt>
+              <dd>
+                Send a PDF, DOCX or XLSX. Iva reads it, answers on its content
+                and can file it into the vault, searchable by meaning.
+              </dd>
+            </div>
+            <div style="--i: 4">
+              <dt>Personal CRM</dt>
+              <dd>
+                Who your people are, what you agreed, when to follow up.
+                Decision cards keep the why.
+              </dd>
+            </div>
+            <div style="--i: 5">
+              <dt>Web search</dt>
+              <dd>
+                Four pluggable providers: Tavily, Exa, Parallel or Brave. The
+                key goes in right in the chat.
+              </dd>
+            </div>
+            <div style="--i: 6">
+              <dt>Google Workspace</dt>
+              <dd>
+                Gmail, Calendar, Drive, Sheets, Docs and Tasks from chat.
+                Installed for you, with a guided key setup in the conversation.
+              </dd>
+            </div>
+            <div style="--i: 7">
+              <dt>Tasks &amp; digest</dt>
+              <dd>
+                Priorities, due dates, reminders and a morning digest that
+                greets you before coffee.
+              </dd>
+            </div>
+            <div style="--i: 8">
+              <dt>Skills &amp; MCP</dt>
+              <dd>
+                Drop one markdown file to add a procedure, or connect any MCP
+                server; keys stay in <code>.env</code>.
+              </dd>
+            </div>
+            <div style="--i: 9">
+              <dt>Your model</dt>
+              <dd>
+                Four providers to choose from: OpenCode Go, Ollama Cloud,
+                OpenRouter, or your own ChatGPT subscription. Your keys, your
+                choice.
+              </dd>
+            </div>
+            <div style="--i: 10">
+              <dt>Self-updating</dt>
+              <dd>
+                A quiet daily check, then one-tap <b>Update</b> in Telegram,
+                staged, with rollback. <code>/usage</code> reports every token
+                for free.
+              </dd>
+            </div>
+          </dl>
+        </div>
+      </section>
 
-<section id="menu">
-  <div class="wrap">
-    <h2 class="sec-label">/menu</h2>
-    <p class="display">One message. Every setting. Zero tokens</p>
-    <p class="sec-copy">Model and thinking depth, web search, language, character, memory, userbot, Google, timers, maintenance. One live message that works even while Iva is busy and never spends a token.</p>
-    <div class="plate">
-      <img src="iva-menu.webp" alt="The /menu panel: physical chrome toggles for model, thinking, search, language, memory, userbot and timers on a smoked-glass plate" width="1800" height="771" loading="lazy" decoding="async">
-      <p class="plate-caption"><span>Settings as a control panel</span><span>Works while Iva is busy</span></p>
-    </div>
-  </div>
-</section>
+      <section id="menu">
+        <div class="wrap">
+          <h2 class="sec-label">/menu</h2>
+          <p class="display">One message. Every setting. Zero tokens</p>
+          <p class="sec-copy">
+            Model and thinking depth, web search, language, character, memory,
+            userbot, Google, timers, maintenance. One live message that works
+            even while Iva is busy and never spends a token.
+          </p>
+          <div class="plate">
+            <img
+              src="iva-menu.webp"
+              alt="The /menu panel: physical chrome toggles for model, thinking, search, language, memory, userbot and timers on a smoked-glass plate"
+              width="1800"
+              height="771"
+              loading="lazy"
+              decoding="async"
+            />
+            <p class="plate-caption">
+              <span>Settings as a control panel</span
+              ><span>Works while Iva is busy</span>
+            </p>
+          </div>
+        </div>
+      </section>
 
-<section id="userbot">
-  <div class="wrap">
-    <h2 class="sec-label">Userbot</h2>
-    <p class="display">A secretary inside Telegram</p>
-    <p class="sec-copy">Connect the userbot and Iva works from your personal account like a secretary: reads the group chats you never keep up with, folds them into summaries, catches the messages that actually need you, and replies as you.</p>
-    <div class="plate">
-      <img src="iva-userbot.webp" alt="Your secretary inside Telegram: the userbot reads group chats from your own account, collects summaries and replies as you, guarded by a server-enforced anti-ban guardrail" width="1676" height="838" loading="lazy" decoding="async">
-      <p class="plate-caption"><span>Your own account, working for you</span><span>Guardrail enforced server-side</span></p>
-    </div>
-    <dl class="spec">
-      <div style="--i:0">
-        <dt>All of Telegram</dt>
-        <dd>Groups, channels, unreads, search and the full history of your personal account.</dd>
+      <section id="userbot">
+        <div class="wrap">
+          <h2 class="sec-label">Userbot</h2>
+          <p class="display">A secretary inside Telegram</p>
+          <p class="sec-copy">
+            Connect the userbot and Iva works from your personal account like a
+            secretary: reads the group chats you never keep up with, folds them
+            into summaries, catches the messages that actually need you, and
+            replies as you.
+          </p>
+          <div class="plate">
+            <img
+              src="iva-userbot.webp"
+              alt="Your secretary inside Telegram: the userbot reads group chats from your own account, collects summaries and replies as you, guarded by a server-enforced anti-ban guardrail"
+              width="1676"
+              height="838"
+              loading="lazy"
+              decoding="async"
+            />
+            <p class="plate-caption">
+              <span>Your own account, working for you</span
+              ><span>Guardrail enforced server-side</span>
+            </p>
+          </div>
+          <dl class="spec">
+            <div style="--i: 0">
+              <dt>All of Telegram</dt>
+              <dd>
+                Groups, channels, unreads, search and the full history of your
+                personal account.
+              </dd>
+            </div>
+            <div style="--i: 1">
+              <dt>Onboarding in chat</dt>
+              <dd>
+                Tell the bot to connect your Telegram, scan a QR. No terminal.
+              </dd>
+            </div>
+            <div style="--i: 2">
+              <dt>Anti-ban guardrail</dt>
+              <dd>
+                FloodWait compliance, randomized pacing and a circuit-breaker,
+                enforced on the server, not asked for in a prompt.
+              </dd>
+            </div>
+            <div style="--i: 3">
+              <dt>Read-only mode</dt>
+              <dd>
+                One <code>.env</code> switch and Iva can read and search but
+                physically cannot send.
+              </dd>
+            </div>
+          </dl>
+        </div>
+      </section>
+
+      <section id="security">
+        <div class="wrap">
+          <h2 class="sec-label">Security</h2>
+          <p class="display">Guarded in, guarded out</p>
+          <p class="sec-copy">
+            You'll forward Iva things from the outside: links, PDFs, other
+            people's messages. Inbound content passes a prompt-injection
+            sanitizer, every reply passes a secret-redaction gate, and the
+            allowlist fails closed: an empty list answers nobody. Your memory is
+            a private git repo you own.
+            <a href="https://github.com/smixs/iva/blob/main/docs/security.md"
+              >Gate internals</a
+            >.
+          </p>
+          <div class="plate">
+            <img
+              src="iva-security-gate.webp"
+              alt="Untrusted input from Telegram, web and email passes the security gate: corrupted messages drop into the reject tray, only clean context reaches the vault"
+              width="1676"
+              height="719"
+              loading="lazy"
+              decoding="async"
+            />
+            <p class="plate-caption">
+              <span>Untrusted in, clean out</span
+              ><span>Links, PDFs and forwards pass the gate first</span>
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section id="install">
+        <div class="wrap">
+          <h2 class="sec-label">Install</h2>
+          <p class="display">Up and running in five minutes</p>
+          <ol class="steps">
+            <li style="--i: 0">
+              <b>Get a token</b>Message
+              <a href="https://t.me/BotFather">@BotFather</a> in Telegram,
+              create a bot, copy the token.
+            </li>
+            <li style="--i: 1">
+              <b>Run one command</b>Any Ubuntu/Debian box: a fresh VPS or your
+              own machine. The installer asks, you answer.
+            </li>
+            <li style="--i: 2">
+              <b>Message your bot</b>The wizard picks your Telegram ID out of
+              that message, finishes setup, and Iva confirms in the chat that
+              it's live.
+            </li>
+          </ol>
+          <div class="liquid-glass install-line">
+            <code id="cmd2"
+              >curl -fsSL
+              https://raw.githubusercontent.com/smixs/iva/main/install.sh |
+              bash</code
+            >
+            <button id="copy2" type="button" aria-label="Copy install command">
+              Copy
+            </button>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <div class="footer-in">
+        <div class="fcol">
+          <span>Iva</span>
+          Open source ·
+          <a href="https://github.com/smixs/iva/blob/main/LICENSE">MIT</a><br />
+          Built on <a href="https://eve.dev/docs/introduction">eve</a>, Vercel's
+          agent framework<br />
+          Grew out of
+          <a href="https://github.com/smixs/agent-second-brain"
+            >agent-second-brain</a
+          >
+        </div>
+        <div class="fcol">
+          <span>Docs</span>
+          <a href="https://github.com/smixs/iva/blob/main/docs/use-cases.md"
+            >25+ use cases</a
+          ><br />
+          <a href="https://github.com/smixs/iva/blob/main/docs/memory.md"
+            >Memory</a
+          >
+          ·
+          <a href="https://github.com/smixs/iva/blob/main/docs/security.md"
+            >Security</a
+          >
+          · <a href="https://github.com/smixs/iva/blob/main/docs/faq.md">FAQ</a
+          ><br />
+          <a href="https://github.com/smixs/iva/blob/main/docs/install.md"
+            >Install guide</a
+          >
+        </div>
+        <div class="fcol">
+          <span>Elsewhere</span>
+          <a href="https://github.com/smixs/iva">github.com/smixs/iva</a><br />
+          <a href="https://github.com/smixs/iva/releases">Releases</a> ·
+          <a href="https://github.com/smixs/iva/blob/main/CHANGELOG.md"
+            >Changelog</a
+          ><br />
+          <a href="ru/" lang="ru" hreflang="ru">Русская версия</a>
+        </div>
       </div>
-      <div style="--i:1">
-        <dt>Onboarding in chat</dt>
-        <dd>Tell the bot to connect your Telegram, scan a QR. No terminal.</dd>
-      </div>
-      <div style="--i:2">
-        <dt>Anti-ban guardrail</dt>
-        <dd>FloodWait compliance, randomized pacing and a circuit-breaker, enforced on the server, not asked for in a prompt.</dd>
-      </div>
-      <div style="--i:3">
-        <dt>Read-only mode</dt>
-        <dd>One <code>.env</code> switch and Iva can read and search but physically cannot send.</dd>
-      </div>
-    </dl>
-  </div>
-</section>
+    </footer>
 
-<section id="security">
-  <div class="wrap">
-    <h2 class="sec-label">Security</h2>
-    <p class="display">Guarded in, guarded out</p>
-    <p class="sec-copy">You'll forward Iva things from the outside: links, PDFs, other people's messages. Inbound content passes a prompt-injection sanitizer, every reply passes a secret-redaction gate, and the allowlist fails closed: an empty list answers nobody. Your memory is a private git repo you own. <a href="https://github.com/smixs/iva/blob/main/docs/security.md">Gate internals</a>.</p>
-    <div class="plate">
-      <img src="iva-security-gate.webp" alt="Untrusted input from Telegram, web and email passes the security gate: corrupted messages drop into the reject tray, only clean context reaches the vault" width="1676" height="719" loading="lazy" decoding="async">
-      <p class="plate-caption"><span>Untrusted in, clean out</span><span>Links, PDFs and forwards pass the gate first</span></p>
-    </div>
-  </div>
-</section>
+    <script>
+      document.documentElement.classList.add("js");
 
-<section id="install">
-  <div class="wrap">
-    <h2 class="sec-label">Install</h2>
-    <p class="display">Up and running in five minutes</p>
-    <ol class="steps">
-      <li style="--i:0"><b>Get a token</b>Message <a href="https://t.me/BotFather">@BotFather</a> in Telegram, create a bot, copy the token.</li>
-      <li style="--i:1"><b>Run one command</b>Any Ubuntu/Debian box: a fresh VPS or your own machine. The installer asks, you answer.</li>
-      <li style="--i:2"><b>Message your bot</b>The wizard picks your Telegram ID out of that message, finishes setup, and Iva confirms in the chat that it's live.</li>
-    </ol>
-    <div class="liquid-glass install-line">
-      <code id="cmd2">curl -fsSL https://raw.githubusercontent.com/smixs/iva/main/install.sh | bash</code>
-      <button id="copy2" type="button" aria-label="Copy install command">Copy</button>
-    </div>
-  </div>
-</section>
+      var io = new IntersectionObserver(
+        function (entries) {
+          entries.forEach(function (e) {
+            if (e.isIntersecting) {
+              e.target.classList.add("in");
+              io.unobserve(e.target);
+            }
+          });
+        },
+        { rootMargin: "0px 0px -8% 0px" },
+      );
+      document
+        .querySelectorAll(".plate, .spec, .asks, .steps")
+        .forEach(function (el) {
+          io.observe(el);
+        });
 
-</main>
+      function wireCopy(btnId, cmdId) {
+        var btn = document.getElementById(btnId);
+        if (!btn) return;
+        btn.addEventListener("click", function () {
+          navigator.clipboard
+            .writeText(document.getElementById(cmdId).textContent)
+            .then(function () {
+              btn.textContent = "Copied";
+              btn.classList.add("done");
+              setTimeout(function () {
+                btn.textContent = "Copy";
+                btn.classList.remove("done");
+              }, 1600);
+            });
+        });
+      }
+      wireCopy("copy", "cmd");
+      wireCopy("copy2", "cmd2");
 
-<footer class="footer">
-  <div class="footer-in">
-    <div class="fcol">
-      <span>Iva</span>
-      Open source · <a href="https://github.com/smixs/iva/blob/main/LICENSE">MIT</a><br>
-      Built on <a href="https://eve.dev/docs/introduction">eve</a>, Vercel's agent framework<br>
-      Grew out of <a href="https://github.com/smixs/agent-second-brain">agent-second-brain</a>
-    </div>
-    <div class="fcol">
-      <span>Docs</span>
-      <a href="https://github.com/smixs/iva/blob/main/docs/use-cases.md">25+ use cases</a><br>
-      <a href="https://github.com/smixs/iva/blob/main/docs/memory.md">Memory</a> · <a href="https://github.com/smixs/iva/blob/main/docs/security.md">Security</a> · <a href="https://github.com/smixs/iva/blob/main/docs/faq.md">FAQ</a><br>
-      <a href="https://github.com/smixs/iva/blob/main/docs/install.md">Install guide</a>
-    </div>
-    <div class="fcol">
-      <span>Elsewhere</span>
-      <a href="https://github.com/smixs/iva">github.com/smixs/iva</a><br>
-      <a href="https://github.com/smixs/iva/releases">Releases</a> · <a href="https://github.com/smixs/iva/blob/main/CHANGELOG.md">Changelog</a><br>
-      <a href="ru/" lang="ru" hreflang="ru">Русская версия</a>
-    </div>
-  </div>
-</footer>
-
-<script>
-document.documentElement.classList.add('js');
-
-var io = new IntersectionObserver(function (entries) {
-  entries.forEach(function (e) {
-    if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target); }
-  });
-}, { rootMargin: '0px 0px -8% 0px' });
-document.querySelectorAll('.plate, .spec, .asks, .steps').forEach(function (el) { io.observe(el); });
-
-function wireCopy(btnId, cmdId) {
-  var btn = document.getElementById(btnId);
-  if (!btn) return;
-  btn.addEventListener('click', function () {
-    navigator.clipboard.writeText(document.getElementById(cmdId).textContent).then(function () {
-      btn.textContent = 'Copied'; btn.classList.add('done');
-      setTimeout(function () { btn.textContent = 'Copy'; btn.classList.remove('done'); }, 1600);
-    });
-  });
-}
-wireCopy('copy', 'cmd');
-wireCopy('copy2', 'cmd2');
-
-(function () {
-  var el = document.getElementById('parallax');
-  if (!el || matchMedia('(prefers-reduced-motion: reduce)').matches || !matchMedia('(hover: hover)').matches) return;
-  var tx = 0, ty = 0, cx = 0, cy = 0, s = 30, raf;
-  addEventListener('mousemove', function (e) {
-    tx = (e.clientX / innerWidth - 0.5) * 2 * s;
-    ty = (e.clientY / innerHeight - 0.5) * 2 * s;
-    if (!raf) loop();
-  }, { passive: true });
-  function loop() {
-    cx += (tx - cx) * 0.06; cy += (ty - cy) * 0.06;
-    el.style.transform = 'translate3d(' + cx.toFixed(2) + 'px,' + cy.toFixed(2) + 'px,0)';
-    raf = (Math.abs(tx - cx) > 0.05 || Math.abs(ty - cy) > 0.05) ? requestAnimationFrame(loop) : null;
-  }
-})();
-</script>
-</body>
+      (function () {
+        var el = document.getElementById("parallax");
+        if (
+          !el ||
+          matchMedia("(prefers-reduced-motion: reduce)").matches ||
+          !matchMedia("(hover: hover)").matches
+        )
+          return;
+        var tx = 0,
+          ty = 0,
+          cx = 0,
+          cy = 0,
+          s = 30,
+          raf;
+        addEventListener(
+          "mousemove",
+          function (e) {
+            tx = (e.clientX / innerWidth - 0.5) * 2 * s;
+            ty = (e.clientY / innerHeight - 0.5) * 2 * s;
+            if (!raf) loop();
+          },
+          { passive: true },
+        );
+        function loop() {
+          cx += (tx - cx) * 0.06;
+          cy += (ty - cy) * 0.06;
+          el.style.transform =
+            "translate3d(" + cx.toFixed(2) + "px," + cy.toFixed(2) + "px,0)";
+          raf =
+            Math.abs(tx - cx) > 0.05 || Math.abs(ty - cy) > 0.05
+              ? requestAnimationFrame(loop)
+              : null;
+        }
+      })();
+    </script>
+  </body>
 </html>
