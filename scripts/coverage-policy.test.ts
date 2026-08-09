@@ -8,9 +8,9 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
-const EXPECTED_PRODUCTION_COUNT = 148;
+const EXPECTED_PRODUCTION_COUNT = 155;
 const EXPECTED_INVENTORY_SHA256 =
-  "0c6e56711bdc4e608dc9ef9ced7ea91fc36bd1232d029c245a9652336ea36cc5";
+  "891ebb60d6fd3b1b98b103d2cd2daa3850c2c00e4f733edfe6bd2980c2ab9fe6";
 
 // Node's native include globs filter loaded modules; they do not load untouched files.
 // This test pins the exact production path inventory and a separately measured 29-path
@@ -53,6 +53,8 @@ const MEASURED_UNREPORTED_BY_CATEGORY = {
     "scripts/memory/rollup.ts",
     "scripts/replica-smoke.ts",
     "scripts/setup/main.ts",
+    // Runs as its own process, spawned by the version being installed.
+    "scripts/update-finish.ts",
   ],
 } as const;
 
@@ -109,7 +111,7 @@ function assertProductionPathInventory(
   const measuredUnreported = Object.values(MEASURED_UNREPORTED_BY_CATEGORY)
     .flat()
     .sort();
-  assert.equal(measuredUnreported.length, 31);
+  assert.equal(measuredUnreported.length, 32);
   assert.equal(new Set(measuredUnreported).size, measuredUnreported.length);
   assert.deepEqual(
     measuredUnreported.filter((path) => !productionFiles.includes(path)),
