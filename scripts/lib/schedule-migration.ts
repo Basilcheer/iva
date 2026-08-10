@@ -20,13 +20,6 @@ import { existsSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 
-import {
-  readStatus,
-  runScheduledJob,
-  withStatusLock,
-  writeStatusAtomic,
-} from "#lib/schedule-runner.ts";
-
 type Period = "daily" | "weekly" | "monthly" | "yearly";
 
 interface ExecResult {
@@ -338,6 +331,15 @@ export async function runScheduleMigration({
 }: RunScheduleMigrationOptions = {}): Promise<void> {
   try {
     if (!statusPath) return;
+
+    // The runner lives in the authored tree, which eve rebuilds and `iva repair` restores.
+    // The CLI imports this module only for LEGACY_MEMORY_UNITS and has to load on an
+    // install whose authored tree is missing or half-written — that is the very state
+    // repair exists for — so the runner is pulled at the one call that spawns jobs
+    // instead of at module load. Inside the guard: a failed import is logged and swallowed
+    // like any other migration failure, never blocking server start.
+    const { readStatus, runScheduledJob, withStatusLock, writeStatusAtomic } =
+      await import("#lib/schedule-runner.ts");
 
     const runPeriod =
       runJob ??

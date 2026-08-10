@@ -120,6 +120,42 @@ test("the authored tree reaches outside agent/ only where a pinned escape says s
   );
 });
 
+// Only `from "..."` clauses: a dynamic import() is exactly the escape hatch a CLI module
+// uses when it needs the authored tree at call time but must still load without it.
+const STATIC_SPECIFIER = /\bfrom\s+"([^"\n]+)"/gu;
+
+// Every edge the CLI would resolve at load time, as "importer -> specifier".
+function cliEdgesIntoAuthoredTree(): string[] {
+  const edges: string[] = [];
+  const seen = new Set<string>();
+  const queue = readdirSync(join(ROOT, "scripts/cli"))
+    .filter((name) => name.endsWith(".ts") && !name.endsWith(".test.ts"))
+    .map((name) => posix.join("scripts/cli", name));
+  while (queue.length > 0) {
+    const file = queue.shift() as string;
+    if (seen.has(file)) continue;
+    seen.add(file);
+    for (const match of readFileSync(join(ROOT, file), "utf8").matchAll(
+      STATIC_SPECIFIER,
+    )) {
+      const target = targetOf(match[1], file);
+      if (target === null) continue;
+      if (!relative(AUTHORED, target).startsWith(".."))
+        edges.push(`${file} -> ${match[1]}`);
+      else queue.push(posix.normalize(relative(ROOT, target)));
+    }
+  }
+  return edges.sort();
+}
+
+test("the CLI loads without the authored tree present", () => {
+  assert.deepEqual(
+    cliEdgesIntoAuthoredTree(),
+    [],
+    "iva repair/doctor run on installs whose agent/ is missing or half-written — reach the authored tree through a dynamic import inside the call that needs it",
+  );
+});
+
 test("the pin resolves #-aliases through package.json instead of trusting the prefix", () => {
   assert.equal(
     targetOf("#lib/i18n.ts", "agent/agent.ts"),
