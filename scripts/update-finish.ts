@@ -71,9 +71,9 @@ export function writeShim(home: string, log: Say): void {
 
 /**
  * Remove the working tree the installation ran from, now that a version runs
- * instead. Only files git accounts for, only where they are unedited, and one file
- * at a time: what git ignores inside a tracked directory - the userbot's venv, a
- * skill's credentials - is the user's, and a layout change is no right to it.
+ * instead. Only files git accounts for, only where unedited, one at a time: what
+ * git ignores inside a tracked directory - the userbot's venv, a skill's
+ * credentials - is the user's, and a layout change is no right to it.
  */
 export function retireCheckout(home: string): string[] {
   let tracked: string[];

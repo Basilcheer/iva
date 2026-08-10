@@ -111,6 +111,9 @@ export function createVersionUpdateCommand(
       store.settled() ?? store.currentName() ?? "the previous version";
     const reportDir = mkdtempSync(join(tmpdir(), "iva-update-"));
     const report = join(reportDir, "outcome.json");
+    const finished = (from: string, to: string): Promise<void> =>
+      reporter?.complete({ beforeVersion: from, afterVersion: to }) ??
+      Promise.resolve();
     const failed = async (detail: string): Promise<void> => {
       terminal.fail(text.failed);
       terminal.info(detail);
@@ -148,19 +151,13 @@ export function createVersionUpdateCommand(
       else if (outcome.status === "current") {
         terminal.done(text.fetch[1]);
         terminal.info(`✅ ${text.current} (${outcome.version})`);
-        await reporter?.complete({
-          beforeVersion: outcome.version,
-          afterVersion: outcome.version,
-        });
+        await finished(outcome.version, outcome.version);
       } else {
         terminal.done(text.build[1]);
         terminal.info(`✅ ${outcome.previous ?? before} → ${outcome.version}`);
         // Or the user goes on believing a skill of theirs is live.
         if (outcome.custom === "stock") terminal.info(`⚠️ ${text.stock}`);
-        await reporter?.complete({
-          beforeVersion: outcome.previous ?? before,
-          afterVersion: outcome.version,
-        });
+        await finished(outcome.previous ?? before, outcome.version);
       }
     } catch (error) {
       await failed((error as { message?: string }).message ?? String(error));

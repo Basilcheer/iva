@@ -147,13 +147,6 @@ export function builtWith(
     : "stock";
 }
 
-/** A port to start the version on: the pid spreads two updaters apart. */
-function probePort(): Promise<number | null> {
-  return new PortSelector(new PortChecker([bindProbe, procProbe])).firstFree(
-    DEFAULT_PORT + 100 + (process.pid % 100),
-  );
-}
-
 /**
  * Build a version, prove it starts, flip a symlink, move the installation onto it.
  * Nothing before the flip touches what runs; nothing after it is a one-shot.
@@ -249,7 +242,10 @@ export async function finishVersionUpdate({
     // must not have touched the installation.
     const scratch = store.sandboxState(name);
     try {
-      const port = await probePort();
+      // The pid spreads two updaters apart; the selector steps over what listens.
+      const port = await new PortSelector(
+        new PortChecker([bindProbe, procProbe]),
+      ).firstFree(DEFAULT_PORT + 100 + (process.pid % 100));
       if (port === null) return { ok: false, log: "no free port for a probe" };
       return await check(dir, port);
     } finally {

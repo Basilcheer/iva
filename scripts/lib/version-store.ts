@@ -79,8 +79,8 @@ function unpack(command: string, args: string[], cwd: string): void {
 
 /**
  * Immutable version directories plus one symlink saying which runs. Every mutation
- * is confined to a directory nothing points at, or is one atomic rename: an
- * interruption leaves garbage, never a half-changed installation.
+ * is confined to a directory nothing points at, or is one atomic rename, so an
+ * interruption leaves garbage and never half a changed installation.
  */
 export function createVersionStore(home: string) {
   const layout = layoutFor(home);
@@ -299,9 +299,9 @@ export function createVersionStore(home: string) {
   }
 
   /**
-   * State for a probe: a real start re-enqueues what the live installation is
-   * doing. Beside the versions, never inside the one being proved, or a kill
-   * mid-check hands the next sweep a good version to delete.
+   * State for a probe: a real start re-enqueues what the installation is doing.
+   * Beside the versions, never inside the one being proved, or a kill mid-check
+   * hands the next sweep a good version to delete.
    */
   function sandboxState(name: string): string {
     const scratch = join(home, `.probe-${process.pid}-${Date.now()}`);

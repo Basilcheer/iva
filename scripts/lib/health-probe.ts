@@ -33,11 +33,11 @@ export type ProbeOptions = {
 export type ProbeResult = { readonly ok: boolean; readonly log: string };
 
 /**
- * The environment the service starts with, adjusted for a probe: the `.env` systemd
- * hands the unit, or the check proves a version under a configuration nobody runs;
- * the probe's own port in both spellings, or code reaching for `IVA_PORT` talks to
- * the live service; and the version's own state directories, because that `.env`
- * may name absolute ones and a start about to be thrown away writes as it comes up.
+ * The environment the service starts with, adjusted for a probe: the unit's own
+ * `.env`, or the check proves a configuration nobody runs; the probe's port in
+ * both spellings, or code reaching for `IVA_PORT` talks to the live service; and
+ * the version's state directories, because that `.env` may name absolute ones and
+ * a start about to be thrown away writes to them as it comes up.
  */
 export function probeEnvironment(
   envPath: string,
@@ -64,9 +64,9 @@ const wait = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
- * Start a built version from its final directory and wait for it to answer: the only
- * check that tells "the build succeeded" from "the service starts", because the
- * server bundles TypeScript from its own paths as it comes up.
+ * Start a built version from its final directory and wait for it to answer: the
+ * only check that tells a green build from a service that comes up, because the
+ * server bundles TypeScript from its own paths as it starts.
  */
 export async function probeVersion({
   dir,
