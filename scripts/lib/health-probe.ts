@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseEnvText } from "./env-file.ts";
+import { DEFAULT_PORT } from "./ports.ts";
 
 const LOG_TAIL = 4000;
 /** Set for the probe only; the code that runs on boot reads it to stay passive. */
@@ -60,8 +61,52 @@ export function probeEnvironment(
   };
 }
 
+/** The port the service really listens on, as the installation's own .env spells it. */
+export function servicePort(envPath: string): number {
+  let values: Record<string, string> = {};
+  try {
+    values = parseEnvText(readFileSync(envPath, "utf8"));
+  } catch {
+    // No readable .env: the service is on the port it defaults to.
+  }
+  const port = Number(
+    (values.IVA_PORT ?? "").trim() || (values.PORT ?? "").trim(),
+  );
+  return Number.isInteger(port) && port > 0 && port <= 65535
+    ? port
+    : DEFAULT_PORT;
+}
+
 const wait = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Wait for the service to answer on its own port after it has been restarted.
+ * The probe before the flip starts a version on scratch state, so this is the
+ * first and only moment anything checks the version against the installation the
+ * user actually has: its cards, its port, the environment of its unit.
+ */
+export async function awaitServing({
+  port,
+  timeoutMs = 90_000,
+  intervalMs = 1000,
+}: {
+  readonly port: number;
+  readonly timeoutMs?: number;
+  readonly intervalMs?: number;
+}): Promise<ProbeResult> {
+  const deadline = Date.now() + timeoutMs;
+  for (let attempt = 1; ; attempt++) {
+    if ((await answering(port, Math.min(intervalMs * 2, 2000)))?.ok)
+      return { ok: true, log: "" };
+    if (Date.now() >= deadline)
+      return {
+        ok: false,
+        log: `nothing answered on port ${port} within ${timeoutMs}ms (${attempt} attempts)`,
+      };
+    await wait(intervalMs);
+  }
+}
 
 /**
  * Start a built version from its final directory and wait for it to answer: the

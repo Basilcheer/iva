@@ -4,7 +4,12 @@ import { cpSync, mkdirSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { dirname, join, relative, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { isAuthoredPath } from "./authored-paths.ts";
-import { probeEnvironment, probeVersion } from "./health-probe.ts";
+import {
+  awaitServing,
+  probeEnvironment,
+  probeVersion,
+  servicePort,
+} from "./health-probe.ts";
 import {
   bindProbe,
   DEFAULT_PORT,
@@ -68,6 +73,8 @@ type FinishOptions = {
   readonly run: Runner;
   readonly probe?: Probe;
   readonly restart?: (root: string) => Promise<void>;
+  /** Whether the restarted service answers on the port the installation runs on. */
+  readonly serving?: (port: number) => Promise<Health>;
   /** Layout changes the installation itself needs: the shim, the old checkout. */
   readonly adopt?: () => void;
   readonly notify?: Say;
@@ -218,6 +225,7 @@ export async function finishVersionUpdate({
   run,
   probe,
   restart = async () => {},
+  serving = (port) => awaitServing({ port }),
   adopt = () => {},
   notify = () => {},
   log = () => {},
@@ -294,11 +302,55 @@ export async function finishVersionUpdate({
     context: { home, dataDir: store.layout.data, versionDir: dir },
     log,
   });
+  // Before it too: the cleaner repairs cards an older frontmatter writer grew to
+  // gigabytes, and repairing them once the agent has them open is too late.
+  await errand(run, log, {
+    what: "the vault cleanup",
+    command: "uv",
+    args: ["run", join(dir, "scripts/autograph/cleanup.py"), ".", "--apply"],
+    cwd: store.layout.vault,
+  });
   await restart(store.layout.current);
-  // After it: until the service runs the new version, the old checkout is what a
-  // failed restart falls back to, so it is not ours to remove any earlier.
+
+  const port = servicePort(env);
+  const live = await serving(port);
+  if (!live.ok) {
+    // The probe before the flip ran on scratch state on a scratch port, so an
+    // installation that only breaks on its own - a card store it cannot open, a
+    // port still held, its unit's environment - fails here and nowhere earlier.
+    // Going back is a flip and a restart, and it is not the user's to do by hand
+    // through an agent that is down.
+    const back =
+      active !== null && active !== name && store.list().includes(active)
+        ? active
+        : store.previousName();
+    notify(
+      `${name} did not answer on port ${port} after the restart; ` +
+        (back
+          ? `going back to ${back}`
+          : "there is no earlier version to go back to"),
+    );
+    if (back) {
+      store.activate(back);
+      // A restart that fails here leaves a service the user is without either
+      // way, and the flip is what makes the next start the older version's.
+      await restart(store.layout.current).catch((error: unknown) =>
+        log(`the restart onto ${back} failed: ${String(error)}`),
+      );
+      store.settle(back);
+    }
+    return { status: "unhealthy", version: name, log: live.log };
+  }
+
+  // After the service is up: until it runs the new version, the old checkout is
+  // what a failed restart falls back to, so it is not ours to remove any earlier.
   adopt();
-  await runErrands(store, dir, run, log);
+  await errand(run, log, {
+    what: "the Google CLI update",
+    command: "npm",
+    args: ["i", "-g", "@googleworkspace/cli@latest"],
+    cwd: dir,
+  });
   const removed = store.gc(KEEP);
   store.settle(name);
   return {
@@ -312,39 +364,32 @@ export async function finishVersionUpdate({
 }
 
 /**
- * What an update does for the installation rather than for the version it installs:
- * the vault cleaner, which repairs cards an older frontmatter writer grew to
- * gigabytes, and the Google CLI, the one dependency that lives outside a version.
- * Both come from the version that just became current, and neither has ever been
- * allowed to fail an update - a done update stays done when one of them cannot run.
+ * Something an update does for the installation rather than for the version it
+ * installs: the vault cleaner, run out of the new version before the service can
+ * open what it repairs, and the Google CLI, the one dependency that lives outside
+ * a version. Neither has ever been allowed to fail an update - a done update
+ * stays done when one of them cannot run.
  */
-async function runErrands(
-  store: Store,
-  dir: string,
+async function errand(
   run: Runner,
   log: Say,
+  {
+    what,
+    command,
+    args,
+    cwd,
+  }: {
+    readonly what: string;
+    readonly command: string;
+    readonly args: readonly string[];
+    readonly cwd: string;
+  },
 ): Promise<void> {
-  const errands: [string, string, readonly string[], string][] = [
-    [
-      "the vault cleanup",
-      "uv",
-      ["run", join(dir, "scripts/autograph/cleanup.py"), ".", "--apply"],
-      store.layout.vault,
-    ],
-    [
-      "the Google CLI update",
-      "npm",
-      ["i", "-g", "@googleworkspace/cli@latest"],
-      dir,
-    ],
-  ];
-  for (const [what, command, args, cwd] of errands) {
-    const done = await run(command, args, cwd).catch(
-      (error: unknown): CommandResult => ({ code: 1, output: String(error) }),
-    );
-    if (done.code !== 0)
-      log(`${what} did not run; the update is done without it`);
-  }
+  const done = await run(command, args, cwd).catch(
+    (error: unknown): CommandResult => ({ code: 1, output: String(error) }),
+  );
+  if (done.code !== 0)
+    log(`${what} did not run; the update is done without it`);
 }
 
 function stockNotice(verb: string, failure: string): string {

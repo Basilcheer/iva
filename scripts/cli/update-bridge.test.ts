@@ -20,7 +20,11 @@ import { createVersionStore } from "../lib/version-store.ts";
 
 function world(t: TestContext): World {
   const created = createWorld();
-  t.after(() => rmSync(created.dir, { recursive: true, force: true }));
+  t.after(() => {
+    // The service an update starts outlives it, as the real one does.
+    created.stop();
+    rmSync(created.dir, { recursive: true, force: true });
+  });
   return created;
 }
 
@@ -62,14 +66,18 @@ test("the first update moves the installation onto versions and keeps its state"
   // a version and not a pronoun.
   assert.ok(output.includes(`0.3.15 → ${name}`), output);
   // The vault cleaner the in-place updater ran still runs, out of the version that
-  // has just become current.
-  assert.match(
-    readFileSync(iva.uvLog, "utf8"),
-    new RegExp(
-      `^run ${iva.home}/versions/${name}/scripts/autograph/cleanup\\.py \\. --apply$`,
-      "mu",
+  // has just become current - and before the service that opens what it repairs.
+  const calls = readFileSync(iva.callsLog, "utf8").split("\n");
+  const cleanup = calls.findIndex((line) =>
+    line.startsWith(
+      `uv run ${iva.home}/versions/${name}/scripts/autograph/cleanup.py . --apply`,
     ),
   );
+  const restart = calls.findIndex((line) =>
+    /restart iva\.service$/u.test(line),
+  );
+  assert.ok(cleanup >= 0, calls.join("\n"));
+  assert.ok(cleanup < restart, calls.join("\n"));
 
   const dir = join(iva.home, "versions", name);
   assert.ok(
@@ -82,7 +90,9 @@ test("the first update moves the installation onto versions and keeps its state"
     '{"kept":true}\n',
   );
   assert.equal(
-    readFileSync(join(iva.home, ".env"), "utf8").includes("IVA_PORT=8723"),
+    readFileSync(join(iva.home, ".env"), "utf8").includes(
+      `IVA_PORT=${iva.port}`,
+    ),
     true,
   );
   // The checkout is gone; nothing runs from a working tree any more.
@@ -107,7 +117,7 @@ test("the first update moves the installation onto versions and keeps its state"
     unit,
     new RegExp(`${iva.home}/current/node_modules/eve/bin/eve\\.js`, "u"),
   );
-  const systemctl = readFileSync(iva.systemctlLog, "utf8");
+  const systemctl = readFileSync(iva.callsLog, "utf8");
   assert.match(systemctl, /restart .*iva\.service/u);
   // The auto-update timer has to survive the move, or the install goes quiet.
   assert.match(systemctl, /enable --now iva-update-check\.timer/u);
@@ -204,29 +214,42 @@ test("the health probe runs on scratch state, with the service's own environment
   );
 
   const output = update(iva);
-  // systemctl is a stub here, so the only server that really started is the probe.
+  // Two servers started: the probe, before the flip, and the service the unit
+  // runs after it. Nothing else starts anything.
   const starts = readFileSync(iva.startsLog, "utf8")
     .trim()
     .split("\n")
     .map((line) => JSON.parse(line) as Record<string, string>);
-  assert.equal(starts.length, 1, output);
-  const [probe] = starts;
+  assert.equal(starts.length, 2, output);
+  const [probe, service] = starts;
   assert.equal(probe.probe, "1", output);
+  assert.equal(service.probe, "", output);
   // The .env systemd hands the unit through EnvironmentFile, or the probe proves
   // a version starts under a configuration nobody runs.
   assert.equal(probe.envMark, "from-dotenv");
   // Both spellings of the port are the probe's own: code that reaches for
   // IVA_PORT to talk to "the server" must not reach the live one.
   assert.equal(probe.ivaPort, probe.port);
-  assert.notEqual(probe.ivaPort, "8723");
+  assert.notEqual(probe.ivaPort, String(iva.port));
   // Everything it wrote landed in scratch state.
   assert.notEqual(probe.store, realpathSync(store));
   assert.notEqual(probe.data, realpathSync(join(iva.home, "data")));
-  assert.equal(existsSync(join(store, "started.log")), false);
-  assert.equal(existsSync(join(iva.home, "data/started.log")), false);
   assert.equal(
     readFileSync(join(store, "open-run.json"), "utf8"),
     '{"status":"running"}\n',
+  );
+  // The live state was opened once, by the service, on the port and the data
+  // directory of the installation - which is what the update then waits for.
+  assert.equal(service.store, realpathSync(store));
+  assert.equal(service.data, realpathSync(join(iva.home, "data")));
+  assert.equal(service.port, String(iva.port));
+  assert.equal(
+    readFileSync(join(store, "started.log"), "utf8"),
+    "re-enqueued active runs\n",
+  );
+  assert.equal(
+    readFileSync(join(iva.home, "data/started.log"), "utf8"),
+    "started\n",
   );
 
   // Once proved, the version runs on the installation's own state - and keeps no
@@ -450,7 +473,7 @@ test("killing an update leaves the running version alone and the next run cleans
       HOME: iva.fakeHome,
       NO_COLOR: "1",
       TERM: "dumb",
-      IVA_TEST_SYSTEMCTL: iva.systemctlLog,
+      IVA_TEST_CALLS: iva.callsLog,
       IVA_TEST_EVE: readFileSync(
         join(iva.home, "current/node_modules/eve/bin/eve.js"),
         "utf8",
@@ -501,10 +524,7 @@ test("an update whose restart fails is finished by the next one", (t) => {
     /\$IVA_ROOT\/current\/bin\/iva\.mjs/u,
   );
   assert.equal(existsSync(join(iva.home, ".git")), false);
-  assert.match(
-    readFileSync(iva.systemctlLog, "utf8"),
-    /restart .*iva\.service/u,
-  );
+  assert.match(readFileSync(iva.callsLog, "utf8"), /restart .*iva\.service/u);
   assert.match(iva.iva(["update"]).stdout, /already up to date/u);
 });
 
@@ -644,9 +664,14 @@ test("--force installs the running release again, beside the version that runs",
     .trim()
     .split("\n")
     .map((line) => JSON.parse(line) as { cwd: string; probe: string });
+  // The probe and then the service, both out of the rebuilt directory: what
+  // passed the check is what the unit runs, down to the path.
   assert.deepEqual(
     starts.map((start) => [start.cwd, start.probe]),
-    [[join(iva.home, "versions", rebuilt), "1"]],
+    [
+      [join(iva.home, "versions", rebuilt), "1"],
+      [join(iva.home, "versions", rebuilt), ""],
+    ],
   );
   // The tree the service was running from was never installed into or built in:
   // it is as broken as it was, and it is still the way back.
@@ -735,11 +760,11 @@ test("an update puts the userbot proxy on the version it installs", (t) => {
     output,
   );
   // Built from the version's own lock file, and the proxy put on the new code.
-  const uv = readFileSync(iva.uvLog, "utf8");
-  assert.match(uv, /^venv --python 3\.12 \.venv$/mu);
-  assert.match(uv, /^pip sync --python .*--require-hashes --strict/mu);
+  const uv = readFileSync(iva.callsLog, "utf8");
+  assert.match(uv, /^uv venv --python 3\.12 \.venv$/mu);
+  assert.match(uv, /^uv pip sync --python .*--require-hashes --strict/mu);
   assert.match(
-    readFileSync(iva.systemctlLog, "utf8"),
+    readFileSync(iva.callsLog, "utf8"),
     /restart iva-telegram-userbot\.service/u,
   );
 });

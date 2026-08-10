@@ -9,6 +9,8 @@ import {
   cpSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
+  readdirSync,
   realpathSync,
   symlinkSync,
   writeFileSync,
@@ -92,10 +94,18 @@ if (process.env.IVA_TEST_STARTS)
   );
 // After the store is opened, like the real thing: a start that crashes here has
 // already touched whatever state it was given.
-const mark = ["START", "BREAK"].join("_");
-const broken = sources(process.cwd()).filter(([, text]) => text.includes(mark));
+const files = sources(process.cwd());
+const carries = (word) => files.filter(([, text]) => text.includes(word + "_BREAK"));
+const broken = carries("START");
 if (broken.length) {
   process.stderr.write("Cannot find module '../scripts/lib/provider.ts' in " + broken[0][0] + "\\n");
+  process.exit(1);
+}
+// The other half of the same seam: a version that starts on the empty state a
+// probe gives it and dies on the cards the installation has. Nothing before the
+// flip can see this - only the service itself ever opens the user's own state.
+if (carries("STATE").length && existsSync(join(data, "cards.md"))) {
+  process.stderr.write("cannot open the card store\\n");
   process.exit(1);
 }
 createServer((_request, response) => response.writeHead(200).end("ok")).listen(
@@ -121,7 +131,9 @@ for (const name of readdirSync(process.env.IVA_TEST_MODULES)) {
 
 /** Builds the venv where it is told to, like `uv venv` does, and nothing else. */
 const UV = `#!/bin/sh
-printf '%s\\n' "$*" >> "$IVA_TEST_UV"
+if [ -n "$IVA_TEST_CALLS" ]; then
+  printf 'uv %s\\n' "$*" >> "$IVA_TEST_CALLS"
+fi
 if [ "$1" = "venv" ]; then
   for venv; do :; done
   mkdir -p "$venv/bin"
@@ -131,16 +143,100 @@ fi
 exit 0
 `;
 
-const SYSTEMCTL = `#!/bin/sh
-printf '%s\\n' "$*" >> "$IVA_TEST_SYSTEMCTL"
-[ "$1" = "--user" ] && shift
-if [ -n "$IVA_TEST_SYSTEMCTL_FAIL" ] && [ "$1" = "restart" ]; then
-  printf 'Failed to connect to bus: No such file or directory\\n' >&2
-  exit 1
-fi
-[ "$1" = "is-enabled" ] && printf 'enabled\\n'
-[ "$1" = "is-active" ] && printf 'active\\n'
-exit 0
+/**
+ * systemd, as far as an update can tell - and it really runs the service. The
+ * unit is read for the same three lines systemd reads it for, so the service the
+ * health check finds (or does not) comes up exactly the way the box would start
+ * it: that version's directory, that .env, that port.
+ */
+const SYSTEMCTL = `#!/usr/bin/env node
+"use strict";
+const { spawn } = require("node:child_process");
+const fs = require("node:fs");
+const { join } = require("node:path");
+
+const argv = process.argv.slice(2);
+if (process.env.IVA_TEST_CALLS)
+  fs.appendFileSync(process.env.IVA_TEST_CALLS, "systemctl " + argv.join(" ") + "\\n");
+const args = argv[0] === "--user" ? argv.slice(1) : argv;
+const verb = args[0];
+if (process.env.IVA_TEST_SYSTEMCTL_FAIL && verb === "restart") {
+  process.stderr.write("Failed to connect to bus: No such file or directory\\n");
+  process.exit(1);
+}
+if (verb === "is-enabled") process.stdout.write("enabled\\n");
+if (verb === "is-active") process.stdout.write("active\\n");
+
+const run = join(process.env.HOME, ".iva-test-units");
+const pidFile = (unit) => join(run, unit + ".pid");
+const sleep = (ms) =>
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+
+function stop(unit) {
+  let pid = 0;
+  try {
+    pid = Number(fs.readFileSync(pidFile(unit), "utf8"));
+  } catch {
+    return;
+  }
+  fs.rmSync(pidFile(unit), { force: true });
+  try {
+    process.kill(pid, "SIGTERM");
+  } catch {
+    return;
+  }
+  // The port has to be free before the unit is started again, or the restart
+  // hands the health check a service that could not bind.
+  for (let waited = 0; waited < 5000; waited += 20) {
+    try {
+      process.kill(pid, 0);
+    } catch {
+      return;
+    }
+    sleep(20);
+  }
+}
+
+function start(unit) {
+  const body = fs.readFileSync(
+    join(process.env.HOME, ".config/systemd/user", unit),
+    "utf8",
+  );
+  const setting = (key) =>
+    (new RegExp("^" + key + "=(.*)$", "m").exec(body) || [])[1];
+  const env = { ...process.env };
+  const file = setting("EnvironmentFile");
+  const assign = (line, into) => {
+    const at = /^\\s*([A-Za-z_][A-Za-z0-9_]*)=(.*)$/.exec(line);
+    if (at) into[at[1]] = at[2];
+  };
+  if (file && fs.existsSync(file))
+    for (const line of fs.readFileSync(file, "utf8").split("\\n"))
+      assign(line, env);
+  for (const line of body.split("\\n"))
+    if (line.startsWith("Environment=")) assign(line.slice(12), env);
+  const exec = (setting("ExecStart") || "").split(" ");
+  fs.mkdirSync(run, { recursive: true });
+  const out = fs.openSync(join(run, unit + ".log"), "a");
+  const child = spawn(exec[0], exec.slice(1), {
+    cwd: setting("WorkingDirectory"),
+    env,
+    detached: true,
+    stdio: ["ignore", out, out],
+  });
+  child.unref();
+  fs.writeFileSync(pidFile(unit), String(child.pid));
+}
+
+// Only the service that serves the port is really run: the rest of the units are
+// timers and helpers with nothing for a health check to find.
+for (const unit of args.slice(1).filter((name) => name === "iva.service")) {
+  if (verb === "stop" || verb === "disable") stop(unit);
+  if (verb === "restart" || verb === "start" || verb === "enable") {
+    stop(unit);
+    start(unit);
+  }
+}
 `;
 
 export type World = {
@@ -150,9 +246,14 @@ export type World = {
   readonly fakeHome: string;
   readonly shim: string;
   readonly upstream: string;
-  readonly systemctlLog: string;
-  /** One line per `uv` call the update makes, in the order they happened. */
-  readonly uvLog: string;
+  /** The port the installation's .env names, and the service really listens on. */
+  readonly port: number;
+  /**
+   * One line per `systemctl` and `uv` call, in the order they happened: the two
+   * stand-ins share a log because the order between them is what an update owes
+   * the vault - it is cleaned before the service opens it.
+   */
+  readonly callsLog: string;
   /** One JSON line per server start, probe or service, in the order they happened. */
   readonly startsLog: string;
   /** Run the user's `iva` command, always through the shim they actually have. */
@@ -165,7 +266,29 @@ export type World = {
   /** Publish a new upstream commit, optionally editing the tree first. */
   publish(edit?: (tree: string) => void): string;
   git(cwd: string, args: readonly string[]): string;
+  /** Stop whatever the world left running; the service outlives the update. */
+  stop(): void;
 };
+
+/**
+ * A port nothing holds, decided before the installation's .env is written: two
+ * worlds at once must not be handed the same one, and neither must a service the
+ * developer is running on the default port.
+ */
+export function freePort(): number {
+  return Number(
+    execFileSync(
+      process.execPath,
+      [
+        "-e",
+        "const s = require('node:net').createServer();" +
+          "s.listen(0, '127.0.0.1', () => {" +
+          "process.stdout.write(String(s.address().port)); s.close(); });",
+      ],
+      { encoding: "utf8" },
+    ),
+  );
+}
 
 function git(cwd: string, args: readonly string[]): string {
   return execFileSync("git", [...args], {
@@ -266,9 +389,9 @@ export function createWorld(): World {
   const home = join(dir, "iva");
   const fakeHome = join(dir, "home");
   const bin = join(dir, "bin");
-  const systemctlLog = join(dir, "systemctl.log");
-  const uvLog = join(dir, "uv.log");
+  const callsLog = join(dir, "calls.log");
   const startsLog = join(dir, "starts.log");
+  const port = freePort();
 
   git(dir, ["init", "--bare", "--initial-branch=main", upstream]);
   mkdirSync(source, { recursive: true });
@@ -283,7 +406,7 @@ export function createWorld(): World {
   git(home, ["config", "iva.updateBranch", "main"]);
   for (const name of ["data", "vault", ".eve"])
     mkdirSync(join(home, name), { recursive: true });
-  writeFileSync(join(home, ".env"), "AGENT_LANGUAGE=en\nIVA_PORT=8723\n");
+  writeFileSync(join(home, ".env"), `AGENT_LANGUAGE=en\nIVA_PORT=${port}\n`);
   // An installed checkout has its dependencies; a version installs its own.
   symlinkSync(join(REPO, "node_modules"), join(home, "node_modules"));
 
@@ -310,8 +433,7 @@ export function createWorld(): World {
     NO_COLOR: "1",
     TERM: "dumb",
     AGENT_LANGUAGE: "en",
-    IVA_TEST_SYSTEMCTL: systemctlLog,
-    IVA_TEST_UV: uvLog,
+    IVA_TEST_CALLS: callsLog,
     IVA_TEST_STARTS: startsLog,
     IVA_TEST_EVE: EVE,
     IVA_TEST_MODULES: join(REPO, "node_modules"),
@@ -328,8 +450,8 @@ export function createWorld(): World {
     fakeHome,
     shim,
     upstream,
-    systemctlLog,
-    uvLog,
+    port,
+    callsLog,
     startsLog,
     git,
     iva: (args, env = {}) =>
@@ -355,6 +477,22 @@ export function createWorld(): World {
       git(source, ["commit", "--allow-empty", "-m", "update"]);
       git(source, ["push", "-q", "origin", "main"]);
       return git(source, ["rev-parse", "HEAD"]);
+    },
+    stop: () => {
+      const units = join(fakeHome, ".iva-test-units");
+      let files: string[];
+      try {
+        files = readdirSync(units);
+      } catch {
+        return; // Nothing was ever started.
+      }
+      for (const file of files.filter((name) => name.endsWith(".pid"))) {
+        try {
+          process.kill(Number(readFileSync(join(units, file), "utf8")));
+        } catch {
+          // Already gone, which is where this is trying to get it.
+        }
+      }
     },
   };
 }

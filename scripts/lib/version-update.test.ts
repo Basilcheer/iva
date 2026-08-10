@@ -103,6 +103,9 @@ function world(t: { after(fn: () => void): void }): World {
           state.restarts.push(dir);
           return Promise.resolve();
         },
+        // No unit and no service: a test about what happens when the restarted
+        // service does not answer says so itself.
+        serving: () => Promise.resolve({ ok: true, log: "" }),
         ...overrides,
       }),
   };
@@ -655,7 +658,105 @@ test("a restart that fails leaves an update the next run can finish", async (t) 
   ]);
 });
 
-test("the chores of the installation are run last, out of the version installed", async (t) => {
+test("a version the service does not come up on is put back on the one that ran", async (t) => {
+  const iva = world(t);
+  const first = updated(await iva.update());
+  writeFileSync(join(iva.repo, "agent/agent.ts"), "export const agent = 2;\n");
+  iva.release("0.3.15");
+  const name = `0.3.15-${iva.target.sha.slice(0, 12)}`;
+  const store = createVersionStore(iva.home);
+  const current = layoutFor(iva.home).current;
+
+  // Proved before the flip on scratch state and dead on the installation's own -
+  // its cards, its port, its unit's environment. Nothing earlier can see this.
+  const outcome = await iva.update({
+    serving: () => Promise.resolve({ ok: false, log: "nothing answered" }),
+  });
+
+  assert.deepEqual(outcome, {
+    status: "unhealthy",
+    version: name,
+    log: "nothing answered",
+  });
+  // Back on the version that was serving, restarted onto it, and finished there:
+  // the way back is not the user's to find by hand through an agent that is down.
+  assert.equal(store.currentName(), first.version);
+  assert.equal(store.settled(), first.version);
+  assert.deepEqual(iva.restarts, [current, current, current]);
+  assert.ok(
+    iva.notices.some((notice) =>
+      notice.includes(`going back to ${first.version}`),
+    ),
+    iva.notices.join("\n"),
+  );
+  // Both versions are still on disk, and the older one really runs from there.
+  assert.deepEqual(
+    readdirSync(store.layout.versions).sort(),
+    [first.version, name].sort(),
+  );
+  assert.equal(
+    readFileSync(join(iva.home, "current/agent/agent.ts"), "utf8"),
+    "export const agent = 1;\n",
+  );
+});
+
+test("a first version that does not answer has nowhere to go back to", async (t) => {
+  const iva = world(t);
+  const current = layoutFor(iva.home).current;
+
+  const outcome = await iva.update({
+    serving: () => Promise.resolve({ ok: false, log: "nothing answered" }),
+  });
+
+  const name = `0.3.14-${iva.target.sha.slice(0, 12)}`;
+  assert.equal(outcome.status, "unhealthy");
+  const store = createVersionStore(iva.home);
+  // Nothing is flipped away from: this version is all the installation has, and
+  // the move stays unfinished, for the next run to pick up.
+  assert.equal(store.currentName(), name);
+  assert.equal(store.settled(), null);
+  assert.deepEqual(iva.restarts, [current]);
+  assert.ok(
+    iva.notices.some((notice) =>
+      notice.includes("no earlier version to go back to"),
+    ),
+    iva.notices.join("\n"),
+  );
+});
+
+test("a rollback the restart refuses still leaves the older version current", async (t) => {
+  const iva = world(t);
+  const first = updated(await iva.update());
+  writeFileSync(join(iva.repo, "agent/agent.ts"), "export const agent = 2;\n");
+  iva.release("0.3.15");
+  const store = createVersionStore(iva.home);
+  const logged: string[] = [];
+  let restarts = 0;
+
+  // The box that lost its user session: the flip back is what decides which
+  // version the next start runs, so a restart nobody can do does not undo it.
+  const outcome = await iva.update({
+    log: (message) => logged.push(message),
+    serving: () => Promise.resolve({ ok: false, log: "nothing answered" }),
+    restart: (dir) => {
+      iva.restarts.push(dir);
+      // The restart onto the new version goes through; the one back does not.
+      return restarts++ === 0
+        ? Promise.resolve()
+        : Promise.reject(new Error("Failed to connect to bus"));
+    },
+  });
+
+  assert.equal(outcome.status, "unhealthy");
+  assert.equal(store.currentName(), first.version);
+  assert.equal(store.settled(), first.version);
+  assert.ok(
+    logged.some((message) => /Failed to connect to bus/.test(message)),
+    logged.join("\n"),
+  );
+});
+
+test("the chores of the installation are run around the restart, out of the version installed", async (t) => {
   const iva = world(t);
   const calls: string[] = [];
   const logged: string[] = [];
@@ -663,6 +764,10 @@ test("the chores of the installation are run last, out of the version installed"
   const outcome = updated(
     await iva.update({
       log: (message) => logged.push(message),
+      restart: (dir) => {
+        calls.push(`restart @${dir}`);
+        return Promise.resolve();
+      },
       run: (command, args, cwd) => {
         calls.push(`${command} ${args.join(" ")} @${cwd}`);
         // No registry here, which is the ordinary state of a box behind a proxy:
@@ -676,9 +781,12 @@ test("the chores of the installation are run last, out of the version installed"
   const layout = layoutFor(iva.home);
   const dir = join(layout.versions, outcome.version);
   // The vault cleaner runs against the vault, out of the version that has just
-  // become current, and the Google CLI is refreshed after everything else.
-  assert.deepEqual(calls.slice(-2), [
+  // become current, and before the restart: it repairs cards that an older
+  // frontmatter writer grew to gigabytes, and once the agent has them open the
+  // repair is too late. The Google CLI is refreshed after everything else.
+  assert.deepEqual(calls.slice(-3), [
     `uv run ${join(dir, "scripts/autograph/cleanup.py")} . --apply @${layout.vault}`,
+    `restart @${layout.current}`,
     `npm i -g @googleworkspace/cli@latest @${dir}`,
   ]);
   assert.equal(createVersionStore(iva.home).settled(), outcome.version);

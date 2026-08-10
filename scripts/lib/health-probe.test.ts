@@ -12,9 +12,27 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "node:http";
-import { probeEnvironment, probeVersion } from "./health-probe.ts";
+import type { AddressInfo } from "node:net";
+import {
+  awaitServing,
+  probeEnvironment,
+  probeVersion,
+  servicePort,
+} from "./health-probe.ts";
+import { DEFAULT_PORT } from "./ports.ts";
 
 const PROBE_PORT = 18730;
+
+/** A port nothing holds: a wait for the service must not be answered by a neighbour. */
+function freePort(): Promise<number> {
+  const server = createServer();
+  return new Promise((resolve) =>
+    server.listen(0, "127.0.0.1", () => {
+      const { port } = server.address() as AddressInfo;
+      server.close(() => resolve(port));
+    }),
+  );
+}
 
 function versionDir(t: { after(fn: () => void): void }, body: string): string {
   const dir = mkdtempSync(join(tmpdir(), "iva-health-"));
@@ -88,6 +106,70 @@ test("the probe environment is the service's, with the probe's own port", (t) =>
     IVA_PORT: "8901",
     IVA_HEALTH_PROBE: "1",
   });
+});
+
+test("the service port is the one the installation's .env names", (t) => {
+  const dir = versionDir(t, "");
+  const env = join(dir, ".env");
+
+  writeFileSync(env, "AGENT_LANGUAGE=en\nIVA_PORT=8901\n");
+  assert.equal(servicePort(env), 8901);
+  // The spelling the unit uses when the installation predates IVA_PORT.
+  writeFileSync(env, "PORT=8902\n");
+  assert.equal(servicePort(env), 8902);
+  writeFileSync(env, "IVA_PORT=\nPORT=8903\n");
+  assert.equal(servicePort(env), 8903);
+  // Nonsense and a missing file both mean the port the service defaults to:
+  // waiting on a port nothing was ever on would roll back a healthy version.
+  writeFileSync(env, "IVA_PORT=eight-thousand\n");
+  assert.equal(servicePort(env), DEFAULT_PORT);
+  writeFileSync(env, "IVA_PORT=99999\n");
+  assert.equal(servicePort(env), DEFAULT_PORT);
+  assert.equal(servicePort(join(dir, "missing.env")), DEFAULT_PORT);
+});
+
+test("the wait after a restart ends as soon as the service answers", async (t) => {
+  const port = await freePort();
+  const server = createServer((_request, response) =>
+    response.writeHead(200).end("ok"),
+  );
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  // Started late, the way a service that has to bundle its sources comes up.
+  setTimeout(() => server.listen(port, "127.0.0.1"), 300);
+
+  const result = await awaitServing({
+    port,
+    timeoutMs: 15_000,
+    intervalMs: 50,
+  });
+  assert.deepEqual(result, { ok: true, log: "" });
+});
+
+test("a service that never answers ends the wait on the deadline", async () => {
+  const port = await freePort();
+  const began = Date.now();
+
+  const result = await awaitServing({ port, timeoutMs: 600, intervalMs: 50 });
+  assert.equal(result.ok, false);
+  assert.match(result.log, new RegExp(`nothing answered on port ${port}`, "u"));
+  // Bounded: an update that hangs here never finishes and never rolls back.
+  assert.ok(Date.now() - began < 10_000, `waited ${Date.now() - began}ms`);
+});
+
+test("a service that answers with an error is not serving", async (t) => {
+  // The agent's process is up and its endpoint is not: a card store it cannot
+  // open answers 503 as honestly as it answers nothing.
+  const port = await freePort();
+  const server = createServer((_request, response) =>
+    response.writeHead(503).end("cannot open the card store"),
+  );
+  await new Promise<void>((resolve) =>
+    server.listen(port, "127.0.0.1", resolve),
+  );
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+
+  const result = await awaitServing({ port, timeoutMs: 600, intervalMs: 50 });
+  assert.equal(result.ok, false);
 });
 
 test("a healthy build answers on the probe port and is stopped again", async (t) => {
