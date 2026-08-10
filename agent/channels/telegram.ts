@@ -849,6 +849,8 @@ function failureMessage(data: { message: string; details?: unknown }): string {
 
 // Транспорт Outbox для канала: доставка через хендл eve. Что и в каком виде отдавать,
 // решает шов (agent/lib/outbox.ts) — здесь только вызовы Bot API и логи отказов.
+// stop канал не выставляет намеренно: ответ в диалоге короткий, и упавший кусок
+// не повод молчать остальными. Обрыв хвоста — про ночные отчёты, не про разговор.
 function outboxTransport(
   tg: Pick<TelegramHandle, "chatId" | "messageThreadId" | "request" | "post">,
 ): OutboxTransport {
