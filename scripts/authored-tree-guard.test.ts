@@ -144,7 +144,27 @@ test("the authored tree opens no new escape out of agent/", () => {
 // uses when it needs the authored tree at call time but must still load without it.
 // Passing here therefore does not make a module movable — a command may still need it at
 // call time; `scripts/cli/account-entrypoints.test.ts` runs the commands themselves.
-const STATIC_SPECIFIER = /\bfrom\s+"([^"\n]+)"/gu;
+// Anchored at the start of a line, where a static import/export clause is the only thing
+// that can stand: prose in a comment naming an import no longer counts as one.
+const FROM_CLAUSE =
+  /^\s*(?:import|export)\b(?<clause>[^"]*?)\bfrom\s+"(?<specifier>[^"\n]+)"/gmu;
+
+// Specifiers a load actually resolves. `import type`/`export type` clauses are erased by
+// the compiler, so they emit no require of the authored tree at run time and cannot break
+// a CLI running without it; an inline `{ type X }` inside a value clause still loads the
+// module, so only the type-only form is dropped.
+function loadTimeSpecifiers(source: string): string[] {
+  const specifiers: string[] = [];
+  for (const match of source.matchAll(FROM_CLAUSE)) {
+    const { clause, specifier } = match.groups as {
+      clause: string;
+      specifier: string;
+    };
+    if (/^\s*type\b/u.test(clause)) continue;
+    specifiers.push(specifier);
+  }
+  return specifiers;
+}
 
 // Every edge the CLI would resolve at load time, as "importer -> specifier".
 function cliEdgesIntoAuthoredTree(): string[] {
@@ -157,13 +177,13 @@ function cliEdgesIntoAuthoredTree(): string[] {
     const file = queue.shift() as string;
     if (seen.has(file)) continue;
     seen.add(file);
-    for (const match of readFileSync(join(ROOT, file), "utf8").matchAll(
-      STATIC_SPECIFIER,
+    for (const specifier of loadTimeSpecifiers(
+      readFileSync(join(ROOT, file), "utf8"),
     )) {
-      const target = targetOf(match[1], file);
+      const target = targetOf(specifier, file);
       if (target === null) continue;
       if (!relative(AUTHORED, target).startsWith(".."))
-        edges.push(`${file} -> ${match[1]}`);
+        edges.push(`${file} -> ${specifier}`);
       else queue.push(posix.normalize(relative(ROOT, target)));
     }
   }
@@ -175,6 +195,28 @@ test("the CLI loads without the authored tree present", () => {
     cliEdgesIntoAuthoredTree(),
     [],
     "iva repair/doctor run on installs whose agent/ is missing or half-written — reach the authored tree through a dynamic import inside the call that needs it",
+  );
+});
+
+test("the CLI walk keeps value imports and drops only the erased type-only ones", () => {
+  assert.deepEqual(
+    loadTimeSpecifiers(
+      'import { runScheduledJob } from "#lib/schedule-runner.ts";',
+    ),
+    ["#lib/schedule-runner.ts"],
+    "a value import of the authored tree must still fail the CLI load-time walk",
+  );
+  assert.deepEqual(
+    loadTimeSpecifiers(
+      'import { readFileSync, type Stats } from "#lib/schedule-runner.ts";\nexport * from "#lib/settings.ts";',
+    ),
+    ["#lib/schedule-runner.ts", "#lib/settings.ts"],
+  );
+  assert.deepEqual(
+    loadTimeSpecifiers(
+      'import type { ScheduleCron } from "#lib/schedule-table.ts";\nexport type { ScheduleName } from "#lib/schedule-table.ts";',
+    ),
+    [],
   );
 });
 
