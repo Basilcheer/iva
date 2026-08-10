@@ -35,7 +35,8 @@ export type Runner = (
 ) => Promise<CommandResult>;
 
 type Say = (message: string) => void;
-type Health = { ok: boolean; log: string };
+/** `busy`: the port went, not the version - the same tree on another port may pass. */
+type Health = { ok: boolean; log: string; busy?: boolean };
 type Probe = (dir: string, port: number) => Promise<Health>;
 /** Whether the user's own files are in the version that runs. */
 type Custom = "none" | "applied" | "stock";
@@ -59,6 +60,8 @@ export type UpdateOutcome =
 const KEEP = 2;
 const INSTALL = ["ci", "--no-audit", "--no-fund"];
 const BUILD = ["run", "build"];
+/** Candidate ports one probe may lose to a neighbour before it gives up. */
+const PROBE_PORTS = 4;
 const MIGRATION_FILE = /^\d{3}-[a-z0-9-]+\.ts$/;
 const MIGRATION_MARKER = "migrations.json";
 const OUTPUT_TAIL = 20_000;
@@ -252,13 +255,28 @@ export async function finishVersionUpdate({
     // A real server start, on scratch state: an update about to be thrown away
     // must not have touched the installation.
     const scratch = store.sandboxState(name);
+    const selector = new PortSelector(new PortChecker([bindProbe, procProbe]));
     try {
       // The pid spreads two updaters apart; the selector steps over what listens.
-      const port = await new PortSelector(
-        new PortChecker([bindProbe, procProbe]),
-      ).firstFree(DEFAULT_PORT + 100 + (process.pid % 100));
-      if (port === null) return { ok: false, log: "no free port for a probe" };
-      return await check(dir, port);
+      // Nothing holds a port between that check and the start, so the version's own
+      // bind is the only reservation there is: a port a neighbour took inside that
+      // window comes back as busy, and the next candidate gets the same chance.
+      let from = DEFAULT_PORT + 100 + (process.pid % 100);
+      for (let left = PROBE_PORTS; left > 0; left--) {
+        const port = await selector.firstFree(from);
+        if (port === null)
+          return { ok: false, log: "no free port for a probe" };
+        const health = await check(dir, port);
+        if (!health.busy) return health;
+        log(
+          `the probe port ${port} was taken before the version could bind it`,
+        );
+        from = port + 1;
+      }
+      return {
+        ok: false,
+        log: `no probe port stayed free for ${PROBE_PORTS} tries`,
+      };
     } finally {
       rmSync(scratch, { recursive: true, force: true });
     }

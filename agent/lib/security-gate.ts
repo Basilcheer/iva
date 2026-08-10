@@ -177,9 +177,28 @@ export function sanitizeInbound(
   return { text, blocked: false, reason: "clean", flags, truncatedChars };
 }
 
+// The shapes the providers of this installation actually issue - agent/provider.ts
+// (ollama, opencode, openrouter, codex/OpenAI) and agent/lib/embeddings.ts (jina,
+// deepinfra) - plus the neighbours that share the same .env. A key body carries
+// hyphens and underscores (sk-proj-…, sk-or-v1-…, sk-ant-api03-…_…), so a class that
+// stops at the first hyphen lets a live key through whole: that is the leak these
+// patterns close. The lookbehind keeps ordinary prose out ("risk-adjusted-return-…"
+// must not become a finding), and each family keeps its own name so the log says
+// which key leaked.
+// Ollama Cloud, DeepInfra and Deepgram issue keys with no telltale prefix. They are
+// caught by the name beside them - generic_key (any *_API_KEY=… or "api key": …),
+// bearer_token, dot_env_content. A bare high-entropy blob with no name next to it is
+// deliberately not matched: no rule tells it from ordinary text, and redacting the
+// model's own answers costs more than that miss.
 const API_KEY_PATTERNS: readonly Pattern[] = [
-  ["openai", /sk-[A-Za-z0-9]{20,}/g],
-  ["anthropic", /sk-ant-[A-Za-z0-9-]{20,}/g],
+  ["openai", /(?<![A-Za-z0-9])sk-(?!ant-|or-)[A-Za-z0-9_-]{20,}/g],
+  ["openrouter", /(?<![A-Za-z0-9])sk-or-(?:v\d+-)?[A-Za-z0-9_-]{20,}/g],
+  ["anthropic", /(?<![A-Za-z0-9])sk-ant-[A-Za-z0-9_-]{20,}/g],
+  ["groq", /(?<![A-Za-z0-9])gsk_[A-Za-z0-9]{20,}/g],
+  ["jina", /(?<![A-Za-z0-9])jina_[A-Za-z0-9_-]{20,}/g],
+  // OAuth access token of the ChatGPT subscription (codex) and DeepInfra's scoped
+  // token: a three-segment JWT, base64url, always starting from the `{"` header.
+  ["jwt", /eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g],
   ["google_api", /AIza[A-Za-z0-9\-_]{35}/g],
   ["github_pat", /ghp_[A-Za-z0-9]{36}/g],
   ["github_fine", /github_pat_[A-Za-z0-9_]{82}/g],
@@ -193,14 +212,27 @@ const API_KEY_PATTERNS: readonly Pattern[] = [
   ["supabase", /sbp_[A-Za-z0-9]{40,}/g],
   ["fal_key", /fal_[A-Za-z0-9_]{20,}/g],
   ["bearer_token", /Bearer\s+[A-Za-z0-9\-._~+/]+=*/gi],
+  // The name a prefixless key travels with, in every form a notice shows it: an env
+  // line (OLLAMA_API_KEY=…), a config dump ("DEEPINFRA_API_KEY": "…"), a sentence
+  // from the provider itself ("api key: …").
   [
     "generic_key",
-    /(?:api[_-]?key|apikey|api[_-]?token)\s*[=:]\s*["']?[A-Za-z0-9\-._]{20,}/gi,
+    /(?:api[\s_-]?key|apikey|api[\s_-]?token)["']?\s*[=:]\s*["']?[A-Za-z0-9\-._]{20,}/gi,
   ],
   [
     "generic_secret",
     /(?:secret|password|passwd|pwd)\s*[=:]\s*["']?[^\s"']{8,}/gi,
   ],
+  // A credential that travels as part of an address rather than beside a name -
+  // how MEMORY_EMBED_URL carries the DeepInfra key, and a proxy, a Postgres or a
+  // Redis URL its own. The shape of the userinfo is the provider's business, so
+  // the position is the whole rule: right after `://` and right before the `@` of
+  // a host. Both halves go, because either can be the secret; the host stays, or
+  // a notice about a failed call stops saying which call failed. The colon is what
+  // keeps ordinary text out: `git@github.com:…` has no `://`, `https://user@host`
+  // has no password, and an address in prose has neither.
+  // The user half may be empty (`redis://:password@host`); the secret half may not.
+  ["url_userinfo", /(?<=:\/\/)[^\s/?#@:]*:[^\s/?#@]+(?=@[^\s/?#]+)/g],
 ];
 
 const INTERNAL_PATH_PATTERNS: readonly Pattern[] = [

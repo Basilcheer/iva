@@ -152,3 +152,20 @@ test("keeps only the first line and truncates the default gist to about 120 char
   assert.equal(result.en.includes("second line"), false);
   assert.equal(result.en.includes("must not be shown"), false);
 });
+
+test("redacts a secret before truncating the gist, so no half key survives", () => {
+  const original = console.error;
+  console.error = () => {};
+  try {
+    // The key straddles the 120-character cut: a gist truncated first would carry
+    // its head into the chat.
+    const message = `Incorrect API key provided ${"x".repeat(80)} api_key=S3CRETKEYS3CRETKEYS3CRET more`;
+
+    const result = humanizeProviderError({ message });
+
+    assert.equal(result.en.includes("S3CRET"), false);
+    assert.equal(result.en.includes("[REDACTED]"), true);
+  } finally {
+    console.error = original;
+  }
+});

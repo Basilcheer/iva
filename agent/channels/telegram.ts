@@ -9,7 +9,11 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 // Outbox — ЕДИНЫЙ шов наружу (тот же, через который уходят ночные отчёты cron):
 // внутри него outbound-Gate, выбор rich/HTML, нарезка на чанки и plain-фолбэк.
-import { sendThroughOutbox, type OutboxTransport } from "../lib/outbox.js";
+import {
+  noticeSender,
+  sendThroughOutbox,
+  type OutboxTransport,
+} from "../lib/outbox.js";
 // Inbound-пайплайн — единственный вход внутрь: allowlist, решение о диспатче,
 // запись в Vault, медиа со зрением и транскрипцией, inbound-Gate и контекст хода.
 // Канал приносит ему эффекты и сам про разбор входящего ничего не знает.
@@ -18,7 +22,8 @@ import { allowedTelegramUsers } from "../lib/telegram-allowlist.js";
 import { describeImage } from "../vision.js";
 import { transcribe } from "../transcribe.js";
 // Статус-сообщение хода («Работаю…», кнопка Стоп, уборка в терминале) и служебное
-// объяснение сбоя — UI канала, обе реплики идут мимо Outbox.
+// объяснение сбоя — UI канала, обе реплики идут мимо Outbox. Мимо Outbox — не мимо
+// гейта: всё, во что подставлен runtime-контент, уходит через noticeSender.
 import {
   finishTelegramStatus,
   sendWorkingStatus,
@@ -314,8 +319,10 @@ const telegram = telegramChannel({
       } catch {
         /* run-status не прибрался — сообщение об ошибке всё равно отправляем */
       }
-      await notifyTelegramFailure(ctx.session.id, data, (text) =>
-        channel.telegram.sendMessage(text),
+      await notifyTelegramFailure(
+        ctx.session.id,
+        data,
+        noticeSender((text) => channel.telegram.sendMessage(text)),
       );
     },
     // У terminal-сбоя eve следом за turn.failed шлёт session.failed без ctx.
@@ -328,8 +335,10 @@ const telegram = telegramChannel({
           /* best-effort: отсутствие chat-state не должно ломать уведомление */
         }
       }
-      await notifyTelegramFailure(data.sessionId, data, (text) =>
-        channel.telegram.sendMessage(text),
+      await notifyTelegramFailure(
+        data.sessionId,
+        data,
+        noticeSender((text) => channel.telegram.sendMessage(text)),
       );
     },
   },
@@ -341,7 +350,7 @@ const telegram = telegramChannel({
     return runTelegramInbound(message, {
       botUsername: tg.botUsername,
       request: (method, body) => tg.request(method, body),
-      sendMessage: (text) => tg.sendMessage(text),
+      sendMessage: noticeSender((text) => tg.sendMessage(text)),
       startTyping: () => tg.startTyping(),
       describeImage,
       transcribe,

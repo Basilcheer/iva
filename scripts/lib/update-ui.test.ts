@@ -1677,3 +1677,61 @@ test("local commits skip the candidate and keep the in-place path", async () => 
   assert.equal(integrated.changed, true);
   assert.equal(await tx.promoteCandidate(), false);
 });
+
+test("a post-commit failure reaches the chat with its secret redacted", async () => {
+  const calls: TelegramCall[] = [];
+  const fetchImpl: MockFetch = async (url, init) => {
+    calls.push({ method: url.split("/").at(-1), body: JSON.parse(init.body) });
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ ok: true, result: {} }),
+    };
+  };
+  const reporter = createTelegramUpdateReporter({
+    token: "token",
+    job: { chatId: 1, messageId: 100, locale: "en" },
+    env: {},
+    fetchImpl,
+  });
+  assert.ok(reporter);
+  const planted = `api_key=${"z".repeat(24)}`;
+
+  await reporter.postCommitFailure(`systemctl refused: ${planted}`);
+  reporter.dispose();
+
+  const text = calls.at(-1)?.body.text ?? "";
+  assert.match(text, /systemctl refused: \[REDACTED\]/);
+  assert.doesNotMatch(text, /zzzz/);
+});
+
+// The build output an update dumps into the chat carries whatever the build printed -
+// including a key in the shape this installation's provider actually issues.
+test("a build failure carrying a real key shape is redacted the same way", async () => {
+  const calls: TelegramCall[] = [];
+  const fetchImpl: MockFetch = async (url, init) => {
+    calls.push({ method: url.split("/").at(-1), body: JSON.parse(init.body) });
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ ok: true, result: {} }),
+    };
+  };
+  const reporter = createTelegramUpdateReporter({
+    token: "token",
+    job: { chatId: 1, messageId: 100, locale: "en" },
+    env: {},
+    fetchImpl,
+  });
+  assert.ok(reporter);
+  const key = `sk-or-v1-${"4f9c1e77ab3d5602".repeat(4)}`;
+
+  await reporter.postCommitFailure(
+    `npm run build\n  provider check failed: ${key}\n  exit 1`,
+  );
+  reporter.dispose();
+
+  const text = calls.at(-1)?.body.text ?? "";
+  assert.match(text, /provider check failed: \[REDACTED\]/);
+  assert.doesNotMatch(text, /sk-or-v1|4f9c1e77/);
+});

@@ -18,6 +18,7 @@ import {
   scanOversizeWorkingTreeFiles,
 } from "../lib/memory-maintenance.ts";
 import { notificationChat } from "../lib/notification-chat.ts";
+import { redactNotice } from "../lib/notice.ts";
 
 const VAULT = resolve(process.env.ASSISTANT_VAULT_DIR ?? "vault");
 // The autograph code lives in THIS repo, not in the vault: the vault is user data only.
@@ -71,7 +72,11 @@ function run(cmd: string, args: string[], cwd = VAULT) {
   };
 }
 
-async function telegram(text: string): Promise<void> {
+// Every alert here is built from runtime data: the stderr of a git push (which is
+// where a remote URL carrying a token shows up), card paths, error text. The Gate
+// stands on the send itself (the rule: agent/lib/outbox.ts).
+async function telegram(message: string): Promise<void> {
+  const text = await redactNotice(message);
   if (!BOT || !CHAT) {
     console.error(
       "doctor: no TELEGRAM_BOT_TOKEN/TELEGRAM_DIGEST_CHAT_ID — alert not sent:",

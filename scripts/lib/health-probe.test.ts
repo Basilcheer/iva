@@ -289,6 +289,48 @@ test("a foreign server on the probe port never passes for the version", async (t
   const result = await probe(dir, {}, 3000);
   assert.equal(result.ok, false, result.log);
   assert.match(result.log, /the probe port was already answering/u);
+  // The port is somebody else's, so this says nothing about the version: the
+  // caller is owed another port, not a failed update.
+  assert.equal(result.busy, true);
+});
+
+test("a start that loses the port between the check and the bind is busy, not broken", async (t) => {
+  // The window no check can close: a port free when it was chosen and taken by
+  // the time the version binds it. Held on loopback, where a server really binds,
+  // and silently - so nothing answers and only the start itself finds out.
+  const squatter = createServer();
+  const port = await new Promise<number>((resolve) =>
+    squatter.listen(0, "127.0.0.1", () =>
+      resolve((squatter.address() as AddressInfo).port),
+    ),
+  );
+  t.after(() => new Promise((resolve) => squatter.close(resolve)));
+
+  const dir = versionDir(t, SERVER);
+  const result = await probeVersion({
+    dir,
+    port,
+    command: process.execPath,
+    args: [join(dir, "server.mjs")],
+    timeoutMs: 15_000,
+    intervalMs: 50,
+  });
+  assert.equal(result.ok, false, result.log);
+  assert.equal(result.busy, true, result.log);
+  assert.match(result.log, /EADDRINUSE/u);
+});
+
+test("a version that cannot start on its own account is not busy", async (t) => {
+  const dir = versionDir(
+    t,
+    `process.stderr.write("Cannot find module '../scripts/lib/provider.ts'\\n");\nprocess.exit(1);\n`,
+  );
+
+  // Nothing about this failure is the port's, and a retry elsewhere would only
+  // start a broken version again.
+  const result = await probe(dir, {}, 15_000);
+  assert.equal(result.ok, false);
+  assert.equal(result.busy, false, result.log);
 });
 
 // The updater writes the flag, the server-start hook reads it, and neither side can import

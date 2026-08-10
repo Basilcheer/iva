@@ -6,7 +6,25 @@
 // пишется как OutboxTransport, и обойти гейт по дороге больше нечем.
 //
 // Служебные реплики самого harness (статус «Работаю…», ack на кнопку, уведомление
-// о падении хода) идут мимо шва: это не текст модели, а UI канала.
+// о падении хода, экраны /menu, экран обновления) идут мимо шва: это не текст модели,
+// а UI канала. Но мимо шва — не мимо гейта. Правило одно на весь репо:
+//   • реплика из одних статических строк (лейблы фаз, кнопки, «Работаю…») гейт не
+//     проходит — редактить в ней нечего;
+//   • реплика, в которую подставлен runtime-контент (текст ошибки, вывод команды,
+//     содержимое файла), проходит гейт ДО отправки — иначе секрет уезжает в чат в
+//     обход Outbox;
+//   • гейт стоит на вызове Bot API, а не во вьюхе над ним: у канала это noticeSender
+//     ниже, у моста — tg() в scripts/poller/transport.ts, у апдейтера — call() в
+//     scripts/lib/telegram-status.ts, у Brain — своя отправка. Один вызов гейтит
+//     тикер, сводку, «уже идёт» и перерисовку разом, и следующий экран гейт забыть
+//     не сможет;
+//   • отдельный гейт на СБОРКЕ текста остаётся ровно там, где текст потом режут
+//     (гист в error-humanizer, деталь ошибки в telegram-media): обрезанный ключ гейт
+//     уже не узнаёт, и его голова уехала бы в чат целой.
+// Речь только о том, что видит чат: вывод в терминал и journal (апдейтер печатает
+// туда ход сборки) гейт не проходит — там и так лежит полный лог.
+// Скрипты, которым авторское дерево недоступно на загрузке (CLI, апдейтер), берут
+// то же самое через scripts/lib/notice.ts.
 //
 // Импорты с расширением .ts намеренно: модуль грузится не только из eve-бандла, но
 // и голым node (cron → scripts/lib/telegram-send.ts), где «./x.js» → «./x.ts» никто
@@ -43,20 +61,42 @@ export type OutboxResult = {
   error: string; // первый отказ доставки
 };
 
-export async function sendThroughOutbox(
-  message: string,
-  transport: OutboxTransport,
-  { limit = 4096 }: { limit?: number } = {},
-): Promise<OutboxResult> {
-  // Outbound-гейт: редактим утёкшие секреты и эксфил-URL ДО отправки. Fail-open —
-  // нашли что-то, шлём отредактированное и громко логируем (блокировать ответ
-  // целиком хуже редкой утечки для единственного владельца инсталляции).
-  const guard = scanOutbound(message);
+// Outbound-гейт: редактим утёкшие секреты и эксфил-URL ДО отправки. Fail-open —
+// нашли что-то, шлём отредактированное и громко логируем (блокировать текст целиком
+// хуже редкой утечки для единственного владельца инсталляции).
+export function redactNotice(text: string): string {
+  const guard = scanOutbound(text);
   if (!guard.clean)
     console.error(
       "[security] outbound leak redacted:",
       guard.findings.map((f) => `${f.type}:${f.name}`).join(", "),
     );
+  return guard.text;
+}
+
+// Служебная реплика канала уходит одним сообщением, без нарезки и rich-пути, но не
+// мимо гейта: обёртка клеит гейт к самому вызову Bot API — как tg() у моста. Бренд на
+// типе делает шов обязательным, а не рекомендованным: NoticeSend собирается только
+// здесь, а эффекты inbound-пайплайна и уведомление о сбое просят именно его, поэтому
+// сырое замыкание над Bot API в них не подставить — tsgo отвергнет.
+export type NoticeSend = ((text: string) => Promise<unknown>) & {
+  readonly gated: "outbound";
+};
+
+export function noticeSender(
+  send: (text: string) => Promise<unknown>,
+): NoticeSend {
+  return Object.assign((text: string) => send(redactNotice(text)), {
+    gated: "outbound" as const,
+  });
+}
+
+export async function sendThroughOutbox(
+  message: string,
+  transport: OutboxTransport,
+  { limit = 4096 }: { limit?: number } = {},
+): Promise<OutboxResult> {
+  const text = redactNotice(message);
 
   const result: OutboxResult = {
     ok: true,
@@ -67,8 +107,8 @@ export async function sendThroughOutbox(
 
   // Rich-путь рендерит нативно то, чего parse_mode=HTML не умеет. Любой отказ —
   // просто HTML-путь ниже, то есть худший случай равен обычному поведению.
-  if (transport.sendRich && needsRichMessage(guard.text)) {
-    const rich = await transport.sendRich(guard.text);
+  if (transport.sendRich && needsRichMessage(text)) {
+    const rich = await transport.sendRich(text);
     if (rich.ok) {
       result.delivered = 1;
       return result;
@@ -84,7 +124,7 @@ export async function sendThroughOutbox(
 
   // toTelegramHtmlChunks режет И конвертирует, гарантируя длину каждого чанка
   // ≤limit ПОСЛЕ конвертации. Пустые чанки не шлём: Telegram отвергает пустой текст.
-  for (const html of toTelegramHtmlChunks(guard.text, limit)) {
+  for (const html of toTelegramHtmlChunks(text, limit)) {
     if (!html) continue;
     const sent = await transport.sendHtml(html);
     if (sent.ok) {

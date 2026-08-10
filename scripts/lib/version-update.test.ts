@@ -2,7 +2,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
-import { createServer } from "node:http";
 import {
   existsSync,
   mkdirSync,
@@ -19,7 +18,6 @@ import {
   fixtureProbe,
   fixtureRunner,
 } from "../fixtures/version-update-harness.ts";
-import { DEFAULT_PORT } from "./ports.ts";
 import { createVersionStore, layoutFor } from "./version-store.ts";
 import { runVersionUpdate, type UpdateOutcome } from "./version-update.ts";
 
@@ -974,17 +972,8 @@ test("the chores of the installation are run around the restart, out of the vers
   );
 });
 
-test("the probe is started on a port nothing is listening on", async (t) => {
+test("the probe is started once when its port is nobody else's", async (t) => {
   const iva = world(t);
-  // The port this process would reach for first, taken by somebody else - the
-  // second updater on the box, or anything at all.
-  const taken = DEFAULT_PORT + 100 + (process.pid % 100);
-  const squatter = createServer();
-  await new Promise<void>((resolve) =>
-    squatter.listen(taken, "0.0.0.0", resolve),
-  );
-  t.after(() => new Promise((resolve) => squatter.close(resolve)));
-
   const ports: number[] = [];
   const outcome = updated(
     await iva.update({
@@ -995,8 +984,55 @@ test("the probe is started on a port nothing is listening on", async (t) => {
     }),
   );
   assert.deepEqual(ports.length, 1, "the version is started once, not retried");
-  assert.notEqual(ports[0], taken);
   assert.equal(createVersionStore(iva.home).currentName(), outcome.version);
+});
+
+test("a probe port lost between the check and the start is traded for the next", async (t) => {
+  const iva = world(t);
+  // Nothing reserves the port the check found free, so the second updater on the
+  // box can bind it first; the start that arrives after it says so and is owed
+  // another candidate, not a failed update.
+  const ports: number[] = [];
+  const outcome = updated(
+    await iva.update({
+      probe: (_dir, port) => {
+        ports.push(port);
+        return Promise.resolve(
+          ports.length === 1
+            ? {
+                ok: false,
+                busy: true,
+                log: `listen EADDRINUSE: address already in use 127.0.0.1:${port}`,
+              }
+            : { ok: true, log: "" },
+        );
+      },
+    }),
+  );
+  assert.equal(ports.length, 2, ports.join(", "));
+  assert.ok(ports[1] > ports[0], ports.join(", "));
+  assert.equal(createVersionStore(iva.home).currentName(), outcome.version);
+});
+
+test("a box where every candidate port is taken ends the update instead of spinning", async (t) => {
+  const iva = world(t);
+  const ports: number[] = [];
+  const outcome = await iva.update({
+    probe: (_dir, port) => {
+      ports.push(port);
+      return Promise.resolve({ ok: false, busy: true, log: "EADDRINUSE" });
+    },
+  });
+
+  assert.equal(outcome.status, "unhealthy", JSON.stringify(outcome));
+  // Bounded and increasing: an update that keeps losing the race still stops.
+  assert.ok(ports.length > 1 && ports.length < 10, ports.join(", "));
+  assert.deepEqual(
+    [...ports].sort((a, b) => a - b),
+    ports,
+    ports.join(", "),
+  );
+  assert.equal(createVersionStore(iva.home).currentName(), null);
 });
 
 test("a version prepared but never activated is reused instead of rebuilt", async (t) => {

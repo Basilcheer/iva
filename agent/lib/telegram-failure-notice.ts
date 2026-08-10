@@ -3,9 +3,12 @@
 // один раз. Заявка на уведомление берётся по sessionId и живёт TTL; не ушедшее
 // сообщение освобождает заявку, чтобы следующее событие всё-таки объяснило сбой.
 //
-// Это служебная реплика канала, а не текст модели: мимо Outbox.
+// Это служебная реплика канала, а не текст модели: мимо Outbox, но не мимо гейта —
+// текст провайдера и errorId здесь runtime-контент. Отправку модуль поэтому просит
+// брендованную (NoticeSend): гейт стоит на вызове Bot API, а не тут (правило в outbox.ts).
 import { humanizeProviderError } from "./error-humanizer.ts";
 import { tr } from "./i18n.ts";
+import type { NoticeSend } from "./outbox.ts";
 
 export type TelegramFailureData = { message: string; details?: unknown };
 
@@ -70,7 +73,7 @@ export function telegramFailureMessage(data: TelegramFailureData): string {
 export async function notifyTelegramFailure(
   sessionId: string,
   data: TelegramFailureData,
-  send: (text: string) => Promise<unknown>,
+  send: NoticeSend,
   { now = Date.now() }: { now?: number } = {},
 ): Promise<void> {
   const claim = claimFailureNotification(sessionId, now);

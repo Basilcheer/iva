@@ -1,3 +1,5 @@
+import { redactNotice } from "./outbox.ts";
+
 export interface ProviderErrorText {
   readonly en: string;
   readonly ru: string;
@@ -38,7 +40,11 @@ function maskTelegramBotToken(text: string): string {
 }
 
 function firstLineGist(message: string): string {
-  const unwrapped = maskTelegramBotToken(stripRetryWrapper(message));
+  // The Gate before the cut, not after it: a truncated key is one the Gate no longer
+  // recognizes, and its head would ride into the chat intact.
+  const unwrapped = redactNotice(
+    maskTelegramBotToken(stripRetryWrapper(message)),
+  );
   const firstLine = (unwrapped.split(/\r?\n/u, 1)[0] ?? "")
     .trim()
     .replace(/\s+/gu, " ");

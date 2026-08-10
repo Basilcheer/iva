@@ -353,3 +353,106 @@ test("turn.failed claims notification before an overlapping session.failed can p
   await turn;
   assert.equal(callsSince(before, "sendMessage").length, 1);
 });
+
+// Уведомление о сбое собирается из runtime-контента (текст провайдера, errorId), и до
+// Bot API оно доходит через шов канала (noticeSender). Планты — под generic_key и под
+// формат телеграм-токена; проверяем то, что реально ушло в теле запроса.
+const PLANTED_KEY = `api_key=${"z".repeat(24)}`;
+const PLANTED_BOT_TOKEN = `1234567890:${"A".repeat(35)}`;
+
+function mutedConsole() {
+  const original = console.error;
+  console.error = () => {};
+  return () => {
+    console.error = original;
+  };
+}
+
+test("turn.failed redacts a provider key before it reaches Bot API", async () => {
+  const chatId = "706";
+  const restore = mutedConsole();
+  const before = apiCalls.length;
+  try {
+    await emitTurnFailed(
+      {
+        code: "MODEL_CALL_FAILED",
+        details: { errorId: "err-key-706" },
+        message: `Incorrect API key provided: ${PLANTED_KEY}`,
+        sequence: 0,
+        turnId: "turn_0",
+      },
+      { chatId, sessionId: "failed-session-key" },
+    );
+  } finally {
+    restore();
+  }
+
+  const sends = callsSince(before, "sendMessage");
+  assert.equal(sends.length, 1);
+  const text = String(sends[0].body!.text);
+  assert.equal(text.includes("zzzz"), false);
+  assert.equal(text.includes("[REDACTED]"), true);
+  assert.equal(text.endsWith("Error id: err-key-706"), true);
+});
+
+// errorId никто не чистит по дороге: если шов канала снять, ключ уедет в чат целым.
+test("turn.failed redacts a secret carried by errorId itself", async () => {
+  const chatId = "707";
+  const restore = mutedConsole();
+  const before = apiCalls.length;
+  try {
+    await emitTurnFailed(
+      {
+        code: "MODEL_CALL_FAILED",
+        details: { errorId: PLANTED_KEY },
+        message: "Provider returned a strange response",
+        sequence: 0,
+        turnId: "turn_0",
+      },
+      { chatId, sessionId: "failed-session-error-id" },
+    );
+  } finally {
+    restore();
+  }
+
+  const sends = callsSince(before, "sendMessage");
+  assert.equal(sends.length, 1);
+  const text = String(sends[0].body!.text);
+  assert.equal(text.includes("zzzz"), false);
+  assert.equal(text.endsWith("Error id: [REDACTED]"), true);
+});
+
+// Худший вход разом: пусто в message, многострочный стек и оба секрета в одной ошибке.
+test("session.failed survives an empty error and redacts a multi-line one", async () => {
+  const restore = mutedConsole();
+  const emptyBefore = apiCalls.length;
+  try {
+    await emitSessionFailed(
+      { code: "MODEL_CALL_FAILED", message: "", sessionId: "failed-empty" },
+      { chatId: "708", sessionId: "failed-empty" },
+    );
+    const empty = callsSince(emptyBefore, "sendMessage");
+    assert.equal(empty.length, 1);
+    assert.equal(empty[0].body!.text, "Turn failed: Unknown provider error");
+
+    const before = apiCalls.length;
+    await emitSessionFailed(
+      {
+        code: "MODEL_CALL_FAILED",
+        details: { errorId: "err-hostile-709" },
+        message: `bot ${PLANTED_BOT_TOKEN} rejected the call: ${PLANTED_KEY}\nat stack ${PLANTED_KEY}`,
+        sessionId: "failed-hostile",
+      },
+      { chatId: "709", sessionId: "failed-hostile" },
+    );
+    const sends = callsSince(before, "sendMessage");
+    assert.equal(sends.length, 1);
+    const text = String(sends[0].body!.text);
+    assert.equal(text.includes("zzzz"), false);
+    assert.equal(text.includes("AAAA"), false);
+    assert.equal(text.includes("at stack"), false);
+    assert.equal(text.includes("[REDACTED]"), true);
+  } finally {
+    restore();
+  }
+});

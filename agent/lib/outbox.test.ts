@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  noticeSender,
+  redactNotice,
   sendThroughOutbox,
   type OutboxAck,
   type OutboxTransport,
@@ -388,4 +390,64 @@ await test("отказ rich-сообщения проваливается в HTM
     sent.map((s) => s.kind),
     ["rich", "html"],
   );
+});
+
+await test("redactNotice проводит служебное уведомление через тот же Gate", (t) => {
+  const logged = captureErrors(t);
+  const planted = `api_key=${"z".repeat(24)}`;
+
+  const text = redactNotice(`build failed: ${planted}`);
+
+  assert.equal(text, "build failed: [REDACTED]");
+  assert.match(
+    logged.join("\n"),
+    /outbound leak redacted: api_key:generic_key/u,
+  );
+});
+
+await test("redactNotice не трогает чистый текст и переживает пустой", (t) => {
+  const logged = captureErrors(t);
+
+  assert.equal(redactNotice("Iva обновлена"), "Iva обновлена");
+  assert.equal(redactNotice(""), "");
+  assert.deepEqual(logged, []);
+});
+
+await test("redactNotice чистит многострочное уведомление целиком", (t) => {
+  captureErrors(t);
+  const planted = `api_key=${"z".repeat(24)}`;
+
+  const text = redactNotice(`line one\nline two ${planted}\nline three`);
+
+  assert.equal(text, "line one\nline two [REDACTED]\nline three");
+});
+
+// noticeSender — тот самый шов служебных реплик: гейт приклеен к вызову Bot API,
+// а не к месту, где текст собрали.
+await test("noticeSender гейтит текст по дороге к транспорту и отдаёт его ответ", async (t) => {
+  captureErrors(t);
+  const sent: string[] = [];
+  const send = noticeSender((text) => {
+    sent.push(text);
+    return Promise.resolve({ ok: true });
+  });
+
+  const ack = await send(`сборка упала: api_key=${"z".repeat(24)}`);
+
+  assert.deepEqual(sent, ["сборка упала: [REDACTED]"]);
+  assert.deepEqual(ack, { ok: true });
+});
+
+await test("noticeSender переживает пустую и многострочную реплику", async (t) => {
+  captureErrors(t);
+  const sent: string[] = [];
+  const send = noticeSender((text) => {
+    sent.push(text);
+    return Promise.resolve(null);
+  });
+
+  await send("");
+  await send(`строка\nвторая api_key=${"z".repeat(24)}\nтретья`);
+
+  assert.deepEqual(sent, ["", "строка\nвторая [REDACTED]\nтретья"]);
 });
