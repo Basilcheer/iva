@@ -9,16 +9,12 @@ import {
   type ChildProcess,
   type SpawnOptions,
 } from "node:child_process";
+import { readFileSync } from "node:fs";
 import {
-  mkdirSync,
-  readFileSync,
-  renameSync,
-  rmSync,
-  statSync,
-  writeFileSync,
-} from "node:fs";
-import { dirname } from "node:path";
-import { randomBytes } from "node:crypto";
+  acquireFileLock,
+  releaseFileLock,
+  writeFileAtomicSync,
+} from "./fs-atomic.ts";
 
 // A repeat within this window is almost certainly a double-fire (a Nitro schedule tick
 // racing a catch-up run, or a manual retrigger) rather than a genuine second cron slot —
@@ -33,8 +29,8 @@ const TAIL_MAX = 4000;
 // future run of every schedule forever (this lock guards the shared status FILE, not
 // one job — every name's admission check and finish-write goes through it).
 const LOCK_STALE_MS = 30_000;
-const LOCK_RETRY_ATTEMPTS = 25;
 const LOCK_RETRY_DELAY_MS = 20;
+const LOCK_TIMEOUT_MS = 500;
 const OWNER_STARTED_AT = Math.round(Date.now() - process.uptime() * 1000);
 
 interface ScheduleStatusEntry {
@@ -140,23 +136,7 @@ export function writeStatusAtomic(
   statusPath: string,
   data: ScheduleStatus,
 ): void {
-  mkdirSync(dirname(statusPath), { recursive: true });
-  // Unique per call (pid + random), not a single shared "<statusPath>.tmp": two
-  // concurrent writers (this schedule-runner call and, in principle, another one
-  // whose withStatusLock retries were exhausted and proceeded unlocked) could
-  // otherwise clobber each other's temp file mid-write, or one could unlink the
-  // other's tmp file out from under an in-flight renameSync (ENOENT).
-  const tmp = `${statusPath}.tmp-${process.pid}-${randomBytes(4).toString("hex")}`;
-  try {
-    writeFileSync(tmp, JSON.stringify(data, null, 2), "utf8");
-    renameSync(tmp, statusPath);
-  } finally {
-    try {
-      rmSync(tmp, { force: true });
-    } catch {
-      // renameSync already consumed it on the success path — nothing left to remove
-    }
-  }
+  writeFileAtomicSync(statusPath, JSON.stringify(data, null, 2));
 }
 
 function tailLines(tail: string, n = 5): string {
@@ -174,43 +154,23 @@ function tailLines(tail: string, n = 5): string {
 // otherwise both read the same pre-reservation status and both decide to proceed before
 // either's write lands, since the tmp+rename write above is atomic per-write but doesn't
 // by itself serialize the READ-THEN-DECIDE-THEN-WRITE sequence across two callers.
-// O_EXCL (the "wx" flag) makes lock *acquisition* itself atomic. `fn` receives whether
-// the lock was actually acquired — on the rare exhausted-retries path we still run `fn`
-// (best-effort, logged by the caller) rather than leaving admission unchecked forever.
+// `fn` receives whether the lock was actually acquired — on the rare timeout path we
+// still run `fn` (best-effort, logged by the caller) rather than leaving admission
+// unchecked forever.
 export async function withStatusLock<T>(
   statusPath: string,
   fn: (acquired: boolean) => T | PromiseLike<T>,
 ): Promise<T> {
   const lockPath = `${statusPath}.lock`;
-  let acquired = false;
-  for (let attempt = 0; attempt < LOCK_RETRY_ATTEMPTS && !acquired; attempt++) {
-    try {
-      mkdirSync(dirname(lockPath), { recursive: true });
-      writeFileSync(lockPath, String(process.pid), { flag: "wx" });
-      acquired = true;
-    } catch (error) {
-      if (errorCode(error) !== "EEXIST") throw error;
-      try {
-        if (Date.now() - statSync(lockPath).mtimeMs >= LOCK_STALE_MS) {
-          rmSync(lockPath, { force: true });
-          continue; // retry the create immediately, no delay needed
-        }
-      } catch {
-        continue; // lock vanished between our failed create and the stat — retry now
-      }
-      await new Promise((resolve) => setTimeout(resolve, LOCK_RETRY_DELAY_MS));
-    }
-  }
+  const held = await acquireFileLock(lockPath, {
+    timeoutMs: LOCK_TIMEOUT_MS,
+    staleMs: LOCK_STALE_MS,
+    retryMs: LOCK_RETRY_DELAY_MS,
+  });
   try {
-    return await fn(acquired);
+    return await fn(held !== null);
   } finally {
-    if (acquired) {
-      try {
-        rmSync(lockPath, { force: true });
-      } catch {
-        // already gone — nothing to clean up
-      }
-    }
+    if (held) releaseFileLock(held);
   }
 }
 

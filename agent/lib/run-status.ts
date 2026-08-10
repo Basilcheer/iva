@@ -9,20 +9,15 @@
 // chatKey = `${chatId}:${threadId ?? ""}` — тот же ключ, что continuation-hook eve
 // (telegram:<chatId>:<threadId>:) и chatKey() моста.
 
-import {
-  closeSync,
-  mkdirSync,
-  openSync,
-  readFileSync,
-  readdirSync,
-  renameSync,
-  rmSync,
-  statSync,
-  writeFileSync,
-  writeSync,
-} from "node:fs";
+import { readFileSync, readdirSync, renameSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
+import {
+  acquireFileLockSync,
+  releaseFileLock,
+  writeFileAtomicSync,
+  type FileLock,
+} from "./fs-atomic.ts";
 
 type StatusRecord = {
   generation?: number;
@@ -31,7 +26,6 @@ type StatusRecord = {
   [key: string]: unknown;
 };
 type StatusPatch = Record<string, unknown>;
-type Lock = { lock: string; token: string };
 
 const errorCode = (error: unknown): string | undefined =>
   error !== null && typeof error === "object" && "code" in error
@@ -62,7 +56,6 @@ const LOCK_TIMEOUT_MS = positiveMs(
   5_000,
 );
 const LOCK_RETRY_MS = 10;
-const lockWaitBuffer = new Int32Array(new SharedArrayBuffer(4));
 
 // Ход длиннее этого считаем зависшим/осиротевшим (упал без terminal-события):
 // мост перестаёт буферизовать, чтобы сообщения не копились вечно.
@@ -147,65 +140,21 @@ function readCurrent(chatKey: string): StatusRecord | null {
   return readPerChat(chatKey) ?? readLegacy(chatKey);
 }
 
-function acquireChatLock(file: string): Lock {
-  mkdirSync(STATUS_DIR, { recursive: true });
+// Статус хода — не публичные данные: и лок, и сам файл создаются под 0600.
+function acquireChatLock(file: string): FileLock {
   const lock = `${file}.lock`;
-  const token = randomUUID();
-  const deadline = Date.now() + LOCK_TIMEOUT_MS;
-  for (;;) {
-    try {
-      const fd = openSync(lock, "wx", 0o600);
-      try {
-        writeSync(fd, token);
-      } catch (error) {
-        rmSync(lock, { force: true });
-        throw error;
-      } finally {
-        closeSync(fd);
-      }
-      return { lock, token };
-    } catch (error) {
-      if (errorCode(error) !== "EEXIST") throw error;
-      try {
-        if (Date.now() - statSync(lock).mtimeMs > LOCK_STALE_MS) {
-          rmSync(lock, { force: true });
-          continue;
-        }
-      } catch (statError) {
-        if (errorCode(statError) !== "ENOENT") throw statError;
-        continue;
-      }
-      if (Date.now() >= deadline) {
-        // eslint-disable-next-line preserve-caught-error -- Preserve the stable timeout diagnostic without exposing the caught OS error as its cause.
-        throw new Error(`run-status lock timeout: ${lock}`);
-      }
-      Atomics.wait(lockWaitBuffer, 0, 0, LOCK_RETRY_MS);
-    }
-  }
-}
-
-function releaseChatLock({ lock, token }: Lock): void {
-  try {
-    if (readFileSync(lock, "utf8") !== token) return;
-    rmSync(lock, { force: true });
-  } catch {
-    // Лок уже был отобран после долгой остановки процесса.
-  }
+  const held = acquireFileLockSync(lock, {
+    timeoutMs: LOCK_TIMEOUT_MS,
+    staleMs: LOCK_STALE_MS,
+    retryMs: LOCK_RETRY_MS,
+    mode: 0o600,
+  });
+  if (held === null) throw new Error(`run-status lock timeout: ${lock}`);
+  return held;
 }
 
 function writeCurrent(file: string, value: StatusRecord): void {
-  mkdirSync(STATUS_DIR, { recursive: true });
-  const tmp = `${file}.tmp-${process.pid}-${randomUUID()}`;
-  try {
-    writeFileSync(tmp, JSON.stringify(value), {
-      encoding: "utf8",
-      flag: "wx",
-      mode: 0o600,
-    });
-    renameSync(tmp, file);
-  } finally {
-    rmSync(tmp, { force: true });
-  }
+  writeFileAtomicSync(file, JSON.stringify(value), { mode: 0o600 });
 }
 
 export function getChatStatus(chatKey: string): StatusRecord | null {
@@ -282,7 +231,7 @@ function updateChatStatus(
     writeCurrent(file, next);
     return next;
   } finally {
-    releaseChatLock(lock);
+    releaseFileLock(lock);
   }
 }
 

@@ -8,16 +8,10 @@
 // Guards: no git-remote/credentials → alert admin on Telegram (gh auth login + git remote),
 // push is skipped. Health score drop → alert on Telegram. Plain Node orchestration.
 import { spawnSync } from "node:child_process";
-import {
-  copyFileSync,
-  existsSync,
-  readFileSync,
-  renameSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { copyFileSync, existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { writeFileAtomicSync } from "#lib/fs-atomic.ts";
 import { CORE_CAP } from "../lib/core-cap.ts";
 import {
   classifyGitPushError,
@@ -197,18 +191,7 @@ if (existsSync(corePath)) {
   const oldCore = readFileSync(corePath, "utf8");
   if (oldCore.length > CORE_CAP) {
     const newCore = clampCore(oldCore);
-    const tmp = `${corePath}.tmp-${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
-    try {
-      writeFileSync(tmp, newCore, "utf8");
-      renameSync(tmp, corePath);
-    } catch (error) {
-      try {
-        rmSync(tmp, { force: true });
-      } catch {
-        /* preserve the original write/rename failure */
-      }
-      throw error;
-    }
+    writeFileAtomicSync(corePath, newCore);
     console.warn(
       `doctor: CORE.md clamped ${oldCore.length} → ${newCore.length} chars (cap ${CORE_CAP})`,
     );

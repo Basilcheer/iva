@@ -5,20 +5,13 @@
 // дополняет один ## Log, SUPERSEDE заменяет Compiled Truth и переносит прежний факт
 // в ## History, а NOOP не пишет файл.
 
-import {
-  closeSync,
-  existsSync,
-  mkdirSync,
-  openSync,
-  readFileSync,
-  readdirSync,
-  renameSync,
-  rmSync,
-  statSync,
-  writeFileSync,
-  writeSync,
-} from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
+import {
+  acquireFileLockSync,
+  releaseFileLock,
+  writeFileAtomicSync,
+} from "./fs-atomic.ts";
 import {
   hasUnclosedFence,
   outsideFences,
@@ -921,61 +914,19 @@ export function mergeCard(input: MergeInput): MergeResult {
 
 const LOCK_STALE_MS = 15_000;
 
-/** Lock-файл (O_EXCL) с токеном владения: release снимает лок, только пока на диске
- * наш токен — вытесненный по staleness держатель не удалит лок преемника. */
+/** Лок карточки — файл `<карточка>.lock` рядом с ней. Занятая карточка это внятная
+ * ошибка для модели, а не тихая перезапись чужой правки. */
 export function acquireLock(file: string, timeoutMs = 5000): () => void {
   const lock = `${file}.lock`;
-  const token = `${process.pid}-${Math.random().toString(36).slice(2)}`;
-  const deadline = Date.now() + timeoutMs;
-  for (;;) {
-    // Дедлайн проверяется на КАЖДОЙ итерации, включая путь «лок исчез между попыткой
-    // и stat» — иначе мигающий лок зациклил бы захват навсегда.
-    if (Date.now() > deadline)
-      throw new Error(`Карточка занята другим процессом: ${lock}`);
-    try {
-      const fd = openSync(lock, "wx");
-      writeSync(fd, token);
-      closeSync(fd);
-      return () => {
-        try {
-          if (readFileSync(lock, "utf8") !== token) return; // лок уже не наш
-          rmSync(lock, { force: true });
-        } catch {
-          /* лок уже снят */
-        }
-      };
-    } catch (err) {
-      const e = err as NodeJS.ErrnoException;
-      if (e.code !== "EEXIST") throw err;
-      // Протухший лок от упавшего процесса не должен блокировать навсегда.
-      try {
-        if (Date.now() - statSync(lock).mtimeMs > LOCK_STALE_MS) {
-          rmSync(lock, { force: true });
-          continue;
-        }
-      } catch (statErr) {
-        // Лок исчез между попыткой и stat — новая итерация; прочие сбои stat — наружу.
-        if ((statErr as NodeJS.ErrnoException).code !== "ENOENT") throw statErr;
-        continue;
-      }
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
-    }
-  }
+  const held = acquireFileLockSync(lock, { timeoutMs, staleMs: LOCK_STALE_MS });
+  if (held === null)
+    throw new Error(`Карточка занята другим процессом: ${lock}`);
+  return () => {
+    releaseFileLock(held);
+  };
 }
 
 /** Запись через временный файл + rename: читатель никогда не видит половину карточки. */
 export function atomicWrite(file: string, content: string): void {
-  mkdirSync(join(file, ".."), { recursive: true });
-  const tmp = `${file}.tmp-${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
-  try {
-    writeFileSync(tmp, content, "utf8");
-    renameSync(tmp, file);
-  } catch (err) {
-    try {
-      rmSync(tmp, { force: true });
-    } catch {
-      /* нечего чистить */
-    }
-    throw err;
-  }
+  writeFileAtomicSync(file, content);
 }
