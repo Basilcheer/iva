@@ -8,6 +8,7 @@ import { spawn } from "node:child_process";
 import {
   mkdtemp,
   mkdir,
+  readdir,
   readFile,
   rm,
   symlink,
@@ -26,6 +27,9 @@ import type { ClientSession, MessageResult } from "eve/client";
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const MARKER = "CEDAR-4729";
 const RESET_MARKER = "CEDAR-5533";
+const UPGRADE_MARKER = "CEDAR-8140";
+// Версия, на которую подменяется eve в durable-логе канарейкой апгрейда.
+const FORGED_EVE_VERSION = "0.0.0-forged";
 const HEALTH_TIMEOUT_MS = 90_000;
 const TURN_TIMEOUT_MS = 120_000;
 
@@ -309,6 +313,44 @@ async function canaryReply(
   );
 }
 
+/**
+ * Симулирует смену версии eve на месте. Шаги воркфлоу записаны в durable-лог вместе с
+ * версией пакета (`step//eve@0.29.5//createSessionStep`), и при replay id сверяется
+ * строкой с текущим потребителем, — значит ЛЮБОЙ апгрейд eve роняет припаркованный run
+ * с CORRUPTED_EVENT_LOG. Переписав версию в логе, смоук получает ровно ту же расходимость,
+ * что и настоящая переустановка, но без второй копии eve в песочнице.
+ * Возвращает число переписанных файлов событий.
+ */
+async function forgeEveStepVersion(app: string): Promise<number> {
+  const versionedStepId = /step\/\/eve@[^/"]+\/\//g;
+  let rewritten = 0;
+  for (const dataDir of [
+    ".eve/.workflow-data",
+    ".output/.eve/.workflow-data",
+  ]) {
+    const events = join(app, dataDir, "events");
+    let files: string[];
+    try {
+      files = await readdir(events);
+    } catch {
+      continue; // этой сборкой такой каталог состояния не используется
+    }
+    for (const file of files) {
+      if (!file.endsWith(".json")) continue;
+      const path = join(events, file);
+      const before = await readFile(path, "utf8");
+      const after = before.replace(
+        versionedStepId,
+        `step//eve@${FORGED_EVE_VERSION}//`,
+      );
+      if (after === before) continue;
+      await writeFile(path, after);
+      rewritten++;
+    }
+  }
+  return rewritten;
+}
+
 async function main(): Promise<void> {
   const sandbox = await mkdtemp(join(tmpdir(), "iva-replica-"));
   const mock = await startMockOpenAiServer();
@@ -382,11 +424,12 @@ async function main(): Promise<void> {
       "What code did I ask you to remember? Reply with the code only.";
     let canaryLine = 0;
     const canaryTurn = async (
+      token: string,
       message: string,
     ): Promise<{ sessionId: string; reply: string }> => {
       const from = canaryLine;
       const accepted = await canaryPost(canaryHttp, CANARY_SEND_ROUTE, {
-        token: canaryToken,
+        token,
         message,
       });
       const sessionId = accepted.sessionId;
@@ -399,7 +442,10 @@ async function main(): Promise<void> {
       return { sessionId, reply: settled.message };
     };
 
-    const seed = await canaryTurn(`Remember this code: ${RESET_MARKER}`);
+    const seed = await canaryTurn(
+      canaryToken,
+      `Remember this code: ${RESET_MARKER}`,
+    );
     if (seed.reply !== "REMEMBERED")
       throw new Error(
         `unexpected canary seed reply: ${JSON.stringify(seed.reply)}`,
@@ -446,7 +492,7 @@ async function main(): Promise<void> {
     // пережившую рестарт, и увидеть её историю. Без этого шага проверка после reset
     // ничего не доказывает — пустой ответ вернула бы и любая посторонняя сессия.
     setPhase("reset-canary");
-    const before = await canaryTurn(recall);
+    const before = await canaryTurn(canaryToken, recall);
     if (before.sessionId !== seed.sessionId)
       throw new Error(
         `canary token did not resume its own session: ${before.sessionId} != ${seed.sessionId}`,
@@ -468,7 +514,7 @@ async function main(): Promise<void> {
         `reset left the token owned: ${JSON.stringify(resetResult)}`,
       );
 
-    const after = await canaryTurn(recall);
+    const after = await canaryTurn(canaryToken, recall);
     if (after.sessionId === seed.sessionId)
       throw new Error(
         `reset did not retire the session: the token still resumes ${after.sessionId}`,
@@ -480,6 +526,53 @@ async function main(): Promise<void> {
     console.log(
       `replica smoke: reset clears the context on the same token OK (before: ${before.reply}, after: ${after.reply})`,
     );
+
+    // Канарейка апгрейда. Каталог .eve/.workflow-data — installation-level состояние
+    // (scripts/lib/version-store.ts), он переживает `iva update` и достаётся новой версии
+    // ивы вместе с припаркованными разговорами. Шаги в нём приколочены к версии eve, так
+    // что смена версии гарантированно рушит replay, — сохранность истории тут проверить
+    // нельзя. Проверяем то, что действительно обязано выполняться на проде: после смены
+    // версии тот же токен НЕ залипает — сообщение принимается и на него приходит ответ.
+    // Ниже канарейка reset, потому что подмена версии убивает все припаркованные сессии.
+    setPhase("upgrade-canary");
+    const upgradeToken = `replica-upgrade:${randomBytes(6).toString("hex")}`;
+    const upgradeSeed = await canaryTurn(
+      upgradeToken,
+      `Remember this code: ${UPGRADE_MARKER}`,
+    );
+    if (upgradeSeed.reply !== "REMEMBERED")
+      throw new Error(
+        `unexpected upgrade seed reply: ${JSON.stringify(upgradeSeed.reply)}`,
+      );
+
+    await stopEve(eve);
+    const forged = await forgeEveStepVersion(app);
+    if (forged === 0)
+      throw new Error(
+        "upgrade canary forged nothing: no versioned eve step ids in the durable log",
+      );
+    note(`[smoke] forged the eve version in ${forged} event files`);
+    eve = startEve({ app, env, port });
+    await waitForHealth(port, eve);
+
+    const upgraded = await canaryTurn(upgradeToken, recall);
+    if (upgraded.sessionId === upgradeSeed.sessionId) {
+      if (upgraded.reply !== UPGRADE_MARKER)
+        throw new Error(
+          `token resumed its pre-upgrade session but lost the history: ${JSON.stringify(upgraded.reply)}`,
+        );
+      console.log(
+        "replica smoke: eve version change kept the parked session OK",
+      );
+    } else {
+      if (upgraded.reply.includes(UPGRADE_MARKER))
+        throw new Error(
+          `fresh post-upgrade session leaked the retired history: ${JSON.stringify(upgraded.reply)}`,
+        );
+      console.log(
+        `replica smoke: eve version change answers on the same token in a fresh session OK (history lost: ${upgraded.reply})`,
+      );
+    }
 
     if (mock.requests.length < 3)
       throw new Error(
