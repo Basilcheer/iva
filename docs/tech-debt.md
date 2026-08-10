@@ -38,21 +38,31 @@ whose `agent/` is missing or half-written — that is the state `iva repair` exi
 (ADR-0003) — so every module those processes **load** stays in `scripts/`, every module the
 authored tree needs lives in `agent/lib`, and neither side reaches the other while loading.
 "Those processes" is wider than `scripts/cli/*`: the guard's load-time walk stops at a
-child process, so it also seeds the ones spawned separately — the setup wizard
-(`iva config` → `scripts/setup.mjs`, and `install.sh`) and the daily update check unit.
-Three shapes, in descending order of preference:
+child process, so every separate node run is walked as its own entrypoint. The systemd
+units are read out of `deploy/` rather than listed by hand — a hand-written list forgot the
+nightly memory doctor once, which is exactly how a unit gets silently coupled to the tree —
+and the three runs no unit starts are named in the guard: the setup wizard (`install.sh` and
+`iva config` → `scripts/setup.mjs`), the vault template copy `install.sh` runs before eve has
+ever built the tree, and the updater's second half, which the previous version spawns inside
+the version it just fetched. One unit is exempt on purpose: the Telegram bridge renders Iva's
+own UI (`#lib/i18n.ts`, `#lib/run-status.ts`) and runs beside `iva.service`, which is what
+builds the tree. Three shapes, in descending order of preference:
 
-- **A plain move**, where nothing in `scripts/cli/*` loads the module: `core-cap` and
-  `core-clamp` (only the nightly rollup and doctor read them), `card-text` (its one
-  CLI-side reader, the vault fence scan, moved out of `scripts/lib/memory-maintenance.ts`
-  into `scripts/memory/card-fences.ts`), and `schedule-migration` — which, living beside
-  the schedules it migrates onto, dropped the two lazy imports it needed to hold the old
-  edge open.
-- **A lazy import inside the one call that needs it**, where the CLI loads a module but
+- **A plain move**, where every reader is either the authored tree itself or a process that
+  runs beside it: `schedule-migration` — which, living beside the schedules it migrates onto,
+  dropped the two lazy imports it needed to hold the old edge open — and `core-cap`, whose
+  other reader, the nightly rollup, is spawned by `agent/lib/schedule-runner.ts` and so has
+  the tree by construction.
+- **A lazy import inside the one call that needs it**, where the process loads a module but
   only exercises that call on a tree that exists: `scripts/lib/config-transaction.ts`
   pulls the health poll at the health check itself (a tree that cannot start fails the
-  apply and rolls back either way), and `scripts/lib/codex-oauth.ts` pulls the token
-  headers inside `listCodexModelCatalog`, which only the `/model` wizard and setup call.
+  apply and rolls back either way), `scripts/lib/codex-oauth.ts` pulls the token
+  headers inside `listCodexModelCatalog`, which only the `/model` wizard and setup call, and
+  `scripts/memory/doctor.ts` pulls the whole card format — `core-cap`, `core-clamp` and, via
+  `scripts/memory/card-fences.ts`, `card-text` — at the CORE clamp and the fence scan. The
+  doctor is its own systemd oneshot, so a static edge there would kill the nightly vault
+  backup on a broken tree; the lazy edge costs those two steps, reports itself, and lets §3
+  commit and push the vault anyway.
 - **Two self-contained halves pinned by a test**, where both sides genuinely need the same
   small thing while loading: the probe-flag name (`scripts/lib/health-probe.ts` writes it,
   `agent/lib/eve-health.ts` reads it), the retired systemd unit names

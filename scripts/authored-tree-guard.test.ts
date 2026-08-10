@@ -120,6 +120,10 @@ test("the authored tree opens no escape out of agent/", () => {
 const FROM_CLAUSE =
   /^\s*(?:import|export)\b(?<clause>[^"]*?)\bfrom\s+"(?<specifier>[^"\n]+)"/gmu;
 
+// A side-effect import binds no name and so has no `from`, but it loads the module just the
+// same — which is all the permanent `.mjs` entry shims do (`import "./setup/main.ts"`).
+const SIDE_EFFECT_IMPORT = /^\s*import\s+"(?<specifier>[^"\n]+)"/gmu;
+
 // Specifiers a load actually resolves. `import type`/`export type` clauses are erased by
 // the compiler, so they emit no require of the authored tree at run time and cannot break
 // a CLI running without it; an inline `{ type X }` inside a value clause still loads the
@@ -134,17 +138,48 @@ function loadTimeSpecifiers(source: string): string[] {
     if (/^\s*type\b/u.test(clause)) continue;
     specifiers.push(specifier);
   }
+  for (const match of source.matchAll(SIDE_EFFECT_IMPORT))
+    specifiers.push((match.groups as { specifier: string }).specifier);
   return specifiers;
 }
 
-// Processes that must load on an install whose `agent/` is missing, beyond `scripts/cli/*`.
-// The walk stops at a child process, so each one is seeded by hand: the setup wizard is a
-// separate node run (`iva config` → scripts/setup.mjs, and install.sh), and the daily update
-// check is a systemd unit — both are exactly the "broken tree" paths of ADR-0003.
+// Processes that must load on an install whose `agent/` is missing, beyond `scripts/cli/*` —
+// exactly the "broken tree" state of ADR-0003. The walk stops at a child process, so every
+// separate node run has to be named. These three are the ones no systemd unit starts: the
+// setup wizard (install.sh and `iva config`), the vault template copy install.sh runs before
+// eve has ever built the tree, and the updater's second half, which the previous version
+// spawns inside the version it just fetched.
 const SPAWNED_ENTRYPOINTS = [
-  "scripts/setup/main.ts",
-  "scripts/check-update.ts",
+  "scripts/setup.mjs",
+  "scripts/init-vault.mjs",
+  "scripts/update-finish.ts",
 ];
+
+// The bridge is the one unit that is meant to load the authored tree: it renders Iva's own
+// Telegram UI (`#lib/i18n.ts`, `#lib/run-status.ts`) and runs beside `iva.service`, which is
+// what builds the tree in the first place.
+const AUTHORED_TREE_UNITS = new Set(["scripts/telegram-poll.mjs"]);
+
+const UNIT_EXEC_START = /^ExecStart=.*?(scripts\/\S+\.(?:ts|mjs))/gmu;
+
+// Every node process `deploy/` starts as a unit of its own, read out of the units instead of
+// listed by hand: the nightly memory doctor got coupled to the authored tree precisely because
+// a hand-written list did not know its unit existed.
+function unitNodeEntrypoints(): string[] {
+  const found = new Set<string>();
+  for (const name of readdirSync(join(ROOT, "deploy"))) {
+    if (!name.endsWith(".service")) continue;
+    const unit = readFileSync(join(ROOT, "deploy", name), "utf8");
+    for (const match of unit.matchAll(UNIT_EXEC_START)) found.add(match[1]);
+  }
+  return [...found].sort();
+}
+
+function brokenTreeUnitEntrypoints(): string[] {
+  return unitNodeEntrypoints().filter(
+    (entrypoint) => !AUTHORED_TREE_UNITS.has(entrypoint),
+  );
+}
 
 // Every edge the CLI would resolve at load time, as "importer -> specifier".
 function cliEdgesIntoAuthoredTree(): string[] {
@@ -153,7 +188,7 @@ function cliEdgesIntoAuthoredTree(): string[] {
   const queue = readdirSync(join(ROOT, "scripts/cli"))
     .filter((name) => name.endsWith(".ts") && !name.endsWith(".test.ts"))
     .map((name) => posix.join("scripts/cli", name))
-    .concat(SPAWNED_ENTRYPOINTS);
+    .concat(SPAWNED_ENTRYPOINTS, brokenTreeUnitEntrypoints());
   while (queue.length > 0) {
     const file = queue.shift() as string;
     if (seen.has(file)) continue;
@@ -179,6 +214,21 @@ test("the CLI loads without the authored tree present", () => {
   );
 });
 
+test("the broken-tree walk covers every node unit deploy/ starts", () => {
+  // Both halves are pinned: the full read proves the units are actually being parsed and
+  // shows a new one, and the filtered read proves the bridge is the only thing excused —
+  // an exemption for a unit that no longer exists cannot sit here unnoticed.
+  assert.deepEqual(unitNodeEntrypoints(), [
+    "scripts/check-update.mjs",
+    "scripts/memory/doctor.ts",
+    "scripts/telegram-poll.mjs",
+  ]);
+  assert.deepEqual(brokenTreeUnitEntrypoints(), [
+    "scripts/check-update.mjs",
+    "scripts/memory/doctor.ts",
+  ]);
+});
+
 test("the CLI walk keeps value imports and drops only the erased type-only ones", () => {
   assert.deepEqual(
     loadTimeSpecifiers(
@@ -196,6 +246,18 @@ test("the CLI walk keeps value imports and drops only the erased type-only ones"
   assert.deepEqual(
     loadTimeSpecifiers(
       'import type { ScheduleCron } from "#lib/schedule-table.ts";\nexport type { ScheduleName } from "#lib/schedule-table.ts";',
+    ),
+    [],
+  );
+  // The entry shims import for side effect only; missing those would leave every process
+  // behind a shim unwalked.
+  assert.deepEqual(loadTimeSpecifiers('import "./setup/main.ts";'), [
+    "./setup/main.ts",
+  ]);
+  // A dynamic import is the escape hatch, and stays invisible to the walk.
+  assert.deepEqual(
+    loadTimeSpecifiers(
+      'const { clampCore } = await import("#lib/core-clamp.ts");',
     ),
     [],
   );
