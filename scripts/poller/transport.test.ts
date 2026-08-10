@@ -106,6 +106,30 @@ test("every Bot API call the bridge makes leaves with its text gated", async (t)
   assert.equal(bodies[3].text, "edit [REDACTED]");
 });
 
+// The same wire, carrying the shapes this installation's keys actually have: an
+// OpenRouter key out of .env and an embedding key out of a nightly index run.
+const OPENROUTER_KEY = `sk-or-v1-${"4f9c1e77ab3d5602".repeat(4)}`;
+const JINA_KEY = `jina_${"7d2fA9bC".repeat(8)}`;
+
+test("a real provider key shape is gated on the bridge's wire too", async (t) => {
+  const bodies = captureFetch(t);
+
+  await tg("editMessageText", {
+    chat_id: 1,
+    message_id: 2,
+    text: `⚠️ Есть проблемы · 00:07\n\ndoctor: model call failed with ${OPENROUTER_KEY}\nexit 1`,
+  });
+  await reply(1, `embed-index: ${JINA_KEY} rejected`);
+
+  const wire = JSON.stringify(bodies);
+  assert.doesNotMatch(wire, /sk-or-v1|4f9c1e77|jina_|7d2fA9bC/u);
+  assert.equal(
+    bodies[0].text,
+    "⚠️ Есть проблемы · 00:07\n\ndoctor: model call failed with [REDACTED]\nexit 1",
+  );
+  assert.equal(bodies[1].text, "embed-index: [REDACTED] rejected");
+});
+
 test("a call with nothing for the chat goes out untouched", async (t) => {
   const bodies = captureFetch(t);
 

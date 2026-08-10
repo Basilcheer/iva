@@ -166,3 +166,24 @@ await test("телеграм-токен и ключ в одной ошибке �
   assert.doesNotMatch(sent[0], /AAAA/u);
   assert.match(sent[0], /\[REDACTED\]/u);
 });
+
+// Живой формат ключа, а не удобный планту: ключ OpenRouter из .env этой инсталляции
+// в ошибке, которую humanizeProviderError ни к одной категории не относит, — значит
+// текст провайдера уходит в чат гистом, как есть.
+const OPENROUTER_KEY = `sk-or-v1-${"4f9c1e77ab3d5602".repeat(4)}`;
+
+await test("ключ провайдера настоящего формата не переживает уведомление о сбое", async (t) => {
+  muteErrors(t);
+  const { sent, send } = collector();
+
+  await notifyTelegramFailure(
+    "s-openrouter",
+    { message: `Provider rejected the request for key ${OPENROUTER_KEY}` },
+    send,
+    { now: 1_000 },
+  );
+
+  assert.equal(sent.length, 1);
+  assert.doesNotMatch(sent[0], /sk-or-v1|4f9c1e77/u);
+  assert.match(sent[0], /\[REDACTED\]/u);
+});

@@ -397,9 +397,11 @@ test("update-lock: занят — go:doc не стартует, текст пр�
 });
 
 const PLANTED = `api_key=${"z".repeat(24)}`;
-const leaks = (cmd: string) => ({
+// Ключ OpenRouter в том виде, в каком его выдаёт провайдер: форма настоящая, значение нет.
+const OPENROUTER_KEY = `sk-or-v1-${"4f9c1e77ab3d5602".repeat(4)}`;
+const leaks = (cmd: string, secret = PLANTED) => ({
   kind: "proc" as const,
-  argv: [process.execPath, "-e", `console.log("boom ${PLANTED}"); ${cmd}`],
+  argv: [process.execPath, "-e", `console.log("boom ${secret}"); ${cmd}`],
 });
 
 // Производственная проводка: экран разговаривает с Telegram мостовым tg(), на котором
@@ -471,6 +473,24 @@ test("финальная сводка: вывод упавшей команды 
   await service.on("go", ["doc"], st, ctx);
   await waitFor(() => sent.some((text) => /Есть проблемы/u.test(text)));
 
+  assert.match(gatedFind(sent, /Есть проблемы/u), /boom \[REDACTED\]/u);
+});
+
+// Планты выше удобны гейту; здесь — форма, которую действительно печатает упавшая
+// проверка провайдера в выводе обслуживания.
+test("вывод с ключом живого формата тоже не доезжает до Bot API", async (t) => {
+  resetForTests();
+  const { ctx, st, sent } = gatedStand(t, {
+    svcSpec: () => leaks("process.exit(1)", OPENROUTER_KEY),
+  });
+
+  await service.on("go", ["doc"], st, ctx);
+  await waitFor(() => sent.some((text) => /Есть проблемы/u.test(text)));
+
+  assert.ok(
+    sent.every((text) => !/sk-or-v1|4f9c1e77/u.test(text)),
+    "ключ дошёл до Bot API",
+  );
   assert.match(gatedFind(sent, /Есть проблемы/u), /boom \[REDACTED\]/u);
 });
 

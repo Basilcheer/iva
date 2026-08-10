@@ -84,3 +84,25 @@ test("a gated body survives an empty, a multi-line and a two-secret text", async
   assert.doesNotMatch(both, new RegExp(BOT_TOKEN, "u"));
   assert.equal(both, 'curl -sS bot[REDACTED] -H "[REDACTED]"');
 });
+
+// The shapes the keys in this installation's .env actually have: a CLI notice is
+// where a build or a doctor run dumps them verbatim.
+const OPENAI_KEY =
+  "sk-proj-Qw3rTy_uIoP-asdfGhJk1234567890zXcVbNmT3BlbkFJmNbVcXz0987654321kJhGfDs";
+const GROQ_KEY = `gsk_${"Kj8Lm2Np".repeat(6)}`;
+
+test("a real provider key shape does not survive a CLI notice", async (t) => {
+  muteErrors(t);
+
+  const notice = await redactNotice(
+    `build failed: OPENAI_API_KEY=${OPENAI_KEY} rejected`,
+  );
+  const body = await redactTelegramBody({
+    text: `embed-index: ${GROQ_KEY} is not accepted`,
+  });
+
+  assert.doesNotMatch(notice, /sk-proj-|Qw3rTy|kJhGfDs/u);
+  assert.match(notice, /\[REDACTED\]/u);
+  assert.doesNotMatch(body.text, /gsk_|Kj8Lm2Np/u);
+  assert.match(body.text, /\[REDACTED\]/u);
+});
