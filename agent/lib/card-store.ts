@@ -302,11 +302,18 @@ export function mergeRelated(body: string, related: string[]): string {
   return replaceH2Sections(body, "Related", content);
 }
 
+/** Строки секции как они лежат в карточке. Пустая строка внутри уже сохранённой записи -
+ * часть свидетельства (пустая строка в фенсе с кодом, в транскрипте, в diff), а не
+ * форматирование, поэтому выкусываются только пустые строки на границах секции: иначе
+ * следующий UPDATE, пересобирая Log, задним числом правит чужую запись. */
 function sectionContent(body: string, heading: string): string[] {
   const lines = body.split("\n");
-  return h2Sections(lines, heading).flatMap((section) =>
-    lines.slice(section.start + 1, section.end).filter((line) => line.trim()),
-  );
+  return h2Sections(lines, heading).flatMap((section) => {
+    const content = lines.slice(section.start + 1, section.end);
+    while (content.length && !content[0].trim()) content.shift();
+    while (content.length && !content.at(-1)?.trim()) content.pop();
+    return content;
+  });
 }
 
 function removeH2Sections(body: string, heading: string): string {

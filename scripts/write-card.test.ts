@@ -1565,6 +1565,58 @@ test("гейт заголовков судит тело в форме хране
   assert.equal(read(created.file), stored, "карточка не тронута");
 });
 
+test("следующий UPDATE не правит ранее сохранённую запись Log ни на байт", async () => {
+  const base = {
+    operation: "ADD",
+    type: "note",
+    title: "Пустая строка внутри записи Log",
+    description: "конфиг с секциями лежит в Log",
+    tags: ["note", "fence"],
+    body: "Seed.",
+  };
+  const created = await call(base);
+  assert.equal(created.ok, true);
+
+  // Пустая строка между секциями конфига несёт смысл: склеить `port: 8080` с `client:`
+  // значит задним числом переписать сохранённое свидетельство.
+  const config =
+    "Deploy config:\n\n```yaml\nserver:\n  port: 8080\n\nclient:\n  retries: 3\n```";
+  assert.equal(
+    (await call({ ...base, operation: "UPDATE", body: config })).ok,
+    true,
+  );
+  const stored = read(created.file);
+  const savedLog = stored.slice(stored.indexOf("## Log")).trimEnd();
+  assert.match(
+    savedLog,
+    /port: 8080\n\s*\n\s*client:/,
+    "пустая строка сохранена",
+  );
+
+  // Второй UPDATE к первой записи не относится вообще - и не имеет права её трогать.
+  const later = await call({
+    ...base,
+    operation: "UPDATE",
+    body: "Unrelated later fact.",
+  });
+  assert.equal(later.ok, true);
+  const after = read(created.file);
+  assert.ok(after.includes(savedLog), "прежняя запись Log уцелела байт в байт");
+  assert.match(after, /^- \d{4}-\d{2}-\d{2}: Unrelated later fact\.$/m);
+
+  // И третий: форма секции устойчива, пустые строки не копятся и не исчезают.
+  assert.equal(
+    (await call({ ...base, operation: "UPDATE", body: "Third fact." })).ok,
+    true,
+  );
+  const third = read(created.file);
+  assert.ok(
+    third.includes(savedLog),
+    "запись Log уцелела и после третьего UPDATE",
+  );
+  assert.equal(third.match(/port: 8080/g)!.length, 1);
+});
+
 test("atomicWrite не оставляет временных файлов и пишет целиком", () => {
   const dir = join(VAULT, "cards", "notes");
   const file = join(dir, "atomic-probe.md");
