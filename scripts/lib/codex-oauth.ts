@@ -105,7 +105,11 @@ function writeAuth(auth: CodexAuth, dataDir: string): void {
   renameSync(tmp, file);
 }
 
-function parseJwt(jwt: string): JsonRecord {
+// parseJwt и toAuth ниже экспортируются ради шва — их точные копии живут в
+// agent/lib/codex-auth.ts, а scripts/lib/codex-auth-seam.test.ts гоняет обе на общих
+// фикстурах: разъехавшийся разбор клеймов или сборка объекта хранилища ломают либо вход,
+// либо почасовой рефреш, и молча.
+export function parseJwt(jwt: string): JsonRecord {
   const payload = String(jwt).split(".")[1];
   if (!payload) throw new Error("malformed JWT");
   return JSON.parse(
@@ -134,7 +138,7 @@ export function accountFromIdToken(idToken: string): {
 }
 
 // Собирает объект хранилища из ответа токен-эндпоинта.
-function toAuth(
+export function toAuth(
   tokens: TokenResponse,
   prev: Partial<CodexAuth> = {},
 ): CodexAuth {
