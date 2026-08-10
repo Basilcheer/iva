@@ -18,7 +18,6 @@ import {
 } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { CORE_CAP } from "#lib/core-cap.ts";
 import {
   classifyGitPushError,
   formatMegabytes,
@@ -26,8 +25,6 @@ import {
   scanOversizeWorkingTreeFiles,
 } from "../lib/memory-maintenance.ts";
 import { notificationChat } from "../lib/notification-chat.ts";
-import { scanUnclosedFenceCards } from "./card-fences.ts";
-import { clampCore } from "#lib/core-clamp.ts";
 
 const VAULT = resolve(process.env.ASSISTANT_VAULT_DIR ?? "vault");
 // The autograph code lives in THIS repo, not in the vault: the vault is user data only.
@@ -114,6 +111,37 @@ function readHealthHistory(): HealthHistoryEntry[] {
   }
 }
 
+interface CardTools {
+  readonly coreCap: number;
+  readonly clampCore: (text: string) => string;
+  readonly scanUnclosedFenceCards: (vaultPath: string) => string[];
+}
+
+// The CORE cap and the fence rules describe the card format, so they live in the authored
+// tree — which eve rebuilds at service start and which `iva repair` exists for when it is
+// missing or half-written (ADR-0003). This unit's load-bearing job is §3, the vault backup,
+// and that needs no tree at all: the tree is therefore reached through a dynamic import here,
+// so its absence costs §1b and §1c and is reported, instead of killing the nightly backup at
+// module resolution.
+async function loadCardTools(): Promise<CardTools | null> {
+  try {
+    const [coreCap, coreClamp, fences] = await Promise.all([
+      import("#lib/core-cap.ts"),
+      import("#lib/core-clamp.ts"),
+      import("./card-fences.ts"),
+    ]);
+    return {
+      coreCap: coreCap.CORE_CAP,
+      clampCore: coreClamp.clampCore,
+      scanUnclosedFenceCards: fences.scanUnclosedFenceCards,
+    };
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    console.error(`doctor: agent/ is not loadable: ${detail}`);
+    return null;
+  }
+}
+
 const today = localDate();
 console.log(`=== doctor memory for ${today} (vault: ${VAULT}) ===`);
 
@@ -190,12 +218,23 @@ if (failures.length) {
   );
 }
 
+// ── 1a. The card format §1b and §1c work from ──
+const cards = await loadCardTools();
+if (!cards) {
+  failures.push("authored tree");
+  await telegram(
+    `doctor: agent/ could not be loaded (${today}), so the CORE cap and the unclosed-fence ` +
+      "scan were skipped; the vault backup below still ran. Restore the tree with `iva repair`.",
+  );
+}
+
 // ── 1b. CORE guard: the memory core must stay small (always-on floor stays flat) ──
 // This runs before git add/commit below, so a repaired CORE is included in the nightly backup.
 const corePath = resolve(VAULT, "CORE.md");
-if (existsSync(corePath)) {
+if (cards && existsSync(corePath)) {
+  const { coreCap, clampCore } = cards;
   const oldCore = readFileSync(corePath, "utf8");
-  if (oldCore.length > CORE_CAP) {
+  if (oldCore.length > coreCap) {
     const newCore = clampCore(oldCore);
     const tmp = `${corePath}.tmp-${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
     try {
@@ -210,14 +249,14 @@ if (existsSync(corePath)) {
       throw error;
     }
     console.warn(
-      `doctor: CORE.md clamped ${oldCore.length} → ${newCore.length} chars (cap ${CORE_CAP})`,
+      `doctor: CORE.md clamped ${oldCore.length} → ${newCore.length} chars (cap ${coreCap})`,
     );
     const protectedOverflow =
-      newCore.length > CORE_CAP
+      newCore.length > coreCap
         ? " Protected headings, pointers or unknown sections still exceed the cap."
         : "";
     await telegram(
-      `CORE.md exceeded its ${CORE_CAP}-char cap (${today}); doctor clamped it ` +
+      `CORE.md exceeded its ${coreCap}-char cap (${today}); doctor clamped it ` +
         `${oldCore.length} → ${newCore.length} chars. Pointers were preserved.${protectedOverflow}`,
     );
   }
@@ -228,7 +267,7 @@ if (existsSync(corePath)) {
 // sections, so write_card refuses UPDATE and SUPERSEDE on it rather than write the fact
 // into code. Where the author meant to close the fence is unknowable, so doctor only names
 // the files - guessing would rewrite the user's text.
-const unclosed = scanUnclosedFenceCards(VAULT);
+const unclosed = cards ? cards.scanUnclosedFenceCards(VAULT) : [];
 if (unclosed.length) {
   const shown = unclosed.slice(0, 10);
   const rest = unclosed.length - shown.length;

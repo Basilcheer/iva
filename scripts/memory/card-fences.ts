@@ -1,8 +1,9 @@
 // Ночная проверка карточек на незакрытый кодовый фенс. Живёт в scripts/memory/, а не в
 // scripts/lib/memory-maintenance.ts: разметку она берёт из authored tree (#lib/card-text.ts),
 // а memory-maintenance грузится `iva doctor` на инсталле, где каталога agent/ может не быть
-// вовсе. Единственный потребитель — scripts/memory/doctor.ts, который без vault и без
-// авторского дерева и так не работает.
+// вовсе. Единственный потребитель — scripts/memory/doctor.ts, и тянет он этот модуль
+// динамическим импортом: его ночной юнит обязан загружаться без authored tree, чтобы бэкап
+// vault прошёл и на половинчатом дереве.
 import { readFileSync, readdirSync } from "node:fs";
 import { resolve, sep } from "node:path";
 import { hasUnclosedFence, splitCard } from "#lib/card-text.ts";
