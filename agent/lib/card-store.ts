@@ -20,10 +20,17 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import {
+  hasUnclosedFence,
+  outsideFences,
+  scanFences,
+} from "../../scripts/lib/card-text.ts";
+import {
   parseFrontmatter,
   writeFrontmatter,
   type FmFields,
 } from "./frontmatter.js";
+
+export { outsideFences } from "../../scripts/lib/card-text.ts";
 
 // ─── identity ──────────────────────────────────────────────────────────────
 
@@ -161,30 +168,6 @@ interface NamedH2Section extends H2Section {
   key: string;
 }
 
-export function outsideFences(lines: string[]): boolean[] {
-  const outside = Array(lines.length).fill(true) as boolean[];
-  let fence: { marker: "`" | "~"; length: number } | null = null;
-  for (let index = 0; index < lines.length; index++) {
-    const line = lines[index];
-    if (fence) {
-      outside[index] = false;
-      const close = /^ {0,3}(`{3,}|~{3,})\s*$/.exec(line);
-      if (
-        close &&
-        close[1][0] === fence.marker &&
-        close[1].length >= fence.length
-      )
-        fence = null;
-      continue;
-    }
-    const open = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
-    if (!open || (open[1][0] === "`" && open[2].includes("`"))) continue;
-    outside[index] = false;
-    fence = { marker: open[1][0] as "`" | "~", length: open[1].length };
-  }
-  return outside;
-}
-
 export function h2Sections(lines: string[], heading: string): H2Section[] {
   const escaped = heading.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const wanted = new RegExp(`^ {0,3}##\\s+${escaped}\\s*$`, "i");
@@ -204,7 +187,7 @@ export function h2Sections(lines: string[], heading: string): H2Section[] {
   });
 }
 
-export function hasH2Section(body: string, heading: string): boolean {
+function hasH2Section(body: string, heading: string): boolean {
   return h2Sections(body.split("\n"), heading).length > 0;
 }
 
@@ -252,7 +235,9 @@ function replaceH2Sections(
 ): string {
   const lines = body.split("\n");
   const sections = h2Sections(lines, heading);
-  const canonical = [`## ${heading}`, ...content];
+  // Heading, blank line, entries - the shape the rest of the card already uses, so a
+  // rewritten section never ends up glued to the next heading.
+  const canonical = [`## ${heading}`, "", ...content];
   if (!sections.length) {
     return `${body.replace(/\s+$/, "")}\n\n${canonical.join("\n")}\n`;
   }
@@ -265,7 +250,7 @@ function replaceH2Sections(
   for (let index = 0; index < lines.length;) {
     const end = byStart.get(index);
     if (end !== undefined) {
-      if (index === first) output.push(...canonical);
+      if (index === first) output.push(...canonical, "");
       index = end;
       continue;
     }
@@ -317,11 +302,18 @@ export function mergeRelated(body: string, related: string[]): string {
   return replaceH2Sections(body, "Related", content);
 }
 
+/** Строки секции как они лежат в карточке. Пустая строка внутри уже сохранённой записи -
+ * часть свидетельства (пустая строка в фенсе с кодом, в транскрипте, в diff), а не
+ * форматирование, поэтому выкусываются только пустые строки на границах секции: иначе
+ * следующий UPDATE, пересобирая Log, задним числом правит чужую запись. */
 function sectionContent(body: string, heading: string): string[] {
   const lines = body.split("\n");
-  return h2Sections(lines, heading).flatMap((section) =>
-    lines.slice(section.start + 1, section.end).filter((line) => line.trim()),
-  );
+  return h2Sections(lines, heading).flatMap((section) => {
+    const content = lines.slice(section.start + 1, section.end);
+    while (content.length && !content[0].trim()) content.shift();
+    while (content.length && !content.at(-1)?.trim()) content.pop();
+    return content;
+  });
 }
 
 function removeH2Sections(body: string, heading: string): string {
@@ -344,15 +336,109 @@ function removeH2Sections(body: string, heading: string): string {
   return output.join("\n").replace(/\s+$/, "") + "\n";
 }
 
+/** История хранится как `- YYYY-MM-DD: факт`. Дата, которую назвала модель, считается
+ * своей независимо от буллета — иначе в append-only архив навсегда уезжает вторая дата
+ * поверх первой. Строку без даты датируем днём записи. */
+function canonicalHistoryEntry(historyEntry: string, date: string): string {
+  const entry = historyEntry.trim().replace(/^[-*]\s+/, "");
+  return /^\d{4}-\d{2}-\d{2}:/.test(entry)
+    ? `- ${entry}`
+    : `- ${date}: ${entry}`;
+}
+
+/** Строки-факты append-only архива. Пусто, если ## History нет или их несколько: границы
+ * архива неоднозначны, судить по нему нельзя. */
+function historyEntries(body: string): string[] {
+  const lines = body.split("\n");
+  const sections = h2Sections(lines, "History");
+  if (sections.length !== 1) return [];
+  return lines
+    .slice(sections[0].start + 1, sections[0].end)
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+/** Текст факта без буллета и без ведущей даты записи - общая форма для сверки
+ * с хвостом Истории. Дата в хвосте необязательна: строки, оставленные легаси-картой
+ * или механическим слиянием autograph, приходят без неё. */
+function historyFact(line: string): string {
+  return line
+    .trim()
+    .replace(/^[-*]\s+/, "")
+    .replace(/^\d{4}-\d{2}-\d{2}:\s*/, "");
+}
+
+/** Compiled Truth лежащей карточки: всё до первой H2, без строки H1. Именно этот факт
+ * вытесняет SUPERSEDE, и именно его обязан назвать historyEntry. */
+function compiledTruth(body: string): string {
+  const lines = body.split("\n");
+  const sections = namedH2Sections(lines);
+  const head = lines.slice(
+    0,
+    sections.length ? sections[0].start : lines.length,
+  );
+  const outside = outsideFences(head);
+  return head
+    .filter((line, index) => !(outside[index] && /^ {0,3}#\s+\S/.test(line)))
+    .join("\n");
+}
+
+/** Факт в форме, пригодной для сверки: без регистра, пунктуации и лишних пробелов.
+ * Модель пересказывает вытесненный факт своими знаками препинания, и побайтовая сверка
+ * спотыкалась бы о точку в конце. */
+function comparableFact(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim();
+}
+
+/** historyEntry в той же форме, но без буллета и без датного префикса: дата принадлежит
+ * архиву, а не факту, и пишут её как придётся - `2026-08-09:`, `2026:`, `2026-01→08:`. */
+function displacedFact(historyEntry: string): string {
+  return comparableFact(
+    historyEntry
+      .trim()
+      .replace(/^[-*]\s+/, "")
+      .replace(/^\d[\d\s./→–—-]*:\s*/, ""),
+  );
+}
+
+/** То же вытеснение, что уже лежит в архиве. Датированную строку сверяем целиком: две
+ * даты у одного факта - два разных вытеснения. Недатированную сверяем по тексту факта,
+ * иначе её повтор на следующие сутки уедет в архив второй строкой под новой датой.
+ * Сверка идёт по всему архиву, а не по его хвосту: доставленный не по порядку SUPERSEDE
+ * вытесняет факт, заархивированный несколько шагов назад, и по одному хвосту он
+ * неотличим от нового - карточка откатилась бы на архивную истину, потеряв нынешнюю. */
+function repeatsArchivedFact(
+  historyEntry: string,
+  dated: string,
+  archived: string[],
+): boolean {
+  const fact = historyEntry.trim().replace(/^[-*]\s+/, "");
+  const undated = !/^\d{4}-\d{2}-\d{2}:/.test(fact);
+  return archived.some(
+    (entry) =>
+      entry.trim() === dated.trim() || (undated && historyFact(entry) === fact),
+  );
+}
+
+/** Многострочное тело ложится под буллет Log со сдвигом на два пробела. Судить его надо
+ * ровно в этом виде: сдвиг меняет разметку, а карточка хранит результат сдвига. */
+function logEntryLines(incoming: string, date: string): string[] {
+  const incomingLines = incoming.trim().split("\n");
+  return incomingLines.length === 1
+    ? [`- ${date}: ${incomingLines[0]}`]
+    : [`- ${date}:`, ...incomingLines.map((line) => `  ${line}`)];
+}
+
 function appendLog(body: string, incoming: string, date: string): string {
   const oldEntries = sectionContent(body, "Log");
   const withoutLogs = removeH2Sections(body, "Log");
-  const incomingLines = incoming.trim().split("\n");
-  const entry =
-    incomingLines.length === 1
-      ? `- ${date}: ${incomingLines[0]}`
-      : [`- ${date}:`, ...incomingLines.map((line) => `  ${line}`)].join("\n");
-  return replaceH2Sections(withoutLogs, "Log", [...oldEntries, entry]);
+  return replaceH2Sections(withoutLogs, "Log", [
+    ...oldEntries,
+    logEntryLines(incoming, date).join("\n"),
+  ]);
 }
 
 function collapseLogSections(body: string): string {
@@ -361,12 +447,18 @@ function collapseLogSections(body: string): string {
   return replaceH2Sections(body, "Log", sectionContent(body, "Log"));
 }
 
+interface CompiledTruthResult {
+  body: string;
+  /** historyEntry совпал со строкой лежащего архива, поэтому НЕ дописан. */
+  suppressedAgainstArchive: boolean;
+}
+
 function replaceCompiledTruth(
   oldBody: string,
   replacement: string,
   historyEntry: string | undefined,
   date: string,
-): string {
+): CompiledTruthResult {
   const structural = new Set(["log", "history", "related"]);
   const oldLines = oldBody.split("\n");
   const replacementLines = replacement.split("\n");
@@ -423,28 +515,30 @@ function replaceCompiledTruth(
           "SUPERSEDE requires exactly one unambiguous ## History section",
         );
       }
-      if (!content.some((line) => line.trim())) {
+      // История сравнивается по строкам-фактам: пустая строка между буллетами -
+      // форматирование, а не свидетельство, и не должна ни ломать сверку префикса,
+      // ни копиться в архиве.
+      const entries = content.filter((line) => line.trim());
+      if (!entries.length) {
         throw new Error(
           "SUPERSEDE replacement ## History must contain the displaced fact",
         );
       }
+      content = entries;
       if (oldHistory.length === 1) {
-        const oldContent = oldLines.slice(
-          oldHistory[0].start + 1,
-          oldHistory[0].end,
-        );
-        while (oldContent.length && !oldContent.at(-1)?.trim())
-          oldContent.pop();
-        const prefixMatches = oldContent.every(
-          (line, index) => content[index] === line,
+        const oldEntries = oldLines
+          .slice(oldHistory[0].start + 1, oldHistory[0].end)
+          .filter((line) => line.trim());
+        const prefixMatches = oldEntries.every(
+          (line, index) => entries[index]?.trim() === line.trim(),
         );
         if (!prefixMatches) {
           throw new Error(
             "SUPERSEDE replacement ## History must preserve existing History as an exact prefix",
           );
         }
-        content = content.slice(oldContent.length);
-        if (!content.some((line) => line.trim()) && !historyEntry?.trim()) {
+        content = entries.slice(oldEntries.length);
+        if (!content.length && !historyEntry?.trim()) {
           throw new Error(
             "SUPERSEDE replacement ## History must append the displaced fact",
           );
@@ -458,12 +552,24 @@ function replaceCompiledTruth(
       ]);
     }
   }
+  let suppressedAgainstArchive = false;
   if (historyEntry?.trim()) {
-    const entry = historyEntry.trim();
-    const dated = /^[-*]\s+\d{4}-\d{2}-\d{2}:/.test(entry)
-      ? entry
-      : `- ${date}: ${entry.replace(/^[-*]\s+/, "")}`;
-    additions.set("history", [...(additions.get("history") ?? []), dated]);
+    const dated = canonicalHistoryEntry(historyEntry, date);
+    const pending = additions.get("history") ?? [];
+    // Один вытесненный факт - одна строка. Модель, дописавшая ## History в body
+    // (секция принадлежит write_card), и повторная доставка уже выполненного вызова
+    // подают тот же факт вторым путём; архив решает, новый он или нет. Легаси-путь
+    // сверяется с подаваемым суффиксом: там факт пишется телом, терять нечего.
+    const archived = pending.length
+      ? [pending.at(-1) as string]
+      : historyEntries(oldBody);
+    if (repeatsArchivedFact(historyEntry, dated, archived)) {
+      // Совпал с лежащим архивом - строки нет ни в одном пути записи, и вызывающий
+      // обязан убедиться, что это реплей, а не потеря факта.
+      suppressedAgainstArchive = pending.length === 0;
+    } else {
+      additions.set("history", [...pending, dated]);
+    }
   }
 
   for (const [key, lines] of additions) {
@@ -476,7 +582,11 @@ function replaceCompiledTruth(
       block = { key, heading, lines: [`## ${heading}`] };
       blocks.push(block);
     }
-    if (block.lines.at(-1)?.trim()) block.lines.push("");
+    // Blank line after the heading, none between entries: otherwise every SUPERSEDE
+    // adds one more blank to the archive and the list renders loose.
+    while (block.lines.length > 1 && !block.lines.at(-1)?.trim())
+      block.lines.pop();
+    if (/^ {0,3}#{1,6}\s/.test(block.lines.at(-1) ?? "")) block.lines.push("");
     block.lines.push(...lines);
   }
 
@@ -486,14 +596,54 @@ function replaceCompiledTruth(
     if (output.length && output.at(-1)?.trim()) output.push("");
     output.push(...block.lines);
   }
-  return output.join("\n").replace(/\s+$/, "") + "\n";
+  return {
+    body: output.join("\n").replace(/\s+$/, "") + "\n",
+    suppressedAgainstArchive,
+  };
 }
 
 export type CardOperation = "ADD" | "UPDATE" | "SUPERSEDE" | "NOOP";
+export const HISTORY_ENTRY_CAP = 500;
 
-export interface MergeInput {
+interface OperationInput {
+  /** Операция, названная вызывающим; undefined — легаси-вызов без operation. */
+  operation?: CardOperation;
+  /** SUPERSEDE: заменить body целиком (frontmatter всё равно сливается). */
+  replaceBody?: boolean;
   /** Содержимое существующего файла (undefined — карточки ещё нет). */
   existing?: string;
+}
+
+/**
+ * Единственный источник вывода операции: явная operation, иначе легаси-автодетект.
+ * Вызывающий обязан передавать в mergeCard сырую operation — по её отсутствию
+ * отличается легаси-путь replace_body, где ## History приходит внутри body.
+ */
+export function resolveOperation(input: OperationInput): CardOperation {
+  if (input.operation) return input.operation;
+  if (input.replaceBody) return "SUPERSEDE";
+  return input.existing === undefined ? "ADD" : "UPDATE";
+}
+
+/**
+ * Легаси-путь, где вытесненная истина приходит секцией `## History` внутри body:
+ * только вызов БЕЗ operation с replace_body. У явного SUPERSEDE его нет - там
+ * вытесненный факт передаётся через historyEntry. Тул и стор обязаны решать это
+ * одинаково, иначе один пускает вызов, а второй роняет его английским исключением.
+ */
+export function isLegacyHistoryReplace(
+  operation: CardOperation | undefined,
+  replaceBody: boolean | undefined,
+  body: string,
+): boolean {
+  return (
+    operation === undefined &&
+    replaceBody === true &&
+    hasH2Section(body.trim(), "History")
+  );
+}
+
+export interface MergeInput extends OperationInput {
   title: string;
   fields: FmFields; // поля, которые тул реально знает и обновляет
   /** Поля только для новой карточки (created/source) — при merge не трогаются. */
@@ -502,10 +652,6 @@ export interface MergeInput {
   related?: string[];
   /** Дата для маркера дописанного блока. */
   date: string;
-  /** SUPERSEDE: заменить body целиком (frontmatter всё равно сливается). */
-  replaceBody?: boolean;
-  /** Explicit operation; omitted callers retain legacy auto-detection. */
-  operation?: CardOperation;
   /** One dated fact moved out of Compiled Truth during SUPERSEDE. */
   historyEntry?: string;
 }
@@ -513,6 +659,8 @@ export interface MergeInput {
 export interface MergeResult {
   content: string;
   action: "created" | "updated" | "merged" | "replaced" | "noop";
+  /** Model noise discarded because a new card has no displaced truth. */
+  ignoredHistoryEntry?: true;
 }
 
 export function mergeCard(input: MergeInput): MergeResult {
@@ -528,9 +676,7 @@ export function mergeCard(input: MergeInput): MergeResult {
     historyEntry,
   } = input;
   const trimmedBody = body.trim();
-  const operation =
-    input.operation ??
-    (replaceBody ? "SUPERSEDE" : existing === undefined ? "ADD" : "UPDATE");
+  const operation = resolveOperation(input);
 
   if (h2Sections(trimmedBody.split("\n"), "Related").length) {
     throw new Error(
@@ -540,16 +686,69 @@ export function mergeCard(input: MergeInput): MergeResult {
   if (replaceBody && operation !== "SUPERSEDE") {
     throw new Error("replaceBody is valid only for SUPERSEDE");
   }
-  if (historyEntry && /[\r\n]/.test(historyEntry)) {
+  if (
+    historyEntry !== undefined &&
+    operation !== "ADD" &&
+    operation !== "SUPERSEDE"
+  ) {
+    throw new Error("historyEntry is valid only for SUPERSEDE");
+  }
+  if (
+    operation === "SUPERSEDE" &&
+    historyEntry !== undefined &&
+    /[\r\n]/.test(historyEntry)
+  ) {
     throw new Error("historyEntry must be a single line");
   }
   if (
-    operation === "UPDATE" &&
+    operation === "SUPERSEDE" &&
+    historyEntry !== undefined &&
+    historyEntry.trim().length > HISTORY_ENTRY_CAP
+  ) {
+    throw new Error(
+      `historyEntry must not exceed ${HISTORY_ENTRY_CAP} characters`,
+    );
+  }
+  // Незакрытый фенс делает кодом всё до конца тела, и гейт заголовков ниже перестаёт
+  // видеть ## History/## Log за ним. Искать заголовки внутри открытого фенса нечем -
+  // такое тело отклоняется целиком, включая легаси-путь replace_body: он единственный,
+  // через который открытый фенс попадал в карточку и ломал её следующий SUPERSEDE.
+  // NOOP тела не пишет вовсе, поэтому его фенс никого не касается.
+  if (operation !== "NOOP" && hasUnclosedFence(trimmedBody)) {
+    throw new Error(`${operation} body must close every code fence`);
+  }
+  // Секции карточки принадлежат write_card: H1 - заголовку, ## History/## Log -
+  // append-only архивам. Тело, которое сочинила модель, несёт факт и только факт, иначе
+  // выдуманный архив въезжает в карточку соседним полем и вычистить его уже нечем.
+  if (
+    (operation === "ADD" || operation === "UPDATE") &&
     hasOutsideHeading(trimmedBody, /^ {0,3}#{1,2}\s+/)
   ) {
-    throw new Error("UPDATE body must be a fact without H1/H2 headings");
+    throw new Error(`${operation} body must be a fact without H1/H2 headings`);
+  }
+  // Гейты выше судят сырое тело, а UPDATE кладёт его в карточку сдвинутым на два пробела
+  // под буллет Log. Фенс с отступом 2-3 после сдвига уезжает на 4-5 и фенсом быть
+  // перестаёт: его содержимое выходит наружу, и спрятанный внутри ## History становится
+  // настоящим заголовком append-only архива. Поэтому запись судим в том виде, в каком
+  // она ляжет в карточку.
+  if (operation === "UPDATE") {
+    const entry = logEntryLines(trimmedBody, date);
+    const scanned = scanFences(entry);
+    if (
+      scanned.open ||
+      entry.some(
+        (line, index) =>
+          scanned.outside[index] && /^ {0,3}#{1,2}\s+/.test(line),
+      )
+    ) {
+      throw new Error(
+        "UPDATE body must start every code fence at the line start; a Log entry indents the body by two spaces",
+      );
+    }
   }
   if (operation === "NOOP") {
+    if (existing === undefined)
+      throw new Error("NOOP requires an existing card");
     return { content: existing ?? "", action: "noop" };
   }
   if (operation === "ADD" && existing !== undefined) {
@@ -561,17 +760,57 @@ export function mergeCard(input: MergeInput): MergeResult {
   ) {
     throw new Error(`${operation} requires an existing card`);
   }
+  if (
+    operation === "SUPERSEDE" &&
+    !historyEntry?.trim() &&
+    !isLegacyHistoryReplace(input.operation, replaceBody, trimmedBody)
+  ) {
+    throw new Error(
+      "SUPERSEDE requires historyEntry or a legacy ## History section",
+    );
+  }
+  // Тело SUPERSEDE переписывает Compiled Truth, поэтому свои H2 ему разрешены, а H1 и
+  // структурные архивы - нет: иначе модель дописывает в append-only ## History строки с
+  // произвольными датами, и вычистить их уже нечем. Легаси-путь (replace_body без
+  // operation) не трогаем - там ## History и есть способ передать вытесненный факт.
+  if (
+    operation === "SUPERSEDE" &&
+    input.operation !== undefined &&
+    hasOutsideHeading(trimmedBody, /^ {0,3}(?:#\s+|##\s+(?:History|Log)\s*$)/i)
+  ) {
+    throw new Error(
+      "SUPERSEDE body must be a fact without an H1 or a ## History/## Log heading",
+    );
+  }
 
   if (existing === undefined) {
     const all: FmFields = { ...fields, ...(initialFields || {}) };
     const fm = ["---", writeFrontmatter(all, []), "---", ""].join("\n");
     let out = `${fm}\n# ${title}\n\n${trimmedBody}\n`;
     if (related && related.length) out = mergeRelated(out, related);
-    return { content: out, action: "created" };
+    return {
+      content: out,
+      action: "created",
+      ...(historyEntry !== undefined
+        ? { ignoredHistoryEntry: true as const }
+        : {}),
+    };
   }
 
   const parsed = parseFrontmatter(existing);
   const oldBody = parsed.body;
+  // Тот же принцип со стороны диска: открытый фенс в лежащей карточке уводит её
+  // ## History и ## Log в код, границ секций нет - SUPERSEDE молча снёс бы весь
+  // append-only архив, а UPDATE не нашёл бы Log и дописал бы факт внутрь кода, откуда
+  // его уже не видно. Отказ для обеих операций; фенс в карточке чинит человек.
+  if (
+    (operation === "SUPERSEDE" || operation === "UPDATE") &&
+    hasUnclosedFence(oldBody)
+  ) {
+    throw new Error(
+      `existing card body leaves a code fence open; close it before ${operation}`,
+    );
+  }
   if (
     operation === "UPDATE" &&
     hasOutsideHeading(
@@ -604,14 +843,22 @@ export function mergeCard(input: MergeInput): MergeResult {
   }
   updates.updated = date;
 
-  const fmText = parsed.fields
-    ? writeFrontmatter(updates, parsed.lines)
-    : writeFrontmatter(updates, []);
-
   let newBody = operation === "UPDATE" ? collapseLogSections(oldBody) : oldBody;
   let appended = false;
+  // A confirmed-cancel rollup retry can replay the exact completed tool call: the same
+  // canonical entry is already archived, so the truth behind it is displaced already and
+  // the entry is not written twice. Anything else that ends here is not a replay - see the
+  // fail-closed gate below, which keeps a stale delivery from rolling the card back.
+  let suppressedHistoryEntry = false;
   if (operation === "SUPERSEDE") {
-    newBody = `\n${replaceCompiledTruth(oldBody, trimmedBody, historyEntry, date).trim()}\n`;
+    const replaced = replaceCompiledTruth(
+      oldBody,
+      trimmedBody,
+      historyEntry,
+      date,
+    );
+    suppressedHistoryEntry = replaced.suppressedAgainstArchive;
+    newBody = `\n${replaced.body.trim()}\n`;
   } else if (!bodyContains(oldBody, trimmedBody)) {
     newBody = appendLog(newBody, trimmedBody, date);
     appended = true;
@@ -622,7 +869,47 @@ export function mergeCard(input: MergeInput): MergeResult {
   newBody = mergeRelated(newBody, related ?? []);
   if (beforeRelated !== newBody) appended = true;
 
-  const content = `---\n${fmText}\n---\n${newBody.replace(/\s*$/, "")}\n`;
+  const render = (stamp: string) =>
+    `---\n${writeFrontmatter(
+      { ...updates, updated: stamp },
+      parsed.fields ? parsed.lines : [],
+    )}\n---\n${newBody.replace(/\s*$/, "")}\n`;
+  const content = render(date);
+  // Реплей, перешагнувший полночь, отличается от лежащей карточки только сегодняшним
+  // `updated:`. Записать файл ради одной этой строки - выдать за изменение то, что
+  // изменением не является, поэтому дату исключаем из сверки.
+  const previousStamp = parsed.fields?.updated;
+  if (suppressedHistoryEntry) {
+    if (
+      content === existing ||
+      (typeof previousStamp === "string" && render(previousStamp) === existing)
+    )
+      return { content: existing, action: "noop" };
+    // Карточка меняется, а строка архива подавлена как дубль - значит это не реплей, а
+    // устаревший historyEntry поверх нового тела: либо модель повторила вчерашний факт,
+    // либо это доставленный не по порядку прошлый SUPERSEDE, который откатил бы truth на
+    // архивную истину. В обоих случаях нынешний факт не назван и молча пропал бы. Отказ;
+    // вызывающий обязан прислать факт, который вытесняет ЭТОТ вызов.
+    throw new Error(
+      "historyEntry already appears in ## History but this SUPERSEDE still changes the card; " +
+        "send the fact this call displaces",
+    );
+  }
+  // Реплей отсеян гейтом выше, значит вызов реально меняет карточку - и вытесняемый факт
+  // обязан быть про НЫНЕШНЮЮ истину. Сверка с архивом ловит лишь буквальный повтор
+  // строки: тот же древний факт под другой датой проходил бы её насквозь, уложив в архив
+  // свой дубль, а нынешнюю истину стерев молча. Хвост истины (пример в фенсе, уточнение
+  // следующим абзацем) повторять не обязательно - началом строка совпасть обязана.
+  if (operation === "SUPERSEDE" && historyEntry?.trim()) {
+    const displaced = displacedFact(historyEntry);
+    const truth = comparableFact(compiledTruth(oldBody));
+    if (displaced && truth && !truth.startsWith(displaced)) {
+      throw new Error(
+        "historyEntry must state the Compiled Truth this SUPERSEDE displaces; " +
+          "send the fact the card holds now",
+      );
+    }
+  }
   return {
     content,
     action:

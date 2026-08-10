@@ -115,7 +115,7 @@ Pick the operation (full rules: `references/update-in-place.md`):
 - **ADD** — no existing card → create it (steps 1–5 below).
 - **NOOP** — already captured, unchanged → stop.
 - **UPDATE** — same subject, new enrichment → open the card, sharpen `description`, append a dated line under `## Log`, re-`touch`.
-- **SUPERSEDE** — new fact _contradicts_ a current value → rewrite the current value (frontmatter field + top of description = "Compiled Truth"), move the OLD value to append-only `## History` (`- 2026-03→2026-06 · company: TDI Group`), set `updated:`. Whole card obsolete → `status: superseded` + `superseded_by: [[new-card]]`.
+- **SUPERSEDE** — new fact _contradicts_ a current value → rewrite the current value (frontmatter field + top of description = "Compiled Truth"), move the OLD value to append-only `## History` (`- 2026-06-01: company: TDI Group (held 2026-03→2026-06)`), set `updated:`. Writing through Iva's `write_card`? Pass the displaced fact as `history_entry` — the tool owns that section. Whole card obsolete → `status: superseded` + `superseded_by: [[new-card]]`.
 
 Only when the operation is **ADD**, continue:
 

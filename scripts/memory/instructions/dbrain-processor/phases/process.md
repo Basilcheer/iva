@@ -21,8 +21,12 @@ For each item:
    - Match, genuinely new and compatible fact → **UPDATE**. The tool appends one
      dated bullet under the card's single `## Log`.
    - Match, new fact contradicts current truth → **SUPERSEDE**. Pass the complete
-     new Compiled Truth in `body` and the displaced old fact in `history_entry`.
-     The tool rewrites current truth and preserves one append-only `## History`.
+     new Compiled Truth in `body` and the displaced old fact in `history_entry`
+     as a single dated line, `YYYY-MM-DD: fact` (the fact's own date, not today's).
+     The tool rewrites current truth and keeps one append-only History:
+     `write_card` owns the `## History` section, so never write that heading
+     into `body` yourself.
+     Never pass `history_entry` with ADD, UPDATE, or NOOP.
      See `references/classification.md` → "ADD / UPDATE / SUPERSEDE / NOOP".
      Never use `UPDATE` to hide a contradiction in chronology.
    - Tag each written card with `confidence: EXTRACTED|INFERRED` (see
@@ -39,9 +43,12 @@ For each item:
    - `description` is a search snippet (what/why), never a title repeat.
    - `tags`: 2–5, lowercase, kebab-case.
    - `created: YYYY-MM-DD` and `source: daily/YYYY-MM-DD.md`.
-4. **Body.** A few sentences of context. Never put `## Related` in `body`; collect
-   relation targets and pass them through the `related` argument. Quote the transcript
-   only as needed; link back with `source: daily/YYYY-MM-DD.md` in frontmatter.
+4. **Body.** A few sentences of context — facts only, with no H1/H2 headings; a
+   `body` carrying one is refused. `write_card` builds the card's structure itself:
+   the `#` title, the dated `## Log`, `## Related`, and the append-only `## History`.
+   Collect relation targets and pass them through the `related` argument. Quote the
+   transcript only as needed; link back with `source: daily/YYYY-MM-DD.md` in
+   frontmatter.
 5. **Reread.** After each non-NOOP call, reread the returned file. Confirm current
    truth is current, and that it contains at most one `## Log`, at most one
    `## Related`, and no dated `## Обновление` / `## Update` heading.

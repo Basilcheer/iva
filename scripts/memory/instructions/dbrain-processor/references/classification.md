@@ -53,11 +53,18 @@ For every fact, pick one operation:
 - **SUPERSEDE** — the new fact _contradicts_ a current value on an existing card (job changed,
   moved city, status flipped). Do NOT just append: **rewrite** the card's current value
   (frontmatter field + top of the description) to the new fact — this is "Compiled Truth", the
-  living snapshot of what is true _now_ — and move the OLD value to a `## History` section as a
-  dated line: `- 2026-03→06: TDI Group`. History is append-only and never edited.
+  living snapshot of what is true _now_ — and pass the OLD value to `write_card` through
+  `history_entry` as a single dated line, `YYYY-MM-DD: fact` (for example
+  `2026-07-31: TDI Group (held 2026-03→06)`), dated by the fact itself, not by today.
+  `write_card` owns the `## History` section: never write that heading into `body` yourself.
+  Never pass `history_entry` with ADD, UPDATE, or NOOP. History is append-only and never edited.
   **Never leave two contradictory current values on the same subject.**
   If a whole card is obsolete (project renamed, decision reverted), set `status: superseded`
   and add `superseded_by: [[new-card]]`.
+
+Whatever the operation, the `body` you pass is facts only, with no H1/H2 headings —
+`write_card` builds the card's structure (the `#` title, `## Log`, `## Related`,
+`## History`) and refuses a body that carries a heading of its own.
 
 The deterministic scan `.graph/supersede-candidates.json` lists same-entity cards with
 conflicting fields — resolve each by superseding the stale one.
