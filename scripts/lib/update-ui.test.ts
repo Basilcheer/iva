@@ -439,6 +439,34 @@ test("Telegram update failure replaces the active phase in the same message", as
   assert.match(calls[1]?.body.text ?? "", /still running v1/);
 });
 
+test("Telegram says an update is already running in the message it was asked from", async () => {
+  const calls: TelegramCall[] = [];
+  const fetchImpl: MockFetch = async (url, init) => {
+    calls.push({ method: url.split("/").at(-1), body: JSON.parse(init.body) });
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ ok: true, result: {} }),
+    };
+  };
+  const reporter = createTelegramUpdateReporter({
+    token: "token",
+    job: { chatId: 1, messageId: 100, locale: "ru" },
+    env: {},
+    fetchImpl,
+  });
+  assert.ok(reporter);
+  await reporter.start("fetch");
+  await reporter.busy();
+  reporter.dispose();
+
+  assert.deepEqual(
+    calls.map((call) => call.body.message_id),
+    [100, 100],
+  );
+  assert.match(calls[1]?.body.text ?? "", /Обновление уже идёт/u);
+});
+
 test("update callback is acknowledged before any message edit", async () => {
   const previousFetch = mutableGlobal.fetch;
   const previousToken = process.env.TELEGRAM_BOT_TOKEN;

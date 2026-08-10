@@ -159,6 +159,8 @@ export function createVersionUpdateCommand(
 
       if (outcome.status === "busy") {
         terminal.fail(text.busy);
+        // Or the Telegram message stays on the phase it never got past.
+        await reporter?.busy();
         process.exitCode = 1;
       } else if (outcome.status === "unhealthy") await failed(outcome.log);
       else if (outcome.status === "failed") await failed(outcome.message);

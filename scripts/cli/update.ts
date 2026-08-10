@@ -70,6 +70,7 @@ type TelegramReporter = {
   start(phase: UpdatePhase): Promise<void>;
   done(phase: UpdatePhase): Promise<void>;
   fail(phase: UpdatePhase, beforeVersion: string): Promise<void>;
+  busy(): Promise<void>;
   postCommitFailure(message: string): Promise<void>;
   complete(
     versions: UpdateVersions & {
@@ -244,6 +245,8 @@ export function createUpdateCommand({
     const lock = ops.acquireUpdateLock(dataDir, owner);
     if (!lock.ok) {
       terminal.fail(text.busy);
+      // Or the Telegram message stays on the phase it never got past.
+      await reporter?.busy();
       reporter?.dispose();
       await ops.removeTelegramJob(loadedJob?.path);
       process.exitCode = 1;

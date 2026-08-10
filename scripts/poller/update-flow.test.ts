@@ -2,8 +2,11 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
+  readdirSync,
   realpathSync,
   rmSync,
   symlinkSync,
@@ -69,6 +72,91 @@ type MockFetch = (
   init: { body?: string },
 ) => Promise<{ json(): Promise<{ ok: boolean; result: object }> }>;
 const mutableGlobal: { fetch: MockFetch } = globalThis;
+
+/**
+ * Tap the /update button and collect the texts Telegram was sent. `systemd-run`
+ * is a stand-in that records the command line: the launch is real, the update
+ * behind it is not.
+ */
+async function press(launcher: string): Promise<string[]> {
+  const texts: string[] = [];
+  const previousFetch = mutableGlobal.fetch;
+  const previousPath = process.env.PATH;
+  mutableGlobal.fetch = (_url, init) => {
+    const body = JSON.parse(init.body ?? "{}") as { text?: string };
+    if (typeof body.text === "string") texts.push(body.text);
+    return Promise.resolve({
+      json: () => Promise.resolve({ ok: true, result: {} }),
+    });
+  };
+  process.env.PATH = launcher;
+  try {
+    await handleUpdateCallback({
+      id: "callback",
+      from: { id: 42 },
+      message: { chat: { id: 1 }, message_id: 10 },
+      data: "iva_update:run",
+    });
+  } finally {
+    mutableGlobal.fetch = previousFetch;
+    process.env.PATH = previousPath;
+  }
+  return texts;
+}
+
+test("the /update button leaves the lock to the update it launches", async (t) => {
+  const lock = join(dataDir, "update.lock");
+  const jobs = join(dataDir, "update-jobs");
+  rmSync(jobs, { recursive: true, force: true }); // The cleanup test's leftovers.
+  const launched = join(dataDir, "launched.log");
+  const bin = join(dataDir, "bin");
+  mkdirSync(bin, { recursive: true });
+  writeFileSync(
+    join(bin, "systemd-run"),
+    `#!/bin/sh\nprintf '%s\\n' "$*" >> "${launched}"\nexit 0\n`,
+    { mode: 0o755 },
+  );
+  t.after(() => {
+    for (const path of [lock, jobs, bin, launched])
+      rmSync(path, { recursive: true, force: true });
+  });
+
+  const first = await press(bin);
+
+  assert.match(first.at(-1) ?? "", /Saving your changes/u);
+  assert.match(
+    readFileSync(launched, "utf8"),
+    /update --telegram-job [0-9a-f]/u,
+  );
+  assert.equal(
+    readdirSync(jobs).length,
+    1,
+    "the update has its job to report to",
+  );
+  // Nothing claimed on the updater's behalf: a lock taken here would never be
+  // released - this process outlives the update and is restarted by it - and the
+  // updater, seeing an owner that is alive, would refuse to run at all.
+  assert.equal(existsSync(lock), false, first.join(" | "));
+
+  // So a second tap is answered by starting an update, not by a wedged lock.
+  assert.match((await press(bin)).at(-1) ?? "", /Saving your changes/u);
+  assert.equal(existsSync(lock), false);
+  assert.equal(readdirSync(jobs).length, 2);
+
+  // A launcher that fails takes the job file back down with it.
+  rmSync(join(bin, "systemd-run"));
+  assert.match((await press(bin)).at(-1) ?? "", /Couldn't start the update/u);
+  assert.equal(readdirSync(jobs).length, 2);
+
+  // And an update that is really running is answered before anything is launched.
+  mkdirSync(lock, { recursive: true });
+  writeFileSync(
+    join(lock, "owner.json"),
+    JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }),
+  );
+  assert.deepEqual(await press(bin), ["⚠️ An update is already running"]);
+  assert.equal(readdirSync(jobs).length, 2);
+});
 
 test("saved update view explains a preserved change set with no conflicts", async (t) => {
   t.after(() => rmSync(dataDir, { recursive: true, force: true }));

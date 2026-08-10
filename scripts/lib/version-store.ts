@@ -415,10 +415,33 @@ export function adoptUpdateLock(dataDir: string): UpdateLock {
 }
 
 /**
- * Serialize updates with one atomic mkdir. A lock whose owner is gone is stale at
+ * Whether a lock that exists still counts. A lock whose owner is gone is stale at
  * once - a SIGKILLed update must not block the retry cleaning up after it - and
  * age is only the fallback for an owner that cannot be read.
  */
+function held(path: string): boolean {
+  const pid = ownerPid(path);
+  if (alive(pid)) return true;
+  if (pid !== undefined) return false;
+  // No readable owner: age is all that is left to tell live from abandoned.
+  try {
+    return Date.now() - statSync(path).mtimeMs < STALE_MS;
+  } catch {
+    return true; // A lock that cannot be read is not one to walk over.
+  }
+}
+
+/**
+ * Is an update running, asked without taking anything. For the processes that only
+ * launch one - the bridge behind /update - so that the updater it starts is the
+ * single owner of the lock, rather than inheriting one nobody will release.
+ */
+export function updateRunning(dataDir: string): boolean {
+  const path = join(dataDir, LOCK);
+  return existsSync(path) && held(path);
+}
+
+/** Serialize updates with one atomic mkdir. */
 export function acquireUpdateLock(dataDir: string): UpdateLock | null {
   mkdirSync(dataDir, { recursive: true });
   const path = join(dataDir, LOCK);
@@ -431,18 +454,7 @@ export function acquireUpdateLock(dataDir: string): UpdateLock | null {
   } catch (caught) {
     if ((caught as NodeJS.ErrnoException).code !== "EEXIST") throw caught;
   }
-  const pid = ownerPid(path);
-  if (alive(pid)) return null;
-  if (pid === undefined) {
-    // No readable owner: age is all that is left to tell live from abandoned.
-    let age: number;
-    try {
-      age = Date.now() - statSync(path).mtimeMs;
-    } catch {
-      return null;
-    }
-    if (age < STALE_MS) return null;
-  }
+  if (held(path)) return null;
   rmSync(path, { recursive: true, force: true });
   try {
     return claim();
