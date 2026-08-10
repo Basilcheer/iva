@@ -20,6 +20,15 @@ import { existsSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 
+// WHEN each period fires — time of day AND day constraint — comes from the schedule table
+// the eve schedules themselves read; this module restates none of it. The import is
+// type-only (erased), with the table itself loaded on the catch-up path below: scripts/cli/
+// systemd.ts imports this module just for LEGACY_MEMORY_UNITS, and the CLI also runs on
+// trees whose package.json carries no `imports` map, where a static `#lib/*` specifier
+// fails to resolve at load (scripts/cli/account-entrypoints.test.ts builds exactly such a
+// tree). The catch-up path only ever runs from the agent, where the table is right there.
+import type { ScheduleCron, ScheduleName } from "#lib/schedule-table.ts";
+
 import {
   readStatus,
   runScheduledJob,
@@ -91,23 +100,19 @@ export const LEGACY_MEMORY_UNITS: readonly string[] = [
   "iva-memory-yearly.timer",
 ];
 
-// { period, cron hour:minute in local tz, day-of-week|day-of-month|month constraint }
-// mirrors the cron strings the eve schedules carry (see agent/schedules/memory-*.ts) —
-// keep these two in sync by hand, there is no single shared source at the cron-string level.
-const PERIOD_SCHEDULE: Record<
-  Period,
-  { readonly hour: number; readonly minute: number; readonly graceMs: number }
-> = {
-  daily: { hour: 4, minute: 0, graceMs: 20 * 60 * 60 * 1000 },
-  weekly: { hour: 4, minute: 15, graceMs: 3 * 24 * 60 * 60 * 1000 },
-  monthly: { hour: 4, minute: 20, graceMs: 7 * 24 * 60 * 60 * 1000 },
-  yearly: { hour: 4, minute: 25, graceMs: 14 * 24 * 60 * 60 * 1000 },
+// How late a missed run may still be caught up, per period — a catch-up policy of this
+// module alone, not schedule metadata.
+const PERIOD_GRACE_MS: Record<Period, number> = {
+  daily: 20 * 60 * 60 * 1000,
+  weekly: 3 * 24 * 60 * 60 * 1000,
+  monthly: 7 * 24 * 60 * 60 * 1000,
+  yearly: 14 * 24 * 60 * 60 * 1000,
 };
-const PERIODS = Object.keys(PERIOD_SCHEDULE) as Period[];
+const PERIODS = Object.keys(PERIOD_GRACE_MS) as Period[];
 
 // The status-file key a real run is recorded under — must match the `name` each
 // agent/schedules/memory-*.ts passes to runScheduledJob, not the bare period.
-function statusKey(period: Period): string {
+function statusKey(period: Period): ScheduleName {
   return `memory-${period}`;
 }
 
@@ -195,60 +200,44 @@ function addDaysToDate(
   };
 }
 
-function prevMonth(y: number, m: number): { y: number; m: number } {
-  return m === 1 ? { y: y - 1, m: 12 } : { y, m: m - 1 };
+// Does a plain Y-M-D calendar date satisfy the cron's date fields? The weekday does not
+// depend on tz once the calendar date itself is fixed. parseCron() refuses a cron that
+// constrains day-of-month and day-of-week at once, so there is no OR case to decide here.
+function matchesDate(
+  cron: ScheduleCron,
+  { y, m, d }: { y: number; m: number; d: number },
+): boolean {
+  if (cron.month !== null && cron.month !== m) return false;
+  if (cron.dayOfMonth !== null && cron.dayOfMonth !== d) return false;
+  if (cron.dayOfWeek === null) return true;
+  return cron.dayOfWeek === new Date(Date.UTC(y, m - 1, d)).getUTCDay(); // 0=Sun..6=Sat
 }
 
-// Monday=0 .. Sunday=6, from a plain Y-M-D calendar date (weekday does not depend on tz
-// once the calendar date itself is fixed).
-function mondayOffset(y: number, m: number, d: number): number {
-  const dow = new Date(Date.UTC(y, m - 1, d)).getUTCDay(); // 0=Sun..6=Sat
-  return (dow + 6) % 7;
-}
-
-// Returns the most recent scheduled UTC epoch ms for a period, at or before `nowMs`.
-function lastDueMs(period: Period, nowMs: number, tz: string): number {
-  const { hour, minute } = PERIOD_SCHEDULE[period];
+// Returns the most recent scheduled UTC epoch ms for a cron, at or before `nowMs`: walk
+// back from today's local calendar date to the most recent date the cron matches, then
+// place its hour:minute in `tz`. Every field of the answer comes from the table, so a
+// cadence change there moves the catch-up point with it.
+function lastDueMs(cron: ScheduleCron, nowMs: number, tz: string): number {
   const today = zonedParts(nowMs, tz);
-
-  if (period === "daily") {
-    const candidate = zonedToUtcMs(today.y, today.m, today.d, hour, minute, tz);
-    if (candidate <= nowMs) return candidate;
-    const y = addDaysToDate(today.y, today.m, today.d, -1);
-    return zonedToUtcMs(y.y, y.m, y.d, hour, minute, tz);
+  let date = { y: today.y, m: today.m, d: today.d };
+  // Two years of days: more than the widest cadence in the table (yearly) plus a leap day.
+  for (let back = 0; back <= 732; back++) {
+    if (matchesDate(cron, date)) {
+      const candidate = zonedToUtcMs(
+        date.y,
+        date.m,
+        date.d,
+        cron.hour,
+        cron.minute,
+        tz,
+      );
+      if (candidate <= nowMs) return candidate;
+    }
+    date = addDaysToDate(date.y, date.m, date.d, -1);
   }
-  if (period === "weekly") {
-    const back = mondayOffset(today.y, today.m, today.d);
-    const monday = addDaysToDate(today.y, today.m, today.d, -back);
-    const candidate = zonedToUtcMs(
-      monday.y,
-      monday.m,
-      monday.d,
-      hour,
-      minute,
-      tz,
-    );
-    if (candidate <= nowMs) return candidate;
-    const prevMonday = addDaysToDate(monday.y, monday.m, monday.d, -7);
-    return zonedToUtcMs(
-      prevMonday.y,
-      prevMonday.m,
-      prevMonday.d,
-      hour,
-      minute,
-      tz,
-    );
-  }
-  if (period === "monthly") {
-    const candidate = zonedToUtcMs(today.y, today.m, 1, hour, minute, tz);
-    if (candidate <= nowMs) return candidate;
-    const prev = prevMonth(today.y, today.m);
-    return zonedToUtcMs(prev.y, prev.m, 1, hour, minute, tz);
-  }
-  // yearly
-  const candidate = zonedToUtcMs(today.y, 1, 1, hour, minute, tz);
-  if (candidate <= nowMs) return candidate;
-  return zonedToUtcMs(today.y - 1, 1, 1, hour, minute, tz);
+  throw new RangeError(
+    `no date in the last two years matches month ${cron.month}, day ${cron.dayOfMonth}, weekday ${cron.dayOfWeek}`,
+  );
 }
 
 // ── legacy unit teardown ─────────────────────────────────────────────────
@@ -339,11 +328,15 @@ export async function runScheduleMigration({
   try {
     if (!statusPath) return;
 
+    // The schedule table, loaded here rather than at the top of the file — see the import
+    // note above. This is the only path that needs it, and it only runs from the agent.
+    const { SCHEDULE_CRON, parseCron } = await import("#lib/schedule-table.ts");
+
     const runPeriod =
       runJob ??
       ((period: Period) =>
         runScheduledJob({
-          name: `memory-${period}`,
+          name: statusKey(period),
           argv: ["scripts/memory/rollup.ts", period],
           root,
           nodeBin,
@@ -391,8 +384,12 @@ export async function runScheduleMigration({
         const due: DuePeriod[] = [];
         for (const period of PERIODS) {
           if (freshlySeeded.has(period)) continue;
-          const { graceMs } = PERIOD_SCHEDULE[period];
-          const dueAt = lastDueMs(period, nowMs, tz);
+          const graceMs = PERIOD_GRACE_MS[period];
+          const dueAt = lastDueMs(
+            parseCron(SCHEDULE_CRON[statusKey(period)]),
+            nowMs,
+            tz,
+          );
           const entry = seeded[statusKey(period)];
           // A real success always wins; otherwise fall back to the seeded baseline (if
           // any) so a freshly-seeded period doesn't immediately look "due" the moment
