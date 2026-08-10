@@ -20,7 +20,7 @@ import {
 
 // Ответ транспорта на одну попытку доставки. retryPlain=true — Telegram не принял
 // разметку (400 по сущностям), тот же кусок имеет смысл повторить без тегов;
-// retryPlain=false — отправка безнадёжна, шов останавливается.
+// retryPlain=false — этот кусок безнадёжен, шов идёт к следующему.
 export type OutboxAck =
   { ok: true } | { ok: false; error: string; retryPlain: boolean };
 
@@ -36,7 +36,7 @@ export type OutboxResult = {
   ok: boolean; // всё, что шов начал отправлять, доставлено
   delivered: number; // сколько сообщений реально ушло в чат
   fellBack: boolean; // хотя бы один кусок ушёл без разметки
-  error: string; // ошибка, на которой шов остановился
+  error: string; // первый отказ доставки (дальше шов всё равно дошёл до конца)
 };
 
 export async function sendThroughOutbox(
@@ -71,6 +71,15 @@ export async function sendThroughOutbox(
     }
   }
 
+  // Отказ на одном куске не отменяет остальные: длинный ответ рвётся на чанки
+  // произвольно, и на 429/сетевом блипе посреди хвоста пользователю лучше получить
+  // остаток ответа, чем тишину. Первую ошибку запоминаем, ok=false — этого хватает
+  // вызывающим (cron выходит ненулевым кодом, канал не засчитывает латентность).
+  const fail = (error: string) => {
+    if (result.ok) result.error = error;
+    result.ok = false;
+  };
+
   // toTelegramHtmlChunks режет И конвертирует, гарантируя длину каждого чанка
   // ≤limit ПОСЛЕ конвертации. Пустые чанки не шлём: Telegram отвергает пустой текст.
   for (const html of toTelegramHtmlChunks(guard.text, limit)) {
@@ -81,21 +90,15 @@ export async function sendThroughOutbox(
       continue;
     }
     if (!sent.retryPlain) {
-      result.ok = false;
-      result.error = sent.error;
-      return result;
+      fail(sent.error);
+      continue;
     }
     // Один повтор тем же куском, но без тегов и parse_mode — по сущностям 400
     // тогда невозможен. htmlToPlain декодирует сущности, иначе &amp; уйдёт литералом.
     result.fellBack = true;
     const plain = await transport.sendPlain(htmlToPlain(html));
-    if (plain.ok) {
-      result.delivered++;
-      continue;
-    }
-    result.ok = false;
-    result.error = `plain retry ${plain.error}`;
-    return result;
+    if (plain.ok) result.delivered++;
+    else fail(`plain retry ${plain.error}`);
   }
   return result;
 }

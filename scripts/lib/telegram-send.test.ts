@@ -85,32 +85,34 @@ void test("telegram-send keeps redaction when retrying a rejected HTML message",
   assert.equal("parse_mode" in requests[1].body, false);
 });
 
-void test("telegram-send stops at a status Telegram cannot retry as plain", async (t) => {
+void test("telegram-send reports the first failure and still delivers the rest", async (t) => {
   const originalFetch = globalThis.fetch;
   const requests: CapturedRequest[] = [];
   globalThis.fetch = (url: URL | RequestInfo, options?: RequestInit) => {
     requests.push(captureRequest(url, options));
-    return Promise.resolve(new Response("too many requests", { status: 429 }));
+    const status = requests.length === 1 ? 429 : 200;
+    return Promise.resolve(
+      new Response(status === 429 ? "too many requests" : "", { status }),
+    );
   };
   t.after(() => {
     globalThis.fetch = originalFetch;
   });
 
+  const report = Array.from(
+    { length: 400 },
+    (_, i) => `line ${i} of the report`,
+  ).join("\n\n");
   const { sendTelegramHtml } = await import("./telegram-send.ts");
-  const result = await sendTelegramHtml(
-    "test-bot",
-    "test-chat",
-    Array.from({ length: 400 }, (_, i) => `line ${i} of the report`).join(
-      "\n\n",
-    ),
-  );
+  const result = await sendTelegramHtml("test-bot", "test-chat", report);
 
   assert.deepEqual(result, {
     ok: false,
     fellBack: false,
     error: "429: too many requests",
   });
-  assert.equal(requests.length, 1);
+  assert.ok(requests.length > 1);
+  assert.ok(String(requests.at(-1)?.body.text).includes("line 399"));
 });
 
 void test("telegram-send never throws on a report that is not a string", async (t) => {

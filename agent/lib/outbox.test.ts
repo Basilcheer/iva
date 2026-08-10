@@ -184,30 +184,84 @@ await test("разметка экранируется, а plain-фолбэк е�
   assert.ok(!plain.text.includes("&amp;"));
 });
 
-await test("транспорт без шанса на разметку останавливает шов", async (t) => {
+const LONG_MESSAGE = Array.from(
+  { length: 400 },
+  (_, i) => `строка ${i} с текстом`,
+).join("\n\n");
+
+// Сколько чанков даёт LONG_MESSAGE — считаем доставкой без единого отказа, чтобы
+// тесты ниже говорили «все, кроме одного», а не сверялись с магическим числом.
+async function chunkCount(message: string): Promise<number> {
+  const { sent, transport } = stub();
+  await sendThroughOutbox(message, transport);
+  return sent.length;
+}
+
+await test("сбой одного чанка не хоронит остальные", async (t) => {
   captureErrors(t);
+  const total = await chunkCount(LONG_MESSAGE);
   const { sent, transport } = stub({
     html: (_html, index) =>
       index === 0
-        ? { ok: true }
-        : { ok: false, error: "429: too many requests", retryPlain: false },
+        ? { ok: false, error: "429: too many requests", retryPlain: false }
+        : { ok: true },
   });
 
-  const result = await sendThroughOutbox(
-    Array.from({ length: 400 }, (_, i) => `строка ${i} с текстом`).join("\n\n"),
-    transport,
-  );
+  const result = await sendThroughOutbox(LONG_MESSAGE, transport);
 
+  // Пользователь теряет один кусок ответа, а не весь хвост: остальные чанки ушли.
   assert.deepEqual(result, {
     ok: false,
-    delivered: 1,
+    delivered: total - 1,
     fellBack: false,
     error: "429: too many requests",
   });
-  assert.equal(sent.length, 2);
+  assert.equal(sent.length, total);
+  assert.ok(sent.at(-1)?.text.includes("строка 399"));
 });
 
-await test("провал plain-повтора возвращается с пометкой повтора", async (t) => {
+await test("провал plain-повтора помечает шов, но доставка продолжается", async (t) => {
+  captureErrors(t);
+  const total = await chunkCount(LONG_MESSAGE);
+  const { sent, transport } = stub({
+    html: (_html, index) =>
+      index === 0
+        ? { ok: false, error: "400: bad entities", retryPlain: true }
+        : { ok: true },
+    plain: () => ({ ok: false, error: "500: server error", retryPlain: false }),
+  });
+
+  const result = await sendThroughOutbox(LONG_MESSAGE, transport);
+
+  assert.deepEqual(result, {
+    ok: false,
+    delivered: total - 1,
+    fellBack: true,
+    error: "plain retry 500: server error",
+  });
+  assert.equal(sent.filter((s) => s.kind === "plain").length, 1);
+  assert.equal(sent.filter((s) => s.kind === "html").length, total);
+});
+
+await test("шов сообщает первую ошибку, даже если упало несколько чанков", async (t) => {
+  captureErrors(t);
+  const { sent, transport } = stub({
+    html: (_html, index) => ({
+      ok: false,
+      error: `50${index}: server error`,
+      retryPlain: false,
+    }),
+  });
+
+  const result = await sendThroughOutbox(LONG_MESSAGE, transport);
+
+  assert.equal(result.ok, false);
+  assert.equal(result.delivered, 0);
+  assert.equal(result.error, "500: server error");
+  assert.ok(sent.length > 1);
+});
+
+await test("единственный чанк, упавший дважды, возвращается с пометкой повтора", async (t) => {
   captureErrors(t);
   const { sent, transport } = stub({
     html: () => ({ ok: false, error: "400: bad entities", retryPlain: true }),
