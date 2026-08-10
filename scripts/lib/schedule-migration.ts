@@ -25,7 +25,7 @@ import {
   runScheduledJob,
   withStatusLock,
   writeStatusAtomic,
-} from "./schedule-runner.ts";
+} from "#lib/schedule-runner.ts";
 
 type Period = "daily" | "weekly" | "monthly" | "yearly";
 

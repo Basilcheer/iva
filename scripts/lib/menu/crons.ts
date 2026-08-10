@@ -1,7 +1,7 @@
 // Экран кронов: read-only. systemctl --user list-timers (фильтр iva-* + xfeed-daily):
 // «имя → следующий запуск», плюс счётчик задач из data/tasks.json, плюс блок расписаний
 // внутри самой Ивы (agent/schedules/*.ts — Nitro scheduled tasks, не systemd) из
-// data/rollup-status.json (scripts/lib/schedule-runner.ts). Пагинация systemd-списка по 8;
+// data/rollup-status.json (agent/lib/schedule-runner.ts). Пагинация systemd-списка по 8;
 // блок расписаний Ивы всегда ровно 5 строк — не пагинируется.
 //
 // execFile ограничен таймаутом 1.5с и кэшируется на 60с — единственный getUpdates-цикл
@@ -30,7 +30,7 @@ let cache: { at: number; timers: Timer[] | null } = { at: 0, timers: null };
 // Cron strings mirrored by hand from agent/schedules/*.ts — same tradeoff as
 // scripts/lib/schedule-migration.ts's PERIOD_SCHEDULE, there is no single shared source
 // at the cron-string level. Status-file keys match the `name` each schedule passes to
-// runScheduledJob (see scripts/lib/schedule-runner.ts), not the bare period.
+// runScheduledJob (see agent/lib/schedule-runner.ts), not the bare period.
 const EVE_SCHEDULES = [
   { name: "memory-daily", cron: "0 4 * * *" },
   { name: "memory-weekly", cron: "15 4 * * 1" },

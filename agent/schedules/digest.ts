@@ -8,7 +8,7 @@
 import { defineSchedule } from "eve/schedules";
 import { readSettings } from "../lib/settings.js";
 import { resolvePaths } from "../lib/schedule-paths.js";
-import { runScheduledJob } from "../../scripts/lib/schedule-runner.ts";
+import { runScheduledJob } from "../lib/schedule-runner.js";
 
 export default defineSchedule({
   cron: "0 8 * * *",
