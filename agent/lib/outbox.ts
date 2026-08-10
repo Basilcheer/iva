@@ -18,11 +18,15 @@ import {
   toTelegramHtmlChunks,
 } from "./telegram-format.ts";
 
-// Ответ транспорта на одну попытку доставки. retryPlain=true — Telegram не принял
-// разметку (400 по сущностям), тот же кусок имеет смысл повторить без тегов;
-// retryPlain=false — этот кусок безнадёжен, шов идёт к следующему.
+// Ответ транспорта на одну попытку доставки.
+//   retryPlain=true — Telegram не принял разметку (400 по сущностям), тот же кусок
+//     имеет смысл повторить без тегов;
+//   stop=true — отказ накрывает не один кусок, а всю отправку (flood control, 5xx,
+//     бот заблокирован): шов бросает хвост, не добивая Bot API оставшимися чанками.
+// Без stop шов идёт к следующему куску: потерять кусок ответа лучше, чем весь хвост.
 export type OutboxAck =
-  { ok: true } | { ok: false; error: string; retryPlain: boolean };
+  | { ok: true }
+  | { ok: false; error: string; retryPlain: boolean; stop?: boolean };
 
 export type OutboxTransport = {
   sendHtml: (html: string) => Promise<OutboxAck>;
@@ -36,7 +40,7 @@ export type OutboxResult = {
   ok: boolean; // всё, что шов начал отправлять, доставлено
   delivered: number; // сколько сообщений реально ушло в чат
   fellBack: boolean; // хотя бы один кусок ушёл без разметки
-  error: string; // первый отказ доставки (дальше шов всё равно дошёл до конца)
+  error: string; // первый отказ доставки
 };
 
 export async function sendThroughOutbox(
@@ -71,10 +75,8 @@ export async function sendThroughOutbox(
     }
   }
 
-  // Отказ на одном куске не отменяет остальные: длинный ответ рвётся на чанки
-  // произвольно, и на 429/сетевом блипе посреди хвоста пользователю лучше получить
-  // остаток ответа, чем тишину. Первую ошибку запоминаем, ok=false — этого хватает
-  // вызывающим (cron выходит ненулевым кодом, канал не засчитывает латентность).
+  // Первую ошибку запоминаем, ok=false — этого хватает вызывающим (cron выходит
+  // ненулевым кодом, канал не засчитывает латентность).
   const fail = (error: string) => {
     if (result.ok) result.error = error;
     result.ok = false;
@@ -91,14 +93,19 @@ export async function sendThroughOutbox(
     }
     if (!sent.retryPlain) {
       fail(sent.error);
+      if (sent.stop) break;
       continue;
     }
     // Один повтор тем же куском, но без тегов и parse_mode — по сущностям 400
     // тогда невозможен. htmlToPlain декодирует сущности, иначе &amp; уйдёт литералом.
     result.fellBack = true;
     const plain = await transport.sendPlain(htmlToPlain(html));
-    if (plain.ok) result.delivered++;
-    else fail(`plain retry ${plain.error}`);
+    if (plain.ok) {
+      result.delivered++;
+      continue;
+    }
+    fail(`plain retry ${plain.error}`);
+    if (plain.stop) break;
   }
   return result;
 }

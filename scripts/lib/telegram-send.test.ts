@@ -175,6 +175,29 @@ void test("telegram-send delivers every chunk when Telegram accepts them", async
   assert.ok(String(requests.at(-1)?.body.text).includes("line 399"));
 });
 
+void test("telegram-send fails an empty report without calling Telegram", async (t) => {
+  const originalFetch = globalThis.fetch;
+  const requests: CapturedRequest[] = [];
+  globalThis.fetch = (url: URL | RequestInfo, options?: RequestInit) => {
+    requests.push(captureRequest(url, options));
+    return Promise.resolve(new Response("", { status: 200 }));
+  };
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  const { sendTelegramHtml } = await import("./telegram-send.ts");
+  for (const report of ["", "   ", "\n\t \n"]) {
+    const result = await sendTelegramHtml("test-bot", "test-chat", report);
+    assert.deepEqual(result, {
+      ok: false,
+      fellBack: false,
+      error: "empty report",
+    });
+  }
+  assert.deepEqual(requests, []);
+});
+
 void test("telegram-send never throws on a report that is not a string", async (t) => {
   const originalFetch = globalThis.fetch;
   const requests: CapturedRequest[] = [];
