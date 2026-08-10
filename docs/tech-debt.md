@@ -28,13 +28,13 @@ never turns the suite red.
 
 Moved to their canonical home in `agent/lib` so far: `telegram-continuation-token`,
 `telegram-acceptance`, `run-status`, `settings`, `i18n`, `telegram-format`,
-`security-gate`, `telegram-reply-context`, `telegram-reset-route`, `telegram-turn-start`
-and `schedule-runner`. `scripts/` consumers reach them through the `#lib/` alias instead
-of the other way around.
+`security-gate`, `telegram-reply-context`, `telegram-reset-route`, `telegram-turn-start`,
+`schedule-runner` and the write half of `usage`. `scripts/` consumers reach them through
+the `#lib/` alias instead of the other way around.
 
-Eight escapes remain, blocked by two different constraints.
+Seven escapes remain, blocked by two different constraints.
 
-**Six are blocked by the CLI, and no ownership change unblocks them.** `iva` has to work
+**Five are blocked by the CLI, and no ownership change unblocks them.** `iva` has to work
 on an install whose `agent/` is missing or half-written — that is the state `iva repair`
 exists for (ADR-0003) — so a module the CLI needs cannot live in the authored tree, and
 `agent/` reaches into `scripts/` instead:
@@ -42,18 +42,20 @@ exists for (ADR-0003) — so a module the CLI needs cannot live in the authored 
 - `agent/instrumentation.ts` → `config-transaction`, `schedule-migration`, `timezone`,
   and `agent/provider.ts` → `model-catalog`: all statically reachable from
   `scripts/cli/*`, so moving them breaks `iva` at load time.
-- `agent/provider.ts` → `codex-oauth` (`iva login`) and `agent/hooks/usage.ts` →
-  `scripts/lib/usage.ts` (`iva usage`): reached only through the dynamic imports in
-  `scripts/cli/account.ts`, so the load-time walk in the guard misses them — but
-  `scripts/cli/account-entrypoints.test.ts` runs both commands against a fixture holding
+- `agent/provider.ts` → `codex-oauth` (`iva login`): reached only through a dynamic import
+  in `scripts/cli/account.ts`, so the load-time walk in the guard misses it — but
+  `scripts/cli/account-entrypoints.test.ts` runs the command against a fixture holding
   only `bin/` + `scripts/`, and a move fails there.
 
-Splitting a module does not help either: what the CLI and the authored tree share is the
-contract itself (the `usage.jsonl` record shape and path, the Codex token file), and
-copying that into both trees trades one bundle edge for two definitions that can drift.
-Closing these six needs a different mechanism — a small shared payload the bundle can
-carry and `iva repair` can restore, or a CLI that degrades when the authored tree is gone
-— not a file move.
+`usage` was the sixth and is closed: `iva usage` needs the report, the hook needs the
+append, and the two halves share nothing but the log file itself. So the write contract
+(record shape, path, `appendUsage`, `subagentTurnId`) moved into `agent/lib/usage.ts` and
+the reporting stayed in `scripts/lib/usage.ts` — which knows the same path, and a
+round-trip test in `scripts/lib/usage.test.ts` writes through one half and reads through
+the other so the halves cannot drift apart silently. The remaining five have no such seam:
+what the CLI and the authored tree share there is behaviour, not a file, and closing them
+needs a different mechanism — a small shared payload the bundle can carry and `iva repair`
+can restore, or a CLI that degrades when the authored tree is gone.
 
 **Two are blocked by ownership only.** `agent/instructions/20-core.ts` →
 `scripts/lib/core-cap.ts` and `scripts/memory/core-clamp.ts`: the cap and its clamp are
