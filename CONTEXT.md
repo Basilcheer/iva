@@ -126,6 +126,13 @@ _Avoid_: whitelist
 обновления — Update branch, тип чата Telegram — называть явно.
 _Avoid_: channel для веток, чатов и «каналов данных»
 
+**Inbound pipeline (входной пайплайн)**:
+Единственный вход внутрь (`agent/lib/telegram-inbound.ts`): из сырого апдейта
+Telegram получается ход модели или ничего. Внутри — allowlist, решение о
+диспатче, запись в Vault, медиа, inbound-Gate и сборка контекста хода. Зеркало
+Outbox: наружу — Outbox, внутрь — inbound pipeline.
+_Avoid_: парсер апдейтов, обработчик входящих
+
 **Outbox**:
 Единственный шов наружу (`agent/lib/outbox.ts`): через него проходит всё, что
 агент говорит в Telegram, и внутри него живёт outbound-гейт. Служебные реплики

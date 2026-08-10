@@ -24,8 +24,9 @@ First wave done: `telegram-continuation-token`, `telegram-acceptance`, `run-stat
 `scripts/` consumers now reach them through the `#lib/` alias instead of the other
 way around.
 
-The Telegram channel (`agent/channels/telegram.ts`) and other files under `agent/`
-still reach into `scripts/lib` for the remainder: `telegram-reply-context`,
+The Telegram channel (`agent/channels/telegram.ts`), its inbound pipeline
+(`agent/lib/telegram-inbound.ts`) and other files under `agent/` still reach into
+`scripts/lib` for the remainder: `telegram-reply-context`,
 `telegram-reset-route`, `telegram-turn-start`, plus
 `provider.ts` and `hooks/usage.ts` (both consumed from `instructions/20-core.ts`)
 pull in further `scripts/lib` modules. This still drags `scripts` code into the
