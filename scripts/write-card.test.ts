@@ -1563,6 +1563,68 @@ test("SUPERSEDE, доставленный не по порядку, не отк�
   );
 });
 
+test("вытесняемый факт сверяется с нынешней истиной, а не только с архивом", async () => {
+  const base = {
+    operation: "ADD",
+    type: "note",
+    title: "Сверка вытесняемого факта",
+    description: "владелец Алиса",
+    tags: ["note", "owner"],
+    body: "Владелец Алиса.",
+  };
+  const created = await call(base);
+  assert.equal(created.ok, true);
+
+  const toBob = {
+    ...base,
+    operation: "SUPERSEDE",
+    description: "владелец Боб",
+    body: "Владелец Боб.",
+    history_entry: "2026-08-09: Владелец Алиса.",
+  };
+  assert.equal((await call(toBob)).action, "replaced");
+  const toCarol = {
+    ...base,
+    operation: "SUPERSEDE",
+    description: "владелец Кэрол",
+    body: "Владелец Кэрол.",
+    history_entry: "2026-08-09: Владелец Боб.",
+  };
+  assert.equal((await call(toCarol)).action, "replaced");
+  const archived = read(created.file);
+
+  // Повторная доставка ВТОРОГО вызова: тело про Боба, вытесняемый факт про Алису, хотя
+  // карточка держит уже Кэрол. Под своей датой строка ловится сверкой с архивом, а под
+  // новой архив её не узнаёт - и без сверки с истиной вызов прошёл бы: Кэрол пропала бы
+  // молча, а в append-only архив легла бы вторая Алиса.
+  for (const [history_entry, expected] of [
+    ["2026-08-09: Владелец Алиса.", /still changes the card/],
+    ["Владелец Алиса.", /still changes the card/],
+    ["2026-08-10: Владелец Алиса.", /Compiled Truth this SUPERSEDE displaces/],
+    ["2026-08-11: Владелец Алиса", /Compiled Truth this SUPERSEDE displaces/],
+  ] as const) {
+    const stale = await call({ ...toBob, history_entry });
+    assert.equal(stale.ok, false, history_entry);
+    assert.match(stale.error, expected, history_entry);
+    assert.equal(read(created.file), archived, history_entry);
+  }
+  assert.match(archived.split("## History")[0], /Владелец Кэрол\./);
+  assert.equal(archived.match(/Владелец Алиса\./g)!.length, 1);
+  assert.deepEqual(
+    archived
+      .slice(archived.indexOf("## History"))
+      .split("\n")
+      .filter((line) => line.startsWith("- ")),
+    ["- 2026-08-09: Владелец Алиса.", "- 2026-08-09: Владелец Боб."],
+  );
+
+  // Настоящий реплей ПОСЛЕДНЕГО вызова после нескольких замен остаётся noop: сверка
+  // с истиной идёт после гейта реплея и не отказывает повтору, который ничего не меняет.
+  const replayed = await call(toCarol);
+  assert.equal(replayed.action, "noop");
+  assert.equal(read(created.file), archived);
+});
+
 test("открытый фенс в лежащей карточке отклоняет и UPDATE, а не прячет факт в код", async () => {
   const base = {
     operation: "ADD",

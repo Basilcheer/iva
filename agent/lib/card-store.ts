@@ -368,6 +368,42 @@ function historyFact(line: string): string {
     .replace(/^\d{4}-\d{2}-\d{2}:\s*/, "");
 }
 
+/** Compiled Truth лежащей карточки: всё до первой H2, без строки H1. Именно этот факт
+ * вытесняет SUPERSEDE, и именно его обязан назвать historyEntry. */
+function compiledTruth(body: string): string {
+  const lines = body.split("\n");
+  const sections = namedH2Sections(lines);
+  const head = lines.slice(
+    0,
+    sections.length ? sections[0].start : lines.length,
+  );
+  const outside = outsideFences(head);
+  return head
+    .filter((line, index) => !(outside[index] && /^ {0,3}#\s+\S/.test(line)))
+    .join("\n");
+}
+
+/** Факт в форме, пригодной для сверки: без регистра, пунктуации и лишних пробелов.
+ * Модель пересказывает вытесненный факт своими знаками препинания, и побайтовая сверка
+ * спотыкалась бы о точку в конце. */
+function comparableFact(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim();
+}
+
+/** historyEntry в той же форме, но без буллета и без датного префикса: дата принадлежит
+ * архиву, а не факту, и пишут её как придётся - `2026-08-09:`, `2026:`, `2026-01→08:`. */
+function displacedFact(historyEntry: string): string {
+  return comparableFact(
+    historyEntry
+      .trim()
+      .replace(/^[-*]\s+/, "")
+      .replace(/^\d[\d\s./→–—-]*:\s*/, ""),
+  );
+}
+
 /** То же вытеснение, что уже лежит в архиве. Датированную строку сверяем целиком: две
  * даты у одного факта - два разных вытеснения. Недатированную сверяем по тексту факта,
  * иначе её повтор на следующие сутки уедет в архив второй строкой под новой датой.
@@ -858,6 +894,21 @@ export function mergeCard(input: MergeInput): MergeResult {
       "historyEntry already appears in ## History but this SUPERSEDE still changes the card; " +
         "send the fact this call displaces",
     );
+  }
+  // Реплей отсеян гейтом выше, значит вызов реально меняет карточку - и вытесняемый факт
+  // обязан быть про НЫНЕШНЮЮ истину. Сверка с архивом ловит лишь буквальный повтор
+  // строки: тот же древний факт под другой датой проходил бы её насквозь, уложив в архив
+  // свой дубль, а нынешнюю истину стерев молча. Хвост истины (пример в фенсе, уточнение
+  // следующим абзацем) повторять не обязательно - началом строка совпасть обязана.
+  if (operation === "SUPERSEDE" && historyEntry?.trim()) {
+    const displaced = displacedFact(historyEntry);
+    const truth = comparableFact(compiledTruth(oldBody));
+    if (displaced && truth && !truth.startsWith(displaced)) {
+      throw new Error(
+        "historyEntry must state the Compiled Truth this SUPERSEDE displaces; " +
+          "send the fact the card holds now",
+      );
+    }
   }
   return {
     content,
