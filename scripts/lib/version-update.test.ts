@@ -161,11 +161,51 @@ async function killAt(
   await exited;
 }
 
+/**
+ * The file a `#`-alias names, read from package.json's `imports` map, or null when the
+ * specifier is not one. The map points inside the tree, so an alias is a file the
+ * unpacked version already carries - unlike a bare package, which needs node_modules.
+ */
+function aliasTarget(specifier: string, repository: string): string | null {
+  if (!specifier.startsWith("#")) return null;
+  const manifest: unknown = JSON.parse(
+    readFileSync(join(repository, "package.json"), "utf8"),
+  );
+  const patterns =
+    typeof manifest === "object" && manifest !== null && "imports" in manifest
+      ? Object.entries(manifest.imports as Record<string, string>)
+      : [];
+  // Node picks the most specific pattern; longest prefix first reproduces that.
+  patterns.sort(([left], [right]) => right.indexOf("*") - left.indexOf("*"));
+  for (const [pattern, mapped] of patterns) {
+    const star = pattern.indexOf("*");
+    if (star === -1) {
+      if (pattern === specifier) return join(repository, mapped);
+      continue;
+    }
+    const head = pattern.slice(0, star);
+    const tail = pattern.slice(star + 1);
+    if (
+      specifier.length >= head.length + tail.length &&
+      specifier.startsWith(head) &&
+      specifier.endsWith(tail)
+    ) {
+      const filled = specifier.slice(
+        head.length,
+        specifier.length - tail.length,
+      );
+      return join(repository, mapped.replace("*", filled));
+    }
+  }
+  return null;
+}
+
 test("the new version's updater runs before there is a node_modules to run with", () => {
   // It is started in a version directory that has just been unpacked, so the
   // whole graph it reaches on the way to `npm ci` has to be built-ins and files
   // from the tree itself. One import of a package is a crash with no update.
   const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+  const repository = join(root, "..");
   const seen = new Set<string>();
   const queue = [join(root, "update-finish.ts")];
   const foreign: string[] = [];
@@ -181,15 +221,37 @@ test("the new version's updater runs before there is a node_modules to run with"
     ];
     for (const [, specifier] of specifiers) {
       if (specifier.startsWith("node:")) continue;
-      if (!specifier.startsWith(".")) {
+      if (specifier.startsWith(".")) {
+        queue.push(join(dirname(file), specifier));
+        continue;
+      }
+      const aliased = aliasTarget(specifier, repository);
+      if (aliased === null) {
         foreign.push(`${relative(root, file)} -> ${specifier}`);
         continue;
       }
-      queue.push(join(dirname(file), specifier));
+      queue.push(aliased);
     }
   }
   assert.deepEqual(foreign, []);
   assert.ok(seen.size > 5, "the import graph was not walked");
+});
+
+test("a package outside the tree is still what the updater's walk refuses", () => {
+  const repository = join(dirname(fileURLToPath(import.meta.url)), "../..");
+  // The alias resolves into the tree the version was unpacked from, through the map
+  // rather than by trusting the prefix; a package name stays foreign, which is what the
+  // walk reports.
+  assert.equal(
+    aliasTarget("#lib/schedule-table.ts", repository),
+    join(repository, "agent/lib/schedule-table.ts"),
+  );
+  assert.equal(
+    aliasTarget("#evals/smoke.ts", repository),
+    join(repository, "evals/smoke.ts"),
+  );
+  assert.equal(aliasTarget("eve/channels", repository), null);
+  assert.equal(aliasTarget("just-bash", repository), null);
 });
 
 test("a first update builds a version, proves it starts and activates it", async (t) => {
