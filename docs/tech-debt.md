@@ -19,18 +19,30 @@ a parallel bespoke UI layer.
 
 ## 3. Cross-imports from `scripts/lib` into `agent/`
 
-First wave done: `telegram-continuation-token`, `telegram-acceptance`, `run-status`,
-`settings` and `i18n` moved from `scripts/lib` to `agent/lib` (canonical home);
-`scripts/` consumers now reach them through the `#lib/` alias instead of the other
-way around.
+eve rebuilds `agent/` at service start, so a specifier there that resolves into
+`scripts/` drags operational code into the bundle — the failure behind the 0.3.14 crash
+loop (issue #176). `scripts/authored-tree-guard.test.ts` pins every remaining escape by
+file and specifier, so the list below can only shrink by a deliberate edit.
 
-The Telegram channel (`agent/channels/telegram.ts`), its inbound pipeline
-(`agent/lib/telegram-inbound.ts`) and other files under `agent/` still reach into
-`scripts/lib` for the remainder: `telegram-reply-context`,
-`telegram-reset-route`, `telegram-turn-start`, plus
-`provider.ts` and `hooks/usage.ts` (both consumed from `instructions/20-core.ts`)
-pull in further `scripts/lib` modules. This still drags `scripts` code into the
-eve bundle for that remainder. These are the next wave to move into `agent/lib`.
+Moved to their canonical home in `agent/lib` so far: `telegram-continuation-token`,
+`telegram-acceptance`, `run-status`, `settings`, `i18n`, `telegram-format`,
+`security-gate`, `telegram-reply-context`, `telegram-reset-route`, `telegram-turn-start`
+and `schedule-runner`. `scripts/` consumers reach them through the `#lib/` alias instead
+of the other way around.
+
+Four authored files still escape, each blocked by consumers the updater/memory release
+owns rather than by design:
+
+- `agent/hooks/usage.ts` → `scripts/lib/usage.ts`, also loaded by `scripts/cli/account.ts`.
+- `agent/instructions/20-core.ts` → `scripts/lib/core-cap.ts` and
+  `scripts/memory/core-clamp.ts`, both shared with the nightly rollup and the doctor.
+- `agent/instrumentation.ts` → `config-transaction`, `schedule-migration` and `timezone`,
+  all three shared with `scripts/cli/{config,systemd}.ts`.
+- `agent/provider.ts` → `codex-oauth` and `model-catalog`; `codex-oauth` is also the
+  `iva login` flow in `scripts/cli/account.ts`.
+
+Each move rewrites imports under `scripts/cli/` or `scripts/memory/`, so they land with
+the release that owns those paths.
 
 ## 4. Evals
 
