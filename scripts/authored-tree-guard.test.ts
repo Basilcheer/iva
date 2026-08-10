@@ -1,10 +1,16 @@
 /* eslint-disable @typescript-eslint/no-floating-promises -- Node's test runner owns registrations. */
 // Guard for the authored tree: eve rebuilds `agent/` at service start, so any module
 // specifier there that resolves outside `agent/` drags `scripts/` into the bundle — the
-// failure that produced the 0.3.14 crash loop (issue #176). The target is zero escapes;
-// the ones still listed below are recorded, not accepted. The guard only forbids NEW
-// ones — fixing a listed escape leaves the suite green, and its line is then deleted by
-// hand — and `#`-aliases are resolved through package.json instead of trusted.
+// failure that produced the 0.3.14 crash loop (issue #176). There are no escapes left and
+// no list to add one to: the tree is closed, and a new specifier out of `agent/` is red on
+// sight. `#`-aliases are resolved through package.json instead of trusted.
+//
+// What replaced the last of them is the seam: the half the authored tree needs lives in
+// `agent/lib`, the half `iva` loads on an install whose `agent/` is missing stays in
+// `scripts/`, and neither reaches the other at load time. Where the two halves must know
+// the same thing anyway — an env-var name, the OAuth constants, the reasoning vocabulary —
+// each side is deliberately self-contained and a test pins the copies together, the way
+// `usage` shares only its log path (docs/tech-debt.md §3).
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join, posix, relative, resolve } from "node:path";
@@ -13,39 +19,6 @@ import { fileURLToPath } from "node:url";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const AUTHORED = join(ROOT, "agent");
-
-// Escapes a move cannot fix today, as "file -> specifier"; the reasons are spelled out in
-// docs/tech-debt.md. Deleting a line here is the goal, and nothing fails when one goes.
-const BLOCKED_ESCAPES: ReadonlySet<string> = new Set([
-  // The CLI needs these modules on an install whose authored tree is missing: the first
-  // group at load time (the second test below), the second group at call time, through a
-  // dynamic import. Moving either into `agent/lib` breaks `iva` on exactly the install
-  // `iva repair` exists for, so the module stays in `scripts/` and `agent/` reaches in.
-  "agent/instrumentation.ts -> ../scripts/lib/config-transaction.ts",
-  "agent/instrumentation.ts -> ../scripts/lib/schedule-migration.ts",
-  "agent/instrumentation.ts -> ../scripts/lib/timezone.ts",
-  "agent/provider.ts -> ../scripts/lib/model-catalog.ts",
-  // `iva login`: statically invisible, but `scripts/cli/account-entrypoints.test.ts` runs the
-  // command against a fixture holding only `bin/` + `scripts/` and catches the move.
-  "agent/provider.ts -> ../scripts/lib/codex-oauth.ts",
-  // The memory release owns the other consumers (`scripts/memory/{doctor,rollup}.ts`),
-  // so the cap and its clamp move with that release rather than against it.
-  "agent/instructions/20-core.ts -> ../../scripts/lib/core-cap.ts",
-  "agent/instructions/20-core.ts -> ../../scripts/memory/core-clamp.ts",
-]);
-
-// Runtime edges the 0.3.15 release brought in, kept apart from the list above because
-// they arrived with a release rather than from a weighed decision. Both targets turn out
-// to be load-time reachable from `scripts/cli/*` too (`health-probe` through
-// `version-update`, `card-text` through `memory-maintenance`), so a plain move into
-// `agent/lib` breaks `iva` the same way — closing them is the next wave's work and needs
-// the same seam the `usage` split used. Recorded, not accepted, and not a licence to add
-// more: any edge outside both lists still fails the guard.
-const BASELINE_ESCAPES: ReadonlySet<string> = new Set([
-  "agent/instrumentation.ts -> ../scripts/lib/health-probe.ts",
-  "agent/lib/card-store.ts -> ../../scripts/lib/card-text.ts",
-  "agent/lib/frontmatter.ts -> ../../scripts/lib/card-text.ts",
-]);
 
 // Every module-looking literal, not just `import`/`export` clauses: a specifier parked in
 // a `const` and fed to a dynamic `import()` escapes the tree exactly as hard.
@@ -130,11 +103,9 @@ function escapes(): string[] {
   return [...found].sort();
 }
 
-test("the authored tree opens no new escape out of agent/", () => {
+test("the authored tree opens no escape out of agent/", () => {
   assert.deepEqual(
-    escapes().filter(
-      (edge) => !BLOCKED_ESCAPES.has(edge) && !BASELINE_ESCAPES.has(edge),
-    ),
+    escapes(),
     [],
     "agent/ must not import from scripts/ — move the module into agent/lib and let scripts/ import it back through #lib/",
   );

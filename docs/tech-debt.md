@@ -17,72 +17,52 @@ hand-rolled multi-step wizards predating eve's native human-in-the-loop primitiv
 They should eventually move onto the same mechanism as item 1 instead of maintaining
 a parallel bespoke UI layer.
 
-## 3. Cross-imports from `scripts/lib` into `agent/`
+## 3. Cross-imports from `scripts/lib` into `agent/` — CLOSED
 
 eve rebuilds `agent/` at service start, so a specifier there that resolves into
 `scripts/` drags operational code into the bundle — the failure behind the 0.3.14 crash
-loop (issue #176). The target is zero such specifiers.
-`scripts/authored-tree-guard.test.ts` lists the escapes that remain and fails on any new
-one; the list is a record of what is blocked, not a budget to spend, and removing an entry
-never turns the suite red.
-
-Moved to their canonical home in `agent/lib` so far: `telegram-continuation-token`,
-`telegram-acceptance`, `run-status`, `settings`, `i18n`, `telegram-format`,
-`security-gate`, `telegram-reply-context`, `telegram-reset-route`, `telegram-turn-start`,
-`schedule-runner` and the write half of `usage`. `scripts/` consumers reach them through
-the `#lib/` alias instead of the other way around.
-
-Seven escapes remain blocked by two different constraints, plus three the 0.3.15 round
-brought in. The guard scans production files only: tests never reach the bundle eve
+loop (issue #176). RESOLVED: there are none left. `scripts/authored-tree-guard.test.ts`
+asserts an empty set and carries no list to add to, so a new specifier out of `agent/` is
+red on sight. The guard scans production files only: tests never reach the bundle eve
 rebuilds, so a specifier in a `*.test.ts` cannot drag `scripts/` into it.
 
-**Five are blocked by the CLI, and no ownership change unblocks them.** `iva` has to work
-on an install whose `agent/` is missing or half-written — that is the state `iva repair`
-exists for (ADR-0003) — so a module the CLI needs cannot live in the authored tree, and
-`agent/` reaches into `scripts/` instead:
+Moved to their canonical home in `agent/lib`: `telegram-continuation-token`,
+`telegram-acceptance`, `run-status`, `settings`, `i18n`, `telegram-format`,
+`security-gate`, `telegram-reply-context`, `telegram-reset-route`, `telegram-turn-start`,
+`schedule-runner`, the write half of `usage`, then `core-cap`, `core-clamp`, `card-text`,
+`schedule-migration` and the health poll now in `agent/lib/eve-health.ts`. `scripts/`
+consumers reach them through the `#lib/` alias instead of the other way around.
 
-- `agent/instrumentation.ts` → `config-transaction`, `schedule-migration`, `timezone`,
-  and `agent/provider.ts` → `model-catalog`: all statically reachable from
-  `scripts/cli/*`, so moving them breaks `iva` at load time.
-- `agent/provider.ts` → `codex-oauth` (`iva login`): reached only through a dynamic import
-  in `scripts/cli/account.ts`, so the load-time walk in the guard misses it — but
-  `scripts/cli/account-entrypoints.test.ts` runs the command against a fixture holding
-  only `bin/` + `scripts/`, and a move fails there.
+What made the last ten closable is the seam, not a move. `iva` has to work on an install
+whose `agent/` is missing or half-written — that is the state `iva repair` exists for
+(ADR-0003) — so every module the CLI **loads** stays in `scripts/`, every module the
+authored tree needs lives in `agent/lib`, and neither side reaches the other while
+loading. Three shapes, in descending order of preference:
 
-`usage` was the sixth and is closed: `iva usage` needs the report, the hook needs the
-append, and the two halves share nothing but the log file itself. So the write contract
-(record shape, path, `appendUsage`, `subagentTurnId`) moved into `agent/lib/usage.ts` and
-the reporting stayed in `scripts/lib/usage.ts` — which knows the same path, and a
-round-trip test in `scripts/lib/usage.test.ts` writes through one half and reads through
-the other so the halves cannot drift apart silently. The remaining five have no such seam:
-what the CLI and the authored tree share there is behaviour, not a file, and closing them
-needs a different mechanism — a small shared payload the bundle can carry and `iva repair`
-can restore, or a CLI that degrades when the authored tree is gone.
-
-**Two are blocked by ownership only.** `agent/instructions/20-core.ts` →
-`scripts/lib/core-cap.ts` and `scripts/memory/core-clamp.ts`: the cap and its clamp are
-shared with the nightly rollup and the doctor, so the move rewrites imports under
-`scripts/memory/`, and lands with the release that owns those paths. Nothing
-architectural stands in the way.
-
-**Three more arrived with the 0.3.15 round** and are recorded apart from those seven, in
-the guard's `BASELINE_ESCAPES` list, because they came in with a release rather than from a
-weighed decision:
-
-- `agent/instrumentation.ts` → `scripts/lib/health-probe.ts`: `PROBE_FLAG`, the marker the
-  boot path reads to stay passive while the updater probes a candidate version.
-- `agent/lib/card-store.ts` and `agent/lib/frontmatter.ts` → `scripts/lib/card-text.ts`:
-  the card-text splitter and fence scanner, the TypeScript half of the parser pair in
-  item 13.
-
-Measured, not assumed: both targets are load-time reachable from `scripts/cli/*` as well —
-`health-probe` through `scripts/lib/version-update.ts` (`iva update`, `iva services`),
-`card-text` through `scripts/lib/memory-maintenance.ts` (`iva doctor`) — so they sit under
-the same CLI constraint as the five above, and a plain move into `agent/lib` breaks `iva`
-on an install whose authored tree is missing. Closing them needs the seam the `usage` split
-used, not a move: the shared piece is small in both cases (one constant, one
-dependency-free parser), which is what makes them the next round's work rather than a
-permanent state.
+- **A plain move**, where nothing in `scripts/cli/*` loads the module: `core-cap` and
+  `core-clamp` (only the nightly rollup and doctor read them), `card-text` (its one
+  CLI-side reader, the vault fence scan, moved out of `scripts/lib/memory-maintenance.ts`
+  into `scripts/memory/card-fences.ts`), and `schedule-migration` — which, living beside
+  the schedules it migrates onto, dropped the two lazy imports it needed to hold the old
+  edge open.
+- **A lazy import inside the one call that needs it**, where the CLI loads a module but
+  only exercises that call on a tree that exists: `scripts/lib/config-transaction.ts`
+  pulls the health poll at the health check itself (a tree that cannot start fails the
+  apply and rolls back either way), and `scripts/lib/codex-oauth.ts` pulls the token
+  headers inside `listCodexModelCatalog`, which only the `/model` wizard and setup call.
+- **Two self-contained halves pinned by a test**, where both sides genuinely need the same
+  small thing while loading: the probe-flag name (`scripts/lib/health-probe.ts` writes it,
+  `agent/lib/eve-health.ts` reads it), the retired systemd unit names
+  (`scripts/lib/legacy-memory-units.ts`), the IANA-zone predicate
+  (`scripts/lib/timezone.ts`, needed by the synchronous `writeUnits()`), the canonical
+  reasoning vocabulary, and the Codex OAuth constants plus the atomic 0600 token write —
+  `iva login` must run without the authored tree, so `scripts/lib/codex-oauth.ts` keeps
+  the sign-in flows while `agent/lib/codex-auth.ts` owns reading, refreshing and signing
+  requests with the result. Each pair is pinned by a test that imports both halves
+  (`scripts/lib/{timezone,reasoning-levels,health-probe,codex-auth-seam}.test.ts`,
+  `agent/lib/schedule-migration.test.ts`), the way `usage` shares only its log path and
+  `scripts/lib/usage.test.ts` round-trips it. A pair without such a test is drift waiting
+  to happen; add the test before adding the pair.
 
 ## 4. Evals
 
@@ -126,7 +106,7 @@ If the box is down when an eve schedule would have fired, the run is simply skip
 — there's no catch-up on next start, unlike systemd's `Persistent=true` timers. Worth
 filing as a feature request against `vercel/eve`.
 
-**Workaround implemented here**: `scripts/lib/schedule-migration.ts`, run fire-and-forget
+**Workaround implemented here**: `agent/lib/schedule-migration.ts`, run fire-and-forget
 from `agent/instrumentation.ts` on every server start, replaces `Persistent=true` for the
 four memory-rollup schedules (`agent/schedules/memory-*.ts`). It compares each period's
 last recorded success (`data/rollup-status.json`) against its most recent
@@ -145,7 +125,7 @@ upstream, remove the workarounds rather than leaving them as permanent scaffoldi
 ## 11. Cron/name metadata duplicated across schedules, migration, and the menu
 
 The same 5 schedule names + cron expressions used to be hand-maintained in three places:
-`agent/schedules/*.ts` (the actual cron strings), `scripts/lib/schedule-migration.ts`'s
+`agent/schedules/*.ts` (the actual cron strings), `agent/lib/schedule-migration.ts`'s
 `PERIOD_SCHEDULE` (hour/minute per period, for catch-up math), and
 `scripts/lib/menu/crons.ts`'s `EVE_SCHEDULES` (for the /menu → ⏰ display). Changing one
 schedule's cadence meant remembering to update up to three files by hand; a missed one
