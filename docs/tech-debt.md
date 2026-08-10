@@ -191,3 +191,12 @@ normalized form only: fields+body for frontmatter, outside[] plus [start,end) se
 ranges for the scanner. Known dialect divergences deliberately NOT covered (quoted commas
 inside flow-list items, mixed-quote stripping) — fixtures encode the shared contract;
 extending it means adding a fixture first.
+
+Pair (a) had a third implementation until then: `agent/tools/memory_search.ts` carried a
+private mini parser for the few scalars it indexes. It was a duplicate inside one language
+— no golden fixtures held it, and it silently dropped folded/literal scalars (indexing the
+literal `>-`), block lists and every card written with CRLF. It is gone: the tool now calls
+the canonical `parseFrontmatter` and flattens lists for the FTS columns, with the indexed
+fields pinned per card shape in `scripts/memory-search-frontmatter.test.ts`. Two
+implementations remain, and by design: the cross-language pair is the price of a Python
+night pipeline, a second copy inside TypeScript is not.

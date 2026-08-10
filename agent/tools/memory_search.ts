@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import { createRequire } from "node:module";
 import { embedTexts, cosine, hasEmbeddingKey } from "../lib/embeddings.js";
+import { parseFrontmatter } from "../lib/frontmatter.js";
 
 // node:sqlite — встроенный модуль (Node 24+). В ESM нет глобального require, поэтому
 // поднимаем его через createRequire; грузим лениво внутри bm25Search (с fallback, если нет).
@@ -79,21 +80,18 @@ async function walk(dir: string, out: string[]): Promise<void> {
   }
 }
 
-// Крошечный парсер frontmatter — нужны только несколько скалярных полей. Не тянем YAML-либу.
-function parseFrontmatter(text: string): {
+// Frontmatter карточки в плоский поисковый вид: список склеиваем пробелом (FTS всё равно
+// токенизирует), ключи приводим к нижнему регистру — регистр ключа не должен решать,
+// найдётся карточка или нет. Разбор — только канонический parseFrontmatter: свой мини-парсер
+// здесь молча терял свёрнутые скаляры, блочные списки и карточки с CRLF.
+function indexedFields(text: string): {
   fm: Record<string, string>;
   body: string;
 } {
-  if (!text.startsWith("---")) return { fm: {}, body: text };
-  const end = text.indexOf("\n---", 3);
-  if (end === -1) return { fm: {}, body: text };
-  const raw = text.slice(3, end);
-  const body = text.slice(end + 4);
+  const { fields, body } = parseFrontmatter(text);
   const fm: Record<string, string> = {};
-  for (const line of raw.split("\n")) {
-    const m = /^([A-Za-z0-9_]+):\s*(.*)$/.exec(line);
-    if (m) fm[m[1].toLowerCase()] = m[2].trim().replace(/^["']|["']$/g, "");
-  }
+  for (const [key, value] of Object.entries(fields ?? {}))
+    fm[key.toLowerCase()] = Array.isArray(value) ? value.join(" ") : value;
   return { fm, body };
 }
 
@@ -116,7 +114,7 @@ export async function loadDocs(scopeDirs: string[]): Promise<Doc[]> {
     } catch {
       continue;
     }
-    const { fm, body } = parseFrontmatter(text);
+    const { fm, body } = indexedFields(text);
     const rel = relative(vault, file).split(sep).join("/");
     const meta = META_FIELDS.map((k) => fm[k])
       .filter(Boolean)
