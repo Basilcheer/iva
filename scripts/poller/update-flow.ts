@@ -16,6 +16,7 @@ import {
   updateOffer,
 } from "../lib/update-check.ts";
 import { modelSummary } from "../lib/model-summary.ts";
+import { upstreamQuery } from "../lib/version-layout.ts";
 import { acquireUpdateLock, releaseUpdateLock } from "../lib/update-safety.ts";
 import { getLang, tr } from "#lib/i18n.ts";
 import {
@@ -31,7 +32,12 @@ import { edit, reply, tg } from "./transport.ts";
 
 type UpdateInfo = Awaited<ReturnType<typeof inspectUpstream>>;
 type UpdateCheckOptions = {
-  inspectImpl?: (options: { root: string }) => Promise<UpdateInfo>;
+  /** The tree this bridge runs out of; on the immutable layout, `<home>/current`. */
+  root?: string;
+  inspectImpl?: (options: {
+    root: string;
+    head?: string;
+  }) => Promise<UpdateInfo>;
   markNotifiedImpl?: (dataDir: string, version: string) => Promise<void>;
   envImpl?: () => Promise<NodeJS.ProcessEnv>;
 };
@@ -77,6 +83,7 @@ function launchSelfUpdate(jobId: string): Promise<LaunchResult> {
 export async function handleUpdateCheck(
   chatId: string | number,
   {
+    root = ROOT,
     inspectImpl = inspectUpstream,
     markNotifiedImpl = markVersionNotified,
     envImpl = () => readEnvFresh(ENV_PATH),
@@ -89,7 +96,10 @@ export async function handleUpdateCheck(
   if (!status) return;
   let info;
   try {
-    info = await inspectImpl({ root: ROOT });
+    // The same question the daily check asks, and on a converted installation the
+    // same two answers: a version has no `.git` of its own, and the mirror's HEAD
+    // is upstream's, so the running commit has to be named.
+    info = await inspectImpl(upstreamQuery(root));
   } catch {
     await edit(
       chatId,

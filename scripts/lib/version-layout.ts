@@ -9,7 +9,7 @@ import {
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { parseVersionName } from "./version-store.ts";
+import { createVersionStore, parseVersionName } from "./version-store.ts";
 
 /** The one command users have on their PATH; rewritten at most once, by the bridge. */
 export const SHIM_PATH = join(homedir(), ".local/bin/iva");
@@ -111,10 +111,31 @@ export function shimPointsAt(shim: string, home: string): boolean {
     .some((path) => path === home || path.startsWith(`${home}/`));
 }
 
-/** The git directory to ask about upstream: the mirror once one exists. */
+/**
+ * The git directory to ask about upstream: the mirror once one exists, and on the
+ * immutable layout nothing else - git discovery climbs parents, so falling back to
+ * a home without a repository answers about whatever repo `$HOME` happens to be in.
+ */
 export function gitRootFor(install: Install): string {
   const mirror = join(install.home, "repo");
-  return existsSync(mirror) ? mirror : install.home;
+  return install.kind === "version" || existsSync(mirror)
+    ? mirror
+    : install.home;
+}
+
+/**
+ * What to ask about upstream from a tree the code is running out of, on either
+ * layout: which repository answers, and which commit counts as installed. On the
+ * immutable layout the mirror's own HEAD moves with the remote, so the running
+ * version has to name its commit or the check compares upstream against itself.
+ */
+export function upstreamQuery(root: string): { root: string; head: string } {
+  const install = classifyRoot(root);
+  const active = createVersionStore(install.home).currentName();
+  return {
+    root: gitRootFor(install),
+    head: (active && parseVersionName(active)?.sha) || "HEAD",
+  };
 }
 
 /**
