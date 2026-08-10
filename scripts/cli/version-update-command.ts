@@ -76,6 +76,15 @@ export async function resolveTarget(
   return { sha, version };
 }
 
+/** The release the running tree is, straight from its own package.json. */
+function installedVersion(root: string): string | null {
+  try {
+    return packageVersion(readFileSync(join(root, "package.json"), "utf8"));
+  } catch {
+    return null; // No readable package.json: nothing to name it with.
+  }
+}
+
 /**
  * `iva update` on the immutable layout. This half only fetches and unpacks the new
  * version; it continues inside that version's own `scripts/update-finish.ts`, so
@@ -107,8 +116,13 @@ export function createVersionUpdateCommand(
     const store = createVersionStore(install.home);
     // The last version the installation actually settled on: after an interrupted
     // update `current` already names the new one, which would report as "X → X".
+    // On the first conversion there is no version yet, and the checkout being
+    // retired knows its own release - the user is told a number, not a pronoun.
     const before =
-      store.settled() ?? store.currentName() ?? "the previous version";
+      store.settled() ??
+      store.currentName() ??
+      installedVersion(install.root) ??
+      "the previous version";
     const reportDir = mkdtempSync(join(tmpdir(), "iva-update-"));
     const report = join(reportDir, "outcome.json");
     const finished = (from: string, to: string): Promise<void> =>

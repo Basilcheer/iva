@@ -58,6 +58,9 @@ test("the first update moves the installation onto versions and keeps its state"
   assert.doesNotMatch(output, /agent\/tools\/kept\.ts/u);
   const name = `0.3.15-${sha.slice(0, 12)}`;
   assert.equal(active(iva), name, output);
+  // The checkout being retired knows its release, so the first conversion reports
+  // a version and not a pronoun.
+  assert.ok(output.includes(`0.3.15 → ${name}`), output);
   // The vault cleaner the in-place updater ran still runs, out of the version that
   // has just become current.
   assert.match(
