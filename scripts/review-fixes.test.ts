@@ -20,6 +20,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ToolContext } from "eve/tools";
 import { quarantineDir } from "./lib/wf-store.ts";
+import { settled } from "./fixtures/tool-result.ts";
 
 // TS — только динамическим импортом: resolve-хук (.js→.ts) не действует на статические
 // импорты, слинкованные до его регистрации.
@@ -143,12 +144,14 @@ test("write_file: симлинк-алиас на cards/ не обходит га
   symlinkSync(join(vault, "cards"), join(vault, "card-alias"));
   process.env.ASSISTANT_VAULT_DIR = vault;
   const { default: writeFile } = await import("../agent/tools/write_file.ts");
-  const res = await writeFile.execute(
-    {
-      path: join(vault, "card-alias", "contacts", "ivan.md"),
-      content: "OVERWRITTEN",
-    },
-    testToolContext("write_file"),
+  const res = settled(
+    await writeFile.execute(
+      {
+        path: join(vault, "card-alias", "contacts", "ivan.md"),
+        content: "OVERWRITTEN",
+      },
+      testToolContext("write_file"),
+    ),
   );
   assert.equal(res.ok, false, JSON.stringify(res));
   assert.equal(
