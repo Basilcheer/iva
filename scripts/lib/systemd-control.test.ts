@@ -246,7 +246,7 @@ void test("doctor reports checked activation failures and keeps its summary", as
 
 void test("doctor checks installed memory services and reports failed ones with a journal hint", async (t) => {
   // daily/weekly/monthly/yearly moved to in-process eve schedules (agent/schedules/memory-*.ts,
-  // see scripts/lib/schedule-migration.ts) — doctor stays the only external systemd watchdog.
+  // see agent/lib/schedule-migration.ts) — doctor stays the only external systemd watchdog.
   const { calls, runCommand } = await fixture(t);
   const result = runCommand("doctor", {
     failedUnit: "iva-memory-doctor.service",
