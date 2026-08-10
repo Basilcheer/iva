@@ -261,6 +261,49 @@ test("the second half of an update is run by the version being installed", (t) =
   assert.equal(readFileSync(join(iva.home, "finished-by"), "utf8"), name);
 });
 
+test("an update follows the data directory the .env names, wherever it is", (t) => {
+  const iva = world(t);
+  // A data directory outside the installation, spelled absolutely - what setup
+  // accepts and `iva config` writes. Everything the update owns has to follow it.
+  const data = join(iva.dir, "state");
+  mkdirSync(join(data, "custom/agent/tools"), { recursive: true });
+  writeFileSync(
+    join(data, "custom/agent/tools/feature.mjs"),
+    "export const feature = 'mine';\n",
+  );
+  appendFileSync(join(iva.home, ".env"), `ASSISTANT_DATA_DIR=${data}\n`);
+
+  const output = update(iva);
+  const name = String(active(iva));
+  // The customization is in the version that runs, not silently left behind.
+  assert.match(name, /\+[0-9a-f]{8}$/u, output);
+  assert.equal(
+    readFileSync(join(iva.home, "current/agent/tools/feature.mjs"), "utf8"),
+    "export const feature = 'mine';\n",
+    output,
+  );
+  assert.equal(realpathSync(join(iva.home, "current/data")), data, output);
+  // Both markers landed in that directory - and nothing was written beside it,
+  // where a second, invisible copy of the installation's state would have grown.
+  assert.match(readFileSync(join(data, "migrations.json"), "utf8"), /001-iva/u);
+  assert.match(readFileSync(join(data, "active.json"), "utf8"), /0\.3\.15-/u);
+  for (const marker of ["active.json", "migrations.json"])
+    assert.equal(existsSync(join(iva.home, "data", marker)), false, output);
+  assert.match(iva.iva(["update"]).stdout, /already up to date/u);
+
+  // And the gate is one lock, held in the same directory: a live one there stops
+  // an update, so two of them can never run past each other.
+  const lock = join(data, "update.lock");
+  mkdirSync(lock, { recursive: true });
+  writeFileSync(
+    join(lock, "owner.json"),
+    JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }),
+  );
+  const busy = iva.iva(["update"]);
+  assert.equal(busy.status, 1, busy.stdout);
+  assert.match(busy.stdout, /already running/u);
+});
+
 test("a customization that does not build leaves the service on the stock build", (t) => {
   const iva = world(t);
   update(iva);

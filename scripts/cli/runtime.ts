@@ -6,7 +6,7 @@ import { createInterface } from "node:readline/promises";
 import { writeEnvAtomicSync } from "../lib/env-file.ts";
 import { createSystemdControl } from "../lib/systemd-control.ts";
 import { real } from "../lib/version-layout.ts";
-import { parseVersionName } from "../lib/version-store.ts";
+import { parseVersionName, stateDir } from "../lib/version-store.ts";
 
 type CaptureOptions = Omit<SpawnSyncOptions, "encoding"> & {
   readonly encoding?: BufferEncoding;
@@ -141,8 +141,7 @@ export function createCliRuntime(root: string) {
   }
 
   function dataDirAbs(env: Partial<EnvValues> = readEnv()): string {
-    const dataDir = env.ASSISTANT_DATA_DIR || "data";
-    return dataDir.startsWith("/") ? dataDir : join(ROOT, dataDir);
+    return stateDir(ROOT, env.ASSISTANT_DATA_DIR, "data");
   }
 
   async function confirm(question: string, defaultValue = false) {

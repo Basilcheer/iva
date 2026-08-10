@@ -12,7 +12,8 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
+import { parseEnvText } from "./env-file.ts";
 
 const INCOMPLETE = ".iva-incomplete";
 const SETTLED = "active.json";
@@ -28,16 +29,36 @@ export const STATE_DIRS = ["data", "vault", ".eve/.workflow-data"];
 /** Where older builds kept the workflow store: linked where one is, never created. */
 export const LEGACY_STATE_DIRS = [".workflow-data"];
 
+/** A state directory as the .env spells it: an absolute one as given, the rest inside `root`. */
+export function stateDir(
+  root: string,
+  configured: string | undefined,
+  fallback: string,
+): string {
+  const raw = configured?.trim() || fallback;
+  return isAbsolute(raw) ? raw : join(root, raw);
+}
+
 /** Where an installation keeps things; state and the mirror outlive every version. */
 export function layoutFor(home: string) {
+  const env = join(home, ".env");
+  // The installation's own .env says where its state is - `iva config` writes those
+  // paths absolute - and the lock, the markers and the customization live in it.
+  // Asking anything else builds a version beside the state the service reads.
+  let values: Record<string, string> = {};
+  try {
+    values = parseEnvText(readFileSync(env, "utf8"));
+  } catch {
+    // No readable .env: the directories beside the installation are the answer.
+  }
   return {
     home,
     repo: join(home, "repo"),
     versions: join(home, "versions"),
     current: join(home, "current"),
-    data: join(home, "data"),
-    vault: join(home, "vault"),
-    env: join(home, ".env"),
+    data: stateDir(home, values.ASSISTANT_DATA_DIR, "data"),
+    vault: stateDir(home, values.ASSISTANT_VAULT_DIR, "vault"),
+    env,
   };
 }
 
@@ -272,11 +293,19 @@ export function createVersionStore(home: string) {
     }
   }
 
+  /** What a link inside a version leads to: the .env may put data or the vault anywhere. */
+  const stateAt = (name: string, root: string): string => {
+    if (root !== home) return join(root, name); // A probe's scratch is plain names.
+    if (name === "data") return layout.data;
+    if (name === "vault") return layout.vault;
+    return join(home, name);
+  };
+
   /** State outlives versions: `stateHome` is the installation, or scratch for a probe. */
   function linkState(dir: string, stateHome: string = home): void {
     const links = STATE_DIRS.map((name): [string, string] => [
       name,
-      join(stateHome, name),
+      stateAt(name, stateHome),
     ]);
     for (const name of LEGACY_STATE_DIRS) {
       // Cleared even where nothing replaces it, or a link from an earlier pass

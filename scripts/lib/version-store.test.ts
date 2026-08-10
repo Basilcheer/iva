@@ -104,6 +104,32 @@ test("layout keeps state outside the versions tree", (t) => {
     assert.equal(path.startsWith(join(root, "versions")), false);
 });
 
+test("the layout is the state the .env names, wherever the user put it", (t) => {
+  const root = home(t);
+  const elsewhere = home(t);
+  // Absolute, the way `iva config` writes it; and a relative one is still the
+  // installation's own, so the two spellings cannot pull the layout apart.
+  writeFileSync(
+    join(root, ".env"),
+    `ASSISTANT_DATA_DIR=${elsewhere}\nASSISTANT_VAULT_DIR=notes\n`,
+  );
+  const layout = layoutFor(root);
+  assert.equal(layout.data, elsewhere);
+  assert.equal(layout.vault, join(root, "notes"));
+
+  // And what a version borrows leads to the same place: one directory holds the
+  // lock, the markers and the customization, whoever asks for it.
+  const store = createVersionStore(root);
+  const dir = store.stage("0.3.15-bbbbbbbbbbbb");
+  store.linkState(dir);
+  assert.equal(realpathSync(join(dir, "data")), realpathSync(elsewhere));
+  assert.equal(
+    realpathSync(join(dir, "vault")),
+    realpathSync(join(root, "notes")),
+  );
+  assert.equal(existsSync(join(root, "data")), false);
+});
+
 test("an interrupted stage leaves the active version untouched and is swept later", (t) => {
   const store = createVersionStore(home(t));
   install(store, "0.3.14-aaaaaaaaaaaa");
