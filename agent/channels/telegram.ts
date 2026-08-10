@@ -53,7 +53,7 @@ import {
   markTelegramFirstOutput,
   publishTelegramEarlyStatus,
   publishTelegramTurnStarted,
-} from "../../scripts/lib/telegram-turn-start.ts";
+} from "../lib/telegram-turn-start.js";
 
 // Токен (TELEGRAM_BOT_TOKEN) и секрет вебхука (TELEGRAM_WEBHOOK_SECRET_TOKEN)
 // читаются из окружения автоматически.

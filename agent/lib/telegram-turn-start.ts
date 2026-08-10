@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { toChannelLocalToken } from "#lib/telegram-continuation-token.ts";
+import { toChannelLocalToken } from "./telegram-continuation-token.ts";
 
 type ChatStatus = Record<string, unknown> | null;
 type GetStatus = (chatKey: string) => ChatStatus;
