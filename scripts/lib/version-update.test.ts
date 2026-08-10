@@ -700,6 +700,122 @@ test("a version the service does not come up on is put back on the one that ran"
   );
 });
 
+test("a customization the service dies on is left out of the version installed next", async (t) => {
+  const iva = world(t);
+  const first = updated(await iva.update());
+  const mine = "custom/agent/connections/mine.ts";
+  customFile(iva.home, "agent/connections/mine.ts", "export const mine = 1;\n");
+  const store = createVersionStore(iva.home);
+  // Builds, and starts on the scratch state the probe gives it, and kills the
+  // service against the installation's own: the shape nothing before the flip
+  // can see. Whatever is under `current` when the restart happens is what runs.
+  const serving = () =>
+    Promise.resolve(
+      existsSync(join(iva.home, "current/agent/connections/mine.ts"))
+        ? { ok: false, log: "the card store did not open" }
+        : { ok: true, log: "" },
+    );
+
+  const down = await iva.update({ serving });
+
+  assert.equal(down.status, "unhealthy");
+  const dead = down.status === "unhealthy" ? down.version : "";
+  assert.equal(store.currentName(), first.version);
+  assert.match(iva.notices.join("\n"), /data\/custom are the likeliest cause/u);
+
+  // The next update must not hand that tree back: it builds and it probes green,
+  // so nothing but the record of what it did to the service tells it apart from a
+  // good version - and reusing it lays the installation down for another deadline.
+  let builds = 0;
+  const back = updated(
+    await iva.update({
+      serving,
+      run: fixtureRunner(() => {
+        builds += 1;
+        return Promise.resolve();
+      }),
+    }),
+  );
+  assert.equal(back.custom, "stock");
+  assert.notEqual(back.version, dead);
+  assert.ok(builds > 0, "the version the service died on was reused");
+  assert.equal(store.currentName(), back.version);
+  assert.equal(store.settled(), back.version);
+  assert.equal(
+    existsSync(join(iva.home, "current/agent/connections/mine.ts")),
+    false,
+  );
+  assert.match(iva.notices.join("\n"), /stock build[\s\S]*data\/custom/u);
+  // Held back, never taken: the file is still the user's to fix.
+  assert.equal(
+    readFileSync(join(layoutFor(iva.home).data, mine), "utf8"),
+    "export const mine = 1;\n",
+  );
+  // And the update is over: the next one has nothing to do, rather than trying
+  // the same customization into the same rollback again.
+  assert.deepEqual(await iva.update({ serving }), {
+    status: "current",
+    version: back.version,
+  });
+
+  // Taking the customization out is an ordinary update again.
+  rmSync(join(layoutFor(iva.home).data, mine), { force: true });
+  const stock = updated(await iva.update({ serving }));
+  assert.equal(stock.custom, "none");
+  assert.equal(store.currentName(), stock.version);
+  assert.equal(
+    readFileSync(join(iva.home, "current/agent/agent.ts"), "utf8"),
+    "export const agent = 1;\n",
+  );
+  assert.equal(
+    readFileSync(join(layoutFor(iva.home).data, "migrated.log"), "utf8"),
+    "001\n",
+    "an applied migration is not replayed by any of this",
+  );
+});
+
+test("a version the service died on is rebuilt by the next update, never reused", async (t) => {
+  const iva = world(t);
+  updated(await iva.update());
+  writeFileSync(join(iva.repo, "agent/agent.ts"), "export const agent = 2;\n");
+  const next = iva.release("0.3.15");
+  const name = `0.3.15-${next.sha.slice(0, 12)}`;
+  const store = createVersionStore(iva.home);
+  // Nothing of the user's in it: upstream code that dies against the state of
+  // this installation alone. The tree stays on disk as the way back's neighbour,
+  // and it is exactly the tree the next update must not reuse.
+  let dead = true;
+
+  const down = await iva.update({
+    serving: () =>
+      Promise.resolve(
+        dead ? { ok: false, log: "nothing answered" } : { ok: true, log: "" },
+      ),
+  });
+  assert.equal(down.status, "unhealthy");
+  assert.ok(store.list().includes(name), "the version is still on disk");
+
+  dead = false;
+  let builds = 0;
+  const outcome = updated(
+    await iva.update({
+      run: fixtureRunner(() => {
+        builds += 1;
+        return Promise.resolve();
+      }),
+    }),
+  );
+  assert.equal(outcome.version, `${name}~2`);
+  assert.ok(builds > 0, "the version the service died on was handed back");
+  assert.equal(store.currentName(), outcome.version);
+  assert.equal(
+    readFileSync(join(iva.home, "current/agent/agent.ts"), "utf8"),
+    "export const agent = 2;\n",
+  );
+  // Served once, so the record of the failure is gone with it.
+  assert.equal(store.liveFailed(outcome.version), false);
+});
+
 test("a first version that does not answer has nowhere to go back to", async (t) => {
   const iva = world(t);
   const current = layoutFor(iva.home).current;

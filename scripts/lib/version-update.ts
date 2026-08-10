@@ -190,10 +190,13 @@ export async function runVersionUpdate(
     }
 
     // Reusing a finished build makes dropping a customization a flip, not a build.
-    // `--force` refuses it: the build already there is the broken one.
-    const finished = force
-      ? undefined
-      : store.list().find((name) => releaseOf(name) === release);
+    // `--force` refuses it: the build already there is the broken one. So does a
+    // release the service has already died on - handing that tree back is how one
+    // bad start becomes an update that lays the installation down for good.
+    const finished =
+      force || store.liveFailed(release)
+        ? undefined
+        : store.list().find((name) => releaseOf(name) === release);
     const name = finished ?? store.nextBuild(release);
     if (!finished) {
       const dir = store.stage(name);
@@ -268,7 +271,17 @@ export async function finishVersionUpdate({
     log(`finishing the move onto ${name}`);
   } else {
     if (prepared) log(`reusing prepared version ${name}`);
-    else
+    else if (store.liveFailed(name)) {
+      // This code has been live once and the service died on it. The overlay is
+      // the only part of the tree that is not upstream's, so it is the part that
+      // comes out; without one there is nothing to drop and this is a rebuild.
+      log(
+        "the service died on this version before; building it without data/custom",
+      );
+      await buildStock(store, name, run).catch(discard);
+      custom = builtWith(dir, name, customDir);
+      if (custom === "stock") notify(deferredNotice());
+    } else
       custom = await buildVersion(store, name, run, notify, log).catch(discard);
     let health = await prove();
     // A green build is not a start: the service compiles the authored TypeScript
@@ -324,11 +337,19 @@ export async function finishVersionUpdate({
       active !== null && active !== name && store.list().includes(active)
         ? active
         : store.previousName();
+    // Written before the rollback: a kill in the middle of one must not leave the
+    // next update believing this tree is a good one to hand back.
+    store.recordLive(name, false);
     notify(
       `${name} did not answer on port ${port} after the restart; ` +
         (back
           ? `going back to ${back}`
-          : "there is no earlier version to go back to"),
+          : "there is no earlier version to go back to") +
+        (custom === "applied"
+          ? ". Your files in data/custom are the likeliest cause - they build and" +
+            " they start, and the service still did not come up on them. The next" +
+            " update installs this version without them."
+          : ""),
     );
     if (back) {
       store.activate(back);
@@ -342,6 +363,8 @@ export async function finishVersionUpdate({
     return { status: "unhealthy", version: name, log: live.log };
   }
 
+  // Served: whatever this code did to the installation before, it does not now.
+  store.recordLive(name, true);
   // After the service is up: until it runs the new version, the old checkout is
   // what a failed restart falls back to, so it is not ours to remove any earlier.
   adopt();
@@ -394,6 +417,20 @@ async function errand(
 
 function stockNotice(verb: string, failure: string): string {
   return `your customization in data/custom does not ${verb} this version, so Iva is running the stock build:\n${failure.slice(-1500)}`;
+}
+
+/**
+ * The customization is held back rather than tried: the last update that carried
+ * it left the service down. Only an edit to `data/custom` or a new release makes
+ * an update try it again, so the user is told which of the two is theirs to do.
+ */
+function deferredNotice(): string {
+  return (
+    "Iva is running the stock build: the version carrying your data/custom files " +
+    "did not come up after the restart last time, so this update leaves them out. " +
+    "The files are untouched where you wrote them - fix them, and the next update " +
+    "installs them again."
+  );
 }
 
 /** One npm step in place; the step's own output is the failure report. */
