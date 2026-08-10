@@ -28,24 +28,20 @@ import { COPY } from "./update.ts";
 
 type CliRuntime = ReturnType<typeof createCliRuntime>;
 
-/** A bare mirror, cloned from the checkout: nothing runs from it, so it is free to rewrite. */
-export async function ensureMirror(
-  home: string,
-  checkout: string,
-): Promise<string> {
+/** A bare mirror of the checkout: nothing runs from it, so it is free to rewrite. */
+export async function ensureMirror(home: string): Promise<string> {
   const repo = join(home, "repo");
   if (existsSync(repo)) return repo;
   const staging = `${repo}.staging-${process.pid}`;
   rmSync(staging, { recursive: true, force: true });
   const git = (root: string, args: string[]): Promise<string> =>
     requireGit(gitAt, root, args);
+  const key = "iva.updateBranch"; // What the installation follows, not the clone.
   try {
-    await git(home, ["clone", "--mirror", join(checkout, ".git"), staging]);
-    const origin = await git(checkout, ["remote", "get-url", "origin"]);
+    await git(home, ["clone", "--mirror", join(home, ".git"), staging]);
+    const origin = await git(home, ["remote", "get-url", "origin"]);
     await git(staging, ["remote", "set-url", "origin", origin]);
-    // The branch an installation follows belongs to it, not to the clone.
-    const key = "iva.updateBranch";
-    const branch = (await gitAt(checkout, ["config", "--local", "--get", key]))
+    const branch = (await gitAt(home, ["config", "--local", "--get", key]))
       .stdout;
     if (branch) await git(staging, ["config", key, branch]);
     renameSync(staging, repo);
@@ -132,7 +128,7 @@ export function createVersionUpdateCommand(
     try {
       terminal.start(text.fetch[0]);
       await reporter?.start("fetch");
-      const repo = await ensureMirror(install.home, install.home);
+      const repo = await ensureMirror(install.home);
       const outcome = await runVersionUpdate({
         home: install.home,
         store,
