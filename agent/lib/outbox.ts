@@ -22,8 +22,7 @@ import {
 // разметку (400 по сущностям), тот же кусок имеет смысл повторить без тегов;
 // retryPlain=false — отправка безнадёжна, шов останавливается.
 export type OutboxAck =
-  | { ok: true }
-  | { ok: false; error: string; retryPlain: boolean };
+  { ok: true } | { ok: false; error: string; retryPlain: boolean };
 
 export type OutboxTransport = {
   sendHtml: (html: string) => Promise<OutboxAck>;

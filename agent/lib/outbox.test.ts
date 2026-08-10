@@ -58,10 +58,7 @@ await test("Gate редактит утёкший секрет до трансп�
   const logged = captureErrors(t);
   const { sent, transport } = stub();
 
-  const result = await sendThroughOutbox(
-    `ключ: ${SECRET} — держи`,
-    transport,
-  );
+  const result = await sendThroughOutbox(`ключ: ${SECRET} — держи`, transport);
 
   assert.deepEqual(result, {
     ok: true,
@@ -260,7 +257,11 @@ await test("таблица уходит одним rich-сообщением, о
 await test("отказ rich-сообщения проваливается в HTML-путь", async (t) => {
   captureErrors(t);
   const { sent, transport } = stub({
-    rich: () => ({ ok: false, error: "400: rich unsupported", retryPlain: false }),
+    rich: () => ({
+      ok: false,
+      error: "400: rich unsupported",
+      retryPlain: false,
+    }),
   });
 
   const result = await sendThroughOutbox(
