@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import { createRequire } from "node:module";
 import { embedTexts, cosine, hasEmbeddingKey } from "../lib/embeddings.js";
-import { parseFrontmatter } from "../lib/frontmatter.js";
+import { cardIndex, cardTitle } from "../lib/card-index.js";
 
 // node:sqlite — встроенный модуль (Node 24+). В ESM нет глобального require, поэтому
 // поднимаем его через createRequire; грузим лениво внутри bm25Search (с fallback, если нет).
@@ -45,23 +45,6 @@ interface Doc {
   source: string;
 }
 
-// Поля фронтматтера, несущие искомый смысл структурированных карточек (контакты/проекты).
-// Индексируем их отдельной колонкой с высоким весом — иначе поиск по имени/компании из
-// фронтматтера промахивается (в body их может не быть).
-const META_FIELDS = [
-  "name",
-  "company",
-  "role",
-  "description",
-  "handle",
-  "aliases",
-  "aka",
-  "title",
-  "platform",
-  "industry",
-  "domain",
-];
-
 async function walk(dir: string, out: string[]): Promise<void> {
   let entries;
   try {
@@ -78,21 +61,6 @@ async function walk(dir: string, out: string[]): Promise<void> {
       out.push(full);
     }
   }
-}
-
-// Frontmatter карточки в плоский поисковый вид: список склеиваем пробелом (FTS всё равно
-// токенизирует), ключи приводим к нижнему регистру — регистр ключа не должен решать,
-// найдётся карточка или нет. Разбор — только канонический parseFrontmatter: свой мини-парсер
-// здесь молча терял свёрнутые скаляры, блочные списки и карточки с CRLF.
-function indexedFields(text: string): {
-  fm: Record<string, string>;
-  body: string;
-} {
-  const { fields, body } = parseFrontmatter(text);
-  const fm: Record<string, string> = {};
-  for (const [key, value] of Object.entries(fields ?? {}))
-    fm[key.toLowerCase()] = Array.isArray(value) ? value.join(" ") : value;
-  return { fm, body };
 }
 
 export async function loadDocs(scopeDirs: string[]): Promise<Doc[]> {
@@ -114,14 +82,11 @@ export async function loadDocs(scopeDirs: string[]): Promise<Doc[]> {
     } catch {
       continue;
     }
-    const { fm, body } = indexedFields(text);
+    const { fm, meta, body } = cardIndex(text);
     const rel = relative(vault, file).split(sep).join("/");
-    const meta = META_FIELDS.map((k) => fm[k])
-      .filter(Boolean)
-      .join(" ");
     docs.push({
       path: rel,
-      title: rel.replace(/\.md$/, "").split("/").pop() || rel,
+      title: cardTitle(rel) || rel,
       meta,
       body: body.slice(0, 8000),
       tags: fm.tags || "",

@@ -192,11 +192,16 @@ ranges for the scanner. Known dialect divergences deliberately NOT covered (quot
 inside flow-list items, mixed-quote stripping) — fixtures encode the shared contract;
 extending it means adding a fixture first.
 
-Pair (a) had a third implementation until then: `agent/tools/memory_search.ts` carried a
-private mini parser for the few scalars it indexes. It was a duplicate inside one language
-— no golden fixtures held it, and it silently dropped folded/literal scalars (indexing the
-literal `>-`), block lists and every card written with CRLF. It is gone: the tool now calls
-the canonical `parseFrontmatter` and flattens lists for the FTS columns, with the indexed
-fields pinned per card shape in `scripts/memory-search-frontmatter.test.ts`. Two
+Pair (a) had two more implementations until then, one per half of memory search:
+`agent/tools/memory_search.ts` (BM25 columns) and `scripts/memory/embed-index.ts` (the
+dense sidecar) each carried a private mini parser for the few scalars they index, with
+their own field lists. Duplicates inside one language — no golden fixtures held them, and
+both silently dropped folded/literal scalars (indexing the literal `>-`), block lists and
+every card written with CRLF. Worse, the copies were not identical, so in
+`MEMORY_SEARCH_MODE=hybrid` the two halves could rank different text for the same card.
+Both are gone: `agent/lib/card-index.ts` is now the single seam turning a card into
+indexable text (canonical `parseFrontmatter`, one `META_FIELDS` list, lists flattened),
+and both halves call it. `scripts/memory-search-index.test.ts` pins the FTS columns and
+the dense text side by side per card shape, and checks the halves still agree. Two
 implementations remain, and by design: the cross-language pair is the price of a Python
 night pipeline, a second copy inside TypeScript is not.

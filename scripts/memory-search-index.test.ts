@@ -1,15 +1,26 @@
 /* eslint-disable @typescript-eslint/no-floating-promises -- Node's test runner owns registrations. */
-// Снапшот индексируемых полей memory_search: что именно уезжает в колонки FTS
-// (title/meta/tags/body) и в отбраковку по status/confidence. Фиксирует контракт
+// Снапшот индексируемого вида карточки — на ОБЕ половины поиска: колонки FTS
+// (title/meta/tags/body) с отбраковкой по status/confidence и текст dense-эмбеддинга
+// сайдкар-индекса (scripts/memory/embed-index.ts). В режиме hybrid половины обязаны
+// видеть один текст: разъехавшись, они ранжируют разные карточки. Фиксирует контракт
 // разбора frontmatter для поиска — карточки со свёрнутыми скалярами, блочными и
 // flow-списками, CRLF, ключами в верхнем регистре, неизвестными полями, без
 // frontmatter и с незакрытым frontmatter.
 import "./lib/ts-esm-hooks.ts";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { embedText } from "../agent/lib/card-index.ts";
 
 const VAULT = mkdtempSync(join(tmpdir(), "iva-memsearch-fm-"));
 process.env.ASSISTANT_VAULT_DIR = VAULT;
@@ -251,4 +262,73 @@ test("слово из свёрнутого description находится пои
     hits.some((hit) => hit.file === "cards/folded.md"),
     `свёрнутый description обязан попадать в индекс: ${JSON.stringify(hits)}`,
   );
+});
+
+// Текст, уезжающий в dense-эмбеддинг: непустые колонки BM25 через пробел —
+// `<title> <meta> <tags> <body>`.
+const EXPECTED_EMBED: Record<string, string> = {
+  "plain.md":
+    "plain Иван Петров Кинолаб contact video \n# Иван Петров\n\nПодрядчик по монтажу.\n",
+  "folded.md": "folded Rushana Продюсер студии, ведёт монтаж Тело.\n",
+  "literal.md": "literal строка один\nстрока два План запуска Тело.\n",
+  "block-list.md":
+    "block-list Проект Альфа alpha альфа project archive Тело.\n",
+  "crlf.md": "crlf CRLF Карточка Тело.\n",
+  "upper-keys.md": "upper-keys Верхний Регистр Тело.\n",
+  "unknown-fields.md": "unknown-fields Икс Тело.\n",
+  "empty-value.md": "empty-value Тело.\n",
+  "quoted.md": "quoted Пётр: главный CTO @petr Тело.\n",
+  "no-frontmatter.md": "no-frontmatter # Заметка\n\nБез frontmatter.\n",
+  "unclosed.md":
+    "unclosed ---\nname: Обрыв\nstatus: active\n\nТело без закрытия.\n",
+};
+
+function embedTexts(): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const name of Object.keys(CARDS)) {
+    const file = join(VAULT, "cards", name);
+    out[name] = embedText(file, readFileSync(file, "utf8"));
+  }
+  return out;
+}
+
+test("текст dense-эмбеддинга совпадает со снапшотом", () => {
+  assert.deepEqual(embedTexts(), EXPECTED_EMBED);
+});
+
+// Каждая индексируемая колонка BM25 обязана целиком лежать и в dense-тексте: иначе
+// половины ранжируют разный текст одной карточки. Карточки фикстуры короче обрезки в
+// 2000 символов, так что тело сравнивается целиком.
+test("dense-половина индексирует те же колонки, что BM25", async () => {
+  const dense = embedTexts();
+  for (const doc of await loadDocs(["cards"])) {
+    const name = doc.path.replace("cards/", "");
+    for (const column of [doc.title, doc.meta, doc.tags, doc.body])
+      if (column)
+        assert.ok(
+          dense[name].includes(column),
+          `половины поиска разошлись на ${name}: колонки BM25 нет в dense-тексте «${dense[name]}» — «${column}»`,
+        );
+  }
+});
+
+// Ночной doctor запускает embed-index голым `node`, без хука, который в тестах
+// переписывает "./x.js" в "./x.ts". Спавн ловит специфкатор, живущий только под хуком:
+// цепочка card-index → frontmatter → card-text обязана резолвиться как есть.
+test("embed-index грузится голым node", () => {
+  const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+  const result = spawnSync(
+    process.execPath,
+    [join(root, "scripts/memory/embed-index.ts")],
+    {
+      cwd: root,
+      encoding: "utf8",
+      env: { PATH: process.env.PATH ?? "" },
+      timeout: 30_000,
+    },
+  );
+
+  assert.equal(result.error, undefined);
+  assert.equal(result.status, 0);
+  assert.match(result.stderr, /^embed-index: no JINA_API_KEY/u);
 });
