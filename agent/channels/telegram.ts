@@ -38,7 +38,7 @@ import {
 // Двуязычие: tr(en, ru) отдаёт строку по текущему языку (data/settings.json → env
 // AGENT_LANGUAGE).
 import { tr } from "../lib/i18n.js";
-import { handleTelegramResetRequest } from "../../scripts/lib/telegram-reset-route.ts";
+import { handleTelegramResetRequest } from "../lib/telegram-reset-route.js";
 // Eve отдаёт обработчикам событий токен с именем канала впереди, а reset-роут клеит его
 // сам. Сохраняем только channel-local вид, иначе /new сбрасывает несуществующий токен (#110).
 import { toChannelLocalToken } from "../lib/telegram-continuation-token.js";
