@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  redactNotice,
   sendThroughOutbox,
   type OutboxAck,
   type OutboxTransport,
@@ -388,4 +389,34 @@ await test("отказ rich-сообщения проваливается в HTM
     sent.map((s) => s.kind),
     ["rich", "html"],
   );
+});
+
+await test("redactNotice проводит служебное уведомление через тот же Gate", (t) => {
+  const logged = captureErrors(t);
+  const planted = `api_key=${"z".repeat(24)}`;
+
+  const text = redactNotice(`build failed: ${planted}`);
+
+  assert.equal(text, "build failed: [REDACTED]");
+  assert.match(
+    logged.join("\n"),
+    /outbound leak redacted: api_key:generic_key/u,
+  );
+});
+
+await test("redactNotice не трогает чистый текст и переживает пустой", (t) => {
+  const logged = captureErrors(t);
+
+  assert.equal(redactNotice("Iva обновлена"), "Iva обновлена");
+  assert.equal(redactNotice(""), "");
+  assert.deepEqual(logged, []);
+});
+
+await test("redactNotice чистит многострочное уведомление целиком", (t) => {
+  captureErrors(t);
+  const planted = `api_key=${"z".repeat(24)}`;
+
+  const text = redactNotice(`line one\nline two ${planted}\nline three`);
+
+  assert.equal(text, "line one\nline two [REDACTED]\nline three");
 });

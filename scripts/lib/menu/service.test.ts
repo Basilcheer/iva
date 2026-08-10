@@ -23,9 +23,15 @@ import {
   type RunOptions,
 } from "./svc-run.ts";
 import { acquireUpdateLock, releaseUpdateLock } from "../update-safety.ts";
+import { createFlows } from "../tg-flow.ts";
 
 const { SCREENS } = (await import("./index.ts")) as {
   SCREENS: Record<string, unknown>;
+};
+// The bridge's own Bot API call, where the outbound Gate stands: the screens below are
+// driven through it exactly as they are in production.
+const { tg: bridgeTg } = (await import("../../poller/transport.ts")) as {
+  tg: (method: string, body: unknown) => Promise<unknown>;
 };
 
 type TestState = MenuServiceState & {
@@ -388,4 +394,112 @@ test("update-lock: занят — go:doc не стартует, текст пр�
   assert.ok(st._last);
   assert.match(st._last.text, /обновлени/i);
   releaseUpdateLock(lock);
+});
+
+const PLANTED = `api_key=${"z".repeat(24)}`;
+const leaks = (cmd: string) => ({
+  kind: "proc" as const,
+  argv: [process.execPath, "-e", `console.log("boom ${PLANTED}"); ${cmd}`],
+});
+
+// Производственная проводка: экран разговаривает с Telegram мостовым tg(), на котором
+// стоит гейт. Ни одна вьюха — тикер, сводка, «Уже идёт», перерисовка — про гейт не знает,
+// и это ровно то свойство, которое здесь проверяется (правило: agent/lib/outbox.ts).
+function gatedStand(
+  t: { after: (fn: () => void) => void },
+  deps: TestDeps,
+): { ctx: MenuServiceContext; st: MenuServiceState; sent: string[] } {
+  const sent: string[] = [];
+  const originalFetch = globalThis.fetch;
+  const originalError = console.error;
+  globalThis.fetch = (async (_url: string, init: { body: string }) => {
+    const { text } = JSON.parse(init.body) as { text?: string };
+    sent.push(text ?? "");
+    return { json: async () => ({ ok: true, result: { message_id: 1 } }) };
+  }) as unknown as typeof fetch;
+  console.error = () => {}; // «[security] outbound leak redacted» на каждый тик
+  t.after(() => {
+    cancelRun();
+    resetForTests();
+    globalThis.fetch = originalFetch;
+    console.error = originalError;
+  });
+  const dataDir = mkdtempSync(join(tmpdir(), "iva-data-"));
+  const flows = createFlows({ tg: bridgeTg as never });
+  const st = flows.start(10, "20", "menu", {
+    screen: "svc",
+    msgId: 1,
+  }) as unknown as MenuServiceState;
+  const ctx: MenuServiceContext = {
+    tg: bridgeTg as MenuServiceContext["tg"],
+    deps: {
+      root: "/x",
+      dataDir,
+      envPath: join(dataDir, ".env"),
+      svcRun: fastRun,
+      ...deps,
+    },
+    flows: flows as unknown as MenuServiceContext["flows"],
+    tr: (_en: string, ru: string) => ru,
+    btn: (text: string, data: string) => ({ text, callback_data: data }),
+    backRow: () => [{ text: "‹ Назад", callback_data: "iva_menu:r:o" }],
+    show: async (state: MenuServiceState, sid: string) => {
+      state.screen = sid;
+      const v = await service.render(state, ctx);
+      await ctx.flows.screen(state, v.text, v.rows);
+    },
+  };
+  return { ctx, st, sent };
+}
+
+const gatedFind = (sent: string[], re: RegExp): string => {
+  const found = sent.filter((text) => re.test(text)).at(-1);
+  assert.ok(found, `нет экрана ${re.source} среди: ${sent.join(" | ")}`);
+  assert.ok(
+    sent.every((text) => !/zzzz/u.test(text)),
+    "секрет дошёл до Bot API",
+  );
+  return found;
+};
+
+test("финальная сводка: вывод упавшей команды уходит отредактированным", async (t) => {
+  resetForTests();
+  const { ctx, st, sent } = gatedStand(t, {
+    svcSpec: () => leaks("process.exit(1)"),
+  });
+
+  await service.on("go", ["doc"], st, ctx);
+  await waitFor(() => sent.some((text) => /Есть проблемы/u.test(text)));
+
+  assert.match(gatedFind(sent, /Есть проблемы/u), /boom \[REDACTED\]/u);
+});
+
+test("тикер и экран «Уже идёт»: та же строка вывода, тот же гейт", async (t) => {
+  resetForTests();
+  const { ctx, st, sent } = gatedStand(t, {
+    svcSpec: () => leaks("setTimeout(() => {}, 60000)"),
+  });
+
+  await service.on("go", ["doc"], st, ctx);
+  await waitFor(() => sent.some((text) => /boom/u.test(text)));
+  assert.match(gatedFind(sent, /boom/u), /boom \[REDACTED\]/u);
+
+  await service.on("go", ["cln"], st, ctx); // занято — вьюха прогресса под шапкой
+  assert.match(gatedFind(sent, /Уже идёт/u), /boom \[REDACTED\]/u);
+});
+
+test("перерисовка после ухода с экрана и возврата тоже проходит гейт", async (t) => {
+  resetForTests();
+  const { ctx, st, sent } = gatedStand(t, {
+    svcSpec: () => leaks("setTimeout(() => {}, 60000)"),
+  });
+
+  await service.on("go", ["doc"], st, ctx);
+  await waitFor(() => currentRun()?.lastLine.includes("boom") === true);
+  st.screen = "r"; // ушёл в корень: тикер за сообщение больше не дерётся
+  sent.length = 0;
+
+  await ctx.show(st, "svc");
+
+  assert.match(gatedFind(sent, /Доктор/u), /boom \[REDACTED\]/u);
 });

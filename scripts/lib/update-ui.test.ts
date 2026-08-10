@@ -1677,3 +1677,30 @@ test("local commits skip the candidate and keep the in-place path", async () => 
   assert.equal(integrated.changed, true);
   assert.equal(await tx.promoteCandidate(), false);
 });
+
+test("a post-commit failure reaches the chat with its secret redacted", async () => {
+  const calls: TelegramCall[] = [];
+  const fetchImpl: MockFetch = async (url, init) => {
+    calls.push({ method: url.split("/").at(-1), body: JSON.parse(init.body) });
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ ok: true, result: {} }),
+    };
+  };
+  const reporter = createTelegramUpdateReporter({
+    token: "token",
+    job: { chatId: 1, messageId: 100, locale: "en" },
+    env: {},
+    fetchImpl,
+  });
+  assert.ok(reporter);
+  const planted = `api_key=${"z".repeat(24)}`;
+
+  await reporter.postCommitFailure(`systemctl refused: ${planted}`);
+  reporter.dispose();
+
+  const text = calls.at(-1)?.body.text ?? "";
+  assert.match(text, /systemctl refused: \[REDACTED\]/);
+  assert.doesNotMatch(text, /zzzz/);
+});

@@ -10,6 +10,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tr } from "./i18n.ts";
+import { redactNotice } from "./outbox.ts";
 import { sanitizeInbound } from "./security-gate.ts";
 import {
   getTelegramMediaCacheEntry,
@@ -269,8 +270,10 @@ export async function processMediaPart(
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     const token = process.env.TELEGRAM_BOT_TOKEN;
-    const contextDetail = (
-      token ? detail.replaceAll(token, "***") : detail
+    // Гейт до обрезки: обрезанный ключ гейт уже не узнаёт, и его хвост уехал бы в
+    // чат целым куском (правило про runtime-контент — в outbox.ts).
+    const contextDetail = redactNotice(
+      token ? detail.replaceAll(token, "***") : detail,
     ).slice(0, 200);
     try {
       await effects.sendMessage(

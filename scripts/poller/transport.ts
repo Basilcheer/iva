@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-base-to-string -- Telegram payload fields retain source-compatible permissive coercion. */
 import { execFile } from "node:child_process";
+import { redactTelegramBody } from "../lib/notice.ts";
 import { API, TOKEN, log } from "./config.ts";
 
 type TelegramResponse = {
@@ -18,6 +19,12 @@ const errorMessage = (error: unknown) => (error as ErrorLike).message;
 
 // Every Bot API call carries a deadline — a hung response must never stall the single polling loop.
 // The default suits normal calls; getUpdates overrides it to sit above its own long-poll window.
+//
+// This is the bridge's only way of speaking to Telegram — every menu screen, wizard, status
+// edit and reply passes through it — so the outbound Gate stands here and not in the views
+// above it. A screen carrying runtime data (a spawned command's output, an error text) is
+// therefore gated by construction, including one written tomorrow. The rule, and the static
+// strings exempt from it, live in agent/lib/outbox.ts.
 async function tg(
   method: string,
   body: unknown,
@@ -26,7 +33,7 @@ async function tg(
   const res = await fetch(`${API}/${method}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body ?? {}),
+    body: JSON.stringify(await redactTelegramBody(body ?? {})),
     signal: AbortSignal.timeout(timeoutMs),
   });
   return res.json();

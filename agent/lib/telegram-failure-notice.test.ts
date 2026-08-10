@@ -67,3 +67,65 @@ await test("errorId из details попадает в текст, мусорны�
     );
   }
 });
+
+// Служебная реплика канала не идёт через Outbox, но текст провайдера в ней —
+// такой же runtime-контент: Gate обязан вычистить его до транспорта.
+function muteErrors(t: { after: (fn: () => void) => void }): void {
+  const original = console.error;
+  console.error = () => {};
+  t.after(() => {
+    console.error = original;
+  });
+}
+
+const PLANTED_KEY = `api_key=${"z".repeat(24)}`;
+const PLANTED_BOT_TOKEN = `1234567890:${"A".repeat(35)}`;
+
+await test("ключ из ошибки провайдера доезжает до чата отредактированным", async (t) => {
+  muteErrors(t);
+  const { sent, send } = collector();
+
+  await notifyTelegramFailure(
+    "s-key",
+    { message: `Incorrect API key provided: ${PLANTED_KEY}` },
+    send,
+    { now: 1_000 },
+  );
+
+  assert.equal(sent.length, 1);
+  assert.doesNotMatch(sent[0], /zzzz/u);
+  assert.match(sent[0], /\[REDACTED\]/u);
+});
+
+await test("пустая ошибка остаётся объяснимой, а не пустым сообщением", (t) => {
+  muteErrors(t);
+
+  assert.match(
+    telegramFailureMessage({ message: "" }),
+    /Unknown provider error$/u,
+  );
+});
+
+await test("секрет со второй строки не уезжает в чат вместе с деталями", (t) => {
+  muteErrors(t);
+
+  const text = telegramFailureMessage({
+    message: `Provider returned a strange response\n${PLANTED_KEY}`,
+    details: { errorId: "err-9", note: PLANTED_KEY },
+  });
+
+  assert.doesNotMatch(text, /zzzz/u);
+  assert.match(text, /Error id: err-9/u);
+});
+
+await test("телеграм-токен и ключ в одной ошибке редактятся оба", (t) => {
+  muteErrors(t);
+
+  const text = telegramFailureMessage({
+    message: `bot ${PLANTED_BOT_TOKEN} rejected: ${PLANTED_KEY}`,
+  });
+
+  assert.doesNotMatch(text, /zzzz/u);
+  assert.doesNotMatch(text, /AAAA/u);
+  assert.match(text, /\[REDACTED\]/u);
+});

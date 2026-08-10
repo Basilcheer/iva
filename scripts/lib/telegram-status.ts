@@ -1,6 +1,7 @@
 import { readFile, rm } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { modelSummary } from "./model-summary.ts";
+import { redactTelegramBody } from "./notice.ts";
 import type { RestoreReport } from "./update-safety.ts";
 
 type UpdatePhase = "protect" | "fetch" | "build";
@@ -124,17 +125,21 @@ export function createTelegramUpdateReporter({
     sleepImpl ??
     ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
 
+  // The update UI's only way to Telegram, so the outbound Gate stands here: the screens
+  // above carry runtime data (the text systemd refused with, a failed build's output) and
+  // must not each remember the Gate. The rule is in agent/lib/outbox.ts.
   async function call(
     method: string,
     body: Record<string, unknown>,
   ): Promise<unknown> {
+    const gated = await redactTelegramBody(body);
     for (let attempt = 1; attempt <= 3; attempt++) {
       let res;
       try {
         res = await fetchImpl(`${api}/${method}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
+          body: JSON.stringify(gated),
         });
       } catch (error) {
         if (attempt === 3) throw error;

@@ -3,9 +3,11 @@
 // один раз. Заявка на уведомление берётся по sessionId и живёт TTL; не ушедшее
 // сообщение освобождает заявку, чтобы следующее событие всё-таки объяснило сбой.
 //
-// Это служебная реплика канала, а не текст модели: мимо Outbox.
+// Это служебная реплика канала, а не текст модели: мимо Outbox, но не мимо гейта —
+// текст провайдера здесь runtime-контент (см. правило в outbox.ts).
 import { humanizeProviderError } from "./error-humanizer.ts";
 import { tr } from "./i18n.ts";
+import { redactNotice } from "./outbox.ts";
 
 export type TelegramFailureData = { message: string; details?: unknown };
 
@@ -59,10 +61,12 @@ function extractFailureErrorId(details: unknown): string | undefined {
 export function telegramFailureMessage(data: TelegramFailureData): string {
   const text = humanizeProviderError(data);
   const errorId = extractFailureErrorId(data.details);
-  return [
-    tr(text.en, text.ru),
-    ...(errorId ? ["", `Error id: ${errorId}`] : []),
-  ].join("\n");
+  return redactNotice(
+    [
+      tr(text.en, text.ru),
+      ...(errorId ? ["", `Error id: ${errorId}`] : []),
+    ].join("\n"),
+  );
 }
 
 // Отправляет объяснение сбоя ровно один раз на сессию. Сбой самой отправки

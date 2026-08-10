@@ -405,6 +405,29 @@ await test("сорванное медиа гасит ранний статус �
   assert.doesNotMatch(calls.sent[0], /1:test-token/u);
 });
 
+await test("ключ из сорванного медиа доезжает до чата отредактированным", async (t) => {
+  muteErrors(t);
+  const planted = `api_key=${"z".repeat(24)}`;
+  const { calls, effects } = harness({
+    request: () => Promise.reject(new Error(`getFile 500 ${planted}`)),
+  });
+
+  const result = await inbound.runTelegramInbound(
+    message({
+      message_id: 8,
+      chat: { id: 77, type: "private" },
+      from: { id: 42, is_bot: false },
+      voice: { file_id: "F4", file_unique_id: "U4" },
+    }),
+    effects,
+  );
+
+  assert.equal(result, null);
+  assert.equal(calls.sent.length, 1);
+  assert.doesNotMatch(calls.sent[0], /zzzz/u);
+  assert.match(calls.sent[0], /\[REDACTED\]/u);
+});
+
 await test("склейка частей: чистый текст-носитель не дублируется, порядок частей сохраняется", async (t) => {
   muteErrors(t);
   const { calls, effects } = harness();
