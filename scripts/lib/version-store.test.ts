@@ -547,3 +547,49 @@ test("resetting a staged version clears it without giving up the claim", (t) => 
     "0.3.14-aaaaaaaaaaaa",
   );
 });
+
+test("a version the service died on is remembered by what it was built from", (t) => {
+  const root = home(t);
+  const store = createVersionStore(root);
+  const marker = join(layoutFor(root).data, "live-failures.json");
+
+  store.recordLive("0.3.15-bbbbbbbbbbbb+aaaa1111", false);
+
+  // A rebuild of the same commit with the same files is the same code: the build
+  // number is all that differs, and it is not what killed the service.
+  assert.equal(store.liveFailed("0.3.15-bbbbbbbbbbbb+aaaa1111"), true);
+  assert.equal(store.liveFailed("0.3.15-bbbbbbbbbbbb+aaaa1111~7"), true);
+  // A different customization, and the same customization on a different commit,
+  // are versions nothing is known about yet.
+  assert.equal(store.liveFailed("0.3.15-bbbbbbbbbbbb+aaaa2222"), false);
+  assert.equal(store.liveFailed("0.3.16-cccccccccccc+aaaa1111"), false);
+  assert.equal(store.liveFailed("0.3.15-bbbbbbbbbbbb"), false);
+  assert.equal(store.liveFailed("not-a-version"), false);
+
+  // Coming up on it is what takes the record away, and only that record.
+  store.recordLive("0.3.16-cccccccccccc", false);
+  store.recordLive("0.3.15-bbbbbbbbbbbb+aaaa1111", true);
+  assert.equal(store.liveFailed("0.3.15-bbbbbbbbbbbb+aaaa1111"), false);
+  assert.equal(store.liveFailed("0.3.16-cccccccccccc"), true);
+
+  // The file cannot grow without bound on a box that keeps failing, and a
+  // successful update that has nothing to forget does not rewrite it.
+  for (let at = 0; at < 20; at++)
+    store.recordLive(
+      `0.3.17-dddddddddddd+${String(at).padStart(8, "0")}`,
+      false,
+    );
+  const written = readFileSync(marker, "utf8");
+  const body = JSON.parse(written) as { failed: string[] };
+  assert.equal(body.failed.length, 8);
+  assert.equal(store.liveFailed("0.3.17-dddddddddddd+00000019"), true);
+  assert.equal(store.liveFailed("0.3.17-dddddddddddd+00000000"), false);
+  store.recordLive("0.3.18-eeeeeeeeeeee", true);
+  assert.equal(readFileSync(marker, "utf8"), written);
+
+  // A marker somebody truncated or hand-edited is "nothing is known", never a crash.
+  writeFileSync(marker, "{ not json");
+  assert.equal(store.liveFailed("0.3.17-dddddddddddd+00000019"), false);
+  store.recordLive("0.3.17-dddddddddddd+00000019", false);
+  assert.equal(store.liveFailed("0.3.17-dddddddddddd+00000019"), true);
+});

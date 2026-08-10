@@ -17,6 +17,9 @@ import { parseEnvText } from "./env-file.ts";
 
 const INCOMPLETE = ".iva-incomplete";
 const SETTLED = "active.json";
+const LIVE_FAILURES = "live-failures.json";
+/** Enough for the versions on disk and the releases a box works through. */
+const FAILURES_KEPT = 8;
 const LOCK = "update.lock";
 const STALE_MS = 60 * 60 * 1000;
 const FLIP_PREFIX = ".current.iva-flip-";
@@ -88,6 +91,16 @@ export function parseVersionName(name: string) {
 export function releaseOf(name: string): string {
   const at = parseVersionName(name);
   return at ? versionName(at.version, at.sha, at.overlay) : name;
+}
+
+/**
+ * What a version is built out of: the commit and the user's files. Two builds
+ * with one key run the same code, so what one of them did to the service the
+ * other does again - the build number is the only thing that tells them apart.
+ */
+function inputsOf(name: string): string | null {
+  const at = parseVersionName(name);
+  return at ? `${at.sha}+${at.overlay ?? ""}` : null;
 }
 
 /** Through a file, not a pipe: two joined processes are a second failure mode. */
@@ -238,6 +251,38 @@ export function createVersionStore(home: string) {
     });
   }
 
+  function liveFailures(): string[] {
+    const failed = readJson(join(layout.data, LIVE_FAILURES)).failed;
+    return Array.isArray(failed)
+      ? failed.filter((key): key is string => typeof key === "string")
+      : [];
+  }
+
+  /**
+   * Has this code already been flipped in and left the service dead? A build that
+   * did is not one to install again: it takes the installation down for a whole
+   * health deadline and rolls back, every time, for as long as it is on disk.
+   */
+  function liveFailed(name: string): boolean {
+    const key = inputsOf(name);
+    return key !== null && liveFailures().includes(key);
+  }
+
+  /** What the service did on the version just flipped in, by what it was built from. */
+  function recordLive(name: string, ok: boolean): void {
+    const key = inputsOf(name);
+    if (key === null) return;
+    const before = liveFailures();
+    const kept = before.filter((one) => one !== key);
+    if (ok && kept.length === before.length) return; // Nothing to forget.
+    if (!ok) kept.push(key);
+    mkdirSync(layout.data, { recursive: true });
+    writeJson(join(layout.data, LIVE_FAILURES), {
+      schema: "iva-live-failures/v1",
+      failed: kept.slice(-FAILURES_KEPT),
+    });
+  }
+
   /** Remove what an interrupted update can leave behind. Never touches a version. */
   function sweep(): string[] {
     const stale = names().filter(
@@ -350,6 +395,8 @@ export function createVersionStore(home: string) {
     activate,
     settled,
     settle,
+    liveFailed,
+    recordLive,
     sweep,
     gc,
     heal,
