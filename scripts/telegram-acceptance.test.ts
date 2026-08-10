@@ -16,13 +16,13 @@ import {
   enqueueItem,
   queueHead,
   removeQueueHead,
-} from "../../scripts/lib/telegram-queue.ts";
+} from "./lib/telegram-queue.ts";
 import {
   addTelegramQueueReceipt,
   handleAcceptedTelegramWebhook,
   TELEGRAM_QUEUE_RECEIPT_FIELD,
   wrapTelegramQueueOnMessage,
-} from "./telegram-acceptance.ts";
+} from "#lib/telegram-acceptance.ts";
 
 const WEBHOOK_SECRET = "test-secret";
 type TestUpdate = {
@@ -86,7 +86,7 @@ process.env.TELEGRAM_BOT_TOKEN = fakeBotToken(999, "acceptance-default");
 process.env.TELEGRAM_WEBHOOK_SECRET_TOKEN = WEBHOOK_SECRET;
 process.env.TELEGRAM_ALLOWED_USER_IDS = "42";
 process.env.TELEGRAM_POLL_SETTLE_MS = "0";
-const pollModulePath = "../../scripts/telegram-poll.mjs";
+const pollModulePath = "./telegram-poll.mjs";
 const { drainReadyQueueHeads } = (await import(pollModulePath)) as {
   drainReadyQueueHeads: DrainReadyQueueHeads;
 };
