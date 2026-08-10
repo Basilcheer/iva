@@ -18,8 +18,9 @@ import {
   isAssistantBearer,
 } from "../lib/assistant-auth.ts";
 import { writeEnvAtomicSync } from "../lib/env-file.ts";
-import { authFilePath, readAuth } from "#lib/codex-auth.ts";
 import {
+  authFilePath,
+  readAuth,
   runDeviceCodeLogin,
   runBrowserLogin,
   listCodexModels,

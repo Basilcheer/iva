@@ -3,10 +3,11 @@
 // для мастеров /model и setup. Остаётся в scripts/, потому что `iva login` обязан работать на
 // инсталле без авторского дерева — см. docs/tech-debt.md.
 //
-// Вторая половина шва — agent/lib/codex-auth.ts: чтение того же файла, рефреш токена и
-// заголовки запроса, то есть всё, что нужно самому агенту в рантайме. Импортировать её отсюда
-// на этапе загрузки нельзя (её тут может не быть), поэтому протокольные константы, атомарная
-// запись и разбор id_token повторены здесь самодостаточно; расхождение ловит
+// Вторая половина шва — agent/lib/codex-auth.ts: рефреш токена и заголовки запроса, то есть
+// всё, что нужно самому агенту в рантайме. Импортировать её отсюда на этапе загрузки нельзя
+// (её тут может не быть — мастер setup грузится и на инсталле без agent/), поэтому
+// протокольные константы, путь к файлу токена, его чтение, атомарная запись и разбор
+// id_token повторены здесь самодостаточно; расхождение ловит
 // scripts/lib/codex-auth-seam.test.ts. Каталог моделей нужен только на полном инсталле, и его
 // половину заголовков подтягивает ленивый импорт внутри самого вызова.
 // Чистый ESM, только node-builtins (crypto/fs/http/child_process).
@@ -15,7 +16,13 @@
 //   auth-домен  https://auth.openai.com     device-code + browser-PKCE
 //   API-домен   https://chatgpt.com/backend-api/codex   /models
 import { createHash, randomBytes } from "node:crypto";
-import { chmodSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  writeFileSync,
+} from "node:fs";
 import { createServer } from "node:http";
 import type { Server } from "node:http";
 import { spawn } from "node:child_process";
@@ -54,12 +61,14 @@ type TokenResponse = {
 };
 type LoginPort = { server: Server; port: number };
 
-// Протокольные константы OAuth, повторённые из agent/lib/codex-auth.ts (см. шапку).
-const ISSUER = "https://auth.openai.com";
-const CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"; // публичный client_id Codex CLI
-const TOKEN_URL = `${ISSUER}/oauth/token`;
+// Протокольные константы OAuth, повторённые из agent/lib/codex-auth.ts (см. шапку). Экспорт —
+// ради шва: scripts/lib/codex-auth-seam.test.ts сверяет обе копии, иначе ротация client_id на
+// одной стороне оставила бы сьют зелёным и сломала вход или почасовой рефреш.
+export const ISSUER = "https://auth.openai.com";
+export const CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"; // публичный client_id Codex CLI
+export const TOKEN_URL = `${ISSUER}/oauth/token`;
 const SCOPE = "openid profile email offline_access";
-const ORIGINATOR = "codex_cli_rs";
+export const ORIGINATOR = "codex_cli_rs";
 const DEVICE_PORT = 1455; // codex-совместимый redirect-порт (fallback 1457)
 const FALLBACK_PORT = 1457;
 
@@ -69,9 +78,20 @@ const MODELS_FETCH_TIMEOUT_MS = 10_000;
 // Язык подсказок входа (en по умолчанию — как у codex CLI). Мастер/CLI прокидывают lang.
 const tr = (lang: string, en: string, ru: string) => (lang === "ru" ? ru : en);
 
-// ── запись токена (копия из agent/lib/codex-auth.ts: агент читает и перезаписывает тот же файл) ──
-function authFilePath(dataDir: string): string {
+// ── файл токена (копия из agent/lib/codex-auth.ts: агент читает и перезаписывает тот же файл) ──
+export function authFilePath(dataDir = defaultDir()): string {
   return join(dataDir, "codex-auth.json");
+}
+
+// Мастер setup спрашивает «вход уже есть?» и печатает план подписки, а запускают его в том
+// числе install.sh и `iva config` — на инсталле, где авторского дерева может не быть. Битый
+// файл читается как «входа нет»: перелогиниться мастер и так предложит.
+export function readAuth(dataDir = defaultDir()): CodexAuth | null {
+  try {
+    return JSON.parse(readFileSync(authFilePath(dataDir), "utf8")) as CodexAuth;
+  } catch {
+    return null;
+  }
 }
 
 // Атомарная запись 0600 (temp + rename) — секрет не должен мелькнуть с широкими правами,

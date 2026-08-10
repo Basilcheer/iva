@@ -35,9 +35,12 @@ consumers reach them through the `#lib/` alias instead of the other way around.
 
 What made the last ten closable is the seam, not a move. `iva` has to work on an install
 whose `agent/` is missing or half-written — that is the state `iva repair` exists for
-(ADR-0003) — so every module the CLI **loads** stays in `scripts/`, every module the
-authored tree needs lives in `agent/lib`, and neither side reaches the other while
-loading. Three shapes, in descending order of preference:
+(ADR-0003) — so every module those processes **load** stays in `scripts/`, every module the
+authored tree needs lives in `agent/lib`, and neither side reaches the other while loading.
+"Those processes" is wider than `scripts/cli/*`: the guard's load-time walk stops at a
+child process, so it also seeds the ones spawned separately — the setup wizard
+(`iva config` → `scripts/setup.mjs`, and `install.sh`) and the daily update check unit.
+Three shapes, in descending order of preference:
 
 - **A plain move**, where nothing in `scripts/cli/*` loads the module: `core-cap` and
   `core-clamp` (only the nightly rollup and doctor read them), `card-text` (its one
@@ -55,10 +58,11 @@ loading. Three shapes, in descending order of preference:
   `agent/lib/eve-health.ts` reads it), the retired systemd unit names
   (`scripts/lib/legacy-memory-units.ts`), the IANA-zone predicate
   (`scripts/lib/timezone.ts`, needed by the synchronous `writeUnits()`), the canonical
-  reasoning vocabulary, and the Codex OAuth constants plus the atomic 0600 token write —
-  `iva login` must run without the authored tree, so `scripts/lib/codex-oauth.ts` keeps
-  the sign-in flows while `agent/lib/codex-auth.ts` owns reading, refreshing and signing
-  requests with the result. Each pair is pinned by a test that imports both halves
+  reasoning vocabulary, and the Codex OAuth constants plus the token file (its path, its
+  atomic 0600 write and the read the setup wizard needs) — `iva login` and the wizard must
+  run without the authored tree, so `scripts/lib/codex-oauth.ts` keeps the sign-in flows
+  while `agent/lib/codex-auth.ts` owns refreshing the token and signing requests with it.
+  Each pair is pinned by a test that imports both halves
   (`scripts/lib/{timezone,reasoning-levels,health-probe,codex-auth-seam}.test.ts`,
   `agent/lib/schedule-migration.test.ts`), the way `usage` shares only its log path and
   `scripts/lib/usage.test.ts` round-trips it. A pair without such a test is drift waiting

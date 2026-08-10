@@ -137,13 +137,23 @@ function loadTimeSpecifiers(source: string): string[] {
   return specifiers;
 }
 
+// Processes that must load on an install whose `agent/` is missing, beyond `scripts/cli/*`.
+// The walk stops at a child process, so each one is seeded by hand: the setup wizard is a
+// separate node run (`iva config` → scripts/setup.mjs, and install.sh), and the daily update
+// check is a systemd unit — both are exactly the "broken tree" paths of ADR-0003.
+const SPAWNED_ENTRYPOINTS = [
+  "scripts/setup/main.ts",
+  "scripts/check-update.ts",
+];
+
 // Every edge the CLI would resolve at load time, as "importer -> specifier".
 function cliEdgesIntoAuthoredTree(): string[] {
   const edges: string[] = [];
   const seen = new Set<string>();
   const queue = readdirSync(join(ROOT, "scripts/cli"))
     .filter((name) => name.endsWith(".ts") && !name.endsWith(".test.ts"))
-    .map((name) => posix.join("scripts/cli", name));
+    .map((name) => posix.join("scripts/cli", name))
+    .concat(SPAWNED_ENTRYPOINTS);
   while (queue.length > 0) {
     const file = queue.shift() as string;
     if (seen.has(file)) continue;
