@@ -630,9 +630,6 @@ async function processMediaPart(
   }
 }
 
-// Разметка, нарезка на чанки и гейт — внутри Outbox (agent/lib/outbox.ts), тот же шов
-// использует cron. Импорт выше.
-
 // --- ESC-остановка хода (аналог ESC в Claude Code) ---
 //
 // turn.started шлёт «⏳ Работаю…» с кнопкой [⏹ Стоп] и пишет running+sessionId+turnId
