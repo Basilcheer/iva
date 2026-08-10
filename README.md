@@ -161,7 +161,15 @@ Default model is deepseek-v4-pro, 131k context. On Go it runs about $9/mo all-in
 ## What's New
 
 <details>
-<summary><b>v0.3.14 · 09.08.2026 — expand the latest releases</b></summary>
+<summary><b>v0.3.15 · 10.08.2026 — expand the latest releases</b></summary>
+
+### 10.08.2026
+
+#### v0.3.15
+
+- An update is now built next to the running version instead of on top of it: the new version is health-checked on its final paths before anything switches, and activation is a single flip. An update that breaks off halfway leaves your working install untouched, and `iva rollback` puts the previous version back.
+- Your data (`data/`, `vault/`, `.env`) now lives outside the code, and your own files in `data/custom` are applied when a version is built — a broken customization no longer takes the service down; Iva starts on the stock build and tells you about it.
+- Memory cards keep an honest archive: history and log lines are written by the tool alone, so the model can't invent a past that never happened; repeated or stale rewrites are refused instead of piling up duplicates, and `memory doctor` names the cards left with an open code fence.
 
 ### 09.08.2026
 
@@ -178,21 +186,6 @@ Default model is deepseek-v4-pro, 131k context. On Go it runs about $9/mo all-in
 - Iva's Node code and tests are now TypeScript end to end. Five tiny compatibility launchers keep the existing CLI, installer and service paths unchanged.
 - The migration added stricter linting, type checks and coverage gates, while follow-up checks preserve Telegram edge cases and accurate token-usage accounting.
 - The memory table of contents now rebuilds from the domains that actually exist, and shared parser fixtures keep the TypeScript and Python implementations in sync.
-
-### 05.08.2026
-
-#### v0.3.12
-
-- One-off reminders arrive again — the system timer crashed before the message could be sent; delivery now stays on a stock-Node-compatible path.
-- Vault health no longer decays from raw daily transcripts — the score counts only the cards Iva actually maintains; an "up" link to a not-yet-created weekly summary isn't broken until its scheduled day, and audio attachments aren't broken links at all.
-- Cards no longer pile up dated "## Update" sections — writes carry explicit operations now: one Log, one Related, displaced facts go to a dated History; the nightly cleanup migrates old piles on its own.
-
-#### v0.3.11
-
-- Re-sent and queued photos/files are no longer processed twice — one message, one blob, one reply, even while Iva is busy (and no repeated paid vision/transcription calls).
-- New `documents` skill — send a PDF, DOCX or XLSX and Iva reads it and answers on its content; on request it files the document into your vault library, searchable by meaning.
-- Nightly memory and the Telegram queue are hardened against rare failures: a corrupted service file or an unlucky restart no longer loses a night of memory or your queued messages.
-- File-processing errors never leak service details into the chat anymore.
 
 </details>
 
