@@ -10,7 +10,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tr } from "./i18n.ts";
-import { redactNotice } from "./outbox.ts";
+import { redactNotice, type NoticeSend } from "./outbox.ts";
 import { sanitizeInbound } from "./security-gate.ts";
 import {
   getTelegramMediaCacheEntry,
@@ -26,8 +26,9 @@ export type TelegramMediaEffects = {
     method: string,
     body?: { file_id: string },
   ) => Promise<{ body: unknown }>;
-  // Служебная реплика самого канала (файл >20MB, сбой обработки) — мимо Outbox.
-  readonly sendMessage: (text: string) => Promise<unknown>;
+  // Служебная реплика самого канала (файл >20MB, сбой обработки) — мимо Outbox, но
+  // не мимо гейта: отправку канал обязан отдать через noticeSender (см. outbox.ts).
+  readonly sendMessage: NoticeSend;
   readonly describeImage: (
     bytes: ArrayBuffer,
     mimeType?: string,

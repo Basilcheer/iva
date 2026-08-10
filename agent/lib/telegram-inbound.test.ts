@@ -20,6 +20,9 @@ const modulePath = fileURLToPath(
 const inbound = (await import(
   pathToFileURL(modulePath).href
 )) as typeof import("./telegram-inbound.ts");
+// Тот же шов, которым канал оборачивает отправку: коллектор видит текст ровно таким,
+// каким его получил бы Bot API.
+const { noticeSender } = await import("./outbox.ts");
 
 type Message = Parameters<typeof inbound.runTelegramInbound>[0];
 type Effects = Parameters<typeof inbound.runTelegramInbound>[1];
@@ -86,10 +89,10 @@ function harness(overrides: Partial<Effects> = {}) {
         body: { result: { file_path: "photos/file.jpg" } },
       });
     },
-    sendMessage: (text) => {
+    sendMessage: noticeSender((text) => {
       calls.sent.push(text);
       return Promise.resolve(null);
-    },
+    }),
     startTyping: () => {
       calls.typing += 1;
       return Promise.resolve();

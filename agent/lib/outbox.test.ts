@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  noticeSender,
   redactNotice,
   sendThroughOutbox,
   type OutboxAck,
@@ -419,4 +420,34 @@ await test("redactNotice чистит многострочное уведомл�
   const text = redactNotice(`line one\nline two ${planted}\nline three`);
 
   assert.equal(text, "line one\nline two [REDACTED]\nline three");
+});
+
+// noticeSender — тот самый шов служебных реплик: гейт приклеен к вызову Bot API,
+// а не к месту, где текст собрали.
+await test("noticeSender гейтит текст по дороге к транспорту и отдаёт его ответ", async (t) => {
+  captureErrors(t);
+  const sent: string[] = [];
+  const send = noticeSender((text) => {
+    sent.push(text);
+    return Promise.resolve({ ok: true });
+  });
+
+  const ack = await send(`сборка упала: api_key=${"z".repeat(24)}`);
+
+  assert.deepEqual(sent, ["сборка упала: [REDACTED]"]);
+  assert.deepEqual(ack, { ok: true });
+});
+
+await test("noticeSender переживает пустую и многострочную реплику", async (t) => {
+  captureErrors(t);
+  const sent: string[] = [];
+  const send = noticeSender((text) => {
+    sent.push(text);
+    return Promise.resolve(null);
+  });
+
+  await send("");
+  await send(`строка\nвторая api_key=${"z".repeat(24)}\nтретья`);
+
+  assert.deepEqual(sent, ["", "строка\nвторая [REDACTED]\nтретья"]);
 });

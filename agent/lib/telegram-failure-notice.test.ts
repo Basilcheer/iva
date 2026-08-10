@@ -1,18 +1,21 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { noticeSender } from "./outbox.ts";
 import {
   notifyTelegramFailure,
   telegramFailureMessage,
 } from "./telegram-failure-notice.ts";
 
+// Собираем ровно то, что увидел бы Bot API: отправку модуль принимает только
+// брендованную, поэтому коллектор оборачивается тем же швом, что и канал.
 function collector() {
   const sent: string[] = [];
   return {
     sent,
-    send: (text: string) => {
+    send: noticeSender((text: string) => {
       sent.push(text);
       return Promise.resolve(null);
-    },
+    }),
   };
 }
 
@@ -44,7 +47,7 @@ await test("несостоявшаяся отправка возвращает �
   await notifyTelegramFailure(
     "s-4",
     data,
-    () => Promise.reject(new Error("Telegram 502")),
+    noticeSender(() => Promise.reject(new Error("Telegram 502"))),
     { now: 1_000 },
   );
   await notifyTelegramFailure("s-4", data, send, { now: 1_100 });
@@ -106,26 +109,60 @@ await test("пустая ошибка остаётся объяснимой, а 
   );
 });
 
-await test("секрет со второй строки не уезжает в чат вместе с деталями", (t) => {
+// errorId приходит из eve нетронутым: в самой реплике его никто не чистит, и до чата
+// он доезжает только через шов — ровно то свойство, ради которого шов и стоит.
+await test("секрет в errorId вычищается швом, а не сборкой текста", async (t) => {
   muteErrors(t);
+  const { sent, send } = collector();
 
-  const text = telegramFailureMessage({
-    message: `Provider returned a strange response\n${PLANTED_KEY}`,
-    details: { errorId: "err-9", note: PLANTED_KEY },
-  });
+  await notifyTelegramFailure(
+    "s-error-id",
+    {
+      message: "Provider returned a strange response",
+      details: { errorId: PLANTED_KEY },
+    },
+    send,
+    { now: 1_000 },
+  );
 
-  assert.doesNotMatch(text, /zzzz/u);
-  assert.match(text, /Error id: err-9/u);
+  assert.equal(sent.length, 1);
+  assert.doesNotMatch(sent[0], /zzzz/u);
+  assert.match(sent[0], /Error id: \[REDACTED\]/u);
 });
 
-await test("телеграм-токен и ключ в одной ошибке редактятся оба", (t) => {
+await test("многострочная ошибка: в чат уходит первая строка, и та без секрета", async (t) => {
   muteErrors(t);
+  const { sent, send } = collector();
 
-  const text = telegramFailureMessage({
-    message: `bot ${PLANTED_BOT_TOKEN} rejected: ${PLANTED_KEY}`,
-  });
+  await notifyTelegramFailure(
+    "s-multiline",
+    {
+      message: `Provider returned a strange response ${PLANTED_KEY}\nstack line ${PLANTED_KEY}`,
+      details: { errorId: "err-9" },
+    },
+    send,
+    { now: 1_000 },
+  );
 
-  assert.doesNotMatch(text, /zzzz/u);
-  assert.doesNotMatch(text, /AAAA/u);
-  assert.match(text, /\[REDACTED\]/u);
+  assert.equal(sent.length, 1);
+  assert.doesNotMatch(sent[0], /zzzz/u);
+  assert.doesNotMatch(sent[0], /stack line/u);
+  assert.match(sent[0], /Error id: err-9/u);
+});
+
+await test("телеграм-токен и ключ в одной ошибке редактятся оба", async (t) => {
+  muteErrors(t);
+  const { sent, send } = collector();
+
+  await notifyTelegramFailure(
+    "s-both",
+    { message: `bot ${PLANTED_BOT_TOKEN} rejected: ${PLANTED_KEY}` },
+    send,
+    { now: 1_000 },
+  );
+
+  assert.equal(sent.length, 1);
+  assert.doesNotMatch(sent[0], /zzzz/u);
+  assert.doesNotMatch(sent[0], /AAAA/u);
+  assert.match(sent[0], /\[REDACTED\]/u);
 });

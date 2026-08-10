@@ -13,12 +13,14 @@
 //   • реплика, в которую подставлен runtime-контент (текст ошибки, вывод команды,
 //     содержимое файла), проходит гейт ДО отправки — иначе секрет уезжает в чат в
 //     обход Outbox;
-//   • гейт стоит на вызове Bot API, а не во вьюхе над ним: у моста это tg() в
-//     scripts/poller/transport.ts, у апдейтера — call() в scripts/lib/telegram-status.ts,
-//     у Brain — своя отправка. Один вызов гейтит тикер, сводку, «уже идёт» и
-//     перерисовку разом, и следующий экран гейт забыть не сможет. Гейт на сборке
-//     текста остаётся там, где вызов Bot API принадлежит eve и обернуть нечего
-//     (telegram-failure-notice, telegram-media).
+//   • гейт стоит на вызове Bot API, а не во вьюхе над ним: у канала это noticeSender
+//     ниже, у моста — tg() в scripts/poller/transport.ts, у апдейтера — call() в
+//     scripts/lib/telegram-status.ts, у Brain — своя отправка. Один вызов гейтит
+//     тикер, сводку, «уже идёт» и перерисовку разом, и следующий экран гейт забыть
+//     не сможет;
+//   • отдельный гейт на СБОРКЕ текста остаётся ровно там, где текст потом режут
+//     (гист в error-humanizer, деталь ошибки в telegram-media): обрезанный ключ гейт
+//     уже не узнаёт, и его голова уехала бы в чат целой.
 // Речь только о том, что видит чат: вывод в терминал и journal (апдейтер печатает
 // туда ход сборки) гейт не проходит — там и так лежит полный лог.
 // Скрипты, которым авторское дерево недоступно на загрузке (CLI, апдейтер), берут
@@ -70,6 +72,23 @@ export function redactNotice(text: string): string {
       guard.findings.map((f) => `${f.type}:${f.name}`).join(", "),
     );
   return guard.text;
+}
+
+// Служебная реплика канала уходит одним сообщением, без нарезки и rich-пути, но не
+// мимо гейта: обёртка клеит гейт к самому вызову Bot API — как tg() у моста. Бренд на
+// типе делает шов обязательным, а не рекомендованным: NoticeSend собирается только
+// здесь, а эффекты inbound-пайплайна и уведомление о сбое просят именно его, поэтому
+// сырое замыкание над Bot API в них не подставить — tsgo отвергнет.
+export type NoticeSend = ((text: string) => Promise<unknown>) & {
+  readonly gated: "outbound";
+};
+
+export function noticeSender(
+  send: (text: string) => Promise<unknown>,
+): NoticeSend {
+  return Object.assign((text: string) => send(redactNotice(text)), {
+    gated: "outbound" as const,
+  });
 }
 
 export async function sendThroughOutbox(
