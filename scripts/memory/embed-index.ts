@@ -5,6 +5,8 @@
 // Эмбеддит карточки/саммари через один внешний ключ (Jina/DeepInfra, см. agent/lib/embeddings.ts),
 // пишет { model, vectors: { "<vault-rel-path>": number[] } }. Локальной модели/RAM нет.
 // Индекс — производный, не в vault (markdown остаётся портируемым); потерялся — пересобери.
+// Текст карточки берём из agent/lib/card-index.ts — там же его берут BM25-колонки
+// memory_search: в hybrid обе половины обязаны индексировать ОДНО и то же.
 import {
   readdirSync,
   readFileSync,
@@ -18,6 +20,7 @@ import {
   embeddingProviderName,
   hasEmbeddingKey,
 } from "../../agent/lib/embeddings.ts";
+import { embedText } from "../../agent/lib/card-index.ts";
 
 const VAULT = process.env.ASSISTANT_VAULT_DIR || "vault";
 const SCOPE = ["cards", "summaries", "weekly", "monthly", "yearly"];
@@ -52,29 +55,6 @@ function walk(dir: string, out: string[]): void {
   }
 }
 
-// Текст для эмбеддинга: заголовок + ключевые поля фронтматтера + начало тела (обрезаем).
-function embedText(file: string): string {
-  const raw = readFileSync(file, "utf8");
-  let fmMeta = "";
-  let body = raw;
-  if (raw.startsWith("---")) {
-    const end = raw.indexOf("\n---", 3);
-    if (end !== -1) {
-      const fm = raw.slice(3, end);
-      body = raw.slice(end + 4);
-      for (const line of fm.split("\n")) {
-        const m =
-          /^(name|company|role|description|tags|handle|aliases|title):\s*(.+)$/.exec(
-            line,
-          );
-        if (m) fmMeta += m[2] + " ";
-      }
-    }
-  }
-  const title = file.replace(/\.md$/, "").split(sep).pop() || "";
-  return `${title} ${fmMeta} ${body}`.slice(0, 2000);
-}
-
 const files: string[] = [];
 for (const d of SCOPE) {
   const abs = join(VAULT, d);
@@ -93,7 +73,7 @@ if (files.length === 0) {
 console.log(
   `embed-index: ${files.length} docs via ${embeddingProviderName()} …`,
 );
-const texts = files.map(embedText);
+const texts = files.map((file) => embedText(file, readFileSync(file, "utf8")));
 const vectors = await embedTexts(texts);
 
 const index: {

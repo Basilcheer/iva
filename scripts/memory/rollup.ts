@@ -6,18 +6,12 @@
 //
 // Requires: a running agent (eve start) and a vault to write into. The processing rules
 // (scripts/memory/instructions/) ship with the repo. Date is in ASSISTANT_TIMEZONE.
-import {
-  appendFileSync,
-  mkdirSync,
-  readFileSync,
-  renameSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Client, type MessageResult, type SessionState } from "eve/client";
 import { CORE_CAP } from "#lib/core-cap.ts";
+import { writeFileAtomicSync } from "#lib/fs-atomic.ts";
 import { notificationChat } from "../lib/notification-chat.ts";
 import {
   cancelTurnAndConfirmQuietly,
@@ -216,12 +210,10 @@ function loadSession(): { state: SessionState; createdAt: number } | null {
   }
 }
 
-// Атомарная запись (tmp + rename): курсор сессии не должен превращаться в полфайла.
+// Курсор сессии не должен превращаться в полфайла: следующий прогон прочитал бы
+// огрызок и бросил бы недособранную память.
 function saveSession(state: SessionState, createdAt: number): void {
-  mkdirSync(DATA_DIR, { recursive: true });
-  const tmp = `${SESSION_FILE}.tmp-${process.pid}`;
-  writeFileSync(tmp, JSON.stringify({ state, createdAt }), "utf8");
-  renameSync(tmp, SESSION_FILE);
+  writeFileAtomicSync(SESSION_FILE, JSON.stringify({ state, createdAt }));
 }
 
 // Брошенные сессии (ротация/несовместимый курсор) — в журнал: их run-обёртки остаются

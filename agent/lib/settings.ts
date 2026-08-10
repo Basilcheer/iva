@@ -3,11 +3,11 @@
 //
 // Зачем отдельный файл, а не .env: язык интерфейса меняется кнопкой в /menu и должен
 // применяться мгновенно, без рестарта, обоими процессами. Файл крошечный, пишем
-// атомарно (tmp+rename) — тот же приём, что run-status.ts, чтобы читатель никогда
-// не увидел полуфайл.
+// атомарно (fs-atomic.ts), чтобы читатель никогда не увидел полуфайл.
 
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { writeFileAtomicSync } from "./fs-atomic.ts";
 
 type Settings = Record<string, unknown>;
 
@@ -37,9 +37,6 @@ export function readSettings(): Settings {
 export function writeSettings(patch: Settings): Settings {
   const next = { ...readSettings(), ...patch };
   for (const k of Object.keys(next)) if (next[k] === null) delete next[k];
-  mkdirSync(DATA_DIR, { recursive: true });
-  const tmp = `${SETTINGS_FILE}.tmp`;
-  writeFileSync(tmp, JSON.stringify(next), "utf8");
-  renameSync(tmp, SETTINGS_FILE);
+  writeFileAtomicSync(SETTINGS_FILE, JSON.stringify(next));
   return next;
 }

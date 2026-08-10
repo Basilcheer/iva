@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import { createRequire } from "node:module";
 import { embedTexts, cosine, hasEmbeddingKey } from "../lib/embeddings.js";
+import { cardIndex, cardTitle } from "../lib/card-index.js";
 
 // node:sqlite — встроенный модуль (Node 24+). В ESM нет глобального require, поэтому
 // поднимаем его через createRequire; грузим лениво внутри bm25Search (с fallback, если нет).
@@ -44,23 +45,6 @@ interface Doc {
   source: string;
 }
 
-// Поля фронтматтера, несущие искомый смысл структурированных карточек (контакты/проекты).
-// Индексируем их отдельной колонкой с высоким весом — иначе поиск по имени/компании из
-// фронтматтера промахивается (в body их может не быть).
-const META_FIELDS = [
-  "name",
-  "company",
-  "role",
-  "description",
-  "handle",
-  "aliases",
-  "aka",
-  "title",
-  "platform",
-  "industry",
-  "domain",
-];
-
 async function walk(dir: string, out: string[]): Promise<void> {
   let entries;
   try {
@@ -77,24 +61,6 @@ async function walk(dir: string, out: string[]): Promise<void> {
       out.push(full);
     }
   }
-}
-
-// Крошечный парсер frontmatter — нужны только несколько скалярных полей. Не тянем YAML-либу.
-function parseFrontmatter(text: string): {
-  fm: Record<string, string>;
-  body: string;
-} {
-  if (!text.startsWith("---")) return { fm: {}, body: text };
-  const end = text.indexOf("\n---", 3);
-  if (end === -1) return { fm: {}, body: text };
-  const raw = text.slice(3, end);
-  const body = text.slice(end + 4);
-  const fm: Record<string, string> = {};
-  for (const line of raw.split("\n")) {
-    const m = /^([A-Za-z0-9_]+):\s*(.*)$/.exec(line);
-    if (m) fm[m[1].toLowerCase()] = m[2].trim().replace(/^["']|["']$/g, "");
-  }
-  return { fm, body };
 }
 
 export async function loadDocs(scopeDirs: string[]): Promise<Doc[]> {
@@ -116,14 +82,11 @@ export async function loadDocs(scopeDirs: string[]): Promise<Doc[]> {
     } catch {
       continue;
     }
-    const { fm, body } = parseFrontmatter(text);
+    const { fm, meta, body } = cardIndex(text);
     const rel = relative(vault, file).split(sep).join("/");
-    const meta = META_FIELDS.map((k) => fm[k])
-      .filter(Boolean)
-      .join(" ");
     docs.push({
       path: rel,
-      title: rel.replace(/\.md$/, "").split("/").pop() || rel,
+      title: cardTitle(rel) || rel,
       meta,
       body: body.slice(0, 8000),
       tags: fm.tags || "",

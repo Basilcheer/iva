@@ -8,14 +8,7 @@
 // Guards: no git-remote/credentials → alert admin on Telegram (gh auth login + git remote),
 // push is skipped. Health score drop → alert on Telegram. Plain Node orchestration.
 import { spawnSync } from "node:child_process";
-import {
-  copyFileSync,
-  existsSync,
-  readFileSync,
-  renameSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { copyFileSync, existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -115,6 +108,7 @@ interface CardTools {
   readonly coreCap: number;
   readonly clampCore: (text: string) => string;
   readonly scanUnclosedFenceCards: (vaultPath: string) => string[];
+  readonly writeFileAtomicSync: (path: string, data: string) => void;
 }
 
 // The CORE cap and the fence rules describe the card format, so they live in the authored
@@ -125,15 +119,17 @@ interface CardTools {
 // module resolution.
 async function loadCardTools(): Promise<CardTools | null> {
   try {
-    const [coreCap, coreClamp, fences] = await Promise.all([
+    const [coreCap, coreClamp, fences, fsAtomic] = await Promise.all([
       import("#lib/core-cap.ts"),
       import("#lib/core-clamp.ts"),
       import("./card-fences.ts"),
+      import("#lib/fs-atomic.ts"),
     ]);
     return {
       coreCap: coreCap.CORE_CAP,
       clampCore: coreClamp.clampCore,
       scanUnclosedFenceCards: fences.scanUnclosedFenceCards,
+      writeFileAtomicSync: fsAtomic.writeFileAtomicSync,
     };
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
@@ -232,22 +228,11 @@ if (!cards) {
 // This runs before git add/commit below, so a repaired CORE is included in the nightly backup.
 const corePath = resolve(VAULT, "CORE.md");
 if (cards && existsSync(corePath)) {
-  const { coreCap, clampCore } = cards;
+  const { coreCap, clampCore, writeFileAtomicSync } = cards;
   const oldCore = readFileSync(corePath, "utf8");
   if (oldCore.length > coreCap) {
     const newCore = clampCore(oldCore);
-    const tmp = `${corePath}.tmp-${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
-    try {
-      writeFileSync(tmp, newCore, "utf8");
-      renameSync(tmp, corePath);
-    } catch (error) {
-      try {
-        rmSync(tmp, { force: true });
-      } catch {
-        /* preserve the original write/rename failure */
-      }
-      throw error;
-    }
+    writeFileAtomicSync(corePath, newCore);
     console.warn(
       `doctor: CORE.md clamped ${oldCore.length} → ${newCore.length} chars (cap ${coreCap})`,
     );
