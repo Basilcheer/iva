@@ -220,6 +220,65 @@ await test("сбой одного чанка не хоронит остальн�
   assert.ok(sent.at(-1)?.text.includes("строка 399"));
 });
 
+await test("stop от транспорта обрывает доставку хвоста", async (t) => {
+  captureErrors(t);
+  const total = await chunkCount(LONG_MESSAGE);
+  const { sent, transport } = stub({
+    html: (_html, index) =>
+      index === 0
+        ? {
+            ok: false,
+            error: "429: flood control",
+            retryPlain: false,
+            stop: true,
+          }
+        : { ok: true },
+  });
+
+  const result = await sendThroughOutbox(LONG_MESSAGE, transport);
+
+  // Telegram душит бота — шов не долбит его оставшимися 45 запросами.
+  assert.ok(total > 1);
+  assert.deepEqual(result, {
+    ok: false,
+    delivered: 0,
+    fellBack: false,
+    error: "429: flood control",
+  });
+  assert.equal(sent.length, 1);
+});
+
+await test("stop на plain-повторе обрывает доставку хвоста", async (t) => {
+  captureErrors(t);
+  const total = await chunkCount(LONG_MESSAGE);
+  const { sent, transport } = stub({
+    html: (_html, index) =>
+      index === 0
+        ? { ok: false, error: "400: bad entities", retryPlain: true }
+        : { ok: true },
+    plain: () => ({
+      ok: false,
+      error: "403: bot was blocked",
+      retryPlain: false,
+      stop: true,
+    }),
+  });
+
+  const result = await sendThroughOutbox(LONG_MESSAGE, transport);
+
+  assert.ok(total > 1);
+  assert.deepEqual(result, {
+    ok: false,
+    delivered: 0,
+    fellBack: true,
+    error: "plain retry 403: bot was blocked",
+  });
+  assert.deepEqual(
+    sent.map((s) => s.kind),
+    ["html", "plain"],
+  );
+});
+
 await test("провал plain-повтора помечает шов, но доставка продолжается", async (t) => {
   captureErrors(t);
   const total = await chunkCount(LONG_MESSAGE);
