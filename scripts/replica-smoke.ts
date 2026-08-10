@@ -28,6 +28,9 @@ const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const MARKER = "CEDAR-4729";
 const RESET_MARKER = "CEDAR-5533";
 const UPGRADE_MARKER = "CEDAR-8140";
+// Ответ mock-провайдера, когда в транскрипте нет НИ ОДНОГО маркера CEDAR, то есть
+// история сессии пуста (scripts/lib/mock-openai-server.ts).
+const EMPTY_HISTORY_REPLY = "MISSING_MARKER";
 // Версия, на которую подменяется eve в durable-логе канарейкой апгрейда.
 const FORGED_EVE_VERSION = "0.0.0-forged";
 const HEALTH_TIMEOUT_MS = 90_000;
@@ -315,7 +318,7 @@ async function canaryReply(
 
 /**
  * Симулирует смену версии eve на месте. Шаги воркфлоу записаны в durable-лог вместе с
- * версией пакета (`step//eve@0.29.5//createSessionStep`), и при replay id сверяется
+ * версией пакета (`step//eve@0.30.8//createSessionStep`), и при replay id сверяется
  * строкой с текущим потребителем, — значит ЛЮБОЙ апгрейд eve роняет припаркованный run
  * с CORRUPTED_EVENT_LOG. Переписав версию в логе, смоук получает ровно ту же расходимость,
  * что и настоящая переустановка, но без второй копии eve в песочнице.
@@ -530,9 +533,23 @@ async function main(): Promise<void> {
     // Канарейка апгрейда. Каталог .eve/.workflow-data — installation-level состояние
     // (scripts/lib/version-store.ts), он переживает `iva update` и достаётся новой версии
     // ивы вместе с припаркованными разговорами. Шаги в нём приколочены к версии eve, так
-    // что смена версии гарантированно рушит replay, — сохранность истории тут проверить
-    // нельзя. Проверяем то, что действительно обязано выполняться на проде: после смены
-    // версии тот же токен НЕ залипает — сообщение принимается и на него приходит ответ.
+    // что смена версии гарантированно рушит replay припаркованного run.
+    //
+    // Исход апгрейда 0.29.5 → 0.30.8 подтверждён прогоном и прибит здесь намертво:
+    // старый continuation-токен НЕ воскрешает свою сессию — на нём заводится свежая,
+    // её история пуста (маркера нет), и ничего из старой истории не протекает. Любой
+    // другой исход — регрессия, а не «тоже нормально».
+    //
+    // В настоящем апгрейде к смене версии шагов добавляется вторая причина: 0.30.5 увёл
+    // session controls и follow-up-сообщения в единый durable command inbox. Ad-hoc
+    // delivery-хук 0.29.5 (`src/execution/session-delivery-hook.js`) в 0.30.8 отсутствует,
+    // токен инбокса теперь выводится из sessionId (`eve:session:<id>:inbox`,
+    // `src/execution/session-command-token.js`). Смоук подделывает только версию шагов —
+    // этого достаточно, чтобы получить ту же расходимость без второй копии eve.
+    //
+    // Итог: припаркованные диалоги после апгрейда начинаются заново. Это осознанный
+    // размен, задокументирован в CHANGELOG 0.3.16.
+    //
     // Ниже канарейка reset, потому что подмена версии убивает все припаркованные сессии.
     setPhase("upgrade-canary");
     const upgradeToken = `replica-upgrade:${randomBytes(6).toString("hex")}`;
@@ -556,23 +573,21 @@ async function main(): Promise<void> {
     await waitForHealth(port, eve);
 
     const upgraded = await canaryTurn(upgradeToken, recall);
-    if (upgraded.sessionId === upgradeSeed.sessionId) {
-      if (upgraded.reply !== UPGRADE_MARKER)
-        throw new Error(
-          `token resumed its pre-upgrade session but lost the history: ${JSON.stringify(upgraded.reply)}`,
-        );
-      console.log(
-        "replica smoke: eve version change kept the parked session OK",
+    if (upgraded.sessionId === upgradeSeed.sessionId)
+      throw new Error(
+        `token still resumes its pre-upgrade session after the version change: ${upgraded.sessionId}`,
       );
-    } else {
-      if (upgraded.reply.includes(UPGRADE_MARKER))
-        throw new Error(
-          `fresh post-upgrade session leaked the retired history: ${JSON.stringify(upgraded.reply)}`,
-        );
-      console.log(
-        `replica smoke: eve version change answers on the same token in a fresh session OK (history lost: ${upgraded.reply})`,
+    if (upgraded.reply.includes(UPGRADE_MARKER))
+      throw new Error(
+        `fresh post-upgrade session leaked the retired history: ${JSON.stringify(upgraded.reply)}`,
       );
-    }
+    if (upgraded.reply !== EMPTY_HISTORY_REPLY)
+      throw new Error(
+        `fresh post-upgrade session did not start empty: ${JSON.stringify(upgraded.reply)}`,
+      );
+    console.log(
+      `replica smoke: eve version change starts a fresh session on the same token, with no history carried over OK (reply: ${upgraded.reply})`,
+    );
 
     if (mock.requests.length < 3)
       throw new Error(
