@@ -1441,6 +1441,51 @@ test("fan-out процессов с одинаковым ADD дает одног
   assert.equal(existsSync(`${join(VAULT, file)}.lock`), false);
 });
 
+test("устаревший history_entry на новом теле отклоняется, а точный реплей остаётся noop", async () => {
+  const base = {
+    operation: "ADD",
+    type: "note",
+    title: "Устаревший history_entry",
+    description: "владелец Alice",
+    tags: ["note", "owner"],
+    body: "Owner: Alice.",
+  };
+  const created = await call(base);
+  assert.equal(created.ok, true);
+
+  const supersede = {
+    ...base,
+    operation: "SUPERSEDE",
+    description: "владелец Bob",
+    body: "Owner: Bob.",
+    history_entry: "2026-01-01: Owner: Alice.",
+  };
+  assert.equal((await call(supersede)).action, "replaced");
+  const archived = read(created.file);
+  assert.equal(archived.match(/- 2026-01-01: Owner: Alice\./g)!.length, 1);
+
+  // Тело меняется, а history_entry всё тот же: вытесняется уже Bob, но модель прислала
+  // строку про Alice. Дописать её нельзя (дубль), проглотить нельзя (Bob пропал бы) -
+  // отказ, карточка не тронута.
+  for (const history_entry of ["2026-01-01: Owner: Alice.", "Owner: Alice."]) {
+    const stale = await call({
+      ...supersede,
+      description: "владелец Carol",
+      body: "Owner: Carol.",
+      history_entry,
+    });
+    assert.equal(stale.ok, false, history_entry);
+    assert.match(stale.error, /still changes the card/);
+    assert.equal(read(created.file), archived, "карточка не тронута");
+  }
+
+  // Тот же вызов целиком - настоящий реплей: строка архива уже на месте, файл не переписан.
+  const replayed = await call(supersede);
+  assert.equal(replayed.action, "noop");
+  assert.equal(read(created.file), archived);
+  assert.equal(archived.match(/^## History$/gm)!.length, 1);
+});
+
 test("atomicWrite не оставляет временных файлов и пишет целиком", () => {
   const dir = join(VAULT, "cards", "notes");
   const file = join(dir, "atomic-probe.md");

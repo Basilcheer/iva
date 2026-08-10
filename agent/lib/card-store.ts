@@ -399,12 +399,18 @@ function collapseLogSections(body: string): string {
   return replaceH2Sections(body, "Log", sectionContent(body, "Log"));
 }
 
+interface CompiledTruthResult {
+  body: string;
+  /** historyEntry совпал с хвостом лежащего архива, поэтому строка НЕ дописана. */
+  suppressedAgainstArchive: boolean;
+}
+
 function replaceCompiledTruth(
   oldBody: string,
   replacement: string,
   historyEntry: string | undefined,
   date: string,
-): string {
+): CompiledTruthResult {
   const structural = new Set(["log", "history", "related"]);
   const oldLines = oldBody.split("\n");
   const replacementLines = replacement.split("\n");
@@ -498,6 +504,7 @@ function replaceCompiledTruth(
       ]);
     }
   }
+  let suppressedAgainstArchive = false;
   if (historyEntry?.trim()) {
     const dated = canonicalHistoryEntry(historyEntry, date);
     const pending = additions.get("history") ?? [];
@@ -505,7 +512,12 @@ function replaceCompiledTruth(
     // (секция принадлежит write_card), и реплей уже выполненного вызова подают
     // тот же факт вторым путём; хвост Истории решает, новый он или нет.
     const tail = pending.at(-1)?.trim() ?? lastHistoryEntry(oldBody);
-    if (!repeatsHistoryTail(historyEntry, dated, tail)) {
+    if (repeatsHistoryTail(historyEntry, dated, tail)) {
+      // Совпал с хвостом лежащего архива - строки нет ни в одном пути записи, и
+      // вызывающий обязан убедиться, что это реплей, а не потеря факта. Совпал с
+      // подаваемым суффиксом (легаси-путь) - факт пишется телом, терять нечего.
+      suppressedAgainstArchive = pending.length === 0;
+    } else {
       additions.set("history", [...pending, dated]);
     }
   }
@@ -534,7 +546,10 @@ function replaceCompiledTruth(
     if (output.length && output.at(-1)?.trim()) output.push("");
     output.push(...block.lines);
   }
-  return output.join("\n").replace(/\s+$/, "") + "\n";
+  return {
+    body: output.join("\n").replace(/\s+$/, "") + "\n",
+    suppressedAgainstArchive,
+  };
 }
 
 export type CardOperation = "ADD" | "UPDATE" | "SUPERSEDE" | "NOOP";
@@ -776,19 +791,20 @@ export function mergeCard(input: MergeInput): MergeResult {
 
   let newBody = operation === "UPDATE" ? collapseLogSections(oldBody) : oldBody;
   let appended = false;
-  // A confirmed-cancel rollup retry can replay the exact completed tool call. Only that
-  // fixed point is suppressed: the same canonical entry already ends History, so the
-  // truth behind it is displaced already. Global History dedup would destroy evidence.
-  const replayed =
-    operation === "SUPERSEDE" &&
-    !!historyEntry?.trim() &&
-    repeatsHistoryTail(
-      historyEntry,
-      canonicalHistoryEntry(historyEntry, date),
-      lastHistoryEntry(oldBody),
-    );
+  // A confirmed-cancel rollup retry can replay the exact completed tool call: the same
+  // canonical entry already ends History, so the truth behind it is displaced already and
+  // the entry is not written twice. Anything else that ends here is not a replay - see the
+  // fail-closed gate below. Global History dedup would destroy evidence.
+  let suppressedHistoryEntry = false;
   if (operation === "SUPERSEDE") {
-    newBody = `\n${replaceCompiledTruth(oldBody, trimmedBody, historyEntry, date).trim()}\n`;
+    const replaced = replaceCompiledTruth(
+      oldBody,
+      trimmedBody,
+      historyEntry,
+      date,
+    );
+    suppressedHistoryEntry = replaced.suppressedAgainstArchive;
+    newBody = `\n${replaced.body.trim()}\n`;
   } else if (!bodyContains(oldBody, trimmedBody)) {
     newBody = appendLog(newBody, trimmedBody, date);
     appended = true;
@@ -809,12 +825,20 @@ export function mergeCard(input: MergeInput): MergeResult {
   // `updated:`. Записать файл ради одной этой строки - выдать за изменение то, что
   // изменением не является, поэтому дату исключаем из сверки.
   const previousStamp = parsed.fields?.updated;
-  if (
-    replayed &&
-    (content === existing ||
-      (typeof previousStamp === "string" && render(previousStamp) === existing))
-  )
-    return { content: existing, action: "noop" };
+  if (suppressedHistoryEntry) {
+    if (
+      content === existing ||
+      (typeof previousStamp === "string" && render(previousStamp) === existing)
+    )
+      return { content: existing, action: "noop" };
+    // Карточка меняется, а строка архива подавлена как дубль хвоста - значит это не
+    // реплей, а устаревший historyEntry поверх нового тела: вытесняемый факт не назван
+    // и молча пропал бы. Отказ; модель обязана прислать факт, который вытесняет ЭТОТ вызов.
+    throw new Error(
+      "historyEntry already ends ## History but this SUPERSEDE still changes the card; " +
+        "send the fact this call displaces",
+    );
+  }
   return {
     content,
     action:
