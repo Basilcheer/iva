@@ -24,6 +24,7 @@ import {
   formatMegabytes,
   recordSkippedOversize,
   scanOversizeWorkingTreeFiles,
+  scanUnclosedFenceCards,
 } from "../lib/memory-maintenance.ts";
 import { notificationChat } from "../lib/notification-chat.ts";
 import { clampCore } from "./core-clamp.ts";
@@ -220,6 +221,25 @@ if (existsSync(corePath)) {
         `${oldCore.length} → ${newCore.length} chars. Pointers were preserved.${protectedOverflow}`,
     );
   }
+}
+
+// ── 1c. Cards with an unclosed code fence (report only, never repaired) ──
+// Such a card reads as one long code block: its ## History and ## Log are no longer
+// sections, so write_card refuses UPDATE and SUPERSEDE on it rather than write the fact
+// into code. Where the author meant to close the fence is unknowable, so doctor only names
+// the files - guessing would rewrite the user's text.
+const unclosed = scanUnclosedFenceCards(VAULT);
+if (unclosed.length) {
+  const shown = unclosed.slice(0, 10);
+  const rest = unclosed.length - shown.length;
+  const list = shown.map((path) => `- ${path}`).join("\n");
+  const message =
+    `vault: ${unclosed.length} карточек с незакрытым \`\`\` (${today}); ` +
+    "их ## History и ## Log читаются как код, поэтому write_card отказывает им в " +
+    `UPDATE и SUPERSEDE. Закрой фенс вручную:\n${list}` +
+    (rest ? `\n… и ещё ${rest}` : "");
+  console.warn(`doctor: ${message}`);
+  await telegram(message);
 }
 
 // ── 2. Detect health score drop ──
