@@ -20,10 +20,17 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import {
+  hasUnclosedFence,
+  outsideFences,
+  scanFences,
+} from "../../scripts/lib/card-text.ts";
+import {
   parseFrontmatter,
   writeFrontmatter,
   type FmFields,
 } from "./frontmatter.js";
+
+export { outsideFences } from "../../scripts/lib/card-text.ts";
 
 // ─── identity ──────────────────────────────────────────────────────────────
 
@@ -159,39 +166,6 @@ interface H2Section {
 interface NamedH2Section extends H2Section {
   heading: string;
   key: string;
-}
-
-function scanFences(lines: string[]): { outside: boolean[]; open: boolean } {
-  const outside = Array(lines.length).fill(true) as boolean[];
-  let fence: { marker: "`" | "~"; length: number } | null = null;
-  for (let index = 0; index < lines.length; index++) {
-    const line = lines[index];
-    if (fence) {
-      outside[index] = false;
-      const close = /^ {0,3}(`{3,}|~{3,})\s*$/.exec(line);
-      if (
-        close &&
-        close[1][0] === fence.marker &&
-        close[1].length >= fence.length
-      )
-        fence = null;
-      continue;
-    }
-    const open = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
-    if (!open || (open[1][0] === "`" && open[2].includes("`"))) continue;
-    outside[index] = false;
-    fence = { marker: open[1][0] as "`" | "~", length: open[1].length };
-  }
-  return { outside, open: fence !== null };
-}
-
-export function outsideFences(lines: string[]): boolean[] {
-  return scanFences(lines).outside;
-}
-
-/** Незакрытый фенс уводит остаток документа в код — заголовков за ним уже не видно. */
-function hasUnclosedFence(body: string): boolean {
-  return scanFences(body.split("\n")).open;
 }
 
 export function h2Sections(lines: string[], heading: string): H2Section[] {

@@ -9,6 +9,8 @@
 // Неизвестные ключи и их порядок сохраняются как есть: тул не знает про tier/relevance/
 // last_accessed/phone/telegram и не имеет права их терять.
 
+import { splitCard } from "../../scripts/lib/card-text.ts";
+
 export type FmValue = string | string[];
 export type FmFields = Record<string, FmValue>;
 
@@ -21,12 +23,10 @@ export interface ParsedFrontmatter {
 }
 
 export function parseFrontmatter(content: string): ParsedFrontmatter {
-  const text = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-  const m = /^---\n([\s\S]*?)\n---\n?([\s\S]*)$/.exec(text);
-  if (!m) return { fields: null, body: text, lines: [] };
+  const { frontmatter, body } = splitCard(content);
+  if (frontmatter === null) return { fields: null, body, lines: [] };
 
-  const rawLines = m[1].split("\n");
-  const body = m[2];
+  const rawLines = frontmatter.split("\n");
   const fields: Record<string, FmValue | null> = {};
   let multilineKey: string | null = null;
   let multilineMode: "fold" | "literal" | "list" | "pending" | null = null;
