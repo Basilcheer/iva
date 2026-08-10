@@ -1529,6 +1529,42 @@ test("открытый фенс в лежащей карточке отклон�
   assert.match(read(created.file), /^- \d{4}-\d{2}-\d{2}: Новый факт\.$/m);
 });
 
+test("гейт заголовков судит тело в форме хранения: ADD хранит как есть, UPDATE со сдвигом", async () => {
+  const { outsideFences } = (await import(
+    join(REPO, "agent", "lib", "card-store.ts")
+  )) as typeof import("../agent/lib/card-store.ts");
+  const realHeadings = (card: string, heading: string) => {
+    const lines = card.split("\n");
+    const outside = outsideFences(lines);
+    const wanted = new RegExp(`^ {0,3}##\\s+${heading}\\s*$`, "i");
+    return lines.filter((line, index) => outside[index] && wanted.test(line))
+      .length;
+  };
+  // Один и тот же фенс с отступом 2: ADD кладёт тело в карточку байт в байт, поэтому
+  // фенс остаётся фенсом и ## History внутри него - код. UPDATE сдвигает тело на два
+  // пробела под буллет Log, фенс уезжает на 4 и фенсом быть перестаёт.
+  const smuggled =
+    "Факт.\n\n  ```text\n## History\n- 2020-01-01: подделка\n  ```";
+  const base = {
+    operation: "ADD",
+    type: "note",
+    title: "Форма хранения тела",
+    description: "гейт судит то, что ляжет в карточку",
+    tags: ["note", "fence"],
+    body: smuggled,
+  };
+  const created = await call(base);
+  assert.equal(created.ok, true);
+  const stored = read(created.file);
+  assert.ok(stored.includes(smuggled), "тело ADD хранится байт в байт");
+  assert.equal(realHeadings(stored, "History"), 0, "пример остался кодом");
+
+  const rejected = await call({ ...base, operation: "UPDATE", body: smuggled });
+  assert.equal(rejected.ok, false);
+  assert.match(rejected.error, /must start every code fence at the line start/);
+  assert.equal(read(created.file), stored, "карточка не тронута");
+});
+
 test("atomicWrite не оставляет временных файлов и пишет целиком", () => {
   const dir = join(VAULT, "cards", "notes");
   const file = join(dir, "atomic-probe.md");
