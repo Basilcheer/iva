@@ -20,10 +20,14 @@ import { existsSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 
-// Type-only, so nothing from agent/ is linked here: scripts/cli/systemd.ts imports this
-// module just for LEGACY_MEMORY_UNITS and has to resolve on a scripts-only tree. The table
-// itself is loaded on the catch-up path below, which only ever runs from the agent.
-import type { ScheduleName, scheduleTimeOfDay } from "#lib/schedule-table.ts";
+// WHEN each period fires — time of day AND day constraint — comes from the schedule table
+// the eve schedules themselves read; this module restates none of it. The import is
+// type-only (erased), with the table itself loaded on the catch-up path below: scripts/cli/
+// systemd.ts imports this module just for LEGACY_MEMORY_UNITS, and the CLI also runs on
+// trees whose package.json carries no `imports` map, where a static `#lib/*` specifier
+// fails to resolve at load (scripts/cli/account-entrypoints.test.ts builds exactly such a
+// tree). The catch-up path only ever runs from the agent, where the table is right there.
+import type { ScheduleCron, ScheduleName } from "#lib/schedule-table.ts";
 
 import {
   readStatus,
@@ -97,8 +101,7 @@ export const LEGACY_MEMORY_UNITS: readonly string[] = [
 ];
 
 // How late a missed run may still be caught up, per period — a catch-up policy of this
-// module alone. WHEN each period fires comes from agent/lib/schedule-table.ts, the single
-// source the eve schedules themselves read.
+// module alone, not schedule metadata.
 const PERIOD_GRACE_MS: Record<Period, number> = {
   daily: 20 * 60 * 60 * 1000,
   weekly: 3 * 24 * 60 * 60 * 1000,
@@ -197,65 +200,44 @@ function addDaysToDate(
   };
 }
 
-function prevMonth(y: number, m: number): { y: number; m: number } {
-  return m === 1 ? { y: y - 1, m: 12 } : { y, m: m - 1 };
+// Does a plain Y-M-D calendar date satisfy the cron's date fields? The weekday does not
+// depend on tz once the calendar date itself is fixed. scheduleCron() refuses a cron that
+// constrains day-of-month and day-of-week at once, so there is no OR case to decide here.
+function matchesDate(
+  cron: ScheduleCron,
+  { y, m, d }: { y: number; m: number; d: number },
+): boolean {
+  if (cron.month !== null && cron.month !== m) return false;
+  if (cron.dayOfMonth !== null && cron.dayOfMonth !== d) return false;
+  if (cron.dayOfWeek === null) return true;
+  return cron.dayOfWeek === new Date(Date.UTC(y, m - 1, d)).getUTCDay(); // 0=Sun..6=Sat
 }
 
-// Monday=0 .. Sunday=6, from a plain Y-M-D calendar date (weekday does not depend on tz
-// once the calendar date itself is fixed).
-function mondayOffset(y: number, m: number, d: number): number {
-  const dow = new Date(Date.UTC(y, m - 1, d)).getUTCDay(); // 0=Sun..6=Sat
-  return (dow + 6) % 7;
-}
-
-// Returns the most recent scheduled UTC epoch ms for a period, at or before `nowMs`.
-function lastDueMs(
-  period: Period,
-  nowMs: number,
-  tz: string,
-  timeOfDay: typeof scheduleTimeOfDay,
-): number {
-  const { hour, minute } = timeOfDay(statusKey(period));
+// Returns the most recent scheduled UTC epoch ms for a cron, at or before `nowMs`: walk
+// back from today's local calendar date to the most recent date the cron matches, then
+// place its hour:minute in `tz`. Every field of the answer comes from the table, so a
+// cadence change there moves the catch-up point with it.
+function lastDueMs(cron: ScheduleCron, nowMs: number, tz: string): number {
   const today = zonedParts(nowMs, tz);
-
-  if (period === "daily") {
-    const candidate = zonedToUtcMs(today.y, today.m, today.d, hour, minute, tz);
-    if (candidate <= nowMs) return candidate;
-    const y = addDaysToDate(today.y, today.m, today.d, -1);
-    return zonedToUtcMs(y.y, y.m, y.d, hour, minute, tz);
+  let date = { y: today.y, m: today.m, d: today.d };
+  // Two years of days: more than the widest cadence in the table (yearly) plus a leap day.
+  for (let back = 0; back <= 732; back++) {
+    if (matchesDate(cron, date)) {
+      const candidate = zonedToUtcMs(
+        date.y,
+        date.m,
+        date.d,
+        cron.hour,
+        cron.minute,
+        tz,
+      );
+      if (candidate <= nowMs) return candidate;
+    }
+    date = addDaysToDate(date.y, date.m, date.d, -1);
   }
-  if (period === "weekly") {
-    const back = mondayOffset(today.y, today.m, today.d);
-    const monday = addDaysToDate(today.y, today.m, today.d, -back);
-    const candidate = zonedToUtcMs(
-      monday.y,
-      monday.m,
-      monday.d,
-      hour,
-      minute,
-      tz,
-    );
-    if (candidate <= nowMs) return candidate;
-    const prevMonday = addDaysToDate(monday.y, monday.m, monday.d, -7);
-    return zonedToUtcMs(
-      prevMonday.y,
-      prevMonday.m,
-      prevMonday.d,
-      hour,
-      minute,
-      tz,
-    );
-  }
-  if (period === "monthly") {
-    const candidate = zonedToUtcMs(today.y, today.m, 1, hour, minute, tz);
-    if (candidate <= nowMs) return candidate;
-    const prev = prevMonth(today.y, today.m);
-    return zonedToUtcMs(prev.y, prev.m, 1, hour, minute, tz);
-  }
-  // yearly
-  const candidate = zonedToUtcMs(today.y, 1, 1, hour, minute, tz);
-  if (candidate <= nowMs) return candidate;
-  return zonedToUtcMs(today.y - 1, 1, 1, hour, minute, tz);
+  throw new RangeError(
+    `no date in the last two years matches month ${cron.month}, day ${cron.dayOfMonth}, weekday ${cron.dayOfWeek}`,
+  );
 }
 
 // ── legacy unit teardown ─────────────────────────────────────────────────
@@ -346,9 +328,9 @@ export async function runScheduleMigration({
   try {
     if (!statusPath) return;
 
-    // WHEN each period fires comes from the schedule table the eve schedules themselves
-    // read — loaded here rather than at the top of the file, see the import note above.
-    const { scheduleTimeOfDay } = await import("#lib/schedule-table.ts");
+    // The schedule table, loaded here rather than at the top of the file — see the import
+    // note above. This is the only path that needs it, and it only runs from the agent.
+    const { scheduleCron } = await import("#lib/schedule-table.ts");
 
     const runPeriod =
       runJob ??
@@ -403,7 +385,7 @@ export async function runScheduleMigration({
         for (const period of PERIODS) {
           if (freshlySeeded.has(period)) continue;
           const graceMs = PERIOD_GRACE_MS[period];
-          const dueAt = lastDueMs(period, nowMs, tz, scheduleTimeOfDay);
+          const dueAt = lastDueMs(scheduleCron(statusKey(period)), nowMs, tz);
           const entry = seeded[statusKey(period)];
           // A real success always wins; otherwise fall back to the seeded baseline (if
           // any) so a freshly-seeded period doesn't immediately look "due" the moment

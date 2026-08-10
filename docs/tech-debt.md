@@ -99,12 +99,14 @@ schedule's cadence meant remembering to update up to three files by hand; a miss
 would make the menu display (or the catch-up math) silently wrong.
 
 RESOLVED: the table lives once, in `agent/lib/schedule-table.ts` (`SCHEDULE_CRON`), and
-all three read it — the schedule files take their `cron` from it, the migration derives the
-wall-clock catch-up point through `scheduleTimeOfDay()` (it keeps only its own per-period
-grace window, which is catch-up policy, not schedule metadata), and the menu renders the
-entries in table order. `agent/lib/schedule-table.test.ts` cross-checks the consumers
-against the table and fails if any cron expression reappears in another source file, so the
-copies cannot silently grow back.
+all three read it — the schedule files take their `cron` from it, the migration places its
+catch-up point with `scheduleCron()`, time of day and day constraint alike (it keeps only
+its own per-period grace window, which is catch-up policy, not schedule metadata), and the
+menu renders the entries in table order. `agent/lib/schedule-table.test.ts` cross-checks
+all three against the table — the migration through its behavior, by bisecting the point
+where a recorded success stops counting as stale and checking that instant against the cron
+— and fails if any cron expression reappears in another source file, so the copies cannot
+silently grow back.
 
 ## 12. scripts/autograph is a deliberate fork of smixs/autograph
 

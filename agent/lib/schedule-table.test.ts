@@ -15,10 +15,11 @@ import { fileURLToPath } from "node:url";
 // Registers the resolve hook that lets `await import()` follow the "./x.js" specifiers
 // agent/schedules/*.ts use (eve build rewrites them in production) — must come first.
 import "../../scripts/lib/ts-esm-hooks.ts";
+import { runScheduleMigration } from "../../scripts/lib/schedule-migration.ts";
 import {
   SCHEDULE_CRON,
   type ScheduleName,
-  scheduleTimeOfDay,
+  scheduleCron,
 } from "./schedule-table.ts";
 
 const REPO_ROOT = fileURLToPath(new URL("../../", import.meta.url));
@@ -60,13 +61,15 @@ void test("the table pins the cron expressions Iva ships with", () => {
   );
 });
 
-void test("scheduleTimeOfDay reads the wall-clock point off the cron string", () => {
-  assert.deepEqual(NAMES.map(scheduleTimeOfDay), [
-    { hour: 4, minute: 0 },
-    { hour: 4, minute: 15 },
-    { hour: 4, minute: 20 },
-    { hour: 4, minute: 25 },
-    { hour: 8, minute: 0 },
+// Also the guard on the table itself: a future entry with a list, range, step or two day
+// constraints at once makes scheduleCron throw, and it throws here, at desk time.
+void test("scheduleCron reads every entry off its cron string", () => {
+  assert.deepEqual(NAMES.map(scheduleCron), [
+    { minute: 0, hour: 4, dayOfMonth: null, month: null, dayOfWeek: null },
+    { minute: 15, hour: 4, dayOfMonth: null, month: null, dayOfWeek: 1 },
+    { minute: 20, hour: 4, dayOfMonth: 1, month: null, dayOfWeek: null },
+    { minute: 25, hour: 4, dayOfMonth: 1, month: 1, dayOfWeek: null },
+    { minute: 0, hour: 8, dayOfMonth: null, month: null, dayOfWeek: null },
   ]);
 });
 
@@ -82,6 +85,104 @@ void test("every schedule file takes its cron from the table", async () => {
       readonly default: { readonly cron: string };
     };
     assert.equal(module.default.cron, SCHEDULE_CRON[name]);
+  }
+});
+
+// The catch-up consumer never exposes the due point it computes; it only decides whether a
+// period runs, and it runs one exactly when the recorded success predates that point. So
+// bisect on that boundary through the public entry point and check the instant it converges
+// on against the cron the table names. A day constraint restated inside the migration — a
+// hardcoded Monday, a hardcoded 1st — instead of read from the table fails here.
+type Period = "daily" | "weekly" | "monthly" | "yearly";
+const PERIODS: readonly Period[] = ["daily", "weekly", "monthly", "yearly"];
+const MINUTE_MS = 60 * 1000;
+const HOUR_MS = 60 * MINUTE_MS;
+const DAY_MS = 24 * HOUR_MS;
+// Probing instant: 6h after a date the cron matches — inside every grace window the
+// migration keeps (20h at the narrowest), so a cadence change in the table moves the probe
+// with it instead of stranding it. The bisection window then only has to reach past 6h.
+const PROBE_AGE_MS = 6 * HOUR_MS;
+const PROBE_WINDOW_MS = 12 * HOUR_MS;
+
+function probeNow(cron: ReturnType<typeof scheduleCron>): number {
+  // August 4th 2026 stands in for whatever the cron leaves unconstrained.
+  let date = Date.UTC(2026, (cron.month ?? 8) - 1, cron.dayOfMonth ?? 4);
+  if (cron.dayOfWeek !== null)
+    date += ((cron.dayOfWeek - new Date(date).getUTCDay() + 7) % 7) * DAY_MS;
+  return date + cron.hour * HOUR_MS + cron.minute * MINUTE_MS + PROBE_AGE_MS;
+}
+
+async function catchUpRuns(
+  statusPath: string,
+  period: Period,
+  lastSuccessAt: number,
+  now: number,
+): Promise<boolean> {
+  const status: Record<string, { lastSuccessAt: number }> = {};
+  for (const other of PERIODS) {
+    // Every other period is recorded as succeeding at `now`, so only the one under test
+    // can come out due — and none of them gets seeded, which would skip it either way.
+    status[`memory-${other}`] = {
+      lastSuccessAt: other === period ? lastSuccessAt : now,
+    };
+  }
+  writeFileSync(statusPath, JSON.stringify(status));
+  const ran: Period[] = [];
+  await runScheduleMigration({
+    statusPath,
+    tz: "UTC",
+    now: () => now,
+    log: () => {},
+    runJob: (fired) => {
+      ran.push(fired);
+      return Promise.resolve();
+    },
+  });
+  return ran.includes(period);
+}
+
+void test("the migration catches a period up at the point the table's cron names", async (t) => {
+  const statusPath = join(temporaryDataDir(t), "rollup-status.json");
+  for (const period of PERIODS) {
+    const cron = scheduleCron(`memory-${period}`);
+    const now = probeNow(cron);
+    // Invariant of the bisection: `runs` is a baseline old enough to be caught up,
+    // `suppressed` is one recent enough not to be — the due point sits between them.
+    let runs = now - PROBE_WINDOW_MS;
+    let suppressed = now;
+    assert.ok(
+      await catchUpRuns(statusPath, period, runs, now),
+      `${period}: nothing was caught up 6h after the table says it fires`,
+    );
+    assert.ok(
+      !(await catchUpRuns(statusPath, period, suppressed, now)),
+      `${period}: a success recorded at "now" must leave nothing to catch up`,
+    );
+    while (suppressed - runs > 1) {
+      const mid = Math.floor((runs + suppressed) / 2);
+      if (await catchUpRuns(statusPath, period, mid, now)) runs = mid;
+      else suppressed = mid;
+    }
+
+    // The oldest success that still suppresses the catch-up IS the due point.
+    const dueAt = new Date(suppressed);
+    assert.equal(
+      dueAt.getUTCSeconds(),
+      0,
+      `${period}: due point is not on a minute`,
+    );
+    assert.equal(dueAt.getUTCMinutes(), cron.minute, `${period}: due minute`);
+    assert.equal(dueAt.getUTCHours(), cron.hour, `${period}: due hour`);
+    if (cron.dayOfWeek !== null)
+      assert.equal(dueAt.getUTCDay(), cron.dayOfWeek, `${period}: due weekday`);
+    if (cron.dayOfMonth !== null)
+      assert.equal(
+        dueAt.getUTCDate(),
+        cron.dayOfMonth,
+        `${period}: due day of month`,
+      );
+    if (cron.month !== null)
+      assert.equal(dueAt.getUTCMonth() + 1, cron.month, `${period}: due month`);
   }
 });
 
