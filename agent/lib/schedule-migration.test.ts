@@ -6,6 +6,7 @@ import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { LEGACY_MEMORY_UNITS as CLI_LEGACY_MEMORY_UNITS } from "../../scripts/lib/legacy-memory-units.ts";
 import {
   LEGACY_MEMORY_UNITS,
   runScheduleMigration,
@@ -53,7 +54,14 @@ function fakeExecImpl({
   return { execImpl, calls };
 }
 
-void test("LEGACY_MEMORY_UNITS lists exactly the 8 retired unit names", () => {
+// The server retires these units on boot and `iva doctor` sweeps the same eight from a tree
+// whose agent/ may be missing, so the list exists on both sides of the seam. Neither copy
+// may grow, shrink or rename a unit on its own.
+void test("LEGACY_MEMORY_UNITS lists exactly the 8 retired unit names, on both sides", () => {
+  assert.deepEqual(
+    [...LEGACY_MEMORY_UNITS].sort(),
+    [...CLI_LEGACY_MEMORY_UNITS].sort(),
+  );
   assert.deepEqual(
     [...LEGACY_MEMORY_UNITS].sort(),
     [
@@ -463,7 +471,7 @@ void test("style-matched integration: a real fake systemctl on PATH, tmpdir HOME
   await writeFile(
     script,
     [
-      `import { runScheduleMigration } from ${JSON.stringify(join(process.cwd(), "scripts/lib/schedule-migration.ts"))};`,
+      `import { runScheduleMigration } from ${JSON.stringify(join(process.cwd(), "agent/lib/schedule-migration.ts"))};`,
       `const statusPath = ${JSON.stringify(join(dir, "data/rollup-status.json"))};`,
       `await runScheduleMigration({ homedir: ${JSON.stringify(home)}, statusPath, tz: "UTC", log: () => {} });`,
       `process.exit(0);`,

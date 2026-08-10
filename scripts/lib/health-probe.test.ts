@@ -13,7 +13,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
+import { PROBE_FLAG as AUTHORED_PROBE_FLAG } from "#lib/eve-health.ts";
 import {
+  PROBE_FLAG,
   awaitServing,
   probeEnvironment,
   probeVersion,
@@ -287,4 +289,11 @@ test("a foreign server on the probe port never passes for the version", async (t
   const result = await probe(dir, {}, 3000);
   assert.equal(result.ok, false, result.log);
   assert.match(result.log, /the probe port was already answering/u);
+});
+
+// The updater writes the flag, the server-start hook reads it, and neither side can import
+// the other: the probe environment is built on a tree whose agent/ may be missing. One name,
+// two spellings, pinned here.
+test("the probe flag the updater writes is the one the authored tree reads", () => {
+  assert.equal(PROBE_FLAG, AUTHORED_PROBE_FLAG);
 });

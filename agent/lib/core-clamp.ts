@@ -1,4 +1,4 @@
-import { CORE_CAP } from "../lib/core-cap.ts";
+import { CORE_CAP } from "./core-cap.ts";
 
 type Section = "user" | "preferences" | "goals" | "pointers";
 

@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-floating-promises -- Node's test runner owns registrations. */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { PROBE_FLAG } from "../scripts/lib/health-probe.ts";
+import { PROBE_FLAG } from "./lib/eve-health.ts";
 import instrumentation from "./instrumentation.ts";
 
 /** Run the server-start hook with console output captured. */

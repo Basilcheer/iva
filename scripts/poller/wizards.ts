@@ -9,7 +9,8 @@ import {
   ModelValidationError,
   validateModelSelection,
 } from "../lib/model-validation.ts";
-import { getAccessToken, runDeviceCodeLogin } from "../lib/codex-oauth.ts";
+import { getAccessToken } from "#lib/codex-auth.ts";
+import { runDeviceCodeLogin } from "../lib/codex-oauth.ts";
 import { compactNumber, modelSummary } from "../lib/model-summary.ts";
 import { getLang, tr } from "#lib/i18n.ts";
 import { readEnvValues, upsertEnv } from "../lib/env-file.ts";

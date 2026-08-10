@@ -1,16 +1,24 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
+import { validateTimeZone as validateAuthored } from "#lib/timezone.ts";
 import { validateTimeZone } from "./timezone.ts";
 
-void test("timezone validation accepts a real IANA zone", () => {
-  assert.equal(validateTimeZone(" Asia/Tashkent "), "Asia/Tashkent");
-});
+// Обе копии предиката гоняются по ОДНОЙ таблице: authored tree проверяет зону на старте
+// сервера, scripts/ — когда `iva doctor` пишет юниты без каталога agent/. Разъехаться
+// молча они не могут: расхождение падает здесь.
+const CASES: readonly [unknown, string | null][] = [
+  [" Asia/Tashkent ", "Asia/Tashkent"],
+  ["Mars/Olympus", null],
+  [undefined, null],
+  ["", null],
+  ["   ", null],
+  ["UTC", "UTC"],
+];
 
-void test("timezone validation rejects a syntactically plausible unknown zone", () => {
-  assert.equal(validateTimeZone("Mars/Olympus"), null);
-});
-
-void test("timezone validation rejects an undefined value", () => {
-  assert.equal(validateTimeZone(undefined), null);
-});
+for (const [input, expected] of CASES) {
+  void test(`timezone validation agrees on ${JSON.stringify(input)}`, () => {
+    assert.equal(validateTimeZone(input), expected);
+    assert.equal(validateAuthored(input), expected);
+  });
+}

@@ -1,8 +1,8 @@
 import { defineDynamic, defineInstructions } from "eve/instructions";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { CORE_CAP } from "../../scripts/lib/core-cap.ts";
-import { clampCore } from "../../scripts/memory/core-clamp.ts";
+import { CORE_CAP } from "../lib/core-cap.ts";
+import { clampCore } from "../lib/core-clamp.ts";
 
 // Динамическая инструкция: каждый турн инжектит «ядро памяти» (vault/CORE.md) в системный
 // промпт — кто пользователь, постоянные предпочтения, активные цели, указатели. Это always-on

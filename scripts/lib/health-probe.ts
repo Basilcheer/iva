@@ -5,7 +5,13 @@ import { parseEnvText } from "./env-file.ts";
 import { DEFAULT_PORT } from "./ports.ts";
 
 const LOG_TAIL = 4000;
-/** Set for the probe only; the code that runs on boot reads it to stay passive. */
+/**
+ * Set for the probe only; the code that runs on boot reads it to stay passive. The reader
+ * is `agent/instrumentation.ts`, which carries the same name in `agent/lib/eve-health.ts`
+ * — `iva update` writes this environment on a tree whose `agent/` may be missing or
+ * half-written, so the writer cannot reach for the authored tree. The two spellings are
+ * pinned together in `scripts/lib/health-probe.test.ts`.
+ */
 export const PROBE_FLAG = "IVA_HEALTH_PROBE";
 const BUSY_PORT = "the probe port was already answering";
 

@@ -10,6 +10,7 @@ import {
 import { dirname } from "node:path";
 import { parseEnvText, writeEnvAtomicSync } from "./env-file.ts";
 import { validateModelSelection } from "./model-validation.ts";
+import type { ProbeEveHealthOptions } from "#lib/eve-health.ts";
 
 type Snapshot = {
   version: number;
@@ -158,57 +159,17 @@ export class ConfigTransactionError extends Error {
   }
 }
 
+// Опрос локального /eve/v1/health живёт в authored tree (agent/lib/eve-health.ts): туда же
+// на старте смотрит сам сервер. `iva config` обязан ГРУЗИТЬСЯ на инсталле, где каталога
+// agent/ нет, поэтому модуль подтягивается в том единственном вызове, которому он нужен.
+// Дерево без agent/ и так не поднимет сервис: провал импорта здесь ловит тот же catch, что
+// и таймаут проверки, и приводит к тому же откату конфигурации.
 export async function probeEveHealth(
   url: string,
-  {
-    fetchFn = fetch,
-    timeoutMs = 15_000,
-    intervalMs = 250,
-    now = Date.now,
-    sleep,
-  }: {
-    fetchFn?: typeof fetch;
-    timeoutMs?: number;
-    intervalMs?: number;
-    now?: () => number;
-    sleep?: (milliseconds: number) => Promise<void>;
-  } = {},
+  options?: ProbeEveHealthOptions,
 ): Promise<void> {
-  const parsed = new URL(url);
-  if (
-    !["127.0.0.1", "localhost", "::1"].includes(parsed.hostname) ||
-    parsed.pathname !== "/eve/v1/health"
-  ) {
-    throw new Error("health check must use the local /eve/v1/health route");
-  }
-  const wait =
-    sleep ??
-    ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
-  const deadline = now() + timeoutMs;
-  let lastStatus = null;
-  do {
-    try {
-      const remaining = Math.max(1, deadline - now());
-      const response = await fetchFn(parsed, {
-        method: "GET",
-        signal: AbortSignal.timeout(Math.min(2_000, remaining)),
-      });
-      lastStatus = response.status;
-      if (response.ok) return;
-    } catch {
-      // Connection failures are retried until the health-check deadline.
-    }
-    if (now() < deadline)
-      await wait(Math.min(intervalMs, Math.max(1, deadline - now())));
-  } while (now() < deadline);
-  throw Object.assign(
-    new Error(
-      lastStatus === null
-        ? "local Eve health check timed out"
-        : `local Eve health returned ${lastStatus}`,
-    ),
-    { code: "EHEALTH" },
-  );
+  const { probeEveHealth: probe } = await import("#lib/eve-health.ts");
+  return probe(url, options);
 }
 
 export async function recoverConfigTransaction(

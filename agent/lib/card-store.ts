@@ -19,18 +19,14 @@ import {
   writeSync,
 } from "node:fs";
 import { join } from "node:path";
-import {
-  hasUnclosedFence,
-  outsideFences,
-  scanFences,
-} from "../../scripts/lib/card-text.ts";
+import { hasUnclosedFence, outsideFences, scanFences } from "./card-text.ts";
 import {
   parseFrontmatter,
   writeFrontmatter,
   type FmFields,
 } from "./frontmatter.js";
 
-export { outsideFences } from "../../scripts/lib/card-text.ts";
+export { outsideFences } from "./card-text.ts";
 
 // ─── identity ──────────────────────────────────────────────────────────────
 

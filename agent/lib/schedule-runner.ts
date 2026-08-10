@@ -1,4 +1,4 @@
-// Thin spawner shared by agent/schedules/*.ts and scripts/lib/schedule-migration.ts.
+// Thin spawner shared by agent/schedules/*.ts and agent/lib/schedule-migration.ts.
 // Runs an existing cron script exactly the way the (now retired) systemd units did —
 // `flock -w 900 <lockPath> <nodeBin> --env-file=.env <argv...>` — under a hard timeout,
 // and records the outcome to a status file so `iva doctor` and the /menu → crons screen

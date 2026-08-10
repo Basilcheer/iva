@@ -18,16 +18,16 @@ import {
 } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { CORE_CAP } from "../lib/core-cap.ts";
+import { CORE_CAP } from "#lib/core-cap.ts";
 import {
   classifyGitPushError,
   formatMegabytes,
   recordSkippedOversize,
   scanOversizeWorkingTreeFiles,
-  scanUnclosedFenceCards,
 } from "../lib/memory-maintenance.ts";
 import { notificationChat } from "../lib/notification-chat.ts";
-import { clampCore } from "./core-clamp.ts";
+import { scanUnclosedFenceCards } from "./card-fences.ts";
+import { clampCore } from "#lib/core-clamp.ts";
 
 const VAULT = resolve(process.env.ASSISTANT_VAULT_DIR ?? "vault");
 // The autograph code lives in THIS repo, not in the vault: the vault is user data only.

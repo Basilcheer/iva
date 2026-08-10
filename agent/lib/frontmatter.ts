@@ -9,7 +9,7 @@
 // Неизвестные ключи и их порядок сохраняются как есть: тул не знает про tier/relevance/
 // last_accessed/phone/telegram и не имеет права их терять.
 
-import { splitCard } from "../../scripts/lib/card-text.ts";
+import { splitCard } from "./card-text.ts";
 
 export type FmValue = string | string[];
 export type FmFields = Record<string, FmValue>;

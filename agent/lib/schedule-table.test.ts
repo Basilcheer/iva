@@ -15,7 +15,7 @@ import { fileURLToPath } from "node:url";
 // Registers the resolve hook that lets `await import()` follow the "./x.js" specifiers
 // agent/schedules/*.ts use (eve build rewrites them in production) — must come first.
 import "../../scripts/lib/ts-esm-hooks.ts";
-import { runScheduleMigration } from "../../scripts/lib/schedule-migration.ts";
+import { runScheduleMigration } from "./schedule-migration.ts";
 import {
   SCHEDULE_CRON,
   type ScheduleCron,

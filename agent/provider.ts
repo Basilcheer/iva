@@ -1,10 +1,7 @@
 import { wrapLanguageModel, type LanguageModelMiddleware } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
-import {
-  CODEX_BASE_URL,
-  codexAuthHeaders,
-} from "../scripts/lib/codex-oauth.ts";
-import { EFFORTS } from "../scripts/lib/model-catalog.ts";
+import { CODEX_BASE_URL, codexAuthHeaders } from "./lib/codex-auth.ts";
+import { CANONICAL_REASONING_EFFORTS as EFFORTS } from "./lib/reasoning-levels.ts";
 
 type WrappableModel = Parameters<typeof wrapLanguageModel>[0]["model"];
 

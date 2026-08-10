@@ -27,10 +27,9 @@
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { defineInstrumentation } from "eve/instrumentation";
-import { probeEveHealth } from "../scripts/lib/config-transaction.ts";
-import { PROBE_FLAG } from "../scripts/lib/health-probe.ts";
-import { runScheduleMigration } from "../scripts/lib/schedule-migration.ts";
-import { validateTimeZone } from "../scripts/lib/timezone.ts";
+import { PROBE_FLAG, probeEveHealth } from "./lib/eve-health.ts";
+import { runScheduleMigration } from "./lib/schedule-migration.ts";
+import { validateTimeZone } from "./lib/timezone.ts";
 
 const log = (...args: unknown[]) =>
   console.log(new Date().toISOString(), ...args);

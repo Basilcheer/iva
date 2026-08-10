@@ -3,7 +3,7 @@
 // each schedule passes to runScheduledJob (scripts/lib/schedule-runner.ts).
 //
 // Three consumers read this table instead of keeping hand-synced copies: the schedule
-// files themselves, scripts/lib/schedule-migration.ts (catch-up math for a missed run)
+// files themselves, agent/lib/schedule-migration.ts (catch-up math for a missed run)
 // and scripts/lib/menu/crons.ts (the /menu → ⏰ display, which shows the entries in the
 // order they are declared here). A cadence change is one edit here.
 //

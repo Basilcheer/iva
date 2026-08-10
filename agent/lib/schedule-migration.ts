@@ -1,6 +1,10 @@
 // One-shot, idempotent migration from the old systemd memory-rollup timers to the
 // in-process eve schedules (agent/schedules/memory-*.ts). Called fire-and-forget from
-// agent/instrumentation.ts on every server start. Two INDEPENDENT jobs — independent
+// agent/instrumentation.ts on every server start, and living in the authored tree with the
+// schedules it migrates onto. The retired unit NAMES are systemd's business as much as the
+// agent's: `iva doctor` sweeps the same eight from a tree whose agent/ may be missing, so
+// scripts/lib/legacy-memory-units.ts carries its own copy and the two are pinned together
+// in this module's test. Two INDEPENDENT jobs — independent
 // enough that only one of them needs systemd at all:
 //
 //   1. tear down the 8 retired iva-memory-{daily,weekly,monthly,yearly}.{service,timer}
@@ -21,15 +25,16 @@ import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 
 // WHEN each period fires — time of day AND day constraint — comes from the schedule table
-// the eve schedules themselves read; this module restates none of it. The import is
-// type-only (erased), with the table itself loaded on the catch-up path below: scripts/cli/
-// systemd.ts imports this module just for LEGACY_MEMORY_UNITS, and the CLI also runs on
-// trees whose package.json carries no `imports` map, where a static `#lib/*` specifier
-// fails to resolve at load (scripts/cli/account-entrypoints.test.ts builds exactly such a
-// tree). The catch-up path only ever runs from the agent, where the table is right there.
-// The schedule runner lives in the authored tree too now, so it is loaded the same lazy
-// way at the one call that spawns jobs — see the note inside runScheduleMigration.
-import type { ScheduleCron, ScheduleName } from "#lib/schedule-table.ts";
+// the eve schedules themselves read; this module restates none of it. Table and runner are
+// siblings in the authored tree, so both are plain static imports.
+import { SCHEDULE_CRON, parseCron } from "./schedule-table.ts";
+import type { ScheduleCron, ScheduleName } from "./schedule-table.ts";
+import {
+  readStatus,
+  runScheduledJob,
+  withStatusLock,
+  writeStatusAtomic,
+} from "./schedule-runner.ts";
 
 type Period = "daily" | "weekly" | "monthly" | "yearly";
 
@@ -322,18 +327,6 @@ export async function runScheduleMigration({
 }: RunScheduleMigrationOptions = {}): Promise<void> {
   try {
     if (!statusPath) return;
-
-    // The schedule table, loaded here rather than at the top of the file — see the import
-    // note above. This is the only path that needs it, and it only runs from the agent.
-    const { SCHEDULE_CRON, parseCron } = await import("#lib/schedule-table.ts");
-    // The runner lives in the authored tree too, which eve rebuilds and `iva repair`
-    // restores. The CLI imports this module only for LEGACY_MEMORY_UNITS and has to load
-    // on an install whose authored tree is missing or half-written — that is the very
-    // state repair exists for — so the runner is pulled at the one call that spawns jobs
-    // instead of at module load. Inside the guard: a failed import is logged and swallowed
-    // like any other migration failure, never blocking server start.
-    const { readStatus, runScheduledJob, withStatusLock, writeStatusAtomic } =
-      await import("#lib/schedule-runner.ts");
 
     const runPeriod =
       runJob ??

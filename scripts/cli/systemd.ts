@@ -14,7 +14,7 @@ import {
   isAssistantBearer,
 } from "../lib/assistant-auth.ts";
 import { writeEnvAtomicSync } from "../lib/env-file.ts";
-import { LEGACY_MEMORY_UNITS } from "../lib/schedule-migration.ts";
+import { LEGACY_MEMORY_UNITS } from "../lib/legacy-memory-units.ts";
 import { cleanupSystemdUnits } from "../lib/systemd-control.ts";
 import { validateTimeZone } from "../lib/timezone.ts";
 import type { createCliRuntime } from "./runtime.ts";
@@ -210,8 +210,8 @@ export function createCliSystemd(runtime: CliRuntime) {
   // entirely (old timers gone, new eve schedules not actually in the bundle) until the
   // next successful build. A shallow recursive text scan for markers unique to the
   // COMPILED schedules is enough — bare "memory-daily" is NOT unique enough: instrumentation.ts
-  // always imports schedule-migration.ts, whose LEGACY_MEMORY_UNITS array contains the
-  // string "iva-memory-daily.service", which itself contains "memory-daily" as a substring
+  // always imports agent/lib/schedule-migration.ts, whose LEGACY_MEMORY_UNITS array contains
+  // the string "iva-memory-daily.service", which itself contains "memory-daily" as a substring
   // — that would make the marker match on every build regardless of whether the schedules
   // themselves actually compiled. Nitro's schedule-task wrapper embeds each schedule's own
   // source path ("schedules/memory-daily.ts") in its description string, which cannot

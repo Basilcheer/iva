@@ -3,15 +3,13 @@ import {
   existsSync,
   lstatSync,
   readFileSync,
-  readdirSync,
   renameSync,
   rmSync,
   statSync,
   writeFileSync,
   type Stats,
 } from "node:fs";
-import { resolve, sep } from "node:path";
-import { hasUnclosedFence, splitCard } from "./card-text.ts";
+import { resolve } from "node:path";
 
 // Keep headroom below GitHub's hard 100 MB blob limit so the nightly backup
 // cannot create history that the remote will reject.
@@ -210,37 +208,4 @@ export function recordSkippedOversize(
     }
     return false;
   }
-}
-
-/**
- * Карточки с незакрытым кодовым фенсом: их ## History и ## Log читаются как код, поэтому
- * write_card отказывает такой карточке в UPDATE и SUPERSEDE. Только перечисление - чинит
- * фенс человек: догадаться, где автор хотел закрыть блок, машине нечем, а закрыть его
- * наугад значит переписать чужой текст.
- */
-export function scanUnclosedFenceCards(vaultPath: string): string[] {
-  // Только cards/: write_card пишет карточки туда и больше никуда, а фенс в сыром
-  // транскрипте daily/ ничему не мешает - ночной алерт про него был бы ложным.
-  const root = resolve(vaultPath, "cards");
-  let entries: string[];
-  try {
-    entries = readdirSync(root, { recursive: true, encoding: "utf8" });
-  } catch {
-    return [];
-  }
-  const found: string[] = [];
-  for (const entry of entries.sort()) {
-    const path = entry.split(sep).join("/");
-    // Служебные каталоги (.git, .graph, .obsidian) - не карточки пользователя.
-    if (!path.endsWith(".md") || path.split("/").some((p) => p.startsWith(".")))
-      continue;
-    let text: string;
-    try {
-      text = readFileSync(resolve(root, entry), "utf8");
-    } catch {
-      continue; // исчез между листингом и чтением - следующий ночной прогон увидит
-    }
-    if (hasUnclosedFence(splitCard(text).body)) found.push(`cards/${path}`);
-  }
-  return found;
 }

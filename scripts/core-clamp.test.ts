@@ -1,8 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { CORE_CAP } from "./lib/core-cap.ts";
-import { clampCore } from "./memory/core-clamp.ts";
+import { CORE_CAP } from "#lib/core-cap.ts";
+import { clampCore } from "#lib/core-clamp.ts";
 
 function fillTo(text: string, target: number): string {
   const marker = "{FILL}";

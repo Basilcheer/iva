@@ -8,17 +8,19 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
-const EXPECTED_PRODUCTION_COUNT = 161;
+const EXPECTED_PRODUCTION_COUNT = 167;
 const EXPECTED_INVENTORY_SHA256 =
-  "e4784233636d6ad3f6d9b7ebc8bb5398f6cfcea4574d956142ebe446cebc1df1";
+  "60caa518622ddf847d4754612f4f48cbf00023a6b7e2f9477bee72cb529eed52";
 
 // Node's native include globs filter loaded modules; they do not load untouched files.
 // This test pins the exact production path inventory and a separately measured 26-path
 // blind-spot snapshot. It does not determine what the current import graph loads, claim
 // that the other paths are reported, or notice import-graph changes without path changes.
-// Measured again for this inventory: `agent/instrumentation.ts`, the five
-// `agent/schedules/*.ts` and `scripts/custom-recovery.ts` left the blind spot — the
-// schedule table and the moved Telegram modules brought tests that load them.
+// Measured again for this inventory: the eight modules the edge-inversion round moved or
+// split into `agent/lib` (card-text, codex-auth, core-cap, core-clamp, eve-health,
+// reasoning-levels, schedule-migration, timezone) and the two it left in `scripts/`
+// (`lib/legacy-memory-units.ts`, `memory/card-fences.ts`) all arrive with tests that load
+// them, so the blind spot is unchanged at 26 paths.
 const MEASURED_UNREPORTED_BY_CATEGORY = {
   frameworkBoundaries: [
     "agent/agent.ts",
