@@ -40,3 +40,7 @@ agent/skills/**/*.pem
 /implementation-notes.md
 /LEARNINGS.md
 /notes/
+.memory.lock
+.netlify/
+attachments/
+scripts/xfeed/
