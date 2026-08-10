@@ -1,6 +1,5 @@
 import {
   telegramChannel,
-  type TelegramApiResponse,
   type TelegramChannelState,
   type TelegramHandle,
   type TelegramMessageBody,
@@ -18,7 +17,15 @@ import { runTelegramInbound } from "../lib/telegram-inbound.js";
 import { allowedTelegramUsers } from "../lib/telegram-allowlist.js";
 import { describeImage } from "../vision.js";
 import { transcribe } from "../transcribe.js";
-import { humanizeProviderError } from "../lib/error-humanizer.js";
+// Статус-сообщение хода («Работаю…», кнопка Стоп, уборка в терминале) и служебное
+// объяснение сбоя — UI канала, обе реплики идут мимо Outbox.
+import {
+  finishTelegramStatus,
+  sendWorkingStatus,
+  stopReplyMarkup,
+  TELEGRAM_STOP_CALLBACK,
+} from "../lib/telegram-status-message.js";
+import { notifyTelegramFailure } from "../lib/telegram-failure-notice.js";
 // Состояние «идёт ли ход» — per-chat файлы data/run-status.d с мостом telegram-poll.mjs:
 // мост по ним буферизует входящие, канал хранит sessionId/turnId для отмены.
 import {
@@ -59,76 +66,10 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 
 // --- ESC-остановка хода (аналог ESC в Claude Code) ---
 //
-// turn.started шлёт «⏳ Работаю…» с кнопкой [⏹ Стоп] и пишет running+sessionId+turnId
-// в run-status. Нажатие кнопки (или /stop, который мост превращает в такой же
-// callback_query) приходит в onCallbackQuery → resumeHook "<sessionId>:cancel" → eve
-// абортит ход → turn.cancelled правит статус-сообщение. В callback_data кладём только
-// константу: лимит 64 байта не вмещает sessionId, он и так лежит в run-status.
-const STOP_CALLBACK = "iva_cancel";
-// Функция, а не const: перевод выбирается в момент вызова (правило репо — module-level
-// const не должна захватывать tr(), иначе язык замерзает до рестарта).
-function stoppedText(): string {
-  return tr(
-    "⏹ Stopped. I'll hold new messages and handle them together with the next one.",
-    "⏹ Остановлено. Новые сообщения накоплю и обработаю вместе со следующим.",
-  );
-}
-
-// Анимированный лоадер статуса — тот же набор, что у /update
-// (t.me/addemoji/iconemoji1), печатающие точки, чтобы «Работаю…» визуально
-// отличался от обновления. Без Premium у владельца бота
-// Telegram вернёт 400 на custom_emoji — тогда навсегда падаем на обычные ⏳.
-const WORK_LOADER = {
-  alt: "💬",
-  customEmojiId: "5818797194127346654",
-  fallback: "⏳",
-};
-let workLoaderSupported = true;
-const stopReplyMarkup = () => ({
-  inline_keyboard: [
-    [{ text: tr("⏹ Stop", "⏹ Стоп"), callback_data: STOP_CALLBACK }],
-  ],
-});
-
-async function sendWorkingStatus(
-  tg: Pick<TelegramHandle, "chatId" | "messageThreadId" | "request">,
-  { canStop = true } = {},
-): Promise<number | null> {
-  const base = {
-    chat_id: tg.chatId,
-    ...(canStop ? { reply_markup: stopReplyMarkup() } : {}),
-    ...(tg.messageThreadId !== undefined
-      ? { message_thread_id: tg.messageThreadId }
-      : {}),
-  };
-  if (workLoaderSupported) {
-    const res = await tg.request("sendMessage", {
-      ...base,
-      text: `${WORK_LOADER.alt} ${tr("Working…", "Работаю…")}`,
-      entities: [
-        {
-          type: "custom_emoji",
-          offset: 0,
-          length: WORK_LOADER.alt.length,
-          custom_emoji_id: WORK_LOADER.customEmojiId,
-        },
-      ],
-    });
-    if (res.ok) return messageIdFromResponse(res);
-    workLoaderSupported = false;
-  }
-  const res = await tg.request("sendMessage", {
-    ...base,
-    text: `${WORK_LOADER.fallback} ${tr("Working…", "Работаю…")}`,
-  });
-  return res.ok ? messageIdFromResponse(res) : null;
-}
-
-function messageIdFromResponse(response: TelegramApiResponse): number | null {
-  const body = asRecord(response.body);
-  const result = asRecord(body?.result);
-  return typeof result?.message_id === "number" ? result.message_id : null;
-}
+// turn.started шлёт «Работаю…» с кнопкой [⏹ Стоп] (agent/lib/telegram-status-message.ts)
+// и пишет running+sessionId+turnId в run-status. Нажатие кнопки (или /stop, который мост
+// превращает в такой же callback_query) приходит в onCallbackQuery → resumeHook
+// "<sessionId>:cancel" → eve абортит ход → turn.cancelled правит статус-сообщение.
 
 // Callback hooks Telegram не получают route-level cancel helper. resumeHook("<sessionId>:cancel")
 // абортит активный ход — сигнал прошит до model.stream и тулзов.
@@ -158,120 +99,6 @@ function loadResumeHook(): Promise<
     return resumeHook as (token: string, payload: unknown) => Promise<unknown>;
   });
   return resumeHookPromise;
-}
-
-// Терминал хода: state → idle (+wasCancelled), статус-сообщение удалить (обычный финал)
-// или переписать на «Остановлено» (отмена). Сбои уборки не критичны — глотаем.
-async function finishStatus(
-  channel: {
-    continuationToken: string;
-    telegram: Pick<TelegramHandle, "chatId" | "messageThreadId" | "request">;
-  },
-  sessionId: string,
-  mode: "completed" | "cancelled" | "failed",
-): Promise<boolean> {
-  const tg = channel.telegram;
-  const key = chatKeyOf(tg.chatId, tg.messageThreadId);
-  const st = getChatStatus(key);
-  // Compare and update happen under one per-chat lock. A reset can remove
-  // sessionId after this read; a late terminal event then becomes a no-op.
-  if (
-    !setChatStatusIf(
-      key,
-      { sessionId },
-      {
-        status: "idle",
-        continuationToken: toChannelLocalToken(channel.continuationToken),
-        sessionId: null,
-        turnId: null,
-        statusMessageId: null,
-        ingressId: null,
-        ingressAt: null,
-        statusAt: null,
-        turnAt: null,
-        firstOutputAt: null,
-        latencyLogged: null,
-        ...(mode === "cancelled" ? { wasCancelled: true } : {}),
-      },
-    )
-  ) {
-    return false;
-  }
-  const msgId = st?.statusMessageId;
-  if (typeof msgId !== "number") return true;
-  try {
-    if (mode === "cancelled") {
-      await tg.request("editMessageText", {
-        chat_id: tg.chatId,
-        message_id: msgId,
-        text: stoppedText(),
-      });
-    } else {
-      await tg.request("deleteMessage", {
-        chat_id: tg.chatId,
-        message_id: msgId,
-      });
-    }
-  } catch {
-    /* статус-сообщение не убралось — не критично */
-  }
-  return true;
-}
-
-const FAILURE_NOTIFICATION_TTL_MS = 60_000;
-const failureNotifications = new Map<string, number>();
-
-function pruneFailureNotifications(now = Date.now()): void {
-  for (const [sessionId, notifiedAt] of failureNotifications) {
-    if (now - notifiedAt >= FAILURE_NOTIFICATION_TTL_MS) {
-      failureNotifications.delete(sessionId);
-    }
-  }
-}
-
-function claimFailureNotification(
-  sessionId: string,
-  now = Date.now(),
-): number | null {
-  pruneFailureNotifications(now);
-  const notifiedAt = failureNotifications.get(sessionId);
-  if (
-    notifiedAt !== undefined &&
-    now - notifiedAt < FAILURE_NOTIFICATION_TTL_MS
-  ) {
-    return null;
-  }
-  failureNotifications.set(sessionId, now);
-  return now;
-}
-
-function releaseFailureNotification(sessionId: string, claim: number): void {
-  if (failureNotifications.get(sessionId) === claim) {
-    failureNotifications.delete(sessionId);
-  }
-}
-
-function extractFailureErrorId(details: unknown): string | undefined {
-  if (
-    typeof details !== "object" ||
-    details === null ||
-    Array.isArray(details)
-  ) {
-    return undefined;
-  }
-  const errorId = (details as Record<string, unknown>).errorId;
-  return typeof errorId === "string" && errorId.length > 0
-    ? errorId
-    : undefined;
-}
-
-function failureMessage(data: { message: string; details?: unknown }): string {
-  const text = humanizeProviderError(data);
-  const errorId = extractFailureErrorId(data.details);
-  return [
-    tr(text.en, text.ru),
-    ...(errorId ? ["", `Error id: ${errorId}`] : []),
-  ].join("\n");
 }
 
 // Транспорт Outbox для канала: доставка через хендл eve. Что и в каком виде отдавать,
@@ -348,13 +175,13 @@ const telegram = telegramChannel({
   // Картинку/файл НЕ суём в запрос к модели (это и ломалось: octet-stream → reject, потом
   // инлайн → Bad Request от провайдера, плюс привязка к конкретному vision-API). "disabled" →
   // eve не качает и не инлайнит вложения вовсе; запрос к модели всегда чистый текст и не
-  // ломается ни на каком провайдере. Файлы качает и сохраняет iva сама (ниже), а модели отдаёт
+  // ломается ни на каком провайдере. Файлы качает и сохраняет inbound-пайплайн, а модели отдаёт
   // ПУТЬ — посмотреть/прочитать она решает сама своими инструментами; не умеет — честно скажет.
   uploadPolicy: "disabled",
   // Нажатия inline-кнопок, не относящиеся к HITL eve. Мост доставляет их даже когда
   // агент занят (callback_query не буферизуется) — иначе «Стоп» не мог бы дойти.
   async onCallbackQuery(ctx, query) {
-    if (query.data !== STOP_CALLBACK) return; // чужой колбэк — не наш
+    if (query.data !== TELEGRAM_STOP_CALLBACK) return; // чужой колбэк — не наш
     const ack = async (text?: string) => {
       try {
         await ctx.telegram.request("answerCallbackQuery", {
@@ -432,16 +259,16 @@ const telegram = telegramChannel({
       });
     },
     async "turn.completed"(_data, channel, ctx) {
-      await finishStatus(channel, ctx.session.id, "completed");
+      await finishTelegramStatus(channel, ctx.session.id, "completed");
     },
     async "turn.cancelled"(_data, channel, ctx) {
-      await finishStatus(channel, ctx.session.id, "cancelled");
+      await finishTelegramStatus(channel, ctx.session.id, "cancelled");
     },
     // Страховка: если терминальное turn-событие потерялось (краш), парковка сессии
     // снимает busy-флаг И удаляет осиротевший «Работаю…» — та же уборка, что у
     // turn.completed. После обычного финала CAS по sessionId не совпадает — no-op.
     async "session.waiting"(_data, channel, ctx) {
-      await finishStatus(channel, ctx.session.id, "completed");
+      await finishTelegramStatus(channel, ctx.session.id, "completed");
     },
     "message.appended"(_data, channel, ctx) {
       markTelegramFirstOutput({
@@ -483,37 +310,27 @@ const telegram = telegramChannel({
     // позднее terminal-событие всё равно должно объяснить пользователю, что произошло.
     async "turn.failed"(data, channel, ctx) {
       try {
-        await finishStatus(channel, ctx.session.id, "failed");
+        await finishTelegramStatus(channel, ctx.session.id, "failed");
       } catch {
         /* run-status не прибрался — сообщение об ошибке всё равно отправляем */
       }
-      const claim = claimFailureNotification(ctx.session.id);
-      if (claim === null) return;
-      try {
-        await channel.telegram.sendMessage(failureMessage(data));
-      } catch {
-        releaseFailureNotification(ctx.session.id, claim);
-        /* молча игнорируем сбой ответа */
-      }
+      await notifyTelegramFailure(ctx.session.id, data, (text) =>
+        channel.telegram.sendMessage(text),
+      );
     },
     // У terminal-сбоя eve следом за turn.failed шлёт session.failed без ctx.
     // Повторно прибираем run-status по sessionId из payload и не дублируем уведомление.
     async "session.failed"(data, channel) {
       if (channel.telegram.chatId) {
         try {
-          await finishStatus(channel, data.sessionId, "failed");
+          await finishTelegramStatus(channel, data.sessionId, "failed");
         } catch {
           /* best-effort: отсутствие chat-state не должно ломать уведомление */
         }
       }
-      const claim = claimFailureNotification(data.sessionId);
-      if (claim === null) return;
-      try {
-        await channel.telegram.sendMessage(failureMessage(data));
-      } catch {
-        releaseFailureNotification(data.sessionId, claim);
-        /* молча игнорируем сбой ответа */
-      }
+      await notifyTelegramFailure(data.sessionId, data, (text) =>
+        channel.telegram.sendMessage(text),
+      );
     },
   },
   // Вход: канал только подаёт эффекты, разбор апдейта живёт в пайплайне.
