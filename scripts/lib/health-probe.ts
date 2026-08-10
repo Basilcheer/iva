@@ -8,6 +8,8 @@ const LOG_TAIL = 4000;
 /** Set for the probe only; the code that runs on boot reads it to stay passive. */
 export const PROBE_FLAG = "IVA_HEALTH_PROBE";
 const BUSY_PORT = "the probe port was already answering";
+/** What a start that lost the port to somebody else says, whatever starts it. */
+const TAKEN = /EADDRINUSE/u;
 
 /** Whatever answers on the port, or null when nothing does in time. */
 async function answering(port: number, ms = 1000): Promise<Response | null> {
@@ -31,7 +33,15 @@ export type ProbeOptions = {
   readonly stopGraceMs?: number;
 };
 
-export type ProbeResult = { readonly ok: boolean; readonly log: string };
+export type ProbeResult = {
+  readonly ok: boolean;
+  readonly log: string;
+  /**
+   * The port was gone by the time the start reached it, so this says nothing
+   * about the version: whoever asked for the probe should offer another port.
+   */
+  readonly busy?: boolean;
+};
 
 /**
  * The environment the service starts with, adjusted for a probe: the unit's own
@@ -130,7 +140,7 @@ export async function probeVersion({
 }: ProbeOptions): Promise<ProbeResult> {
   // Whatever answers before anything is started cannot be the version.
   if (await answering(port))
-    return { ok: false, log: `${BUSY_PORT} on ${port}` };
+    return { ok: false, busy: true, log: `${BUSY_PORT} on ${port}` };
 
   let log = "";
   let exit: { code: number | null; signal: NodeJS.Signals | null } | null =
@@ -178,5 +188,7 @@ export async function probeVersion({
   const reason = crash
     ? `exited with code ${crash.code ?? "null"}${crash.signal ? ` (${crash.signal})` : ""}`
     : `did not become healthy on port ${port} within ${timeoutMs}ms`;
-  return { ok: false, log: `${reason}\n${log}` };
+  // A port free when it was chosen and taken when it was bound is a race with
+  // whoever took it, not a version that cannot start.
+  return { ok: false, log: `${reason}\n${log}`, busy: TAKEN.test(log) };
 }
