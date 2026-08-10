@@ -191,7 +191,7 @@ cd ~/iva && bash install.sh
 
 ## На чём построено
 
-Агента запускает [eve](https://eve.dev/docs/introduction) 0.29.5, агентный фреймворк Vercel; поисковый индекс живёт на SQLite, встроенном в Node 24, - без отдельной базы. Ива выросла из [agent-second-brain](https://github.com/smixs/agent-second-brain) и [autograph](https://github.com/smixs/autograph) - эта история рассказана в [docs/ru/memory.md](docs/ru/memory.md).
+Агента запускает [eve](https://eve.dev/docs/introduction) 0.30.8, агентный фреймворк Vercel; поисковый индекс живёт на SQLite, встроенном в Node 24, - без отдельной базы. Ива выросла из [agent-second-brain](https://github.com/smixs/agent-second-brain) и [autograph](https://github.com/smixs/autograph) - эта история рассказана в [docs/ru/memory.md](docs/ru/memory.md).
 
 ## Спасибо
 
