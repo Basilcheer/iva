@@ -133,10 +133,7 @@ function sameFile(one: string, other: string): boolean {
   }
 }
 
-/**
- * What a version on disk was built with, by contents and not by names: a stock tree
- * has files at authored paths too, `agent/instructions.md` above all.
- */
+/** What a version was built with, by contents: a stock tree has authored paths too. */
 export function builtWith(
   dir: string,
   name: string,
@@ -150,11 +147,7 @@ export function builtWith(
     : "stock";
 }
 
-/**
- * A port to start the version on: the pid spreads two updaters apart, the selector
- * steps over what is listening. Not the docker probe - it shells out per port, and
- * a published port is a listening socket to the other two anyway.
- */
+/** A port to start the version on: the pid spreads two updaters apart. */
 function probePort(): Promise<number | null> {
   return new PortSelector(new PortChecker([bindProbe, procProbe])).firstFree(
     DEFAULT_PORT + 100 + (process.pid % 100),
@@ -162,9 +155,8 @@ function probePort(): Promise<number | null> {
 }
 
 /**
- * One update: build a new immutable version, prove it starts, flip a symlink, then
- * move the installation onto it. Nothing before the flip touches the running
- * version, and nothing after it is a one-shot - the next run replays it.
+ * Build a version, prove it starts, flip a symlink, move the installation onto it.
+ * Nothing before the flip touches what runs; nothing after it is a one-shot.
  */
 export async function runVersionUpdate(
   options: UpdateOptions,
@@ -185,8 +177,7 @@ export async function runVersionUpdate(
     store.heal();
 
     const target = await resolveTarget();
-    // Half of what gets built, so half of what the version is called: edited
-    // mid-update, the digest simply differs again on the next run.
+    // Half of what gets built, so half of what it is called.
     const { digest } = customOverlay(join(store.layout.data, "custom"));
     const release = versionName(target.version, target.sha, digest);
     const active = store.currentName();
@@ -224,9 +215,9 @@ export async function runVersionUpdate(
 }
 
 /**
- * The half of an update the new version runs about itself - install, build, prove,
- * flip, migrate, restart - so the code just fetched runs it instead of the code
- * being replaced. The flip decides what runs, the marker whether the move is done.
+ * The half of an update the new version runs about itself, so a fix to any of it
+ * ships with the release carrying it. The flip decides what runs, the marker
+ * whether the move is finished.
  */
 export async function finishVersionUpdate({
   home,
@@ -287,8 +278,8 @@ export async function finishVersionUpdate({
       if (health.ok) notify(stockNotice("start against", broken));
     }
     if (!health.ok) {
-      // Garbage nothing points at - unless an earlier run finished it, in which
-      // case it is somebody's way back and a failed probe never takes it.
+      // Garbage nothing points at - unless an earlier run finished it, and then
+      // it is somebody's way back, which a failed probe never takes.
       if (!prepared) rmSync(dir, { recursive: true, force: true });
       notify(
         `update to ${name} did not start; staying on ${active ?? "the current version"}`,
@@ -369,10 +360,7 @@ async function buildVersion(
   return "stock";
 }
 
-/**
- * Rebuild a staged version from its commit alone, under the name it was staged
- * with, digest and all: a customization known not to work here is tried once.
- */
+/** Rebuild a staged version from its commit alone: a broken customization is tried once. */
 async function buildStock(
   store: Store,
   name: string,
@@ -393,10 +381,7 @@ function appliedMigrations(dataDir: string): string[] {
     : [];
 }
 
-/**
- * The migrations this version ships and has not applied. The marker only avoids
- * repeat work - each migration is idempotent, so losing it stays recoverable.
- */
+/** Unapplied migrations this version ships. Each is idempotent; the marker only saves work. */
 export async function runMigrations({
   dir,
   dataDir,

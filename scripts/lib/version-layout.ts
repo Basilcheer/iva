@@ -150,8 +150,9 @@ export function isEntrypoint(moduleUrl: string): boolean {
 /**
  * A shim that resolves paths and nothing else, so it is never rewritten again: the
  * active version, else the tree it was installed from (what a half-finished bridge
- * leaves), else the version last settled on - a lost `current` must take neither
- * the repair command nor the release with it. install.sh writes the same script.
+ * leaves), else the one settled on last, else the newest built - a lost `current`
+ * must take neither the repair command nor the release with it, and a name sorts
+ * by string, not by release. install.sh writes the same script.
  */
 export function shimScript(home: string, node: string): string {
   return [
@@ -164,8 +165,10 @@ export function shimScript(home: string, node: string): string {
     '  if [ -n "$settled" ] && [ -f "$IVA_ROOT/versions/$settled/bin/iva.mjs" ]; then',
     '    IVA_ROOT="$IVA_ROOT/versions/$settled"',
     "  else",
-    '    for candidate in "$IVA_ROOT"/versions/*; do',
-    '      [ -f "$candidate/bin/iva.mjs" ] && IVA_ROOT="$candidate"',
+    '    for candidate in $(ls -t "$IVA_ROOT/versions" 2>/dev/null); do',
+    '      [ -f "$IVA_ROOT/versions/$candidate/bin/iva.mjs" ] || continue',
+    '      IVA_ROOT="$IVA_ROOT/versions/$candidate"',
+    "      break",
     "    done",
     "  fi",
     "fi",

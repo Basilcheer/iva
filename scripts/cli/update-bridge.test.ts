@@ -515,7 +515,10 @@ test("a rollback is a symlink flip and a restart, with no build and no network",
   // Nothing pins a version, so the release just rolled back from is still what
   // the next update resolves to. Saying so is the difference between a rollback
   // and a mystery when it comes back.
-  assert.match(result.stdout, /can bring that version back/u);
+  assert.match(
+    result.stdout,
+    /another `iva rollback`.*can bring that version back/u,
+  );
   // And forward again: the pair is symmetric, so a bad rollback is not a trap.
   assert.equal(iva.iva(["rollback"]).status, 0);
   assert.equal(active(iva), second);

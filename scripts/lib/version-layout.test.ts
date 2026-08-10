@@ -10,6 +10,7 @@ import {
   realpathSync,
   rmSync,
   symlinkSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -26,12 +27,18 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "../..");
 function installation(t: { after(fn: () => void): void }): string {
   const home = realpathSync(mkdtempSync(join(tmpdir(), "iva-shim-")));
   t.after(() => rmSync(home, { recursive: true, force: true }));
-  for (const name of ["0.3.14-aaaaaaaaaaaa", "0.3.9-bbbbbbbbbbbb"]) {
+  // Built in release order, which is the reverse of the order their names sort in.
+  for (const [name, age] of [
+    ["0.3.9-bbbbbbbbbbbb", 2],
+    ["0.3.14-aaaaaaaaaaaa", 1],
+  ] as const) {
     mkdirSync(join(home, "versions", name, "bin"), { recursive: true });
     writeFileSync(
       join(home, "versions", name, "bin/iva.mjs"),
       `process.stdout.write(${JSON.stringify(name)});\n`,
     );
+    const at = new Date(Date.now() - age * 60_000);
+    utimesSync(join(home, "versions", name), at, at);
   }
   mkdirSync(join(home, "data"), { recursive: true });
   return home;
@@ -44,8 +51,7 @@ test("a shim without `current` runs the version the installation settled on", (t
   chmodSync(shim, 0o755);
   const run = (): string => execFileSync(shim, { encoding: "utf8" });
 
-  // `current` is lost - the state the shim exists to survive. Sorted names put
-  // the older release last, so picking the last one runs the wrong code.
+  // `current` is lost - the state the shim exists to survive.
   writeFileSync(
     join(home, "data/active.json"),
     `${JSON.stringify({ schema: "iva-active/v1", version: "0.3.14-aaaaaaaaaaaa" })}\n`,
@@ -53,9 +59,10 @@ test("a shim without `current` runs the version the installation settled on", (t
   assert.equal(run(), "0.3.14-aaaaaaaaaaaa");
 
   // No marker to go by: running something still beats running nothing, because
-  // the command that repairs the installation is this one.
+  // the command that repairs the installation is this one - and the newest build,
+  // not the name that sorts last, or the repair starts an older release.
   rmSync(join(home, "data/active.json"));
-  assert.equal(run(), "0.3.9-bbbbbbbbbbbb");
+  assert.equal(run(), "0.3.14-aaaaaaaaaaaa");
 
   // And an active version outranks both.
   symlinkSync(join(home, "versions/0.3.9-bbbbbbbbbbbb"), join(home, "current"));
@@ -94,6 +101,12 @@ test("a checkout somebody develops in is never converted, however the shim point
   const shim = join(dir, "iva-shim");
   writeFileSync(shim, shimScript(home, process.execPath));
   const managed = (): boolean => isManagedInstall(classifyRoot(home), shim);
+  assert.equal(managed(), true);
+
+  // The deliberate ceiling of the test: an installation is free to have edits of
+  // its own - preserving them is what the checkout-era updater is for - so dirt
+  // alone cannot mean somebody develops here. History is the only tell.
+  writeFileSync(join(home, "package.json"), '{ "edited": true }\n');
   assert.equal(managed(), true);
 
   // A branch of their own: a working tree, not an installation. Converting it

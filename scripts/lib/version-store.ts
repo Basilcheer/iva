@@ -281,7 +281,7 @@ export function createVersionStore(home: string) {
     for (const name of LEGACY_STATE_DIRS) {
       // Cleared even where nothing replaces it, or a link from an earlier pass
       // survives into a probe aimed at live state. Asked of the install, never
-      // of the scratch: a box without a legacy store never grows one.
+      // the scratch: a box without a legacy store never grows one.
       rmSync(join(dir, name), { recursive: true, force: true });
       if (existsSync(join(home, name)))
         links.push([name, join(stateHome, name)]);
@@ -299,8 +299,8 @@ export function createVersionStore(home: string) {
   }
 
   /**
-   * State for a probe: the real server starts and would re-enqueue what the live one
-   * is doing. Beside the versions, never inside the one being proved, or a kill
+   * State for a probe: a real start re-enqueues what the live installation is
+   * doing. Beside the versions, never inside the one being proved, or a kill
    * mid-check hands the next sweep a good version to delete.
    */
   function sandboxState(name: string): string {
@@ -387,8 +387,8 @@ export function adoptUpdateLock(dataDir: string): UpdateLock {
 
 /**
  * Serialize updates with one atomic mkdir. A lock whose owner is gone is stale at
- * once - a SIGKILLed update must not block the retry that cleans up after it - and
- * age is only a fallback for an owner that cannot be read.
+ * once - a SIGKILLed update must not block the retry cleaning up after it - and
+ * age is only the fallback for an owner that cannot be read.
  */
 export function acquireUpdateLock(dataDir: string): UpdateLock | null {
   mkdirSync(dataDir, { recursive: true });

@@ -221,8 +221,11 @@ export function createVersionUpdateCommand(
       // Or the next update believes it still owes the move this just undid.
       store.settle(previous);
       runtime.ok(`${from ?? "the broken version"} → ${previous}`);
-      // Nothing pins a version: upstream still resolves to the one left behind.
-      runtime.warn("the next `iva update` can bring that version back");
+      // Nothing pins a version: upstream still resolves to the one left behind,
+      // and with two builds on disk another rollback is a way back onto it too.
+      runtime.warn(
+        "another `iva rollback`, like the next `iva update`, can bring that version back",
+      );
     } finally {
       lock.release();
     }
