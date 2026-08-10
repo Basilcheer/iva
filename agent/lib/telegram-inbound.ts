@@ -22,7 +22,7 @@ import {
   type TelegramRawMessage,
 } from "./telegram-parts.ts";
 import { appendDaily } from "./vault-daily.ts";
-import { buildTelegramReplyContext } from "../../scripts/lib/telegram-reply-context.ts";
+import { buildTelegramReplyContext } from "./telegram-reply-context.ts";
 
 // Структурная проекция входящего сообщения eve: пайплайну хватает этих полей.
 export type TelegramInboundMessage = {
