@@ -8,14 +8,17 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
-const EXPECTED_PRODUCTION_COUNT = 151;
+const EXPECTED_PRODUCTION_COUNT = 161;
 const EXPECTED_INVENTORY_SHA256 =
-  "5521111f0c8780f12762cddaa01e1458692a91a32557b3fb05e32760acedae2b";
+  "e4784233636d6ad3f6d9b7ebc8bb5398f6cfcea4574d956142ebe446cebc1df1";
 
 // Node's native include globs filter loaded modules; they do not load untouched files.
-// This test pins the exact production path inventory and a separately measured 29-path
+// This test pins the exact production path inventory and a separately measured 26-path
 // blind-spot snapshot. It does not determine what the current import graph loads, claim
 // that the other paths are reported, or notice import-graph changes without path changes.
+// Measured again for this inventory: `agent/instrumentation.ts`, the five
+// `agent/schedules/*.ts` and `scripts/custom-recovery.ts` left the blind spot — the
+// schedule table and the moved Telegram modules brought tests that load them.
 const MEASURED_UNREPORTED_BY_CATEGORY = {
   frameworkBoundaries: [
     "agent/agent.ts",
@@ -27,13 +30,7 @@ const MEASURED_UNREPORTED_BY_CATEGORY = {
     "agent/instructions/20-core.ts",
     "agent/instructions/25-persona.ts",
     "agent/instructions/now.ts",
-    "agent/instrumentation.ts",
     "agent/sandbox.ts",
-    "agent/schedules/digest.ts",
-    "agent/schedules/memory-daily.ts",
-    "agent/schedules/memory-monthly.ts",
-    "agent/schedules/memory-weekly.ts",
-    "agent/schedules/memory-yearly.ts",
     "agent/subagents/planner/agent.ts",
   ],
   thinAgentTools: [
@@ -46,11 +43,12 @@ const MEASURED_UNREPORTED_BY_CATEGORY = {
     "scripts/build.ts",
     "scripts/check-bash-cwd.ts",
     "scripts/check-reasoning-strip.ts",
-    "scripts/custom-recovery.ts",
     "scripts/daily-digest.ts",
     "scripts/memory/doctor.ts",
     "scripts/memory/embed-index.ts",
     "scripts/memory/rollup.ts",
+    // A one-shot data migration, run out of the version that introduced it.
+    "scripts/migrations/001-iva-port.ts",
     "scripts/replica-smoke.ts",
     "scripts/setup/main.ts",
     // Runs as its own process, spawned by the version being installed.
@@ -111,7 +109,7 @@ function assertProductionPathInventory(
   const measuredUnreported = Object.values(MEASURED_UNREPORTED_BY_CATEGORY)
     .flat()
     .sort();
-  assert.equal(measuredUnreported.length, 32);
+  assert.equal(measuredUnreported.length, 26);
   assert.equal(new Set(measuredUnreported).size, measuredUnreported.length);
   assert.deepEqual(
     measuredUnreported.filter((path) => !productionFiles.includes(path)),
