@@ -32,7 +32,9 @@ Moved to their canonical home in `agent/lib` so far: `telegram-continuation-toke
 `schedule-runner` and the write half of `usage`. `scripts/` consumers reach them through
 the `#lib/` alias instead of the other way around.
 
-Seven escapes remain, blocked by two different constraints.
+Seven escapes remain blocked by two different constraints, plus three the 0.3.15 round
+brought in. The guard scans production files only: tests never reach the bundle eve
+rebuilds, so a specifier in a `*.test.ts` cannot drag `scripts/` into it.
 
 **Five are blocked by the CLI, and no ownership change unblocks them.** `iva` has to work
 on an install whose `agent/` is missing or half-written — that is the state `iva repair`
@@ -62,6 +64,25 @@ can restore, or a CLI that degrades when the authored tree is gone.
 shared with the nightly rollup and the doctor, so the move rewrites imports under
 `scripts/memory/`, and lands with the release that owns those paths. Nothing
 architectural stands in the way.
+
+**Three more arrived with the 0.3.15 round** and are recorded apart from those seven, in
+the guard's `BASELINE_ESCAPES` list, because they came in with a release rather than from a
+weighed decision:
+
+- `agent/instrumentation.ts` → `scripts/lib/health-probe.ts`: `PROBE_FLAG`, the marker the
+  boot path reads to stay passive while the updater probes a candidate version.
+- `agent/lib/card-store.ts` and `agent/lib/frontmatter.ts` → `scripts/lib/card-text.ts`:
+  the card-text splitter and fence scanner, the TypeScript half of the parser pair in
+  item 13.
+
+Measured, not assumed: both targets are load-time reachable from `scripts/cli/*` as well —
+`health-probe` through `scripts/lib/version-update.ts` (`iva update`, `iva services`),
+`card-text` through `scripts/lib/memory-maintenance.ts` (`iva doctor`) — so they sit under
+the same CLI constraint as the five above, and a plain move into `agent/lib` breaks `iva`
+on an install whose authored tree is missing. Closing them needs the seam the `usage` split
+used, not a move: the shared piece is small in both cases (one constant, one
+dependency-free parser), which is what makes them the next round's work rather than a
+permanent state.
 
 ## 4. Evals
 
