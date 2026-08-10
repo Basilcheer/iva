@@ -54,12 +54,12 @@ function commandPositions(command: string): string[] {
 }
 
 // Сам CLI: restart|stop|reset|full-reset останавливают iva.service; update перезапускает
-// его в конце; doctor рестартует в ремонтных ветках (см. шапку). Ловим прямые вызовы
-// файла (bin/iva.mjs restart, ./bin/iva.mjs) и форму с разделителем (npm-скрипты сюда
-// не доходят — их снимает WRAPPER только у sh -c, а `npm run iva -- restart` ловится
-// отдельной альтернативой).
+// его в конце; rollback — это флип симлинка current и тот же рестарт; doctor рестартует
+// в ремонтных ветках (см. шапку). Ловим прямые вызовы файла (bin/iva.mjs restart,
+// ./bin/iva.mjs) и форму с разделителем (npm-скрипты сюда не доходят — их снимает
+// WRAPPER только у sh -c, а `npm run iva -- restart` ловится отдельной альтернативой).
 const IVA_CLI_LETHAL =
-  /^(?:(?:[\w./~-]*\/)?iva(?:\.mjs)?|npm\s+run\s+iva\s+--)\s+(?:--\s+)?(?:restart|stop|reset|full-reset|update|doctor)(?![\w-])/;
+  /^(?:(?:[\w./~-]*\/)?iva(?:\.mjs)?|npm\s+run\s+iva\s+--)\s+(?:--\s+)?(?:restart|stop|reset|full-reset|update|rollback|doctor)(?![\w-])/;
 
 // systemctl с летальным глаголом, у которого среди юнитов-аргументов есть ровно "iva"
 // или "iva.service" (iva-telegram-poll и таймеры не матчятся: после iva идёт дефис).

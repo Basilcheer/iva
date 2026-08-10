@@ -15,6 +15,7 @@ import {
 import { readFile } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import { basename, dirname, join } from "node:path";
+import { throughLink } from "./version-layout.ts";
 
 // Lazy value capture + trailing \s*: tolerates CRLF files (a greedy .* would keep the \r).
 const LINE_RE = /^\s*([A-Z0-9_]+)\s*=\s*(.*?)\s*$/;
@@ -72,10 +73,14 @@ export async function readEnvFresh(
  * then the parent directory is fsynced so the rename survives a crash.
  */
 export function writeEnvAtomicSync(
-  path: string,
+  linkOrPath: string,
   text: unknown,
   { beforeRename, beforeDirectorySync }: AtomicWriteHooks = {},
 ): void {
+  // A version directory borrows `.env` from the installation through a symlink,
+  // and a rename replaces the link rather than following it - which would turn
+  // shared configuration into a copy that the next update drops.
+  const path = throughLink(linkOrPath);
   if (existsSync(path)) chmodSync(path, 0o600);
   const parent = dirname(path);
   const tmp = join(

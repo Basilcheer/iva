@@ -198,6 +198,9 @@ function operationsFixture(
     fail: async (phase: string, beforeVersion: string) => {
       events.push(`reporter.fail:${phase}:${beforeVersion}`);
     },
+    busy: async () => {
+      events.push("reporter.busy");
+    },
     postCommitFailure: async (message: string) => {
       events.push(`reporter.postCommitFailure:${message}`);
     },
@@ -310,6 +313,44 @@ test("no-change update preserves phase order, live getter reads and finalizers",
   ]);
   assert.equal(events.includes("tx.rollback"), false);
   assert.equal(events.includes("tx.get:outputTouched"), false);
+});
+
+test("a telegram update that finds the lock taken says so in the chat", async (t) => {
+  const previousExitCode = process.exitCode;
+  t.after(() => {
+    process.exitCode = previousExitCode;
+  });
+  process.exitCode = undefined;
+  const root = await sandbox(t);
+  const events: string[] = [];
+  const transaction = transactionFixture(events, {
+    changed: false,
+    outputTouched: false,
+    hadLocalChanges: false,
+  });
+  const command = createUpdateCommand({
+    runtime: runtimeFixture(root, events),
+    systemdLifecycle: { writeUnits: () => [], migrateEnv: () => false },
+    showTree: async () => {},
+    restartUserbotIfActive: () => {},
+    operations: {
+      ...operationsFixture(events, transaction),
+      acquireUpdateLock: () => ({ ok: false, path: "", owner: "someone-else" }),
+    },
+  });
+
+  await command(["--telegram-job", "job-1"]);
+
+  // The job file is deleted here, so a message left on "Saving your changes"
+  // would never be corrected by anything.
+  assertOrder(events, [
+    "terminal.fail:An update is already running",
+    "reporter.busy",
+    "reporter.dispose",
+    "ops.removeTelegramJob",
+  ]);
+  assert.equal(events.includes("ops.createUpdateTransaction"), false);
+  assert.equal(process.exitCode, 1);
 });
 
 test("post-commit timer failure reports failure without rollback", async (t) => {

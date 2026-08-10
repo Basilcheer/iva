@@ -1,10 +1,12 @@
 import { spawnSync, type SpawnSyncOptions } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { writeEnvAtomicSync } from "../lib/env-file.ts";
 import { createSystemdControl } from "../lib/systemd-control.ts";
+import { real } from "../lib/version-layout.ts";
+import { parseVersionName, stateDir } from "../lib/version-store.ts";
 
 type CaptureOptions = Omit<SpawnSyncOptions, "encoding"> & {
   readonly encoding?: BufferEncoding;
@@ -31,7 +33,10 @@ type RuntimeColors = {
 /** Create the shared, side-effect-free-at-import runtime used by the Iva CLI. */
 export function createCliRuntime(root: string) {
   const ROOT = root;
-  const ENV_PATH = join(ROOT, ".env");
+  // Through the symlink: on the immutable layout `<root>/.env` points at the
+  // installation's own file, and an atomic write would otherwise replace the link
+  // with a copy that the next version never sees.
+  const ENV_PATH = real(join(ROOT, ".env"));
   const UNIT_DIR = join(homedir(), ".config/systemd/user");
   const NODE = process.execPath;
   const NODE_BIN_DIR = dirname(NODE);
@@ -118,8 +123,12 @@ export function createCliRuntime(root: string) {
   const scQ = (...args: string[]): CaptureResult =>
     cap("systemctl", ["--user", ...args]);
   const systemd = createSystemdControl({ run: (args) => scQ(...args) });
+  // On the immutable layout there is no working tree to ask: the commit a version
+  // was built from is part of its directory name.
   const gitHead = (): string =>
-    cap("git", ["rev-parse", "--short", "HEAD"]).out;
+    cap("git", ["rev-parse", "--short", "HEAD"]).out ||
+    parseVersionName(basename(real(ROOT)))?.sha ||
+    "";
 
   function readEnv(): EnvValues {
     const env: EnvValues = {};
@@ -132,8 +141,7 @@ export function createCliRuntime(root: string) {
   }
 
   function dataDirAbs(env: Partial<EnvValues> = readEnv()): string {
-    const dataDir = env.ASSISTANT_DATA_DIR || "data";
-    return dataDir.startsWith("/") ? dataDir : join(ROOT, dataDir);
+    return stateDir(ROOT, env.ASSISTANT_DATA_DIR, "data");
   }
 
   async function confirm(question: string, defaultValue = false) {

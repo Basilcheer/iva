@@ -8,7 +8,8 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
-import { fileURLToPath } from "node:url";
+import { isEntrypoint } from "./lib/version-layout.ts";
+import { createVersionStore, parseVersionName } from "./lib/version-store.ts";
 import { z } from "zod";
 
 const BOOTSTRAP_FILES = [
@@ -45,6 +46,19 @@ function gitOk(root: string, ...args: string[]): boolean {
       stdio: "ignore",
     }).status === 0
   );
+}
+
+/**
+ * Whether the repaired updater really put the target in charge. A legacy install
+ * shows it as a moved HEAD; one that the bridge has since converted has no
+ * working tree at all and shows it as the version `current` points at.
+ */
+function activated(root: string, target: string): boolean {
+  const active = createVersionStore(root).currentName();
+  const sha = active ? parseVersionName(active)?.sha : null;
+  return sha
+    ? target.startsWith(sha)
+    : gitOk(root, "merge-base", "--is-ancestor", target, "HEAD");
 }
 
 function optionalGit(root: string, ...args: string[]): string | null {
@@ -250,7 +264,7 @@ export function runRepairUpdate(
       { cwd: root, stdio: "inherit", env: process.env },
     );
     if (update.status !== 0) throw new Error("the repaired updater failed");
-    if (!gitOk(root, "merge-base", "--is-ancestor", target, "HEAD"))
+    if (!activated(root, target))
       throw new Error(
         "the repaired updater did not activate the fetched target",
       );
@@ -286,8 +300,7 @@ function argument(name: string): string | undefined {
   return value;
 }
 
-const invokedPath = process.argv[1] ? realpathSync(process.argv[1]) : "";
-if (invokedPath === realpathSync(fileURLToPath(import.meta.url))) {
+if (isEntrypoint(import.meta.url)) {
   try {
     runRepairUpdate({
       inputRoot: argument("--root") || process.cwd(),

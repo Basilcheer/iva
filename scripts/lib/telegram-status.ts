@@ -29,6 +29,7 @@ type Reporter = {
   start(phase: UpdatePhase): Promise<void>;
   done(phase: UpdatePhase): Promise<void>;
   fail(phase: UpdatePhase, beforeVersion: string): Promise<void>;
+  busy(): Promise<void>;
   postCommitFailure(message: string): Promise<void>;
   complete(versions: {
     beforeVersion: string;
@@ -58,6 +59,7 @@ const COPY = {
     build: ["Building Iva", "Iva built", "Couldn't build Iva"],
     timerFailure:
       "Iva is ready, but the automatic update timer could not be activated",
+    busy: "An update is already running",
     final: "✅ Iva updated",
     preserved: "Local changes: preserved",
     conflicted: (count: number) =>
@@ -82,6 +84,7 @@ const COPY = {
     build: ["Собираю Iva", "Iva собрана", "Не удалось собрать Iva"],
     timerFailure:
       "Iva готова, но таймер автоматических обновлений не удалось активировать",
+    busy: "Обновление уже идёт",
     final: "✅ Iva обновлена",
     preserved: "Локальные изменения: сохранены",
     conflicted: (count: number) =>
@@ -243,6 +246,12 @@ export function createTelegramUpdateReporter({
       currentPhase = null;
       await finish(`⚠️ ${reason}\n\n${copy.failure(beforeVersion)}`);
     },
+    // The tap that finds an update already running: the message it edited must
+    // not be left saying the update is under way.
+    async busy() {
+      currentPhase = null;
+      await finish(`⚠️ ${copy.busy}`);
+    },
     async postCommitFailure(message: string) {
       currentPhase = null;
       await finish(`⚠️ ${copy.timerFailure}\n\n${message}`);
@@ -288,6 +297,18 @@ export function createTelegramUpdateReporter({
     },
     dispose() {},
   };
+}
+
+/**
+ * A reporter for a job read off disk. Both updaters load the same untrusted JSON,
+ * so the cast that admits it lives here, next to the validation it stands on.
+ */
+export function reporterFor(
+  job: unknown,
+  token: string | undefined,
+  env: Record<string, string | undefined>,
+): Reporter | null {
+  return createTelegramUpdateReporter({ token, job: job as TelegramJob, env });
 }
 
 export async function loadTelegramJob(

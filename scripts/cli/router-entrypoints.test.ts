@@ -14,6 +14,9 @@ function runCli(args: readonly string[]) {
     env: {
       ...process.env,
       AGENT_LANGUAGE: "en",
+      // Node prints a warning to stderr when both are set, and these tests hold the
+      // CLI to an empty stderr - which must not depend on the operator's shell.
+      FORCE_COLOR: undefined,
       IVA_NO_ANIM: "1",
       NO_COLOR: "1",
       TERM: "dumb",

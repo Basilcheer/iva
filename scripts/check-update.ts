@@ -1,6 +1,7 @@
-import { dirname, join, resolve } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { acquireUpdateLock, releaseUpdateLock } from "./lib/update-safety.ts";
+import { isEntrypoint, upstreamQuery } from "./lib/version-layout.ts";
+import { acquireUpdateLock } from "./lib/version-store.ts";
 import {
   inspectUpstream,
   markVersionNotified,
@@ -22,7 +23,10 @@ type SendUpdateRequest = {
 type DailyUpdateOptions = {
   root?: string;
   env?: UpdateEnvironment;
-  inspectImpl?: (options: { root: string }) => Promise<UpdateInfo>;
+  inspectImpl?: (options: {
+    root: string;
+    head?: string;
+  }) => Promise<UpdateInfo>;
   sendImpl?: (request: SendUpdateRequest) => Promise<unknown>;
   readStateImpl?: typeof readNotifiedVersion;
   writeStateImpl?: typeof markVersionNotified;
@@ -46,13 +50,13 @@ export async function runDailyUpdateCheck({
   if (!token || !chatId) return { status: "not-configured" as const };
 
   const storage = dataDir(root, env);
-  const lock = acquireUpdateLock(
-    storage,
-    `daily-check-${process.pid}-${Date.now()}`,
-  );
-  if (!lock.ok) return { status: "update-running" as const };
+  // The same lock the updater itself takes, with the same rules about when a
+  // holder counts as gone: two answers to that question on one file is how a
+  // crashed update ends up blocking the daily check for hours.
+  const lock = acquireUpdateLock(storage);
+  if (!lock) return { status: "update-running" as const };
   try {
-    const info = await inspectImpl({ root });
+    const info = await inspectImpl(upstreamQuery(root));
     if (!info.hasVersionUpdate) return { status: "current" as const, info };
     if ((await readStateImpl(storage)) === info.remoteVersion) {
       return { status: "already-notified" as const, info };
@@ -67,17 +71,12 @@ export async function runDailyUpdateCheck({
     await writeStateImpl(storage, info.remoteVersion);
     return { status: "notified" as const, info };
   } finally {
-    releaseUpdateLock(lock);
+    lock.release();
   }
 }
 
 export async function main(entryUrl = import.meta.url): Promise<void> {
-  if (
-    !process.argv[1] ||
-    resolve(process.argv[1]) !== fileURLToPath(entryUrl)
-  ) {
-    return;
-  }
+  if (!isEntrypoint(entryUrl)) return;
   try {
     const result = await runDailyUpdateCheck();
     if (result.status === "notified") {

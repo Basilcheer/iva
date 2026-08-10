@@ -1,11 +1,12 @@
 /* eslint-disable @typescript-eslint/no-floating-promises -- Node's test runner owns registrations. */
 import assert from "node:assert/strict";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 import { createSystemdControl } from "../lib/systemd-control.ts";
+import { createVersionStore } from "../lib/version-store.ts";
 import { createDoctorCommand } from "./doctor.ts";
 import { createCliRuntime } from "./runtime.ts";
 import { createCliSystemd } from "./systemd.ts";
@@ -245,4 +246,44 @@ test("opencode diagnostics preserve required-key order", async (t) => {
     failures[0],
     ".env incomplete, missing: OPENCODE_API_KEY, OPENCODE_MODEL, DEEPGRAM_API_KEY, TELEGRAM_BOT_TOKEN, TELEGRAM_ALLOWED_USER_IDS, ASSISTANT_BEARER — run: iva config",
   );
+});
+
+test("doctor reports an update that flipped but never finished", async (t) => {
+  const home = await mkdtemp(join(tmpdir(), "iva-cli-doctor-home-"));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  const name = "0.3.15-abcdefabcdef";
+  const dir = join(home, "versions", name);
+  mkdirSync(join(dir, ".output/server"), { recursive: true });
+  writeFileSync(join(dir, ".output/server/index.mjs"), "export {};\n");
+  writeFileSync(join(dir, ".env"), "present=true\n");
+  mkdirSync(join(home, "data"), { recursive: true });
+  symlinkSync(dir, join(home, "current"));
+
+  const events: Array<[string, string]> = [];
+  const root = join(home, "current");
+  const runtime: CliRuntime = {
+    ...createCliRuntime(root),
+    C: NO_COLOR,
+    ok: (message) => events.push(["ok", message]),
+    warn: (message) => events.push(["warn", message]),
+    bad: (message) => events.push(["bad", message]),
+    readEnv: completeEnv,
+    hasSystemd: () => false,
+  };
+  const doctor = createDoctorCommand(runtime, lifecycle(), {
+    nodeVersion: "24.19.0",
+    log: () => undefined,
+    exit: () => undefined,
+  });
+
+  await doctor();
+  const unfinished = (): boolean =>
+    events.some(([, message]) => message.includes(`update to ${name} never`));
+  assert.ok(unfinished(), JSON.stringify(events));
+
+  // Once the installation records the move, there is nothing left to report.
+  createVersionStore(home).settle(name);
+  events.length = 0;
+  await doctor();
+  assert.equal(unfinished(), false, JSON.stringify(events));
 });

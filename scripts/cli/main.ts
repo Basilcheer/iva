@@ -7,6 +7,7 @@ import { createCliSystemd } from "./systemd.ts";
 import { createTreeRenderer } from "./tree.ts";
 import { createUpdateCommand } from "./update.ts";
 import { createUserbotCommands } from "./userbot.ts";
+import { createVersionUpdateCommand } from "./version-update-command.ts";
 
 export type CliCommand = (args: readonly string[]) => unknown;
 
@@ -52,12 +53,23 @@ export function createCliMain(root: string) {
   const services = createServiceCommands(runtime, systemdLifecycle);
   const cmdConfig = createConfigCommand(runtime, systemdLifecycle);
   const cmdDoctor = createDoctorCommand(runtime, systemdLifecycle);
-  const cmdUpdate = createUpdateCommand({
+  const legacyUpdate = createUpdateCommand({
     runtime,
     systemdLifecycle,
     showTree: tree.showTree,
     restartUserbotIfActive: userbot.restartUserbotIfActive,
   });
+  // Installations move to immutable versions; a development checkout keeps the
+  // in-place updater, which is also what the bridge era still needs on the way in.
+  //
+  // The move therefore takes two `iva update` runs, and that is not a bug to fix
+  // here: the first one is executed entirely by the code the user already has -
+  // the old stash-and-rebase updater, which knows nothing about versions - and
+  // all it can do is bring this file onto their disk. The second run is the first
+  // one that reaches this routing, and it is the one that converts the layout.
+  const versionUpdate = createVersionUpdateCommand(runtime, systemdLifecycle);
+  const cmdUpdate = (args: readonly string[]): Promise<void> =>
+    versionUpdate.active() ? versionUpdate.run(args) : legacyUpdate(args);
   const { C, SERVICES, TIMERS, bad, ok } = runtime;
 
   function cmdHelp(): void {
@@ -68,6 +80,7 @@ ${C.b}Commands:${C.x}
   ${C.c}iva update${C.x}         update: git pull + build + restart
   ${C.c}iva config${C.x}         configure: model, Telegram, Deepgram, TZ, vault
   ${C.c}iva login${C.x} [--browser]  sign in to an OpenAI subscription (ChatGPT) for MODEL_PROVIDER=codex
+  ${C.c}iva rollback${C.x}       go back to the previous version (symlink flip + restart)
   ${C.c}iva doctor${C.x}         diagnose and safely auto-repair the install
   ${C.c}iva status${C.x}         status of services and memory timers
   ${C.c}iva restart${C.x}        restart the agent and Telegram bridge
@@ -85,6 +98,7 @@ ${C.b}Commands:${C.x}
 
   const commands: Readonly<Record<string, CliCommand>> = {
     update: cmdUpdate,
+    rollback: versionUpdate.rollback,
     userbot: userbot.cmdUserbot,
     config: cmdConfig,
     login: account.cmdLogin,

@@ -16,7 +16,8 @@ import {
   updateOffer,
 } from "../lib/update-check.ts";
 import { modelSummary } from "../lib/model-summary.ts";
-import { acquireUpdateLock, releaseUpdateLock } from "../lib/update-safety.ts";
+import { upstreamQuery } from "../lib/version-layout.ts";
+import { updateRunning } from "../lib/version-store.ts";
 import { getLang, tr } from "#lib/i18n.ts";
 import {
   ALLOWED,
@@ -31,7 +32,12 @@ import { edit, reply, tg } from "./transport.ts";
 
 type UpdateInfo = Awaited<ReturnType<typeof inspectUpstream>>;
 type UpdateCheckOptions = {
-  inspectImpl?: (options: { root: string }) => Promise<UpdateInfo>;
+  /** The tree this bridge runs out of; on the immutable layout, `<home>/current`. */
+  root?: string;
+  inspectImpl?: (options: {
+    root: string;
+    head?: string;
+  }) => Promise<UpdateInfo>;
   markNotifiedImpl?: (dataDir: string, version: string) => Promise<void>;
   envImpl?: () => Promise<NodeJS.ProcessEnv>;
 };
@@ -77,6 +83,7 @@ function launchSelfUpdate(jobId: string): Promise<LaunchResult> {
 export async function handleUpdateCheck(
   chatId: string | number,
   {
+    root = ROOT,
     inspectImpl = inspectUpstream,
     markNotifiedImpl = markVersionNotified,
     envImpl = () => readEnvFresh(ENV_PATH),
@@ -89,7 +96,10 @@ export async function handleUpdateCheck(
   if (!status) return;
   let info;
   try {
-    info = await inspectImpl({ root: ROOT });
+    // The same question the daily check asks, and on a converted installation the
+    // same two answers: a version has no `.git` of its own, and the mirror's HEAD
+    // is upstream's, so the running commit has to be named.
+    info = await inspectImpl(upstreamQuery(root));
   } catch {
     await edit(
       chatId,
@@ -276,8 +286,11 @@ export async function handleUpdateCallback(
   }
 
   const jobId = randomBytes(8).toString("hex");
-  const lock = acquireUpdateLock(DATA_DIR, jobId);
-  if (!lock.ok) {
+  // Asked, never taken: the updater this launches owns the lock from end to end.
+  // A lock claimed here on its behalf would outlive the launch - this bridge does
+  // not release it, and it is restarted by the very update it is waiting for - so
+  // one tap would answer "already running" to every update after it.
+  if (updateRunning(DATA_DIR)) {
     await edit(
       chatId as string | number,
       messageId as number,
@@ -306,7 +319,6 @@ export async function handleUpdateCallback(
   );
   const r = await launchSelfUpdate(jobId);
   if (!r.ok) {
-    releaseUpdateLock(lock);
     await rm(join(jobs, `${jobId}.json`), { force: true });
     await edit(
       chatId as string | number,

@@ -22,6 +22,7 @@ import {
   rebaseBuildOutput,
   type MaterializedCustomLayer,
 } from "./lib/custom-layer.ts";
+import { classifyRoot, isEntrypoint } from "./lib/version-layout.ts";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const BUILD_ROOT = join(ROOT, ".iva-build");
@@ -128,40 +129,49 @@ export function buildWithCustomLayer(): void {
     if (existsSync(join(ROOT, ".env")))
       symlinkSync(join(ROOT, ".env"), join(staging, ".env"));
 
-    const customDataDir = resolve(dataDir());
-    let head = "";
-    try {
-      head = execFileSync("git", ["rev-parse", "HEAD"], {
-        cwd: ROOT,
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "pipe"],
-      }).trim();
-    } catch {
-      // Release archives without Git metadata still support a clean core build.
-    }
-    let hasCustomizations = false;
-    if (head)
+    // An installed version is an immutable tree that already has the user's
+    // customization overlaid into it, and it owns no git metadata - so the
+    // legacy custom layer has nothing to do here. Asking anyway would be worse
+    // than useless: git discovery climbs out of the version into whatever
+    // checkout the installation still has above it, and the answer would rebase
+    // this version's output onto a runtime directory outside the version, on a
+    // revision that is not this version's.
+    if (classifyRoot(ROOT).kind === "checkout") {
+      const customDataDir = resolve(dataDir());
+      let head = "";
       try {
-        captureCustomLayer({
-          root: ROOT,
-          dataDir: customDataDir,
-          baseRevision: head,
-        });
-        hasCustomizations =
-          Object.keys(readCustomManifest(customDataDir).entries).length > 0;
-      } catch (error) {
-        invalidRecoveryDir = archiveInvalidCustomLayer({
+        head = execFileSync("git", ["rev-parse", "HEAD"], {
+          cwd: ROOT,
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "pipe"],
+        }).trim();
+      } catch {
+        // Release archives without Git metadata still support a clean core build.
+      }
+      let hasCustomizations = false;
+      if (head)
+        try {
+          captureCustomLayer({
+            root: ROOT,
+            dataDir: customDataDir,
+            baseRevision: head,
+          });
+          hasCustomizations =
+            Object.keys(readCustomManifest(customDataDir).entries).length > 0;
+        } catch (error) {
+          invalidRecoveryDir = archiveInvalidCustomLayer({
+            dataDir: customDataDir,
+            targetRevision: head,
+            error,
+          });
+        }
+      if (hasCustomizations) {
+        materialized = materializeCustomLayer({
+          root: staging,
           dataDir: customDataDir,
           targetRevision: head,
-          error,
         });
       }
-    if (hasCustomizations) {
-      materialized = materializeCustomLayer({
-        root: staging,
-        dataDir: customDataDir,
-        targetRevision: head,
-      });
     }
 
     const npm = process.platform === "win32" ? "npm.cmd" : "npm";
@@ -198,5 +208,4 @@ export function buildWithCustomLayer(): void {
   }
 }
 
-if (resolve(process.argv[1] ?? "") === resolve(fileURLToPath(import.meta.url)))
-  buildWithCustomLayer();
+if (isEntrypoint(import.meta.url)) buildWithCustomLayer();

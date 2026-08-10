@@ -5,6 +5,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import {
   chmodSync,
   copyFileSync,
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -462,15 +463,15 @@ test("a tombstone conflicts safely when upstream changes the deleted file", (t) 
 test("the public build falls back to core when Git metadata is unavailable", (t) => {
   const root = mkdtempSync(join(tmpdir(), "iva-build-no-git-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
-  mkdirSync(join(root, "scripts/lib"), { recursive: true });
+  mkdirSync(join(root, "scripts"), { recursive: true });
   copyFileSync(
     join(PROJECT_ROOT, "scripts/build.ts"),
     join(root, "scripts/build.ts"),
   );
-  copyFileSync(
-    join(PROJECT_ROOT, "scripts/lib/custom-layer.ts"),
-    join(root, "scripts/lib/custom-layer.ts"),
-  );
+  // The whole lib tree, so a new import inside build.ts cannot silently break the fixture.
+  cpSync(join(PROJECT_ROOT, "scripts/lib"), join(root, "scripts/lib"), {
+    recursive: true,
+  });
   symlinkSync(
     join(PROJECT_ROOT, "node_modules"),
     join(root, "node_modules"),

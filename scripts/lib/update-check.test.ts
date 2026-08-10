@@ -7,7 +7,9 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -33,7 +35,7 @@ type DailyUpdateResult = {
 type DailyUpdateOptions = {
   root?: string;
   env?: Record<string, string>;
-  inspectImpl?: () => Promise<{
+  inspectImpl?: (options: { root: string; head?: string }) => Promise<{
     hasVersionUpdate: boolean;
     localVersion?: string;
     remoteVersion?: string;
@@ -356,4 +358,30 @@ test("a post-commit timer failure exits without rollback or a false update claim
     cliUpdate.match(/if \(!\(await finalizeUpdate\(\)\)\) return;/g)?.length,
     2,
   );
+});
+
+test("on the versioned layout the daily check reads the mirror and names the installed commit", async () => {
+  const home = realpathSync(mkdtempSync(join(tmpdir(), "iva-daily-layout-")));
+  const sha = "a".repeat(40);
+  const name = `0.3.15-${sha.slice(0, 12)}`;
+  mkdirSync(join(home, "versions", name), { recursive: true });
+  mkdirSync(join(home, "repo"), { recursive: true });
+  mkdirSync(join(home, "data"), { recursive: true });
+  symlinkSync(join(home, "versions", name), join(home, "current"));
+
+  const asked: { root?: string; head?: string }[] = [];
+  const result = await runDailyUpdateCheck({
+    // The units run from `current`, which is where the check starts too.
+    root: join(home, "current"),
+    env: { TELEGRAM_BOT_TOKEN: "token", TELEGRAM_ALLOWED_USER_IDS: "1" },
+    inspectImpl: async (options) => {
+      asked.push(options);
+      return { hasVersionUpdate: false };
+    },
+  });
+  assert.equal(result.status, "current");
+  // The mirror's own HEAD follows the remote, so the active version has to be named.
+  assert.deepEqual(asked, [
+    { root: join(home, "repo"), head: sha.slice(0, 12) },
+  ]);
 });

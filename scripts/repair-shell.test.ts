@@ -223,3 +223,26 @@ void test("repair falls back to clean core when customized dependencies fail", (
     rmSync(fixture, { recursive: true, force: true });
   }
 });
+
+void test("repair refuses a versioned install and names the commands that fit it", () => {
+  const fixture = mkdtempSync(join(tmpdir(), "iva-repair-versioned-"));
+  try {
+    const install = join(fixture, "iva");
+    mkdirSync(join(install, "versions/0.3.15-0123456789ab"), {
+      recursive: true,
+    });
+    const result = execFileSync("bash", [join(ROOT, "repair.sh")], {
+      cwd: fixture,
+      encoding: "utf8",
+      env: { ...process.env, IVA_INSTALL_DIR: install },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    assert.fail(`repair.sh should have refused: ${result}`);
+  } catch (error) {
+    const failure = error as { status?: number; stderr?: string };
+    assert.equal(failure.status, 1);
+    assert.match(String(failure.stderr), /iva update.*iva rollback/u);
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+});

@@ -1041,8 +1041,7 @@ export function createUpdateTransaction({
       const rebaseApply = join(gitDir, "rebase-apply");
       if (
         existsSync(join(gitDir, "rebase-merge")) ||
-        (existsSync(rebaseApply) &&
-          !existsSync(join(rebaseApply, "applying")))
+        (existsSync(rebaseApply) && !existsSync(join(rebaseApply, "applying")))
       )
         await git("rebase", "--abort");
     }

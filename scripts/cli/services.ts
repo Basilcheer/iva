@@ -1,4 +1,7 @@
-import { relative } from "node:path";
+import { join, relative } from "node:path";
+import { classifyRoot } from "../lib/version-layout.ts";
+import { createVersionStore, parseVersionName } from "../lib/version-store.ts";
+import { builtWith, customOverlay } from "../lib/version-update.ts";
 import {
   quarantinePath as defaultQuarantinePath,
   resetStateTargets as defaultResetStateTargets,
@@ -66,6 +69,43 @@ export function createServiceCommands(
     requireSystemd();
     restartServices(); // regenerate the unit before restart → PORT stays in sync with IVA_PORT in .env
     ok("Restarted: iva + telegram-poll");
+    warnUnbuiltCustom();
+  }
+
+  /**
+   * A restart runs the version that is installed; it never builds one. Editing
+   * `data/custom` therefore changes nothing until the version containing it is
+   * built, and silence is the worst possible answer to somebody who has just
+   * written a skill and restarted to see it work.
+   */
+  function warnUnbuiltCustom(): void {
+    // Only versions carry a build; on a checkout `iva restart` must not shell out
+    // to git to learn what it can see for itself.
+    const install = classifyRoot(ROOT);
+    if (install.kind !== "version") return;
+    const store = createVersionStore(install.home);
+    const active = store.currentName();
+    if (!active) return;
+    const customDir = join(store.layout.data, "custom");
+    const digest = customOverlay(customDir).digest;
+    if (parseVersionName(active)?.overlay !== digest) {
+      warn(
+        "data/custom changed since this version was built - run: iva update",
+      );
+      return;
+    }
+    // The version carries the digest of a customization that then failed to
+    // build or start, so the stock tree was installed under that name. Nothing
+    // about the digest says so - only the files in the tree do - and this is the
+    // case where a user is most sure their skill should be running.
+    if (
+      digest &&
+      builtWith(join(store.layout.versions, active), active, customDir) !==
+        "applied"
+    )
+      warn(
+        "data/custom is not in the version that runs: it did not build or start - fix it and run: iva update",
+      );
   }
 
   // Full reset: stop services, quarantine workflow + Telegram control state, bring it back up.

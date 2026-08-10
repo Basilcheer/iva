@@ -19,6 +19,9 @@ command -v node >/dev/null 2>&1 || die "Node.js is required"
 
 node_major="$(node -p 'process.versions.node.split(".")[0]')"
 [ "$node_major" -ge 24 ] || die "Node 24 or newer is required"
+if [ ! -d "$INSTALL_DIR/.git" ] && [ -d "$INSTALL_DIR/versions" ]; then
+  die "$INSTALL_DIR already runs versioned installs: use 'iva update', or 'iva rollback' to return to the previous version"
+fi
 [ -d "$INSTALL_DIR/.git" ] || die "Iva was not found at $INSTALL_DIR"
 
 INSTALL_DIR="$(cd "$INSTALL_DIR" && pwd -P)"
@@ -137,7 +140,8 @@ done < <(find "$INSTALL_DIR" -maxdepth 1 -type f -name '.env.*' -print0)
 
 mkdir -p -- "$candidate/data/update-recovery/$stamp"
 recovery="$candidate/data/update-recovery/$stamp"
-chmod 700 -- "$candidate/data/update-recovery" "$recovery"
+# Both paths are absolute, so no end-of-options marker is needed to keep them apart from flags.
+chmod 700 "$candidate/data/update-recovery" "$recovery"
 final_recovery="$INSTALL_DIR/data/update-recovery/$stamp"
 cp -- "$state_dir/changes.patch" "$recovery/changes.patch"
 cp -- "$state_dir/untracked.zlist" "$recovery/untracked.zlist"
@@ -154,7 +158,11 @@ if [ -s "$state_dir/changes.patch" ]; then
     apply_code=$?
   fi
   if [ "$apply_code" -ne 0 ]; then
-    mapfile -t conflicts < <(git -C "$candidate" diff --name-only --diff-filter=U)
+    # bash 3.2 (macOS) has no mapfile; NUL-delimited read also survives odd path names.
+    conflicts=()
+    while IFS= read -r -d '' conflict; do
+      conflicts+=("$conflict")
+    done < <(git -C "$candidate" diff --name-only --diff-filter=U -z)
     if [ "${#conflicts[@]}" -gt 0 ]; then
       printf '%s\n' "${conflicts[@]}" >>"$recovery/conflicts.txt"
       git -C "$candidate" checkout HEAD -- "${conflicts[@]}"

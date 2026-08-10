@@ -2,8 +2,16 @@
 // *.trash-<штамп> (атомарно в пределах одной ФС) с ротацией старых карантинов.
 // Даёт откат после случайного reset: припаркованные диалоги возвращаются обратным
 // переименованием, пока карантин не вытеснен ротацией.
-import { chmodSync, lstatSync, readdirSync, renameSync, rmSync } from "node:fs";
+import {
+  chmodSync,
+  lstatSync,
+  mkdirSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+} from "node:fs";
 import { basename, dirname, join } from "node:path";
+import { throughLink } from "./version-layout.ts";
 
 export const TRASH_KEEP = 2;
 
@@ -23,9 +31,10 @@ function pathStat(path: string) {
 // file/dir → path.trash-<stamp>. Одна операция reset передаёт общий stamp; если такой
 // карантин уже есть, суффикс не даёт затереть предыдущую копию.
 export function quarantinePath(
-  path: string,
+  link: string,
   stamp = new Date().toISOString().replace(/[:.]/g, "-"),
 ): string | null {
+  const path = throughLink(link);
   const stat = pathStat(path);
   if (!stat) return null;
   const base = `${path}.trash-${stamp}`;
@@ -38,6 +47,10 @@ export function quarantinePath(
   if (stat.isDirectory()) chmodSync(path, 0o700);
   else if (stat.isFile()) chmodSync(path, 0o600);
   renameSync(path, dest);
+  // Ссылка не должна повиснуть: mkdir через висящий симлинк — ENOENT, и сервис,
+  // который сам создаёт свой стор при старте, после reset уже не поднимется.
+  if (path !== link && stat.isDirectory())
+    mkdirSync(path, { recursive: true, mode: 0o700 });
   pruneTrash(path);
   return dest;
 }
