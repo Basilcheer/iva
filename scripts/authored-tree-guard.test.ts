@@ -25,10 +25,9 @@ const BLOCKED_ESCAPES: ReadonlySet<string> = new Set([
   "agent/instrumentation.ts -> ../scripts/lib/schedule-migration.ts",
   "agent/instrumentation.ts -> ../scripts/lib/timezone.ts",
   "agent/provider.ts -> ../scripts/lib/model-catalog.ts",
-  // `iva login` and `iva usage`: statically invisible, but `scripts/cli/account-entrypoints.test.ts`
-  // runs both against a fixture holding only `bin/` + `scripts/` and catches the move.
+  // `iva login`: statically invisible, but `scripts/cli/account-entrypoints.test.ts` runs the
+  // command against a fixture holding only `bin/` + `scripts/` and catches the move.
   "agent/provider.ts -> ../scripts/lib/codex-oauth.ts",
-  "agent/hooks/usage.ts -> ../../scripts/lib/usage.ts",
   // The memory release owns the other consumers (`scripts/memory/{doctor,rollup}.ts`),
   // so the cap and its clamp move with that release rather than against it.
   "agent/instructions/20-core.ts -> ../../scripts/lib/core-cap.ts",

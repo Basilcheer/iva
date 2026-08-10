@@ -1,5 +1,5 @@
 import { defineHook } from "eve/hooks";
-import { appendUsage, subagentTurnId } from "../../scripts/lib/usage.ts";
+import { appendUsage, subagentTurnId } from "../lib/usage.js";
 
 // Учёт фактического расхода токенов. ОДИН хук ловит весь расход одного eve-агента без
 // двойного счёта: основной чат (channel.kind="telegram") и фоновые джобы через eve/client —
@@ -8,8 +8,7 @@ import { appendUsage, subagentTurnId } from "../../scripts/lib/usage.ts";
 // читают мост (/usage) и CLI (`iva usage`).
 //
 // ВАЖНО: в отличие от transcript.ts НЕ фильтруем finishReason="tool-calls" — расход есть на
-// КАЖДОМ шаге модели, включая tool-call раунды. Относительный импорт scripts/lib работает
-// в бандле (см. transcript.ts).
+// КАЖДОМ шаге модели, включая tool-call раунды.
 
 const PROVIDER = process.env.MODEL_PROVIDER ?? "ollama";
 // Модель/провайдер не приходят в событие — берём из env (та же логика, что в agent/agent.ts).
@@ -78,7 +77,7 @@ export default defineHook({
     // значит ключ sessionId:turnId столкнулся бы с каким-то ходом родителя (сразу после
     // /new — с его же текущим turn_0, позже — с давним одноимённым). Пишем ход РОДИТЕЛЯ
     // с суффиксом: ключ уникален по построению, а привязка к ходу сохраняется, поэтому
-    // расход субагента продолжает попадать в «итого за ход» (scripts/lib/usage.ts).
+    // расход субагента продолжает попадать в «итого за ход» (отчёт: scripts/lib/usage.ts).
     "subagent.event": (event, ctx) => {
       const inner = event.data.event;
       if (inner.type === "step.completed") {

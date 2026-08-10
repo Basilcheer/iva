@@ -1,9 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { appendUsage, subagentTurnId } from "#lib/usage.ts";
 import {
   formatUsageReport,
   parseWindow,
-  subagentTurnId,
+  readEntries,
   summarize,
   type UsageRecord,
 } from "./usage.ts";
@@ -273,28 +277,31 @@ void test("a subagent step is not counted as a separate turn in windowed summari
   assert.equal(agg.totals.steps, 2);
 });
 
-void test("the subagent turn key falls back the way Eve itself does", () => {
-  assert.equal(
-    subagentTurnId({ id: "turn_5", sequence: 5 }, "planner", "turn_0"),
-    "turn_5#planner",
-  );
-  assert.equal(
-    subagentTurnId({ id: "", sequence: 7 }, "planner", "turn_0"),
-    "turn_7#planner",
-  );
-  assert.equal(
-    subagentTurnId({ sequence: 0 }, "planner", "turn_3"),
-    "turn_0#planner",
-  );
-  assert.equal(
-    subagentTurnId(undefined, "planner", "turn_3"),
-    "turn_3#planner",
-  );
-  assert.equal(subagentTurnId({}, "planner", "turn_3"), "turn_3#planner");
-  assert.equal(
-    subagentTurnId({ id: "turn_5" }, undefined, "turn_0"),
-    "turn_5#subagent",
-  );
+// Пишет лог authored tree, читает его отчёт — общего кода у половин нет, поэтому путь
+// файла и форма записи держатся только на этом прогоне: разъедутся — падает здесь.
+void test("the authored tree's append lands where the report reads it", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "iva-usage-roundtrip-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const dataDir = join(root, "data");
+  const entries = [
+    step({ step: 0, in: 104_632, out: 160, total: 104_792 }),
+    step({
+      step: 1,
+      turnId: subagentTurnId({ id: "turn_1", sequence: 1 }, "planner"),
+      subagent: "planner",
+      in: 19_800,
+      out: 90,
+      total: 19_890,
+    }),
+  ];
+  for (const entry of entries) appendUsage(entry, dataDir);
+
+  assert.deepEqual(readEntries(dataDir), entries);
+  const { last } = summarize(readEntries(dataDir), { window: "last" });
+  assert.ok(last);
+  assert.equal(last.in, 104_632);
+  assert.equal(last.subagent, "planner");
+  assert.equal(last.steps, 2);
 });
 
 void test("a fallback key still groups into the parent turn and keeps context clean", () => {
