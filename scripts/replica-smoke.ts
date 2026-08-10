@@ -5,7 +5,15 @@
 // Запуск: npm run replica (в CI — шаг после build). По мотивам stabilization-форка
 // mamysh/iva (PR #7), переписано под upstream.
 import { spawn } from "node:child_process";
-import { mkdtemp, mkdir, rm, symlink, writeFile, cp } from "node:fs/promises";
+import {
+  mkdtemp,
+  mkdir,
+  readFile,
+  rm,
+  symlink,
+  writeFile,
+  cp,
+} from "node:fs/promises";
 import { createServer } from "node:net";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -226,11 +234,79 @@ async function prepareReplica(sandbox: string): Promise<string> {
   // а здесь он бы стоил минуты и сотни мегабайт на каждый прогон.
   await symlink(join(ROOT, "node_modules"), join(app, "node_modules"), "dir");
   await mkdir(join(app, "data"), { recursive: true });
+  // Канал-фикстура живёт ТОЛЬКО в одноразовом приложении: он даёт смоуку тот же
+  // send/reset, что зовёт telegram-мост. Пути роутов дублируются константами ниже —
+  // разъехались, и смоук падает на 404, молча пройти не сможет.
+  await cp(
+    join(ROOT, "scripts/fixtures/reset-canary-channel.ts"),
+    join(app, "agent/channels/reset-canary.ts"),
+  );
   return app;
 }
 
 function errorDetail(error: unknown): unknown {
   return (error as { message?: unknown } | null | undefined)?.message ?? error;
+}
+
+// Роуты канала-фикстуры scripts/fixtures/reset-canary-channel.ts.
+const CANARY_SEND_ROUTE = "/replica/canary/send";
+const CANARY_RESET_ROUTE = "/replica/canary/reset";
+const CANARY_REPLY_LOG = "replica-canary.jsonl";
+
+async function canaryPost(
+  { port, bearer }: { port: number; bearer: string },
+  route: string,
+  body: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const res = await fetch(`http://127.0.0.1:${port}${route}`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${bearer}`,
+    },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(30_000),
+  });
+  const text = await res.text();
+  if (!res.ok)
+    throw new Error(
+      `${route} returned HTTP ${res.status}: ${text.slice(0, 300)}`,
+    );
+  return JSON.parse(text) as Record<string, unknown>;
+}
+
+/**
+ * Ждёт финальную реплику канала-фикстуры для sessionId, считая только записи ПОСЛЕ
+ * `fromLine`: второй ход той же сессии иначе прочитал бы ответ первого и любая проверка
+ * истории стала бы вакуумной. Возвращает курсор для следующего ожидания.
+ */
+async function canaryReply(
+  logPath: string,
+  sessionId: string,
+  fromLine: number,
+  timeoutMs = TURN_TIMEOUT_MS,
+): Promise<{ message: string; line: number }> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    let lines: string[] = [];
+    try {
+      lines = (await readFile(logPath, "utf8")).split("\n").filter(Boolean);
+    } catch {
+      /* лог появляется вместе с первой завершённой репликой */
+    }
+    for (let i = fromLine; i < lines.length; i++) {
+      const entry = JSON.parse(lines[i]) as {
+        sessionId?: unknown;
+        message?: unknown;
+      };
+      if (entry.sessionId === sessionId && typeof entry.message === "string")
+        return { message: entry.message.trim(), line: i + 1 };
+    }
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  throw new Error(
+    `canary turn for session ${sessionId} did not complete within ${timeoutMs / 1000}s`,
+  );
 }
 
 async function main(): Promise<void> {
@@ -328,37 +404,76 @@ async function main(): Promise<void> {
       );
     }
 
-    // Канарейка reset: контракт eve — «reset retires a session so its continuation
-    // starts fresh». Проверяем именно его: сеем маркер, ресетим сессию и приходим
-    // с тем же continuationToken (мост в Telegram пересобирает токен детерминированно
-    // и другого прислать не может). Если история пережила reset — маркер вернётся,
-    // и /new врёт пользователю про «контекст очищен» (issue #110).
+    // Канарейка reset (issue #110): /new обязан реально чистить контекст на том токене,
+    // который придёт от Telegram. Мост других токенов не присылает — он пересобирает свой
+    // детерминированно из chat_id, — поэтому проверка идёт по пути канала: send() без
+    // intent (resume-or-start) и reset() на том же канале, ровно как в agent/channels/telegram.ts.
+    // Сначала положительный контроль (по токену история ВИДНА), потом reset, потом тот же
+    // токен обязан прийти в пустую сессию. Без первого шага второй ничего не доказывает.
     setPhase("reset-canary");
-    const canary = client.session();
-    const seeded = await turn(canary, `Remember this code: ${RESET_MARKER}`);
-    if (seeded !== "REMEMBERED")
+    const canaryLog = join(app, "data", CANARY_REPLY_LOG);
+    const canaryToken = `replica-canary:${randomBytes(6).toString("hex")}`;
+    const canaryHttp = { port, bearer };
+    const recall =
+      "What code did I ask you to remember? Reply with the code only.";
+    let canaryLine = 0;
+    const canaryTurn = async (
+      message: string,
+    ): Promise<{ sessionId: string; reply: string }> => {
+      const from = canaryLine;
+      const accepted = await canaryPost(canaryHttp, CANARY_SEND_ROUTE, {
+        token: canaryToken,
+        message,
+      });
+      const sessionId = accepted.sessionId;
+      if (typeof sessionId !== "string" || !sessionId)
+        throw new Error(
+          `canary send returned no session id: ${JSON.stringify(accepted)}`,
+        );
+      const settled = await canaryReply(canaryLog, sessionId, from);
+      canaryLine = settled.line;
+      return { sessionId, reply: settled.message };
+    };
+
+    const seed = await canaryTurn(`Remember this code: ${RESET_MARKER}`);
+    if (seed.reply !== "REMEMBERED")
       throw new Error(
-        `unexpected canary seed reply: ${JSON.stringify(seeded)}`,
+        `unexpected canary seed reply: ${JSON.stringify(seed.reply)}`,
       );
-    const beforeReset = canary.state;
-    if (!beforeReset?.continuationToken)
-      throw new Error("canary session parked without a continuation token");
-    const resetResult = await canary.reset();
-    if (resetResult?.status !== "reset")
+
+    const before = await canaryTurn(recall);
+    if (before.sessionId !== seed.sessionId)
+      throw new Error(
+        `canary token did not resume its own session: ${before.sessionId} != ${seed.sessionId}`,
+      );
+    if (before.reply !== RESET_MARKER)
+      throw new Error(
+        `canary token could not reach its history before reset: ${JSON.stringify(before.reply)}`,
+      );
+
+    const resetResult = await canaryPost(canaryHttp, CANARY_RESET_ROUTE, {
+      token: canaryToken,
+    });
+    if (resetResult.status !== "reset")
       throw new Error(
         `unexpected reset status: ${JSON.stringify(resetResult)}`,
       );
-    const afterReset = await turn(
-      client.session(beforeReset),
-      "What code did I ask you to remember? Reply with the code only.",
-    );
-    if (afterReset.includes(RESET_MARKER)) {
+    if (resetResult.activeSessionAfterReset !== null)
       throw new Error(
-        `reset did not retire the session: history survived (${JSON.stringify(afterReset)})`,
+        `reset left the token owned: ${JSON.stringify(resetResult)}`,
       );
-    }
+
+    const after = await canaryTurn(recall);
+    if (after.sessionId === seed.sessionId)
+      throw new Error(
+        `reset did not retire the session: the token still resumes ${after.sessionId}`,
+      );
+    if (after.reply.includes(RESET_MARKER))
+      throw new Error(
+        `reset did not clear the context: history survived (${JSON.stringify(after.reply)})`,
+      );
     console.log(
-      `replica smoke: reset retires the session OK (post-reset reply: ${afterReset})`,
+      `replica smoke: reset clears the context on the same token OK (before: ${before.reply}, after: ${after.reply})`,
     );
 
     if (mock.requests.length < 3)
