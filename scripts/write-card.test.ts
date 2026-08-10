@@ -1486,6 +1486,49 @@ test("устаревший history_entry на новом теле отклоня
   assert.equal(archived.match(/^## History$/gm)!.length, 1);
 });
 
+test("открытый фенс в лежащей карточке отклоняет и UPDATE, а не прячет факт в код", async () => {
+  const base = {
+    operation: "ADD",
+    type: "note",
+    title: "Фенс в карточке до UPDATE",
+    description: "в теле карточки остался открытый фенс",
+    tags: ["note", "fence"],
+    body: "Owner: Alice.",
+  };
+  const created = await call(base);
+  assert.equal(created.ok, true);
+  // Опечатка человека: фенс открыт выше ## Log, поэтому секции не видно и новая запись
+  // уехала бы внутрь кода - в карточке она есть, а для читателя её нет.
+  const poisoned =
+    `${read(created.file).trimEnd()}\n\n` +
+    "```yaml\nowner: Alice\n\n" +
+    "## Log\n\n- 2026-01-01: Ownership confirmed\n";
+  writeFileSync(join(VAULT, created.file), poisoned);
+
+  const rejected = await call({
+    ...base,
+    operation: "UPDATE",
+    body: "Новый факт.",
+  });
+  assert.equal(rejected.ok, false);
+  assert.match(rejected.error, /existing card body leaves a code fence open/);
+  assert.match(rejected.error, /close it before UPDATE/);
+  assert.equal(read(created.file), poisoned);
+
+  // Тот же UPDATE проходит, как только фенс закрыт человеком.
+  writeFileSync(
+    join(VAULT, created.file),
+    poisoned.replace("owner: Alice\n", "owner: Alice\n```\n"),
+  );
+  const accepted = await call({
+    ...base,
+    operation: "UPDATE",
+    body: "Новый факт.",
+  });
+  assert.equal(accepted.ok, true);
+  assert.match(read(created.file), /^- \d{4}-\d{2}-\d{2}: Новый факт\.$/m);
+});
+
 test("atomicWrite не оставляет временных файлов и пишет целиком", () => {
   const dir = join(VAULT, "cards", "notes");
   const file = join(dir, "atomic-probe.md");

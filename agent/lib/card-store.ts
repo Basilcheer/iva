@@ -750,11 +750,15 @@ export function mergeCard(input: MergeInput): MergeResult {
   const parsed = parseFrontmatter(existing);
   const oldBody = parsed.body;
   // Тот же принцип со стороны диска: открытый фенс в лежащей карточке уводит её
-  // ## History в код, границ секций нет - замена Compiled Truth молча снесла бы весь
-  // append-only архив. Отказ; фенс в карточке чинит человек.
-  if (operation === "SUPERSEDE" && hasUnclosedFence(oldBody)) {
+  // ## History и ## Log в код, границ секций нет - SUPERSEDE молча снёс бы весь
+  // append-only архив, а UPDATE не нашёл бы Log и дописал бы факт внутрь кода, откуда
+  // его уже не видно. Отказ для обеих операций; фенс в карточке чинит человек.
+  if (
+    (operation === "SUPERSEDE" || operation === "UPDATE") &&
+    hasUnclosedFence(oldBody)
+  ) {
     throw new Error(
-      "existing card body leaves a code fence open; close it before SUPERSEDE",
+      `existing card body leaves a code fence open; close it before ${operation}`,
     );
   }
   if (
