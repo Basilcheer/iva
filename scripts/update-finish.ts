@@ -152,10 +152,13 @@ export async function main(argv: readonly string[]): Promise<number> {
       restart: async (root) => {
         const { createCliRuntime } = await import("./cli/runtime.ts");
         const { createCliSystemd } = await import("./cli/systemd.ts");
+        const { reinstallUserbot } = await import("./cli/userbot.ts");
         // Units name `current`: they survive every later flip unrewritten.
         const runtime = createCliRuntime(root);
-        createCliSystemd(runtime).restartServices();
+        const services = createCliSystemd(runtime);
+        services.restartServices();
         runtime.systemd.activate([runtime.UPDATE_TIMER]);
+        reinstallUserbot(runtime, services, notify);
         await Promise.resolve();
       },
       adopt: () => {

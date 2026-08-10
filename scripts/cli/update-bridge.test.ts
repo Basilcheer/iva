@@ -644,3 +644,52 @@ test("the move to versions keeps the files git ignores inside the code tree", (t
   assert.equal(existsSync(join(iva.home, "scripts")), false, output);
   assert.equal(existsSync(join(iva.home, "bin")), false, output);
 });
+
+test("an update puts the userbot proxy on the version it installs", (t) => {
+  const iva = world(t);
+  const output = update(iva);
+  // The unit is written against `current`, so the interpreter it execs has to
+  // exist in the version that just became current - nothing else creates it.
+  const unit = readFileSync(
+    join(iva.fakeHome, ".config/systemd/user/iva-telegram-userbot.service"),
+    "utf8",
+  );
+  const python = /^ExecStart=(\S+)/mu.exec(unit)?.[1] ?? "";
+  assert.match(python, new RegExp(`^${iva.home}/current/`, "u"));
+  assert.ok(existsSync(python), `${python} is missing\n${output}`);
+  assert.ok(
+    existsSync(
+      join(
+        iva.home,
+        "versions",
+        String(active(iva)),
+        "services/telegram-userbot/.venv/bin/python",
+      ),
+    ),
+    output,
+  );
+  // Built from the version's own lock file, and the proxy put on the new code.
+  const uv = readFileSync(iva.uvLog, "utf8");
+  assert.match(uv, /^venv --python 3\.12 \.venv$/mu);
+  assert.match(uv, /^pip sync --python .*--require-hashes --strict/mu);
+  assert.match(
+    readFileSync(iva.systemctlLog, "utf8"),
+    /restart iva-telegram-userbot\.service/u,
+  );
+});
+
+test("an update whose userbot proxy cannot be rebuilt still installs the version", (t) => {
+  const iva = world(t);
+  update(iva);
+  const first = active(iva);
+  // The lock file of the new version is unreadable: `uv` is never reached, and
+  // a broken integration must not hold back the release that carries its fix.
+  const sha = iva.publish((tree) =>
+    rmSync(join(tree, "services/telegram-userbot/requirements.lock")),
+  );
+
+  const output = update(iva);
+  assert.equal(active(iva), `0.3.15-${sha.slice(0, 12)}`, output);
+  assert.notEqual(active(iva), first);
+  assert.match(output, /telegram userbot proxy did not come up/u);
+});

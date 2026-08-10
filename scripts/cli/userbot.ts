@@ -273,3 +273,25 @@ export function createUserbotCommands(
     cmdUserbot,
   };
 }
+
+/**
+ * Put the proxy on the code a version just installed. Its venv is built beside
+ * that code, so a fresh version has none and the unit would exec an interpreter
+ * that is not there. Never fatal: an integration that cannot be rebuilt is a
+ * broken integration, not a failed update.
+ */
+export function reinstallUserbot(
+  runtime: UserbotRuntime,
+  systemdLifecycle: Pick<CliSystemd, "writeUnits">,
+  report: (message: string) => void,
+): void {
+  try {
+    createUserbotCommands(runtime, systemdLifecycle).restartUserbotIfActive({
+      quiet: true,
+    });
+  } catch (error) {
+    report(
+      `the telegram userbot proxy did not come up: ${(error as Error).message}`,
+    );
+  }
+}
