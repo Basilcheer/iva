@@ -8,10 +8,11 @@
 import { defineSchedule } from "eve/schedules";
 import { readSettings } from "../lib/settings.js";
 import { resolvePaths } from "../lib/schedule-paths.js";
+import { SCHEDULE_CRON } from "../lib/schedule-table.js";
 import { runScheduledJob } from "../../scripts/lib/schedule-runner.ts";
 
 export default defineSchedule({
-  cron: "0 8 * * *",
+  cron: SCHEDULE_CRON.digest,
   run({ waitUntil }) {
     const settings = readSettings() as {
       digestSchedule?: { enabled?: boolean };

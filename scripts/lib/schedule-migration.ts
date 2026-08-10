@@ -20,6 +20,11 @@ import { existsSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 
+// Type-only, so nothing from agent/ is linked here: scripts/cli/systemd.ts imports this
+// module just for LEGACY_MEMORY_UNITS and has to resolve on a scripts-only tree. The table
+// itself is loaded on the catch-up path below, which only ever runs from the agent.
+import type { ScheduleName, scheduleTimeOfDay } from "#lib/schedule-table.ts";
+
 import {
   readStatus,
   runScheduledJob,
@@ -91,23 +96,20 @@ export const LEGACY_MEMORY_UNITS: readonly string[] = [
   "iva-memory-yearly.timer",
 ];
 
-// { period, cron hour:minute in local tz, day-of-week|day-of-month|month constraint }
-// mirrors the cron strings the eve schedules carry (see agent/schedules/memory-*.ts) —
-// keep these two in sync by hand, there is no single shared source at the cron-string level.
-const PERIOD_SCHEDULE: Record<
-  Period,
-  { readonly hour: number; readonly minute: number; readonly graceMs: number }
-> = {
-  daily: { hour: 4, minute: 0, graceMs: 20 * 60 * 60 * 1000 },
-  weekly: { hour: 4, minute: 15, graceMs: 3 * 24 * 60 * 60 * 1000 },
-  monthly: { hour: 4, minute: 20, graceMs: 7 * 24 * 60 * 60 * 1000 },
-  yearly: { hour: 4, minute: 25, graceMs: 14 * 24 * 60 * 60 * 1000 },
+// How late a missed run may still be caught up, per period — a catch-up policy of this
+// module alone. WHEN each period fires comes from agent/lib/schedule-table.ts, the single
+// source the eve schedules themselves read.
+const PERIOD_GRACE_MS: Record<Period, number> = {
+  daily: 20 * 60 * 60 * 1000,
+  weekly: 3 * 24 * 60 * 60 * 1000,
+  monthly: 7 * 24 * 60 * 60 * 1000,
+  yearly: 14 * 24 * 60 * 60 * 1000,
 };
-const PERIODS = Object.keys(PERIOD_SCHEDULE) as Period[];
+const PERIODS = Object.keys(PERIOD_GRACE_MS) as Period[];
 
 // The status-file key a real run is recorded under — must match the `name` each
 // agent/schedules/memory-*.ts passes to runScheduledJob, not the bare period.
-function statusKey(period: Period): string {
+function statusKey(period: Period): ScheduleName {
   return `memory-${period}`;
 }
 
@@ -207,8 +209,13 @@ function mondayOffset(y: number, m: number, d: number): number {
 }
 
 // Returns the most recent scheduled UTC epoch ms for a period, at or before `nowMs`.
-function lastDueMs(period: Period, nowMs: number, tz: string): number {
-  const { hour, minute } = PERIOD_SCHEDULE[period];
+function lastDueMs(
+  period: Period,
+  nowMs: number,
+  tz: string,
+  timeOfDay: typeof scheduleTimeOfDay,
+): number {
+  const { hour, minute } = timeOfDay(statusKey(period));
   const today = zonedParts(nowMs, tz);
 
   if (period === "daily") {
@@ -339,11 +346,15 @@ export async function runScheduleMigration({
   try {
     if (!statusPath) return;
 
+    // WHEN each period fires comes from the schedule table the eve schedules themselves
+    // read — loaded here rather than at the top of the file, see the import note above.
+    const { scheduleTimeOfDay } = await import("#lib/schedule-table.ts");
+
     const runPeriod =
       runJob ??
       ((period: Period) =>
         runScheduledJob({
-          name: `memory-${period}`,
+          name: statusKey(period),
           argv: ["scripts/memory/rollup.ts", period],
           root,
           nodeBin,
@@ -391,8 +402,8 @@ export async function runScheduleMigration({
         const due: DuePeriod[] = [];
         for (const period of PERIODS) {
           if (freshlySeeded.has(period)) continue;
-          const { graceMs } = PERIOD_SCHEDULE[period];
-          const dueAt = lastDueMs(period, nowMs, tz);
+          const graceMs = PERIOD_GRACE_MS[period];
+          const dueAt = lastDueMs(period, nowMs, tz, scheduleTimeOfDay);
           const entry = seeded[statusKey(period)];
           // A real success always wins; otherwise fall back to the seeded baseline (if
           // any) so a freshly-seeded period doesn't immediately look "due" the moment

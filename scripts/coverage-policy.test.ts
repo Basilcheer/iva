@@ -8,9 +8,9 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
-const EXPECTED_PRODUCTION_COUNT = 142;
+const EXPECTED_PRODUCTION_COUNT = 143;
 const EXPECTED_INVENTORY_SHA256 =
-  "aa2ef5f1802542550de00a190000435e1a2b63d7bb0c1fc8d32bb6b401e15ee2";
+  "53fcd1afe67c4c7fd2a460efc54859b80725cd7bf2eb1da3a91687c2209a4f29";
 
 // Node's native include globs filter loaded modules; they do not load untouched files.
 // This test pins the exact production path inventory and a separately measured 29-path

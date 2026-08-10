@@ -11,6 +11,9 @@ import { readFileSync } from "node:fs";
 import { execFile } from "node:child_process";
 import { join } from "node:path";
 import { readSettings } from "#lib/settings.ts";
+// Names double as status-file keys — the `name` each schedule passes to runScheduledJob
+// (see scripts/lib/schedule-runner.ts), not the bare period. Display order is table order.
+import { SCHEDULE_CRON } from "#lib/schedule-table.ts";
 
 const PER_PAGE = 8;
 const CACHE_TTL_MS = 60_000;
@@ -26,18 +29,6 @@ type MenuContext = {
   backRow: (screen: string) => Button[];
 };
 let cache: { at: number; timers: Timer[] | null } = { at: 0, timers: null };
-
-// Cron strings mirrored by hand from agent/schedules/*.ts — same tradeoff as
-// scripts/lib/schedule-migration.ts's PERIOD_SCHEDULE, there is no single shared source
-// at the cron-string level. Status-file keys match the `name` each schedule passes to
-// runScheduledJob (see scripts/lib/schedule-runner.ts), not the bare period.
-const EVE_SCHEDULES = [
-  { name: "memory-daily", cron: "0 4 * * *" },
-  { name: "memory-weekly", cron: "15 4 * * 1" },
-  { name: "memory-monthly", cron: "20 4 1 * *" },
-  { name: "memory-yearly", cron: "25 4 1 1 *" },
-  { name: "digest", cron: "0 8 * * *" },
-];
 
 function loadRollupStatus(dataDir: string): Record<string, RollupEntry> {
   try {
@@ -85,13 +76,13 @@ function digestEnabled() {
 function schedulesBlock(dataDir: string, T: Translate) {
   const status = loadRollupStatus(dataDir);
   const digestOn = digestEnabled();
-  const lines = EVE_SCHEDULES.map((s) => {
+  const lines = Object.entries(SCHEDULE_CRON).map(([name, cron]) => {
     // digest fires off by default (agent/schedules/digest.ts) — "never" would be
     // indistinguishable from "enabled but hasn't run yet"; say so explicitly instead.
-    if (s.name === "digest" && !digestOn) {
-      return `• ${s.name} (${s.cron}) → ${T("disabled", "выключен")}`;
+    if (name === "digest" && !digestOn) {
+      return `• ${name} (${cron}) → ${T("disabled", "выключен")}`;
     }
-    return `• ${s.name} (${s.cron}) → ${formatLastSuccess(status[s.name], T)}`;
+    return `• ${name} (${cron}) → ${formatLastSuccess(status[name], T)}`;
   });
   return `${T("📅 Schedules (inside Iva)", "📅 Расписания (внутри Ивы)")}\n${lines.join("\n")}`;
 }

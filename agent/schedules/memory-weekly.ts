@@ -2,10 +2,11 @@
 // See memory-daily.ts for the shared rationale (local-time cron, flock, no logic moved here).
 import { defineSchedule } from "eve/schedules";
 import { memoryRollupJob } from "../lib/schedule-paths.js";
+import { SCHEDULE_CRON } from "../lib/schedule-table.js";
 import { runScheduledJob } from "../../scripts/lib/schedule-runner.ts";
 
 export default defineSchedule({
-  cron: "15 4 * * 1",
+  cron: SCHEDULE_CRON["memory-weekly"],
   run({ waitUntil }) {
     waitUntil(runScheduledJob(memoryRollupJob("weekly")));
   },

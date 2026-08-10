@@ -91,15 +91,20 @@ upstream, remove the workarounds rather than leaving them as permanent scaffoldi
 
 ## 11. Cron/name metadata duplicated across schedules, migration, and the menu
 
-The same 5 schedule names + cron expressions are hand-maintained in three places:
+The same 5 schedule names + cron expressions used to be hand-maintained in three places:
 `agent/schedules/*.ts` (the actual cron strings), `scripts/lib/schedule-migration.ts`'s
 `PERIOD_SCHEDULE` (hour/minute per period, for catch-up math), and
 `scripts/lib/menu/crons.ts`'s `EVE_SCHEDULES` (for the /menu → ⏰ display). Changing one
-schedule's cadence means remembering to update up to three files by hand; a missed one
-would make the menu display (or the catch-up math) silently wrong. Fixing this properly
-means either introducing a single shared schedule-metadata source all three read from, or
-adding a CI check that parses and cross-validates the three copies — both a heavier lift
-than the rest of this pass, so deferred rather than done here.
+schedule's cadence meant remembering to update up to three files by hand; a missed one
+would make the menu display (or the catch-up math) silently wrong.
+
+RESOLVED: the table lives once, in `agent/lib/schedule-table.ts` (`SCHEDULE_CRON`), and
+all three read it — the schedule files take their `cron` from it, the migration derives the
+wall-clock catch-up point through `scheduleTimeOfDay()` (it keeps only its own per-period
+grace window, which is catch-up policy, not schedule metadata), and the menu renders the
+entries in table order. `agent/lib/schedule-table.test.ts` cross-checks the consumers
+against the table and fails if any cron expression reappears in another source file, so the
+copies cannot silently grow back.
 
 ## 12. scripts/autograph is a deliberate fork of smixs/autograph
 
