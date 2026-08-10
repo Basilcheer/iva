@@ -10,9 +10,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createTerminalProgress } from "../lib/progress.ts";
 import {
-  createTelegramUpdateReporter,
   loadTelegramJob,
   removeTelegramJob,
+  reporterFor,
 } from "../lib/telegram-status.ts";
 import { resolveUpdateTarget } from "../lib/update-channel.ts";
 import { gitAt, packageVersion, requireGit } from "../lib/update-check.ts";
@@ -102,14 +102,7 @@ export function createVersionUpdateCommand(
       jobAt >= 0 ? (args[jobAt + 1] ?? "") : "",
     );
     const reporter = job
-      ? createTelegramUpdateReporter({
-          // The reporter is the runtime boundary that validates a persisted job.
-          job: job.job as NonNullable<
-            Parameters<typeof createTelegramUpdateReporter>[0]
-          >["job"],
-          token: env.TELEGRAM_BOT_TOKEN,
-          env,
-        })
+      ? reporterFor(job.job, env.TELEGRAM_BOT_TOKEN, env)
       : null;
     const store = createVersionStore(install.home);
     // The last version the installation actually settled on: after an interrupted

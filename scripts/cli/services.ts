@@ -1,5 +1,5 @@
 import { join, relative } from "node:path";
-import { classifyRoot, isManagedInstall } from "../lib/version-layout.ts";
+import { classifyRoot } from "../lib/version-layout.ts";
 import { createVersionStore, parseVersionName } from "../lib/version-store.ts";
 import { builtWith, customOverlay } from "../lib/version-update.ts";
 import {
@@ -79,8 +79,10 @@ export function createServiceCommands(
    * written a skill and restarted to see it work.
    */
   function warnUnbuiltCustom(): void {
+    // Only versions carry a build; on a checkout `iva restart` must not shell out
+    // to git to learn what it can see for itself.
     const install = classifyRoot(ROOT);
-    if (!isManagedInstall(install)) return;
+    if (install.kind !== "version") return;
     const store = createVersionStore(install.home);
     const active = store.currentName();
     if (!active) return;

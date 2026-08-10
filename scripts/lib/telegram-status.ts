@@ -290,6 +290,18 @@ export function createTelegramUpdateReporter({
   };
 }
 
+/**
+ * A reporter for a job read off disk. Both updaters load the same untrusted JSON,
+ * so the cast that admits it lives here, next to the validation it stands on.
+ */
+export function reporterFor(
+  job: unknown,
+  token: string | undefined,
+  env: Record<string, string | undefined>,
+): Reporter | null {
+  return createTelegramUpdateReporter({ token, job: job as TelegramJob, env });
+}
+
 export async function loadTelegramJob(
   dataDir: string,
   jobId: string | undefined,

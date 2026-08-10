@@ -8,9 +8,9 @@ import {
   type TerminalProgress,
 } from "../lib/progress.ts";
 import {
-  createTelegramUpdateReporter,
   loadTelegramJob,
   removeTelegramJob,
+  reporterFor,
 } from "../lib/telegram-status.ts";
 import {
   acquireUpdateLock,
@@ -180,15 +180,7 @@ export function createUpdateCommand({
     createTerminalProgress,
     loadTelegramJob,
     createTelegramUpdateReporter: ({ token, job, env }) =>
-      createTelegramUpdateReporter({
-        token,
-        // The persisted job is deliberately interpreted by the reporter exactly as in the
-        // JavaScript CLI; reporter validation remains the runtime boundary for malformed JSON.
-        job: job as NonNullable<
-          Parameters<typeof createTelegramUpdateReporter>[0]
-        >["job"],
-        env,
-      }),
+      reporterFor(job, token, env),
     removeTelegramJob,
     acquireUpdateLock,
     createUpdateLog,
