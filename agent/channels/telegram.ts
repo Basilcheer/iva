@@ -16,19 +16,13 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
-// Разметка Telegram — ЕДИНЫЙ источник правды (тот же модуль, что у cron-скриптов).
-// toTelegramHtmlChunks: markdown → массив готовых, сбалансированных HTML-чанков ≤limit
-// (гарантирует длину ПОСЛЕ конвертации). htmlToPlain: декодирующий plain-фолбэк.
-import {
-  toTelegramHtmlChunks,
-  htmlToPlain,
-  needsRichMessage,
-} from "../../scripts/lib/telegram-format.ts";
+// Outbox — ЕДИНЫЙ шов наружу (тот же, через который уходят ночные отчёты cron):
+// внутри него outbound-Gate, выбор rich/HTML, нарезка на чанки и plain-фолбэк.
+import { sendThroughOutbox, type OutboxTransport } from "../lib/outbox.js";
 import { describeImage } from "../vision.js";
 import {
   hasInboundAttackSignal,
   sanitizeInbound,
-  scanOutbound,
 } from "../lib/security-gate.js";
 import {
   mediaFromRaw,
@@ -52,8 +46,7 @@ import {
   setChatStatusIf,
 } from "../lib/run-status.js";
 // Двуязычие: tr(en, ru) отдаёт строку по текущему языку (data/settings.json → env
-// AGENT_LANGUAGE). i18n.ts живёт в agent/lib — это уже не кросс-импорт, в отличие от
-// telegram-format выше.
+// AGENT_LANGUAGE).
 import { tr } from "../lib/i18n.js";
 import { buildTelegramReplyContext } from "../../scripts/lib/telegram-reply-context.ts";
 import { handleTelegramResetRequest } from "../../scripts/lib/telegram-reset-route.ts";
@@ -238,7 +231,7 @@ function buildAuth(msg: TelegramDispatchMessage) {
 //
 // Тот же крошечный хелпер продублирован в agent/hooks/transcript.ts — выносить в
 // общий модуль не стали из-за тривиальности (это пара fs-вызовов), а НЕ из-за бандла:
-// импорт из scripts/lib в бандл работает (см. telegram-format.ts). Формат d_brain:
+// импорт из scripts/lib в бандл работает (см. telegram-reply-context.ts). Формат d_brain:
 // `## HH:MM [type]` + контент.
 // Дата/время — в часовом поясе пользователя (ASSISTANT_TIMEZONE, иначе локальный TZ).
 function localStamp(): { date: string; hhmm: string; hhmmss: string } {
@@ -637,8 +630,8 @@ async function processMediaPart(
   }
 }
 
-// Markdown → Telegram HTML и нарезка на чанки — в общем модуле
-// scripts/lib/telegram-format.ts (тот же конвертер использует cron). Импорт выше.
+// Разметка, нарезка на чанки и гейт — внутри Outbox (agent/lib/outbox.ts), тот же шов
+// использует cron. Импорт выше.
 
 // --- ESC-остановка хода (аналог ESC в Claude Code) ---
 //
@@ -857,6 +850,73 @@ function failureMessage(data: { message: string; details?: unknown }): string {
   ].join("\n");
 }
 
+// Транспорт Outbox для канала: доставка через хендл eve. Что и в каком виде отдавать,
+// решает шов (agent/lib/outbox.ts) — здесь только вызовы Bot API и логи отказов.
+function outboxTransport(
+  tg: Pick<TelegramHandle, "chatId" | "messageThreadId" | "request" | "post">,
+): OutboxTransport {
+  return {
+    // Rich message (sendRichMessage, Bot API 10.1): таблицы/таск-листы/<details>/формулы
+    // рендерятся нативно — HTML-путь так не умеет. Любая ошибка (старый Bot API, парс,
+    // лимит 32768, RICH_MESSAGE_*) уводит шов в HTML-путь, то есть в поведение до rich.
+    // request() = raw Bot API call, транспорт JSON, поэтому rich_message шлём объектом.
+    async sendRich(markdown) {
+      try {
+        const res = await tg.request("sendRichMessage", {
+          chat_id: tg.chatId,
+          rich_message: { markdown },
+          ...(tg.messageThreadId !== undefined
+            ? { message_thread_id: tg.messageThreadId }
+            : {}),
+        });
+        if (res.ok) return { ok: true };
+        console.error(
+          "[telegram] sendRichMessage отвергнут, фолбэк HTML:",
+          res.status,
+          JSON.stringify(res.body).slice(0, 300),
+        );
+        return {
+          ok: false,
+          error: `sendRichMessage ${res.status}`,
+          retryPlain: false,
+        };
+      } catch (err) {
+        console.error("[telegram] sendRichMessage упал, фолбэк HTML:", err);
+        return { ok: false, error: String(err), retryPlain: false };
+      }
+    },
+    async sendHtml(html) {
+      try {
+        // eve's TelegramMessageBody type omits parse_mode, но рантайм
+        // (normalizeTelegramMessageBody) спредит тело прямо в sendMessage —
+        // поле доходит до Telegram, и от него зависит наш HTML-рендер. Расширяем тип локально.
+        await tg.post({
+          text: html,
+          parse_mode: "HTML",
+        } as TelegramMessageBody & { parse_mode: "HTML" });
+        return { ok: true };
+      } catch (err) {
+        console.error(
+          "[telegram] HTML отвергнут, шлю plain:",
+          err,
+          "| HTML:",
+          html.slice(0, 300),
+        );
+        return { ok: false, error: String(err), retryPlain: true };
+      }
+    },
+    async sendPlain(text) {
+      try {
+        await tg.post(text);
+        return { ok: true };
+      } catch (e2) {
+        console.error("[telegram] plain-фолбэк тоже упал:", e2);
+        return { ok: false, error: String(e2), retryPlain: false };
+      }
+    },
+  };
+}
+
 const telegram = telegramChannel({
   botUsername: process.env.TELEGRAM_BOT_USERNAME ?? "my_bot",
   // Картинку/файл НЕ суём в запрос к модели (это и ломалось: octet-stream → reject, потом
@@ -967,12 +1027,11 @@ const telegram = telegramChannel({
         setStatusIfImpl: setChatStatusIf,
       });
     },
-    // Ответ модели → красивый Telegram-HTML. Переопределяет дефолтную plain-доставку
-    // eve. Промежуточный текст перед tool-calls не шлём (зеркалим дефолт). Конвертер
-    // даёт всегда валидный HTML, поэтому 400 от Telegram практически недостижим — но
-    // если случился, НЕ глотаем молча: логируем и шлём один раз plain (теги срезаны,
-    // без parse_mode → по сущностям 400 невозможен). Без повторного хода модели — ход
-    // уже закрыт, реформат произойдёт на следующем сообщении (ошибка видна в логе/vault).
+    // Ответ модели уходит через Outbox — он же переопределяет дефолтную plain-доставку
+    // eve. Промежуточный текст перед tool-calls не шлём (зеркалим дефолт). Повторного
+    // хода модели на сбой доставки нет — ход уже закрыт, реформат произойдёт на следующем
+    // сообщении (ошибка видна в логе/vault). Латентность засчитываем, только если ушло
+    // хотя бы одно сообщение и ни одно не потерялось.
     async "message.completed"(data, channel, ctx) {
       if (data.finishReason === "tool-calls" || !data.message) return;
       const recordDelivery = (delivered: boolean) =>
@@ -987,81 +1046,11 @@ const telegram = telegramChannel({
           getStatusImpl: getChatStatus,
           setStatusIfImpl: setChatStatusIf,
         });
-      // Outbound security-гейт: редактим утёкшие секреты/эксфил-URL ДО отправки. Fail-open —
-      // если гейт что-то нашёл, шлём отредактированное и громко логируем (блокировать ответ
-      // целиком хуже редкой утечки для единственного владельца).
-      const guard = scanOutbound(data.message);
-      if (!guard.clean) {
-        console.error(
-          "[security] outbound leak redacted:",
-          guard.findings.map((f) => `${f.type}:${f.name}`).join(", "),
-        );
-      }
-      // toTelegramHtmlChunks режет на чанки И конвертирует, гарантируя длину каждого
-      // чанка ≤4096 ПОСЛЕ конвертации (ручной chunkMarkdown+mdToTelegramHtml мог раздуть
-      // чанк тегами за лимит → 400). Пустые чанки не шлём (Telegram отвергает пустой текст).
-
-      // Rich message (sendRichMessage, Bot API 10.1): таблицы/таск-листы/<details>/формулы
-      // рендерятся нативно — HTML-путь так не умеет. Пробуем rich ТОЛЬКО для них; любая
-      // ошибка (старый Bot API, парс, лимит 32768, RICH_MESSAGE_*) проваливается в HTML-путь
-      // ниже — worst case = сегодняшнее поведение. request() = raw Bot API call, транспорт
-      // JSON, поэтому rich_message шлём объектом. chat_id/thread берём из channel.telegram.
-      if (needsRichMessage(guard.text)) {
-        try {
-          const res = await channel.telegram.request("sendRichMessage", {
-            chat_id: channel.telegram.chatId,
-            rich_message: { markdown: guard.text },
-            ...(channel.telegram.messageThreadId !== undefined
-              ? { message_thread_id: channel.telegram.messageThreadId }
-              : {}),
-          });
-          if (res.ok) {
-            recordDelivery(true);
-            return;
-          }
-          console.error(
-            "[telegram] sendRichMessage отвергнут, фолбэк HTML:",
-            res.status,
-            JSON.stringify(res.body).slice(0, 300),
-          );
-        } catch (err) {
-          console.error("[telegram] sendRichMessage упал, фолбэк HTML:", err);
-        }
-      }
-
-      let attemptedDelivery = false;
-      let allChunksDelivered = true;
-      for (const html of toTelegramHtmlChunks(guard.text, 4096)) {
-        if (!html) continue;
-        attemptedDelivery = true;
-        let chunkDelivered = false;
-        try {
-          // eve's TelegramMessageBody type omits parse_mode, но рантайм
-          // (normalizeTelegramMessageBody) спредит тело прямо в sendMessage —
-          // поле доходит до Telegram, и от него зависит наш HTML-рендер. Расширяем тип локально.
-          await channel.telegram.post({
-            text: html,
-            parse_mode: "HTML",
-          } as TelegramMessageBody & { parse_mode: "HTML" });
-          chunkDelivered = true;
-        } catch (err) {
-          console.error(
-            "[telegram] HTML отвергнут, шлю plain:",
-            err,
-            "| HTML:",
-            html.slice(0, 300),
-          );
-          try {
-            // htmlToPlain декодирует сущности (&amp;→&), иначе они утекли бы литералами.
-            await channel.telegram.post(htmlToPlain(html));
-            chunkDelivered = true;
-          } catch (e2) {
-            console.error("[telegram] plain-фолбэк тоже упал:", e2);
-          }
-        }
-        if (!chunkDelivered) allChunksDelivered = false;
-      }
-      if (attemptedDelivery && allChunksDelivered) recordDelivery(true);
+      const result = await sendThroughOutbox(
+        data.message,
+        outboxTransport(channel.telegram),
+      );
+      if (result.delivered > 0 && result.ok) recordDelivery(true);
     },
     // Ход упал: статус прибираем по CAS, но сообщение об ошибке от него не гейтим —
     // позднее terminal-событие всё равно должно объяснить пользователю, что произошло.
