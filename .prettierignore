@@ -9,3 +9,5 @@ services/telegram-userbot/
 data/
 scripts/autograph/tests/golden/
 CHANGELOG.md
+wt/
+.gauntlet/
