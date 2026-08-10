@@ -13,7 +13,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test, { type TestContext } from "node:test";
 import { createWorld, type World } from "../fixtures/install-world.ts";
 import { createVersionStore } from "../lib/version-store.ts";
@@ -618,4 +618,29 @@ test("a rollback with nothing to go back to changes nothing", (t) => {
   assert.equal(result.status, 1);
   assert.match(result.stdout, /no previous version/u);
   assert.equal(active(iva), only);
+});
+
+test("the move to versions keeps the files git ignores inside the code tree", (t) => {
+  const iva = world(t);
+  // Two kinds of state that live inside the code tree and only git ignores:
+  // the proxy's virtualenv, built by `iva userbot setup`, and a credential a
+  // skill keeps beside itself. Neither is recoverable and neither is ours.
+  const venv = join(iva.home, "services/telegram-userbot/.venv/bin/python");
+  mkdirSync(dirname(venv), { recursive: true });
+  writeFileSync(venv, "#!/bin/sh\nexit 0\n");
+  const secret = join(iva.home, "agent/skills/bts/token.local");
+  mkdirSync(dirname(secret), { recursive: true });
+  writeFileSync(secret, "s3cret\n");
+
+  const output = update(iva);
+  assert.equal(readFileSync(venv, "utf8"), "#!/bin/sh\nexit 0\n", output);
+  assert.equal(readFileSync(secret, "utf8"), "s3cret\n", output);
+  // The tracked code beside them still goes: only the ignored files stayed.
+  assert.equal(
+    existsSync(join(iva.home, "services/telegram-userbot/requirements.lock")),
+    false,
+    output,
+  );
+  assert.equal(existsSync(join(iva.home, "scripts")), false, output);
+  assert.equal(existsSync(join(iva.home, "bin")), false, output);
 });

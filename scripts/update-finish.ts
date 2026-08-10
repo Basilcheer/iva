@@ -4,6 +4,8 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
+  rmdirSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -69,14 +71,15 @@ export function writeShim(home: string, log: Say): void {
 
 /**
  * Remove the working tree the installation ran from, now that a version runs
- * instead. Only files git accounts for and only where they are unedited: a layout
- * change is not a right to delete what the user put there.
+ * instead. Only files git accounts for, only where they are unedited, and one file
+ * at a time: what git ignores inside a tracked directory - the userbot's venv, a
+ * skill's credentials - is the user's, and a layout change is no right to it.
  */
 export function retireCheckout(home: string): string[] {
   let tracked: string[];
   let dirty: Set<string>;
   try {
-    tracked = git(home, ["ls-tree", "--name-only", "HEAD"])
+    tracked = git(home, ["ls-tree", "-r", "--name-only", "HEAD"])
       .split("\n")
       .map((name) => name.trim())
       .filter(Boolean);
@@ -92,19 +95,26 @@ export function retireCheckout(home: string): string[] {
   }
   if (!tracked.includes("package.json")) return [];
 
-  const removed: string[] = [];
-  // Artifacts unconditionally: rebuilt, never authored, and .git is mirrored.
-  for (const name of [
-    ...tracked.filter((name) => !dirty.has(name)),
-    ...ARTIFACTS,
-  ]) {
-    if (KEEP.has(name)) continue;
-    const path = join(home, name);
-    if (!existsSync(path)) continue;
-    rmSync(path, { recursive: true, force: true });
-    removed.push(name);
+  const removed = new Set<string>();
+  // Artifacts however edited: rebuilt, never authored, and .git is mirrored.
+  for (const path of [...tracked, ...ARTIFACTS]) {
+    const name = topLevel(path);
+    if (KEEP.has(name) || (dirty.has(name) && !ARTIFACTS.includes(path)))
+      continue;
+    const full = join(home, path);
+    if (!existsSync(full)) continue;
+    rmSync(full, { recursive: true, force: true });
+    removed.add(name);
+    // Up to the first directory that still holds something, which is never ours:
+    // git listed everything of ours in `tracked`.
+    for (
+      let at = dirname(full);
+      at !== home && readdirSync(at).length === 0;
+      at = dirname(at)
+    )
+      rmdirSync(at);
   }
-  return removed.sort();
+  return [...removed].sort();
 }
 
 /**
