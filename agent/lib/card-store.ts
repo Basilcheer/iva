@@ -346,14 +346,16 @@ function canonicalHistoryEntry(historyEntry: string, date: string): string {
     : `- ${date}: ${entry}`;
 }
 
-function lastHistoryEntry(body: string): string | undefined {
+/** Строки-факты append-only архива. Пусто, если ## History нет или их несколько: границы
+ * архива неоднозначны, судить по нему нельзя. */
+function historyEntries(body: string): string[] {
   const lines = body.split("\n");
   const sections = h2Sections(lines, "History");
-  if (sections.length !== 1) return undefined;
-  const content = lines
+  if (sections.length !== 1) return [];
+  return lines
     .slice(sections[0].start + 1, sections[0].end)
-    .filter((line) => line.trim());
-  return content.at(-1)?.trim();
+    .map((line) => line.trim())
+    .filter(Boolean);
 }
 
 /** Текст факта без буллета и без ведущей даты записи - общая форма для сверки
@@ -366,20 +368,23 @@ function historyFact(line: string): string {
     .replace(/^\d{4}-\d{2}-\d{2}:\s*/, "");
 }
 
-/** То же вытеснение, что уже стоит в хвосте Истории. Датированную строку сверяем
- * целиком: две даты у одного факта - два разных вытеснения. Недатированную сверяем
- * по тексту факта, иначе её повтор на следующие сутки уедет в архив второй строкой
- * под новой датой. Дальше хвоста дедуп не идёт - это уничтожало бы свидетельства. */
-function repeatsHistoryTail(
+/** То же вытеснение, что уже лежит в архиве. Датированную строку сверяем целиком: две
+ * даты у одного факта - два разных вытеснения. Недатированную сверяем по тексту факта,
+ * иначе её повтор на следующие сутки уедет в архив второй строкой под новой датой.
+ * Сверка идёт по всему архиву, а не по его хвосту: доставленный не по порядку SUPERSEDE
+ * вытесняет факт, заархивированный несколько шагов назад, и по одному хвосту он
+ * неотличим от нового - карточка откатилась бы на архивную истину, потеряв нынешнюю. */
+function repeatsArchivedFact(
   historyEntry: string,
   dated: string,
-  tail: string | undefined,
+  archived: string[],
 ): boolean {
-  if (tail === undefined) return false;
-  if (tail.trim() === dated.trim()) return true;
   const fact = historyEntry.trim().replace(/^[-*]\s+/, "");
-  if (/^\d{4}-\d{2}-\d{2}:/.test(fact)) return false;
-  return historyFact(tail) === fact;
+  const undated = !/^\d{4}-\d{2}-\d{2}:/.test(fact);
+  return archived.some(
+    (entry) =>
+      entry.trim() === dated.trim() || (undated && historyFact(entry) === fact),
+  );
 }
 
 /** Многострочное тело ложится под буллет Log со сдвигом на два пробела. Судить его надо
@@ -408,7 +413,7 @@ function collapseLogSections(body: string): string {
 
 interface CompiledTruthResult {
   body: string;
-  /** historyEntry совпал с хвостом лежащего архива, поэтому строка НЕ дописана. */
+  /** historyEntry совпал со строкой лежащего архива, поэтому НЕ дописан. */
   suppressedAgainstArchive: boolean;
 }
 
@@ -516,13 +521,15 @@ function replaceCompiledTruth(
     const dated = canonicalHistoryEntry(historyEntry, date);
     const pending = additions.get("history") ?? [];
     // Один вытесненный факт - одна строка. Модель, дописавшая ## History в body
-    // (секция принадлежит write_card), и реплей уже выполненного вызова подают
-    // тот же факт вторым путём; хвост Истории решает, новый он или нет.
-    const tail = pending.at(-1)?.trim() ?? lastHistoryEntry(oldBody);
-    if (repeatsHistoryTail(historyEntry, dated, tail)) {
-      // Совпал с хвостом лежащего архива - строки нет ни в одном пути записи, и
-      // вызывающий обязан убедиться, что это реплей, а не потеря факта. Совпал с
-      // подаваемым суффиксом (легаси-путь) - факт пишется телом, терять нечего.
+    // (секция принадлежит write_card), и повторная доставка уже выполненного вызова
+    // подают тот же факт вторым путём; архив решает, новый он или нет. Легаси-путь
+    // сверяется с подаваемым суффиксом: там факт пишется телом, терять нечего.
+    const archived = pending.length
+      ? [pending.at(-1) as string]
+      : historyEntries(oldBody);
+    if (repeatsArchivedFact(historyEntry, dated, archived)) {
+      // Совпал с лежащим архивом - строки нет ни в одном пути записи, и вызывающий
+      // обязан убедиться, что это реплей, а не потеря факта.
       suppressedAgainstArchive = pending.length === 0;
     } else {
       additions.set("history", [...pending, dated]);
@@ -803,9 +810,9 @@ export function mergeCard(input: MergeInput): MergeResult {
   let newBody = operation === "UPDATE" ? collapseLogSections(oldBody) : oldBody;
   let appended = false;
   // A confirmed-cancel rollup retry can replay the exact completed tool call: the same
-  // canonical entry already ends History, so the truth behind it is displaced already and
+  // canonical entry is already archived, so the truth behind it is displaced already and
   // the entry is not written twice. Anything else that ends here is not a replay - see the
-  // fail-closed gate below. Global History dedup would destroy evidence.
+  // fail-closed gate below, which keeps a stale delivery from rolling the card back.
   let suppressedHistoryEntry = false;
   if (operation === "SUPERSEDE") {
     const replaced = replaceCompiledTruth(
@@ -842,11 +849,13 @@ export function mergeCard(input: MergeInput): MergeResult {
       (typeof previousStamp === "string" && render(previousStamp) === existing)
     )
       return { content: existing, action: "noop" };
-    // Карточка меняется, а строка архива подавлена как дубль хвоста - значит это не
-    // реплей, а устаревший historyEntry поверх нового тела: вытесняемый факт не назван
-    // и молча пропал бы. Отказ; модель обязана прислать факт, который вытесняет ЭТОТ вызов.
+    // Карточка меняется, а строка архива подавлена как дубль - значит это не реплей, а
+    // устаревший historyEntry поверх нового тела: либо модель повторила вчерашний факт,
+    // либо это доставленный не по порядку прошлый SUPERSEDE, который откатил бы truth на
+    // архивную истину. В обоих случаях нынешний факт не назван и молча пропал бы. Отказ;
+    // вызывающий обязан прислать факт, который вытесняет ЭТОТ вызов.
     throw new Error(
-      "historyEntry already ends ## History but this SUPERSEDE still changes the card; " +
+      "historyEntry already appears in ## History but this SUPERSEDE still changes the card; " +
         "send the fact this call displaces",
     );
   }

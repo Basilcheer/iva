@@ -1486,6 +1486,83 @@ test("устаревший history_entry на новом теле отклоня
   assert.equal(archived.match(/^## History$/gm)!.length, 1);
 });
 
+test("SUPERSEDE, доставленный не по порядку, не откатывает truth на архивный факт", async () => {
+  const base = {
+    operation: "ADD",
+    type: "note",
+    title: "Не по порядку",
+    description: "владелец Алиса",
+    tags: ["note", "owner"],
+    body: "Владелец Алиса.",
+  };
+  const created = await call(base);
+  assert.equal(created.ok, true);
+
+  const toBob = {
+    ...base,
+    operation: "SUPERSEDE",
+    description: "владелец Боб",
+    body: "Владелец Боб.",
+    history_entry: "2026-08-09: Владелец Алиса.",
+  };
+  assert.equal((await call(toBob)).action, "replaced");
+  const toCarol = {
+    ...base,
+    operation: "SUPERSEDE",
+    description: "владелец Кэрол",
+    body: "Владелец Кэрол.",
+    history_entry: "2026-08-09: Владелец Боб.",
+  };
+  assert.equal((await call(toCarol)).action, "replaced");
+  const archived = read(created.file);
+
+  // Повторная доставка ПРЕДЫДУЩЕГО SUPERSEDE: его строка архива давно не хвост, но факт
+  // уже вытеснен. Пропустить вызов - откатить truth на Боба, потеряв Кэрол молча, и
+  // положить в append-only архив второго Алису. Отказ, карточка не тронута.
+  for (const history_entry of [
+    "2026-08-09: Владелец Алиса.",
+    "Владелец Алиса.",
+  ]) {
+    const stale = await call({ ...toBob, history_entry });
+    assert.equal(stale.ok, false, history_entry);
+    assert.match(stale.error, /still changes the card/);
+    assert.equal(read(created.file), archived, "карточка не тронута");
+  }
+  assert.match(archived.split("## History")[0], /Владелец Кэрол\./);
+  assert.equal(archived.match(/Владелец Алиса\./g)!.length, 1);
+
+  // Реплей ПОСЛЕДНЕГО вызова остаётся noop - архив уже содержит ровно его строку.
+  assert.equal((await call(toCarol)).action, "noop");
+  assert.equal(read(created.file), archived);
+
+  // Факт, которого в архиве ещё нет, по-прежнему вытесняет truth штатно.
+  assert.equal(
+    (
+      await call({
+        ...base,
+        operation: "SUPERSEDE",
+        description: "владелец Дмитрий",
+        body: "Владелец Дмитрий.",
+        history_entry: "2026-08-10: Владелец Кэрол.",
+      })
+    ).action,
+    "replaced",
+  );
+  const out = read(created.file);
+  assert.equal(out.match(/^## History$/gm)!.length, 1);
+  assert.deepEqual(
+    out
+      .slice(out.indexOf("## History"))
+      .split("\n")
+      .filter((line) => line.startsWith("- ")),
+    [
+      "- 2026-08-09: Владелец Алиса.",
+      "- 2026-08-09: Владелец Боб.",
+      "- 2026-08-10: Владелец Кэрол.",
+    ],
+  );
+});
+
 test("открытый фенс в лежащей карточке отклоняет и UPDATE, а не прячет факт в код", async () => {
   const base = {
     operation: "ADD",
