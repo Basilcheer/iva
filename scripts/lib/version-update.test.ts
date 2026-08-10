@@ -655,6 +655,39 @@ test("a restart that fails leaves an update the next run can finish", async (t) 
   ]);
 });
 
+test("the chores of the installation are run last, out of the version installed", async (t) => {
+  const iva = world(t);
+  const calls: string[] = [];
+  const logged: string[] = [];
+  const build = fixtureRunner();
+  const outcome = updated(
+    await iva.update({
+      log: (message) => logged.push(message),
+      run: (command, args, cwd) => {
+        calls.push(`${command} ${args.join(" ")} @${cwd}`);
+        // No registry here, which is the ordinary state of a box behind a proxy:
+        // a chore that cannot run is not an update that failed.
+        return command === "npm" && args[0] === "i"
+          ? Promise.resolve({ code: 1, output: "no registry" })
+          : build(command, args, cwd);
+      },
+    }),
+  );
+  const layout = layoutFor(iva.home);
+  const dir = join(layout.versions, outcome.version);
+  // The vault cleaner runs against the vault, out of the version that has just
+  // become current, and the Google CLI is refreshed after everything else.
+  assert.deepEqual(calls.slice(-2), [
+    `uv run ${join(dir, "scripts/autograph/cleanup.py")} . --apply @${layout.vault}`,
+    `npm i -g @googleworkspace/cli@latest @${dir}`,
+  ]);
+  assert.equal(createVersionStore(iva.home).settled(), outcome.version);
+  assert.ok(
+    logged.some((message) => /Google CLI update did not run/.test(message)),
+    logged.join("\n"),
+  );
+});
+
 test("the probe is started on a port nothing is listening on", async (t) => {
   const iva = world(t);
   // The port this process would reach for first, taken by somebody else - the

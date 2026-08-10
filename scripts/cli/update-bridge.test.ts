@@ -58,6 +58,15 @@ test("the first update moves the installation onto versions and keeps its state"
   assert.doesNotMatch(output, /agent\/tools\/kept\.ts/u);
   const name = `0.3.15-${sha.slice(0, 12)}`;
   assert.equal(active(iva), name, output);
+  // The vault cleaner the in-place updater ran still runs, out of the version that
+  // has just become current.
+  assert.match(
+    readFileSync(iva.uvLog, "utf8"),
+    new RegExp(
+      `^run ${iva.home}/versions/${name}/scripts/autograph/cleanup\\.py \\. --apply$`,
+      "mu",
+    ),
+  );
 
   const dir = join(iva.home, "versions", name);
   assert.ok(

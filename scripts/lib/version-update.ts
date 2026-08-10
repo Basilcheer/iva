@@ -298,6 +298,7 @@ export async function finishVersionUpdate({
   // After it: until the service runs the new version, the old checkout is what a
   // failed restart falls back to, so it is not ours to remove any earlier.
   adopt();
+  await runErrands(store, dir, run, log);
   const removed = store.gc(KEEP);
   store.settle(name);
   return {
@@ -308,6 +309,42 @@ export async function finishVersionUpdate({
     migrations,
     removed,
   };
+}
+
+/**
+ * What an update does for the installation rather than for the version it installs:
+ * the vault cleaner, which repairs cards an older frontmatter writer grew to
+ * gigabytes, and the Google CLI, the one dependency that lives outside a version.
+ * Both come from the version that just became current, and neither has ever been
+ * allowed to fail an update - a done update stays done when one of them cannot run.
+ */
+async function runErrands(
+  store: Store,
+  dir: string,
+  run: Runner,
+  log: Say,
+): Promise<void> {
+  const errands: [string, string, readonly string[], string][] = [
+    [
+      "the vault cleanup",
+      "uv",
+      ["run", join(dir, "scripts/autograph/cleanup.py"), ".", "--apply"],
+      store.layout.vault,
+    ],
+    [
+      "the Google CLI update",
+      "npm",
+      ["i", "-g", "@googleworkspace/cli@latest"],
+      dir,
+    ],
+  ];
+  for (const [what, command, args, cwd] of errands) {
+    const done = await run(command, args, cwd).catch(
+      (error: unknown): CommandResult => ({ code: 1, output: String(error) }),
+    );
+    if (done.code !== 0)
+      log(`${what} did not run; the update is done without it`);
+  }
 }
 
 function stockNotice(verb: string, failure: string): string {

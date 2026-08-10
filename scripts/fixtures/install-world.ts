@@ -315,6 +315,11 @@ export function createWorld(): World {
     IVA_TEST_STARTS: startsLog,
     IVA_TEST_EVE: EVE,
     IVA_TEST_MODULES: join(REPO, "node_modules"),
+    // An update keeps the Google CLI current with a global install. Here that must
+    // reach neither the network nor the developer's own global prefix: it fails in
+    // the world, which is exactly what a box without one does.
+    npm_config_prefix: join(dir, "npm-global"),
+    npm_config_offline: "1",
   };
 
   return {
