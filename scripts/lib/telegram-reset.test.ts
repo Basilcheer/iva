@@ -6,7 +6,7 @@ import {
   requestTelegramReset,
 } from "./telegram-reset.ts";
 import { toChannelLocalToken } from "#lib/telegram-continuation-token.ts";
-import { handleTelegramResetRequest } from "./telegram-reset-route.ts";
+import { handleTelegramResetRequest } from "#lib/telegram-reset-route.ts";
 
 type FetchCall = { url: string; init: RequestInit };
 type ResetInput = { continuationToken: string; reason?: string };

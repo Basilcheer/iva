@@ -27,14 +27,9 @@ import { join } from "node:path";
 // trees whose package.json carries no `imports` map, where a static `#lib/*` specifier
 // fails to resolve at load (scripts/cli/account-entrypoints.test.ts builds exactly such a
 // tree). The catch-up path only ever runs from the agent, where the table is right there.
+// The schedule runner lives in the authored tree too now, so it is loaded the same lazy
+// way at the one call that spawns jobs — see the note inside runScheduleMigration.
 import type { ScheduleCron, ScheduleName } from "#lib/schedule-table.ts";
-
-import {
-  readStatus,
-  runScheduledJob,
-  withStatusLock,
-  writeStatusAtomic,
-} from "./schedule-runner.ts";
 
 type Period = "daily" | "weekly" | "monthly" | "yearly";
 
@@ -331,6 +326,14 @@ export async function runScheduleMigration({
     // The schedule table, loaded here rather than at the top of the file — see the import
     // note above. This is the only path that needs it, and it only runs from the agent.
     const { SCHEDULE_CRON, parseCron } = await import("#lib/schedule-table.ts");
+    // The runner lives in the authored tree too, which eve rebuilds and `iva repair`
+    // restores. The CLI imports this module only for LEGACY_MEMORY_UNITS and has to load
+    // on an install whose authored tree is missing or half-written — that is the very
+    // state repair exists for — so the runner is pulled at the one call that spawns jobs
+    // instead of at module load. Inside the guard: a failed import is logged and swallowed
+    // like any other migration failure, never blocking server start.
+    const { readStatus, runScheduledJob, withStatusLock, writeStatusAtomic } =
+      await import("#lib/schedule-runner.ts");
 
     const runPeriod =
       runJob ??

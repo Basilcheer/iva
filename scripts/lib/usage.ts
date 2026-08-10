@@ -1,29 +1,14 @@
-// Учёт расхода токенов — ЕДИНЫЙ источник правды по формату usage.jsonl, чтению и сводкам.
-// Переиспользуется хуком (запись: agent/hooks/usage.ts), Telegram-мостом и CLI `iva usage`
-// (чтение). Чистый ESM (только node-builtins) — бандлится в eve и работает в bare-node,
-// как scripts/lib/telegram-format.ts.
-//
-// Лог живёт в data/usage.jsonl (ASSISTANT_DATA_DIR, дефолт ./data) — рядом с tasks.json,
-// gitignored, НЕ в vault (иначе ночной doctor коммитил бы растущий лог в репо памяти).
-// Одна строка JSONL на шаг модели; ход (turn) = несколько шагов, группируем по turnId.
-import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+// Отчётность по расходу токенов: чтение usage.jsonl, окна и сводки для Telegram-моста
+// (/usage) и CLI (`iva usage`). Запись лога живёт в authored tree (agent/lib/usage.ts) —
+// её делает хук, а eve пересобирает дерево при старте. Обратный импорт оттуда сюда
+// невозможен: `iva usage` обязан грузиться на установке без authored tree (ADR-0003),
+// поэтому путь лога знают обе половины, а совпадение пинует round-trip тест в usage.test.ts.
+// Чистый ESM (только node-builtins) — работает в bare-node, как agent/lib/telegram-format.ts.
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import type { UsageRecord } from "#lib/usage.ts";
 
-export interface UsageRecord {
-  ts: string;
-  source: string;
-  provider: string;
-  model: string;
-  sessionId: string;
-  turnId: string;
-  step: number;
-  subagent?: string;
-  in: number;
-  out: number;
-  cacheRead: number;
-  cacheWrite: number;
-  total: number;
-}
+export type { UsageRecord };
 
 type UsageWindow =
   "last" | "today" | "week" | "month" | "by-model" | "by-source";
@@ -90,11 +75,6 @@ interface LegacySummarizeOptions {
   readonly tz?: string;
 }
 
-interface TurnLike {
-  readonly id?: string;
-  readonly sequence?: number;
-}
-
 interface Accumulator {
   in: number;
   out: number;
@@ -107,17 +87,7 @@ interface Accumulator {
 
 const defaultDir = (): string => process.env.ASSISTANT_DATA_DIR || "data";
 
-export function usageFilePath(dataDir = defaultDir()): string {
-  return join(dataDir, "usage.jsonl");
-}
-
-// Sync append (как transcript.ts) — короткая дозапись против латентности модели, без
-// interleave от конкурентных асинхронных записей.
-export function appendUsage(record: UsageRecord, dataDir = defaultDir()): void {
-  const file = usageFilePath(dataDir);
-  mkdirSync(dirname(file), { recursive: true });
-  appendFileSync(file, JSON.stringify(record) + "\n", "utf8");
-}
+const usageFilePath = (dataDir: string): string => join(dataDir, "usage.jsonl");
 
 // Толерантный парсер: нет файла → пусто; битую строку (обрыв при падении на середине
 // append) — молча пропускаем.
@@ -194,25 +164,6 @@ const baseTurnId = (turnId: string | undefined): string =>
   String(turnId ?? "").split("#")[0];
 const turnKey = (entry: UsageRecord): string =>
   `${entry.sessionId}:${baseTurnId(entry.turnId)}`;
-
-/**
- * Ключ хода для записи инлайн-субагента: ход РОДИТЕЛЯ плюс суффикс с именем субагента.
- * Живёт здесь, а не в хуке, чтобы правило и его чтение не разъезжались.
- *
- * Фолбэки повторяют канон самого eve (`turnId.length > 0 ? turnId : turn_<sequence>`):
- * `ctx.session.turn.id` бывает ПУСТОЙ строкой между ходами, поэтому `??` тут не годится —
- * пустая строка дала бы ключ "#planner" и склеила бы разные ходы в один.
- */
-export function subagentTurnId(
-  turn: TurnLike | undefined,
-  subagentName: string | undefined,
-  childTurnId?: string,
-): string {
-  const bySequence =
-    typeof turn?.sequence === "number" ? `turn_${turn.sequence}` : "";
-  const parentTurnId = turn?.id || bySequence || childTurnId || "";
-  return `${parentTurnId}#${subagentName || "subagent"}`;
-}
 
 const blank = (): Accumulator => ({
   in: 0,

@@ -1,7 +1,8 @@
 // OAuth-ядро для входа по подписке OpenAI (ChatGPT Plus/Pro/Team) — как в официальном codex CLI.
 // ЕДИНЫЙ источник правды: импортируется и из bare-node CLI/setup модулей
 // (scripts/cli/account.ts, scripts/setup/main.ts), и из бандла eve
-// (agent/provider.ts, agent/vision.ts) — как scripts/lib/usage.ts.
+// (agent/provider.ts, agent/vision.ts). Остаётся в scripts/, потому что `iva login`
+// обязан работать на инсталле без авторского дерева — см. docs/tech-debt.md.
 // Чистый ESM, только node-builtins (crypto/fs/http/child_process); типы — в этом модуле.
 //
 // Протокол (reverse-engineered из openai/codex, публичный client_id):

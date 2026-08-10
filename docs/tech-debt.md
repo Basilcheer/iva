@@ -19,17 +19,49 @@ a parallel bespoke UI layer.
 
 ## 3. Cross-imports from `scripts/lib` into `agent/`
 
-First wave done: `telegram-continuation-token`, `telegram-acceptance`, `run-status`,
-`settings` and `i18n` moved from `scripts/lib` to `agent/lib` (canonical home);
-`scripts/` consumers now reach them through the `#lib/` alias instead of the other
-way around.
+eve rebuilds `agent/` at service start, so a specifier there that resolves into
+`scripts/` drags operational code into the bundle — the failure behind the 0.3.14 crash
+loop (issue #176). The target is zero such specifiers.
+`scripts/authored-tree-guard.test.ts` lists the escapes that remain and fails on any new
+one; the list is a record of what is blocked, not a budget to spend, and removing an entry
+never turns the suite red.
 
-The Telegram channel (`agent/channels/telegram.ts`) and other files under `agent/`
-still reach into `scripts/lib` for the remainder: `telegram-format`,
-`telegram-reply-context`, `telegram-reset-route`, `telegram-turn-start`, plus
-`provider.ts` and `hooks/usage.ts` (both consumed from `instructions/20-core.ts`)
-pull in further `scripts/lib` modules. This still drags `scripts` code into the
-eve bundle for that remainder. These are the next wave to move into `agent/lib`.
+Moved to their canonical home in `agent/lib` so far: `telegram-continuation-token`,
+`telegram-acceptance`, `run-status`, `settings`, `i18n`, `telegram-format`,
+`security-gate`, `telegram-reply-context`, `telegram-reset-route`, `telegram-turn-start`,
+`schedule-runner` and the write half of `usage`. `scripts/` consumers reach them through
+the `#lib/` alias instead of the other way around.
+
+Seven escapes remain, blocked by two different constraints.
+
+**Five are blocked by the CLI, and no ownership change unblocks them.** `iva` has to work
+on an install whose `agent/` is missing or half-written — that is the state `iva repair`
+exists for (ADR-0003) — so a module the CLI needs cannot live in the authored tree, and
+`agent/` reaches into `scripts/` instead:
+
+- `agent/instrumentation.ts` → `config-transaction`, `schedule-migration`, `timezone`,
+  and `agent/provider.ts` → `model-catalog`: all statically reachable from
+  `scripts/cli/*`, so moving them breaks `iva` at load time.
+- `agent/provider.ts` → `codex-oauth` (`iva login`): reached only through a dynamic import
+  in `scripts/cli/account.ts`, so the load-time walk in the guard misses it — but
+  `scripts/cli/account-entrypoints.test.ts` runs the command against a fixture holding
+  only `bin/` + `scripts/`, and a move fails there.
+
+`usage` was the sixth and is closed: `iva usage` needs the report, the hook needs the
+append, and the two halves share nothing but the log file itself. So the write contract
+(record shape, path, `appendUsage`, `subagentTurnId`) moved into `agent/lib/usage.ts` and
+the reporting stayed in `scripts/lib/usage.ts` — which knows the same path, and a
+round-trip test in `scripts/lib/usage.test.ts` writes through one half and reads through
+the other so the halves cannot drift apart silently. The remaining five have no such seam:
+what the CLI and the authored tree share there is behaviour, not a file, and closing them
+needs a different mechanism — a small shared payload the bundle can carry and `iva repair`
+can restore, or a CLI that degrades when the authored tree is gone.
+
+**Two are blocked by ownership only.** `agent/instructions/20-core.ts` →
+`scripts/lib/core-cap.ts` and `scripts/memory/core-clamp.ts`: the cap and its clamp are
+shared with the nightly rollup and the doctor, so the move rewrites imports under
+`scripts/memory/`, and lands with the release that owns those paths. Nothing
+architectural stands in the way.
 
 ## 4. Evals
 
