@@ -161,9 +161,15 @@ Default model is deepseek-v4-pro, 131k context. On Go it runs about $9/mo all-in
 ## What's New
 
 <details>
-<summary><b>v0.3.15 · 10.08.2026 — expand the latest releases</b></summary>
+<summary><b>v0.3.16 · 10.08.2026 — expand the latest releases</b></summary>
 
 ### 10.08.2026
+
+#### v0.3.16
+
+- ⚠️ Updating clears the context of your open Telegram chats once, and Iva starts the conversation from a blank slate. Memory, notes and cards are untouched — only the thread of the current chat is lost.
+- Iva now runs on eve 0.30.8. localDev permissions come from the deployment itself rather than the request's Host header, so a loopback Host spoofed from outside opens nothing, and Iva's own gate is still there on top of it.
+- Skills install from a registry with one command (`eve add @skills/<name>`), a `SKILL.md` written for another agent is taken as is with no frontmatter wrangling, and dev builds are faster.
 
 #### v0.3.15
 
