@@ -159,9 +159,15 @@ cd ~/iva && bash install.sh
 ## Что нового
 
 <details>
-<summary><b>v0.3.15 · 10.08.2026 - развернуть последние релизы</b></summary>
+<summary><b>v0.3.16 · 10.08.2026 - развернуть последние релизы</b></summary>
 
 ### 10.08.2026
+
+#### v0.3.16
+
+- ⚠️ Обновление один раз обнулит контекст открытых диалогов в Telegram, и Ива начнёт разговор заново. Память, заметки и карточки целы, теряется только нить текущей переписки.
+- Ива переехала на eve 0.30.8. Права в localDev теперь выдаются по самому деплойменту, а не по заголовку Host, так что подделать его снаружи не выйдет, а собственный гейт Ивы остался на месте.
+- Скиллы ставятся из реестра одной командой `eve add @skills/<имя>`, чужой `SKILL.md` подхватывается как есть, без переписывания frontmatter, а дев-сборки стали быстрее.
 
 #### v0.3.15
 
@@ -191,7 +197,7 @@ cd ~/iva && bash install.sh
 
 ## На чём построено
 
-Агента запускает [eve](https://eve.dev/docs/introduction) 0.29.5, агентный фреймворк Vercel; поисковый индекс живёт на SQLite, встроенном в Node 24, - без отдельной базы. Ива выросла из [agent-second-brain](https://github.com/smixs/agent-second-brain) и [autograph](https://github.com/smixs/autograph) - эта история рассказана в [docs/ru/memory.md](docs/ru/memory.md).
+Агента запускает [eve](https://eve.dev/docs/introduction) 0.30.8, агентный фреймворк Vercel; поисковый индекс живёт на SQLite, встроенном в Node 24, - без отдельной базы. Ива выросла из [agent-second-brain](https://github.com/smixs/agent-second-brain) и [autograph](https://github.com/smixs/autograph) - эта история рассказана в [docs/ru/memory.md](docs/ru/memory.md).
 
 ## Спасибо
 

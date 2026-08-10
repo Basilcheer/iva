@@ -15,6 +15,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ToolContext } from "eve/tools";
+import { settled } from "./fixtures/tool-result.ts";
 
 const VAULT = mkdtempSync(join(tmpdir(), "iva-paths-"));
 process.env.ASSISTANT_VAULT_DIR = VAULT;
@@ -55,9 +56,11 @@ function testToolContext(toolName: string): ToolContext {
 }
 
 test("write_file отказывается перезаписать существующую карточку в cards/", async () => {
-  const res = await writeFile.execute(
-    { path: CARD, content: "затёрто" },
-    testToolContext("write_file"),
+  const res = settled(
+    await writeFile.execute(
+      { path: CARD, content: "затёрто" },
+      testToolContext("write_file"),
+    ),
   );
   assert.equal(res.ok, false);
   if (typeof res.error !== "string") assert.fail("expected write_file error");
@@ -70,9 +73,11 @@ test("write_file отказывается перезаписать сущест�
 
 test("write_file создаёт НОВЫЙ файл в cards/ как обычно", async () => {
   const fresh = join(VAULT, "cards", "contacts", "новый.md");
-  const res = await writeFile.execute(
-    { path: fresh, content: "# Новый\n" },
-    testToolContext("write_file"),
+  const res = settled(
+    await writeFile.execute(
+      { path: fresh, content: "# Новый\n" },
+      testToolContext("write_file"),
+    ),
   );
   assert.equal(res.ok, true);
   assert.equal(readFileSync(fresh, "utf8"), "# Новый\n");
@@ -80,24 +85,28 @@ test("write_file создаёт НОВЫЙ файл в cards/ как обычн�
 
 test("write_file по-прежнему пишет vault/CORE.md (см. instructions/10-map.md)", async () => {
   const core = join(VAULT, "CORE.md");
-  const res = await writeFile.execute(
-    {
-      path: core,
-      content: "# CORE\n- факт\n",
-    },
-    testToolContext("write_file"),
+  const res = settled(
+    await writeFile.execute(
+      {
+        path: core,
+        content: "# CORE\n- факт\n",
+      },
+      testToolContext("write_file"),
+    ),
   );
   assert.equal(res.ok, true);
   assert.ok(readFileSync(core, "utf8").includes("факт"));
 });
 
 test("путь из memory_search открывается read_file без ENOENT", async () => {
-  const found = await memorySearch.execute(
-    {
-      query: "Иван Петров монтаж",
-      limit: 5,
-    },
-    testToolContext("memory_search"),
+  const found = settled(
+    await memorySearch.execute(
+      {
+        query: "Иван Петров монтаж",
+        limit: 5,
+      },
+      testToolContext("memory_search"),
+    ),
   );
   assert.ok(found.hits.length > 0, "memory_search ничего не нашёл");
   const hit = found.hits[0].file;
@@ -106,17 +115,15 @@ test("путь из memory_search открывается read_file без ENOENT
     !hit.startsWith("/"),
     `ожидался vault-относительный путь, получено ${hit}`,
   );
-  const read = await readFileTool.execute(
-    { path: hit },
-    testToolContext("read_file"),
+  const read = settled(
+    await readFileTool.execute({ path: hit }, testToolContext("read_file")),
   );
   assert.ok(read.content.includes("Кинолаб"));
 });
 
 test("read_file принимает и абсолютный путь", async () => {
-  const read = await readFileTool.execute(
-    { path: CARD },
-    testToolContext("read_file"),
+  const read = settled(
+    await readFileTool.execute({ path: CARD }, testToolContext("read_file")),
   );
   assert.ok(read.content.includes("Иван Петров"));
 });
