@@ -201,7 +201,7 @@ function addDaysToDate(
 }
 
 // Does a plain Y-M-D calendar date satisfy the cron's date fields? The weekday does not
-// depend on tz once the calendar date itself is fixed. scheduleCron() refuses a cron that
+// depend on tz once the calendar date itself is fixed. parseCron() refuses a cron that
 // constrains day-of-month and day-of-week at once, so there is no OR case to decide here.
 function matchesDate(
   cron: ScheduleCron,
@@ -330,7 +330,7 @@ export async function runScheduleMigration({
 
     // The schedule table, loaded here rather than at the top of the file — see the import
     // note above. This is the only path that needs it, and it only runs from the agent.
-    const { scheduleCron } = await import("#lib/schedule-table.ts");
+    const { SCHEDULE_CRON, parseCron } = await import("#lib/schedule-table.ts");
 
     const runPeriod =
       runJob ??
@@ -385,7 +385,11 @@ export async function runScheduleMigration({
         for (const period of PERIODS) {
           if (freshlySeeded.has(period)) continue;
           const graceMs = PERIOD_GRACE_MS[period];
-          const dueAt = lastDueMs(scheduleCron(statusKey(period)), nowMs, tz);
+          const dueAt = lastDueMs(
+            parseCron(SCHEDULE_CRON[statusKey(period)]),
+            nowMs,
+            tz,
+          );
           const entry = seeded[statusKey(period)];
           // A real success always wins; otherwise fall back to the seeded baseline (if
           // any) so a freshly-seeded period doesn't immediately look "due" the moment

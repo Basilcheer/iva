@@ -30,28 +30,56 @@ export interface ScheduleCron {
   readonly dayOfWeek: number | null;
 }
 
-// A single field: a plain number, or null for `*`. Every entry above is deliberately that
-// simple; a list, range or step would parse as NaN and silently move a fire time, so it is
-// refused here instead.
-function cronField(value: string): number | null {
+// The five fields a cron line carries, in order, with the values each one accepts.
+const FIELDS = [
+  { label: "minute", min: 0, max: 59 },
+  { label: "hour", min: 0, max: 23 },
+  { label: "day-of-month", min: 1, max: 31 },
+  { label: "month", min: 1, max: 12 },
+  { label: "day-of-week", min: 0, max: 7 }, // 7 is Sunday again, normalized below
+] as const;
+
+// A single field: a plain number in range, or null for `*`. Every entry above is
+// deliberately that simple. Anything else — a list, range or step, an empty field left by
+// a stray double space, a value cron itself would reject — would silently move a fire
+// time, so it is refused here rather than parsed into an approximation.
+function cronField(
+  value: string,
+  field: (typeof FIELDS)[number],
+): number | null {
   if (value === "*") return null;
+  if (!/^\d{1,2}$/.test(value))
+    throw new TypeError(`unsupported ${field.label} field "${value}"`);
   const parsed = Number(value);
-  if (!Number.isInteger(parsed))
-    throw new TypeError(`unsupported cron field "${value}"`);
+  if (parsed < field.min || parsed > field.max)
+    throw new TypeError(
+      `${field.label} "${value}" is outside ${field.min}..${field.max}`,
+    );
   return parsed;
 }
 
-export function scheduleCron(name: ScheduleName): ScheduleCron {
-  const [minute, hour, dayOfMonth, month, dayOfWeek] = SCHEDULE_CRON[name]
-    .split(" ")
-    .map(cronField);
+// Parses a table entry into calendar fields. Every throw below marks a shape no consumer
+// can place on a calendar; the table's own test calls this for each entry, so a bad edit
+// fails at desk time instead of drifting the catch-up point in production.
+export function parseCron(cron: string): ScheduleCron {
+  const fields = cron.split(" ");
+  // Field count first: a 6-field cron (the seconds-first dialect croner also accepts) and
+  // a 4-field one both parse field-by-field without complaint, each one silently reading
+  // an hour as a minute, a day as an hour, and so on.
+  if (fields.length !== FIELDS.length)
+    throw new TypeError(
+      `cron "${cron}" must have ${FIELDS.length} fields (minute hour day-of-month month day-of-week), not ${fields.length}`,
+    );
+  const [minute, hour, dayOfMonth, month, dayOfWeek] = fields.map(
+    (value, index) => cronField(value, FIELDS[index]),
+  );
   if (minute === null || hour === null)
-    throw new TypeError(`${name} must fire at a fixed minute of a fixed hour`);
+    throw new TypeError(`cron "${cron}" must fire at a fixed minute and hour`);
   // Real cron ORs day-of-month with day-of-week when both are constrained. No entry above
   // does, and a consumer would have to guess which rule wins — so refuse that shape too.
   if (dayOfMonth !== null && dayOfWeek !== null)
     throw new TypeError(
-      `${name} must not constrain both day-of-month and day-of-week`,
+      `cron "${cron}" must not constrain both day-of-month and day-of-week`,
     );
   return {
     minute,

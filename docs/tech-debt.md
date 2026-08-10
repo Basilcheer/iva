@@ -100,7 +100,7 @@ would make the menu display (or the catch-up math) silently wrong.
 
 RESOLVED: the table lives once, in `agent/lib/schedule-table.ts` (`SCHEDULE_CRON`), and
 all three read it — the schedule files take their `cron` from it, the migration places its
-catch-up point with `scheduleCron()`, time of day and day constraint alike (it keeps only
+catch-up point with `parseCron()`, time of day and day constraint alike (it keeps only
 its own per-period grace window, which is catch-up policy, not schedule metadata), and the
 menu renders the entries in table order. `agent/lib/schedule-table.test.ts` cross-checks
 all three against the table — the migration through its behavior, by bisecting the point

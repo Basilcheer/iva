@@ -18,8 +18,9 @@ import "../../scripts/lib/ts-esm-hooks.ts";
 import { runScheduleMigration } from "../../scripts/lib/schedule-migration.ts";
 import {
   SCHEDULE_CRON,
+  type ScheduleCron,
   type ScheduleName,
-  scheduleCron,
+  parseCron,
 } from "./schedule-table.ts";
 
 const REPO_ROOT = fileURLToPath(new URL("../../", import.meta.url));
@@ -61,16 +62,69 @@ void test("the table pins the cron expressions Iva ships with", () => {
   );
 });
 
-// Also the guard on the table itself: a future entry with a list, range, step or two day
-// constraints at once makes scheduleCron throw, and it throws here, at desk time.
-void test("scheduleCron reads every entry off its cron string", () => {
-  assert.deepEqual(NAMES.map(scheduleCron), [
-    { minute: 0, hour: 4, dayOfMonth: null, month: null, dayOfWeek: null },
-    { minute: 15, hour: 4, dayOfMonth: null, month: null, dayOfWeek: 1 },
-    { minute: 20, hour: 4, dayOfMonth: 1, month: null, dayOfWeek: null },
-    { minute: 25, hour: 4, dayOfMonth: 1, month: 1, dayOfWeek: null },
-    { minute: 0, hour: 8, dayOfMonth: null, month: null, dayOfWeek: null },
-  ]);
+void test("parseCron reads every entry off its cron string", () => {
+  assert.deepEqual(
+    NAMES.map((name) => parseCron(SCHEDULE_CRON[name])),
+    [
+      { minute: 0, hour: 4, dayOfMonth: null, month: null, dayOfWeek: null },
+      { minute: 15, hour: 4, dayOfMonth: null, month: null, dayOfWeek: 1 },
+      { minute: 20, hour: 4, dayOfMonth: 1, month: null, dayOfWeek: null },
+      { minute: 25, hour: 4, dayOfMonth: 1, month: 1, dayOfWeek: null },
+      { minute: 0, hour: 8, dayOfMonth: null, month: null, dayOfWeek: null },
+    ],
+  );
+});
+
+// cron writes Sunday as both 0 and 7; no entry in the table spells it 7 today, so pin the
+// normalization here — a weekly schedule moved to Sunday must not come out as weekday 7,
+// which matches no JS date and would send the catch-up walk two years back.
+void test("parseCron normalizes cron's second spelling of Sunday", () => {
+  assert.deepEqual(parseCron("30 5 * * 7"), {
+    minute: 30,
+    hour: 5,
+    dayOfMonth: null,
+    month: null,
+    dayOfWeek: 0,
+  });
+});
+
+// The guard on the table itself. Each shape below is a plausible future edit that parses
+// into SOMETHING without a check, and none of the consumers would complain: the schedule
+// files and the ⏰ menu pass the string through untouched, so only this parser stands
+// between a typo and a catch-up point at an instant the schedule never fires — or a walk
+// through two years of dates ending in a RangeError that the migration's outer catch
+// swallows, silently disabling catch-up for all four periods at once. It throws here, at
+// desk time, instead.
+void test("parseCron refuses shapes no consumer can place on a calendar", () => {
+  const refused: readonly (readonly [string, RegExp])[] = [
+    // croner (the engine eve bundles) reads a 6-field line as seconds-first and fires it
+    // at the same wall-clock time; field-by-field it would parse as 00:00 on the 30th.
+    ["0 30 4 * * *", /must have 5 fields .* not 6/],
+    ["0 4 * *", /must have 5 fields .* not 4/],
+    ["0 4  * * *", /must have 5 fields .* not 6/], // stray double space
+    ["0 4  * *", /unsupported day-of-month field ""/], // the same, one field short
+    ["", /must have 5 fields .* not 1/],
+    ["*/15 4 * * *", /unsupported minute field "\*\/15"/],
+    ["0 4,16 * * *", /unsupported hour field "4,16"/],
+    ["0 4-6 * * *", /unsupported hour field "4-6"/],
+    ["0 4 * * MON", /unsupported day-of-week field "MON"/],
+    ["0 25 * * *", /hour "25" is outside 0\.\.23/],
+    ["0 4 0 * *", /day-of-month "0" is outside 1\.\.31/],
+    ["0 4 * 13 *", /month "13" is outside 1\.\.12/],
+    ["* 4 * * *", /must fire at a fixed minute and hour/],
+    ["0 * * * *", /must fire at a fixed minute and hour/],
+    // Real cron ORs the two day constraints; the catch-up math ANDs date fields, so it
+    // would place the point on the wrong dates in either reading.
+    ["20 4 1 * 1", /must not constrain both day-of-month and day-of-week/],
+  ];
+  for (const [cron, message] of refused) {
+    assert.throws(
+      () => parseCron(cron),
+      (error: unknown) =>
+        error instanceof TypeError && message.test(error.message),
+      `parseCron accepted ${JSON.stringify(cron)}`,
+    );
+  }
 });
 
 void test("every schedule file takes its cron from the table", async () => {
@@ -104,7 +158,7 @@ const DAY_MS = 24 * HOUR_MS;
 const PROBE_AGE_MS = 6 * HOUR_MS;
 const PROBE_WINDOW_MS = 12 * HOUR_MS;
 
-function probeNow(cron: ReturnType<typeof scheduleCron>): number {
+function probeNow(cron: ScheduleCron): number {
   // August 4th 2026 stands in for whatever the cron leaves unconstrained.
   let date = Date.UTC(2026, (cron.month ?? 8) - 1, cron.dayOfMonth ?? 4);
   if (cron.dayOfWeek !== null)
@@ -144,7 +198,7 @@ async function catchUpRuns(
 void test("the migration catches a period up at the point the table's cron names", async (t) => {
   const statusPath = join(temporaryDataDir(t), "rollup-status.json");
   for (const period of PERIODS) {
-    const cron = scheduleCron(`memory-${period}`);
+    const cron = parseCron(SCHEDULE_CRON[`memory-${period}`]);
     const now = probeNow(cron);
     // Invariant of the bisection: `runs` is a baseline old enough to be caught up,
     // `suppressed` is one recent enough not to be — the due point sits between them.
