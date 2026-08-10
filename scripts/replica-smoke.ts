@@ -367,6 +367,44 @@ async function main(): Promise<void> {
       throw new Error(`unexpected seed reply: ${JSON.stringify(remembered)}`);
     const savedState = session.state;
 
+    // Канарейка reset (issue #110): /new обязан реально чистить контекст на том токене,
+    // который придёт от Telegram. Мост других токенов не присылает — он пересобирает свой
+    // детерминированно из chat_id, — поэтому проверка идёт по пути канала: send() без
+    // intent (то есть resume-or-start) и reset() на том же канале, ровно как в
+    // agent/channels/telegram.ts. Маркер сеется ДО рестарта: тогда положительный контроль
+    // ниже заодно жёстко проверяет, что durable-стейт .eve/.workflow-data пережил рестарт,
+    // — по пути канала, в отличие от мягкого клиентского резюма.
+    setPhase("canary-seed");
+    const canaryLog = join(app, "data", CANARY_REPLY_LOG);
+    const canaryToken = `replica-canary:${randomBytes(6).toString("hex")}`;
+    const canaryHttp = { port, bearer };
+    const recall =
+      "What code did I ask you to remember? Reply with the code only.";
+    let canaryLine = 0;
+    const canaryTurn = async (
+      message: string,
+    ): Promise<{ sessionId: string; reply: string }> => {
+      const from = canaryLine;
+      const accepted = await canaryPost(canaryHttp, CANARY_SEND_ROUTE, {
+        token: canaryToken,
+        message,
+      });
+      const sessionId = accepted.sessionId;
+      if (typeof sessionId !== "string" || !sessionId)
+        throw new Error(
+          `canary send returned no session id: ${JSON.stringify(accepted)}`,
+        );
+      const settled = await canaryReply(canaryLog, sessionId, from);
+      canaryLine = settled.line;
+      return { sessionId, reply: settled.message };
+    };
+
+    const seed = await canaryTurn(`Remember this code: ${RESET_MARKER}`);
+    if (seed.reply !== "REMEMBERED")
+      throw new Error(
+        `unexpected canary seed reply: ${JSON.stringify(seed.reply)}`,
+      );
+
     setPhase("restart");
     await stopEve(eve);
     eve = startEve({ app, env, port });
@@ -404,43 +442,10 @@ async function main(): Promise<void> {
       );
     }
 
-    // Канарейка reset (issue #110): /new обязан реально чистить контекст на том токене,
-    // который придёт от Telegram. Мост других токенов не присылает — он пересобирает свой
-    // детерминированно из chat_id, — поэтому проверка идёт по пути канала: send() без
-    // intent (resume-or-start) и reset() на том же канале, ровно как в agent/channels/telegram.ts.
-    // Сначала положительный контроль (по токену история ВИДНА), потом reset, потом тот же
-    // токен обязан прийти в пустую сессию. Без первого шага второй ничего не доказывает.
+    // Положительный контроль канарейки: тот же токен обязан вернуться в СВОЮ сессию,
+    // пережившую рестарт, и увидеть её историю. Без этого шага проверка после reset
+    // ничего не доказывает — пустой ответ вернула бы и любая посторонняя сессия.
     setPhase("reset-canary");
-    const canaryLog = join(app, "data", CANARY_REPLY_LOG);
-    const canaryToken = `replica-canary:${randomBytes(6).toString("hex")}`;
-    const canaryHttp = { port, bearer };
-    const recall =
-      "What code did I ask you to remember? Reply with the code only.";
-    let canaryLine = 0;
-    const canaryTurn = async (
-      message: string,
-    ): Promise<{ sessionId: string; reply: string }> => {
-      const from = canaryLine;
-      const accepted = await canaryPost(canaryHttp, CANARY_SEND_ROUTE, {
-        token: canaryToken,
-        message,
-      });
-      const sessionId = accepted.sessionId;
-      if (typeof sessionId !== "string" || !sessionId)
-        throw new Error(
-          `canary send returned no session id: ${JSON.stringify(accepted)}`,
-        );
-      const settled = await canaryReply(canaryLog, sessionId, from);
-      canaryLine = settled.line;
-      return { sessionId, reply: settled.message };
-    };
-
-    const seed = await canaryTurn(`Remember this code: ${RESET_MARKER}`);
-    if (seed.reply !== "REMEMBERED")
-      throw new Error(
-        `unexpected canary seed reply: ${JSON.stringify(seed.reply)}`,
-      );
-
     const before = await canaryTurn(recall);
     if (before.sessionId !== seed.sessionId)
       throw new Error(
