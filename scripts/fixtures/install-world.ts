@@ -119,6 +119,18 @@ for (const name of readdirSync(process.env.IVA_TEST_MODULES)) {
 }
 `;
 
+/** Builds the venv where it is told to, like `uv venv` does, and nothing else. */
+const UV = `#!/bin/sh
+printf '%s\\n' "$*" >> "$IVA_TEST_UV"
+if [ "$1" = "venv" ]; then
+  for venv; do :; done
+  mkdir -p "$venv/bin"
+  printf '%s\\n' '#!/bin/sh' 'exit 0' > "$venv/bin/python"
+  chmod 755 "$venv/bin/python"
+fi
+exit 0
+`;
+
 const SYSTEMCTL = `#!/bin/sh
 printf '%s\\n' "$*" >> "$IVA_TEST_SYSTEMCTL"
 [ "$1" = "--user" ] && shift
@@ -139,6 +151,8 @@ export type World = {
   readonly shim: string;
   readonly upstream: string;
   readonly systemctlLog: string;
+  /** One line per `uv` call the update makes, in the order they happened. */
+  readonly uvLog: string;
   /** One JSON line per server start, probe or service, in the order they happened. */
   readonly startsLog: string;
   /** Run the user's `iva` command, always through the shim they actually have. */
@@ -182,6 +196,18 @@ function seed(tree: string): void {
   cpSync(
     join(REPO, "scripts/update-finish.ts"),
     join(tree, "scripts/update-finish.ts"),
+  );
+  // The proxy the userbot service runs: tracked code beside a venv git ignores.
+  mkdirSync(join(tree, "services/telegram-userbot"), { recursive: true });
+  cpSync(
+    join(REPO, "services/telegram-userbot/requirements.lock"),
+    join(tree, "services/telegram-userbot/requirements.lock"),
+  );
+  writeFileSync(join(tree, "services/telegram-userbot/serve.py"), "\n");
+  writeFileSync(
+    join(tree, ".gitignore"),
+    // `*.local` stands in for the credentials skills keep beside their code.
+    "node_modules\n.env\n/data/\n/vault/\n.eve\n.output\n*.local\nservices/telegram-userbot/.venv\n",
   );
   writeFileSync(join(tree, "scripts/source-scan.mjs"), SCAN);
   writeFileSync(join(tree, "scripts/build-stub.mjs"), BUILD);
@@ -235,6 +261,7 @@ export function createWorld(): World {
   const fakeHome = join(dir, "home");
   const bin = join(dir, "bin");
   const systemctlLog = join(dir, "systemctl.log");
+  const uvLog = join(dir, "uv.log");
   const startsLog = join(dir, "starts.log");
 
   git(dir, ["init", "--bare", "--initial-branch=main", upstream]);
@@ -263,8 +290,13 @@ export function createWorld(): World {
   );
   chmodSync(shim, 0o755);
   mkdirSync(bin, { recursive: true });
-  writeFileSync(join(bin, "systemctl"), SYSTEMCTL);
-  chmodSync(join(bin, "systemctl"), 0o755);
+  for (const [name, body] of [
+    ["systemctl", SYSTEMCTL],
+    ["uv", UV],
+  ]) {
+    writeFileSync(join(bin, name), body);
+    chmodSync(join(bin, name), 0o755);
+  }
 
   const childEnv = {
     PATH: `${bin}:${dirname(process.execPath)}:/usr/bin:/bin:/usr/sbin`,
@@ -273,6 +305,7 @@ export function createWorld(): World {
     TERM: "dumb",
     AGENT_LANGUAGE: "en",
     IVA_TEST_SYSTEMCTL: systemctlLog,
+    IVA_TEST_UV: uvLog,
     IVA_TEST_STARTS: startsLog,
     IVA_TEST_EVE: EVE,
     IVA_TEST_MODULES: join(REPO, "node_modules"),
@@ -285,6 +318,7 @@ export function createWorld(): World {
     shim,
     upstream,
     systemctlLog,
+    uvLog,
     startsLog,
     git,
     iva: (args, env = {}) =>
