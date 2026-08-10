@@ -172,6 +172,9 @@ void test("unclosed fence scan lists user cards only and never touches them", as
   );
   await writeFile(join(vault, ".graph", "report.md"), "```\nservice output\n");
   await writeFile(join(vault, "cards", "notes", "not-markdown.txt"), "```\n");
+  // Сырой транскрипт вне cards/: write_card его не пишет, алерт про него был бы ложным.
+  await mkdir(join(vault, "daily"), { recursive: true });
+  await writeFile(join(vault, "daily", "2026-08-10.md"), "```\nвойс\n");
 
   assert.deepEqual(scanUnclosedFenceCards(vault), ["cards/notes/broken.md"]);
   assert.equal(

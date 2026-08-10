@@ -219,9 +219,12 @@ export function recordSkippedOversize(
  * наугад значит переписать чужой текст.
  */
 export function scanUnclosedFenceCards(vaultPath: string): string[] {
+  // Только cards/: write_card пишет карточки туда и больше никуда, а фенс в сыром
+  // транскрипте daily/ ничему не мешает - ночной алерт про него был бы ложным.
+  const root = resolve(vaultPath, "cards");
   let entries: string[];
   try {
-    entries = readdirSync(vaultPath, { recursive: true, encoding: "utf8" });
+    entries = readdirSync(root, { recursive: true, encoding: "utf8" });
   } catch {
     return [];
   }
@@ -233,11 +236,11 @@ export function scanUnclosedFenceCards(vaultPath: string): string[] {
       continue;
     let text: string;
     try {
-      text = readFileSync(resolve(vaultPath, entry), "utf8");
+      text = readFileSync(resolve(root, entry), "utf8");
     } catch {
       continue; // исчез между листингом и чтением - следующий ночной прогон увидит
     }
-    if (hasUnclosedFence(splitCard(text).body)) found.push(path);
+    if (hasUnclosedFence(splitCard(text).body)) found.push(`cards/${path}`);
   }
   return found;
 }
