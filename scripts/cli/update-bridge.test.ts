@@ -643,6 +643,14 @@ test("the move to versions keeps the files git ignores inside the code tree", (t
   );
   assert.equal(existsSync(join(iva.home, "scripts")), false, output);
   assert.equal(existsSync(join(iva.home, "bin")), false, output);
+  // A name git would quote is still a name of ours, and still goes.
+  assert.equal(
+    existsSync(
+      join(iva.home, "agent/skills/\u043f\u0440\u0438\u0432\u0435\u0442.md"),
+    ),
+    false,
+    output,
+  );
 });
 
 test("an update puts the userbot proxy on the version it installs", (t) => {

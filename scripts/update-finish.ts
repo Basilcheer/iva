@@ -79,15 +79,16 @@ export function retireCheckout(home: string): string[] {
   let tracked: string[];
   let dirty: Set<string>;
   try {
-    tracked = git(home, ["ls-tree", "-r", "--name-only", "HEAD"])
-      .split("\n")
-      .map((name) => name.trim())
+    // -z on both: without it git escapes and quotes every path outside ASCII,
+    // and a quoted name matches no file, retiring the checkout only in part.
+    tracked = git(home, ["ls-tree", "-r", "-z", "--name-only", "HEAD"])
+      .split("\0")
       .filter(Boolean);
     dirty = new Set(
       git(home, ["status", "--porcelain=v1", "--untracked-files=all", "-z"])
         .split("\0")
         .filter(Boolean)
-        .map((entry) => topLevel(entry.slice(3).replace(/^"|"$/gu, ""))),
+        .map((entry) => topLevel(entry.slice(3))),
     );
   } catch {
     // Without git there is no telling the user's files from ours: keep everything.

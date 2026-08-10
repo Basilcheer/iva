@@ -197,6 +197,12 @@ function seed(tree: string): void {
     join(REPO, "scripts/update-finish.ts"),
     join(tree, "scripts/update-finish.ts"),
   );
+  // A stock skill under a name that git has to quote unless it is asked not to.
+  mkdirSync(join(tree, "agent/skills"), { recursive: true });
+  writeFileSync(
+    join(tree, "agent/skills/\u043f\u0440\u0438\u0432\u0435\u0442.md"),
+    "# skill\n",
+  );
   // The proxy the userbot service runs: tracked code beside a venv git ignores.
   mkdirSync(join(tree, "services/telegram-userbot"), { recursive: true });
   cpSync(
