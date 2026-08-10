@@ -9,7 +9,7 @@ Wraps the ban-relevant outbound methods of the live Telethon client so every sen
 
 Reads are NOT wrapped (reading is safe).
 
-# ponytail: wraps the 3 high-level send methods, not every Telethon API — these are
+# wraps the 3 high-level send methods, not every Telethon API — these are
 # the guide's real ban vectors (cold DM, media, forwards). Raw-API writes
 # (invites/joins) bypass this; the skill carries those behavioral limits. Widen the
 # tuple if a new outbound vector starts mattering.

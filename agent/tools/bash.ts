@@ -232,7 +232,7 @@ async function reapProcessGroup(groupPid: number): Promise<void> {
 // /workspace) — exec тогда падает сырым EACCES/ENOENT ещё до запуска команды, и агент строит
 // неверные выводы (см. issue #17). Разворачиваем ~ и проверяем директорию ДО exec, чтобы вернуть
 // понятную диагностику вместо низкоуровневого сбоя Node.
-// ponytail: /workspace намеренно НЕ маппим на корень проекта — молчаливая догадка хуже ясной ошибки.
+// /workspace намеренно НЕ маппим на корень проекта — молчаливая догадка хуже ясной ошибки.
 export function normalizeCwd(cwd?: string): { cwd?: string; error?: string } {
   if (!cwd || !cwd.trim()) return {}; // exec возьмёт process.cwd()
   let resolved = cwd;
