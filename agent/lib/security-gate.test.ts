@@ -215,6 +215,38 @@ await test("scanOutbound knows the key shapes the project's providers issue", ()
   }
 });
 
+// A key that travels as part of an address instead of beside a name: this is how
+// MEMORY_EMBED_URL carries the DeepInfra credential, and how a proxy, a Postgres or
+// a Redis URL carries its own. No key shape matches it - the userinfo is whatever
+// the provider issued - so the place it sits is the only thing that gives it away.
+await test("scanOutbound redacts credentials carried in a URL and keeps the host", () => {
+  const urls: ReadonlyArray<readonly [url: string, gated: string]> = [
+    [
+      `https://api:${"9f3Ac1Dz".repeat(4)}@api.deepinfra.com/v1/openai/embeddings`,
+      "https://[REDACTED]@api.deepinfra.com/v1/openai/embeddings",
+    ],
+    [
+      `postgres://iva:${"pQ7wZ2xR".repeat(3)}@db.internal:5432/vault`,
+      "postgres://[REDACTED]@db.internal:5432/vault",
+    ],
+    [
+      `http://user:${"s3cr3t".repeat(2)}@127.0.0.1:8080`,
+      "http://[REDACTED]@127.0.0.1:8080",
+    ],
+    // The user half is the provider's to leave empty; the secret is still a secret.
+    [
+      `redis://:${"Rk4mB8vT".repeat(2)}@cache.internal:6379/0`,
+      "redis://[REDACTED]@cache.internal:6379/0",
+    ],
+  ];
+
+  for (const [url, gated] of urls) {
+    const result = scanOutbound(`embed-index failed against ${url}`);
+    assert.equal(result.clean, false, `no finding on: ${url}`);
+    assert.equal(result.text, `embed-index failed against ${gated}`);
+  }
+});
+
 await test("scanOutbound leaves hyphenated prose and key talk alone", () => {
   const innocent = [
     "risk-adjusted-return-metrics-for-the-quarter",
@@ -222,6 +254,14 @@ await test("scanOutbound leaves hyphenated prose and key talk alone", () => {
     "смотри раздел api key в документации провайдера",
     "sk-lint",
     "https://openrouter.ai/keys",
+    // An address with no credential in it: an ssh remote, a URL naming only the
+    // user, a mailbox in prose. A rule that fires here redacts ordinary answers.
+    "git@github.com:user/repo.git",
+    "git clone git@github.com:smixs/iva.git",
+    "https://user@host/repo",
+    "https://api.deepinfra.com/v1/openai/embeddings",
+    "пиши на hello@majento.ai, отвечаю в тот же день",
+    "смотри https://example.com:8080/report@2026",
   ];
 
   for (const text of innocent) {

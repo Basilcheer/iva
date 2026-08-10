@@ -130,6 +130,36 @@ test("a real provider key shape is gated on the bridge's wire too", async (t) =>
   assert.equal(bodies[1].text, "embed-index: [REDACTED] rejected");
 });
 
+// The shape a credential takes when it travels as part of an address rather than
+// beside a name: MEMORY_EMBED_URL is a whole URL with the key in its userinfo, and
+// an embedding failure quotes the URL. The bridge has no humanizer in front of it,
+// so what a script printed is what the chat gets.
+const EMBED_URL = `https://api:${"9f3Ac1Dz".repeat(4)}@api.deepinfra.com/v1/openai/embeddings`;
+
+test("a credential carried inside a URL is gated on the bridge's wire", async (t) => {
+  const bodies = captureFetch(t);
+
+  await tg("editMessageText", {
+    chat_id: 1,
+    message_id: 2,
+    text: `⚠️ Есть проблемы · 00:11\n\nMEMORY_EMBED_URL=${EMBED_URL}\nexit 1`,
+  });
+  await reply(1, `embed-index failed against ${EMBED_URL}`);
+
+  const wire = JSON.stringify(bodies);
+  assert.doesNotMatch(wire, /9f3Ac1Dz/u);
+  // The host survives: the credential is the leak, and a notice that will not say
+  // where the call went is one nobody can act on.
+  assert.equal(
+    bodies[0].text,
+    "⚠️ Есть проблемы · 00:11\n\nMEMORY_EMBED_URL=https://[REDACTED]@api.deepinfra.com/v1/openai/embeddings\nexit 1",
+  );
+  assert.equal(
+    bodies[1].text,
+    "embed-index failed against https://[REDACTED]@api.deepinfra.com/v1/openai/embeddings",
+  );
+});
+
 test("a call with nothing for the chat goes out untouched", async (t) => {
   const bodies = captureFetch(t);
 

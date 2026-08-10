@@ -223,6 +223,16 @@ const API_KEY_PATTERNS: readonly Pattern[] = [
     "generic_secret",
     /(?:secret|password|passwd|pwd)\s*[=:]\s*["']?[^\s"']{8,}/gi,
   ],
+  // A credential that travels as part of an address rather than beside a name -
+  // how MEMORY_EMBED_URL carries the DeepInfra key, and a proxy, a Postgres or a
+  // Redis URL its own. The shape of the userinfo is the provider's business, so
+  // the position is the whole rule: right after `://` and right before the `@` of
+  // a host. Both halves go, because either can be the secret; the host stays, or
+  // a notice about a failed call stops saying which call failed. The colon is what
+  // keeps ordinary text out: `git@github.com:…` has no `://`, `https://user@host`
+  // has no password, and an address in prose has neither.
+  // The user half may be empty (`redis://:password@host`); the secret half may not.
+  ["url_userinfo", /(?<=:\/\/)[^\s/?#@:]*:[^\s/?#@]+(?=@[^\s/?#]+)/g],
 ];
 
 const INTERNAL_PATH_PATTERNS: readonly Pattern[] = [
