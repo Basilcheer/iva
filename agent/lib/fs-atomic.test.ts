@@ -108,7 +108,9 @@ test("восемь параллельных писателей не делят t
 
 test("убитый посреди записи писатель не оставляет полфайла — читатель видит только целые версии (seed виден)", async (t) => {
   const seed = Number(process.env.IVA_TEST_SEED ?? Date.now() % 100_000);
-  console.log(`fs-atomic partial-write seed: ${seed} (IVA_TEST_SEED to replay)`);
+  console.log(
+    `fs-atomic partial-write seed: ${seed} (IVA_TEST_SEED to replay)`,
+  );
   let lcg = seed >>> 0;
   const nextDelay = (): number => {
     lcg = (lcg * 1_664_525 + 1_013_904_223) >>> 0;
@@ -163,7 +165,10 @@ test("лок эксклюзивен: проигравший получает nul
   const held = acquireFileLockSync(path, { timeoutMs: 500 });
   assert.ok(held);
   const started = Date.now();
-  assert.equal(await acquireFileLock(path, { timeoutMs: 100, retryMs: 5 }), null);
+  assert.equal(
+    await acquireFileLock(path, { timeoutMs: 100, retryMs: 5 }),
+    null,
+  );
   assert.equal(acquireFileLockSync(path, { timeoutMs: 100, retryMs: 5 }), null);
   assert.ok(Date.now() - started >= 100, "проигравший обязан реально ждать");
 
