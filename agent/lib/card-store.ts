@@ -7,20 +7,12 @@
 
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-<<<<<<< HEAD
 import { hasUnclosedFence, outsideFences, scanFences } from "./card-text.ts";
-=======
 import {
   acquireFileLockSync,
   releaseFileLock,
   writeFileAtomicSync,
 } from "./fs-atomic.ts";
-import {
-  hasUnclosedFence,
-  outsideFences,
-  scanFences,
-} from "../../scripts/lib/card-text.ts";
->>>>>>> feat/fs-atomic
 import {
   parseFrontmatter,
   writeFrontmatter,
