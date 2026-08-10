@@ -7,11 +7,10 @@
 //     nesting inside <pre>/<code>, attribute values safe.
 //   • Length-safe: chunk on a tag-safe boundary to <=4096 (text) / caption limit.
 //
-// ЕДИНЫЙ ИСТОЧНИК ПРАВДЫ для разметки Telegram. Импортируется и из eve-бандла
-// (agent/channels/telegram.ts), и из plain-node cron-скриптов (scripts/*). Pure
-// string ops, ноль импортов — поэтому одинаково и бандлится rolldown'ом, и
-// исполняется голым node. (Проверено: `eve build`/`eve dev` импорт из scripts/lib
-// резолвят без проблем — старое поверье про «ломает eve dev 0.11.4» опровергнуто.)
+// ЕДИНЫЙ ИСТОЧНИК ПРАВДЫ для разметки Telegram. Единственный потребитель —
+// Outbox (./outbox.ts), через который наружу идут и ответы канала, и ночные отчёты
+// cron-скриптов. Pure string ops, ноль импортов — поэтому одинаково и бандлится
+// rolldown'ом в eve-бандл, и исполняется голым node на cron-пути.
 
 // ── escaping ──────────────────────────────────────────────────────────────────
 const HTML_ESC: Record<string, string> = {
