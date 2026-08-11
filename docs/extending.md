@@ -1,10 +1,13 @@
 # Extending
 
-Everything Iva does is a file in an `agent/` tree. The bundled files in `agent/` belong to the updateable
-core; your authored layer lives in `data/custom/agent/`. `npm run build` combines both in a disposable
-tree, then `iva restart` activates the result ([cli.md](./cli.md)). The live source checkout stays clean,
-so an update cannot be blocked by a customized skill or HTML file. Existing local edits in the authored
-paths are migrated automatically on the first update.
+Everything Iva does is a file in an `agent/` tree. The shipped files in `agent/` are the authored tree,
+refreshed by releases; your custom layer lives in `data/custom/agent/`. `npm run build` combines both in
+a disposable tree, then `iva restart` activates the result ([cli.md](./cli.md)). The live source checkout
+stays clean, so an update cannot be blocked by a customized skill or HTML file. Local edits you already
+made to `agent/instructions.md`, `agent/skills/`, `agent/connections/`, `agent/tools/` or
+`agent/subagents/` move into the custom layer automatically on the first update. Edits anywhere else in
+the tree stay a plain local patch: the updater stashes them and replays them onto the new revision, and
+archives them under `data/update-conflicts/` when they no longer apply.
 
 ## Adding a skill
 
@@ -57,8 +60,8 @@ The model discovers the server's tools through the built-in `connection_search` 
 Put a tool in `data/custom/agent/tools/<name>.ts`. Use the bundled files in `agent/tools/` as
 read-only examples. Every input must have a zod schema, enum-like values need explicit allowlists,
 and file paths must be resolved and bounded to their permitted root. Keep credentials in `.env`.
-The disposable build compiles custom tools together with core tools without copying their source into
-the live checkout.
+The disposable build compiles custom tools together with the authored tree's tools without copying their
+source into the live checkout.
 
 ## Subagents
 
@@ -82,12 +85,12 @@ A subagent brings its own provider and model: the planner pins Ollama Cloud (`OL
 
 Iva's voice lives in exactly one customizable file: `data/custom/agent/instructions.md` - tone, rules,
 tool preferences and hard limits. Start by copying the bundled `agent/instructions.md`. The reply
-language still comes from `AGENT_LANGUAGE` in `.env`. The files in `agent/instructions/` are core
-machinery and are not part of the customization layer.
+language still comes from `AGENT_LANGUAGE` in `.env`. The files in `agent/instructions/` stay in the
+authored tree and are not part of the custom layer.
 
-If an upstream edit overlaps yours, Iva activates the new core and saves all three versions under
-`data/update-conflicts/`. Tell Iva "restore my update changes" or «верни мои изменения после
-обновления» to load the recovery skill and merge them from chat.
+If an upstream edit overlaps yours, Iva activates the new authored tree and saves all three versions
+(base, yours, upstream) under `data/update-conflicts/`. Tell Iva "restore my update changes" or «верни
+мои изменения после обновления» to load the recovery skill and merge them from chat.
 
 What Iva knows about _you_ is memory, not code — that's `CORE.md` in the vault ([memory.md](./memory.md)).
 
