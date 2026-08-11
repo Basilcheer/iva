@@ -1,6 +1,7 @@
 import { createAccountCommands } from "./account.ts";
 import { createConfigCommand } from "./config.ts";
 import { createDoctorCommand } from "./doctor.ts";
+import { createNotifyCommand } from "./notify.ts";
 import { createCliRuntime } from "./runtime.ts";
 import { createServiceCommands } from "./services.ts";
 import { createCliSystemd } from "./systemd.ts";
@@ -53,6 +54,7 @@ export function createCliMain(root: string) {
   const services = createServiceCommands(runtime, systemdLifecycle);
   const cmdConfig = createConfigCommand(runtime, systemdLifecycle);
   const cmdDoctor = createDoctorCommand(runtime, systemdLifecycle);
+  const cmdNotify = createNotifyCommand(runtime);
   const legacyUpdate = createUpdateCommand({
     runtime,
     systemdLifecycle,
@@ -87,6 +89,7 @@ ${C.b}Commands:${C.x}
   ${C.c}iva reset${C.x}          full reset: clear stuck workflows and restart
   ${C.c}iva start${C.x} / ${C.c}stop${C.x}    start / stop
   ${C.c}iva usage${C.x} [win]      token usage (last|today|week|month|by-model|by-source|tail)
+  ${C.c}iva notify${C.x} <text>    send one Telegram message (what cron and systemd reminders call)
   ${C.c}iva userbot${C.x} [creds|setup|status|diagnose --json|off]  personal-account userbot proxy
   ${C.c}iva logs${C.x} [poll]     agent logs (or the Telegram bridge) -f
   ${C.c}iva uninstall${C.x}       remove units and the command (--purge — delete code+vault)
@@ -107,6 +110,7 @@ ${C.b}Commands:${C.x}
     restart: services.cmdRestart,
     reset: services.cmdReset,
     usage: account.cmdUsage,
+    notify: cmdNotify,
     start: services.cmdStart,
     stop: services.cmdStop,
     logs: services.cmdLogs,
