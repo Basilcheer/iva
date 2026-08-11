@@ -161,9 +161,15 @@ Default model is deepseek-v4-pro, 131k context. On Go it runs about $9/mo all-in
 ## What's New
 
 <details>
-<summary><b>v0.3.17 · 11.08.2026 — expand the latest releases</b></summary>
+<summary><b>v0.3.18 · 11.08.2026 — expand the latest releases</b></summary>
 
 ### 11.08.2026
+
+#### v0.3.18
+
+- The nightly memory care is now called Brain. The update renames the systemd units on a live install by itself. An interrupted update never leaves your install without the nightly job.
+- Web content now passes the inbound filter. Pages and search results always arrive; a suspected injection carries a warning. The detector reads English, Russian and Uzbek. Telegram filtering did not change.
+- The docs now match the code: all four card operations, local-first checks instead of CI, and an honest security page.
 
 #### v0.3.17
 
