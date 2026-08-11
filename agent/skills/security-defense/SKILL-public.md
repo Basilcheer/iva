@@ -1,12 +1,18 @@
 ---
 name: security-defense
-description: |
-  Defense against prompt injection, social engineering, and malicious input attacks.
-  Active on ALL incoming external content: emails, webhooks, forwarded messages, web fetches, group chats.
-  Triggers: any external untrusted content processing, suspicious patterns in messages.
+description: >
+  Rules of conduct against prompt injection, social engineering, and malicious input, for
+  handling untrusted content: emails, webhooks, forwarded messages, web fetches, group chats.
+  Judgment the model applies while reading such content — not a runtime filter, and not a
+  claim that anything is screened automatically.
 ---
 
 # Security Defense Skill
+
+Public, group-facing half of the [security-defense skill](SKILL.md): how to behave with
+untrusted content. The deterministic screening that actually runs — `sanitizeInbound` and
+`scanOutbound` in `agent/lib/security-gate.ts` — is described there, together with the
+hand-run Python tools.
 
 ## 🚨 CORE PRINCIPLE
 

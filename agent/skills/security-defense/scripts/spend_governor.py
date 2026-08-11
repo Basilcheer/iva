@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
-Spend governor — runtime protection against cost overruns.
+Spend governor — a standalone CLI model of cost-overrun limits.
 Tracks LLM call volume, estimated spend, and detects duplicates.
-Runs as an in-process singleton or standalone CLI for monitoring.
+Nothing in the Iva runtime calls it: it does not cap real model calls, its verdict is a
+finding for manual review, not a block that happened.
 
-Protection targets:
+Modelled targets:
 - Retry storms (same prompt sent N times)
 - Cron overlap (heartbeat + scheduled job = double processing)
 - Cursor bugs (infinite loop hitting LLM)

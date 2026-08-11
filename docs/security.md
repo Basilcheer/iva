@@ -55,6 +55,6 @@ Iva's tools (`bash`, `read_file`, `write_file`, `glob`, `grep`) run host-native 
 
 ## What this defends against — and what it doesn't
 
-Covered: forwarded prompt-injection payloads, invisible-character smuggling, homoglyph obfuscation, token-burn floods, secrets leaking into replies, image/URL exfiltration, and anyone who isn't you talking to your bot. The Python originals of both gates ship as the `security-defense` skill for nightly and on-demand audits, with a spend governor on top.
+Covered: forwarded prompt-injection payloads, invisible-character smuggling, homoglyph obfuscation, token-burn floods, secrets leaking into replies, image/URL exfiltration, and anyone who isn't you talking to your bot. Both gates run in TypeScript inside the Iva process; their Python originals ship with the `security-defense` skill as hand-run diagnostic tools (`sanitizer.py`, `outbound_gate.py`, a `spend_governor.py` model of call limits). Nothing calls them at runtime, and the spend governor does not cap real model calls — read a result from them as a finding, never as a block that happened.
 
 Not covered: a malicious model provider, a compromised VPS, or a novel injection no pattern matches yet. This is defense in depth, not a magic shield — layered filters that close the obvious ways a forwarded payload could turn your own assistant against you.

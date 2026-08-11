@@ -44,7 +44,7 @@ Update button in Telegram) — running an old tag is not a supported configurati
   `forward_messages`). Raw-API writes — joins, invites, contact imports, reactions —
   are knowingly not wrapped; that gap is documented, not a vulnerability.
 - The install and update path — anything that gets code onto a host through
-  `install.sh` or `iva update`, including the spend governor and the restart guard.
+  `install.sh` or `iva update`, including the restart guard.
 
 ## What is not in scope
 
