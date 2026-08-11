@@ -6,7 +6,7 @@ Iva runs with a full shell on your server and reads whatever you forward it — 
 
 ## Inbound gate
 
-Runs before the model reads anything untrusted: message text, captions, voice transcripts — and every page or search result the agent pulls off the web.
+Runs before the model reads anything untrusted: message text, captions, voice transcripts — and every page or search result `web_fetch` and `web_search` bring back.
 
 - 🧹 **Invisible Unicode** — zero-width and control characters are stripped; if more than 5% of a message longer than 100 characters is invisible, it's blocked as a smuggling flood.
 - 💸 **Wallet-drain characters** — Tibetan, Braille and math glyphs that tokenize at 3–10 tokens each are removed; more than 50 of them blocks the message.
@@ -18,7 +18,9 @@ Hard cap: 50,000 characters per message.
 
 ### The web surface: warn, don't block
 
-`web_fetch` and `web_search` are wrappers: the fetch itself stays the framework's (https only, DNS-checked against private and loopback addresses, 5 MB ceiling, 30 s timeout), and the gate runs on what comes back — page text, search titles, snippets and the provider's quick answer. Policy there is **warn-and-pass** ([ADR-0006](https://github.com/smixs/iva/blob/main/docs/adr/0006-web-surface-passes-the-inbound-gate.md)): the content always reaches the model, and an attack signal adds a `warning` field to the tool result plus one line in the log. Reading pages is the agent's daily job — silently losing a page to a false positive costs more than the warning does. Links are checked but never rewritten.
+`web_fetch` and `web_search` are wrappers: the fetch itself stays the framework's (https only, DNS-checked against private and loopback addresses, 5 MB ceiling, 30 s timeout), and the gate runs on what comes back — page text, search titles, snippets and the provider's quick answer. Policy there is **warn-and-pass** ([ADR-0006](https://github.com/smixs/iva/blob/main/docs/adr/0006-web-surface-passes-the-inbound-gate.md)): the content always reaches the model, and an attack signal adds a `warning` field to the tool result plus one line in the log. Reading pages is the agent's daily job — silently losing a page to a false positive costs more than the warning does. Links are checked but never rewritten, and a payload hidden in percent-encoding is checked in its decoded form too. The framework's own error text goes through the gate as well: a redirect message quotes the attacker's `Location` header verbatim.
+
+The boundary in one line: the gate covers the two web tools, on every node of the agent graph — a declared subagent would otherwise get the ungated framework tools, so the planner has both slots switched off. It does not cover the `agent-browser` skill: that one drives a real browser through the shell, and its output returns through `bash`, outside the gate.
 
 ## Outbound gate
 
