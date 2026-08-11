@@ -544,6 +544,20 @@ void test("the brain rename is idempotent and stops touching systemd once the ol
   assert.deepEqual(nightlyUnitsOnDisk(unitDir), ["iva-brain.timer"]);
 });
 
+// A half-unpacked deploy/: only the named units of the new pair landed — the shape that must
+// make the migration keep the old pair. Used by every "the kept unit must still work" test
+// below; the default (service only) is the tree an update died in before writing the timer.
+async function partialDeploy(
+  project: string,
+  units: readonly string[] = ["iva-brain.service"],
+): Promise<void> {
+  const deploy = join(project, "deploy");
+  await rm(deploy); // the fixture symlinks the real deploy/ — swap in a partial copy
+  await mkdir(deploy, { recursive: true });
+  for (const unit of units)
+    await copyFile(join(ROOT, "deploy", unit), join(deploy, unit));
+}
+
 void test("an update interrupted before deploy/ carries iva-brain.timer keeps the old nightly unit", async (t) => {
   // A half-extracted tree: the new service file landed, the timer did not. Removing the old
   // pair here would leave the install with no nightly vault care at all until the next
@@ -551,13 +565,7 @@ void test("an update interrupted before deploy/ carries iva-brain.timer keeps th
   const { home, project, runCommand } = await fixture(t);
   const unitDir = join(home, ".config/systemd/user");
   await seedLegacyBrainUnits(unitDir, project);
-  const deploy = join(project, "deploy");
-  await rm(deploy); // the fixture symlinks the real deploy/ — swap in a partial copy
-  await mkdir(deploy, { recursive: true });
-  await copyFile(
-    join(ROOT, "deploy/iva-brain.service"),
-    join(deploy, "iva-brain.service"),
-  );
+  await partialDeploy(project);
 
   const result = runCommand("_install-units");
   const output = `${result.stdout}\n${result.stderr}`;
@@ -568,6 +576,78 @@ void test("an update interrupted before deploy/ carries iva-brain.timer keeps th
     nightlyUnitsOnDisk(unitDir),
     ["iva-memory-doctor.timer"],
     "the old nightly timer survives an update that never delivered the new one",
+  );
+});
+
+void test("an update interrupted before deploy/ carries iva-brain.service keeps the old nightly unit", async (t) => {
+  // The mirror half-extracted tree: the new TIMER landed, the service it points at did not.
+  // A timer alone is not a nightly job — OnCalendar fires and systemd finds no iva-brain
+  // .service to start. Retiring the old pair on that state costs every night until the next
+  // successful update, and the timer on disk makes the install look migrated while it is not.
+  const { home, project, runCommand } = await fixture(t);
+  const unitDir = join(home, ".config/systemd/user");
+  await seedLegacyBrainUnits(unitDir, project);
+  await partialDeploy(project, ["iva-brain.timer"]);
+
+  const result = runCommand("_install-units");
+  const output = `${result.stdout}\n${result.stderr}`;
+
+  assert.equal(result.status, 0, output);
+  assert.equal(
+    existsSync(join(unitDir, "iva-brain.service")),
+    false,
+    "the fixture must really lack the new service — otherwise this proves nothing",
+  );
+  assert.match(output, /skipping legacy brain-unit cleanup/);
+  assert.match(output, /iva-brain\.service/);
+  assert.deepEqual(
+    nightlyUnitsOnDisk(unitDir).sort(),
+    ["iva-brain.timer", "iva-memory-doctor.timer"],
+    "the old nightly pair survives a timer that has no service to start",
+  );
+  assert.equal(
+    existsSync(join(unitDir, "iva-memory-doctor.service")),
+    true,
+    "the kept timer needs its own service to stay a working nightly job",
+  );
+  const entrypoint = await nightlyEntrypoint(
+    unitDir,
+    "iva-memory-doctor.service",
+  );
+  assert.equal(entrypoint, "scripts/memory/brain.ts");
+  assert.equal(existsSync(join(project, entrypoint)), true);
+});
+
+void test("iva status and iva doctor both see the nightly unit kept by a service-less new timer", async (t) => {
+  // The blind-spot check for the mirror case: iva-brain.timer IS on disk here, so a status
+  // built from this version's unit list alone looks complete while the unit actually carrying
+  // the night is the kept pre-rename one.
+  const { calls, home, project, runCommand } = await fixture(t);
+  const unitDir = join(home, ".config/systemd/user");
+  await seedLegacyBrainUnits(unitDir, project);
+  await partialDeploy(project, ["iva-brain.timer"]);
+
+  assert.equal(runCommand("_install-units").status, 0);
+  await writeFile(calls, "");
+  const status = runCommand("status");
+  const statusOutput = `${status.stdout}\n${status.stderr}`;
+
+  assert.equal(status.status, 0, statusOutput);
+  assert.match(
+    await readFile(calls, "utf8"),
+    /--user list-timers --no-pager iva-brain\.timer iva-update-check\.timer iva-memory-doctor\.timer/,
+  );
+  assert.match(statusOutput, /iva-memory-doctor\.timer still installed/);
+
+  await writeFile(calls, "");
+  const doctor = runCommand("doctor", {
+    failedUnit: "iva-memory-doctor.service",
+  });
+  const doctorOutput = `${doctor.stdout}\n${doctor.stderr}`;
+  assert.match(doctorOutput, /iva-memory-doctor\.service failed/);
+  assert.match(
+    doctorOutput,
+    /journalctl --user -u iva-memory-doctor\.service -n 100 --no-pager/,
   );
 });
 
@@ -591,18 +671,6 @@ void test("a new brain timer that refuses to come up keeps the old pair installe
     "iva-memory-doctor.timer",
   ]);
 });
-
-// A partial deploy/: the new service file landed, the timer did not — the shape that makes
-// the migration keep the old pair. Used by every "the kept unit must still work" test below.
-async function partialDeploy(project: string): Promise<void> {
-  const deploy = join(project, "deploy");
-  await rm(deploy); // the fixture symlinks the real deploy/ — swap in a partial copy
-  await mkdir(deploy, { recursive: true });
-  await copyFile(
-    join(ROOT, "deploy/iva-brain.service"),
-    join(deploy, "iva-brain.service"),
-  );
-}
 
 void test("a legacy nightly unit kept by an interrupted update still names a script that exists", async (t) => {
   // The unit file surviving on disk proves nothing: its ExecStart was written before the

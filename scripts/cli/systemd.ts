@@ -46,6 +46,7 @@ export function createCliSystemd(runtime: CliRuntime) {
     OLD_DEFAULT_HOST,
     SERVICES,
     TIMERS,
+    BRAIN_SERVICE,
     BRAIN_TIMER,
     ok,
     warn,
@@ -212,9 +213,12 @@ export function createCliSystemd(runtime: CliRuntime) {
   //
   // Order is the whole point. The nightly vault care must never be absent, not even for the
   // window between two steps of an update that dies halfway:
-  //   1. the new timer must be written to UNIT_DIR by THIS run (daemon-reload already done),
-  //   2. and enabled+active — `iva update` calls writeUnits() but not activateUnits(), so a
-  //      merely-written unit would still never fire,
+  //   1. BOTH new units must be written to UNIT_DIR by THIS run (daemon-reload already done).
+  //      The timer alone is not a nightly job: a half-unpacked deploy/ can carry either file
+  //      without the other, and a timer whose iva-brain.service is missing fires at 05:00 into
+  //      nothing — while looking migrated. A service without its timer never fires at all.
+  //   2. and the timer enabled+active — `iva update` calls writeUnits() but not
+  //      activateUnits(), so a merely-written unit would still never fire,
   //   3. only then may the old pair be disabled and deleted.
   // Any failure in 1–2 keeps the old units: a duplicated nightly run is harmless (both take
   // the same .memory.lock), a missing one costs the user a night of memory care.
@@ -268,12 +272,12 @@ export function createCliSystemd(runtime: CliRuntime) {
           `kept ${repointed.join(", ")} — repointed at ${BRAIN_ENTRYPOINT}, so tonight's vault care still runs`,
         );
     };
-    if (
-      !written.includes(BRAIN_TIMER) ||
-      !existsSync(join(UNIT_DIR, BRAIN_TIMER))
-    ) {
+    const missing = [BRAIN_SERVICE, BRAIN_TIMER].filter(
+      (unit) => !written.includes(unit) || !existsSync(join(UNIT_DIR, unit)),
+    );
+    if (missing.length) {
       warn(
-        `skipping legacy brain-unit cleanup — ${BRAIN_TIMER} is not installed yet (run \`iva doctor\`, then it will run automatically)`,
+        `skipping legacy brain-unit cleanup — ${missing.join(" and ")} not installed yet (run \`iva doctor\`, then it will run automatically)`,
       );
       keeping();
       return [];
