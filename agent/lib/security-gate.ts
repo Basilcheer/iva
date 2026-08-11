@@ -65,23 +65,29 @@ const LOOKALIKES: Record<string, string> = {
   ν: "v",
 };
 
-// Агент работает по-русски, а его владелец читает и узбекский веб, поэтому
-// детектор говорит на трёх языках. Английские и узбекские правила латинские;
-// русские написаны кириллицей и морфологию слова добирают хвостом `\p{L}*`
-// («игнорируй», «игнорируйте», «проигнорировать» — одно правило).
-// Апостроф узбекской латиницы пишут пятью разными знаками (o'/oʻ/o’/oʼ/o`),
-// поэтому он везде идёт классом.
+// Агент работает по-русски, а его владелец читает и узбекский веб, поэтому на
+// web-поверхности детектор говорит на трёх языках. Английские и узбекские
+// правила латинские; русские написаны кириллицей и морфологию слова добирают
+// хвостом `\p{L}*` («игнорируй», «игнорируйте», «проигнорировать» — одно
+// правило). Апостроф узбекской латиницы пишут пятью разными знаками
+// (o'/oʻ/o’/oʼ/o`), поэтому он везде идёт классом.
 const UZ_APOSTROPHE = "['‘’ʻʼ`]?";
 
-const ROLE_MARKER_RE = new RegExp(
-  String.raw`(?:^|\n)\s*(?:system|assistant|user|human|AI|claude|instruction|admin|root` +
-    String.raw`|система|систем|ассистент|пользователь|человек|админ|инструкция` +
-    String.raw`|tizim|yordamchi|foydalanuvchi|inson|ko${UZ_APOSTROPHE}rsatma` +
-    String.raw`)\s*[:-]\s`,
-  "gimu",
+function roleMarkerRe(names: string): RegExp {
+  return new RegExp(String.raw`(?:^|\n)\s*(?:${names})\s*[:-]\s`, "gimu");
+}
+
+const ENGLISH_ROLE_MARKER_RE = roleMarkerRe(
+  String.raw`system|assistant|user|human|AI|claude|instruction|admin|root`,
 );
 
-const OVERRIDE_PATTERNS = [
+const MULTILINGUAL_ROLE_MARKER_RE = roleMarkerRe(
+  String.raw`system|assistant|user|human|AI|claude|instruction|admin|root` +
+    String.raw`|система|систем|ассистент|пользователь|человек|админ|инструкция` +
+    String.raw`|tizim|yordamchi|foydalanuvchi|inson|ko${UZ_APOSTROPHE}rsatma`,
+);
+
+const ENGLISH_OVERRIDE_PATTERNS = [
   /ignore\s+(?:all\s+)?previous\s+instructions?/i,
   /forget\s+(?:all\s+)?(?:your\s+)?(?:previous\s+)?instructions?/i,
   /you\s+are\s+now\s+(?:in\s+)?(?:\w+\s+)?mode/i,
@@ -93,6 +99,15 @@ const OVERRIDE_PATTERNS = [
   /pretend\s+(?:you\s+)?(?:are|have)\s+no\s+(?:rules|restrictions|limits)/i,
   /(?:reveal|show|display|print|output)\s+(?:your\s+)?(?:system\s+)?(?:prompt|instructions)/i,
   /(?:send|forward|email|post)\s+(?:all\s+)?(?:data|files|secrets|keys|tokens)/i,
+];
+
+// Русские и узбекские правила стоят ТОЛЬКО на web — на поверхности, где текст
+// это данные, а гейт лишь предупреждает. По-русски владелец говорит с агентом
+// каждый день, и те же слова у него значат ровно то, что сказано: «покажи
+// правила из CLAUDE.md», «отмени ограничение на длину», «забудь предыдущие
+// указания» — это работа, а не инъекция. На блокирующей поверхности такие
+// правила съедали бы вопрос владельца целиком (см. ADR-0006, «Язык детектора»).
+const RU_UZ_OVERRIDE_PATTERNS = [
   // Русский: те же одиннадцать намерений, слово в слово как их пишет инъекция.
   /(?:про)?игнорир\p{L}*\s+(?:\p{L}+\s+){0,3}?(?:инструкц|указан|правил|предписан|команд)\p{L}*/iu,
   /забуд\p{L}*\s+(?:\p{L}+\s+){0,3}?(?:инструкц|указан|правил|предписан|роль|что\b)\p{L}*/iu,
@@ -125,6 +140,11 @@ const OVERRIDE_PATTERNS = [
   ),
 ];
 
+const MULTILINGUAL_OVERRIDE_PATTERNS = [
+  ...ENGLISH_OVERRIDE_PATTERNS,
+  ...RU_UZ_OVERRIDE_PATTERNS,
+];
+
 const INBOUND_ATTACK_FLAG_NAMES = new Set(["role-markers", "overrides"]);
 
 export function hasInboundAttackSignal(
@@ -138,13 +158,42 @@ export function hasInboundAttackSignal(
   });
 }
 
-// Warn-and-pass surfaces (web content) need the cleaned text even when a block
-// rule fires: dropping a whole page over 51 Braille glyphs or a Tibetan article
-// is a false block, and the caller still gets `blocked: true` to wrap the text in
-// a warning. The default stays fail-closed for Telegram, where a flood is a
-// message the owner can resend.
+// Поверхность входа. Одно решение, а не набор ручек: от неё зависит и то, как
+// гейт отвечает на блокировку, и то, на скольких языках он читает.
+//
+// `telegram` (дефолт) — блокирующая поверхность. Говорит на ней владелец, текст
+// от него это инструкция, и ложная блокировка стоит целого вопроса: гейт
+// обнуляет текст, поэтому правила держатся англоязычного минимума, как было до
+// web-раунда.
+//
+// `web` — warn-and-pass (ADR-0006). Текст здесь данные, эффект гейта — одна
+// фраза предупреждения, поэтому цена ложной сработки мала, а цена пропуска
+// велика: правила читают три языка, и очищенный текст едет к модели даже когда
+// сработало правило блокировки. Иначе тибетская статья, таблица Брайля или
+// математика в юникоде превращались бы в пустоту.
+export type InboundSurface = "telegram" | "web";
+
+interface SurfaceRules {
+  roleMarker: RegExp;
+  overrides: readonly RegExp[];
+  keepBlockedText: boolean;
+}
+
+const SURFACE_RULES: Record<InboundSurface, SurfaceRules> = {
+  telegram: {
+    roleMarker: ENGLISH_ROLE_MARKER_RE,
+    overrides: ENGLISH_OVERRIDE_PATTERNS,
+    keepBlockedText: false,
+  },
+  web: {
+    roleMarker: MULTILINGUAL_ROLE_MARKER_RE,
+    overrides: MULTILINGUAL_OVERRIDE_PATTERNS,
+    keepBlockedText: true,
+  },
+};
+
 export interface SanitizeOptions {
-  keepBlockedText?: boolean;
+  surface?: InboundSurface;
 }
 
 // Bounds the text by Unicode code points without splitting a surrogate pair.
@@ -175,9 +224,9 @@ export function sanitizeInbound(
   if (!Number.isSafeInteger(maxChars) || maxChars < 0) {
     throw new RangeError("maxChars must be a non-negative safe integer");
   }
-  const keepBlockedText = options.keepBlockedText === true;
+  const rules = SURFACE_RULES[options.surface ?? "telegram"];
   const blockedPayload = (cleaned: string) =>
-    keepBlockedText
+    rules.keepBlockedText
       ? capCodePoints(cleaned, maxChars)
       : {
           text: "",
@@ -234,10 +283,10 @@ export function sanitizeInbound(
   // наоборот, ломает само слово («игнорируй» → «игнopиpyй»), так что русские
   // правила работают по сырому тексту. Считаем по обоим и берём больший счёт.
   const roleMarkers = Math.max(
-    (probe.match(ROLE_MARKER_RE) || []).length,
-    (text.match(ROLE_MARKER_RE) || []).length,
+    (probe.match(rules.roleMarker) || []).length,
+    (text.match(rules.roleMarker) || []).length,
   );
-  const overrides = OVERRIDE_PATTERNS.filter(
+  const overrides = rules.overrides.filter(
     (re) => re.test(probe) || re.test(text),
   ).length;
   if (roleMarkers) flags.push(`role-markers=${roleMarkers}`);
