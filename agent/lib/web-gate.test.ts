@@ -59,12 +59,31 @@ test("warn-and-pass: заблокированный текст не обнуля
   assert.equal(outcome.text, "живой текст страницы");
 });
 
-test("wallet-drain: глифы сняты, остальное осталось", () => {
-  const outcome = gateWebText(`${"⠁".repeat(60)} итог 42`);
+test("wallet-drain: страница остаётся целой, предупреждение едет", () => {
+  // Таблица Брайля — контент, а не атака: снять глифы значило бы отдать модели
+  // строку пробелов. За порогом текст держит бюджет, а не удаление (ADR-0006).
+  const page = `${"⠁".repeat(60)} итог 42`;
+  const outcome = gateWebText(page);
 
   assert.equal(outcome.blocked, true);
   assert.equal(outcome.flags[0], "wallet-drain");
-  assert.equal(outcome.text, " итог 42");
+  assert.equal(outcome.text, page);
+  assert.equal(outcome.truncatedChars, 0);
+
+  const { value } = captureErrors(() =>
+    reportWebGate("web_fetch https://bo.example", [outcome]),
+  );
+  assert.equal(value.flagged, true);
+  assert.ok(value.warning);
+});
+
+test("wallet-drain: длинная страница режется бюджетом, а не письменностью", () => {
+  const outcome = gateWebText("ཨ་མདོ་ནི་བོད།".repeat(1000));
+
+  assert.equal(outcome.blocked, true);
+  assert.equal(Array.from(outcome.text).length, 2000);
+  assert.equal(outcome.truncatedChars, 11000);
+  assert.ok(outcome.text.startsWith("ཨ་མདོ"));
 });
 
 test("заблокированный текст режется тем же лимитом", () => {

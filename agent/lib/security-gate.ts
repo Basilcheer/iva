@@ -223,15 +223,30 @@ export function hasInboundAttackSignal(
 //
 // `web` — warn-and-pass (ADR-0006). Текст здесь данные, эффект гейта — одна
 // фраза предупреждения, поэтому цена ложной сработки мала, а цена пропуска
-// велика: правила читают три языка, и очищенный текст едет к модели даже когда
-// сработало правило блокировки. Иначе тибетская статья, таблица Брайля или
-// математика в юникоде превращались бы в пустоту.
+// велика: правила читают три языка, текст едет к модели даже когда сработало
+// правило блокировки, а дорогие письменности остаются на месте — тибетская
+// статья, таблица Брайля и математика в юникоде это контент, а не атака.
 export type InboundSurface = "telegram" | "web";
+
+// Бюджет символов дорогих письменностей на поверхности, где их не вырезают.
+// Дорогой символ стоит 3–10 токенов, то есть 2000 таких — порядка 20 тысяч
+// токенов: цена обычной большой страницы, а не кошелька владельца. Столько же
+// знаков тибетской статьи или таблицы Брайля — уже целое содержимое, а не
+// «пустота с предупреждением». Всё, что за бюджетом, вырезается и идёт в счёт
+// усечения.
+export const EXPENSIVE_SCRIPT_MAX_CHARS = 2000;
 
 interface SurfaceRules {
   roleMarker: RegExp;
   overrides: readonly RegExp[];
   keepBlockedText: boolean;
+  // Вырезать ли символы дорогих письменностей из текста, который едет к модели.
+  // Счёт для порога wallet-drain ведётся в любом случае.
+  stripExpensiveScripts: boolean;
+  // Читать ли правилам ещё и NFKC-вид текста. Он снимает маскировку
+  // совместимыми формами (математическое `𝐢𝐠𝐧𝐨𝐫𝐞` → `ignore`, полноширинные
+  // буквы), которую на другой поверхности снимает само вырезание глифов.
+  foldCompatibility: boolean;
 }
 
 const SURFACE_RULES: Record<InboundSurface, SurfaceRules> = {
@@ -239,11 +254,15 @@ const SURFACE_RULES: Record<InboundSurface, SurfaceRules> = {
     roleMarker: ENGLISH_ROLE_MARKER_RE,
     overrides: ENGLISH_OVERRIDE_PATTERNS,
     keepBlockedText: false,
+    stripExpensiveScripts: true,
+    foldCompatibility: false,
   },
   web: {
     roleMarker: MULTILINGUAL_ROLE_MARKER_RE,
     overrides: MULTILINGUAL_OVERRIDE_PATTERNS,
     keepBlockedText: true,
+    stripExpensiveScripts: false,
+    foldCompatibility: true,
   },
 };
 
@@ -269,6 +288,25 @@ function capCodePoints(
     text: truncatedChars > 0 ? text.slice(0, keptCodeUnits) : text,
     truncatedChars,
   };
+}
+
+// Копия текста с буквами-двойниками, приведёнными к латинице. Живёт только в
+// детекторе: модели отдаётся сырой текст.
+function normalizeLookalikes(text: string): {
+  text: string;
+  normalized: number;
+} {
+  let normalized = 0;
+  const probe = Array.from(text)
+    .map((c) => {
+      if (LOOKALIKES[c]) {
+        normalized++;
+        return LOOKALIKES[c];
+      }
+      return c;
+    })
+    .join("");
+  return { text: probe, normalized };
 }
 
 export function sanitizeInbound(
@@ -306,43 +344,55 @@ export function sanitizeInbound(
   }
   if (invisibleRemoved) flags.push(`invisible=${invisibleRemoved}`);
 
-  let walletRemoved = 0;
-  text = text.replace(WALLET_DRAIN_RE, () => {
-    walletRemoved++;
+  // Дорогие письменности считаются на обеих поверхностях, а вырезаются только
+  // там, где текст это сообщение. На web они и есть содержимое страницы, так
+  // что расход держит бюджет, а не удаление: первые EXPENSIVE_SCRIPT_MAX_CHARS
+  // таких символов остаются на месте, лишнее за бюджетом уходит и попадает в
+  // счёт усечения. Модель получает тибетскую статью, а не строку пробелов
+  // (ADR-0006). Бюджет считается по символам письменности, а не по длине
+  // текста: страница на латинице с цитатой на Брайле доезжает целой.
+  let expensiveChars = 0;
+  let expensiveDropped = 0;
+  text = text.replace(WALLET_DRAIN_RE, (glyph) => {
+    expensiveChars++;
+    if (rules.stripExpensiveScripts) return "";
+    if (expensiveChars <= EXPENSIVE_SCRIPT_MAX_CHARS) return glyph;
+    expensiveDropped++;
     return "";
   });
-  if (walletRemoved > 50) {
+  if (expensiveChars > 50) {
+    const payload = blockedPayload(text);
     return {
-      ...blockedPayload(text),
+      ...payload,
+      truncatedChars: payload.truncatedChars + expensiveDropped,
       blocked: true,
-      reason: `Wallet drain attempt: ${walletRemoved} expensive Unicode chars`,
+      reason: `Wallet drain attempt: ${expensiveChars} expensive Unicode chars`,
       flags: ["wallet-drain"],
     };
   }
 
-  let normalized = 0;
-  const probe = Array.from(text)
-    .map((c) => {
-      if (LOOKALIKES[c]) {
-        normalized++;
-        return LOOKALIKES[c];
-      }
-      return c;
-    })
-    .join("");
+  const { text: probe, normalized } = normalizeLookalikes(text);
   if (normalized) flags.push(`lookalikes=${normalized}`);
 
-  // Правила читают оба вида текста: сырой и нормализованный. Латиницу
-  // нормализация не трогает, поэтому английские и узбекские правила видят в
-  // probe и обычный текст, и маскировку буквами-двойниками. Кириллице она,
-  // наоборот, ломает само слово («игнорируй» → «игнopиpyй»), так что русские
-  // правила работают по сырому тексту. Считаем по обоим и берём больший счёт.
+  // Правила читают несколько видов одного текста. Сырой и нормализованный
+  // буквами-двойниками: латиницу нормализация не трогает, поэтому английские и
+  // узбекские правила видят в probe и обычный текст, и маскировку; кириллице
+  // она ломает само слово («игнорируй» → «игнopиpyй»), так что русские правила
+  // работают по сырому. На web добавляется NFKC-вид: там дорогие письменности
+  // остаются в тексте, а математическая латиница читается моделью как обычные
+  // буквы («𝐢𝐠𝐧𝐨𝐫𝐞 𝐚𝐥𝐥 𝐩𝐫𝐞𝐯𝐢𝐨𝐮𝐬 𝐢𝐧𝐬𝐭𝐫𝐮𝐜𝐭𝐢𝐨𝐧𝐬»). Одинаковые виды схлопывает Set.
+  // Счёт маркеров — больший из видов, override — сработка хоть на одном.
+  const views = new Set([text, probe]);
+  if (rules.foldCompatibility) {
+    const folded = text.normalize("NFKC");
+    views.add(folded);
+    views.add(normalizeLookalikes(folded).text);
+  }
   const roleMarkers = Math.max(
-    (probe.match(rules.roleMarker) || []).length,
-    (text.match(rules.roleMarker) || []).length,
+    ...[...views].map((view) => (view.match(rules.roleMarker) || []).length),
   );
-  const overrides = rules.overrides.filter(
-    (re) => re.test(probe) || re.test(text),
+  const overrides = rules.overrides.filter((re) =>
+    [...views].some((view) => re.test(view)),
   ).length;
   if (roleMarkers) flags.push(`role-markers=${roleMarkers}`);
   if (overrides) flags.push(`overrides=${overrides}`);

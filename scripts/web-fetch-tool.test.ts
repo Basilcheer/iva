@@ -116,11 +116,11 @@ test("невидимый флуд чистится, контент не теря
   assert.match(logs[0], /invisible-flood/u);
 });
 
-test("wallet-drain глифы снимаются, остальной текст остаётся", async () => {
+test("wallet-drain: письменность доезжает до модели с предупреждением", async () => {
   const { value } = await fetchPage(html(`<p>${"⠁".repeat(80)} итог: 42</p>`));
 
   assert.match(value.content ?? "", /итог: 42/u);
-  assert.equal((value.content ?? "").includes("⠁"), false);
+  assert.match(value.content ?? "", /⠁{80}/u);
   assert.ok(value.warning);
 });
 
