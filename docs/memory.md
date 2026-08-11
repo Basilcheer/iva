@@ -32,8 +32,8 @@ Daily and weekly runs post a report to Telegram; monthly and yearly run silent.
 The daily pass extracts entities through `write_card` — a tool whose type and status enums come from the vault's `schema.json`, so the model cannot invent card types. Every fact gets one operation:
 
 - ➕ **ADD** — a new card. If that card already exists, the call is refused: an existing subject is UPDATE or SUPERSEDE territory.
-- ✏️ **UPDATE** — a new fact that does not contradict the current one; it lands as a line in the card's `## Log`.
-- 🔁 **SUPERSEDE** — the fact contradicts the current value: the card is rewritten to the new truth and the old value moves to an append-only `## History` as a dated line (`- 2026-07-31: TDI Group (held 2026-03→06)`). The date is the fact's own, not the day of writing; an entry that arrives without one is stamped with the write date.
+- ✏️ **UPDATE** — a new fact that does not contradict the card's Compiled Truth (its frontmatter plus the top of its description); it lands as a line in the card's `## Log`.
+- 🔁 **SUPERSEDE** — the fact contradicts the Compiled Truth: the card is rewritten to the new fact and the displaced one moves to an append-only `## History` as a dated line (`- 2026-07-31: TDI Group (held 2026-03→06)`). The date is the fact's own, not the day of writing; an entry that arrives without one is stamped with the write date.
 - ⏭️ **NOOP** — already known, nothing written.
 
 Facts carry a `confidence:` tag — `EXTRACTED` (you said it) or `INFERRED` (Iva deduced it) — so later answers assert the first and hedge the second. Decisions are the payoff: a decision card holds what you chose, when and why, and its History records every reversal with dates. You always see what is true now, plus the trail of how it got there.
