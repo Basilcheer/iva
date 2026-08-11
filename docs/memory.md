@@ -65,7 +65,7 @@ The vault is initialized from `vault-template/` as its own private git repo, sep
 ```text
 vault/
 ├── CORE.md          # always-on core
-├── PERSONA.md       # ≤800-char character, written by the /menu test, read every turn
+├── PERSONA.md       # ≤800-char speaking style, written by the /menu test, read every turn
 ├── MOC.md           # topic index, regenerated nightly
 ├── cards/           # contacts/ projects/ decisions/ ideas/ notes/
 ├── daily/           # raw transcripts, one per day

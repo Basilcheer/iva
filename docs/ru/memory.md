@@ -69,7 +69,7 @@ Vault инициализируется из `vault-template/` как отдел�
 ```text
 vault/
 ├── CORE.md          # always-on core
-├── PERSONA.md       # характер ≤800 знаков, пишет тест из /menu, читается каждый ход
+├── PERSONA.md       # стиль общения ≤800 знаков, пишет тест из /menu, читается каждый ход
 ├── MOC.md           # topic index, regenerated nightly
 ├── cards/           # contacts/ projects/ decisions/ ideas/ notes/
 ├── daily/           # raw transcripts, one per day
