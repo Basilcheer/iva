@@ -85,11 +85,13 @@ evals; it is not attached to Iva's bundled skills and has no runner wired up. Th
 `#evals/*` import alias is declared in `package.json` but unused. eve ships a native
 `eve/evals` module — adopt it before adding product-level skill evals.
 
-## 5. CI discovery guardrails
+## 5. Discovery guardrails are not part of the release check
 
-Neither `npm run validate` nor `eve info` runs in CI. Both would catch silent eve
-discovery failures (agent/tool/skill wiring that eve can't find at build time) before
-they reach a release. Worth adding as a CI step.
+Neither `npm run validate` nor `eve info` runs on the way to a release. Both would catch
+silent eve discovery failures (agent/tool/skill wiring that eve can't find at build time)
+before they reach users. There is no CI to hang them on
+([ADR-0004](adr/0004-philosophy-is-the-review-bar.md)), so the fix is to make them part
+of the local pre-release routine.
 
 ## 6. `sessionTimeoutMs: false`
 
@@ -178,7 +180,7 @@ vs `scripts/autograph/common.py`; (b) the fence-aware H1/H2 section scanner adde
 once in both parsers simultaneously (blank line inside a folded block, fixed in 0.3.11).
 RESOLVED after 0.3.12: shared golden fixtures live in
 `scripts/autograph/tests/golden/` (input Markdown + expected normalized JSON per case);
-both `scripts/golden-parsers.test.ts` (CI node glob) and
+both `scripts/golden-parsers.test.ts` (picked up by `node --test`) and
 `scripts/autograph/tests/test_autograph.py` assert against the same expectations. The
 result shapes differ (TS returns fields, Python returns a tuple), so fixtures compare a
 normalized form only: fields+body for frontmatter, outside[] plus [start,end) section

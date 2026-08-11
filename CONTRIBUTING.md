@@ -42,9 +42,15 @@ npm run poll                             # second terminal: the Telegram bridge
 `npm run dev` runs the agent with reload. `npm start` does **not** rebuild, so if a
 change under `agent/` seems to do nothing, you skipped `npm run build`.
 
-## What CI will check
+## What you check before you push
 
-These four catch most of it — run them before pushing:
+There is no CI. The project is local-first by decision
+([ADR-0004](docs/adr/0004-philosophy-is-the-review-bar.md)): no GitHub Actions, no PR
+gates, no review bots — `.github/` holds issue templates and nothing else. Whatever a
+build server would have caught, you catch on your own machine, and the review reads the
+diff against [docs/philosophy.md](docs/philosophy.md) and `docs/adr/`.
+
+These four catch most of it:
 
 ```bash
 npm run lint
@@ -53,14 +59,16 @@ npm run typecheck
 npm test
 ```
 
-CI runs more on top: `git diff --check` on the PR range (trailing whitespace fails the
-build), the `.mjs` migration budget, `npm run build`, the coverage floors
-(`npm run test:coverage` — lines 76, branches 79.1, functions 72; they may rise, they do
-not fall), `npm run replica` (installs Iva from scratch against a mock provider), the
-autograph tests, the Python security-defense suite, and the userbot guardrail tests.
+Run the rest when your change reaches them: `npm run build`, the coverage floors
+(`npm run test:coverage` — lines 75, branches 77, functions 71; they may rise, they do
+not fall), `npm run replica` (installs Iva from scratch against a mock provider),
+and the three Python suites, each a standalone script you run with `python3`:
+`scripts/autograph/tests/test_autograph.py`,
+`agent/skills/security-defense/scripts/test_security.py` and
+`services/telegram-userbot/test_guardrails.py`.
 
 If you touch `services/telegram-userbot/requirements.in`, regenerate the hash-locked file
-or CI will fail on the diff:
+in the same change:
 
 ```bash
 uv pip compile services/telegram-userbot/requirements.in \
@@ -73,6 +81,10 @@ New Node source and tests are TypeScript. The only `.mjs` files in the tree are 
 logic-free entry shims; do not add a sixth.
 
 ## Pull requests
+
+A PR is read and merged by a human who runs the checks above on their own machine —
+nothing runs automatically when you open it, and no bot will tell you what broke. Say in
+the PR which checks you ran and what they said.
 
 - One change per PR. A rename, a refactor and a feature in one diff cannot be reviewed.
 - Commit messages describe the code change and nothing else — no AI or tool
