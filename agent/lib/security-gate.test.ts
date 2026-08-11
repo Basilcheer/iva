@@ -155,6 +155,36 @@ await test("the web wallet-drain budget bounds the glyphs, not the page", () => 
   );
 });
 
+await test("the invisible flood does not buy a page more than the glyph budget", () => {
+  // Флуд и дорогая письменность на одной странице: раньше ранний возврат флуда
+  // стоял выше бюджета, и текст с глифами уезжал к модели целиком — чем больше
+  // невидимого мусора, тем меньше резалось. Бюджет обязан держать оба случая.
+  const page = "ཨ".repeat(16000);
+  const withFlood = `${"​".repeat(2000)}${page}`;
+  const glyphsIn = (text: string) =>
+    Array.from(text).filter((c) => c === "ཨ").length;
+
+  const plain = sanitizeInbound(page, 50000, { surface: "web" });
+  const flooded = sanitizeInbound(withFlood, 50000, { surface: "web" });
+
+  assert.equal(glyphsIn(plain.text), EXPENSIVE_SCRIPT_MAX_CHARS);
+  assert.deepEqual(flooded, {
+    text: "ཨ".repeat(EXPENSIVE_SCRIPT_MAX_CHARS),
+    blocked: true,
+    reason: "Excessive invisible characters: 2000 (11%)",
+    flags: ["invisible-flood"],
+    truncatedChars: 16000 - EXPENSIVE_SCRIPT_MAX_CHARS,
+  });
+  // Telegram при той же странице по-прежнему обнуляет текст и молчит про бюджет.
+  assert.deepEqual(sanitizeInbound(withFlood, 50000), {
+    text: "",
+    blocked: true,
+    reason: "Excessive invisible characters: 2000 (11%)",
+    flags: ["invisible-flood"],
+    truncatedChars: 0,
+  });
+});
+
 await test("the web surface un-masks a payload written in compatibility glyphs", () => {
   // Математическая латиница читается моделью как обычные буквы, а правилам по
   // сырому виду не видна. На web глифы больше не вырезаются, поэтому маскировку

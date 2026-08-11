@@ -334,16 +334,6 @@ export function sanitizeInbound(
     invisibleRemoved++;
     return "";
   });
-  if (originalLen > 100 && invisibleRemoved > originalLen * 0.05) {
-    return {
-      ...blockedPayload(text),
-      blocked: true,
-      reason: `Excessive invisible characters: ${invisibleRemoved} (${Math.floor((invisibleRemoved * 100) / originalLen)}%)`,
-      flags: ["invisible-flood"],
-    };
-  }
-  if (invisibleRemoved) flags.push(`invisible=${invisibleRemoved}`);
-
   // Дорогие письменности считаются на обеих поверхностях, а вырезаются только
   // там, где текст это сообщение. На web они и есть содержимое страницы, так
   // что расход держит бюджет, а не удаление: первые EXPENSIVE_SCRIPT_MAX_CHARS
@@ -351,6 +341,15 @@ export function sanitizeInbound(
   // счёт усечения. Модель получает тибетскую статью, а не строку пробелов
   // (ADR-0006). Бюджет считается по символам письменности, а не по длине
   // текста: страница на латинице с цитатой на Брайле доезжает целой.
+  //
+  // Бюджет применяется ДО проверки на invisible-flood, а не после: иначе
+  // страница, которая несёт и невидимый флуд, и глифы, уезжала бы к модели
+  // ранним возвратом флуда — целиком, мимо бюджета. Чем больше невидимого
+  // мусора добавил бы атакующий, тем меньше резалась бы дорогая письменность.
+  // Порядок самих проверок при этом прежний: сначала флуд, потом wallet-drain,
+  // — и telegram-поверхность не видит разницы, там текст обнуляется в обоих
+  // случаях. Проходы независимы: невидимые знаки (Cf/Cc) в диапазоны дорогих
+  // письменностей не входят, поэтому счёт глифов от порядка не зависит.
   let expensiveChars = 0;
   let expensiveDropped = 0;
   text = text.replace(WALLET_DRAIN_RE, (glyph) => {
@@ -360,15 +359,30 @@ export function sanitizeInbound(
     expensiveDropped++;
     return "";
   });
-  if (expensiveChars > 50) {
+  const blockedWithBudget = (reason: string, flag: string): SanitizeResult => {
     const payload = blockedPayload(text);
     return {
       ...payload,
       truncatedChars: payload.truncatedChars + expensiveDropped,
       blocked: true,
-      reason: `Wallet drain attempt: ${expensiveChars} expensive Unicode chars`,
-      flags: ["wallet-drain"],
+      reason,
+      flags: [flag],
     };
+  };
+
+  if (originalLen > 100 && invisibleRemoved > originalLen * 0.05) {
+    return blockedWithBudget(
+      `Excessive invisible characters: ${invisibleRemoved} (${Math.floor((invisibleRemoved * 100) / originalLen)}%)`,
+      "invisible-flood",
+    );
+  }
+  if (invisibleRemoved) flags.push(`invisible=${invisibleRemoved}`);
+
+  if (expensiveChars > 50) {
+    return blockedWithBudget(
+      `Wallet drain attempt: ${expensiveChars} expensive Unicode chars`,
+      "wallet-drain",
+    );
   }
 
   const { text: probe, normalized } = normalizeLookalikes(text);
