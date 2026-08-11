@@ -65,8 +65,21 @@ const LOOKALIKES: Record<string, string> = {
   ν: "v",
 };
 
-const ROLE_MARKER_RE =
-  /(?:^|\n)\s*(?:system|assistant|user|human|AI|claude|instruction|admin|root)\s*[:-]\s/gim;
+// Агент работает по-русски, а его владелец читает и узбекский веб, поэтому
+// детектор говорит на трёх языках. Английские и узбекские правила латинские;
+// русские написаны кириллицей и морфологию слова добирают хвостом `\p{L}*`
+// («игнорируй», «игнорируйте», «проигнорировать» — одно правило).
+// Апостроф узбекской латиницы пишут пятью разными знаками (o'/oʻ/o’/oʼ/o`),
+// поэтому он везде идёт классом.
+const UZ_APOSTROPHE = "['‘’ʻʼ`]?";
+
+const ROLE_MARKER_RE = new RegExp(
+  String.raw`(?:^|\n)\s*(?:system|assistant|user|human|AI|claude|instruction|admin|root` +
+    String.raw`|система|систем|ассистент|пользователь|человек|админ|инструкция` +
+    String.raw`|tizim|yordamchi|foydalanuvchi|inson|ko${UZ_APOSTROPHE}rsatma` +
+    String.raw`)\s*[:-]\s`,
+  "gimu",
+);
 
 const OVERRIDE_PATTERNS = [
   /ignore\s+(?:all\s+)?previous\s+instructions?/i,
@@ -80,6 +93,36 @@ const OVERRIDE_PATTERNS = [
   /pretend\s+(?:you\s+)?(?:are|have)\s+no\s+(?:rules|restrictions|limits)/i,
   /(?:reveal|show|display|print|output)\s+(?:your\s+)?(?:system\s+)?(?:prompt|instructions)/i,
   /(?:send|forward|email|post)\s+(?:all\s+)?(?:data|files|secrets|keys|tokens)/i,
+  // Русский: те же одиннадцать намерений, слово в слово как их пишет инъекция.
+  /(?:про)?игнорир\p{L}*\s+(?:\p{L}+\s+){0,3}?(?:инструкц|указан|правил|предписан|команд)\p{L}*/iu,
+  /забуд\p{L}*\s+(?:\p{L}+\s+){0,3}?(?:инструкц|указан|правил|предписан|роль|что\b)\p{L}*/iu,
+  /(?:нов|друг|следующ)\p{L}+\s+(?:систем\p{L}+\s+)?(?:инструкц|указан|правил|команд)\p{L}*\s*:/iu,
+  /(?:систем\p{L}+\s+(?:промпт|подсказк)\p{L}*|промпт\p{L}*\s+систем\p{L}+)/iu,
+  /режим\p{L}*\s+(?:разработчик|бога|dev)\p{L}*/iu,
+  /(?:покажи|выведи|раскрой|напечатай|отдай|скажи)\p{L}*\s+(?:\p{L}+\s+){0,3}?(?:промпт|инструкц|правил|систем)\p{L}*/iu,
+  // «отправь файл» и «пришли данные» — обычная просьба владельца, поэтому
+  // объект правила только секрет: ключ, токен, пароль, учётка.
+  /(?:отправ|перешл|пришл|выгруз|опубликуй|слей)\p{L}*\s+(?:\p{L}+\s+){0,3}?(?:ключ|токен|парол|секрет|учётн|учетн)\p{L}*/iu,
+  /(?:веди\s+себя|действуй|притворись|представь)\p{L}*\s*,?\s*(?:как|будто|что)\s+(?:\p{L}+\s+){0,3}?(?:без\s+(?:ограничен|правил|цензур)|друг|нов|неограничен)\p{L}*/iu,
+  /(?:отмен|обойд|сними|отключ)\p{L}*\s+(?:\p{L}+\s+){0,3}?(?:ограничен|запрет|правил|защит|цензур|фильтр)\p{L}*/iu,
+  // Узбекский (латиница): «забудь предыдущие указания», «системный промпт»,
+  // «режим разработчика», «отправь ключи».
+  new RegExp(
+    String.raw`(?:oldingi|avvalgi|barcha)\s+(?:\p{L}+\s+){0,2}?ko${UZ_APOSTROPHE}rsatma\p{L}*`,
+    "iu",
+  ),
+  new RegExp(
+    String.raw`ko${UZ_APOSTROPHE}rsatma\p{L}*\s+(?:\p{L}+\s+){0,3}?(?:unut|e${UZ_APOSTROPHE}tiborsiz|bekor)\p{L}*`,
+    "iu",
+  ),
+  new RegExp(
+    String.raw`(?:tizim|dasturchi)\s*\p{L}*\s+(?:prompt|ko${UZ_APOSTROPHE}rsatma|rejim)\p{L}*`,
+    "iu",
+  ),
+  new RegExp(
+    String.raw`(?:kalit|token|parol|maxfiy)\p{L}*[^.\n]{0,40}?(?:yubor|jo${UZ_APOSTROPHE}nat|oshkor)\p{L}*`,
+    "iu",
+  ),
 ];
 
 const INBOUND_ATTACK_FLAG_NAMES = new Set(["role-markers", "overrides"]);
@@ -185,8 +228,18 @@ export function sanitizeInbound(
     .join("");
   if (normalized) flags.push(`lookalikes=${normalized}`);
 
-  const roleMarkers = (probe.match(ROLE_MARKER_RE) || []).length;
-  const overrides = OVERRIDE_PATTERNS.filter((re) => re.test(probe)).length;
+  // Правила читают оба вида текста: сырой и нормализованный. Латиницу
+  // нормализация не трогает, поэтому английские и узбекские правила видят в
+  // probe и обычный текст, и маскировку буквами-двойниками. Кириллице она,
+  // наоборот, ломает само слово («игнорируй» → «игнopиpyй»), так что русские
+  // правила работают по сырому тексту. Считаем по обоим и берём больший счёт.
+  const roleMarkers = Math.max(
+    (probe.match(ROLE_MARKER_RE) || []).length,
+    (text.match(ROLE_MARKER_RE) || []).length,
+  );
+  const overrides = OVERRIDE_PATTERNS.filter(
+    (re) => re.test(probe) || re.test(text),
+  ).length;
   if (roleMarkers) flags.push(`role-markers=${roleMarkers}`);
   if (overrides) flags.push(`overrides=${overrides}`);
 
