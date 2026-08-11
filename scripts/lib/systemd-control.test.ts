@@ -734,6 +734,50 @@ void test("iva status and iva doctor both see the renamed nightly unit", async (
   assert.deepEqual(nightlyUnitsOnDisk(unitDir), ["iva-brain.timer"]);
 });
 
+void test("iva status lists the pre-rename nightly timer an interrupted update kept", async (t) => {
+  // The blind spot the rename opened: with the migration held back, the only nightly unit on
+  // disk is iva-memory-doctor.timer, and a status built from this version's unit list alone
+  // prints a timer table with nothing in it. The night is still running — invisibly.
+  const { calls, home, project, runCommand } = await fixture(t);
+  const unitDir = join(home, ".config/systemd/user");
+  await seedLegacyBrainUnits(unitDir, project);
+  await partialDeploy(project);
+
+  assert.equal(runCommand("_install-units").status, 0);
+  assert.deepEqual(nightlyUnitsOnDisk(unitDir), ["iva-memory-doctor.timer"]);
+  await writeFile(calls, "");
+  const status = runCommand("status");
+  const output = `${status.stdout}\n${status.stderr}`;
+
+  assert.equal(status.status, 0, output);
+  assert.match(
+    await readFile(calls, "utf8"),
+    /--user list-timers --no-pager iva-brain\.timer iva-update-check\.timer iva-memory-doctor\.timer/,
+    "the nightly unit actually installed here never reached list-timers",
+  );
+  assert.match(output, /iva-memory-doctor\.timer still installed/);
+  assert.match(output, /run: iva doctor/);
+});
+
+void test("iva status stays quiet about legacy units once the brain rename is done", async (t) => {
+  const { calls, home, project, runCommand } = await fixture(t);
+  const unitDir = join(home, ".config/systemd/user");
+  await seedLegacyBrainUnits(unitDir, project);
+
+  assert.equal(runCommand("_install-units").status, 0);
+  assert.deepEqual(nightlyUnitsOnDisk(unitDir), ["iva-brain.timer"]);
+  await writeFile(calls, "");
+  const status = runCommand("status");
+  const output = `${status.stdout}\n${status.stderr}`;
+
+  assert.equal(status.status, 0, output);
+  assert.match(
+    await readFile(calls, "utf8"),
+    /--user list-timers --no-pager iva-brain\.timer iva-update-check\.timer\n/,
+  );
+  assert.doesNotMatch(output, /iva-memory-doctor/);
+});
+
 void test("doctor surfaces problems from a fresh nightly memory report", async (t) => {
   const { project, runCommand } = await fixture(t);
   const graph = join(project, "vault/.graph");

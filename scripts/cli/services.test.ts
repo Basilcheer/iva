@@ -25,6 +25,7 @@ type Dependencies = NonNullable<Parameters<typeof createServiceCommands>[2]>;
 type RuntimeOptions = {
   readonly root?: string;
   readonly dataDir?: string;
+  readonly unitDir?: string;
   readonly requireSystemd?: () => void;
   readonly runStatus?: number;
   readonly stop?: (units: readonly string[]) => void;
@@ -44,6 +45,9 @@ function runtimeFixture(
   {
     root = "/srv/iva",
     dataDir = "/srv/iva/data",
+    // Never the real ~/.config/systemd/user: on a machine that still carries a pre-rename
+    // nightly timer these tests would otherwise read the developer's own install.
+    unitDir = "/nonexistent/systemd/user",
     requireSystemd = () => events.push("runtime.requireSystemd"),
     runStatus = 0,
     stop = (units) => events.push(`systemd.stop:${units.join(",")}`),
@@ -56,6 +60,7 @@ function runtimeFixture(
   };
   return {
     ...base,
+    UNIT_DIR: unitDir,
     ok: (message) => events.push(`runtime.ok:${message}`),
     warn: (message) => events.push(`runtime.warn:${message}`),
     bad: (message) => events.push(`runtime.bad:${message}`),
@@ -133,6 +138,33 @@ void test("status preserves command order and ignores non-zero command results",
     "runtime.requireSystemd",
     "runtime.run:systemctl:--user|status|--no-pager|-n|5|iva.service|iva-telegram-poll.service",
     "runtime.run:systemctl:--user|list-timers|--no-pager|iva-brain.timer|iva-update-check.timer",
+  ]);
+});
+
+void test("status lists and flags a pre-rename nightly timer the migration had to keep", () => {
+  // The install where the Brain rename could not finish: iva-memory-doctor.timer is still the
+  // unit doing the nightly vault care. A status that lists only the units this version ships
+  // shows an empty timer table and hides exactly the night this migration must not cost.
+  const unitDir = mkdtempSync(join(tmpdir(), "iva-services-units-"));
+  writeFileSync(join(unitDir, "iva-memory-doctor.timer"), "[Timer]\n");
+  writeFileSync(join(unitDir, "iva-memory-doctor.service"), "[Service]\n");
+  const events: string[] = [];
+  const commands = createServiceCommands(
+    runtimeFixture(events, { unitDir }),
+    lifecycleFixture(events),
+  );
+
+  try {
+    commands.cmdStatus();
+  } finally {
+    rmSync(unitDir, { recursive: true, force: true });
+  }
+
+  assert.deepEqual(events, [
+    "runtime.requireSystemd",
+    "runtime.run:systemctl:--user|status|--no-pager|-n|5|iva.service|iva-telegram-poll.service",
+    "runtime.warn:iva-memory-doctor.timer still installed — the Brain rename did not finish; run: iva doctor",
+    "runtime.run:systemctl:--user|list-timers|--no-pager|iva-brain.timer|iva-update-check.timer|iva-memory-doctor.timer",
   ]);
 });
 

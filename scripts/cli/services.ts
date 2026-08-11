@@ -1,4 +1,6 @@
+import { existsSync } from "node:fs";
 import { join, relative } from "node:path";
+import { LEGACY_BRAIN_UNITS } from "../lib/legacy-memory-units.ts";
 import { classifyRoot } from "../lib/version-layout.ts";
 import { createVersionStore, parseVersionName } from "../lib/version-store.ts";
 import { builtWith, customOverlay } from "../lib/version-update.ts";
@@ -27,6 +29,7 @@ export function createServiceCommands(
 ) {
   const {
     ROOT,
+    UNIT_DIR,
     SERVICES,
     TIMERS,
     ok,
@@ -58,8 +61,23 @@ export function createServiceCommands(
     ]);
     // The exact timers this version installs, not a glob: `iva-memory-*` was written for
     // the rollup timers that no longer exist, and it silently stopped matching the nightly
-    // unit the moment it was renamed to iva-brain.timer.
-    run("systemctl", ["--user", "list-timers", "--no-pager", ...TIMERS]);
+    // unit the moment it was renamed to iva-brain.timer. A pre-rename nightly timer still on
+    // disk is listed too: when the migration had to keep it (removeLegacyBrainUnits), THAT is
+    // the unit carrying the nightly vault care, and a status hiding it hides the lost night.
+    const keptNightlyTimers = LEGACY_BRAIN_UNITS.filter(
+      (unit) => unit.endsWith(".timer") && existsSync(join(UNIT_DIR, unit)),
+    );
+    for (const unit of keptNightlyTimers)
+      warn(
+        `${unit} still installed — the Brain rename did not finish; run: iva doctor`,
+      );
+    run("systemctl", [
+      "--user",
+      "list-timers",
+      "--no-pager",
+      ...TIMERS,
+      ...keptNightlyTimers,
+    ]);
   }
 
   function cmdRestart(): void {
