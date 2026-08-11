@@ -8,7 +8,7 @@ import { clampCore } from "../lib/core-clamp.ts";
 // промпт — кто пользователь, постоянные предпочтения, активные цели, указатели. Это always-on
 // RAM памяти (аналог core memory у MemGPT): маленькое, переживает компактацию (инструкции —
 // не часть сжимаемой истории диалога). Пишет ядро ночной rollup; живой чат правит его только
-// на явное «запомни …». Clamp чистый и общий с ночным doctor.
+// на явное «запомни …». Clamp чистый и общий с ночным brain.
 const VAULT = process.env.ASSISTANT_VAULT_DIR ?? "vault";
 
 function coreMarkdown(): string {
@@ -19,7 +19,7 @@ function coreMarkdown(): string {
     return ""; // нет файла (vault не инициализирован) — молча ничего не инжектим.
   }
   if (!core) return "";
-  // Тот же section-aware backstop, что у doctor: указатели нельзя отрезать слепым slice.
+  // Тот же section-aware backstop, что у brain: указатели нельзя отрезать слепым slice.
   if (core.length > CORE_CAP) core = clampCore(core);
   return `## Ядро памяти (CORE) — кто пользователь и что в работе\n${core}`;
 }

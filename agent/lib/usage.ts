@@ -8,7 +8,7 @@
 // сам файл, и это пинует round-trip тест в scripts/lib/usage.test.ts.
 //
 // Лог живёт в data/usage.jsonl (ASSISTANT_DATA_DIR, дефолт ./data) — рядом с tasks.json,
-// gitignored, НЕ в vault (иначе ночной doctor коммитил бы растущий лог в репо памяти).
+// gitignored, НЕ в vault (иначе ночной brain коммитил бы растущий лог в репо памяти).
 // Одна строка JSONL на шаг модели; ход (turn) = несколько шагов, группируем по turnId.
 import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";

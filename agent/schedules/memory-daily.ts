@@ -6,7 +6,7 @@
 //
 // No logic moves here: runScheduledJob spawns the SAME command the timer used to run
 // (flock -w 900 .memory.lock node --env-file=.env scripts/memory/rollup.ts daily), under
-// the same lock the doctor script also takes, so a parallel monthly/yearly rollup on
+// the same lock the brain script also takes, so a parallel monthly/yearly rollup on
 // Jan 1 still serializes instead of racing on CORE.md/MOC.md.
 import { defineSchedule } from "eve/schedules";
 import { memoryRollupJob } from "../lib/schedule-paths.js";

@@ -51,7 +51,7 @@ CORE.md едет в каждом системном промпте; всё ос�
 
 ## Доктор
 
-В 05:00 `scripts/memory/doctor.ts` проводит механическое обслуживание - без LLM, всё детерминированно - запуская скрипты [autograph](https://github.com/smixs/autograph) из `scripts/autograph/` через `uv`:
+В 05:00 `scripts/memory/brain.ts` проводит механическое обслуживание - без LLM, всё детерминированно - запуская скрипты [autograph](https://github.com/smixs/autograph) из `scripts/autograph/` через `uv`:
 
 1. `enforce` - страховка схемы: приводит алиасы типов к канону, чинит невалидные статусы, дозаполняет системные поля на карточках, записанных мимо `write_card`
 2. `graph.health` - пересобирает граф связей, дописывает в историю health score от 0 до 100

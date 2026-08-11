@@ -58,7 +58,7 @@ Update button in Telegram) — running an old tag is not a supported configurati
 ## The honest boundary
 
 Your vault is a private git repo on your own server — and once `gh` is authenticated on
-that server, the nightly doctor mirrors it to a private `iva-vault` repo under your
+that server, the nightly brain mirrors it to a private `iva-vault` repo under your
 GitHub account. The model and transcription are cloud APIs you pick and pay for: their
 operators see the text you send them. Iva does not phone home, and no telemetry is
 collected.

@@ -64,14 +64,15 @@ Do not reset or clean the checkout. If the histories cannot be combined safely, 
 
 ### gh not available warnings
 
-Cause: the nightly doctor backs your vault up to a private `iva-vault` GitHub repo through `gh`; unauthenticated `gh` means no off-box backup.
+Cause: the nightly brain backs your vault up to a private `iva-vault` GitHub repo through `gh`; unauthenticated `gh` means no off-box backup.
 
 ```bash
 gh auth login                                      # the installer already put gh on the box
-systemctl --user start iva-memory-doctor.service   # backup now: creates the private repo and pushes
+systemctl --user start iva-brain.service           # backup now: creates the private repo and pushes
 ```
 
-`iva doctor` only reports a missing vault origin — the repo creation and push happen in the nightly memory-doctor job; the second command runs it immediately instead of waiting for 05:00.
+`iva doctor` only reports a missing vault origin — the repo creation and push happen in the nightly brain job; the second command runs it immediately instead of waiting for 05:00.
+On an install that has not been updated since the rename the unit is still called `iva-memory-doctor.service` — `iva doctor` moves it to `iva-brain.service`.
 
 ### agent-browser fails on Ubuntu 24.04
 
@@ -90,7 +91,7 @@ The step-by-step procedure — what to copy off the old box and how to restore i
 
 ### Restore memory from the iva-vault repo
 
-The doctor commits and pushes the vault nightly at 05:00, so the remote is at most a day behind.
+The brain commits and pushes the vault nightly at 05:00, so the remote is at most a day behind.
 
 ```bash
 rm -rf ~/iva/vault

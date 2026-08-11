@@ -40,7 +40,7 @@ authored tree needs lives in `agent/lib`, and neither side reaches the other whi
 "Those processes" is wider than `scripts/cli/*`: the guard's load-time walk stops at a
 child process, so every separate node run is walked as its own entrypoint. The systemd
 units are read out of `deploy/` rather than listed by hand — a hand-written list forgot the
-nightly memory doctor once, which is exactly how a unit gets silently coupled to the tree —
+nightly brain once, which is exactly how a unit gets silently coupled to the tree —
 and the three runs no unit starts are named in the guard: the setup wizard (`install.sh` and
 `iva config` → `scripts/setup.mjs`), the vault template copy `install.sh` runs before eve has
 ever built the tree, and the updater's second half, which the previous version spawns inside
@@ -58,9 +58,9 @@ builds the tree. Three shapes, in descending order of preference:
   pulls the health poll at the health check itself (a tree that cannot start fails the
   apply and rolls back either way), `scripts/lib/codex-oauth.ts` pulls the token
   headers inside `listCodexModelCatalog`, which only the `/model` wizard and setup call, and
-  `scripts/memory/doctor.ts` pulls the whole card format — `core-cap`, `core-clamp` and, via
+  `scripts/memory/brain.ts` pulls the whole card format — `core-cap`, `core-clamp` and, via
   `scripts/memory/card-fences.ts`, `card-text` — at the CORE clamp and the fence scan. The
-  doctor is its own systemd oneshot, so a static edge there would kill the nightly vault
+  brain is its own systemd oneshot, so a static edge there would kill the nightly vault
   backup on a broken tree; the lazy edge costs those two steps, reports itself, and lets §3
   commit and push the vault anyway.
 - **Two self-contained halves pinned by a test**, where both sides genuinely need the same

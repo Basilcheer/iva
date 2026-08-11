@@ -49,7 +49,7 @@ Iva's tools (`bash`, `read_file`, `write_file`, `glob`, `grep`) run host-native 
 
 ## Privacy
 
-- 🗄️ **Your vault, your repo** — memory lives in a separate private git repository you own; the nightly doctor commits and pushes it ([memory.md](memory.md)).
+- 🗄️ **Your vault, your repo** — memory lives in a separate private git repository you own; the nightly brain commits and pushes it ([memory.md](memory.md)).
 - 🔐 **Keys in `.env`** - credentials stay on your box in a `0600` file and are never pasted into a prompt by Iva itself. The one exception is userbot onboarding, where you type `api_id`, `api_hash` and a 2FA password into the chat: those do reach the model and the daily log, see [userbot.md](userbot.md). They do sit in the service's environment, and the agent's shell inherits it: a hijacked turn can read them. The allowlist and the inbound gate are what keep that turn from happening.
 - ☁️ **Honest boundary** — the model and the voice transcription are cloud APIs you chose and pay for yourself. Self-hosted means your code and your memory, not the model weights.
 

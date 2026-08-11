@@ -7,7 +7,7 @@
 # Installs system dependencies (git, gh, python3, ffmpeg, pandoc, poppler), uv, Node 24+ (nvm),
 # npm dependencies, runs an interactive setup (Ollama + model + Telegram +
 # Deepgram + timezone + vault), builds the agent and sets up a systemd user service plus
-# watchdog timers (memory doctor, update check). Memory rollups (daily/weekly/monthly/yearly)
+# watchdog timers (brain, update check). Memory rollups (daily/weekly/monthly/yearly)
 # run as in-process eve schedules, not systemd. The live vault is initialized as a separate
 # git repo for backup.
 #

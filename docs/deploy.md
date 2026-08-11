@@ -53,10 +53,10 @@ unset ASSISTANT_BEARER IVA_PORT
 | `iva.service`                  | always                       | the agent (`eve start`), `Restart=always`                     |
 | `iva-telegram-poll.service`    | always                       | the long-polling bridge                                       |
 | `iva-telegram-userbot.service` | opt-in (`iva userbot setup`) | Telethon userbot MCP proxy — see [userbot.md](userbot.md)     |
-| `iva-memory-doctor.timer`      | 05:00 nightly                | schema/health/decay/MOC checks + vault `git push`             |
+| `iva-brain.timer`              | 05:00 nightly                | schema/health/decay/MOC checks + vault `git push`             |
 | `iva-update-check.timer`       | 10:00 daily                  | check for a newer stable Iva version; notify once per version |
 
-The doctor and update-check timers stay on systemd on purpose: they're watchdogs that must keep running even if the agent process itself is wedged. `iva-memory-doctor.timer` embeds `ASSISTANT_TIMEZONE` directly, so its 05:00 schedule remains correct even when the server clock uses UTC — as do the eve schedules below (`Environment=TZ` in `iva.service`). Setting the server's own system timezone to match is therefore optional, not required for anything in this doc to work correctly:
+The brain and update-check timers stay on systemd on purpose: they're watchdogs that must keep running even if the agent process itself is wedged. `iva-brain.timer` embeds `ASSISTANT_TIMEZONE` directly, so its 05:00 schedule remains correct even when the server clock uses UTC — as do the eve schedules below (`Environment=TZ` in `iva.service`). Setting the server's own system timezone to match is therefore optional, not required for anything in this doc to work correctly:
 
 ```bash
 # Optional — the generated units and the eve schedules already carry ASSISTANT_TIMEZONE
@@ -88,8 +88,8 @@ Manual runs and status:
 
 ```bash
 npm run memory -- daily   # or weekly | monthly | yearly
-npm run doctor
-systemctl --user list-timers                             # doctor, update-check (the only two systemd timers left)
+npm run brain
+systemctl --user list-timers                             # brain, update-check (the only two systemd timers left)
 systemctl --user status iva.service iva-telegram-poll.service  # the two always-on services
 cat data/rollup-status.json                               # last run per eve schedule (or: /menu → ⏰ in Telegram)
 iva logs                  # agent; `iva logs poll` for the bridge
@@ -107,9 +107,9 @@ Exposing the Eve HTTP channel is a separate security decision. Require HTTPS and
 
 ## Moving servers
 
-Your state is three things: the vault (its own git repo, pushed nightly by the doctor), `.env` (all keys), and `data/` (`tasks.json`, `usage.jsonl`).
+Your state is three things: the vault (its own git repo, pushed nightly by the brain), `.env` (all keys), and `data/` (`tasks.json`, `usage.jsonl`).
 
-1. Old box: `npm run doctor` to push the vault, then copy `.env` and `data/` off.
+1. Old box: `npm run brain` to push the vault, then copy `.env` and `data/` off.
 2. New box: run the installer ([install](./install.md)) with `--skip-setup`, drop in `.env`.
 3. Clone the vault back — `gh repo clone <user>/iva-vault <vault-dir>` — restore `data/`, then `iva restart`.
 
