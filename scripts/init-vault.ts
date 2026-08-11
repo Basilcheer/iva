@@ -64,7 +64,7 @@ if (!existsSync(resolve(VAULT, ".git"))) {
       "chore: init memory vault from template",
     ]);
   } catch {
-    // No git identity — not critical: doctor.ts will commit later.
+    // No git identity — not critical: brain.ts will commit later.
     console.warn(
       "init-vault: first commit failed (configure git user.name/email) — continuing",
     );
@@ -73,7 +73,7 @@ if (!existsSync(resolve(VAULT, ".git"))) {
   console.log(
     "For off-server backup, authorize gh once:\n" +
       "  gh auth login\n" +
-      "The nightly doctor then auto-creates a private iva-vault repo and pushes to it.",
+      "The nightly brain then auto-creates a private iva-vault repo and pushes to it.",
   );
 } else {
   console.log("init-vault: vault git repo already exists — skipping init.");

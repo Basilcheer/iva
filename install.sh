@@ -606,7 +606,7 @@ case ":$PATH:" in
 esac
 
 # ─────────────────────────────────────────────────────────────────────────
-# 9. systemd: the main service + doctor/update-check timers (Linux). Requires a
+# 9. systemd: the main service + brain/update-check timers (Linux). Requires a
 #    configured .env. Memory rollups (daily/weekly/monthly/yearly) no longer have
 #    systemd units of their own — they run as in-process eve schedules
 #    (agent/schedules/memory-*.ts), migrated automatically on the server's first

@@ -333,7 +333,7 @@ export function createUpdateCommand({
       versions = await tx.versions();
       migrateEnv({ quiet: true });
       // The streaming cleaner repairs cards the old frontmatter writer bloated to GBs (those
-      // OOM-kill the agent and the nightly doctor, so waiting for the doctor is not an option).
+      // OOM-kill the agent and the nightly brain, so waiting for the brain is not an option).
       // The script comes from the freshly updated repo, so it is always the current version —
       // best-effort: it never fails an update.
       try {
