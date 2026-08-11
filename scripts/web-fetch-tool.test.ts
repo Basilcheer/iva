@@ -248,7 +248,9 @@ test("инъекция в адресе редиректа едет как error,
 });
 
 test("обычная ошибка фреймворка остаётся читаемой и без предупреждения", async () => {
-  const { value, logs } = await fetchPage(new Response("nope", { status: 503 }));
+  const { value, logs } = await fetchPage(
+    new Response("nope", { status: 503 }),
+  );
 
   assert.match(value.error ?? "", /status code: 503/u);
   assert.equal(value.warning, undefined);
