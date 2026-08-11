@@ -6,7 +6,7 @@ Iva runs with a full shell on your server and reads whatever you forward it — 
 
 ## Inbound gate
 
-Runs before the model reads anything untrusted: message text, captions, voice transcripts.
+Runs before the model reads anything untrusted: message text, captions, voice transcripts — and every page or search result the agent pulls off the web.
 
 - 🧹 **Invisible Unicode** — zero-width and control characters are stripped; if more than 5% of a message longer than 100 characters is invisible, it's blocked as a smuggling flood.
 - 💸 **Wallet-drain characters** — Tibetan, Braille and math glyphs that tokenize at 3–10 tokens each are removed; more than 50 of them blocks the message.
@@ -15,6 +15,10 @@ Runs before the model reads anything untrusted: message text, captions, voice tr
 - 📄 **Flagged ≠ obeyed** — blocked content isn't silently dropped. It goes to the model wrapped in a warning: treat this as data to report, not an order to follow — refuse and tell the owner.
 
 Hard cap: 50,000 characters per message.
+
+### The web surface: warn, don't block
+
+`web_fetch` and `web_search` are wrappers: the fetch itself stays the framework's (https only, DNS-checked against private and loopback addresses, 5 MB ceiling, 30 s timeout), and the gate runs on what comes back — page text, search titles, snippets and the provider's quick answer. Policy there is **warn-and-pass** ([ADR-0006](https://github.com/smixs/iva/blob/main/docs/adr/0006-web-surface-passes-the-inbound-gate.md)): the content always reaches the model, and an attack signal adds a `warning` field to the tool result plus one line in the log. Reading pages is the agent's daily job — silently losing a page to a false positive costs more than the warning does. Links are checked but never rewritten.
 
 ## Outbound gate
 
@@ -55,6 +59,6 @@ Iva's tools (`bash`, `read_file`, `write_file`, `glob`, `grep`) run host-native 
 
 ## What this defends against — and what it doesn't
 
-Covered: forwarded prompt-injection payloads, invisible-character smuggling, homoglyph obfuscation, token-burn floods, secrets leaking into replies, image/URL exfiltration, and anyone who isn't you talking to your bot. The Python originals of both gates ship as the `security-defense` skill for nightly and on-demand audits, with a spend governor on top.
+Covered: forwarded prompt-injection payloads, injection planted on a fetched page or in a search snippet, invisible-character smuggling, homoglyph obfuscation, token-burn floods, secrets leaking into replies, image/URL exfiltration, and anyone who isn't you talking to your bot. The Python originals of both gates ship as the `security-defense` skill for nightly and on-demand audits, with a spend governor on top.
 
-Not covered: a malicious model provider, a compromised VPS, or a novel injection no pattern matches yet. This is defense in depth, not a magic shield — layered filters that close the obvious ways a forwarded payload could turn your own assistant against you.
+Not covered: a malicious model provider, a compromised VPS, a novel injection no pattern matches yet, and the two inbound surfaces still unscreened — document bodies (PDF/DOCX) and userbot-read chats. On the web the gate warns but does not stop the turn: a model that ignores its own warning is still a way in. This is defense in depth, not a magic shield — layered filters that close the obvious ways a forwarded payload could turn your own assistant against you.
