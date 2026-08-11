@@ -8,19 +8,17 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
-const EXPECTED_PRODUCTION_COUNT = 171;
+const EXPECTED_PRODUCTION_COUNT = 173;
 const EXPECTED_INVENTORY_SHA256 =
-  "34a2beba5ec59132b9967574d556164c1d956b8111be9e60c573ae925edcb992";
+  "8bfa15912ca46f6849982d121bf1663dc7c04686d557d953954f7d9c675fd5ec";
 
 // Node's native include globs filter loaded modules; they do not load untouched files.
-// This test pins the exact production path inventory and a separately measured 26-path
+// This test pins the exact production path inventory and a separately measured 25-path
 // blind-spot snapshot. It does not determine what the current import graph loads, claim
 // that the other paths are reported, or notice import-graph changes without path changes.
-// Measured again for this inventory: the eight modules the edge-inversion round moved or
-// split into `agent/lib` (card-text, codex-auth, core-cap, core-clamp, eve-health,
-// reasoning-levels, schedule-migration, timezone) and the two it left in `scripts/`
-// (`lib/legacy-memory-units.ts`, `memory/card-fences.ts`) all arrive with tests that load
-// them, so the blind spot is unchanged at 26 paths.
+// Measured again for this inventory: the web inbound-gate round added `agent/lib/web-gate.ts`
+// and `agent/tools/web_fetch.ts`, both reported, and gave `agent/tools/web_search.ts` its
+// first loading test - so the blind spot drops from 26 paths to 25.
 const MEASURED_UNREPORTED_BY_CATEGORY = {
   frameworkBoundaries: [
     "agent/agent.ts",
@@ -39,7 +37,6 @@ const MEASURED_UNREPORTED_BY_CATEGORY = {
     "agent/tools/glob.ts",
     "agent/tools/grep.ts",
     "agent/tools/tasks.ts",
-    "agent/tools/web_search.ts",
   ],
   standaloneOperations: [
     "scripts/build.ts",
@@ -111,7 +108,7 @@ function assertProductionPathInventory(
   const measuredUnreported = Object.values(MEASURED_UNREPORTED_BY_CATEGORY)
     .flat()
     .sort();
-  assert.equal(measuredUnreported.length, 26);
+  assert.equal(measuredUnreported.length, 25);
   assert.equal(new Set(measuredUnreported).size, measuredUnreported.length);
   assert.deepEqual(
     measuredUnreported.filter((path) => !productionFiles.includes(path)),
