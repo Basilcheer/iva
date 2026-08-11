@@ -44,7 +44,7 @@ _Avoid_: оглавление, каталог
 **Rollup**:
 Ночная сборка памяти силами модели: сырой день превращается в карточки и
 саммари по цепочке daily → weekly → monthly → yearly.
-_Avoid_: consolidation, консолидация, DAG, dbrain-processor, диаризация
+_Avoid_: consolidation, консолидация, DAG, диаризация
 (диаризация — название способности модели в philosophy.md, не процесса)
 
 **Brain**:

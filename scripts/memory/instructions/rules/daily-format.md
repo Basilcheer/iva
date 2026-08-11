@@ -52,7 +52,7 @@ Content of the entry
 
 ## Daily-summary — `summaries/daily/YYYY-MM-DD.md`
 
-Produced by the `dbrain-processor` skill after processing the day.
+Produced by the `memory-processor` skill after processing the day.
 
 ```markdown
 ---

@@ -142,7 +142,7 @@ def cleanup_card_body(body: str) -> tuple[str, dict, bool]:
         )
         if nonempty_update:
             # Moving chronology into Log cannot repair stale Compiled Truth. Queue
-            # the card for a semantic dbrain pass even when migration is safe.
+            # the card for a semantic rollup pass even when migration is safe.
             compile_candidate = True
 
         if not _simple_log_update_sections(lines, combined):
@@ -177,7 +177,7 @@ def cleanup_card_body(body: str) -> tuple[str, dict, bool]:
 
     # Duplicate Related blocks are merged only when every non-empty line is a
     # link-only list item. Prose-bearing duplicates stay byte-identical and are
-    # queued for the next semantic dbrain pass.
+    # queued for the next semantic rollup pass.
     related = _sections(lines, RELATED_HEADING_RE)
     if len(related) > 1:
         safe = True

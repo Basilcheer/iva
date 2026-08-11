@@ -1,5 +1,5 @@
 ---
-name: dbrain-processor
+name: memory-processor
 description: >-
   Iva's daily-memory processor. Reads the day's two-sided transcript
   (vault/daily/YYYY-MM-DD.md), distills noteworthy entities / decisions / ideas
@@ -10,7 +10,7 @@ description: >-
 depends_on: [autograph]
 ---
 
-# dbrain-processor — daily transcript → cards + summary
+# memory-processor — daily transcript → cards + summary
 
 Turn one day of raw conversation into durable, navigable memory.
 
@@ -79,7 +79,7 @@ uv run scripts/autograph/graph.py health vault vault/schema.json      # confirm 
 ```
 
 Read `.graph/enforce-report.json` after `enforce.py`. Every path in
-`compile_candidates` needs semantic repair during the next dbrain pass: reread the
+`compile_candidates` needs semantic repair during the next rollup pass: reread the
 card, decide its current truth, and use `write_card` to leave one coherent card.
 The mechanical pass deliberately refuses to guess when duplicate `## Related`
 sections contain prose.
