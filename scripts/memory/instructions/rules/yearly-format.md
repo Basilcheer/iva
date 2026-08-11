@@ -3,10 +3,10 @@ paths: "yearly/**/*.md"
 type: note
 ---
 
-# Yearly summary (DAG level 4 — top)
+# Yearly summary (rollup chain, level 4 — top)
 
 Rules for yearly rollup cards. Triggered by the yearly rollup (Jan 1) over the twelve
-monthly-summaries of the previous year. This is the **root** of the DAG — it has no
+monthly-summaries of the previous year. This is the **root** of the rollup chain — it has no
 parent; everything else hangs beneath it.
 
 - File: `yearly/YYYY.md` (e.g. `yearly/2026.md`).
@@ -60,8 +60,8 @@ topics: [theme-a, theme-b, theme-c]
 ## MOC contract (yearly-summary)
 
 - **down → months** — `## Months` links every monthly-summary of the year.
-- **no up-link** — this is the DAG root.
+- **no up-link** — this is the rollup chain root.
 - **topics** — `topics:` frontmatter + `## Story of the year`.
 
-From here a reader can descend the whole DAG to any single day's raw transcript:
+From here a reader can descend the whole rollup chain to any single day's raw transcript:
 `yearly → monthly → weekly → daily-summary → daily/YYYY-MM-DD`.

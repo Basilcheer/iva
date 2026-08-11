@@ -80,7 +80,7 @@ iva restart
 | `MEMORY_EMBED_MODEL`    | `jina-embeddings-v3` | Имя модели эмбеддингов.                                                                                                                                                                                           |
 | `MEMORY_EMBED_URL`      | —                    | Любой OpenAI-совместимый endpoint эмбеддингов, например локальная Ollama на `http://127.0.0.1:11434/v1/embeddings` — тогда внешний ключ вообще не нужен.                                                          |
 
-Гибридный индекс собирает ночной brain; чтобы собрать его прямо сейчас, запустите `node --env-file=.env scripts/memory/embed-index.ts`. Как поиск устроен на самом деле: [memory.md](./memory.md).
+Гибридный индекс собирает ночной проход Brain; чтобы собрать его прямо сейчас, запустите `node --env-file=.env scripts/memory/embed-index.ts`. Как поиск устроен на самом деле: [memory.md](./memory.md).
 
 ## Система
 

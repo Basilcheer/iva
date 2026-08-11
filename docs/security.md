@@ -49,12 +49,12 @@ Iva's tools (`bash`, `read_file`, `write_file`, `glob`, `grep`) run host-native 
 
 ## Privacy
 
-- 🗄️ **Your vault, your repo** — memory lives in a separate private git repository you own; the nightly brain commits and pushes it ([memory.md](memory.md)).
+- 🗄️ **Your vault, your repo** — memory lives in a separate private git repository you own; the nightly Brain pass commits and pushes it ([memory.md](memory.md)).
 - 🔐 **Keys in `.env`** - credentials stay on your box in a `0600` file and are never pasted into a prompt by Iva itself. The one exception is userbot onboarding, where you type `api_id`, `api_hash` and a 2FA password into the chat: those do reach the model and the daily log, see [userbot.md](userbot.md). They do sit in the service's environment, and the agent's shell inherits it: a hijacked turn can read them. The allowlist and the inbound gate are what keep that turn from happening.
 - ☁️ **Honest boundary** — the model and the voice transcription are cloud APIs you chose and pay for yourself. Self-hosted means your code and your memory, not the model weights.
 
 ## What this defends against — and what it doesn't
 
-Covered: forwarded prompt-injection payloads, invisible-character smuggling, homoglyph obfuscation, token-burn floods, secrets leaking into replies, image/URL exfiltration, and anyone who isn't you talking to your bot. The Python originals of both gates ship as the `security-defense` skill for nightly and on-demand audits, with a spend governor on top.
+Covered: forwarded prompt-injection payloads, invisible-character smuggling, homoglyph obfuscation, token-burn floods, secrets leaking into replies, image/URL exfiltration, and anyone who isn't you talking to your bot. Both gates run in TypeScript inside the Iva process; their Python originals ship with the `security-defense` skill as hand-run diagnostic tools (`sanitizer.py`, `outbound_gate.py`, a `spend_governor.py` model of call limits). Nothing calls them at runtime, and the spend governor does not cap real model calls — read a result from them as a finding, never as a block that happened.
 
 Not covered: a malicious model provider, a compromised VPS, or a novel injection no pattern matches yet. This is defense in depth, not a magic shield — layered filters that close the obvious ways a forwarded payload could turn your own assistant against you.

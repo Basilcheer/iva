@@ -183,7 +183,7 @@ Default model is deepseek-v4-pro, 131k context. On Go it runs about $9/mo all-in
 
 - An update is now built next to the running version instead of on top of it: the new version is health-checked on its final paths before anything switches, and activation is a single flip. An update that breaks off halfway leaves your working install untouched, and `iva rollback` puts the previous version back.
 - Your data (`data/`, `vault/`, `.env`) now lives outside the code, and your own files in `data/custom` are applied when a version is built — a broken customization no longer takes the service down; Iva starts on the stock build and tells you about it.
-- Memory cards keep an honest archive: history and log lines are written by the tool alone, so the model can't invent a past that never happened; repeated or stale rewrites are refused instead of piling up duplicates, and the nightly `brain` names the cards left with an open code fence.
+- Memory cards keep an honest archive: history and log lines are written by the tool alone, so the model can't invent a past that never happened; repeated or stale rewrites are refused instead of piling up duplicates, and the nightly Brain pass names the cards left with an open code fence.
 
 ### 09.08.2026
 

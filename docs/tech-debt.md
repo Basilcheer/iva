@@ -10,9 +10,9 @@ means designing the Telegram side of the approval prompt (inline buttons, timeou
 what happens to the turn while waiting) before it's worth turning on. Deferred
 deliberately, not an oversight.
 
-## 2. Poller UI wizards → native HITL
+## 2. Bridge UI wizards → native HITL
 
-The `/model`, `/think` and related menu flows in the Telegram poller are
+The `/model`, `/think` and related menu flows in the Bridge (`scripts/poller/`) are
 hand-rolled multi-step wizards predating eve's native human-in-the-loop primitives.
 They should eventually move onto the same mechanism as item 1 instead of maintaining
 a parallel bespoke UI layer.
@@ -40,7 +40,8 @@ authored tree needs lives in `agent/lib`, and neither side reaches the other whi
 "Those processes" is wider than `scripts/cli/*`: the guard's load-time walk stops at a
 child process, so every separate node run is walked as its own entrypoint. The systemd
 units are read out of `deploy/` rather than listed by hand — a hand-written list forgot the
-nightly brain once, which is exactly how a unit gets silently coupled to the tree —
+nightly Brain unit (`deploy/iva-brain.service`) once, which is exactly how a unit
+gets silently coupled to the tree —
 and the three runs no unit starts are named in the guard: the setup wizard (`install.sh` and
 `iva config` → `scripts/setup.mjs`), the vault template copy `install.sh` runs before eve has
 ever built the tree, and the updater's second half, which the previous version spawns inside
@@ -59,8 +60,8 @@ builds the tree. Three shapes, in descending order of preference:
   apply and rolls back either way), `scripts/lib/codex-oauth.ts` pulls the token
   headers inside `listCodexModelCatalog`, which only the `/model` wizard and setup call, and
   `scripts/memory/brain.ts` pulls the whole card format — `core-cap`, `core-clamp` and, via
-  `scripts/memory/card-fences.ts`, `card-text` — at the CORE clamp and the fence scan. The
-  brain is its own systemd oneshot, so a static edge there would kill the nightly vault
+  `scripts/memory/card-fences.ts`, `card-text` — at the CORE clamp and the fence scan. That
+  script is its own systemd oneshot, so a static edge there would kill the nightly vault
   backup on a broken tree; the lazy edge costs those two steps, reports itself, and lets §3
   commit and push the vault anyway.
 - **Two self-contained halves pinned by a test**, where both sides genuinely need the same
@@ -85,11 +86,17 @@ evals; it is not attached to Iva's bundled skills and has no runner wired up. Th
 `#evals/*` import alias is declared in `package.json` but unused. eve ships a native
 `eve/evals` module — adopt it before adding product-level skill evals.
 
-## 5. CI discovery guardrails
+## 5. Discovery guardrails are not part of the release check
 
-Neither `npm run validate` nor `eve info` runs in CI. Both would catch silent eve
-discovery failures (agent/tool/skill wiring that eve can't find at build time) before
-they reach a release. Worth adding as a CI step.
+`npx eve info` prints what eve actually discovered in `agent/` — the instructions dir,
+the skill, tool, subagent and schedule counts, and a `Diagnostics` line — so a skill or
+tool that quietly stopped being discovered shows up as a smaller count. Nothing runs it:
+`npm run build` spawns `npm run build:core` (`eve build`) from `scripts/build.ts` and
+reads none of that back, and no other script in `package.json` calls `eve info` at all.
+So the wiring can rot between releases and the first place it surfaces is a user's
+install. There is no CI to hang the check on
+([ADR-0004](adr/0004-philosophy-is-the-review-bar.md)); the fix is either a pre-release
+habit of reading `npx eve info` or a script that asserts the expected counts.
 
 ## 6. `sessionTimeoutMs: false`
 
@@ -178,7 +185,7 @@ vs `scripts/autograph/common.py`; (b) the fence-aware H1/H2 section scanner adde
 once in both parsers simultaneously (blank line inside a folded block, fixed in 0.3.11).
 RESOLVED after 0.3.12: shared golden fixtures live in
 `scripts/autograph/tests/golden/` (input Markdown + expected normalized JSON per case);
-both `scripts/golden-parsers.test.ts` (CI node glob) and
+both `scripts/golden-parsers.test.ts` (picked up by `node --test`) and
 `scripts/autograph/tests/test_autograph.py` assert against the same expectations. The
 result shapes differ (TS returns fields, Python returns a tuple), so fixtures compare a
 normalized form only: fields+body for frontmatter, outside[] plus [start,end) section

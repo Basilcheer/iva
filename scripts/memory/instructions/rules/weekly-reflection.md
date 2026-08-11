@@ -3,7 +3,7 @@ paths: "weekly/**/*.md"
 type: note
 ---
 
-# Weekly summary (DAG level 2)
+# Weekly summary (rollup chain, level 2)
 
 Rules for weekly rollup cards. Triggered by the weekly rollup (Monday 04:15) over the
 seven daily-summaries of the ISO week.

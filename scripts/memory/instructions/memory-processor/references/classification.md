@@ -71,7 +71,7 @@ conflicting fields — resolve each by superseding the stale one.
 
 The mechanical report `.graph/enforce-report.json` may list `compile_candidates`
 whose duplicate Related sections contain prose. Reread and repair those cards
-semantically on the next dbrain pass; deterministic cleanup will not discard prose.
+semantically on the next rollup pass; deterministic cleanup will not discard prose.
 
 ## Confidence
 

@@ -5,7 +5,7 @@ Frontmatter per type. `type` and `status` MUST exist in
 (what/why), never a title repeat. `tags`: 2–5, lowercase, kebab-case.
 
 The canonical generic templates live in
-`scripts/autograph/docs/references/card-templates.md` — these are the dbrain-specific
+`scripts/autograph/docs/references/card-templates.md` — these are the memory-processor-specific
 shapes. Nightly cards are written by `write_card`, so its contract wins over any
 hand-editing recipe you read there: the `body` you pass is plain facts with
 no H1/H2 headings — the tool builds the card's `#` title, its `## Log` and

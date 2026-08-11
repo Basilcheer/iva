@@ -1,10 +1,13 @@
 # Extending
 
-Everything Iva does is a file in an `agent/` tree. The bundled files in `agent/` belong to the updateable
-core; your authored layer lives in `data/custom/agent/`. `npm run build` combines both in a disposable
-tree, then `iva restart` activates the result ([cli.md](./cli.md)). The live source checkout stays clean,
-so an update cannot be blocked by a customized skill or HTML file. Existing local edits in the authored
-paths are migrated automatically on the first update.
+Everything Iva does is a file in an `agent/` tree. The shipped files in `agent/` are the authored tree,
+refreshed by releases; your custom layer lives in `data/custom/agent/`. `npm run build` combines both in
+a disposable tree, then `iva restart` activates the result ([cli.md](./cli.md)). The live source checkout
+stays clean, so an update cannot be blocked by a customized skill or HTML file. Local edits you already
+made to `agent/instructions.md`, `agent/skills/`, `agent/connections/`, `agent/tools/` or
+`agent/subagents/` move into the custom layer automatically on the first update. Edits anywhere else in
+the tree stay a plain local patch: the updater stashes them and replays them onto the new revision, and
+archives them under `data/update-conflicts/` when they no longer apply.
 
 ## Adding a skill
 
@@ -22,6 +25,7 @@ with a `SKILL.md` plus supporting files. Iva loads both your custom skills and t
 - 📄 **documents.md** — local PDF, DOCX and XLSX extraction, one-file answers and optional library import.
 - 📡 **telegram-userbot/** — a guarded personal-account workflow with a separate safety reference.
 - 🎨 **rich-post/** — a directory skill for rich Telegram posts with supporting references.
+- 🩹 **update-recovery/** — merges customizations an update left in `data/update-conflicts/`; triggered by "restore my update changes".
 
 ⚠️ Your skills go in `data/custom/agent/skills/` and nowhere else - never in a `.claude/` directory
 (`~/.claude/skills/`, `vault/.claude/skills/`). That is a different tool's layout; Iva does not read it.
@@ -56,8 +60,8 @@ The model discovers the server's tools through the built-in `connection_search` 
 Put a tool in `data/custom/agent/tools/<name>.ts`. Use the bundled files in `agent/tools/` as
 read-only examples. Every input must have a zod schema, enum-like values need explicit allowlists,
 and file paths must be resolved and bounded to their permitted root. Keep credentials in `.env`.
-The disposable build compiles custom tools together with core tools without copying their source into
-the live checkout.
+The disposable build compiles custom tools together with the authored tree's tools without copying their
+source into the live checkout.
 
 ## Subagents
 
@@ -81,12 +85,12 @@ A subagent brings its own provider and model: the planner pins Ollama Cloud (`OL
 
 Iva's voice lives in exactly one customizable file: `data/custom/agent/instructions.md` - tone, rules,
 tool preferences and hard limits. Start by copying the bundled `agent/instructions.md`. The reply
-language still comes from `AGENT_LANGUAGE` in `.env`. The files in `agent/instructions/` are core
-machinery and are not part of the customization layer.
+language still comes from `AGENT_LANGUAGE` in `.env`. The files in `agent/instructions/` stay in the
+authored tree and are not part of the custom layer.
 
-If an upstream edit overlaps yours, Iva activates the new core and saves all three versions under
-`data/update-conflicts/`. Tell Iva "restore my update changes" or «верни мои изменения после
-обновления» to load the recovery skill and merge them from chat.
+If an upstream edit overlaps yours, Iva activates the new authored tree and saves all three versions
+(base, yours, upstream) under `data/update-conflicts/`. Tell Iva "restore my update changes" or «верни
+мои изменения после обновления» to load the recovery skill and merge them from chat.
 
 What Iva knows about _you_ is memory, not code — that's `CORE.md` in the vault ([memory.md](./memory.md)).
 
@@ -112,4 +116,4 @@ One gotcha — Iva runs eve **0.30.8**:
 
 - 🩹 **patch-package** — `patches/eve+0.30.8.patch` makes deterministic model-call errors (invalid prompt, unknown tool) fail fast instead of parking a poisoned session; upstream still classifies them as recoverable in 0.30.8. If you bump Eve, regenerate the patch (re-apply the edit to `node_modules/eve/dist/src/harness/model-call-error.js`, then `npx patch-package eve`) or drop it only after the targeted classification test passes against upstream.
 
-The Eve 0.11.4 schedule crash (`eve dev` dying when a schedule handler imported another authored module) is fixed since 0.27.8. Iva now ships five `agent/schedules/*.ts` handlers: four memory rollups and the opt-in digest. On a VPS they run in the `iva.service` process; the two remaining systemd timers are watchdogs for brain and update-check ([deploy.md](./deploy.md)).
+The Eve 0.11.4 schedule crash (`eve dev` dying when a schedule handler imported another authored module) is fixed since 0.27.8. Iva now ships five `agent/schedules/*.ts` handlers: four memory rollups and the opt-in digest. On a VPS they run in the `iva.service` process; the two remaining systemd timers are watchdogs for the nightly Brain pass and update-check ([deploy.md](./deploy.md)).

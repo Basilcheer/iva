@@ -76,7 +76,7 @@ No key for the active provider means `web_search` returns a clear error — noth
 | `MEMORY_EMBED_MODEL`    | `jina-embeddings-v3` | Embedding model name.                                                                                                                                                 |
 | `MEMORY_EMBED_URL`      | —                    | Any OpenAI-compatible embeddings endpoint, e.g. a local Ollama at `http://127.0.0.1:11434/v1/embeddings` — then no external key at all.                               |
 
-The nightly brain builds the hybrid index; to build it now, run `node --env-file=.env scripts/memory/embed-index.ts`. How search actually works: [memory.md](./memory.md).
+The nightly Brain pass builds the hybrid index; to build it now, run `node --env-file=.env scripts/memory/embed-index.ts`. How search actually works: [memory.md](./memory.md).
 
 ## System
 

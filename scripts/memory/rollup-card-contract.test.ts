@@ -36,7 +36,7 @@ function promptText(source: string): string {
   return source.replace(/`\s*\+\s*`/g, "");
 }
 
-void test("daily rollup prompt exposes the same four card operations as dbrain", () => {
+void test("daily rollup prompt exposes the same four card operations as the memory-processor", () => {
   const prompt = promptText(read("rollup.ts"));
   for (const fragment of [
     "ADD (new)",
@@ -78,7 +78,7 @@ void test("daily rollup prompt exposes the same four card operations as dbrain",
   }
 
   const processInstructions = read(
-    "instructions/dbrain-processor/phases/process.md",
+    "instructions/memory-processor/phases/process.md",
   );
   for (const operation of ["ADD", "UPDATE", "SUPERSEDE", "NOOP"]) {
     assert.match(processInstructions, new RegExp(`\\*\\*${operation}\\*\\*`));
@@ -99,13 +99,13 @@ function historyBullets(text: string): string[] {
   );
 }
 
-void test("dbrain phase and its reference teach one history_entry contract", () => {
+void test("memory-processor phase and its reference teach one history_entry contract", () => {
   for (const name of [
     "phases/process.md",
     "references/classification.md",
     "references/card-templates.md",
   ]) {
-    const text = read(`instructions/dbrain-processor/${name}`);
+    const text = read(`instructions/memory-processor/${name}`);
     assert.match(
       text,
       /`write_card` owns the `## History` section/,
@@ -126,7 +126,7 @@ void test("dbrain phase and its reference teach one history_entry contract", () 
   }
 });
 
-/** The dbrain instructions send the model to the autograph references for canonical
+/** The memory-processor instructions send the model to the autograph references for canonical
  * card shapes, and the nightly dedup merge appends to the same section. Both must show
  * the one line format write_card stores, or the model learns to write a second one. */
 void test("autograph references and the dedup merge keep one History line format", () => {
@@ -169,8 +169,8 @@ function cardExampleHeadings(text: string): string[] {
     .filter((line) => /^ {0,3}#{1,2}\s+/.test(line));
 }
 
-void test("dbrain card examples and the daily prompt keep a card body free of H1/H2", () => {
-  const root = "instructions/dbrain-processor";
+void test("memory-processor card examples and the daily prompt keep a card body free of H1/H2", () => {
+  const root = "instructions/memory-processor";
   const pages = readdirSync(join(HERE, root), { recursive: true })
     .map(String)
     .filter((name) => name.endsWith(".md"));
@@ -202,8 +202,8 @@ void test("dbrain card examples and the daily prompt keep a card body free of H1
 });
 
 void test("every nightly mechanical path runs bounded cleanup before whole-file enforce", () => {
-  const skill = read("instructions/dbrain-processor/SKILL.md");
-  const summarize = read("instructions/dbrain-processor/phases/summarize.md");
+  const skill = read("instructions/memory-processor/SKILL.md");
+  const summarize = read("instructions/memory-processor/phases/summarize.md");
   const brain = read("brain.ts");
   for (const text of [skill, summarize, brain]) {
     assertBefore(text, "cleanup.py", "enforce.py");

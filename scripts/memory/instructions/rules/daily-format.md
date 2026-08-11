@@ -2,9 +2,9 @@
 paths: "{daily,summaries/daily}/**/*.md"
 ---
 
-# Daily format & daily-summary (DAG level 0–1)
+# Daily format & daily-summary (rollup chain, levels 0–1)
 
-Covers two file kinds at the bottom of the DAG:
+Covers two file kinds at the bottom of the rollup chain:
 
 - **Raw transcript** — `daily/YYYY-MM-DD.md` (append-only conversation log).
 - **Daily-summary** — `summaries/daily/YYYY-MM-DD.md` (type `daily-summary`).
@@ -52,7 +52,7 @@ Content of the entry
 
 ## Daily-summary — `summaries/daily/YYYY-MM-DD.md`
 
-Produced by the `dbrain-processor` skill after processing the day.
+Produced by the `memory-processor` skill after processing the day.
 
 ```markdown
 ---

@@ -1,5 +1,5 @@
 {
-  "_comment": "Seed schema for Iva's PERSONAL-MEMORY vault. Hand-authored (no discover/swarm bootstrap). Layout: daily/ raw transcripts; summaries/daily, weekly/, monthly/, yearly/ summary cards (DAG); cards/* entity cards. enrich.py is NOT used — Iva (DeepSeek) makes all tag/link/classification judgments.",
+  "_comment": "Seed schema for Iva's PERSONAL-MEMORY vault. Hand-authored (no discover/swarm bootstrap). Layout: daily/ raw transcripts; summaries/daily, weekly/, monthly/, yearly/ summary cards (rollup chain); cards/* entity cards. enrich.py is NOT used — Iva (DeepSeek) makes all tag/link/classification judgments.",
   "node_types": {
     "daily-summary": {
       "description": "One-day rollup card: topics of the day + MOC down to created cards and the raw daily transcript, up to the week",
@@ -38,7 +38,7 @@
       ]
     },
     "yearly-summary": {
-      "description": "Year rollup card: top of the DAG; MOC down to monthly-summaries",
+      "description": "Year rollup card: top of the rollup chain; MOC down to monthly-summaries",
       "required": [
         "description",
         "tags"

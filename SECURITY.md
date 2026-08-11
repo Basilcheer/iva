@@ -44,7 +44,7 @@ Update button in Telegram) — running an old tag is not a supported configurati
   `forward_messages`). Raw-API writes — joins, invites, contact imports, reactions —
   are knowingly not wrapped; that gap is documented, not a vulnerability.
 - The install and update path — anything that gets code onto a host through
-  `install.sh` or `iva update`, including the spend governor and the restart guard.
+  `install.sh` or `iva update`, including the restart guard.
 
 ## What is not in scope
 
@@ -58,7 +58,7 @@ Update button in Telegram) — running an old tag is not a supported configurati
 ## The honest boundary
 
 Your vault is a private git repo on your own server — and once `gh` is authenticated on
-that server, the nightly brain mirrors it to a private `iva-vault` repo under your
+that server, the nightly Brain pass mirrors it to a private `iva-vault` repo under your
 GitHub account. The model and transcription are cloud APIs you pick and pay for: their
 operators see the text you send them. Iva does not phone home, and no telemetry is
 collected.

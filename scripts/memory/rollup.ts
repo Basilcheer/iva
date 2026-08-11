@@ -1,4 +1,4 @@
-// Memory consolidation (DAG): one parameterized script for all periods.
+// Rollup: one parameterized script for all periods (daily → weekly → monthly → yearly).
 // Run by the in-process eve schedules in agent/schedules/memory-*.ts, drives Iva
 // via eve/client (like scripts/daily-digest.ts), and posts a report to Telegram for daily/weekly.
 //
@@ -40,7 +40,7 @@ const BOT = process.env.TELEGRAM_BOT_TOKEN;
 const CHAT = notificationChat();
 const VAULT = process.env.ASSISTANT_VAULT_DIR ?? "vault";
 const TZ = process.env.ASSISTANT_TIMEZONE ?? process.env.TZ ?? "UTC";
-// Format rules and the dbrain-processor prompts live in the repo, not in the vault: they
+// Format rules and the memory-processor prompts live in the repo, not in the vault: they
 // are product, and must update with it instead of rotting inside every user's vault.
 // Absolute, so the agent can read them whatever its working directory is.
 const INSTRUCTIONS = resolve(
@@ -86,8 +86,8 @@ function buildPrompt(p: Period, now: string): string {
 
   const intro =
     `You are processing long-term memory (vault: ${VAULT}). It is now ${now} (${TZ}). ` +
-    `Work strictly by the format rules in ${INSTRUCTIONS}/rules/ and the dbrain-processor ` +
-    `instructions in ${INSTRUCTIONS}/dbrain-processor/. ` +
+    `Work strictly by the format rules in ${INSTRUCTIONS}/rules/ and the memory-processor ` +
+    `instructions in ${INSTRUCTIONS}/memory-processor/. ` +
     `Do not invent facts — take them from the source files. `;
 
   const tail =
