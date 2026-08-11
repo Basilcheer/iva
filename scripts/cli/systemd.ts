@@ -15,6 +15,8 @@ import {
 } from "../lib/assistant-auth.ts";
 import { writeEnvAtomicSync } from "../lib/env-file.ts";
 import {
+  BRAIN_ENTRYPOINT,
+  LEGACY_BRAIN_ENTRYPOINT,
   LEGACY_BRAIN_UNITS,
   LEGACY_MEMORY_UNITS,
 } from "../lib/legacy-memory-units.ts";
@@ -216,12 +218,56 @@ export function createCliSystemd(runtime: CliRuntime) {
   //   3. only then may the old pair be disabled and deleted.
   // Any failure in 1–2 keeps the old units: a duplicated nightly run is harmless (both take
   // the same .memory.lock), a missing one costs the user a night of memory care.
+  // The kept-unit half of the same guarantee. The legacy pair was written by an install made
+  // before the rename, so its ExecStart names scripts/memory/doctor.ts — a file THIS tree no
+  // longer ships (it is scripts/memory/brain.ts now), and writeUnits() runs on the already
+  // updated tree (update.ts calls it from postCommit). So every path that keeps the old unit
+  // as the safety net would otherwise keep a unit that fails at 05:00 with "Cannot find
+  // module" — the lost night the ordering above exists to prevent. Repoint it in place, by
+  // the exact old path only, so an operator-edited unit keeps everything else it says.
+  // Silent on its own: the callers that keep the pair report it, the one that retires the
+  // pair right after has nothing to report.
+  function repointLegacyBrainUnits(stale: readonly string[]): string[] {
+    const repointed: string[] = [];
+    for (const unit of stale) {
+      const path = join(UNIT_DIR, unit);
+      let body: string;
+      try {
+        body = readFileSync(path, "utf8");
+      } catch {
+        continue; // unreadable — nothing safe to rewrite, and cleanup below still tries
+      }
+      if (!body.includes(LEGACY_BRAIN_ENTRYPOINT)) continue;
+      try {
+        writeFileSync(
+          path,
+          body.replaceAll(LEGACY_BRAIN_ENTRYPOINT, BRAIN_ENTRYPOINT),
+        );
+        repointed.push(unit);
+      } catch (error) {
+        warn(
+          `could not repoint ${unit} at ${BRAIN_ENTRYPOINT}: ${(error as { message: string }).message}`,
+        );
+      }
+    }
+    if (repointed.length) systemd.daemonReload();
+    return repointed;
+  }
+
   function removeLegacyBrainUnits(written: readonly string[]): string[] {
     if (!hasSystemd()) return [];
     const stale = LEGACY_BRAIN_UNITS.filter((unit) =>
       existsSync(join(UNIT_DIR, unit)),
     );
     if (!stale.length) return [];
+    // Before anything else: whatever the steps below decide, a kept unit must be able to run.
+    const repointed = repointLegacyBrainUnits(stale);
+    const keeping = (): void => {
+      if (repointed.length)
+        ok(
+          `kept ${repointed.join(", ")} — repointed at ${BRAIN_ENTRYPOINT}, so tonight's vault care still runs`,
+        );
+    };
     if (
       !written.includes(BRAIN_TIMER) ||
       !existsSync(join(UNIT_DIR, BRAIN_TIMER))
@@ -229,6 +275,7 @@ export function createCliSystemd(runtime: CliRuntime) {
       warn(
         `skipping legacy brain-unit cleanup — ${BRAIN_TIMER} is not installed yet (run \`iva doctor\`, then it will run automatically)`,
       );
+      keeping();
       return [];
     }
     try {
@@ -237,6 +284,7 @@ export function createCliSystemd(runtime: CliRuntime) {
       warn(
         `skipping legacy brain-unit cleanup — ${BRAIN_TIMER} did not come up: ${(error as { message: string }).message}`,
       );
+      keeping();
       return [];
     }
     try {
@@ -251,6 +299,7 @@ export function createCliSystemd(runtime: CliRuntime) {
       warn(
         `legacy brain-unit cleanup incomplete: ${(error as { message: string }).message}`,
       );
+      keeping();
       return stale;
     }
   }

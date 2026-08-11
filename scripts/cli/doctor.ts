@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
+import { LEGACY_BRAIN_UNITS } from "../lib/legacy-memory-units.ts";
 import { classifyAgentListeners } from "../lib/listener-security.ts";
 import { readMemoryMaintenanceReport } from "../lib/memory-maintenance.ts";
 import { classifyRoot } from "../lib/version-layout.ts";
@@ -312,16 +313,23 @@ export function createDoctorCommand(
       );
 
     // A oneshot service can be inactive and still healthy; its persistent failed state is the
-    // signal that the last nightly run broke. Query it only if it is installed on this host.
-    if (existsSync(join(UNIT_DIR, BRAIN_SERVICE))) {
-      const state = systemd.query("is-failed", BRAIN_SERVICE);
+    // signal that the last nightly run broke. Query each one only if it is installed here.
+    // The legacy pre-rename service counts too: a migration that had to keep it (see
+    // removeLegacyBrainUnits) leaves it carrying the nightly vault care, and a failure there
+    // costs exactly the same night as a failure of the new one.
+    const nightlyServices = [
+      BRAIN_SERVICE,
+      ...LEGACY_BRAIN_UNITS.filter((unit) => unit.endsWith(".service")),
+    ].filter((unit) => existsSync(join(UNIT_DIR, unit)));
+    for (const service of nightlyServices) {
+      const state = systemd.query("is-failed", service);
       if (state.code === 0 && state.out === "failed") {
         bad(
-          `${BRAIN_SERVICE} failed — check: journalctl --user -u ${BRAIN_SERVICE} -n 100 --no-pager`,
+          `${service} failed — check: journalctl --user -u ${service} -n 100 --no-pager`,
         );
         badN++;
       } else {
-        ok(`${BRAIN_SERVICE} has no failed state`);
+        ok(`${service} has no failed state`);
         okN++;
       }
     }

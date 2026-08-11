@@ -54,6 +54,13 @@ async function fixture(t: TestContext) {
     recursive: true,
   });
   await symlink(join(ROOT, "scripts/lib"), join(project, "scripts/lib"), "dir");
+  // The real nightly entrypoint: the retained-legacy-unit tests check that the unit kept on
+  // disk names a script that actually exists in the tree it will run against.
+  await symlink(
+    join(ROOT, "scripts/memory"),
+    join(project, "scripts/memory"),
+    "dir",
+  );
   await symlink(join(ROOT, "deploy"), join(project, "deploy"), "dir");
   await writeFile(join(project, ".output/server/index.mjs"), "");
   await copyFile(
@@ -437,11 +444,44 @@ void test("a PARTIAL build (only memory-daily compiled) still counts as stale �
 // below drives the real CLI against the fake systemctl, so it proves the ORDER of the calls,
 // not just the end state.
 
-// Two units, one nightly job: the state an install carries before it is updated.
-async function seedLegacyBrainUnits(unitDir: string): Promise<void> {
+// Two units, one nightly job: the state an install carries before it is updated. The service
+// body is the pre-rename one, placeholders already substituted the way writeUnits() left them
+// — including the ExecStart naming scripts/memory/doctor.ts, which this tree no longer ships.
+async function seedLegacyBrainUnits(
+  unitDir: string,
+  project: string,
+): Promise<void> {
   await mkdir(unitDir, { recursive: true });
-  await writeFile(join(unitDir, "iva-memory-doctor.service"), "[Unit]\n");
-  await writeFile(join(unitDir, "iva-memory-doctor.timer"), "[Unit]\n");
+  await writeFile(
+    join(unitDir, "iva-memory-doctor.service"),
+    [
+      "[Unit]",
+      "Description=Iva nightly vault care (pre-rename unit)",
+      "",
+      "[Service]",
+      "Type=oneshot",
+      `WorkingDirectory=${project}`,
+      `ExecStart=/usr/bin/flock -w 900 ${project}/.memory.lock ${process.execPath} --env-file=.env scripts/memory/doctor.ts`,
+      "",
+    ].join("\n"),
+  );
+  await writeFile(
+    join(unitDir, "iva-memory-doctor.timer"),
+    "[Unit]\nDescription=Iva nightly vault care (pre-rename unit)\n\n[Timer]\nOnCalendar=*-*-* 05:00:00\n",
+  );
+}
+
+// What the retained unit will actually try to run: the trailing script path of its ExecStart,
+// resolved against the project it runs in. A unit whose entrypoint is missing is a lost night,
+// not a safety net — existsSync on the unit FILE proves nothing about that.
+async function nightlyEntrypoint(
+  unitDir: string,
+  unit: string,
+): Promise<string> {
+  const body = await readFile(join(unitDir, unit), "utf8");
+  const execStart = body.match(/^ExecStart=(.*)$/m);
+  assert.ok(execStart, `${unit} has no ExecStart: ${body}`);
+  return execStart[1].trim().split(/\s+/).at(-1) as string;
 }
 
 // At no point may a run leave the install with zero nightly units on disk.
@@ -452,9 +492,9 @@ function nightlyUnitsOnDisk(unitDir: string): string[] {
 }
 
 void test("the brain rename enables the new timer BEFORE retiring the old memory-doctor pair", async (t) => {
-  const { calls, home, runCommand } = await fixture(t);
+  const { calls, home, project, runCommand } = await fixture(t);
   const unitDir = join(home, ".config/systemd/user");
-  await seedLegacyBrainUnits(unitDir);
+  await seedLegacyBrainUnits(unitDir, project);
 
   const result = runCommand("_install-units");
   const output = `${result.stdout}\n${result.stderr}`;
@@ -489,9 +529,9 @@ void test("the brain rename enables the new timer BEFORE retiring the old memory
 });
 
 void test("the brain rename is idempotent and stops touching systemd once the old pair is gone", async (t) => {
-  const { calls, home, runCommand } = await fixture(t);
+  const { calls, home, project, runCommand } = await fixture(t);
   const unitDir = join(home, ".config/systemd/user");
-  await seedLegacyBrainUnits(unitDir);
+  await seedLegacyBrainUnits(unitDir, project);
 
   assert.equal(runCommand("_install-units").status, 0);
   await writeFile(calls, "");
@@ -510,7 +550,7 @@ void test("an update interrupted before deploy/ carries iva-brain.timer keeps th
   // successful update — the exact night this migration must not cost anyone.
   const { home, project, runCommand } = await fixture(t);
   const unitDir = join(home, ".config/systemd/user");
-  await seedLegacyBrainUnits(unitDir);
+  await seedLegacyBrainUnits(unitDir, project);
   const deploy = join(project, "deploy");
   await rm(deploy); // the fixture symlinks the real deploy/ — swap in a partial copy
   await mkdir(deploy, { recursive: true });
@@ -534,9 +574,9 @@ void test("an update interrupted before deploy/ carries iva-brain.timer keeps th
 void test("a new brain timer that refuses to come up keeps the old pair installed", async (t) => {
   // enable --now succeeded but the unit is not active: systemd took the file and the job
   // still is not scheduled. Tearing down the old pair on that signal would lose the night.
-  const { home, runCommand } = await fixture(t);
+  const { home, project, runCommand } = await fixture(t);
   const unitDir = join(home, ".config/systemd/user");
-  await seedLegacyBrainUnits(unitDir);
+  await seedLegacyBrainUnits(unitDir, project);
 
   const result = runCommand("_install-units", {
     inactiveUnit: "iva-brain.timer",
@@ -552,10 +592,127 @@ void test("a new brain timer that refuses to come up keeps the old pair installe
   ]);
 });
 
-void test("iva status and iva doctor both see the renamed nightly unit", async (t) => {
-  const { calls, home, runCommand } = await fixture(t);
+// A partial deploy/: the new service file landed, the timer did not — the shape that makes
+// the migration keep the old pair. Used by every "the kept unit must still work" test below.
+async function partialDeploy(project: string): Promise<void> {
+  const deploy = join(project, "deploy");
+  await rm(deploy); // the fixture symlinks the real deploy/ — swap in a partial copy
+  await mkdir(deploy, { recursive: true });
+  await copyFile(
+    join(ROOT, "deploy/iva-brain.service"),
+    join(deploy, "iva-brain.service"),
+  );
+}
+
+void test("a legacy nightly unit kept by an interrupted update still names a script that exists", async (t) => {
+  // The unit file surviving on disk proves nothing: its ExecStart was written before the
+  // rename and names scripts/memory/doctor.ts, while writeUnits() runs on the ALREADY updated
+  // tree (update.ts calls it from postCommit), where that file is gone. Kept as-is, the unit
+  // dies at 05:00 with "Cannot find module" — the lost night, just quieter.
+  const { home, project, runCommand } = await fixture(t);
   const unitDir = join(home, ".config/systemd/user");
-  await seedLegacyBrainUnits(unitDir);
+  await seedLegacyBrainUnits(unitDir, project);
+  await partialDeploy(project);
+
+  const result = runCommand("_install-units");
+  const output = `${result.stdout}\n${result.stderr}`;
+
+  assert.equal(result.status, 0, output);
+  assert.deepEqual(nightlyUnitsOnDisk(unitDir), ["iva-memory-doctor.timer"]);
+  const entrypoint = await nightlyEntrypoint(
+    unitDir,
+    "iva-memory-doctor.service",
+  );
+  assert.equal(
+    existsSync(join(project, entrypoint)),
+    true,
+    `the kept unit runs ${entrypoint}, which this tree does not ship`,
+  );
+  assert.equal(entrypoint, "scripts/memory/brain.ts");
+  assert.match(output, /repointed at scripts\/memory\/brain\.ts/);
+});
+
+void test("a legacy nightly unit kept because the new timer stayed down is repointed too", async (t) => {
+  const { home, project, runCommand } = await fixture(t);
+  const unitDir = join(home, ".config/systemd/user");
+  await seedLegacyBrainUnits(unitDir, project);
+
+  const result = runCommand("_install-units", {
+    inactiveUnit: "iva-brain.timer",
+  });
+  const output = `${result.stdout}\n${result.stderr}`;
+
+  assert.equal(result.status, 0, output);
+  const entrypoint = await nightlyEntrypoint(
+    unitDir,
+    "iva-memory-doctor.service",
+  );
+  assert.equal(entrypoint, "scripts/memory/brain.ts");
+  assert.equal(existsSync(join(project, entrypoint)), true);
+});
+
+void test("repointing a kept legacy unit is idempotent and leaves the rest of the unit alone", async (t) => {
+  const { home, project, runCommand } = await fixture(t);
+  const unitDir = join(home, ".config/systemd/user");
+  await seedLegacyBrainUnits(unitDir, project);
+  await partialDeploy(project);
+  const before = await readFile(
+    join(unitDir, "iva-memory-doctor.service"),
+    "utf8",
+  );
+
+  assert.equal(runCommand("_install-units").status, 0);
+  const first = await readFile(
+    join(unitDir, "iva-memory-doctor.service"),
+    "utf8",
+  );
+  assert.equal(runCommand("_install-units").status, 0);
+  const second = await readFile(
+    join(unitDir, "iva-memory-doctor.service"),
+    "utf8",
+  );
+
+  assert.equal(second, first, "a second run rewrites nothing");
+  assert.equal(
+    first,
+    before.replaceAll("scripts/memory/doctor.ts", "scripts/memory/brain.ts"),
+    "only the entrypoint changes — flock, TimeoutStartSec, WorkingDirectory stay",
+  );
+});
+
+void test("doctor reports a failed legacy nightly service the migration had to keep", async (t) => {
+  // Without this the failure is invisible: the kept unit is the one carrying the nightly
+  // vault care, and doctor used to query only the new service's failed state.
+  const { calls, home, project, runCommand } = await fixture(t);
+  const unitDir = join(home, ".config/systemd/user");
+  await seedLegacyBrainUnits(unitDir, project);
+  await partialDeploy(project);
+
+  const doctor = runCommand("doctor", {
+    failedUnit: "iva-memory-doctor.service",
+  });
+  const output = `${doctor.stdout}\n${doctor.stderr}`;
+  const checked = (await readFile(calls, "utf8"))
+    .trim()
+    .split("\n")
+    .filter((call) => call.startsWith("--user is-failed "))
+    .map((call) => call.split(" ").at(-1));
+
+  assert.ok(
+    checked.includes("iva-memory-doctor.service"),
+    `doctor never asked about the kept unit: ${checked.join(", ")}`,
+  );
+  assert.match(output, /iva-memory-doctor\.service failed/);
+  assert.match(
+    output,
+    /journalctl --user -u iva-memory-doctor\.service -n 100 --no-pager/,
+  );
+});
+
+void test("iva status and iva doctor both see the renamed nightly unit", async (t) => {
+  const { calls, home, project, runCommand } = await fixture(t);
+  const unitDir = join(home, ".config/systemd/user");
+  await seedLegacyBrainUnits(unitDir, project);
 
   const status = runCommand("status");
   assert.equal(status.status, 0, `${status.stdout}\n${status.stderr}`);

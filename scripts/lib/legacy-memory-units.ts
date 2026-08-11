@@ -24,3 +24,10 @@ export const LEGACY_BRAIN_UNITS: readonly string[] = [
   "iva-memory-doctor.service",
   "iva-memory-doctor.timer",
 ];
+
+// The nightly entrypoint before and after the rename, as the legacy unit's ExecStart spells
+// it. The old unit file names a script this tree no longer ships, so any run that KEEPS the
+// old pair as the safety net must repoint it first (see repointLegacyBrainUnits): a retained
+// unit that dies with "Cannot find module" is not a safety net, it is a lost night.
+export const LEGACY_BRAIN_ENTRYPOINT = "scripts/memory/doctor.ts";
+export const BRAIN_ENTRYPOINT = "scripts/memory/brain.ts";
