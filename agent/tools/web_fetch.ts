@@ -1,6 +1,11 @@
 import { defineTool } from "eve/tools";
 import { webFetch } from "eve/tools/defaults";
-import { gateWebError, gateWebText, reportWebGate } from "../lib/web-gate.ts";
+import {
+  gateWebError,
+  gateWebText,
+  probeWebText,
+  reportWebGate,
+} from "../lib/web-gate.ts";
 
 // Обёртка над штатным web_fetch eve. Сам запрос не переписан НАМЕРЕННО: у
 // фреймворка уже есть SSRF-защита (https-only, DNS-резолв с отсевом приватных,
@@ -48,11 +53,20 @@ export default defineTool({
     }
 
     const gated = gateWebText(raw.content);
-    const report = reportWebGate(`web_fetch ${raw.url}`, [gated]);
+    // Заголовок `Content-Type` пишет владелец страницы — это такой же
+    // недоверенный ввод, как её тело, и без гейта он был каналом в модель мимо
+    // санитайзера. Лимит тот же, что у текста ошибки: тип содержимого длиной в
+    // страницу — уже не тип. Проверяем оба вида, как адрес: параметр заголовка
+    // несёт нагрузку percent-encoded.
+    const contentType = probeWebText(raw.contentType);
+    const report = reportWebGate(`web_fetch ${raw.url}`, [
+      gated,
+      ...contentType,
+    ]);
 
     return {
       url: raw.url,
-      contentType: raw.contentType,
+      contentType: contentType[0].text,
       // truncated фреймворка ИЛИ усечение защитным лимитом гейта.
       truncated: raw.truncated || gated.truncatedChars > 0,
       content: gated.text,
