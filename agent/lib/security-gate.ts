@@ -95,13 +95,51 @@ export function hasInboundAttackSignal(
   });
 }
 
+// Warn-and-pass surfaces (web content) need the cleaned text even when a block
+// rule fires: dropping a whole page over 51 Braille glyphs or a Tibetan article
+// is a false block, and the caller still gets `blocked: true` to wrap the text in
+// a warning. The default stays fail-closed for Telegram, where a flood is a
+// message the owner can resend.
+export interface SanitizeOptions {
+  keepBlockedText?: boolean;
+}
+
+// Bounds the text by Unicode code points without splitting a surrogate pair.
+function capCodePoints(
+  text: string,
+  maxChars: number,
+): { text: string; truncatedChars: number } {
+  let codePoints = 0;
+  let keptCodeUnits = text.length;
+  for (let offset = 0; offset < text.length;) {
+    if (codePoints === maxChars) keptCodeUnits = offset;
+    const point = text.codePointAt(offset);
+    offset += point !== undefined && point > 0xffff ? 2 : 1;
+    codePoints += 1;
+  }
+  const truncatedChars = Math.max(0, codePoints - maxChars);
+  return {
+    text: truncatedChars > 0 ? text.slice(0, keptCodeUnits) : text,
+    truncatedChars,
+  };
+}
+
 export function sanitizeInbound(
   input: string,
   maxChars = 50000,
+  options: SanitizeOptions = {},
 ): SanitizeResult {
   if (!Number.isSafeInteger(maxChars) || maxChars < 0) {
     throw new RangeError("maxChars must be a non-negative safe integer");
   }
+  const keepBlockedText = options.keepBlockedText === true;
+  const blockedPayload = (cleaned: string) =>
+    keepBlockedText
+      ? capCodePoints(cleaned, maxChars)
+      : {
+          text: "",
+          truncatedChars: 0,
+        };
   const originalLen = input.length;
   const flags: string[] = [];
 
@@ -113,11 +151,10 @@ export function sanitizeInbound(
   });
   if (originalLen > 100 && invisibleRemoved > originalLen * 0.05) {
     return {
-      text: "",
+      ...blockedPayload(text),
       blocked: true,
       reason: `Excessive invisible characters: ${invisibleRemoved} (${Math.floor((invisibleRemoved * 100) / originalLen)}%)`,
       flags: ["invisible-flood"],
-      truncatedChars: 0,
     };
   }
   if (invisibleRemoved) flags.push(`invisible=${invisibleRemoved}`);
@@ -129,11 +166,10 @@ export function sanitizeInbound(
   });
   if (walletRemoved > 50) {
     return {
-      text: "",
+      ...blockedPayload(text),
       blocked: true,
       reason: `Wallet drain attempt: ${walletRemoved} expensive Unicode chars`,
       flags: ["wallet-drain"],
-      truncatedChars: 0,
     };
   }
 
@@ -154,16 +190,9 @@ export function sanitizeInbound(
   if (roleMarkers) flags.push(`role-markers=${roleMarkers}`);
   if (overrides) flags.push(`overrides=${overrides}`);
 
-  let codePoints = 0;
-  let keptCodeUnits = text.length;
-  for (let offset = 0; offset < text.length;) {
-    if (codePoints === maxChars) keptCodeUnits = offset;
-    const point = text.codePointAt(offset);
-    offset += point !== undefined && point > 0xffff ? 2 : 1;
-    codePoints += 1;
-  }
-  const truncatedChars = Math.max(0, codePoints - maxChars);
-  if (truncatedChars > 0) text = text.slice(0, keptCodeUnits);
+  const capped = capCodePoints(text, maxChars);
+  text = capped.text;
+  const truncatedChars = capped.truncatedChars;
 
   if ((roleMarkers >= 2 && overrides >= 1) || overrides >= 3) {
     return {
