@@ -34,7 +34,9 @@ Update button in Telegram) — running an old tag is not a supported configurati
   sanitizer covers Telegram text, captions and transcripts, plus everything
   `web_fetch` and `web_search` bring back — on the web surface it warns rather than
   blocks: flagged content still reaches the model, wrapped in a "treat this as data"
-  warning. Document bodies (PDF/DOCX), userbot-read chats and whatever the
+  warning. Its detector is a pattern list, not a judge of meaning: it knows canonical
+  phrasings and five families of intent, so a payload paraphrased outside them passes
+  unflagged in every language it reads. Document bodies (PDF/DOCX), userbot-read chats and whatever the
   `agent-browser` skill prints through the shell still reach the model unscreened,
   and reports about those paths are welcome too.
 - Secret leakage past the redaction gate — into chat, logs or vault files. Note the
