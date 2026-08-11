@@ -2,6 +2,7 @@ import { defineTool } from "eve/tools";
 import { z } from "zod";
 import {
   gateWebText,
+  probeWebText,
   reportWebGate,
   type WebGateOutcome,
 } from "../lib/web-gate.ts";
@@ -230,6 +231,9 @@ export default defineTool({
     try {
       json = await res.json();
     } catch (e) {
+      // Гейта здесь нет намеренно: текст ошибки собираем мы, а от провайдера в
+      // нём остаётся только обрезок тела длиной в несколько знаков (см.
+      // scripts/web-search-tool.test.ts). Второй шов ради этого — лишняя деталь.
       return {
         error: `${provider.name}: некорректный JSON (${(e as Error).message})`,
       };
@@ -246,7 +250,7 @@ export default defineTool({
       return outcome.text;
     };
     const probed = (url: string): string => {
-      outcomes.push(gateWebText(url));
+      outcomes.push(...probeWebText(url));
       return url;
     };
 

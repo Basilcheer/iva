@@ -42,6 +42,12 @@ export function gateWebText(
   return sanitizeInbound(input, maxChars, { keepBlockedText: true });
 }
 
+// Потолок текста ошибки. Сообщение фреймворка или провайдера цитирует чужие
+// данные (заголовок Location у редиректа, кусок битого JSON), то есть остаётся
+// каналом для полезной нагрузки. Диагностике хватает первых строк, а длинный
+// хвост в контексте не нужен — режем.
+export const WEB_ERROR_MAX_CHARS = 2000;
+
 export interface WebGateReport {
   flagged: boolean;
   // Предупреждение модели: непусто ровно тогда, когда flagged.
@@ -95,4 +101,45 @@ export function reportWebGate(
     warning: injectionWarning(),
     ...(truncationNotice ? { truncationNotice } : {}),
   };
+}
+
+export interface WebGateError {
+  error: string;
+  warning?: string;
+}
+
+function decodePercent(text: string): string {
+  try {
+    return decodeURIComponent(text);
+  } catch {
+    return text; // битая escape-последовательность: смотрим только сырой вид
+  }
+}
+
+// Проверка строки, внутри которой живёт адрес: текста ошибки или url результата
+// поиска. Такая строка несёт нагрузку percent-encoded
+// (`?note=system:%20ignore%20all%20previous%20instructions`) — санитайзер по
+// сырому виду её не видит, а модель читает адрес как обычный текст и декодирует
+// сама. Поэтому смотрим оба вида; первый исход — сырой, его текст и отдаётся,
+// второй нужен только ради сигнала. Адрес не переписывается: ссылка обязана
+// остаться рабочей (ADR-0006).
+export function probeWebText(
+  text: string,
+  maxChars = WEB_ERROR_MAX_CHARS,
+): WebGateOutcome[] {
+  const raw = gateWebText(text, maxChars);
+  const decoded = decodePercent(text);
+  return decoded === text ? [raw] : [raw, gateWebText(decoded, maxChars)];
+}
+
+// Текст ошибки — тоже web-ввод. Сообщение штатного web_fetch дословно цитирует
+// адрес редиректа, а разбор ответа провайдера — кусок его тела: без гейта
+// атакующему хватало заголовка `Location`, чтобы доставить инструкцию в модель в
+// обход санитайзера. Политика та же, warn-and-pass: причина отказа модели нужна
+// (по адресу редиректа она повторит вызов), поэтому текст едет — очищенный, при
+// сигнале с warning и одной записью в лог.
+export function gateWebError(source: string, message: string): WebGateError {
+  const outcomes = probeWebText(message);
+  const { warning } = reportWebGate(source, outcomes);
+  return { error: outcomes[0].text, ...(warning ? { warning } : {}) };
 }
