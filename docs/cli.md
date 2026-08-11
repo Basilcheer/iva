@@ -78,6 +78,6 @@ Every model step appends one JSON line to `data/usage.jsonl` — including tool-
 - 🧮 **Five counters** — in, out, cache read, cache write, total — plus model, session, turn and step index
 - 🤖 **Subagent steps** — planner tokens are tagged with the subagent name and counted, not lost
 
-The log lives in `data/` next to `tasks.json`, gitignored and outside the vault — otherwise the nightly doctor would commit an ever-growing log into your memory repo.
+The log lives in `data/` next to `tasks.json`, gitignored and outside the vault — otherwise the nightly Brain pass would commit an ever-growing log into your memory repo.
 
 No dollar figures, on purpose. Both providers are flat-rate subscriptions (see [providers.md](providers.md)), so there is no per-token price to multiply. Tokens are the number you can trust; a computed dollar estimate would be fiction.

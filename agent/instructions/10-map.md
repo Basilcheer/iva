@@ -43,7 +43,7 @@
 - Реплики и твои ответы авто-пишутся в `vault/daily/<сегодня>.md` (хук транскрипта).
 - Голос/видео/аудио транскрибируются в дневной файл до тебя (Deepgram).
 - Ночью eve schedules запускают rollup daily→weekly→monthly→yearly; отдельный systemd-watchdog
-  запускает doctor. Они превращают сырой день в карточки + саммари и обновляют `CORE.md`. Не гоняй вручную.
+  запускает проход Brain. Они превращают сырой день в карточки + саммари и обновляют `CORE.md`. Не гоняй вручную.
 - Тяжёлые процедуры — это скиллы: грузи по имени, тело придёт само
   (`morning-digest`, `web-research`, `agent-browser`, `google-workspace`, `security-defense`,
   `telegram-userbot`, `rich-post`, `documents`).

@@ -56,7 +56,7 @@ unset ASSISTANT_BEARER IVA_PORT
 | `iva-memory-doctor.timer`      | 05:00 nightly                | schema/health/decay/MOC checks + vault `git push`             |
 | `iva-update-check.timer`       | 10:00 daily                  | check for a newer stable Iva version; notify once per version |
 
-The doctor and update-check timers stay on systemd on purpose: they're watchdogs that must keep running even if the agent process itself is wedged. `iva-memory-doctor.timer` embeds `ASSISTANT_TIMEZONE` directly, so its 05:00 schedule remains correct even when the server clock uses UTC — as do the eve schedules below (`Environment=TZ` in `iva.service`). Setting the server's own system timezone to match is therefore optional, not required for anything in this doc to work correctly:
+The Brain and update-check timers stay on systemd on purpose: they're watchdogs that must keep running even if the agent process itself is wedged. `iva-memory-doctor.timer` embeds `ASSISTANT_TIMEZONE` directly, so its 05:00 schedule remains correct even when the server clock uses UTC — as do the eve schedules below (`Environment=TZ` in `iva.service`). Setting the server's own system timezone to match is therefore optional, not required for anything in this doc to work correctly:
 
 ```bash
 # Optional — the generated units and the eve schedules already carry ASSISTANT_TIMEZONE
@@ -107,7 +107,7 @@ Exposing the Eve HTTP channel is a separate security decision. Require HTTPS and
 
 ## Moving servers
 
-Your state is three things: the vault (its own git repo, pushed nightly by the doctor), `.env` (all keys), and `data/` (`tasks.json`, `usage.jsonl`).
+Your state is three things: the vault (its own git repo, pushed nightly by the Brain pass), `.env` (all keys), and `data/` (`tasks.json`, `usage.jsonl`).
 
 1. Old box: `npm run doctor` to push the vault, then copy `.env` and `data/` off.
 2. New box: run the installer ([install](./install.md)) with `--skip-setup`, drop in `.env`.
