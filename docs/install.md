@@ -10,6 +10,17 @@ Everything between `curl` and a working bot. One command on a fresh server: the 
 
 > Never used a server? The host sends you an address (IP), a login and a password. On Mac or Linux open Terminal, on Windows PowerShell, type `ssh root@YOUR_ADDRESS`, enter the password. You're in. First thing: make yourself a normal user and switch to it — `adduser iva && usermod -aG sudo iva && su - iva` — and install from there. Iva's shell tool runs with the permissions of whoever installed it, so don't hand it root.
 
+> If the installer ends with `Failed to connect to bus: No medium found`, leave the `su - iva` shell. Enable linger and reconnect directly:
+>
+> ```bash
+> exit                          # back to the root session on the server
+> loginctl enable-linger iva
+> exit                          # back to your own computer
+> ssh iva@YOUR_ADDRESS
+> ```
+>
+> Then run the installer again.
+
 ## Install
 
 ```bash
