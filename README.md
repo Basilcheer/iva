@@ -161,7 +161,15 @@ Default model is deepseek-v4-pro, 131k context. On Go it runs about $9/mo all-in
 ## What's New
 
 <details>
-<summary><b>v0.3.16 · 10.08.2026 — expand the latest releases</b></summary>
+<summary><b>v0.3.17 · 11.08.2026 — expand the latest releases</b></summary>
+
+### 11.08.2026
+
+#### v0.3.17
+
+- Nothing Iva sends to Telegram goes around the secret filter any more. Service notices used to slip past it, so a key printed by a failed provider call or by `iva doctor` could reach your chat in full; the filter now sits on every outgoing call and knows the key formats providers actually issue, including credentials hidden inside a URL.
+- An update no longer fails because a port was taken: the health check moves on to the next one instead of dying on a port someone else grabbed a moment earlier.
+- Every write to your data goes through one tested implementation, so a server killed mid-write leaves neither half a card nor a stuck lock behind.
 
 ### 10.08.2026
 
@@ -184,14 +192,6 @@ Default model is deepseek-v4-pro, 131k context. On Go it runs about $9/mo all-in
 - The "Working…" indicator with its Stop button now always disappears once the reply arrives — replying to one of Iva's messages while she was still busy used to leave the previous indicator stuck in the chat forever.
 - Crashed and parked turns clean up after themselves now: an orphaned indicator is deleted instead of waiting for a manual cleanup.
 - All five status loaders switched to animated emoji (typing dots for a working turn), and a dirty install no longer rolls back a healthy update — local changes are kept as a recovery bundle.
-
-### 06.08.2026
-
-#### v0.3.13
-
-- Iva's Node code and tests are now TypeScript end to end. Five tiny compatibility launchers keep the existing CLI, installer and service paths unchanged.
-- The migration added stricter linting, type checks and coverage gates, while follow-up checks preserve Telegram edge cases and accurate token-usage accounting.
-- The memory table of contents now rebuilds from the domains that actually exist, and shared parser fixtures keep the TypeScript and Python implementations in sync.
 
 </details>
 
