@@ -60,8 +60,8 @@ builds the tree. Three shapes, in descending order of preference:
   apply and rolls back either way), `scripts/lib/codex-oauth.ts` pulls the token
   headers inside `listCodexModelCatalog`, which only the `/model` wizard and setup call, and
   `scripts/memory/doctor.ts` pulls the whole card format — `core-cap`, `core-clamp` and, via
-  `scripts/memory/card-fences.ts`, `card-text` — at the CORE clamp and the fence scan. The
-  doctor is its own systemd oneshot, so a static edge there would kill the nightly vault
+  `scripts/memory/card-fences.ts`, `card-text` — at the CORE clamp and the fence scan. That
+  script is its own systemd oneshot, so a static edge there would kill the nightly vault
   backup on a broken tree; the lazy edge costs those two steps, reports itself, and lets §3
   commit and push the vault anyway.
 - **Two self-contained halves pinned by a test**, where both sides genuinely need the same

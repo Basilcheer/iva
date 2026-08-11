@@ -44,9 +44,9 @@ The same pass resolves conflicts flagged in `.graph/supersede-candidates.json` a
 
 `memory_search` runs on Node 24's built-in `node:sqlite`: BM25 over an FTS5 full-text index. Zero external dependencies — no vector database, no search server, nothing extra on a $5 VPS. Hits are reranked by link distance in `.graph/vault-graph.json` — cards that reference each other surface together — and weighted by IDF coverage, so ranking stays language-agnostic: Russian, Uzbek and English all work.
 
-For fuzzy or cross-language semantics, switch on hybrid mode (`MEMORY_SEARCH_MODE=hybrid` plus one embedding key — every variable in [configuration.md](configuration.md)). Dense results are fused with BM25 via reciprocal rank fusion; the nightly doctor rebuilds the embedding sidecar.
+For fuzzy or cross-language semantics, switch on hybrid mode (`MEMORY_SEARCH_MODE=hybrid` plus one embedding key — every variable in [configuration.md](configuration.md)). Dense results are fused with BM25 via reciprocal rank fusion; the nightly Brain pass rebuilds the embedding sidecar.
 
-## Doctor
+## Brain
 
 At 05:00 `scripts/memory/doctor.ts` runs mechanical maintenance — no LLM, all deterministic — executing the [autograph](https://github.com/smixs/autograph) scripts from `scripts/autograph/` via `uv`:
 
@@ -82,4 +82,4 @@ Everything is plain markdown. Cards, summaries and CORE.md are safe to edit by h
 
 ## Background & prior art
 
-Memory is the part I've worked on longest: first [agent-second-brain](https://github.com/smixs/agent-second-brain), a Telegram-to-Obsidian pipeline; then [autograph](https://github.com/smixs/autograph), the typed-graph schema engine Iva now ships and runs over the vault; Iva gathers both. The core idea — keep the verbatim record, compress upward, never lose the trail — follows the [LCM: Lossless Context Management](https://arxiv.org/abs/2605.04050) paper (Ehrlich & Blackman, 2026), with the card graph, SUPERSEDE semantics and doctor loop on top.
+Memory is the part I've worked on longest: first [agent-second-brain](https://github.com/smixs/agent-second-brain), a Telegram-to-Obsidian pipeline; then [autograph](https://github.com/smixs/autograph), the typed-graph schema engine Iva now ships and runs over the vault; Iva gathers both. The core idea — keep the verbatim record, compress upward, never lose the trail — follows the [LCM: Lossless Context Management](https://arxiv.org/abs/2605.04050) paper (Ehrlich & Blackman, 2026), with the card graph, SUPERSEDE semantics and the Brain pass on top.
