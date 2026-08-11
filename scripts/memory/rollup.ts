@@ -1,4 +1,4 @@
-// Memory consolidation (DAG): one parameterized script for all periods.
+// Rollup: one parameterized script for all periods (daily → weekly → monthly → yearly).
 // Run by the in-process eve schedules in agent/schedules/memory-*.ts, drives Iva
 // via eve/client (like scripts/daily-digest.ts), and posts a report to Telegram for daily/weekly.
 //
