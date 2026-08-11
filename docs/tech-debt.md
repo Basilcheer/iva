@@ -10,9 +10,9 @@ means designing the Telegram side of the approval prompt (inline buttons, timeou
 what happens to the turn while waiting) before it's worth turning on. Deferred
 deliberately, not an oversight.
 
-## 2. Poller UI wizards → native HITL
+## 2. Bridge UI wizards → native HITL
 
-The `/model`, `/think` and related menu flows in the Telegram poller are
+The `/model`, `/think` and related menu flows in the Bridge (`scripts/poller/`) are
 hand-rolled multi-step wizards predating eve's native human-in-the-loop primitives.
 They should eventually move onto the same mechanism as item 1 instead of maintaining
 a parallel bespoke UI layer.
@@ -40,7 +40,8 @@ authored tree needs lives in `agent/lib`, and neither side reaches the other whi
 "Those processes" is wider than `scripts/cli/*`: the guard's load-time walk stops at a
 child process, so every separate node run is walked as its own entrypoint. The systemd
 units are read out of `deploy/` rather than listed by hand — a hand-written list forgot the
-nightly memory doctor once, which is exactly how a unit gets silently coupled to the tree —
+nightly Brain unit (`deploy/iva-memory-doctor.service`) once, which is exactly how a unit
+gets silently coupled to the tree —
 and the three runs no unit starts are named in the guard: the setup wizard (`install.sh` and
 `iva config` → `scripts/setup.mjs`), the vault template copy `install.sh` runs before eve has
 ever built the tree, and the updater's second half, which the previous version spawns inside
