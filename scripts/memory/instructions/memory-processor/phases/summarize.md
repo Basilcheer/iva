@@ -1,6 +1,6 @@
 # Phase 4: SUMMARIZE
 
-Write the daily-summary card — the day's node in the DAG. Then run the mechanical
+Write the daily-summary card — the day's node in the rollup chain. Then run the mechanical
 autograph pass and mark the transcript processed.
 
 Full template + MOC contract: `references/daily-summary.md` and
@@ -40,7 +40,7 @@ source: daily/YYYY-MM-DD.md
 
 ## Navigation
 
-<!-- DAG: down to the raw transcript, up to the week -->
+<!-- Rollup chain: down to the raw transcript, up to the week -->
 
 - Raw transcript: [[daily/YYYY-MM-DD|Full transcript]]
 - Up: [[weekly/YYYY-Www|Week WW]]

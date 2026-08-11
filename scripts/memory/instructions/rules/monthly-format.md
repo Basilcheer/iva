@@ -3,7 +3,7 @@ paths: "monthly/**/*.md"
 type: note
 ---
 
-# Monthly summary (DAG level 3)
+# Monthly summary (rollup chain, level 3)
 
 Rules for monthly rollup cards. Triggered by the monthly rollup (1st of the month) over
 the weekly-summaries of the previous month.

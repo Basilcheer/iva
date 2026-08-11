@@ -1,6 +1,6 @@
 # Daily-summary card spec
 
-The daily-summary is the day's node in the DAG. It is the bridge between the durable
+The daily-summary is the day's node in the rollup chain. It is the bridge between the durable
 graph (cards) and the raw record (transcript), and the parent-hook for the weekly rollup.
 
 Location: `summaries/daily/YYYY-MM-DD.md` · type: `daily-summary`.

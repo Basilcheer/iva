@@ -114,4 +114,4 @@ Markdown) and let the nightly Brain run the mechanical pass later.
 - `references/daily-summary.md` — the daily-summary card spec (topics + MOC).
 - `scripts/autograph/docs/SKILL.md` — the typed vault engine (graph, decay, MOC, dedup).
 - `scripts/memory/instructions/rules/{daily,weekly,monthly,yearly}-format.md` — format +
-  DAG navigation rules.
+  rollup chain navigation rules.
