@@ -89,7 +89,7 @@ Manual runs and status:
 ```bash
 npm run memory -- daily   # or weekly | monthly | yearly
 npm run doctor
-systemctl --user list-timers                             # doctor, update-check (the only two systemd timers left)
+systemctl --user list-timers                             # Brain, update-check (the only two systemd timers left)
 systemctl --user status iva.service iva-telegram-poll.service  # the two always-on services
 cat data/rollup-status.json                               # last run per eve schedule (or: /menu → ⏰ in Telegram)
 iva logs                  # agent; `iva logs poll` for the bridge
