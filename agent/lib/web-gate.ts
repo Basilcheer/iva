@@ -112,10 +112,17 @@ export interface WebGateError {
 }
 
 function decodePercent(text: string): string {
+  // `+` в query-string — штатная запись пробела (form-urlencoded), и модель
+  // читает её так же: `?note=ignore+all+previous+instructions` для неё фраза, а
+  // для санитайзера по сырому виду — одно слово. Поэтому в куске после `?`
+  // плюсы раскрываются вместе с %XX. Вне query `+` — обычный знак («C++»), его
+  // не трогаем. Раскрытие живёт только в проверочной копии: сам адрес
+  // отдаётся сырым.
+  const spaced = text.replace(/\?\S*/gu, (query) => query.replaceAll("+", " "));
   try {
-    return decodeURIComponent(text);
+    return decodeURIComponent(spaced);
   } catch {
-    return text; // битая escape-последовательность: смотрим только сырой вид
+    return spaced; // битая escape-последовательность: смотрим только сырой вид
   }
 }
 
