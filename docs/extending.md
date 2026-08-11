@@ -22,6 +22,7 @@ with a `SKILL.md` plus supporting files. Iva loads both your custom skills and t
 - 📄 **documents.md** — local PDF, DOCX and XLSX extraction, one-file answers and optional library import.
 - 📡 **telegram-userbot/** — a guarded personal-account workflow with a separate safety reference.
 - 🎨 **rich-post/** — a directory skill for rich Telegram posts with supporting references.
+- 🩹 **update-recovery/** — merges customizations an update left in `data/update-conflicts/`; triggered by "restore my update changes".
 
 ⚠️ Your skills go in `data/custom/agent/skills/` and nowhere else - never in a `.claude/` directory
 (`~/.claude/skills/`, `vault/.claude/skills/`). That is a different tool's layout; Iva does not read it.

@@ -15,6 +15,7 @@ Iva is a self-hosted Telegram AI assistant with layered memory that turns your m
 - [faq.md](faq.md) — short answers on cost, models, privacy, Obsidian
 - [troubleshooting.md](troubleshooting.md) — a silent bot, failed timers, provider errors
 - [philosophy.md](philosophy.md) — skill over code, the thin harness, the wheel principle
+- [adr/](adr/) — the decisions that bind the code: what was chosen, why, and what was rejected
 - [tech-debt.md](tech-debt.md) — known gaps and deferred decisions, tracked in the open
 
 Документация на русском: [ru/](ru/)
