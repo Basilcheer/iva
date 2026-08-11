@@ -1,5 +1,5 @@
 // Строит сайдкар-индекс эмбеддингов для hybrid-поиска: vault/.index/embeddings.json.
-// Запускается вручную или ночным doctor.ts (только при MEMORY_SEARCH_MODE=hybrid).
+// Запускается вручную или ночным brain.ts (только при MEMORY_SEARCH_MODE=hybrid).
 //   node --env-file=.env scripts/memory/embed-index.ts
 //
 // Эмбеддит карточки/саммари через один внешний ключ (Jina/DeepInfra, см. agent/lib/embeddings.ts),

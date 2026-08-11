@@ -28,7 +28,7 @@ export function createServiceCommands(
   const {
     ROOT,
     SERVICES,
-    UPDATE_TIMER,
+    TIMERS,
     ok,
     warn,
     bad,
@@ -56,13 +56,10 @@ export function createServiceCommands(
       "5",
       ...SERVICES,
     ]);
-    run("systemctl", [
-      "--user",
-      "list-timers",
-      "--no-pager",
-      "iva-memory-*",
-      UPDATE_TIMER,
-    ]);
+    // The exact timers this version installs, not a glob: `iva-memory-*` was written for
+    // the rollup timers that no longer exist, and it silently stopped matching the nightly
+    // unit the moment it was renamed to iva-brain.timer.
+    run("systemctl", ["--user", "list-timers", "--no-pager", ...TIMERS]);
   }
 
   function cmdRestart(): void {

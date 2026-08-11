@@ -283,7 +283,7 @@ test("startUnit: oneshot activating→inactive = done, журнал в tail", as
   const finished: { value: ServiceRun | null } = { value: null };
   startUnit(
     "mem",
-    { unit: "iva-memory-doctor.service" },
+    { unit: "iva-brain.service" },
     baseOpts(tg, {
       loader: LOADERS.mem,
       execFileImpl,
@@ -319,7 +319,7 @@ test("startUnit: failed юнит — status failed", async () => {
   const finished: { value: ServiceRun | null } = { value: null };
   startUnit(
     "mem",
-    { unit: "iva-memory-doctor.service" },
+    { unit: "iva-brain.service" },
     baseOpts(tg, {
       execFileImpl,
       onFinish: (r) => {

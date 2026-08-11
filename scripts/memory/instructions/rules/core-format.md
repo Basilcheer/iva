@@ -11,7 +11,7 @@ file the model never has to search for.
 ## Hard rules
 
 1. **Char cap ≈ 1200** (~300 tokens). On overflow → **consolidate, never grow**: merge, shorten,
-   drop the least useful line. The nightly rollup verifies the resulting file; `doctor.ts`
+   drop the least useful line. The nightly rollup verifies the resulting file; `brain.ts`
    deterministically clamps any remaining overflow without touching pointers.
 2. **Only durable facts.** Identity, standing preferences, and ≤3 active goals. Anything a web
    search would surface, anything stale within ~7 days, any task state → does NOT belong here.

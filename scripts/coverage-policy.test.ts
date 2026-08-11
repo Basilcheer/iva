@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const EXPECTED_PRODUCTION_COUNT = 171;
 const EXPECTED_INVENTORY_SHA256 =
-  "34a2beba5ec59132b9967574d556164c1d956b8111be9e60c573ae925edcb992";
+  "f8d875e3bf8fb556b1c3e621ea16ee21a1518aa20d5cff5d72a1a85c82b1397d";
 
 // Node's native include globs filter loaded modules; they do not load untouched files.
 // This test pins the exact production path inventory and a separately measured 26-path
@@ -46,7 +46,7 @@ const MEASURED_UNREPORTED_BY_CATEGORY = {
     "scripts/check-bash-cwd.ts",
     "scripts/check-reasoning-strip.ts",
     "scripts/daily-digest.ts",
-    "scripts/memory/doctor.ts",
+    "scripts/memory/brain.ts",
     "scripts/memory/embed-index.ts",
     "scripts/memory/rollup.ts",
     // A one-shot data migration, run out of the version that introduced it.

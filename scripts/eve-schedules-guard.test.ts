@@ -22,9 +22,15 @@ test("deploy/ contains none of the 8 retired iva-memory-{daily,weekly,monthly,ye
     [],
     "these units moved to agent/schedules/*.ts — see agent/lib/schedule-migration.ts",
   );
-  // The doctor timer is the one memory-related unit that stays on systemd on purpose.
-  assert.ok(files.includes("iva-memory-doctor.service"));
-  assert.ok(files.includes("iva-memory-doctor.timer"));
+  // Brain is the one memory-related unit that stays on systemd on purpose, and it ships
+  // under that name only: the pre-rename pair is retired by scripts/lib/legacy-memory-units.ts,
+  // so re-adding it to deploy/ would resurrect what the migration deletes.
+  assert.ok(files.includes("iva-brain.service"));
+  assert.ok(files.includes("iva-brain.timer"));
+  assert.deepEqual(
+    files.filter((f) => f.startsWith("iva-memory-doctor.")),
+    [],
+  );
 });
 
 test("agent/schedules/ contains exactly the 5 expected eve schedules", () => {

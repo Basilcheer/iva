@@ -356,7 +356,7 @@ if (result.status === "failed" || !result.message) {
 }
 
 // Daily is the only rollup that updates CORE. Verify the actual file, not just the turn
-// status: one same-session correction is allowed, then fail loudly and leave doctor as
+// status: one same-session correction is allowed, then fail loudly and leave brain as
 // the deterministic 05:00 backstop.
 if (period === "daily") {
   const corePath = join(VAULT, "CORE.md");
@@ -388,7 +388,7 @@ if (period === "daily") {
     if (core.length > CORE_CAP) {
       console.error(
         `rollup daily: CORE.md remains over cap after one correction (${core.length}/${CORE_CAP}); ` +
-          "doctor will clamp it at 05:00",
+          "brain will clamp it at 05:00",
       );
       process.exit(1);
     }

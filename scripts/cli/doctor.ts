@@ -36,8 +36,8 @@ export function createDoctorCommand(
     UNIT_DIR,
     NPM,
     SERVICES,
-    MEMORY_SERVICES,
-    MEMORY_TIMERS,
+    BRAIN_SERVICE,
+    BRAIN_TIMER,
     TIMERS,
     DEFAULT_PORT,
     C,
@@ -308,30 +308,22 @@ export function createDoctorCommand(
     }
     if (!timerFailed)
       ok(
-        `Background timers enabled and active (${TIMERS.length}: ${MEMORY_TIMERS.length} memory + update check)`,
+        `Background timers enabled and active (${TIMERS.length}: brain + update check)`,
       );
 
     // A oneshot service can be inactive and still healthy; its persistent failed state is the
-    // signal that the last nightly run broke. Query only units actually installed on this host.
-    const installedMemoryServices = MEMORY_SERVICES.filter((unit) =>
-      existsSync(join(UNIT_DIR, unit)),
-    );
-    let failedMemoryServices = 0;
-    for (const unit of installedMemoryServices) {
-      const state = systemd.query("is-failed", unit);
+    // signal that the last nightly run broke. Query it only if it is installed on this host.
+    if (existsSync(join(UNIT_DIR, BRAIN_SERVICE))) {
+      const state = systemd.query("is-failed", BRAIN_SERVICE);
       if (state.code === 0 && state.out === "failed") {
         bad(
-          `${unit} failed — check: journalctl --user -u ${unit} -n 100 --no-pager`,
+          `${BRAIN_SERVICE} failed — check: journalctl --user -u ${BRAIN_SERVICE} -n 100 --no-pager`,
         );
         badN++;
-        failedMemoryServices++;
+      } else {
+        ok(`${BRAIN_SERVICE} has no failed state`);
+        okN++;
       }
-    }
-    if (installedMemoryServices.length && failedMemoryServices === 0) {
-      ok(
-        `Memory units have no failed state (${installedMemoryServices.length})`,
-      );
-      okN++;
     }
 
     // daily/weekly/monthly/yearly now run as in-process eve schedules (no systemd unit of
@@ -416,11 +408,9 @@ export function createDoctorCommand(
       warnN++;
     }
 
-    // enforce-report.json is produced by iva-memory-doctor.service, so only complain about
+    // enforce-report.json is produced by iva-brain.service, so only complain about
     // missing/stale output when that timer is enabled. A fresh report is still useful either way.
-    const maintenanceTimerEnabled = systemd.isEnabled(
-      "iva-memory-doctor.timer",
-    );
+    const maintenanceTimerEnabled = systemd.isEnabled(BRAIN_TIMER);
     const maintenanceReport = readMemoryMaintenanceReport(
       join(vaultPath, ".graph/enforce-report.json"),
     );

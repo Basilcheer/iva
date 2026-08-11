@@ -49,15 +49,12 @@ export function createCliRuntime(root: string) {
   };
 
   const SERVICES = ["iva.service", "iva-telegram-poll.service"];
-  const MEMORY_PERIODS = ["doctor"];
-  const MEMORY_SERVICES = MEMORY_PERIODS.map(
-    (name) => `iva-memory-${name}.service`,
-  );
-  const MEMORY_TIMERS = MEMORY_PERIODS.map(
-    (name) => `iva-memory-${name}.timer`,
-  );
+  // Brain — the deterministic nightly vault care (CONTEXT.md). One oneshot service
+  // driven by one timer; the rollups it follows are in-process eve schedules.
+  const BRAIN_SERVICE = "iva-brain.service";
+  const BRAIN_TIMER = "iva-brain.timer";
   const UPDATE_TIMER = "iva-update-check.timer";
-  const TIMERS = [...MEMORY_TIMERS, UPDATE_TIMER];
+  const TIMERS = [BRAIN_TIMER, UPDATE_TIMER];
 
   const SVC_USERBOT = "iva-telegram-userbot.service";
   const USERBOT_DIR = join(ROOT, "services/telegram-userbot");
@@ -203,9 +200,8 @@ export function createCliRuntime(root: string) {
     NPM,
     childEnv,
     SERVICES,
-    MEMORY_PERIODS,
-    MEMORY_SERVICES,
-    MEMORY_TIMERS,
+    BRAIN_SERVICE,
+    BRAIN_TIMER,
     UPDATE_TIMER,
     TIMERS,
     SVC_USERBOT,

@@ -66,7 +66,7 @@ export type MenuServiceContext = {
 };
 
 const CMDS = new Set<ServiceCommand>(["doc", "cln", "mem"]);
-const MEM_UNIT = "iva-memory-doctor.service";
+const MEM_UNIT = "iva-brain.service";
 
 const isServiceCommand = (cmd: string | undefined): cmd is ServiceCommand =>
   cmd !== undefined && CMDS.has(cmd as ServiceCommand);
@@ -75,7 +75,7 @@ const label = (cmd: ServiceCommand, T: MenuServiceContext["tr"]): string =>
   ({
     doc: T("🩺 Doctor", "🩺 Доктор"),
     cln: T("🧹 Vault cleanup", "🧹 Чистка vault"),
-    mem: T("🌙 Night memory cycle", "🌙 Ночной цикл"),
+    mem: T("🌙 Brain (nightly care)", "🌙 Brain (ночной уход)"),
   })[cmd];
 
 const describe = (cmd: ServiceCommand, T: MenuServiceContext["tr"]): string =>
@@ -89,7 +89,7 @@ const describe = (cmd: ServiceCommand, T: MenuServiceContext["tr"]): string =>
       "Проходит по карточкам памяти стримингом и убирает раздутые description из бага 0.3.0. Тела карточек не трогает.\nОбычно меньше минуты; гигабайтные файлы — дольше.",
     ),
     mem: T(
-      "Runs the nightly memory doctor now, without waiting for 05:00: cleanup → enforce → graph → git push.\nUsually 1–10 minutes.",
+      "Runs the nightly brain now, without waiting for 05:00: cleanup → enforce → graph → git push.\nUsually 1–10 minutes.",
       "Запускает ночной цикл памяти сейчас, не дожидаясь 05:00: cleanup → enforce → graph → git push.\nОбычно 1–10 минут.",
     ),
   })[cmd];

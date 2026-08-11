@@ -14,3 +14,13 @@ export const LEGACY_MEMORY_UNITS: readonly string[] = [
   "iva-memory-yearly.service",
   "iva-memory-yearly.timer",
 ];
+
+// The pair the Brain rename retires: installs made before it carry the nightly vault care
+// as iva-memory-doctor.{service,timer}, which deploy/ now ships as iva-brain.*. Removed
+// only after the new timer is written AND enabled (see removeLegacyBrainUnits), so an
+// update that dies mid-migration still leaves one nightly unit standing. Frozen: these two
+// names only ever existed under the old term.
+export const LEGACY_BRAIN_UNITS: readonly string[] = [
+  "iva-memory-doctor.service",
+  "iva-memory-doctor.timer",
+];

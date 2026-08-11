@@ -27,12 +27,11 @@ test("runtime exposes the CLI primitives and shared unit constants", async (t) =
   const runtime = createCliRuntime(root);
 
   assert.deepEqual(Object.keys(runtime).sort(), [
+    "BRAIN_SERVICE",
+    "BRAIN_TIMER",
     "C",
     "DEFAULT_PORT",
     "ENV_PATH",
-    "MEMORY_PERIODS",
-    "MEMORY_SERVICES",
-    "MEMORY_TIMERS",
     "NODE",
     "NODE_BIN_DIR",
     "NPM",
@@ -78,12 +77,11 @@ test("runtime exposes the CLI primitives and shared unit constants", async (t) =
     "iva.service",
     "iva-telegram-poll.service",
   ]);
-  assert.deepEqual(runtime.MEMORY_PERIODS, ["doctor"]);
-  assert.deepEqual(runtime.MEMORY_SERVICES, ["iva-memory-doctor.service"]);
-  assert.deepEqual(runtime.MEMORY_TIMERS, ["iva-memory-doctor.timer"]);
+  assert.equal(runtime.BRAIN_SERVICE, "iva-brain.service");
+  assert.equal(runtime.BRAIN_TIMER, "iva-brain.timer");
   assert.equal(runtime.UPDATE_TIMER, "iva-update-check.timer");
   assert.deepEqual(runtime.TIMERS, [
-    "iva-memory-doctor.timer",
+    "iva-brain.timer",
     "iva-update-check.timer",
   ]);
   assert.equal(runtime.SVC_USERBOT, "iva-telegram-userbot.service");

@@ -121,7 +121,7 @@ void test("status preserves both systemctl argv vectors and ignores a failed sta
   assert.equal(result.status, 0, result.stderr || result.stdout);
   assert.deepEqual(await calls(context.systemctlLog), [
     "--user status --no-pager -n 5 iva.service iva-telegram-poll.service",
-    "--user list-timers --no-pager iva-memory-* iva-update-check.timer",
+    "--user list-timers --no-pager iva-brain.timer iva-update-check.timer",
   ]);
 });
 
@@ -240,9 +240,9 @@ void test("start activates services and timers in order before printing success"
     "--user enable --now iva-telegram-poll.service",
     "--user is-enabled iva-telegram-poll.service",
     "--user is-active iva-telegram-poll.service",
-    "--user enable --now iva-memory-doctor.timer",
-    "--user is-enabled iva-memory-doctor.timer",
-    "--user is-active iva-memory-doctor.timer",
+    "--user enable --now iva-brain.timer",
+    "--user is-enabled iva-brain.timer",
+    "--user is-active iva-brain.timer",
     "--user enable --now iva-update-check.timer",
     "--user is-enabled iva-update-check.timer",
     "--user is-active iva-update-check.timer",

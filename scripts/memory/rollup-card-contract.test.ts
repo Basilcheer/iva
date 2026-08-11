@@ -204,8 +204,8 @@ void test("dbrain card examples and the daily prompt keep a card body free of H1
 void test("every nightly mechanical path runs bounded cleanup before whole-file enforce", () => {
   const skill = read("instructions/dbrain-processor/SKILL.md");
   const summarize = read("instructions/dbrain-processor/phases/summarize.md");
-  const doctor = read("doctor.ts");
-  for (const text of [skill, summarize, doctor]) {
+  const brain = read("brain.ts");
+  for (const text of [skill, summarize, brain]) {
     assertBefore(text, "cleanup.py", "enforce.py");
   }
 });

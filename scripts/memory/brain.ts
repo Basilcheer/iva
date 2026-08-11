@@ -1,7 +1,7 @@
-// Memory doctor: mechanical vault maintenance (no LLM) + git commit&push.
-// Runs nightly via systemd timer (deploy/iva-memory-doctor.{service,timer}).
+// Brain: deterministic nightly vault care (no LLM) + git commit&push.
+// Runs nightly via systemd timer (deploy/iva-brain.{service,timer}).
 //
-//   node --env-file=.env scripts/memory/doctor.ts
+//   node --env-file=.env scripts/memory/brain.ts
 //
 // Runs the autograph scripts (graph.health / engine.decay / moc.generate /
 // dedup / link_cleanup) on the vault via `uv run`, then commits and pushes the vault repo.
@@ -47,7 +47,7 @@ function isHealthHistoryEntry(value: unknown): value is HealthHistoryEntry {
 }
 
 if (!existsSync(VAULT)) {
-  console.error(`doctor: vault not found: ${VAULT}`);
+  console.error(`brain: vault not found: ${VAULT}`);
   process.exit(1);
 }
 
@@ -79,7 +79,7 @@ async function telegram(message: string): Promise<void> {
   const text = await redactNotice(message);
   if (!BOT || !CHAT) {
     console.error(
-      "doctor: no TELEGRAM_BOT_TOKEN/TELEGRAM_DIGEST_CHAT_ID — alert not sent:",
+      "brain: no TELEGRAM_BOT_TOKEN/TELEGRAM_DIGEST_CHAT_ID — alert not sent:",
       text,
     );
     return;
@@ -91,7 +91,7 @@ async function telegram(message: string): Promise<void> {
   });
   if (!res.ok)
     console.error(
-      "doctor: Telegram sendMessage failed:",
+      "brain: Telegram sendMessage failed:",
       res.status,
       await res.text(),
     );
@@ -138,13 +138,13 @@ async function loadCardTools(): Promise<CardTools | null> {
     };
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
-    console.error(`doctor: agent/ is not loadable: ${detail}`);
+    console.error(`brain: agent/ is not loadable: ${detail}`);
     return null;
   }
 }
 
 const today = localDate();
-console.log(`=== doctor memory for ${today} (vault: ${VAULT}) ===`);
+console.log(`=== brain for ${today} (vault: ${VAULT}) ===`);
 
 // ── 0. Schema location: vault root, with a one-time migration off the legacy path ──
 // Up to 0.3.2 the per-vault schema sat in vault/.claude/skills/autograph/schema.json (a
@@ -154,7 +154,7 @@ const VAULT_SCHEMA = resolve(VAULT, "schema.json");
 const LEGACY_SCHEMA = resolve(VAULT, ".claude/skills/autograph/schema.json");
 if (!existsSync(VAULT_SCHEMA) && existsSync(LEGACY_SCHEMA)) {
   copyFileSync(LEGACY_SCHEMA, VAULT_SCHEMA);
-  console.log(`doctor: schema migrated to the vault root: ${VAULT_SCHEMA}`);
+  console.log(`brain: schema migrated to the vault root: ${VAULT_SCHEMA}`);
 }
 // Fall back to the shipped example so a vault that never had a schema still gets enforced.
 const SCHEMA = existsSync(VAULT_SCHEMA)
@@ -164,7 +164,7 @@ const SCHEMA = existsSync(VAULT_SCHEMA)
     : resolve(SCRIPTS, "schema.example.json");
 
 // ── 1. Mechanical maintenance (autograph, no LLM) ──
-// Do NOT ignore failures: otherwise doctor would commit/push and exit 0 even though health/
+// Do NOT ignore failures: otherwise brain would commit/push and exit 0 even though health/
 // decay/moc did not run (no uv/Python, vault not initialized, etc.).
 const failures: string[] = [];
 function maint(label: string, args: string[]): void {
@@ -214,7 +214,7 @@ if (process.env.MEMORY_SEARCH_MODE === "hybrid") {
 
 if (failures.length) {
   await telegram(
-    `doctor: vault maintenance partially failed (${failures.join(", ")}) for ${today}. ` +
+    `brain: vault maintenance partially failed (${failures.join(", ")}) for ${today}. ` +
       `Check that the server has uv/Python and the vault is initialized (schema.json + cards).`,
   );
 }
@@ -224,7 +224,7 @@ const cards = await loadCardTools();
 if (!cards) {
   failures.push("authored tree");
   await telegram(
-    `doctor: agent/ could not be loaded (${today}), so the CORE cap and the unclosed-fence ` +
+    `brain: agent/ could not be loaded (${today}), so the CORE cap and the unclosed-fence ` +
       "scan were skipped; the vault backup below still ran. Restore the tree with `iva repair`.",
   );
 }
@@ -239,14 +239,14 @@ if (cards && existsSync(corePath)) {
     const newCore = clampCore(oldCore);
     writeFileAtomicSync(corePath, newCore);
     console.warn(
-      `doctor: CORE.md clamped ${oldCore.length} → ${newCore.length} chars (cap ${coreCap})`,
+      `brain: CORE.md clamped ${oldCore.length} → ${newCore.length} chars (cap ${coreCap})`,
     );
     const protectedOverflow =
       newCore.length > coreCap
         ? " Protected headings, pointers or unknown sections still exceed the cap."
         : "";
     await telegram(
-      `CORE.md exceeded its ${coreCap}-char cap (${today}); doctor clamped it ` +
+      `CORE.md exceeded its ${coreCap}-char cap (${today}); brain clamped it ` +
         `${oldCore.length} → ${newCore.length} chars. Pointers were preserved.${protectedOverflow}`,
     );
   }
@@ -255,7 +255,7 @@ if (cards && existsSync(corePath)) {
 // ── 1c. Cards with an unclosed code fence (report only, never repaired) ──
 // Such a card reads as one long code block: its ## History and ## Log are no longer
 // sections, so write_card refuses UPDATE and SUPERSEDE on it rather than write the fact
-// into code. Where the author meant to close the fence is unknowable, so doctor only names
+// into code. Where the author meant to close the fence is unknowable, so brain only names
 // the files - guessing would rewrite the user's text.
 const unclosed = cards ? cards.scanUnclosedFenceCards(VAULT) : [];
 if (unclosed.length) {
@@ -267,7 +267,7 @@ if (unclosed.length) {
     "их ## History и ## Log читаются как код, поэтому write_card отказывает им в " +
     `UPDATE и SUPERSEDE. Закрой фенс вручную:\n${list}` +
     (rest ? `\n… и ещё ${rest}` : "");
-  console.warn(`doctor: ${message}`);
+  console.warn(`brain: ${message}`);
   await telegram(message);
 }
 
@@ -298,7 +298,7 @@ try {
   const message =
     `vault: не удалось проверить размеры файлов перед git add (${detail}); ` +
     "ночной коммит отложен, чтобы не повредить историю.";
-  console.warn(`doctor: ${message}`);
+  console.warn(`brain: ${message}`);
   await telegram(message);
   process.exit(1);
 }
@@ -313,7 +313,7 @@ if (oversized.length) {
       `файл ${path} (${formatMegabytes(size)}) превышает лимит GitHub; ` +
       "ночной cleanup должен его ужать, коммит отложен",
   );
-  for (const line of lines) console.warn(`doctor: ${line}`);
+  for (const line of lines) console.warn(`brain: ${line}`);
   await telegram(`vault:\n${lines.join("\n")}`);
   process.exit(1);
 }
@@ -342,7 +342,7 @@ function ensureRemote(): string {
   ]);
   if (create.status === 0) {
     console.log(
-      "doctor: created private backup repo iva-vault and attached origin",
+      "brain: created private backup repo iva-vault and attached origin",
     );
     return run("git", ["remote", "get-url", "origin"]).stdout.trim();
   }
@@ -359,10 +359,10 @@ const remoteUrl = ensureRemote();
 if (!remoteUrl) {
   await telegram(
     "vault has no git remote and gh is not authenticated — memory is not being backed up. " +
-      "On the server run `gh auth login` (with repo scope); the nightly doctor will then create " +
+      "On the server run `gh auth login` (with repo scope); the nightly brain will then create " +
       "a private iva-vault repo and back up automatically.",
   );
-  console.error("doctor: no remote and gh unavailable — push skipped");
+  console.error("brain: no remote and gh unavailable — push skipped");
   process.exit(failures.length ? 1 : 0);
 }
 
@@ -381,10 +381,10 @@ if (push.status !== 0) {
         ? "vault: git push failed (no credentials?). On the server run `gh auth login` " +
           `and verify remote access (cd ${VAULT} && git push).`
         : `vault: git push failed: ${error.firstLine}`;
-  console.warn(`doctor: ${message}`);
+  console.warn(`brain: ${message}`);
   await telegram(message);
   process.exit(1);
 }
 
-console.log("=== doctor: done, vault committed and pushed ===");
+console.log("=== brain: done, vault committed and pushed ===");
 process.exit(failures.length ? 1 : 0);

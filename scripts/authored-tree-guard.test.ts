@@ -163,7 +163,7 @@ const AUTHORED_TREE_UNITS = new Set(["scripts/telegram-poll.mjs"]);
 const UNIT_EXEC_START = /^ExecStart=.*?(scripts\/\S+\.(?:ts|mjs))/gmu;
 
 // Every node process `deploy/` starts as a unit of its own, read out of the units instead of
-// listed by hand: the nightly memory doctor got coupled to the authored tree precisely because
+// listed by hand: the nightly brain got coupled to the authored tree precisely because
 // a hand-written list did not know its unit existed.
 function unitNodeEntrypoints(): string[] {
   const found = new Set<string>();
@@ -220,12 +220,12 @@ test("the broken-tree walk covers every node unit deploy/ starts", () => {
   // an exemption for a unit that no longer exists cannot sit here unnoticed.
   assert.deepEqual(unitNodeEntrypoints(), [
     "scripts/check-update.mjs",
-    "scripts/memory/doctor.ts",
+    "scripts/memory/brain.ts",
     "scripts/telegram-poll.mjs",
   ]);
   assert.deepEqual(brokenTreeUnitEntrypoints(), [
     "scripts/check-update.mjs",
-    "scripts/memory/doctor.ts",
+    "scripts/memory/brain.ts",
   ]);
 });
 

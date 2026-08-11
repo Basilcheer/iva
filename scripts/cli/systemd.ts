@@ -14,7 +14,10 @@ import {
   isAssistantBearer,
 } from "../lib/assistant-auth.ts";
 import { writeEnvAtomicSync } from "../lib/env-file.ts";
-import { LEGACY_MEMORY_UNITS } from "../lib/legacy-memory-units.ts";
+import {
+  LEGACY_BRAIN_UNITS,
+  LEGACY_MEMORY_UNITS,
+} from "../lib/legacy-memory-units.ts";
 import { cleanupSystemdUnits } from "../lib/systemd-control.ts";
 import { validateTimeZone } from "../lib/timezone.ts";
 import type { createCliRuntime } from "./runtime.ts";
@@ -41,6 +44,7 @@ export function createCliSystemd(runtime: CliRuntime) {
     OLD_DEFAULT_HOST,
     SERVICES,
     TIMERS,
+    BRAIN_TIMER,
     ok,
     warn,
     hasSystemd,
@@ -195,7 +199,60 @@ export function createCliSystemd(runtime: CliRuntime) {
     }
     if (hasSystemd()) systemd.daemonReload();
     removeLegacyMemoryUnits();
+    removeLegacyBrainUnits(written);
     return written;
+  }
+
+  // The Brain rename: iva-memory-doctor.{service,timer} → iva-brain.{service,timer}. deploy/
+  // ships only the new pair, so the copy loop above never overwrites or removes the old one —
+  // this retires it by exact name, off every writeUnits() call (update/doctor/config/restart/
+  // install.sh), so every install migrates without a dedicated command.
+  //
+  // Order is the whole point. The nightly vault care must never be absent, not even for the
+  // window between two steps of an update that dies halfway:
+  //   1. the new timer must be written to UNIT_DIR by THIS run (daemon-reload already done),
+  //   2. and enabled+active — `iva update` calls writeUnits() but not activateUnits(), so a
+  //      merely-written unit would still never fire,
+  //   3. only then may the old pair be disabled and deleted.
+  // Any failure in 1–2 keeps the old units: a duplicated nightly run is harmless (both take
+  // the same .memory.lock), a missing one costs the user a night of memory care.
+  function removeLegacyBrainUnits(written: readonly string[]): string[] {
+    if (!hasSystemd()) return [];
+    const stale = LEGACY_BRAIN_UNITS.filter((unit) =>
+      existsSync(join(UNIT_DIR, unit)),
+    );
+    if (!stale.length) return [];
+    if (
+      !written.includes(BRAIN_TIMER) ||
+      !existsSync(join(UNIT_DIR, BRAIN_TIMER))
+    ) {
+      warn(
+        `skipping legacy brain-unit cleanup — ${BRAIN_TIMER} is not installed yet (run \`iva doctor\`, then it will run automatically)`,
+      );
+      return [];
+    }
+    try {
+      systemd.activate([BRAIN_TIMER]);
+    } catch (error) {
+      warn(
+        `skipping legacy brain-unit cleanup — ${BRAIN_TIMER} did not come up: ${(error as { message: string }).message}`,
+      );
+      return [];
+    }
+    try {
+      return cleanupSystemdUnits({
+        units: stale,
+        disable: (unit) => systemd.disableNow([unit]),
+        remove: (unit) => rmSync(join(UNIT_DIR, unit)),
+        reload: () => systemd.daemonReload(),
+        reset: () => systemd.resetFailed(),
+      });
+    } catch (error) {
+      warn(
+        `legacy brain-unit cleanup incomplete: ${(error as { message: string }).message}`,
+      );
+      return stale;
+    }
   }
 
   // Existing installs may still carry the 8 retired iva-memory-{daily,weekly,monthly,yearly}

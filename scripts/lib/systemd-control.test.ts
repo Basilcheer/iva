@@ -244,25 +244,25 @@ void test("doctor reports checked activation failures and keeps its summary", as
   assert.doesNotMatch(output, /Units installed, enabled and active/);
 });
 
-void test("doctor checks installed memory services and reports failed ones with a journal hint", async (t) => {
+void test("doctor checks the installed brain service and reports a failed one with a journal hint", async (t) => {
   // daily/weekly/monthly/yearly moved to in-process eve schedules (agent/schedules/memory-*.ts,
-  // see agent/lib/schedule-migration.ts) — doctor stays the only external systemd watchdog.
+  // see agent/lib/schedule-migration.ts) — brain stays the only external systemd watchdog.
   const { calls, runCommand } = await fixture(t);
   const result = runCommand("doctor", {
-    failedUnit: "iva-memory-doctor.service",
+    failedUnit: "iva-brain.service",
   });
   const output = `${result.stdout}\n${result.stderr}`;
   const systemctlCalls = (await readFile(calls, "utf8")).trim().split("\n");
   const checked = systemctlCalls
-    .filter((call) => call.startsWith("--user is-failed iva-memory-"))
+    .filter((call) => call.startsWith("--user is-failed "))
     .map((call) => call.split(" ").at(-1));
 
   assert.equal(result.status, 1, output);
-  assert.deepEqual(checked, ["iva-memory-doctor.service"]);
-  assert.match(output, /iva-memory-doctor\.service failed/);
+  assert.deepEqual(checked, ["iva-brain.service"]);
+  assert.match(output, /iva-brain\.service failed/);
   assert.match(
     output,
-    /journalctl --user -u iva-memory-doctor\.service -n 100 --no-pager/,
+    /journalctl --user -u iva-brain\.service -n 100 --no-pager/,
   );
 });
 
@@ -429,6 +429,152 @@ void test("a PARTIAL build (only memory-daily compiled) still counts as stale �
       `${period}'s legacy unit survives a partial build`,
     );
   }
+});
+
+// ── Brain rename: iva-memory-doctor.{service,timer} → iva-brain.{service,timer} ─────────
+// The nightly vault care is the one thing that must never be absent, so the migration is
+// ordered: write the new timer, enable it, and only then tear the old pair down. Every test
+// below drives the real CLI against the fake systemctl, so it proves the ORDER of the calls,
+// not just the end state.
+
+// Two units, one nightly job: the state an install carries before it is updated.
+async function seedLegacyBrainUnits(unitDir: string): Promise<void> {
+  await mkdir(unitDir, { recursive: true });
+  await writeFile(join(unitDir, "iva-memory-doctor.service"), "[Unit]\n");
+  await writeFile(join(unitDir, "iva-memory-doctor.timer"), "[Unit]\n");
+}
+
+// At no point may a run leave the install with zero nightly units on disk.
+function nightlyUnitsOnDisk(unitDir: string): string[] {
+  return ["iva-brain.timer", "iva-memory-doctor.timer"].filter((unit) =>
+    existsSync(join(unitDir, unit)),
+  );
+}
+
+void test("the brain rename enables the new timer BEFORE retiring the old memory-doctor pair", async (t) => {
+  const { calls, home, runCommand } = await fixture(t);
+  const unitDir = join(home, ".config/systemd/user");
+  await seedLegacyBrainUnits(unitDir);
+
+  const result = runCommand("_install-units");
+  const output = `${result.stdout}\n${result.stderr}`;
+  const systemctlCalls = (await readFile(calls, "utf8")).trim().split("\n");
+
+  assert.equal(result.status, 0, output);
+  assert.equal(
+    existsSync(join(unitDir, "iva-brain.timer")),
+    true,
+    "the new timer is installed",
+  );
+  assert.deepEqual(
+    nightlyUnitsOnDisk(unitDir),
+    ["iva-brain.timer"],
+    "the old pair is gone and the new timer stands in its place",
+  );
+  assert.equal(existsSync(join(unitDir, "iva-memory-doctor.service")), false);
+
+  const enabledNew = systemctlCalls.indexOf(
+    "--user enable --now iva-brain.timer",
+  );
+  const activeNew = systemctlCalls.indexOf("--user is-active iva-brain.timer");
+  const disabledOld = systemctlCalls.indexOf(
+    "--user disable --now iva-memory-doctor.timer",
+  );
+  assert.ok(enabledNew >= 0, "the new timer is enabled by the migration");
+  assert.ok(disabledOld >= 0, "the old timer is disabled by the migration");
+  assert.ok(
+    enabledNew < disabledOld && activeNew < disabledOld,
+    `the new timer must be confirmed up first: ${systemctlCalls.join(" | ")}`,
+  );
+});
+
+void test("the brain rename is idempotent and stops touching systemd once the old pair is gone", async (t) => {
+  const { calls, home, runCommand } = await fixture(t);
+  const unitDir = join(home, ".config/systemd/user");
+  await seedLegacyBrainUnits(unitDir);
+
+  assert.equal(runCommand("_install-units").status, 0);
+  await writeFile(calls, "");
+  const second = runCommand("_install-units");
+
+  assert.equal(second.status, 0, `${second.stdout}\n${second.stderr}`);
+  const systemctlCalls = (await readFile(calls, "utf8")).trim();
+  assert.doesNotMatch(systemctlCalls, /enable --now iva-brain\.timer/);
+  assert.doesNotMatch(systemctlCalls, /iva-memory-doctor/);
+  assert.deepEqual(nightlyUnitsOnDisk(unitDir), ["iva-brain.timer"]);
+});
+
+void test("an update interrupted before deploy/ carries iva-brain.timer keeps the old nightly unit", async (t) => {
+  // A half-extracted tree: the new service file landed, the timer did not. Removing the old
+  // pair here would leave the install with no nightly vault care at all until the next
+  // successful update — the exact night this migration must not cost anyone.
+  const { home, project, runCommand } = await fixture(t);
+  const unitDir = join(home, ".config/systemd/user");
+  await seedLegacyBrainUnits(unitDir);
+  const deploy = join(project, "deploy");
+  await rm(deploy); // the fixture symlinks the real deploy/ — swap in a partial copy
+  await mkdir(deploy, { recursive: true });
+  await copyFile(
+    join(ROOT, "deploy/iva-brain.service"),
+    join(deploy, "iva-brain.service"),
+  );
+
+  const result = runCommand("_install-units");
+  const output = `${result.stdout}\n${result.stderr}`;
+
+  assert.equal(result.status, 0, output);
+  assert.match(output, /skipping legacy brain-unit cleanup/);
+  assert.deepEqual(
+    nightlyUnitsOnDisk(unitDir),
+    ["iva-memory-doctor.timer"],
+    "the old nightly timer survives an update that never delivered the new one",
+  );
+});
+
+void test("a new brain timer that refuses to come up keeps the old pair installed", async (t) => {
+  // enable --now succeeded but the unit is not active: systemd took the file and the job
+  // still is not scheduled. Tearing down the old pair on that signal would lose the night.
+  const { home, runCommand } = await fixture(t);
+  const unitDir = join(home, ".config/systemd/user");
+  await seedLegacyBrainUnits(unitDir);
+
+  const result = runCommand("_install-units", {
+    inactiveUnit: "iva-brain.timer",
+  });
+  const output = `${result.stdout}\n${result.stderr}`;
+
+  assert.equal(result.status, 0, output);
+  assert.match(output, /skipping legacy brain-unit cleanup/);
+  assert.match(output, /did not become active/);
+  assert.deepEqual(nightlyUnitsOnDisk(unitDir).sort(), [
+    "iva-brain.timer",
+    "iva-memory-doctor.timer",
+  ]);
+});
+
+void test("iva status and iva doctor both see the renamed nightly unit", async (t) => {
+  const { calls, home, runCommand } = await fixture(t);
+  const unitDir = join(home, ".config/systemd/user");
+  await seedLegacyBrainUnits(unitDir);
+
+  const status = runCommand("status");
+  assert.equal(status.status, 0, `${status.stdout}\n${status.stderr}`);
+  assert.match(
+    await readFile(calls, "utf8"),
+    /--user list-timers --no-pager iva-brain\.timer iva-update-check\.timer/,
+    "the old iva-memory-* glob stopped matching the renamed unit",
+  );
+
+  await writeFile(calls, "");
+  const doctor = runCommand("doctor");
+  const output = `${doctor.stdout}\n${doctor.stderr}`;
+  const systemctlCalls = await readFile(calls, "utf8");
+
+  assert.match(systemctlCalls, /--user enable --now iva-brain\.timer/);
+  assert.match(systemctlCalls, /--user is-failed iva-brain\.service/);
+  assert.match(output, /Background timers enabled and active \(2/);
+  assert.doesNotMatch(output, /iva-memory-doctor/);
+  assert.deepEqual(nightlyUnitsOnDisk(unitDir), ["iva-brain.timer"]);
 });
 
 void test("doctor surfaces problems from a fresh nightly memory report", async (t) => {

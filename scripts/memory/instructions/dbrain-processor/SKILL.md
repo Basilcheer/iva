@@ -85,7 +85,7 @@ The mechanical pass deliberately refuses to guess when duplicate `## Related`
 sections contain prose.
 
 If `uv` / Python is unavailable, still produce the cards and summary (they are plain
-Markdown) and let the nightly doctor run the mechanical pass later.
+Markdown) and let the nightly brain run the mechanical pass later.
 
 ## Hard rules
 
