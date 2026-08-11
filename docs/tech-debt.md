@@ -87,11 +87,15 @@ evals; it is not attached to Iva's bundled skills and has no runner wired up. Th
 
 ## 5. Discovery guardrails are not part of the release check
 
-Neither `npm run validate` nor `eve info` runs on the way to a release. Both would catch
-silent eve discovery failures (agent/tool/skill wiring that eve can't find at build time)
-before they reach users. There is no CI to hang them on
-([ADR-0004](adr/0004-philosophy-is-the-review-bar.md)), so the fix is to make them part
-of the local pre-release routine.
+`npx eve info` prints what eve actually discovered in `agent/` — the instructions dir,
+the skill, tool, subagent and schedule counts, and a `Diagnostics` line — so a skill or
+tool that quietly stopped being discovered shows up as a smaller count. Nothing runs it:
+`npm run build` spawns `npm run build:core` (`eve build`) from `scripts/build.ts` and
+reads none of that back, and no other script in `package.json` calls `eve info` at all.
+So the wiring can rot between releases and the first place it surfaces is a user's
+install. There is no CI to hang the check on
+([ADR-0004](adr/0004-philosophy-is-the-review-bar.md)); the fix is either a pre-release
+habit of reading `npx eve info` or a script that asserts the expected counts.
 
 ## 6. `sessionTimeoutMs: false`
 

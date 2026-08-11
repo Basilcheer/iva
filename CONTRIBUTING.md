@@ -22,7 +22,7 @@ back, and that is not a comment on the code.
 
 [AGENTS.md](AGENTS.md) is the working contract: layout, the `#*` import alias, the
 review rules that also apply to humans — secrets never land in tracked files, auth
-gates only ever get narrower, user data stays out of the repo, and anything under
+checks only ever get narrower, user data stays out of the repo, and anything under
 `agent/` needs a rebuild before it does anything.
 
 ## Local setup
@@ -45,10 +45,10 @@ change under `agent/` seems to do nothing, you skipped `npm run build`.
 ## What you check before you push
 
 There is no CI. The project is local-first by decision
-([ADR-0004](docs/adr/0004-philosophy-is-the-review-bar.md)): no GitHub Actions, no PR
-gates, no review bots — `.github/` holds issue templates and nothing else. Whatever a
-build server would have caught, you catch on your own machine, and the review reads the
-diff against [docs/philosophy.md](docs/philosophy.md) and `docs/adr/`.
+([ADR-0004](docs/adr/0004-philosophy-is-the-review-bar.md)): no GitHub Actions, no
+merge checks, no review bots — `.github/` holds issue templates and nothing else.
+Whatever a build server would have caught, you catch on your own machine, and the review
+reads the diff against [docs/philosophy.md](docs/philosophy.md) and `docs/adr/`.
 
 These four catch most of it:
 
@@ -62,10 +62,12 @@ npm test
 Run the rest when your change reaches them: `npm run build`, the coverage floors
 (`npm run test:coverage` — lines 75, branches 77, functions 71; they may rise, they do
 not fall), `npm run replica` (installs Iva from scratch against a mock provider),
-and the three Python suites, each a standalone script you run with `python3`:
-`scripts/autograph/tests/test_autograph.py`,
-`agent/skills/security-defense/scripts/test_security.py` and
-`services/telegram-userbot/test_guardrails.py`.
+and the Python suites. `scripts/autograph/tests/test_autograph.py` and
+`agent/skills/security-defense/scripts/test_security.py` are standalone: plain `python3`
+from any directory. The userbot suites import their neighbouring modules, so they run
+from `services/telegram-userbot/` — `test_health.py` needs nothing installed,
+`test_guardrails.py` imports `telethon` and needs a virtualenv built from
+`requirements.lock`.
 
 If you touch `services/telegram-userbot/requirements.in`, regenerate the hash-locked file
 in the same change:
