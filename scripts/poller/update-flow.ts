@@ -432,13 +432,24 @@ function finishedAfterStart(
  * A move that did not stick. A rollback settles the installation back onto the
  * version it started on (version-update.ts: recordLive(name, false), activate(back),
  * settle(back)), so the settle marker of a failed update is as fresh as a good one's
- * and says nothing about which way it went. The disk still knows: the build the
- * rollback came off is the newest one there, it is not the one running, and it is
- * the one the service died on. Any of that missing, and this says nothing.
+ * and says nothing about which way it went. Neither does the age of the directories:
+ * activate() relinks state inside the version it turns on, so the build a rollback
+ * lands back on is the freshest thing on disk and the running one at the same time.
+ * What the rollback does leave is the build it came off - present, not running, and
+ * on record as having taken the service down. That is the whole reading.
+ *
+ * Why any such build and not only a recent one: this is asked on one branch only -
+ * a job too old to name the version it started on - and such a job comes from a
+ * bridge that the update itself replaces, so it is answered once and then never
+ * exists again; the six-hour TTL is its ceiling either way. A failure left on disk
+ * by an older update therefore costs at most one spinner that expires, while a
+ * rollback read as a success costs a "✅" on the version the update just failed to
+ * leave. The conservative reading is the cheap one.
  */
 function rolledBack(store: VersionStore, running: string): boolean {
-  const newest = store.list()[0];
-  return newest !== undefined && newest !== running && store.liveFailed(newest);
+  return store
+    .list()
+    .some((name) => name !== running && store.liveFailed(name));
 }
 
 /**

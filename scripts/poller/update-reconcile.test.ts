@@ -10,7 +10,6 @@ import {
   realpathSync,
   rmSync,
   symlinkSync,
-  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -96,6 +95,31 @@ function install(t: TestContext, current: string = NEW): string {
   mkdirSync(join(home, "versions", current), { recursive: true });
   symlinkSync(join(home, "versions", current), join(home, "current"));
   return join(home, "current");
+}
+
+/**
+ * The same installation, built the way an update builds one: the store stages both
+ * versions and flips `current` itself. Nothing here is arranged by hand, so a test
+ * on top of it exercises the code that moves an installation rather than a fixture
+ * shaped like its result.
+ */
+function installation(t: TestContext): {
+  store: ReturnType<typeof createVersionStore>;
+  root: string;
+} {
+  const home = realpathSync(mkdtempSync(join(tmpdir(), "iva-reconcile-home-")));
+  t.after(() => {
+    rmSync(home, { recursive: true, force: true });
+    rmSync(join(dataDir, "live-failures.json"), { force: true });
+  });
+  writeFileSync(join(home, ".env"), `ASSISTANT_DATA_DIR=${dataDir}\n`);
+  const store = createVersionStore(home);
+  for (const name of [OLD, NEW]) {
+    store.stage(name);
+    store.complete(name);
+  }
+  store.activate(OLD); // What the box runs as the tap is made.
+  return { store, root: join(home, "current") };
 }
 
 function clean(t: TestContext): void {
@@ -380,24 +404,7 @@ test("nothing is said when no evidence says the update finished", async (t) => {
 
 test("a rollback is never a ✅ on a job that never named its version", async (t) => {
   clean(t);
-  const home = realpathSync(mkdtempSync(join(tmpdir(), "iva-reconcile-home-")));
-  t.after(() => {
-    rmSync(home, { recursive: true, force: true });
-    rmSync(join(dataDir, "live-failures.json"), { force: true });
-  });
-  writeFileSync(join(home, ".env"), `ASSISTANT_DATA_DIR=${dataDir}\n`);
-  for (const name of [OLD, NEW])
-    mkdirSync(join(home, "versions", name), { recursive: true });
-  // The build the update installed is the newest on disk; the one it went back to
-  // is older. Set, not assumed: the order is what tells a rollback from a success.
-  const hourAgo = Date.now() / 1000 - 3600;
-  utimesSync(join(home, "versions", OLD), hourAgo, hourAgo);
-  symlinkSync(join(home, "versions", OLD), join(home, "current"));
-  // Exactly what the updater writes on an unhealthy flip: the dead build recorded,
-  // then the flip back, then a settle marker as fresh as a good update's.
-  const store = createVersionStore(home);
-  store.recordLive(NEW, false);
-  store.settle(OLD);
+  const { store, root } = installation(t);
   const calls = telegram(t);
   const path = job("rolled-back", {
     chatId: 1,
@@ -406,12 +413,25 @@ test("a rollback is never a ✅ on a job that never named its version", async (t
     startedAt: minutesAgo(5),
   });
 
+  // The rollback out of version-update.ts, step for step and through the store
+  // itself: the new build is flipped in, the service does not answer on its port,
+  // the dead build is recorded, the installation goes back and settles where it
+  // started. The gap is the restart and the health deadline that really sit here.
+  store.activate(NEW);
+  await wait(25);
+  store.recordLive(NEW, false);
+  store.activate(OLD);
+  store.settle(OLD);
+
+  assert.equal(store.currentName(), OLD, "the box runs what it started on");
+  // Where the mtime reading broke: activating OLD relinks state inside it, so the
+  // build the rollback went back to is the newest directory and the running one at
+  // once, and a rollback looks exactly like an update that stuck.
+  if (store.list()[0] === OLD)
+    t.diagnostic("the rollback left the old build newest on disk");
+
   await Promise.all(
-    await reconcileUpdateJobs({
-      root: join(home, "current"),
-      tickMs: 5,
-      graceMs: 15,
-    }),
+    await reconcileUpdateJobs({ root, tickMs: 5, graceMs: 15 }),
   );
 
   assert.deepEqual(
@@ -420,6 +440,36 @@ test("a rollback is never a ✅ on a job that never named its version", async (t
     "the version that failed is not one to celebrate",
   );
   assert.equal(existsSync(path), true, "the job waits for the TTL");
+});
+
+test("an update that stuck is still a ✅ on a job that never named its version", async (t) => {
+  clean(t);
+  const { store, root } = installation(t);
+  const calls = telegram(t);
+  const path = job("stuck", {
+    chatId: 1,
+    messageId: 100,
+    locale: "en",
+    startedAt: minutesAgo(5),
+  });
+
+  // The same steps where the service does come up: flip, a live record that says
+  // so, settle on the new build. The version left behind is not one that failed,
+  // so nothing here may swallow the final the user is owed.
+  store.activate(NEW);
+  await wait(25);
+  store.recordLive(NEW, true);
+  store.settle(NEW);
+
+  await Promise.all(
+    await reconcileUpdateJobs({ root, tickMs: 5, graceMs: 15 }),
+  );
+
+  assert.equal(existsSync(path), false, "the answered job is gone");
+  assert.equal(finals(calls).length, 1, finals(calls).join(" | "));
+  assert.match(finals(calls)[0], /Iva updated/u);
+  assert.match(finals(calls)[0], new RegExp(`Version: ${NEW}`, "u"));
+  assert.doesNotMatch(finals(calls)[0], /→/u);
 });
 
 test("a job the updater answered itself is dropped without a second word", async (t) => {
