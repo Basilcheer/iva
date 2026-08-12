@@ -465,24 +465,36 @@ async function concludeUpdateJob(
   moved: string | null,
 ): Promise<void> {
   if (moved) {
-    // A move can also go backwards. The previous update dies after the flip, the
-    // user taps /update again, and the job is written down on the version already
-    // linked in - so a rollback out of the resumed run (version-update.ts:
-    // recordLive(name, false) on the version being finished, then activate(back))
-    // moves `current` off exactly the version this job named, and the arrow drawn
-    // from it reads "✅ new → old": a downgrade sold as an update.
-    // What says which way it went is the starting version's own verdict, not the
+    // A move is only an update when both of its ends are good, so the guard asks
+    // about both: the version this job left, and the version it is standing on.
+    //
+    // Moved OFF a dead version. The previous update dies after the flip, the user
+    // taps /update again, and the job is written down on the version already linked
+    // in - so a rollback out of the resumed run (version-update.ts: recordLive(name,
+    // false) on the version being finished, then activate(back)) moves `current` off
+    // exactly the version this job named, and the arrow drawn from it reads
+    // "✅ new → old": a downgrade sold as an update.
+    //
+    // Moved ONTO a dead version. The updater is killed between recordLive(name,
+    // false) and activate(back) (version-update.ts, the same lines): the rollback it
+    // had already decided on never happened. `current` is the new build, that build
+    // is on record as having taken the service down, and the service is still down -
+    // an arrow reading "✅ old → new" would announce an update over a box that does
+    // not answer, which the bridge is alive to say only because it is a unit of its
+    // own that systemd keeps restarting.
+    //
+    // What says which way it went is the verdict on those two versions, not the
     // failures lying around on disk: rolledBack() below asks whether anything not
     // running has ever taken the service down, and after an honest update the last
     // update's corpse is still there - that reading would swallow a ✅ the user is
-    // owed. A job that named its version does not need the guess: the rollback is
-    // the one that leaves that very version on record as dead.
+    // owed. A job that named its version does not need the guess.
     if (
-      typeof job.currentAtStart === "string" &&
-      store.liveFailed(job.currentAtStart)
+      store.liveFailed(moved) ||
+      (typeof job.currentAtStart === "string" &&
+        store.liveFailed(job.currentAtStart))
     ) {
       log(
-        "update job left for the ttl; the version it started on is on record as dead:",
+        "update job left for the ttl; an end of the move is on record as dead:",
         basename(path),
       );
       return;

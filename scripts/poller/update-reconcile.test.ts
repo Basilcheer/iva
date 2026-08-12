@@ -507,6 +507,43 @@ test("a rollback out of a resumed flip is never a ✅ on the version it left", a
   assert.equal(existsSync(path), true, "the job waits for the TTL");
 });
 
+test("a rollback that never happened is never a ✅ on the version it died on", async (t) => {
+  clean(t);
+  const { store, root } = installation(t);
+  store.settle(OLD); // Where the box has been sitting since the last update.
+  const calls = telegram(t);
+  const path = job("half-rolled-back", {
+    chatId: 1,
+    messageId: 100,
+    locale: "en",
+    startedAt: minutesAgo(5),
+    currentAtStart: OLD,
+  });
+
+  // version-update.ts kills the updater between the two lines that undo a bad flip:
+  // the dead build is on record, the activate(back) that would have moved off it
+  // never runs. `current` is the new build, the service is down on it, and nothing
+  // settled - the only process left to speak is this bridge, which systemd restarts
+  // on its own unit.
+  store.activate(NEW);
+  await wait(25);
+  store.recordLive(NEW, false);
+
+  assert.equal(store.currentName(), NEW, "the box is stuck on the dead build");
+  assert.equal(store.settled(), OLD, "the move never settled");
+
+  await Promise.all(
+    await reconcileUpdateJobs({ root, tickMs: 5, graceMs: 15 }),
+  );
+
+  assert.deepEqual(
+    calls,
+    [],
+    "a ✅ over a dead agent is the worst final of all",
+  );
+  assert.equal(existsSync(path), true, "the job waits for the TTL");
+});
+
 test("an old failure on disk does not swallow the ✅ of an update that stuck", async (t) => {
   clean(t);
   const { store, root } = installation(t);
