@@ -248,7 +248,18 @@ export function createVersionStore(home: string) {
     writeJson(join(layout.data, SETTLED), {
       schema: "iva-active/v1",
       version: name,
+      settledAt: new Date().toISOString(),
     });
+  }
+
+  /**
+   * When the installation last finished a move. The only evidence an update ran
+   * that survives the process which ran it, for a job too old to name the version
+   * it started on. A marker written before this field carries no time at all.
+   */
+  function settledAt(): string | null {
+    const at = readJson(join(layout.data, SETTLED)).settledAt;
+    return typeof at === "string" ? at : null;
   }
 
   function liveFailures(): string[] {
@@ -395,6 +406,7 @@ export function createVersionStore(home: string) {
     activate,
     settled,
     settle,
+    settledAt,
     liveFailed,
     recordLive,
     sweep,
