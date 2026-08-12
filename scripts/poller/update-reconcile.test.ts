@@ -38,6 +38,8 @@ const { reconcileUpdateJobs } = (await import(
 
 const OLD = "0.3.17-aaaaaaaaaaaa";
 const NEW = "0.3.18-bbbbbbbbbbbb";
+/** A build an older update already failed on, still on disk when the next one runs. */
+const STALE = "0.3.16-cccccccccccc";
 const jobsDir = join(dataDir, "update-jobs");
 const lockDir = join(dataDir, "update.lock");
 
@@ -470,6 +472,78 @@ test("an update that stuck is still a ✅ on a job that never named its version"
   assert.match(finals(calls)[0], /Iva updated/u);
   assert.match(finals(calls)[0], new RegExp(`Version: ${NEW}`, "u"));
   assert.doesNotMatch(finals(calls)[0], /→/u);
+});
+
+test("a rollback out of a resumed flip is never a ✅ on the version it left", async (t) => {
+  clean(t);
+  const { store, root } = installation(t);
+  const calls = telegram(t);
+  // Where the previous update died: `current` is already the new build, nothing
+  // else about the move finished. The tap that follows names what it finds.
+  store.activate(NEW);
+  const path = job("resumed", {
+    chatId: 1,
+    messageId: 100,
+    locale: "en",
+    startedAt: minutesAgo(5),
+    currentAtStart: NEW,
+  });
+
+  // The resumed run out of version-update.ts: it finishes the move onto the build
+  // already linked in, the service does not answer after the restart, and it goes
+  // back the same way - the dead build on record, the old one active and settled.
+  await wait(25);
+  store.recordLive(NEW, false);
+  store.activate(OLD);
+  store.settle(OLD);
+
+  assert.equal(store.currentName(), OLD, "the box is back where it came from");
+
+  await Promise.all(
+    await reconcileUpdateJobs({ root, tickMs: 5, graceMs: 15 }),
+  );
+
+  assert.deepEqual(calls, [], "a downgrade is not an update to announce");
+  assert.equal(existsSync(path), true, "the job waits for the TTL");
+});
+
+test("an old failure on disk does not swallow the ✅ of an update that stuck", async (t) => {
+  clean(t);
+  const { store, root } = installation(t);
+  // Somebody else's failure, left where a previous rollback left it: present, not
+  // running, on record as dead. It says nothing about the update running now.
+  store.stage(STALE);
+  store.complete(STALE);
+  store.recordLive(STALE, false);
+  const calls = telegram(t);
+  const path = job("honest", {
+    chatId: 1,
+    messageId: 100,
+    locale: "en",
+    startedAt: minutesAgo(5),
+    currentAtStart: OLD,
+  });
+
+  // The move that worked: flipped in, alive on its port, settled on the new build.
+  store.activate(NEW);
+  await wait(25);
+  store.recordLive(NEW, true);
+  store.settle(NEW);
+
+  assert.equal(
+    store.liveFailed(STALE),
+    true,
+    "the old corpse is still on disk",
+  );
+
+  await Promise.all(
+    await reconcileUpdateJobs({ root, tickMs: 5, graceMs: 15 }),
+  );
+
+  assert.equal(existsSync(path), false, "the answered job is gone");
+  assert.equal(finals(calls).length, 1, finals(calls).join(" | "));
+  assert.match(finals(calls)[0], /Iva updated/u);
+  assert.match(finals(calls)[0], new RegExp(`${OLD} → ${NEW}`, "u"));
 });
 
 test("a job the updater answered itself is dropped without a second word", async (t) => {

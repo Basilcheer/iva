@@ -465,6 +465,28 @@ async function concludeUpdateJob(
   moved: string | null,
 ): Promise<void> {
   if (moved) {
+    // A move can also go backwards. The previous update dies after the flip, the
+    // user taps /update again, and the job is written down on the version already
+    // linked in - so a rollback out of the resumed run (version-update.ts:
+    // recordLive(name, false) on the version being finished, then activate(back))
+    // moves `current` off exactly the version this job named, and the arrow drawn
+    // from it reads "✅ new → old": a downgrade sold as an update.
+    // What says which way it went is the starting version's own verdict, not the
+    // failures lying around on disk: rolledBack() below asks whether anything not
+    // running has ever taken the service down, and after an honest update the last
+    // update's corpse is still there - that reading would swallow a ✅ the user is
+    // owed. A job that named its version does not need the guess: the rollback is
+    // the one that leaves that very version on record as dead.
+    if (
+      typeof job.currentAtStart === "string" &&
+      store.liveFailed(job.currentAtStart)
+    ) {
+      log(
+        "update job left for the ttl; the version it started on is on record as dead:",
+        basename(path),
+      );
+      return;
+    }
     if (
       await deliverFinal(job, {
         beforeVersion: job.currentAtStart,
