@@ -17,7 +17,11 @@ import {
 import { resolveUpdateTarget } from "../lib/update-channel.ts";
 import { gitAt, packageVersion, requireGit } from "../lib/update-check.ts";
 import { classifyRoot, isManagedInstall } from "../lib/version-layout.ts";
-import { acquireUpdateLock, createVersionStore } from "../lib/version-store.ts";
+import {
+  acquireUpdateLock,
+  createVersionStore,
+  writeJson,
+} from "../lib/version-store.ts";
 import {
   commandRunner,
   runVersionUpdate,
@@ -27,6 +31,44 @@ import type { createCliRuntime } from "./runtime.ts";
 import { COPY } from "./update.ts";
 
 type CliRuntime = ReturnType<typeof createCliRuntime>;
+
+/** What the bridge says in the chat once this process is gone. */
+type UpdateOutcomeRecord = {
+  readonly schema: "iva-update-outcome/v1";
+  readonly status: "updated";
+  readonly before: string;
+  readonly after: string;
+  readonly custom: string;
+  readonly finishedAt: string;
+};
+
+/**
+ * Leave the final word in the job file. This process is the old version's: the
+ * restart it just ordered kills it, and an edit it starts can still be in flight
+ * when it goes - which is how a stale phase edit landed after the final one and
+ * left "Building Iva" in the chat for good. The bridge that comes up after the
+ * restart is the process that outlives the update, so the last screen is its to
+ * say. False means the file is not there to hand over, and the caller reports
+ * the result itself.
+ *
+ * Through the store's own writer: `writeJson` is the rename this side already
+ * trusts with the markers an interrupted update is replayed from, and the CLI
+ * carries no import into the authored tree.
+ */
+function handOutcome(
+  job: { path: string } | null,
+  outcome: UpdateOutcomeRecord,
+): boolean {
+  if (!job) return false;
+  try {
+    const stored: unknown = JSON.parse(readFileSync(job.path, "utf8"));
+    if (typeof stored !== "object" || stored === null) return false;
+    writeJson(job.path, { ...(stored as Record<string, unknown>), outcome });
+    return true;
+  } catch {
+    return false; // No readable job file: nobody is waiting on one.
+  }
+}
 
 /** A bare mirror of the checkout: nothing runs from it, so it is free to rewrite. */
 export async function ensureMirror(home: string): Promise<string> {
@@ -123,11 +165,12 @@ export function createVersionUpdateCommand(
       store.currentName() ??
       installedVersion(install.root) ??
       "the previous version";
+    let handedToBridge = false;
     const reportDir = mkdtempSync(join(tmpdir(), "iva-update-"));
     const report = join(reportDir, "outcome.json");
-    const finished = (from: string, to: string): Promise<void> =>
-      reporter?.complete({ beforeVersion: from, afterVersion: to }) ??
-      Promise.resolve();
+    const finished = async (from: string, to: string): Promise<void> => {
+      await reporter?.complete({ beforeVersion: from, afterVersion: to });
+    };
     const failed = async (detail: string): Promise<void> => {
       terminal.fail(text.failed);
       terminal.info(detail);
@@ -146,14 +189,17 @@ export function createVersionUpdateCommand(
         run: commandRunner(verbose),
         force,
         log: (message) => terminal.info(message),
-        handoff: (name) => {
+        handoff: async (name) => {
           terminal.done(text.fetch[1]);
-          void reporter?.done("fetch");
+          await reporter?.done("fetch");
           terminal.start(text.build[0]);
-          void reporter?.start("build");
+          // Awaited, not fired off: the build below blocks this event loop for
+          // minutes, and an edit still in flight when it does lands whenever the
+          // loop comes back - after the final screen, overwriting it.
+          await reporter?.start("build");
           // The spinner and the new version's own output must not share a line.
           terminal.dispose();
-          return Promise.resolve(handoff(name, report, verbose));
+          return handoff(name, report, verbose);
         },
       });
 
@@ -173,7 +219,16 @@ export function createVersionUpdateCommand(
         terminal.info(`✅ ${outcome.previous ?? before} → ${outcome.version}`);
         // Or the user goes on believing a skill of theirs is live.
         if (outcome.custom === "stock") terminal.info(`⚠️ ${text.stock}`);
-        await finished(outcome.previous ?? before, outcome.version);
+        handedToBridge = handOutcome(job, {
+          schema: "iva-update-outcome/v1",
+          status: "updated",
+          before: outcome.previous ?? before,
+          after: outcome.version,
+          custom: outcome.custom,
+          finishedAt: new Date().toISOString(),
+        });
+        if (!handedToBridge)
+          await finished(outcome.previous ?? before, outcome.version);
       }
     } catch (error) {
       await failed((error as { message?: string }).message ?? String(error));
@@ -181,7 +236,9 @@ export function createVersionUpdateCommand(
       rmSync(reportDir, { recursive: true, force: true });
       terminal.dispose();
       reporter?.dispose();
-      await removeTelegramJob(job?.path);
+      // A handed-over job belongs to the bridge now; deleting it here would take
+      // the only record of what to say with it.
+      if (!handedToBridge) await removeTelegramJob(job?.path);
     }
   }
 
