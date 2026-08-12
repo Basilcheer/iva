@@ -159,7 +159,13 @@ Default model is deepseek-v4-pro, 131k context. On Go it runs about $9/mo all-in
 ## What's New
 
 <details>
-<summary><b>v0.3.18 · 11.08.2026 — expand the latest releases</b></summary>
+<summary><b>v0.3.19 · 12.08.2026 — expand the latest releases</b></summary>
+
+### 12.08.2026
+
+#### v0.3.19
+
+- The "Building Iva" spinner no longer sticks forever after a Telegram update. The final "✅ Iva updated" now arrives from the bridge, after the restart. A failed message edit is logged and resent as a new message. A false "✅" cannot happen: the bridge stays silent until the installation has settled.
 
 ### 11.08.2026
 
@@ -188,14 +194,6 @@ Default model is deepseek-v4-pro, 131k context. On Go it runs about $9/mo all-in
 - An update is now built next to the running version instead of on top of it: the new version is health-checked on its final paths before anything switches, and activation is a single flip. An update that breaks off halfway leaves your working install untouched, and `iva rollback` puts the previous version back.
 - Your data (`data/`, `vault/`, `.env`) now lives outside the code, and your own files in `data/custom` are applied when a version is built — a broken customization no longer takes the service down; Iva starts on the stock build and tells you about it.
 - Memory cards keep an honest archive: history and log lines are written by the tool alone, so the model can't invent a past that never happened; repeated or stale rewrites are refused instead of piling up duplicates, and the nightly Brain pass names the cards left with an open code fence.
-
-### 09.08.2026
-
-#### v0.3.14
-
-- The "Working…" indicator with its Stop button now always disappears once the reply arrives — replying to one of Iva's messages while she was still busy used to leave the previous indicator stuck in the chat forever.
-- Crashed and parked turns clean up after themselves now: an orphaned indicator is deleted instead of waiting for a manual cleanup.
-- All five status loaders switched to animated emoji (typing dots for a working turn), and a dirty install no longer rolls back a healthy update — local changes are kept as a recovery bundle.
 
 </details>
 
