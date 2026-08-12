@@ -77,7 +77,7 @@ type TelegramReporter = {
       changedLocal?: boolean;
       restoreReport?: RestoreReport;
     },
-  ): Promise<void>;
+  ): Promise<boolean>;
   dispose(): void;
 };
 

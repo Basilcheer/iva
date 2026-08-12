@@ -467,6 +467,153 @@ test("Telegram says an update is already running in the message it was asked fro
   assert.match(calls[1]?.body.text ?? "", /Обновление уже идёт/u);
 });
 
+test("a final Telegram refuses to edit is sent as its own message", async (t) => {
+  const errors: string[] = [];
+  t.mock.method(console, "error", (...args: unknown[]) =>
+    errors.push(args.map(String).join(" ")),
+  );
+  const calls: TelegramCall[] = [];
+  // Neither a deleted message nor a rate limit: a refusal this side has never
+  // seen, which used to end the update with the phase still on screen.
+  const fetchImpl: MockFetch = async (url, init) => {
+    const method = url.split("/").at(-1);
+    calls.push({ method, body: JSON.parse(init.body) });
+    if (method === "editMessageText")
+      return {
+        ok: false,
+        status: 400,
+        json: async () => ({ ok: false, description: "Bad Request: FROZEN" }),
+      };
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ ok: true, result: { message_id: 200 } }),
+    };
+  };
+  const reporter = createTelegramUpdateReporter({
+    token: "token",
+    job: { chatId: 1, messageId: 100, locale: "en" },
+    env: {},
+    fetchImpl,
+  });
+  assert.ok(reporter);
+
+  assert.equal(
+    await reporter.complete({ beforeVersion: "v1", afterVersion: "v2" }),
+    true,
+  );
+
+  const sent = calls.filter((call) => call.method === "sendMessage");
+  assert.equal(sent.length, 1, "the user is told the update finished");
+  assert.match(sent[0]?.body.text ?? "", /Iva updated/);
+  assert.match(sent[0]?.body.text ?? "", /v1 → v2/);
+  assert.ok(
+    errors.some((line) =>
+      /update status edit failed: 400 .*FROZEN/u.test(line),
+    ),
+    errors.join("\n"),
+  );
+});
+
+test("a final that cannot be delivered at all is reported, not swallowed", async (t) => {
+  const errors: string[] = [];
+  t.mock.method(console, "error", (...args: unknown[]) =>
+    errors.push(args.map(String).join(" ")),
+  );
+  const fetchImpl: MockFetch = async () => ({
+    ok: false,
+    status: 403,
+    json: async () => ({
+      ok: false,
+      description: "Forbidden: bot was blocked",
+    }),
+  });
+  const reporter = createTelegramUpdateReporter({
+    token: "token",
+    job: { chatId: 1, messageId: 100, locale: "en" },
+    env: {},
+    fetchImpl,
+  });
+  assert.ok(reporter);
+
+  assert.equal(await reporter.complete({ afterVersion: "v2" }), false);
+
+  assert.equal(errors.length, 2, errors.join("\n"));
+  assert.match(errors[0], /update status edit failed: 403/u);
+  assert.match(errors[1], /update status message failed: 403/u);
+});
+
+test("a version reported without the one before it names the version that runs", async () => {
+  const calls: TelegramCall[] = [];
+  const fetchImpl: MockFetch = async (url, init) => {
+    calls.push({ method: url.split("/").at(-1), body: JSON.parse(init.body) });
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ ok: true, result: {} }),
+    };
+  };
+  const reporter = createTelegramUpdateReporter({
+    token: "token",
+    job: { chatId: 1, messageId: 100, locale: "ru" },
+    env: { MODEL_PROVIDER: "codex", CODEX_MODEL: "gpt-5.5" },
+    fetchImpl,
+  });
+  assert.ok(reporter);
+
+  assert.equal(await reporter.complete({ afterVersion: "0.3.19-abc" }), true);
+
+  const final = calls.at(-1)?.body.text ?? "";
+  assert.match(final, /Iva обновлена/u);
+  assert.match(final, /Версия: 0\.3\.19-abc/u);
+  assert.doesNotMatch(final, /→/u);
+});
+
+test("a refused phase edit is reported and the update carries on", async (t) => {
+  const errors: string[] = [];
+  t.mock.method(console, "error", (...args: unknown[]) =>
+    errors.push(args.map(String).join(" ")),
+  );
+  const calls: TelegramCall[] = [];
+  let failing = true;
+  const fetchImpl: MockFetch = async (url, init) => {
+    calls.push({ method: url.split("/").at(-1), body: JSON.parse(init.body) });
+    if (failing)
+      return {
+        ok: false,
+        status: 500,
+        json: async () => ({ ok: false, description: "Internal Server Error" }),
+      };
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ ok: true, result: {} }),
+    };
+  };
+  const reporter = createTelegramUpdateReporter({
+    token: "token",
+    job: { chatId: 1, messageId: 100, locale: "en" },
+    env: {},
+    fetchImpl,
+    sleepImpl: async () => {},
+  });
+  assert.ok(reporter);
+
+  await reporter.start("build");
+  failing = false;
+  assert.equal(
+    await reporter.complete({ beforeVersion: "v1", afterVersion: "v2" }),
+    true,
+  );
+
+  assert.ok(
+    errors.some((line) => /update status edit failed: 500/u.test(line)),
+    errors.join("\n"),
+  );
+  assert.match(calls.at(-1)?.body.text ?? "", /Iva updated/);
+  assert.equal(calls.filter((call) => call.method === "sendMessage").length, 0);
+});
+
 test("update callback is acknowledged before any message edit", async () => {
   const previousFetch = mutableGlobal.fetch;
   const previousToken = process.env.TELEGRAM_BOT_TOKEN;

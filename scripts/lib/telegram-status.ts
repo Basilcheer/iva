@@ -32,12 +32,13 @@ type Reporter = {
   fail(phase: UpdatePhase, beforeVersion: string): Promise<void>;
   busy(): Promise<void>;
   postCommitFailure(message: string): Promise<void>;
+  /** Whether the user really got the final screen; false is a result to act on. */
   complete(versions: {
-    beforeVersion: string;
+    beforeVersion?: string;
     afterVersion: string;
     changedLocal?: boolean;
     restoreReport?: RestoreReport;
-  }): Promise<void>;
+  }): Promise<boolean>;
   dispose(): void;
 };
 
@@ -194,6 +195,10 @@ export function createTelegramUpdateReporter({
         currentMessageId = null;
         uiLost = true;
       }
+      // Said out loud: a refused edit used to leave nothing behind but the phase
+      // it never got past, and the journal of the run that lost the final screen
+      // is where anyone looks first.
+      console.error("update status edit failed:", error.status, error.message);
       return { ok: false, error };
     }
   }
@@ -220,17 +225,29 @@ export function createTelegramUpdateReporter({
     await edit({ text: `${UPDATE_LOADER.fallback} ${text}` });
   }
 
+  /**
+   * The screen the user is left with. Any refused edit is answered with a new
+   * message, whatever the reason: a message Telegram will not let this process
+   * edit is indistinguishable, from here, from one it lost - and both leave the
+   * chat saying an update is still running.
+   */
   async function finish(
     text: string,
     replyMarkup?: Record<string, unknown>,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const body = replyMarkup ? { text, reply_markup: replyMarkup } : { text };
-    if ((await edit(body)).ok) return;
-    if (!uiLost) return;
+    if ((await edit(body)).ok) return true;
     try {
       await call("sendMessage", { chat_id: activeJob.chatId, ...body });
-    } catch {
-      // The final status notification is best-effort after the original UI is lost.
+      return true;
+    } catch (caught) {
+      const error = caught as TelegramError;
+      console.error(
+        "update status message failed:",
+        error.status,
+        error.message,
+      );
+      return false;
     }
   }
 
@@ -261,20 +278,25 @@ export function createTelegramUpdateReporter({
       currentPhase = null;
       await finish(`⚠️ ${copy.timerFailure}\n\n${message}`);
     },
+    // The version it started on is not always knowable by whoever delivers this:
+    // the reconciler after a restart may have only the version that runs now,
+    // and a number the user can read beats a pronoun or an invented arrow.
     async complete({
       beforeVersion,
       afterVersion,
       restoreReport,
     }: {
-      beforeVersion: string;
+      beforeVersion?: string;
       afterVersion: string;
       restoreReport?: RestoreReport;
-    }) {
+    }): Promise<boolean> {
       const model = modelSummary(env);
       const lines = [
         copy.final,
         "",
-        `${beforeVersion} → ${afterVersion}`,
+        beforeVersion
+          ? `${beforeVersion} → ${afterVersion}`
+          : `${lang === "ru" ? "Версия" : "Version"}: ${afterVersion}`,
         `${lang === "ru" ? "Модель" : "Model"}: ${model.line}`,
       ];
       lines.push(copy.preserved);
@@ -298,7 +320,7 @@ export function createTelegramUpdateReporter({
             ],
           };
       }
-      await finish(lines.join("\n"), replyMarkup);
+      return finish(lines.join("\n"), replyMarkup);
     },
     dispose() {},
   };

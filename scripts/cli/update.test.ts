@@ -206,6 +206,7 @@ function operationsFixture(
     },
     complete: async (versions: { changedLocal?: boolean }) => {
       events.push(`reporter.complete:${String(versions.changedLocal)}`);
+      return true;
     },
     dispose: () => events.push("reporter.dispose"),
   };
