@@ -429,6 +429,19 @@ function finishedAfterStart(
 }
 
 /**
+ * A move that did not stick. A rollback settles the installation back onto the
+ * version it started on (version-update.ts: recordLive(name, false), activate(back),
+ * settle(back)), so the settle marker of a failed update is as fresh as a good one's
+ * and says nothing about which way it went. The disk still knows: the build the
+ * rollback came off is the newest one there, it is not the one running, and it is
+ * the one the service died on. Any of that missing, and this says nothing.
+ */
+function rolledBack(store: VersionStore, running: string): boolean {
+  const newest = store.list()[0];
+  return newest !== undefined && newest !== running && store.liveFailed(newest);
+}
+
+/**
  * A job whose updater never got to write its outcome down - killed between the
  * flip and the file. The installation itself is the only witness left, and a "✅"
  * invented without one is worse than the spinner it would replace: a job nothing
@@ -453,10 +466,14 @@ async function concludeUpdateJob(
   // A job from a bridge that did not write down the version it started on. The
   // settle marker is all there is, and it can only say that a move finished -
   // so the user is told which version runs, without an arrow nobody can draw.
+  // A move that finished by going back is still a finished move, and the marker
+  // reads the same either way: a rollback has to be ruled out here, or the box
+  // reports "✅ updated" on the version the update just failed to leave.
   const after = store.currentName() ?? store.settled();
   if (
     job.currentAtStart === undefined &&
     after &&
+    !rolledBack(store, after) &&
     finishedAfterStart(job.startedAt, store.settledAt())
   ) {
     if (await deliverFinal(job, { afterVersion: after }))
@@ -532,15 +549,23 @@ export async function reconcileUpdateJobs({
   const watchers: Promise<void>[] = [];
   for (const name of names.filter((one) => one.endsWith(".json"))) {
     const path = join(jobsDir(), name);
-    const job = await readUpdateJob(path);
-    if (!job) continue;
-    const outcome = outcomeOf(job);
-    if (!outcome) {
-      watchers.push(watchUpdateJob(path, job, { root, tickMs, graceMs }));
-      continue;
+    // One job's bad luck stays its own, exactly as in the stale sweep above. This
+    // runs before deleteWebhook: a throw here is the bridge exiting into a systemd
+    // restart, onto the same unreadable - or undeletable - file, forever. A chat
+    // that never gets its final screen must not cost the box every other message.
+    try {
+      const job = await readUpdateJob(path);
+      if (!job) continue;
+      const outcome = outcomeOf(job);
+      if (!outcome) {
+        watchers.push(watchUpdateJob(path, job, { root, tickMs, graceMs }));
+        continue;
+      }
+      if (await deliverFinal(job, outcome)) await rm(path, { force: true });
+      else log("update final undelivered; the job waits for the next start");
+    } catch (error) {
+      log("update job reconcile failed:", name, (error as ErrorLike).message);
     }
-    if (await deliverFinal(job, outcome)) await rm(path, { force: true });
-    else log("update final undelivered; the job waits for the next start");
   }
   return watchers;
 }

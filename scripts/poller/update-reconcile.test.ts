@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-floating-promises -- Node's test runner owns registration promises. */
 import assert from "node:assert/strict";
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -9,12 +10,14 @@ import {
   realpathSync,
   rmSync,
   symlinkSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 import { writeFileAtomic } from "#lib/fs-atomic.ts";
+import { createVersionStore } from "../lib/version-store.ts";
 
 const dataDir = realpathSync(
   mkdtempSync(join(tmpdir(), "iva-update-reconcile-")),
@@ -211,6 +214,54 @@ test("a delivery Telegram refuses keeps the job for the next start", async (t) =
   );
 });
 
+test(
+  "a job file that cannot be removed costs the chat nothing else",
+  {
+    // Permissions do not apply to root, so neither does the failure being proved.
+    skip: process.getuid?.() === 0 && "root writes through any directory",
+  },
+  async (t) => {
+    clean(t);
+    const root = install(t);
+    const lines: string[] = [];
+    t.mock.method(console, "log", (...args: unknown[]) =>
+      lines.push(args.map(String).join(" ")),
+    );
+    const calls = telegram(t);
+    const body = {
+      chatId: 1,
+      messageId: 100,
+      locale: "en",
+      startedAt: minutesAgo(2),
+      currentAtStart: OLD,
+      outcome: outcome(OLD, NEW),
+    };
+    const first = job("stuck-a", body);
+    const second = job("stuck-b", { ...body, messageId: 101 });
+    // A read-only jobs directory: every final goes out, no job file can be unlinked.
+    // This runs before the first poll, so a throw here is a bridge that never polls.
+    chmodSync(jobsDir, 0o555);
+    try {
+      assert.deepEqual(await reconcileUpdateJobs({ root }), [], "no watchers");
+    } finally {
+      chmodSync(jobsDir, 0o755);
+    }
+
+    assert.equal(finals(calls).length, 2, finals(calls).join(" | "));
+    assert.equal(
+      existsSync(first),
+      true,
+      "an undeletable job waits for the TTL",
+    );
+    assert.equal(existsSync(second), true, "and so does the one behind it");
+    assert.ok(
+      lines.filter((line) => /update job reconcile failed/u.test(line))
+        .length === 2,
+      lines.join("\n"),
+    );
+  },
+);
+
 test("a job killed after the flip is answered from what the installation says", async (t) => {
   for (const settledAt of [minutesAgo(1), undefined]) {
     await t.test(`settle marker time: ${settledAt ?? "absent"}`, async (st) => {
@@ -324,6 +375,50 @@ test("nothing is said when no evidence says the update finished", async (t) => {
   );
 
   assert.deepEqual(calls, [], "a false ✅ is worse than a spinner");
+  assert.equal(existsSync(path), true, "the job waits for the TTL");
+});
+
+test("a rollback is never a ✅ on a job that never named its version", async (t) => {
+  clean(t);
+  const home = realpathSync(mkdtempSync(join(tmpdir(), "iva-reconcile-home-")));
+  t.after(() => {
+    rmSync(home, { recursive: true, force: true });
+    rmSync(join(dataDir, "live-failures.json"), { force: true });
+  });
+  writeFileSync(join(home, ".env"), `ASSISTANT_DATA_DIR=${dataDir}\n`);
+  for (const name of [OLD, NEW])
+    mkdirSync(join(home, "versions", name), { recursive: true });
+  // The build the update installed is the newest on disk; the one it went back to
+  // is older. Set, not assumed: the order is what tells a rollback from a success.
+  const hourAgo = Date.now() / 1000 - 3600;
+  utimesSync(join(home, "versions", OLD), hourAgo, hourAgo);
+  symlinkSync(join(home, "versions", OLD), join(home, "current"));
+  // Exactly what the updater writes on an unhealthy flip: the dead build recorded,
+  // then the flip back, then a settle marker as fresh as a good update's.
+  const store = createVersionStore(home);
+  store.recordLive(NEW, false);
+  store.settle(OLD);
+  const calls = telegram(t);
+  const path = job("rolled-back", {
+    chatId: 1,
+    messageId: 100,
+    locale: "en",
+    startedAt: minutesAgo(5),
+  });
+
+  await Promise.all(
+    await reconcileUpdateJobs({
+      root: join(home, "current"),
+      tickMs: 5,
+      graceMs: 15,
+    }),
+  );
+
+  assert.deepEqual(
+    calls,
+    [],
+    "the version that failed is not one to celebrate",
+  );
   assert.equal(existsSync(path), true, "the job waits for the TTL");
 });
 
