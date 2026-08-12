@@ -465,36 +465,49 @@ async function concludeUpdateJob(
   moved: string | null,
 ): Promise<void> {
   if (moved) {
-    // A move is only an update when both of its ends are good, so the guard asks
-    // about both: the version this job left, and the version it is standing on.
+    // An update is a move that finished onto a version that lives, off a version
+    // that lived. Three questions, and a "✅" needs all three answered.
     //
-    // Moved OFF a dead version. The previous update dies after the flip, the user
-    // taps /update again, and the job is written down on the version already linked
-    // in - so a rollback out of the resumed run (version-update.ts: recordLive(name,
-    // false) on the version being finished, then activate(back)) moves `current` off
-    // exactly the version this job named, and the arrow drawn from it reads
-    // "✅ new → old": a downgrade sold as an update.
+    // Did the move finish? The settle marker is the last thing an update writes,
+    // and it is written after the service has answered on its port (version-update.ts:
+    // recordLive(name, true), then settle(name)). Everything between the flip and it -
+    // the migrations, the vault cleanup, the restart, the health deadline - is where
+    // an updater dies without leaving a verdict on anything: `current` is the new
+    // build, no failure is on record, and the flip alone reads "✅ old → new" over an
+    // agent that may be lying down. `settled() === moved` is what the installation
+    // itself says about that, and the same marker `iva doctor` reads to report an
+    // "update to X never finished". It also survives what the failure list does not:
+    // that list keeps only the last few builds, so a verdict can be pushed out of it,
+    // and a guard that only asks about failures goes blind exactly then.
     //
-    // Moved ONTO a dead version. The updater is killed between recordLive(name,
-    // false) and activate(back) (version-update.ts, the same lines): the rollback it
-    // had already decided on never happened. `current` is the new build, that build
-    // is on record as having taken the service down, and the service is still down -
-    // an arrow reading "✅ old → new" would announce an update over a box that does
-    // not answer, which the bridge is alive to say only because it is a unit of its
-    // own that systemd keeps restarting.
+    // Is the version it stands on good? The marker alone does not say so. A rollback
+    // settles the version it goes back to without ever proving it (version-update.ts:
+    // activate(back), then settle(back), with no probe between), so the far end of a
+    // rollback satisfies `settled() === moved` too - only the verdict on that version
+    // rules out a "✅ old → new" over a box that does not answer.
     //
-    // What says which way it went is the verdict on those two versions, not the
-    // failures lying around on disk: rolledBack() below asks whether anything not
-    // running has ever taken the service down, and after an honest update the last
-    // update's corpse is still there - that reading would swallow a ✅ the user is
-    // owed. A job that named its version does not need the guess.
-    if (
+    // Is the version it came off good? A job written while the box already sat on a
+    // half-installed build names that build as its start. The resumed run rolls back
+    // off it - recordLive(new, false), activate(old), settle(old) - which moves
+    // `current` to the old version and settles there, so `settled() === moved` holds
+    // once more and the arrow drawn from it reads "✅ new → old": a downgrade sold as
+    // an update. The verdict the rollback recorded on the version this job started on
+    // is what catches that one.
+    //
+    // Neither verdict is read off the failures lying around on disk: rolledBack()
+    // below asks whether anything not running ever took the service down, and after
+    // an honest update the previous update's corpse is still there - that reading
+    // would swallow a ✅ the user is owed. A job that named its version asks about
+    // its own two ends and nothing else.
+    const dead =
       store.liveFailed(moved) ||
       (typeof job.currentAtStart === "string" &&
-        store.liveFailed(job.currentAtStart))
-    ) {
+        store.liveFailed(job.currentAtStart));
+    if (dead || store.settled() !== moved) {
       log(
-        "update job left for the ttl; an end of the move is on record as dead:",
+        dead
+          ? "update job left for the ttl; an end of the move is on record as dead:"
+          : "update job left for the ttl; the move onto this version never settled:",
         basename(path),
       );
       return;

@@ -544,6 +544,77 @@ test("a rollback that never happened is never a ✅ on the version it died on", 
   assert.equal(existsSync(path), true, "the job waits for the TTL");
 });
 
+test("a flip nobody has judged yet is never a ✅", async (t) => {
+  clean(t);
+  const { store, root } = installation(t);
+  const calls = telegram(t);
+  const path = job("unjudged", {
+    chatId: 1,
+    messageId: 100,
+    locale: "en",
+    startedAt: minutesAgo(5),
+    currentAtStart: OLD,
+  });
+
+  // Where the updater really dies: the flip is one line, and the migrations, the
+  // vault cleanup, the restart and the whole health deadline come after it. Killed
+  // in there it leaves `current` on the new build and a verdict on nothing - no
+  // live failure, no settle marker - which is exactly what a box whose agent is
+  // down looks like from here.
+  store.activate(NEW);
+  await wait(25);
+
+  assert.equal(store.currentName(), NEW, "the box stands on the new build");
+  assert.equal(store.liveFailed(NEW), false, "no verdict was ever recorded");
+  assert.equal(store.settled(), null, "and the move never settled");
+
+  await Promise.all(
+    await reconcileUpdateJobs({ root, tickMs: 5, graceMs: 15 }),
+  );
+
+  assert.deepEqual(
+    calls,
+    [],
+    "a move that never finished is not one to announce",
+  );
+  assert.equal(existsSync(path), true, "the job waits for the TTL");
+});
+
+test("a verdict pushed out of the failure list is still not a ✅", async (t) => {
+  clean(t);
+  const { store, root } = installation(t);
+  store.settle(OLD); // Where the box has been sitting since the last update.
+  const calls = telegram(t);
+  const path = job("forgotten-verdict", {
+    chatId: 1,
+    messageId: 100,
+    locale: "en",
+    startedAt: minutesAgo(5),
+    currentAtStart: OLD,
+  });
+
+  // The dead flip of the test above it, plus time: the failure list keeps only the
+  // last few builds, so the updates that follow push this verdict out of it. The
+  // failure guard goes blind at that point; what the box did not do - settle onto
+  // the build it stands on - it still has not done.
+  store.activate(NEW);
+  await wait(25);
+  store.recordLive(NEW, false);
+  for (let i = 1; i <= 8; i++)
+    store.recordLive(`0.3.${i}-${String(i).repeat(12)}`, false);
+
+  assert.equal(store.currentName(), NEW, "the box is stuck on the dead build");
+  assert.equal(store.liveFailed(NEW), false, "its verdict has been forgotten");
+  assert.equal(store.settled(), OLD, "the move never settled");
+
+  await Promise.all(
+    await reconcileUpdateJobs({ root, tickMs: 5, graceMs: 15 }),
+  );
+
+  assert.deepEqual(calls, [], "a forgotten failure is not a success");
+  assert.equal(existsSync(path), true, "the job waits for the TTL");
+});
+
 test("an old failure on disk does not swallow the ✅ of an update that stuck", async (t) => {
   clean(t);
   const { store, root } = installation(t);
