@@ -41,7 +41,7 @@ type TelegramResponse = {
 };
 const { QUEUE_FILE, reapStaleRuns, reconcileScopedResetIntents } = queue;
 const { drainReadyQueueHeads, routeMessageUpdate } = routing;
-const { removeStaleUpdateJobs } = updateFlow;
+const { reconcileUpdateJobs, removeStaleUpdateJobs } = updateFlow;
 const { handleControl, registerBotCommands } = control;
 
 export { readCappedStream } from "./transport.ts";
@@ -88,6 +88,12 @@ export async function main() {
     );
   log(`telegram-poll start → messages ${ACCEPTANCE_ROUTE}; callbacks ${ROUTE}`);
   await removeStaleUpdateJobs();
+  // The update that restarted this bridge left its final screen to us: its own
+  // process died with the restart. Delivered before the first poll; the jobs with
+  // nothing to say yet are watched beside it.
+  const watched = await reconcileUpdateJobs();
+  if (watched.length > 0)
+    log(`watching ${watched.length} unfinished update job(s)`);
   // Upgrade the old {chatKey: string[]} queue atomically before polling. A failed
   // migration stops the bridge, so Telegram retains new updates until the old bytes
   // are safely represented as versioned FIFO items.

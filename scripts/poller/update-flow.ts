@@ -1,13 +1,6 @@
 import { execFile } from "node:child_process";
-import { join } from "node:path";
-import {
-  mkdir,
-  readFile,
-  readdir,
-  rm,
-  stat,
-  writeFile,
-} from "node:fs/promises";
+import { basename, join } from "node:path";
+import { readFile, readdir, rm, stat } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import { readEnvFresh } from "../lib/env-file.ts";
 import {
@@ -16,8 +9,10 @@ import {
   updateOffer,
 } from "../lib/update-check.ts";
 import { modelSummary } from "../lib/model-summary.ts";
-import { upstreamQuery } from "../lib/version-layout.ts";
-import { updateRunning } from "../lib/version-store.ts";
+import { reporterFor } from "../lib/telegram-status.ts";
+import { classifyRoot, upstreamQuery } from "../lib/version-layout.ts";
+import { createVersionStore, updateRunning } from "../lib/version-store.ts";
+import { writeFileAtomic } from "#lib/fs-atomic.ts";
 import { getLang, tr } from "#lib/i18n.ts";
 import {
   ALLOWED,
@@ -27,6 +22,7 @@ import {
   ROOT,
   UPDATE_JOB_TTL_MS,
   log,
+  sleep,
 } from "./config.ts";
 import { edit, reply, tg } from "./transport.ts";
 
@@ -146,8 +142,10 @@ export async function handleUpdateCheck(
   }
 }
 
+const jobsDir = (): string => join(DATA_DIR, "update-jobs");
+
 async function removeStaleUpdateJobs(): Promise<void> {
-  const jobs = join(DATA_DIR, "update-jobs");
+  const jobs = jobsDir();
   let names;
   try {
     names = await readdir(jobs);
@@ -299,15 +297,21 @@ export async function handleUpdateCallback(
     );
     return true;
   }
-  const jobs = join(DATA_DIR, "update-jobs");
-  await mkdir(jobs, { recursive: true });
-  await writeFile(
-    join(jobs, `${jobId}.json`),
+  // The version that runs as the tap is made. What the update moves the box off
+  // of, written down while the process that knows it is still alive: after the
+  // restart nothing else can name it. A development checkout has no version and
+  // simply leaves the field out.
+  const currentAtStart = createVersionStore(
+    classifyRoot(ROOT).home,
+  ).currentName();
+  await writeFileAtomic(
+    join(jobsDir(), `${jobId}.json`),
     JSON.stringify({
       chatId,
       messageId,
       locale: getLang(),
       startedAt: new Date().toISOString(),
+      ...(currentAtStart ? { currentAtStart } : {}),
     }),
     { mode: 0o600 },
   );
@@ -319,7 +323,7 @@ export async function handleUpdateCallback(
   );
   const r = await launchSelfUpdate(jobId);
   if (!r.ok) {
-    await rm(join(jobs, `${jobId}.json`), { force: true });
+    await rm(join(jobsDir(), `${jobId}.json`), { force: true });
     await edit(
       chatId as string | number,
       messageId as number,
@@ -327,6 +331,218 @@ export async function handleUpdateCallback(
     );
   }
   return true;
+}
+
+// ── the last word on an update (reconciliation) ────────────────────────────
+// The updater that installs a version dies with the restart it orders: its process
+// is the retired version's. Whatever it still owed the chat it leaves in the job
+// file, and this bridge - the process the restart brings up - is what says it.
+
+/** How often a job with no outcome yet is looked at again. */
+const WATCH_TICK_MS = 5_000;
+/** How long after the lock goes a job is given to grow an outcome. */
+const WATCH_GRACE_MS = 30_000;
+
+type UpdateJob = {
+  chatId?: string | number;
+  messageId?: string | number;
+  locale?: string;
+  startedAt?: string;
+  /** The version that ran when the tap was made; absent on a checkout. */
+  currentAtStart?: string;
+  outcome?: unknown;
+};
+type FinalVersions = { beforeVersion?: string; afterVersion: string };
+type ReconcileOptions = {
+  root?: string;
+  tickMs?: number;
+  graceMs?: number;
+};
+type VersionStore = ReturnType<typeof createVersionStore>;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+async function readUpdateJob(path: string): Promise<UpdateJob | null> {
+  try {
+    const parsed: unknown = JSON.parse(await readFile(path, "utf8"));
+    return isRecord(parsed) ? parsed : null;
+  } catch {
+    return null; // Gone, or never valid JSON: there is nothing to answer with.
+  }
+}
+
+/** The final an updater wrote down, or null when it never got that far. */
+function outcomeOf(job: UpdateJob): FinalVersions | null {
+  const outcome = job.outcome;
+  if (!isRecord(outcome)) return null;
+  if (outcome.schema !== "iva-update-outcome/v1") return null;
+  if (outcome.status !== "updated") return null;
+  const { after, before } = outcome;
+  if (typeof after !== "string" || !after) return null;
+  return {
+    afterVersion: after,
+    beforeVersion: typeof before === "string" && before ? before : undefined,
+  };
+}
+
+/**
+ * The same final screen the updater would have shown, through the same reporter:
+ * one vocabulary, one Gate, one set of retries. False keeps the job for the next
+ * start of the bridge, with the six-hour TTL as the ceiling.
+ */
+async function deliverFinal(
+  job: UpdateJob,
+  versions: FinalVersions,
+): Promise<boolean> {
+  let reporter;
+  try {
+    const env = await readEnvFresh(ENV_PATH);
+    reporter = reporterFor(job, env.TELEGRAM_BOT_TOKEN, env);
+    if (!reporter) return false; // No chat, no message: nothing to answer.
+    return await reporter.complete(versions);
+  } catch (error) {
+    log("update final delivery failed:", (error as ErrorLike).message);
+    return false;
+  } finally {
+    reporter?.dispose();
+  }
+}
+
+/** The version that runs now, when it is not the one the tap was made on. */
+function flippedTo(store: VersionStore, job: UpdateJob): string | null {
+  if (typeof job.currentAtStart !== "string") return null;
+  const current = store.currentName();
+  return current && current !== job.currentAtStart ? current : null;
+}
+
+function finishedAfterStart(
+  startedAt: string | undefined,
+  settledAt: string | null,
+): boolean {
+  const started = Date.parse(startedAt ?? "");
+  const settled = Date.parse(settledAt ?? "");
+  return (
+    Number.isFinite(started) && Number.isFinite(settled) && settled > started
+  );
+}
+
+/**
+ * A job whose updater never got to write its outcome down - killed between the
+ * flip and the file. The installation itself is the only witness left, and a "✅"
+ * invented without one is worse than the spinner it would replace: a job nothing
+ * proves is left to the TTL rather than answered with a guess.
+ */
+async function concludeUpdateJob(
+  path: string,
+  job: UpdateJob,
+  store: VersionStore,
+  moved: string | null,
+): Promise<void> {
+  if (moved) {
+    if (
+      await deliverFinal(job, {
+        beforeVersion: job.currentAtStart,
+        afterVersion: moved,
+      })
+    )
+      await rm(path, { force: true });
+    return;
+  }
+  // A job from a bridge that did not write down the version it started on. The
+  // settle marker is all there is, and it can only say that a move finished -
+  // so the user is told which version runs, without an arrow nobody can draw.
+  const after = store.currentName() ?? store.settled();
+  if (
+    job.currentAtStart === undefined &&
+    after &&
+    finishedAfterStart(job.startedAt, store.settledAt())
+  ) {
+    if (await deliverFinal(job, { afterVersion: after }))
+      await rm(path, { force: true });
+    return;
+  }
+  log(
+    "update job left for the ttl; nothing proves the update finished:",
+    basename(path),
+  );
+}
+
+/**
+ * One job with no outcome, watched until the installation says something about
+ * it. Runs beside the polling loop: every tick is guarded, and a tick that throws
+ * is a line in the journal, never a bridge that stopped answering messages.
+ */
+async function watchUpdateJob(
+  path: string,
+  snapshot: UpdateJob,
+  { root, tickMs, graceMs }: Required<ReconcileOptions>,
+): Promise<void> {
+  const store = createVersionStore(classifyRoot(root).home);
+  const deadline = Date.now() + UPDATE_JOB_TTL_MS;
+  let quietSince: number | null = null;
+  while (Date.now() < deadline) {
+    await sleep(tickMs);
+    try {
+      // The updater still holds the lock: it is alive and owes the chat nothing.
+      if (updateRunning(DATA_DIR)) {
+        quietSince = null;
+        continue;
+      }
+      const job = await readUpdateJob(path);
+      const outcome = job && outcomeOf(job);
+      if (job && outcome) {
+        if (await deliverFinal(job, outcome)) await rm(path, { force: true });
+        return;
+      }
+      const moved = flippedTo(store, snapshot);
+      // The file went with an updater that answered the chat itself: nothing was
+      // installed, so nothing restarted, so the report went out the ordinary way.
+      if (!job && !moved) return;
+      quietSince ??= Date.now();
+      if (Date.now() - quietSince < graceMs) continue;
+      await concludeUpdateJob(path, job ?? snapshot, store, moved);
+      return;
+    } catch (error) {
+      log("update job watch failed:", (error as ErrorLike).message);
+    }
+  }
+  log("update job watch gave up on:", basename(path));
+}
+
+/**
+ * Answer every update the box has not answered yet. Called once at start, after
+ * the stale-job sweep and before the first poll: a job with an outcome is a final
+ * screen owed right now, and a job without one is watched in the background while
+ * messages keep flowing. The watchers it returns are the caller's to await; the
+ * bridge only counts them.
+ */
+export async function reconcileUpdateJobs({
+  root = ROOT,
+  tickMs = WATCH_TICK_MS,
+  graceMs = WATCH_GRACE_MS,
+}: ReconcileOptions = {}): Promise<Promise<void>[]> {
+  let names: string[];
+  try {
+    names = await readdir(jobsDir());
+  } catch {
+    return []; // No update was ever asked for on this box.
+  }
+  const watchers: Promise<void>[] = [];
+  for (const name of names.filter((one) => one.endsWith(".json"))) {
+    const path = join(jobsDir(), name);
+    const job = await readUpdateJob(path);
+    if (!job) continue;
+    const outcome = outcomeOf(job);
+    if (!outcome) {
+      watchers.push(watchUpdateJob(path, job, { root, tickMs, graceMs }));
+      continue;
+    }
+    if (await deliverFinal(job, outcome)) await rm(path, { force: true });
+    else log("update final undelivered; the job waits for the next start");
+  }
+  return watchers;
 }
 
 export { removeStaleUpdateJobs };
