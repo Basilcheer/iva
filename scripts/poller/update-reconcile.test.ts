@@ -288,6 +288,80 @@ test(
   },
 );
 
+test(
+  "a watched job whose file cannot be removed is still answered once",
+  {
+    // Permissions do not apply to root, so neither does the failure being proved.
+    skip: process.getuid?.() === 0 && "root writes through any directory",
+  },
+  async (t) => {
+    clean(t);
+    const root = install(t);
+    const lines: string[] = [];
+    t.mock.method(console, "log", (...args: unknown[]) =>
+      lines.push(args.map(String).join(" ")),
+    );
+    const calls = telegram(t);
+    const body = {
+      chatId: 1,
+      messageId: 100,
+      locale: "en",
+      startedAt: minutesAgo(2),
+      currentAtStart: OLD,
+    };
+    const path = job("watched-stuck", body);
+
+    // No outcome yet, so the job is watched rather than answered on the spot.
+    const watchers = await reconcileUpdateJobs({
+      root,
+      tickMs: 5,
+      graceMs: 10_000, // Long enough that only the outcome below ends the watch.
+    });
+    assert.equal(watchers.length, 1, "a job with no outcome is watched");
+
+    // The updater's verdict lands under the watcher, into a directory nothing may
+    // unlink from any more: the final is owed, the file cannot go.
+    writeFileSync(
+      path,
+      JSON.stringify({ ...body, outcome: outcome(OLD, NEW) }),
+    );
+    chmodSync(jobsDir, 0o555);
+    let watched = false;
+    const finished = Promise.all(watchers).then(() => {
+      watched = true;
+    });
+    try {
+      // A watcher that survives its own unlink stops here; one that does not comes
+      // back every tick, so the window is what counts the repeats.
+      await Promise.race([finished, wait(120)]);
+    } finally {
+      chmodSync(jobsDir, 0o755);
+    }
+
+    assert.equal(finals(calls).length, 1, finals(calls).join(" | "));
+    assert.equal(watched, true, "a delivered final ends the watch");
+    assert.equal(
+      calls.filter((call) => call.method === "sendMessage").length,
+      0,
+      calls.map((call) => `${call.method}: ${call.text}`).join(" | "),
+    );
+    assert.equal(
+      existsSync(path),
+      true,
+      "an undeletable job waits for the TTL",
+    );
+    assert.ok(
+      lines.some((line) => /update job file left on disk/u.test(line)),
+      lines.join("\n"),
+    );
+    assert.equal(
+      lines.filter((line) => /update job watch failed/u.test(line)).length,
+      0,
+      lines.join("\n"),
+    );
+  },
+);
+
 test("a job killed after the flip is answered from what the installation says", async (t) => {
   for (const settledAt of [minutesAgo(1), undefined]) {
     await t.test(`settle marker time: ${settledAt ?? "absent"}`, async (st) => {

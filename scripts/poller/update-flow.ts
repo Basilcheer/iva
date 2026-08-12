@@ -453,6 +453,26 @@ function rolledBack(store: VersionStore, running: string): boolean {
 }
 
 /**
+ * The file of a job whose final screen has already gone out. Delivery is the part
+ * the chat sees and the part that must happen once; the file is bookkeeping behind
+ * it. A jobs directory that refuses the unlink - read-only, or owned by someone
+ * else - therefore costs a line in the journal and a file that waits for the TTL,
+ * never a throw: the watcher that called this is done with the job either way, and
+ * a throw would put it back on the loop to deliver the same final on every tick.
+ */
+async function dropDeliveredJob(path: string): Promise<void> {
+  try {
+    await rm(path, { force: true });
+  } catch (error) {
+    log(
+      "update job file left on disk after its final:",
+      basename(path),
+      (error as ErrorLike).message,
+    );
+  }
+}
+
+/**
  * A job whose updater never got to write its outcome down - killed between the
  * flip and the file. The installation itself is the only witness left, and a "✅"
  * invented without one is worse than the spinner it would replace: a job nothing
@@ -518,7 +538,7 @@ async function concludeUpdateJob(
         afterVersion: moved,
       })
     )
-      await rm(path, { force: true });
+      await dropDeliveredJob(path);
     return;
   }
   // A job from a bridge that did not write down the version it started on. The
@@ -535,7 +555,7 @@ async function concludeUpdateJob(
     finishedAfterStart(job.startedAt, store.settledAt())
   ) {
     if (await deliverFinal(job, { afterVersion: after }))
-      await rm(path, { force: true });
+      await dropDeliveredJob(path);
     return;
   }
   log(
@@ -567,8 +587,12 @@ async function watchUpdateJob(
       }
       const job = await readUpdateJob(path);
       const outcome = job && outcomeOf(job);
+      // A final that went out ends the watch, whatever the disk then says: the
+      // unlink is bookkeeping (dropDeliveredJob swallows its failure), and a tick
+      // that threw past this return would come back and say the same thing again -
+      // every five seconds, for as long as the TTL allows.
       if (job && outcome) {
-        if (await deliverFinal(job, outcome)) await rm(path, { force: true });
+        if (await deliverFinal(job, outcome)) await dropDeliveredJob(path);
         return;
       }
       const moved = flippedTo(store, snapshot);
