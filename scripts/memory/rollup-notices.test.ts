@@ -77,7 +77,7 @@ test("the delivery half of the prompt is the one that carries the language", () 
   assert.match(source, /no H1\/H2 headings/u);
 });
 
-test("the red line in the instructions exempts the nightly memory pass", () => {
+test("the red line in the instructions exempts both scheduled senders", () => {
   // Красный блок системных инструкций требует rich message для ЛЮБОГО отчёта. Без явного
   // исключения он спорит с хвостом промпта, кричит громче — и владелец получает второе
   // сообщение мимо кода доставки.
@@ -87,10 +87,16 @@ test("the red line in the instructions exempts the nightly memory pass", () => {
   );
   const red = instructions.slice(0, instructions.indexOf("\nТы — **Iva**"));
   assert.match(red, /ЛЮБОЙ ОТЧЁТ.*ТОЛЬКО RICH MESSAGE/u);
-  assert.match(red, /ИСКЛЮЧЕНИЕ/u);
-  assert.match(red, /ФИНАЛЬНЫЙ ТЕКСТ хода/u);
-  assert.match(red, /ЗАПРЕЩЕН/u);
-  // Оба плановых хода, чей результат доставляет код, названы поимённо.
-  assert.match(red, /rollup/u);
-  assert.match(red, /дайджест/iu);
+  const at = red.indexOf("ИСКЛЮЧЕНИЕ");
+  assert.notEqual(at, -1, "the red line must carry an exception at all");
+  const exception = red.slice(at);
+  assert.match(exception, /ФИНАЛЬНЫЙ ТЕКСТ хода/u);
+  assert.match(exception, /ЗАПРЕЩЕН/u);
+  // Оба хода названы В САМОМ исключении, одним предложением: упоминание дайджеста рядом —
+  // например во фразе «дайджест из чата — обычный ход» — этому не удовлетворяет.
+  assert.match(
+    exception,
+    /Их два:[^.]*rollup[^.]*утренний дайджест по расписанию/u,
+    "the exception itself must name the nightly rollup and the scheduled digest",
+  );
 });

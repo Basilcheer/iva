@@ -7,9 +7,19 @@
 import "./lib/ts-esm-hooks.ts"; // agent/** импортирует соседей как "./x.js" — см. сам хук
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { memoryReportTail } from "./lib/notice-policy.ts";
+
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 // settings.ts берёт каталог данных из окружения ОДИН раз, на импорте, поэтому и каталог, и
 // переменная задаются до загрузки расписания — иначе тумблер читался бы из настоящего data/.
@@ -89,4 +99,25 @@ test("the digest keeps the cadence the schedule table declares", async () => {
   const cron = (table as { SCHEDULE_CRON: Record<string, string> })
     .SCHEDULE_CRON.digest;
   assert.equal(digest.cron, cron);
+});
+
+// Второй плановый отправитель обязан говорить модели ровно то же, что первый: результат хода
+// доставляет код. Проверка грепом — промпт исполняет модель, иначе его не проверить; зато
+// формулировка берётся из хвоста rollup, поэтому разъехаться они не могут.
+test("the digest prompt forbids self-delivery in the same words as the rollup", () => {
+  const clause =
+    "Do not send it anywhere yourself: no rich messages, no digest chat, no Telegram tools.";
+  assert.ok(
+    memoryReportTail((english) => english).includes(clause),
+    "the shared clause must be the one the rollup tail really carries",
+  );
+
+  const script = readFileSync(join(ROOT, "scripts/daily-digest.ts"), "utf8");
+  // Промпт склеен из строковых литералов, поэтому сравнивается склеенный вид.
+  const prompt = script.replace(/"\s*\+\s*\n?\s*"/gu, "");
+  assert.ok(
+    prompt.includes(clause),
+    "scripts/daily-digest.ts must carry the same no-self-delivery clause",
+  );
+  assert.match(prompt, /Return the digest as the final text of this turn\./u);
 });
