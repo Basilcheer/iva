@@ -6,12 +6,26 @@
 //
 // Requires: a running agent (eve start) and a vault to write into. The processing rules
 // (scripts/memory/instructions/) ship with the repo. Date is in ASSISTANT_TIMEZONE.
-import { appendFileSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+} from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Client, type MessageResult, type SessionState } from "eve/client";
 import { CORE_CAP } from "#lib/core-cap.ts";
 import { writeFileAtomicSync } from "#lib/fs-atomic.ts";
+import { tr } from "#lib/i18n.ts";
+import { readSettings } from "#lib/settings.ts";
+import {
+  memoryReportTail,
+  memoryReportsEnabled,
+  memoryReportsOffNotice,
+  noticeOnce,
+} from "../lib/notices.ts";
 import { notificationChat } from "../lib/notification-chat.ts";
 import {
   cancelTurnAndConfirmQuietly,
@@ -48,8 +62,10 @@ const INSTRUCTIONS = resolve(
   "instructions",
 );
 
-// daily/weekly reports go to Telegram; monthly/yearly are silent (vault only).
-const POST_TO_TELEGRAM: Record<Period, boolean> = {
+// daily/weekly may carry a Report to Telegram; monthly/yearly are silent by design (vault
+// only). Whether the Report actually goes out is the owner's switch, read at the end of the
+// run — a toggle flipped tonight applies tonight, with no restart (ADR-0007).
+const REPORTS_TO_TELEGRAM: Record<Period, boolean> = {
   daily: true,
   weekly: true,
   monthly: false,
@@ -90,9 +106,9 @@ function buildPrompt(p: Period, now: string): string {
     `instructions in ${INSTRUCTIONS}/memory-processor/. ` +
     `Do not invent facts — take them from the source files. `;
 
-  const tail =
-    `At the end, return a SHORT report in plain text (no markdown tables): what was created/updated, ` +
-    `key topics and links between cards. Only the finished report, with no preamble or reasoning.`;
+  // Delivery half of the prompt: language, human wording, no self-delivery. Built per call,
+  // so a language switched in /menu applies to the next night without a restart.
+  const tail = memoryReportTail(tr);
 
   switch (p) {
     case "daily":
@@ -176,6 +192,10 @@ const client = new Client({
 const DATA_DIR = process.env.ASSISTANT_DATA_DIR ?? "data";
 const SESSION_FILE = join(DATA_DIR, `rollup-session-${period}.json`);
 const SESSION_TTL_MS = 90 * 24 * 3600 * 1000;
+// Has this period ever run here? Read before the turn saves its own cursor. It is the one
+// deterministic mark that separates an installation that used to get the morning report
+// from a fresh one, which has nothing to miss and must hear nothing (ADR-0007).
+const RAN_BEFORE = existsSync(SESSION_FILE);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -400,8 +420,38 @@ if (period === "daily") {
 
 console.log(`rollup ${period} (${today}):\n${result.message}`);
 
-// Telegram report only for daily/weekly.
-if (POST_TO_TELEGRAM[period]) {
+// Telegram report only for daily/weekly, and only when the owner turned Reports on.
+if (REPORTS_TO_TELEGRAM[period]) {
+  if (!memoryReportsEnabled(readSettings())) {
+    // An installation that used to get this report hears once why the morning went quiet;
+    // a fresh one never had it and stays silent. The claim is atomic, so daily and weekly
+    // on the same night say it once between them.
+    if (RAN_BEFORE && BOT && CHAT) {
+      const said = await noticeOnce(
+        DATA_DIR,
+        "memory-reports-off",
+        async () => {
+          const sent = await sendTelegramHtml(
+            BOT,
+            CHAT,
+            memoryReportsOffNotice(tr),
+          );
+          if (!sent.ok)
+            console.error(
+              `rollup ${period}: could not deliver the reports-off notice:`,
+              sent.error,
+            );
+          return sent.ok;
+        },
+      );
+      if (said === "sent")
+        console.log(`rollup ${period}: told the chat that reports are now off`);
+    }
+    console.log(
+      `rollup ${period}: memory reports are off — the report stays in the log`,
+    );
+    process.exit(0);
+  }
   if (!BOT || !CHAT) {
     console.error(
       `rollup ${period}: no TELEGRAM_BOT_TOKEN/TELEGRAM_DIGEST_CHAT_ID — report not sent`,
