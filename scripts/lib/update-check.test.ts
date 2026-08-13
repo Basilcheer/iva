@@ -383,7 +383,7 @@ test("on the versioned layout the daily check reads the mirror and names the ins
   ]);
 });
 
-// Оффер обновления — Alert (ADR-0007), и говорит он на языке, выбранном в /menu, а не на
+// Предложение обновиться — алерт (ADR-0007), и говорит он на языке, выбранном в /menu, а не на
 // том, что остался в .env. Резолвер кэширует язык на ~2с и читает settings.json от cwd,
 // поэтому каждый сценарий — свежий процесс (тот же приём, что в agent/lib/i18n.test.ts).
 const OFFER_PROBE = `
