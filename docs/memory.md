@@ -27,7 +27,7 @@ One script, four in-process eve schedules, configured local time. `scripts/memor
 | monthly  | 1st, 04:20   | the month's weeklies       | monthly summary               |
 | yearly   | Jan 1, 04:25 | the year's monthlies       | yearly summary                |
 
-Every run is silent by default: the vault is written, the chat stays quiet. Daily and weekly runs can post a report to Telegram — switch it on in `/menu` → **🔔 Notices** → _Memory reports_ (`memoryReports.enabled` in `data/settings.json`, read at the end of each run, so a tap applies the same night with no restart). Monthly and yearly are always silent. When the report is on, it comes as one short human note in your interface language — what Iva remembered, in 3–5 lines, with no internal terms. Why off by default: [ADR-0007](adr/0007-notices-are-opt-in.md).
+Every run is silent by default: the vault is written, the chat stays quiet. Daily and weekly runs can post a report to Telegram — switch it on in `/menu` → **🔔 Notices** → _Memory reports_ (`memoryReports.enabled` in `data/settings.json`, read at the end of each nightly run, so a tap applies the same night with no restart). Monthly and yearly are always silent. When the report is on, it comes as one short human note in your interface language — what Iva remembered, in 3–5 lines, with no internal terms. Why off by default: [ADR-0007](adr/0007-notices-are-opt-in.md).
 
 The daily pass extracts entities through `write_card` — a tool whose type and status enums come from the vault's `schema.json`, so the model cannot invent card types. Every fact gets one operation:
 

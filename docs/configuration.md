@@ -80,7 +80,7 @@ The nightly Brain pass builds the hybrid index; to build it now, run `node --env
 
 ## Notices
 
-What Iva says on her own lives in `data/settings.json`, not in `.env` — the **🔔 Notices** screen in `/menu` writes these keys, and every schedule reads them when it fires, so a tap applies without a restart.
+What Iva says on her own lives in `data/settings.json`, not in `.env` — the **🔔 Notices** screen in `/menu` writes these keys, and the report switch is read at the end of each nightly run, the digest switch when its schedule fires — so a tap applies without a restart.
 
 | Key                      | Default | Notes                                                                                                           |
 | ------------------------ | ------- | --------------------------------------------------------------------------------------------------------------- |
