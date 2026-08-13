@@ -21,7 +21,6 @@ import {
   deliverMemoryReport,
   memoryReportTail,
   memoryReportsEnabled,
-  memoryReportsOffNotice,
   noticeLang,
   noticeTranslator,
   settleReportsOffNotice,
