@@ -254,11 +254,11 @@ if (failures.length) {
     steps,
     T(
       `Nightly memory care failed at: ${steps}. Cards stay off-schema and the topic index goes stale. ` +
-        "On the server run `uv --version`. It says nothing: install uv with " +
-        "`curl -LsSf https://astral.sh/uv/install.sh | sh`.",
+        "On the server run: uv --version. It says nothing: install uv with " +
+        "curl -LsSf https://astral.sh/uv/install.sh | sh",
       `Ночной уход за памятью не прошёл на шагах: ${steps}. Карточки остаются вне схемы, индекс тем устаревает. ` +
-        "Выполни на сервере `uv --version`. Пусто — поставь uv: " +
-        "`curl -LsSf https://astral.sh/uv/install.sh | sh`.",
+        "Выполни на сервере: uv --version. Пусто — поставь uv: " +
+        "curl -LsSf https://astral.sh/uv/install.sh | sh",
     ),
   );
 } else {
@@ -274,9 +274,9 @@ if (!cards) {
     "unloadable",
     T(
       "Iva's own files could not be loaded. The CORE.md size check and the broken-card scan were skipped. " +
-        "The memory backup still ran. On the server run `iva repair`.",
+        "The memory backup still ran. On the server run: iva repair",
       "Файлы самой Ивы не читаются. Проверка размера CORE.md и поиск битых карточек пропущены. " +
-        "Бэкап памяти всё равно прошёл. Выполни на сервере `iva repair`.",
+        "Бэкап памяти всё равно прошёл. Выполни на сервере: iva repair",
     ),
   );
 } else {
@@ -391,11 +391,11 @@ try {
   const detail = error instanceof Error ? error.message : String(error);
   const message = T(
     `The file-size check before the backup failed (${detail}). The memory backup is on hold, ` +
-      "so today's memory is not saved off the server yet. On the server run `df -h` for free space. " +
-      `Then run \`cd ${VAULT} && git status\` and read the error.`,
+      "so today's memory is not saved off the server yet. On the server run df -h for free space. " +
+      `Then run: cd ${VAULT} && git status`,
     `Проверка размеров файлов перед бэкапом не прошла (${detail}). Бэкап памяти отложен, ` +
-      "сегодняшняя память ещё не сохранена вне сервера. Выполни на сервере `df -h` — сколько места. " +
-      `Потом выполни \`cd ${VAULT} && git status\` и прочитай ошибку.`,
+      "сегодняшняя память ещё не сохранена вне сервера. Выполни на сервере df -h — сколько места. " +
+      `Потом выполни: cd ${VAULT} && git status`,
   );
   console.warn(`brain: ${message}`);
   await alert("backup-scan", "unreadable", message);
@@ -472,10 +472,10 @@ if (!remoteUrl) {
     "vault-remote",
     "missing",
     T(
-      "Memory is not backed up: the vault has no git remote. On the server run `gh auth login` " +
-        "(repo scope). The nightly brain then creates a private `iva-vault` repo and turns the backup on.",
-      "Память не бэкапится: у vault нет git remote. Зайди на сервер и выполни `gh auth login` " +
-        "(scope repo). Ночной brain сам создаст приватный репо `iva-vault` и включит бэкап.",
+      "Memory is not backed up: the vault has no git remote. On the server run: gh auth login " +
+        "(repo scope). The nightly brain then creates a private iva-vault repository and turns the backup on.",
+      "Память не бэкапится: у vault нет git remote. Зайди на сервер и выполни: gh auth login " +
+        "(scope repo). Ночной brain сам создаст приватный репозиторий iva-vault и включит бэкап.",
     ),
   );
   console.error("brain: no remote and gh unavailable — push skipped");
@@ -495,28 +495,28 @@ if (push.status !== 0) {
           "Memory backup rejected: the vault history holds a file too big for GitHub. Nothing is " +
             "lost, but new memory stays on the server only. Clean the history by hand on the " +
             `server, in ${VAULT}.\n` +
-            "1. Start a clean branch: `git checkout --orphan vault-clean`.\n" +
-            '2. Commit the current files: `git add -A && git commit -m "vault"`.\n' +
-            "3. Replace the remote history: `git push --force origin vault-clean:main`.",
+            "1. Start a clean branch: git checkout --orphan vault-clean\n" +
+            '2. Commit the current files: git add -A && git commit -m "vault"\n' +
+            "3. Replace the remote history: git push --force origin vault-clean:main",
           "Бэкап памяти отклонён: в истории vault лежит слишком большой файл. Ничего не потеряно, " +
             "но новая память остаётся только на сервере. Почисти историю вручную на сервере, " +
             `в ${VAULT}.\n` +
-            "1. Заведи чистую ветку: `git checkout --orphan vault-clean`.\n" +
-            '2. Закоммить текущие файлы: `git add -A && git commit -m "vault"`.\n' +
-            "3. Замени историю на remote: `git push --force origin vault-clean:main`.",
+            "1. Заведи чистую ветку: git checkout --orphan vault-clean\n" +
+            '2. Закоммить текущие файлы: git add -A && git commit -m "vault"\n' +
+            "3. Замени историю на remote: git push --force origin vault-clean:main",
         )
       : error.kind === "auth"
         ? T(
             "Memory backup failed: git has no access to the repo. New memory stays on the server " +
-              `only. On the server run \`gh auth login\`, then check \`cd ${VAULT} && git push\`.`,
+              `only. On the server run: gh auth login. Then check: cd ${VAULT} && git push`,
             "Бэкап памяти не прошёл: у git нет доступа к репозиторию. Новая память остаётся только " +
-              `на сервере. Выполни на сервере \`gh auth login\`, потом проверь \`cd ${VAULT} && git push\`.`,
+              `на сервере. Выполни на сервере: gh auth login. Потом проверь: cd ${VAULT} && git push`,
           )
         : T(
             `Memory backup failed: ${error.firstLine}. New memory stays on the server only. ` +
-              `On the server run \`cd ${VAULT} && git push\` and read the error.`,
+              `On the server run: cd ${VAULT} && git push`,
             `Бэкап памяти не прошёл: ${error.firstLine}. Новая память остаётся только на сервере. ` +
-              `Выполни на сервере \`cd ${VAULT} && git push\` и прочитай ошибку.`,
+              `Выполни на сервере: cd ${VAULT} && git push`,
           );
   console.warn(`brain: ${message}`);
   await alert("backup-push", error.kind, message);

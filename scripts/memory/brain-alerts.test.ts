@@ -10,6 +10,7 @@ import test, { type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import {
+  copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -74,7 +75,7 @@ test("brain speaks Russian, says what broke and what to do", (t) => {
     /Ночной уход за памятью не прошёл на шагах: cleanup/,
   );
   assert.match(run.stderr, /Карточки остаются вне схемы/);
-  assert.match(run.stderr, /Выполни на сервере `uv --version`/);
+  assert.match(run.stderr, /Выполни на сервере: uv --version/);
   // 2. CORE.md ужат.
   assert.match(
     run.stderr,
@@ -87,7 +88,7 @@ test("brain speaks Russian, says what broke and what to do", (t) => {
   // 4. Бэкап отложен.
   assert.match(run.stderr, /Проверка размеров файлов перед бэкапом не прошла/);
   assert.match(run.stderr, /память ещё не сохранена вне сервера/);
-  assert.match(run.stderr, /Выполни на сервере `df -h`/);
+  assert.match(run.stderr, /Выполни на сервере df -h/);
   // Ни одной английской строки из прежних алертов.
   assert.doesNotMatch(run.stderr, /vault maintenance partially failed/);
   assert.doesNotMatch(run.stderr, /Vault health dropped/);
@@ -99,14 +100,14 @@ test("brain speaks English when the owner picked English", (t) => {
   assert.equal(run.code, 1);
   assert.match(run.stderr, /Nightly memory care failed at: cleanup/);
   assert.match(run.stderr, /Cards stay off-schema/);
-  assert.match(run.stderr, /On the server run `uv --version`/);
+  assert.match(run.stderr, /On the server run: uv --version/);
   assert.match(
     run.stderr,
     new RegExp(`CORE\\.md grew past its ${CORE_CAP}-character cap`),
   );
   assert.match(run.stderr, /Cards with an unclosed ``` fence: 1\./);
   assert.match(run.stderr, /The file-size check before the backup failed/);
-  assert.match(run.stderr, /On the server run `df -h`/);
+  assert.match(run.stderr, /On the server run df -h/);
   // Русского в английском прогоне нет вовсе.
   assert.doesNotMatch(run.stderr, /Ночной уход/);
   assert.doesNotMatch(run.stderr, /Бэкап памяти/);
@@ -172,4 +173,106 @@ test("every brain alert goes through the throttle and carries both locales", () 
   assert.match(source, /Память не бэкапится: у vault нет git remote\./u);
   assert.match(source, /"\(repo scope\)\. The nightly brain then creates/u);
   assert.match(source, /"\(scope repo\)\. Ночной brain сам создаст/u);
+});
+
+// ── Установка со сломанным agent/ ────────────────────────────────────────────────────────
+// Brain копируется на «остров»: свой package.json без алиаса #lib и без каталога agent/.
+// loadCardTools() там падает, cards === null — то есть проверить размер ядра и просканировать
+// фенсы нечем. Забывать в этом состоянии нечего: отметка недельного дросселя обязана уцелеть,
+// иначе установка с мигающим деревом теряет дроссель и получает алерты каждую ночь.
+function runBrainWithoutTree(t: TestContext): {
+  code: number | null;
+  stderr: string;
+  state: Record<string, { essence?: string; lastSentAt?: number }>;
+} {
+  const home = mkdtempSync(join(tmpdir(), "iva-brain-island-"));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const island = join(home, "island");
+  mkdirSync(join(island, "scripts/memory"), { recursive: true });
+  mkdirSync(join(island, "scripts/lib"), { recursive: true });
+  writeFileSync(
+    join(island, "package.json"),
+    JSON.stringify({ type: "module" }),
+  );
+  copyFileSync(
+    join(ROOT, "scripts/memory/brain.ts"),
+    join(island, "scripts/memory/brain.ts"),
+  );
+  for (const name of [
+    "memory-maintenance.ts",
+    "notice-policy.ts",
+    "notice.ts",
+    "notification-chat.ts",
+  ])
+    copyFileSync(
+      join(ROOT, "scripts/lib", name),
+      join(island, "scripts/lib", name),
+    );
+
+  const vault = join(home, "vault");
+  const dataDir = join(home, "data");
+  mkdirSync(join(vault, "cards"), { recursive: true });
+  mkdirSync(dataDir, { recursive: true });
+  writeFileSync(join(vault, "CORE.md"), "x".repeat(CORE_CAP * 2));
+  writeFileSync(
+    join(vault, "cards", "broken.md"),
+    "---\ntype: note\n---\n\nfacts\n\n```bash\nnever closed\n",
+  );
+  const week = 7 * 24 * 60 * 60 * 1000;
+  writeFileSync(
+    join(dataDir, "alert-state.json"),
+    JSON.stringify({
+      "core-cap": { essence: "clamped", lastSentAt: Date.now() - week / 2 },
+      "unclosed-fence": {
+        essence: "cards/broken.md",
+        lastSentAt: Date.now() - week / 2,
+      },
+      "health-drop": { essence: "dropping", lastSentAt: Date.now() - week / 2 },
+    }),
+  );
+
+  const result = spawnSync(process.execPath, ["scripts/memory/brain.ts"], {
+    cwd: island,
+    encoding: "utf8",
+    env: {
+      PATH: "",
+      HOME: home,
+      ASSISTANT_VAULT_DIR: vault,
+      ASSISTANT_DATA_DIR: dataDir,
+      ASSISTANT_TIMEZONE: "UTC",
+      AGENT_LANGUAGE: "ru",
+    },
+  });
+  return {
+    code: result.status,
+    stderr: result.stderr,
+    state: JSON.parse(
+      readFileSync(join(dataDir, "alert-state.json"), "utf8"),
+    ) as Record<string, { essence?: string; lastSentAt?: number }>,
+  };
+}
+
+test("a broken agent/ does not erase the throttle of what it could not check", (t) => {
+  const run = runBrainWithoutTree(t);
+
+  assert.equal(run.code, 1);
+  assert.match(run.stderr, /Файлы самой Ивы не читаются/, "the tree is gone");
+
+  // Проверить эти две проблемы было нечем — отметки на месте, дроссель жив.
+  assert.equal(
+    typeof run.state["core-cap"]?.lastSentAt,
+    "number",
+    "the CORE cap was never measured, so its alert must not be forgotten",
+  );
+  assert.equal(
+    typeof run.state["unclosed-fence"]?.lastSentAt,
+    "number",
+    "the fence scan never ran, so its alert must not be forgotten",
+  );
+  // А то, что проверить БЫЛО чем, забывается — иначе тест доказывал бы лишь мёртвую запись.
+  assert.equal(
+    "health-drop" in run.state,
+    false,
+    "health history was readable and showed no drop, so that one is cleared",
+  );
 });
