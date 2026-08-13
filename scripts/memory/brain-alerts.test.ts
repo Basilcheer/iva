@@ -74,7 +74,7 @@ test("brain speaks Russian, says what broke and what to do", (t) => {
     /Ночной уход за памятью не прошёл на шагах: cleanup/,
   );
   assert.match(run.stderr, /Карточки остаются вне схемы/);
-  assert.match(run.stderr, /установлены uv и Python/);
+  assert.match(run.stderr, /Выполни на сервере `uv --version`/);
   // 2. CORE.md ужат.
   assert.match(
     run.stderr,
@@ -87,6 +87,7 @@ test("brain speaks Russian, says what broke and what to do", (t) => {
   // 4. Бэкап отложен.
   assert.match(run.stderr, /Проверка размеров файлов перед бэкапом не прошла/);
   assert.match(run.stderr, /память ещё не сохранена вне сервера/);
+  assert.match(run.stderr, /Выполни на сервере `df -h`/);
   // Ни одной английской строки из прежних алертов.
   assert.doesNotMatch(run.stderr, /vault maintenance partially failed/);
   assert.doesNotMatch(run.stderr, /Vault health dropped/);
@@ -98,13 +99,14 @@ test("brain speaks English when the owner picked English", (t) => {
   assert.equal(run.code, 1);
   assert.match(run.stderr, /Nightly memory care failed at: cleanup/);
   assert.match(run.stderr, /Cards stay off-schema/);
-  assert.match(run.stderr, /uv and Python are installed/);
+  assert.match(run.stderr, /On the server run `uv --version`/);
   assert.match(
     run.stderr,
     new RegExp(`CORE\\.md grew past its ${CORE_CAP}-character cap`),
   );
   assert.match(run.stderr, /Cards with an unclosed ``` fence: 1\./);
   assert.match(run.stderr, /The file-size check before the backup failed/);
+  assert.match(run.stderr, /On the server run `df -h`/);
   // Русского в английском прогоне нет вовсе.
   assert.doesNotMatch(run.stderr, /Ночной уход/);
   assert.doesNotMatch(run.stderr, /Бэкап памяти/);

@@ -254,9 +254,11 @@ if (failures.length) {
     steps,
     T(
       `Nightly memory care failed at: ${steps}. Cards stay off-schema and the topic index goes stale. ` +
-        "On the server check that uv and Python are installed. Then check the vault has schema.json and cards.",
+        "On the server run `uv --version`. It says nothing: install uv with " +
+        "`curl -LsSf https://astral.sh/uv/install.sh | sh`.",
       `Ночной уход за памятью не прошёл на шагах: ${steps}. Карточки остаются вне схемы, индекс тем устаревает. ` +
-        "Проверь на сервере, что установлены uv и Python. Потом проверь, что в vault есть schema.json и карточки.",
+        "Выполни на сервере `uv --version`. Пусто — поставь uv: " +
+        "`curl -LsSf https://astral.sh/uv/install.sh | sh`.",
     ),
   );
 } else {
@@ -284,6 +286,10 @@ if (!cards) {
 // ── 1b. CORE guard: the memory core must stay small (always-on floor stays flat) ──
 // This runs before git add/commit below, so a repaired CORE is included in the nightly backup.
 const corePath = resolve(VAULT, "CORE.md");
+// coreClamped стоит рядом с alert, а cleared — снаружи: тревога забывается на КАЖДОМ пути,
+// где ядро не переросло лимит, включая тот, на котором проверить его нечем (нет дерева).
+// Иначе одна сломанная установка держала бы тревогу о давно починенном файле.
+let coreClamped = false;
 if (cards && existsSync(corePath)) {
   const { coreCap, clampCore, writeFileAtomicSync } = cards;
   const oldCore = readFileSync(corePath, "utf8");
@@ -294,6 +300,7 @@ if (cards && existsSync(corePath)) {
       `brain: CORE.md clamped ${oldCore.length} → ${newCore.length} chars (cap ${coreCap})`,
     );
     const stillOver = newCore.length > coreCap;
+    coreClamped = true;
     await alert(
       "core-cap",
       stillOver ? "protected-overflow" : "clamped",
@@ -312,10 +319,9 @@ if (cards && existsSync(corePath)) {
             : ""),
       ),
     );
-  } else {
-    await cleared("core-cap");
   }
 }
+if (!coreClamped) await cleared("core-cap");
 
 // ── 1c. Cards with an unclosed code fence (report only, never repaired) ──
 // Such a card reads as one long code block: its ## History and ## Log are no longer
@@ -339,7 +345,7 @@ if (unclosed.length) {
   );
   console.warn(`brain: ${message}`);
   await alert("unclosed-fence", unclosed.join(","), message);
-} else if (cards) {
+} else {
   await cleared("unclosed-fence");
 }
 
@@ -378,9 +384,11 @@ try {
   const detail = error instanceof Error ? error.message : String(error);
   const message = T(
     `The file-size check before the backup failed (${detail}). The memory backup is on hold, ` +
-      "so today's memory is not saved off the server yet. Check free disk space and git in the vault folder.",
+      "so today's memory is not saved off the server yet. On the server run `df -h` for free space. " +
+      `Then run \`cd ${VAULT} && git status\` and read the error.`,
     `Проверка размеров файлов перед бэкапом не прошла (${detail}). Бэкап памяти отложен, ` +
-      "сегодняшняя память ещё не сохранена вне сервера. Проверь место на диске и git в папке vault.",
+      "сегодняшняя память ещё не сохранена вне сервера. Выполни на сервере `df -h` — сколько места. " +
+      `Потом выполни \`cd ${VAULT} && git status\` и прочитай ошибку.`,
   );
   console.warn(`brain: ${message}`);
   await alert("backup-scan", "unreadable", message);
