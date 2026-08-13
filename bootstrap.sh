@@ -49,9 +49,9 @@ FAIL2BAN_JAIL="/etc/fail2ban/jail.local"
 AUTO_UPGRADES_CONF="/etc/apt/apt.conf.d/20auto-upgrades"
 MARKER="# managed by the iva VPS bootstrap"
 
-# charm palette — one source for both the gum flags and the raw ANSI fallbacks
-C_PRIMARY=212   # pink
-C_ACCENT=99     # violet
+# iva palette (see deploy/iva-tree.ans) — one source for both the gum flags and the raw ANSI fallbacks
+C_PRIMARY=113   # leaf green
+C_ACCENT=71     # moss
 C_OK=84         # green
 C_WARN=214      # amber
 C_ERR=196       # red
@@ -365,8 +365,10 @@ show_banner() {
   local letter_i=("#######" "  ###  " "  ###  " "  ###  " "  ###  " "#######")
   local letter_v=("###   ###" "###   ###" "###   ###" " ### ### " "  #####  " "   ###   ")
   local letter_a=(" _#####_ " "###   ###" "###   ###" "#########" "###   ###" "###   ###")
-  # #7D56F4 (violet) → #FF6AC1 (pink)
-  local r0=125 g0=86 b0=244 r1=255 g1=106 b1=193
+  # Palette derived from the canonical tree art in deploy/iva-tree.ans (earthy greens,
+  # mean RGB 103,121,82, amber only in the highlights): forest green #387630 → light
+  # leaf #B2D66A, lifted in brightness so the letters stay readable on a dark terminal.
+  local r0=56 g0=118 b0=48 r1=178 g1=214 b1=106
   local row line len i ch glyph r g b span
 
   printf '\n'
