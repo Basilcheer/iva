@@ -17,10 +17,12 @@ import {
   recordSkippedOversize,
   scanOversizeWorkingTreeFiles,
 } from "../lib/memory-maintenance.ts";
+import { alertOnce, alertResolved, noticeTranslator } from "../lib/notices.ts";
 import { notificationChat } from "../lib/notification-chat.ts";
 import { redactNotice } from "../lib/notice.ts";
 
 const VAULT = resolve(process.env.ASSISTANT_VAULT_DIR ?? "vault");
+const DATA_DIR = resolve(process.env.ASSISTANT_DATA_DIR ?? "data");
 // The autograph code lives in THIS repo, not in the vault: the vault is user data only.
 // Absolute paths, because every script is spawned with cwd = VAULT (they take "." as the vault).
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -74,28 +76,54 @@ function run(cmd: string, args: string[], cwd = VAULT) {
 
 // Every alert here is built from runtime data: the stderr of a git push (which is
 // where a remote URL carrying a token shows up), card paths, error text. The Gate
-// stands on the send itself (the rule: agent/lib/outbox.ts).
-async function telegram(message: string): Promise<void> {
+// stands on the send itself (the rule: agent/lib/outbox.ts). Returns whether the
+// message really reached Telegram — an alert that never left must not silence the next one.
+async function telegram(message: string): Promise<boolean> {
   const text = await redactNotice(message);
   if (!BOT || !CHAT) {
     console.error(
       "brain: no TELEGRAM_BOT_TOKEN/TELEGRAM_DIGEST_CHAT_ID — alert not sent:",
       text,
     );
-    return;
+    return false;
   }
   const res = await fetch(`https://api.telegram.org/bot${BOT}/sendMessage`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ chat_id: CHAT, text }),
   });
-  if (!res.ok)
+  if (!res.ok) {
     console.error(
       "brain: Telegram sendMessage failed:",
       res.status,
       await res.text(),
     );
+    return false;
+  }
+  return true;
 }
+
+// An Alert cannot be switched off (ADR-0007), so it earns the interruption twice over: it
+// says what broke, what it costs and what to do, and it repeats at most once a week for the
+// same problem. `essence` is the substance of the problem — a different substance is a
+// different problem and speaks at once.
+async function alert(
+  key: string,
+  essence: string,
+  message: string,
+): Promise<void> {
+  const outcome = await alertOnce(DATA_DIR, key, essence, () =>
+    telegram(message),
+  );
+  if (outcome === "throttled")
+    console.log(
+      `brain: ${key} is unchanged since the last alert — not repeated`,
+    );
+}
+
+// The problem is gone: forget it, so tomorrow's relapse speaks at once instead of waiting
+// out the week.
+const cleared = (key: string): Promise<void> => alertResolved(DATA_DIR, key);
 
 // Health score is read from the history that graph.py health appends after each run.
 function readHealthHistory(): HealthHistoryEntry[] {
@@ -144,6 +172,9 @@ async function loadCardTools(): Promise<CardTools | null> {
 }
 
 const today = localDate();
+// Language of every line below. Resolved once per run: the nightly pass is minutes long,
+// and a translator is a function, so no translated string is frozen in a module constant.
+const T = await noticeTranslator();
 console.log(`=== brain for ${today} (vault: ${VAULT}) ===`);
 
 // ── 0. Schema location: vault root, with a one-time migration off the legacy path ──
@@ -213,20 +244,37 @@ if (process.env.MEMORY_SEARCH_MODE === "hybrid") {
 }
 
 if (failures.length) {
-  await telegram(
-    `brain: vault maintenance partially failed (${failures.join(", ")}) for ${today}. ` +
-      `Check that the server has uv/Python and the vault is initialized (schema.json + cards).`,
+  const steps = failures.join(", ");
+  await alert(
+    "maintenance",
+    steps,
+    T(
+      `Nightly memory care failed at: ${steps}. Cards stay off-schema and the topic index goes stale. ` +
+        "On the server check that uv and Python are installed. Then check the vault has schema.json and cards.",
+      `Ночной уход за памятью не прошёл на шагах: ${steps}. Карточки остаются вне схемы, индекс тем устаревает. ` +
+        "Проверь на сервере, что установлены uv и Python. Потом проверь, что в vault есть schema.json и карточки.",
+    ),
   );
+} else {
+  await cleared("maintenance");
 }
 
 // ── 1a. The card format §1b and §1c work from ──
 const cards = await loadCardTools();
 if (!cards) {
   failures.push("authored tree");
-  await telegram(
-    `brain: agent/ could not be loaded (${today}), so the CORE cap and the unclosed-fence ` +
-      "scan were skipped; the vault backup below still ran. Restore the tree with `iva repair`.",
+  await alert(
+    "authored-tree",
+    "unloadable",
+    T(
+      "Iva's own files could not be loaded. The CORE.md size check and the broken-card scan were skipped. " +
+        "The memory backup still ran. On the server run `iva repair`.",
+      "Файлы самой Iva не читаются. Проверка размера CORE.md и поиск битых карточек пропущены. " +
+        "Бэкап памяти всё равно прошёл. Выполни на сервере `iva repair`.",
+    ),
   );
+} else {
+  await cleared("authored-tree");
 }
 
 // ── 1b. CORE guard: the memory core must stay small (always-on floor stays flat) ──
@@ -241,14 +289,27 @@ if (cards && existsSync(corePath)) {
     console.warn(
       `brain: CORE.md clamped ${oldCore.length} → ${newCore.length} chars (cap ${coreCap})`,
     );
-    const protectedOverflow =
-      newCore.length > coreCap
-        ? " Protected headings, pointers or unknown sections still exceed the cap."
-        : "";
-    await telegram(
-      `CORE.md exceeded its ${coreCap}-char cap (${today}); brain clamped it ` +
-        `${oldCore.length} → ${newCore.length} chars. Pointers were preserved.${protectedOverflow}`,
+    const stillOver = newCore.length > coreCap;
+    await alert(
+      "core-cap",
+      stillOver ? "protected-overflow" : "clamped",
+      T(
+        `CORE.md grew past its ${coreCap}-character cap. I trimmed it from ${oldCore.length} to ` +
+          `${newCore.length} characters. Pointers stayed in place. Open CORE.md and check that ` +
+          "nothing important is gone." +
+          (stillOver
+            ? " Protected headings and unknown sections are still over the cap."
+            : ""),
+        `CORE.md вырос за лимит в ${coreCap} знаков. Я ужала его с ${oldCore.length} до ` +
+          `${newCore.length} знаков. Указатели на месте. Открой CORE.md и проверь, что ` +
+          "важное не пропало." +
+          (stillOver
+            ? " Защищённые заголовки и неизвестные секции всё ещё за лимитом."
+            : ""),
+      ),
     );
+  } else {
+    await cleared("core-cap");
   }
 }
 
@@ -262,13 +323,20 @@ if (unclosed.length) {
   const shown = unclosed.slice(0, 10);
   const rest = unclosed.length - shown.length;
   const list = shown.map((path) => `- ${path}`).join("\n");
-  const message =
-    `vault: ${unclosed.length} карточек с незакрытым \`\`\` (${today}); ` +
-    "их ## History и ## Log читаются как код, поэтому write_card отказывает им в " +
-    `UPDATE и SUPERSEDE. Закрой фенс вручную:\n${list}` +
-    (rest ? `\n… и ещё ${rest}` : "");
+  const message = T(
+    `${unclosed.length} cards have an unclosed \`\`\` fence. Iva cannot update or replace ` +
+      "facts in them, so new facts about these subjects are lost. Close the fence by hand:\n" +
+      list +
+      (rest ? `\n… and ${rest} more` : ""),
+    `У ${unclosed.length} карточек не закрыт \`\`\`. Iva не может обновлять и заменять в них ` +
+      "факты, поэтому новые факты по этим темам теряются. Закрой фенс вручную:\n" +
+      list +
+      (rest ? `\n… и ещё ${rest}` : ""),
+  );
   console.warn(`brain: ${message}`);
-  await telegram(message);
+  await alert("unclosed-fence", unclosed.join(","), message);
+} else if (cards) {
+  await cleared("unclosed-fence");
 }
 
 // ── 2. Detect health score drop ──
@@ -277,9 +345,18 @@ if (history.length >= 2) {
   const cur = history[history.length - 1]?.health_score;
   const prev = history[history.length - 2]?.health_score;
   if (typeof cur === "number" && typeof prev === "number" && cur < prev) {
-    await telegram(
-      `Vault health dropped: ${prev} → ${cur}/100 (${today}). Check vault/.graph/report.md.`,
+    await alert(
+      "health-drop",
+      "dropping",
+      T(
+        `Vault health dropped: ${prev} → ${cur} of 100. Links are breaking, so memory search ` +
+          "finds less. Open vault/.graph/report.md and see what fell.",
+        `Здоровье vault упало: ${prev} → ${cur} из 100. Связи рвутся, поиск по памяти находит ` +
+          "меньше. Открой vault/.graph/report.md и посмотри, что просело.",
+      ),
     );
+  } else {
+    await cleared("health-drop");
   }
 }
 
@@ -295,11 +372,14 @@ try {
   });
 } catch (error) {
   const detail = error instanceof Error ? error.message : String(error);
-  const message =
-    `vault: не удалось проверить размеры файлов перед git add (${detail}); ` +
-    "ночной коммит отложен, чтобы не повредить историю.";
+  const message = T(
+    `The file-size check before the backup failed (${detail}). The memory backup is on hold, ` +
+      "so today's memory is not saved off the server yet. Check free disk space and git in the vault folder.",
+    `Проверка размеров файлов перед бэкапом не прошла (${detail}). Бэкап памяти отложен, ` +
+      "сегодняшняя память ещё не сохранена вне сервера. Проверь место на диске и git в папке vault.",
+  );
   console.warn(`brain: ${message}`);
-  await telegram(message);
+  await alert("backup-scan", "unreadable", message);
   process.exit(1);
 }
 
@@ -308,13 +388,23 @@ if (oversized.length) {
     resolve(VAULT, ".graph/enforce-report.json"),
     oversized.length,
   );
-  const lines = oversized.map(
-    ({ path, size }) =>
-      `файл ${path} (${formatMegabytes(size)}) превышает лимит GitHub; ` +
-      "ночной cleanup должен его ужать, коммит отложен",
+  const lines = oversized.map(({ path, size }) =>
+    T(
+      `File ${path} (${formatMegabytes(size)}) is over the GitHub limit.`,
+      `Файл ${path} (${formatMegabytes(size)}) больше лимита GitHub.`,
+    ),
   );
   for (const line of lines) console.warn(`brain: ${line}`);
-  await telegram(`vault:\n${lines.join("\n")}`);
+  await alert(
+    "backup-oversize",
+    oversized.map(({ path }) => path).join(","),
+    T(
+      `${lines.join("\n")}\nThe memory backup is on hold until these files shrink. The nightly ` +
+        "cleanup should shrink them. Check again tomorrow.",
+      `${lines.join("\n")}\nБэкап памяти отложен, пока эти файлы не уменьшатся. Ночная чистка ` +
+        "должна их ужать. Проверь завтра.",
+    ),
+  );
   process.exit(1);
 }
 
@@ -357,14 +447,20 @@ function ensureRemote(): string {
 
 const remoteUrl = ensureRemote();
 if (!remoteUrl) {
-  await telegram(
-    "vault has no git remote and gh is not authenticated — memory is not being backed up. " +
-      "On the server run `gh auth login` (with repo scope); the nightly brain will then create " +
-      "a private iva-vault repo and back up automatically.",
+  await alert(
+    "vault-remote",
+    "missing",
+    T(
+      "Memory is not backed up: the vault has no git remote. On the server run `gh auth login` " +
+        "(repo scope). The nightly brain then creates a private `iva-vault` repo and turns the backup on.",
+      "Память не бэкапится: у vault нет git remote. Зайди на сервер и выполни `gh auth login` " +
+        "(scope repo). Ночной brain сам создаст приватный репо `iva-vault` и включит бэкап.",
+    ),
   );
   console.error("brain: no remote and gh unavailable — push skipped");
   process.exit(failures.length ? 1 : 0);
 }
+await cleared("vault-remote");
 
 run("git", ["add", "-A"]);
 // commit may return non-zero if there is nothing to commit — that is normal.
@@ -374,17 +470,32 @@ if (push.status !== 0) {
   const error = classifyGitPushError(push.stderr);
   const message =
     error.kind === "oversize"
-      ? "vault: git push отклонён: история уже содержит слишком большой blob. " +
-        "Нужна ручная очистка: `git checkout --orphan vault-clean` — сверни историю vault " +
-        "в один чистый коммит и запушь с `--force`."
+      ? T(
+          "Memory backup rejected: the vault history holds a file too big for GitHub. Nothing is " +
+            "lost, but new memory stays on the server only. Clean it by hand: `git checkout " +
+            "--orphan vault-clean`, fold the history into one clean commit, then push with `--force`.",
+          "Бэкап памяти отклонён: в истории vault лежит слишком большой файл. Ничего не потеряно, " +
+            "но новая память остаётся только на сервере. Почисти вручную: `git checkout --orphan " +
+            "vault-clean`, сверни историю в один чистый коммит и запушь с `--force`.",
+        )
       : error.kind === "auth"
-        ? "vault: git push failed (no credentials?). On the server run `gh auth login` " +
-          `and verify remote access (cd ${VAULT} && git push).`
-        : `vault: git push failed: ${error.firstLine}`;
+        ? T(
+            "Memory backup failed: git has no access to the repo. New memory stays on the server " +
+              `only. On the server run \`gh auth login\`, then check \`cd ${VAULT} && git push\`.`,
+            "Бэкап памяти не прошёл: у git нет доступа к репозиторию. Новая память остаётся только " +
+              `на сервере. Выполни на сервере \`gh auth login\`, потом проверь \`cd ${VAULT} && git push\`.`,
+          )
+        : T(
+            `Memory backup failed: ${error.firstLine}. New memory stays on the server only. ` +
+              `On the server run \`cd ${VAULT} && git push\` and read the error.`,
+            `Бэкап памяти не прошёл: ${error.firstLine}. Новая память остаётся только на сервере. ` +
+              `Выполни на сервере \`cd ${VAULT} && git push\` и прочитай ошибку.`,
+          );
   console.warn(`brain: ${message}`);
-  await telegram(message);
+  await alert("backup-push", error.kind, message);
   process.exit(1);
 }
+await cleared("backup-push");
 
 console.log("=== brain: done, vault committed and pushed ===");
 process.exit(failures.length ? 1 : 0);
