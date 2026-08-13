@@ -109,11 +109,13 @@ test("a switched-on toggle is ticked and offers the way back off", () => {
 });
 
 test("a toggle writes its own key and leaves the neighbours alone", async () => {
-  // Настоящие соседи из data/settings.json: язык (экран 🌐 Язык) и второй тумблер.
+  // Соседи двух видов: чужой ключ верхнего уровня (язык, второй тумблер) и сосед ВНУТРИ
+  // того же объекта. Второго сегодня в коде нет — и потому он здесь: тумблер обязан патчить
+  // вложенный объект целиком, а не переписывать его одним своим полем.
   writeSettingsFile({
     language: "en",
     digestSchedule: { enabled: true },
-    memoryReports: { enabled: false },
+    memoryReports: { enabled: false, chatId: "123" },
   });
   const redrawn: string[] = [];
   const context = makeContext("ru", redrawn);
@@ -123,7 +125,7 @@ test("a toggle writes its own key and leaves the neighbours alone", async () => 
   assert.deepEqual(readSettingsFile(), {
     language: "en",
     digestSchedule: { enabled: true },
-    memoryReports: { enabled: true },
+    memoryReports: { enabled: true, chatId: "123" },
   });
   assert.deepEqual(redrawn, ["ntc"], "the screen redraws itself, not the root");
 
@@ -131,7 +133,7 @@ test("a toggle writes its own key and leaves the neighbours alone", async () => 
   assert.deepEqual(readSettingsFile(), {
     language: "en",
     digestSchedule: { enabled: false },
-    memoryReports: { enabled: true },
+    memoryReports: { enabled: true, chatId: "123" },
   });
 });
 

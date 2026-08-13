@@ -1,5 +1,5 @@
 // Экран «🔔 Уведомления»: чем Iva имеет право прервать день. Тумблеры только у Report'ов —
-// плановых сводок; Alert'ы (проблемы и предложения обновиться) не выключаются, о чём экран
+// плановых сводок; алерты (проблемы и предложения обновиться) не выключаются, о чём экран
 // говорит прямым текстом (ADR-0007).
 //
 // Тумблер пишется в data/settings.json, который и rollup, и schedule дайджеста читают в
@@ -9,6 +9,8 @@
 // render() через ctx.tr, иначе язык замёрзнет до рестарта.
 import { readSettings, writeSettings } from "#lib/settings.ts";
 import { memoryReportsEnabled } from "../notice-policy.ts";
+
+const PARENT = "r";
 
 type Button = { text: string; callback_data: string };
 type MenuState = { page: number };
@@ -39,7 +41,7 @@ function digestEnabled(settings: unknown): boolean {
 }
 
 export default {
-  parent: "r",
+  parent: PARENT,
   render(_state: MenuState, ctx: MenuContext) {
     const settings = readSettings();
     const T = ctx.tr;
@@ -65,15 +67,15 @@ export default {
           "dig",
         ),
       ],
-      ctx.backRow("r"),
+      ctx.backRow(PARENT),
     ];
     return {
       text: T(
-        "🔔 Notices\n\nMemory reports: what Iva filed, after each nightly pass.\n" +
-          "Morning digest: your day ahead, at 08:00.\n\n" +
+        "🔔 Notices\n\nMemory reports: what Iva filed overnight and over the week.\n" +
+          "Morning digest: your day ahead at 08:00.\n\n" +
           "Alerts — problems and updates — always arrive.",
-        "🔔 Уведомления\n\nОтчёты памяти: что Ива разложила, после каждой ночной сборки.\n" +
-          "Утренний дайджест: план дня, в 08:00.\n\n" +
+        "🔔 Уведомления\n\nОтчёты памяти: что Ива разложила за ночь и за неделю.\n" +
+          "Утренний дайджест: план дня в 08:00.\n\n" +
           "Алерты — о проблемах и обновлениях — приходят всегда.",
       ),
       rows,
