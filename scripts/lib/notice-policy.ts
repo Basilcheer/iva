@@ -14,10 +14,12 @@
 // Здесь только политика: кому и когда можно говорить. Транспорт приносит вызывающий
 // (у моста, ночного brain и апдейтера он разный), поэтому каждая отправка — колбэк.
 //
-// Модуль обязан РАБОТАТЬ на установке без authored tree (scripts/authored-tree-guard.test.ts):
-// ночной brain и проверка обновлений — юниты, которые должны работать на половине установки,
-// и дроссель алертов нужен там больше всего. Поэтому из `agent/` берётся ровно одно — резолвер
-// языка, динамическим импортом и fail-open; всё остальное здесь на node:fs.
+// Модуль обязан РАБОТАТЬ на установке без authored tree: ночной brain и проверка обновлений —
+// юниты, которые работают на половине установки, и дроссель алертов нужен там больше всего.
+// Поэтому из `agent/` берётся ровно одно — резолвер языка, динамическим импортом и fail-open;
+// всё остальное здесь на node:fs. Сторожит это «островной» прогон в notice-policy.test.ts
+// (модуль копируется в каталог без алиаса `#lib`), а не authored-tree-guard: тот следит за
+// обратным направлением — чтобы agent/ не тянул scripts/.
 import {
   closeSync,
   mkdirSync,
@@ -29,6 +31,7 @@ import {
   writeFileSync,
   writeSync,
 } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 
 export type Translate = (english: string, russian: string) => string;
@@ -72,13 +75,22 @@ export function memoryReportsEnabled(settings: unknown): boolean {
 }
 
 /**
+ * «На каком языке писать» — одна формулировка на оба плановых хода (ночная свёртка и
+ * утренний дайджест). Общая функция, а не копия строки: разъехаться им нельзя, иначе
+ * половина плановых сообщений снова уедет на язык инструкции.
+ */
+export function writtenInLanguage(tr: Translate): string {
+  return `written in ${tr("English", "Russian")}`;
+}
+
+/**
  * Хвост ночного промпта — та его часть, что описывает ДОСТАВКУ отчёта: язык, форму и
  * запрет доставить себя самому. Язык называется явно: без этого модель пишет отчёт на
  * языке инструкции, и пользователь получает половину сообщения по-английски.
  */
 export function memoryReportTail(tr: Translate): string {
   return (
-    `At the end, return a SHORT report, written in ${tr("English", "Russian")}. ` +
+    `At the end, return a SHORT report, ${writtenInLanguage(tr)}. ` +
     `Plain text, no markdown tables. Write it in the first person, the way a person tells ` +
     `what they remembered in this pass: 3-5 short lines. ` +
     `Use everyday words only: no card operations (ADD/UPDATE/SUPERSEDE/NOOP), no field ` +
@@ -358,7 +370,9 @@ function readAlertState(dataDir: string): AlertState {
 // нужнее всего. Механизм тот же (tmp + rename), три строки, зависимостей ноль.
 function writeAlertState(dataDir: string, state: AlertState): void {
   const path = alertStatePath(dataDir);
-  const temp = `${path}.${process.pid}.${Date.now()}.tmp`;
+  // Уникален на вызов, а не на миллисекунду: две доставки в одну мс поделили бы имя,
+  // и вторая потеряла бы отметку на флаге "wx".
+  const temp = `${path}.${process.pid}.${randomUUID()}.tmp`;
   try {
     mkdirSync(dataDir, { recursive: true });
     writeFileSync(temp, `${JSON.stringify(state)}\n`, {

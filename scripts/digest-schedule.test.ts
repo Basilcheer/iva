@@ -17,7 +17,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { memoryReportTail } from "./lib/notice-policy.ts";
+import { memoryReportTail, writtenInLanguage } from "./lib/notice-policy.ts";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -120,4 +120,32 @@ test("the digest prompt forbids self-delivery in the same words as the rollup", 
     "scripts/daily-digest.ts must carry the same no-self-delivery clause",
   );
   assert.match(prompt, /Return the digest as the final text of this turn\./u);
+});
+
+// Язык — вторая половина той же жалобы: без явной фразы системный блок 05-language тянет
+// плановый ход на язык инструкции, и дайджест приходит по-английски на русской установке.
+// Формулировка у обоих ходов одна функция, поэтому разъехаться они не могут.
+test("the digest prompt names the language the same way the rollup does", () => {
+  assert.equal(
+    writtenInLanguage((english) => english),
+    "written in English",
+  );
+  assert.equal(
+    writtenInLanguage((_english, russian) => russian),
+    "written in Russian",
+  );
+  assert.ok(
+    memoryReportTail((english) => english).includes(
+      writtenInLanguage((english) => english),
+    ),
+    "the rollup tail must take the phrase from the shared function",
+  );
+
+  const script = readFileSync(join(ROOT, "scripts/daily-digest.ts"), "utf8");
+  assert.match(
+    script,
+    /\$\{writtenInLanguage\(tr\)\}/u,
+    "scripts/daily-digest.ts must name the language through the same function",
+  );
+  assert.match(script, /import \{ tr \} from "#lib\/i18n\.ts";/u);
 });
