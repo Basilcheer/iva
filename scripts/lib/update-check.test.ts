@@ -382,3 +382,63 @@ test("on the versioned layout the daily check reads the mirror and names the ins
     { root: join(home, "repo"), head: sha.slice(0, 12) },
   ]);
 });
+
+// Оффер обновления — Alert (ADR-0007), и говорит он на языке, выбранном в /menu, а не на
+// том, что остался в .env. Резолвер кэширует язык на ~2с и читает settings.json от cwd,
+// поэтому каждый сценарий — свежий процесс (тот же приём, что в agent/lib/i18n.test.ts).
+const OFFER_PROBE = `
+const { runDailyUpdateCheck } = await import(process.env.__CHECK_UPDATE_URL);
+const texts = [];
+const result = await runDailyUpdateCheck({
+  root: process.env.__ROOT,
+  env: {
+    TELEGRAM_BOT_TOKEN: "token",
+    TELEGRAM_DIGEST_CHAT_ID: "42",
+    ASSISTANT_DATA_DIR: process.env.ASSISTANT_DATA_DIR,
+    AGENT_LANGUAGE: process.env.AGENT_LANGUAGE,
+  },
+  inspectImpl: async () => ({ hasVersionUpdate: true, localVersion: "1.2.3", remoteVersion: "1.2.4" }),
+  sendImpl: async (request) => texts.push(request.offer.text),
+});
+process.stdout.write(JSON.stringify({ status: result.status, texts }));
+`;
+
+function offerProbe(settingsLanguage: string, agentLanguage: string): string[] {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "iva-offer-lang-")));
+  const data = join(root, "data");
+  mkdirSync(data, { recursive: true });
+  writeFileSync(
+    join(data, "settings.json"),
+    JSON.stringify({ language: settingsLanguage }),
+  );
+  const output = execFileSync(
+    process.execPath,
+    ["--input-type=module", "-e", OFFER_PROBE],
+    {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        __CHECK_UPDATE_URL: new URL("../check-update.mjs", import.meta.url)
+          .href,
+        __ROOT: root,
+        ASSISTANT_DATA_DIR: data,
+        AGENT_LANGUAGE: agentLanguage,
+      },
+    },
+  );
+  const parsed = JSON.parse(output) as { status: string; texts: string[] };
+  assert.equal(parsed.status, "notified");
+  return parsed.texts;
+}
+
+test("the update offer speaks the language picked in /menu, not the one left in .env", () => {
+  const english = offerProbe("en", "ru");
+  assert.equal(english.length, 1);
+  assert.match(english[0], /A new Iva version is available/);
+  assert.doesNotMatch(english[0], /Доступна новая версия/);
+
+  const russian = offerProbe("ru", "en");
+  assert.equal(russian.length, 1);
+  assert.match(russian[0], /Доступна новая версия Iva/);
+  assert.doesNotMatch(russian[0], /A new Iva version/);
+});
