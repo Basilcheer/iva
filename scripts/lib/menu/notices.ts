@@ -1,5 +1,5 @@
 // Экран «🔔 Уведомления»: чем Iva имеет право прервать день. Тумблеры только у Report'ов —
-// плановых сводок; Alert'ы (проблемы, офферы обновления) не выключаются, о чём экран
+// плановых сводок; Alert'ы (проблемы и предложения обновиться) не выключаются, о чём экран
 // говорит прямым текстом (ADR-0007).
 //
 // Тумблер пишется в data/settings.json, который и rollup, и schedule дайджеста читают в
@@ -69,12 +69,12 @@ export default {
     ];
     return {
       text: T(
-        "🔔 Notices\n\nMemory reports: what Iva filed last night, at 04:00.\n" +
+        "🔔 Notices\n\nMemory reports: what Iva filed, after each nightly pass.\n" +
           "Morning digest: your day ahead, at 08:00.\n\n" +
-          "Alerts about problems and update offers always arrive.",
-        "🔔 Уведомления\n\nОтчёты памяти: что Ива разложила ночью, в 04:00.\n" +
+          "Alerts — problems and updates — always arrive.",
+        "🔔 Уведомления\n\nОтчёты памяти: что Ива разложила, после каждой ночной сборки.\n" +
           "Утренний дайджест: план дня, в 08:00.\n\n" +
-          "Алерты о проблемах и офферы обновлений приходят всегда.",
+          "Алерты — о проблемах и обновлениях — приходят всегда.",
       ),
       rows,
     };

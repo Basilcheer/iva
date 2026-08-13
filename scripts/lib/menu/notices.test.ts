@@ -76,7 +76,7 @@ test("both toggles render off on a fresh installation, in either language", () =
   assert.match(russian.text, /🔔 Уведомления/);
   assert.match(
     russian.text,
-    /Алерты о проблемах и офферы обновлений приходят всегда/,
+    /Алерты — о проблемах и обновлениях — приходят всегда/,
   );
   assert.deepEqual(labels(russian), [
     ["○ Отчёты памяти", "iva_menu:ntc:set:rep:1"],
@@ -86,10 +86,7 @@ test("both toggles render off on a fresh installation, in either language", () =
 
   const english = screen.render({ page: 0 }, makeContext("en"));
   assert.match(english.text, /🔔 Notices/);
-  assert.match(
-    english.text,
-    /Alerts about problems and update offers always arrive/,
-  );
+  assert.match(english.text, /Alerts — problems and updates — always arrive/);
   assert.deepEqual(labels(english), [
     ["○ Memory reports", "iva_menu:ntc:set:rep:1"],
     ["○ Morning digest", "iva_menu:ntc:set:dig:1"],
@@ -112,10 +109,11 @@ test("a switched-on toggle is ticked and offers the way back off", () => {
 });
 
 test("a toggle writes its own key and leaves the neighbours alone", async () => {
+  // Настоящие соседи из data/settings.json: язык (экран 🌐 Язык) и второй тумблер.
   writeSettingsFile({
     language: "en",
-    digestSchedule: { enabled: true, hour: 8 },
-    memoryReports: { lastReport: "2026-08-12" },
+    digestSchedule: { enabled: true },
+    memoryReports: { enabled: false },
   });
   const redrawn: string[] = [];
   const context = makeContext("ru", redrawn);
@@ -124,16 +122,16 @@ test("a toggle writes its own key and leaves the neighbours alone", async () => 
 
   assert.deepEqual(readSettingsFile(), {
     language: "en",
-    digestSchedule: { enabled: true, hour: 8 },
-    memoryReports: { lastReport: "2026-08-12", enabled: true },
+    digestSchedule: { enabled: true },
+    memoryReports: { enabled: true },
   });
   assert.deepEqual(redrawn, ["ntc"], "the screen redraws itself, not the root");
 
   await screen.on("set", ["dig", "0"], { page: 0 }, context);
   assert.deepEqual(readSettingsFile(), {
     language: "en",
-    digestSchedule: { enabled: false, hour: 8 },
-    memoryReports: { lastReport: "2026-08-12", enabled: true },
+    digestSchedule: { enabled: false },
+    memoryReports: { enabled: true },
   });
 });
 

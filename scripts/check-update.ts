@@ -63,7 +63,7 @@ export async function runDailyUpdateCheck({
       return { status: "already-notified" as const, info };
     }
 
-    // The update offer is an Alert (ADR-0007) and speaks the one language the owner picked:
+    // The update prompt is an Alert (ADR-0007) and speaks the one language the owner picked:
     // settings.language first, AGENT_LANGUAGE after it — the same resolver the chat uses.
     const offer = updateOffer(
       info.localVersion,

@@ -237,7 +237,7 @@ test("daily check sends one offer per version and records only successful sends"
   assert.equal((await runDailyUpdateCheck(options)).status, "notified");
   assert.equal(sent.length, 1);
   assert.equal(sent[0].offer.replyMarkup.inline_keyboard[0].length, 2);
-  assert.match(sent[0].offer.text, /Доступна новая версия Iva/);
+  assert.match(sent[0].offer.text, /Доступна новая версия Ивы/);
   assert.equal((await runDailyUpdateCheck(options)).status, "already-notified");
   assert.equal(sent.length, 1);
 
@@ -288,7 +288,7 @@ test("offer copy is bilingual and keeps existing callback actions", () => {
   const en = updateOffer("1.2.3", "1.2.4", "en");
   const ru = updateOffer("1.2.3", "1.2.4", "ru");
   assert.match(en.text, /new Iva version/);
-  assert.match(ru.text, /новая версия Iva/);
+  assert.match(ru.text, /новая версия Ивы/);
   assert.deepEqual(
     en.replyMarkup.inline_keyboard[0].map((button) => button.callback_data),
     ["iva_update:do", "iva_update:skip"],
@@ -439,6 +439,6 @@ test("the update offer speaks the language picked in /menu, not the one left in 
 
   const russian = offerProbe("ru", "en");
   assert.equal(russian.length, 1);
-  assert.match(russian[0], /Доступна новая версия Iva/);
+  assert.match(russian[0], /Доступна новая версия Ивы/);
   assert.doesNotMatch(russian[0], /A new Iva version/);
 });
