@@ -87,7 +87,7 @@ What Iva says on her own lives in `data/settings.json`, not in `.env` — the **
 | `memoryReports.enabled`  | `false` | The nightly memory report (daily 04:00 and weekly Mon 04:15) in Telegram. Off means the vault is still written. |
 | `digestSchedule.enabled` | `false` | The morning digest at 08:00. `/digest` works by hand either way.                                                |
 
-Alerts about problems (memory not backed up, a failed nightly pass) and update offers always arrive: they cannot be switched off, but each one says what to do and repeats at most once a week per problem — [ADR-0007](./adr/0007-notices-are-opt-in.md).
+Alerts — problems (memory not backed up, a failed nightly pass) and new versions — always arrive: they cannot be switched off, but each one says what to do and repeats at most once a week per problem — [ADR-0007](./adr/0007-notices-are-opt-in.md).
 
 ## System
 

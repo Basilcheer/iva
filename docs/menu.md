@@ -60,9 +60,9 @@ Your raw answers are archived verbatim to `vault/core-interview.md` (overwritten
 
 Everything Iva sends **on her own** — with no message from you — is a Notice, and there are exactly two kinds. A **Report** is a scheduled summary: the nightly memory report and the morning digest. An **Alert** is trouble that needs your hand: memory that is not being backed up, a nightly pass that failed, a new version to install.
 
-The **🔔 Notices** screen switches the two Reports — _Memory reports_ (nightly, 04:00 and Mon 04:15) and _Morning digest_ (08:00). Both are **off by default**, so a fresh installation says nothing in the morning; the vault is still written and `/digest` still works by hand. A tap writes `data/settings.json`, which each schedule reads when it fires — no restart, and a switch flipped tonight applies tonight.
+The **🔔 Notices** screen switches the two Reports — _Memory reports_ (nightly, 04:00 and Mon 04:15) and _Morning digest_ (08:00). Both are **off by default**, so a fresh installation says nothing in the morning; the vault is still written and `/digest` still works by hand. A tap writes `data/settings.json`, which each schedule reads when it fires — no restart, and a switch flipped tonight applies tonight. Both scheduled turns hand their text to the code that delivers it, so a report arrives as exactly one message ([ADR-0007](adr/0007-notices-are-opt-in.md)).
 
-Alerts cannot be switched off, and the screen says so. The price they pay for that: every Alert names what broke, what it costs and the exact command to fix it, and it repeats at most once a week for the same problem — sooner only if the problem changed or came back after a fix. The reasoning: [ADR-0007](adr/0007-notices-are-opt-in.md).
+Alerts — problems and new versions — cannot be switched off, and the screen says so. The price they pay for that: every Alert names what broke, what it costs and the exact command to fix it, and it repeats at most once a week for the same problem — sooner only if the problem changed or came back after a fix. The reasoning: [ADR-0007](adr/0007-notices-are-opt-in.md).
 
 ## API keys and secrets
 
