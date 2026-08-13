@@ -2,7 +2,7 @@
 // ровно два, и у каждого своё правило (ADR-0007):
 //   • Report — плановая сводка (отчёты памяти, утренний дайджест). По умолчанию выключен,
 //     включается тумблером в /menu → 🔔 Уведомления.
-//   • Alert — проблема, с которой владельцу надо что-то сделать (brain, оффер обновления).
+//   • Alert — проблема, с которой владельцу надо что-то сделать (brain, предложение обновиться).
 //     Не выключается — и потому обязан говорить, что делать, и не повторяться чаще раза
 //     в неделю на одну и ту же проблему.
 //
@@ -21,6 +21,7 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
+  readdirSync,
   rmSync,
   writeSync,
 } from "node:fs";
@@ -103,6 +104,45 @@ function errorCode(error: unknown): string | undefined {
 const REPORTS_OFF_MARKER = "notice-memory-reports-off.json";
 
 /**
+ * Гонялась ли ночная свёртка на этой установке раньше — по следам, которые она оставляет
+ * и которые свежая установка к своей первой ночи иметь не может:
+ *
+ *   • курсор сессии ЛЮБОГО периода (`data/rollup-session-*.json`) — но его сносит
+ *     dropHungSession, поэтому одного его мало;
+ *   • `data/rollup-status.json` с записью любого периода — его пишет спавнер расписаний
+ *     после каждого прогона, и он переживает сброс курсора;
+ *   • дневные сводки в vault (`summaries/daily/*.md`) — их создаёт только свёртка;
+ *     шаблон vault'а привозит каталог пустым.
+ *
+ * BEST-EFFORT, а не гарантия: установка ≤0.3.9 (курсоров тогда не было), у которой ещё и
+ * vault не на месте, следов не оставит и Notice не получит. Цена ошибки в эту сторону —
+ * молчание вместо объяснения; цена ошибки в другую — нотация свежему пользователю.
+ * Записано в ADR-0007.
+ */
+export function rollupRanBefore(dataDir: string, vaultDir: string): boolean {
+  const names = (dir: string): string[] => {
+    try {
+      return readdirSync(dir);
+    } catch {
+      return []; // каталога нет — следов тоже
+    }
+  };
+  if (names(dataDir).some((name) => /^rollup-session-.+\.json$/.test(name)))
+    return true;
+  if (names(join(vaultDir, "summaries/daily")).some((n) => n.endsWith(".md")))
+    return true;
+  try {
+    const parsed: unknown = JSON.parse(
+      readFileSync(join(dataDir, "rollup-status.json"), "utf8"),
+    );
+    if (typeof parsed !== "object" || parsed === null) return false;
+    return Object.keys(parsed).some((name) => name.startsWith("memory-"));
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Заявка на право сказать: атомарный O_EXCL. Две ночные свёртки (daily и weekly) стартуют
  * одна за другой, и проигравшая обязана молчать, а не повторять. Файл ещё и хранит принятое
  * решение — по нему видно, что именно было решено в ту единственную ночь.
@@ -127,40 +167,64 @@ function claimOnce(
   }
 }
 
-export type ReportsOffNotice = "sent" | "not-needed" | "settled" | "failed";
+export type ReportsOffNotice =
+  "sent" | "not-needed" | "skipped" | "settled" | "failed";
+
+/**
+ * Владелец уже знает про тумблер: ключ `memoryReports` в settings пишет только экран
+ * /menu → 🔔 Уведомления. Значит выключил отчёты он сам, и рассказывать ему об этом —
+ * нотация на его собственное действие.
+ */
+export function ownerKnowsTheSwitch(settings: unknown): boolean {
+  return (
+    typeof settings === "object" &&
+    settings !== null &&
+    Object.hasOwn(settings, "memoryReports")
+  );
+}
 
 /**
  * Вопрос «сказать ли, что отчёты теперь выключены» решается РОВНО ОДИН РАЗ — в первый
- * прогон, где маркера ещё нет, — и записывается вместе с ответом:
+ * прогон, где маркера ещё нет, — и решение записывается в сам маркер:
  *
- *   • установка уже гоняла свёртку раньше (`ranBefore`) — отчёт у неё был, notice уходит;
- *   • свежая установка — терять ей нечего, пишем «not-needed» и молчим НАВСЕГДА.
+ *   • владелец уже трогал тумблер (`ownerKnows`) — он в курсе, «not-needed»;
+ *   • установка никогда не гоняла свёртку (`ranBefore` = false) — терять ей нечего,
+ *     «not-needed», молчим НАВСЕГДА;
+ *   • отчёт у установки был, но чата ещё нет (`send` = null) — «skipped»: к моменту, когда
+ *     чат появится, новость уже несвежая, а решение всё равно закрыто;
+ *   • иначе — Notice уходит.
  *
- * Решение записано, поэтому вторая ночь ничего не пересматривает: `ranBefore` к тому
- * времени станет true у всех (свёртка сохранила свой курсор), и без этой записи свежая
- * установка получила бы notice про отчёт, которого никогда не видела.
+ * Решение записано, поэтому вторая ночь ничего не пересматривает: следы прежних прогонов к
+ * тому времени появятся у всех, и без этой записи свежая установка получила бы notice про
+ * отчёт, которого никогда не видела.
  *
- * Заявка возвращается только если отправка не состоялась: несказанный Notice хуже
- * сказанного на ночь позже.
+ * КОМПРОМИСС: заявка подаётся ДО отправки, поэтому крэш между заявкой и доставкой теряет
+ * Notice навсегда. Обратный порядок (сначала отправить, потом пометить) на гонке daily и
+ * weekly дал бы дубль, а дубль хуже потери: пропавший Notice стоит одной строки в доке,
+ * повторяющийся — доверия к тому, что Iva не спамит. Записано в ADR-0007.
  */
 export async function settleReportsOffNotice({
   dataDir,
   ranBefore,
+  ownerKnows = false,
   send,
 }: {
   dataDir: string;
   ranBefore: boolean;
-  send: () => Promise<boolean>;
+  ownerKnows?: boolean;
+  /** null — чата нет: решение всё равно принимается, отправки не будет. */
+  send: (() => Promise<boolean>) | null;
 }): Promise<ReportsOffNotice> {
   const path = join(dataDir, REPORTS_OFF_MARKER);
-  const decision: ReportsOffNotice = ranBefore ? "sent" : "not-needed";
+  const decision: ReportsOffNotice =
+    ownerKnows || !ranBefore ? "not-needed" : send ? "sent" : "skipped";
   const claim = claimOnce(path, {
     decision,
     at: new Date().toISOString(),
   });
   if (claim === "taken") return "settled";
   if (claim === "failed") return "failed"; // решим завтра, маркера всё ещё нет
-  if (!ranBefore) return "not-needed";
+  if (decision !== "sent" || !send) return decision;
   if (await send()) return "sent";
   try {
     rmSync(path, { force: true });
@@ -192,28 +256,40 @@ export async function deliverMemoryReport({
   ranBefore,
   report,
   tr,
-  sendReport,
-  sendNotice,
+  send,
 }: {
   dataDir: string;
   settings: unknown;
   ranBefore: boolean;
   report: string;
   tr: Translate;
-  sendReport: (
-    text: string,
-  ) => Promise<{ ok: boolean; fellBack: boolean; error: string }>;
-  sendNotice: (text: string) => Promise<{ ok: boolean }>;
+  /** null — чат не настроен: отчёту некуда ехать, но решение о Notice всё равно берётся. */
+  send: {
+    report: (
+      text: string,
+    ) => Promise<{ ok: boolean; fellBack: boolean; error: string }>;
+    notice: (text: string) => Promise<{ ok: boolean }>;
+  } | null;
 }): Promise<ReportDelivery> {
   if (!memoryReportsEnabled(settings)) {
     const notice = await settleReportsOffNotice({
       dataDir,
       ranBefore,
-      send: async () => (await sendNotice(memoryReportsOffNotice(tr))).ok,
+      ownerKnows: ownerKnowsTheSwitch(settings),
+      send: send
+        ? async () => (await send.notice(memoryReportsOffNotice(tr))).ok
+        : null,
     });
     return { status: "off", fellBack: false, error: "", notice };
   }
-  const sent = await sendReport(report);
+  if (!send)
+    return {
+      status: "failed",
+      fellBack: false,
+      error: "no chat configured",
+      notice: "not-asked",
+    };
+  const sent = await send.report(report);
   return {
     status: sent.ok ? "sent" : "failed",
     fellBack: sent.fellBack,

@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -22,7 +23,9 @@ import {
   memoryReportTail,
   memoryReportsEnabled,
   noticeLang,
+  ownerKnowsTheSwitch,
   noticeTranslator,
+  rollupRanBefore,
   settleReportsOffNotice,
   type ReportsOffNotice,
   type Translate,
@@ -105,35 +108,102 @@ test("notice language comes from the tree, and falls back to the env without it"
   assert.equal(tr("EN", "RU"), "EN");
 });
 
+// ── След прежних прогонов ────────────────────────────────────────────────────────────────
+function vaultSummary(dir: string, name = "2026-08-11.md"): void {
+  mkdirSync(join(dir, "summaries/daily"), { recursive: true });
+  writeFileSync(join(dir, "summaries/daily", name), "# day\n");
+}
+
+test("a rollup that ran here before leaves a trace that survives its own cleanup", (t) => {
+  const data = dataDir(t);
+  const vault = dataDir(t);
+
+  // Свежая установка: каталог данных пуст, vault привезён шаблоном (пустой summaries/daily).
+  mkdirSync(join(vault, "summaries/daily"), { recursive: true });
+  writeFileSync(join(vault, "summaries/daily/.gitkeep"), "");
+  writeFileSync(join(data, "settings.json"), "{}");
+  writeFileSync(join(data, "tasks.json"), "[]");
+  assert.equal(rollupRanBefore(data, vault), false);
+  assert.equal(rollupRanBefore(join(data, "nope"), join(vault, "nope")), false);
+
+  // Курсор любого периода — след.
+  writeFileSync(join(data, "rollup-session-weekly.json"), "{}");
+  assert.equal(rollupRanBefore(data, vault), true);
+
+  // dropHungSession снёс курсор — статус расписаний остаётся.
+  rmSync(join(data, "rollup-session-weekly.json"));
+  writeFileSync(
+    join(data, "rollup-status.json"),
+    JSON.stringify({ "memory-daily": { lastSuccessAt: 1 } }),
+  );
+  assert.equal(rollupRanBefore(data, vault), true);
+
+  // Битый статус — не след; чужие записи в нём — тоже.
+  writeFileSync(join(data, "rollup-status.json"), "{ not json");
+  assert.equal(rollupRanBefore(data, vault), false);
+  writeFileSync(
+    join(data, "rollup-status.json"),
+    JSON.stringify({ digest: { lastSuccessAt: 1 } }),
+  );
+  assert.equal(rollupRanBefore(data, vault), false);
+
+  // Дневная сводка в vault — след даже с пустым data/ (обновление с версии без курсоров).
+  vaultSummary(vault);
+  assert.equal(rollupRanBefore(data, vault), true);
+});
+
 // ── Миграция: решение принимается один раз, на первой же ночи ────────────────────────────
-// Ночь свёртки воспроизводится в том же порядке, что в rollup.ts: сначала читается, гонялась
-// ли эта свёртка раньше (курсор сессии на диске), потом прогон СОХРАНЯЕТ курсор, и только
-// в конце решается судьба Notice. Без записанного решения вторая ночь свежей установки
-// выглядит как старая — ровно та регрессия, ради которой это поведение и проверяется.
+// Ночь воспроизводится в том же порядке, что в rollup.ts: сначала читается след прежних
+// прогонов, потом прогон оставляет СВОИ следы (курсор и запись в статусе расписаний), и
+// только в конце решается судьба Notice. Без записанного решения вторая ночь свежей
+// установки выглядит как старая — ровно та регрессия, ради которой это и проверяется.
 type Night = { outcome: ReportsOffNotice; said: number };
 
-async function night(dir: string, sent: string[]): Promise<Night> {
-  const cursor = join(dir, "rollup-session-daily.json");
-  const ranBefore = existsSync(cursor);
-  writeFileSync(cursor, JSON.stringify({ state: {}, createdAt: Date.now() }));
+async function night(
+  data: string,
+  vault: string,
+  sent: string[],
+  options: { chat?: boolean; ownerKnows?: boolean } = {},
+): Promise<Night> {
+  const { chat = true, ownerKnows = false } = options;
+  const ranBefore = rollupRanBefore(data, vault);
+  writeFileSync(
+    join(data, "rollup-session-daily.json"),
+    JSON.stringify({ state: {}, createdAt: Date.now() }),
+  );
+  writeFileSync(
+    join(data, "rollup-status.json"),
+    JSON.stringify({ "memory-daily": { lastSuccessAt: Date.now() } }),
+  );
   const outcome = await settleReportsOffNotice({
-    dataDir: dir,
+    dataDir: data,
     ranBefore,
-    send: () => {
-      sent.push("notice");
-      return Promise.resolve(true);
-    },
+    ownerKnows,
+    send: chat
+      ? () => {
+          sent.push("notice");
+          return Promise.resolve(true);
+        }
+      : null,
   });
   return { outcome, said: sent.length };
 }
 
+function markerDecision(dir: string): string {
+  const marker: unknown = JSON.parse(
+    readFileSync(join(dir, "notice-memory-reports-off.json"), "utf8"),
+  );
+  return String((marker as { decision?: string }).decision);
+}
+
 test("a fresh installation is never told about a report it never had", async (t) => {
-  const dir = dataDir(t);
+  const data = dataDir(t);
+  const vault = dataDir(t);
   const sent: string[] = [];
 
-  const first = await night(dir, sent);
-  const second = await night(dir, sent);
-  const third = await night(dir, sent);
+  const first = await night(data, vault, sent);
+  const second = await night(data, vault, sent);
+  const third = await night(data, vault, sent);
 
   assert.deepEqual(
     [first.outcome, second.outcome, third.outcome],
@@ -141,23 +211,81 @@ test("a fresh installation is never told about a report it never had", async (t)
     "the answer is decided on night one and never revisited",
   );
   assert.equal(sent.length, 0, "not a single morning message");
-  const marker: unknown = JSON.parse(
-    readFileSync(join(dir, "notice-memory-reports-off.json"), "utf8"),
-  );
-  assert.equal((marker as { decision?: string }).decision, "not-needed");
+  assert.equal(markerDecision(data), "not-needed");
+});
+
+test("a fresh installation whose chat is configured later still stays silent", async (t) => {
+  const data = dataDir(t);
+  const vault = dataDir(t);
+  const sent: string[] = [];
+
+  // Первые две ночи бот ещё не настроен, поэтому отправлять некуда.
+  const first = await night(data, vault, sent, { chat: false });
+  await night(data, vault, sent, { chat: false });
+  // Чат появился — но вопрос уже закрыт.
+  const withChat = await night(data, vault, sent);
+
+  assert.equal(first.outcome, "not-needed");
+  assert.equal(withChat.outcome, "settled");
+  assert.equal(sent.length, 0);
+  assert.equal(markerDecision(data), "not-needed");
 });
 
 test("an installation that had the report hears once, then never again", async (t) => {
-  const dir = dataDir(t);
+  const data = dataDir(t);
+  const vault = dataDir(t);
   const sent: string[] = [];
-  // Свёртка уже гонялась до апдейта: её курсор лежит в data/.
-  writeFileSync(join(dir, "rollup-session-daily.json"), "{}");
+  // Свёртка гонялась до апдейта: её курсор лежит в data/.
+  writeFileSync(join(data, "rollup-session-daily.json"), "{}");
 
-  const first = await night(dir, sent);
-  const second = await night(dir, sent);
+  const first = await night(data, vault, sent);
+  const second = await night(data, vault, sent);
 
   assert.deepEqual([first.outcome, second.outcome], ["sent", "settled"]);
   assert.equal(sent.length, 1, "one message, not one per night");
+});
+
+test("an old installation without a chat closes the question without a word", async (t) => {
+  const data = dataDir(t);
+  const vault = dataDir(t);
+  const sent: string[] = [];
+  vaultSummary(vault); // отчёты у неё были
+
+  const first = await night(data, vault, sent, { chat: false });
+  const later = await night(data, vault, sent);
+
+  assert.equal(first.outcome, "skipped");
+  assert.equal(markerDecision(data), "skipped");
+  assert.equal(later.outcome, "settled", "stale news is not delivered late");
+  assert.equal(sent.length, 0);
+});
+
+test("an owner who switched the reports off himself gets no lecture about it", async (t) => {
+  const data = dataDir(t);
+  const vault = dataDir(t);
+  const sent: string[] = [];
+  vaultSummary(vault); // старая установка: отчёты у неё были
+
+  const first = await night(data, vault, sent, { ownerKnows: true });
+  const second = await night(data, vault, sent, { ownerKnows: true });
+
+  assert.deepEqual([first.outcome, second.outcome], ["not-needed", "settled"]);
+  assert.equal(sent.length, 0);
+  assert.equal(markerDecision(data), "not-needed");
+});
+
+test("the switch itself is what tells us the owner knows about it", () => {
+  assert.equal(
+    ownerKnowsTheSwitch({ memoryReports: { enabled: false } }),
+    true,
+  );
+  assert.equal(ownerKnowsTheSwitch({ memoryReports: {} }), true);
+  assert.equal(ownerKnowsTheSwitch({ language: "ru" }), false);
+  assert.equal(ownerKnowsTheSwitch({}), false);
+  assert.equal(ownerKnowsTheSwitch(null), false);
+  assert.equal(ownerKnowsTheSwitch("memoryReports"), false);
+  // Унаследованное имя свойства — не выбор владельца.
+  assert.equal(ownerKnowsTheSwitch({ toString: 1 }), false);
 });
 
 test("daily and weekly on the same night say it once between them", async (t) => {
@@ -236,8 +364,10 @@ function delivery(dir: string, settings: unknown, ranBefore: boolean) {
     ranBefore,
     report: "Запомнила три вещи про проект.",
     tr: RU,
-    sendReport: (text) => sendTelegramHtml("token", "42", text),
-    sendNotice: (text) => sendTelegramHtml("token", "42", text),
+    send: {
+      report: (text) => sendTelegramHtml("token", "42", text),
+      notice: (text) => sendTelegramHtml("token", "42", text),
+    },
   });
 }
 
@@ -276,11 +406,9 @@ test("a switched-off report on an old installation sends the notice, once", asyn
   const dir = dataDir(t);
   const calls = telegramCalls(t);
 
-  const first = await delivery(
-    dir,
-    { memoryReports: { enabled: false } },
-    true,
-  );
+  // Установка после апдейта: ключа memoryReports в settings ещё нет — тумблера владелец
+  // не касался, отчёт у него был, и молчание нужно объяснить.
+  const first = await delivery(dir, { language: "ru" }, true);
   const second = await delivery(dir, {}, true);
 
   assert.equal(first.notice, "sent");
@@ -289,6 +417,21 @@ test("a switched-off report on an old installation sends the notice, once", asyn
   assert.match(calls[0].text, /Утренние отчёты памяти теперь выключены/);
   assert.match(calls[0].text, /\/menu → 🔔 Уведомления/);
   assert.doesNotMatch(calls[0].text, /Запомнила три вещи/);
+});
+
+test("an owner who used the switch gets the report neither way", async (t) => {
+  const dir = dataDir(t);
+  const calls = telegramCalls(t);
+
+  const result = await delivery(
+    dir,
+    { memoryReports: { enabled: false } },
+    true,
+  );
+
+  assert.equal(result.status, "off");
+  assert.equal(result.notice, "not-needed");
+  assert.deepEqual(calls, [], "no lecture about his own tap");
 });
 
 test("a report carrying a secret is redacted on the way out", async (t) => {
@@ -303,8 +446,10 @@ test("a report carrying a secret is redacted on the way out", async (t) => {
     ranBefore: true,
     report: "Разобрала день. Ключ password=hunter2hunter лежал в заметке.",
     tr: RU,
-    sendReport: (text) => sendTelegramHtml("token", "42", text),
-    sendNotice: (text) => sendTelegramHtml("token", "42", text),
+    send: {
+      report: (text) => sendTelegramHtml("token", "42", text),
+      notice: (text) => sendTelegramHtml("token", "42", text),
+    },
   });
 
   assert.equal(calls.length, 1);

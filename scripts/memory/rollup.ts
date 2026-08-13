@@ -6,13 +6,7 @@
 //
 // Requires: a running agent (eve start) and a vault to write into. The processing rules
 // (scripts/memory/instructions/) ship with the repo. Date is in ASSISTANT_TIMEZONE.
-import {
-  appendFileSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  rmSync,
-} from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Client, type MessageResult, type SessionState } from "eve/client";
@@ -24,6 +18,7 @@ import {
   deliverMemoryReport,
   memoryReportTail,
   memoryReportsEnabled,
+  rollupRanBefore,
 } from "../lib/notice-policy.ts";
 import { notificationChat } from "../lib/notification-chat.ts";
 import {
@@ -191,10 +186,12 @@ const client = new Client({
 const DATA_DIR = process.env.ASSISTANT_DATA_DIR ?? "data";
 const SESSION_FILE = join(DATA_DIR, `rollup-session-${period}.json`);
 const SESSION_TTL_MS = 90 * 24 * 3600 * 1000;
-// Has this period ever run here? Read before the turn saves its own cursor. It is the one
-// deterministic mark that separates an installation that used to get the morning report
-// from a fresh one, which has nothing to miss and must hear nothing (ADR-0007).
-const RAN_BEFORE = existsSync(SESSION_FILE);
+// Did a rollup ever run on this installation? Read here, before this run leaves traces of
+// its own, and read from every trace at once (cursors of all four periods, the schedule
+// status file, daily summaries in the vault) — a single cursor is not enough, dropHungSession
+// deletes it. It separates an installation that used to get the morning report from a fresh
+// one, which has nothing to miss and must hear nothing. Best-effort by design: ADR-0007.
+const RAN_BEFORE = rollupRanBefore(DATA_DIR, VAULT);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -425,17 +422,21 @@ console.log(`rollup ${period} (${today}):\n${result.message}`);
 // that reports are now off. Never both, never twice.
 if (REPORTS_TO_TELEGRAM[period]) {
   const settings = readSettings();
-  if (!BOT || !CHAT) {
-    if (memoryReportsEnabled(settings)) {
-      console.error(
-        `rollup ${period}: no TELEGRAM_BOT_TOKEN/TELEGRAM_DIGEST_CHAT_ID — report not sent`,
-      );
-      process.exit(1);
-    }
-    // No chat to speak to: the reports-off notice stays unclaimed, so an installation that
-    // gets its token later still hears it once.
-    console.log(`rollup ${period}: no chat configured — nothing to deliver`);
-    process.exit(0);
+  // markdown → Telegram-HTML conversion, chunking, the outbound Gate and the self-heal all
+  // live in the shared seam. No token or chat means no seam — and the policy still decides
+  // the one-time notice, so a chat configured later cannot revive a question already closed.
+  const send =
+    BOT && CHAT
+      ? {
+          report: (text: string) => sendTelegramHtml(BOT, CHAT, text),
+          notice: (text: string) => sendTelegramHtml(BOT, CHAT, text),
+        }
+      : null;
+  if (!send && memoryReportsEnabled(settings)) {
+    console.error(
+      `rollup ${period}: no TELEGRAM_BOT_TOKEN/TELEGRAM_DIGEST_CHAT_ID — report not sent`,
+    );
+    process.exit(1);
   }
   const delivery = await deliverMemoryReport({
     dataDir: DATA_DIR,
@@ -443,10 +444,7 @@ if (REPORTS_TO_TELEGRAM[period]) {
     ranBefore: RAN_BEFORE,
     report: result.message,
     tr,
-    // markdown → Telegram-HTML conversion, chunking, the outbound Gate and the self-heal
-    // all live in the shared seam.
-    sendReport: (text) => sendTelegramHtml(BOT, CHAT, text),
-    sendNotice: (text) => sendTelegramHtml(BOT, CHAT, text),
+    send,
   });
   if (delivery.status === "off") {
     if (delivery.notice === "sent")

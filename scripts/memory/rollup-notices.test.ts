@@ -43,18 +43,24 @@ test("what leaves the chat is decided by the policy, not by the script", () => {
   assert.equal(source.split("sendTelegramHtml(").length - 1, 2);
   assert.match(
     block,
-    /sendReport: \(text\) => sendTelegramHtml\(BOT, CHAT, text\)/u,
+    /report: \(text: string\) => sendTelegramHtml\(BOT, CHAT, text\)/u,
   );
   assert.match(
     block,
-    /sendNotice: \(text\) => sendTelegramHtml\(BOT, CHAT, text\)/u,
+    /notice: \(text: string\) => sendTelegramHtml\(BOT, CHAT, text\)/u,
   );
+  // Чат не настроен — решение о Notice всё равно принимается: send просто null.
+  assert.match(block, /: null;/u);
+  assert.match(block, /send,/u);
 });
 
-test("the run tells the policy whether this period ever ran here before", () => {
-  // Единственная проводка, которую политика увидеть не может: признак читается ДО того,
-  // как прогон сохранит собственный курсор. Прочитанный после, он был бы true у всех.
-  assert.match(source, /const RAN_BEFORE = existsSync\(SESSION_FILE\);/u);
+test("the run reads the traces of past runs before it leaves its own", () => {
+  // Единственная проводка, которую политика увидеть не может: след читается ДО того, как
+  // прогон оставит свой собственный. Прочитанный после, он был бы true у всех.
+  assert.match(
+    source,
+    /const RAN_BEFORE = rollupRanBefore\(DATA_DIR, VAULT\);/u,
+  );
   assert.ok(
     source.indexOf("const RAN_BEFORE") < source.indexOf("saveSession("),
     "reading it after the save would make every installation look old",
@@ -82,8 +88,9 @@ test("the red line in the instructions exempts the nightly memory pass", () => {
   const red = instructions.slice(0, instructions.indexOf("\nТы — **Iva**"));
   assert.match(red, /ЛЮБОЙ ОТЧЁТ.*ТОЛЬКО RICH MESSAGE/u);
   assert.match(red, /ИСКЛЮЧЕНИЕ/u);
-  assert.match(red, /rollup/u);
   assert.match(red, /ФИНАЛЬНЫЙ ТЕКСТ хода/u);
-  assert.match(red, /доставку делает код/u);
-  assert.match(red, /rich message.*ЗАПРЕЩЕН/su);
+  assert.match(red, /ЗАПРЕЩЕН/u);
+  // Оба плановых хода, чей результат доставляет код, названы поимённо.
+  assert.match(red, /rollup/u);
+  assert.match(red, /дайджест/iu);
 });
