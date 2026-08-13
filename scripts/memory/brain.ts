@@ -355,8 +355,8 @@ if (unclosed.length) {
 
 // ── 2. Detect health score drop ──
 const history = readHealthHistory();
-// Усечённая или пересозданная история — не «падение»: тогда сравнивать нечего, и алерт о
-// давнем падении должен быть забыт, а не висеть вечно.
+// То же правило, что у ядра и фенсов: забываем только то, что реально проверили. Меньше двух
+// точек — сравнивать нечего, проверки не было, и отметка дросселя просто доживает свою неделю.
 let healthDropped = false;
 if (history.length >= 2) {
   const cur = history[history.length - 1]?.health_score;
@@ -374,8 +374,8 @@ if (history.length >= 2) {
       ),
     );
   }
+  if (!healthDropped) cleared("health-drop");
 }
-if (!healthDropped) cleared("health-drop");
 
 // ── 3. Git commit & push ──
 // Check the complete working-tree snapshot before staging anything. If even one file is

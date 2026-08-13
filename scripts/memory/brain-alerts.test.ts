@@ -180,7 +180,10 @@ test("every brain alert goes through the throttle and carries both locales", () 
 // loadCardTools() там падает, cards === null — то есть проверить размер ядра и просканировать
 // фенсы нечем. Забывать в этом состоянии нечего: отметка недельного дросселя обязана уцелеть,
 // иначе установка с мигающим деревом теряет дроссель и получает алерты каждую ночь.
-function runBrainWithoutTree(t: TestContext): {
+function runBrainWithoutTree(
+  t: TestContext,
+  options: { health?: number[] } = {},
+): {
   code: number | null;
   stderr: string;
   state: Record<string, { essence?: string; lastSentAt?: number }>;
@@ -218,6 +221,16 @@ function runBrainWithoutTree(t: TestContext): {
     join(vault, "cards", "broken.md"),
     "---\ntype: note\n---\n\nfacts\n\n```bash\nnever closed\n",
   );
+  // История здоровья читается без authored tree, поэтому ею и проверяется вторая половина
+  // правила: где сравнить БЫЛО чем и падения нет — отметка снимается.
+  if (options.health) {
+    mkdirSync(join(vault, ".graph"), { recursive: true });
+    writeFileSync(
+      join(vault, ".graph/health-history.json"),
+      JSON.stringify(options.health.map((health_score) => ({ health_score }))),
+    );
+  }
+
   const week = 7 * 24 * 60 * 60 * 1000;
   writeFileSync(
     join(dataDir, "alert-state.json"),
@@ -269,10 +282,27 @@ test("a broken agent/ does not erase the throttle of what it could not check", (
     "number",
     "the fence scan never ran, so its alert must not be forgotten",
   );
-  // А то, что проверить БЫЛО чем, забывается — иначе тест доказывал бы лишь мёртвую запись.
+  // Истории здоровья в этой фикстуре нет вовсе: сравнивать было нечего, значит и забывать
+  // нечего — то же правило, что у двух проверок выше.
+  assert.equal(
+    typeof run.state["health-drop"]?.lastSentAt,
+    "number",
+    "with no health history there was no comparison, so nothing may be forgotten",
+  );
+});
+
+test("a check that did run and found nothing does clear its alert", (t) => {
+  // Та же сломанная установка, но история здоровья на месте и падения в ней нет. Иначе
+  // предыдущий тест доказывал бы лишь то, что запись невозможно снять вообще.
+  const run = runBrainWithoutTree(t, { health: [80, 85] });
+
+  assert.equal(run.code, 1);
   assert.equal(
     "health-drop" in run.state,
     false,
-    "health history was readable and showed no drop, so that one is cleared",
+    "the history was readable and showed no drop, so that alert is forgotten",
   );
+  // Соседи, которых проверить было нечем, по-прежнему на месте.
+  assert.equal(typeof run.state["core-cap"]?.lastSentAt, "number");
+  assert.equal(typeof run.state["unclosed-fence"]?.lastSentAt, "number");
 });
