@@ -18,21 +18,23 @@ import {
   alertDue,
   alertOnce,
   alertResolved,
+  deliverMemoryReport,
   memoryReportTail,
   memoryReportsEnabled,
   memoryReportsOffNotice,
   noticeLang,
-  noticeOnce,
   noticeTranslator,
+  settleReportsOffNotice,
+  type ReportsOffNotice,
   type Translate,
-} from "./notices.ts";
+} from "./notice-policy.ts";
 import { sendTelegramHtml } from "./telegram-send.ts";
 
 const EN: Translate = (english) => english;
 const RU: Translate = (_english, russian) => russian;
 
 function dataDir(t: TestContext): string {
-  const dir = mkdtempSync(join(tmpdir(), "iva-notices-"));
+  const dir = mkdtempSync(join(tmpdir(), "iva-notice-policy-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   return dir;
 }
@@ -104,72 +106,116 @@ test("notice language comes from the tree, and falls back to the env without it"
   assert.equal(tr("EN", "RU"), "EN");
 });
 
-// ── Notice: одноразовое сообщение ────────────────────────────────────────────────────────
-test("a one-time notice is said once, whatever the runs do next", async (t) => {
+// ── Миграция: решение принимается один раз, на первой же ночи ────────────────────────────
+// Ночь свёртки воспроизводится в том же порядке, что в rollup.ts: сначала читается, гонялась
+// ли эта свёртка раньше (курсор сессии на диске), потом прогон СОХРАНЯЕТ курсор, и только
+// в конце решается судьба Notice. Без записанного решения вторая ночь свежей установки
+// выглядит как старая — ровно та регрессия, ради которой это поведение и проверяется.
+type Night = { outcome: ReportsOffNotice; said: number };
+
+async function night(dir: string, sent: string[]): Promise<Night> {
+  const cursor = join(dir, "rollup-session-daily.json");
+  const ranBefore = existsSync(cursor);
+  writeFileSync(cursor, JSON.stringify({ state: {}, createdAt: Date.now() }));
+  const outcome = await settleReportsOffNotice({
+    dataDir: dir,
+    ranBefore,
+    send: () => {
+      sent.push("notice");
+      return Promise.resolve(true);
+    },
+  });
+  return { outcome, said: sent.length };
+}
+
+test("a fresh installation is never told about a report it never had", async (t) => {
   const dir = dataDir(t);
-  let said = 0;
-  const send = () => {
-    said += 1;
-    return Promise.resolve(true);
-  };
+  const sent: string[] = [];
 
-  assert.equal(await noticeOnce(dir, "memory-reports-off", send), "sent");
-  assert.equal(await noticeOnce(dir, "memory-reports-off", send), "already");
-  assert.equal(await noticeOnce(dir, "memory-reports-off", send), "already");
-  assert.equal(said, 1);
+  const first = await night(dir, sent);
+  const second = await night(dir, sent);
+  const third = await night(dir, sent);
 
-  const marker = join(dir, "notice-memory-reports-off.json");
-  assert.equal(statSync(marker).mode & 0o777, 0o600);
-  const stored: unknown = JSON.parse(readFileSync(marker, "utf8"));
-  assert.equal(
-    typeof (stored as { notifiedAt?: unknown }).notifiedAt,
-    "string",
+  assert.deepEqual(
+    [first.outcome, second.outcome, third.outcome],
+    ["not-needed", "settled", "settled"],
+    "the answer is decided on night one and never revisited",
   );
+  assert.equal(sent.length, 0, "not a single morning message");
+  const marker: unknown = JSON.parse(
+    readFileSync(join(dir, "notice-memory-reports-off.json"), "utf8"),
+  );
+  assert.equal((marker as { decision?: string }).decision, "not-needed");
 });
 
-test("two rollups claiming the same notice at once leave one of them silent", async (t) => {
+test("an installation that had the report hears once, then never again", async (t) => {
+  const dir = dataDir(t);
+  const sent: string[] = [];
+  // Свёртка уже гонялась до апдейта: её курсор лежит в data/.
+  writeFileSync(join(dir, "rollup-session-daily.json"), "{}");
+
+  const first = await night(dir, sent);
+  const second = await night(dir, sent);
+
+  assert.deepEqual([first.outcome, second.outcome], ["sent", "settled"]);
+  assert.equal(sent.length, 1, "one message, not one per night");
+});
+
+test("daily and weekly on the same night say it once between them", async (t) => {
   const dir = dataDir(t);
   let said = 0;
   const send = async () => {
-    // Обе свёртки уже внутри отправки: заявка решает спор до неё, а не после.
+    // Обе свёртки уже внутри отправки: заявку разрешает файловая система, а не порядок.
     await new Promise((resolve) => setTimeout(resolve, 5));
     said += 1;
     return true;
   };
 
   const outcomes = await Promise.all([
-    noticeOnce(dir, "memory-reports-off", send),
-    noticeOnce(dir, "memory-reports-off", send),
+    settleReportsOffNotice({ dataDir: dir, ranBefore: true, send }),
+    settleReportsOffNotice({ dataDir: dir, ranBefore: true, send }),
   ]);
 
-  assert.deepEqual([...outcomes].sort(), ["already", "sent"]);
+  assert.deepEqual([...outcomes].sort(), ["sent", "settled"]);
   assert.equal(said, 1);
 });
 
-test("a notice that could not be delivered is said by the next run", async (t) => {
+test("a notice that could not be delivered is said by the next night", async (t) => {
   const dir = dataDir(t);
   const marker = join(dir, "notice-memory-reports-off.json");
 
   assert.equal(
-    await noticeOnce(dir, "memory-reports-off", () => Promise.resolve(false)),
+    await settleReportsOffNotice({
+      dataDir: dir,
+      ranBefore: true,
+      send: () => Promise.resolve(false),
+    }),
     "failed",
   );
   assert.equal(existsSync(marker), false, "the claim is given back");
 
   let said = 0;
   assert.equal(
-    await noticeOnce(dir, "memory-reports-off", () => {
-      said += 1;
-      return Promise.resolve(true);
+    await settleReportsOffNotice({
+      dataDir: dir,
+      ranBefore: true,
+      send: () => {
+        said += 1;
+        return Promise.resolve(true);
+      },
     }),
     "sent",
   );
   assert.equal(said, 1);
-  assert.equal(existsSync(marker), true);
+  assert.equal(statSync(marker).mode & 0o777, 0o600);
 });
 
-test("the reports-off notice reaches Telegram once, in the owner's language", async (t) => {
-  const dir = dataDir(t);
+// ── Что уходит в чат по итогам прогона: ровно одно сообщение или ни одного ───────────────
+// Транспорт настоящий (sendTelegramHtml → Outbox → Bot API), поймана только сеть: так видно
+// и число сообщений, и их текст — то, что увидел бы владелец.
+function telegramCalls(
+  t: TestContext,
+): Array<{ method: string; text: string }> {
   const calls: Array<{ method: string; text: string }> = [];
   const mutable = globalThis as unknown as { fetch: unknown };
   const previous = mutable.fetch;
@@ -181,25 +227,109 @@ test("the reports-off notice reaches Telegram once, in the owner's language", as
     calls.push({ method: url.split("/").at(-1) ?? "", text: body.text ?? "" });
     return Promise.resolve({ ok: true, status: 200, text: () => "" });
   };
+  return calls;
+}
 
-  const say = () =>
-    noticeOnce(dir, "memory-reports-off", async () => {
-      const sent = await sendTelegramHtml(
-        "token",
-        "42",
-        memoryReportsOffNotice(RU),
-      );
-      return sent.ok;
-    });
+function delivery(dir: string, settings: unknown, ranBefore: boolean) {
+  return deliverMemoryReport({
+    dataDir: dir,
+    settings,
+    ranBefore,
+    report: "Запомнила три вещи про проект.",
+    tr: RU,
+    sendReport: (text) => sendTelegramHtml("token", "42", text),
+    sendNotice: (text) => sendTelegramHtml("token", "42", text),
+  });
+}
 
-  assert.equal(await say(), "sent");
-  assert.equal(await say(), "already");
+test("a switched-on report goes out exactly once per run", async (t) => {
+  const dir = dataDir(t);
+  const calls = telegramCalls(t);
 
-  assert.equal(calls.length, 1, "one message, not one per run");
+  const result = await delivery(
+    dir,
+    { memoryReports: { enabled: true } },
+    true,
+  );
+
+  assert.equal(result.status, "sent");
+  assert.equal(result.notice, "not-asked");
+  assert.equal(calls.length, 1);
   assert.equal(calls[0].method, "sendMessage");
+  assert.match(calls[0].text, /Запомнила три вещи про проект/);
+  assert.equal(existsSync(join(dir, "notice-memory-reports-off.json")), false);
+});
+
+test("a switched-off report on a fresh installation sends nothing at all", async (t) => {
+  const dir = dataDir(t);
+  const calls = telegramCalls(t);
+
+  const first = await delivery(dir, {}, false);
+  const second = await delivery(dir, {}, true); // вторая ночь: курсор уже есть
+
+  assert.equal(first.status, "off");
+  assert.equal(first.notice, "not-needed");
+  assert.equal(second.notice, "settled");
+  assert.deepEqual(calls, [], "a fresh install says nothing in the morning");
+});
+
+test("a switched-off report on an old installation sends the notice, once", async (t) => {
+  const dir = dataDir(t);
+  const calls = telegramCalls(t);
+
+  const first = await delivery(
+    dir,
+    { memoryReports: { enabled: false } },
+    true,
+  );
+  const second = await delivery(dir, {}, true);
+
+  assert.equal(first.notice, "sent");
+  assert.equal(second.notice, "settled");
+  assert.equal(calls.length, 1);
   assert.match(calls[0].text, /Утренние отчёты памяти теперь выключены/);
   assert.match(calls[0].text, /\/menu → 🔔 Уведомления/);
-  assert.doesNotMatch(calls[0].text, /Morning memory reports/);
+  assert.doesNotMatch(calls[0].text, /Запомнила три вещи/);
+});
+
+test("a report carrying a secret is redacted on the way out", async (t) => {
+  // Ночной отчёт пишет модель по чужому дню, поэтому он такой же рантайм-текст, как
+  // алерты brain: доставка обязана идти через outbound-Gate (ADR-0005), а не мимо.
+  const dir = dataDir(t);
+  const calls = telegramCalls(t);
+
+  await deliverMemoryReport({
+    dataDir: dir,
+    settings: { memoryReports: { enabled: true } },
+    ranBefore: true,
+    report: "Разобрала день. Ключ password=hunter2hunter лежал в заметке.",
+    tr: RU,
+    sendReport: (text) => sendTelegramHtml("token", "42", text),
+    sendNotice: (text) => sendTelegramHtml("token", "42", text),
+  });
+
+  assert.equal(calls.length, 1);
+  assert.match(calls[0].text, /Разобрала день/);
+  assert.doesNotMatch(calls[0].text, /hunter2hunter/);
+  assert.match(calls[0].text, /REDACTED/);
+});
+
+test("settings that are junk keep the report in the vault, not in the chat", async (t) => {
+  const dir = dataDir(t);
+  const calls = telegramCalls(t);
+
+  for (const settings of [
+    undefined,
+    null,
+    "on",
+    42,
+    [],
+    { memoryReports: 1 },
+  ]) {
+    const result = await delivery(dir, settings, false);
+    assert.equal(result.status, "off", `${JSON.stringify(settings)} is not on`);
+  }
+  assert.deepEqual(calls, []);
 });
 
 // ── Alert: дроссель ──────────────────────────────────────────────────────────────────────
@@ -291,6 +421,34 @@ test("a problem that came back after the fix speaks at once", async (t) => {
   assert.equal(Object.keys(alertState(dir)).length, 1);
 });
 
+test("the backup alerts forget the problem once the backup works again", async (t) => {
+  const dir = dataDir(t);
+  const sent: string[] = [];
+  const send = (key: string) => () => {
+    sent.push(key);
+    return Promise.resolve(true);
+  };
+
+  for (const key of ["backup-scan", "backup-oversize"]) {
+    await alertOnce(dir, key, "unreadable", send(key));
+    assert.equal(
+      await alertOnce(dir, key, "unreadable", send(key)),
+      "throttled",
+    );
+    // Ночь, когда бэкап прошёл: проблема забыта.
+    await alertResolved(dir, key);
+    // Назавтра сломалось снова — говорим сразу, а не через неделю.
+    assert.equal(await alertOnce(dir, key, "unreadable", send(key)), "sent");
+  }
+
+  assert.deepEqual(sent, [
+    "backup-scan",
+    "backup-scan",
+    "backup-oversize",
+    "backup-oversize",
+  ]);
+});
+
 test("an alert that never left does not silence the next run", async (t) => {
   const dir = dataDir(t);
   assert.equal(
@@ -365,17 +523,17 @@ test("the alert state is written atomically and stays private", async (t) => {
 // getLang кэширует язык на ~2с и читает settings.json от cwd, поэтому каждый сценарий —
 // свежий процесс со своим data-каталогом (тот же приём, что в agent/lib/i18n.test.ts).
 const PROBE = `
-const notices = await import(process.env.__NOTICES_URL);
-const tr = await notices.noticeTranslator();
+const policy = await import(process.env.__POLICY_URL);
+const tr = await policy.noticeTranslator();
 process.stdout.write(JSON.stringify({
-  lang: await notices.noticeLang(),
-  tail: notices.memoryReportTail(tr),
-  migration: notices.memoryReportsOffNotice(tr),
+  lang: await policy.noticeLang(),
+  tail: policy.memoryReportTail(tr),
+  migration: policy.memoryReportsOffNotice(tr),
 }));
 `;
 
 function probe(settingsLanguage: string | null, agentLanguage: string) {
-  const dir = mkdtempSync(join(tmpdir(), "iva-notices-lang-"));
+  const dir = mkdtempSync(join(tmpdir(), "iva-notice-lang-"));
   if (settingsLanguage !== null)
     writeFileSync(
       join(dir, "settings.json"),
@@ -388,8 +546,9 @@ function probe(settingsLanguage: string | null, agentLanguage: string) {
       encoding: "utf8",
       env: {
         ...process.env,
-        __NOTICES_URL: pathToFileURL(join(import.meta.dirname, "notices.ts"))
-          .href,
+        __POLICY_URL: pathToFileURL(
+          join(import.meta.dirname, "notice-policy.ts"),
+        ).href,
         ASSISTANT_DATA_DIR: dir,
         AGENT_LANGUAGE: agentLanguage,
       },

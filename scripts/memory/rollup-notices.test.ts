@@ -1,8 +1,14 @@
 /* eslint-disable @typescript-eslint/no-floating-promises -- Node's test runner owns registration promises. */
-// Контракт ночной свёртки как ОТПРАВИТЕЛЯ. Сам rollup.ts запускается только против живого
-// агента (eve/client), поэтому политика вынесена в scripts/lib/notices.ts и проверена там
-// поведением; здесь проверяется проводка: что свёртка спрашивает тумблер, что доставка одна
-// и что месяц с годом остались молчаливыми.
+// Контракт ночной свёртки как ОТПРАВИТЕЛЯ — и он честно грепный, а не поведенческий.
+//
+// Поведение доставки живёт в scripts/lib/notice-policy.test.ts и проверено там настоящим
+// транспортом: сколько сообщений уходит за прогон, какое именно, что видит свежая
+// установка в первую и во вторую ночь. Сам rollup.ts здесь запустить нечем — он ведёт
+// живого агента через eve/client, — а промпт исполняет модель, и ни то ни другое в
+// юнит-тесте не воспроизводится. Поэтому здесь проверяется ровно то, что проверяемо
+// текстом: что свёртка отдала решение политике и передала ей правильный признак, что
+// молчаливые периоды остались молчаливыми, и что системный красный блок инструкций не
+// спорит с хвостом ночного промпта.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -10,6 +16,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
+const ROOT = join(HERE, "../..");
 const source = readFileSync(join(HERE, "rollup.ts"), "utf8");
 
 /** Тело блока «этот период вообще может писать в Telegram», от заголовка до конца файла. */
@@ -27,49 +34,30 @@ test("monthly and yearly rollups stay silent, as they always were", () => {
   assert.match(table, /yearly: false/u);
 });
 
-test("the report leaves only after the owner's switch says yes", () => {
+test("what leaves the chat is decided by the policy, not by the script", () => {
   const block = deliveryBlock();
-  const gate = block.indexOf("if (!memoryReportsEnabled(readSettings()))");
-  const send = block.indexOf("sendTelegramHtml(BOT, CHAT, result.message)");
-  assert.notEqual(
-    gate,
-    -1,
-    "the switch is read at delivery time, not at import",
-  );
-  assert.notEqual(send, -1);
-  assert.ok(gate < send, "the switch is asked before the report is sent");
-  // Выключено — выходим до отправки, а не «просто не логируем».
-  assert.ok(
-    block.slice(gate, send).includes("process.exit(0)"),
-    "a switched-off report ends the run instead of falling through to the send",
-  );
-});
-
-test("one run posts the report once, and nothing else posts at all", () => {
-  // Две отправки во всём файле: сам отчёт и одноразовый Notice о выключении.
+  assert.match(block, /await deliverMemoryReport\(\{/u);
+  assert.match(block, /settings,/u);
+  assert.match(block, /ranBefore: RAN_BEFORE,/u);
+  // Оба шва отправки — только аргументы этого решения; своей отправки у свёртки нет.
   assert.equal(source.split("sendTelegramHtml(").length - 1, 2);
-  assert.equal(
-    source.split("sendTelegramHtml(BOT, CHAT, result.message)").length - 1,
-    1,
-  );
-  assert.equal(source.split("memoryReportsOffNotice(").length - 1, 1);
-});
-
-test("a fresh installation is never told about a report it never had", () => {
-  const block = deliveryBlock();
   assert.match(
     block,
-    /if \(RAN_BEFORE && BOT && CHAT\)/u,
-    "the migration notice rides on evidence that this period ran here before",
+    /sendReport: \(text\) => sendTelegramHtml\(BOT, CHAT, text\)/u,
   );
   assert.match(
-    source,
-    /const RAN_BEFORE = existsSync\(SESSION_FILE\);/u,
-    "that evidence is read before the run saves its own cursor",
+    block,
+    /sendNotice: \(text\) => sendTelegramHtml\(BOT, CHAT, text\)/u,
   );
+});
+
+test("the run tells the policy whether this period ever ran here before", () => {
+  // Единственная проводка, которую политика увидеть не может: признак читается ДО того,
+  // как прогон сохранит собственный курсор. Прочитанный после, он был бы true у всех.
+  assert.match(source, /const RAN_BEFORE = existsSync\(SESSION_FILE\);/u);
   assert.ok(
     source.indexOf("const RAN_BEFORE") < source.indexOf("saveSession("),
-    "reading it after the save would make every installation look fresh",
+    "reading it after the save would make every installation look old",
   );
 });
 
@@ -81,4 +69,21 @@ test("the delivery half of the prompt is the one that carries the language", () 
   // Обработка карточек не тронута: язык добавлен только в доставку.
   assert.match(source, /Prefer the write_card tool over write_file/u);
   assert.match(source, /no H1\/H2 headings/u);
+});
+
+test("the red line in the instructions exempts the nightly memory pass", () => {
+  // Красный блок системных инструкций требует rich message для ЛЮБОГО отчёта. Без явного
+  // исключения он спорит с хвостом промпта, кричит громче — и владелец получает второе
+  // сообщение мимо кода доставки.
+  const instructions = readFileSync(
+    join(ROOT, "agent/instructions.md"),
+    "utf8",
+  );
+  const red = instructions.slice(0, instructions.indexOf("\nТы — **Iva**"));
+  assert.match(red, /ЛЮБОЙ ОТЧЁТ.*ТОЛЬКО RICH MESSAGE/u);
+  assert.match(red, /ИСКЛЮЧЕНИЕ/u);
+  assert.match(red, /rollup/u);
+  assert.match(red, /ФИНАЛЬНЫЙ ТЕКСТ хода/u);
+  assert.match(red, /доставку делает код/u);
+  assert.match(red, /rich message.*ЗАПРЕЩЕН/su);
 });

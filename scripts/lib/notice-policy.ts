@@ -1,10 +1,14 @@
-// Notice — всё, что Iva говорит сама, без хода пользователя (CONTEXT.md). Видов ровно два,
-// и у каждого своё правило (ADR-0007):
+// Политика Notice — всё, что Iva говорит сама, без хода пользователя (CONTEXT.md). Видов
+// ровно два, и у каждого своё правило (ADR-0007):
 //   • Report — плановая сводка (отчёты памяти, утренний дайджест). По умолчанию выключен,
 //     включается тумблером в /menu → 🔔 Уведомления.
 //   • Alert — проблема, с которой владельцу надо что-то сделать (brain, оффер обновления).
 //     Не выключается — и потому обязан говорить, что делать, и не повторяться чаще раза
 //     в неделю на одну и ту же проблему.
+//
+// Не путать с соседним `notice.ts`: тот — путь к outbound-Gate (redactNotice), этот —
+// решение, говорить ли вообще. Каждая отправка отсюда всё равно уходит через шов
+// вызывающего, а значит через Gate.
 //
 // Здесь только политика: кому и когда можно говорить. Транспорт приносит вызывающий
 // (у моста, ночного brain и апдейтера он разный), поэтому каждая отправка — колбэк.
@@ -20,7 +24,7 @@ import {
   rmSync,
   writeSync,
 } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 export type Translate = (english: string, russian: string) => string;
 type Language = "en" | "ru";
@@ -96,41 +100,126 @@ function errorCode(error: unknown): string | undefined {
     : undefined;
 }
 
+const REPORTS_OFF_MARKER = "notice-memory-reports-off.json";
+
 /**
- * Notice, который говорится ровно один раз за всю жизнь установки. Заявка на право
- * сказать — атомарный O_EXCL: две ночные свёртки (daily и weekly) стартуют одну за
- * другой, и проигравшая обязана молчать, а не повторять. Заявка возвращается, если
- * отправка не состоялась: несказанный Notice хуже сказанного дважды.
+ * Заявка на право сказать: атомарный O_EXCL. Две ночные свёртки (daily и weekly) стартуют
+ * одна за другой, и проигравшая обязана молчать, а не повторять. Файл ещё и хранит принятое
+ * решение — по нему видно, что именно было решено в ту единственную ночь.
  */
-export async function noticeOnce(
-  dataDir: string,
-  name: string,
-  send: () => Promise<boolean>,
-): Promise<"sent" | "already" | "failed"> {
-  const path = join(dataDir, `notice-${name}.json`);
+function claimOnce(
+  path: string,
+  payload: Record<string, string>,
+): "claimed" | "taken" | "failed" {
   try {
-    mkdirSync(dataDir, { recursive: true });
+    mkdirSync(dirname(path), { recursive: true });
     const fd = openSync(path, "wx", 0o600);
     try {
-      writeSync(
-        fd,
-        `${JSON.stringify({ notifiedAt: new Date().toISOString() })}\n`,
-      );
+      writeSync(fd, `${JSON.stringify(payload)}\n`);
     } finally {
       closeSync(fd);
     }
+    return "claimed";
   } catch (error) {
-    if (errorCode(error) === "EEXIST") return "already";
-    console.error(`[notices] could not claim the "${name}" notice:`, error);
+    if (errorCode(error) === "EEXIST") return "taken";
+    console.error(`[notice-policy] could not claim ${path}:`, error);
     return "failed";
   }
+}
+
+export type ReportsOffNotice = "sent" | "not-needed" | "settled" | "failed";
+
+/**
+ * Вопрос «сказать ли, что отчёты теперь выключены» решается РОВНО ОДИН РАЗ — в первый
+ * прогон, где маркера ещё нет, — и записывается вместе с ответом:
+ *
+ *   • установка уже гоняла свёртку раньше (`ranBefore`) — отчёт у неё был, notice уходит;
+ *   • свежая установка — терять ей нечего, пишем «not-needed» и молчим НАВСЕГДА.
+ *
+ * Решение записано, поэтому вторая ночь ничего не пересматривает: `ranBefore` к тому
+ * времени станет true у всех (свёртка сохранила свой курсор), и без этой записи свежая
+ * установка получила бы notice про отчёт, которого никогда не видела.
+ *
+ * Заявка возвращается только если отправка не состоялась: несказанный Notice хуже
+ * сказанного на ночь позже.
+ */
+export async function settleReportsOffNotice({
+  dataDir,
+  ranBefore,
+  send,
+}: {
+  dataDir: string;
+  ranBefore: boolean;
+  send: () => Promise<boolean>;
+}): Promise<ReportsOffNotice> {
+  const path = join(dataDir, REPORTS_OFF_MARKER);
+  const decision: ReportsOffNotice = ranBefore ? "sent" : "not-needed";
+  const claim = claimOnce(path, {
+    decision,
+    at: new Date().toISOString(),
+  });
+  if (claim === "taken") return "settled";
+  if (claim === "failed") return "failed"; // решим завтра, маркера всё ещё нет
+  if (!ranBefore) return "not-needed";
   if (await send()) return "sent";
   try {
     rmSync(path, { force: true });
   } catch {
-    /* заявка останется — тогда Notice не повторится; молчать безопаснее, чем спамить */
+    /* заявка останется — Notice не повторится; молчать безопаснее, чем спамить */
   }
   return "failed";
+}
+
+export type ReportDelivery = {
+  /** off — тумблер выключен; sent/failed — отчёт ушёл или не ушёл. */
+  status: "off" | "sent" | "failed";
+  /** Отчёт доехал без разметки: вызывающий подскажет модели формат на следующий раз. */
+  fellBack: boolean;
+  error: string;
+  /** Судьба одноразового Notice о выключении; "not-asked" — отчёт был включён. */
+  notice: ReportsOffNotice | "not-asked";
+};
+
+/**
+ * Всё, что ночная свёртка говорит в чат по итогам прогона, — одним решением. За прогон
+ * уходит РОВНО ОДНО сообщение: либо отчёт (если тумблер включён), либо — единственный раз
+ * за жизнь установки — Notice о том, что отчёты выключены. Ни одного, если тумблер выключен
+ * и вопрос уже закрыт.
+ */
+export async function deliverMemoryReport({
+  dataDir,
+  settings,
+  ranBefore,
+  report,
+  tr,
+  sendReport,
+  sendNotice,
+}: {
+  dataDir: string;
+  settings: unknown;
+  ranBefore: boolean;
+  report: string;
+  tr: Translate;
+  sendReport: (
+    text: string,
+  ) => Promise<{ ok: boolean; fellBack: boolean; error: string }>;
+  sendNotice: (text: string) => Promise<{ ok: boolean }>;
+}): Promise<ReportDelivery> {
+  if (!memoryReportsEnabled(settings)) {
+    const notice = await settleReportsOffNotice({
+      dataDir,
+      ranBefore,
+      send: async () => (await sendNotice(memoryReportsOffNotice(tr))).ok,
+    });
+    return { status: "off", fellBack: false, error: "", notice };
+  }
+  const sent = await sendReport(report);
+  return {
+    status: sent.ok ? "sent" : "failed",
+    fellBack: sent.fellBack,
+    error: sent.error,
+    notice: "not-asked",
+  };
 }
 
 // ── Alert: тревога, которую нельзя выключить ─────────────────────────────────────────────

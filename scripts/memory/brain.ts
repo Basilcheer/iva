@@ -17,7 +17,11 @@ import {
   recordSkippedOversize,
   scanOversizeWorkingTreeFiles,
 } from "../lib/memory-maintenance.ts";
-import { alertOnce, alertResolved, noticeTranslator } from "../lib/notices.ts";
+import {
+  alertOnce,
+  alertResolved,
+  noticeTranslator,
+} from "../lib/notice-policy.ts";
 import { notificationChat } from "../lib/notification-chat.ts";
 import { redactNotice } from "../lib/notice.ts";
 

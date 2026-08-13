@@ -8,7 +8,7 @@
 // Правило репо: ни одной module-level const с переведённой строкой — подписи собираются в
 // render() через ctx.tr, иначе язык замёрзнет до рестарта.
 import { readSettings, writeSettings } from "#lib/settings.ts";
-import { memoryReportsEnabled } from "../notices.ts";
+import { memoryReportsEnabled } from "../notice-policy.ts";
 
 type Button = { text: string; callback_data: string };
 type MenuState = { page: number };

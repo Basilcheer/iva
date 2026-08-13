@@ -1,7 +1,7 @@
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isEntrypoint, upstreamQuery } from "./lib/version-layout.ts";
-import { noticeLang } from "./lib/notices.ts";
+import { noticeLang } from "./lib/notice-policy.ts";
 import { acquireUpdateLock } from "./lib/version-store.ts";
 import {
   inspectUpstream,

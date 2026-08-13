@@ -21,11 +21,10 @@ import { writeFileAtomicSync } from "#lib/fs-atomic.ts";
 import { tr } from "#lib/i18n.ts";
 import { readSettings } from "#lib/settings.ts";
 import {
+  deliverMemoryReport,
   memoryReportTail,
   memoryReportsEnabled,
-  memoryReportsOffNotice,
-  noticeOnce,
-} from "../lib/notices.ts";
+} from "../lib/notice-policy.ts";
 import { notificationChat } from "../lib/notification-chat.ts";
 import {
   cancelTurnAndConfirmQuietly,
@@ -420,46 +419,48 @@ if (period === "daily") {
 
 console.log(`rollup ${period} (${today}):\n${result.message}`);
 
-// Telegram report only for daily/weekly, and only when the owner turned Reports on.
+// Telegram report only for daily/weekly, and only when the owner turned Reports on. What
+// leaves the chat is one decision, taken in the policy module and proven there by test:
+// the report, or — once in the life of an installation that used to get it — the notice
+// that reports are now off. Never both, never twice.
 if (REPORTS_TO_TELEGRAM[period]) {
-  if (!memoryReportsEnabled(readSettings())) {
-    // An installation that used to get this report hears once why the morning went quiet;
-    // a fresh one never had it and stays silent. The claim is atomic, so daily and weekly
-    // on the same night say it once between them.
-    if (RAN_BEFORE && BOT && CHAT) {
-      const said = await noticeOnce(
-        DATA_DIR,
-        "memory-reports-off",
-        async () => {
-          const sent = await sendTelegramHtml(
-            BOT,
-            CHAT,
-            memoryReportsOffNotice(tr),
-          );
-          if (!sent.ok)
-            console.error(
-              `rollup ${period}: could not deliver the reports-off notice:`,
-              sent.error,
-            );
-          return sent.ok;
-        },
+  const settings = readSettings();
+  if (!BOT || !CHAT) {
+    if (memoryReportsEnabled(settings)) {
+      console.error(
+        `rollup ${period}: no TELEGRAM_BOT_TOKEN/TELEGRAM_DIGEST_CHAT_ID — report not sent`,
       );
-      if (said === "sent")
-        console.log(`rollup ${period}: told the chat that reports are now off`);
+      process.exit(1);
     }
+    // No chat to speak to: the reports-off notice stays unclaimed, so an installation that
+    // gets its token later still hears it once.
+    console.log(`rollup ${period}: no chat configured — nothing to deliver`);
+    process.exit(0);
+  }
+  const delivery = await deliverMemoryReport({
+    dataDir: DATA_DIR,
+    settings,
+    ranBefore: RAN_BEFORE,
+    report: result.message,
+    tr,
+    // markdown → Telegram-HTML conversion, chunking, the outbound Gate and the self-heal
+    // all live in the shared seam.
+    sendReport: (text) => sendTelegramHtml(BOT, CHAT, text),
+    sendNotice: (text) => sendTelegramHtml(BOT, CHAT, text),
+  });
+  if (delivery.status === "off") {
+    if (delivery.notice === "sent")
+      console.log(`rollup ${period}: told the chat that reports are now off`);
+    if (delivery.notice === "failed")
+      console.error(
+        `rollup ${period}: could not deliver the reports-off notice`,
+      );
     console.log(
       `rollup ${period}: memory reports are off — the report stays in the log`,
     );
     process.exit(0);
   }
-  if (!BOT || !CHAT) {
-    console.error(
-      `rollup ${period}: no TELEGRAM_BOT_TOKEN/TELEGRAM_DIGEST_CHAT_ID — report not sent`,
-    );
-    process.exit(1);
-  }
-  // markdown → Telegram-HTML conversion + self-heal live in a shared helper.
-  const r = await sendTelegramHtml(BOT, CHAT, result.message);
+  const r = delivery;
   if (r.fellBack) {
     // HTML didn't parse — the report went out flat. Give the agent feedback in the same
     // session so it formats the next report more simply (one turn, no resend).
@@ -483,7 +484,7 @@ if (REPORTS_TO_TELEGRAM[period]) {
         await dropHungSession("format-feedback");
     }
   }
-  if (!r.ok) {
+  if (r.status === "failed") {
     console.error(`rollup ${period}: Telegram send failed:`, r.error);
     process.exit(1);
   }
