@@ -7,10 +7,14 @@
 #
 # What it does, in this order: sets the timezone, updates the system, installs the
 # packages install.sh expects (git, gh, python3, ffmpeg, pandoc, poppler), creates a
-# sudo user with systemd lingering enabled, authorizes your SSH key, turns on a
-# firewall that allows SSH only, starts fail2ban, enables unattended security
-# upgrades, and hardens sshd LAST — with a reload, so the session you are typing in
-# is never dropped. It ends with the two commands that finish the install.
+# sudo user with systemd lingering enabled, turns on a firewall that allows SSH only,
+# starts fail2ban, enables unattended security upgrades, and hardens sshd LAST — with
+# a reload, so the session you are typing in is never dropped. It ends with the two
+# commands that finish the install.
+#
+# It never asks for an SSH key: you log in as the new user with the password you set
+# here, and hardening stops at PermitRootLogin no. Headless runs can still authorize a
+# key with IVA_PUBKEY, and only then may IVA_DISABLE_PASSWORD_AUTH turn passwords off.
 #
 # Every step is detect-then-skip: running it twice changes nothing and exits 0.
 # This script installs no agent code. Iva itself is installed by install.sh, from the
@@ -66,7 +70,7 @@ GUM_SUPPORTED=true
 CURRENT_STEP="startup"
 SPINNER_PID=""
 STEP_NO=0
-STEP_TOTAL=9
+STEP_TOTAL=8
 
 TARGET_USER=""
 TARGET_PASS=""
@@ -197,9 +201,13 @@ Prepare a fresh Ubuntu/Debian VPS for Iva. Run as root:
   bash <(curl -fsSL https://raw.githubusercontent.com/smixs/iva/main/bootstrap.sh)
 
 It sets the timezone, updates the system, installs Iva's system packages, creates a
-sudo user with lingering enabled, authorizes an SSH key, enables a SSH-only firewall,
-fail2ban and unattended security upgrades, and hardens sshd last (reload, never a
-restart). Re-running it is safe: every step is detect-then-skip.
+sudo user with lingering enabled, enables a SSH-only firewall, fail2ban and unattended
+security upgrades, and hardens sshd last (reload, never a restart). Re-running it is
+safe: every step is detect-then-skip.
+
+Interactively it asks three things: the login, its password, and the timezone. It does
+not ask for an SSH key — you log in with that password, and hardening stops at
+PermitRootLogin no. Headless runs can authorize a key with IVA_PUBKEY.
 
 Flags:
   --non-interactive   never ask anything; read the answers from the environment
@@ -807,55 +815,34 @@ ask_password() {
   ui_password TARGET_PASS "Password for $TARGET_USER (you will need it to log in)"
 }
 
+# Keys are a headless-only feature. The interactive flow deliberately asks nothing here:
+# pasting a public key is a step too far for the people this bootstrap is written for, so
+# they log in with the password they just set and hardening stops at PermitRootLogin no.
 ask_pubkey() {
-  local candidate="" attempts=0
+  local candidate=""
 
-  if [ "$UI_MODE" = none ]; then
-    candidate="$(sanitize_pubkey "${IVA_PUBKEY:-}")"
-    if [ -n "$candidate" ]; then
-      if valid_pubkey "$candidate"; then
-        PUBKEY="$candidate"
-      else
-        warn "IVA_PUBKEY does not look like an SSH public key — continuing without it"
-      fi
-    fi
-    case "$(lowercase "${IVA_DISABLE_PASSWORD_AUTH:-}")" in
-      true|yes|1)  DISABLE_PASSWORD_AUTH=true ;;
-      false|no|0)  DISABLE_PASSWORD_AUTH=false ;;
-      *)           if [ -n "$PUBKEY" ]; then DISABLE_PASSWORD_AUTH=true; else DISABLE_PASSWORD_AUTH=false; fi ;;
-    esac
-    # Without a key, disabling password logins locks everyone out. Never do it.
-    if [ -z "$PUBKEY" ]; then
-      DISABLE_PASSWORD_AUTH=false
-    fi
+  if [ "$UI_MODE" != none ]; then
+    PUBKEY=""
+    DISABLE_PASSWORD_AUTH=false
     return 0
   fi
 
-  if ! ui_confirm "Add an SSH public key for $TARGET_USER? (recommended)" yes; then
-    return 0
-  fi
-  ui_note "On your LOCAL machine run:  cat ~/.ssh/id_ed25519.pub"
-  ui_note "Then paste the whole line here (it starts with ssh-ed25519 or ssh-rsa)."
-  while [ "$attempts" -lt 3 ]; do
-    attempts=$(( attempts + 1 ))
-    ui_input candidate "SSH public key for $TARGET_USER" "ssh-ed25519 AAAA... you@laptop"
-    candidate="$(sanitize_pubkey "$candidate")"
-    if [ -n "$candidate" ] && valid_pubkey "$candidate"; then
+  candidate="$(sanitize_pubkey "${IVA_PUBKEY:-}")"
+  if [ -n "$candidate" ]; then
+    if valid_pubkey "$candidate"; then
       PUBKEY="$candidate"
-      break
+    else
+      warn "IVA_PUBKEY does not look like an SSH public key — continuing without it"
     fi
-    warn "that does not parse as an SSH public key (attempt $attempts of 3)"
-  done
-  if [ -z "$PUBKEY" ]; then
-    warn "continuing without a key — password login stays enabled"
-    return 0
   fi
-
-  echo
-  ui_note "Key-only login is the safer setup, but if you lose the private key you lose the server."
-  ui_note "Say no unless you have the key backed up and can test it in a second terminal."
-  if ui_confirm "Disable SSH password authentication entirely? (key-only login)" no; then
-    DISABLE_PASSWORD_AUTH=true
+  case "$(lowercase "${IVA_DISABLE_PASSWORD_AUTH:-}")" in
+    true|yes|1)  DISABLE_PASSWORD_AUTH=true ;;
+    false|no|0)  DISABLE_PASSWORD_AUTH=false ;;
+    *)           if [ -n "$PUBKEY" ]; then DISABLE_PASSWORD_AUTH=true; else DISABLE_PASSWORD_AUTH=false; fi ;;
+  esac
+  # Without a key, disabling password logins locks everyone out. Never do it.
+  if [ -z "$PUBKEY" ]; then
+    DISABLE_PASSWORD_AUTH=false
   fi
 }
 
@@ -1061,12 +1048,11 @@ enable_linger() {
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 9. Authorized key
+# Authorized key — headless only (IVA_PUBKEY), so it gets no section of its own and
+# stays silent when there is no key. When there is one, it reports under User account.
 # ─────────────────────────────────────────────────────────────────────────────
 install_pubkey() {
-  section "SSH key"
   if [ -z "$PUBKEY" ]; then
-    ok "No key given — password login stays enabled"
     return 0
   fi
   CURRENT_STEP="authorizing the SSH key"
@@ -1261,6 +1247,14 @@ harden_ssh() {
     fi
   } >"$SSHD_DROPIN"
   chmod 644 "$SSHD_DROPIN"
+
+  # sshd -t refuses to validate without the privilege separation directory, and on
+  # socket-activated images (DigitalOcean's Ubuntu 24.04) it does not exist until
+  # sshd.service has started at least once. Non-fatal on purpose: dying here would
+  # leave the drop-in above unvalidated and un-rolled-back. Let sshd -t be the gate.
+  if [ ! -d /run/sshd ]; then
+    install -d -m 0755 /run/sshd >>"$LOG_FILE" 2>&1 || true
+  fi
 
   if ! "$binary" -t >>"$LOG_FILE" 2>&1; then
     rm -f "$SSHD_DROPIN"

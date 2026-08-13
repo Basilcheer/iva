@@ -111,7 +111,7 @@ curl -fsSL https://raw.githubusercontent.com/smixs/iva/main/install.sh | bash
 2. Запустите установщик и ответьте на его вопросы.
 3. Напишите своему боту. Мастер достанет ваш Telegram ID из этого сообщения, закончит настройку, и Ива прямо в чате подтвердит, что работает.
 
-Свежий VPS и вы всё ещё под root? Сначала запустите `bash <(curl -fsSL https://raw.githubusercontent.com/smixs/iva/main/bootstrap.sh)`: он заведёт вам sudo-пользователя (сразу с linger), обновит систему и включит фаервол, fail2ban и защиту SSH. Потом зайдите этим пользователем и запустите установщик выше. Подробности: [docs/ru/install.md](docs/ru/install.md).
+Свежий VPS и вы всё ещё под root? Сначала запустите `bash <(curl -fsSL https://raw.githubusercontent.com/smixs/iva/main/bootstrap.sh)`: он заведёт вам sudo-пользователя (сразу с linger), обновит систему и включит фаервол, fail2ban и защиту SSH. Спросит три вещи - логин, пароль и часовой пояс, - SSH-ключ не нужен. Потом зайдите этим пользователем с тем же паролем и запустите установщик выше. Подробности: [docs/ru/install.md](docs/ru/install.md).
 
 Ставьте от обычного пользователя, не от root: shell-инструмент Ивы работает с правами того, кто её поставил. Для установки без диалога есть `--skip-setup` и `--non-interactive`. Хотите сначала прочитать скрипт - заберите его через `curl -fsSL https://raw.githubusercontent.com/smixs/iva/main/install.sh -o install.sh`, прочитайте, потом `bash install.sh`. Прохождение мастера шаг за шагом и SSH-ликбез для тех, у кого VPS впервые: [docs/ru/install.md](docs/ru/install.md).
 
