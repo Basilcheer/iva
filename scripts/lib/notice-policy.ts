@@ -370,8 +370,9 @@ function readAlertState(dataDir: string): AlertState {
 // нужнее всего. Механизм тот же (tmp + rename), три строки, зависимостей ноль.
 function writeAlertState(dataDir: string, state: AlertState): void {
   const path = alertStatePath(dataDir);
-  // Уникален на вызов, а не на миллисекунду: две доставки в одну мс поделили бы имя,
-  // и вторая потеряла бы отметку на флаге "wx".
+  // Уникален на вызов, а не на миллисекунду. Живого бага здесь нет: записи синхронные, и
+  // одному процессу поделить имя не с кем. Это дешёвая страховка на случай второго писателя
+  // — цена ошибки на флаге "wx" была бы потерянной отметкой дросселя.
   const temp = `${path}.${process.pid}.${randomUUID()}.tmp`;
   try {
     mkdirSync(dataDir, { recursive: true });

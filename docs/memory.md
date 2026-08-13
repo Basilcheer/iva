@@ -48,7 +48,7 @@ For fuzzy or cross-language semantics, switch on hybrid mode (`MEMORY_SEARCH_MOD
 
 ## Brain
 
-At 05:00 `scripts/memory/doctor.ts` runs mechanical maintenance — no LLM, all deterministic — executing the [autograph](https://github.com/smixs/autograph) scripts from `scripts/autograph/` via `uv`:
+At 05:00 `scripts/memory/brain.ts` runs mechanical maintenance — no LLM, all deterministic — executing the [autograph](https://github.com/smixs/autograph) scripts from `scripts/autograph/` via `uv`:
 
 1. `enforce` — schema backstop: coerces type aliases, fixes invalid statuses, backfills system fields on cards written outside `write_card`
 2. `graph.health` — rebuilds the link graph, appends a 0–100 health score to history

@@ -440,7 +440,7 @@ test("every button on the root screen resolves to a registered screen", () => {
   const reachable = new Set(sids);
   for (const sid of Object.keys(SCREENS))
     assert.ok(
-      sid === "r" || reachable.has(sid),
+      reachable.has(sid),
       `SCREENS holds "${sid}", but no root button leads there`,
     );
 });
