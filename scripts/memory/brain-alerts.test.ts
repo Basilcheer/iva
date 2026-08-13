@@ -82,7 +82,7 @@ test("brain speaks Russian, says what broke and what to do", (t) => {
   );
   assert.match(run.stderr, /Открой CORE\.md и проверь/);
   // 3. Карточка с незакрытым фенсом — с путём к ней.
-  assert.match(run.stderr, /У 1 карточек не закрыт/);
+  assert.match(run.stderr, /Карточек с незакрытым ```: 1\./);
   assert.match(run.stderr, /cards\/broken\.md/);
   // 4. Бэкап отложен.
   assert.match(run.stderr, /Проверка размеров файлов перед бэкапом не прошла/);
@@ -103,7 +103,7 @@ test("brain speaks English when the owner picked English", (t) => {
     run.stderr,
     new RegExp(`CORE\\.md grew past its ${CORE_CAP}-character cap`),
   );
-  assert.match(run.stderr, /cards have an unclosed/);
+  assert.match(run.stderr, /Cards with an unclosed ``` fence: 1\./);
   assert.match(run.stderr, /The file-size check before the backup failed/);
   // Русского в английском прогоне нет вовсе.
   assert.doesNotMatch(run.stderr, /Ночной уход/);

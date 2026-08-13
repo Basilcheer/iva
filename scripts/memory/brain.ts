@@ -324,11 +324,11 @@ if (unclosed.length) {
   const rest = unclosed.length - shown.length;
   const list = shown.map((path) => `- ${path}`).join("\n");
   const message = T(
-    `${unclosed.length} cards have an unclosed \`\`\` fence. Iva cannot update or replace ` +
-      "facts in them, so new facts about these subjects are lost. Close the fence by hand:\n" +
+    `Cards with an unclosed \`\`\` fence: ${unclosed.length}. Iva cannot update or replace ` +
+      "facts in them, so new facts on these subjects are lost. Close the fence by hand:\n" +
       list +
       (rest ? `\n… and ${rest} more` : ""),
-    `У ${unclosed.length} карточек не закрыт \`\`\`. Iva не может обновлять и заменять в них ` +
+    `Карточек с незакрытым \`\`\`: ${unclosed.length}. Iva не может обновлять и заменять в них ` +
       "факты, поэтому новые факты по этим темам теряются. Закрой фенс вручную:\n" +
       list +
       (rest ? `\n… и ещё ${rest}` : ""),
