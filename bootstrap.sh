@@ -10,7 +10,8 @@
 # sudo user with systemd lingering enabled, turns on a firewall that allows SSH only,
 # starts fail2ban, enables unattended security upgrades, and hardens sshd LAST — with
 # a reload, so the session you are typing in is never dropped. It ends with the two
-# commands that finish the install.
+# commands that finish the install — and, when the upgrade brought a new kernel, with
+# a reboot, because install.sh refuses to run while one is pending.
 #
 # It never asks for an SSH key: you log in as the new user with the password you set
 # here, and hardening stops at PermitRootLogin no. Headless runs can still authorize a
@@ -30,6 +31,8 @@
 #   IVA_PUBKEY                  optional SSH public key to authorize
 #   IVA_TZ                      optional IANA timezone, e.g. Europe/Berlin
 #   IVA_DISABLE_PASSWORD_AUTH   optional true/false; default true with a key, false without
+#   IVA_REBOOT                  optional true/false; reboot when the upgrade brought a
+#                               new kernel. Default false — never reboot silently.
 #
 # Log: /var/log/iva-bootstrap.log (mode 600).
 
@@ -51,6 +54,8 @@ SSHD_DROPIN_DIR="/etc/ssh/sshd_config.d"
 SSHD_DROPIN="/etc/ssh/sshd_config.d/00-iva-hardening.conf"
 FAIL2BAN_JAIL="/etc/fail2ban/jail.local"
 AUTO_UPGRADES_CONF="/etc/apt/apt.conf.d/20auto-upgrades"
+# apt leaves this behind when an upgraded package (kernel, glibc, dbus) needs a reboot.
+REBOOT_REQUIRED_FLAG="/var/run/reboot-required"
 MARKER="# managed by the iva VPS bootstrap"
 
 # iva palette (see deploy/iva-tree.ans) — one source for both the gum flags and the raw ANSI fallbacks
@@ -219,6 +224,9 @@ Environment (required in non-interactive mode):
   IVA_PUBKEY                  optional SSH public key to authorize
   IVA_TZ                      optional IANA timezone, e.g. Europe/Berlin
   IVA_DISABLE_PASSWORD_AUTH   optional true/false; default true with a key, false without
+  IVA_REBOOT                  optional true/false; reboot when the upgrade brought a new
+                              kernel. Default false — never reboot silently. Interactive
+                              runs are asked instead.
 
 Example:
   IVA_USER=iva IVA_PASS='...' IVA_PUBKEY="$(cat ~/.ssh/id_ed25519.pub)" \
@@ -1340,20 +1348,35 @@ plain_card() {
 
 final_card() {
   CURRENT_STEP="printing the summary"
-  local ip
+  local ip pending=false
   ip="$(public_ip)"
-  local card=(
-    "VPS ready for iva"
-    ""
-    "Next steps, from your LOCAL machine:"
+  if reboot_pending; then
+    pending=true
+  fi
+  local card=("VPS ready for iva" "")
+  if [ "$pending" = true ]; then
+    # Card lines stay ASCII: plain_card pads by ${#line}, which counts bytes in a
+    # non-UTF-8 locale, and one em dash is enough to leave the box visibly ragged.
+    card+=(
+      "Kernel was updated. The server will reboot now."
+      "Wait ~30 seconds, then continue from your LOCAL machine:"
+    )
+  else
+    card+=("Next steps, from your LOCAL machine:")
+  fi
+  card+=(
     ""
     "  ssh $TARGET_USER@$ip"
     "  curl -fsSL $RAW_BASE/install.sh | bash"
     ""
-    "Keep this root session open until you verify login in a NEW terminal."
   )
-  if [ -e /var/run/reboot-required ]; then
-    card+=("" "Reboot recommended (kernel updated): sudo reboot")
+  if [ "$pending" = true ]; then
+    card+=(
+      "install.sh refuses to start before that reboot: a pending kernel"
+      "upgrade makes every package install hang."
+    )
+  else
+    card+=("Keep this root session open until you verify login in a NEW terminal.")
   fi
   if [ "$UI_MODE" = gum ] && [ -t 1 ]; then
     if gum style --border double --border-foreground "$C_PRIMARY" --padding "1 3" --margin "1 2" \
@@ -1368,6 +1391,44 @@ final_card() {
   echo "  Log: $LOG_FILE"
   echo
   log "bootstrap finished for user $TARGET_USER"
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 15. Reboot after a kernel upgrade. Not a section of its own: it runs after the
+#     card and only when apt left the flag behind. This is the cure, not a
+#     workaround — while a reboot is pending, needrestart opens an ncurses dialog
+#     inside every apt run, install.sh paints it behind a spinner where nobody can
+#     answer it, and the install hangs forever. install.sh refuses to start until
+#     the flag is gone, so the reboot has to happen here.
+# ─────────────────────────────────────────────────────────────────────────────
+reboot_pending() {
+  [ -e "$REBOOT_REQUIRED_FLAG" ] && have_systemd
+}
+
+reboot_if_needed() {
+  reboot_pending || return 0
+  CURRENT_STEP="rebooting after the kernel upgrade"
+  local do_reboot=false
+  if [ "$UI_MODE" != none ]; then
+    if ui_confirm "Reboot now? (recommended)" yes; then
+      do_reboot=true
+    fi
+  else
+    # Headless default is false: rebooting in the middle of someone else's
+    # automation is exactly the kind of surprise that has to be asked for.
+    case "$(lowercase "${IVA_REBOOT:-}")" in
+      true|yes|1) do_reboot=true ;;
+    esac
+  fi
+  if [ "$do_reboot" != true ]; then
+    warn "Not rebooting. install.sh will refuse to run until the kernel upgrade is applied — run 'sudo reboot' when you are ready, then continue with the two commands above."
+    return 0
+  fi
+  log "rebooting after the kernel upgrade"
+  step "Rebooting now — reconnect in about 30 seconds"
+  # Let the card and the line above reach the terminal before the kernel takes it away.
+  sleep 2
+  reboot || warn "couldn't reboot — do it by hand: sudo reboot"
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1396,6 +1457,7 @@ main() {
   setup_unattended_upgrades
   harden_ssh
   final_card
+  reboot_if_needed
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
