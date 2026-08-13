@@ -8,9 +8,9 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
-const EXPECTED_PRODUCTION_COUNT = 176;
+const EXPECTED_PRODUCTION_COUNT = 177;
 const EXPECTED_INVENTORY_SHA256 =
-  "6d5d9f7034251b3720d7104a37b48a88e41dc0b0801be06048f360b3481649f5";
+  "99a21a1cbbc3ba9e669703e73e08e1889ac10ad50c979c28f3d6e6f70fce87b0";
 
 // Node's native include globs filter loaded modules; they do not load untouched files.
 // This test pins the exact production path inventory and a separately measured 25-path
@@ -21,7 +21,8 @@ const EXPECTED_INVENTORY_SHA256 =
 // first loading test - so the blind spot dropped from 26 paths to 25. The subagent slots
 // `agent/subagents/planner/tools/web_fetch.ts` and `web_search.ts` came next, both reported
 // at 100% by scripts/web-surface-gate.test.ts, so the blind spot stays at 25. The notice
-// policy module `scripts/lib/notices.ts` came next, loaded by its own test and reported,
+// policy module `scripts/lib/notices.ts` and the `/menu` screen that switches the reports,
+// `scripts/lib/menu/notices.ts`, came next - both loaded by their own tests and reported,
 // so the blind spot stays at 25 again.
 const MEASURED_UNREPORTED_BY_CATEGORY = {
   frameworkBoundaries: [
