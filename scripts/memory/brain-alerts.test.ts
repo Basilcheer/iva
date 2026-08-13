@@ -156,16 +156,11 @@ test("every brain alert goes through the throttle and carries both locales", () 
   const cleared = [...source.matchAll(/await cleared\("([a-z-]+)"\)/gu)].map(
     (match) => match[1],
   );
-  for (const key of [
-    "authored-tree",
-    "backup-push",
-    "core-cap",
-    "health-drop",
-    "maintenance",
-    "unclosed-fence",
-    "vault-remote",
-  ])
-    assert.ok(cleared.includes(key), `${key} must be cleared when it is gone`);
+  assert.deepEqual(
+    [...cleared].sort(),
+    [...keys].sort(),
+    "every problem that can be alerted must also be forgettable, or a relapse waits a week",
+  );
 
   // Эталонный алерт: обе локали говорят, что сломалось, чем грозит и что сделать.
   assert.match(

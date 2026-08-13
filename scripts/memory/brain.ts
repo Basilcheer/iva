@@ -273,7 +273,7 @@ if (!cards) {
     T(
       "Iva's own files could not be loaded. The CORE.md size check and the broken-card scan were skipped. " +
         "The memory backup still ran. On the server run `iva repair`.",
-      "Файлы самой Iva не читаются. Проверка размера CORE.md и поиск битых карточек пропущены. " +
+      "Файлы самой Ивы не читаются. Проверка размера CORE.md и поиск битых карточек пропущены. " +
         "Бэкап памяти всё равно прошёл. Выполни на сервере `iva repair`.",
     ),
   );
@@ -332,7 +332,7 @@ if (unclosed.length) {
       "facts in them, so new facts on these subjects are lost. Close the fence by hand:\n" +
       list +
       (rest ? `\n… and ${rest} more` : ""),
-    `Карточек с незакрытым \`\`\`: ${unclosed.length}. Iva не может обновлять и заменять в них ` +
+    `Карточек с незакрытым \`\`\`: ${unclosed.length}. Ива не может обновлять и заменять в них ` +
       "факты, поэтому новые факты по этим темам теряются. Закрой фенс вручную:\n" +
       list +
       (rest ? `\n… и ещё ${rest}` : ""),
@@ -386,6 +386,7 @@ try {
   await alert("backup-scan", "unreadable", message);
   process.exit(1);
 }
+await cleared("backup-scan");
 
 if (oversized.length) {
   recordSkippedOversize(
@@ -403,14 +404,15 @@ if (oversized.length) {
     "backup-oversize",
     oversized.map(({ path }) => path).join(","),
     T(
-      `${lines.join("\n")}\nThe memory backup is on hold until these files shrink. The nightly ` +
-        "cleanup should shrink them. Check again tomorrow.",
-      `${lines.join("\n")}\nБэкап памяти отложен, пока эти файлы не уменьшатся. Ночная чистка ` +
-        "должна их ужать. Проверь завтра.",
+      `${lines.join("\n")}\nThe memory backup is on hold until these files shrink. New memory ` +
+        "stays on the server only. Shrink them now: /menu → 🛠 Maintenance → 🧹 Vault cleanup.",
+      `${lines.join("\n")}\nБэкап памяти отложен, пока эти файлы не уменьшатся. Новая память ` +
+        "остаётся только на сервере. Ужми их сейчас: /menu → 🛠 Обслуживание → 🧹 Чистка vault.",
     ),
   );
   process.exit(1);
 }
+await cleared("backup-oversize");
 
 // Auto-provision a private backup remote via the already-authorized gh CLI instead of
 // nagging nightly: only alert when gh itself can't help (not installed / not logged in).
@@ -476,11 +478,17 @@ if (push.status !== 0) {
     error.kind === "oversize"
       ? T(
           "Memory backup rejected: the vault history holds a file too big for GitHub. Nothing is " +
-            "lost, but new memory stays on the server only. Clean it by hand: `git checkout " +
-            "--orphan vault-clean`, fold the history into one clean commit, then push with `--force`.",
+            "lost, but new memory stays on the server only. Clean the history by hand on the " +
+            `server, in ${VAULT}.\n` +
+            "1. Start a clean branch: `git checkout --orphan vault-clean`.\n" +
+            '2. Commit the current files: `git add -A && git commit -m "vault"`.\n' +
+            "3. Replace the remote history: `git push --force origin vault-clean:main`.",
           "Бэкап памяти отклонён: в истории vault лежит слишком большой файл. Ничего не потеряно, " +
-            "но новая память остаётся только на сервере. Почисти вручную: `git checkout --orphan " +
-            "vault-clean`, сверни историю в один чистый коммит и запушь с `--force`.",
+            "но новая память остаётся только на сервере. Почисти историю вручную на сервере, " +
+            `в ${VAULT}.\n` +
+            "1. Заведи чистую ветку: `git checkout --orphan vault-clean`.\n" +
+            '2. Закоммить текущие файлы: `git add -A && git commit -m "vault"`.\n' +
+            "3. Замени историю на remote: `git push --force origin vault-clean:main`.",
         )
       : error.kind === "auth"
         ? T(
