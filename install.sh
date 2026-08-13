@@ -49,7 +49,7 @@ t() { if [ "$IVA_LANG" = ru ]; then printf '%s' "$2"; else printf '%s' "$1"; fi;
 INSTALL_LOG="${TMPDIR:-/tmp}/iva-install-$$.log"
 SPINNER_PID=""
 spinner_enabled() {
-  [ -t 1 ] && [ "${IVA_NO_ANIM:-0}" != 1 ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-}" != dumb
+  [ -t 1 ] && [ "${IVA_NO_ANIM:-0}" != 1 ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-}" != dumb ]
 }
 stop_spinner() {
   if [ -n "$SPINNER_PID" ]; then
