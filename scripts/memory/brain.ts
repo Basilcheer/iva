@@ -127,7 +127,7 @@ async function alert(
 
 // The problem is gone: forget it, so tomorrow's relapse speaks at once instead of waiting
 // out the week.
-const cleared = (key: string): Promise<void> => alertResolved(DATA_DIR, key);
+const cleared = (key: string): void => alertResolved(DATA_DIR, key);
 
 // Health score is read from the history that graph.py health appends after each run.
 function readHealthHistory(): HealthHistoryEntry[] {
@@ -262,7 +262,7 @@ if (failures.length) {
     ),
   );
 } else {
-  await cleared("maintenance");
+  cleared("maintenance");
 }
 
 // ── 1a. The card format §1b and §1c work from ──
@@ -280,18 +280,20 @@ if (!cards) {
     ),
   );
 } else {
-  await cleared("authored-tree");
+  cleared("authored-tree");
 }
 
 // ── 1b. CORE guard: the memory core must stay small (always-on floor stays flat) ──
 // This runs before git add/commit below, so a repaired CORE is included in the nightly backup.
 const corePath = resolve(VAULT, "CORE.md");
-// coreClamped стоит рядом с alert, а cleared — снаружи: тревога забывается на КАЖДОМ пути,
-// где ядро не переросло лимит, включая тот, на котором проверить его нечем (нет дерева).
-// Иначе одна сломанная установка держала бы тревогу о давно починенном файле.
+// Забываем проблему только там, где её реально проверили: без authored tree размер ядра
+// измерить нечем, и «почищено» было бы выдумкой. Запись при этом ничего не блокирует — как
+// только дерево вернётся, ближайшая ночь либо снова скажет, либо очистит.
+let coreChecked = false;
 let coreClamped = false;
 if (cards && existsSync(corePath)) {
   const { coreCap, clampCore, writeFileAtomicSync } = cards;
+  coreChecked = true;
   const oldCore = readFileSync(corePath, "utf8");
   if (oldCore.length > coreCap) {
     const newCore = clampCore(oldCore);
@@ -321,7 +323,7 @@ if (cards && existsSync(corePath)) {
     );
   }
 }
-if (!coreClamped) await cleared("core-cap");
+if (coreChecked && !coreClamped) cleared("core-cap");
 
 // ── 1c. Cards with an unclosed code fence (report only, never repaired) ──
 // Such a card reads as one long code block: its ## History and ## Log are no longer
@@ -345,16 +347,22 @@ if (unclosed.length) {
   );
   console.warn(`brain: ${message}`);
   await alert("unclosed-fence", unclosed.join(","), message);
-} else {
-  await cleared("unclosed-fence");
+} else if (cards) {
+  // Скан прошёл и ничего не нашёл. Без дерева (cards === null) он не выполнялся вовсе —
+  // забывать непроверенное нельзя.
+  cleared("unclosed-fence");
 }
 
 // ── 2. Detect health score drop ──
 const history = readHealthHistory();
+// Усечённая или пересозданная история — не «падение»: тогда сравнивать нечего, и алерт о
+// давнем падении должен быть забыт, а не висеть вечно.
+let healthDropped = false;
 if (history.length >= 2) {
   const cur = history[history.length - 1]?.health_score;
   const prev = history[history.length - 2]?.health_score;
   if (typeof cur === "number" && typeof prev === "number" && cur < prev) {
+    healthDropped = true;
     await alert(
       "health-drop",
       "dropping",
@@ -365,10 +373,9 @@ if (history.length >= 2) {
           "меньше. Открой vault/.graph/report.md и посмотри, что просело.",
       ),
     );
-  } else {
-    await cleared("health-drop");
   }
 }
+if (!healthDropped) cleared("health-drop");
 
 // ── 3. Git commit & push ──
 // Check the complete working-tree snapshot before staging anything. If even one file is
@@ -394,7 +401,7 @@ try {
   await alert("backup-scan", "unreadable", message);
   process.exit(1);
 }
-await cleared("backup-scan");
+cleared("backup-scan");
 
 if (oversized.length) {
   recordSkippedOversize(
@@ -420,7 +427,7 @@ if (oversized.length) {
   );
   process.exit(1);
 }
-await cleared("backup-oversize");
+cleared("backup-oversize");
 
 // Auto-provision a private backup remote via the already-authorized gh CLI instead of
 // nagging nightly: only alert when gh itself can't help (not installed / not logged in).
@@ -474,7 +481,7 @@ if (!remoteUrl) {
   console.error("brain: no remote and gh unavailable — push skipped");
   process.exit(failures.length ? 1 : 0);
 }
-await cleared("vault-remote");
+cleared("vault-remote");
 
 run("git", ["add", "-A"]);
 // commit may return non-zero if there is nothing to commit — that is normal.
@@ -515,7 +522,7 @@ if (push.status !== 0) {
   await alert("backup-push", error.kind, message);
   process.exit(1);
 }
-await cleared("backup-push");
+cleared("backup-push");
 
 console.log("=== brain: done, vault committed and pushed ===");
 process.exit(failures.length ? 1 : 0);

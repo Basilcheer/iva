@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-floating-promises -- Node's test runner owns registration promises. */
 // Ночной brain целиком, живым процессом: единственный способ увидеть, на каком языке он
 // говорит и что именно говорит. Телеграма в тесте нет — без токена brain печатает готовый
-// текст тревоги в stderr, и это ровно та строка, которую увидел бы владелец.
+// текст алерта в stderr, и это ровно та строка, которую увидел бы владелец.
 //
 // PATH пуст намеренно: без uv, git и gh прогон останавливается на проверке размеров перед
 // бэкапом и НИКОГДА не доходит до `gh repo create` — тест не имеет права ничего создать в
@@ -130,7 +130,7 @@ test("an alert that never reached Telegram does not silence the next night", (t)
 });
 
 // Дроссель и текст живут в разных местах, поэтому здесь — только контракт brain.ts: каждая
-// тревога уходит через alert() (то есть через дроссель) и несёт пару локалей.
+// алерт уходит через alert() (то есть через дроссель) и несёт пару локалей.
 test("every brain alert goes through the throttle and carries both locales", () => {
   const source = readFileSync(join(ROOT, "scripts/memory/brain.ts"), "utf8");
 
@@ -155,9 +155,9 @@ test("every brain alert goes through the throttle and carries both locales", () 
   assert.doesNotMatch(source, /await telegram\(/u);
 
   // Каждая проблема умеет и «ушла»: рецидив после починки говорит сразу.
-  const cleared = [...source.matchAll(/await cleared\("([a-z-]+)"\)/gu)].map(
-    (match) => match[1],
-  );
+  const cleared = [
+    ...source.matchAll(/(?<!await )cleared\("([a-z-]+)"\)/gu),
+  ].map((match) => match[1]);
   assert.deepEqual(
     [...cleared].sort(),
     [...keys].sort(),
