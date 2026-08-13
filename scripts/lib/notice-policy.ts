@@ -2,7 +2,8 @@
 // ровно два, и у каждого своё правило (ADR-0007):
 //   • Report — плановая сводка (отчёты памяти, утренний дайджест). По умолчанию выключен,
 //     включается тумблером в /menu → 🔔 Уведомления.
-//   • Alert — проблема, с которой владельцу надо что-то сделать (brain, предложение обновиться).
+//   • Alert (алерт) — проблема, с которой владельцу надо что-то сделать: brain, предложение
+//     обновиться.
 //     Не выключается — и потому обязан говорить, что делать, и не повторяться чаще раза
 //     в неделю на одну и ту же проблему.
 //
@@ -13,16 +14,19 @@
 // Здесь только политика: кому и когда можно говорить. Транспорт приносит вызывающий
 // (у моста, ночного brain и апдейтера он разный), поэтому каждая отправка — колбэк.
 //
-// Модуль обязан грузиться на установке без authored tree (scripts/authored-tree-guard.test.ts):
-// ночной brain и проверка обновлений — юниты, которые должны работать на половине установки.
-// Поэтому `agent/` достаётся динамическим импортом внутри вызова и всегда fail-open.
+// Модуль обязан РАБОТАТЬ на установке без authored tree (scripts/authored-tree-guard.test.ts):
+// ночной brain и проверка обновлений — юниты, которые должны работать на половине установки,
+// и дроссель алертов нужен там больше всего. Поэтому из `agent/` берётся ровно одно — резолвер
+// языка, динамическим импортом и fail-open; всё остальное здесь на node:fs.
 import {
   closeSync,
   mkdirSync,
   openSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
+  writeFileSync,
   writeSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
@@ -104,13 +108,15 @@ function errorCode(error: unknown): string | undefined {
 const REPORTS_OFF_MARKER = "notice-memory-reports-off.json";
 
 /**
- * Гонялась ли ночная свёртка на этой установке раньше — по следам, которые она оставляет
- * и которые свежая установка к своей первой ночи иметь не может:
+ * Гонялась ли ночная свёртка на этой установке раньше — по следам ЗАВЕРШЁННОГО прогона,
+ * которых свежая установка к своей первой ночи иметь не может:
  *
- *   • курсор сессии ЛЮБОГО периода (`data/rollup-session-*.json`) — но его сносит
- *     dropHungSession, поэтому одного его мало;
- *   • `data/rollup-status.json` с записью любого периода — его пишет спавнер расписаний
- *     после каждого прогона, и он переживает сброс курсора;
+ *   • курсор сессии ЛЮБОГО периода (`data/rollup-session-*.json`) — его пишет сама свёртка
+ *     после хода, но сносит dropHungSession, поэтому одного его мало;
+ *   • запись периода в `data/rollup-status.json` С ПОЛЕМ ЗАВЕРШЕНИЯ (`lastFinishedAt` или
+ *     `lastSuccessAt`). Одного имени периода мало: спавнер расписаний резервирует слот
+ *     (`lastStartedAt`, `inProgressSince`, `ownerPid`) ДО запуска, и текущий, самый первый
+ *     прогон читал бы собственную бронь как чужой прошлый успех;
  *   • дневные сводки в vault (`summaries/daily/*.md`) — их создаёт только свёртка;
  *     шаблон vault'а привозит каталог пустым.
  *
@@ -136,7 +142,17 @@ export function rollupRanBefore(dataDir: string, vaultDir: string): boolean {
       readFileSync(join(dataDir, "rollup-status.json"), "utf8"),
     );
     if (typeof parsed !== "object" || parsed === null) return false;
-    return Object.keys(parsed).some((name) => name.startsWith("memory-"));
+    return Object.entries(parsed).some(([name, entry]) => {
+      if (!name.startsWith("memory-")) return false;
+      if (typeof entry !== "object" || entry === null) return false;
+      const { lastFinishedAt, lastSuccessAt } = entry as {
+        lastFinishedAt?: unknown;
+        lastSuccessAt?: unknown;
+      };
+      return (
+        typeof lastFinishedAt === "number" || typeof lastSuccessAt === "number"
+      );
+    });
   } catch {
     return false;
   }
@@ -298,7 +314,7 @@ export async function deliverMemoryReport({
   };
 }
 
-// ── Alert: тревога, которую нельзя выключить ─────────────────────────────────────────────
+// ── Alert: алерт, который нельзя выключить ───────────────────────────────────────────────
 export const ALERT_REPEAT_MS = 7 * 24 * 60 * 60 * 1000;
 
 type AlertRecord = { essence: string; lastSentAt: number };
@@ -309,7 +325,7 @@ function alertStatePath(dataDir: string): string {
 }
 
 // Битый, недописанный или чужой формат состояния значит «слать»: fail-open. Замолчавшая
-// тревога стоит дороже, чем увиденная дважды, поэтому непонятная запись просто теряется.
+// алерт стоит дороже, чем увиденный дважды, поэтому непонятная запись просто теряется.
 function readAlertState(dataDir: string): AlertState {
   let parsed: unknown;
   try {
@@ -336,25 +352,35 @@ function readAlertState(dataDir: string): AlertState {
   return state;
 }
 
-async function writeAlertState(
-  dataDir: string,
-  state: AlertState,
-): Promise<void> {
+// Запись состояния — своя, из node:fs, а НЕ через #lib/fs-atomic.ts. Дроссель нужен ровно
+// той установке, у которой authored tree сломан: там алерт `authored-tree` уходит каждую
+// ночь, и импорт из agent/ упал бы вместе с ним — недельный дроссель умер бы там, где он
+// нужнее всего. Механизм тот же (tmp + rename), три строки, зависимостей ноль.
+function writeAlertState(dataDir: string, state: AlertState): void {
+  const path = alertStatePath(dataDir);
+  const temp = `${path}.${process.pid}.${Date.now()}.tmp`;
   try {
-    // Атомарная запись — из authored tree, поэтому динамически: brain обязан работать и
-    // без него. Не записалось — тревога повторится завтра, а это безопасная сторона.
-    const { writeFileAtomicSync } = await import("#lib/fs-atomic.ts");
-    writeFileAtomicSync(alertStatePath(dataDir), `${JSON.stringify(state)}\n`, {
+    mkdirSync(dataDir, { recursive: true });
+    writeFileSync(temp, `${JSON.stringify(state)}\n`, {
+      encoding: "utf8",
+      flag: "wx",
       mode: 0o600,
     });
+    renameSync(temp, path);
   } catch (error) {
-    console.error("[notices] could not record the alert state:", error);
+    // Не записалось — алерт повторится завтра, а это безопасная сторона.
+    console.error("[notice-policy] could not record the alert state:", error);
+    try {
+      rmSync(temp, { force: true });
+    } catch {
+      /* tmp уже забрал rename или его не удалось создать вовсе */
+    }
   }
 }
 
 /**
  * Пора ли говорить: записи нет, существо проблемы сменилось, прошла неделя — или часы
- * ушли назад (запись из будущего иначе заглушила бы тревогу навсегда).
+ * ушли назад (запись из будущего иначе заглушила бы алерт навсегда).
  */
 export function alertDue(
   dataDir: string,
@@ -370,8 +396,8 @@ export function alertDue(
 }
 
 /**
- * Тревога с дросселем. Состояние обновляется только после состоявшейся отправки:
- * неотправленная тревога не имеет права заглушить следующую.
+ * Алерт с дросселем. Состояние обновляется только после состоявшейся отправки:
+ * неотправленный алерт не имеет права заглушить следующий.
  */
 export async function alertOnce(
   dataDir: string,
@@ -383,17 +409,14 @@ export async function alertOnce(
   if (!(await send())) return "failed";
   const state = readAlertState(dataDir);
   state[key] = { essence, lastSentAt: Date.now() };
-  await writeAlertState(dataDir, state);
+  writeAlertState(dataDir, state);
   return "sent";
 }
 
 /** Проблема ушла: забыть её, чтобы завтрашний рецидив заговорил сразу, а не через неделю. */
-export async function alertResolved(
-  dataDir: string,
-  key: string,
-): Promise<void> {
+export function alertResolved(dataDir: string, key: string): void {
   const state = readAlertState(dataDir);
   if (!(key in state)) return; // нечего забывать — и незачем трогать файл
   delete state[key];
-  await writeAlertState(dataDir, state);
+  writeAlertState(dataDir, state);
 }

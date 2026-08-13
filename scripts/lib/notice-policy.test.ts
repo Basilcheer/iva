@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-floating-promises -- Node's test runner owns registration promises. */
 import test, { type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn as realSpawn } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
@@ -31,6 +31,7 @@ import {
   type Translate,
 } from "./notice-policy.ts";
 import { sendTelegramHtml } from "./telegram-send.ts";
+import { runScheduledJob } from "#lib/schedule-runner.ts";
 
 const EN: Translate = (english) => english;
 const RU: Translate = (_english, russian) => russian;
@@ -132,6 +133,24 @@ test("a rollup that ran here before leaves a trace that survives its own cleanup
 
   // dropHungSession снёс курсор — статус расписаний остаётся.
   rmSync(join(data, "rollup-session-weekly.json"));
+  // Бронь текущего прогона (спавнер пишет её ДО запуска) следом не считается.
+  writeFileSync(
+    join(data, "rollup-status.json"),
+    JSON.stringify({
+      "memory-daily": {
+        lastStartedAt: 1,
+        inProgressSince: 1,
+        ownerPid: process.pid,
+      },
+    }),
+  );
+  assert.equal(rollupRanBefore(data, vault), false);
+  // Завершение — считается, и успехом, и провалом: прогон был.
+  writeFileSync(
+    join(data, "rollup-status.json"),
+    JSON.stringify({ "memory-daily": { lastFinishedAt: 1, lastExitCode: 1 } }),
+  );
+  assert.equal(rollupRanBefore(data, vault), true);
   writeFileSync(
     join(data, "rollup-status.json"),
     JSON.stringify({ "memory-daily": { lastSuccessAt: 1 } }),
@@ -555,13 +574,13 @@ test("a problem that came back after the fix speaks at once", async (t) => {
   };
 
   await alertOnce(dir, "health-drop", "dropping", send);
-  await alertResolved(dir, "health-drop");
+  alertResolved(dir, "health-drop");
   assert.deepEqual(alertState(dir), {});
   assert.equal(await alertOnce(dir, "health-drop", "dropping", send), "sent");
   assert.equal(sent, 2);
 
   // Нечего забывать — файл не трогаем и не падаем.
-  await alertResolved(dir, "never-seen");
+  alertResolved(dir, "never-seen");
   assert.equal(Object.keys(alertState(dir)).length, 1);
 });
 
@@ -580,7 +599,7 @@ test("the backup alerts forget the problem once the backup works again", async (
       "throttled",
     );
     // Ночь, когда бэкап прошёл: проблема забыта.
-    await alertResolved(dir, key);
+    alertResolved(dir, key);
     // Назавтра сломалось снова — говорим сразу, а не через неделю.
     assert.equal(await alertOnce(dir, key, "unreadable", send(key)), "sent");
   }
@@ -720,4 +739,127 @@ test("the switch in /menu decides the language of every notice, not the env", ()
   // Настроек нет — остаётся env, потом дефолт.
   assert.equal(probe(null, "en").lang, "en");
   assert.equal(probe(null, "").lang, "ru");
+});
+
+// ── Первая ночь свежей установки, через НАСТОЯЩИЙ спавнер расписаний ─────────────────────
+// Спавнер резервирует слот в data/rollup-status.json ДО запуска свёртки (lastStartedAt,
+// inProgressSince, ownerPid). Если считать следом само имя периода, свежая установка
+// прочитает собственную бронь как чужой прошлый прогон — и получит Notice в первую же ночь.
+test("the very first scheduled run is not mistaken for a run that happened before", async (t) => {
+  const home = dataDir(t);
+  const data = join(home, "data");
+  const vault = join(home, "vault");
+  mkdirSync(join(vault, "summaries/daily"), { recursive: true });
+  writeFileSync(join(vault, "summaries/daily/.gitkeep"), "");
+  mkdirSync(data, { recursive: true });
+  const calls = telegramCalls(t);
+
+  const seen: boolean[] = [];
+  const result = await runScheduledJob({
+    name: "memory-daily",
+    argv: ["scripts/memory/rollup.ts", "daily"],
+    root: home,
+    nodeBin: process.execPath,
+    statusPath: join(data, "rollup-status.json"),
+    log: () => {},
+    // Здесь, вместо самой свёртки, стоит её первый шаг: прочитать след прежних прогонов.
+    // К этому моменту бронь текущего прогона уже лежит в статус-файле.
+    spawnImpl: (_cmd, _args, options) => {
+      seen.push(rollupRanBefore(data, vault));
+      return realSpawn(process.execPath, ["-e", "process.exit(0)"], options);
+    },
+  });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(seen, [false], "its own reservation is not a past run");
+
+  // И решение, принятое с этим признаком, молчит.
+  const delivery = await deliverMemoryReport({
+    dataDir: data,
+    settings: {},
+    ranBefore: seen[0],
+    report: "ночной отчёт",
+    tr: RU,
+    send: {
+      report: (text) => sendTelegramHtml("token", "42", text),
+      notice: (text) => sendTelegramHtml("token", "42", text),
+    },
+  });
+  assert.equal(delivery.notice, "not-needed");
+  assert.deepEqual(
+    calls,
+    [],
+    "a fresh installation hears nothing on night one",
+  );
+
+  // Зато завершённый прогон — уже след: вторая ночь видит установку как гонявшую свёртку.
+  assert.equal(rollupRanBefore(data, vault), true);
+});
+
+// ── Дроссель без authored tree ───────────────────────────────────────────────────────────
+// Установка со сломанным agent/ — ровно та, которой алерт нужен каждую ночь; если состояние
+// дросселя писать через #lib/fs-atomic.ts, оно бы там не писалось вовсе. Модуль копируется в
+// каталог со СВОИМ package.json, где алиаса #lib нет вообще: так проверяется, что политика
+// живёт на одном node:fs.
+const NO_TREE_PROBE = `
+const policy = await import(process.env.__POLICY_URL);
+const dir = process.env.__DATA_DIR;
+const first = await policy.alertOnce(dir, "authored-tree", "unloadable", () => Promise.resolve(true));
+const second = await policy.alertOnce(dir, "authored-tree", "unloadable", () => Promise.resolve(true));
+process.stdout.write(JSON.stringify({
+  first,
+  second,
+  lang: await policy.noticeLang({ AGENT_LANGUAGE: "en" }),
+}));
+`;
+
+test("the weekly throttle works on an installation whose agent/ is gone", (t) => {
+  const home = dataDir(t);
+  const island = join(home, "island");
+  const data = join(home, "data");
+  mkdirSync(island, { recursive: true });
+  mkdirSync(data, { recursive: true });
+  writeFileSync(
+    join(island, "package.json"),
+    JSON.stringify({ type: "module" }),
+  );
+  writeFileSync(
+    join(island, "notice-policy.ts"),
+    readFileSync(join(import.meta.dirname, "notice-policy.ts"), "utf8"),
+  );
+
+  const output = execFileSync(
+    process.execPath,
+    ["--input-type=module", "-e", NO_TREE_PROBE],
+    {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        __POLICY_URL: pathToFileURL(join(island, "notice-policy.ts")).href,
+        __DATA_DIR: data,
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
+
+  const probe = JSON.parse(output) as {
+    first: string;
+    second: string;
+    lang: string;
+  };
+  assert.equal(probe.first, "sent");
+  assert.equal(
+    probe.second,
+    "throttled",
+    "the throttle must survive without agent/",
+  );
+  assert.equal(probe.lang, "en", "the language falls back to the environment");
+  const statePath = join(data, "alert-state.json");
+  assert.equal(statSync(statePath).mode & 0o777, 0o600);
+  const state: unknown = JSON.parse(readFileSync(statePath, "utf8"));
+  assert.equal(
+    typeof (state as Record<string, { lastSentAt?: unknown }>)["authored-tree"]
+      .lastSentAt,
+    "number",
+  );
 });
