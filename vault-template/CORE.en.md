@@ -1,4 +1,4 @@
-# CORE — memory core
+# CORE
 
 <!-- Always-on: injected into context every turn (≤~1200 chars). Durable facts only.
      Written by the nightly rollup; on an explicit "remember …" the agent appends a line.

@@ -8,7 +8,7 @@ Iva is a self-hosted Telegram AI assistant with layered memory that turns your m
 
 ## Can I run a Telegram AI bot with my own API key?
 
-Yes — Iva runs entirely on your own keys: one model-provider key (OpenCode Go or Ollama Cloud), a Deepgram key for voice, and a bot token from @BotFather. The setup wizard validates every key live and lets you pick a model from the provider's fetched list. Keys stay in `.env` on your server — walkthrough in [install.md](install.md).
+Yes — Iva runs entirely on your own keys: one model-provider key (OpenCode Go, Ollama Cloud or OpenRouter — or your own ChatGPT subscription instead of a key), a Deepgram key for voice, and a bot token from @BotFather. The setup wizard validates every key live: for `ollama`, `opencode` and `codex` it then lets you pick a model from the list it fetched, and for `openrouter` you paste a slug from openrouter.ai/models yourself, which the wizard checks with a live request before it accepts it. Keys stay in `.env` on your server — walkthrough in [install.md](install.md).
 
 ## Is my data private?
 
@@ -24,7 +24,7 @@ Yes — the setup wizard and the agent both run in Russian or English (`AGENT_LA
 
 ## What models does it support?
 
-Two OpenAI-compatible providers — OpenCode Go and Ollama Cloud — with deepseek-v4-pro as the default on both. Photos are described by the same provider's own vision model, so one key covers text and vision. Full model lists and limits: [providers.md](providers.md).
+Four providers. Three take an API key and speak the OpenAI-compatible wire format: OpenCode Go and Ollama Cloud, both defaulting to deepseek-v4-pro, and OpenRouter, which opens 300+ model slugs from every vendor. The fourth, `codex`, rides your own OpenAI (ChatGPT) subscription over OAuth and calls its Responses API instead — no key at all. Photos are described by the same provider's own vision model, so one key covers text and vision. Full model lists, prices and limits: [providers.md](providers.md).
 
 ## Do I need a domain or HTTPS?
 
@@ -47,6 +47,6 @@ Yes — that is the point. You talk, it files: daily transcripts, nightly rollup
 
 ## When NOT to use Iva
 
-- **You need a team or multi-user chat UI.** Iva is single-user by design: the allowlist gates a few trusted IDs and the vault belongs to one person. LibreChat fits teams better.
+- **You need a team or multi-user chat UI.** Iva is single-user by design: the allowlist admits a few trusted IDs and the vault belongs to one person. LibreChat fits teams better.
 - **You want local model weights.** Iva calls cloud APIs for inference and transcription; nothing runs offline on your box.
 - **You want a hosted, no-ops product.** Iva expects you to own a VPS and occasionally run `iva doctor`. A ChatGPT subscription is simpler if you never want to touch a server.

@@ -111,16 +111,16 @@ function buildPrompt(p: Period, now: string): string {
         `Process the raw transcript of the completed day (${VAULT}/daily/${yesterday}.md): ` +
         `extract entities and create/update autograph cards. Prefer the write_card tool over write_file ` +
         `for cards — it enforces the schema. For each fact choose one operation: ADD (new), ` +
-        `UPDATE (existing subject, compatible new fact), SUPERSEDE (contradicts a current value), ` +
+        `UPDATE (existing subject, compatible new fact), SUPERSEDE (contradicts the Compiled Truth), ` +
         `or NOOP (already known). Pass history_entry only for SUPERSEDE, never for ADD, UPDATE, or NOOP. ` +
-        `On SUPERSEDE: REWRITE the card's current value (frontmatter + top description) to the new fact ` +
+        `On SUPERSEDE: REWRITE the card's Compiled Truth (frontmatter + top description) to the new fact ` +
         `and pass the OLD value through history_entry as a single dated line ` +
         `'YYYY-MM-DD: fact' (e.g. '2026-07-31: TDI Group (held 2026-03→06)') — the fact's own date, ` +
         `not today's; write_card owns the '## History' section. ` +
         `A card 'body' is facts only, with no H1/H2 headings: write_card builds the card ` +
         `structure itself (the title, '## Log', '## Related', '## History') and refuses a body ` +
         `that carries a heading of its own. ` +
-        `Never leave two contradictory CURRENT values; History is append-only, never edited. ` +
+        `Never leave two contradictory Compiled Truths; History is append-only, never edited. ` +
         `Tag each fact's certainty with 'confidence:' — EXTRACTED (user stated it directly) or ` +
         `INFERRED (you deduced it). ` +
         `Emotional venting and momentary states ("I'm useless", "wasted the whole day", tiredness, ` +

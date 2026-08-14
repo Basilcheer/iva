@@ -61,8 +61,8 @@ superseded_by: [[new-project-card]]
 
 ## Card with History (a fact changed — see references/update-in-place.md)
 
-Compiled Truth (frontmatter + top of description) holds the current value; old values
-move to an append-only `## History` section, never edited, one line per displaced
+Compiled Truth (frontmatter + top of description) is what counts as true now; displaced
+facts move to an append-only `## History` section, never edited, one line per displaced
 value: `- {YYYY-MM-DD}: {fact}`. Cards written through Iva's `write_card` get this
 section from the tool — pass the displaced fact as `history_entry` instead.
 
@@ -114,4 +114,4 @@ Creative director at Globex.
 ❌ `tags: []` — empty tags add nothing, pick 2-5 relevant ones
 ❌ No frontmatter — every file needs `---` block
 ❌ Creating a near-duplicate instead of updating — grep/`search.py` first
-❌ Two contradictory current values on one subject — supersede the old one into `## History`
+❌ Two contradictory Compiled Truths on one subject — supersede the old one into `## History`

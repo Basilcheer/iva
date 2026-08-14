@@ -82,7 +82,7 @@ void test("у каждого кода портрет и персона непу�
         persona.length <= 800,
         `personaMarkdown(${code}, ${lang}) = ${persona.length} > 800`,
       );
-      // Самодостаточность: имя архетипа присутствует (персона — инструкция про этот характер).
+      // Самодостаточность: имя архетипа присутствует (PERSONA — инструкция про этот архетип).
       assert.ok(
         persona.includes(
           ARCHETYPES[code as keyof typeof ARCHETYPES].name[lang],

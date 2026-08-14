@@ -26,7 +26,7 @@ For every fact, pick exactly one:
 | **ADD**       | Genuinely new subject, no existing card           | Create a card (Workflow 3)                                                      |
 | **NOOP**      | Already captured and unchanged                    | Do nothing                                                                      |
 | **UPDATE**    | Same subject, new _enrichment_ (no contradiction) | Sharpen `description`, add tags, append a dated line under `## Log`, re-`touch` |
-| **SUPERSEDE** | New fact _contradicts_ a current value            | Rewrite current value + move old to `## History` (below)                        |
+| **SUPERSEDE** | New fact _contradicts_ the Compiled Truth         | Rewrite Compiled Truth + move old to `## History` (below)                       |
 
 `type`, `status`, and the target folder come from **`schema.json` only** — never invent
 a type or status. Folder = reverse-lookup of `domain_inference` for the card's domain.
@@ -37,7 +37,7 @@ The frontmatter fields and the top of the description are **Compiled Truth** —
 living snapshot of what is true _now_. When a fact changes (job changed, moved city,
 status flipped):
 
-1. **Rewrite** the current value in place — the frontmatter field _and_ the top of the
+1. **Rewrite** the Compiled Truth in place — the frontmatter field _and_ the top of the
    description — to the new fact.
 2. **Move the OLD value** to a `## History` section as a dated line:
    ```markdown
@@ -49,7 +49,7 @@ status flipped):
 
 Rules:
 
-- **Never leave two contradictory current values** on the same subject. Do NOT just
+- **Never leave two contradictory Compiled Truths** on the same subject. Do NOT just
   append the new fact and leave the old one standing.
 - `## History` is **append-only** — never edit or reorder existing lines.
 - One line format for every writer: `- {YYYY-MM-DD}: {fact}`, dated by the day the

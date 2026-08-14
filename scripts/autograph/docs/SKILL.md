@@ -115,7 +115,7 @@ Pick the operation (full rules: `references/update-in-place.md`):
 - **ADD** — no existing card → create it (steps 1–5 below).
 - **NOOP** — already captured, unchanged → stop.
 - **UPDATE** — same subject, new enrichment → open the card, sharpen `description`, append a dated line under `## Log`, re-`touch`.
-- **SUPERSEDE** — new fact _contradicts_ a current value → rewrite the current value (frontmatter field + top of description = "Compiled Truth"), move the OLD value to append-only `## History` (`- 2026-06-01: company: TDI Group (held 2026-03→2026-06)`), set `updated:`. Writing through Iva's `write_card`? Pass the displaced fact as `history_entry` — the tool owns that section. Whole card obsolete → `status: superseded` + `superseded_by: [[new-card]]`.
+- **SUPERSEDE** — new fact _contradicts_ the Compiled Truth → rewrite the Compiled Truth (frontmatter field + top of description), move the OLD value to append-only `## History` (`- 2026-06-01: company: TDI Group (held 2026-03→2026-06)`), set `updated:`. Writing through Iva's `write_card`? Pass the displaced fact as `history_entry` — the tool owns that section. Whole card obsolete → `status: superseded` + `superseded_by: [[new-card]]`.
 
 Only when the operation is **ADD**, continue:
 
@@ -334,23 +334,23 @@ uv run scripts/autograph/link_cleanup.py <vault-dir> --apply                    
 
 ## Common Mistakes
 
-| Mistake                                             | Fix                                                                                                                                 |
-| --------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| **Skipping agent swarm in Phase 2**                 | **CRITICAL: always run Step 2B. Script alone cannot classify unstructured content. No exceptions.**                                 |
-| **Using deprecated `links` subcommand**             | **`links` was removed (0.3% match rate). Only `swarm-links` is available — 81.6% match rate.**                                      |
-| **Creating cards without linking**                  | **Always follow Workflow 3 — link to hub + 2 siblings immediately. Orphan cards are wasted knowledge.**                             |
-| **Creating a near-duplicate instead of updating**   | **Workflow 3 Step 0 — `search.py`/grep first. Same subject → UPDATE or SUPERSEDE the existing card, never a second one.**           |
-| **Two contradictory current values on one subject** | **SUPERSEDE: rewrite the current value (Compiled Truth), move the old one to append-only `## History`. Never leave both standing.** |
-| **Touching archive cards to active directly**       | **Use graduated recall — touch promotes one tier at a time (archive→cold→warm→active).**                                            |
-| Sending full vault to one agent                     | Use `swarm_prepare.py` — bin-packs into ~50K token batches.                                                                         |
-| Running Wave 2 without Wave 1                       | `swarm_reduce.py prepare` needs JSONL in `.graph/swarm/classifications/`.                                                           |
-| Using schema.example.json directly                  | Run discover → generate your own schema.json                                                                                        |
-| Description = title repeat                          | Write specific search snippet                                                                                                       |
-| Status not in enum                                  | Check schema's node_types                                                                                                           |
-| Skip dry run                                        | Always run without --apply first                                                                                                    |
-| Running link enrich before dedup                    | Creates links to files that get merged/trashed. Dedup first.                                                                        |
-| Missing OPENROUTER_API_KEY                          | `enrich.py` reads from `OPENROUTER_API_KEY` env var.                                                                                |
-| Only running swarm-links once                       | Run again with `--force` to enrich ALL files.                                                                                       |
+| Mistake                                              | Fix                                                                                                                       |
+| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| **Skipping agent swarm in Phase 2**                  | **CRITICAL: always run Step 2B. Script alone cannot classify unstructured content. No exceptions.**                       |
+| **Using deprecated `links` subcommand**              | **`links` was removed (0.3% match rate). Only `swarm-links` is available — 81.6% match rate.**                            |
+| **Creating cards without linking**                   | **Always follow Workflow 3 — link to hub + 2 siblings immediately. Orphan cards are wasted knowledge.**                   |
+| **Creating a near-duplicate instead of updating**    | **Workflow 3 Step 0 — `search.py`/grep first. Same subject → UPDATE or SUPERSEDE the existing card, never a second one.** |
+| **Two contradictory Compiled Truths on one subject** | **SUPERSEDE: rewrite the Compiled Truth, move the old one to append-only `## History`. Never leave both standing.**       |
+| **Touching archive cards to active directly**        | **Use graduated recall — touch promotes one tier at a time (archive→cold→warm→active).**                                  |
+| Sending full vault to one agent                      | Use `swarm_prepare.py` — bin-packs into ~50K token batches.                                                               |
+| Running Wave 2 without Wave 1                        | `swarm_reduce.py prepare` needs JSONL in `.graph/swarm/classifications/`.                                                 |
+| Using schema.example.json directly                   | Run discover → generate your own schema.json                                                                              |
+| Description = title repeat                           | Write specific search snippet                                                                                             |
+| Status not in enum                                   | Check schema's node_types                                                                                                 |
+| Skip dry run                                         | Always run without --apply first                                                                                          |
+| Running link enrich before dedup                     | Creates links to files that get merged/trashed. Dedup first.                                                              |
+| Missing OPENROUTER_API_KEY                           | `enrich.py` reads from `OPENROUTER_API_KEY` env var.                                                                      |
+| Only running swarm-links once                        | Run again with `--force` to enrich ALL files.                                                                             |
 
 ## Default Models
 
