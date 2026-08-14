@@ -1156,3 +1156,46 @@ test("old versions are collected while the running one and its rollback stay", a
   assert.ok(kept.includes(store.currentName()!));
   assert.ok(kept.includes(releases.at(-2)!));
 });
+
+// Вторая половина апдейта — ПЕРВЫЙ код новой версии, который исполняется на машине, и он
+// бежит до сборки. Проверка только в новом CLI до битого значения не доезжает никогда:
+// первую половину гоняет версия, которая уже стоит, поэтому цикл fetch → build → health-fail
+// → rollback повторялся бы бесконечно. Здесь он обрывается на входе, назвав значение.
+test("the new version refuses to build on an invalid MODEL_PROVIDER", async (t) => {
+  const home = mkdtempSync(join(tmpdir(), "iva-finish-provider-"));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const report = join(home, "outcome.json");
+  const { main } = (await import("../update-finish.ts")) as {
+    main: (argv: readonly string[]) => Promise<number>;
+  };
+  const previousReport = process.env.IVA_UPDATE_OUTCOME;
+  t.after(() => {
+    if (previousReport === undefined) delete process.env.IVA_UPDATE_OUTCOME;
+    else process.env.IVA_UPDATE_OUTCOME = previousReport;
+  });
+  process.env.IVA_UPDATE_OUTCOME = report;
+
+  for (const value of ["ollmaa", "OLLAMA", ""]) {
+    writeFileSync(join(home, ".env"), `MODEL_PROVIDER=${value}\n`);
+    rmSync(report, { force: true });
+
+    const code = await main([home, "0.3.20-abcdefabcdef"]);
+
+    assert.equal(code, 1, value);
+    const outcome = JSON.parse(
+      readFileSync(report, "utf8"),
+    ) as UpdateOutcome & {
+      message?: string;
+    };
+    assert.equal(outcome.status, "failed", value);
+    assert.match(
+      outcome.message ?? "",
+      new RegExp(`Invalid MODEL_PROVIDER "${value}"`),
+      value,
+    );
+    assert.match(outcome.message ?? "", /ollama, opencode, codex, openrouter/u);
+    assert.match(outcome.message ?? "", /iva config/u);
+    // Ни замка, ни установки версии: до сборки дело не дошло.
+    assert.equal(existsSync(join(home, "versions")), false, value);
+  }
+});

@@ -1943,3 +1943,68 @@ test("the update reporter refuses a bad provider in the language of the job", as
     assert.doesNotMatch(text, /Building Iva|Собираю Iva/u, locale);
   }
 });
+
+// Терминал причину падения печатал всегда, чат — нет: приходило голое «Couldn't build Iva»
+// и «Retry: /update», по которому пользователь жал обновление снова и снова. Хвост причины
+// (сообщение ошибки или конец health-лога) теперь едет вместе с отказом.
+test("a failed build tells the chat why, redacted and trimmed", async () => {
+  const calls: TelegramCall[] = [];
+  const fetchImpl: MockFetch = async (url, init) => {
+    calls.push({
+      method: url.split("/").at(-1),
+      body: JSON.parse(init.body) as TelegramBody,
+    });
+    return { ok: true, status: 200, json: async () => ({ ok: true }) };
+  };
+  const reporter = createTelegramUpdateReporter({
+    token: "token",
+    job: { chatId: 1, messageId: 100, locale: "en" },
+    env: {},
+    fetchImpl,
+  });
+  assert.ok(reporter);
+
+  await reporter.fail(
+    "build",
+    "0.3.19",
+    'Invalid MODEL_PROVIDER "ollmaa"; expected one of: ollama, opencode, codex, openrouter — run: iva config',
+  );
+
+  const text = calls.at(-1)?.body.text ?? "";
+  assert.match(text, /Couldn't build Iva/u);
+  assert.match(text, /Invalid MODEL_PROVIDER "ollmaa"/u);
+  assert.match(text, /iva config/u);
+  assert.match(text, /0\.3\.19/u);
+});
+
+test("a failure detail is capped and passes the outbound gate", async () => {
+  const calls: TelegramCall[] = [];
+  const fetchImpl: MockFetch = async (url, init) => {
+    calls.push({
+      method: url.split("/").at(-1),
+      body: JSON.parse(init.body) as TelegramBody,
+    });
+    return { ok: true, status: 200, json: async () => ({ ok: true }) };
+  };
+  const reporter = createTelegramUpdateReporter({
+    token: "token",
+    job: { chatId: 1, messageId: 100, locale: "en" },
+    env: {},
+    fetchImpl,
+  });
+  assert.ok(reporter);
+
+  // Хвост лога с ключом внутри: в чат уходит конец, и секрет в нём не переживает гейт.
+  const secret = `sk-or-v1-${"a".repeat(48)}`;
+  await reporter.fail("build", "0.3.19", `${"x".repeat(2000)}\nkey ${secret}`);
+
+  const text = calls.at(-1)?.body.text ?? "";
+  assert.equal(text.includes(secret), false);
+  assert.equal(text.length < 900, true, String(text.length));
+
+  // Без причины сообщение остаётся ровно таким, каким было.
+  await reporter.fail("build", "0.3.19");
+  const plain = calls.at(-1)?.body.text ?? "";
+  assert.match(plain, /Couldn't build Iva/u);
+  assert.doesNotMatch(plain, /xxxx/u);
+});

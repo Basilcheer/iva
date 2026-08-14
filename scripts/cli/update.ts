@@ -74,7 +74,11 @@ type UpdateTransaction = {
 type TelegramReporter = {
   start(phase: UpdatePhase): Promise<void>;
   done(phase: UpdatePhase): Promise<void>;
-  fail(phase: UpdatePhase, beforeVersion: string): Promise<void>;
+  fail(
+    phase: UpdatePhase,
+    beforeVersion: string,
+    detail?: string,
+  ): Promise<void>;
   busy(): Promise<void>;
   badProvider(value: string, accepted: string): Promise<void>;
   postCommitFailure(message: string): Promise<void>;
@@ -504,7 +508,17 @@ export function createUpdateCommand({
           }
         }
       }
-      await reporter?.fail(state.phase, versions.beforeVersion);
+      // Та же причина, что уходит в терминал ниже: чат без неё бесполезен. Читается
+      // отдельно и безопасно: брошенный null разыменовывается строкой ниже, и падать он
+      // обязан ПОСЛЕ того, как чат узнал об отказе, — иначе сообщение остаётся на фазе.
+      const thrown = (
+        error as { readonly message?: unknown } | null | undefined
+      )?.message;
+      await reporter?.fail(
+        state.phase,
+        versions.beforeVersion,
+        typeof thrown === "string" ? thrown : undefined,
+      );
       const message = (error as { readonly message: unknown }).message;
       terminal.info(
         `${message as string}. ${locale === "ru" ? "Откат" : "Rollback"}: ${rollbackOk ? "OK" : "FAILED"}. ${locale === "ru" ? "Лог" : "Log"}: ${logFile}`,

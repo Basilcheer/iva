@@ -191,7 +191,8 @@ export function createVersionUpdateCommand(
     const failed = async (detail: string): Promise<void> => {
       terminal.fail(text.failed);
       terminal.info(detail);
-      await reporter?.fail("build", before);
+      // Причина едет в чат вместе с отказом: без неё остаётся «Retry: /update» по кругу.
+      await reporter?.fail("build", before, detail);
       process.exitCode = 1;
     };
 

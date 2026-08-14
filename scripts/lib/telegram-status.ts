@@ -29,7 +29,11 @@ type TelegramError = Error & { status?: number };
 type Reporter = {
   start(phase: UpdatePhase): Promise<void>;
   done(phase: UpdatePhase): Promise<void>;
-  fail(phase: UpdatePhase, beforeVersion: string): Promise<void>;
+  fail(
+    phase: UpdatePhase,
+    beforeVersion: string,
+    detail?: string,
+  ): Promise<void>;
   busy(): Promise<void>;
   /** Refusal before the first phase — the message carries what to fix, in the job's language. */
   badProvider(value: string, accepted: string): Promise<void>;
@@ -43,6 +47,10 @@ type Reporter = {
   }): Promise<boolean>;
   dispose(): void;
 };
+
+// Сколько причины доезжает в чат. Хвост, а не голова: у сборки и у health-пробы
+// последние строки — это и есть отказ, а начало лога всегда одинаковое.
+const FAIL_DETAIL_CHARS = 400;
 
 // Animated triangle loader from https://t.me/addemoji/iconemoji1.
 // Bots whose owner doesn't have Telegram Premium transparently fall back to ◇.
@@ -269,10 +277,17 @@ export function createTelegramUpdateReporter({
       currentPhase = null;
       return Promise.resolve();
     },
-    async fail(phase: UpdatePhase, beforeVersion: string) {
+    // `detail` — почему именно не вышло: сообщение ошибки или хвост health-лога. В терминале
+    // причина была всегда, а в чате оставалось голое «Не удалось собрать Iva» — и с ним
+    // пользователь мог только жать /update по кругу. Хвост обрезан, и он проходит тот же
+    // outbound-Gate, что и всё остальное (redactTelegramBody в call ниже).
+    async fail(phase: UpdatePhase, beforeVersion: string, detail?: string) {
       const reason = copy[phase][2];
       currentPhase = null;
-      await finish(`⚠️ ${reason}\n\n${copy.failure(beforeVersion)}`);
+      const tail = (detail ?? "").trim().slice(-FAIL_DETAIL_CHARS);
+      await finish(
+        `⚠️ ${reason}${tail ? `\n\n${tail}` : ""}\n\n${copy.failure(beforeVersion)}`,
+      );
     },
     // The tap that finds an update already running: the message it edited must
     // not be left saying the update is under way.
