@@ -207,3 +207,40 @@ and both halves call it. `scripts/memory-search-index.test.ts` pins the FTS colu
 the dense text side by side per card shape, and checks the halves still agree. Two
 implementations remain, and by design: the cross-language pair is the price of a Python
 night pipeline, a second copy inside TypeScript is not.
+
+## 14. The inbound gate cannot replace Telegram message text
+
+On a text message the pipeline can add context to the turn and nothing else: eve's
+`TelegramInboundResult` is `{ auth, context } | null`, so `message.text` is delivered to the
+model by the channel regardless of what `sanitizeInbound` found. Checked against eve 0.30.8
+(the pinned version) and 0.37.0 — the shape is the same in both. The only lever beside it is
+`null`, which drops the entire update: too blunt to spend on a false positive, and from 0.31.0
+it no longer applies to an authorized message at all. So for Telegram **text** the gate is an
+annotation: the cleaned copy, the injection
+warning and the truncation note ride beside the original, and whether the payload is obeyed is
+up to the model. Everything the pipeline assembles itself — voice transcripts, captions, the
+vision description of an image — is genuinely filtered, because there is no channel-delivered
+original to compete with.
+
+No workaround here, by the owner's decision: faking one (re-sending a scrubbed copy, dropping
+the turn and replying by hand, editing session state behind the framework's back) buys a
+partial guarantee at the cost of a second delivery path around the inbound pipeline — exactly
+the shape ADR-0005 exists to avoid. `docs/security.md` states the limit instead, in the
+section "Telegram text: an annotation, not a filter".
+
+The fix is upstream, and the feature request to file against `vercel/eve` is small: let the
+inbound hook return the text the model will see, as one optional field beside `context` —
+
+```ts
+type TelegramInboundResult = {
+  readonly auth: SessionAuthContext | null;
+  readonly context?: readonly string[];
+  readonly text?: string; // new: the body the model actually reads
+} | null;
+```
+
+— where an omitted `text` keeps today's behaviour, so it can ship in a patch release, and the
+replacement covers only the model-visible body, leaving logs and the raw update alone. Remove
+this item when a released eve lets the pipeline hand back that text and the pipeline uses it:
+that is what turns the sanitizer on Telegram text from a warning into a filter, and it retires
+the security doc's section with it.

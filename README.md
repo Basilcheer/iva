@@ -97,9 +97,9 @@ The bot is half of Telegram. The other half is your personal account: connect th
 
 ## Security & privacy
 
-<img src="assets/iva-security-gate.webp" alt="Untrusted input from Telegram, web and email passes the security gate: corrupted messages drop into the reject tray, only clean context reaches the vault" width="100%">
+<img src="assets/iva-security-gate.webp" alt="Untrusted input from Telegram and the web passes the security gate: corrupted messages drop into the reject tray, only clean context reaches the vault" width="100%">
 
-Inbound content passes a prompt-injection sanitizer, every reply passes a secret-redaction gate, and the user allowlist fails closed — an empty list answers nobody. Your memory is a private git repo you own; the honest boundary is that the model and transcription are cloud APIs you choose and pay for. Gate internals: [docs/security.md](docs/security.md).
+Web pages, search results, voice transcripts, captions and the vision model's description of a picture reach the model only through a prompt-injection sanitizer. On a forwarded text message the same gate annotates the turn with a warning instead of filtering the text, and document bodies, userbot-read chats and `agent-browser` output are not screened at all. Everything that leaves through the Outbox passes a secret-redaction gate, and the user allowlist fails closed — an empty list answers nobody. Your memory is a private git repo you own; the honest boundary is that the model and transcription are cloud APIs you choose and pay for. Gate internals and the full boundary: [docs/security.md](docs/security.md).
 
 ## Install
 

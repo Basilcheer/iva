@@ -78,15 +78,19 @@ test("the delivery half of the prompt is the one that carries the language", () 
 });
 
 test("the red line in the instructions exempts both scheduled senders", () => {
-  // Красный блок системных инструкций требует rich message для ЛЮБОГО отчёта. Без явного
-  // исключения он спорит с хвостом промпта, кричит громче — и владелец получает второе
-  // сообщение мимо кода доставки.
+  // Красный блок системных инструкций говорит, что отчёт — обычный ответ хода: отправку
+  // делает код Outbox. В плановых ходах отправку тоже делает код, но другой, и без явного
+  // исключения модель считает своим ответом уже отправленный текст — владелец получает
+  // второе сообщение мимо кода доставки.
   const instructions = readFileSync(
     join(ROOT, "agent/instructions.md"),
     "utf8",
   );
   const red = instructions.slice(0, instructions.indexOf("\nТы — **Iva**"));
-  assert.match(red, /ЛЮБОЙ ОТЧЁТ.*ТОЛЬКО RICH MESSAGE/u);
+  assert.match(red, /ОТЧЁТ.*ОБЫЧНЫЙ ОТВЕТ ХОДА/u);
+  // Транспорт мимо Outbox из обязательного пути убран: он же обход outbound-гейта.
+  assert.doesNotMatch(red, /ТОЛЬКО RICH MESSAGE/u);
+  assert.match(red, /ЗАПРЕЩЕНО слать отчёт в текущий чат мимо ответа/u);
   const at = red.indexOf("ИСКЛЮЧЕНИЕ");
   assert.notEqual(at, -1, "the red line must carry an exception at all");
   const exception = red.slice(at);

@@ -1,6 +1,6 @@
 ---
 description: >-
-  Send Telegram rich-media posts and reports via the bot (Bot API 10.1 sendRichMessage) - text, inline images, tables, headings, lists, quotes, collapsible blocks, formulas, collages/slideshows ALL in one message bubble. This is the REQUIRED transport for reports (see the red-banner rule in the persona). Also use when asked for a rich post, a message with images between text, a post with a table, "rich message", "картинка в середине текста". NOT for plain text replies (just answer) or simple albums.
+  Send a Telegram rich-media post to ANOTHER allowlisted chat via the bot (Bot API 10.1 sendRichMessage) - text, inline images, tables, headings, lists, quotes, collapsible blocks, formulas, collages/slideshows ALL in one message bubble. Use when the owner asks to post somewhere other than the current conversation (the digest chat, for example), or when a post needs inline images between paragraphs. NOT for a report or an answer to the current chat: those are the plain reply of the turn, and the host already sends rich messages for them (see the red-banner rule in the persona).
 ---
 
 # rich-post — Telegram rich messages via the bot
@@ -8,6 +8,17 @@ description: >-
 Send ONE message that mixes text, inline images, tables, headings, lists,
 block quotes, collapsible blocks and formulas. This is `sendRichMessage`
 (Bot API 10.1, June 2026), not an album.
+
+## When NOT to use this
+
+A report or an answer for the chat you are talking in is the plain reply of the
+turn. The Outbox (`agent/lib/outbox.ts`) already routes a reply that needs
+tables, task lists, `<details>` or block formulas into `sendRichMessage`, and
+falls back to HTML if Bot API refuses it. Sending the same text with this script
+instead delivers it twice and bypasses the outbound gate that runs inside the
+Outbox — a secret in the text would leave unredacted. Reach for this skill only
+when the destination is a different allowlisted chat, or when the post needs
+inline images and the owner asked for it there.
 
 Album (sendMediaGroup) = up to 10 media, ONE caption, no text between images.
 Rich message = up to 50 media, text/tables/blocks interleaved in a single
@@ -127,8 +138,11 @@ HTML-only extras: <u>underline</u> <sub>x</sub> <sup>x</sup>
 - Use `rich_message.markdown` OR `rich_message.html`, exactly one.
 - Channels/groups: the bot must be admin with permission to send media (and
   the target still has to be allowlisted).
-- The host does NOT call sendRichMessage on normal replies — this script is
-  the way to send rich posts.
+- The host DOES call sendRichMessage on normal replies (`agent/lib/outbox.ts`,
+  `needsRichMessage`), so tables and task lists in an ordinary answer already
+  render. This script exists for the other chat, not for a nicer reply.
+- The script talks to Bot API directly and runs no outbound gate. Everything it
+  sends must be text you wrote in this turn, not a file dump or command output.
 
 ## Example
 
