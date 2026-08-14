@@ -82,6 +82,10 @@ TARGET_PASS=""
 CREATE_USER=false
 PUBKEY=""
 DISABLE_PASSWORD_AUTH=false
+# Set true ONLY once the key is really in authorized_keys with the right perms.
+# harden_ssh reads THIS, not "a key was handed in": a key that never landed must
+# never let us turn passwords off, or the owner is locked out of their own VPS.
+KEY_AUTHORIZED=false
 TIMEZONE_CHOICE=""
 SSH_PORT=22
 
@@ -1003,8 +1007,34 @@ install_gh() {
   fi
 }
 
+# Run one command as $TARGET_USER, never as root. Both callers below write inside
+# somebody else's home — ~/.local/bin and ~/.ssh — and an existing account is allowed
+# here (see pick_user), so either path can already be a symlink the user put there.
+# Root following one would create or overwrite whatever it points at and hand the
+# result over: a way to have root make the user the owner of, say, /etc. Under the
+# user's own uid the same command can only touch what the user could touch anyway, so
+# there is no ownership to repair afterwards and no group to look up. stdin is passed
+# through, which is how content root holds reaches a file without a root redirect.
+as_target_user() {
+  if command -v runuser >/dev/null 2>&1; then
+    runuser -u "$TARGET_USER" -- "$@"
+  else
+    # No runuser (it ships with util-linux, so this is the unusual box): su takes the
+    # command as positional parameters, which keeps a path with spaces or quotes in it
+    # out of the parsing done by the shell su starts.
+    #
+    # The `--` is load-bearing, not decoration. su's own getopt has no leading `+`, so
+    # it permutes: without the marker it reaches into the payload and eats anything
+    # option-shaped there. `mkdir -p` would arrive as a plain `mkdir` (su swallows -p
+    # as --preserve-environment) and `tee -a` or `grep -qxF` would abort su itself on
+    # an invalid option — leaving a box with no authorized key and, with
+    # IVA_DISABLE_PASSWORD_AUTH, an owner locked out of their own server.
+    su -s /bin/sh -c 'exec "$0" "$@"' -- "$TARGET_USER" "$@"
+  fi
+}
+
 # ─────────────────────────────────────────────────────────────────────────────
-# 8. The everyday user: sudo group + lingering.
+# 8. The everyday user: sudo group + lingering + ~/.local/bin.
 #    Lingering is not optional: without it the user's systemd instance never
 #    starts at boot and installing Iva fails with "Failed to connect to bus".
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1036,7 +1066,38 @@ create_user() {
     warn "couldn't add $TARGET_USER to the sudo group — do it by hand: usermod -aG sudo $TARGET_USER"
   fi
 
+  ensure_local_bin
   enable_linger
+}
+
+# The directory has to exist BEFORE the user's first login. install.sh puts the `iva`
+# command in ~/.local/bin, but the stock ~/.profile only adds that directory to PATH
+# when it is already there as the shell starts — created later, it stays off PATH for
+# the whole session, and `iva help` answers "command not found" right after an install
+# that reported success. Created here, the first login already has it.
+#
+# Created AS THE USER (as_target_user above), never as root. A missing home is a warn,
+# not something to invent: a home directory that passwd promises but nobody created is
+# not this script's to write, and writing one at root's umask hands back a home the
+# user cannot use.
+ensure_local_bin() {
+  CURRENT_STEP="preparing ~/.local/bin for $TARGET_USER"
+  local home created=false
+  # `|| true` inside the substitution, or pipefail hands the failed lookup to the ERR
+  # trap and the whole bootstrap dies here — with the check right below unreached.
+  home="$(getent passwd "$TARGET_USER" 2>/dev/null | cut -d: -f6 || true)"
+  if [ -z "$home" ] || [ ! -d "$home" ]; then
+    warn "no home directory for $TARGET_USER — skipping ~/.local/bin; after installing Iva, run 'exec bash -l' to put the iva command on PATH"
+    return 0
+  fi
+  if as_target_user mkdir -p "$home/.local/bin" >>"$LOG_FILE" 2>&1; then
+    created=true
+  fi
+  if [ "$created" = true ]; then
+    ok "~/.local/bin ready — the iva command is on PATH from the first login"
+  else
+    warn "couldn't create $home/.local/bin as $TARGET_USER — after installing Iva, run 'exec bash -l' to put the iva command on PATH"
+  fi
 }
 
 enable_linger() {
@@ -1064,26 +1125,61 @@ install_pubkey() {
     return 0
   fi
   CURRENT_STEP="authorizing the SSH key"
-  local home group ssh_dir keys
-  home="$(getent passwd "$TARGET_USER" | cut -d: -f6)"
-  if [ -z "$home" ]; then
-    home="/home/$TARGET_USER"
+  # Everything here runs as the user, for the reason spelled out at as_target_user:
+  # this function is reached for an EXISTING account too, whose ~/.ssh may already be
+  # a symlink pointing anywhere. The key itself travels down stdin into the user's own
+  # `tee`; a root redirect would write through that symlink instead.
+  local home ssh_dir keys
+  # `|| true` inside the substitution: without it pipefail hands a failed lookup to the
+  # ERR trap and kills the bootstrap, with the check right below unreached.
+  home="$(getent passwd "$TARGET_USER" 2>/dev/null | cut -d: -f6 || true)"
+  if [ -z "$home" ] || [ ! -d "$home" ]; then
+    warn "no home directory for $TARGET_USER — the key was not authorized; log in with the password and add it by hand"
+    return 0
   fi
-  group="$(id -gn "$TARGET_USER" 2>/dev/null || printf '%s' "$TARGET_USER")"
   ssh_dir="$home/.ssh"
   keys="$ssh_dir/authorized_keys"
 
-  mkdir -p "$ssh_dir"
-  chmod 700 "$ssh_dir"
-  touch "$keys"
-  chmod 600 "$keys"
-  if grep -qxF "$PUBKEY" "$keys" 2>/dev/null; then
-    ok "Key already authorized for $TARGET_USER"
-  else
-    printf '%s\n' "$PUBKEY" >>"$keys"
-    ok "Key authorized for $TARGET_USER"
+  if ! as_target_user mkdir -p "$ssh_dir" >>"$LOG_FILE" 2>&1; then
+    warn "couldn't create $ssh_dir as $TARGET_USER — the key was not authorized; log in with the password and add it by hand"
+    return 0
   fi
-  chown -R "$TARGET_USER:$group" "$ssh_dir"
+  # mkdir leaves the directory at whatever the user's umask allows — 0755 by default,
+  # 0775 where umask is 002 — and sshd under StrictModes refuses an authorized_keys
+  # whose directory is writable by group or other, which is what 0775 is. Tightened
+  # before the key is written, so the file is never created inside a directory anybody
+  # else could still have swapped it out of.
+  as_target_user chmod 700 "$ssh_dir" >>"$LOG_FILE" 2>&1 \
+    || warn "couldn't set 700 on $ssh_dir — sshd may refuse the key until it is fixed"
+  # Create the file and lock it to 0600 BEFORE anything reads from or appends to it.
+  # This closes two holes at once. First, the umask window: `tee -a` would otherwise
+  # create authorized_keys at 0664 (0666 & ~umask) and only a later chmod would tighten
+  # it, so a fixed file created here means the append never widens it. Second, the
+  # "already authorized" path below returns early — if the file were left at whatever a
+  # previous run or a careless admin set, sshd StrictModes would reject a 0666 file and
+  # passwords would already be off. A file we cannot create or lock down is not a safely
+  # authorized key: warn and leave KEY_AUTHORIZED false so passwords stay on.
+  if ! as_target_user touch "$keys" >>"$LOG_FILE" 2>&1; then
+    warn "couldn't create $keys as $TARGET_USER — the key was not authorized; log in with the password and add it by hand"
+    return 0
+  fi
+  if ! as_target_user chmod 600 "$keys" >>"$LOG_FILE" 2>&1; then
+    warn "couldn't set 600 on $keys — the key was not authorized; log in with the password and add it by hand"
+    return 0
+  fi
+  if as_target_user grep -qxF "$PUBKEY" "$keys" >/dev/null 2>&1; then
+    KEY_AUTHORIZED=true
+    ok "Key already authorized for $TARGET_USER"
+    return 0
+  fi
+  if printf '%s\n' "$PUBKEY" | as_target_user tee -a "$keys" >>"$LOG_FILE" 2>&1; then
+    as_target_user chmod 600 "$keys" >>"$LOG_FILE" 2>&1 \
+      || warn "couldn't set 600 on $keys — sshd may refuse the key until it is fixed"
+    KEY_AUTHORIZED=true
+    ok "Key authorized for $TARGET_USER"
+  else
+    warn "couldn't write $keys as $TARGET_USER — the key was not authorized; log in with the password and add it by hand"
+  fi
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1188,6 +1284,12 @@ EOF
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 12. Unattended security upgrades
+#     Worth knowing where it leads: this timer patches the box every day, and apt
+#     leaves $REBOOT_REQUIRED_FLAG behind for glibc, openssl and dbus just as much as
+#     for a kernel. So a server prepared here raises the flag again within days of
+#     being installed, without anyone touching it — on a live machine it is a normal
+#     state, not evidence of a broken one. What reads it: reboot_if_needed below, and
+#     install.sh's preflight (see it for how it reacts).
 # ─────────────────────────────────────────────────────────────────────────────
 setup_unattended_upgrades() {
   section "Automatic security updates"
@@ -1216,6 +1318,16 @@ EOF
 # ─────────────────────────────────────────────────────────────────────────────
 harden_ssh() {
   section "SSH hardening"
+  # DISABLE_PASSWORD_AUTH was decided back at ask_pubkey from "a key was provided". But
+  # a provided key that never reached authorized_keys — no home, an unwritable ~/.ssh,
+  # perms we could not set — would lock the owner out the instant we turn passwords off.
+  # Bind the switch to the key being REALLY authorized, not to the intent. No authorized
+  # key ⇒ passwords stay on, whatever was asked for. Decided first, before any early
+  # return below, so the invariant holds on every path out of hardening.
+  if [ "$DISABLE_PASSWORD_AUTH" = true ] && [ "$KEY_AUTHORIZED" != true ]; then
+    warn "the SSH key was not authorized — leaving password logins ON so you are not locked out; log in with the password, add the key by hand, then turn passwords off"
+    DISABLE_PASSWORD_AUTH=false
+  fi
   if [ ! -f "$SSHD_MAIN_CONFIG" ]; then
     warn "no $SSHD_MAIN_CONFIG — skipping hardening"
     return 0

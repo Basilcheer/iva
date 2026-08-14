@@ -7,6 +7,7 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -63,7 +64,33 @@ void test("repair bridges a dirty legacy install and preserves arbitrary files",
     );
     mkdirSync(join(install, "agent/skills/my-skill"), { recursive: true });
     writeFileSync(join(install, "agent/skills/my-skill/SKILL.md"), "# Mine\n");
+    // Gitignored, and none of it comes back on its own: the skill's credential and
+    // the Telethon session are the user's, the venv and node_modules are the repo's.
+    writeFileSync(
+      join(install, "agent/skills/my-skill/api-token.json"),
+      '{"token":"kept"}\n',
+    );
+    mkdirSync(join(install, "services/telegram-userbot/.venv/bin"), {
+      recursive: true,
+    });
+    writeFileSync(
+      join(install, "services/telegram-userbot/telegram-userbot.session"),
+      "SQLite format 3\n",
+    );
+    writeFileSync(
+      join(install, "services/telegram-userbot/.venv/bin/python"),
+      "#!/bin/sh\n",
+    );
+    mkdirSync(join(install, "node_modules/left-pad"), { recursive: true });
+    writeFileSync(
+      join(install, "node_modules/left-pad/index.js"),
+      "module.exports = 1;\n",
+    );
     writeFileSync(join(install, ".env"), "IVA_PORT=8723\n");
+    mkdirSync(join(install, "vault"), { recursive: true });
+    writeFileSync(join(install, "vault/CORE.md"), "# memory\n");
+    mkdirSync(join(install, "attachments"), { recursive: true });
+    writeFileSync(join(install, "attachments/voice.ogg"), "audio\n");
     mkdirSync(join(install, "data"), { recursive: true });
     writeFileSync(join(install, "data/settings.json"), '{"saved":true}\n');
     mkdirSync(join(install, ".workflow-data"), { recursive: true });
@@ -101,6 +128,14 @@ void test("repair bridges a dirty legacy install and preserves arbitrary files",
       '{"saved":true}\n',
     );
     assert.equal(
+      readFileSync(join(install, "vault/CORE.md"), "utf8"),
+      "# memory\n",
+    );
+    assert.equal(
+      readFileSync(join(install, "attachments/voice.ogg"), "utf8"),
+      "audio\n",
+    );
+    assert.equal(
       readFileSync(join(install, ".workflow-data/run.json"), "utf8"),
       '{"run":1}\n',
     );
@@ -115,6 +150,31 @@ void test("repair bridges a dirty legacy install and preserves arbitrary files",
     assert.equal(
       readFileSync(join(install, "agent/skills/my-skill/SKILL.md"), "utf8"),
       "# Mine\n",
+    );
+    assert.equal(
+      readFileSync(
+        join(install, "agent/skills/my-skill/api-token.json"),
+        "utf8",
+      ),
+      '{"token":"kept"}\n',
+    );
+    assert.equal(
+      readFileSync(
+        join(install, "services/telegram-userbot/telegram-userbot.session"),
+        "utf8",
+      ),
+      "SQLite format 3\n",
+    );
+    assert.throws(
+      () =>
+        readFileSync(
+          join(install, "services/telegram-userbot/.venv/bin/python"),
+        ),
+      { code: "ENOENT" },
+    );
+    assert.throws(
+      () => readFileSync(join(install, "node_modules/left-pad/index.js")),
+      { code: "ENOENT" },
     );
     assert.match(
       readFileSync(join(install, "agent/channels/eve.ts"), "utf8"),
@@ -149,6 +209,11 @@ void test("repair bridges a dirty legacy install and preserves arbitrary files",
     );
     assert.match(conflicts, /docs\/index\.html/);
     assert.match(conflicts, /scripts\/telegram-poll\.mjs/);
+    // State copied byte-for-byte is not a conflict with itself: without that filter
+    // every repair would tell the user their own memory and workflow state need review.
+    assert.doesNotMatch(conflicts, /^data\/?$/mu);
+    assert.doesNotMatch(conflicts, /^vault\/?$/mu);
+    assert.doesNotMatch(conflicts, /^\.workflow-data\/?$/mu);
   } finally {
     rmSync(fixture, { recursive: true, force: true });
   }
@@ -178,6 +243,11 @@ void test("repair falls back to clean core when customized dependencies fail", (
     writeFileSync(
       join(install, "scripts/custom-telegram-button.ts"),
       "export const customButton = true;\n",
+    );
+    mkdirSync(join(install, "agent/skills/my-skill"), { recursive: true });
+    writeFileSync(
+      join(install, "agent/skills/my-skill/api-token.json"),
+      '{"token":"kept"}\n',
     );
     mkdirSync(join(install, "data"), { recursive: true });
     writeFileSync(join(install, "data/settings.json"), '{"saved":true}\n');
@@ -212,12 +282,148 @@ void test("repair falls back to clean core when customized dependencies fail", (
       () => readFileSync(join(install, "scripts/custom-telegram-button.ts")),
       { code: "ENOENT" },
     );
+    // A credential never built anything, so the fallback has no claim on it.
+    assert.equal(
+      readFileSync(
+        join(install, "agent/skills/my-skill/api-token.json"),
+        "utf8",
+      ),
+      '{"token":"kept"}\n',
+    );
     assert.equal(readFileSync(`${npmState}.log`, "utf8"), "ci\nci\nbuild\n");
     const backup = output.match(/Your complete backup: (.+)/)?.[1];
     assert.ok(backup);
     assert.equal(
       readFileSync(join(backup, "scripts/custom-telegram-button.ts"), "utf8"),
       "export const customButton = true;\n",
+    );
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
+void test("repair survives a file it cannot read and names it for review", (t) => {
+  if (process.getuid?.() === 0) {
+    t.skip("root reads a mode 000 file, so nothing is refused");
+    return;
+  }
+  const fixture = mkdtempSync(join(tmpdir(), "iva-repair-unreadable-"));
+  const remote = join(fixture, "remote.git");
+  const install = join(fixture, "iva");
+  const fakeBin = join(fixture, "bin");
+  const unreadable = join(install, "agent/skills/my-skill/api-token.json");
+  try {
+    const target = git(ROOT, "rev-parse", "HEAD");
+    const repairBranch = "repair-test-target";
+    execFileSync("git", ["clone", "--quiet", "--bare", ROOT, remote]);
+    execFileSync(
+      "git",
+      ["--git-dir", remote, "update-ref", `refs/heads/${repairBranch}`, target],
+      { cwd: ROOT },
+    );
+    execFileSync("git", ["clone", "--quiet", remote, install]);
+    git(install, "checkout", "-B", "main", LEGACY_HEAD);
+
+    // A dirty legacy checkout collects files written under sudo or left at mode 000.
+    // They are exactly what this script exists to rescue, and it cannot read them.
+    mkdirSync(join(install, "agent/skills/my-skill"), { recursive: true });
+    writeFileSync(unreadable, '{"token":"locked"}\n');
+    chmodSync(unreadable, 0o000);
+    mkdirSync(join(install, "services/telegram-userbot"), { recursive: true });
+    writeFileSync(
+      join(install, "services/telegram-userbot/telegram-userbot.session"),
+      "SQLite format 3\n",
+    );
+    writeFileSync(join(install, "notes.md"), "# my notes\n");
+    // The typical ignored entry is a whole DIRECTORY: --directory collapses one into a
+    // single name, and cp -a copies a directory file by file, so an unreadable member
+    // leaves a partial tree behind at the destination. Half a directory that looks
+    // whole is worse than none: the user would never know to open the backup.
+    mkdirSync(join(install, ".claude"), { recursive: true });
+    writeFileSync(join(install, ".claude/settings.json"), '{"local":true}\n');
+    writeFileSync(join(install, ".claude/notes.md"), "# agent notes\n");
+    writeFileSync(join(install, ".claude/locked.json"), '{"secret":true}\n');
+    chmodSync(join(install, ".claude/locked.json"), 0o000);
+    mkdirSync(join(install, "data"), { recursive: true });
+    writeFileSync(join(install, "data/settings.json"), '{"saved":true}\n');
+
+    mkdirSync(fakeBin);
+    const fakeNpm = join(fakeBin, "npm");
+    writeFileSync(
+      fakeNpm,
+      '#!/bin/sh\nif [ "$1" = "run" ] && [ "$2" = "build" ]; then mkdir -p .output/server; printf ok > .output/server/index.mjs; fi\nexit 0\n',
+    );
+    chmodSync(fakeNpm, 0o755);
+
+    const output = execFileSync("bash", [join(ROOT, "repair.sh")], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      env: {
+        ...process.env,
+        PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+        IVA_INSTALL_DIR: install,
+        IVA_REPAIR_REPO_URL: remote,
+        IVA_REPAIR_BRANCH: repairBranch,
+        IVA_REPAIR_SKIP_RESTART: "1",
+      },
+    });
+
+    assert.match(output, /Iva is repaired and updated\./);
+    // Everything readable still arrives, ignored files included.
+    assert.equal(
+      readFileSync(
+        join(install, "services/telegram-userbot/telegram-userbot.session"),
+        "utf8",
+      ),
+      "SQLite format 3\n",
+    );
+    assert.equal(
+      readFileSync(join(install, "notes.md"), "utf8"),
+      "# my notes\n",
+    );
+    assert.equal(
+      readFileSync(join(install, "data/settings.json"), "utf8"),
+      '{"saved":true}\n',
+    );
+    // Not half-copied into the fresh checkout, and named where the user will look.
+    assert.throws(() => readFileSync(unreadable), { code: "ENOENT" });
+    // The directory goes whole or not at all — no two-of-three tree pretending to be
+    // the real thing.
+    assert.throws(() => statSync(join(install, ".claude")), { code: "ENOENT" });
+    const conflicts = readFileSync(
+      join(
+        install,
+        "data/update-recovery",
+        readdirSync(join(install, "data/update-recovery"))[0],
+        "conflicts.txt",
+      ),
+      "utf8",
+    );
+    assert.match(
+      conflicts,
+      /agent\/skills\/my-skill\/api-token\.json \(could not be copied/,
+    );
+    assert.match(conflicts, /^\.claude \(could not be copied/mu);
+    assert.match(output, /Files needing review:/);
+    // And no byte of any of it was lost: the complete backup still holds every file,
+    // the readable members of the refused directory included.
+    const backup = output.match(/Your complete backup: (.+)/)?.[1];
+    assert.ok(backup);
+    const rescued = join(backup, "agent/skills/my-skill/api-token.json");
+    chmodSync(rescued, 0o600);
+    assert.equal(readFileSync(rescued, "utf8"), '{"token":"locked"}\n');
+    assert.equal(
+      readFileSync(join(backup, ".claude/settings.json"), "utf8"),
+      '{"local":true}\n',
+    );
+    assert.equal(
+      readFileSync(join(backup, ".claude/notes.md"), "utf8"),
+      "# agent notes\n",
+    );
+    chmodSync(join(backup, ".claude/locked.json"), 0o600);
+    assert.equal(
+      readFileSync(join(backup, ".claude/locked.json"), "utf8"),
+      '{"secret":true}\n',
     );
   } finally {
     rmSync(fixture, { recursive: true, force: true });

@@ -65,9 +65,9 @@ not fall), `npm run replica` (installs Iva from scratch against a mock provider)
 and the Python suites. `scripts/autograph/tests/test_autograph.py` and
 `agent/skills/security-defense/scripts/test_security.py` are standalone: plain `python3`
 from any directory. The userbot suites import their neighbouring modules, so they run
-from `services/telegram-userbot/` — `test_health.py` needs nothing installed,
-`test_guardrails.py` imports `telethon` and needs a virtualenv built from
-`requirements.lock`.
+from `services/telegram-userbot/` — `test_health.py` and `test_session_path.py` need
+nothing installed, `test_guardrails.py` imports `telethon` and needs a virtualenv built
+from `requirements.lock`.
 
 If you touch `services/telegram-userbot/requirements.in`, regenerate the hash-locked file
 in the same change:
