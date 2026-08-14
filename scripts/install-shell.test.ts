@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import {
   execFileSync,
+  spawn,
   spawnSync,
   type SpawnSyncReturns,
 } from "node:child_process";
@@ -53,6 +54,16 @@ case "$1" in
   exec)
     case "$*" in
       *"eve build"*)
+        # The build is where a weak VPS dies: the OOM killer takes it (137), and where the
+        # test needs a run to still be alive, it waits here after saying so.
+        if [ -n "$IVA_TEST_BUILD_EXIT" ]; then
+          echo "Killed" >&2
+          exit "$IVA_TEST_BUILD_EXIT"
+        fi
+        if [ -n "$IVA_TEST_BUILD_WAIT" ]; then
+          : > "$IVA_TEST_BUILD_WAIT"
+          sleep 10
+        fi
         mkdir -p .output
         printf 'built' > .output/server.mjs
         ;;
@@ -73,11 +84,43 @@ esac
 exit 0
 `;
 
-/** The iva CLI the installer delegates the units to, including the failure it is famous for. */
-const IVA_CLI = `import { appendFileSync } from "node:fs";
+/**
+ * The iva CLI the installer delegates the units to, including the failure it is famous
+ * for. It is also the only thing the test can ask about the installation while the run is
+ * still going: on request it writes down where the copy of .env is at that moment, with
+ * what permissions, and what the run has put in TMPDIR.
+ */
+const IVA_CLI = `import { appendFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 const args = process.argv.slice(2);
 if (process.env.IVA_TEST_CALLS)
   appendFileSync(process.env.IVA_TEST_CALLS, \`iva \${args.join(" ")}\\n\`);
+const entries = (dir) => {
+  try {
+    return readdirSync(dir).map((name) => ({
+      name,
+      mode: (statSync(join(dir, name)).mode & 0o777).toString(8),
+    }));
+  } catch {
+    return [];
+  }
+};
+if (process.env.IVA_TEST_SNAPSHOT && args[0] === "_install-units") {
+  const backups = join(process.cwd(), "data/update-backups");
+  let dirMode = "";
+  try {
+    dirMode = (statSync(backups).mode & 0o777).toString(8);
+  } catch {}
+  writeFileSync(
+    process.env.IVA_TEST_SNAPSHOT,
+    JSON.stringify({
+      cwd: process.cwd(),
+      backupsMode: dirMode,
+      backups: entries(backups),
+      tmp: entries(process.env.TMPDIR ?? "/tmp"),
+    }),
+  );
+}
 if (args[0] === "_activate-units" && process.env.IVA_TEST_UNITS_FAIL) {
   process.stderr.write("Failed to connect to bus: No such file or directory\\n");
   process.exit(1);
@@ -87,6 +130,8 @@ if (args[0] === "_activate-units" && process.env.IVA_TEST_UNITS_FAIL) {
 type RunOptions = {
   readonly calls?: string;
   readonly env?: Readonly<Record<string, string>>;
+  /** The installer to run, when it must be one sitting inside the installation. */
+  readonly script?: string;
 };
 
 type World = {
@@ -95,6 +140,18 @@ type World = {
   readonly home: string;
   readonly tmp: string;
   run(options?: RunOptions): SpawnSyncReturns<string>;
+  /**
+   * The same run without blocking, so a signal can arrive while it is working - which is
+   * the only way to see what a dropped SSH session does to an install.
+   */
+  runAsync(options?: RunOptions): {
+    signal(name: NodeJS.Signals): void;
+    done: Promise<{
+      code: number | null;
+      signal: string | null;
+      output: string;
+    }>;
+  };
   git(...args: string[]): string;
   /** Everything the run called, in order. */
   calls(path?: string): string;
@@ -202,6 +259,22 @@ function createWorld(t: TestContext, options: { env?: boolean } = {}): World {
   if (options.env !== false)
     writeFileSync(join(install, ".env"), "AGENT_LANGUAGE=en\nIVA_PORT=8723\n");
 
+  const environment = (runOptions: RunOptions): Record<string, string> => ({
+    ...IDENTITY,
+    PATH: `${TOOLS}:${dirname(process.execPath)}:/usr/bin:/bin:/usr/sbin`,
+    HOME: home,
+    TMPDIR: tmp,
+    NO_COLOR: "1",
+    TERM: "dumb",
+    INSTALL_DIR: install,
+    BRANCH: "main",
+    REPO_URL: remote,
+    IVA_TEST_CALLS: runOptions.calls ?? defaultCalls,
+    IVA_TEST_NPM_PREFIX: npmPrefix,
+    IVA_TEST_RECORDER: RECORDER_PATH,
+    ...runOptions.env,
+  });
+
   return {
     dir,
     install,
@@ -211,25 +284,38 @@ function createWorld(t: TestContext, options: { env?: boolean } = {}): World {
     calls: (path = defaultCalls) =>
       existsSync(path) ? readFileSync(path, "utf8") : "",
     run: (runOptions = {}) =>
-      spawnSync("bash", [join(dir, "install.sh"), "--non-interactive"], {
-        cwd: dir,
-        encoding: "utf8",
-        env: {
-          ...IDENTITY,
-          PATH: `${TOOLS}:${dirname(process.execPath)}:/usr/bin:/bin:/usr/sbin`,
-          HOME: home,
-          TMPDIR: tmp,
-          NO_COLOR: "1",
-          TERM: "dumb",
-          INSTALL_DIR: install,
-          BRANCH: "main",
-          REPO_URL: remote,
-          IVA_TEST_CALLS: runOptions.calls ?? defaultCalls,
-          IVA_TEST_NPM_PREFIX: npmPrefix,
-          IVA_TEST_RECORDER: RECORDER_PATH,
-          ...runOptions.env,
+      spawnSync(
+        "bash",
+        [runOptions.script ?? join(dir, "install.sh"), "--non-interactive"],
+        {
+          cwd: dir,
+          encoding: "utf8",
+          env: environment(runOptions),
         },
-      }),
+      ),
+    runAsync: (runOptions = {}) => {
+      const child = spawn(
+        "bash",
+        [runOptions.script ?? join(dir, "install.sh"), "--non-interactive"],
+        { cwd: dir, env: environment(runOptions) },
+      );
+      let output = "";
+      const collect = (chunk: unknown): void => {
+        output += String(chunk);
+      };
+      child.stdout.on("data", collect);
+      child.stderr.on("data", collect);
+      return {
+        signal: (name) => {
+          child.kill(name);
+        },
+        done: new Promise((resolve) =>
+          child.on("close", (code, signal) =>
+            resolve({ code, signal, output }),
+          ),
+        ),
+      };
+    },
   };
 }
 
@@ -263,6 +349,164 @@ void test("an exit before any work is done stays quiet and succeeds", () => {
   assert.equal(help.status, 0, help.stdout + help.stderr);
   assert.equal(help.stderr, "");
   assert.match(help.stdout, /--skip-setup/u);
+});
+
+void test("a stage killed mid-way fails the install and gives the old build back", (t) => {
+  const world = createWorld(t);
+  writeFileSync(join(world.install, "README.md"), "# fixture\nlocal edit\n");
+  mkdirSync(join(world.install, ".output"), { recursive: true });
+  writeFileSync(join(world.install, ".output/marker"), "previous build\n");
+
+  // 137: what the OOM killer leaves on a 512MB VPS, the failure this installer exists for.
+  const result = world.run({ env: { IVA_TEST_BUILD_EXIT: "137" } });
+
+  assert.notEqual(result.status, 0, result.stdout + result.stderr);
+  assert.doesNotMatch(result.stdout, /Installation complete/u);
+  assert.match(result.stderr, /Install stopped during/u);
+  // The previous build is back where it was, not deleted as if the install had worked.
+  assert.equal(
+    readFileSync(join(world.install, ".output/marker"), "utf8"),
+    "previous build\n",
+  );
+  assert.deepEqual(outputBackups(world.install), []);
+  assert.equal(
+    readFileSync(join(world.install, "README.md"), "utf8"),
+    "# fixture\nlocal edit\n",
+  );
+  assert.deepEqual(leftovers(world.tmp), []);
+  assert.equal(world.git("stash", "list"), "");
+  assert.equal(world.git("for-each-ref", "refs/iva/update-backups"), "");
+  // The units were never touched: the run stopped at the build.
+  assert.doesNotMatch(world.calls(), /iva _install-units/u);
+});
+
+void test("a dropped connection rolls the install back like any other failure", async (t) => {
+  const world = createWorld(t);
+  writeFileSync(join(world.install, "README.md"), "# fixture\nlocal edit\n");
+  writeFileSync(join(world.install, "mine.txt"), "mine\n");
+  mkdirSync(join(world.install, ".output"), { recursive: true });
+  writeFileSync(join(world.install, ".output/marker"), "previous build\n");
+
+  const waiting = join(world.dir, "building");
+  const run = world.runAsync({ env: { IVA_TEST_BUILD_WAIT: waiting } });
+  // Hang up the moment the run is provably inside the build, past the point where it has
+  // moved the old output aside and written down everything it has to put back.
+  for (let waited = 0; !existsSync(waiting) && waited < 20000; waited += 50)
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.ok(existsSync(waiting), "the run never reached the build");
+  run.signal("SIGHUP");
+  const result = await run.done;
+
+  assert.notEqual(result.code, 0);
+  assert.equal(
+    readFileSync(join(world.install, ".output/marker"), "utf8"),
+    "previous build\n",
+  );
+  assert.deepEqual(outputBackups(world.install), []);
+  assert.equal(
+    readFileSync(join(world.install, "README.md"), "utf8"),
+    "# fixture\nlocal edit\n",
+  );
+  assert.equal(readFileSync(join(world.install, "mine.txt"), "utf8"), "mine\n");
+  assert.deepEqual(leftovers(world.tmp), []);
+  assert.deepEqual(
+    backups(world.install).filter((name) => name.startsWith(".env")),
+    [],
+  );
+  assert.equal(world.git("stash", "list"), "");
+  assert.equal(world.git("for-each-ref", "refs/iva/update-backups"), "");
+});
+
+void test("the copy of .env lives beside the installation, never in /tmp", (t) => {
+  const world = createWorld(t);
+  writeFileSync(join(world.install, "README.md"), "# fixture\nlocal edit\n");
+  const snapshot = join(world.dir, "snapshot.json");
+
+  const result = world.run({ env: { IVA_TEST_SNAPSHOT: snapshot } });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+
+  // Taken while the install was still running, so it is the live state, not the leftovers.
+  const live = JSON.parse(readFileSync(snapshot, "utf8")) as {
+    backupsMode: string;
+    backups: { name: string; mode: string }[];
+    tmp: { name: string; mode: string }[];
+  };
+  const envCopy = live.backups.filter((entry) => entry.name.startsWith(".env"));
+  assert.equal(envCopy.length, 1, JSON.stringify(live.backups));
+  assert.equal(envCopy[0].mode, "600");
+  assert.equal(live.backupsMode, "700");
+  // The only thing this run may leave in a world-readable directory is its log.
+  assert.deepEqual(
+    live.tmp.filter((entry) => !entry.name.startsWith("iva-install-")),
+    [],
+  );
+  assert.deepEqual(leftovers(world.tmp), []);
+  assert.deepEqual(
+    backups(world.install).filter((name) => name.startsWith(".env")),
+    [],
+  );
+});
+
+void test("a pending reboot stops a first install and only warns over a configured one", (t) => {
+  const world = createWorld(t, { env: false });
+  const flag = join(world.dir, "reboot-required");
+  writeFileSync(flag, "");
+  writeFileSync(`${flag}.pkgs`, "linux-headers-6.8.0-137\n");
+
+  // Nothing is configured yet, and every package stage is still ahead: refuse.
+  const fresh = world.run({ env: { IVA_REBOOT_FLAG: flag } });
+  assert.notEqual(fresh.status, 0, fresh.stdout + fresh.stderr);
+  assert.match(fresh.stderr, /sudo reboot/u);
+  assert.doesNotMatch(world.calls(), /npm ci/u);
+
+  // Configured: unattended-upgrades raises this flag for any security update, and a re-run
+  // that installs nothing must not be refused for days.
+  writeFileSync(
+    join(world.install, ".env"),
+    "AGENT_LANGUAGE=en\nIVA_PORT=8723\n",
+  );
+  const rerun = world.run({
+    calls: join(world.dir, "rerun.log"),
+    env: { IVA_REBOOT_FLAG: flag },
+  });
+  assert.equal(rerun.status, 0, rerun.stdout + rerun.stderr);
+  assert.match(rerun.stdout, /reboot/iu);
+  assert.match(
+    world.calls(join(world.dir, "rerun.log")),
+    /iva _activate-units/u,
+  );
+});
+
+void test("an installation without git rebuilds instead of trusting the stamp", (t) => {
+  const world = createWorld(t);
+  // A tree unpacked from an archive: the installer sits inside it and there is no history
+  // to compare against, so nothing can prove the output matches the code.
+  cpSync(join(ROOT, "install.sh"), join(world.install, "install.sh"));
+  rmSync(join(world.install, ".git"), { recursive: true, force: true });
+
+  const script = join(world.install, "install.sh");
+  const first = world.run({ calls: join(world.dir, "first.log"), script });
+  assert.equal(first.status, 0, first.stdout + first.stderr);
+  assert.match(world.calls(join(world.dir, "first.log")), /eve build/u);
+
+  const second = world.run({ calls: join(world.dir, "second.log"), script });
+  assert.equal(second.status, 0, second.stdout + second.stderr);
+  assert.match(world.calls(join(world.dir, "second.log")), /eve build/u);
+});
+
+void test("patches with nothing to apply them mean a full install, not a reuse", (t) => {
+  const world = createWorld(t);
+  assert.equal(world.run().status, 0);
+
+  // What `npm prune --production` leaves behind: the tree still matches the lockfile by
+  // npm's own record, but the tool that puts the patches on top is gone.
+  rmSync(join(world.install, "node_modules/.bin/patch-package"), {
+    force: true,
+  });
+
+  const second = world.run({ calls: join(world.dir, "second.log") });
+  assert.equal(second.status, 0, second.stdout + second.stderr);
+  assert.match(world.calls(join(world.dir, "second.log")), /^npm ci$/mu);
 });
 
 void test("a failure at the last stage restores the checkout and leaves nothing behind", (t) => {
@@ -441,21 +685,6 @@ void test("the deferred wizard ends with enabled units and lingering, in that or
     activate > linger,
     `the units were activated before lingering:\n${secondCalls}`,
   );
-});
-
-void test("a pending reboot stops a first install but only warns on a re-run", (t) => {
-  // The flag itself belongs to the system, so the two paths are read out of the script:
-  // a first install dies, an existing installation is warned and continues.
-  const installer = readFileSync(join(ROOT, "install.sh"), "utf8");
-  const gate =
-    /if \[ -e \/var\/run\/reboot-required \]; then([\s\S]*?)\nfi\n/u.exec(
-      installer,
-    );
-  assert.ok(gate, "the reboot check is no longer a single if block");
-  assert.match(gate[1], /INSTALL_EXISTS" != true \]; then\s*\n\s*die /u);
-  assert.match(gate[1], /elif[\s\S]*warn /u);
-  assert.doesNotMatch(gate[1].split("elif")[1] ?? "", /die /u);
-  t.diagnostic("reboot gate: die on a fresh install, warn on a re-run");
 });
 
 void test("a versioned install is refused instead of cloned into", (t) => {
