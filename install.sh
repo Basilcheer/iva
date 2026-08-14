@@ -823,7 +823,7 @@ esac
 if ! command -v systemctl >/dev/null 2>&1; then
   : # not Linux/systemd — skip silently
 elif [ ! -f .env ]; then
-  warn "$(t "No .env — not setting up autostart. First: cd $PROJECT_DIR && npm run setup, then run this installer again — it finishes in seconds." "Нет .env — автозапуск не настраиваю. Сначала: cd $PROJECT_DIR && npm run setup, потом запустите установщик снова — он завершится за секунды.")"
+  warn "$(t "No .env — not setting up autostart. Run: cd $PROJECT_DIR && npm run setup, then: bash install.sh (seconds — it reuses everything already done)." "Нет .env — автозапуск не настраиваю. Выполните: cd $PROJECT_DIR && npm run setup, потом: bash install.sh (секунды — всё готовое переиспользуется).")"
 elif prompt_yes_no "$(t "Set up autostart via systemd (service + watchdog timers)?" "Завести автозапуск через systemd (сервис + сторожевые таймеры)?")" yes; then
   CURRENT_STEP="$(t "systemd units" "systemd-юниты")"
   # Lingering first: without it the user's systemd bus only exists while a login session

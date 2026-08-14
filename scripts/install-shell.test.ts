@@ -416,8 +416,13 @@ void test("the deferred wizard ends with enabled units and lingering, in that or
   assert.equal(first.status, 0, first.stdout + first.stderr);
   const firstCalls = world.calls(join(world.dir, "first.log"));
   assert.doesNotMatch(firstCalls, /iva _install-units/u);
-  // The one command the user is told to run next, in both places it is printed.
-  assert.match(first.stdout, /bash install\.sh/u);
+  // Both places that tell the user what to do next name the same two commands: the
+  // wizard, then the installer - never `iva restart`, which leaves the units disabled.
+  const advice = (first.stdout + first.stderr).match(
+    /npm run setup[\s\S]*?install\.sh/gu,
+  );
+  assert.equal(advice?.length, 2, first.stdout + first.stderr);
+  assert.doesNotMatch(first.stdout, /iva restart/u);
 
   // What `npm run setup` leaves behind.
   writeFileSync(
