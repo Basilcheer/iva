@@ -16,6 +16,7 @@ import {
 } from "../lib/telegram-status.ts";
 import { resolveUpdateTarget } from "../lib/update-channel.ts";
 import { gitAt, packageVersion, requireGit } from "../lib/update-check.ts";
+import { catalogProvider } from "../lib/model-catalog.ts";
 import { classifyRoot, isManagedInstall } from "../lib/version-layout.ts";
 import {
   acquireUpdateLock,
@@ -28,7 +29,7 @@ import {
   type UpdateOutcome,
 } from "../lib/version-update.ts";
 import type { createCliRuntime } from "./runtime.ts";
-import { COPY } from "./update.ts";
+import { ACCEPTED_PROVIDERS, COPY, invalidProviderRefusal } from "./update.ts";
 
 type CliRuntime = ReturnType<typeof createCliRuntime>;
 
@@ -155,6 +156,22 @@ export function createVersionUpdateCommand(
     const reporter = job
       ? reporterFor(job.job, env.TELEGRAM_BOT_TOKEN, env)
       : null;
+    // Тот же префлайт, что на legacy-пути, и на боевом он именно этот: managed-layout —
+    // всё, что стоит через install.sh. Без него опечатка в MODEL_PROVIDER прогоняла
+    // fetch → build → restart → health-fail и возвращала «Couldn't build Iva … Retry:
+    // /update» по кругу, ни разу не назвав причину. Отказ до зеркала, до лока и до первой
+    // записи — установка остаётся нетронутой (ADR-0003).
+    const configuredProvider = env.MODEL_PROVIDER ?? "ollama";
+    if (!catalogProvider(configuredProvider)) {
+      terminal.fail(invalidProviderRefusal(text, configuredProvider));
+      await reporter?.badProvider(configuredProvider, ACCEPTED_PROVIDERS);
+      terminal.dispose();
+      reporter?.dispose();
+      await removeTelegramJob(job?.path);
+      process.exitCode = 1;
+      return;
+    }
+
     const store = createVersionStore(install.home);
     // The last version the installation actually settled on: after an interrupted
     // update `current` already names the new one, which would report as "X → X".

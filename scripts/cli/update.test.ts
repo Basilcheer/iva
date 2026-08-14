@@ -5,9 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 import { MODEL_PROVIDER_NAMES } from "#lib/model-provider.ts";
-import { CATALOG } from "../lib/model-catalog.ts";
 import { createCliRuntime } from "./runtime.ts";
-import { createUpdateCommand } from "./update.ts";
+import { ACCEPTED_PROVIDERS, createUpdateCommand } from "./update.ts";
 
 type Runtime = ReturnType<typeof createCliRuntime>;
 type UpdateFactoryOptions = Parameters<typeof createUpdateCommand>[0];
@@ -208,8 +207,8 @@ function operationsFixture(
     busy: async () => {
       events.push("reporter.busy");
     },
-    blocked: async (message: string) => {
-      events.push(`reporter.blocked:${message}`);
+    badProvider: async (value: string, accepted: string) => {
+      events.push(`reporter.badProvider:${value}:${accepted}`);
     },
     postCommitFailure: async (message: string) => {
       events.push(`reporter.postCommitFailure:${message}`);
@@ -725,10 +724,10 @@ test("an update refuses to start on an invalid MODEL_PROVIDER and names the fix"
 
   await command(["--telegram-job", "job-1"]);
 
-  const refusal = `Fix MODEL_PROVIDER in .env first (iva config) — Iva won't start on this value: "ollmaa" (${Object.keys(CATALOG).join(", ")})`;
+  const refusal = `Fix MODEL_PROVIDER in .env first (iva config) — Iva won't start on this value: "ollmaa" (${ACCEPTED_PROVIDERS})`;
   assertOrder(events, [
     `terminal.fail:${refusal}`,
-    `reporter.blocked:${refusal}`,
+    `reporter.badProvider:ollmaa:${ACCEPTED_PROVIDERS}`,
     "reporter.dispose",
     "ops.removeTelegramJob",
   ]);

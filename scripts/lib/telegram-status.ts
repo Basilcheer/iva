@@ -31,8 +31,8 @@ type Reporter = {
   done(phase: UpdatePhase): Promise<void>;
   fail(phase: UpdatePhase, beforeVersion: string): Promise<void>;
   busy(): Promise<void>;
-  /** Refusal before the first phase — the message carries what to fix. */
-  blocked(message: string): Promise<void>;
+  /** Refusal before the first phase — the message carries what to fix, in the job's language. */
+  badProvider(value: string, accepted: string): Promise<void>;
   postCommitFailure(message: string): Promise<void>;
   /** Whether the user really got the final screen; false is a result to act on. */
   complete(versions: {
@@ -64,6 +64,8 @@ const COPY = {
     timerFailure:
       "Iva is ready, but the automatic update timer could not be activated",
     busy: "An update is already running",
+    badProvider:
+      "Fix MODEL_PROVIDER in .env first (iva config) — Iva won't start on this value",
     final: "✅ Iva updated",
     preserved: "Local changes: preserved",
     conflicted: (count: number) =>
@@ -89,6 +91,8 @@ const COPY = {
     timerFailure:
       "Iva готова, но таймер автоматических обновлений не удалось активировать",
     busy: "Обновление уже идёт",
+    badProvider:
+      "Сначала почини MODEL_PROVIDER в .env (iva config) — на этом значении Iva не стартует",
     final: "✅ Iva обновлена",
     preserved: "Локальные изменения: сохранены",
     conflicted: (count: number) =>
@@ -277,10 +281,14 @@ export function createTelegramUpdateReporter({
       await finish(`⚠️ ${copy.busy}`);
     },
     // Отказ ещё до первой фазы (сломанная конфигурация): сообщение, с которого тап начался,
-    // обязано сказать, что чинить, а не остаться на «Обновляю».
-    async blocked(message: string) {
+    // обязано сказать, что чинить, а не остаться на «Обновляю». Текст собирается ЗДЕСЬ, из
+    // copy этого репортера: язык у него из job.locale — языка того, кто нажал, — а не из
+    // AGENT_LANGUAGE процесса CLI, который на обоих путях апдейта может быть другим.
+    async badProvider(value: string, accepted: string) {
       currentPhase = null;
-      await finish(`⚠️ ${message}`);
+      await finish(
+        `⚠️ ${copy.badProvider}: ${JSON.stringify(value)} (${accepted})`,
+      );
     },
     async postCommitFailure(message: string) {
       currentPhase = null;

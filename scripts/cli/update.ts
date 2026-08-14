@@ -28,7 +28,10 @@ type CliRuntime = ReturnType<typeof createCliRuntime>;
 type CliSystemd = ReturnType<typeof createCliSystemd>;
 type UpdatePhase = "protect" | "fetch" | "build";
 
-type UpdateCopy = Record<UpdatePhase, readonly [string, string, string]> & {
+export type UpdateCopy = Record<
+  UpdatePhase,
+  readonly [string, string, string]
+> & {
   readonly timerFailure: string;
   readonly current: string;
   readonly busy: string;
@@ -73,7 +76,7 @@ type TelegramReporter = {
   done(phase: UpdatePhase): Promise<void>;
   fail(phase: UpdatePhase, beforeVersion: string): Promise<void>;
   busy(): Promise<void>;
-  blocked(message: string): Promise<void>;
+  badProvider(value: string, accepted: string): Promise<void>;
   postCommitFailure(message: string): Promise<void>;
   complete(
     versions: UpdateVersions & {
@@ -176,6 +179,20 @@ export const COPY: Record<"en" | "ru", UpdateCopy> = {
   },
 };
 
+/** Имена, которые примет рантайм, — для сообщения об отказе на обоих путях апдейта. */
+export const ACCEPTED_PROVIDERS = Object.keys(CATALOG).join(", ");
+
+/**
+ * Отказ апдейта на невалидном MODEL_PROVIDER — один текст на legacy- и managed-путь.
+ * В терминал он идёт на языке CLI (AGENT_LANGUAGE), в чат — из copy репортера (job.locale).
+ */
+export function invalidProviderRefusal(
+  text: UpdateCopy,
+  value: string,
+): string {
+  return `${text.badProvider}: ${JSON.stringify(value)} (${ACCEPTED_PROVIDERS})`;
+}
+
 /** Build the update command around one shared CLI runtime and systemd lifecycle. */
 export function createUpdateCommand({
   runtime,
@@ -255,9 +272,8 @@ export function createUpdateCommand({
     // (ADR-0003: путь обновления обязан объяснять, что чинить).
     const configuredProvider = env.MODEL_PROVIDER ?? "ollama";
     if (!catalogProvider(configuredProvider)) {
-      const detail = `${text.badProvider}: ${JSON.stringify(configuredProvider)} (${Object.keys(CATALOG).join(", ")})`;
-      terminal.fail(detail);
-      await reporter?.blocked(detail);
+      terminal.fail(invalidProviderRefusal(text, configuredProvider));
+      await reporter?.badProvider(configuredProvider, ACCEPTED_PROVIDERS);
       reporter?.dispose();
       await ops.removeTelegramJob(loadedJob?.path);
       process.exitCode = 1;

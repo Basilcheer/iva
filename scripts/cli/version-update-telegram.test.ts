@@ -16,6 +16,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test, { type TestContext } from "node:test";
+import { MODEL_PROVIDER_NAMES } from "#lib/model-provider.ts";
 import { createCliRuntime } from "./runtime.ts";
 import { createVersionUpdateCommand } from "./version-update-command.ts";
 
@@ -84,7 +85,13 @@ type World = {
  * leash. The updater's own process is this one, which is the point - the race
  * under test is between its event loop and the build it blocks it with.
  */
-function world(t: TestContext): World {
+function world(
+  t: TestContext,
+  {
+    provider = "codex",
+    locale = "en",
+  }: { provider?: string; locale?: string } = {},
+): World {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "iva-update-final-")));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const home = join(dir, "iva");
@@ -114,7 +121,7 @@ function world(t: TestContext): World {
     JSON.stringify({
       chatId: 1,
       messageId: 100,
-      locale: "en",
+      locale,
       startedAt: new Date().toISOString(),
     }),
     { mode: 0o600 },
@@ -147,7 +154,7 @@ function world(t: TestContext): World {
     readEnv: () => ({
       AGENT_LANGUAGE: "en",
       TELEGRAM_BOT_TOKEN: "token",
-      MODEL_PROVIDER: "codex",
+      MODEL_PROVIDER: provider,
       CODEX_MODEL: "gpt-test",
     }),
     dataDirAbs: () => dataDir,
@@ -283,4 +290,57 @@ test("an update that finds one already running answers and drops its job", async
     "nothing was built",
   );
   process.exitCode = 0;
+});
+
+// Боевой путь апдейта — этот: managed-layout стоит на всём, что поставлено install.sh
+// (scripts/cli/main.ts маршрутизирует туда по isManagedInstall). Префлайт, живущий только
+// в legacy-обновлении, боевую установку не защищал: опечатка в MODEL_PROVIDER прогоняла
+// fetch → build → restart, упиралась в health-check и возвращала «Couldn't build Iva»
+// без единого слова о причине.
+test("the managed update refuses an invalid MODEL_PROVIDER before it touches anything", async (t) => {
+  const iva = world(t, { provider: "ollmaa" });
+
+  await iva.run();
+
+  const refusal = iva.finals().at(-1) ?? "";
+  assert.match(refusal, /Fix MODEL_PROVIDER in \.env first \(iva config\)/u);
+  assert.match(refusal, /"ollmaa"/u);
+  assert.match(refusal, /ollama, opencode, codex, openrouter/u);
+  // Ни зеркала, ни хендоффа, ни версий: установка ровно та же, что была.
+  assert.equal(
+    iva.lines().some((line) => line.startsWith("handoff")),
+    false,
+  );
+  assert.equal(existsSync(join(iva.home, "repo")), false);
+  assert.equal(existsSync(join(iva.home, "versions")), false);
+  // Джоб снят: сообщение получило финальный текст, ждать его больше некому.
+  assert.equal(existsSync(iva.jobPath), false);
+  assert.equal(process.exitCode, 1);
+});
+
+// Язык отказа — языка того, кто нажал /update, а не AGENT_LANGUAGE процесса CLI
+// (в этом мире он "en"): в чат текст собирает репортер из своей copy по job.locale.
+test("the managed refusal speaks the language of the chat that asked", async (t) => {
+  const iva = world(t, { provider: "ollmaa", locale: "ru" });
+
+  await iva.run();
+
+  const refusal = iva.finals().at(-1) ?? "";
+  assert.match(
+    refusal,
+    /Сначала почини MODEL_PROVIDER в \.env \(iva config\)/u,
+  );
+  assert.doesNotMatch(refusal, /Fix MODEL_PROVIDER/u);
+});
+
+test("every accepted provider name passes the managed preflight", async (t) => {
+  for (const name of MODEL_PROVIDER_NAMES) {
+    const iva = world(t, { provider: name });
+    await iva.run();
+    assert.equal(
+      iva.lines().some((line) => line.startsWith("handoff")),
+      true,
+      name,
+    );
+  }
 });
