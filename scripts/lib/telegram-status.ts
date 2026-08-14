@@ -31,6 +31,8 @@ type Reporter = {
   done(phase: UpdatePhase): Promise<void>;
   fail(phase: UpdatePhase, beforeVersion: string): Promise<void>;
   busy(): Promise<void>;
+  /** Refusal before the first phase — the message carries what to fix. */
+  blocked(message: string): Promise<void>;
   postCommitFailure(message: string): Promise<void>;
   /** Whether the user really got the final screen; false is a result to act on. */
   complete(versions: {
@@ -273,6 +275,12 @@ export function createTelegramUpdateReporter({
     async busy() {
       currentPhase = null;
       await finish(`⚠️ ${copy.busy}`);
+    },
+    // Отказ ещё до первой фазы (сломанная конфигурация): сообщение, с которого тап начался,
+    // обязано сказать, что чинить, а не остаться на «Обновляю».
+    async blocked(message: string) {
+      currentPhase = null;
+      await finish(`⚠️ ${message}`);
     },
     async postCommitFailure(message: string) {
       currentPhase = null;

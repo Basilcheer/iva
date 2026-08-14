@@ -2,6 +2,7 @@ import { spawnSync as nodeSpawnSync } from "node:child_process";
 import { existsSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { CATALOG, catalogProvider } from "../lib/model-catalog.ts";
 import { modelSummary } from "../lib/model-summary.ts";
 import {
   createTerminalProgress,
@@ -31,6 +32,7 @@ type UpdateCopy = Record<UpdatePhase, readonly [string, string, string]> & {
   readonly timerFailure: string;
   readonly current: string;
   readonly busy: string;
+  readonly badProvider: string;
   readonly failed: string;
   readonly stock: string;
 };
@@ -71,6 +73,7 @@ type TelegramReporter = {
   done(phase: UpdatePhase): Promise<void>;
   fail(phase: UpdatePhase, beforeVersion: string): Promise<void>;
   busy(): Promise<void>;
+  blocked(message: string): Promise<void>;
   postCommitFailure(message: string): Promise<void>;
   complete(
     versions: UpdateVersions & {
@@ -149,6 +152,8 @@ export const COPY: Record<"en" | "ru", UpdateCopy> = {
       "Iva готова, но таймер автоматических обновлений не удалось активировать",
     current: "Iva уже обновлена",
     busy: "Обновление уже идёт",
+    badProvider:
+      "Сначала почини MODEL_PROVIDER в .env (iva config) — на этом значении Iva не стартует",
     failed: "Не удалось завершить обновление",
     stock: "ваша доработка в data/custom не входит в эту версию",
   },
@@ -164,6 +169,8 @@ export const COPY: Record<"en" | "ru", UpdateCopy> = {
       "Iva is ready, but the automatic update timer could not be activated",
     current: "Iva is already up to date",
     busy: "An update is already running",
+    badProvider:
+      "Fix MODEL_PROVIDER in .env first (iva config) — Iva won't start on this value",
     failed: "Couldn't complete the update",
     stock: "your customization in data/custom is not in this version",
   },
@@ -241,6 +248,22 @@ export function createUpdateCommand({
         })
       : null;
     const terminal = ops.createTerminalProgress({ verbose });
+
+    // Обновление не чинит .env, а на неизвестном MODEL_PROVIDER новая версия не поднимется:
+    // без этой проверки апдейт прошёл бы целиком, упёрся в health-check, откатился — и ни разу
+    // не назвал причину. Отказ ДО замка и до первой записи, чтобы установка осталась нетронутой
+    // (ADR-0003: путь обновления обязан объяснять, что чинить).
+    const configuredProvider = env.MODEL_PROVIDER ?? "ollama";
+    if (!catalogProvider(configuredProvider)) {
+      const detail = `${text.badProvider}: ${JSON.stringify(configuredProvider)} (${Object.keys(CATALOG).join(", ")})`;
+      terminal.fail(detail);
+      await reporter?.blocked(detail);
+      reporter?.dispose();
+      await ops.removeTelegramJob(loadedJob?.path);
+      process.exitCode = 1;
+      return;
+    }
+
     const owner = telegramJobId || `cli-${process.pid}-${Date.now()}`;
     const lock = ops.acquireUpdateLock(dataDir, owner);
     if (!lock.ok) {
