@@ -110,9 +110,13 @@ run_stage() {
     rc=$?
   fi
   stop_spinner
-  warn "$(t "Failed: $label" "Не удалось: $label")"
-  tail -n 12 "$INSTALL_LOG" >&2 || true
-  echo "$(t "Full log:" "Полный лог:") $INSTALL_LOG" >&2
+  # Every line of the report is optional; the exit code is not. With no terminal left to
+  # print to, an unguarded write here would replace the code the stage really died with.
+  warn "$(t "Failed: $label" "Не удалось: $label")" || true
+  {
+    tail -n 12 "$INSTALL_LOG"
+    echo "$(t "Full log:" "Полный лог:") $INSTALL_LOG"
+  } >&2 2>/dev/null || true
   return "$rc"
 }
 
@@ -175,11 +179,24 @@ acquire_install_lock() {
   local lock="$PROJECT_DIR/data/install.lock" owner=""
   mkdir -p "$PROJECT_DIR/data" 2>/dev/null || true
   if ! mkdir "$lock" 2>/dev/null; then
-    owner="$(cat "$lock/pid" 2>/dev/null || true)"
-    if [ -n "$owner" ] && kill -0 "$owner" 2>/dev/null; then
-      die "$(t "Another installer is already running here (pid $owner). Wait for it to finish, or stop it, and run this again." "Здесь уже работает другой установщик (pid $owner). Дождитесь его или остановите — и запустите снова.")"
+    # Not a rival installer at all — the directory could not be created here. The lock is a
+    # guard rail, not a requirement, so say so and get on with the install.
+    if [ ! -d "$lock" ]; then
+      warn "$(t "Couldn't create the lock at $lock — continuing without it" "Не смог создать лок $lock — продолжаю без него")"
+      return 0
     fi
-    warn "$(t "Taking over the lock of an installer that is no longer running" "Забираю лок установщика, которого больше нет")"
+    if [ -f "$lock/pid" ]; then
+      owner="$(cat "$lock/pid" 2>/dev/null || true)"
+      if [ -n "$owner" ] && kill -0 "$owner" 2>/dev/null; then
+        die "$(t "Another installer is already running here (pid $owner, lock: $lock). Wait for it to finish, or stop it, and run this again." "Здесь уже работает другой установщик (pid $owner, лок: $lock). Дождитесь его или остановите — и запустите снова.")"
+      fi
+    # No owner written yet: the installer that made this directory is a moment away from
+    # writing its pid into it, and taking the lock now would run two of us. Only a lock
+    # that has been sitting there for a minute is treated as abandoned.
+    elif [ -z "$(find "$lock" -maxdepth 0 -mmin +1 2>/dev/null)" ]; then
+      die "$(t "Another installer is starting here (lock: $lock). Run this again in a moment." "Здесь запускается другой установщик (лок: $lock). Повторите через несколько секунд.")"
+    fi
+    warn "$(t "Taking over the lock of an installer that is no longer running: $lock" "Забираю лок установщика, которого больше нет: $lock")"
   fi
   INSTALL_LOCK="$lock"
   printf '%s\n' "$$" >"$lock/pid" 2>/dev/null || true
@@ -227,9 +244,12 @@ prepare_install_update() {
     fi
     # Named only once the copy is whole: a backup nobody could finish must not be one the
     # rollback trusts. And an install that cannot preserve .env has no business going on to
-    # replace the build.
-    copy_env_private "$candidate" \
-      || die "$(t "Cannot copy $PROJECT_DIR/.env — check its permissions and free space, then run again." "Не могу скопировать $PROJECT_DIR/.env — проверьте права и свободное место, потом запустите снова.")"
+    # replace the build. The empty file mktemp already made goes with it, or a run that
+    # never copied anything would leave a stub behind in /tmp.
+    copy_env_private "$candidate" || {
+      rm -f -- "$candidate"
+      die "$(t "Cannot copy $PROJECT_DIR/.env — check its permissions and free space, then run again." "Не могу скопировать $PROJECT_DIR/.env — проверьте права и свободное место, потом запустите снова.")"
+    }
     INSTALL_ENV_BACKUP="$candidate"
   fi
 
@@ -360,9 +380,15 @@ finish_install_update() {
 on_err() {
   local rc=$?
   stop_spinner
-  echo >&2
-  echo "${c_red}✗ $(t "Install aborted (code $rc). Failing command: ${BASH_COMMAND}" "Установка прервалась (код $rc). Упала команда: ${BASH_COMMAND}")${c_reset}" >&2
-  echo "${c_yellow}  $(t "Full log:" "Полный лог:") $INSTALL_LOG${c_reset}" >&2
+  # Reporting must not become the failure. With no terminal left to print to every line
+  # below fails, and under errexit the first one would end the run with its own status
+  # instead of the one that actually broke. `set +e` is not the fix here: it would outlive
+  # the handler and leave the rest of the script running unchecked.
+  {
+    echo
+    echo "${c_red}✗ $(t "Install aborted (code $rc). Failing command: ${BASH_COMMAND}" "Установка прервалась (код $rc). Упала команда: ${BASH_COMMAND}")${c_reset}"
+    echo "${c_yellow}  $(t "Full log:" "Полный лог:") $INSTALL_LOG${c_reset}"
+  } >&2 2>/dev/null || true
 }
 # The single exit path: `die`, errexit, Ctrl-C, a dropped SSH session and SIGTERM all end
 # up here, so no run leaves a copy of .env, a stash entry or a backup ref behind.
@@ -377,6 +403,9 @@ finalize_install() {
   # on. Left armed it prints a second "Install aborted" over the real cause, which is how
   # the reason for a failure gets lost.
   trap - ERR
+  # Nothing in here may end the handler early: this is the only path that puts the
+  # checkout back, and it runs while something has already gone wrong.
+  set +e
   # A log that stopped being writable mid-run must not take the rollback down with it: the
   # redirects below would fail before their commands ever ran.
   : >>"$INSTALL_LOG" 2>/dev/null || INSTALL_LOG=/dev/null
