@@ -53,6 +53,19 @@ void test("daily rollup prompt exposes the same four card operations as the memo
     );
   }
 
+  // Canon: the "two contradictory" rule names Compiled Truth, never the retired
+  // "current value" wording the glossary forbids.
+  assert.match(
+    prompt,
+    /Never leave two contradictory Compiled Truths/,
+    "the daily prompt must forbid two contradictory Compiled Truths",
+  );
+  assert.doesNotMatch(
+    prompt,
+    /two contradictory CURRENT values|two contradictory current values/,
+    "the daily prompt must not use the retired 'current value' wording",
+  );
+
   // The SUPERSEDE rule is where the prompt shows a history entry; every dated example
   // there must read the way write_card stores the line, bullet and section excluded.
   assertBefore(

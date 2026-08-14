@@ -48,7 +48,7 @@ For every fact, pick one operation:
   the schema so you can't invent a type or field).
 - **UPDATE** — existing subject, new fact compatible with current truth → add it to
   the card's single dated `## Log`. UPDATE never creates a card and never carries a
-  contradictory former/current pair.
+  contradictory former/superseded pair.
 - **NOOP** — already captured and unchanged → do nothing.
 - **SUPERSEDE** — the new fact _contradicts_ the Compiled Truth of an existing card (job changed,
   moved city, status flipped). Do NOT just append: **rewrite** the card's Compiled Truth

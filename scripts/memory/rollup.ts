@@ -120,7 +120,7 @@ function buildPrompt(p: Period, now: string): string {
         `A card 'body' is facts only, with no H1/H2 headings: write_card builds the card ` +
         `structure itself (the title, '## Log', '## Related', '## History') and refuses a body ` +
         `that carries a heading of its own. ` +
-        `Never leave two contradictory CURRENT values; History is append-only, never edited. ` +
+        `Never leave two contradictory Compiled Truths; History is append-only, never edited. ` +
         `Tag each fact's certainty with 'confidence:' — EXTRACTED (user stated it directly) or ` +
         `INFERRED (you deduced it). ` +
         `Emotional venting and momentary states ("I'm useless", "wasted the whole day", tiredness, ` +
