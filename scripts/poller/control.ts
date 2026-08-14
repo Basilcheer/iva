@@ -1,12 +1,18 @@
-import { botCommands, helpText, tr } from "#lib/i18n.ts";
+import { botCommands, helpText, startText, tr } from "#lib/i18n.ts";
 import { continuationTokenForControl } from "../lib/telegram-reset.ts";
+import { TELEGRAM_STOP_CALLBACK } from "#lib/telegram-status-message.ts";
+import {
+  requestTurnCancel,
+  stopOutcomeText,
+  type StopOutcome,
+} from "#lib/telegram-stop.ts";
 import type {
   TelegramCallbackQuery,
   TelegramQueueMessage as TelegramMessage,
   TelegramQueueUpdate as TelegramUpdate,
 } from "../lib/telegram-queue.ts";
 import type { TelegramFlowState } from "../lib/tg-flow.ts";
-import { getChatStatus, isRunning } from "#lib/run-status.ts";
+import { getChatStatus } from "#lib/run-status.ts";
 import { readEnvFresh } from "../lib/env-file.ts";
 import {
   formatUsageReport,
@@ -17,14 +23,15 @@ import {
 import {
   ALLOWED,
   BOT_USER_ID,
+  CANCEL_ROUTE,
   DATA_DIR,
   ENV_PATH,
   ROOT,
+  SECRET,
   log,
 } from "./config.ts";
 import { downloadTelegramFile, edit, reply, sc, tg } from "./transport.ts";
 import { chatKey } from "./offset.ts";
-import { deliver } from "./deliver.ts";
 import { performScopedReset } from "./queue.ts";
 import { deliverDirectUpdate } from "./routing.ts";
 import { handleUpdateCallback, handleUpdateCheck } from "./update-flow.ts";
@@ -67,6 +74,23 @@ type ControlTransport = (
   method: string,
   body: Record<string, unknown>,
 ) => Promise<TelegramResult>;
+type StatusImpl = (chatKey: string) => Record<string, unknown> | null;
+type CancelImpl = (input: {
+  url: string;
+  secret: string;
+  continuationToken: string;
+  turnId?: string;
+}) => Promise<unknown>;
+// Точки ввода-вывода handleControl, которые подменяются в тестах: ответ в чат,
+// подтверждение нажатия и вызов cancel-роута. Всё остальное остаётся дефолтным.
+export type ControlDeps = {
+  replyImpl?: (
+    chatId: number | undefined,
+    text: string,
+  ) => Promise<SentMessage | null>;
+  ackImpl?: (callbackQueryId: string, text?: string) => Promise<unknown>;
+  cancelImpl?: CancelImpl;
+};
 
 const controlTg = tg as unknown as ControlTransport;
 
@@ -119,6 +143,62 @@ const editMessage = (
   messageId: number,
   text: string,
 ) => edit(chatId as number, messageId, text);
+
+// Команды, которые исполняет САМ мост: они обязаны работать, даже когда агент занят
+// или завис, поэтому в eve не уходят. Порядок здесь ни на что не влияет — /help и синее
+// меню Telegram кормит таблица COMMANDS (agent/lib/i18n.ts).
+export const OUT_OF_BAND_COMMANDS = [
+  "/menu",
+  "/help",
+  "/start",
+  "/stop",
+  "/usage",
+  "/restart",
+  "/new",
+  "/update",
+  "/model",
+  "/think",
+];
+
+// Подтверждение нажатия: гасит спиннер кнопки и показывает всплывающую подсказку.
+// Ошибки глотаем — сама отмена уже отправлена, а протухший callback_query_id Telegram
+// отвергает штатно.
+const answerCallback = (callbackQueryId: string, text?: string) =>
+  controlTg("answerCallbackQuery", {
+    callback_query_id: callbackQueryId,
+    ...(text === undefined ? {} : { text }),
+  }).catch((e: unknown) => {
+    log("answerCallbackQuery failed:", errorMessage(e));
+    return { ok: false };
+  });
+
+// ⏹ Стоп: кнопка статус-сообщения и /stop. В long-poll обе двери ведут сюда, в мост:
+// он перехватывает апдейт раньше любой доставки, поэтому «Стоп» доходит и до занятого
+// агента. Решение «есть ли что останавливать» и сам POST на cancel-роут живут в
+// agent/lib/telegram-stop.ts — там же, где второй вход (onCallbackQuery канала для
+// webhook-режима), чтобы политика не разъехалась между режимами.
+async function requestTurnStop(
+  update: TelegramUpdate,
+  {
+    keyImpl = chatKey,
+    cancelImpl,
+    ...cancelDeps
+  }: {
+    keyImpl?: (update: TelegramUpdate) => string | null;
+    cancelImpl?: CancelImpl;
+    getStatusImpl?: StatusImpl;
+    runningImpl?: (chatKey: string) => boolean;
+    logImpl?: (...parts: unknown[]) => void;
+  } = {},
+): Promise<StopOutcome> {
+  return requestTurnCancel(keyImpl(update), {
+    url: CANCEL_ROUTE,
+    secret: SECRET,
+    logImpl: log,
+    ...(cancelImpl === undefined ? {} : { cancelImpl }),
+    ...cancelDeps,
+  });
+}
 
 // Движок /menu: делит session-store (flows) с визардами /model//think. deps — мост отдаёт
 // экранам всё нужное (пути, systemctl, доставку в eve, allowlist, хендофф в визарды).
@@ -256,11 +336,36 @@ export async function handleAwaitNonText(
 
 // Control commands are handled by the BRIDGE (out-of-band) — they work even if the agent is stuck.
 // Trusted IDs only. Returns true if the command was handled (we do NOT deliver it to eve).
-async function handleControl(update: TelegramUpdate) {
+async function handleControl(
+  update: TelegramUpdate,
+  {
+    replyImpl = replyTo,
+    ackImpl = answerCallback,
+    cancelImpl,
+  }: ControlDeps = {},
+) {
   // Bridge-owned inline-button taps (/update, /model, /think) — not eve HITL callbacks.
   const cq = update.callback_query;
   if (cq && hasCallbackData(cq)) {
     const callback = cq;
+    // ⏹ Стоп у статус-сообщения. Тап никогда не уходит в eve: колбэк наш, а отмену
+    // мост делает сам через cancel-роут канала. У канала есть свой обработчик той же
+    // кнопки (agent/lib/telegram-stop.ts), но он для webhook-режима, где моста нет:
+    // здесь апдейт перехватывается раньше любой доставки.
+    // NB: колбэк с ЧУЖИМИ данными уходит в eve и там попадает в тот же
+    // onCallbackQuery канала — дефолтная ветка eve «Unsupported action.» из-за него
+    // отключена, поэтому спиннер гасит сам канал пустым answerCallbackQuery.
+    if (callback.data === TELEGRAM_STOP_CALLBACK) {
+      const from = String(callback.from?.id ?? "");
+      // Чужой тап в группе: гасим спиннер молча и ничего не отменяем.
+      if (ALLOWED.size === 0 || !ALLOWED.has(from)) {
+        await ackImpl(callback.id);
+        return true;
+      }
+      const outcome = await requestTurnStop(update, { cancelImpl });
+      await ackImpl(callback.id, stopOutcomeText(outcome));
+      return true;
+    }
     if (callback.data.startsWith("iva_update:"))
       return handleUpdateCallback(callback);
     // Wizard errors must not escape: an uncaught throw would crash the bridge and
@@ -331,20 +436,7 @@ async function handleControl(update: TelegramUpdate) {
   }
   if (!text.startsWith("/")) return false;
   const cmd = text.split(/\s+/)[0].replace(/@\w+$/, "").toLowerCase();
-  if (
-    ![
-      "/menu",
-      "/help",
-      "/stop",
-      "/usage",
-      "/restart",
-      "/new",
-      "/update",
-      "/model",
-      "/think",
-    ].includes(cmd)
-  )
-    return false;
+  if (!OUT_OF_BAND_COMMANDS.includes(cmd)) return false;
   const from = String(msg?.from?.id ?? "");
   if (ALLOWED.size === 0 || !ALLOWED.has(from)) return false; // untrusted — let eve drop it
   const chatId = msg?.chat?.id;
@@ -357,31 +449,23 @@ async function handleControl(update: TelegramUpdate) {
     return true;
   }
   if (cmd === "/help") {
-    await replyTo(chatId, helpText());
+    await replyImpl(chatId, helpText());
     return true;
   }
-  // /stop — interrupt the current turn. Same path as the ⏹ Stop button: we synthesize a
-  // callback_query with data "iva_cancel"; the channel resolves sessionId from run-status
-  // and resumes eve's cancel hook. Out-of-band so it reaches a busy agent (an ordinary
-  // message would be queued by the gate below and never processed).
+  // /start — кнопка Start у нового пользователя. Без этой ветки приветствие уходило
+  // обычным ходом в модель: платный запрос ради «привет». Отвечает мост, out-of-band.
+  if (cmd === "/start") {
+    await replyImpl(chatId, startText());
+    return true;
+  }
+  // /stop — interrupt the current turn, the same door as the ⏹ Stop button.
+  // Out-of-band so it reaches a busy agent (an ordinary message would be queued by
+  // the gate below and never processed).
   if (cmd === "/stop") {
-    const key = chatKey(update);
-    if (!key || !isRunning(key)) {
-      await replyTo(
-        chatId,
-        tr("Nothing is running right now.", "Сейчас ничего не выполняется."),
-      );
-      return true;
-    }
-    await deliver({
-      update_id: 0,
-      callback_query: {
-        id: `ivastop-${Date.now()}`, // synthetic: answerCallbackQuery on it fails, channel tolerates
-        from: msg?.from,
-        message: msg, // carries chat/thread — the channel derives chatKey from here
-        data: "iva_cancel",
-      },
-    });
+    const outcome = await requestTurnStop(update, { cancelImpl });
+    // Успех виден по статус-сообщению: turn.cancelled перепишет его на «Остановлено».
+    if (outcome !== "requested")
+      await replyImpl(chatId, stopOutcomeText(outcome));
     return true;
   }
   // /usage — token spend from data/usage.jsonl. Out-of-band and FREE (we don't call the model).

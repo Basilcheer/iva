@@ -204,6 +204,26 @@
       "period"
     ]
   },
+  "identity": {
+    "_comment": "same-entity detection for dedup/supersede grouping. Cards sharing a strong key (exact normalized match on match_fields) are grouped even under different filenames — 'Ivan Petrov' and 'Vanya' with one telegram handle are one contact. Name-only never groups (fuzzy off — a false merge is worse than a duplicate); a value shared by more than max_shared cards is treated as generic and skipped. Remove this block to fall back to exact-stem grouping only.",
+    "match_fields": [
+      "email",
+      "telegram",
+      "handle",
+      "phone"
+    ],
+    "same_domain_only": true,
+    "same_type_only": true,
+    "fuzzy_name": false,
+    "ignore_values": [
+      "",
+      "n/a",
+      "-",
+      "none",
+      "unknown"
+    ],
+    "max_shared": 8
+  },
   "entity_extraction": {
     "_comment": "settings for daily.py mechanical entity extraction",
     "noise_words": [

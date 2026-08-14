@@ -27,6 +27,8 @@ curl -X POST "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/setWebhook" \
 
 Note: `getUpdates` — which the setup wizard uses to discover your user ID — stops working while a webhook is registered.
 
+What you give up without the bridge: the out-of-band commands are gone (`/menu`, `/stop`, `/new`, `/restart`, `/start`, `/model`, `/think`, `/update`, `/usage`, `/help` reach the model as ordinary text instead of being handled), and so are the busy-time queue with its 👀 acknowledgement, per-chat pacing, and durable offset. Only `/task`, `/tasks` and `/digest` are model-routed by design. The ⏹ Stop button keeps working in both modes: the channel answers the tap itself and calls its own cancel route.
+
 ## systemd units
 
 `scripts/cli/systemd.ts` is the single source of truth for every unit; the permanent `bin/iva.mjs` entry shim delegates to the TypeScript CLI. Any restart through the `iva` CLI regenerates the units first, so `Environment=PORT` always matches `IVA_PORT` in `.env`. Don't hand-edit `~/.config/systemd/user/iva-*` — edits get overwritten. If you write your own unit instead, bake the port literally (`Environment=PORT=8723`): systemd will not expand `$IVA_PORT` from an `EnvironmentFile`.

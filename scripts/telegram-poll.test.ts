@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-floating-promises, @typescript-eslint/require-await -- Node's test runner owns registrations and the doubles intentionally retain asynchronous production boundaries. */
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { markTelegramTurnAlive } from "#lib/telegram-turn-start.ts";
 
 type Update = {
   update_id: number;
@@ -521,13 +522,16 @@ test("direct failure cleanup never clobbers a turn that acquired a session", asy
 });
 
 test("callback_query delivery keeps the original option-free webhook path", async () => {
+  // Колбэк HITL самого eve: его callback_data — "eve:<id в base36>"
+  // (TELEGRAM_HITL_CALLBACK_PREFIX в eve/…/telegram/hitl.js). Свои кнопки — Стоп,
+  // /menu, визарды — мост съедает сам в handleControl и до этой доставки не доводит.
   const callbackUpdate = {
     update_id: 11,
     callback_query: {
       id: "callback-11",
       from: { id: 42, is_bot: false },
       message: routedUpdate.message,
-      data: "iva_cancel",
+      data: "eve:1",
     },
   };
   let statusReads = 0;
@@ -707,6 +711,71 @@ test("reapStaleRuns skips chats while their queue head is mid-drain", async () =
 
   assert.equal(reaped, 0);
   assert.equal(sideEffects, 0);
+});
+
+test("a long silent turn survives the reaper while its heartbeat runs; a dead one does not", async () => {
+  // Сорокапятиминутный ресёрч: в чат он не пишет ни слова, но тулзы работают, и ход
+  // сам подтверждает, что жив. До пульса ровно этот ход получал насильный idle,
+  // реальный сброс континуации и «Предыдущий ход оборвался» при живом ходе.
+  const staleMs = 30 * 60_000;
+  let nowMs = reaperNow - 45 * 60_000;
+  const record: StatusRecord = {
+    status: "running",
+    generation: 1,
+    updatedAt: nowMs,
+    continuationToken: "1::",
+    sessionId: "session-live",
+    turnId: "turn-live",
+  };
+  const beats = new Map<string, { sessionId: string; at: number }>();
+  for (let minute = 0; minute < 45; minute++) {
+    nowMs += 60_000;
+    markTelegramTurnAlive({
+      chatKey: "1:",
+      sessionId: "session-live",
+      now: () => nowMs,
+      beats,
+      getStatusImpl: () => record,
+      setStatusIfImpl: (_key, expected, patch) => {
+        if (
+          expected.status !== record.status ||
+          expected.sessionId !== record.sessionId
+        ) {
+          return null;
+        }
+        Object.assign(record, patch, {
+          generation: record.generation + 1,
+          updatedAt: nowMs,
+        });
+        return record;
+      },
+    });
+  }
+  assert.equal(record.updatedAt, nowMs);
+
+  let sideEffects = 0;
+  const survived = await reapStaleRuns(
+    reaperDeps([{ chatKey: "1:", status: record }], {
+      now: () => nowMs,
+      staleMs,
+      setStatusIfImpl: () => {
+        sideEffects++;
+        return { status: "idle" };
+      },
+    }),
+  );
+  assert.equal(survived, 0);
+  assert.equal(sideEffects, 0);
+
+  // Тот же ход умер вместе с процессом: пульса больше нет — жнец обязан его снять.
+  nowMs += staleMs + 1_000;
+  const reaped = await reapStaleRuns(
+    reaperDeps([{ chatKey: "1:", status: record }], {
+      now: () => nowMs,
+      staleMs,
+    }),
+  );
+  assert.equal(reaped, 1);
 });
 
 test("reapStaleRuns swallows and logs a notification failure", async () => {
@@ -1001,4 +1070,168 @@ test("provider, model, effort and pending key persist in one atomic write", asyn
       OPENCODE_API_KEY: "new-secret",
     },
   ]);
+});
+
+// --- Свойство жнеца на виртуальном времени (seeded, реплей через IVA_TEST_SEED) ---
+//
+// Пара «пульс хода + жнец» — единственное, что отличает живой молчаливый ход от
+// мёртвого, и проверять её надо не одним сценарием, а классом историй: случайные
+// паузы, случайный шаг опроса, случайный финал (ход закончился / процесс умер).
+// Ожидания взяты из ДОГОВОРА, а не из кода: жнец снимает ход, чей статус не
+// обновлялся дольше RUN_STALE_MS.
+//
+// Запас в свойстве (а) — цена дросселя пульса: пропущенная запись оставляет
+// updatedAt позади события не более чем на heartbeat-интервал, поэтому гарантия
+// «не жнётся» честна для активности не реже, чем (staleMs − heartbeatMs).
+// Сам дроссель тоже под свойством: генератор обязан строить болтливые цепочки
+// (паузы короче интервала дросселя длиннее, чем окно протухания). Именно они
+// ловят ошибку «двигать отметку дросселя на пропущенной записи»: с ней ход
+// перестаёт писать статус вовсе и жнец снимает живого.
+test("property: a turn with live activity is never reaped, a dead one is reaped inside 2x the stale window", async () => {
+  const seed = Number(process.env.IVA_TEST_SEED ?? Date.now() % 100_000);
+  console.log(`reaper property seed: ${seed} (IVA_TEST_SEED to replay)`);
+  let lcg = seed >>> 0;
+  const rand = () => {
+    lcg = (lcg * 1664525 + 1013904223) >>> 0;
+    return lcg / 2 ** 32;
+  };
+  const between = (min: number, max: number) =>
+    min + Math.floor(rand() * (max - min + 1));
+
+  const STALE_MS = 30 * 60_000;
+  const HEARTBEAT_MS = 60_000;
+  const SAFE_GAP_MAX = STALE_MS - HEARTBEAT_MS;
+
+  for (let iteration = 0; iteration < 120; iteration++) {
+    const label = `seed ${seed} iter ${iteration}`;
+    const startedAt = between(0, 10_000);
+    // История хода: паузы молчания между признаками жизни (tool-вызовы и их снимки).
+    // Обязательно смешиваем два режима, иначе дроссель пульса не проверяется:
+    //  - редкие события (пауза до SAFE_GAP_MAX) — каждое пишет статус;
+    //  - БОЛТОВНЯ: длинная цепочка пауз короче интервала дросселя. Там почти каждое
+    //    событие запись пропускает, и если пропуск начнёт двигать отметку дросселя,
+    //    ход перестанет писать статус вовсе и жнец снимет живого.
+    const events: number[] = [];
+    let cursor = startedAt;
+    const segments = between(1, 4);
+    for (let s = 0; s < segments; s++) {
+      if (rand() < 0.5) {
+        // Болтовня длиннее окна протухания: 45–90 событий по 1–59 с.
+        const burst = between(45, 90);
+        for (let e = 0; e < burst; e++) {
+          cursor += between(1_000, HEARTBEAT_MS - 1_000);
+          events.push(cursor);
+        }
+        continue;
+      }
+      const quiet = between(1, 6);
+      for (let e = 0; e < quiet; e++) {
+        cursor += between(1_000, SAFE_GAP_MAX);
+        events.push(cursor);
+      }
+    }
+    if (events.length === 0) events.push(cursor + between(1_000, 30_000));
+    const lastEventAt = events[events.length - 1];
+    // Три исхода: ход честно закончился, ход умер вместе с процессом, ход ещё идёт.
+    const ending = rand();
+    const finishesAt = ending < 0.4 ? lastEventAt + between(1, 60_000) : null;
+    const observeUntil = lastEventAt + 3 * STALE_MS;
+
+    const record: StatusRecord = {
+      status: "running",
+      generation: 1,
+      updatedAt: startedAt,
+      continuationToken: "1::",
+      sessionId: `session-${iteration}`,
+      turnId: `turn-${iteration}`,
+    };
+    const beats = new Map<string, { sessionId: string; at: number }>();
+    const setStatusIf = (
+      _key: string,
+      expected: Record<string, unknown>,
+      patch: Record<string, unknown>,
+      at: number,
+    ) => {
+      for (const [key, value] of Object.entries(expected)) {
+        if (!Object.is(record[key], value)) return null;
+      }
+      Object.assign(record, patch, {
+        generation: record.generation + 1,
+        updatedAt: at,
+      });
+      for (const key of Object.keys(record))
+        if (record[key] === null) delete record[key];
+      return record;
+    };
+
+    let pending = 0;
+    let reapedAt: number | null = null;
+    let now = startedAt;
+    while (now <= observeUntil && reapedAt === null) {
+      now += between(1_000, 60_000); // шаг опроса моста
+      while (pending < events.length && events[pending] <= now) {
+        const at = events[pending++];
+        markTelegramTurnAlive({
+          chatKey: "1:",
+          sessionId: record.sessionId as string,
+          now: () => at,
+          minIntervalMs: HEARTBEAT_MS,
+          beats,
+          getStatusImpl: () => record,
+          setStatusIfImpl: (key, expected, patch) =>
+            setStatusIf(key, expected, patch, at),
+        });
+      }
+      // Терминальное событие хода приходит своим чередом и снимает running.
+      if (
+        finishesAt !== null &&
+        finishesAt <= now &&
+        record.status === "running"
+      )
+        setStatusIf(
+          "1:",
+          { sessionId: record.sessionId },
+          { status: "idle", sessionId: null, turnId: null },
+          finishesAt,
+        );
+
+      const observedAt = now;
+      const reaped = await reapStaleRuns(
+        reaperDeps([{ chatKey: "1:", status: record }], {
+          now: () => observedAt,
+          staleMs: STALE_MS,
+          setStatusIfImpl: (key, expected, patch) =>
+            setStatusIf(key, expected, patch, observedAt),
+        }),
+      );
+      if (reaped > 0) reapedAt = observedAt;
+
+      // (а) Пока ход подаёт признаки жизни, снимать его нельзя — сколько бы он ни длился.
+      if (now <= lastEventAt) {
+        assert.equal(reapedAt, null, `${label}: живой ход сняли на ${now}`);
+        assert.equal(record.status, "running", `${label}: живой ход стал idle`);
+      }
+      // Завершённый ход жнецу больше не принадлежит.
+      if (finishesAt !== null && now > finishesAt) {
+        assert.equal(
+          reapedAt,
+          null,
+          `${label}: снят уже завершённый ход на ${now}`,
+        );
+      }
+    }
+
+    if (finishesAt !== null) {
+      assert.equal(reapedAt, null, `${label}: завершённый ход не жнётся вовсе`);
+      assert.equal(record.status, "idle", `${label}: финал не прибрал статус`);
+      continue;
+    }
+    // (б) Мёртвый ход (процесс умер после последнего события) обязан быть снят.
+    assert.notEqual(reapedAt, null, `${label}: мёртвый ход остался running`);
+    assert.ok(
+      (reapedAt as number) <= lastEventAt + 2 * STALE_MS,
+      `${label}: мёртвый ход снят слишком поздно (${String(reapedAt)} > ${lastEventAt + 2 * STALE_MS})`,
+    );
+    assert.equal(record.status, "idle", `${label}: жнец не перевёл ход в idle`);
+  }
 });
