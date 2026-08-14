@@ -90,16 +90,20 @@ start_spinner() {
   SPINNER_PID=$!
 }
 run_stage() {
-  local label="$1" success="$2"
+  local label="$1" success="$2" rc=0
   shift 2
   CURRENT_STEP="$label"
   start_spinner "$label"
+  # The exit code has to be read inside the else branch. Read after `fi` it is the status
+  # of the if-statement itself, which is 0 when a failing condition has no else — so every
+  # stage reported success, and a build killed by the OOM killer ended with a green banner.
   if "$@" >>"$INSTALL_LOG" 2>&1; then
     stop_spinner
     ok "$success"
     return 0
+  else
+    rc=$?
   fi
-  local rc=$?
   stop_spinner
   warn "$(t "Failed: $label" "Не удалось: $label")"
   tail -n 12 "$INSTALL_LOG" >&2 || true
@@ -161,6 +165,10 @@ prepare_install_update() {
   INSTALL_ORIGINAL_HEAD="$(git -C "$PROJECT_DIR" rev-parse HEAD)"
   INSTALL_BACKUP_REF="refs/iva/update-backups/$(date -u +%Y%m%dT%H%M%SZ)-$$"
   git -C "$PROJECT_DIR" update-ref "$INSTALL_BACKUP_REF" "$INSTALL_ORIGINAL_HEAD"
+  # Armed with the first artifact, not at the end: a failure while preparing must reach
+  # the same rollback as any later one, or the ref it just wrote is orphaned and the
+  # cleanup reports changes it never took.
+  INSTALL_UPDATE_ACTIVE=true
 
   # The copies live next to the installation, not in /tmp: `iva update` keeps its own
   # copy of .env in data/update-backups/ for the same reason — a world-readable directory
@@ -190,7 +198,6 @@ prepare_install_update() {
     git -C "$PROJECT_DIR" stash push --include-untracked --message "iva-install-$(date -u +%Y%m%dT%H%M%SZ)-$$" >>"$INSTALL_LOG" 2>&1
     INSTALL_STASH_OID="$(git -C "$PROJECT_DIR" rev-parse refs/stash)"
   fi
-  INSTALL_UPDATE_ACTIVE=true
 }
 
 restore_install_stash() {
@@ -275,13 +282,19 @@ on_err() {
   echo "${c_red}✗ $(t "Install aborted (code $rc). Failing command: ${BASH_COMMAND}" "Установка прервалась (код $rc). Упала команда: ${BASH_COMMAND}")${c_reset}" >&2
   echo "${c_yellow}  $(t "Full log:" "Полный лог:") $INSTALL_LOG${c_reset}" >&2
 }
-# The single exit path: `die`, errexit, Ctrl-C and SIGTERM all end up here, so no run
-# leaves a copy of .env, a stash entry or a backup ref behind.
+# The single exit path: `die`, errexit, Ctrl-C, a dropped SSH session and SIGTERM all end
+# up here, so no run leaves a copy of .env, a stash entry or a backup ref behind.
+# The rollback is decided by INSTALL_COMPLETE, never by the exit code: bash enters this
+# handler with $? = 0 when a signal kills the script, and a run that died on a dropped
+# connection is exactly the one that must put the checkout back.
 finalize_install() {
   local rc=$?
   stop_spinner
-  if [ "$rc" -ne 0 ] && [ "$INSTALL_COMPLETE" != true ]; then
-    echo "${c_red}✗ $(t "Install stopped during: $CURRENT_STEP" "Установка остановилась на шаге: $CURRENT_STEP")${c_reset}" >&2
+  if [ "$INSTALL_COMPLETE" != true ]; then
+    # Silent when nothing was started yet — `--help` and a refused flag exit this way.
+    if [ "$rc" -ne 0 ] || [ "$INSTALL_UPDATE_ACTIVE" = true ]; then
+      echo "${c_red}✗ $(t "Install stopped during: $CURRENT_STEP" "Установка остановилась на шаге: $CURRENT_STEP")${c_reset}" >&2
+    fi
     rollback_install_update
   fi
   cleanup_install_artifacts
@@ -290,6 +303,7 @@ trap on_err ERR
 trap finalize_install EXIT
 trap 'stop_spinner; exit 130' INT
 trap 'stop_spinner; exit 143' TERM
+trap 'stop_spinner; exit 129' HUP
 
 # ── Interactivity mode (modeled on NousResearch/hermes-agent) ──────────────
 # Do NOT `exec < /dev/tty`: with `curl | bash`, bash reads the script ITSELF from the stdin pipe,
@@ -374,10 +388,14 @@ SCRIPT_DIR=""
 if [ -n "$SOURCE" ] && [ -f "$SOURCE" ]; then
   SCRIPT_DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
 fi
+# A configured installation, not merely a directory: an abandoned first clone has a .git
+# and still has every heavy package stage ahead of it, so .env (or the versioned layout)
+# is what tells a re-run from a first install.
 INSTALL_EXISTS=false
-if [ -d "$INSTALL_DIR/.git" ] || [ -f "$INSTALL_DIR/.env" ] || [ -d "$INSTALL_DIR/versions" ]; then
+if [ -f "$INSTALL_DIR/.env" ] || [ -d "$INSTALL_DIR/versions" ]; then
   INSTALL_EXISTS=true
-elif [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/package.json" ] && grep -q '"eve"' "$SCRIPT_DIR/package.json"; then
+elif [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/.env" ] && [ -f "$SCRIPT_DIR/package.json" ] \
+  && grep -q '"eve"' "$SCRIPT_DIR/package.json"; then
   INSTALL_EXISTS=true
 fi
 
@@ -388,9 +406,14 @@ fi
 # its end. Over an existing installation this is a warning instead: unattended-upgrades
 # (which bootstrap.sh switches on) leaves the same flag behind for any security update, and
 # a re-run that installs no packages at all must not be refused for days on end.
-if [ -e /var/run/reboot-required ]; then
+# needrestart only draws its dialog for a new kernel, so that is the case worth naming
+# apart. The file lists one package per line; anything else in it means nothing here.
+reboot_needs_kernel() { grep -q '^linux-' "$1" 2>/dev/null; }
+# The path is a variable so the two answers can be tested without a real pending reboot.
+REBOOT_FLAG="${IVA_REBOOT_FLAG:-/var/run/reboot-required}"
+if [ -e "$REBOOT_FLAG" ]; then
   reboot_kernel=false
-  if grep -q '^linux-' /var/run/reboot-required.pkgs 2>/dev/null; then reboot_kernel=true; fi
+  if reboot_needs_kernel "$REBOOT_FLAG.pkgs"; then reboot_kernel=true; fi
   if [ "$INSTALL_EXISTS" != true ]; then
     die "$(t "The system was updated but the server has not been rebooted, and package installs will hang. Run: sudo reboot — then reconnect and run this installer again." "Система обновилась, но сервер не перезагружен — установка пакетов зависнет. Выполните: sudo reboot — потом переподключитесь и запустите установщик снова.")"
   elif [ "$reboot_kernel" = true ]; then
@@ -466,10 +489,13 @@ fi
 # where the failure is only a warning, so the install would keep going for minutes and
 # die on a later step with the real cause scrolled away. Diagnose only: repairing another
 # tool's package database is the administrator's call, not the installer's.
+# A whole package database makes `dpkg --audit` say nothing at all. Blank lines are not an
+# answer either way, so only real characters count as a report.
+dpkg_state_is_broken() { [ -n "$(printf '%s' "$1" | tr -d '[:space:]')" ]; }
 if [ "$PM" = "apt" ] && command -v dpkg >/dev/null 2>&1; then
   CURRENT_STEP="$(t "package system check" "проверка пакетной системы")"
   dpkg_audit="$(dpkg --audit 2>/dev/null || true)"
-  if [ -n "$dpkg_audit" ]; then
+  if dpkg_state_is_broken "$dpkg_audit"; then
     echo "$dpkg_audit" >&2
     die "$(t "The package system is half-way through an interrupted install, so no package can be installed now. Repair it first: sudo dpkg --configure -a — then run this installer again." "Пакетная система осталась в незавершённом состоянии после прерванной установки — поставить пакеты сейчас нельзя. Сначала почините: sudo dpkg --configure -a — потом запустите установщик снова.")"
   fi
@@ -640,9 +666,13 @@ if npm_deps_match_lock; then
   # of the installed tree, so re-apply them: it is the one thing a skipped `npm ci` would
   # leave stale, and it takes under a second. The binary is called the way the hook calls
   # it — straight out of node_modules — so nothing here can reach for the registry.
-  if [ -d patches ] && [ -x node_modules/.bin/patch-package ]; then
-    if node_modules/.bin/patch-package >>"$INSTALL_LOG" 2>&1; then INSTALL_DEPS_REUSED=true; fi
-  else
+  # There are patches but nothing to apply them with (a pruned node_modules) means the
+  # installed tree cannot be trusted: fall through to a full install rather than call it
+  # reused with the patches missing.
+  if [ ! -d patches ]; then
+    INSTALL_DEPS_REUSED=true
+  elif [ -x node_modules/.bin/patch-package ] \
+    && node_modules/.bin/patch-package >>"$INSTALL_LOG" 2>&1; then
     INSTALL_DEPS_REUSED=true
   fi
   if [ "$INSTALL_DEPS_REUSED" = true ]; then
@@ -735,15 +765,25 @@ fi
 # The stamp lives inside .output on purpose. `npm run build` (scripts/build.ts) replaces
 # the whole directory with one it built itself — custom layer included — so its output
 # never carries this stamp, and the installer rebuilds instead of adopting an output it
-# did not produce. Inputs: the commit, every tracked edit on top of it, the set of
-# untracked paths, and .env, which the build reads. Editing an already-untracked file in
-# place between two runs is the one change this does not see.
+# did not produce. Inputs: the commit, every tracked edit on top of it, the untracked files
+# with their contents, and .env, which the build reads.
 BUILD_STAMP=".output/.iva-install-build"
+# Prints nothing and fails when git cannot describe the tree — no repository, no git, or a
+# checkout it refuses to read (dubious ownership under sudo). Without git the source state
+# is unknowable, and an unknowable state must never skip a build: the answer would be the
+# hash of .env alone, and changed code would keep the stale output.
 install_build_fingerprint() {
+  local head
+  head="$(git -C "$PROJECT_DIR" rev-parse HEAD 2>/dev/null || true)"
+  [ -n "$head" ] || return 1
   {
-    git -C "$PROJECT_DIR" rev-parse HEAD 2>/dev/null || echo "no-head"
-    git -C "$PROJECT_DIR" status --porcelain=v1 --untracked-files=all 2>/dev/null || true
-    git -C "$PROJECT_DIR" diff HEAD --binary 2>/dev/null || true
+    printf '%s\n' "$head"
+    git -C "$PROJECT_DIR" status --porcelain=v1 --untracked-files=all
+    git -C "$PROJECT_DIR" diff HEAD --binary
+    # status names the untracked files, this hashes what is in them: a source file the user
+    # added by hand is part of the build like any other.
+    git -C "$PROJECT_DIR" ls-files --others --exclude-standard \
+      | git -C "$PROJECT_DIR" hash-object --stdin-paths 2>/dev/null || true
     if [ -f "$PROJECT_DIR/.env" ]; then
       # Never fatal: pipefail would turn an unreadable file into a failed install, and an
       # answer that cannot be reproduced is exactly the one that must not skip the build.
@@ -754,8 +794,8 @@ install_build_fingerprint() {
   } | git hash-object --stdin
 }
 CURRENT_STEP="$(t "build" "сборка")"
-BUILD_FINGERPRINT="$(install_build_fingerprint)"
-if [ -f "$BUILD_STAMP" ] && [ "$(cat "$BUILD_STAMP")" = "$BUILD_FINGERPRINT" ]; then
+BUILD_FINGERPRINT="$(install_build_fingerprint || true)"
+if [ -n "$BUILD_FINGERPRINT" ] && [ -f "$BUILD_STAMP" ] && [ "$(cat "$BUILD_STAMP")" = "$BUILD_FINGERPRINT" ]; then
   ok "$(t "Build is current — reusing .output" "Сборка актуальна — использую готовый .output")"
 else
   if [ "$INSTALL_UPDATE_ACTIVE" = true ] && [ -e .output ]; then
@@ -763,7 +803,9 @@ else
     mv .output "$INSTALL_OUTPUT_BACKUP"
   fi
   run_stage "$(t "Building Iva" "Собираю Iva")" "$(t "Build ready → .output" "Сборка готова → .output")" npm exec -- eve build
-  if [ -d .output ]; then printf '%s\n' "$BUILD_FINGERPRINT" >"$BUILD_STAMP"; fi
+  if [ -n "$BUILD_FINGERPRINT" ] && [ -d .output ]; then
+    printf '%s\n' "$BUILD_FINGERPRINT" >"$BUILD_STAMP"
+  fi
 fi
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -855,7 +897,10 @@ elif prompt_yes_no "$(t "Set up autostart via systemd (service + watchdog timers
   fi
 fi
 
-git -C "$PROJECT_DIR" config --local iva.updateBranch "$UPDATE_CHANNEL"
+# Non-fatal: an installation unpacked from an archive has no git config to write into, and
+# that is not a reason to fail an install that otherwise finished.
+git -C "$PROJECT_DIR" config --local iva.updateBranch "$UPDATE_CHANNEL" 2>/dev/null \
+  || warn "$(t "couldn't record the update branch (not a git checkout) — 'iva update' will use the default" "не записал ветку обновлений (не git-checkout) — 'iva update' возьмёт ветку по умолчанию")"
 
 finish_install_update
 INSTALL_COMPLETE=true
