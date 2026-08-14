@@ -41,7 +41,10 @@ export interface ModelProviderSelection {
 
 // Record<ModelProviderName, …> держит таблицу полной: новое имя в MODEL_PROVIDER_NAMES
 // не соберётся, пока ему не задали модель и ответ про reasoning.
-const PROVIDERS = {
+// Экспортируется ради шва: CATALOG в scripts/lib/model-catalog.ts несёт те же modelVar и
+// те же дефолты для кнопок /model и мастера, и разъехаться им нельзя — расхождение значит,
+// что мастер предлагает не ту модель, которую возьмёт рантайм. Сверяет model-catalog.test.ts.
+export const MODEL_PROVIDERS = {
   ollama: {
     modelVar: "OLLAMA_MODEL",
     defaultModel: "deepseek-v4-pro",
@@ -88,7 +91,7 @@ export function resolveModelProvider(
     throw new Error(invalidModelProviderMessage(raw));
 
   const name = raw as ModelProviderName;
-  const provider = PROVIDERS[name];
+  const provider = MODEL_PROVIDERS[name];
   const configured = env[provider.modelVar] ?? provider.defaultModel;
   return {
     name,

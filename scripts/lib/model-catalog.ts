@@ -122,6 +122,27 @@ export const CATALOG: Record<string, ProviderCatalogEntry> = {
   },
 };
 
+// The one place the CLI half turns a configured MODEL_PROVIDER into a provider. Exact match,
+// like the runtime resolver (agent/lib/model-provider.ts): an unknown name resolves to nothing
+// rather than collapsing into Ollama, so the wizard, doctor, the update and the /menu screens
+// all see the same broken configuration the agent refuses to start on (issue #161).
+export function catalogProvider(
+  name: string | undefined,
+): ProviderCatalogEntry | undefined {
+  return name !== undefined && Object.hasOwn(CATALOG, name)
+    ? CATALOG[name]
+    : undefined;
+}
+
+// The .env keys a provider cannot work without. codex has no key — it signs in over OAuth
+// (data/codex-auth.json), which is checked separately. Shared by `iva doctor` and the setup
+// wizard so one of them can never call a configuration complete that the other rejects.
+export function providerEnvKeys(provider: ProviderCatalogEntry): string[] {
+  return provider.keyVar
+    ? [provider.keyVar, provider.modelVar]
+    : [provider.modelVar];
+}
+
 // Ollama Cloud and OpenCode Go both expose OpenAI-compatible reasoning_effort.
 // Their /models payloads contain IDs only, so the API's common low/medium/high
 // contract is the best available capability signal. Codex is richer: its live

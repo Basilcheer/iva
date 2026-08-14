@@ -7,7 +7,7 @@ import {
   recoverConfigTransaction,
 } from "../lib/config-transaction.ts";
 import { parseEnvText } from "../lib/env-file.ts";
-import { CATALOG } from "../lib/model-catalog.ts";
+import { catalogProvider } from "../lib/model-catalog.ts";
 import type { createCliRuntime } from "./runtime.ts";
 import type { createCliSystemd } from "./systemd.ts";
 
@@ -90,9 +90,7 @@ export function createConfigCommand(
       // Тот же каталог, что у мастера, доктора и кнопок /model, — и тот же перечень имён,
       // что принимает рантайм (сверяет scripts/lib/model-catalog.test.ts).
       const provider = nextEnv.MODEL_PROVIDER;
-      const catalog = Object.hasOwn(CATALOG, provider)
-        ? CATALOG[provider]
-        : undefined;
+      const catalog = catalogProvider(provider);
       if (!catalog)
         throw new Error(
           "candidate configuration has an invalid model provider",

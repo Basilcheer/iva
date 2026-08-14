@@ -3,7 +3,11 @@ import { join } from "node:path";
 import { LEGACY_BRAIN_UNITS } from "../lib/legacy-memory-units.ts";
 import { classifyAgentListeners } from "../lib/listener-security.ts";
 import { readMemoryMaintenanceReport } from "../lib/memory-maintenance.ts";
-import { CATALOG } from "../lib/model-catalog.ts";
+import {
+  CATALOG,
+  catalogProvider,
+  providerEnvKeys,
+} from "../lib/model-catalog.ts";
 import { classifyRoot } from "../lib/version-layout.ts";
 import { createVersionStore } from "../lib/version-store.ts";
 import type { createCliRuntime } from "./runtime.ts";
@@ -94,9 +98,7 @@ export function createDoctorCommand(
       // сверяет scripts/lib/model-catalog.test.ts с копией в agent/lib/model-provider.ts).
       // Неизвестное значение — отказ, а не диагностика ollama: рантайм на нём не стартует.
       const rawProvider = env.MODEL_PROVIDER ?? "ollama";
-      const provider = Object.hasOwn(CATALOG, rawProvider)
-        ? CATALOG[rawProvider]
-        : undefined;
+      const provider = catalogProvider(rawProvider);
       if (!provider) {
         bad(
           `Invalid MODEL_PROVIDER ${JSON.stringify(rawProvider)}; expected one of: ${Object.keys(CATALOG).join(", ")} — run: iva config`,
@@ -105,8 +107,7 @@ export function createDoctorCommand(
       } else {
         // codex — доступ по OAuth-токену (data/codex-auth.json), у остальных — ключ в .env.
         const required = [
-          ...(provider.keyVar ? [provider.keyVar] : []),
-          provider.modelVar,
+          ...providerEnvKeys(provider),
           "DEEPGRAM_API_KEY",
           "TELEGRAM_BOT_TOKEN",
           "TELEGRAM_ALLOWED_USER_IDS",

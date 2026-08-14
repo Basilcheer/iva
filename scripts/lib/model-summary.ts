@@ -7,8 +7,10 @@ type ProviderSettings = {
 };
 
 // Короткие подписи для одной строки статуса — не лейблы каталога (там «Ollama Cloud»).
-// Имена — те же, что принимает рантайм; их совпадение пинует update-ui.test.ts.
-const PROVIDERS: Record<string, ProviderSettings> = {
+// Имена — те же, что принимает рантайм, и ровно те же: лишнее имя здесь показало бы
+// провайдера, на котором агент не стартует, а недостающее назвало бы рабочего невалидным.
+// Обе стороны сверяет update-ui.test.ts.
+export const PROVIDERS: Record<string, ProviderSettings> = {
   ollama: {
     label: "Ollama",
     model: "OLLAMA_MODEL",

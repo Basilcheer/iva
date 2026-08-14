@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-unnecessary-type-assertion -- conversion keeps source-compatible runtime indexing. */
 // Экран статуса: одна карта — версия, провайдер·модель·размышления, поиск+ключ, язык,
 // userbot, Google, расход за сегодня. Быстрые поля (env/файлы) читаются синхронно в первом
 // рендере; общая userbot-проба systemd/HTTP/Telethon НЕ ждётся синхронно — сначала
@@ -8,7 +7,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { readEnvValues } from "../env-file.ts";
-import { CATALOG } from "../model-catalog.ts";
+import { catalogProvider } from "../model-catalog.ts";
 import { SEARCH_CATALOG } from "../search-catalog.ts";
 import { readEntries, summarize } from "../usage.ts";
 import { probeUserbotHealth } from "../userbot-health.ts";
@@ -89,10 +88,7 @@ function usageToday(
 // Собирает быстрые поля (без медленной пробы) — переиспользуется первым рендером и async-edit'ом.
 function fastFields(env: Env, ctx: MenuContext) {
   const configuredProvider = env.MODEL_PROVIDER ?? "ollama";
-  const providerIsValid = Object.hasOwn(CATALOG, configuredProvider);
-  const cat = providerIsValid
-    ? CATALOG[configuredProvider as keyof typeof CATALOG]
-    : undefined;
+  const cat = catalogProvider(configuredProvider);
   const searchProv =
     typeof env.SEARCH_PROVIDER === "string" &&
     Object.hasOwn(SEARCH_CATALOG, env.SEARCH_PROVIDER)
@@ -101,9 +97,7 @@ function fastFields(env: Env, ctx: MenuContext) {
   const searchCat = SEARCH_CATALOG[searchProv as keyof typeof SEARCH_CATALOG];
   return {
     version: version(ctx.deps.root),
-    provider: providerIsValid
-      ? configuredProvider
-      : `invalid (${configuredProvider})`,
+    provider: cat ? configuredProvider : `invalid (${configuredProvider})`,
     model: cat ? env[cat.modelVar] || cat.def : "?",
     effort: cat ? (env.THINKING_EFFORT || "").toLowerCase() : "",
     searchProv,

@@ -15,7 +15,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MODEL_PROVIDER_NAMES } from "#lib/model-provider.ts";
-import { modelSummary } from "./model-summary.ts";
+import { PROVIDERS, modelSummary } from "./model-summary.ts";
 import { createTerminalProgress } from "./progress.ts";
 import {
   createTelegramUpdateReporter,
@@ -67,7 +67,12 @@ test("modelSummary uses configured provider values without runtime defaults", ()
 
 // Экран обновления показывает эту строку рядом с версией. Знай он свой набор имён —
 // после опечатки он спокойно назвал бы Ollama, пока агент отказывается стартовать.
+// Сверка идёт в ОБЕ стороны: лишний ключ здесь так же врёт, как недостающий.
 test("modelSummary knows exactly the provider names the runtime accepts", () => {
+  assert.deepEqual(
+    Object.keys(PROVIDERS).sort(),
+    [...MODEL_PROVIDER_NAMES].sort(),
+  );
   for (const name of MODEL_PROVIDER_NAMES) {
     assert.doesNotMatch(
       modelSummary({ MODEL_PROVIDER: name }).line,
