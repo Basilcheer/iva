@@ -58,6 +58,9 @@ t() { if [ "$IVA_LANG" = ru ]; then printf '%s' "$2"; else printf '%s' "$1"; fi;
 # run behind a spinner, so they remain fully readable and interactive.
 INSTALL_LOG="${TMPDIR:-/tmp}/iva-install-$$.log"
 SPINNER_PID=""
+# The stage a failure interrupted, named in the error handler (bootstrap.sh does the same):
+# a late failure is otherwise buried under the npm output of the stages before it.
+CURRENT_STEP="startup"
 spinner_enabled() {
   [ -t 1 ] && [ "${IVA_NO_ANIM:-0}" != 1 ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-}" != dumb ]
 }
@@ -89,6 +92,7 @@ start_spinner() {
 run_stage() {
   local label="$1" success="$2"
   shift 2
+  CURRENT_STEP="$label"
   start_spinner "$label"
   if "$@" >>"$INSTALL_LOG" 2>&1; then
     stop_spinner
@@ -137,19 +141,153 @@ IVA_TREE
   echo
 }
 
+# A re-run over an existing checkout uses the same preservation contract as
+# `iva update`: exact stash OID, backup ref, no git clean and no reset to remote.
+# Declared before the traps, because the exit handler reads them on every path out.
+INSTALL_UPDATE_ACTIVE=false
+INSTALL_COMPLETE=false
+INSTALL_ORIGINAL_HEAD=""
+INSTALL_STASH_OID=""
+INSTALL_BACKUP_REF=""
+INSTALL_ENV_BACKUP=""
+INSTALL_OUTPUT_BACKUP=""
+INSTALL_UNTRACKED_LIST=""
+# Set once the checkout is known to hold the user's own state again — after a clean
+# rollback, or after a finished install. Only then are the stash entry and the backup
+# ref duplicates that may be dropped.
+INSTALL_TREE_RESTORED=false
+
+prepare_install_update() {
+  INSTALL_ORIGINAL_HEAD="$(git -C "$PROJECT_DIR" rev-parse HEAD)"
+  INSTALL_BACKUP_REF="refs/iva/update-backups/$(date -u +%Y%m%dT%H%M%SZ)-$$"
+  git -C "$PROJECT_DIR" update-ref "$INSTALL_BACKUP_REF" "$INSTALL_ORIGINAL_HEAD"
+
+  # The copies live next to the installation, not in /tmp: `iva update` keeps its own
+  # copy of .env in data/update-backups/ for the same reason — a world-readable directory
+  # is no place for the file that holds every key. git ignores data/, so the copies never
+  # reach a stash either.
+  local backups="$PROJECT_DIR/data/update-backups" stamp
+  stamp="$(date -u +%Y%m%dT%H%M%SZ)-$$"
+  if mkdir -p "$backups" 2>/dev/null && chmod 700 "$backups" 2>/dev/null; then
+    INSTALL_UNTRACKED_LIST="$backups/untracked-$stamp.zlist"
+  else
+    backups=""
+    INSTALL_UNTRACKED_LIST="$(mktemp "${TMPDIR:-/tmp}/iva-untracked.XXXXXX")"
+  fi
+  git -C "$PROJECT_DIR" ls-files --others --exclude-standard -z >"$INSTALL_UNTRACKED_LIST"
+  if [ -f "$PROJECT_DIR/.env" ]; then
+    if [ -n "$backups" ]; then
+      INSTALL_ENV_BACKUP="$backups/.env-$stamp"
+      cp -p "$PROJECT_DIR/.env" "$INSTALL_ENV_BACKUP"
+    else
+      INSTALL_ENV_BACKUP="$(mktemp "${TMPDIR:-/tmp}/iva-env.XXXXXX")"
+      cp -p "$PROJECT_DIR/.env" "$INSTALL_ENV_BACKUP"
+    fi
+    chmod 600 "$INSTALL_ENV_BACKUP"
+  fi
+
+  if [ -n "$(git -C "$PROJECT_DIR" status --porcelain=v1 --untracked-files=all)" ]; then
+    git -C "$PROJECT_DIR" stash push --include-untracked --message "iva-install-$(date -u +%Y%m%dT%H%M%SZ)-$$" >>"$INSTALL_LOG" 2>&1
+    INSTALL_STASH_OID="$(git -C "$PROJECT_DIR" rev-parse refs/stash)"
+  fi
+  INSTALL_UPDATE_ACTIVE=true
+}
+
+restore_install_stash() {
+  [ -n "$INSTALL_STASH_OID" ] || return 0
+  git -C "$PROJECT_DIR" stash apply --index "$INSTALL_STASH_OID" >>"$INSTALL_LOG" 2>&1
+}
+
+rollback_install_update() {
+  [ "$INSTALL_UPDATE_ACTIVE" = true ] || return 0
+  INSTALL_UPDATE_ACTIVE=false
+  set +e
+  local restored=true
+  git -C "$PROJECT_DIR" rebase --abort >>"$INSTALL_LOG" 2>&1
+  # This exact reset is rollback to the user's recorded HEAD, never to upstream.
+  git -C "$PROJECT_DIR" reset --hard "$INSTALL_ORIGINAL_HEAD" >>"$INSTALL_LOG" 2>&1 || restored=false
+  if [ -n "$INSTALL_UNTRACKED_LIST" ] && [ -f "$INSTALL_UNTRACKED_LIST" ]; then
+    while IFS= read -r -d '' relative; do
+      rm -f -- "$PROJECT_DIR/$relative"
+    done <"$INSTALL_UNTRACKED_LIST"
+  fi
+  restore_install_stash || restored=false
+  if [ -n "$INSTALL_ENV_BACKUP" ] && [ -f "$INSTALL_ENV_BACKUP" ]; then
+    cp -p "$INSTALL_ENV_BACKUP" "$PROJECT_DIR/.env"
+    chmod 600 "$PROJECT_DIR/.env"
+  fi
+  if [ -n "$INSTALL_OUTPUT_BACKUP" ] && [ -e "$INSTALL_OUTPUT_BACKUP" ]; then
+    rm -rf -- "$PROJECT_DIR/.output"
+    mv "$INSTALL_OUTPUT_BACKUP" "$PROJECT_DIR/.output" && INSTALL_OUTPUT_BACKUP=""
+  fi
+  INSTALL_TREE_RESTORED="$restored"
+  set -e
+}
+
+# Removes what this run created, on success and on failure alike. Called last, so a
+# rollback has already read the copies back into the checkout. The stash entry and the
+# backup ref are dropped only once the checkout holds the user's state again; if the
+# rollback could not finish, they stay and are named, because a recoverable mess beats
+# lost work.
+cleanup_install_artifacts() {
+  set +e
+  [ -z "$INSTALL_ENV_BACKUP" ] || rm -f -- "$INSTALL_ENV_BACKUP"
+  INSTALL_ENV_BACKUP=""
+  [ -z "$INSTALL_UNTRACKED_LIST" ] || rm -f -- "$INSTALL_UNTRACKED_LIST"
+  INSTALL_UNTRACKED_LIST=""
+  [ -z "$INSTALL_OUTPUT_BACKUP" ] || rm -rf -- "$INSTALL_OUTPUT_BACKUP"
+  INSTALL_OUTPUT_BACKUP=""
+  if [ "$INSTALL_TREE_RESTORED" = true ]; then
+    if [ -n "$INSTALL_STASH_OID" ]; then
+      local stash_ref
+      stash_ref="$(git -C "$PROJECT_DIR" stash list --format='%gd %H' | awk -v oid="$INSTALL_STASH_OID" '$2 == oid {print $1; exit}')"
+      [ -z "$stash_ref" ] || git -C "$PROJECT_DIR" stash drop "$stash_ref" >>"$INSTALL_LOG" 2>&1
+      INSTALL_STASH_OID=""
+    fi
+    if [ -n "$INSTALL_BACKUP_REF" ]; then
+      git -C "$PROJECT_DIR" update-ref -d "$INSTALL_BACKUP_REF" >>"$INSTALL_LOG" 2>&1
+      INSTALL_BACKUP_REF=""
+    fi
+  elif [ -n "$INSTALL_STASH_OID" ] || [ -n "$INSTALL_BACKUP_REF" ]; then
+    warn "$(t "Your changes were kept: git stash list, and the commit in $INSTALL_BACKUP_REF" "Ваши изменения сохранены: git stash list и коммит в $INSTALL_BACKUP_REF")"
+  fi
+  set -e
+}
+
+finish_install_update() {
+  [ "$INSTALL_UPDATE_ACTIVE" = true ] || return 0
+  INSTALL_UPDATE_ACTIVE=false
+  # The stash was applied back onto the updated checkout right after the merge.
+  INSTALL_TREE_RESTORED=true
+  cleanup_install_artifacts
+}
+
 # Loud error handler: no more silent exits from set -e.
 # Pulled into a function so it can be temporarily removed/restored around foreign code
 # (nvm normally does `return <non-zero>` internally — without removing the trap that's a false alarm).
+# Restoring and cleaning up is NOT done here: `cmd || die` handles the failure itself and
+# exits, so the ERR trap never sees it. The EXIT trap below is the one path every failure
+# takes, so that is where rollback and temp-file removal live.
 on_err() {
   local rc=$?
   stop_spinner
-  rollback_install_update >/dev/null 2>&1 || true
   echo >&2
   echo "${c_red}✗ $(t "Install aborted (code $rc). Failing command: ${BASH_COMMAND}" "Установка прервалась (код $rc). Упала команда: ${BASH_COMMAND}")${c_reset}" >&2
   echo "${c_yellow}  $(t "Full log:" "Полный лог:") $INSTALL_LOG${c_reset}" >&2
 }
+# The single exit path: `die`, errexit, Ctrl-C and SIGTERM all end up here, so no run
+# leaves a copy of .env, a stash entry or a backup ref behind.
+finalize_install() {
+  local rc=$?
+  stop_spinner
+  if [ "$rc" -ne 0 ] && [ "$INSTALL_COMPLETE" != true ]; then
+    echo "${c_red}✗ $(t "Install stopped during: $CURRENT_STEP" "Установка остановилась на шаге: $CURRENT_STEP")${c_reset}" >&2
+    rollback_install_update
+  fi
+  cleanup_install_artifacts
+}
 trap on_err ERR
-trap 'stop_spinner' EXIT
+trap finalize_install EXIT
 trap 'stop_spinner; exit 130' INT
 trap 'stop_spinner; exit 143' TERM
 
@@ -229,12 +367,37 @@ pick_language   # ← first question: language (default English), before any ins
 echo "  ${c_green}Iva${c_reset} — $(t "your personal long-term-memory agent that just works" "личный агент с долговременной памятью, который просто работает")"
 echo "  ─────────────────────────────────────────────"
 
-# A pending reboot is a dead end, not a warning. needrestart draws its ncurses dialog
-# inside every apt run below — including the ones agent-browser makes on its own, where
-# the environment above cannot reach — and the install stops there forever. Stop now,
-# while the fix is still one command. bootstrap.sh offers this reboot at its end.
+# Where the code is, decided here because the checks below need to know whether this is
+# a first install or a re-run over one that already exists (section 4 uses it too).
+SOURCE="${BASH_SOURCE[0]:-}"
+SCRIPT_DIR=""
+if [ -n "$SOURCE" ] && [ -f "$SOURCE" ]; then
+  SCRIPT_DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
+fi
+INSTALL_EXISTS=false
+if [ -d "$INSTALL_DIR/.git" ] || [ -f "$INSTALL_DIR/.env" ] || [ -d "$INSTALL_DIR/versions" ]; then
+  INSTALL_EXISTS=true
+elif [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/package.json" ] && grep -q '"eve"' "$SCRIPT_DIR/package.json"; then
+  INSTALL_EXISTS=true
+fi
+
+# A pending reboot after a kernel upgrade is a dead end for a first install: needrestart
+# draws its ncurses dialog inside every apt run below — including the ones agent-browser
+# makes on its own, where the environment above cannot reach — and the install stops there
+# forever. Stop now, while the fix is still one command. bootstrap.sh offers this reboot at
+# its end. Over an existing installation this is a warning instead: unattended-upgrades
+# (which bootstrap.sh switches on) leaves the same flag behind for any security update, and
+# a re-run that installs no packages at all must not be refused for days on end.
 if [ -e /var/run/reboot-required ]; then
-  die "$(t "The kernel was updated but the server has not been rebooted, and package installs will hang. Run: sudo reboot — then reconnect and run this installer again." "Ядро обновилось, но сервер не перезагружен — установка пакетов зависнет. Выполните: sudo reboot — потом переподключитесь и запустите установщик снова.")"
+  reboot_kernel=false
+  if grep -q '^linux-' /var/run/reboot-required.pkgs 2>/dev/null; then reboot_kernel=true; fi
+  if [ "$INSTALL_EXISTS" != true ]; then
+    die "$(t "The system was updated but the server has not been rebooted, and package installs will hang. Run: sudo reboot — then reconnect and run this installer again." "Система обновилась, но сервер не перезагружен — установка пакетов зависнет. Выполните: sudo reboot — потом переподключитесь и запустите установщик снова.")"
+  elif [ "$reboot_kernel" = true ]; then
+    warn "$(t "The kernel was updated and the server has not been rebooted. If this run installs packages, it can hang — reboot first (sudo reboot) if it does." "Ядро обновилось, а сервер не перезагружен. Если этот запуск будет ставить пакеты, он может зависнуть — тогда сначала перезагрузитесь (sudo reboot).")"
+  else
+    warn "$(t "A reboot is pending after a system update — installing packages may hang until you run: sudo reboot" "После обновления системы ждёт перезагрузка — установка пакетов может зависнуть, пока не выполните: sudo reboot")"
+  fi
 fi
 
 # root runs directly; otherwise via sudo (cache the password once).
@@ -243,7 +406,16 @@ run_root() { if [ "$(id -u)" -eq 0 ]; then "$@"; else sudo "$@"; fi; }
 # apt through plain run_root would lose DEBIAN_FRONTEND/NEEDRESTART_MODE the moment sudo
 # resets the environment, so pass them through `env` — which runs as root and hands them
 # straight to apt-get. Use this for every apt-get call, never run_root apt-get.
-apt_get() { run_root env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a apt-get "$@"; }
+# The three options are bootstrap.sh's: unattended-upgrades holding the dpkg lock is a
+# wait, not a failure, and a changed config file is a question nobody can answer behind
+# the spinner.
+apt_get() {
+  run_root env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a apt-get \
+    -o DPkg::Lock::Timeout=300 \
+    -o Dpkg::Options::=--force-confdef \
+    -o Dpkg::Options::=--force-confold \
+    "$@"
+}
 
 # ── Swap for weak VPSes ($4 DigitalOcean droplet = 512MB RAM) ──────────────
 # On low RAM without swap, npm install and especially `eve build` (rolldown+nitro+node)
@@ -287,6 +459,20 @@ PM="none"
 if   command -v apt-get >/dev/null 2>&1; then PM="apt"
 elif command -v dnf     >/dev/null 2>&1; then PM="dnf"
 elif command -v brew    >/dev/null 2>&1; then PM="brew"
+fi
+
+# A dpkg left half-way through (a reboot during unattended-upgrade) makes every apt run
+# fail, including the ones agent-browser starts on its own for Chromium's libraries —
+# where the failure is only a warning, so the install would keep going for minutes and
+# die on a later step with the real cause scrolled away. Diagnose only: repairing another
+# tool's package database is the administrator's call, not the installer's.
+if [ "$PM" = "apt" ] && command -v dpkg >/dev/null 2>&1; then
+  CURRENT_STEP="$(t "package system check" "проверка пакетной системы")"
+  dpkg_audit="$(dpkg --audit 2>/dev/null || true)"
+  if [ -n "$dpkg_audit" ]; then
+    echo "$dpkg_audit" >&2
+    die "$(t "The package system is half-way through an interrupted install, so no package can be installed now. Repair it first: sudo dpkg --configure -a — then run this installer again." "Пакетная система осталась в незавершённом состоянии после прерванной установки — поставить пакеты сейчас нельзя. Сначала почините: sudo dpkg --configure -a — потом запустите установщик снова.")"
+  fi
 fi
 
 need_pkgs=()
@@ -388,87 +574,9 @@ fi
 command -v node >/dev/null 2>&1 || die "$(t "Node $NODE_MAJOR_MIN+ failed to install. Install it manually (nvm install $NODE_MAJOR_MIN) and re-run." "Node $NODE_MAJOR_MIN+ не установился. Поставьте вручную (nvm install $NODE_MAJOR_MIN) и перезапустите.")"
 ok "Node $(node -v)"
 
-# A re-run over an existing checkout uses the same preservation contract as
-# `iva update`: exact stash OID, backup ref, no git clean and no reset to remote.
-INSTALL_UPDATE_ACTIVE=false
-INSTALL_ORIGINAL_HEAD=""
-INSTALL_STASH_OID=""
-INSTALL_BACKUP_REF=""
-INSTALL_ENV_BACKUP=""
-INSTALL_OUTPUT_BACKUP=""
-INSTALL_UNTRACKED_LIST=""
-
-prepare_install_update() {
-  INSTALL_ORIGINAL_HEAD="$(git -C "$PROJECT_DIR" rev-parse HEAD)"
-  INSTALL_BACKUP_REF="refs/iva/update-backups/$(date -u +%Y%m%dT%H%M%SZ)-$$"
-  git -C "$PROJECT_DIR" update-ref "$INSTALL_BACKUP_REF" "$INSTALL_ORIGINAL_HEAD"
-
-  INSTALL_UNTRACKED_LIST="$(mktemp "${TMPDIR:-/tmp}/iva-untracked.XXXXXX")"
-  git -C "$PROJECT_DIR" ls-files --others --exclude-standard -z >"$INSTALL_UNTRACKED_LIST"
-  if [ -f "$PROJECT_DIR/.env" ]; then
-    INSTALL_ENV_BACKUP="$(mktemp "${TMPDIR:-/tmp}/iva-env.XXXXXX")"
-    cp -p "$PROJECT_DIR/.env" "$INSTALL_ENV_BACKUP"
-    chmod 600 "$INSTALL_ENV_BACKUP"
-  fi
-
-  if [ -n "$(git -C "$PROJECT_DIR" status --porcelain=v1 --untracked-files=all)" ]; then
-    git -C "$PROJECT_DIR" stash push --include-untracked --message "iva-install-$(date -u +%Y%m%dT%H%M%SZ)-$$" >>"$INSTALL_LOG" 2>&1
-    INSTALL_STASH_OID="$(git -C "$PROJECT_DIR" rev-parse refs/stash)"
-  fi
-  INSTALL_UPDATE_ACTIVE=true
-}
-
-restore_install_stash() {
-  [ -n "$INSTALL_STASH_OID" ] || return 0
-  git -C "$PROJECT_DIR" stash apply --index "$INSTALL_STASH_OID" >>"$INSTALL_LOG" 2>&1
-}
-
-rollback_install_update() {
-  [ "$INSTALL_UPDATE_ACTIVE" = true ] || return 0
-  set +e
-  git -C "$PROJECT_DIR" rebase --abort >>"$INSTALL_LOG" 2>&1
-  # This exact reset is rollback to the user's recorded HEAD, never to upstream.
-  git -C "$PROJECT_DIR" reset --hard "$INSTALL_ORIGINAL_HEAD" >>"$INSTALL_LOG" 2>&1
-  if [ -n "$INSTALL_UNTRACKED_LIST" ] && [ -f "$INSTALL_UNTRACKED_LIST" ]; then
-    while IFS= read -r -d '' relative; do
-      rm -f -- "$PROJECT_DIR/$relative"
-    done <"$INSTALL_UNTRACKED_LIST"
-  fi
-  restore_install_stash
-  if [ -n "$INSTALL_ENV_BACKUP" ] && [ -f "$INSTALL_ENV_BACKUP" ]; then
-    cp -p "$INSTALL_ENV_BACKUP" "$PROJECT_DIR/.env"
-    chmod 600 "$PROJECT_DIR/.env"
-  fi
-  if [ -n "$INSTALL_OUTPUT_BACKUP" ] && [ -e "$INSTALL_OUTPUT_BACKUP" ]; then
-    rm -rf -- "$PROJECT_DIR/.output"
-    mv "$INSTALL_OUTPUT_BACKUP" "$PROJECT_DIR/.output"
-  fi
-  INSTALL_UPDATE_ACTIVE=false
-  set -e
-}
-
-finish_install_update() {
-  [ "$INSTALL_UPDATE_ACTIVE" = true ] || return 0
-  if [ -n "$INSTALL_STASH_OID" ]; then
-    local stash_ref
-    stash_ref="$(git -C "$PROJECT_DIR" stash list --format='%gd %H' | awk -v oid="$INSTALL_STASH_OID" '$2 == oid {print $1; exit}')"
-    [ -z "$stash_ref" ] || git -C "$PROJECT_DIR" stash drop "$stash_ref" >>"$INSTALL_LOG" 2>&1
-  fi
-  git -C "$PROJECT_DIR" update-ref -d "$INSTALL_BACKUP_REF"
-  [ -z "$INSTALL_OUTPUT_BACKUP" ] || rm -rf -- "$INSTALL_OUTPUT_BACKUP"
-  [ -z "$INSTALL_ENV_BACKUP" ] || rm -f -- "$INSTALL_ENV_BACKUP"
-  [ -z "$INSTALL_UNTRACKED_LIST" ] || rm -f -- "$INSTALL_UNTRACKED_LIST"
-  INSTALL_UPDATE_ACTIVE=false
-}
-
 # ─────────────────────────────────────────────────────────────────────────
-# 4. Project code (current directory / update / clone)
+# 4. Project code (current directory / update / clone). SCRIPT_DIR is resolved at the top.
 # ─────────────────────────────────────────────────────────────────────────
-SOURCE="${BASH_SOURCE[0]:-}"
-SCRIPT_DIR=""
-if [ -n "$SOURCE" ] && [ -f "$SOURCE" ]; then
-  SCRIPT_DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
-fi
 if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/package.json" ] && grep -q '"eve"' "$SCRIPT_DIR/package.json"; then
   PROJECT_DIR="$SCRIPT_DIR"
   UPDATE_CHANNEL="$(git -C "$PROJECT_DIR" branch --show-current 2>/dev/null || true)"
@@ -498,6 +606,11 @@ elif [ -d "$INSTALL_DIR/.git" ]; then
     rollback_install_update
     die "$(t "Couldn't safely combine the update; the previous checkout was restored." "Не удалось безопасно объединить обновление; прежнее состояние восстановлено.")"
   fi
+elif [ -d "$INSTALL_DIR/versions" ]; then
+  # A versioned installation has no checkout to update and no room for a clone: the
+  # code lives in $INSTALL_DIR/versions/<version> behind the `current` symlink, and
+  # only `iva update` may add one. Same refusal as repair.sh.
+  die "$(t "$INSTALL_DIR already runs versioned installs: update it with 'iva update', or return to the previous version with 'iva rollback'." "$INSTALL_DIR уже работает на версионной раскладке: обновляйте командой 'iva update' или вернитесь на прошлую версию через 'iva rollback'.")"
 else
   run_stage "$(t "Cloning Iva" "Клонирую Iva")" "$(t "Iva downloaded" "Iva загружена")" \
     git clone --branch "$BRANCH" "$REPO_URL" "$INSTALL_DIR"
@@ -506,12 +619,42 @@ fi
 cd "$PROJECT_DIR"
 
 # ─────────────────────────────────────────────────────────────────────────
-# 5. npm dependencies
+# 5. npm dependencies. Detect-then-skip: a re-run after a late failure must not
+#    delete and reinstall a node_modules that already matches the lockfile.
 # ─────────────────────────────────────────────────────────────────────────
-if [ -f package-lock.json ]; then
-  run_stage "$(t "Installing dependencies" "Ставлю зависимости")" "$(t "Dependencies installed" "Зависимости установлены")" npm ci
-else
-  run_stage "$(t "Installing dependencies" "Ставлю зависимости")" "$(t "Dependencies installed" "Зависимости установлены")" npm install
+# npm records what it installed in node_modules/.package-lock.json, so the answer comes
+# from npm's own bookkeeping, not from a marker of ours: every entry it lists must be in
+# package-lock.json at the same version, and every entry the lockfile requires on this
+# platform must be there. Optional and os/cpu-specific packages are absent by design.
+npm_deps_match_lock() {
+  [ -d node_modules ] || return 1
+  [ -f package-lock.json ] || return 1
+  [ -f node_modules/.package-lock.json ] || return 1
+  node -e 'const fs=require("fs");const j=p=>JSON.parse(fs.readFileSync(p,"utf8"));const lock=j("package-lock.json"),have=j("node_modules/.package-lock.json");const a=lock.packages||{},b=have.packages||{};if(!Object.keys(b).length)process.exit(1);for(const k of Object.keys(b)){if(!k)continue;if(!a[k]||a[k].version!==b[k].version)process.exit(1)}for(const k of Object.keys(a)){if(!k)continue;const e=a[k];if(e.optional||e.devOptional||e.os||e.cpu)continue;if(!b[k])process.exit(1)}' \
+    >/dev/null 2>&1
+}
+CURRENT_STEP="$(t "dependencies" "зависимости")"
+INSTALL_DEPS_REUSED=false
+if npm_deps_match_lock; then
+  # The lockfile says nothing about patches/, which npm's postinstall hook applies on top
+  # of the installed tree, so re-apply them: it is the one thing a skipped `npm ci` would
+  # leave stale, and it takes under a second. The binary is called the way the hook calls
+  # it — straight out of node_modules — so nothing here can reach for the registry.
+  if [ -d patches ] && [ -x node_modules/.bin/patch-package ]; then
+    if node_modules/.bin/patch-package >>"$INSTALL_LOG" 2>&1; then INSTALL_DEPS_REUSED=true; fi
+  else
+    INSTALL_DEPS_REUSED=true
+  fi
+  if [ "$INSTALL_DEPS_REUSED" = true ]; then
+    ok "$(t "Dependencies already match package-lock.json" "Зависимости уже соответствуют package-lock.json")"
+  fi
+fi
+if [ "$INSTALL_DEPS_REUSED" != true ]; then
+  if [ -f package-lock.json ]; then
+    run_stage "$(t "Installing dependencies" "Ставлю зависимости")" "$(t "Dependencies installed" "Зависимости установлены")" npm ci
+  else
+    run_stage "$(t "Installing dependencies" "Ставлю зависимости")" "$(t "Dependencies installed" "Зависимости установлены")" npm install
+  fi
 fi
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -520,39 +663,52 @@ fi
 # The binary installs into npm-global; the path is needed here and in the service PATH (below).
 NPM_GLOBAL_BIN="$(npm prefix -g 2>/dev/null)/bin"
 export PATH="$NPM_GLOBAL_BIN:$PATH"
-echo "  ${c_yellow}$(t "Chromium and its system libraries may take 1–3 minutes." "Chromium и системные библиотеки могут устанавливаться 1–3 минуты.")${c_reset}"
-# Refresh the sudo cache ahead of time (a visible prompt here, not a hidden one mid-install).
-if [ "$(id -u)" -ne 0 ] && command -v sudo >/dev/null 2>&1; then sudo -v 2>/dev/null || true; fi
-if run_stage "$(t "Installing agent-browser" "Ставлю agent-browser")" "$(t "agent-browser installed" "agent-browser установлен")" npm i -g agent-browser; then
-  run_stage "$(t "Downloading Chromium" "Скачиваю Chromium")" "$(t "Chromium ready" "Chromium готов")" agent-browser install --with-deps \
-    || warn "$(t "Finish later: agent-browser install --with-deps" "Завершите позже: agent-browser install --with-deps")"
-  # Chrome won't start on Ubuntu 23.10+/24.04: the kernel forbids unprivileged user
-  # namespaces (AppArmor) → "No usable sandbox". On Linux, enable --no-sandbox by
-  # default for all agent-browser calls (idempotent, without clobbering an existing config).
-  if [ "$(uname -s)" = "Linux" ]; then
-    node -e 'const fs=require("fs"),os=require("os"),p=require("path");const d=p.join(os.homedir(),".agent-browser"),f=p.join(d,"config.json");fs.mkdirSync(d,{recursive:true});let c={};try{c=JSON.parse(fs.readFileSync(f,"utf8"))}catch{}const w="--no-sandbox";const cur=typeof c.args=="string"?c.args:Array.isArray(c.args)?c.args.join(","):"";if(!cur.split(/[,\n]/).map(s=>s.trim()).filter(Boolean).includes(w)){c.args=cur?cur+","+w:w;fs.writeFileSync(f,JSON.stringify(c,null,2)+"\n")}' \
-      2>/dev/null || warn "$(t "couldn't configure ~/.agent-browser/config.json — add \"args\": \"--no-sandbox\" manually" "не настроил ~/.agent-browser/config.json — добавь \"args\": \"--no-sandbox\" вручную")"
-  fi
-  # A real launch check: doctor ignores config args and falsely complains about the sandbox.
-  if agent-browser open about:blank >/dev/null 2>&1; then
-    agent-browser close --all >/dev/null 2>&1 || true
-    ok "$(t "agent-browser ready" "agent-browser готов")"
-  else
-    warn "$(t "agent-browser installed but Chrome didn't start — check later: agent-browser open about:blank" "agent-browser поставлен, но Chrome не запустился — проверьте позже: agent-browser open about:blank")"
-  fi
+CURRENT_STEP="agent-browser"
+# The launch check first, not after the install: it is the same proof the install path
+# ends with, and passing it means the binary and Chromium are both there. Downloading
+# Chromium again is the longest stage of the whole script, so it has to be earned.
+if command -v agent-browser >/dev/null 2>&1 && agent-browser open about:blank >/dev/null 2>&1; then
+  agent-browser close --all >/dev/null 2>&1 || true
+  ok "$(t "agent-browser already installed" "agent-browser уже установлен")"
 else
-  warn "$(t "couldn't install agent-browser — browser tasks unavailable, everything else works" "не удалось поставить agent-browser — браузерные задачи недоступны, остальное работает")"
+  echo "  ${c_yellow}$(t "Chromium and its system libraries may take 1–3 minutes." "Chromium и системные библиотеки могут устанавливаться 1–3 минуты.")${c_reset}"
+  # Refresh the sudo cache ahead of time (a visible prompt here, not a hidden one mid-install).
+  if [ "$(id -u)" -ne 0 ] && command -v sudo >/dev/null 2>&1; then sudo -v 2>/dev/null || true; fi
+  if run_stage "$(t "Installing agent-browser" "Ставлю agent-browser")" "$(t "agent-browser installed" "agent-browser установлен")" npm i -g agent-browser; then
+    run_stage "$(t "Downloading Chromium" "Скачиваю Chromium")" "$(t "Chromium ready" "Chromium готов")" agent-browser install --with-deps \
+      || warn "$(t "Finish later: agent-browser install --with-deps" "Завершите позже: agent-browser install --with-deps")"
+    # Chrome won't start on Ubuntu 23.10+/24.04: the kernel forbids unprivileged user
+    # namespaces (AppArmor) → "No usable sandbox". On Linux, enable --no-sandbox by
+    # default for all agent-browser calls (idempotent, without clobbering an existing config).
+    if [ "$(uname -s)" = "Linux" ]; then
+      node -e 'const fs=require("fs"),os=require("os"),p=require("path");const d=p.join(os.homedir(),".agent-browser"),f=p.join(d,"config.json");fs.mkdirSync(d,{recursive:true});let c={};try{c=JSON.parse(fs.readFileSync(f,"utf8"))}catch{}const w="--no-sandbox";const cur=typeof c.args=="string"?c.args:Array.isArray(c.args)?c.args.join(","):"";if(!cur.split(/[,\n]/).map(s=>s.trim()).filter(Boolean).includes(w)){c.args=cur?cur+","+w:w;fs.writeFileSync(f,JSON.stringify(c,null,2)+"\n")}' \
+        2>/dev/null || warn "$(t "couldn't configure ~/.agent-browser/config.json — add \"args\": \"--no-sandbox\" manually" "не настроил ~/.agent-browser/config.json — добавь \"args\": \"--no-sandbox\" вручную")"
+    fi
+    # A real launch check: doctor ignores config args and falsely complains about the sandbox.
+    if agent-browser open about:blank >/dev/null 2>&1; then
+      agent-browser close --all >/dev/null 2>&1 || true
+      ok "$(t "agent-browser ready" "agent-browser готов")"
+    else
+      warn "$(t "agent-browser installed but Chrome didn't start — check later: agent-browser open about:blank" "agent-browser поставлен, но Chrome не запустился — проверьте позже: agent-browser open about:blank")"
+    fi
+  else
+    warn "$(t "couldn't install agent-browser — browser tasks unavailable, everything else works" "не удалось поставить agent-browser — браузерные задачи недоступны, остальное работает")"
+  fi
 fi
 
 # ─────────────────────────────────────────────────────────────────────────
 # 5c. Google Workspace CLI (`gws`): Gmail / Calendar / Drive / Sheets / Docs
 # ─────────────────────────────────────────────────────────────────────────
-# Idempotent: `npm i -g …@latest` installs on a fresh box and upgrades on re-run
-# (install.sh doubles as the updater; `iva update` refreshes it too). Non-fatal —
-# Google-service tasks are optional. Binary lands in npm-global (already on PATH).
-# Auth is per-user and interactive — the bot walks the user through it in chat
-# (agent skill `google-workspace`); nothing to configure here.
-if run_stage "$(t "Installing Google Workspace CLI" "Ставлю Google Workspace CLI")" "$(t "gws installed" "gws установлен")" npm i -g @googleworkspace/cli@latest && command -v gws >/dev/null 2>&1; then
+# Installed once and left alone: an installed `gws` is kept current by `iva update`
+# (scripts/cli/update.ts runs the same global install), so re-running the installer after
+# a failure has no reason to pay for it again. Non-fatal — Google-service tasks are
+# optional. Binary lands in npm-global (already on PATH). Auth is per-user and
+# interactive — the bot walks the user through it in chat (agent skill
+# `google-workspace`); nothing to configure here.
+CURRENT_STEP="gws"
+if command -v gws >/dev/null 2>&1; then
+  ok "$(t "gws already installed" "gws уже установлен")"
+elif run_stage "$(t "Installing Google Workspace CLI" "Ставлю Google Workspace CLI")" "$(t "gws installed" "gws установлен")" npm i -g @googleworkspace/cli@latest && command -v gws >/dev/null 2>&1; then
   ok "$(t "gws ready — connect Google later: message the bot \"connect Google\"" "gws готов — Google подключишь позже: напиши боту «подключи Google»")"
 else
   warn "$(t "couldn't install gws — Google-service tasks unavailable, everything else works (retry: npm i -g @googleworkspace/cli)" "не удалось поставить gws — задачи с Google-сервисами недоступны, остальное работает (повторить: npm i -g @googleworkspace/cli)")"
@@ -573,13 +729,42 @@ else
 fi
 
 # ─────────────────────────────────────────────────────────────────────────
-# 7. Build
+# 7. Build. Detect-then-skip: the stamp inside .output says which source state this
+#    exact output was built from, by this installer.
 # ─────────────────────────────────────────────────────────────────────────
-if [ "$INSTALL_UPDATE_ACTIVE" = true ] && [ -e .output ]; then
-  INSTALL_OUTPUT_BACKUP="$PROJECT_DIR/.output.iva-install-backup-$$"
-  mv .output "$INSTALL_OUTPUT_BACKUP"
+# The stamp lives inside .output on purpose. `npm run build` (scripts/build.ts) replaces
+# the whole directory with one it built itself — custom layer included — so its output
+# never carries this stamp, and the installer rebuilds instead of adopting an output it
+# did not produce. Inputs: the commit, every tracked edit on top of it, the set of
+# untracked paths, and .env, which the build reads. Editing an already-untracked file in
+# place between two runs is the one change this does not see.
+BUILD_STAMP=".output/.iva-install-build"
+install_build_fingerprint() {
+  {
+    git -C "$PROJECT_DIR" rev-parse HEAD 2>/dev/null || echo "no-head"
+    git -C "$PROJECT_DIR" status --porcelain=v1 --untracked-files=all 2>/dev/null || true
+    git -C "$PROJECT_DIR" diff HEAD --binary 2>/dev/null || true
+    if [ -f "$PROJECT_DIR/.env" ]; then
+      # Never fatal: pipefail would turn an unreadable file into a failed install, and an
+      # answer that cannot be reproduced is exactly the one that must not skip the build.
+      git hash-object -- "$PROJECT_DIR/.env" 2>/dev/null || echo "unreadable-env-$$"
+    else
+      echo "no-env"
+    fi
+  } | git hash-object --stdin
+}
+CURRENT_STEP="$(t "build" "сборка")"
+BUILD_FINGERPRINT="$(install_build_fingerprint)"
+if [ -f "$BUILD_STAMP" ] && [ "$(cat "$BUILD_STAMP")" = "$BUILD_FINGERPRINT" ]; then
+  ok "$(t "Build is current — reusing .output" "Сборка актуальна — использую готовый .output")"
+else
+  if [ "$INSTALL_UPDATE_ACTIVE" = true ] && [ -e .output ]; then
+    INSTALL_OUTPUT_BACKUP="$PROJECT_DIR/.output.iva-install-backup-$$"
+    mv .output "$INSTALL_OUTPUT_BACKUP"
+  fi
+  run_stage "$(t "Building Iva" "Собираю Iva")" "$(t "Build ready → .output" "Сборка готова → .output")" npm exec -- eve build
+  if [ -d .output ]; then printf '%s\n' "$BUILD_FINGERPRINT" >"$BUILD_STAMP"; fi
 fi
-run_stage "$(t "Building Iva" "Собираю Iva")" "$(t "Build ready → .output" "Сборка готова → .output")" npm exec -- eve build
 
 # ─────────────────────────────────────────────────────────────────────────
 # 8. Live vault: a SEPARATE private git repo (memory + backup + Obsidian)
@@ -638,8 +823,14 @@ esac
 if ! command -v systemctl >/dev/null 2>&1; then
   : # not Linux/systemd — skip silently
 elif [ ! -f .env ]; then
-  warn "$(t "No .env — not setting up autostart. First: npm run setup, then re-run install.sh." "Нет .env — автозапуск не настраиваю. Сначала: npm run setup, потом перезапустите install.sh.")"
+  warn "$(t "No .env — not setting up autostart. First: cd $PROJECT_DIR && npm run setup, then run this installer again — it finishes in seconds." "Нет .env — автозапуск не настраиваю. Сначала: cd $PROJECT_DIR && npm run setup, потом запустите установщик снова — он завершится за секунды.")"
 elif prompt_yes_no "$(t "Set up autostart via systemd (service + watchdog timers)?" "Завести автозапуск через systemd (сервис + сторожевые таймеры)?")" yes; then
+  CURRENT_STEP="$(t "systemd units" "systemd-юниты")"
+  # Lingering first: without it the user's systemd bus only exists while a login session
+  # does, and `systemctl --user enable --now` below is exactly the call that fails with
+  # "Failed to connect to bus" on a box nobody is logged into.
+  loginctl enable-linger "${USER:-$(id -un)}" >/dev/null 2>&1 \
+    || warn "$(t "couldn't enable linger (the service won't start before login)" "не удалось включить linger (сервис не стартует до логина)")"
   # Delegate writing the units to the iva CLI — the single source of truth is scripts/cli/systemd.ts.
   step "$(t "Installing systemd units (via the iva CLI)…" "Ставлю systemd-юниты (через iva CLI)…")"
   node "$PROJECT_DIR/bin/iva.mjs" _install-units || die "$(t "couldn't write the systemd units" "не удалось записать systemd-юниты")"
@@ -647,7 +838,6 @@ elif prompt_yes_no "$(t "Set up autostart via systemd (service + watchdog timers
     || die "$(t "couldn't enable and start the systemd units; follow the journal hint above" "не удалось включить и запустить systemd-юниты; проверьте подсказку journal выше")"
   ok "$(t "Bot enabled and online" "Бот включён и на связи")"
   ok "$(t "Background timers enabled and active: systemctl --user list-timers" "Фоновые таймеры включены и активны: systemctl --user list-timers")"
-  loginctl enable-linger "$USER" >/dev/null 2>&1 || warn "$(t "couldn't enable linger (the service won't start before login)" "не удалось включить linger (сервис не стартует до логина)")"
   ok "$(t "Service started: systemctl --user status iva" "Сервис запущен: systemctl --user status iva")"
 
   # Instant confirmation in Telegram (direct Bot API — doesn't depend on the server).
@@ -668,6 +858,7 @@ fi
 git -C "$PROJECT_DIR" config --local iva.updateBranch "$UPDATE_CHANNEL"
 
 finish_install_update
+INSTALL_COMPLETE=true
 
 # ─────────────────────────────────────────────────────────────────────────
 # 10. Final
@@ -678,8 +869,11 @@ echo "${c_green}${c_bold}│            $(t "✓ Installation complete   " "✓ 
 echo "${c_green}${c_bold}└──────────────────────────────────────────┘${c_reset}"
 echo
 if [ "$SETUP_DONE" != true ]; then
+  # The installer, not `npm run build && iva restart`: a restart writes the units but
+  # never enables them and never turns lingering on, so that path ends with a bot that
+  # dies at logout. Re-running is cheap now — every finished stage is skipped.
   echo "  ${c_yellow}${c_bold}$(t "Configure the keys first:" "Сначала настройте ключи:")${c_reset}  cd $PROJECT_DIR && npm run setup"
-  echo "  $(t "Then rebuild and start:" "Затем пересоберите и запустите:") npm run build && iva restart"
+  echo "  $(t "Then finish the install (seconds — it reuses everything already done):" "Затем завершите установку (секунды — всё готовое переиспользуется):") cd $PROJECT_DIR && bash install.sh"
   echo
 fi
 echo "  ${c_bold}$(t "Commands (${c_green}iva${c_reset}${c_bold} — from anywhere):" "Команды (${c_green}iva${c_reset}${c_bold} — из любого места):")${c_reset}"
