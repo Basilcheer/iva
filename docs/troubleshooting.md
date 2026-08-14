@@ -55,6 +55,8 @@ journalctl --user -u iva.service -n 20 --no-pager
 
 `iva doctor` prints the same line, and the bridge is a separate service, so `/menu` → 📊 Status still answers and shows the provider as `invalid (ollmaa)`. Fix it with `iva config`, with the `/model` wizard in Telegram, or by hand — then `iva restart`. Removing the variable altogether is not a typo: that still means `ollama`.
 
+One transitional case: `iva update` refuses this configuration up front and says so, but the first half of any update is executed by the code you already have. An installation that was already broken when the check shipped therefore gets one round of `Couldn't build Iva … Retry: /update` before the new updater is in place. Fix `MODEL_PROVIDER` first (`iva config`, or edit `.env`), then run `iva update` again — from then on the refusal is immediate and names the value.
+
 ### Voice note over 20MB ignored
 
 Cause: Telegram's Bot API download cap ([providers.md](providers.md)) — the bridge never receives the audio. Split before sending:

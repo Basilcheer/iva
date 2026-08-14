@@ -13,7 +13,7 @@ const EXPECTED_INVENTORY_SHA256 =
   "0e0668f9a95b555ab606a532ada66e1d345e4eff5b849c2eb479d788de9feb9b";
 
 // Node's native include globs filter loaded modules; they do not load untouched files.
-// This test pins the exact production path inventory and a separately measured 26-path
+// This test pins the exact production path inventory and a separately measured 25-path
 // blind-spot snapshot. It does not determine what the current import graph loads, claim
 // that the other paths are reported, or notice import-graph changes without path changes.
 // Measured again for this inventory: the web inbound-gate round added `agent/lib/web-gate.ts`
@@ -25,17 +25,17 @@ const EXPECTED_INVENTORY_SHA256 =
 // the root `agent/sandbox.ts` it re-exports - no test loads either - so the blind spot is 26.
 // The notice policy module `scripts/lib/notice-policy.ts` and the `/menu` screen that switches
 // the reports, `scripts/lib/menu/notices.ts`, came next - both loaded by their own tests and
-// reported, so the blind spot stays at 26. The provider resolver `agent/lib/model-provider.ts`
-// came after them: its own test loads it in process and it is reported, while the hook that
-// now imports it, `agent/hooks/usage.ts`, is only loaded in a spawned process - so the blind
-// spot stays at 26 and keeps the hook.
+// reported, so the blind spot stayed at 26. The provider resolver `agent/lib/model-provider.ts`
+// came after them, reported at 100% by its own test. Its integration test also settled a
+// standing claim about `agent/hooks/usage.ts`: a spawned child inherits NODE_V8_COVERAGE, so
+// the hook it imports is measured like any other file - re-measured at 82% lines here, which
+// takes it off this list and puts the blind spot at 25.
 const MEASURED_UNREPORTED_BY_CATEGORY = {
   frameworkBoundaries: [
     "agent/agent.ts",
     "agent/channels/eve.ts",
     "agent/connections/telegram-userbot.ts",
     "agent/hooks/transcript.ts",
-    "agent/hooks/usage.ts",
     "agent/instructions/05-language.ts",
     "agent/instructions/20-core.ts",
     "agent/instructions/25-persona.ts",
@@ -119,7 +119,7 @@ function assertProductionPathInventory(
   const measuredUnreported = Object.values(MEASURED_UNREPORTED_BY_CATEGORY)
     .flat()
     .sort();
-  assert.equal(measuredUnreported.length, 26);
+  assert.equal(measuredUnreported.length, 25);
   assert.equal(new Set(measuredUnreported).size, measuredUnreported.length);
   assert.deepEqual(
     measuredUnreported.filter((path) => !productionFiles.includes(path)),
