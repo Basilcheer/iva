@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import {
+  chmodSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -405,5 +408,102 @@ void test("a pending reboot counts as a kernel one exactly when a linux package 
   assert.equal(
     shellPredicate("reboot_needs_kernel", body, join(dir, "absent.pkgs")),
     false,
+  );
+});
+
+// ── The copy of .env ───────────────────────────────────────────────────────
+// The file holds every key the installation has. What matters is not the mode it ends up
+// with but the mode it has while it is being written, and that a copy nobody finished can
+// never replace one that was.
+
+/** Runs the real copy against a source that only produces bytes when told to. */
+function copyingEnv(dir: string, destination: string) {
+  const source = join(dir, ".env");
+  execFileSync("mkfifo", [source]);
+  chmodSync(source, 0o644);
+  const child = spawn(
+    "bash",
+    [
+      "-c",
+      `set -Eeuo pipefail\nPROJECT_DIR="$1"\n${shellFunction("copy_env_private")}\ncopy_env_private "$2"`,
+      "copy",
+      dir,
+      destination,
+    ],
+    { stdio: "ignore" },
+  );
+  return {
+    child,
+    /** Unblocks the copy by writing the file's contents into the pipe. */
+    write: (text: string) => writeFileSync(source, text),
+    done: new Promise<number>((resolve) =>
+      child.on("close", (code) => resolve(code ?? 1)),
+    ),
+  };
+}
+
+async function until(condition: () => boolean, what: string): Promise<void> {
+  for (let waited = 0; waited < 10000; waited += 20) {
+    if (condition()) return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  assert.fail(`timed out waiting for ${what}`);
+}
+
+void test("the copy of .env is private before it holds anything", async (t) => {
+  const dir = workspace(t);
+  const home = join(dir, "backups");
+  mkdirSync(home, { recursive: true });
+  const destination = join(home, ".env-copy");
+
+  const copy = copyingEnv(dir, destination);
+  t.after(() => copy.child.kill("SIGKILL"));
+
+  // The first thing that appears where the copy is being made - whatever the copy calls it
+  // - already has to be private, because the secret is written into it next.
+  await until(() => readdirSync(home).length > 0, "the copy to appear");
+  const [name] = readdirSync(home);
+  const early = statSync(join(home, name));
+  assert.equal(
+    (early.mode & 0o777).toString(8),
+    "600",
+    `the copy was created as ${(early.mode & 0o777).toString(8)} and only tightened later`,
+  );
+  assert.equal(early.size, 0, "content was written before the mode was set");
+
+  copy.write("TELEGRAM_BOT_TOKEN=secret\n");
+  assert.equal(await copy.done, 0);
+  assert.equal(
+    readFileSync(destination, "utf8"),
+    "TELEGRAM_BOT_TOKEN=secret\n",
+  );
+  assert.equal((statSync(destination).mode & 0o777).toString(8), "600");
+});
+
+void test("a copy of .env that was never finished cannot replace a whole one", async (t) => {
+  const dir = workspace(t);
+  const home = join(dir, "backups");
+  mkdirSync(home, { recursive: true });
+  const destination = join(home, ".env-copy");
+  // The copy from a run that did finish, which this one must not damage.
+  writeFileSync(destination, "TELEGRAM_BOT_TOKEN=whole\n", { mode: 0o600 });
+
+  const copy = copyingEnv(dir, destination);
+  // Always killed, whatever the copy did with the pipe: a child still holding it open
+  // would keep the whole test process alive.
+  t.after(() => copy.child.kill("SIGKILL"));
+  await until(
+    () => readdirSync(home).length > 1,
+    "the copy to start being written",
+  );
+  copy.child.kill("SIGKILL");
+  await copy.done;
+
+  // Killed mid-write, and the good copy is untouched: the name it is under is only ever
+  // taken by a file that is complete.
+  assert.equal(
+    readFileSync(destination, "utf8"),
+    "TELEGRAM_BOT_TOKEN=whole\n",
+    "an unfinished copy overwrote the copy that was whole",
   );
 });

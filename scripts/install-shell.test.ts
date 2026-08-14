@@ -56,6 +56,11 @@ case "$1" in
       *"eve build"*)
         # The build is where a weak VPS dies: the OOM killer takes it (137), and where the
         # test needs a run to still be alive, it waits here after saying so.
+        if [ -n "$IVA_TEST_FREEZE_LOG" ]; then
+          # The log every rollback command redirects into stops being writable while the
+          # run is still going - a revoked mount, a full disk, another hand on the box.
+          chmod 000 "$TMPDIR"/iva-install-*.log
+        fi
         if [ -n "$IVA_TEST_BUILD_EXIT" ]; then
           # A real build clears the output directory before it writes into it, which is
           # why a build that dies half-way takes the working installation with it.
@@ -147,6 +152,8 @@ type RunOptions = {
   readonly env?: Readonly<Record<string, string>>;
   /** The installer to run, when it must be one sitting inside the installation. */
   readonly script?: string;
+  /** Run it with no stderr at all, the way a terminal that went away leaves it. */
+  readonly closedStderr?: boolean;
 };
 
 type World = {
@@ -188,7 +195,24 @@ const TOOLS = realpathSync(mkdtempSync(join(tmpdir(), "iva-install-tools-")));
 const RECORDER_PATH = join(TOOLS, "recorder");
 writeFileSync(RECORDER_PATH, RECORDER);
 chmodSync(RECORDER_PATH, 0o755);
-for (const name of ["sudo", "systemctl", "loginctl", "uv"])
+// Everything the installer may reach for, stubbed by name. The package layer is here on
+// purpose: on Ubuntu - the platform this script is written for - /usr/bin carries a real
+// apt-get and a real dpkg, and a missing `gh` sends the installer to cli.github.com over
+// the network. A test suite must not run either.
+for (const name of [
+  "sudo",
+  "systemctl",
+  "loginctl",
+  "uv",
+  "apt-get",
+  "dpkg",
+  "curl",
+  "gh",
+  "python3",
+  "ffmpeg",
+  "pandoc",
+  "pdftotext",
+])
   symlinkSync(RECORDER_PATH, join(TOOLS, name));
 writeFileSync(join(TOOLS, "npm"), NPM);
 chmodSync(join(TOOLS, "npm"), 0o755);
@@ -302,16 +326,22 @@ function createWorld(t: TestContext, options: { env?: boolean } = {}): World {
     git,
     calls: (path = defaultCalls) =>
       existsSync(path) ? readFileSync(path, "utf8") : "",
-    run: (runOptions = {}) =>
-      spawnSync(
-        "bash",
-        [runOptions.script ?? join(dir, "install.sh"), "--non-interactive"],
-        {
-          cwd: dir,
-          encoding: "utf8",
-          env: environment(runOptions),
-        },
-      ),
+    run: (runOptions = {}) => {
+      const installer = runOptions.script ?? join(dir, "install.sh");
+      const argv = runOptions.closedStderr
+        ? [
+            "-c",
+            'exec 2>&-; exec bash "$0" "$@"',
+            installer,
+            "--non-interactive",
+          ]
+        : [installer, "--non-interactive"];
+      return spawnSync("bash", argv, {
+        cwd: dir,
+        encoding: "utf8",
+        env: environment(runOptions),
+      });
+    },
     runAsync: (runOptions = {}) => {
       const child = spawn(
         "bash",
@@ -494,6 +524,65 @@ void test("a build that could not be put back is kept and named", (t) => {
   assert.match(said, new RegExp(kept[0], "u"));
 });
 
+void test("a log that stops being writable does not stop the undo", (t) => {
+  if (process.getuid?.() === 0) {
+    t.skip("root writes into a read-only directory, so nothing fails here");
+    return;
+  }
+  const world = createWorld(t);
+  writeFileSync(join(world.install, "README.md"), "# fixture\nlocal edit\n");
+  mkdirSync(join(world.install, ".output"), { recursive: true });
+  writeFileSync(join(world.install, ".output/marker"), "previous build\n");
+
+  // Every command of the rollback redirects into the install log. With the log gone, a
+  // redirect fails before its command runs - and the undo would be skipped in silence.
+  const result = world.run({
+    env: { IVA_TEST_FREEZE_LOG: "1", IVA_TEST_BUILD_EXIT: "137" },
+  });
+  for (const name of readdirSync(world.tmp))
+    chmodSync(join(world.tmp, name), 0o600);
+
+  assert.notEqual(result.status, 0, result.stdout + result.stderr);
+  assert.equal(
+    readFileSync(join(world.install, ".output/marker"), "utf8"),
+    "previous build\n",
+    "the previous build was not restored once the log went away",
+  );
+  assert.deepEqual(outputBackups(world.install), []);
+  assert.equal(
+    readFileSync(join(world.install, "README.md"), "utf8"),
+    "# fixture\nlocal edit\n",
+  );
+  assert.equal(world.git("stash", "list"), "");
+  assert.equal(world.git("for-each-ref", "refs/iva/update-backups"), "");
+});
+
+void test("a terminal that went away does not take the undo with it", (t) => {
+  const world = createWorld(t);
+  writeFileSync(join(world.install, "README.md"), "# fixture\nlocal edit\n");
+  mkdirSync(join(world.install, ".output"), { recursive: true });
+  writeFileSync(join(world.install, ".output/marker"), "previous build\n");
+
+  // No stderr at all, which is what a dropped session leaves behind: the first thing the
+  // exit handler does is say where it stopped, and that write fails. Under errexit that
+  // ends the handler before it restores anything - and rewrites the exit code on the way.
+  const result = world.run({
+    closedStderr: true,
+    env: { IVA_TEST_BUILD_EXIT: "137" },
+  });
+
+  assert.equal(
+    readFileSync(join(world.install, ".output/marker"), "utf8"),
+    "previous build\n",
+    "the undo stopped at the line it could not print",
+  );
+  assert.deepEqual(outputBackups(world.install), []);
+  assert.equal(world.git("stash", "list"), "");
+  assert.equal(world.git("for-each-ref", "refs/iva/update-backups"), "");
+  // The code the build died with, not one invented by a handler that fell over.
+  assert.equal(result.status, 137);
+});
+
 void test("a failure is reported once, with the stage that failed", (t) => {
   const world = createWorld(t);
   writeFileSync(join(world.install, "README.md"), "# fixture\nlocal edit\n");
@@ -549,13 +638,25 @@ void test("a second installer in the same checkout is refused, a dead one is not
   const refused = world.run();
   assert.notEqual(refused.status, 0, refused.stdout + refused.stderr);
   assert.match(refused.stderr, new RegExp(`pid ${process.pid}`, "u"));
+  // The path is part of the answer: a pid the system has since reused is a dead end
+  // without it.
+  assert.match(refused.stderr, /data\/install\.lock/u);
   assert.doesNotMatch(world.calls(), /npm ci/u);
   // A refused run touches nothing at all.
   assert.equal(world.git("stash", "list"), "");
   assert.deepEqual(backups(world.install), []);
 
-  // The same lock left by a run that no longer exists is taken over, not honoured forever.
-  writeFileSync(join(lock, "pid"), "999999\n");
+  // A lock with no owner written into it yet belongs to an installer that is a moment from
+  // writing one - taking it over would run two of them at once.
+  rmSync(join(lock, "pid"));
+  const starting = world.run();
+  assert.notEqual(starting.status, 0, starting.stdout + starting.stderr);
+  assert.match(starting.stderr, /starting/u);
+
+  // The same lock left by a run that really is gone is taken over, not honoured forever.
+  const dead = spawnSync(process.execPath, ["-e", "0"]);
+  assert.equal(dead.status, 0);
+  writeFileSync(join(lock, "pid"), `${dead.pid}\n`);
   const taken = world.run({ calls: join(world.dir, "second.log") });
   assert.equal(taken.status, 0, taken.stdout + taken.stderr);
   assert.equal(
@@ -686,9 +787,9 @@ void test("a failure while preserving the checkout keeps the files it was preser
   const world = createWorld(t);
   writeFileSync(join(world.install, "README.md"), "# fixture\nlocal edit\n");
   writeFileSync(join(world.install, "mine.txt"), "mine\n");
-  // The window between writing the backup ref and taking the stash: here the copy of .env
-  // cannot be made, and at that moment the untracked files are recorded but not saved
-  // anywhere.
+  // The copy of .env is the first thing a run saves, and it cannot be made: the failure
+  // lands before anything else has been written down, while the user's files sit in the
+  // tree with nothing holding a second copy of them.
   chmodSync(join(world.install, ".env"), 0o000);
 
   const result = world.run();
@@ -707,6 +808,67 @@ void test("a failure while preserving the checkout keeps the files it was preser
   assert.equal(world.git("stash", "list"), "");
   assert.deepEqual(leftovers(world.tmp), []);
   assert.deepEqual(backups(world.install), []);
+});
+
+void test("a failure between the backup ref and the stash orphans neither", (t) => {
+  if (process.getuid?.() === 0) {
+    t.skip("root reads a file with no permissions, so the stash does not fail");
+    return;
+  }
+  const world = createWorld(t);
+  writeFileSync(join(world.install, "README.md"), "# fixture\nlocal edit\n");
+  // git cannot put this into a stash, so the run dies after the backup ref is written and
+  // before the stash that ref exists to accompany - the one window the arming order is for.
+  writeFileSync(join(world.install, "unreadable.txt"), "mine\n");
+  chmodSync(join(world.install, "unreadable.txt"), 0o000);
+
+  const result = world.run();
+  chmodSync(join(world.install, "unreadable.txt"), 0o600);
+
+  assert.notEqual(result.status, 0, result.stdout + result.stderr);
+  assert.match(result.stderr, /Install stopped during: saving your changes/u);
+  // The ref was written and then taken back with the rest of the run: not left behind for
+  // the next one to trip over, and not silently reported as changes that were saved.
+  assert.equal(world.git("for-each-ref", "refs/iva/update-backups"), "");
+  assert.equal(world.git("stash", "list"), "");
+  assert.doesNotMatch(result.stdout, /changes are in the stash/u);
+  // And everything of the user's is still where it was.
+  assert.equal(
+    readFileSync(join(world.install, "README.md"), "utf8"),
+    "# fixture\nlocal edit\n",
+  );
+  assert.equal(
+    readFileSync(join(world.install, "unreadable.txt"), "utf8"),
+    "mine\n",
+  );
+  assert.deepEqual(leftovers(world.tmp), []);
+  assert.deepEqual(
+    backups(world.install).filter((name) => name.startsWith(".env")),
+    [],
+  );
+});
+
+void test("a run that can save nothing at all leaves nothing behind", (t) => {
+  if (process.getuid?.() === 0) {
+    t.skip("root reads a file with no permissions, so nothing fails here");
+    return;
+  }
+  const world = createWorld(t);
+  // Both places a copy of .env could go are refused: the installation's own directory
+  // cannot be written, and the file itself cannot be read.
+  mkdirSync(join(world.install, "data"), { recursive: true });
+  chmodSync(join(world.install, "data"), 0o500);
+  chmodSync(join(world.install, ".env"), 0o000);
+
+  const result = world.run();
+  chmodSync(join(world.install, "data"), 0o700);
+  chmodSync(join(world.install, ".env"), 0o600);
+
+  assert.notEqual(result.status, 0, result.stdout + result.stderr);
+  assert.match(result.stderr, /Cannot copy/u);
+  // Not even the empty file the fallback had to create to try: a run that copied nothing
+  // leaves no stub of a copy anywhere.
+  assert.deepEqual(leftovers(world.tmp), []);
 });
 
 void test("a pending reboot stops a first install and only warns over a configured one", (t) => {
