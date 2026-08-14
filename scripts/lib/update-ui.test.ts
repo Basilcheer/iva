@@ -15,7 +15,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MODEL_PROVIDER_NAMES } from "#lib/model-provider.ts";
-import { PROVIDERS, modelSummary } from "./model-summary.ts";
+import { SUMMARY_PROVIDER_NAMES, modelSummary } from "./model-summary.ts";
 import { createTerminalProgress } from "./progress.ts";
 import {
   createTelegramUpdateReporter,
@@ -70,7 +70,7 @@ test("modelSummary uses configured provider values without runtime defaults", ()
 // Сверка идёт в ОБЕ стороны: лишний ключ здесь так же врёт, как недостающий.
 test("modelSummary knows exactly the provider names the runtime accepts", () => {
   assert.deepEqual(
-    Object.keys(PROVIDERS).sort(),
+    [...SUMMARY_PROVIDER_NAMES].sort(),
     [...MODEL_PROVIDER_NAMES].sort(),
   );
   for (const name of MODEL_PROVIDER_NAMES) {
@@ -1908,4 +1908,38 @@ test("a build failure carrying a real key shape is redacted the same way", async
   const text = calls.at(-1)?.body.text ?? "";
   assert.match(text, /provider check failed: \[REDACTED\]/);
   assert.doesNotMatch(text, /sk-or-v1|4f9c1e77/);
+});
+
+// Реальный репортер, а не заглушка из теста апдейта: текст отказа собирается ЗДЕСЬ и берёт
+// язык из job.locale — языка того, кто нажал /update, — а не из AGENT_LANGUAGE процесса CLI.
+test("the update reporter refuses a bad provider in the language of the job", async () => {
+  for (const [locale, expected] of [
+    ["ru", /Сначала почини MODEL_PROVIDER в \.env \(iva config\)/u],
+    ["en", /Fix MODEL_PROVIDER in \.env first \(iva config\)/u],
+  ] as const) {
+    const calls: TelegramCall[] = [];
+    const fetchImpl: MockFetch = async (url, init) => {
+      calls.push({
+        method: url.split("/").at(-1),
+        body: JSON.parse(init.body) as TelegramBody,
+      });
+      return { ok: true, status: 200, json: async () => ({ ok: true }) };
+    };
+    const reporter = createTelegramUpdateReporter({
+      token: "token",
+      job: { chatId: 1, messageId: 100, locale },
+      env: {},
+      fetchImpl,
+    });
+    assert.ok(reporter);
+
+    await reporter.badProvider("ollmaa", "ollama, opencode, codex, openrouter");
+
+    const text = calls.at(-1)?.body.text ?? "";
+    assert.match(text, expected, locale);
+    assert.match(text, /"ollmaa"/u, locale);
+    assert.match(text, /ollama, opencode, codex, openrouter/u, locale);
+    // Это финальный экран: он не должен остаться под лоадером фазы.
+    assert.doesNotMatch(text, /Building Iva|Собираю Iva/u, locale);
+  }
 });

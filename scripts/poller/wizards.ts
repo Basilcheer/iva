@@ -1,5 +1,6 @@
 import {
   CATALOG,
+  catalogModel,
   catalogProvider,
   checkKey,
   EFFORTS,
@@ -184,7 +185,6 @@ export async function currentConfig({
   const configured = env.MODEL_PROVIDER ?? "ollama";
   const valid = Boolean(catalogProvider(configured));
   const provider = valid ? configured : "ollama";
-  const cat = CATALOG[provider];
   return {
     provider,
     providerIsValid: valid,
@@ -192,7 +192,9 @@ export async function currentConfig({
     // его «ollama» в строке «Сейчас…» значило бы спрятать причину, ради которой визард
     // и открыли. Экраны после сохранения показывают уже записанное имя, оно валидно.
     providerLabel: valid ? provider : `invalid (${configured})`,
-    model: env[cat.modelVar] || cat.def,
+    // Модель — тем же правилом, что у Статуса и рантайма. У невалидного провайдера модели
+    // нет: показать OLLAMA_MODEL значило бы назвать модель, к которой никто не пойдёт.
+    model: catalogModel(configured, env) ?? "?",
     effort: providerSupportsReasoning(provider)
       ? (env.THINKING_EFFORT ?? "").toLowerCase()
       : "",
@@ -271,10 +273,16 @@ async function handleModelCmd(
 async function handleThinkCmd(
   chatId: FlowId,
   from: FlowId,
-  { msgId }: { msgId?: number } = {},
+  {
+    msgId,
+    readEnv,
+  }: {
+    msgId?: number;
+    readEnv?: () => Promise<Record<string, string>>;
+  } = {},
 ) {
   const { provider, providerIsValid, providerLabel, model, effort } =
-    await currentConfig();
+    await currentConfig(readEnv ? { readEnv } : {});
   const st = newWizard(chatId, from, "think");
   st.provider = provider;
   st.model = model;

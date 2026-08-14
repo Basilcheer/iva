@@ -80,6 +80,30 @@ export function invalidModelProviderMessage(raw: string): string {
 }
 
 /**
+ * Модель провайдера из сырого значения переменной. Одно правило на всех, потому что раньше
+ * ответов на один и тот же `.env` было три: рантайм брал пустую строку как есть, экран
+ * статуса подставлял дефолт, а экран обновления рисовал «?».
+ *
+ * Пробелы срезаются, пустое (и пробельное) значение — это «не задано», то есть дефолт
+ * провайдера. Свою модель нельзя «стереть», оставив агента без имени модели в запросе.
+ *
+ * Повторено в scripts/lib/model-catalog.ts (`catalogModel`) для половины, которая грузится
+ * без authored tree; равенство двух правил сверяет scripts/lib/model-catalog.test.ts.
+ */
+export function modelProviderModel(
+  name: ModelProviderName,
+  raw: string | undefined,
+): string {
+  const configured = (raw ?? "").trim();
+  // Эндпоинт OpenCode ждёт bare-ID — срезаем внутренний UI-префикс "opencode-go/"
+  // из дефолта и старых .env. Срез идёт ДО проверки на пустоту: голый "opencode-go/"
+  // тоже «не задано», а не пустое имя модели в запросе.
+  const stripped =
+    name === "opencode" ? configured.replace(/^opencode-go\//, "") : configured;
+  return stripped || MODEL_PROVIDERS[name].defaultModel;
+}
+
+/**
  * Разрешает MODEL_PROVIDER в одну согласованную тройку «имя · модель · reasoning».
  * Бросает на любом значении, которого нет в MODEL_PROVIDER_NAMES.
  */
@@ -91,16 +115,9 @@ export function resolveModelProvider(
     throw new Error(invalidModelProviderMessage(raw));
 
   const name = raw as ModelProviderName;
-  const provider = MODEL_PROVIDERS[name];
-  const configured = env[provider.modelVar] ?? provider.defaultModel;
   return {
     name,
-    // Эндпоинт OpenCode ждёт bare-ID — срезаем внутренний UI-префикс "opencode-go/"
-    // из дефолта и старых .env.
-    model:
-      name === "opencode"
-        ? configured.replace(/^opencode-go\//, "")
-        : configured,
-    compatibleReasoning: provider.compatibleReasoning,
+    model: modelProviderModel(name, env[MODEL_PROVIDERS[name].modelVar]),
+    compatibleReasoning: MODEL_PROVIDERS[name].compatibleReasoning,
   };
 }

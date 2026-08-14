@@ -1,12 +1,13 @@
 /* eslint-disable @typescript-eslint/no-floating-promises, @typescript-eslint/require-await -- Node owns test registration; the async request double preserves the wizard boundary. */
 import assert from "node:assert/strict";
-import test from "node:test";
+import test, { type TestContext } from "node:test";
 import { MODEL_PROVIDER_NAMES } from "#lib/model-provider.ts";
 import { CATALOG } from "../lib/model-catalog.ts";
 import {
   currentConfig,
   flows,
   getWizard,
+  handleThinkCmd,
   isStaleWizard,
   runWizardRequest,
   selectWizardEffort,
@@ -121,4 +122,77 @@ test("wizard options prioritize the configured model and async results are dropp
     ),
     { stale: true },
   );
+});
+
+type SentCall = { method: string; text: string };
+type MockResponse = { ok: boolean; status: number; json(): Promise<unknown> };
+const mutableGlobal = globalThis as unknown as {
+  fetch: (url: string, init?: { body?: string }) => Promise<MockResponse>;
+};
+
+/** Ловит всё, что визард действительно отправляет: путь в Telegram у моста ровно один. */
+function telegramSpy(t: TestContext): SentCall[] {
+  const sent: SentCall[] = [];
+  const previous = mutableGlobal.fetch;
+  t.after(() => {
+    mutableGlobal.fetch = previous;
+  });
+  mutableGlobal.fetch = (url, init) => {
+    const method = url.split("/").at(-1) ?? "";
+    if (url.includes("api.telegram.org")) {
+      const body = JSON.parse(init?.body ?? "{}") as { text?: string };
+      sent.push({ method, text: body.text ?? "" });
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({ ok: true, result: { message_id: 7 } }),
+      });
+    }
+    // Каталог моделей провайдера — только для контрольного случая.
+    return Promise.resolve({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ data: [{ id: "deepseek-v4-pro" }] }),
+    });
+  };
+  return sent;
+}
+
+// Гвард в /think до этого не вызывал ни один тест: удали его — и весь сьют оставался
+// зелёным, пока живой визард рисовал уровни ollama поверх сломанной конфигурации.
+test("/think refuses an invalid provider and sends the user to /model", async (t) => {
+  const sent = telegramSpy(t);
+
+  await handleThinkCmd(4102033, "9104204", {
+    readEnv: async () => ({
+      MODEL_PROVIDER: "ollmaa",
+      THINKING_EFFORT: "high",
+    }),
+  });
+
+  const texts = sent.map((call) => call.text).join("\n");
+  assert.match(
+    texts,
+    /MODEL_PROVIDER is (now )?invalid \(ollmaa\)|invalid \(ollmaa\)/u,
+  );
+  assert.match(texts, /\/model/u);
+  // Ни экрана загрузки уровней, ни самих уровней: настраивать нечего.
+  assert.doesNotMatch(texts, /Loading thinking levels/u);
+  assert.doesNotMatch(texts, /reply_markup.*eff:/u);
+});
+
+test("/think still works on a provider the runtime accepts", async (t) => {
+  const sent = telegramSpy(t);
+
+  await handleThinkCmd(4102034, "9104205", {
+    readEnv: async () => ({
+      MODEL_PROVIDER: "ollama",
+      OLLAMA_API_KEY: "key",
+      OLLAMA_MODEL: "deepseek-v4-pro",
+    }),
+  });
+
+  const texts = sent.map((call) => call.text).join("\n");
+  assert.doesNotMatch(texts, /invalid \(/u);
+  assert.match(texts, /Loading thinking levels|deepseek-v4-pro/u);
 });

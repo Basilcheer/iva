@@ -1,39 +1,27 @@
+import { catalogModel, catalogProvider } from "./model-catalog.ts";
+
 type Env = Record<string, string | undefined>;
 
-type ProviderSettings = {
-  label: string;
-  model: string;
-  context: string;
+// Короткая подпись провайдера для одной строки статуса — не лейбл каталога (там
+// «Ollama Cloud»). Имя переменной модели здесь НЕ повторяется: раньше это был третий
+// реестр, и переименуй его кто-нибудь — экран обновления показывал бы «?» на рабочей
+// установке, а никакой тест бы не заметил. Модель берётся из каталога, окно контекста —
+// единственное, что осталось локальным, и оно ни с чем не пересекается.
+const PROVIDERS: Record<string, { label: string; context: string }> = {
+  ollama: { label: "Ollama", context: "OLLAMA_CONTEXT_WINDOW" },
+  opencode: { label: "OpenCode", context: "OPENCODE_CONTEXT_WINDOW" },
+  openrouter: { label: "OpenRouter", context: "OPENROUTER_CONTEXT_WINDOW" },
+  codex: { label: "OpenAI", context: "CODEX_CONTEXT_WINDOW" },
 };
 
-// Короткие подписи для одной строки статуса — не лейблы каталога (там «Ollama Cloud»).
-// Имена — те же, что принимает рантайм, и ровно те же: лишнее имя здесь показало бы
-// провайдера, на котором агент не стартует, а недостающее назвало бы рабочего невалидным.
-// Обе стороны сверяет update-ui.test.ts.
-export const PROVIDERS: Record<string, ProviderSettings> = {
-  ollama: {
-    label: "Ollama",
-    model: "OLLAMA_MODEL",
-    context: "OLLAMA_CONTEXT_WINDOW",
-  },
-  opencode: {
-    label: "OpenCode",
-    model: "OPENCODE_MODEL",
-    context: "OPENCODE_CONTEXT_WINDOW",
-  },
-  openrouter: {
-    label: "OpenRouter",
-    model: "OPENROUTER_MODEL",
-    context: "OPENROUTER_CONTEXT_WINDOW",
-  },
-  codex: {
-    label: "OpenAI",
-    model: "CODEX_MODEL",
-    context: "CODEX_CONTEXT_WINDOW",
-  },
-};
+/** Имена провайдеров, которые умеет подписать этот экран. Сверяются с рантаймом в тесте. */
+export const SUMMARY_PROVIDER_NAMES = Object.keys(PROVIDERS);
 
-/** Display-only model settings. Setup writes explicit values, so this helper never duplicates runtime defaults. */
+/**
+ * Display-only модель и окно контекста. Значение модели читается тем же правилом, что и
+ * рантайм (catalogModel): пробелы срезаны, пустое — это «не задано», то есть дефолт
+ * провайдера. Экран обновления и /menu обязаны показывать ту модель, к которой пойдёт агент.
+ */
 export function modelSummary(env: Env = process.env): {
   provider: string;
   model: string;
@@ -44,17 +32,16 @@ export function modelSummary(env: Env = process.env): {
   // регистр или обрезать пробелы значило бы назвать провайдера, на котором агент даже
   // не стартует. Неизвестное имя показываем тем же словом, что и /menu → Статус.
   const id = env.MODEL_PROVIDER ?? "ollama";
-  const provider = Object.hasOwn(PROVIDERS, id)
-    ? PROVIDERS[id]
-    : { label: `invalid (${id})`, model: "", context: "" };
-  const model = provider.model ? (env[provider.model] || "?").trim() : "?";
-  const rawContext = provider.context ? Number(env[provider.context]) : 0;
+  const known = Boolean(catalogProvider(id)) && Object.hasOwn(PROVIDERS, id);
+  const label = known ? PROVIDERS[id].label : `invalid (${id})`;
+  const model = known ? (catalogModel(id, env) ?? "?") : "?";
+  const rawContext = known ? Number(env[PROVIDERS[id].context]) : 0;
   return {
-    provider: provider.label,
+    provider: label,
     model,
     contextWindow:
       Number.isFinite(rawContext) && rawContext > 0 ? rawContext : null,
-    line: `${provider.label} · ${model}`,
+    line: `${label} · ${model}`,
   };
 }
 

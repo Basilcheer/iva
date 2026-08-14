@@ -289,7 +289,8 @@ test("property: a valid name never picks up another provider's model", () => {
   fc.assert(
     fc.property(
       fc.constantFrom(...MODEL_PROVIDER_NAMES),
-      fc.string({ minLength: 1 }),
+      // Значение без обрамляющих пробелов: их отдельное свойство ниже.
+      fc.string({ minLength: 1 }).filter((s) => s === s.trim()),
       (name, suffix) => {
         // У каждого провайдера своя помеченная модель: чужая в ответе видна сразу.
         const env: Record<string, string> = { MODEL_PROVIDER: name };
@@ -332,26 +333,78 @@ test("property: an unset model variable falls back to that provider's own defaul
 
 test("property: OpenCode drops the wizard prefix and nobody else touches the value", () => {
   fc.assert(
-    fc.property(fc.string(), (model) => {
-      assert.equal(
-        resolveModelProvider({
-          MODEL_PROVIDER: "opencode",
-          OPENCODE_MODEL: `opencode-go/${model}`,
-        }).model,
-        model,
-      );
-      for (const name of MODEL_PROVIDER_NAMES) {
-        if (name === "opencode") continue;
-        const tagged = `opencode-go/${model}`;
+    fc.property(
+      fc.string({ minLength: 1 }).filter((s) => s === s.trim()),
+      (model) => {
         assert.equal(
           resolveModelProvider({
-            MODEL_PROVIDER: name,
-            [MODEL_PROVIDERS[name].modelVar]: tagged,
+            MODEL_PROVIDER: "opencode",
+            OPENCODE_MODEL: `opencode-go/${model}`,
           }).model,
-          tagged,
+          model,
         );
-      }
-    }),
+        for (const name of MODEL_PROVIDER_NAMES) {
+          if (name === "opencode") continue;
+          const tagged = `opencode-go/${model}`;
+          assert.equal(
+            resolveModelProvider({
+              MODEL_PROVIDER: name,
+              [MODEL_PROVIDERS[name].modelVar]: tagged,
+            }).model,
+            tagged,
+          );
+        }
+      },
+    ),
+    RUNS,
+  );
+});
+
+// Пустое и пробельное значение — это «не задано». Раньше рантайм отдавал пустую строку
+// провайдеру, а два экрана показывали разное; теперь ответ один — дефолт провайдера.
+test("property: a blank or padded model variable always means the provider default", () => {
+  const blank = fc
+    .array(fc.constantFrom(" ", "\t", "\n", "\r", "\u00a0"), { maxLength: 6 })
+    .map((chars) => chars.join(""));
+  fc.assert(
+    fc.property(
+      fc.constantFrom(...MODEL_PROVIDER_NAMES),
+      blank,
+      (name, padding) => {
+        const selection = resolveModelProvider({
+          MODEL_PROVIDER: name,
+          [MODEL_PROVIDERS[name].modelVar]: padding,
+        });
+        assert.equal(selection.model, MODEL_PROVIDERS[name].defaultModel);
+      },
+    ),
+    RUNS,
+  );
+  // Тот же случай у OpenCode приходит голым префиксом мастера.
+  assert.equal(
+    resolveModelProvider({
+      MODEL_PROVIDER: "opencode",
+      OPENCODE_MODEL: "  opencode-go/  ",
+    }).model,
+    MODEL_PROVIDERS.opencode.defaultModel,
+  );
+});
+
+// Значение с обрамляющими пробелами доезжает до провайдера обрезанным, а не как есть.
+test("property: padding around a real model is trimmed, not passed through", () => {
+  fc.assert(
+    fc.property(
+      fc.constantFrom(...MODEL_PROVIDER_NAMES),
+      fc.string({ minLength: 1 }).filter((s) => s === s.trim() && s !== ""),
+      fc.constantFrom("", " ", "  ", "\t", "\n"),
+      (name, model, pad) => {
+        const selection = resolveModelProvider({
+          MODEL_PROVIDER: name,
+          [MODEL_PROVIDERS[name].modelVar]: `${pad}${model}${pad}`,
+        });
+        assert.equal(selection.model, model);
+      },
+    ),
     RUNS,
   );
 });

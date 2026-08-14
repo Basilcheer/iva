@@ -7,7 +7,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { readEnvValues } from "../env-file.ts";
-import { catalogProvider } from "../model-catalog.ts";
+import { catalogModel, catalogProvider } from "../model-catalog.ts";
 import { SEARCH_CATALOG } from "../search-catalog.ts";
 import { readEntries, summarize } from "../usage.ts";
 import { probeUserbotHealth } from "../userbot-health.ts";
@@ -98,7 +98,7 @@ function fastFields(env: Env, ctx: MenuContext) {
   return {
     version: version(ctx.deps.root),
     provider: cat ? configuredProvider : `invalid (${configuredProvider})`,
-    model: cat ? env[cat.modelVar] || cat.def : "?",
+    model: catalogModel(configuredProvider, env) ?? "?",
     effort: cat ? (env.THINKING_EFFORT || "").toLowerCase() : "",
     searchProv,
     hasKey: Boolean(searchCat && env[searchCat.keyVar]),

@@ -134,6 +134,23 @@ export function catalogProvider(
     : undefined;
 }
 
+// The model a provider will actually be asked for, by the same rule the runtime uses
+// (agent/lib/model-provider.ts `modelProviderModel`): trimmed, and blank means "not set",
+// so the provider's own default answers. Every screen reads this instead of its own
+// `|| default` or `|| "?"`, because one .env may not produce three different answers.
+// The two halves are pinned together in the test next door.
+export function catalogModel(
+  name: string,
+  env: Readonly<Record<string, string | undefined>>,
+): string | undefined {
+  const provider = catalogProvider(name);
+  if (!provider) return undefined;
+  const configured = (env[provider.modelVar] ?? "").trim();
+  const stripped =
+    name === "opencode" ? configured.replace(/^opencode-go\//, "") : configured;
+  return stripped || provider.def;
+}
+
 // The .env keys a provider cannot work without. codex has no key — it signs in over OAuth
 // (data/codex-auth.json), which is checked separately. Shared by `iva doctor` and the setup
 // wizard so one of them can never call a configuration complete that the other rejects.
