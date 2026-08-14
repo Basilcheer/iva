@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-floating-promises, @typescript-eslint/require-await -- Node's test runner owns registrations and async stubs preserve production signatures. */
 import assert from "node:assert/strict";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { existsSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -342,28 +343,82 @@ test("invalid candidate metadata and apply failures propagate after cleanup", as
   assert.equal(existsSync(dirname(candidatePath)), false);
 });
 
-// `iva config` запускает мастера отдельным процессом, а тот читает ЖИВОЙ .env репозитория
-// (loadExistingEnv → SOURCE_ENV_PATH, без переопределения — `IVA_CONFIG_OUTPUT` меняет только
-// запись). Прогнать его в тесте можно было бы, только подсунув свой .env в рабочее дерево, —
-// чего тест делать не должен: это разделяемое состояние и чужая конфигурация. Поэтому гвард
-// на исходник, тем же приёмом, что и scripts/authored-tree-guard.test.ts.
+// Настоящий прогон мастера, которого `iva config` и запускает. Раньше его нельзя было
+// прогнать иначе как подсунув .env в рабочее дерево, поэтому ветка «уже настроена» дожила
+// до релиза с дырой: при MODEL_PROVIDER=ollmaa карты промахивались, ключ выпадал из
+// обязательных, мастер печатал «Iva is already configured» и выходил по дефолтному «нет».
+// IVA_CONFIG_INPUT даёт ему фикстуру вместо живой конфигурации машины.
 //
-// Ловит ровно ту дыру, из-за которой путь починки не чинил: при MODEL_PROVIDER=ollmaa карты
-// провайдера промахивались, API-ключ выпадал из обязательных, мастер печатал «Iva уже
-// настроена» и выходил по дефолтному «нет» — а отказ агента отправляет именно сюда.
-test("the setup wizard cannot call an invalid provider a complete configuration", () => {
-  const source = readFileSync(
-    join(
-      fileURLToPath(new URL("../../", import.meta.url)),
-      "scripts/setup/main.ts",
-    ),
-    "utf8",
-  );
-  // Провайдер разрешается общим точным лукапом, а не собственной картой мастера.
-  assert.match(source, /const cat0 = catalogProvider\(prov0\);/u);
-  assert.doesNotMatch(source, /\}\[prov0\] \|\| "OLLAMA_MODEL"/u);
-  // И «настроено» невозможно без валидного провайдера.
-  assert.match(source, /const isComplete =\s*\n?\s*Boolean\(cat0\) &&/u);
-  // Пользователю говорят, что именно сломано, до того как он пойдёт по шагам.
-  assert.match(source, /MODEL_PROVIDER is invalid \(\$\{prov0\}\)/u);
+// Процесс останавливается на первом же вопросе (stdin открыт, но пуст) — до сети дело не
+// доходит: всё, что проверяется, напечатано раньше.
+function fixtureEnv(provider: string): string {
+  return [
+    `MODEL_PROVIDER=${provider}`,
+    "OLLAMA_API_KEY=key",
+    "OLLAMA_MODEL=deepseek-v4-pro",
+    "DEEPGRAM_API_KEY=dg",
+    "TELEGRAM_BOT_TOKEN=tg",
+    "TELEGRAM_ALLOWED_USER_IDS=1",
+    "TELEGRAM_BOT_USERNAME=ivabot",
+    "AGENT_LANGUAGE=en",
+    `ASSISTANT_BEARER=${"b".repeat(43)}`,
+    "",
+  ].join("\n");
+}
+
+async function runWizard(
+  t: TestContext,
+  provider: string,
+  stopAt: RegExp,
+): Promise<string> {
+  const root = await sandbox(t);
+  const input = join(root, "fixture.env");
+  writeFileSync(input, fixtureEnv(provider));
+  const repo = fileURLToPath(new URL("../../", import.meta.url));
+  const clean = { ...process.env };
+  delete clean.FORCE_COLOR;
+  const child = spawn(process.execPath, [join(repo, "scripts/setup/main.ts")], {
+    cwd: repo,
+    env: {
+      ...clean,
+      NO_COLOR: "1",
+      AGENT_LANGUAGE: "en",
+      IVA_CONFIG_INPUT: input,
+      IVA_CONFIG_OUTPUT: join(root, "candidate.env"),
+    },
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  let output = "";
+  const timer = setTimeout(() => child.kill("SIGKILL"), 20_000);
+  await new Promise<void>((resolve) => {
+    const collect = (chunk: Buffer): void => {
+      output += chunk.toString();
+      if (stopAt.test(output)) child.kill("SIGKILL");
+    };
+    child.stdout.on("data", collect);
+    child.stderr.on("data", collect);
+    child.on("close", () => resolve());
+  });
+  clearTimeout(timer);
+  return output;
+}
+
+test("the setup wizard treats an invalid provider as unconfigured, not as complete", async (t) => {
+  const output = await runWizard(t, "ollmaa", /Provider \(1\/2\/3\/4\)/u);
+
+  assert.doesNotMatch(output, /already configured/u);
+  assert.doesNotMatch(output, /Reconfigure from scratch/u);
+  assert.match(output, /MODEL_PROVIDER is invalid \(ollmaa\)/u);
+  // И он именно СПРАШИВАЕТ провайдера, а не проходит мимо шага.
+  assert.match(output, /Provider \(1\/2\/3\/4\)/u);
+});
+
+// Контроль: на исправной конфигурации мастер по-прежнему коротко подтверждает и предлагает
+// ничего не трогать. Без него тест выше проходил бы и на мастере, сломанном вообще.
+test("the setup wizard still short-circuits on a complete configuration", async (t) => {
+  const output = await runWizard(t, "ollama", /Reconfigure from scratch/u);
+
+  assert.match(output, /Iva is already configured/u);
+  assert.match(output, /Provider: ollama/u);
+  assert.doesNotMatch(output, /MODEL_PROVIDER is invalid/u);
 });
