@@ -68,15 +68,15 @@ Every stage checks whether its work is already done and skips it, so a run after
 
 | Stage           | Skipped when                                                                            |
 | --------------- | --------------------------------------------------------------------------------------- |
-| System packages | the command is already there (`git`, `gh`, `ffmpeg`, `pandoc`, `pdftotext`)             |
+| System packages | the command is already there (`git`, `gh`, `python3`, `ffmpeg`, `pandoc`, `pdftotext`)  |
 | `npm ci`        | `node_modules` matches `package-lock.json` — npm's own record; patches are re-applied   |
 | agent-browser   | the binary is installed and really opens a page                                         |
 | `gws`           | the binary is installed (`iva update` keeps it current)                                 |
 | Build           | `.output` carries this installer's stamp for the current commit, local edits and `.env` |
 
-The wizard, the vault check, the `iva` command and the systemd units are cheap, so they run every time. A run that fails is undone: the checkout goes back to the commit and the changes it started with, and the copies it made of `.env` and of your untracked files are deleted — on Ctrl-C and on a dropped SSH session too. An installation unpacked from an archive instead of cloned has no commit to compare against, so it rebuilds every time.
+The wizard, the vault check, the `iva` command and the systemd units are cheap, so they run every time. A run that fails is undone: the checkout goes back to the commit and the changes it started with, and the copies it made of `.env` and of your untracked files are deleted — on Ctrl-C and on a dropped SSH session too. An installation unpacked from an archive instead of cloned has no commit to compare against, so it rebuilds every time; so does one with a file the build cannot read.
 
-Run one installer at a time. Two at once work on the same checkout and will undo each other's changes.
+Only one installer runs in an installation at a time: a second one is refused by name, with the process id of the one already working. A lock left by a run that no longer exists is taken over, so a power cut cannot leave the installation unusable.
 
 ### Flags and overrides
 
