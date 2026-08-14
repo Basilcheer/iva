@@ -145,12 +145,12 @@ Four model providers. Pick one and fill its block in `.env`:
 
 | Provider         | How you pay                            |
 | ---------------- | -------------------------------------- |
-| OpenCode Go      | API key, ~$5/mo                        |
+| OpenCode Go      | API key, ~$10/mo ($5 first month)      |
 | Ollama Cloud     | API key, ~$20/mo                       |
 | OpenRouter       | API key, pay-as-you-go, 300+ models    |
 | OpenAI (ChatGPT) | your Plus/Pro subscription, no API key |
 
-Default model is deepseek-v4-pro, 131k context. On Go it runs about $9/mo all-in ($5 model + $4–5 VPS), no markup; voice rides Deepgram's free starter credit. Model lists, limits and the search matrix: [docs/providers.md](docs/providers.md).
+Default model is deepseek-v4-pro, 131k context. On Go it runs about $14–15/mo all-in ($10 model + $4–5 VPS; the model's first month is $5), no markup; voice rides Deepgram's free starter credit. Model lists, limits and the search matrix: [docs/providers.md](docs/providers.md).
 
 ## Documentation
 
