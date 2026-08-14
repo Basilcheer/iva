@@ -57,6 +57,11 @@ t() { if [ "$IVA_LANG" = ru ]; then printf '%s' "$2"; else printf '%s' "$1"; fi;
 # Compact progress for automatic work. Prompts, sudo and the setup wizard never
 # run behind a spinner, so they remain fully readable and interactive.
 INSTALL_LOG="${TMPDIR:-/tmp}/iva-install-$$.log"
+# Proven writable before anything is done, because every step of the rollback redirects
+# into it: a temporary directory nobody can write to would make those redirects fail before
+# the commands even ran, and the undo would be skipped without a word. Fail here instead,
+# while there is still nothing to undo.
+: >"$INSTALL_LOG" || die "$(t "Cannot write the install log at $INSTALL_LOG. Set TMPDIR to a writable directory and run again." "Не могу писать лог установки в $INSTALL_LOG. Укажите TMPDIR с правом записи и запустите снова.")"
 SPINNER_PID=""
 # The stage a failure interrupted, named in the error handler (bootstrap.sh does the same):
 # a late failure is otherwise buried under the npm output of the stages before it.
@@ -156,46 +161,91 @@ INSTALL_BACKUP_REF=""
 INSTALL_ENV_BACKUP=""
 INSTALL_OUTPUT_BACKUP=""
 INSTALL_UNTRACKED_LIST=""
+INSTALL_LOCK=""
 # Set once the checkout is known to hold the user's own state again — after a clean
 # rollback, or after a finished install. Only then are the stash entry and the backup
 # ref duplicates that may be dropped.
 INSTALL_TREE_RESTORED=false
 
+# Two installers in one checkout undo each other: the second stashes what the first is
+# still building from, and both restore over each other's work. A directory is the lock,
+# because creating one is atomic everywhere. A lock whose owner is gone is taken over -
+# a run killed by a power cut must not leave the installation unusable.
+acquire_install_lock() {
+  local lock="$PROJECT_DIR/data/install.lock" owner=""
+  mkdir -p "$PROJECT_DIR/data" 2>/dev/null || true
+  if ! mkdir "$lock" 2>/dev/null; then
+    owner="$(cat "$lock/pid" 2>/dev/null || true)"
+    if [ -n "$owner" ] && kill -0 "$owner" 2>/dev/null; then
+      die "$(t "Another installer is already running here (pid $owner). Wait for it to finish, or stop it, and run this again." "Здесь уже работает другой установщик (pid $owner). Дождитесь его или остановите — и запустите снова.")"
+    fi
+    warn "$(t "Taking over the lock of an installer that is no longer running" "Забираю лок установщика, которого больше нет")"
+  fi
+  INSTALL_LOCK="$lock"
+  printf '%s\n' "$$" >"$lock/pid" 2>/dev/null || true
+}
+
+# Copies .env with the permissions it must have from the first byte: `cp -p` carries the
+# source mode over, and a .env somebody left world-readable would be copied that way and
+# stay so until the chmod — a window a shared box does not need. The copy appears at its
+# final name only once it is whole, so a rollback can never restore half a file over a
+# whole one.
+copy_env_private() {
+  local part="$1.part"
+  : >"$part" 2>/dev/null || return 1
+  chmod 600 "$part" 2>/dev/null || { rm -f -- "$part"; return 1; }
+  cat "$PROJECT_DIR/.env" >"$part" 2>/dev/null || { rm -f -- "$part"; return 1; }
+  mv -- "$part" "$1"
+}
+
+# Saves whatever this run is about to overwrite. `moving` is for the one path that also
+# rewrites the checkout itself (fetch and merge): only there does HEAD move, and only there
+# is a stash needed to make room for it. Every path gets the copy of .env and, from here
+# on, the backup of .output the build replaces.
 prepare_install_update() {
-  INSTALL_ORIGINAL_HEAD="$(git -C "$PROJECT_DIR" rev-parse HEAD)"
-  INSTALL_BACKUP_REF="refs/iva/update-backups/$(date -u +%Y%m%dT%H%M%SZ)-$$"
-  git -C "$PROJECT_DIR" update-ref "$INSTALL_BACKUP_REF" "$INSTALL_ORIGINAL_HEAD"
-  # Armed with the first artifact, not at the end: a failure while preparing must reach
-  # the same rollback as any later one, or the ref it just wrote is orphaned and the
-  # cleanup reports changes it never took.
+  local moving="${1:-}" stamp backups
+  # Armed before the first artifact: a failure while preparing must reach the same rollback
+  # as any later one, or what it just wrote is orphaned and the cleanup reports changes it
+  # never took.
   INSTALL_UPDATE_ACTIVE=true
+  stamp="$(date -u +%Y%m%dT%H%M%SZ)-$$"
 
   # The copies live next to the installation, not in /tmp: `iva update` keeps its own
   # copy of .env in data/update-backups/ for the same reason — a world-readable directory
   # is no place for the file that holds every key. git ignores data/, so the copies never
   # reach a stash either.
-  local backups="$PROJECT_DIR/data/update-backups" stamp
-  stamp="$(date -u +%Y%m%dT%H%M%SZ)-$$"
-  if mkdir -p "$backups" 2>/dev/null && chmod 700 "$backups" 2>/dev/null; then
+  backups="$PROJECT_DIR/data/update-backups"
+  if ! (mkdir -p "$backups" 2>/dev/null && chmod 700 "$backups" 2>/dev/null); then
+    backups=""
+  fi
+  if [ -f "$PROJECT_DIR/.env" ]; then
+    local candidate
+    if [ -n "$backups" ]; then
+      candidate="$backups/.env-$stamp"
+    else
+      candidate="$(mktemp "${TMPDIR:-/tmp}/iva-env.XXXXXX")"
+    fi
+    # Named only once the copy is whole: a backup nobody could finish must not be one the
+    # rollback trusts. And an install that cannot preserve .env has no business going on to
+    # replace the build.
+    copy_env_private "$candidate" \
+      || die "$(t "Cannot copy $PROJECT_DIR/.env — check its permissions and free space, then run again." "Не могу скопировать $PROJECT_DIR/.env — проверьте права и свободное место, потом запустите снова.")"
+    INSTALL_ENV_BACKUP="$candidate"
+  fi
+
+  [ "$moving" = moving ] || return 0
+
+  INSTALL_ORIGINAL_HEAD="$(git -C "$PROJECT_DIR" rev-parse HEAD)"
+  INSTALL_BACKUP_REF="refs/iva/update-backups/$stamp"
+  git -C "$PROJECT_DIR" update-ref "$INSTALL_BACKUP_REF" "$INSTALL_ORIGINAL_HEAD"
+  if [ -n "$backups" ]; then
     INSTALL_UNTRACKED_LIST="$backups/untracked-$stamp.zlist"
   else
-    backups=""
     INSTALL_UNTRACKED_LIST="$(mktemp "${TMPDIR:-/tmp}/iva-untracked.XXXXXX")"
   fi
   git -C "$PROJECT_DIR" ls-files --others --exclude-standard -z >"$INSTALL_UNTRACKED_LIST"
-  if [ -f "$PROJECT_DIR/.env" ]; then
-    if [ -n "$backups" ]; then
-      INSTALL_ENV_BACKUP="$backups/.env-$stamp"
-      cp -p "$PROJECT_DIR/.env" "$INSTALL_ENV_BACKUP"
-    else
-      INSTALL_ENV_BACKUP="$(mktemp "${TMPDIR:-/tmp}/iva-env.XXXXXX")"
-      cp -p "$PROJECT_DIR/.env" "$INSTALL_ENV_BACKUP"
-    fi
-    chmod 600 "$INSTALL_ENV_BACKUP"
-  fi
-
   if [ -n "$(git -C "$PROJECT_DIR" status --porcelain=v1 --untracked-files=all)" ]; then
-    git -C "$PROJECT_DIR" stash push --include-untracked --message "iva-install-$(date -u +%Y%m%dT%H%M%SZ)-$$" >>"$INSTALL_LOG" 2>&1
+    git -C "$PROJECT_DIR" stash push --include-untracked --message "iva-install-$stamp" >>"$INSTALL_LOG" 2>&1
     INSTALL_STASH_OID="$(git -C "$PROJECT_DIR" rev-parse refs/stash)"
   fi
 }
@@ -215,7 +265,11 @@ rollback_install_update() {
   # depends on where their work is: with a stash the tree is a copy of what the stash
   # holds, so it may be thrown away; without one the tree is the only place their changes
   # exist, and --keep refuses to overwrite a modified file instead of destroying it.
-  if [ -n "$INSTALL_STASH_OID" ]; then
+  # No recorded head at all means this run never moved the checkout — only the build and
+  # .env are its to put back.
+  if [ -z "$INSTALL_ORIGINAL_HEAD" ]; then
+    :
+  elif [ -n "$INSTALL_STASH_OID" ]; then
     git -C "$PROJECT_DIR" reset --hard "$INSTALL_ORIGINAL_HEAD" >>"$INSTALL_LOG" 2>&1 || restored=false
   else
     git -C "$PROJECT_DIR" reset --keep "$INSTALL_ORIGINAL_HEAD" >>"$INSTALL_LOG" 2>&1 || restored=false
@@ -231,12 +285,21 @@ rollback_install_update() {
   fi
   restore_install_stash || restored=false
   if [ -n "$INSTALL_ENV_BACKUP" ] && [ -f "$INSTALL_ENV_BACKUP" ]; then
-    cp -p "$INSTALL_ENV_BACKUP" "$PROJECT_DIR/.env"
-    chmod 600 "$PROJECT_DIR/.env"
+    if cat "$INSTALL_ENV_BACKUP" >"$PROJECT_DIR/.env"; then
+      chmod 600 "$PROJECT_DIR/.env"
+    else
+      restored=false
+    fi
   fi
+  # Cleared only once the build is really back in place: a backup still on disk is the only
+  # copy of the previous build, and the cleanup is about to remove whatever this still names.
   if [ -n "$INSTALL_OUTPUT_BACKUP" ] && [ -e "$INSTALL_OUTPUT_BACKUP" ]; then
     rm -rf -- "$PROJECT_DIR/.output"
-    mv "$INSTALL_OUTPUT_BACKUP" "$PROJECT_DIR/.output" && INSTALL_OUTPUT_BACKUP=""
+    if mv "$INSTALL_OUTPUT_BACKUP" "$PROJECT_DIR/.output"; then
+      INSTALL_OUTPUT_BACKUP=""
+    else
+      restored=false
+    fi
   fi
   INSTALL_TREE_RESTORED="$restored"
   set -e
@@ -249,13 +312,14 @@ rollback_install_update() {
 # lost work.
 cleanup_install_artifacts() {
   set +e
-  [ -z "$INSTALL_ENV_BACKUP" ] || rm -f -- "$INSTALL_ENV_BACKUP"
-  INSTALL_ENV_BACKUP=""
+  # The list of names is never the only copy of anything.
   [ -z "$INSTALL_UNTRACKED_LIST" ] || rm -f -- "$INSTALL_UNTRACKED_LIST"
   INSTALL_UNTRACKED_LIST=""
-  [ -z "$INSTALL_OUTPUT_BACKUP" ] || rm -rf -- "$INSTALL_OUTPUT_BACKUP"
-  INSTALL_OUTPUT_BACKUP=""
   if [ "$INSTALL_TREE_RESTORED" = true ]; then
+    [ -z "$INSTALL_ENV_BACKUP" ] || rm -f -- "$INSTALL_ENV_BACKUP"
+    INSTALL_ENV_BACKUP=""
+    [ -z "$INSTALL_OUTPUT_BACKUP" ] || rm -rf -- "$INSTALL_OUTPUT_BACKUP"
+    INSTALL_OUTPUT_BACKUP=""
     if [ -n "$INSTALL_STASH_OID" ]; then
       local stash_ref
       stash_ref="$(git -C "$PROJECT_DIR" stash list --format='%gd %H' | awk -v oid="$INSTALL_STASH_OID" '$2 == oid {print $1; exit}')"
@@ -266,9 +330,16 @@ cleanup_install_artifacts() {
       git -C "$PROJECT_DIR" update-ref -d "$INSTALL_BACKUP_REF" >>"$INSTALL_LOG" 2>&1
       INSTALL_BACKUP_REF=""
     fi
-  elif [ -n "$INSTALL_STASH_OID" ] || [ -n "$INSTALL_BACKUP_REF" ]; then
-    warn "$(t "Your changes were kept: git stash list, and the commit in $INSTALL_BACKUP_REF" "Ваши изменения сохранены: git stash list и коммит в $INSTALL_BACKUP_REF")"
+  else
+    # Nothing this run saved is removed while the checkout is not back to what it was:
+    # each of these may be the only copy left, so they are kept and named instead.
+    [ -z "$INSTALL_STASH_OID" ] || warn "$(t "Your changes are in the stash: git stash list" "Ваши изменения в stash: git stash list")"
+    [ -z "$INSTALL_BACKUP_REF" ] || warn "$(t "Your previous commit is kept at $INSTALL_BACKUP_REF" "Прежний коммит сохранён в $INSTALL_BACKUP_REF")"
+    [ -z "$INSTALL_ENV_BACKUP" ] || warn "$(t "Your .env is copied at $INSTALL_ENV_BACKUP" "Копия вашего .env: $INSTALL_ENV_BACKUP")"
+    [ -z "$INSTALL_OUTPUT_BACKUP" ] || warn "$(t "Your previous build is kept at $INSTALL_OUTPUT_BACKUP" "Прежняя сборка сохранена в $INSTALL_OUTPUT_BACKUP")"
   fi
+  [ -z "$INSTALL_LOCK" ] || rm -rf -- "$INSTALL_LOCK"
+  INSTALL_LOCK=""
   set -e
 }
 
@@ -295,11 +366,20 @@ on_err() {
 }
 # The single exit path: `die`, errexit, Ctrl-C, a dropped SSH session and SIGTERM all end
 # up here, so no run leaves a copy of .env, a stash entry or a backup ref behind.
-# The rollback is decided by INSTALL_COMPLETE, never by the exit code: bash enters this
-# handler with $? = 0 when a signal kills the script, and a run that died on a dropped
-# connection is exactly the one that must put the checkout back.
+# The rollback is decided by INSTALL_COMPLETE and not by the exit code: the code is right
+# for every route this script traps, but bash enters this handler with $? = 0 for the fatal
+# signals nothing traps, and a run that died on one of those is exactly the one that must
+# put the checkout back.
 finalize_install() {
   local rc=$?
+  # The undo runs commands that fail as a matter of course — `git rebase --abort` with no
+  # rebase in progress is the usual one — and the ERR trap does not care that `set +e` is
+  # on. Left armed it prints a second "Install aborted" over the real cause, which is how
+  # the reason for a failure gets lost.
+  trap - ERR
+  # A log that stopped being writable mid-run must not take the rollback down with it: the
+  # redirects below would fail before their commands ever ran.
+  : >>"$INSTALL_LOG" 2>/dev/null || INSTALL_LOG=/dev/null
   stop_spinner
   if [ "$INSTALL_COMPLETE" != true ]; then
     # Silent when nothing was started yet — `--help` and a refused flag exit this way.
@@ -614,17 +694,26 @@ ok "Node $(node -v)"
 # ─────────────────────────────────────────────────────────────────────────
 # 4. Project code (current directory / update / clone). SCRIPT_DIR is resolved at the top.
 # ─────────────────────────────────────────────────────────────────────────
+CURRENT_STEP="$(t "reading the installation" "чтение установки")"
 if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/package.json" ] && grep -q '"eve"' "$SCRIPT_DIR/package.json"; then
   PROJECT_DIR="$SCRIPT_DIR"
   UPDATE_CHANNEL="$(git -C "$PROJECT_DIR" branch --show-current 2>/dev/null || true)"
   UPDATE_CHANNEL="${UPDATE_CHANNEL:-main}"
   step "$(t "Using current directory: $PROJECT_DIR" "Использую текущий каталог: $PROJECT_DIR")"
+  acquire_install_lock
+  # No git work here, and the build is destructive all the same: this is the command the
+  # installer itself tells people to re-run, so it owes them the same undo as any other.
+  CURRENT_STEP="$(t "saving your files" "сохранение ваших файлов")"
+  prepare_install_update
 elif [ -d "$INSTALL_DIR/.git" ]; then
   PROJECT_DIR="$INSTALL_DIR"
+  acquire_install_lock
+  CURRENT_STEP="$(t "saving your changes" "сохранение ваших изменений")"
   start_spinner "$(t "Saving your changes" "Сохраняю ваши изменения")"
-  prepare_install_update
+  prepare_install_update moving
   stop_spinner
   ok "$(t "Changes saved" "Изменения сохранены")"
+  CURRENT_STEP="$(t "getting the update" "получение обновления")"
   start_spinner "$(t "Getting the update" "Получаю обновление")"
   if git -C "$PROJECT_DIR" fetch --prune origin "refs/heads/$BRANCH" >>"$INSTALL_LOG" 2>&1; then
     remote_ref="$(git -C "$PROJECT_DIR" rev-parse FETCH_HEAD)"
@@ -652,6 +741,7 @@ else
   run_stage "$(t "Cloning Iva" "Клонирую Iva")" "$(t "Iva downloaded" "Iva загружена")" \
     git clone --branch "$BRANCH" "$REPO_URL" "$INSTALL_DIR"
   PROJECT_DIR="$INSTALL_DIR"
+  acquire_install_lock
 fi
 cd "$PROJECT_DIR"
 
@@ -759,6 +849,7 @@ fi
 # 6. Interactive setup (provider + model + Telegram + Deepgram + TZ + vault)
 #    Reads /dev/tty → works with `curl | bash` too. Without a terminal — defer it.
 # ─────────────────────────────────────────────────────────────────────────
+CURRENT_STEP="$(t "setup wizard" "мастер настройки")"
 SETUP_DONE=false
 if [ "$RUN_SETUP" = false ]; then
   warn "$(t "Setup skipped (flag). Run it later: cd $PROJECT_DIR && npm run setup" "Настройка пропущена (флаг). Запустите потом: cd $PROJECT_DIR && npm run setup")"
@@ -784,25 +875,32 @@ BUILD_STAMP=".output/.iva-install-build"
 # is unknowable, and an unknowable state must never skip a build: the answer would be the
 # hash of .env alone, and changed code would keep the stale output.
 install_build_fingerprint() {
-  local head
+  local head answer
   head="$(git -C "$PROJECT_DIR" rev-parse HEAD 2>/dev/null || true)"
   [ -n "$head" ] || return 1
-  {
-    printf '%s\n' "$head"
-    git -C "$PROJECT_DIR" status --porcelain=v1 --untracked-files=all
-    git -C "$PROJECT_DIR" diff HEAD --binary
-    # status names the untracked files, this hashes what is in them: a source file the user
-    # added by hand is part of the build like any other.
-    git -C "$PROJECT_DIR" ls-files --others --exclude-standard \
-      | git -C "$PROJECT_DIR" hash-object --stdin-paths 2>/dev/null || true
-    if [ -f "$PROJECT_DIR/.env" ]; then
-      # Never fatal: pipefail would turn an unreadable file into a failed install, and an
-      # answer that cannot be reproduced is exactly the one that must not skip the build.
-      git hash-object -- "$PROJECT_DIR/.env" 2>/dev/null || echo "unreadable-env-$$"
-    else
-      echo "no-env"
-    fi
-  } | git hash-object --stdin
+  # Every input must be read in full or there is no answer: a dangling symlink among the
+  # untracked files ends the hashing stream, and an answer missing the files after it would
+  # be stable while the code under it changed. Nothing printed, so the caller sees the
+  # failure as an empty fingerprint and builds.
+  answer="$(
+    {
+      printf '%s\n' "$head"
+      git -C "$PROJECT_DIR" status --porcelain=v1 --untracked-files=all
+      git -C "$PROJECT_DIR" diff HEAD --binary
+      # status names the untracked files, this hashes what is in them: a source file the
+      # user added by hand is part of the build like any other.
+      # The exits are explicit because errexit does not end a subshell of a pipeline on a
+      # failing pipeline inside it, and a half-read input is exactly what must not answer.
+      git -C "$PROJECT_DIR" ls-files --others --exclude-standard \
+        | git -C "$PROJECT_DIR" hash-object --stdin-paths 2>/dev/null || exit 1
+      if [ -f "$PROJECT_DIR/.env" ]; then
+        git hash-object -- "$PROJECT_DIR/.env" 2>/dev/null || exit 1
+      else
+        echo "no-env"
+      fi
+    } | git hash-object --stdin
+  )" || return 1
+  printf '%s\n' "$answer"
 }
 CURRENT_STEP="$(t "build" "сборка")"
 BUILD_FINGERPRINT="$(install_build_fingerprint || true)"
@@ -823,6 +921,7 @@ fi
 # 8. Live vault: a SEPARATE private git repo (memory + backup + Obsidian)
 #    Created from vault-template/ (a skeleton in the code repo); personal data never enters the code repo.
 # ─────────────────────────────────────────────────────────────────────────
+CURRENT_STEP="$(t "vault" "vault")"
 VAULT_DIR_REL="$(grep -E '^ASSISTANT_VAULT_DIR=' .env 2>/dev/null | head -n1 | cut -d= -f2- | tr -d '"' || true)"
 VAULT_DIR_REL="${VAULT_DIR_REL:-vault}"
 case "$VAULT_DIR_REL" in
@@ -836,6 +935,7 @@ ASSISTANT_VAULT_DIR="$VAULT_DIR_REL" node scripts/init-vault.mjs || warn "$(t "i
 # 8.5. The `iva` command in ~/.local/bin (update/config/doctor/uninstall/...).
 #     A wrapper with hardcoded node+project paths — works from any shell.
 # ─────────────────────────────────────────────────────────────────────────
+CURRENT_STEP="$(t "the iva command" "команда iva")"
 step "$(t "Installing the iva command in ~/.local/bin…" "Ставлю команду iva в ~/.local/bin…")"
 mkdir -p "$HOME/.local/bin"
 # Path resolution only, so the same shim keeps working once the install moves to
