@@ -383,6 +383,32 @@ void test("a changed .env rebuilds instead of reusing the output", (t) => {
   assert.match(world.calls(join(world.dir, "second.log")), /eve build/u);
 });
 
+void test("a first install into an empty directory still runs every stage", (t) => {
+  const world = createWorld(t);
+  const fresh = join(world.dir, "fresh");
+
+  const result = world.run({ env: { INSTALL_DIR: fresh } });
+
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  const calls = world.calls();
+  for (const stage of [
+    /^npm ci$/mu,
+    /^npm i -g agent-browser$/mu,
+    /^agent-browser install --with-deps$/mu,
+    /^npm i -g @googleworkspace\/cli@latest$/mu,
+    /^npm exec -- eve build$/mu,
+  ])
+    assert.match(calls, stage);
+  assert.equal(existsSync(join(fresh, ".output/server.mjs")), true);
+  // Nothing was preserved, so nothing had to be cleaned up either.
+  assert.deepEqual(leftovers(world.tmp), []);
+  assert.deepEqual(backups(fresh), []);
+  assert.equal(
+    execFileSync("git", ["stash", "list"], { cwd: fresh, encoding: "utf8" }),
+    "",
+  );
+});
+
 void test("the deferred wizard ends with enabled units and lingering, in that order", (t) => {
   const world = createWorld(t, { env: false });
 
