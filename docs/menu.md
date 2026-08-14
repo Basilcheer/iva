@@ -86,7 +86,7 @@ A status card built from the shared CLI/Telegram health probe plus the presence 
 - **No credentials** → instructions for my.telegram.org and a button to enter `api_id` / `api_hash`.
 - **Credentials, not running** → **Enable**, which launches `iva userbot setup` detached (the venv build is slow, so the screen shows a spinner and refreshes when it's done).
 - **Starting** → a bounded waiting state with **Disable** and **Refresh**.
-- **Unreachable** → the service is active but the bearer-gated proxy health route did not answer.
+- **Unreachable** → the service is active but the bearer-protected proxy health route did not answer.
 - **Login required** → the existing proxy session is reachable but Telethon is not authorized yet.
 - **Ready** → both the proxy and the personal Telegram account are healthy.
 

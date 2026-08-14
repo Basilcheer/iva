@@ -2,7 +2,7 @@
 
 Known gaps and deferred decisions, tracked so they don't get lost between releases.
 
-## 1. Approval gates (eve `tools.approval` + Telegram HITL)
+## 1. Approval prompts (eve `tools.approval` + Telegram HITL)
 
 eve ships a native tool-approval flow (human-in-the-loop confirmation before a tool
 runs). Iva doesn't wire it up yet — every tool call executes unattended. Adopting it

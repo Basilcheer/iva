@@ -6,7 +6,7 @@ Finds cards about the SAME entity that assert DIFFERENT values for a key field
 (company, role, status, phone, handle, …). These are the "stacked contradiction"
 that silent grep-recall surfaces as conflicting facts. This pass only REPORTS
 (dry-run, like dedup.py) — the nightly LLM rollup reads the report and resolves
-(rewrite current value + move old to ## History, per memory-processor rules).
+(rewrite Compiled Truth + move old to ## History, per memory-processor rules).
 
   python3 supersede.py <vault-dir> [--apply] [--verbose]
 

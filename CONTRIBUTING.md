@@ -48,7 +48,8 @@ There is no CI. The project is local-first by decision
 ([ADR-0004](docs/adr/0004-philosophy-is-the-review-bar.md)): no GitHub Actions, no
 merge checks, no review bots — `.github/` holds issue templates and nothing else.
 Whatever a build server would have caught, you catch on your own machine, and the review
-reads the diff against [docs/philosophy.md](docs/philosophy.md) and `docs/adr/`.
+reads the diff against [CONTEXT.md](CONTEXT.md) — the glossary, whose _Avoid_ lists bind
+code and docs alike — plus [docs/philosophy.md](docs/philosophy.md) and `docs/adr/`.
 
 These four catch most of it:
 

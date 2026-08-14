@@ -3,7 +3,7 @@
 ## Local-First Mode - Highest Priority
 
 - Team: Shima and the active agent. Work directly in the current checkout and branch.
-- Develop, inspect, build, review, and test locally. Never use GitHub Actions, CI services, pull requests, merge gates, branch protection, CodeRabbit, review bots, or external SDLC pipelines.
+- Develop, inspect, build, review, and test locally. Never use GitHub Actions, CI services, pull requests, merge checks, branch protection, CodeRabbit, review bots, or external SDLC pipelines.
 - GitHub is only a direct sync target when Shima explicitly asks to commit or push.
 - Skip ceremony-only plans, implementation journals, checklists, handoffs, and remote review loops unless explicitly requested.
 - Every behavior change gets relevant hostile local tests: malformed or junk input, repeated user actions, duplicate/stale/out-of-order events, races, interruption, retry, restart, timeout, partial writes, missing dependencies, stale generated output, and broken or partial builds. Randomized tests expose their seed.
@@ -15,6 +15,14 @@ operational scripts in `scripts/`, CLI entry in `bin/iva.mjs`.
 Design philosophy (skill vs code, thin harness, the wheel principle): docs/philosophy.md.
 Before wiring a new feature into code, check it against that document — most
 recurring problems should become skills, not mechanisms.
+
+The project canon is three files, and every diff review — human, orchestrator or
+critic — judges the change against all three (ADR-0004); a breach is red, no
+exceptions. CONTEXT.md is the glossary: one concept, one word, and the _Avoid_ list
+under each entry is binding for code, docs, commit messages and the agent's own
+instructions alike. docs/adr/ holds the decisions already made and the alternatives
+already rejected — argue with an ADR before contradicting it. docs/philosophy.md is
+the method above. Read them before proposing a change and again when reviewing one.
 
 Build: `npm run build` (materializes `data/custom/agent` in a disposable tree) or
 `npm run build:core` for a maintainer-only core build. A build is required after any authored
@@ -40,11 +48,11 @@ kind (no Co-Authored-By bots, no "Generated with" footers). See CLAUDE.md.
   narrow these entries, and reject files from these paths if they appear in
   Git's index. Also flag any hardcoded secret, token-looking literal, or absolute
   path from a specific machine (e.g. `/home/<user>/...`).
-- **Auth and permission gates.** `agent/lib/eve-auth.*` and `scripts/lib/*auth*`,
+- **Auth and permission checks.** `agent/lib/eve-auth.*` and `scripts/lib/*auth*`,
   `scripts/lib/listener-security.*` define who may talk to the assistant and which
   chats may trigger actions. Flag any change that widens an allow-list, removes a
   chat-type check (secrets/settings must stay private-chat-only), or bypasses these
-  gates from a new code path.
+  checks from a new code path.
 - **User data stays out of the repo.** Runtime user data belongs to the vault and
   `data/` (both untracked). Flag code that writes user content, chat logs, or
   generated files into tracked repo paths, and any staged change that includes files from

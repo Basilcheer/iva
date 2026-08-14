@@ -41,7 +41,7 @@ void test("daily rollup prompt exposes the same four card operations as the memo
   for (const fragment of [
     "ADD (new)",
     "UPDATE (existing subject, compatible new fact)",
-    "SUPERSEDE (contradicts a current value)",
+    "SUPERSEDE (contradicts the Compiled Truth)",
     "NOOP (already known)",
     "Pass history_entry only for SUPERSEDE",
     "the fact's own date, not today's",

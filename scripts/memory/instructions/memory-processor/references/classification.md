@@ -50,15 +50,15 @@ For every fact, pick one operation:
   the card's single dated `## Log`. UPDATE never creates a card and never carries a
   contradictory former/current pair.
 - **NOOP** — already captured and unchanged → do nothing.
-- **SUPERSEDE** — the new fact _contradicts_ a current value on an existing card (job changed,
-  moved city, status flipped). Do NOT just append: **rewrite** the card's current value
-  (frontmatter field + top of the description) to the new fact — this is "Compiled Truth", the
+- **SUPERSEDE** — the new fact _contradicts_ the Compiled Truth of an existing card (job changed,
+  moved city, status flipped). Do NOT just append: **rewrite** the card's Compiled Truth
+  (frontmatter field + top of the description) to the new fact — Compiled Truth is the
   living snapshot of what is true _now_ — and pass the OLD value to `write_card` through
   `history_entry` as a single dated line, `YYYY-MM-DD: fact` (for example
   `2026-07-31: TDI Group (held 2026-03→06)`), dated by the fact itself, not by today.
   `write_card` owns the `## History` section: never write that heading into `body` yourself.
   Never pass `history_entry` with ADD, UPDATE, or NOOP. History is append-only and never edited.
-  **Never leave two contradictory current values on the same subject.**
+  **Never leave two contradictory Compiled Truths on the same subject.**
   If a whole card is obsolete (project renamed, decision reverted), set `status: superseded`
   and add `superseded_by: [[new-card]]`.
 

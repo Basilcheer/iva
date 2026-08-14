@@ -4,12 +4,25 @@
 
 - Команда - Шима и активный агент. Работа идёт прямо в текущем checkout и текущей ветке.
 - Разработка, самопроверка, сборка и тесты выполняются локально.
-- Запрещены GitHub Actions, CI-сервисы, pull request, merge gates, branch protection, CodeRabbit, review-боты и внешний SDLC pipeline.
+- Запрещены GitHub Actions, CI-сервисы, pull request, merge-проверки, branch protection, CodeRabbit, review-боты и внешний SDLC pipeline.
 - GitHub используется только для прямой синхронизации, когда Шима явно просит commit или push.
 - Не создавать process checklist, implementation journal, handoff и remote review loop без отдельного запроса.
 - В локальных тестах приоритет у мусорного ввода, тупых повторных действий пользователя, duplicate/stale/out-of-order событий, гонок, прерываний, retry, restart, timeout, partial writes, отсутствующих зависимостей и сломанных/частичных сборок. Randomized tests обязаны показывать seed.
 
 Guidance for Claude Code working in this repository.
+
+## 📐 Канон проекта — планка любого ревью
+
+Три файла, против которых судится каждый дифф (ADR-0004). Нарушение — red, без исключений.
+
+- `CONTEXT.md` — глоссарий: одно понятие — одно слово. Колонки _Avoid_ обязательны: эти
+  слова не идут ни в код, ни в доки, ни в коммит-сообщения, ни в инструкции агента.
+- `docs/adr/` — принятые решения и уже отвергнутые альтернативы. Спорить с ADR можно,
+  молча противоречить — нет.
+- `docs/philosophy.md` — метод: скилл важнее кода, тонкий harness, принцип колеса.
+
+Читать перед правкой и ещё раз при ревью. Рабочий контракт (раскладка, алиас `#*`,
+правила ревью) — `AGENTS.md`.
 
 ## 🚫 Commit messages — СТРОГО ЗАПРЕЩЕНО упоминать Claude
 

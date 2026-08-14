@@ -4,10 +4,10 @@ import { join } from "node:path";
 import { CORE_CAP } from "../lib/core-cap.ts";
 import { clampCore } from "../lib/core-clamp.ts";
 
-// Динамическая инструкция: каждый турн инжектит «ядро памяти» (vault/CORE.md) в системный
+// Динамическая инструкция: каждый турн инжектит CORE (vault/CORE.md) в системный
 // промпт — кто пользователь, постоянные предпочтения, активные цели, указатели. Это always-on
 // RAM памяти (аналог core memory у MemGPT): маленькое, переживает компактацию (инструкции —
-// не часть сжимаемой истории диалога). Пишет ядро ночной rollup; живой чат правит его только
+// не часть сжимаемой истории диалога). Пишет CORE ночной rollup; живой чат правит его только
 // на явное «запомни …». Clamp чистый и общий с ночным brain.
 const VAULT = process.env.ASSISTANT_VAULT_DIR ?? "vault";
 
@@ -21,12 +21,12 @@ function coreMarkdown(): string {
   if (!core) return "";
   // Тот же section-aware backstop, что у brain: указатели нельзя отрезать слепым slice.
   if (core.length > CORE_CAP) core = clampCore(core);
-  return `## Ядро памяти (CORE) — кто пользователь и что в работе\n${core}`;
+  return `## CORE — кто пользователь и что в работе\n${core}`;
 }
 
 export default defineDynamic({
   events: {
-    // turn.started — перечитывается каждый турн, чтобы ядро не «застывало» после правок.
+    // turn.started — перечитывается каждый турн, чтобы CORE не «застывал» после правок.
     "turn.started": () => defineInstructions({ markdown: coreMarkdown() }),
   },
 });

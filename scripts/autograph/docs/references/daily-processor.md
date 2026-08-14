@@ -45,7 +45,7 @@ For each item, run the Workflow 3 **Step 0 dedup-first** decision
 - **NOOP** — already captured, unchanged → skip.
 - **UPDATE** — same subject, new enrichment → sharpen `description`, add tags, append a
   dated `## Log` line.
-- **SUPERSEDE** — new fact contradicts a current value → rewrite Compiled Truth, old value
+- **SUPERSEDE** — new fact contradicts the Compiled Truth → rewrite it, old value
   to append-only `## History`.
 
 Resolve **every** entry in `.graph/supersede-candidates.json` while you are here.

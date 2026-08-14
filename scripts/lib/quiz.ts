@@ -489,22 +489,22 @@ export function personaMarkdown(code: string, lang: string) {
     .join("\n");
   const md = isRu
     ? [
-        `# Характер Ивы — ${card.name.ru} (${code})`,
+        `# PERSONA Ивы — ${card.name.ru} (${code})`,
         "",
         `Веди себя как «${card.name.ru}»: ${card.modus.ru}.`,
         "",
         phrases,
         "",
-        "Это профиль характера, а не тем разговора: соблюдай его в каждом ответе.",
+        "Это профиль стиля общения, а не тем разговора: соблюдай его в каждом ответе.",
       ].join("\n")
     : [
-        `# Iva's character — ${card.name.en} (${code})`,
+        `# Iva's PERSONA — ${card.name.en} (${code})`,
         "",
         `Act as the «${card.name.en}»: ${card.modus.en}.`,
         "",
         phrases,
         "",
-        "This is a character profile, not a topic: keep it in every reply.",
+        "This is a communication style profile, not a topic: keep it in every reply.",
       ].join("\n");
   return md.slice(0, 800);
 }

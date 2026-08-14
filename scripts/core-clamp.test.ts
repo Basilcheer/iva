@@ -40,6 +40,27 @@ void test("under-cap input is returned byte-identically", () => {
   assert.equal(clampCore(input), input);
 });
 
+// The shipped template's H1 and pointer label (vault-template/CORE.md). Every other fixture
+// in this file keeps the older wording on purpose: existing vaults still carry it.
+void test("the current template shape clamps and keeps its pointers exact", () => {
+  const input = fillTo(
+    "# CORE\n\n" +
+      "<!-- comment -->\n\n" +
+      "## Пользователь\n{FILL}\n\n" +
+      "## Предпочтения\n- undated, evicted first\n- 2026-07: kept\n\n" +
+      "## Активные цели (≤3)\n- goal\n\n" +
+      "## Указатели\n- Последний день: — · Индекс: vault/MOC.md\n",
+    CORE_CAP + 20,
+  );
+
+  const output = clampCore(input);
+  assert.ok(output.length <= CORE_CAP);
+  assert.ok(output.startsWith("# CORE\n"));
+  assert.ok(!output.includes("- undated, evicted first"));
+  assert.ok(output.includes("- 2026-07: kept"));
+  assert.equal(pointers(output), pointers(input));
+});
+
 void test("preferences evict undated bullets first, then oldest dated bullets", () => {
   const undated = "- durable but undated\n";
   const oldest = "- 2024-01: oldest dated\n";

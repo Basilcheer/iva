@@ -283,10 +283,10 @@ if (!cards) {
   cleared("authored-tree");
 }
 
-// ── 1b. CORE guard: the memory core must stay small (always-on floor stays flat) ──
+// ── 1b. CORE guard: CORE must stay small (always-on floor stays flat) ──
 // This runs before git add/commit below, so a repaired CORE is included in the nightly backup.
 const corePath = resolve(VAULT, "CORE.md");
-// Забываем проблему только там, где её реально проверили: без authored tree размер ядра
+// Забываем проблему только там, где её реально проверили: без authored tree размер CORE
 // измерить нечем, и «почищено» было бы выдумкой. Запись при этом ничего не блокирует — как
 // только дерево вернётся, ближайшая ночь либо снова скажет, либо очистит.
 let coreChecked = false;
@@ -355,7 +355,7 @@ if (unclosed.length) {
 
 // ── 2. Detect health score drop ──
 const history = readHealthHistory();
-// То же правило, что у ядра и фенсов: забываем только то, что реально проверили. Меньше двух
+// То же правило, что у CORE и фенсов: забываем только то, что реально проверили. Меньше двух
 // точек — сравнивать нечего, проверки не было, и отметка дросселя просто доживает свою неделю.
 let healthDropped = false;
 if (history.length >= 2) {
