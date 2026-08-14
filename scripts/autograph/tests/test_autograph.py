@@ -10,6 +10,7 @@ Usage: python3 test_autograph.py
 import sys
 import os
 import json
+import random
 import shutil
 import tempfile
 import subprocess
@@ -22,6 +23,11 @@ sys.path.insert(0, str(SCRIPTS_DIR))
 
 PASS = 0
 FAIL = 0
+
+# Случайные property-кейсы гоняются от фиксированного seed: прогон воспроизводим, а seed
+# печатается в шапке и в подробностях каждого провала, чтобы красный прогон повторялся
+# один в один. Другой seed — AUTOGRAPH_TEST_SEED=<число>.
+SEED = int(os.environ.get('AUTOGRAPH_TEST_SEED', '20260814'))
 
 
 def test(name: str, condition: bool, detail: str = ""):
@@ -314,6 +320,7 @@ def main():
         print(f"  vault:  {vault_dir}")
         print(f"  schema: {schema_path}")
         print(f"  tmp:    {tmp}")
+        print(f"  seed:   {SEED}")
         print(f"{'='*60}\n")
 
         # ═══════════════════════════════════════════════════════
@@ -2186,6 +2193,390 @@ def main():
                 got = [[s, e] for s, e, _m in _sections(lines, matcher)]
                 test(f"golden sections: {md_file.stem} ## {heading}",
                      got == ranges, f"{got} != {ranges}")
+
+        # ═══════════════════════════════════════════════════════
+        # 8. Ночная запись: атомарность, нечитаемые байты, кривой домен, фенсы
+        # ═══════════════════════════════════════════════════════
+        print("\n--- nightly write safety ---")
+        import os as _os
+        from engine import read_card, write_card
+        from moc import moc_stem
+        from dedup import append_history
+
+        # 8.1 write_card кладёт файл целиком и не оставляет временных хвостов
+        atomic_dir = tmp / "atomic"
+        atomic_dir.mkdir(exist_ok=True)
+        target = atomic_dir / "card.md"
+        target.write_text("---\ntype: note\n---\nстарое\n")
+        write_card(target, "---\ntype: note\n---\nновое\n")
+        test("write_card replaces content", target.read_text().endswith("новое\n"))
+        test("write_card leaves no temp files",
+             [p.name for p in atomic_dir.iterdir()] == ["card.md"],
+             str([p.name for p in atomic_dir.iterdir()]))
+
+        # 8.2 упавшая запись не трогает лежащий на диске файл (tmp+replace, не truncate).
+        # Ломаем сам момент записи временного файла: до os.replace дело не доходит.
+        class _Boom(Exception):
+            pass
+
+        real_fdopen = _os.fdopen
+
+        def _bad_fdopen(fd, *a, **kw):
+            _os.close(fd)
+            raise _Boom("disk full")
+
+        crashed = False
+        _os.fdopen = _bad_fdopen
+        try:
+            write_card(target, "---\ntype: note\n---\nнедописанное\n")
+        except _Boom:
+            crashed = True
+        finally:
+            _os.fdopen = real_fdopen
+        test("write_card propagates a failed write", crashed)
+        test("failed write keeps the old card intact",
+             target.read_text().endswith("новое\n"), target.read_text())
+        test("failed write leaves no temp files",
+             [p.name for p in atomic_dir.iterdir()] == ["card.md"],
+             str([p.name for p in atomic_dir.iterdir()]))
+
+        # 8.3 не-utf8 карточка: пропускаем с предупреждением, байты НЕ трогаем
+        broken_vault = tmp / "broken-bytes"
+        (broken_vault / "cards").mkdir(parents=True, exist_ok=True)
+        broken = broken_vault / "cards" / "latin1.md"
+        # Байт 0xe9 (latin-1 «é») плюс ровно та разметка, ради которой ночные писатели
+        # переписывают карточку: ссылка, которую graph.fix умеет починить, фантомная —
+        # которую вычищает link_cleanup, и та, которую переписывает redirect_links.
+        # Без этого прогон «пережил и не тронул» ничего бы не доказывал: скрипт просто
+        # не дошёл бы до записи.
+        raw_bytes = ("---\ntype: note\ntier: warm\nlast_accessed: 2020-01-01\n---\n"
+                     "# Caf\xe9\n\n## Related\n- [[good]]\n- [[phantom-missing]]\n"
+                     "- [[gone]]\n").encode('latin-1')
+        broken.write_bytes(raw_bytes)
+        good = broken_vault / "cards" / "good.md"
+        good.write_text("---\ntype: note\ntier: warm\nlast_accessed: 2020-01-01\n---\nтело\n")
+
+        test("read_card returns None on invalid utf-8", read_card(broken) is None)
+
+        # ПОРЯДОК НОЧИ. brain.ts гоняет cleanup → enforce → graph → decay → …, и защита
+        # обязана стоять у ПЕРВОГО, кто пишет: сотри байты он — всем следующим шагам файл
+        # достался бы уже валидным utf-8, и их защита не сработала бы никогда (ADR-0002).
+        # Первый — cleanup, и у него своя дорога к записи: он не читает карточку целиком,
+        # а разбирает фронтматтер построчно, поэтому битый байт кладём именно туда, да ещё
+        # и с раздутым description — без него cleanup просто не дошёл бы до записи.
+        cleanup_vault = tmp / "broken-bytes-cleanup"
+        (cleanup_vault / "cards").mkdir(parents=True, exist_ok=True)
+        bloat_unit = 'Subscriber/contact: interested in total life-tracking'
+        cleanup_broken = cleanup_vault / "cards" / "latin1-fm.md"
+        cleanup_broken_bytes = (
+            "---\ntype: note\ndescription: >-\n  "
+            + bloat_unit + ' ' + bloat_unit
+            + "\nname: Caf\xe9\ntier: warm\nlast_accessed: 2020-01-01\n---\n"
+            "# Body\n\nbody bytes\n").encode('latin-1')
+        cleanup_broken.write_bytes(cleanup_broken_bytes)
+        # Контроль: такая же раздутая, но читаемая карточка в том же прогоне обязана
+        # почиститься — иначе «байты целы» доказывало бы лишь то, что cleanup не работает.
+        cleanup_ok = cleanup_vault / "cards" / "bloated-ok.md"
+        cleanup_ok.write_text(
+            "---\ntype: note\ndescription: >-\n  "
+            + bloat_unit + ' ' + bloat_unit
+            + "\ntier: warm\nlast_accessed: 2020-01-01\n---\n# Body\n\nтело\n")
+
+        code, _, err = run([py, str(SCRIPTS_DIR / 'cleanup.py'),
+                            str(cleanup_vault), '--apply'])
+        test("cleanup --apply survives an undecodable frontmatter", code == 0, err[:300])
+        test("cleanup left the undecodable bytes untouched (byte for byte)",
+             cleanup_broken.read_bytes() == cleanup_broken_bytes,
+             repr(cleanup_broken.read_bytes()[:80]))
+        test("cleanup warns about the file it skipped",
+             'not valid utf-8' in err, err[:300])
+        test("cleanup did clean the readable bloated card",
+             cleanup_ok.read_text().count(bloat_unit) == 1,
+             cleanup_ok.read_text()[:200])
+
+        # Каскад целиком, ровно в порядке ночи: следующие шаги тоже не трогают байты.
+        for step_argv in (
+            ['enforce.py', str(cleanup_vault), str(schema_path), '--apply'],
+            ['engine.py', 'decay', str(cleanup_vault), str(schema_path)],
+        ):
+            code, _, err = run([py, str(SCRIPTS_DIR / step_argv[0]), *step_argv[1:]])
+            test(f"night cascade: {step_argv[0]} survives the undecodable card",
+                 code == 0, err[:200])
+        test("night cascade left the undecodable bytes untouched (byte for byte)",
+             cleanup_broken.read_bytes() == cleanup_broken_bytes,
+             repr(cleanup_broken.read_bytes()[:80]))
+        test("night cascade did process the readable card",
+             'relevance' in cleanup_ok.read_text())
+
+        code, out, err = run([py, str(SCRIPTS_DIR / 'enforce.py'),
+                              str(broken_vault), str(schema_path), '--apply'])
+        test("enforce --apply survives an undecodable card", code == 0, err[:300])
+        test("enforce left the undecodable bytes untouched (byte for byte)",
+             broken.read_bytes() == raw_bytes,
+             repr(broken.read_bytes()[:60]))
+        test("enforce warns about the file it skipped",
+             'not valid utf-8' in err, err[:300])
+        test("enforce counts the skipped file", 'Unreadable skipped: 1' in out
+             or 'Unreadable skipped:  1' in out, out[-400:])
+        test("enforce still fixed the readable card",
+             'tags' in good.read_text() or 'relevance' in good.read_text())
+        report = json.loads((broken_vault / '.graph' / 'enforce-report.json').read_text())
+        test("enforce report carries the skip", report.get('skipped_unreadable') == 1,
+             str(report))
+
+        code, _, err = run([py, str(SCRIPTS_DIR / 'engine.py'), 'decay',
+                            str(broken_vault), str(schema_path)])
+        test("decay survives an undecodable card", code == 0, err[:200])
+        test("decay left the undecodable bytes untouched",
+             broken.read_bytes() == raw_bytes)
+        test("decay still updated the readable card",
+             'relevance' in good.read_text())
+
+        code, _, _ = run([py, str(SCRIPTS_DIR / 'engine.py'), 'stats',
+                          str(broken_vault), str(schema_path)])
+        test("stats survives an undecodable card", code == 0)
+        code, _, _ = run([py, str(SCRIPTS_DIR / 'engine.py'), 'init',
+                          str(broken_vault), str(schema_path)])
+        test("init survives an undecodable card", code == 0)
+        test("init left the undecodable bytes untouched",
+             broken.read_bytes() == raw_bytes)
+
+        # Класс ошибки закрыт не на пути одной ночи, а у КАЖДОГО, кто переписывает
+        # карточку: первый же писатель с errors='replace' уничтожает байты, и защита
+        # всех, кто идёт следом, становится мёртвым кодом. Проверяем поведением —
+        # каждый писатель гоняется в apply-режиме поверх нечитаемой карточки.
+        code, _, err = run([py, str(SCRIPTS_DIR / 'link_cleanup.py'),
+                            str(broken_vault), '--apply'])
+        test("link_cleanup --apply survives an undecodable card", code == 0, err[:200])
+        test("link_cleanup left the undecodable bytes untouched",
+             broken.read_bytes() == raw_bytes)
+
+        # graph.fix переписывает файл только по СПИСКУ битых ссылок, поэтому зовём
+        # функцию напрямую с той ссылкой, которую она умеет чинить ([[good]] → cards/good).
+        import graph as _graph
+        applied = _graph.fix_broken_links(
+            broken_vault,
+            {'broken_link_list': [{'source': 'cards/latin1', 'target': 'good'}]},
+            apply=True)[1]
+        test("graph.fix_broken_links skipped the undecodable card", applied == 0,
+             str(applied))
+        test("graph.fix left the undecodable bytes untouched",
+             broken.read_bytes() == raw_bytes)
+
+        # enrich применяет результаты LLM-прогона из готовых batch-*-results.json —
+        # кладём такой файл руками и проверяем, что нечитаемую карточку он обходит,
+        # а соседнюю читаемую честно правит.
+        import enrich as _enrich
+        results_dir = tmp / "enrich-results"
+        results_dir.mkdir(exist_ok=True)
+        (results_dir / 'batch-001-results.json').write_text(json.dumps({
+            'results': [
+                {'path': 'cards/latin1.md', 'tags': ['tag-a']},
+                {'path': 'cards/good.md', 'tags': ['tag-b']},
+            ]
+        }))
+        applied = _enrich.apply_tags(broken_vault, results_dir)
+        test("enrich apply_tags skipped the undecodable card", applied == 1, str(applied))
+        test("enrich apply_tags left the undecodable bytes untouched",
+             broken.read_bytes() == raw_bytes)
+        test("enrich apply_tags did tag the readable card",
+             'tag-b' in good.read_text(), good.read_text()[:120])
+
+        # dedup применяется только через манифест, поэтому его писателей зовём напрямую.
+        import dedup as _dedup
+        broken_extra = broken_vault / "cards" / "latin1-extra.md"
+        broken_extra.write_bytes(raw_bytes)
+        test("merge_content refuses an undecodable canonical",
+             _dedup.merge_content(broken, [good]) is False)
+        test("merge_content left the undecodable canonical untouched",
+             broken.read_bytes() == raw_bytes)
+        good_before = good.read_bytes()
+        test("merge_content skips an undecodable extra",
+             _dedup.merge_content(good, [broken_extra]) is False)
+        test("merge_content left both files untouched",
+             good.read_bytes() == good_before and broken_extra.read_bytes() == raw_bytes)
+        _dedup.redirect_links(broken_vault, ['cards/gone.md'], 'cards/good.md')
+        test("redirect_links left the undecodable card untouched",
+             broken.read_bytes() == raw_bytes)
+        test("thin_crm_overlay refuses an undecodable card",
+             _dedup.thin_crm_overlay(broken_vault, 'cards/latin1.md',
+                                     'cards/good.md') is False)
+        test("thin_crm_overlay left the undecodable card untouched",
+             broken.read_bytes() == raw_bytes)
+        broken_extra.unlink()
+
+        # 8.4 домен с разделителем пути не роняет генерацию MOC
+        test("moc_stem keeps a plain domain", moc_stem('work') == 'MOC-work')
+        test("moc_stem flattens a path-like domain",
+             moc_stem('work/clients') == 'MOC-work-clients')
+        test("moc_stem survives a domain of only separators",
+             moc_stem('../..') == 'MOC-other')
+        test("moc_stem keeps cyrillic", moc_stem('работа') == 'MOC-работа')
+
+        slash_vault = tmp / "slash-domain"
+        (slash_vault / "cards").mkdir(parents=True, exist_ok=True)
+        (slash_vault / "cards" / "one.md").write_text(
+            "---\ntype: note\ndomain: work/clients\ndescription: Клиенты\ntags: [a]\n---\n# One\n")
+        (slash_vault / "cards" / "two.md").write_text(
+            "---\ntype: note\ndomain: personal\ndescription: Личное\ntags: [a]\n---\n# Two\n")
+        code, out, err = run([py, str(SCRIPTS_DIR / 'moc.py'), 'generate',
+                              str(slash_vault), str(schema_path)])
+        test("moc generate survives a path-like domain", code == 0, err[:300])
+        test("moc wrote the flattened file",
+             (slash_vault / 'MOC' / 'MOC-work-clients.md').exists())
+        test("moc did not lose the other domain",
+             (slash_vault / 'MOC' / 'MOC-personal.md').exists())
+        hub_path = slash_vault / 'MOC.md'
+        hub = hub_path.read_text() if hub_path.exists() else ''
+        test("hub links the flattened MOC", '[[MOC/MOC-work-clients]]' in hub,
+             hub or 'MOC.md not written')
+        test("hub keeps no broken link", '[[MOC/MOC-work/clients]]' not in hub)
+
+        # 8.5 append_history не пишет внутрь код-фенса
+        fenced = ("# Карточка\n\nтекст\n\n```md\n## History\n- цитата\n```\n\n"
+                  "## History\n- 2026-01-01: company: A\n\n## Log\n- запись\n")
+        appended = append_history(fenced, ['- 2026-08-14: company: B'])
+        fence_block = appended.split('```')[1]
+        test("append_history keeps the fenced block untouched",
+             '2026-08-14' not in fence_block, fence_block)
+        real_section = appended.split('## History')[-1].split('## Log')[0]
+        test("append_history writes into the real History section",
+             '- 2026-08-14: company: B' in real_section, real_section)
+        test("append_history did not add a second History",
+             appended.count('## History') == fenced.count('## History'), appended)
+
+        # Единственный ## History — внутри фенса: пишем свою секцию, а не в чужой код.
+        only_fenced = "# Карточка\n\n```md\n## History\n- цитата\n```\n"
+        appended2 = append_history(only_fenced, ['- 2026-08-14: company: B'])
+        test("fenced-only History is not treated as a section",
+             appended2.split('```')[1].count('2026-08-14') == 0)
+        test("fenced-only History gets a real section appended",
+             appended2.rstrip().endswith('- 2026-08-14: company: B'), appended2)
+
+        # Карточка без History — поведение прежнее.
+        plain = "# Карточка\n\nтекст\n"
+        test("no History section still creates one",
+             append_history(plain, ['- x']) == "# Карточка\n\nтекст\n\n## History\n- x\n")
+
+        # ═══════════════════════════════════════════════════════
+        # 9. Свойства на случайных входах (seed фиксирован и печатается)
+        # ═══════════════════════════════════════════════════════
+        print(f"\n--- properties (seed={SEED}) ---")
+        rnd = random.Random(SEED)
+
+        # 9.1 append_history: запись НИКОГДА не попадает внутрь фенса, а настоящая
+        # секция History остаётся ровно одна. Карточки собираются случайно: оба вида
+        # фенсов, ## History и внутри кода, и снаружи, посторонние секции.
+        def random_card() -> tuple:
+            """(текст карточки, есть ли настоящая ## History вне фенсов)."""
+            lines = ['# Карточка', '']
+            has_real = False
+            for _ in range(rnd.randint(1, 9)):
+                roll = rnd.random()
+                if roll < 0.3:
+                    # Код-фенс, внутри которого может лежать что угодно, включая
+                    # строку, похожую на заголовок секции.
+                    mark = rnd.choice(['```', '~~~', '````'])
+                    info = rnd.choice(['', 'md', 'python'])
+                    lines.append(mark + info)
+                    for _ in range(rnd.randint(1, 4)):
+                        lines.append(rnd.choice(
+                            ['## History', '- цитата', '## Log', 'код', '']))
+                    lines.append(mark)
+                elif roll < 0.45 and not has_real:
+                    lines.append('## History')
+                    for _ in range(rnd.randint(0, 3)):
+                        lines.append(f'- 2026-01-0{rnd.randint(1, 9)}: field: v')
+                    has_real = True
+                elif roll < 0.6:
+                    lines.append(rnd.choice(['## Log', '## Related', '## Notes']))
+                    lines.append('- строка')
+                else:
+                    lines.append(rnd.choice(['текст', '', 'ещё текст', '  отступ']))
+            return '\n'.join(lines) + '\n', has_real
+
+        prop_fence_ok = True
+        prop_single_ok = True
+        prop_detail = ''
+        for case in range(120):
+            body, _ = random_card()
+            marker = f'- 2026-08-14: PROP-{case}'
+            result = append_history(body, [marker])
+            lines = result.split('\n')
+            outside = _outside_fences(lines)
+            positions = [i for i, l in enumerate(lines) if l == marker]
+            # Строка вставлена ровно один раз и вне любого фенса.
+            if len(positions) != 1 or not outside[positions[0]]:
+                prop_fence_ok = False
+                prop_detail = f'case {case}, seed={SEED}: {result!r}'
+                break
+            headings = [i for i, l in enumerate(lines)
+                        if outside[i] and l.strip() == '## History']
+            if len(headings) != 1:
+                prop_single_ok = False
+                prop_detail = f'case {case}, seed={SEED}: {result!r}'
+                break
+        test("property: append_history never writes inside a fence",
+             prop_fence_ok, prop_detail)
+        test("property: exactly one real ## History section remains",
+             prop_single_ok, prop_detail)
+
+        # 9.2 moc_stem: какой бы домен ни пришёл из фронтматтера, файл остаётся
+        # ВНУТРИ каталога MOC — ни подкаталога, ни выхода наверх.
+        moc_root = (tmp / 'moc-prop' / 'MOC').resolve()
+        moc_root.mkdir(parents=True, exist_ok=True)
+        alphabet = list('abcяё/\\.. -_:*?"<>|\t\n\x00%$#@!') + ['..', '../', 'работа']
+        prop_path_ok = True
+        prop_path_detail = ''
+        for case in range(150):
+            domain = ''.join(rnd.choice(alphabet)
+                             for _ in range(rnd.randint(1, 12)))
+            candidate = (moc_root / f'{moc_stem(domain)}.md').resolve()
+            if candidate.parent != moc_root or not candidate.name.endswith('.md'):
+                prop_path_ok = False
+                prop_path_detail = f'domain={domain!r} → {candidate}, seed={SEED}'
+                break
+        test("property: any domain stays inside the MOC directory",
+             prop_path_ok, prop_path_detail)
+
+        # 9.3 write_card: сбой в любой точке (запись временного файла или сам replace)
+        # оставляет прежнюю карточку байт в байт и не плодит мусор в каталоге.
+        prop_atomic_ok = True
+        prop_atomic_detail = ''
+        crash_dir = tmp / 'atomic-prop'
+        crash_dir.mkdir(exist_ok=True)
+        real_replace = _os.replace
+        for case in range(60):
+            card_path = crash_dir / 'card.md'
+            before_bytes = ('---\ntype: note\n---\n' +
+                            ''.join(rnd.choice('абвгde \n#-') for _ in range(rnd.randint(1, 400)))
+                            ).encode('utf-8')
+            card_path.write_bytes(before_bytes)
+            fail_at = rnd.choice(['write', 'replace'])
+            if fail_at == 'write':
+                _os.fdopen = _bad_fdopen
+            else:
+                def _bad_replace(*a, **kw):
+                    raise _Boom("power loss")
+                _os.replace = _bad_replace
+            try:
+                write_card(card_path, 'новое содержимое\n')
+            except _Boom:
+                pass
+            except Exception as exc:  # noqa: BLE001 — любое другое исключение = провал свойства
+                prop_atomic_ok = False
+                prop_atomic_detail = f'case {case}: unexpected {exc!r}, seed={SEED}'
+            finally:
+                _os.fdopen = real_fdopen
+                _os.replace = real_replace
+            leftovers = sorted(p.name for p in crash_dir.iterdir())
+            if card_path.read_bytes() != before_bytes or leftovers != ['card.md']:
+                prop_atomic_ok = False
+                prop_atomic_detail = (f'case {case} ({fail_at}): leftovers={leftovers}, '
+                                      f'changed={card_path.read_bytes() != before_bytes}, seed={SEED}')
+                break
+        test("property: a crashed write leaves the old card byte-for-byte",
+             prop_atomic_ok, prop_atomic_detail)
 
         # ═══════════════════════════════════════════════════════
         # SUMMARY

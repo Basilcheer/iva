@@ -17,7 +17,8 @@ from pathlib import Path
 from datetime import datetime
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from common import walk_vault, rel_path, extract_wikilinks, build_link_index, resolve_link_target
+from common import (walk_vault, rel_path, extract_wikilinks, build_link_index,
+                    resolve_link_target, read_card, write_card)
 
 
 def build_stems_and_paths(vault_dir: Path) -> dict:
@@ -99,7 +100,10 @@ def run_cleanup(vault_dir: Path, apply: bool = False) -> dict:
 
     for md in walk_vault(vault_dir):
         report['total_files_scanned'] += 1
-        content = md.read_text(errors='replace')
+        # Строгое чтение: с --apply прочитанное уходит обратно в тот же файл.
+        content = read_card(md)
+        if content is None:
+            continue
 
         if '## Related' not in content:
             continue
@@ -119,7 +123,7 @@ def run_cleanup(vault_dir: Path, apply: bool = False) -> dict:
             report['files_modified'] += 1
 
             if apply:
-                md.write_text(new_content)
+                write_card(md, new_content)
 
     # Print summary
     print(f"Scanned: {report['total_files_scanned']} files")

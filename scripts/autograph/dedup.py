@@ -28,8 +28,10 @@ from common import (
     parse_frontmatter, walk_vault, rel_path,
     load_schema, get_richness_fields, collect_duplicate_groups,
     write_frontmatter, infer_domain, infer_type,
-    get_conflict_fields, card_recency_date,
+    get_conflict_fields, card_recency_date, read_card, write_card,
 )
+# Один сканер фенсов на весь autograph — свой второй разъехался бы с enforce.py.
+from enforce import _outside_fences
 
 
 def content_richness(content: str, bonus_fields: list | None = None) -> int:
@@ -293,18 +295,35 @@ def _history_line(from_date: str, to_date: str, field: str, val, today: str) -> 
 
 
 def append_history(body: str, lines: list[str]) -> str:
-    """Append lines to an append-only ## History section (existing lines untouched)."""
+    """Append lines to an append-only ## History section (existing lines untouched).
+
+    Headings are only headings OUTSIDE code fences: a card quoting `## History` inside a
+    ```-block used to catch this writer, and the dated line landed in the middle of the
+    quoted code instead of the real section (or a real History was never found and a
+    second one got appended). Fence scanning is enforce.py's `_outside_fences` — the same
+    one the enforcer and card-store use, so all writers agree on what a section is.
+    """
     add = '\n'.join(lines)
     text = body.rstrip('\n')
-    marker = re.search(r'^## History[ \t]*$', text, re.MULTILINE)
-    if not marker:
+    body_lines = text.split('\n')
+    outside = _outside_fences(body_lines)
+    marker = next(
+        (i for i, line in enumerate(body_lines)
+         if outside[i] and re.match(r'^## History[ \t]*$', line)),
+        None)
+    if marker is None:
         return text + '\n\n## History\n' + add + '\n'
     # insert at the end of the History section (before the next ## or EOF)
-    nxt = re.search(r'^## ', text[marker.end():], re.MULTILINE)
-    if nxt:
-        at = marker.end() + nxt.start()
-        return text[:at].rstrip('\n') + '\n' + add + '\n\n' + text[at:]
-    return text + '\n' + add + '\n'
+    end = len(body_lines)
+    for i in range(marker + 1, len(body_lines)):
+        if outside[i] and body_lines[i].startswith('## '):
+            end = i
+            break
+    head = '\n'.join(body_lines[:end]).rstrip('\n')
+    tail = '\n'.join(body_lines[end:])
+    if not tail:
+        return head + '\n' + add + '\n'
+    return head + '\n' + add + '\n\n' + tail
 
 
 def merge_content(canonical_path: Path, extra_paths: list[Path],
@@ -317,7 +336,11 @@ def merge_content(canonical_path: Path, extra_paths: list[Path],
     """
     conflict = set(conflict_fields or [])
     today = today or date.today().isoformat()
-    canon_content = canonical_path.read_text(errors='replace')
+    # Читаем строго: всё, что здесь прочитано, ниже уходит обратно на диск, а
+    # errors='replace' превратил бы недекодируемые байты в U+FFFD навсегда.
+    canon_content = read_card(canonical_path)
+    if canon_content is None:
+        return False
     canon_fm, canon_body, canon_lines = parse_frontmatter(canon_content)
     if canon_fm is None:
         canon_fm = {}
@@ -325,9 +348,8 @@ def merge_content(canonical_path: Path, extra_paths: list[Path],
     history_lines: list[str] = []
 
     for extra_path in extra_paths:
-        try:
-            extra_content = extra_path.read_text(errors='replace')
-        except Exception:
+        extra_content = read_card(extra_path)
+        if extra_content is None:
             continue
         extra_fm, extra_body, _ = parse_frontmatter(extra_content)
         if extra_fm is None:
@@ -381,7 +403,7 @@ def merge_content(canonical_path: Path, extra_paths: list[Path],
 
     if changed:
         new_fm = write_frontmatter(canon_fm, canon_lines)
-        canonical_path.write_text(f"---\n{new_fm}\n---\n{canon_body}")
+        write_card(canonical_path, f"---\n{new_fm}\n---\n{canon_body}")
 
     return changed
 
@@ -410,9 +432,8 @@ def redirect_links(vault_dir: Path, old_paths: list[str], canonical: str) -> int
 
     count = 0
     for md in walk_vault(vault_dir):
-        try:
-            content = md.read_text(errors='replace')
-        except Exception:
+        content = read_card(md)
+        if content is None:
             continue
 
         new_content = content
@@ -426,7 +447,7 @@ def redirect_links(vault_dir: Path, old_paths: list[str], canonical: str) -> int
                 count += 1
 
         if new_content != content:
-            md.write_text(new_content)
+            write_card(md, new_content)
 
     return count
 
@@ -438,7 +459,9 @@ def thin_crm_overlay(
     full = vault_dir / crm_path
     if not full.exists():
         return False
-    content = full.read_text(errors='replace')
+    content = read_card(full)
+    if content is None:
+        return False
     fm, body, fm_lines = parse_frontmatter(content)
     fm = fm or {}
     canonical_noext = canonical.replace('.md', '')
@@ -460,7 +483,7 @@ def thin_crm_overlay(
     new_content = f"---\n{new_fm}\n---\n{new_body}"
     if new_content == content:
         return False
-    full.write_text(new_content)
+    write_card(full, new_content)
     return True
 
 

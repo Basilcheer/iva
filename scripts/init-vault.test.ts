@@ -151,3 +151,39 @@ void test("init-vault leaves a non-empty pre-existing vault untouched", async (t
     "true",
   );
 });
+
+// Атомарная запись оставляет временный файл рядом с данными, если писателя убили
+// сигналом, а ночной brain делает `git add -A` — огрызок не должен попасть в историю
+// vault. Проверяем НАСТОЯЩИМ git'ом и настоящими именами обоих писателей: python
+// (tempfile.mkstemp → tmpXXXX.tmp) и TypeScript (fs-atomic → <файл>.tmp-<pid>-<uuid>).
+void test("the vault template ignores half-written temp files, not real cards", async (t) => {
+  const root = await sandbox(t);
+  const vault = join(root, "vault");
+  mkdirSync(join(vault, "cards"), { recursive: true });
+  const template = fileURLToPath(
+    new URL("../vault-template/.gitignore", import.meta.url),
+  );
+  writeFileSync(join(vault, ".gitignore"), readFileSync(template, "utf8"));
+
+  execFileSync("git", ["-C", vault, "init", "-q"]);
+  for (const name of [
+    "cards/tmpjsxhjx4o.tmp",
+    "cards/ivan.md.tmp-23940-c9d1d4da-9f4c-477f-ac92-7972aedd15ea",
+    "cards/ivan.md",
+    "MOC.md",
+  ])
+    writeFileSync(join(vault, name), "x\n");
+  execFileSync("git", ["-C", vault, "add", "-A"]);
+
+  const staged = execFileSync(
+    "git",
+    ["-C", vault, "diff", "--cached", "--name-only"],
+    {
+      encoding: "utf8",
+    },
+  )
+    .split("\n")
+    .filter(Boolean)
+    .sort();
+  assert.deepEqual(staged, [".gitignore", "MOC.md", "cards/ivan.md"]);
+});

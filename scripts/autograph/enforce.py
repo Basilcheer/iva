@@ -19,7 +19,8 @@ from common import (
     load_schema, parse_frontmatter, write_frontmatter, format_field,
     walk_vault, rel_path, infer_domain, infer_type, IGNORE_DIRS,
     get_type_aliases, get_field_fixes, get_node_types, get_status_defaults,
-    collect_duplicate_groups, collapse_repeated_description, cap_description, DESC_CAP
+    collect_duplicate_groups, collapse_repeated_description, cap_description, DESC_CAP,
+    read_card, write_card
 )
 
 ENFORCE_MAX_FILE_BYTES = 10 * 1024 * 1024
@@ -225,7 +226,7 @@ def enforce(vault_dir: Path, schema: dict, apply=False, verbose=False):
 
     stats = {
         'total': 0, 'valid': 0, 'fixed': 0, 'needs_review': 0,
-        'no_fm': 0, 'skipped_oversize': 0,
+        'no_fm': 0, 'skipped_oversize': 0, 'skipped_unreadable': 0,
         'fixes': defaultdict(int), 'review_items': [], 'compile_candidates': []
     }
     eligible_files = []
@@ -238,8 +239,16 @@ def enforce(vault_dir: Path, schema: dict, apply=False, verbose=False):
                 stats['skipped_oversize'] += 1
                 print(f"  WARNING: skipping oversized file: {rp}")
                 continue
-            content = md.read_text(errors='replace')
         except Exception:
+            continue
+        # Первый писатель ночи — cleanup (brain.ts: cleanup → enforce → … → decay), и он
+        # тоже читает строго; enforce идёт сразу за ним и переписывает КАЖДУЮ карточку,
+        # которую поправил. Прочитай он её с errors='replace' — недекодируемые байты
+        # пропали бы навсегда, а всем, кто идёт следом, файл достался бы уже валидным
+        # utf-8, и их защита не сработала бы никогда (ADR-0002).
+        content = read_card(md)
+        if content is None:
+            stats['skipped_unreadable'] += 1
             continue
         eligible_files.append(md)
 
@@ -366,7 +375,7 @@ def enforce(vault_dir: Path, schema: dict, apply=False, verbose=False):
         # --- WRITE ---
         if changed and apply:
             new_fm = write_frontmatter(fields, orig_lines)
-            md.write_text(f"---\n{new_fm}\n---\n{body}")
+            write_card(md, f"---\n{new_fm}\n---\n{body}")
 
         if changed:
             stats['fixed'] += 1
@@ -426,6 +435,7 @@ def main():
     print(f"  Needs review:    {stats['needs_review']}")
     print(f"  No frontmatter:  {stats['no_fm']}")
     print(f"  Oversize skipped:{stats['skipped_oversize']:>4}")
+    print(f"  Unreadable skipped:{stats['skipped_unreadable']:>2}")
     print(f"\n  Fixes:")
     for k, v in sorted(stats['fixes'].items(), key=lambda x: -x[1]):
         print(f"    {k}: {v}")
@@ -449,6 +459,7 @@ def main():
         'score': score, 'total': stats['total'], 'valid': stats['valid'],
         'fixed': stats['fixed'], 'review': stats['needs_review'],
         'skipped_oversize': stats['skipped_oversize'],
+        'skipped_unreadable': stats['skipped_unreadable'],
         'duplicates': len(dupes), 'mode': mode,
         'fixes': dict(stats['fixes']),
         'compile_candidates': sorted(stats['compile_candidates']),

@@ -23,7 +23,8 @@ from collections import defaultdict
 from common import (
     load_schema, parse_frontmatter, walk_vault, rel_path,
     extract_wikilinks, infer_domain, get_domain_map, IGNORE_DIRS,
-    build_link_index, normalize_link_target, resolve_link_target, is_hub_path
+    build_link_index, normalize_link_target, resolve_link_target, is_hub_path,
+    read_card, write_card
 )
 
 EMBED_EXTS = {'.jpg', '.jpeg', '.png', '.gif', '.svg', '.pdf', '.mp3', '.mp4', '.webp',
@@ -355,7 +356,11 @@ def fix_broken_links(vault_dir: Path, graph: dict, apply: bool = False) -> list:
             src_path = vault_dir / (fix['source'] + '.md')
             if not src_path.exists():
                 continue
-            content = src_path.read_text(errors='replace')
+            # Читаем строго и пишем атомарно: всё прочитанное здесь уходит обратно в тот
+            # же файл, а errors='replace' затёр бы недекодируемые байты навсегда.
+            content = read_card(src_path)
+            if content is None:
+                continue
             pattern = re.compile(
                 r'\[\[' + re.escape(normalize_link_target(fix['old'])) + r'(?P<anchor>#[^\]|]+)?(?P<alias>\|[^\]]+)?\]\]'
             )
@@ -364,7 +369,7 @@ def fix_broken_links(vault_dir: Path, graph: dict, apply: bool = False) -> list:
                     lambda m: f"[[{fix['new']}{m.group('anchor') or ''}{m.group('alias') or ''}]]",
                     content
                 )
-                src_path.write_text(content)
+                write_card(src_path, content)
                 applied += 1
         return fixes, applied
     return fixes, 0

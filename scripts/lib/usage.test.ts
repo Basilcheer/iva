@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { appendUsage, subagentTurnId } from "#lib/usage.ts";
@@ -107,6 +107,108 @@ void test("windowed summaries still sum inputs across turns", () => {
   );
   assert.equal(agg.totals.in, 300);
   assert.equal(agg.totals.turns, 2);
+});
+
+// by-model/by-source считают по всему логу, а лог подрезается по размеру: «total» без
+// даты читался бы как «за всё время». Отчёт обязан назвать, с какой записи он считает.
+void test("lifetime windows report the date they actually count from", () => {
+  const entries = [
+    step({ ts: "2026-06-01T10:00:00Z", model: "a", total: 100 }),
+    step({ ts: "2026-07-31T10:00:00Z", model: "b", total: 200 }),
+  ];
+  const agg = summarize(entries, { window: "by-model", tz: "UTC" });
+  assert.equal(agg.since, "2026-06-01");
+  const report = formatUsageReport(agg);
+  assert.match(report, /^By model since 2026-06-01 \(total 300 tokens\):/);
+
+  // Пустой лог не выдумывает дату.
+  const empty = summarize([], { window: "by-source", tz: "UTC" });
+  assert.equal(empty.since, null);
+  assert.equal(formatUsageReport(empty), "No usage logged yet.");
+
+  // Битая ts первой строки не превращается в «Invalid Date».
+  const skewed = summarize(
+    [step({ ts: "не дата" }), step({ ts: "2026-07-31T10:00:00Z" })],
+    { window: "by-source", tz: "UTC" },
+  );
+  assert.equal(skewed.since, "2026-07-31");
+});
+
+// Окно с датой тоже не застраховано: хвост лога — порядка десяти тысяч шагов, а месяц
+// активного пользователя того же порядка. Если лог не достаёт до начала окна, отчёт
+// обязан назвать дату, с которой посчитал; если достаёт — молчать.
+void test("a windowed report names its start date only when the log is short", () => {
+  const now = Date.parse("2026-08-14T12:00:00Z");
+  // Лог начинается 10 августа — до начала месяца не достаёт.
+  const short = summarize(
+    [
+      step({ ts: "2026-08-10T09:00:00Z", turnId: "t1", total: 100 }),
+      step({ ts: "2026-08-14T09:00:00Z", turnId: "t2", total: 200 }),
+    ],
+    { window: "month", now, tz: "UTC" },
+  );
+  assert.equal(short.since, "2026-08-10");
+  assert.match(
+    formatUsageReport(short),
+    /^This month since 2026-08-10: 300 tokens/,
+  );
+
+  // Тот же месяц, но лог начинается ДО его начала — считать не с чего-то середины.
+  const full = summarize(
+    [
+      step({ ts: "2026-06-01T09:00:00Z", turnId: "t0", total: 50 }),
+      step({ ts: "2026-08-14T09:00:00Z", turnId: "t2", total: 200 }),
+    ],
+    { window: "month", now, tz: "UTC" },
+  );
+  assert.equal(full.since, null);
+  assert.match(formatUsageReport(full), /^This month: 200 tokens/);
+
+  // Неделя: та же логика на скользящем окне.
+  const week = summarize([step({ ts: "2026-08-13T09:00:00Z", total: 10 })], {
+    window: "week",
+    now,
+    tz: "UTC",
+  });
+  assert.equal(week.since, "2026-08-13");
+  assert.match(formatUsageReport(week), /^Last 7 days since 2026-08-13:/);
+
+  // Пустое окно остаётся прежней короткой строкой, без выдуманной даты.
+  const empty = summarize([step({ ts: "2026-06-01T09:00:00Z" })], {
+    window: "today",
+    now,
+    tz: "UTC",
+  });
+  assert.equal(formatUsageReport(empty), "Today: no usage.");
+
+  // Граница месяца проверяется по первому числу и ни по какому другому: лог, начатый
+  // 1-го, покрывает месяц целиком (молчим), начатый 2-го — уже нет (говорим).
+  const fromFirst = summarize(
+    [step({ ts: "2026-08-01T00:30:00Z", total: 7 })],
+    { window: "month", now, tz: "UTC" },
+  );
+  assert.equal(
+    fromFirst.since,
+    null,
+    "лог с 1-го числа покрывает месяц целиком",
+  );
+  assert.match(formatUsageReport(fromFirst), /^This month: 7 tokens/);
+
+  const fromSecond = summarize(
+    [step({ ts: "2026-08-02T00:30:00Z", total: 7 })],
+    { window: "month", now, tz: "UTC" },
+  );
+  assert.equal(fromSecond.since, "2026-08-02", "лог со 2-го — месяц неполный");
+  assert.match(formatUsageReport(fromSecond), /^This month since 2026-08-02:/);
+
+  // Сравниваются ДАТЫ, а не мгновения: лог, начавшийся сегодня утром, покрывает «today»
+  // целиком — «Today since сегодня» было бы шумом, а не предупреждением.
+  const startedToday = summarize(
+    [step({ ts: "2026-08-14T06:00:00Z", total: 5 })],
+    { window: "today", now, tz: "UTC" },
+  );
+  assert.equal(startedToday.since, null);
+  assert.match(formatUsageReport(startedToday), /^Today: 5 tokens/);
 });
 
 void test("parseWindow falls back to the last turn", () => {
@@ -302,6 +404,38 @@ void test("the authored tree's append lands where the report reads it", (t) => {
   assert.equal(last.in, 104_632);
   assert.equal(last.subagent, "planner");
   assert.equal(last.steps, 2);
+});
+
+// Лог, накопленный прежней версией (до подрезки на стороне записи), может быть каким
+// угодно большим, а /usage разбирает его прямо в обработчике моста. Читается хвост:
+// свежие записи целы, обрубленная первая строка выброшена, отчёт строится.
+void test("a huge legacy log is read from the tail, not whole", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "iva-usage-tail-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const dataDir = join(root, "data");
+  mkdirSync(dataDir, { recursive: true });
+
+  const old =
+    JSON.stringify(step({ turnId: "ancient", model: "ы-модель" })) + "\n";
+  const newest = step({ turnId: "newest", in: 777, out: 7, total: 784 });
+  const written = Math.ceil((8 * 1024 * 1024) / old.length);
+  writeFileSync(
+    join(dataDir, "usage.jsonl"),
+    old.repeat(written) + JSON.stringify(newest) + "\n",
+  );
+
+  const entries = readEntries(dataDir);
+  assert.ok(entries.length > 0);
+  assert.ok(
+    entries.length < written,
+    `прочитан хвост, а не весь файл: ${entries.length} из ${written + 1}`,
+  );
+  assert.deepEqual(entries[entries.length - 1], newest);
+  // Ни одной битой записи: обрубленная первая строка выброшена целиком.
+  for (const entry of entries) assert.equal(typeof entry.ts, "string");
+  const { last } = summarize(entries, { window: "last" });
+  assert.ok(last);
+  assert.equal(last.in, 777);
 });
 
 void test("a fallback key still groups into the parent turn and keeps context clean", () => {

@@ -42,6 +42,13 @@ export function embeddingProviderName(): string {
   return pickProvider().name;
 }
 
+// Имя модели, которой считаются векторы. Нужно тому, кто хранит их между запусками
+// (scripts/memory/embed-index.ts): векторы разных моделей несравнимы, смена модели
+// обязана пересчитать индекс целиком, а не подмешать чужое пространство к своему.
+export function embeddingModelName(): string {
+  return pickProvider().cfg.model;
+}
+
 // Батчами (эмбеддинг-эндпоинты OpenAI-совместимы: {input: string[], model}). Бросает при
 // сетевой/HTTP-ошибке — вызывающий (memory_search) ловит и уходит в чистый BM25 (graceful).
 export async function embedTexts(

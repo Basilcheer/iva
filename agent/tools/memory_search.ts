@@ -1,8 +1,9 @@
 import { defineTool } from "eve/tools";
 import { z } from "zod";
 import { readdir, readFile, stat } from "node:fs/promises";
-import { readFileSync } from "node:fs";
-import { join, relative, sep } from "node:path";
+import { readFileSync, statSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { join, relative, resolve, sep } from "node:path";
 import { createRequire } from "node:module";
 import { embedTexts, cosine, hasEmbeddingKey } from "../lib/embeddings.js";
 import { cardIndex, cardTitle } from "../lib/card-index.js";
@@ -63,28 +64,92 @@ async function walk(dir: string, out: string[]): Promise<void> {
   }
 }
 
-export async function loadDocs(scopeDirs: string[]): Promise<Doc[]> {
+// Разобранная карточка вместе со СНИМКОМ файла, по которому её узнают в следующий раз.
+interface CachedDoc {
+  mtimeNs: bigint;
+  size: bigint;
+  doc: Doc;
+}
+
+// Кэш живёт в модуле: ход агента вызывает поиск по нескольку раз, а vault между вызовами
+// обычно не меняется. Ключ — абсолютный путь файла.
+const docCache = new Map<string, CachedDoc>();
+
+// Счётчики для тестов: сколько карточек реально прочитано с диска и сколько раз собран
+// FTS-индекс. Больше их никто не читает — это единственный способ отличить попадание в
+// кэш от повторной работы, не меряя время.
+export const cacheStats = { fileReads: 0, indexBuilds: 0 };
+
+export interface LoadedDocs {
+  docs: Doc[];
+  // Отпечаток набора файлов: по нему кэшируется собранный FTS-индекс.
+  signature: string;
+}
+
+export async function loadDocs(scopeDirs: string[]): Promise<LoadedDocs> {
   const vault = VAULT();
+  // scope приходит в тул свободными строками — их пишет МОДЕЛЬ, а её может завести
+  // содержимое чужого сообщения. join(vault, "../..") уводил обход за пределы vault:
+  // поиск читал бы .env, ключи и чужие репозитории, а куски их строк уезжали бы модели
+  // в snippet. Каждый элемент резолвим и берём только те, что лежат внутри корня;
+  // остальные молча отбрасываем — тул целиком построен на мягкой деградации, и ход
+  // из-за кривого scope падать не должен.
+  const root = resolve(vault);
+  const roots = scopeDirs
+    .map((dir) => resolve(root, dir))
+    .filter((abs) => abs === root || abs.startsWith(root + sep));
   const files: string[] = [];
-  for (const d of scopeDirs) {
-    const abs = join(vault, d);
+  for (const abs of roots) {
     try {
       if ((await stat(abs)).isDirectory()) await walk(abs, files);
     } catch {
       /* нет такой директории — пропускаем */
     }
   }
+  // Vault меняется и ИЗВНЕ процесса — ночной Brain пишет карточки, `git pull` подтягивает
+  // чужие. Поэтому кэш опирается не на своё знание о записях, а на снимок каждого файла:
+  // mtime (наносекунды — bigint, чтобы две правки в одну миллисекунду не слились) плюс
+  // размер. stat — один syscall без чтения содержимого, он на порядок дешевле readFile
+  // с разбором frontmatter, и перечитывается ровно та карточка, чей снимок разъехался.
   const docs: Doc[] = [];
+  const seen = new Set<string>();
+  const fingerprint = createHash("sha1").update(vault).update("\n");
   for (const file of files) {
+    let stats;
+    try {
+      stats = statSync(file, { bigint: true });
+    } catch {
+      continue; // файл исчез между обходом и снимком
+    }
+    seen.add(file);
+    fingerprint
+      .update(file)
+      .update("\n")
+      .update(String(stats.mtimeNs))
+      .update("\n")
+      .update(String(stats.size))
+      .update("\n");
+
+    const cached = docCache.get(file);
+    if (
+      cached &&
+      cached.mtimeNs === stats.mtimeNs &&
+      cached.size === stats.size
+    ) {
+      docs.push(cached.doc);
+      continue;
+    }
+
     let text: string;
     try {
       text = await readFile(file, "utf8");
     } catch {
       continue;
     }
+    cacheStats.fileReads++;
     const { fm, meta, body } = cardIndex(text);
     const rel = relative(vault, file).split(sep).join("/");
-    docs.push({
+    const doc: Doc = {
       path: rel,
       title: cardTitle(rel) || rel,
       meta,
@@ -93,9 +158,18 @@ export async function loadDocs(scopeDirs: string[]): Promise<Doc[]> {
       status: (fm.status || "").toLowerCase(),
       confidence: (fm.confidence || "").toUpperCase(),
       source: fm.source || "",
-    });
+    };
+    docCache.set(file, { mtimeNs: stats.mtimeNs, size: stats.size, doc });
+    docs.push(doc);
   }
-  return docs;
+  // Удалённая карточка не должна держать память вечно. Чистим только то, что лежит в
+  // просмотренных сейчас каталогах: вызов с узким scope не обязан выбрасывать из кэша
+  // карточки, на которые он просто не смотрел.
+  for (const file of docCache.keys())
+    if (!seen.has(file) && roots.some((dir) => file.startsWith(dir + sep)))
+      docCache.delete(file);
+
+  return { docs, signature: fingerprint.digest("hex") };
 }
 
 // Токены запроса — язык-АГНОСТИЧНО: любые буквенно-цифровые последовательности (Unicode),
@@ -271,8 +345,22 @@ interface Hit {
 // маленьких похожих карточек микроскопичен и нестабилен → дальше ранжируем по рангу (RRF-style),
 // а не по сырому скору. Это же готовит слияние с dense-списком в плагине (RRF).
 
-// BM25 через node:sqlite FTS5. Бросает — вызывающий ловит и уходит в fallback.
-function bm25Search(docs: Doc[], ftsQuery: string, limit: number): string[] {
+// Собранный FTS-индекс переживает вызов: пересборка с нуля на каждый запрос — это INSERT
+// каждой карточки заново, самая дорогая часть поиска. Живёт ровно один индекс — на тот
+// набор файлов, чей отпечаток совпал; изменился vault — прежний индекс закрывается.
+// Плата — резидентная память: на вольте в 2000 карточек (≈8 МБ) кэш карточек вместе с
+// индексом держат порядка 40 МБ. Раньше столько же выделялось и освобождалось на КАЖДЫЙ
+// запрос; теперь память занята постоянно, но её порядок тот же.
+let indexCache: {
+  signature: string;
+  db: import("node:sqlite").DatabaseSync;
+} | null = null;
+
+function ftsIndex(
+  docs: Doc[],
+  signature: string,
+): import("node:sqlite").DatabaseSync {
+  if (indexCache && indexCache.signature === signature) return indexCache.db;
   // node:sqlite встроен в Node 24+, грузится без флага (проверено). createRequire — т.к. ESM.
   const { DatabaseSync } = nodeRequire(
     "node:sqlite",
@@ -287,16 +375,33 @@ function bm25Search(docs: Doc[], ftsQuery: string, limit: number): string[] {
     );
     for (const doc of docs)
       ins.run(doc.path, doc.title, doc.meta, doc.tags, doc.body);
-    // Веса колонок: title/meta важнее tags важнее body (bm25 меньше = релевантнее → ORDER BY asc).
-    const rows = db
-      .prepare(
-        "SELECT path FROM d WHERE d MATCH ? ORDER BY bm25(d, 5.0, 5.0, 2.0, 1.0) LIMIT ?",
-      )
-      .all(ftsQuery, limit * 4) as Array<{ path: string }>;
-    return rows.map((r) => r.path);
-  } finally {
+  } catch (error) {
+    // Недостроенный индекс не кэшируем и старый (рабочий) не трогаем — вызывающий уйдёт
+    // в наивный поиск, а следующий вызов попробует собрать заново.
     db.close();
+    throw error;
   }
+  cacheStats.indexBuilds++;
+  indexCache?.db.close();
+  indexCache = { signature, db };
+  return db;
+}
+
+// BM25 через node:sqlite FTS5. Бросает — вызывающий ловит и уходит в fallback.
+function bm25Search(
+  docs: Doc[],
+  signature: string,
+  ftsQuery: string,
+  limit: number,
+): string[] {
+  const db = ftsIndex(docs, signature);
+  // Веса колонок: title/meta важнее tags важнее body (bm25 меньше = релевантнее → ORDER BY asc).
+  const rows = db
+    .prepare(
+      "SELECT path FROM d WHERE d MATCH ? ORDER BY bm25(d, 5.0, 5.0, 2.0, 1.0) LIMIT ?",
+    )
+    .all(ftsQuery, limit * 4) as Array<{ path: string }>;
+  return rows.map((r) => r.path);
 }
 
 // Fallback без sqlite: частота токенов, порядок по убыванию (грубо, но ход не падает).
@@ -338,7 +443,9 @@ export async function searchMemory({
   {
     const topN = limit ?? 12;
     const tokens = contentTokens(query);
-    const docs = await loadDocs(scope && scope.length ? scope : DEFAULT_DIRS);
+    const { docs, signature } = await loadDocs(
+      scope && scope.length ? scope : DEFAULT_DIRS,
+    );
     if (docs.length === 0)
       return { count: 0, hits: [] as Hit[], note: "vault пуст или недоступен" };
 
@@ -347,7 +454,7 @@ export async function searchMemory({
     let engine = "bm25";
     try {
       const ftsQuery = toFtsQuery(tokens);
-      ranked = ftsQuery ? bm25Search(docs, ftsQuery, topN) : [];
+      ranked = ftsQuery ? bm25Search(docs, signature, ftsQuery, topN) : [];
       if (ranked.length === 0) {
         ranked = naiveSearch(docs, tokens);
         engine = "naive-empty-bm25";

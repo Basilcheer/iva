@@ -13,6 +13,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   classifyGitPushError,
+  ensureVaultGitignore,
   formatMegabytes,
   recordSkippedOversize,
   scanOversizeWorkingTreeFiles,
@@ -482,6 +483,12 @@ if (!remoteUrl) {
   process.exit(failures.length ? 1 : 0);
 }
 cleared("vault-remote");
+
+// Перед `git add -A`: в .gitignore вольта должны быть шаблоны временных файлов атомарной
+// записи, иначе огрызок убитого писателя уедет в историю памяти как карточка. Идемпотентно
+// и только дозаписью — см. ensureVaultGitignore.
+if (ensureVaultGitignore(VAULT))
+  console.log("brain: added temp-file patterns to the vault .gitignore");
 
 run("git", ["add", "-A"]);
 // commit may return non-zero if there is nothing to commit — that is normal.

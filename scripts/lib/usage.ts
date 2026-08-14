@@ -4,7 +4,7 @@
 // невозможен: `iva usage` обязан грузиться на установке без authored tree (ADR-0003),
 // поэтому путь лога знают обе половины, а совпадение пинует round-trip тест в usage.test.ts.
 // Чистый ESM (только node-builtins) — работает в bare-node, как agent/lib/telegram-format.ts.
-import { readFileSync } from "node:fs";
+import { closeSync, fstatSync, openSync, readSync } from "node:fs";
 import { join } from "node:path";
 import type { UsageRecord } from "#lib/usage.ts";
 
@@ -45,12 +45,17 @@ interface ByModelSummary {
   readonly window: "by-model";
   readonly rows: UsageRow[];
   readonly totals: Totals;
+  // Дата самой старой записи в логе. У этих двух окон границы нет — они считают всё, что
+  // в логе лежит, а лог подрезается по размеру (agent/lib/usage.ts). «За всё время» без
+  // этой даты было бы враньём после первой подрезки.
+  readonly since: string | null;
 }
 
 interface BySourceSummary {
   readonly window: "by-source";
   readonly rows: UsageRow[];
   readonly totals: Totals;
+  readonly since: string | null;
 }
 
 interface WindowSummary {
@@ -58,6 +63,11 @@ interface WindowSummary {
   readonly totals: Totals;
   readonly bySource: UsageRow[];
   readonly byModel: UsageRow[];
+  // Дата, с которой окно реально посчитано, ЕСЛИ лог не достаёт до его начала. Хвост
+  // лога (agent/lib/usage.ts) — порядка десяти тысяч шагов, а месяц активного
+  // пользователя того же порядка, так что «This month» после подрезки может считать
+  // не весь месяц. null — лог покрывает окно целиком, и говорить не о чем.
+  readonly since: string | null;
 }
 
 type UsageSummary =
@@ -89,12 +99,44 @@ const defaultDir = (): string => process.env.ASSISTANT_DATA_DIR || "data";
 
 const usageFilePath = (dataDir: string): string => join(dataDir, "usage.jsonl");
 
+// Сколько байт лога читать. Это ровно тот потолок, до которого лог растёт на стороне
+// записи (agent/lib/usage.ts), поэтому в норме читается ВЕСЬ файл; лимит нужен на случай
+// лога, накопленного прежней версией без подрезки: /usage разбирает его в обработчике
+// моста, и мегабайты JSON.parse там встают поперёк цикла моста.
+const TAIL_BYTES = 4 * 1024 * 1024;
+
 // Толерантный парсер: нет файла → пусто; битую строку (обрыв при падении на середине
-// append) — молча пропускаем.
+// append) — молча пропускаем. Читаем хвост, а не файл целиком: свежие записи в конце,
+// и именно они нужны всем окнам отчёта.
 export function readEntries(dataDir = defaultDir()): UsageRecord[] {
   let raw: string;
   try {
-    raw = readFileSync(usageFilePath(dataDir), "utf8");
+    const fd = openSync(usageFilePath(dataDir), "r");
+    try {
+      const size = fstatSync(fd).size;
+      const from = Math.max(0, size - TAIL_BYTES);
+      const buffer = Buffer.allocUnsafe(size - from);
+      // Дочитываем в цикле: одно readSync вправе вернуть меньше запрошенного, а
+      // недобранными оказались бы САМЫЕ СВЕЖИЕ записи — те, ради которых и читаем.
+      // Взять при этом можно только реально заполненную часть буфера: allocUnsafe.
+      let filled = 0;
+      while (filled < buffer.length) {
+        const read = readSync(
+          fd,
+          buffer,
+          filled,
+          buffer.length - filled,
+          from + filled,
+        );
+        if (read <= 0) break; // файл укоротили под нами — берём что есть
+        filled += read;
+      }
+      raw = buffer.subarray(0, filled).toString("utf8");
+      // Обрезанную с начала строку (и разрубленный по границе символ) выбрасываем целиком.
+      if (from > 0) raw = raw.slice(raw.indexOf("\n") + 1);
+    } finally {
+      closeSync(fd);
+    }
   } catch {
     return [];
   }
@@ -292,7 +334,14 @@ export function summarize(
       if (group) add(group, entry);
       add(total, entry);
     }
-    return { window, rows: rowsOf(groups), totals: finalize(total) };
+    // Записи ложатся в лог по времени, так что первая разбираемая ts — самая старая.
+    const oldest = entries.find((entry) => !Number.isNaN(Date.parse(entry.ts)));
+    return {
+      window,
+      rows: rowsOf(groups),
+      totals: finalize(total),
+      since: oldest ? localDate(oldest.ts, tz) : null,
+    };
   }
   // today / week / month — итог + разбивка по источникам и моделям
   const matching = entries.filter((entry) => inWindow(entry, window, now, tz));
@@ -310,11 +359,23 @@ export function summarize(
     const modelGroup = byModel.get(model);
     if (modelGroup) add(modelGroup, entry);
   }
+  // Лог не достаёт до начала окна — значит всё, что было раньше, подрезано, и отчёт
+  // обязан назвать дату, с которой посчитал. Сравниваем ДАТЫ, а не мгновения: отчёт
+  // говорит датами, и «Today since сегодня» было бы шумом, а не предупреждением.
+  const oldest = entries.find((entry) => !Number.isNaN(Date.parse(entry.ts)));
+  const startsOn =
+    window === "today"
+      ? localDate(now, tz)
+      : window === "week"
+        ? localDate(now - 7 * 86400000, tz)
+        : `${localDate(now, tz).slice(0, 7)}-01`;
+  const oldestDate = oldest ? localDate(oldest.ts, tz) : null;
   return {
     window,
     totals: finalize(total),
     bySource: rowsOf(bySource),
     byModel: rowsOf(byModel),
+    since: oldestDate && oldestDate > startsOn ? oldestDate : null,
   };
 }
 
@@ -365,15 +426,21 @@ export function formatUsageReport(
       (row) =>
         `• ${summary.window === "by-source" ? sourceLabel(row.key) : row.key}: ${num(row.total)} tokens (${plural(row.turns, "turn")})`,
     );
+    // «since» — не украшение: лог подрезается по размеру, и без даты «total» читался бы
+    // как «за всё время», хотя это итог по тому, что в логе уцелело.
+    const since = summary.since ? ` since ${summary.since}` : "";
     return [
-      `${WINDOW_LABEL[summary.window]} (total ${num(summary.totals.total)} tokens):`,
+      `${WINDOW_LABEL[summary.window]}${since} (total ${num(summary.totals.total)} tokens):`,
       ...lines,
     ].join("\n");
   }
   const total = summary.totals;
   if (!total.steps) return `${WINDOW_LABEL[summary.window]}: no usage.`;
+  // Та же пометка, что и у lifetime-окон: лог подрезается по размеру, и «This month»
+  // без даты читался бы как «весь месяц», хотя старых строк уже нет.
+  const from = summary.since ? ` since ${summary.since}` : "";
   const output = [
-    `${WINDOW_LABEL[summary.window]}: ${num(total.total)} tokens (in ${num(total.in)} / out ${num(total.out)}) · ${plural(total.turns, "turn")}`,
+    `${WINDOW_LABEL[summary.window]}${from}: ${num(total.total)} tokens (in ${num(total.in)} / out ${num(total.out)}) · ${plural(total.turns, "turn")}`,
   ];
   if (summary.bySource.length > 1) {
     output.push("Sources:");

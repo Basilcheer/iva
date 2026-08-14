@@ -115,6 +115,55 @@ export function formatMegabytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+// Карточки и MOC пишутся «временный файл рядом + rename». Убитый сигналом писатель
+// оставляет такой файл на диске, а ночь делает `git add -A` — огрызок уехал бы в историю
+// vault как настоящая карточка. Шаблонный vault-template/.gitignore до живых вольтов не
+// доезжает: init-vault копирует его только в ПУСТОЙ каталог, а проблема есть на каждой
+// установке. Поэтому строчки досылает сама ночь, перед git add.
+// Два шаблона, потому что писателей два: python (tempfile.mkstemp → tmpXXXX.tmp) и
+// TypeScript (agent/lib/fs-atomic.ts → <файл>.tmp-<pid>-<uuid>).
+const TMP_IGNORE_PATTERNS = ["*.tmp", "*.tmp-*"] as const;
+const TMP_IGNORE_HEADER =
+  "# unfinished atomic writes (temp files of an interrupted writer)";
+
+/**
+ * Дописывает в `.gitignore` вольта шаблоны временных файлов, если их там нет.
+ * Только ДОПИСЫВАЕТ: чужой .gitignore не перезаписывается и ни одна его строка не
+ * удаляется (ADR-0002 — файл пользовательский). Возвращает true, если что-то дописано.
+ */
+export function ensureVaultGitignore(vaultPath: string): boolean {
+  const file = resolve(vaultPath, ".gitignore");
+  let current = "";
+  try {
+    current = readFileSync(file, "utf8");
+  } catch {
+    /* нет файла — создадим ниже */
+  }
+  const present = new Set(current.split("\n").map((line) => line.trim()));
+  const missing = TMP_IGNORE_PATTERNS.filter(
+    (pattern) => !present.has(pattern),
+  );
+  if (missing.length === 0) return false;
+
+  const separator =
+    current === "" ? "" : current.endsWith("\n") ? "\n" : "\n\n";
+  const next = `${current}${separator}${TMP_IGNORE_HEADER}\n${missing.join("\n")}\n`;
+  // Через tmp+rename: оборванная дозапись не имеет права оставить от .gitignore огрызок.
+  const tmp = `${file}.tmp-${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
+  try {
+    writeFileSync(tmp, next, "utf8");
+    renameSync(tmp, file);
+    return true;
+  } catch {
+    try {
+      rmSync(tmp, { force: true });
+    } catch {
+      /* best effort */
+    }
+    return false;
+  }
+}
+
 export function classifyGitPushError(stderr: string): {
   kind: "oversize" | "auth" | "other";
   firstLine: string;

@@ -1,11 +1,20 @@
 import { strict as assert } from "node:assert";
-import { mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  utimes,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import {
   GITHUB_BLOB_GUARD_BYTES,
   classifyGitPushError,
+  ensureVaultGitignore,
   memoryReportProblems,
   readMemoryMaintenanceReport,
   recordSkippedOversize,
@@ -141,4 +150,81 @@ void test("memory report freshness and oversize marker are durable", async (t) =
     status: "stale",
     problems: [],
   });
+});
+
+// Живой vault свой .gitignore не получает: init-vault копирует шаблон только в ПУСТОЙ
+// каталог. Значит шаблоны временных файлов досылает сама ночь — перед `git add -A`,
+// только дозаписью и идемпотентно.
+void test("the nightly gitignore step appends temp patterns without touching what is there", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "iva-vault-gitignore-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const file = join(root, ".gitignore");
+
+  // 1. Файла нет — создаётся с обоими шаблонами.
+  assert.equal(ensureVaultGitignore(root), true);
+  const created = await readFile(file, "utf8");
+  assert.match(created, /^\*\.tmp$/mu);
+  assert.match(created, /^\*\.tmp-\*$/mu);
+  assert.equal(created.startsWith("\n"), false, "без пустой первой строки");
+
+  // 2. Идемпотентность: ещё два прогона ничего не пишут и ничего не меняют.
+  for (const attempt of [1, 2]) {
+    assert.equal(ensureVaultGitignore(root), false, `прогон ${attempt + 1}`);
+    assert.equal(await readFile(file, "utf8"), created);
+  }
+
+  // 3. Чужой .gitignore: дописываем в конец, прежнее содержимое цело байт в байт.
+  const existing = ".graph/\n.trash/\n\n# личное\nsecret-notes/\n";
+  await writeFile(file, existing);
+  assert.equal(ensureVaultGitignore(root), true);
+  const appended = await readFile(file, "utf8");
+  assert.equal(
+    appended.slice(0, existing.length),
+    existing,
+    "прежние строки не тронуты",
+  );
+  assert.match(appended, /^\*\.tmp$/mu);
+  assert.match(appended, /^\*\.tmp-\*$/mu);
+  assert.equal(ensureVaultGitignore(root), false, "повтор — no-op");
+  assert.equal(await readFile(file, "utf8"), appended);
+
+  // 4. Файл без завершающего перевода строки не склеивается с нашим блоком.
+  await writeFile(file, ".graph/");
+  assert.equal(ensureVaultGitignore(root), true);
+  const glued = await readFile(file, "utf8");
+  assert.match(glued, /^\.graph\/$/mu);
+
+  // 5. Частичный набор: не хватает только второго шаблона — дописывается он один.
+  await writeFile(file, "*.tmp\n");
+  assert.equal(ensureVaultGitignore(root), true);
+  const partial = await readFile(file, "utf8");
+  assert.equal(partial.match(/^\*\.tmp$/gmu)?.length, 1, "дубля не появилось");
+  assert.match(partial, /^\*\.tmp-\*$/mu);
+});
+
+// То же самое, но настоящим git'ом и настоящими именами временных файлов обоих
+// писателей: после шага ночи `git add -A` не забирает огрызки, но забирает карточки.
+void test("after the nightly step git add -A skips temp leftovers in a live vault", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "iva-vault-gitadd-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const git = (...args: string[]): string =>
+    execFileSync("git", ["-C", root, ...args], { encoding: "utf8" });
+  git("init", "-q");
+  await mkdir(join(root, "cards"), { recursive: true });
+  await writeFile(join(root, ".gitignore"), ".graph/\n");
+  for (const name of [
+    "cards/tmpjsxhjx4o.tmp",
+    "cards/ivan.md.tmp-23940-c9d1d4da-9f4c-477f-ac92-7972aedd15ea",
+    "cards/ivan.md",
+    "MOC.md",
+  ])
+    await writeFile(join(root, name), "x\n");
+
+  ensureVaultGitignore(root);
+  git("add", "-A");
+  const staged = git("diff", "--cached", "--name-only")
+    .split("\n")
+    .filter(Boolean)
+    .sort();
+  assert.deepEqual(staged, [".gitignore", "MOC.md", "cards/ivan.md"]);
 });
