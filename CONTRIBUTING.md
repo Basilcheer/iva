@@ -92,6 +92,9 @@ the PR which checks you ran and what they said.
 - Commit messages describe the code change and nothing else — no AI or tool
   attribution, no "generated with" footers.
 - Tests come with the change. Bug fixes get a test that fails without the fix.
+- Parsers, validators, resolvers and state invariants are tested property-based
+  (fast-check): generators explore the input space, a failure prints its seed, the
+  seed replays the failure. Example tests stay as contract anchors.
 - Touching the update path (`iva update`, `data/settings.json`, anything persisted)?
   Say in the PR how an older install upgrades. Self-hosters arrive from arbitrary old
   versions, and the update runs under the _previous_ CLI.

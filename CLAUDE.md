@@ -8,6 +8,7 @@
 - GitHub используется только для прямой синхронизации, когда Шима явно просит commit или push.
 - Не создавать process checklist, implementation journal, handoff и remote review loop без отдельного запроса.
 - В локальных тестах приоритет у мусорного ввода, тупых повторных действий пользователя, duplicate/stale/out-of-order событий, гонок, прерываний, retry, restart, timeout, partial writes, отсутствующих зависимостей и сломанных/частичных сборок. Randomized tests обязаны показывать seed.
+- Парсеры, валидаторы, резолверы и инварианты состояния тестируются property-based (fast-check): генераторы перебирают входное пространство, провал печатает seed, seed воспроизводит провал. Example-тесты остаются якорями контрактов. Правило: входных случаев больше десятка — нужен генератор, не перечисление.
 
 Guidance for Claude Code working in this repository.
 
