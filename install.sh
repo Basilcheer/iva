@@ -211,9 +211,20 @@ rollback_install_update() {
   set +e
   local restored=true
   git -C "$PROJECT_DIR" rebase --abort >>"$INSTALL_LOG" 2>&1
-  # This exact reset is rollback to the user's recorded HEAD, never to upstream.
-  git -C "$PROJECT_DIR" reset --hard "$INSTALL_ORIGINAL_HEAD" >>"$INSTALL_LOG" 2>&1 || restored=false
-  if [ -n "$INSTALL_UNTRACKED_LIST" ] && [ -f "$INSTALL_UNTRACKED_LIST" ]; then
+  # Both resets go to the user's recorded HEAD, never to upstream. Which one is safe
+  # depends on where their work is: with a stash the tree is a copy of what the stash
+  # holds, so it may be thrown away; without one the tree is the only place their changes
+  # exist, and --keep refuses to overwrite a modified file instead of destroying it.
+  if [ -n "$INSTALL_STASH_OID" ]; then
+    git -C "$PROJECT_DIR" reset --hard "$INSTALL_ORIGINAL_HEAD" >>"$INSTALL_LOG" 2>&1 || restored=false
+  else
+    git -C "$PROJECT_DIR" reset --keep "$INSTALL_ORIGINAL_HEAD" >>"$INSTALL_LOG" 2>&1 || restored=false
+  fi
+  # Only ever to make room for the stash that holds these same files. Without a stash there
+  # is nothing to put them back from, and a rollback that deletes the user's untracked work
+  # is worse than the failure it is undoing.
+  if [ -n "$INSTALL_STASH_OID" ] && [ -n "$INSTALL_UNTRACKED_LIST" ] \
+    && [ -f "$INSTALL_UNTRACKED_LIST" ]; then
     while IFS= read -r -d '' relative; do
       rm -f -- "$PROJECT_DIR/$relative"
     done <"$INSTALL_UNTRACKED_LIST"

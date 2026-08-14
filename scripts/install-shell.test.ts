@@ -447,6 +447,37 @@ void test("the copy of .env lives beside the installation, never in /tmp", (t) =
   );
 });
 
+void test("a failure while preserving the checkout keeps the files it was preserving", (t) => {
+  if (process.getuid?.() === 0) {
+    t.skip("root can read a file with no permissions, so nothing fails here");
+    return;
+  }
+  const world = createWorld(t);
+  writeFileSync(join(world.install, "README.md"), "# fixture\nlocal edit\n");
+  writeFileSync(join(world.install, "mine.txt"), "mine\n");
+  // The window between writing the backup ref and taking the stash: here the copy of .env
+  // cannot be made, and at that moment the untracked files are recorded but not saved
+  // anywhere.
+  chmodSync(join(world.install, ".env"), 0o000);
+
+  const result = world.run();
+  chmodSync(join(world.install, ".env"), 0o600);
+
+  assert.notEqual(result.status, 0, result.stdout + result.stderr);
+  // The user's files are still theirs - a rollback with nothing to restore from must not
+  // delete what it recorded.
+  assert.equal(readFileSync(join(world.install, "mine.txt"), "utf8"), "mine\n");
+  assert.equal(
+    readFileSync(join(world.install, "README.md"), "utf8"),
+    "# fixture\nlocal edit\n",
+  );
+  // And the ref it had already written is gone with it.
+  assert.equal(world.git("for-each-ref", "refs/iva/update-backups"), "");
+  assert.equal(world.git("stash", "list"), "");
+  assert.deepEqual(leftovers(world.tmp), []);
+  assert.deepEqual(backups(world.install), []);
+});
+
 void test("a pending reboot stops a first install and only warns over a configured one", (t) => {
   const world = createWorld(t, { env: false });
   const flag = join(world.dir, "reboot-required");
