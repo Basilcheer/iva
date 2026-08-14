@@ -14,6 +14,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { MODEL_PROVIDER_NAMES } from "#lib/model-provider.ts";
 import { modelSummary } from "./model-summary.ts";
 import { createTerminalProgress } from "./progress.ts";
 import {
@@ -62,6 +63,27 @@ test("modelSummary uses configured provider values without runtime defaults", ()
       line: "OpenAI · gpt-5.5",
     },
   );
+});
+
+// Экран обновления показывает эту строку рядом с версией. Знай он свой набор имён —
+// после опечатки он спокойно назвал бы Ollama, пока агент отказывается стартовать.
+test("modelSummary knows exactly the provider names the runtime accepts", () => {
+  for (const name of MODEL_PROVIDER_NAMES) {
+    assert.doesNotMatch(
+      modelSummary({ MODEL_PROVIDER: name }).line,
+      /invalid/,
+      name,
+    );
+  }
+  for (const value of ["ollmaa", " ollama", "OLLAMA", ""]) {
+    assert.equal(
+      modelSummary({ MODEL_PROVIDER: value }).line,
+      `invalid (${value}) · ?`,
+      JSON.stringify(value),
+    );
+  }
+  // Отсутствие переменной — по-прежнему Ollama, а не отказ.
+  assert.equal(modelSummary({}).provider, "Ollama");
 });
 
 test("terminal progress is deterministic outside a TTY", () => {

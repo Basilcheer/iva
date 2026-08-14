@@ -6,6 +6,8 @@ type ProviderSettings = {
   context: string;
 };
 
+// Короткие подписи для одной строки статуса — не лейблы каталога (там «Ollama Cloud»).
+// Имена — те же, что принимает рантайм; их совпадение пинует update-ui.test.ts.
 const PROVIDERS: Record<string, ProviderSettings> = {
   ollama: {
     label: "Ollama",
@@ -36,12 +38,13 @@ export function modelSummary(env: Env = process.env): {
   contextWindow: number | null;
   line: string;
 } {
-  const id = (env.MODEL_PROVIDER || "ollama").trim().toLowerCase();
-  const provider = PROVIDERS[id] || {
-    label: id || "Model",
-    model: "",
-    context: "",
-  };
+  // Строгое совпадение, как в рантайме (agent/lib/model-provider.ts): привести здесь
+  // регистр или обрезать пробелы значило бы назвать провайдера, на котором агент даже
+  // не стартует. Неизвестное имя показываем тем же словом, что и /menu → Статус.
+  const id = env.MODEL_PROVIDER ?? "ollama";
+  const provider = Object.hasOwn(PROVIDERS, id)
+    ? PROVIDERS[id]
+    : { label: `invalid (${id})`, model: "", context: "" };
   const model = provider.model ? (env[provider.model] || "?").trim() : "?";
   const rawContext = provider.context ? Number(env[provider.context]) : 0;
   return {

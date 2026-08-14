@@ -176,12 +176,20 @@ export function selectableWizardOptions(
   ].slice(0, limit);
 }
 
-async function currentConfig() {
-  const env = await readEnvValues(ENV_PATH);
-  const provider = CATALOG[env.MODEL_PROVIDER] ? env.MODEL_PROVIDER : "ollama";
+export async function currentConfig({
+  readEnv = () => readEnvValues(ENV_PATH),
+} = {}) {
+  const env = await readEnv();
+  const configured = env.MODEL_PROVIDER ?? "ollama";
+  const valid = Object.hasOwn(CATALOG, configured);
+  const provider = valid ? configured : "ollama";
   const cat = CATALOG[provider];
   return {
     provider,
+    // Что реально стоит в .env. На неизвестном имени агент не стартует вовсе, и назвать
+    // его «ollama» в строке «Сейчас…» значило бы спрятать причину, ради которой визард
+    // и открыли. Экраны после сохранения показывают уже записанное имя, оно валидно.
+    providerLabel: valid ? provider : `invalid (${configured})`,
     model: env[cat.modelVar] || cat.def,
     effort: providerSupportsReasoning(provider)
       ? (env.THINKING_EFFORT ?? "").toLowerCase()
@@ -239,15 +247,15 @@ async function handleModelCmd(
   from: FlowId,
   { msgId }: { msgId?: number } = {},
 ) {
-  const { provider, model, effort } = await currentConfig();
+  const { providerLabel, model, effort } = await currentConfig();
   const st = newWizard(chatId, from, "model");
   st.msgId = msgId ?? null;
   st.step = "intro";
   await wizScreen(
     st,
     tr(
-      `Now: provider ${provider} · model ${model} · thinking: ${effortLabel(effort)}.`,
-      `Сейчас: провайдер ${provider} · модель ${model} · размышления: ${effortLabel(effort)}.`,
+      `Now: provider ${providerLabel} · model ${model} · thinking: ${effortLabel(effort)}.`,
+      `Сейчас: провайдер ${providerLabel} · модель ${model} · размышления: ${effortLabel(effort)}.`,
     ),
     [
       [

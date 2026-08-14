@@ -1,11 +1,22 @@
 import { test } from "node:test";
 /* eslint-disable @typescript-eslint/no-floating-promises, @typescript-eslint/require-await */
 import assert from "node:assert/strict";
+import { MODEL_PROVIDER_NAMES } from "#lib/model-provider.ts";
 import {
+  CATALOG,
   FALLBACK_EFFORTS,
   ModelCatalogError,
   fetchModelOptions,
 } from "./model-catalog.ts";
+
+// Каталог — вторая половина шва: по нему строятся кнопки /model, мастер и `iva doctor`
+// (они грузятся на инсталле, где agent/ может не быть, ADR-0003), а принимает значение
+// authored-резолвер. Разъедься перечни — мастер предложил бы провайдера, на котором
+// рантайм откажется стартовать, или доктор объявил бы .env здоровым перед отказом.
+// Порядок тоже общий: он же задаёт порядок имён в сообщении об отказе.
+test("both trees accept exactly the same provider names, in the same order", () => {
+  assert.deepEqual(Object.keys(CATALOG), [...MODEL_PROVIDER_NAMES]);
+});
 
 test("Codex catalog failure cannot create selectable fallback models", async () => {
   await assert.rejects(

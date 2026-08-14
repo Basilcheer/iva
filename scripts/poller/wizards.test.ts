@@ -1,7 +1,10 @@
 /* eslint-disable @typescript-eslint/no-floating-promises, @typescript-eslint/require-await -- Node owns test registration; the async request double preserves the wizard boundary. */
 import assert from "node:assert/strict";
 import test from "node:test";
+import { MODEL_PROVIDER_NAMES } from "#lib/model-provider.ts";
+import { CATALOG } from "../lib/model-catalog.ts";
 import {
+  currentConfig,
   flows,
   getWizard,
   isStaleWizard,
@@ -11,6 +14,35 @@ import {
   selectableWizardOptions,
   wizardActionAllowed,
 } from "./wizards.ts";
+
+// Визард — путь починки: он открывается ИМЕННО тогда, когда MODEL_PROVIDER набран с
+// опечаткой и агент не стартует. Назови он такую конфигурацию «ollama» — пользователь
+// увидел бы здоровую строку и ушёл искать причину в другом месте.
+test("the model wizard shows the configured provider, valid or not", async () => {
+  for (const name of MODEL_PROVIDER_NAMES) {
+    const config = await currentConfig({
+      readEnv: async () => ({ MODEL_PROVIDER: name }),
+    });
+    assert.equal(config.providerLabel, name);
+    assert.equal(config.provider, name);
+    assert.equal(config.model, CATALOG[name].def);
+  }
+  // Пробелы вокруг значения парсер .env срезает сам (scripts/lib/env-file.ts), поэтому
+  // сюда доезжает то, что он оставляет: опечатка, регистр, пустое значение, мусор.
+  for (const value of ["ollmaa", "OLLAMA", "", "__proto__"]) {
+    const config = await currentConfig({
+      readEnv: async () => ({ MODEL_PROVIDER: value }),
+    });
+    assert.equal(config.providerLabel, `invalid (${value})`, value);
+    // Кнопки всё же надо чем-то нарисовать — визард встаёт на дефолтном провайдере.
+    assert.equal(config.provider, "ollama", value);
+  }
+  // Переменной нет — это не опечатка, а дефолт: он и остаётся ollama.
+  assert.equal(
+    (await currentConfig({ readEnv: async () => ({}) })).provider,
+    "ollama",
+  );
+});
 
 test("wizard lookup preserves Telegram's string user ID", () => {
   const chatId = 4_102_033;

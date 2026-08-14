@@ -7,6 +7,7 @@ import {
   recoverConfigTransaction,
 } from "../lib/config-transaction.ts";
 import { parseEnvText } from "../lib/env-file.ts";
+import { CATALOG } from "../lib/model-catalog.ts";
 import type { createCliRuntime } from "./runtime.ts";
 import type { createCliSystemd } from "./systemd.ts";
 
@@ -86,19 +87,17 @@ export function createConfigCommand(
 
       const nextText = readFileSync(candidatePath, "utf8");
       const nextEnv = parseEnvText(nextText);
+      // Тот же каталог, что у мастера, доктора и кнопок /model, — и тот же перечень имён,
+      // что принимает рантайм (сверяет scripts/lib/model-catalog.test.ts).
       const provider = nextEnv.MODEL_PROVIDER;
-      const selected = (
-        {
-          ollama: ["OLLAMA_MODEL", "OLLAMA_API_KEY"],
-          opencode: ["OPENCODE_MODEL", "OPENCODE_API_KEY"],
-          openrouter: ["OPENROUTER_MODEL", "OPENROUTER_API_KEY"],
-          codex: ["CODEX_MODEL", null],
-        } as Record<string, ProviderSelection | undefined>
-      )[provider];
-      if (!selected)
+      const catalog = Object.hasOwn(CATALOG, provider)
+        ? CATALOG[provider]
+        : undefined;
+      if (!catalog)
         throw new Error(
           "candidate configuration has an invalid model provider",
         );
+      const selected: ProviderSelection = [catalog.modelVar, catalog.keyVar];
       const port = Number(nextEnv.IVA_PORT || DEFAULT_PORT);
       if (!Number.isInteger(port) || port < 1 || port > 65535) {
         throw new Error("candidate configuration has an invalid IVA_PORT");
