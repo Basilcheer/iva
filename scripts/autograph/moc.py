@@ -8,6 +8,7 @@ Commands:
   moc.py generate <vault-dir> [schema.json] --domain <name>
 """
 
+import re
 import sys
 import json
 from pathlib import Path
@@ -16,8 +17,22 @@ from datetime import datetime
 
 from common import (
     load_schema, parse_frontmatter, walk_vault, rel_path,
-    infer_domain, get_node_types, get_status_order
+    infer_domain, get_node_types, get_status_order, write_card
 )
+
+
+# Домен приходит из фронтматтера карточки, и enforce.py его не проверяет — он лишь
+# подставляет отсутствующий. Значит `domain: work/clients` встречается на самом деле, а в
+# имени файла давал MOC/MOC-work/clients.md: каталога work/ нет, запись падала, и один
+# кривой домен ронял генерацию ВСЕХ MOC. Домен при этом не теряется: в заголовке и в
+# тексте остаётся как написан, безопасная форма нужна только имени файла и ссылке на него.
+_UNSAFE_IN_NAME = re.compile(r'[^\w.\-]+', re.UNICODE)
+
+
+def moc_stem(domain: str) -> str:
+    """MOC file name for a domain, without extension."""
+    safe = _UNSAFE_IN_NAME.sub('-', str(domain)).strip(' .-')
+    return f'MOC-{safe}' if safe else 'MOC-other'
 
 
 def build_moc_data(vault_dir: Path, schema: dict, domain_filter: str = None) -> dict:
@@ -166,7 +181,7 @@ def generate_hub(data: dict) -> str:
     добавлении/удалении домена (issue #113).
     """
     lines = [
-        '# MOC — оглавление памяти',
+        '# MOC — индекс тем',
         '',
         'Хабы графа: темы → карточки. На вопрос «что я знаю про X» начни отсюда и иди по ссылкам.',
         'Регенерится ночью (autograph `moc.py generate`) — может слегка отставать; если пусто, ищи через `grep`.',
@@ -176,7 +191,7 @@ def generate_hub(data: dict) -> str:
         cards = data[domain]
         if not cards:
             continue
-        lines.append(f'- [[MOC/MOC-{domain}]] — карточек: {len(cards)}')
+        lines.append(f'- [[MOC/{moc_stem(domain)}]] — карточек: {len(cards)}')
     lines.append('')
     return '\n'.join(lines)
 
@@ -213,12 +228,15 @@ def main():
         moc_dir = vault_dir / 'MOC'
         moc_dir.mkdir(exist_ok=True)
         total_links = 0
+        # MOC пишем тем же атомарным швом, что и карточки: обрыв посреди записи оставил
+        # бы обрезанный MOC.md, а ночной brain делает `git add -A` — огрызок уехал бы
+        # в историю vault как «текущий индекс тем памяти».
 
         if domain_filter:
             cards = data.get(domain_filter, [])
             moc_text = generate_moc(domain_filter, cards, schema)
-            outpath = moc_dir / f'MOC-{domain_filter}.md'
-            outpath.write_text(moc_text)
+            outpath = moc_dir / f'{moc_stem(domain_filter)}.md'
+            write_card(outpath, moc_text)
             link_count = moc_text.count('[[')
             total_links += link_count
             print(f"✓ Generated: {outpath.relative_to(vault_dir)}")
@@ -228,25 +246,28 @@ def main():
                 if not cards:
                     continue
                 moc_text = generate_moc(domain, cards, schema)
-                outpath = moc_dir / f'MOC-{domain}.md'
-                outpath.write_text(moc_text)
+                stem = moc_stem(domain)
+                if stem != f'MOC-{domain}':
+                    print(f"  domain {domain!r} → {stem}.md (unsafe in a file name)")
+                outpath = moc_dir / f'{stem}.md'
+                write_card(outpath, moc_text)
                 link_count = moc_text.count('[[')
                 total_links += link_count
                 print(f"✓ Generated: {outpath.relative_to(vault_dir)}")
                 print(f"  {link_count} wikilinks")
 
         # Хаб собирается из ПОЛНОГО скана: прогон с --domain обновляет один доменный
-        # файл, но оглавление всё равно должно перечислять все домены vault'а.
+        # файл, но индекс всё равно должен перечислять все домены vault'а.
         # Ссылки — только на реально существующие MOC-файлы: домен, чей файл ещё
         # не сгенерирован, попадёт в хаб при первом же полном прогоне (ночь).
         hub_data = build_moc_data(vault_dir, schema, None) if domain_filter else data
         hub_data = {
             d: cards for d, cards in hub_data.items()
-            if cards and (moc_dir / f'MOC-{d}.md').exists()
+            if cards and (moc_dir / f'{moc_stem(d)}.md').exists()
         }
         if any(hub_data.values()):
             hub_text = generate_hub(hub_data)
-            (vault_dir / 'MOC.md').write_text(hub_text)
+            write_card(vault_dir / 'MOC.md', hub_text)
             total_links += hub_text.count('[[')
             print("✓ Generated: MOC.md")
 

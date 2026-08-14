@@ -74,6 +74,33 @@ class LineStream:
                 self.buf += data
 
 
+def decode_fm_line(raw_line: bytes, truncated: bool) -> str | None:
+    """Frontmatter line as STRICT utf-8, or None when those bytes are not utf-8.
+
+    cleanup runs FIRST at night (brain.ts: cleanup → enforce → … → decay) and rewrites
+    the frontmatter it parsed. Decoding with errors='ignore' silently dropped every byte
+    it could not read and then wrote the result back over the card: the bytes were gone
+    before any later step could refuse to touch them (ADR-0002). A line we cannot decode
+    means the whole file is left alone — the body is copied verbatim anyway, so only the
+    frontmatter is ever read as text.
+    """
+    try:
+        return raw_line.decode('utf-8')
+    except UnicodeDecodeError:
+        pass
+    if truncated:
+        # Обрезка по LINE_CAP режет по БАЙТУ и может разрубить символ на конце строки.
+        # Это артефакт чтения, а не порча файла: отбрасываем хвост (максимум 3 байта —
+        # длина символа utf-8 минус один) и пробуем снова. Если не помогло — байты
+        # действительно не utf-8.
+        for cut in (1, 2, 3):
+            try:
+                return raw_line[:-cut].decode('utf-8')
+            except UnicodeDecodeError:
+                continue
+    return None
+
+
 def collapse_from_sample(sample: str) -> str:
     """Recover the repeated unit from the head of a giant description value.
     The sample is an exact prefix of the value; the full tail was already
@@ -127,7 +154,11 @@ def clean_file(md: Path, apply: bool):
             if len(out) + len(desc_lines) > FM_MAX_LINES:
                 return None  # not a sane frontmatter — leave the file alone
             raw_line, truncated = item
-            line = raw_line.decode('utf-8', errors='ignore')
+            line = decode_fm_line(raw_line, truncated)
+            if line is None:
+                print(f"  WARNING: skipping file that is not valid utf-8 "
+                      f"(left untouched): {md}", file=sys.stderr)
+                return None
             stripped = line.strip()
             # Keep parity with the canonical TS/Python frontmatter parsers:
             # YAML block continuations may use a single leading space.

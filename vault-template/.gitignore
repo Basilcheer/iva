@@ -13,6 +13,14 @@
 # --- rollup/doctor runtime session state ---
 .session/
 
+# --- недописанные файлы атомарной записи ---
+# Карточки и MOC пишутся через «временный файл рядом + rename». Убитый по SIGKILL
+# писатель оставляет такой файл на диске, а ночной brain делает `git add -A` — без этих
+# строк огрызок уехал бы в историю vault. Два шаблона, потому что писателей два:
+# python (tempfile.mkstemp → tmpXXXX.tmp) и TypeScript (fs-atomic → <файл>.tmp-<pid>-<uuid>).
+*.tmp
+*.tmp-*
+
 # --- OS / editor noise ---
 .DS_Store
 Thumbs.db

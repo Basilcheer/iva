@@ -1,6 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { appendUsage, subagentTurnId, usageFilePath } from "./usage.ts";
@@ -51,6 +58,47 @@ void test("appending creates the data directory and keeps one record per line", 
     JSON.parse(lines[1]),
     record({ step: 1, subagent: "planner" }),
   );
+});
+
+// Лог расхода растёт с каждым шагом модели и раньше не подрезался вовсе. Теряем при
+// переполнении САМОЕ СТАРОЕ и только его: свежие записи (их читает /usage) и целостность
+// строк обязаны пережить подрезку.
+void test("an oversized log is trimmed from the oldest end, keeping whole lines", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "iva-usage-trim-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const dataDir = join(root, "data");
+  mkdirSync(dataDir, { recursive: true });
+
+  // Лог, накопленный до подрезки: пятимегабайтный файл целых строк.
+  const filler = JSON.stringify(record({ turnId: "old" })) + "\n";
+  const file = usageFilePath(dataDir);
+  writeFileSync(
+    file,
+    filler.repeat(Math.ceil((5 * 1024 * 1024) / filler.length)),
+  );
+  const before = readFileSync(file, "utf8").length;
+
+  appendUsage(record({ turnId: "newest", step: 42 }), dataDir);
+
+  const raw = readFileSync(file, "utf8");
+  assert.ok(raw.length < before, "файл подрезан");
+  assert.ok(raw.length > 1024 * 1024, "хвост оставлен, а не вычищен под ноль");
+  const lines = raw.split("\n").filter(Boolean);
+  // Ни одной покалеченной строки и последней лежит только что дописанная запись.
+  for (const line of lines) JSON.parse(line);
+  assert.deepEqual(
+    JSON.parse(lines[lines.length - 1]),
+    record({ turnId: "newest", step: 42 }),
+  );
+  assert.deepEqual(
+    readdirSync(dataDir).filter((name) => name.endsWith(".tmp")),
+    [],
+  );
+
+  // Следующая запись в подрезанный лог ложится как обычно, без повторной подрезки.
+  appendUsage(record({ turnId: "after", step: 43 }), dataDir);
+  const afterLines = readFileSync(file, "utf8").split("\n").filter(Boolean);
+  assert.equal(afterLines.length, lines.length + 1);
 });
 
 void test("the subagent turn key falls back the way Eve itself does", () => {

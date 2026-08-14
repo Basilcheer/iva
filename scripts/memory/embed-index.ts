@@ -11,12 +11,15 @@ import {
   readdirSync,
   readFileSync,
   mkdirSync,
+  renameSync,
   writeFileSync,
   statSync,
 } from "node:fs";
+import { createHash } from "node:crypto";
 import { join, relative, sep } from "node:path";
 import {
   embedTexts,
+  embeddingModelName,
   embeddingProviderName,
   hasEmbeddingKey,
 } from "../../agent/lib/embeddings.ts";
@@ -70,32 +73,88 @@ if (files.length === 0) {
   process.exit(0);
 }
 
-console.log(
-  `embed-index: ${files.length} docs via ${embeddingProviderName()} …`,
-);
-const texts = files.map((file) => embedText(file, readFileSync(file, "utf8")));
-const vectors = await embedTexts(texts);
-
-const index: {
+// Форма индекса на диске. `model`/`count`/`vectors` — как было (memory_search читает
+// только vectors). Добавлены `embedModel` и `hashes`: по ним видно, какие карточки уже
+// посчитаны ЭТОЙ моделью и не изменились с прошлой ночи. Индекс без этих полей (собранный
+// прежней версией) просто считается несовпавшим — тогда ночь пересчитает всё один раз.
+interface EmbedIndex {
   model: string;
+  embedModel: string;
   count: number;
   vectors: Record<string, number[]>;
-} = {
+  hashes: Record<string, string>;
+}
+
+const INDEX_PATH = join(VAULT, ".index", "embeddings.json");
+
+function loadPrevious(): EmbedIndex | null {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(INDEX_PATH, "utf8"));
+    if (typeof parsed !== "object" || parsed === null) return null;
+    const prev = parsed as Partial<EmbedIndex>;
+    // Векторы разных моделей несравнимы — сменился провайдер или модель, старое не годится.
+    if (
+      prev.model !== embeddingProviderName() ||
+      prev.embedModel !== embeddingModelName()
+    )
+      return null;
+    if (
+      typeof prev.vectors !== "object" ||
+      prev.vectors === null ||
+      typeof prev.hashes !== "object" ||
+      prev.hashes === null
+    )
+      return null;
+    return prev as EmbedIndex;
+  } catch {
+    return null; // нет файла или он битый — считаем с нуля
+  }
+}
+
+const previous = loadPrevious();
+const index: EmbedIndex = {
   model: embeddingProviderName(),
+  embedModel: embeddingModelName(),
   count: files.length,
   vectors: {},
+  hashes: {},
 };
-files.forEach((f, i) => {
-  if (vectors[i])
-    index.vectors[relative(VAULT, f).split(sep).join("/")] = vectors[i];
-});
 
-mkdirSync(join(VAULT, ".index"), { recursive: true });
-writeFileSync(
-  join(VAULT, ".index", "embeddings.json"),
-  JSON.stringify(index),
-  "utf8",
+// Что реально надо посчитать: карточка новая либо её текст изменился. Ключ — хэш ТЕКСТА,
+// который уходит в эмбеддинг, а не mtime: `git pull` и ночной Brain переставляют mtime и
+// на неизменившихся файлах, а платим мы за вызов модели.
+const pending: Array<{ path: string; text: string }> = [];
+for (const file of files) {
+  const path = relative(VAULT, file).split(sep).join("/");
+  const text = embedText(file, readFileSync(file, "utf8"));
+  const hash = createHash("sha1").update(text).digest("hex");
+  index.hashes[path] = hash;
+  const reusable =
+    previous && previous.hashes[path] === hash && previous.vectors[path];
+  // Записи удалённых карточек не переносятся: индекс собирается из нынешнего списка файлов.
+  if (reusable) index.vectors[path] = reusable;
+  else pending.push({ path, text });
+}
+
+console.log(
+  `embed-index: ${files.length} docs via ${embeddingProviderName()}, ` +
+    `${pending.length} to embed, ${files.length - pending.length} reused …`,
 );
+
+if (pending.length) {
+  const vectors = await embedTexts(pending.map((item) => item.text));
+  pending.forEach((item, i) => {
+    if (vectors[i]) index.vectors[item.path] = vectors[i];
+    else delete index.hashes[item.path]; // не посчиталось — не помечаем как готовое
+  });
+}
+
+// Запись через tmp+rename: оборванная посреди записи ночь не должна оставить обрезанный
+// JSON вместо рабочего индекса (ADR-0002 — данные не теряются).
+mkdirSync(join(VAULT, ".index"), { recursive: true });
+const tmp = `${INDEX_PATH}.tmp`;
+writeFileSync(tmp, JSON.stringify(index), "utf8");
+renameSync(tmp, INDEX_PATH);
 console.log(
   `embed-index: wrote ${Object.keys(index.vectors).length} vectors → ${VAULT}/.index/embeddings.json`,
 );

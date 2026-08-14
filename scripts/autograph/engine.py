@@ -21,7 +21,7 @@ from collections import defaultdict
 from common import (
     load_schema, parse_frontmatter, write_frontmatter, walk_vault, rel_path,
     infer_domain, infer_type, calc_relevance, calc_tier, days_since,
-    get_decay_config, get_node_types
+    get_decay_config, get_node_types, read_card, write_card
 )
 
 
@@ -40,9 +40,8 @@ def cmd_decay(vault_dir: Path, schema: dict, dry_run: bool = False):
     today = date.today()
 
     for md in files:
-        try:
-            content = md.read_text(errors='replace')
-        except Exception:
+        content = read_card(md)
+        if content is None:
             continue
 
         fm, body, orig_lines = parse_frontmatter(content)
@@ -84,7 +83,7 @@ def cmd_decay(vault_dir: Path, schema: dict, dry_run: bool = False):
 
         if not dry_run:
             new_fm = write_frontmatter(fm, orig_lines)
-            md.write_text(f"---\n{new_fm}\n---\n{body}")
+            write_card(md, f"---\n{new_fm}\n---\n{body}")
 
     config = get_decay_config(schema)
     mode = "DRY RUN" if dry_run else "APPLIED"
@@ -102,7 +101,10 @@ def cmd_touch(filepath: str, schema: dict):
         print(f"Error: {filepath} not found", file=sys.stderr)
         sys.exit(1)
 
-    content = fp.read_text(errors='replace')
+    content = read_card(fp)
+    if content is None:
+        print(f"Error: cannot read {filepath} as utf-8", file=sys.stderr)
+        sys.exit(1)
     fm, body, orig_lines = parse_frontmatter(content)
     if fm is None:
         print(f"Error: no frontmatter in {filepath}", file=sys.stderr)
@@ -143,7 +145,7 @@ def cmd_touch(filepath: str, schema: dict):
         fm['tier'] = new_tier
 
     new_fm = write_frontmatter(fm, orig_lines)
-    fp.write_text(f"---\n{new_fm}\n---\n{body}")
+    write_card(fp, f"---\n{new_fm}\n---\n{body}")
     new_tier = fm.get('tier', current_tier)
     print(f"  touched: {filepath} → {current_tier}→{new_tier}, "
           f"relevance={fm['relevance']}, access_count={access_count}")
@@ -155,9 +157,8 @@ def cmd_creative(n: int, vault_dir: Path, schema: dict):
     cold_archive = []
 
     for md in files:
-        try:
-            content = md.read_text(errors='replace')
-        except Exception:
+        content = read_card(md)
+        if content is None:
             continue
         fm, _, _ = parse_frontmatter(content)
         if fm is None:
@@ -191,11 +192,10 @@ def cmd_stats(vault_dir: Path, schema: dict):
     stale_90 = 0
 
     for md in files:
-        try:
-            content = md.read_text(errors='replace')
-            total_size += len(content)
-        except Exception:
+        content = read_card(md)
+        if content is None:
             continue
+        total_size += len(content)
         fm, _, _ = parse_frontmatter(content)
         if fm is None:
             no_fm += 1
@@ -244,9 +244,8 @@ def cmd_init(vault_dir: Path, schema: dict, dry_run: bool = False):
     added = 0
 
     for md in files:
-        try:
-            content = md.read_text(errors='replace')
-        except Exception:
+        content = read_card(md)
+        if content is None:
             continue
         fm, body, _ = parse_frontmatter(content)
         if fm is not None:
@@ -260,7 +259,7 @@ def cmd_init(vault_dir: Path, schema: dict, dry_run: bool = False):
         new_fm = f"---\ntype: {card_type}\ndomain: {domain}\ntier: warm\nrelevance: 0.5\nlast_accessed: {today}\n---\n"
 
         if not dry_run:
-            md.write_text(new_fm + content)
+            write_card(md, new_fm + content)
         added += 1
 
     mode = "DRY RUN" if dry_run else "APPLIED"

@@ -179,13 +179,20 @@ const client = new Client({
 // workflowEntry run in .eve/.workflow-data that nothing ever closes (the client API has
 // no delete), so a fresh session per rollup leaked one forever-"running" run per night
 // and eve re-enqueued the whole pile on every start. One persistent session per period
-// caps that at one run. Rotation is deliberately RARE (90d): every rotation abandons one
-// run in the store (nothing can close it), so frequent rotation would just re-create the
+// caps that at one run. Rotation stays RARE for that reason: every rotation abandons one
+// run in the store (nothing can close it), so per-night rotation would just re-create the
 // leak. Abandoned sessions are logged to data/rollup-abandoned.jsonl for the record;
 // `iva reset` clears them together with the store. Parked cursor lives in data/.
 const DATA_DIR = process.env.ASSISTANT_DATA_DIR ?? "data";
 const SESSION_FILE = join(DATA_DIR, `rollup-session-${period}.json`);
-const SESSION_TTL_MS = 90 * 24 * 3600 * 1000;
+// 14 days, not 90. The session carries the whole history of previous rollups, and the
+// daily one reuses it every single night: at 90 days the nightly turn opened with ~three
+// months of prior rollup transcript — tens of thousands of tokens of context the night's
+// actual job never reads, paid for on every run and slowest exactly where the box is
+// weakest. 14 days keeps the anti-leak compromise above intact (one abandoned run per
+// period per fortnight, ~26 a year instead of ~4) and cuts the carried history by roughly
+// an order of magnitude. Cost is deliberate and bounded; `iva reset` still clears them.
+const SESSION_TTL_MS = 14 * 24 * 3600 * 1000;
 // Did a rollup ever run on this installation? Read here, before this run leaves traces of
 // its own, and read from every trace at once (cursors of all four periods, the schedule
 // status file, daily summaries in the vault) — a single cursor is not enough, dropHungSession

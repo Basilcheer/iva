@@ -4,8 +4,11 @@ Single source of truth. NO hardcoded domains, types, statuses, paths.
 Everything reads from schema.json.
 """
 
+import os
 import re
 import json
+import sys
+import tempfile
 from pathlib import Path
 from datetime import date, datetime
 from collections import defaultdict
@@ -34,6 +37,49 @@ DEFAULT_IDENTITY = {
     "ignore_values": ["", "n/a", "-", "none", "unknown"],
     "max_shared": 8,
 }
+
+
+# ─── CARD I/O ──────────────────────────────────────────────
+# Every script that REWRITES a card goes through this pair, and it lives here because
+# the nightly order decides the outcome: brain.ts runs enforce first and engine.decay
+# after it, so a guard in one script alone is dead code — the first writer of the night
+# already destroyed the bytes.
+
+
+def read_card(path: Path) -> str | None:
+    """Read a card as STRICT utf-8, or None when it cannot be read.
+
+    Strict on purpose: errors='replace' turned every undecodable byte into U+FFFD, and
+    the caller then wrote that back over the original file — one pass silently destroyed
+    the bytes it could not read, and the file was valid utf-8 afterwards, so nothing ever
+    noticed. A file we cannot decode is reported and left exactly as it is on disk.
+    """
+    try:
+        return path.read_text(encoding='utf-8')
+    except UnicodeDecodeError:
+        print(f"  WARNING: skipping file that is not valid utf-8 (left untouched): {path}",
+              file=sys.stderr)
+        return None
+    except Exception:
+        return None
+
+
+def write_card(path: Path, text: str) -> None:
+    """Replace a card in one step: temp file in the SAME directory, then os.replace.
+
+    Same shape cleanup.py uses. write_text truncates first and writes after, so a crash
+    (or a full disk) mid-write left a half-written card behind; os.replace on the same
+    filesystem swaps the name atomically — readers see either the old card or the new one.
+    """
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix='.tmp')
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as w:
+            w.write(text)
+        os.replace(tmp, path)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
 
 
 # ─── SCHEMA ────────────────────────────────────────────────

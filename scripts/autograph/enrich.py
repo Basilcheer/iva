@@ -23,7 +23,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from common import (walk_vault, parse_frontmatter, write_frontmatter,
-                    rel_path, extract_wikilinks, load_schema, get_ignore_tags)
+                    rel_path, extract_wikilinks, load_schema, get_ignore_tags,
+                    read_card, write_card)
 from swarm_prepare import estimate_tokens, bin_pack_batches, top_folder
 
 # ─── CONSTANTS ────────────────────────────────────────────
@@ -275,17 +276,21 @@ def apply_tags(vault_dir: Path, results_dir: Path):
             if not tags:
                 continue
 
-            content = path.read_text(errors='replace')
+            # Строгое чтение и атомарная запись: прочитанное здесь уходит обратно в тот
+            # же файл, а errors='replace' затёр бы недекодируемые байты навсегда.
+            content = read_card(path)
+            if content is None:
+                continue
             fm, body, lines = parse_frontmatter(content)
             if fm is None:
                 # Create frontmatter
                 fm = {'tags': tags}
                 new_fm = write_frontmatter(fm, [])
-                path.write_text(f"---\n{new_fm}\n---\n{body}")
+                write_card(path, f"---\n{new_fm}\n---\n{body}")
             else:
                 fm['tags'] = tags
                 new_fm = write_frontmatter(fm, lines)
-                path.write_text(f"---\n{new_fm}\n---\n{body}")
+                write_card(path, f"---\n{new_fm}\n---\n{body}")
             applied += 1
     return applied
 
@@ -457,7 +462,10 @@ def apply_links(vault_dir: Path, results_dir: Path, stem_to_path: dict[str, str]
             if not matched:
                 continue
 
-            content = path.read_text(errors='replace')
+            # Как и выше: прочитанное уходит обратно в этот же файл.
+            content = read_card(path)
+            if content is None:
+                continue
 
             # Build wikilink targets for new stems
             new_targets = {}
@@ -491,7 +499,7 @@ def apply_links(vault_dir: Path, results_dir: Path, stem_to_path: dict[str, str]
                 section = "\n\n## Related\n" + '\n'.join(link_lines) + '\n'
                 content = content.rstrip() + section
 
-            path.write_text(content)
+            write_card(path, content)
             applied += 1
     return applied
 

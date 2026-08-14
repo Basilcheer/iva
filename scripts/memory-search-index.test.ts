@@ -250,7 +250,7 @@ const { loadDocs, searchMemory } =
   await import("../agent/tools/memory_search.ts");
 
 test("индексируемые поля карточек совпадают со снапшотом", async () => {
-  const docs = (await loadDocs(["cards"])).sort((a, b) =>
+  const docs = (await loadDocs(["cards"])).docs.sort((a, b) =>
     a.path < b.path ? -1 : 1,
   );
   assert.deepEqual(docs, EXPECTED);
@@ -301,7 +301,7 @@ test("текст dense-эмбеддинга совпадает со снапшо
 // 2000 символов, так что тело сравнивается целиком.
 test("dense-половина индексирует те же колонки, что BM25", async () => {
   const dense = embedTexts();
-  for (const doc of await loadDocs(["cards"])) {
+  for (const doc of (await loadDocs(["cards"])).docs) {
     const name = doc.path.replace("cards/", "");
     for (const column of [doc.title, doc.meta, doc.tags, doc.body])
       if (column)

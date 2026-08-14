@@ -10,7 +10,14 @@
 // Лог живёт в data/usage.jsonl (ASSISTANT_DATA_DIR, дефолт ./data) — рядом с tasks.json,
 // gitignored, НЕ в vault (иначе ночной brain коммитил бы растущий лог в репо памяти).
 // Одна строка JSONL на шаг модели; ход (turn) = несколько шагов, группируем по turnId.
-import { appendFileSync, mkdirSync } from "node:fs";
+import {
+  appendFileSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join } from "node:path";
 
 export interface UsageRecord {
@@ -40,12 +47,51 @@ export function usageFilePath(dataDir = defaultDir()): string {
   return join(dataDir, "usage.jsonl");
 }
 
+// Потолок лога и сколько от него остаётся после подрезки. Лог — операционный счётчик, а
+// не память пользователя: САМЫЕ СТАРЫЕ строки при переполнении теряются НАМЕРЕННО, и
+// инвариант «данные не теряются» (ADR-0002) на них не распространяется — он про vault.
+//
+// Сколько это шагов, по замеру реальной записи (269 байт без субагента, 298 с ним):
+// сразу после подрезки в логе ~7 000–7 800 шагов модели, к следующей подрезке — вдвое
+// больше. У активного пользователя месяц — того же порядка, поэтому НИ ОДНО окно нельзя
+// объявить «заведомо целым»: и month, и week после подрезки могут считать не с начала
+// окна. Врать об этом нельзя, поэтому scripts/lib/usage.ts печатает в отчёте дату, с
+// которой он реально посчитал, как только лог до начала окна не достаёт (то же и у
+// lifetime-окон by-model/by-source, у которых начала нет вовсе).
+// Без подрезки файл рос бы вечно, а читает его /usage целиком на слабом хосте.
+const MAX_BYTES = 4 * 1024 * 1024;
+const KEEP_BYTES = 2 * 1024 * 1024;
+
+// Подрезка через tmp+rename: оборванная запись не оставит вместо лога полфайла. Писатель
+// у лога один (процесс агента), поэтому гонки «дописали, пока подрезали» тут нет.
+function trim(file: string): void {
+  try {
+    const raw = readFileSync(file);
+    if (raw.length <= MAX_BYTES) return;
+    // Режем по границе строки — половина JSON никому не нужна.
+    const newline = raw.indexOf(0x0a, raw.length - KEEP_BYTES);
+    if (newline === -1) return;
+    const tmp = `${file}.tmp`;
+    writeFileSync(tmp, raw.subarray(newline + 1));
+    renameSync(tmp, file);
+  } catch {
+    /* подрезка — не повод потерять записанный ход */
+  }
+}
+
 // Sync append (как transcript.ts) — короткая дозапись против латентности модели, без
 // interleave от конкурентных асинхронных записей.
 export function appendUsage(record: UsageRecord, dataDir = defaultDir()): void {
   const file = usageFilePath(dataDir);
   mkdirSync(dirname(file), { recursive: true });
   appendFileSync(file, JSON.stringify(record) + "\n", "utf8");
+  // Один statSync на шаг модели — против сетевого вызова к модели это ничто, а лог
+  // перестаёт расти без границы.
+  try {
+    if (statSync(file).size > MAX_BYTES) trim(file);
+  } catch {
+    /* нет файла — нечего подрезать */
+  }
 }
 
 /**

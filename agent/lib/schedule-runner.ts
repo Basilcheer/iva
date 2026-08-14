@@ -1,6 +1,6 @@
 // Thin spawner shared by agent/schedules/*.ts and agent/lib/schedule-migration.ts.
 // Runs an existing cron script exactly the way the (now retired) systemd units did —
-// `flock -w 900 <lockPath> <nodeBin> --env-file=.env <argv...>` — under a hard timeout,
+// `flock -w 3900 <lockPath> <nodeBin> --env-file=.env <argv...>` — under a hard timeout,
 // and records the outcome to a status file so `iva doctor` and the /menu → crons screen
 // can see it. Never throws: eve's schedule runner and the fire-and-forget migration hook
 // both need a promise that always settles.
@@ -21,6 +21,13 @@ import {
 // none of the four periods fire more than once every 2h.
 const GUARD_MS = 2 * 60 * 60 * 1000;
 const DEFAULT_TIMEOUT_MS = 3600_000;
+// How long flock may WAIT for .memory.lock before giving up. All four rollups plus the
+// brain share that one lock and start 5..15 minutes apart, so a wait shorter than the
+// job timeout meant a long daily silently threw the weekly (and everything behind it)
+// off the night: flock exited 1 and the run was recorded as failed without ever starting.
+// Keeping it above DEFAULT_TIMEOUT_MS makes the queue WAIT instead: the runner's own
+// timeout is then the only thing that ends a wedged night, and it kills the whole group.
+const LOCK_WAIT_SECONDS = 3900;
 const DEFAULT_KILL_GRACE_MS = 10_000;
 const TAIL_MAX = 4000;
 // The admission critical section below is a handful of synchronous fs calls — always
@@ -268,7 +275,14 @@ export async function runScheduledJob(
 
     const cmd = lockPath ? "flock" : (nodeBin as string);
     const args = lockPath
-      ? ["-w", "900", lockPath, nodeBin as string, "--env-file=.env", ...argv]
+      ? [
+          "-w",
+          String(LOCK_WAIT_SECONDS),
+          lockPath,
+          nodeBin as string,
+          "--env-file=.env",
+          ...argv,
+        ]
       : ["--env-file=.env", ...argv];
 
     const outcome = await new Promise<SpawnOutcome>((resolve) => {

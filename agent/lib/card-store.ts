@@ -5,7 +5,7 @@
 // дополняет один ## Log, SUPERSEDE заменяет Compiled Truth и переносит прежний факт
 // в ## History, а NOOP не пишет файл.
 
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { hasUnclosedFence, outsideFences, scanFences } from "./card-text.ts";
 import {
@@ -85,6 +85,79 @@ export interface Identity {
   candidates?: string[];
 }
 
+// Имена одной карточки в уже нормализованном виде — вместе со снимком файла, по которому
+// видно, что разбирать её заново не нужно.
+interface CardNames {
+  mtimeNs: bigint;
+  size: bigint;
+  /** normalizeName каждого кандидата (H1, name/title/aka/aliases, слаг файла). */
+  full: string[];
+  /** baseName тех же кандидатов — для матча «голое имя ↔ квалифицированная карточка». */
+  bare: string[];
+}
+
+// Промах точного слага — это КАЖДАЯ новая карточка, а за ночь ролловера их десятки.
+// Без кэша каждая из них перечитывала и разбирала весь каталог типа: N карточек → N²
+// чтений с диска. Кэш живёт в процессе, по каталогу; ключ записи — снимок файла (mtime в
+// наносекундах + размер), поэтому правка карточки чужими руками (ночной Brain, git pull)
+// видна так же, как своя.
+//
+// Что осталось и почему: обход никуда не делся — на каждый промах это readdirSync плюс
+// statSync на файл, то есть O(N) СИСТЕМНЫХ ВЫЗОВОВ (ушли только чтение содержимого и
+// разбор frontmatter, самая дорогая часть). Это осознанная цена: карточки пишет не
+// только этот процесс, и единственный способ увидеть чужую правку — спросить у диска.
+// Замеры на 2000 карточек, 50 промахов подряд: 5283 мс → 1143 мс, и весь остаток —
+// как раз эти stat'ы.
+const namesByDir = new Map<string, Map<string, CardNames>>();
+
+// Счётчики для тестов: сколько карточек реально прочитано с диска при разрешении имени.
+export const resolveStats = { fileReads: 0 };
+
+function cardNames(dir: string): Map<string, CardNames> {
+  let names: string[];
+  try {
+    names = readdirSync(dir).filter((n) => n.endsWith(".md"));
+  } catch {
+    names = [];
+  }
+  const cached = namesByDir.get(dir) ?? new Map<string, CardNames>();
+  const fresh = new Map<string, CardNames>();
+  for (const name of names.sort()) {
+    const full = join(dir, name);
+    let stats;
+    try {
+      stats = statSync(full, { bigint: true });
+    } catch {
+      continue; // файл исчез между листингом и снимком
+    }
+    const prior = cached.get(name);
+    if (prior && prior.mtimeNs === stats.mtimeNs && prior.size === stats.size) {
+      fresh.set(name, prior);
+      continue;
+    }
+    let text: string;
+    try {
+      text = readFileSync(full, "utf8");
+    } catch {
+      continue;
+    }
+    resolveStats.fileReads++;
+    const { fields, body } = parseFrontmatter(text);
+    const h1 = extractH1(body);
+    const cands = [h1, ...fmNames(fields), name.replace(/\.md$/, "")].filter(
+      Boolean,
+    ) as string[];
+    fresh.set(name, {
+      mtimeNs: stats.mtimeNs,
+      size: stats.size,
+      full: cands.map(normalizeName),
+      bare: cands.map(baseName),
+    });
+  }
+  namesByDir.set(dir, fresh);
+  return fresh;
+}
+
 /**
  * Идентичность карточки: сначала точный слаг, иначе — поиск среди карточек ТОГО ЖЕ типа
  * по H1-заголовку и полям name/title/aka/aliases. Так карточка с латинским легаси-слагом
@@ -103,31 +176,11 @@ export function resolveCard(dir: string, title: string): Identity {
   const wantedBase = baseName(title);
   const bareQuery = !hasQualifier(title);
   const hits: string[] = [];
-  let names: string[];
-  try {
-    names = readdirSync(dir).filter((n) => n.endsWith(".md"));
-  } catch {
-    names = [];
-  }
-  for (const name of names.sort()) {
-    const full = join(dir, name);
-    let text: string;
-    try {
-      text = readFileSync(full, "utf8");
-    } catch {
-      continue;
-    }
-    const { fields, body } = parseFrontmatter(text);
-    const h1 = extractH1(body);
-    const cands = [h1, ...fmNames(fields), name.replace(/\.md$/, "")].filter(
-      Boolean,
-    ) as string[];
-    const matched = cands.some(
-      (c) =>
-        normalizeName(c) === wanted ||
-        (bareQuery && baseName(c) === wantedBase),
-    );
-    if (matched) hits.push(full);
+  for (const [name, entry] of cardNames(dir)) {
+    const matched =
+      entry.full.includes(wanted) ||
+      (bareQuery && entry.bare.includes(wantedBase));
+    if (matched) hits.push(join(dir, name));
   }
 
   if (hits.length === 1) return { file: hits[0], matchedBy: "title" };

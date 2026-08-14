@@ -17,4 +17,7 @@ Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
 # (systemd-analyze verify: «has no effect in combination with Type=oneshot»), а свой
 # таймаут старта у oneshot по умолчанию вовсе отключён.
 TimeoutStartSec=3600
-ExecStart=/usr/bin/flock -w 900 __PROJECT_DIR__/.memory.lock __NODE_BIN__ --env-file=.env scripts/memory/brain.ts
+# -w (сколько ждать лок) держим ВЫШЕ TimeoutStartSec: роллапы занимают тот же лок на
+# час, и короткое ожидание превращало «brain подождал» в «brain не запускался этой
+# ночью». Раньше кончится TimeoutStartSec — юнит станет failed и попадёт в `iva doctor`.
+ExecStart=/usr/bin/flock -w 3900 __PROJECT_DIR__/.memory.lock __NODE_BIN__ --env-file=.env scripts/memory/brain.ts

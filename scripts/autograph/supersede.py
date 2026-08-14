@@ -25,6 +25,7 @@ from common import (
     load_schema,
     parse_frontmatter,
     write_frontmatter,
+    write_card,
     collect_duplicate_groups,
     get_conflict_fields,
     card_recency_date as _card_date,
@@ -99,7 +100,9 @@ def apply_supersede(vault_dir: Path, candidates: list) -> int:
         fields["status"] = "superseded"
         fields["superseded_by"] = f"[[{cur_rel.replace('.md', '')}]]"
         new_fm = write_frontmatter(fields, lines)
-        old_path.write_text(f"---\n{new_fm}\n---\n{body}", encoding="utf-8")
+        # Читает этот путь уже строго; запись — через тот же атомарный шов, что и
+        # остальные писатели карточек (краш посреди записи не оставит полкарточки).
+        write_card(old_path, f"---\n{new_fm}\n---\n{body}")
         changed += 1
     return changed
 
