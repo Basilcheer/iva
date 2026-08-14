@@ -528,7 +528,10 @@ async function main() {
   // и доктор. Неизвестное имя (опечатка `ollmaa`) не сходится ни с одним ключом: раньше карты
   // промахивались, API-ключ выпадал из REQUIRED, мастер объявлял сломанный .env настроенным и
   // выходил — а это тот самый мастер, к которому отказ агента и отправляет (issue #161).
-  const prov0 = existing.MODEL_PROVIDER || "ollama";
+  // `??`, не `||`: `MODEL_PROVIDER=` в .env — это заданное пустое значение, и рантайм,
+  // доктор, статус и апдейт его отвергают. Схлопни его здесь в ollama — и единственный
+  // экран, который умеет починить, снова объявил бы сломанный .env настроенным.
+  const prov0 = existing.MODEL_PROVIDER ?? "ollama";
   const cat0 = catalogProvider(prov0);
   const provModel = cat0?.modelVar ?? "OLLAMA_MODEL";
   // codex — доступ по OAuth-токену (data/codex-auth.json), у ollama/opencode/openrouter — API-ключ в .env.

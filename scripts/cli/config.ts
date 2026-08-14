@@ -73,9 +73,15 @@ export function createConfigCommand(
     const candidateDir = mkdtempSync(join(tmpdir(), "iva-config-"));
     const candidatePath = join(candidateDir, ".env");
     try {
-      const result = run(NODE, ["scripts/setup.mjs"], {
-        env: { ...childEnv, IVA_CONFIG_OUTPUT: candidatePath },
-      });
+      // IVA_CONFIG_INPUT снимается намеренно: он существует, чтобы прогнать мастера против
+      // фикстуры в тесте, и унаследованный из окружения оператора он молча подменил бы
+      // источник конфигурации — `iva config` обязан читать живой .env установки.
+      const spawnEnv: Record<string, string | undefined> = {
+        ...childEnv,
+        IVA_CONFIG_OUTPUT: candidatePath,
+        IVA_CONFIG_INPUT: undefined,
+      };
+      const result = run(NODE, ["scripts/setup.mjs"], { env: spawnEnv });
       if (result.status !== 0) {
         process.exitCode = result.status ?? 1;
         return;

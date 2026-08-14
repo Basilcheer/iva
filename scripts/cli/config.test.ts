@@ -404,13 +404,22 @@ async function runWizard(
 }
 
 test("the setup wizard treats an invalid provider as unconfigured, not as complete", async (t) => {
-  const output = await runWizard(t, "ollmaa", /Provider \(1\/2\/3\/4\)/u);
+  // Пустое значение отдельным случаем: ключ в .env есть, значение пустое. Рантайм, доктор,
+  // статус и апдейт его отвергают, а мастер с `||` схлопывал его в ollama и объявлял
+  // сломанный .env настроенным — то есть ровно в починке и молчал.
+  for (const value of ["ollmaa", "OLLAMA", ""]) {
+    const output = await runWizard(t, value, /Provider \(1\/2\/3\/4\)/u);
 
-  assert.doesNotMatch(output, /already configured/u);
-  assert.doesNotMatch(output, /Reconfigure from scratch/u);
-  assert.match(output, /MODEL_PROVIDER is invalid \(ollmaa\)/u);
-  // И он именно СПРАШИВАЕТ провайдера, а не проходит мимо шага.
-  assert.match(output, /Provider \(1\/2\/3\/4\)/u);
+    assert.doesNotMatch(output, /already configured/u, value);
+    assert.doesNotMatch(output, /Reconfigure from scratch/u, value);
+    assert.match(
+      output,
+      new RegExp(`MODEL_PROVIDER is invalid \\(${value}\\)`),
+      value,
+    );
+    // И он именно СПРАШИВАЕТ провайдера, а не проходит мимо шага.
+    assert.match(output, /Provider \(1\/2\/3\/4\)/u, value);
+  }
 });
 
 // Контроль: на исправной конфигурации мастер по-прежнему коротко подтверждает и предлагает
@@ -421,4 +430,36 @@ test("the setup wizard still short-circuits on a complete configuration", async 
   assert.match(output, /Iva is already configured/u);
   assert.match(output, /Provider: ollama/u);
   assert.doesNotMatch(output, /MODEL_PROVIDER is invalid/u);
+});
+
+// IVA_CONFIG_INPUT существует ради одного: прогнать мастера против фикстуры в тесте.
+// Унаследованный из окружения оператора он молча подменил бы источник — мастер прочитал бы
+// чужой файл и записал бы результат поверх живого .env установки. `iva config` снимает его.
+test("iva config never lets an inherited fixture seed replace the live .env", async (t) => {
+  // Мастер «отказался» ниже, и команда выставляет process.exitCode — вернуть как было.
+  const previousExitCode = process.exitCode;
+  t.after(() => {
+    process.exitCode = previousExitCode;
+  });
+  const root = await sandbox(t);
+  const seen: Record<string, string | undefined>[] = [];
+  const base = createCliRuntime(root);
+  const runtime: CliRuntime = {
+    ...base,
+    requireSystemd: () => undefined,
+    childEnv: { ...base.childEnv, IVA_CONFIG_INPUT: "/tmp/somebody-elses.env" },
+    run: (_command, _args, options) => {
+      seen.push({ ...options?.env });
+      return result(1); // Мастер «отказался» — дальше идти незачем.
+    },
+    confirm: async () => true,
+  };
+
+  await createConfigCommand(runtime, { writeUnits: () => [] })([]);
+
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].IVA_CONFIG_INPUT, undefined);
+  // А выход и остальное окружение на месте.
+  assert.equal(typeof seen[0].IVA_CONFIG_OUTPUT, "string");
+  assert.equal(seen[0].PATH, base.childEnv.PATH);
 });
