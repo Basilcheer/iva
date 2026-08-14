@@ -8,9 +8,9 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
-const EXPECTED_PRODUCTION_COUNT = 178;
+const EXPECTED_PRODUCTION_COUNT = 179;
 const EXPECTED_INVENTORY_SHA256 =
-  "31571ec85a16445fbdf67a2423c803ce832b8021668edd2930053083f27e296f";
+  "0e0668f9a95b555ab606a532ada66e1d345e4eff5b849c2eb479d788de9feb9b";
 
 // Node's native include globs filter loaded modules; they do not load untouched files.
 // This test pins the exact production path inventory and a separately measured 26-path
@@ -25,7 +25,10 @@ const EXPECTED_INVENTORY_SHA256 =
 // the root `agent/sandbox.ts` it re-exports - no test loads either - so the blind spot is 26.
 // The notice policy module `scripts/lib/notice-policy.ts` and the `/menu` screen that switches
 // the reports, `scripts/lib/menu/notices.ts`, came next - both loaded by their own tests and
-// reported, so the blind spot stays at 26.
+// reported, so the blind spot stays at 26. The provider resolver `agent/lib/model-provider.ts`
+// came after them: its own test loads it in process and it is reported, while the hook that
+// now imports it, `agent/hooks/usage.ts`, is only loaded in a spawned process - so the blind
+// spot stays at 26 and keeps the hook.
 const MEASURED_UNREPORTED_BY_CATEGORY = {
   frameworkBoundaries: [
     "agent/agent.ts",

@@ -5,6 +5,10 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
+import {
+  MODEL_PROVIDER_NAMES,
+  invalidModelProviderMessage,
+} from "#lib/model-provider.ts";
 import { createSystemdControl } from "../lib/systemd-control.ts";
 import { createVersionStore } from "../lib/version-store.ts";
 import { createDoctorCommand } from "./doctor.ts";
@@ -286,4 +290,85 @@ test("doctor reports an update that flipped but never finished", async (t) => {
   events.length = 0;
   await doctor();
   assert.equal(unfinished(), false, JSON.stringify(events));
+});
+
+test("doctor rejects an invalid model provider instead of diagnosing Ollama", async (t) => {
+  const root = await sandbox(t);
+  writeFileSync(join(root, ".env"), "MODEL_PROVIDER=ollmaa\n");
+  const failures: string[] = [];
+  const runtime: CliRuntime = {
+    ...createCliRuntime(root),
+    C: NO_COLOR,
+    ok: () => undefined,
+    warn: () => undefined,
+    bad: (message) => failures.push(message),
+    readEnv: () => ({ MODEL_PROVIDER: "ollmaa" }),
+    hasSystemd: () => false,
+  };
+
+  await createDoctorCommand(runtime, lifecycle(), {
+    nodeVersion: "24.0.0",
+    log: () => undefined,
+    exit: () => undefined,
+  })();
+
+  assert.equal(
+    failures[0],
+    'Invalid MODEL_PROVIDER "ollmaa"; expected one of: ollama, opencode, codex, openrouter — run: iva config',
+  );
+  assert.equal(
+    failures.some((message) => message.includes("OLLAMA_")),
+    false,
+  );
+});
+
+// Доктор и рантайм обязаны принимать один и тот же набор имён и объяснять отказ одним
+// предложением: разъедься они, доктор объявил бы .env здоровым перед сервисом, который
+// на этом же значении отказывается стартовать, — и починку искали бы не там.
+test("doctor accepts exactly the provider names the runtime accepts", async (t) => {
+  async function diagnose(provider: string): Promise<string[]> {
+    const root = await sandbox(t);
+    writeFileSync(join(root, ".env"), `MODEL_PROVIDER=${provider}\n`);
+    const failures: string[] = [];
+    const runtime: CliRuntime = {
+      ...createCliRuntime(root),
+      C: NO_COLOR,
+      ok: () => undefined,
+      warn: () => undefined,
+      bad: (message) => failures.push(message),
+      readEnv: () => ({ ...completeEnv(), MODEL_PROVIDER: provider }),
+      hasSystemd: () => false,
+    };
+    await createDoctorCommand(runtime, lifecycle(), {
+      nodeVersion: "24.0.0",
+      log: () => undefined,
+      exit: () => undefined,
+    })();
+    return failures;
+  }
+
+  for (const name of MODEL_PROVIDER_NAMES) {
+    const failures = await diagnose(name);
+    assert.deepEqual(
+      failures.filter((message) =>
+        message.startsWith("Invalid MODEL_PROVIDER"),
+      ),
+      [],
+      name,
+    );
+  }
+  for (const value of [
+    "ollmaa",
+    " ollama",
+    "ollama ",
+    "OLLAMA",
+    "оllama",
+    "__proto__",
+  ]) {
+    assert.equal(
+      (await diagnose(value))[0],
+      invalidModelProviderMessage(value),
+      JSON.stringify(value),
+    );
+  }
 });

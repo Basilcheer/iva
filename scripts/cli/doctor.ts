@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { LEGACY_BRAIN_UNITS } from "../lib/legacy-memory-units.ts";
 import { classifyAgentListeners } from "../lib/listener-security.ts";
 import { readMemoryMaintenanceReport } from "../lib/memory-maintenance.ts";
+import { CATALOG } from "../lib/model-catalog.ts";
 import { classifyRoot } from "../lib/version-layout.ts";
 import { createVersionStore } from "../lib/version-store.ts";
 import type { createCliRuntime } from "./runtime.ts";
@@ -88,35 +89,44 @@ export function createDoctorCommand(
       bad(".env missing — run: iva config");
       badN++;
     } else {
-      const provider = env.MODEL_PROVIDER || "ollama";
-      // codex — доступ по OAuth-токену (data/codex-auth.json), у ollama/opencode — API-ключ в .env.
-      const providerKeys: Record<string, readonly string[]> = {
-        ollama: ["OLLAMA_API_KEY", "OLLAMA_MODEL"],
-        opencode: ["OPENCODE_API_KEY", "OPENCODE_MODEL"],
-        openrouter: ["OPENROUTER_API_KEY", "OPENROUTER_MODEL"],
-        codex: ["CODEX_MODEL"],
-      };
-      const required = [
-        ...(providerKeys[provider] || providerKeys.ollama),
-        "DEEPGRAM_API_KEY",
-        "TELEGRAM_BOT_TOKEN",
-        "TELEGRAM_ALLOWED_USER_IDS",
-        "ASSISTANT_BEARER",
-      ];
-      const missing = required.filter((key) => !(env[key] || "").trim());
-      if (
-        provider === "codex" &&
-        !existsSync(join(dataDirAbs(env), "codex-auth.json"))
-      )
-        missing.push("OpenAI sign-in (iva login)");
-      if (!missing.length) {
-        ok(`.env filled in (provider: ${provider})`);
-        okN++;
-      } else {
+      // Имя провайдера и его обязательные ключи — из того же каталога, что кнопки /model
+      // и мастер: доктор не может принять имя, которого не примет рантайм (перечень имён
+      // сверяет scripts/lib/model-catalog.test.ts с копией в agent/lib/model-provider.ts).
+      // Неизвестное значение — отказ, а не диагностика ollama: рантайм на нём не стартует.
+      const rawProvider = env.MODEL_PROVIDER ?? "ollama";
+      const provider = Object.hasOwn(CATALOG, rawProvider)
+        ? CATALOG[rawProvider]
+        : undefined;
+      if (!provider) {
         bad(
-          `.env incomplete, missing: ${missing.join(", ")} — run: iva config`,
+          `Invalid MODEL_PROVIDER ${JSON.stringify(rawProvider)}; expected one of: ${Object.keys(CATALOG).join(", ")} — run: iva config`,
         );
         badN++;
+      } else {
+        // codex — доступ по OAuth-токену (data/codex-auth.json), у остальных — ключ в .env.
+        const required = [
+          ...(provider.keyVar ? [provider.keyVar] : []),
+          provider.modelVar,
+          "DEEPGRAM_API_KEY",
+          "TELEGRAM_BOT_TOKEN",
+          "TELEGRAM_ALLOWED_USER_IDS",
+          "ASSISTANT_BEARER",
+        ];
+        const missing = required.filter((key) => !(env[key] || "").trim());
+        if (
+          provider.auth === "oauth" &&
+          !existsSync(join(dataDirAbs(env), "codex-auth.json"))
+        )
+          missing.push("OpenAI sign-in (iva login)");
+        if (!missing.length) {
+          ok(`.env filled in (provider: ${rawProvider})`);
+          okN++;
+        } else {
+          bad(
+            `.env incomplete, missing: ${missing.join(", ")} — run: iva config`,
+          );
+          badN++;
+        }
       }
       // old .env without IVA_PORT (or with :3000) — migrate right here
       if (migrateEnv()) fixN++;

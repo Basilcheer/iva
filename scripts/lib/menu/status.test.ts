@@ -124,3 +124,44 @@ test("status does not edit an expired menu after the asynchronous probe settles"
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(edits, 0);
 });
+
+// Пустая строка отдельным случаем: `MODEL_PROVIDER=` в .env — это заданное значение,
+// которого рантайм не принимает, а не «переменной нет». Развернись предикат обратно в
+// `||`, экран снова рапортовал бы про Ollama, пока агент лежит.
+// Пробелов вокруг значения здесь нет намеренно: парсер .env их срезает (LINE_RE в
+// scripts/lib/env-file.ts), до экрана они не доезжают — их ловит резолвер рантайма,
+// который читает process.env напрямую.
+test("status surfaces an invalid model provider instead of presenting Ollama", async () => {
+  for (const value of ["ollmaa", "OLLAMA", "ollama,opencode", ""]) {
+    const { root, envPath } = await fixture();
+    await writeFile(
+      envPath,
+      `MODEL_PROVIDER=${value}\nOLLAMA_MODEL=wrong-model\n`,
+    );
+    const state: StatusState = { chatId: 1, userId: "2", screen: "st" };
+    const context: StatusContext = {
+      deps: {
+        root,
+        envPath,
+        dataDir: join(root, "data"),
+        probeUserbotHealth: async () => ({ state: "off" }),
+      },
+      flows: {
+        get: () => null,
+        screen: async () => undefined,
+      },
+      getLang: () => "en",
+      tr: (en) => en,
+      btn: (text, callbackData) => ({ text, callback_data: callbackData }),
+      backRow: () => [{ text: "Back", callback_data: "iva_menu:r:o" }],
+    };
+
+    const view = await status.default.render(state, context);
+    assert.equal(
+      view.text.includes(`Model: invalid (${value}) · ?`),
+      true,
+      view.text,
+    );
+    assert.doesNotMatch(view.text, /Model: ollama|wrong-model/);
+  }
+});
