@@ -31,6 +31,8 @@ Four providers. Pick one with `MODEL_PROVIDER` and fill only that block. `ollama
 | `CODEX_MODEL`               | `gpt-5.5`         | Model from your OpenAI plan. `iva config` lists what your subscription actually exposes.                                                                                                                           |
 | `CODEX_CONTEXT_WINDOW`      | `272000`          | Same warning — set the real window of the model you picked.                                                                                                                                                        |
 
+Those four names, spelled exactly. Any other value — a typo, a different case — stops the agent at startup and prints the accepted names, instead of running Ollama under a name nobody configured; `iva doctor` and `/menu` → 📊 Status report the same thing ([troubleshooting.md](troubleshooting.md)). No `MODEL_PROVIDER` line at all still means `ollama`.
+
 For `codex` there is no API key in `.env`: run `iva login` (device code, headless-friendly) or `iva login --browser`. The OAuth token lives in `data/codex-auth.json` (chmod 600, gitignored) and is auto-refreshed before it expires. Full flow: [providers.md](./providers.md#openai-by-chatgpt-subscription-codex).
 
 **Don't inflate the context window.** Compaction triggers at 70% of this number. Set it above the model's real window and the compactor fires too late — the request overflows before history gets trimmed. When you switch models, enter the new model's actual window, not a rounder bigger one.
