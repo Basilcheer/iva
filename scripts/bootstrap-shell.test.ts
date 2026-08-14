@@ -9,6 +9,7 @@ import {
   rmSync,
   statSync,
   symlinkSync,
+  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -474,6 +475,132 @@ void test("install_pubkey stays silent with no key to authorize", () => {
     assert.equal(output, "");
     assert.throws(() => readFileSync(runLog), { code: "ENOENT" });
     assert.deepEqual(readdirSync(home), []);
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
+// The lockout class: install_pubkey and harden_ssh are exercised back to back, exactly
+// as main() runs them. DISABLE_PASSWORD_AUTH arrives true (the ask_pubkey default when a
+// key is provided); the question is whether harden_ssh keeps it true. SSHD_MAIN_CONFIG
+// points at nothing, so harden_ssh runs its password-switch decision and then returns at
+// the missing-config guard — the drop-in is never written, and DISABLE_PASSWORD_AUTH is
+// left holding the verdict for the test to read.
+function runLockout(opts: {
+  readonly home: string;
+  readonly runLog: string;
+  readonly rootLog: string;
+  readonly pubkey?: string;
+  readonly extra?: readonly string[];
+}): string {
+  const { home, runLog, rootLog, pubkey = KEY, extra = [] } = opts;
+  const prelude = [
+    "set -Eeuo pipefail",
+    'ok() { printf "ok: %s\\n" "$*"; }',
+    'warn() { printf "warn: %s\\n" "$*"; }',
+    "section() { :; }",
+    "LOG_FILE=/dev/null",
+    "TARGET_USER=iva",
+    "SSHD_MAIN_CONFIG=/nonexistent/sshd_config",
+    // The intent handed down from ask_pubkey: a key was provided, so turn passwords off.
+    "DISABLE_PASSWORD_AUTH=true",
+    "KEY_AUTHORIZED=false",
+    `PUBKEY=${JSON.stringify(pubkey)}`,
+    `getent() { printf 'iva:x:1000:1000::%s:/bin/bash\\n' "${home}"; }`,
+    `runuser() { printf 'runuser %s\\n' "$*" >>"${runLog}"; shift 3; command "$@"; }`,
+    `mkdir() { printf 'root-mkdir %s\\n' "$*" >>"${rootLog}"; command mkdir "$@"; }`,
+    `chmod() { printf 'root-chmod %s\\n' "$*" >>"${rootLog}"; command chmod "$@"; }`,
+    `tee() { printf 'root-tee %s\\n' "$*" >>"${rootLog}"; command tee "$@"; }`,
+    ...extra,
+  ].join("\n");
+  const body = [
+    bashFunction("as_target_user"),
+    bashFunction("install_pubkey"),
+    bashFunction("harden_ssh"),
+    "install_pubkey",
+    "harden_ssh",
+    'printf "state: DISABLE_PASSWORD_AUTH=%s KEY_AUTHORIZED=%s\\n" "$DISABLE_PASSWORD_AUTH" "$KEY_AUTHORIZED"',
+  ].join("\n");
+  return execFileSync("bash", ["-c", `${prelude}\n${body}`], {
+    encoding: "utf8",
+  });
+}
+
+void test("harden_ssh keeps passwords ON when the key never landed — no lockout", () => {
+  const fixture = mkdtempSync(join(tmpdir(), "iva-bootstrap-lockout-nokey-"));
+  try {
+    const home = join(fixture, "home", "iva");
+    mkdirSync(home, { recursive: true });
+    // The key cannot be authorized: getent hands back no home, so install_pubkey warns
+    // and leaves KEY_AUTHORIZED false. The intent said "disable passwords"; the fact
+    // says the owner has no key waiting, so passwords must stay on.
+    const output = runLockout({
+      home,
+      runLog: join(fixture, "runuser.log"),
+      rootLog: join(fixture, "root.log"),
+      extra: ["getent() { return 2; }"],
+    });
+
+    assert.match(output, /warn: no home directory for iva/);
+    assert.match(output, /leaving password logins ON/);
+    assert.match(output, /state: DISABLE_PASSWORD_AUTH=false KEY_AUTHORIZED=false/);
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
+void test("harden_ssh disables passwords once the key is really authorized, fixing bad perms", () => {
+  const fixture = mkdtempSync(join(tmpdir(), "iva-bootstrap-lockout-fix-"));
+  try {
+    const home = join(fixture, "home", "iva");
+    const sshDir = join(home, ".ssh");
+    mkdirSync(sshDir, { recursive: true });
+    // A world-writable authorized_keys with unrelated content: sshd StrictModes would
+    // reject 0666, so the perms must be fixed before the key is trusted.
+    const keys = join(sshDir, "authorized_keys");
+    writeFileSync(keys, "ssh-rsa AAAAOTHER other@host\n");
+    chmodSync(keys, 0o666);
+    const output = runLockout({
+      home,
+      runLog: join(fixture, "runuser.log"),
+      rootLog: join(fixture, "root.log"),
+    });
+
+    assert.match(output, /ok: Key authorized for iva/);
+    assert.doesNotMatch(output, /leaving password logins ON/);
+    assert.match(output, /state: DISABLE_PASSWORD_AUTH=true KEY_AUTHORIZED=true/);
+    assert.equal(statSync(keys).mode & 0o777, 0o600);
+    assert.equal(
+      readFileSync(keys, "utf8"),
+      `ssh-rsa AAAAOTHER other@host\n${KEY}\n`,
+    );
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
+void test("harden_ssh trusts an already-authorized key only after locking its 0666 file to 0600", () => {
+  const fixture = mkdtempSync(join(tmpdir(), "iva-bootstrap-lockout-already-"));
+  try {
+    const home = join(fixture, "home", "iva");
+    const sshDir = join(home, ".ssh");
+    mkdirSync(sshDir, { recursive: true });
+    // The key is ALREADY present, but the file is world-writable. The "already
+    // authorized" path must still tighten it to 0600 before it may report success —
+    // otherwise sshd rejects the file and passwords would be off with no way in.
+    const keys = join(sshDir, "authorized_keys");
+    writeFileSync(keys, `${KEY}\n`);
+    chmodSync(keys, 0o666);
+    const output = runLockout({
+      home,
+      runLog: join(fixture, "runuser.log"),
+      rootLog: join(fixture, "root.log"),
+    });
+
+    assert.match(output, /ok: Key already authorized for iva/);
+    assert.doesNotMatch(output, /leaving password logins ON/);
+    assert.match(output, /state: DISABLE_PASSWORD_AUTH=true KEY_AUTHORIZED=true/);
+    assert.equal(statSync(keys).mode & 0o777, 0o600);
   } finally {
     rmSync(fixture, { recursive: true, force: true });
   }

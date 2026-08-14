@@ -132,16 +132,21 @@ git -C "$INSTALL_DIR" ls-files --others --exclude-standard -z >"$state_dir/untra
 # a skill's credentials, the Telethon session, local notes. Listing only the untracked
 # ones left all of that behind in a backup this script then tells the user to remove.
 # --directory collapses a wholly ignored directory into a single entry, so this never
-# walks node_modules to name it. A directory git itself cannot read is not listed at
-# all: its contents stay in the complete backup and are never named in conflicts.txt —
-# an inherited limit of asking git, and the backup is still whole.
+# walks node_modules to name it. A directory that is unreadable AND not matched by an
+# ignore rule is not listed at all: git cannot see inside to decide, so it stays out of
+# ignored.raw — its contents live in the complete backup and are never named in
+# conflicts.txt. (A directory ignored BY NAME is still listed even at mode 000: git
+# needs no read to match the rule. This is an inherited limit of asking git, and the
+# backup is whole either way.)
 #
 # Listed into a file, not through a process substitution: there git's exit status is
 # nobody's, so a failed listing would read as "nothing is ignored here" and quietly
 # leave every one of these files behind. As a plain redirect it is a command like any
-# other, and errexit stops the repair while it has still touched nothing.
+# other, and errexit stops the repair while it has still touched nothing. git's own
+# stderr ("warning: could not open directory …" for an unreadable path) goes to a file,
+# not the user's screen mid-repair.
 git -C "$INSTALL_DIR" ls-files --others --ignored --exclude-standard --directory -z \
-  >"$state_dir/ignored.raw"
+  >"$state_dir/ignored.raw" 2>"$state_dir/ignored.err"
 : >"$state_dir/ignored.zlist"
 while IFS= read -r -d '' ignored; do
   if rebuildable "$ignored"; then continue; fi

@@ -82,6 +82,10 @@ TARGET_PASS=""
 CREATE_USER=false
 PUBKEY=""
 DISABLE_PASSWORD_AUTH=false
+# Set true ONLY once the key is really in authorized_keys with the right perms.
+# harden_ssh reads THIS, not "a key was handed in": a key that never landed must
+# never let us turn passwords off, or the owner is locked out of their own VPS.
+KEY_AUTHORIZED=false
 TIMEZONE_CHOICE=""
 SSH_PORT=22
 
@@ -1147,13 +1151,31 @@ install_pubkey() {
   # else could still have swapped it out of.
   as_target_user chmod 700 "$ssh_dir" >>"$LOG_FILE" 2>&1 \
     || warn "couldn't set 700 on $ssh_dir — sshd may refuse the key until it is fixed"
+  # Create the file and lock it to 0600 BEFORE anything reads from or appends to it.
+  # This closes two holes at once. First, the umask window: `tee -a` would otherwise
+  # create authorized_keys at 0664 (0666 & ~umask) and only a later chmod would tighten
+  # it, so a fixed file created here means the append never widens it. Second, the
+  # "already authorized" path below returns early — if the file were left at whatever a
+  # previous run or a careless admin set, sshd StrictModes would reject a 0666 file and
+  # passwords would already be off. A file we cannot create or lock down is not a safely
+  # authorized key: warn and leave KEY_AUTHORIZED false so passwords stay on.
+  if ! as_target_user touch "$keys" >>"$LOG_FILE" 2>&1; then
+    warn "couldn't create $keys as $TARGET_USER — the key was not authorized; log in with the password and add it by hand"
+    return 0
+  fi
+  if ! as_target_user chmod 600 "$keys" >>"$LOG_FILE" 2>&1; then
+    warn "couldn't set 600 on $keys — the key was not authorized; log in with the password and add it by hand"
+    return 0
+  fi
   if as_target_user grep -qxF "$PUBKEY" "$keys" >/dev/null 2>&1; then
+    KEY_AUTHORIZED=true
     ok "Key already authorized for $TARGET_USER"
     return 0
   fi
   if printf '%s\n' "$PUBKEY" | as_target_user tee -a "$keys" >>"$LOG_FILE" 2>&1; then
     as_target_user chmod 600 "$keys" >>"$LOG_FILE" 2>&1 \
       || warn "couldn't set 600 on $keys — sshd may refuse the key until it is fixed"
+    KEY_AUTHORIZED=true
     ok "Key authorized for $TARGET_USER"
   else
     warn "couldn't write $keys as $TARGET_USER — the key was not authorized; log in with the password and add it by hand"
@@ -1296,6 +1318,16 @@ EOF
 # ─────────────────────────────────────────────────────────────────────────────
 harden_ssh() {
   section "SSH hardening"
+  # DISABLE_PASSWORD_AUTH was decided back at ask_pubkey from "a key was provided". But
+  # a provided key that never reached authorized_keys — no home, an unwritable ~/.ssh,
+  # perms we could not set — would lock the owner out the instant we turn passwords off.
+  # Bind the switch to the key being REALLY authorized, not to the intent. No authorized
+  # key ⇒ passwords stay on, whatever was asked for. Decided first, before any early
+  # return below, so the invariant holds on every path out of hardening.
+  if [ "$DISABLE_PASSWORD_AUTH" = true ] && [ "$KEY_AUTHORIZED" != true ]; then
+    warn "the SSH key was not authorized — leaving password logins ON so you are not locked out; log in with the password, add the key by hand, then turn passwords off"
+    DISABLE_PASSWORD_AUTH=false
+  fi
   if [ ! -f "$SSHD_MAIN_CONFIG" ]; then
     warn "no $SSHD_MAIN_CONFIG — skipping hardening"
     return 0
