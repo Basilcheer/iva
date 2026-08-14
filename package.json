@@ -50,6 +50,7 @@
     "@typescript/native-preview": "7.0.0-dev.20260523.1",
     "eslint": "^10.8.0",
     "eslint-config-prettier": "^10.1.8",
+    "fast-check": "4.9.0",
     "globals": "^17.9.0",
     "patch-package": "^8.0.1",
     "prettier": "^3.9.6",

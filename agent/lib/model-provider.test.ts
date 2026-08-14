@@ -10,7 +10,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import fc from "fast-check";
 import {
+  MODEL_PROVIDERS,
   MODEL_PROVIDER_NAMES,
   invalidModelProviderMessage,
   resolveModelProvider,
@@ -210,4 +212,146 @@ test("runtime startup rejects an invalid provider before choosing a config", () 
       module,
     );
   }
+});
+
+// ─── Свойства (fast-check) ────────────────────────────────────────────────────────────
+// Якоря выше перечисляют конкретные значения контракта; здесь генераторы ходят по всему
+// входному пространству — именно там и нашлась опечатка issue #161.
+//
+// КАК ВОСПРОИЗВЕСТИ ПАДЕНИЕ: при провале fast-check печатает в отчёте строку вида
+// `Property failed after N tests { seed: -1234567, path: "12:3:0", endOnFailure: true }`.
+// Подставь их вторым аргументом — fc.assert(prop, { seed: -1234567, path: "12:3:0" }) —
+// и прогон повторится байт в байт, включая shrink.
+const NAMES: readonly string[] = MODEL_PROVIDER_NAMES;
+const RUNS = { numRuns: 500 };
+
+// Пробельные обрамления, которых человек в .env не видит.
+const invisible = fc.constantFrom("", " ", "\t", "\n", "\r", " ", "​");
+
+// Регистр-мутации валидного имени: OLLAMA, Ollama, oLLaMa — рантайм принимает одно.
+const caseMutated = fc
+  .constantFrom(...NAMES)
+  .chain((name) =>
+    fc
+      .array(fc.boolean(), { minLength: name.length, maxLength: name.length })
+      .map((flags) =>
+        [...name]
+          .map((char, index) => (flags[index] ? char.toUpperCase() : char))
+          .join(""),
+      ),
+  );
+
+const padded = fc
+  .tuple(invisible, fc.constantFrom(...MODEL_PROVIDER_NAMES), invisible)
+  .map(([left, name, right]) => `${left}${name}${right}`);
+
+const notAProviderName = fc
+  .oneof(
+    fc.string(),
+    fc.string({ unit: "grapheme" }),
+    fc.string({ unit: "binary" }),
+    padded,
+    caseMutated,
+    // Ключи прототипа: на них ловится проверка через `in`/индексирование вместо списка.
+    fc.constantFrom(
+      "__proto__",
+      "constructor",
+      "prototype",
+      "toString",
+      "valueOf",
+      "hasOwnProperty",
+    ),
+    fc.constantFrom(...MODEL_PROVIDER_NAMES).map((name) => `${name},${name}`),
+  )
+  .filter((value) => !NAMES.includes(value));
+
+test("property: every value outside the list is refused, with the list in the refusal", () => {
+  fc.assert(
+    fc.property(notAProviderName, (value) => {
+      assert.throws(
+        () => resolveModelProvider({ MODEL_PROVIDER: value }),
+        (error: unknown) =>
+          error instanceof Error &&
+          error.message === invalidModelProviderMessage(value),
+      );
+      // Перечень в отказе — канонический порядок целиком, а не «одно из».
+      assert.ok(
+        invalidModelProviderMessage(value).includes(
+          "ollama, opencode, codex, openrouter",
+        ),
+      );
+    }),
+    RUNS,
+  );
+});
+
+test("property: a valid name never picks up another provider's model", () => {
+  fc.assert(
+    fc.property(
+      fc.constantFrom(...MODEL_PROVIDER_NAMES),
+      fc.string({ minLength: 1 }),
+      (name, suffix) => {
+        // У каждого провайдера своя помеченная модель: чужая в ответе видна сразу.
+        const env: Record<string, string> = { MODEL_PROVIDER: name };
+        for (const other of MODEL_PROVIDER_NAMES)
+          env[MODEL_PROVIDERS[other].modelVar] = `${other}::${suffix}`;
+
+        const selection = resolveModelProvider(env);
+        assert.equal(selection.name, name);
+        assert.equal(selection.model, `${name}::${suffix}`);
+        assert.equal(selection.model.length > 0, true);
+        assert.equal(
+          selection.compatibleReasoning,
+          name === "ollama" || name === "opencode",
+        );
+      },
+    ),
+    RUNS,
+  );
+});
+
+test("property: an unset model variable falls back to that provider's own default", () => {
+  fc.assert(
+    fc.property(
+      fc.constantFrom(...MODEL_PROVIDER_NAMES),
+      // Чужие переменные заполнены, своя — нет: дефолт обязан прийти из своей строки.
+      fc.string({ minLength: 1 }),
+      (name, noise) => {
+        const env: Record<string, string> = { MODEL_PROVIDER: name };
+        for (const other of MODEL_PROVIDER_NAMES)
+          if (other !== name) env[MODEL_PROVIDERS[other].modelVar] = noise;
+
+        const selection = resolveModelProvider(env);
+        assert.equal(selection.model, MODEL_PROVIDERS[name].defaultModel);
+        assert.equal(selection.model.length > 0, true);
+      },
+    ),
+    RUNS,
+  );
+});
+
+test("property: OpenCode drops the wizard prefix and nobody else touches the value", () => {
+  fc.assert(
+    fc.property(fc.string(), (model) => {
+      assert.equal(
+        resolveModelProvider({
+          MODEL_PROVIDER: "opencode",
+          OPENCODE_MODEL: `opencode-go/${model}`,
+        }).model,
+        model,
+      );
+      for (const name of MODEL_PROVIDER_NAMES) {
+        if (name === "opencode") continue;
+        const tagged = `opencode-go/${model}`;
+        assert.equal(
+          resolveModelProvider({
+            MODEL_PROVIDER: name,
+            [MODEL_PROVIDERS[name].modelVar]: tagged,
+          }).model,
+          tagged,
+        );
+      }
+    }),
+    RUNS,
+  );
 });
