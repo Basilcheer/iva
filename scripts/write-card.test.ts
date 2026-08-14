@@ -754,7 +754,7 @@ test("незакрытый фенс отклоняется на ADD, UPDATE и S
   assert.match(rejectedSupersede.error, /must close every code fence/);
   assert.equal(read(created.file), before);
 
-  // Тот же пример с закрытым фенсом остаётся кодом и проходит: гейт ловит именно
+  // Тот же пример с закрытым фенсом остаётся кодом и проходит: проверка ловит именно
   // незакрытый фенс, а не заголовки внутри примера.
   const closed = await call({
     ...base,
@@ -874,7 +874,7 @@ test("открытый фенс в лежащей карточке отклон�
   const created = await call(base);
   assert.equal(created.ok, true);
   // Карточка с опечаткой: фенс открыт выше ## History, поэтому весь архив читается как
-  // код. Замена Compiled Truth без гейта стёрла бы обе записи молча.
+  // код. Замена Compiled Truth без проверки стёрла бы обе записи молча.
   const poisoned =
     `${read(created.file).trimEnd()}\n\n` +
     "```yaml\nowner: Alice\n\n" +
@@ -1619,7 +1619,7 @@ test("вытесняемый факт сверяется с нынешней и�
   );
 
   // Настоящий реплей ПОСЛЕДНЕГО вызова после нескольких замен остаётся noop: сверка
-  // с истиной идёт после гейта реплея и не отказывает повтору, который ничего не меняет.
+  // с истиной идёт после проверки реплея и не отказывает повтору, который ничего не меняет.
   const replayed = await call(toCarol);
   assert.equal(replayed.action, "noop");
   assert.equal(read(created.file), archived);
@@ -1668,7 +1668,7 @@ test("открытый фенс в лежащей карточке отклон�
   assert.match(read(created.file), /^- \d{4}-\d{2}-\d{2}: Новый факт\.$/m);
 });
 
-test("гейт заголовков судит тело в форме хранения: ADD хранит как есть, UPDATE со сдвигом", async () => {
+test("проверка заголовков судит тело в форме хранения: ADD хранит как есть, UPDATE со сдвигом", async () => {
   const { outsideFences } = (await import(
     join(REPO, "agent", "lib", "card-store.ts")
   )) as typeof import("../agent/lib/card-store.ts");
@@ -1688,7 +1688,7 @@ test("гейт заголовков судит тело в форме хране
     operation: "ADD",
     type: "note",
     title: "Форма хранения тела",
-    description: "гейт судит то, что ляжет в карточку",
+    description: "проверка судит то, что ляжет в карточку",
     tags: ["note", "fence"],
     body: smuggled,
   };

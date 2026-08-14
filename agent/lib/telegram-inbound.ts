@@ -150,7 +150,7 @@ function shouldDispatch(msg: TelegramInboundMessage, bot?: string): boolean {
 
 // Для медиа text/attachments пусты (eve не парсит голос/видео в attachments),
 // поэтому обычный shouldDispatch их всегда отбрасывает (строка с проверкой длины).
-// Гейтим по чату: личка — всегда; группа/супергруппа — только реплай боту,
+// Фильтруем по чату: личка — всегда; группа/супергруппа — только реплай боту,
 // команда или @упоминание в подписи. Иначе в группе чужой голос ушёл бы в Deepgram.
 function shouldDispatchMedia(
   msg: TelegramInboundMessage,

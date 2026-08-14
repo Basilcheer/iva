@@ -1213,11 +1213,13 @@
           <h2 class="sec-label">Security</h2>
           <p class="display">Guarded in, guarded out</p>
           <p class="sec-copy">
-            You'll forward Iva things from the outside: links, PDFs, other
-            people's messages. Inbound content passes a prompt-injection
-            sanitizer, every reply passes a secret-redaction gate, and the
-            allowlist fails closed: an empty list answers nobody. Your memory is
-            a private git repo you own.
+            You'll forward Iva things from the outside: links, web pages, other
+            people's messages. Web pages, search results, voice transcripts,
+            captions and the vision model's description reach the model only
+            through a prompt-injection sanitizer; a forwarded text message is
+            tagged with a warning instead. Every reply passes a secret-redaction
+            gate, and the allowlist fails closed: an empty list answers nobody.
+            Your memory is a private git repo you own.
             <a href="https://github.com/smixs/iva/blob/main/docs/security.md"
               >Gate internals</a
             >.
@@ -1225,7 +1227,7 @@
           <div class="plate">
             <img
               src="iva-security-gate.webp"
-              alt="Untrusted input from Telegram, web and email passes the security gate: corrupted messages drop into the reject tray, only clean context reaches the vault"
+              alt="Untrusted input from Telegram and the web passes the security gate: corrupted messages drop into the reject tray, only clean context reaches the vault"
               width="1676"
               height="719"
               loading="lazy"
@@ -1233,7 +1235,7 @@
             />
             <p class="plate-caption">
               <span>Untrusted in, clean out</span
-              ><span>Links, PDFs and forwards pass the gate first</span>
+              ><span>Links, web pages and forwards pass the gate first</span>
             </p>
           </div>
         </div>

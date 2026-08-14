@@ -324,7 +324,7 @@ def main() -> None:
 
         mcp.settings.host = host
         mcp.settings.port = port
-        # Bound to localhost + bearer-gated; the DNS-rebinding validator only adds
+        # Bound to localhost + bearer-protected; the DNS-rebinding validator only adds
         # 421s for the loopback/host aliases iva uses, so disable it here.
         from mcp.server.transport_security import TransportSecuritySettings
 
