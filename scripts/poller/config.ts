@@ -1,6 +1,7 @@
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { TELEGRAM_ACCEPTANCE_ROUTE } from "#lib/telegram-acceptance.ts";
+import { TELEGRAM_CANCEL_ROUTE } from "#lib/telegram-cancel-route.ts";
 
 export const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 export const NODE = process.execPath;
@@ -24,6 +25,7 @@ export const DATA_DIR_ABS = DATA_DIR;
 export const ROUTE = `${HOST}/eve/v1/telegram`;
 export const ACCEPTANCE_ROUTE = `${HOST}${TELEGRAM_ACCEPTANCE_ROUTE}`;
 export const RESET_ROUTE = `${ROUTE}/reset`;
+export const CANCEL_ROUTE = `${HOST}${TELEGRAM_CANCEL_ROUTE}`;
 export const API = `https://api.telegram.org/bot${TOKEN}`;
 export const OFFSET_FILE = join(DATA_DIR, "telegram-offset.json");
 // Acceptance returns 204 only after the turn starts. Ninety seconds is deliberately

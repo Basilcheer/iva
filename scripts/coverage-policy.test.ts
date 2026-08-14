@@ -8,9 +8,9 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
-const EXPECTED_PRODUCTION_COUNT = 178;
+const EXPECTED_PRODUCTION_COUNT = 182;
 const EXPECTED_INVENTORY_SHA256 =
-  "31571ec85a16445fbdf67a2423c803ce832b8021668edd2930053083f27e296f";
+  "c96c138675722e0367f0ff10895d244301d85880d825205fac382b2f55c26507";
 
 // Node's native include globs filter loaded modules; they do not load untouched files.
 // This test pins the exact production path inventory and a separately measured 26-path
@@ -25,7 +25,12 @@ const EXPECTED_INVENTORY_SHA256 =
 // the root `agent/sandbox.ts` it re-exports - no test loads either - so the blind spot is 26.
 // The notice policy module `scripts/lib/notice-policy.ts` and the `/menu` screen that switches
 // the reports, `scripts/lib/menu/notices.ts`, came next - both loaded by their own tests and
-// reported, so the blind spot stays at 26.
+// reported, so the blind spot stays at 26. The turn-cancellation seam came after it -
+// `agent/lib/eve-cancel.ts`, `agent/lib/telegram-cancel-route.ts` and
+// `agent/lib/telegram-cancel-client.ts` - all three loaded by `scripts/lib/telegram-cancel.test.ts`
+// and reported, so the blind spot stays at 26. The webhook-mode Stop handler
+// `agent/lib/telegram-stop.ts` came after it, loaded by `scripts/telegram-failure-events.test.ts`
+// through the real channel and reported, so the blind spot stays at 26.
 const MEASURED_UNREPORTED_BY_CATEGORY = {
   frameworkBoundaries: [
     "agent/agent.ts",

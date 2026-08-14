@@ -73,6 +73,11 @@ export const COMMANDS: ReadonlyArray<Command> = [
   { command: "menu", en: "settings menu", ru: "меню настроек" },
   { command: "help", en: "this list", ru: "этот список" },
   {
+    command: "start",
+    en: "greeting and first steps",
+    ru: "приветствие и первые шаги",
+  },
+  {
     command: "stop",
     en: "interrupt the current turn (same as the ⏹ Stop button)",
     ru: "прервать текущий ход (как кнопка ⏹ Стоп)",
@@ -130,6 +135,23 @@ export function helpText(): string {
     return `/${c.command}${hint} — ${pick(c.en, c.ru)}`;
   });
   return [pick("Iva commands:", "Команды Iva:"), ...lines].join("\n");
+}
+
+// Ответ на /start: кнопку Start жмут ровно один раз, и до модели она доходить не должна.
+// Генерится на каждый вызов — по тому же правилу, что helpText().
+export function startText(): string {
+  const isRu = getLang() === "ru";
+  return isRu
+    ? [
+        "Привет, я Iva — твой личный ассистент.",
+        "Просто напиши, что нужно: текстом, голосом или файлом.",
+        "Список команд — /help, настройки — /menu.",
+      ].join("\n")
+    : [
+        "Hi, I'm Iva — your personal assistant.",
+        "Just tell me what you need: text, voice, or a file.",
+        "Commands are in /help, settings in /menu.",
+      ].join("\n");
 }
 
 // Массив для setMyCommands на конкретном языке (мост зовёт дважды: default=en и

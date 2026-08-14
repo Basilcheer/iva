@@ -1,7 +1,13 @@
 /* eslint-disable @typescript-eslint/no-floating-promises -- Node's test runner owns registrations. */
 import "./lib/ts-esm-hooks.ts";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import {
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { after } from "node:test";
@@ -12,6 +18,8 @@ process.env.AGENT_LANGUAGE = "en";
 process.env.TELEGRAM_ALLOWED_USER_IDS = "9";
 process.env.TELEGRAM_BOT_TOKEN = "failure-test-token";
 process.env.TELEGRAM_WEBHOOK_SECRET_TOKEN = "failure-test-secret";
+process.env.IVA_PORT = "8723";
+delete process.env.ASSISTANT_HOST; // адрес самовызова cancel-роута должен быть предсказуем
 
 type ApiBody = Record<string, unknown> & {
   chat_id?: unknown;
@@ -29,6 +37,10 @@ type EventOptions = {
   sessionId: string;
   continuationToken?: string;
 };
+type ChannelEventHandler = (
+  data: Record<string, unknown>,
+  context: unknown,
+) => void | Promise<void>;
 type FailureAdapter = {
   state?: Record<string, unknown>;
   createAdapterContext: (base: {
@@ -51,6 +63,11 @@ type FailureAdapter = {
     data: Record<string, unknown>,
     context: unknown,
   ) => void | Promise<void>;
+  "turn.started": ChannelEventHandler;
+  "actions.requested": ChannelEventHandler;
+  "action.partial": ChannelEventHandler;
+  "action.result": ChannelEventHandler;
+  "message.appended": ChannelEventHandler;
 };
 
 const apiCalls: ApiCall[] = [];
@@ -66,6 +83,10 @@ globalThis.fetch = async (url, init = {}) => {
       ) as ApiBody)
     : undefined;
   apiCalls.push({ method, body });
+  // Самовызов cancel-роута каналом (кнопка ⏹ Стоп в webhook-режиме) — не Bot API.
+  if (requestUrl.endsWith("/eve/v1/telegram/cancel")) {
+    return Response.json({ ok: true, status: "accepted" });
+  }
   const hold = heldSend;
   if (method === "sendMessage" && hold?.chatId === String(body?.chat_id)) {
     hold.startedResolve();
@@ -455,4 +476,296 @@ test("session.failed survives an empty error and redacts a multi-line one", asyn
   } finally {
     restore();
   }
+});
+
+// --- Проводка пульса живого хода ---
+//
+// Пульс держится на ЧЕТЫРЁХ обработчиках событий канала (agent/channels/telegram.ts).
+// Сама функция markTelegramTurnAlive проверена в agent/lib/telegram-turn-start.test.ts,
+// но её вызов из обработчика — отдельный провод: убрать его, и жнец снова начнёт снимать
+// живой молчаливый ход, а все юнит-тесты останутся зелёными. Здесь дёргается настоящий
+// адаптер канала, а результат читается из настоящего run-status.
+const HEARTBEAT_EVENTS = [
+  ["actions.requested", { actions: [], sequence: 0, turnId: "turn_0" }],
+  [
+    "action.partial",
+    { result: {}, sequence: 1, stepIndex: 0, turnId: "turn_0" },
+  ],
+  [
+    "action.result",
+    { result: {}, sequence: 2, stepIndex: 0, turnId: "turn_0" },
+  ],
+  ["message.appended", { message: {}, sequence: 3 }],
+] as const;
+
+async function emitChannelEvent(
+  name: (typeof HEARTBEAT_EVENTS)[number][0],
+  data: Record<string, unknown>,
+  options: EventOptions,
+) {
+  const context = eventContext(options);
+  await contextStorage.run(context.ctx, () =>
+    adapter[name](data, context.value),
+  );
+}
+
+test("every live-turn event refreshes run-status, and actions.requested keeps Eve's typing default", async () => {
+  let chatIdSeed = 710;
+  for (const [name, data] of HEARTBEAT_EVENTS) {
+    // Свой чат на событие: пульс дросселирован одной записью в минуту на чат.
+    const chatId = String(chatIdSeed++);
+    const sessionId = `alive-${name}`;
+    const key = chatKeyOf(chatId);
+    // firstOutputAt проставлен заранее: иначе отметка первого вывода в message.appended
+    // сама сделала бы запись и замаскировала отсутствие пульса.
+    setChatStatus(key, {
+      status: "running",
+      sessionId,
+      turnId: "turn_0",
+      firstOutputAt: 1,
+    });
+    const before = getChatStatus(key)!;
+    const apiBefore = apiCalls.length;
+    await new Promise((resolve) => setTimeout(resolve, 5)); // Date.now() ходит по миллисекундам
+
+    await emitChannelEvent(name, { ...data }, { chatId, sessionId });
+
+    const after = getChatStatus(key)!;
+    assert.equal(
+      after.generation,
+      (before.generation as number) + 1,
+      `${name}: пульс не дошёл до run-status`,
+    );
+    assert.ok(
+      (after.updatedAt as number) > (before.updatedAt as number),
+      `${name}: updatedAt не двинулся, жнец снимет живой ход`,
+    );
+    assert.equal(after.status, "running", `${name}: пульс сменил статус`);
+    assert.equal(after.sessionId, sessionId, `${name}: пульс сменил сессию`);
+
+    // Дефолт eve на actions.requested — обновить «печатает…». Переопределяя событие,
+    // канал обязан сохранить это сам.
+    assert.equal(
+      callsSince(apiBefore, "sendChatAction").length,
+      name === "actions.requested" ? 1 : 0,
+      `${name}: индикатор набора`,
+    );
+  }
+});
+
+test("a heartbeat from a finished or foreign turn is refused by the same wiring", async () => {
+  const chatId = "719";
+  const key = chatKeyOf(chatId);
+  setChatStatus(key, {
+    status: "running",
+    sessionId: "live-session",
+    turnId: "turn_0",
+    firstOutputAt: 1,
+  });
+  const before = getChatStatus(key)!;
+
+  // Опоздавшее событие уже сброшенного хода: CAS по sessionId не совпал.
+  await emitChannelEvent(
+    "action.result",
+    { result: {}, sequence: 9, stepIndex: 0, turnId: "turn_old" },
+    { chatId, sessionId: "old-session" },
+  );
+
+  const after = getChatStatus(key)!;
+  assert.equal(after.generation, before.generation);
+  assert.equal(after.updatedAt, before.updatedAt);
+  assert.equal(after.sessionId, "live-session");
+});
+
+// --- Кнопка ⏹ Стоп в webhook-режиме ---
+//
+// В штатном long-poll нажатие перехватывает мост (scripts/poller/main.ts зовёт
+// handleControl до любой доставки) и до eve оно не доходит. В webhook-режиме моста нет
+// вовсе, апдейт идёт прямо в канал — и тогда работает onCallbackQuery. Здесь дёргается
+// НАСТОЯЩИЙ вебхук-роут канала: проверяется, что eve доводит колбэк до обработчика, а тот
+// зовёт собственный cancel-роут с токеном и turnId из run-status.
+const webhookRoute = channel.routes.find(
+  (candidate) =>
+    candidate.transport !== "websocket" &&
+    candidate.method === "POST" &&
+    candidate.path === "/eve/v1/telegram",
+);
+if (!webhookRoute || webhookRoute.transport === "websocket")
+  throw new Error("telegramChannel did not expose its webhook route");
+const webhookHandler = webhookRoute.handler;
+
+const unusedRouteArg = () => {
+  throw new Error("not used by the callback-query path");
+};
+
+async function postWebhookUpdate(update: Record<string, unknown>) {
+  // Канал подтверждает вебхук раньше диспетчеризации и уводит работу в waitUntil —
+  // без дожидания фоновых задач тест увидел бы пустоту.
+  const background: Promise<unknown>[] = [];
+  const response = await webhookHandler(
+    new Request("http://iva.test/eve/v1/telegram", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-telegram-bot-api-secret-token": "failure-test-secret",
+      },
+      body: JSON.stringify(update),
+    }),
+    {
+      send: unusedRouteArg,
+      resolveActiveSession: unusedRouteArg,
+      cancel: unusedRouteArg,
+      clear: unusedRouteArg,
+      compact: unusedRouteArg,
+      reset: unusedRouteArg,
+      getSession: unusedRouteArg,
+      receive: unusedRouteArg,
+      params: {},
+      waitUntil: (task: Promise<unknown>) => {
+        background.push(Promise.resolve(task));
+      },
+      requestIp: "127.0.0.1",
+    } as never,
+  );
+  await Promise.allSettled(background);
+  return response;
+}
+
+function stopTap(chatId: string, fromId: number) {
+  return {
+    update_id: 900 + fromId,
+    callback_query: {
+      id: `cq-${chatId}`,
+      from: { id: fromId, is_bot: false },
+      message: {
+        message_id: 5,
+        date: 1,
+        chat: { id: Number(chatId), type: "private" },
+      },
+      data: "iva_cancel",
+    },
+  };
+}
+
+test("the Stop button reaches the channel's own cancel route when no bridge is running", async () => {
+  const chatId = "731";
+  const key = chatKeyOf(chatId);
+  setChatStatus(key, {
+    status: "running",
+    // Namespaced-токен пишут версии до фикса #110 — наружу обязан уйти channel-local.
+    continuationToken: `telegram:${chatId}::`,
+    sessionId: "webhook-stop-session",
+    turnId: "turn_7",
+  });
+  const before = apiCalls.length;
+
+  await postWebhookUpdate(stopTap(chatId, 9));
+
+  const cancels = callsSince(before, "cancel");
+  assert.equal(cancels.length, 1, "нажатие не дошло до cancel-роута");
+  assert.deepEqual(cancels[0].body, {
+    continuationToken: `${chatId}::`,
+    turnId: "turn_7",
+  });
+  const acks = callsSince(before, "answerCallbackQuery");
+  assert.equal(acks.length, 1);
+  assert.equal(acks[0].body!.text, "Stopping…");
+});
+
+test("an idle chat and an untrusted tap never reach the cancel route", async () => {
+  const idleChat = "732";
+  setChatStatus(chatKeyOf(idleChat), { status: "idle" });
+  const beforeIdle = apiCalls.length;
+  await postWebhookUpdate(stopTap(idleChat, 9));
+  assert.equal(callsSince(beforeIdle, "cancel").length, 0);
+  assert.equal(
+    callsSince(beforeIdle, "answerCallbackQuery")[0].body!.text,
+    "Nothing is running right now.",
+  );
+
+  const liveChat = "733";
+  setChatStatus(chatKeyOf(liveChat), {
+    status: "running",
+    continuationToken: `${liveChat}::`,
+    sessionId: "guarded-session",
+    turnId: "turn_8",
+  });
+  const beforeStranger = apiCalls.length;
+  await postWebhookUpdate(stopTap(liveChat, 4242));
+  assert.equal(callsSince(beforeStranger, "cancel").length, 0);
+  // Спиннер гасим, но чужому нажатию ничего не объясняем.
+  const strangerAcks = callsSince(beforeStranger, "answerCallbackQuery");
+  assert.equal(strangerAcks.length, 1);
+  assert.equal(strangerAcks[0].body!.text, undefined);
+
+  // HITL-колбэк самого eve ("eve:" — TELEGRAM_HITL_CALLBACK_PREFIX) разбирается ДО
+  // нашего хука: он не наш, до cancel не доходит, и отвечает на него eve.
+  const beforeHitl = apiCalls.length;
+  await postWebhookUpdate({
+    ...stopTap(liveChat, 9),
+    callback_query: { ...stopTap(liveChat, 9).callback_query, data: "eve:1" },
+  });
+  assert.equal(callsSince(beforeHitl, "cancel").length, 0);
+  assert.equal(callsSince(beforeHitl, "answerCallbackQuery").length, 1);
+
+  // А вот НЕ-HITL чужой колбэк (кнопка меню, долетевшая до eve) попадает уже в наш
+  // хук. Само его наличие навсегда закрывает дефолтную ветку eve «Unsupported
+  // action.», поэтому спиннер обязан гасить канал — иначе он крутится вечно.
+  const beforeForeign = apiCalls.length;
+  await postWebhookUpdate({
+    ...stopTap(liveChat, 9),
+    callback_query: {
+      ...stopTap(liveChat, 9).callback_query,
+      data: "iva_menu:root",
+    },
+  });
+  assert.equal(callsSince(beforeForeign, "cancel").length, 0);
+  const foreignAcks = callsSince(beforeForeign, "answerCallbackQuery");
+  assert.equal(foreignAcks.length, 1, "чужой колбэк остался без ack");
+  assert.equal(foreignAcks[0].body!.text, undefined);
+});
+
+// Состарить запись run-status, не трогая её раскладку: ищем файл по sessionId и
+// правим одно поле. Если раскладка изменится, помощник упадёт, а не притворится.
+function backdateStatus(sessionId: string, ageMs: number) {
+  const dir = join(dataDir, "run-status.d");
+  for (const name of readdirSync(dir)) {
+    const file = join(dir, name);
+    const parsed = JSON.parse(readFileSync(file, "utf8")) as {
+      sessionId?: string;
+      updatedAt?: number;
+    };
+    if (parsed.sessionId !== sessionId) continue;
+    writeFileSync(
+      file,
+      JSON.stringify({ ...parsed, updatedAt: Date.now() - ageMs }),
+    );
+    return;
+  }
+  throw new Error(`run-status record for ${sessionId} not found`);
+}
+
+test("a crashed turn's stale status is not stoppable in webhook mode either", async () => {
+  // В webhook-режиме жнеца нет вовсе (он живёт в мосте), поэтому запись «running»
+  // после краша процесса лежит вечно. Политика «живой ход» обязана быть одна на оба
+  // режима — по возрасту updatedAt, иначе кнопка навсегда отвечает «Останавливаю…».
+  const chatId = "734";
+  const key = chatKeyOf(chatId);
+  setChatStatus(key, {
+    status: "running",
+    continuationToken: `${chatId}::`,
+    sessionId: "crashed-session",
+    turnId: "turn_9",
+  });
+  backdateStatus("crashed-session", 31 * 60_000);
+  assert.equal(getChatStatus(key)!.status, "running"); // запись всё ещё «идёт»
+
+  const before = apiCalls.length;
+  await postWebhookUpdate(stopTap(chatId, 9));
+
+  assert.equal(callsSince(before, "cancel").length, 0);
+  assert.equal(
+    callsSince(before, "answerCallbackQuery")[0].body!.text,
+    "Nothing is running right now.",
+  );
 });

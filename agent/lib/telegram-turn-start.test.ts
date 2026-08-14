@@ -4,8 +4,10 @@ import assert from "node:assert/strict";
 import {
   emitTelegramTurnLatency,
   markTelegramFirstOutput,
+  markTelegramTurnAlive,
   publishTelegramEarlyStatus,
   publishTelegramTurnStarted,
+  type TurnHeartbeat,
 } from "./telegram-turn-start.ts";
 
 type Status = Record<string, unknown>;
@@ -18,16 +20,32 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-function statusStore(initial: Status = {}) {
+// Двойник run-status. Контракт настоящего updateChatStatus (agent/lib/run-status.ts)
+// шире, чем «слить patch»: КАЖДАЯ успешная запись двигает generation и updatedAt —
+// на них держатся и CAS раннего статуса, и жнец протухших ходов. Двойник, который их
+// не двигал, тихо прощал бы пульсу хода не делать свою работу.
+function statusStore(initial: Status = {}, now: () => number = Date.now) {
   let value = initial;
+  const commit = (patch: Status) => {
+    const previousGeneration =
+      typeof value.generation === "number" &&
+      Number.isSafeInteger(value.generation) &&
+      value.generation >= 0
+        ? value.generation
+        : 0;
+    value = {
+      ...value,
+      ...patch,
+      generation: previousGeneration + 1,
+      updatedAt: now(),
+    };
+    for (const key of Object.keys(value))
+      if (value[key] === null) delete value[key];
+    return value;
+  };
   return {
     get: () => value,
-    set: (_key: string, patch: Status) => {
-      value = { ...value, ...patch };
-      for (const key of Object.keys(value))
-        if (value[key] === null) delete value[key];
-      return value;
-    },
+    set: (_key: string, patch: Status) => commit(patch),
     cas: (_key: string, expected: Status, patch: Status) => {
       if (
         Object.entries(expected).some(
@@ -36,10 +54,7 @@ function statusStore(initial: Status = {}) {
       ) {
         return null;
       }
-      value = { ...value, ...patch };
-      for (const key of Object.keys(value))
-        if (value[key] === null) delete value[key];
-      return value;
+      return commit(patch);
     },
   };
 }
@@ -614,4 +629,112 @@ void test("a namespaced token from Eve is stored channel-local (#110)", async ()
     true,
   );
   assert.equal(adopted.get().continuationToken, "-1001:77:42");
+});
+
+void test("a live turn's heartbeat moves updatedAt and is throttled between events", () => {
+  // Событий у длинного хода много (каждый tool-вызов), а запись в run-status —
+  // файл под локом. Пульс обязан ходить редко и всё же не давать ходу протухнуть.
+  let nowMs = 1_000_000;
+  const store = statusStore(
+    { status: "running", sessionId: "session-1", generation: 3 },
+    () => nowMs,
+  );
+  const beats = new Map<string, TurnHeartbeat>();
+  const beat = () =>
+    markTelegramTurnAlive({
+      chatKey: "1:",
+      sessionId: "session-1",
+      now: () => nowMs,
+      minIntervalMs: 60_000,
+      beats,
+      getStatusImpl: store.get,
+      setStatusIfImpl: store.cas,
+    });
+
+  assert.equal(beat(), true);
+  assert.equal(store.get().updatedAt, 1_000_000);
+  const generationAfterFirst = store.get().generation;
+
+  nowMs += 59_999; // тот же ход, интервал не вышел — записи нет
+  assert.equal(beat(), false);
+  assert.equal(store.get().generation, generationAfterFirst);
+  assert.equal(store.get().updatedAt, 1_000_000);
+
+  nowMs += 1; // ровно интервал — пульс проходит
+  assert.equal(beat(), true);
+  assert.equal(store.get().updatedAt, 1_060_000);
+  assert.equal(store.get().status, "running");
+  assert.equal(store.get().sessionId, "session-1");
+});
+
+void test("a late heartbeat cannot revive a finished, reset or foreign turn", () => {
+  let nowMs = 2_000_000;
+  const beats = new Map<string, TurnHeartbeat>();
+  const alive = (store: ReturnType<typeof statusStore>, sessionId: string) =>
+    markTelegramTurnAlive({
+      chatKey: "1:",
+      sessionId,
+      now: () => nowMs,
+      beats,
+      getStatusImpl: store.get,
+      setStatusIfImpl: store.cas,
+    });
+
+  // Ход уже финишировал: статус idle.
+  const finished = statusStore({ status: "idle", generation: 9 }, () => nowMs);
+  assert.equal(alive(finished, "session-1"), false);
+  assert.equal(finished.get().status, "idle");
+  assert.equal(finished.get().generation, 9);
+
+  // /new успел сбросить сессию, на её месте уже другая.
+  const replaced = statusStore(
+    { status: "running", sessionId: "session-2", generation: 4 },
+    () => nowMs,
+  );
+  assert.equal(alive(replaced, "session-1"), false);
+  assert.equal(replaced.get().generation, 4);
+
+  // Свой живой ход по тому же чату пульс всё ещё пишет.
+  assert.equal(alive(replaced, "session-2"), true);
+  assert.equal(replaced.get().updatedAt, 2_000_000);
+  assert.equal(replaced.get().generation, 5);
+
+  // Новый ход в том же чате не ждёт интервала от предыдущего.
+  nowMs += 10;
+  const next = statusStore(
+    { status: "running", sessionId: "session-3", generation: 1 },
+    () => nowMs,
+  );
+  assert.equal(alive(next, "session-3"), true);
+  assert.equal(next.get().updatedAt, 2_000_010);
+});
+
+void test("a heartbeat losing the CAS race reports failure without retry storms", () => {
+  let nowMs = 3_000_000;
+  const store = statusStore(
+    { status: "running", sessionId: "session-1", generation: 2 },
+    () => nowMs,
+  );
+  const beats = new Map<string, TurnHeartbeat>();
+  let casCalls = 0;
+  const beat = () =>
+    markTelegramTurnAlive({
+      chatKey: "1:",
+      sessionId: "session-1",
+      now: () => nowMs,
+      minIntervalMs: 60_000,
+      beats,
+      getStatusImpl: store.get,
+      // Гонка: между чтением и записью терминальное событие увело статус.
+      setStatusIfImpl: () => {
+        casCalls++;
+        return null;
+      },
+    });
+
+  assert.equal(beat(), false);
+  assert.equal(casCalls, 1);
+  nowMs += 1_000;
+  assert.equal(beat(), false);
+  assert.equal(casCalls, 1); // отметка стоит: поток событий не превращается в поток записей
 });

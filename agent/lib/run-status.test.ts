@@ -151,6 +151,46 @@ test("each accepted status write advances a monotonic per-chat generation", () =
   assert.equal(second.generation, 2);
 });
 
+test("a write with no fields still refreshes updatedAt (the turn heartbeat rides on this)", () => {
+  // Пульс живого хода (markTelegramTurnAlive) шлёт ПУСТОЙ патч: сообщать ему нечего,
+  // кроме «ход ещё жив», а жизнь измеряется возрастом updatedAt. Если запись без полей
+  // перестанет двигать updatedAt, молчаливый длинный ход снова начнёт жаться жнецом.
+  const before = status.setChatStatus("heartbeat:", {
+    status: "running",
+    sessionId: "session-1",
+  });
+  assert.equal(before.status, "running");
+  // Обе записи умещаются в одну миллисекунду, и тогда «updatedAt двинулся» нечем
+  // измерить. Ждём смену часов, а не таймер: ограничено одной миллисекундой и не
+  // зависит от загрузки машины.
+  const startedAt = Date.now();
+  while (Date.now() === startedAt) {
+    /* смена миллисекунды */
+  }
+
+  const beat = status.setChatStatusIf(
+    "heartbeat:",
+    { status: "running", sessionId: "session-1" },
+    {},
+  );
+  assert.ok(beat);
+  assert.equal(beat.status, "running");
+  assert.equal(beat.sessionId, "session-1");
+  assert.equal(beat.generation, (before.generation as number) + 1);
+  assert.ok((beat.updatedAt as number) > (before.updatedAt as number));
+  assert.ok(Date.now() - (beat.updatedAt as number) < 60_000);
+
+  // Чужая сессия пульс не пишет: CAS не совпал.
+  assert.equal(
+    status.setChatStatusIf(
+      "heartbeat:",
+      { status: "running", sessionId: "session-2" },
+      {},
+    ),
+    null,
+  );
+});
+
 test("per-chat status enumeration returns decoded keys and records", () => {
   const dir = join(dataDir, "run-status.d");
   status.setChatStatus("listed:-7", {

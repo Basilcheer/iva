@@ -5,8 +5,6 @@ import {
   type TelegramMessageBody,
 } from "eve/channels/telegram";
 import { POST } from "eve/channels";
-import { join } from "node:path";
-import { pathToFileURL } from "node:url";
 // Outbox — ЕДИНЫЙ шов наружу (тот же, через который уходят ночные отчёты cron):
 // внутри него outbound-Gate, выбор rich/HTML, нарезка на чанки и plain-фолбэк.
 import {
@@ -18,7 +16,6 @@ import {
 // запись в Vault, медиа со зрением и транскрипцией, inbound-Gate и контекст хода.
 // Канал приносит ему эффекты и сам про разбор входящего ничего не знает.
 import { runTelegramInbound } from "../lib/telegram-inbound.js";
-import { allowedTelegramUsers } from "../lib/telegram-allowlist.js";
 import { describeImage } from "../vision.js";
 import { transcribe } from "../transcribe.js";
 // Статус-сообщение хода («Работаю…», кнопка Стоп, уборка в терминале) и служебное
@@ -40,10 +37,14 @@ import {
   setChatStatus,
   setChatStatusIf,
 } from "../lib/run-status.js";
-// Двуязычие: tr(en, ru) отдаёт строку по текущему языку (data/settings.json → env
-// AGENT_LANGUAGE).
-import { tr } from "../lib/i18n.js";
 import { handleTelegramResetRequest } from "../lib/telegram-reset-route.js";
+// Отмена хода: публичный cancel eve отдаётся только роутам, поэтому «Стоп» — свой
+// POST-роут, а мост зовёт его тем же секретом, что и reset.
+import {
+  handleTelegramCancelRequest,
+  TELEGRAM_CANCEL_ROUTE,
+} from "../lib/telegram-cancel-route.js";
+import { handleTelegramStopCallback } from "../lib/telegram-stop.js";
 // Eve отдаёт обработчикам событий токен с именем канала впереди, а reset-роут клеит его
 // сам. Сохраняем только channel-local вид, иначе /new сбрасывает несуществующий токен (#110).
 import { toChannelLocalToken } from "../lib/telegram-continuation-token.js";
@@ -56,6 +57,7 @@ import {
   abandonTelegramEarlyStatus,
   emitTelegramTurnLatency,
   markTelegramFirstOutput,
+  markTelegramTurnAlive,
   publishTelegramEarlyStatus,
   publishTelegramTurnStarted,
 } from "../lib/telegram-turn-start.js";
@@ -63,48 +65,13 @@ import {
 // Токен (TELEGRAM_BOT_TOKEN) и секрет вебхука (TELEGRAM_WEBHOOK_SECRET_TOKEN)
 // читаются из окружения автоматически.
 
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
 // --- ESC-остановка хода (аналог ESC в Claude Code) ---
 //
 // turn.started шлёт «Работаю…» с кнопкой [⏹ Стоп] (agent/lib/telegram-status-message.ts)
-// и пишет running+sessionId+turnId в run-status. Нажатие кнопки (или /stop, который мост
-// превращает в такой же callback_query) приходит в onCallbackQuery → resumeHook
-// "<sessionId>:cancel" → eve абортит ход → turn.cancelled правит статус-сообщение.
-
-// Callback hooks Telegram не получают route-level cancel helper. resumeHook("<sessionId>:cancel")
-// абортит активный ход — сигнал прошит до model.stream и тулзов.
-// Именно ДИНАМИЧЕСКИЙ import по вычисленному пути: статический компилятор authored-модулей
-// eve копирует в свой кэш, где package-internal специфаеры #compiled/* не резолвятся
-// (сервис падает на старте). Рантайм-import оставляет модуль на месте (алиасы eve работают),
-// а мир Workflow лежит в globalThis-реестре — общий для любых инстансов модуля.
-// ПРИ АПГРЕЙДЕ eve: если появился публичный cancel-API — перейти на него.
-let resumeHookPromise: Promise<
-  (token: string, payload: unknown) => Promise<unknown>
-> | null = null;
-function loadResumeHook(): Promise<
-  (token: string, payload: unknown) => Promise<unknown>
-> {
-  resumeHookPromise ??= import(
-    pathToFileURL(
-      join(
-        process.cwd(),
-        "node_modules/eve/dist/src/internal/workflow/runtime.js",
-      ),
-    ).href
-  ).then((moduleValue: unknown) => {
-    const resumeHook = asRecord(moduleValue)?.resumeHook;
-    if (typeof resumeHook !== "function") {
-      throw new TypeError("eve runtime did not export resumeHook");
-    }
-    return resumeHook as (token: string, payload: unknown) => Promise<unknown>;
-  });
-  return resumeHookPromise;
-}
+// и пишет running+continuationToken+turnId в run-status. Нажатие кнопки (и /stop) ловит
+// МОСТ: он читает статус и зовёт POST /eve/v1/telegram/cancel, а тот — публичный cancel
+// eve из RouteHandlerArgs (agent/lib/eve-cancel.ts). Дальше eve абортит ход и присылает
+// turn.cancelled, который правит статус-сообщение.
 
 // Транспорт Outbox для канала: доставка через хендл eve. Что и в каком виде отдавать,
 // решает шов (agent/lib/outbox.ts) — здесь только вызовы Bot API и логи отказов.
@@ -175,6 +142,23 @@ function outboxTransport(
   };
 }
 
+// Пульс живого хода в run-status: без него жнец моста снимал молчаливый длинный ход
+// как протухший (agent/lib/telegram-turn-start.ts).
+function keepTurnAlive(
+  channel: { telegram: Pick<TelegramHandle, "chatId" | "messageThreadId"> },
+  ctx: { session: { id: string } },
+): void {
+  markTelegramTurnAlive({
+    chatKey: chatKeyOf(
+      channel.telegram.chatId,
+      channel.telegram.messageThreadId,
+    ),
+    sessionId: ctx.session.id,
+    getStatusImpl: getChatStatus,
+    setStatusIfImpl: setChatStatusIf,
+  });
+}
+
 const telegram = telegramChannel({
   botUsername: process.env.TELEGRAM_BOT_USERNAME ?? "my_bot",
   // Картинку/файл НЕ суём в запрос к модели (это и ломалось: octet-stream → reject, потом
@@ -183,57 +167,29 @@ const telegram = telegramChannel({
   // ломается ни на каком провайдере. Файлы качает и сохраняет inbound-пайплайн, а модели отдаёт
   // ПУТЬ — посмотреть/прочитать она решает сама своими инструментами; не умеет — честно скажет.
   uploadPolicy: "disabled",
-  // Нажатия inline-кнопок, не относящиеся к HITL eve. Мост доставляет их даже когда
-  // агент занят (callback_query не буферизуется) — иначе «Стоп» не мог бы дойти.
-  async onCallbackQuery(ctx, query) {
-    if (query.data !== TELEGRAM_STOP_CALLBACK) return; // чужой колбэк — не наш
+  // Кнопка ⏹ Стоп, пришедшая прямо в канал. В long-poll мост съедает колбэк раньше
+  // (scripts/poller/main.ts зовёт handleControl до любой доставки), и этот путь не
+  // срабатывает; он существует для webhook-режима, где моста нет вовсе. Отмена идёт
+  // тем же публичным маршрутом — POST на собственный cancel-роут.
+  // ВАЖНО: наличие этого хука закрывает дефолтную ветку eve НАВСЕГДА — «Unsupported
+  // action.» на не-HITL колбэки больше не отправляется. Поэтому чужой колбэк гасим
+  // сами пустым answerCallbackQuery: иначе у нажавшего вечный спиннер на кнопке.
+  onCallbackQuery: async (ctx, query) => {
     const ack = async (text?: string) => {
       try {
         await ctx.telegram.request("answerCallbackQuery", {
           callback_query_id: query.id,
-          ...(text ? { text } : {}),
+          ...(text === undefined ? {} : { text }),
         });
       } catch {
-        /* /stop шлёт синтетический query.id — answerCallbackQuery на него падает, это норма */
+        /* протухший callback_query_id Telegram отвергает штатно */
       }
     };
-    const from = query.from?.id;
-    const allowed = allowedTelegramUsers();
-    if (allowed.size === 0 || !from || !allowed.has(from)) return ack();
-    const ref = query.message;
-    if (!ref) return ack();
-    const key = chatKeyOf(ref.chat.id, ref.messageThreadId);
-    const st = getChatStatus(key);
-    const sessionId = st?.sessionId;
-    if (
-      !st ||
-      st.status !== "running" ||
-      typeof sessionId !== "string" ||
-      sessionId.length === 0
-    ) {
-      return ack(
-        tr("Nothing is running right now.", "Сейчас ничего не выполняется."),
-      );
+    if (query.data !== TELEGRAM_STOP_CALLBACK) {
+      await ack();
+      return;
     }
-    try {
-      // Пустой payload матчит любой активный ход; turnId — гард, чтобы запоздалое
-      // нажатие не убило уже СЛЕДУЮЩИЙ ход (несовпавший turnId eve глотает как no-op).
-      const resumeHook = await loadResumeHook();
-      const turnId = st.turnId;
-      await resumeHook(
-        `${sessionId}:cancel`,
-        typeof turnId === "string" && turnId.length > 0 ? { turnId } : {},
-      );
-      await ack(tr("Stopping…", "Останавливаю…"));
-    } catch (e) {
-      console.error("[telegram] cancel-хук не сработал:", e);
-      await ack(
-        tr(
-          "Didn't work — the turn may have already finished.",
-          "Не вышло — возможно, ход уже завершился.",
-        ),
-      );
-    }
+    await handleTelegramStopCallback(query, { ackImpl: ack });
   },
   events: {
     // Начало хода: сначала публикуем running, затем отправляем медленное статус-сообщение.
@@ -285,6 +241,23 @@ const telegram = telegramChannel({
         getStatusImpl: getChatStatus,
         setStatusIfImpl: setChatStatusIf,
       });
+      keepTurnAlive(channel, ctx);
+    },
+    // Пульс хода: тулзы — самый частый признак жизни длинного молчаливого хода.
+    // action.partial (промежуточный снимок стримящего тула) держит пульс и внутри
+    // ОДНОГО долгого вызова. Запись в run-status дросселирована внутри
+    // markTelegramTurnAlive, поэтому на частоте событий это ничего не стоит.
+    // Дефолт eve на этом событии — обновить «печатает…»; переопределяя его, обязаны
+    // сохранить это сами, иначе индикатор набора умрёт между вызовами тулзов.
+    async "actions.requested"(_data, channel, ctx) {
+      keepTurnAlive(channel, ctx);
+      await channel.telegram.startTyping();
+    },
+    "action.partial"(_data, channel, ctx) {
+      keepTurnAlive(channel, ctx);
+    },
+    "action.result"(_data, channel, ctx) {
+      keepTurnAlive(channel, ctx);
     },
     // Ответ модели уходит через Outbox — он же переопределяет дефолтную plain-доставку
     // eve. Промежуточный текст перед tool-calls не шлём (зеркалим дефолт). Повторного
@@ -429,6 +402,15 @@ export default {
       handleTelegramResetRequest(
         req,
         reset,
+        process.env.TELEGRAM_WEBHOOK_SECRET_TOKEN,
+      ),
+    ),
+    // Same reasoning for cancel: the route helper is bound to this authored channel,
+    // so a channel-local token resolves in the "telegram" namespace.
+    POST(TELEGRAM_CANCEL_ROUTE, (req, { cancel }) =>
+      handleTelegramCancelRequest(
+        req,
+        cancel,
         process.env.TELEGRAM_WEBHOOK_SECRET_TOKEN,
       ),
     ),

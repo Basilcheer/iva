@@ -20,6 +20,7 @@ type ProbeResult = {
   lang: string;
   word: string;
   help: string;
+  start: string;
   commands: string[];
   botEn: Array<{ command: string; description: string }>;
   botRu: Array<{ command: string; description: string }>;
@@ -31,6 +32,7 @@ process.stdout.write(JSON.stringify({
   lang: m.getLang(),
   word: m.tr("EN", "RU"),
   help: m.helpText(),
+  start: m.startText(),
   commands: m.COMMANDS.map((c) => c.command),
   botEn: m.botCommands("en"),
   botRu: m.botCommands("ru"),
@@ -98,6 +100,7 @@ test("COMMANDS is the single source: menu first, all control commands present", 
   const expected = [
     "menu",
     "help",
+    "start",
     "stop",
     "new",
     "restart",
@@ -136,7 +139,7 @@ test("helpText keeps the argument hints from the original help", () => {
 
 test("botCommands returns Telegram command objects per language", () => {
   const { botEn, botRu } = probe();
-  assert.equal(botEn.length, 12);
+  assert.equal(botEn.length, 13);
   assert.equal(botEn[0].command, "menu");
   assert.equal(botEn[0].description, "settings menu");
   assert.equal(botRu[0].description, "меню настроек");
@@ -144,4 +147,31 @@ test("botCommands returns Telegram command objects per language", () => {
     assert.doesNotMatch(c.command, /\//); // имя команды без ведущего слэша
     assert.ok(c.description.length >= 1 && c.description.length <= 256);
   }
+});
+
+test("startText greets in both languages and points at /help", () => {
+  // Кнопку Start новый пользователь жмёт до любой настройки: ответ обязан быть
+  // готовым в обеих локалях и вести дальше, а не уходить ходом в модель.
+  const en = probe({ agentLanguage: "en" }).start;
+  assert.match(en, /^Hi, I'm Iva/u);
+  assert.match(en, /\/help/u);
+  assert.match(en, /\/menu/u);
+  const ru = probe({ language: "ru" }).start;
+  assert.match(ru, /^Привет, я Iva/u);
+  assert.match(ru, /\/help/u);
+  assert.match(ru, /\/menu/u);
+});
+
+test("/start is in the command table, so /help and the blue menu both show it", () => {
+  const { commands, botEn, botRu } = probe();
+  assert.ok(commands.includes("start"));
+  assert.equal(
+    botEn.find((c) => c.command === "start")?.description,
+    "greeting and first steps",
+  );
+  assert.equal(
+    botRu.find((c) => c.command === "start")?.description,
+    "приветствие и первые шаги",
+  );
+  assert.match(probe({ language: "ru" }).help, /\/start — приветствие/u);
 });

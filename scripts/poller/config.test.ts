@@ -3,6 +3,7 @@ import { execFile } from "node:child_process";
 import test from "node:test";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { localCancelUrl } from "#lib/telegram-cancel-route.ts";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const CONFIG_URL = pathToFileURL(join(ROOT, "scripts/poller/config.ts")).href;
@@ -21,6 +22,7 @@ interface ConfigSnapshot {
   readonly route: string;
   readonly acceptanceRoute: string;
   readonly resetRoute: string;
+  readonly cancelRoute: string;
   readonly api: string;
   readonly offsetFile: string;
   readonly directAcceptanceTimeoutMs: number;
@@ -60,6 +62,7 @@ process.stdout.write(JSON.stringify({
   route: config.ROUTE,
   acceptanceRoute: config.ACCEPTANCE_ROUTE,
   resetRoute: config.RESET_ROUTE,
+  cancelRoute: config.CANCEL_ROUTE,
   api: config.API,
   offsetFile: config.OFFSET_FILE,
   directAcceptanceTimeoutMs: config.DIRECT_ACCEPTANCE_TIMEOUT_MS,
@@ -124,6 +127,13 @@ void test("poller config snapshots default root, routes, data, and helper behavi
     config.resetRoute,
     "http://127.0.0.1:8723/eve/v1/telegram/reset",
   );
+  assert.equal(
+    config.cancelRoute,
+    "http://127.0.0.1:8723/eve/v1/telegram/cancel",
+  );
+  // Канал считает тот же адрес сам (authored tree не может импортировать scripts/),
+  // поэтому копии правила о хосте пришпилены друг к другу.
+  assert.equal(config.cancelRoute, localCancelUrl({}));
   assert.equal(config.api, "https://api.telegram.org/botundefined");
   assert.equal(config.offsetFile, join(ROOT, "data", "telegram-offset.json"));
   assert.equal(config.directAcceptanceTimeoutMs, 90_000);
@@ -164,6 +174,14 @@ void test("poller config keeps explicit host, token, relative data, and allowlis
   assert.equal(
     config.resetRoute,
     "https://poll.example.test:9443/eve/v1/telegram/reset",
+  );
+  assert.equal(
+    config.cancelRoute,
+    "https://poll.example.test:9443/eve/v1/telegram/cancel",
+  );
+  assert.equal(
+    config.cancelRoute,
+    localCancelUrl({ ASSISTANT_HOST: "https://poll.example.test:9443/" }),
   );
   assert.equal(config.api, `https://api.telegram.org/bot${token}`);
   assert.equal(config.directAcceptanceTimeoutMs, 123);

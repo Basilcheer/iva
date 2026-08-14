@@ -66,6 +66,31 @@ export interface MarkTelegramFirstOutputOptions {
   setStatusIfImpl: SetStatusIf;
 }
 
+export interface MarkTelegramTurnAliveOptions {
+  chatKey: string;
+  sessionId: string;
+  now?: () => number;
+  minIntervalMs?: number;
+  beats?: Map<string, TurnHeartbeat>;
+  getStatusImpl: GetStatus;
+  setStatusIfImpl: SetStatusIf;
+}
+
+export type TurnHeartbeat = { sessionId: string; at: number };
+
+// Пульс живого хода. Жнец моста (scripts/poller/queue.ts) считает ход мёртвым по
+// возрасту updatedAt, а тот двигался только на старте хода, первом выводе и финале:
+// молчаливый ход на сорок минут (глубокий ресёрч) получал насильный idle, реальный
+// сброс континуации и ложь «ход оборвался» — при живом ходе. Теперь ход сам
+// подтверждает, что жив, из своих же событий.
+//
+// Дёшево: события идут пачками, поэтому запись в run-status дросселируется одной на
+// интервал и делается CAS-ом по sessionId — опоздавший пульс не воскресит уже
+// завершённый или сброшенный ход. Карта пульсов ключуется чатом, не сессией, поэтому
+// не растёт с числом ходов.
+export const TURN_HEARTBEAT_MIN_INTERVAL_MS = 60_000;
+const turnHeartbeats = new Map<string, TurnHeartbeat>();
+
 const durationFromIngress = (ingressAt: unknown, at: unknown): number | null =>
   typeof ingressAt === "number" &&
   Number.isFinite(ingressAt) &&
@@ -330,6 +355,36 @@ export function markTelegramFirstOutput({
       { status: "running", sessionId, firstOutputAt: undefined },
       { firstOutputAt: now() },
     ),
+  );
+}
+
+export function markTelegramTurnAlive({
+  chatKey,
+  sessionId,
+  now = Date.now,
+  minIntervalMs = TURN_HEARTBEAT_MIN_INTERVAL_MS,
+  beats = turnHeartbeats,
+  getStatusImpl,
+  setStatusIfImpl,
+}: MarkTelegramTurnAliveOptions): boolean {
+  const at = now();
+  const previous = beats.get(chatKey);
+  if (previous?.sessionId === sessionId && at - previous.at < minIntervalMs)
+    return false;
+  const current = getStatusImpl(chatKey);
+  if (current?.status !== "running" || current.sessionId !== sessionId) {
+    // Ход этого чата уже не наш: пульс не пишем и забываем его отметку.
+    if (previous !== undefined) beats.delete(chatKey);
+    return false;
+  }
+  // Отметку ставим до записи: сбойный CAS не должен превращать поток событий в
+  // поток попыток записи. Следующая попытка всё равно придёт через интервал.
+  beats.set(chatKey, { sessionId, at });
+  // Патч пустой намеренно: пульсу нечего сообщать, кроме «я жив», а любая успешная
+  // запись run-status двигает updatedAt (agent/lib/run-status.ts). Отдельное поле
+  // дублировало бы updatedAt и требовало уборки в каждом терминальном патче.
+  return Boolean(
+    setStatusIfImpl(chatKey, { status: "running", sessionId }, {}),
   );
 }
 
