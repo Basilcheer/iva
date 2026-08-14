@@ -38,10 +38,28 @@ test("the model wizard shows the configured provider, valid or not", async () =>
     assert.equal(config.provider, "ollama", value);
   }
   // Переменной нет — это не опечатка, а дефолт: он и остаётся ollama.
-  assert.equal(
-    (await currentConfig({ readEnv: async () => ({}) })).provider,
-    "ollama",
-  );
+  const missing = await currentConfig({ readEnv: async () => ({}) });
+  assert.equal(missing.provider, "ollama");
+  assert.equal(missing.providerIsValid, true);
+});
+
+// /think и /model читают одно и то же состояние. Раньше /think видел схлопнутую в ollama
+// подмену и рисовал уровни, как будто всё в порядке, — настройка уезжала в .env, а агент
+// всё равно не стартовал. Флаг тот же, что рисует метку в /model.
+test("the thinking wizard sees the same invalid provider the model wizard shows", async () => {
+  for (const value of ["ollmaa", "OLLAMA", ""]) {
+    const config = await currentConfig({
+      readEnv: async () => ({ MODEL_PROVIDER: value, THINKING_EFFORT: "high" }),
+    });
+    assert.equal(config.providerIsValid, false, value);
+    assert.equal(config.providerLabel, `invalid (${value})`, value);
+  }
+  for (const name of MODEL_PROVIDER_NAMES) {
+    const config = await currentConfig({
+      readEnv: async () => ({ MODEL_PROVIDER: name }),
+    });
+    assert.equal(config.providerIsValid, true, name);
+  }
 });
 
 test("wizard lookup preserves Telegram's string user ID", () => {

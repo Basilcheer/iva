@@ -1,5 +1,6 @@
 import {
   CATALOG,
+  catalogProvider,
   checkKey,
   EFFORTS,
   fetchModelOptions,
@@ -181,11 +182,12 @@ export async function currentConfig({
 } = {}) {
   const env = await readEnv();
   const configured = env.MODEL_PROVIDER ?? "ollama";
-  const valid = Object.hasOwn(CATALOG, configured);
+  const valid = Boolean(catalogProvider(configured));
   const provider = valid ? configured : "ollama";
   const cat = CATALOG[provider];
   return {
     provider,
+    providerIsValid: valid,
     // Что реально стоит в .env. На неизвестном имени агент не стартует вовсе, и назвать
     // его «ollama» в строке «Сейчас…» значило бы спрятать причину, ради которой визард
     // и открыли. Экраны после сохранения показывают уже записанное имя, оно валидно.
@@ -271,11 +273,26 @@ async function handleThinkCmd(
   from: FlowId,
   { msgId }: { msgId?: number } = {},
 ) {
-  const { provider, model, effort } = await currentConfig();
+  const { provider, providerIsValid, providerLabel, model, effort } =
+    await currentConfig();
   const st = newWizard(chatId, from, "think");
   st.provider = provider;
   st.model = model;
   st.msgId = msgId ?? null;
+  // Уровни размышлений выбираются у провайдера, а на неизвестном имени агент не стартует
+  // вовсе: нарисовать кнопки ollama значило бы принять настройку, которая никуда не поедет.
+  // /model — тот же экран, что чинит причину, и метка провайдера там та же.
+  if (!providerIsValid) {
+    await endWizard(
+      st,
+      tr(
+        `Thinking levels need a working provider — MODEL_PROVIDER is ${providerLabel}. Set it via /model.`,
+        `Уровни размышлений нужны рабочему провайдеру — MODEL_PROVIDER сейчас ${providerLabel}. Задай его через /model.`,
+      ),
+      menuRow(),
+    );
+    return;
+  }
   if (!providerSupportsReasoning(provider)) {
     await endWizard(
       st,
