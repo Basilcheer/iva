@@ -55,7 +55,9 @@ journalctl --user -u iva.service -n 20 --no-pager
 
 `iva doctor` prints the same line, and the bridge is a separate service, so `/menu` → 📊 Status still answers and shows the provider as `invalid (ollmaa)`. Fix it with `iva config`, with the `/model` wizard in Telegram, or by hand — then `iva restart`. Removing the variable altogether is not a typo: that still means `ollama`.
 
-One transitional case: `iva update` refuses this configuration up front and says so, but the first half of any update is executed by the code you already have. An installation that was already broken when the check shipped therefore gets one round of `Couldn't build Iva … Retry: /update` before the new updater is in place. Fix `MODEL_PROVIDER` first (`iva config`, or edit `.env`), then run `iva update` again — from then on the refusal is immediate and names the value.
+**Values that used to work.** Before this check, `MODEL_PROVIDER=` (empty) and `MODEL_PROVIDER=OLLAMA` both resolved to Ollama and ran. They are refused now — deliberately: the old behaviour ran one provider under another provider's name, so usage, reasoning and `/menu` disagreed with what was actually being called. If your installation was one of those, it stops on the next restart until you spell one of the four names.
+
+**Updating from such an installation.** The first half of every `iva update` is executed by the code already on your disk, so a check that ships inside the new version cannot run until that version is installed. Coming from a release older than this one, the first attempt fetches and builds, fails the health probe and rolls back; the message names the reason, in the terminal and in the chat. From the version carrying this check onward `iva update` refuses before the build, and the release after it refuses before the fetch. Either way the fix is the same and takes precedence over retrying: correct `MODEL_PROVIDER` with `iva config` or in `.env`, then update.
 
 ### Voice note over 20MB ignored
 

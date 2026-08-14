@@ -28,8 +28,10 @@ test("the model wizard shows the configured provider, valid or not", async () =>
     assert.equal(config.provider, name);
     assert.equal(config.model, CATALOG[name].def);
   }
-  // Пробелы вокруг значения парсер .env срезает сам (scripts/lib/env-file.ts), поэтому
-  // сюда доезжает то, что он оставляет: опечатка, регистр, пустое значение, мусор.
+  // Через живой .env сюда приходит то, что оставил парсер scripts/lib/env-file.ts: он
+  // срезает обрамляющие пробелы, поэтому в списке их нет. Это правило ИМЕННО этого
+  // парсера — у мастера установки свой, и их поведение на пробелах не сверяется. Здесь
+  // readEnv подставлен, так что проверяется предикат, а не парсер.
   for (const value of ["ollmaa", "OLLAMA", "", "__proto__"]) {
     const config = await currentConfig({
       readEnv: async () => ({ MODEL_PROVIDER: value }),
