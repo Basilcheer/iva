@@ -74,7 +74,9 @@ Every stage checks whether its work is already done and skips it, so a run after
 | `gws`           | the binary is installed (`iva update` keeps it current)                                 |
 | Build           | `.output` carries this installer's stamp for the current commit, local edits and `.env` |
 
-The wizard, the vault check, the `iva` command and the systemd units are cheap, so they run every time. A run that fails is undone: the checkout goes back to the commit and the changes it started with, and the copies it made of `.env` and of your untracked files are deleted — on Ctrl-C too.
+The wizard, the vault check, the `iva` command and the systemd units are cheap, so they run every time. A run that fails is undone: the checkout goes back to the commit and the changes it started with, and the copies it made of `.env` and of your untracked files are deleted — on Ctrl-C and on a dropped SSH session too. An installation unpacked from an archive instead of cloned has no commit to compare against, so it rebuilds every time.
+
+Run one installer at a time. Two at once work on the same checkout and will undo each other's changes.
 
 ### Flags and overrides
 
