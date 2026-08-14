@@ -29,6 +29,7 @@ import {
   probeOpenRouterModel,
   validateModelSelection,
 } from "../lib/model-validation.ts";
+import { catalogProvider, providerEnvKeys } from "../lib/model-catalog.ts";
 import { keptSetupWritePlan } from "../lib/setup-keep.ts";
 import { validateTimeZone } from "../lib/timezone.ts";
 import { openrouterErrReason } from "./openrouter.ts";
@@ -506,32 +507,35 @@ async function main() {
   );
 
   // Already configured? Don't walk every step — ask once.
+  // Провайдер берётся ТОЧНЫМ именем из общего каталога — того же, на который смотрят рантайм
+  // и доктор. Неизвестное имя (опечатка `ollmaa`) не сходится ни с одним ключом: раньше карты
+  // промахивались, API-ключ выпадал из REQUIRED, мастер объявлял сломанный .env настроенным и
+  // выходил — а это тот самый мастер, к которому отказ агента и отправляет (issue #161).
   const prov0 = existing.MODEL_PROVIDER || "ollama";
-  const provModel =
-    {
-      opencode: "OPENCODE_MODEL",
-      openrouter: "OPENROUTER_MODEL",
-      codex: "CODEX_MODEL",
-    }[prov0] || "OLLAMA_MODEL";
+  const cat0 = catalogProvider(prov0);
+  const provModel = cat0?.modelVar ?? "OLLAMA_MODEL";
   // codex — доступ по OAuth-токену (data/codex-auth.json), у ollama/opencode/openrouter — API-ключ в .env.
-  // ollama задан явно: `null ?? default` вернул бы ключ и для codex (null нуллиш) → мастер зацикливался бы.
-  const provKey = {
-    ollama: "OLLAMA_API_KEY",
-    opencode: "OPENCODE_API_KEY",
-    openrouter: "OPENROUTER_API_KEY",
-    codex: null,
-  }[prov0];
+  // Список ключей общий с `iva doctor`: иначе один объявил бы .env полным, а второй — нет.
+  const provKey = cat0?.keyVar ?? null;
   const REQUIRED = [
-    provModel,
+    ...(cat0 ? providerEnvKeys(cat0) : []),
     "DEEPGRAM_API_KEY",
     "TELEGRAM_BOT_TOKEN",
     "TELEGRAM_ALLOWED_USER_IDS",
-    ...(provKey ? [provKey] : []),
   ];
   const loggedInCodex =
     prov0 !== "codex" || existsSync(authFilePath(dataDirAbs(existing)));
   const isComplete =
-    loggedInCodex && REQUIRED.every((k) => (existing[k] || "").trim());
+    Boolean(cat0) &&
+    loggedInCodex &&
+    REQUIRED.every((k) => (existing[k] || "").trim());
+  if (!cat0)
+    console.log(
+      `\n${C.y}  ⚠ ${t(
+        `MODEL_PROVIDER is invalid (${prov0}) — Iva won't start until you pick one below.`,
+        `MODEL_PROVIDER невалиден (${prov0}) — Iva не стартует, пока не выберешь провайдера ниже.`,
+      )}${C.x}`,
+    );
   if (isComplete) {
     console.log(
       `\n${C.b}${C.g}  ${t("Iva is already configured:", "Iva уже настроена:")}${C.x}`,

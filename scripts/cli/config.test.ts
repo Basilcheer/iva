@@ -1,10 +1,11 @@
 /* eslint-disable @typescript-eslint/no-floating-promises, @typescript-eslint/require-await -- Node's test runner owns registrations and async stubs preserve production signatures. */
 import assert from "node:assert/strict";
-import { existsSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test, { type TestContext } from "node:test";
+import { fileURLToPath } from "node:url";
 import { createConfigCommand } from "./config.ts";
 import { createCliRuntime } from "./runtime.ts";
 
@@ -339,4 +340,30 @@ test("invalid candidate metadata and apply failures propagate after cleanup", as
 
   await assert.rejects(cmdConfig(), (error) => error === applyError);
   assert.equal(existsSync(dirname(candidatePath)), false);
+});
+
+// `iva config` запускает мастера отдельным процессом, а тот читает ЖИВОЙ .env репозитория
+// (loadExistingEnv → SOURCE_ENV_PATH, без переопределения — `IVA_CONFIG_OUTPUT` меняет только
+// запись). Прогнать его в тесте можно было бы, только подсунув свой .env в рабочее дерево, —
+// чего тест делать не должен: это разделяемое состояние и чужая конфигурация. Поэтому гвард
+// на исходник, тем же приёмом, что и scripts/authored-tree-guard.test.ts.
+//
+// Ловит ровно ту дыру, из-за которой путь починки не чинил: при MODEL_PROVIDER=ollmaa карты
+// провайдера промахивались, API-ключ выпадал из обязательных, мастер печатал «Iva уже
+// настроена» и выходил по дефолтному «нет» — а отказ агента отправляет именно сюда.
+test("the setup wizard cannot call an invalid provider a complete configuration", () => {
+  const source = readFileSync(
+    join(
+      fileURLToPath(new URL("../../", import.meta.url)),
+      "scripts/setup/main.ts",
+    ),
+    "utf8",
+  );
+  // Провайдер разрешается общим точным лукапом, а не собственной картой мастера.
+  assert.match(source, /const cat0 = catalogProvider\(prov0\);/u);
+  assert.doesNotMatch(source, /\}\[prov0\] \|\| "OLLAMA_MODEL"/u);
+  // И «настроено» невозможно без валидного провайдера.
+  assert.match(source, /const isComplete =\s*\n?\s*Boolean\(cat0\) &&/u);
+  // Пользователю говорят, что именно сломано, до того как он пойдёт по шагам.
+  assert.match(source, /MODEL_PROVIDER is invalid \(\$\{prov0\}\)/u);
 });
