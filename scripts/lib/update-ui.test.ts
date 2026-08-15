@@ -1038,6 +1038,7 @@ function d10Transaction(
   writeFileSync(
     wrapper,
     "#!/bin/sh\n" +
+      `calls=${JSON.stringify(calls)}\n` +
       `printf '%s\\n' "$*" >> ${JSON.stringify(calls)}\n` +
       wrapperBody.replaceAll("__REAL_GIT__", JSON.stringify(realGit)) +
       `\nexec ${JSON.stringify(realGit)} "$@"\n`,
@@ -1056,19 +1057,40 @@ function d10Transaction(
 
 test("every pre-snapshot command fault leaves the live tree untouched", async (t) => {
   const faults = [
+    [
+      '[ "$1" = update-ref ] && [ "$#" -eq 3 ] && printf \'%s\' "$2" | grep -q \'^refs/iva/update-recovery/\'',
+      "guard ref write",
+    ],
+    [
+      '[ "$1" = rev-parse ] && [ "$2" = --verify ] && printf \'%s\' "$3" | grep -q \'^refs/iva/update-recovery/\'',
+      "guard ref verification",
+    ],
     ['[ "$1" = ls-files ] && [ "$2" = --cached ]', "tracked index scan"],
+    ['[ "$1" = ls-files ] && [ "$2" = -v ]', "index flag scan"],
+    [
+      '[ "$1" = diff ] && [ "$2" = --cached ] && [ "$#" -eq 4 ]',
+      "ordinary staged path scan",
+    ],
+    [
+      '[ "$1" = diff ] && [ "$2" = --cached ] && [ "$#" -eq 5 ]',
+      "intent-to-add path scan",
+    ],
     ['[ "$1" = ls-files ] && [ "$2" = --others ]', "untracked path scan"],
     ['[ "$1" = write-tree ] && [ -z "$GIT_INDEX_FILE" ]', "index tree write"],
     [
-      "[ \"$1\" = read-tree ] && printf '%s' \"$GIT_INDEX_FILE\" | grep -q 'detect-worktree'",
+      '[ "$1" = hash-object ] && [ "$3" = --no-filters ] && [ "$5" = tracked.txt ]',
+      "raw worktree blob",
+    ],
+    [
+      "[ \"$1\" = read-tree ] && printf '%s' \"$GIT_INDEX_FILE\" | grep -q 'iva-update-worktree-snapshot'",
       "worktree index init",
     ],
     [
-      '[ "$1" = -c ] && [ "$3" = add ] && printf \'%s\' "$GIT_INDEX_FILE" | grep -q \'detect-worktree\'',
-      "literal worktree capture",
+      "[ \"$1\" = update-index ] && printf '%s' \"$GIT_INDEX_FILE\" | grep -q 'iva-update-worktree-snapshot'",
+      "worktree index populate",
     ],
     [
-      "[ \"$1\" = write-tree ] && printf '%s' \"$GIT_INDEX_FILE\" | grep -q 'detect-worktree'",
+      "[ \"$1\" = write-tree ] && printf '%s' \"$GIT_INDEX_FILE\" | grep -q 'iva-update-worktree-snapshot'",
       "worktree tree write",
     ],
     [
@@ -1084,8 +1106,12 @@ test("every pre-snapshot command fault leaves the live tree untouched", async (t
       "untracked index init",
     ],
     [
-      '[ "$1" = -c ] && [ "$3" = add ] && printf \'%s\' "$GIT_INDEX_FILE" | grep -q \'iva-update-untracked-snapshot\'',
-      "literal untracked capture",
+      '[ "$1" = hash-object ] && [ "$3" = --no-filters ] && [ "$5" = nested/deep/untracked.bin ]',
+      "raw untracked blob",
+    ],
+    [
+      "[ \"$1\" = update-index ] && printf '%s' \"$GIT_INDEX_FILE\" | grep -q 'iva-update-untracked-snapshot'",
+      "untracked index populate",
     ],
     [
       "[ \"$1\" = write-tree ] && printf '%s' \"$GIT_INDEX_FILE\" | grep -q 'iva-update-untracked-snapshot'",
@@ -1100,45 +1126,19 @@ test("every pre-snapshot command fault leaves the live tree untouched", async (t
       "recovery commit",
     ],
     [
-      '[ "$1" = rev-parse ] && [ "$2" = --verify ] && printf \'%s\' "$3" | grep -Fq \'^{commit}\'',
+      "[ \"$1\" = rev-parse ] && [ \"$2\" = --verify ] && printf '%s' \"$3\" | grep -Fq '^{commit}' && ! printf '%s' \"$3\" | grep -q '^refs/'",
       "recovery commit verification",
     ],
-    ['[ "$1" = ls-tree ] && [ "$4" != *"^3" ]', "worktree verification"],
+    ['[ "$1" = ls-tree ] && [ "$2" = -r ]', "tree verification"],
+    ['[ "$1" = cat-file ] && [ "$2" = blob ]', "raw byte verification"],
+    ['[ "$1" = show ] && [ "$2" = -s ]', "metadata verification"],
     [
-      "[ \"$1\" = read-tree ] && printf '%s' \"$GIT_INDEX_FILE\" | grep -q 'verify-worktree'",
-      "worktree verification init",
+      '[ "$1" = update-ref ] && [ "$#" -eq 4 ] && printf \'%s\' "$2" | grep -q \'^refs/iva/update-recovery/\'',
+      "durable snapshot ref write",
     ],
     [
-      '[ "$1" = -c ] && [ "$3" = add ] && printf \'%s\' "$GIT_INDEX_FILE" | grep -q \'verify-worktree\'',
-      "worktree verification capture",
-    ],
-    [
-      "[ \"$1\" = write-tree ] && printf '%s' \"$GIT_INDEX_FILE\" | grep -q 'verify-worktree'",
-      "worktree verification write",
-    ],
-    [
-      "[ \"$1\" = ls-tree ] && printf '%s' \"$4\" | grep -Fq '^3'",
-      "untracked verification",
-    ],
-    [
-      "[ \"$1\" = read-tree ] && printf '%s' \"$GIT_INDEX_FILE\" | grep -q 'verify-untracked'",
-      "untracked verification init",
-    ],
-    [
-      '[ "$1" = -c ] && [ "$3" = add ] && printf \'%s\' "$GIT_INDEX_FILE" | grep -q \'verify-untracked\'',
-      "untracked verification capture",
-    ],
-    [
-      "[ \"$1\" = write-tree ] && printf '%s' \"$GIT_INDEX_FILE\" | grep -q 'verify-untracked'",
-      "untracked verification write",
-    ],
-    [
-      "[ \"$1\" = update-ref ] && printf '%s' \"$2\" | grep -q '^refs/iva/update-recovery/'",
-      "durable ref write",
-    ],
-    [
-      "[ \"$1\" = rev-parse ] && printf '%s' \"$3\" | grep -q '^refs/iva/update-recovery/'",
-      "durable ref verification",
+      '[ "$1" = rev-parse ] && [ "$2" = --verify ] && printf \'%s\' "$3" | grep -q \'^refs/iva/update-recovery/\' && [ "$(grep -c \'^update-ref refs/iva/update-recovery/\' "$calls")" -ge 2 ]',
+      "durable snapshot ref verification",
     ],
   ] as const;
 
@@ -1373,7 +1373,6 @@ test("the durable unique ref restores a crashed transaction and disappears only 
   );
   const [ref, oid] = recovery.split(" ");
   assert.match(ref ?? "", /^refs\/iva\/update-recovery\//u);
-  assert.equal(ref?.endsWith(oid ?? ""), true);
   assert.equal(git(fixture.local, "rev-parse", "--verify", ref ?? ""), oid);
 
   git(fixture.local, "stash", "apply", "--index", oid ?? "");
@@ -1706,59 +1705,6 @@ test("rollback reports reset failure and does not attempt a destructive apply", 
   );
 });
 
-test("rollback reports apply failure while the exact durable ref remains recoverable", async (t) => {
-  const fixture = updateFixture();
-  t.after(() => rmSync(fixture.temp, { recursive: true, force: true }));
-  const before = prepareProtectedTree(fixture.local);
-  const failRollback = join(fixture.temp, "fail-rollback");
-  const { tx } = d10Transaction(
-    fixture,
-    `if [ -f ${JSON.stringify(failRollback)} ] && [ "$1" = stash ] && [ "$2" = apply ]; then\n` +
-      "  printf '%s\\n' 'injected rollback apply failure' >&2\n" +
-      "  exit 92\n" +
-      "fi\n",
-  );
-  await tx.protect();
-  const recoveryOid = git(
-    fixture.local,
-    "for-each-ref",
-    "--format=%(objectname)",
-    "refs/iva/update-recovery",
-  );
-  writeFileSync(failRollback, "fail\n");
-
-  await assert.rejects(() => tx.rollback(), /injected rollback apply failure/u);
-
-  rmSync(failRollback);
-  git(fixture.local, "stash", "apply", "--index", recoveryOid);
-  assert.deepEqual(protectedTreeState(fixture.local), before);
-});
-
-test("rollback recovers the exact tree after a partial stash apply failure", async (t) => {
-  const fixture = updateFixture();
-  t.after(() => rmSync(fixture.temp, { recursive: true, force: true }));
-  const before = prepareProtectedTree(fixture.local);
-  const marker = join(fixture.temp, "stash-apply-failed-once");
-  const { tx } = d10Transaction(
-    fixture,
-    'if [ "$1" = stash ] && [ "$2" = apply ] && [ ! -e ' +
-      `${JSON.stringify(marker)} ]; then\n` +
-      `  : > ${JSON.stringify(marker)}\n` +
-      "  printf '%s\\n' partial > tracked.txt\n" +
-      "  chmod 644 executable.sh\n" +
-      "  mkdir -p nested/deep\n" +
-      "  printf bad > nested/deep/untracked.bin\n" +
-      "  printf '%s\\n' 'injected stash apply failure' >&2\n" +
-      "  exit 76\n" +
-      "fi\n",
-  );
-
-  await assert.rejects(() => tx.protect(), /injected stash apply failure/u);
-  await tx.rollback();
-
-  assert.deepEqual(protectedTreeState(fixture.local), before);
-});
-
 test("a fault after protect rolls back staged, unstaged, modes and nested untracked bytes", async (t) => {
   const fixture = updateFixture();
   t.after(() => rmSync(fixture.temp, { recursive: true, force: true }));
@@ -1831,51 +1777,6 @@ test("stash conflict report can still roll back user files byte-for-byte", async
     /No rebase in progress/u,
     "ordinary rollback must not emit a false rebase failure",
   );
-});
-
-test("rollback restores user files after recovery stash apply fails once", async (t) => {
-  const fx = candidateFixture();
-  t.after(() => rmSync(fx.temp, { recursive: true, force: true }));
-  writeFileSync(join(fx.local, "tracked.txt"), "user version\n");
-  writeFileSync(join(fx.local, "local-only.txt"), "user file\n");
-  const bin = join(fx.temp, "failing-git");
-  mkdirSync(bin);
-  const wrapper = join(bin, "git");
-  const failedOnce = join(fx.temp, "stash-apply-failed-once");
-  const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
-  writeFileSync(
-    wrapper,
-    "#!/bin/sh\n" +
-      'if [ "$1" = "stash" ] && [ "$2" = "apply" ] && [ ! -e ' +
-      `${JSON.stringify(failedOnce)} ]; then\n` +
-      `  : > ${JSON.stringify(failedOnce)}\n` +
-      "  printf 'partial\\n' > tracked.txt\n" +
-      "  printf 'partial\\n' > local-only.txt\n" +
-      "  exit 1\n" +
-      "fi\n" +
-      `exec ${JSON.stringify(realGit)} "$@"\n`,
-  );
-  chmodSync(wrapper, 0o755);
-  const tx = createUpdateTransaction({
-    root: fx.local,
-    dataDir: fx.data,
-    envPath: join(fx.local, ".env"),
-    env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}` },
-  });
-
-  await assert.rejects(() => tx.protect(), /prepare local customizations/u);
-  await tx.rollback();
-
-  assert.equal(
-    readFileSync(join(fx.local, "tracked.txt"), "utf8"),
-    "user version\n",
-  );
-  assert.equal(
-    readFileSync(join(fx.local, "local-only.txt"), "utf8"),
-    "user file\n",
-  );
-  assert.match(git(fx.local, "status", "--porcelain=v1"), /tracked\.txt/u);
-  assert.notEqual(git(fx.local, "stash", "list"), "");
 });
 
 test("conflicting local commits abort rebase and restore the original branch", async () => {

@@ -4,9 +4,7 @@ import {
   chmodSync,
   copyFileSync,
   existsSync,
-  lstatSync,
   mkdirSync,
-  mkdtempSync,
   readFileSync,
   readdirSync,
   renameSync,
@@ -16,7 +14,6 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join, resolve, sep } from "node:path";
-import { tmpdir } from "node:os";
 import {
   archiveInvalidCustomLayer,
   captureCustomLayer,
@@ -29,6 +26,11 @@ import {
   type MaterializedCustomLayer,
 } from "./custom-layer.ts";
 import { persistUpdateBranch, resolveUpdateTarget } from "./update-channel.ts";
+import {
+  UpdateRecoveryOwner,
+  type RecoveryFileOps,
+  type RecoveryGit,
+} from "./update-recovery.ts";
 
 const LOCK_TTL_MS = 6 * 60 * 60 * 1000;
 
@@ -38,6 +40,8 @@ type CommandOptions = {
   env?: NodeJS.ProcessEnv;
   logFile?: string;
   verbose?: boolean;
+  input?: Buffer;
+  trimOutput?: boolean;
 };
 type UpdateLock = { ok: boolean; path: string; owner: string | null };
 type UpdateTarget = Awaited<ReturnType<typeof resolveUpdateTarget>> & {
@@ -81,25 +85,16 @@ type UpdateTransactionOptions = {
   verbose?: boolean;
   logFile?: string;
   env?: NodeJS.ProcessEnv;
+  recoveryFileOps?: RecoveryFileOps;
 };
-type SnapshotTreeEntry = { mode: string; path: string };
-
-function sameSnapshotTreeEntries(
-  actual: readonly { mode: string; path: string }[],
-  expected: readonly { mode: string; path: string }[],
-): boolean {
-  if (actual.length !== expected.length) return false;
-  const expectedModes = new Map(
-    expected.map(({ mode, path }) => [path, mode] as const),
-  );
-  if (expectedModes.size !== expected.length) return false;
-  const actualPaths = new Set(actual.map(({ path }) => path));
-  return (
-    actualPaths.size === actual.length &&
-    actual.every(({ mode, path }) => expectedModes.get(path) === mode)
-  );
-}
-
+type ProtectedEnv =
+  | { phase: "unknown" }
+  | { phase: "absent" }
+  | { phase: "backup"; path: string; mode: number };
+type PromotedDirectory =
+  | { phase: "untouched" }
+  | { phase: "remove" }
+  | { phase: "restore"; backup: string };
 function readJsonObject(text: string): Record<string, unknown> | null {
   try {
     const value: unknown = JSON.parse(text);
@@ -114,13 +109,20 @@ function readJsonObject(text: string): Record<string, unknown> | null {
 export function runCommand(
   command: string,
   args: string[],
-  { cwd, env = process.env, logFile, verbose = false }: CommandOptions = {},
+  {
+    cwd,
+    env = process.env,
+    logFile,
+    verbose = false,
+    input,
+    trimOutput = true,
+  }: CommandOptions = {},
 ): Promise<CommandResult> {
   return new Promise<CommandResult>((resolve) => {
     const child = spawn(command, args, {
       cwd,
       env,
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ["pipe", "pipe", "pipe"],
     });
     let stdout = "";
     let stderr = "";
@@ -139,13 +141,14 @@ export function runCommand(
     };
     collect("out", child.stdout, process.stdout);
     collect("err", child.stderr, process.stderr);
+    child.stdin.end(input);
     child.on("error", (error) =>
       resolve({ code: 1, stdout, stderr: `${stderr}${error.message}` }),
     );
     child.on("close", (code) =>
       resolve({
         code: code ?? 1,
-        stdout: stdout.trim(),
+        stdout: trimOutput ? stdout.trim() : stdout,
         stderr: stderr.trim(),
       }),
     );
@@ -296,27 +299,21 @@ export function createUpdateTransaction({
   verbose = false,
   logFile,
   env = process.env,
+  recoveryFileOps,
 }: UpdateTransactionOptions) {
   const commandEnv = { ...env };
   let originalHead = "";
   let branch = "";
   let updateBranch = "";
-  let backupRef = "";
-  let stashOid = "";
-  let recoveryStashOid = "";
-  let recoveryRef = "";
-  let snapshotCommitted = false;
+  let recoveryOwner: UpdateRecoveryOwner | null = null;
   let hadLocalChanges = false;
   let stashApplied = false;
-  let preserveStash = false;
-  let envBackup = "";
-  let outputBackup = "";
+  let protectedEnv: ProtectedEnv = { phase: "unknown" };
+  let outputState: PromotedDirectory = { phase: "untouched" };
   let changed = false;
-  let originalUntracked: string[] = [];
   let cachedTarget: UpdateTarget | null = null;
   let candidate: UpdateCandidate | null = null;
-  let nodeModulesBackup = "";
-  let promotedNodeModulesWithoutBackup = false;
+  let nodeModulesState: PromotedDirectory = { phase: "untouched" };
   let outputTouched = false;
   let capturedCustomPaths: string[] = [];
   let materializedCustomLayer: MaterializedCustomLayer | null = null;
@@ -333,28 +330,23 @@ export function createUpdateTransaction({
       );
     return result.stdout ?? "";
   };
-  const runSnapshotGit = async (
-    args: string[],
-    extraEnv: NodeJS.ProcessEnv,
-  ): Promise<string> => {
-    const result = await runCommand("git", args, {
-      cwd: root,
-      env: {
-        ...commandEnv,
-        GIT_AUTHOR_NAME: "Iva Update Recovery",
-        GIT_AUTHOR_EMAIL: "iva-update@localhost",
-        GIT_COMMITTER_NAME: "Iva Update Recovery",
-        GIT_COMMITTER_EMAIL: "iva-update@localhost",
-        ...extraEnv,
-      },
-      logFile,
-      verbose,
-    });
-    if (result.code !== 0)
-      throw new Error(
-        result.stderr || result.stdout || `git ${args[0]} failed`,
-      );
-    return result.stdout;
+  const recoveryGit: RecoveryGit = {
+    run: (args, options = {}) =>
+      runCommand("git", args, {
+        cwd: root,
+        env: { ...commandEnv, ...options.env },
+        logFile,
+        verbose,
+        input: options.input,
+        trimOutput: !options.rawOutput,
+      }),
+    runBuffer: (args) =>
+      runCommandBuffer("git", args, { cwd: root, env: commandEnv }),
+  };
+
+  const requireRecoveryOwner = (): UpdateRecoveryOwner => {
+    if (!recoveryOwner) throw new Error("a durable recovery owner is required");
+    return recoveryOwner;
   };
 
   const safeChild = (base: string, ...parts: string[]): string => {
@@ -365,193 +357,8 @@ export function createUpdateTransaction({
     return target;
   };
 
-  const removeOriginalUntracked = (): void => {
-    for (const relative of originalUntracked) {
-      const target = safeChild(root, relative);
-      rmSync(target, { recursive: true, force: true });
-    }
-  };
-
-  const parseIndexEntries = (text: string): SnapshotTreeEntry[] =>
-    text
-      .split("\0")
-      .filter(Boolean)
-      .map((record) => {
-        const tab = record.indexOf("\t");
-        const [mode, , stage] = record.slice(0, tab).split(" ");
-        if (tab < 0 || !mode || stage !== "0")
-          throw new Error("the Git index cannot be snapshotted");
-        return { mode, path: record.slice(tab + 1) };
-      });
-
-  const parseTreeEntries = (text: string): SnapshotTreeEntry[] =>
-    text
-      .split("\0")
-      .filter(Boolean)
-      .map((record) => {
-        const tab = record.indexOf("\t");
-        const mode = record.slice(0, record.indexOf(" "));
-        if (tab < 0 || !mode)
-          throw new Error("the recovery tree cannot be verified");
-        return { mode, path: record.slice(tab + 1) };
-      });
-
-  const liveTreeEntry = (
-    path: string,
-    indexMode?: string,
-  ): SnapshotTreeEntry | null => {
-    let stat;
-    try {
-      stat = lstatSync(safeChild(root, path));
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-      throw error;
-    }
-    if (stat.isSymbolicLink()) return { mode: "120000", path };
-    if (stat.isFile())
-      return { mode: stat.mode & 0o111 ? "100755" : "100644", path };
-    if (stat.isDirectory() && indexMode === "160000")
-      return { mode: "160000", path };
-    throw new Error(`unsupported working-tree entry: ${path}`);
-  };
-
-  const liveTrackedEntries = (
-    indexEntries: readonly SnapshotTreeEntry[],
-  ): SnapshotTreeEntry[] =>
-    indexEntries
-      .map(({ mode, path }) => liveTreeEntry(path, mode))
-      .filter((entry): entry is SnapshotTreeEntry => entry !== null);
-
-  const createSnapshotTree = async (
-    name: string,
-    entries: readonly SnapshotTreeEntry[],
-  ): Promise<string> => {
-    const snapshotDir = mkdtempSync(
-      join(tmpdir(), `iva-update-${name}-snapshot-`),
-    );
-    const indexEnv = {
-      GIT_INDEX_FILE: join(snapshotDir, "index"),
-      GIT_LITERAL_PATHSPECS: "1",
-    };
-    try {
-      await runSnapshotGit(["read-tree", "--empty"], indexEnv);
-      if (entries.length > 0) {
-        const pathspec = join(snapshotDir, "paths");
-        writeFileSync(
-          pathspec,
-          `${entries.map(({ path }) => path).join("\0")}\0`,
-          { mode: 0o600 },
-        );
-        await runSnapshotGit(
-          [
-            "-c",
-            "core.fileMode=true",
-            "add",
-            "-f",
-            `--pathspec-from-file=${pathspec}`,
-            "--pathspec-file-nul",
-          ],
-          indexEnv,
-        );
-      }
-      return await runSnapshotGit(["write-tree"], indexEnv);
-    } finally {
-      rmSync(snapshotDir, { recursive: true, force: true });
-    }
-  };
-
-  const verifyRecoverySnapshot = async (recovery: {
-    oid: string;
-    indexEntries: SnapshotTreeEntry[];
-    worktreeEntries: SnapshotTreeEntry[];
-    worktreeTree: string;
-    untrackedEntries: SnapshotTreeEntry[];
-    untrackedTree: string | null;
-  }): Promise<string> => {
-    const { oid } = recovery;
-    const [
-      commitOid,
-      baseOid,
-      indexOid,
-      indexTree,
-      snapshotIndexTree,
-      snapshotWorktreeTree,
-    ] = await Promise.all([
-      mustGit("rev-parse", "--verify", `${oid}^{commit}`),
-      mustGit("rev-parse", "--verify", `${oid}^1`),
-      mustGit("rev-parse", "--verify", `${oid}^2`),
-      mustGit("write-tree"),
-      mustGit("rev-parse", "--verify", `${oid}^2^{tree}`),
-      mustGit("rev-parse", "--verify", `${oid}^{tree}`),
-    ]);
-    const snapshotWorktreeEntries = parseTreeEntries(
-      await mustGit("ls-tree", "-r", "-z", oid),
-    );
-    const currentWorktreeEntries = liveTrackedEntries(recovery.indexEntries);
-    const currentWorktreeTree = await createSnapshotTree(
-      "verify-worktree",
-      currentWorktreeEntries,
-    );
-    const incomplete = [
-      [commitOid !== oid, "commit"],
-      [baseOid !== originalHead, "base"],
-      [!indexOid, "index-parent"],
-      [indexTree !== snapshotIndexTree, "index-tree"],
-      [snapshotWorktreeTree !== recovery.worktreeTree, "snapshot-tree"],
-      [snapshotWorktreeTree !== currentWorktreeTree, "worktree-tree"],
-      [
-        !sameSnapshotTreeEntries(
-          snapshotWorktreeEntries,
-          recovery.worktreeEntries,
-        ),
-        "snapshot-modes",
-      ],
-      [
-        !sameSnapshotTreeEntries(
-          currentWorktreeEntries,
-          recovery.worktreeEntries,
-        ),
-        "live-modes",
-      ],
-    ]
-      .filter(([failed]) => failed)
-      .map(([, label]) => label);
-    if (incomplete.length > 0)
-      throw new Error(
-        `git stash recovery snapshot is incomplete: ${incomplete.join(", ")}`,
-      );
-    if (originalUntracked.length > 0) {
-      const [snapshotUntrackedTree, snapshotUntrackedText] = await Promise.all([
-        mustGit("rev-parse", "--verify", `${oid}^3^{tree}`),
-        mustGit("ls-tree", "-r", "-z", `${oid}^3`),
-      ]);
-      const snapshotUntracked = parseTreeEntries(snapshotUntrackedText);
-      const currentUntracked = originalUntracked
-        .map((path) => liveTreeEntry(path))
-        .filter((entry): entry is SnapshotTreeEntry => entry !== null);
-      const currentUntrackedTree = await createSnapshotTree(
-        "verify-untracked",
-        currentUntracked,
-      );
-      if (
-        !recovery.untrackedTree ||
-        snapshotUntrackedTree !== recovery.untrackedTree ||
-        snapshotUntrackedTree !== currentUntrackedTree ||
-        !sameSnapshotTreeEntries(
-          snapshotUntracked,
-          recovery.untrackedEntries,
-        ) ||
-        !sameSnapshotTreeEntries(currentUntracked, recovery.untrackedEntries)
-      )
-        throw new Error("git stash recovery snapshot is incomplete");
-    }
-    return oid;
-  };
-
-  const commitRecoverySnapshot = (oid: string): void => {
-    recoveryStashOid = oid;
-    snapshotCommitted = true;
-  };
+  const originalUntracked = (): readonly string[] =>
+    recoveryOwner?.originalUntracked ?? [];
 
   const resolveNewStashOid = async (
     previousStashOid: string,
@@ -581,78 +388,6 @@ export function createUpdateTransaction({
     if (!fallback.stdout || fallback.stdout === previousStashOid)
       throw new Error("git stash did not create a new recovery snapshot");
     return { oid: fallback.stdout, lookupError };
-  };
-
-  const createRecoverySnapshot = async (
-    message: string,
-    basis: {
-      indexEntries: SnapshotTreeEntry[];
-      indexTree: string;
-      worktreeEntries: SnapshotTreeEntry[];
-      worktreeTree: string;
-    },
-  ): Promise<{
-    oid: string;
-    indexEntries: SnapshotTreeEntry[];
-    worktreeEntries: SnapshotTreeEntry[];
-    worktreeTree: string;
-    untrackedEntries: SnapshotTreeEntry[];
-    untrackedTree: string | null;
-  }> => {
-    const untrackedEntries = originalUntracked.map((path) => {
-      const entry = liveTreeEntry(path);
-      if (!entry)
-        throw new Error(`untracked recovery path disappeared: ${path}`);
-      return entry;
-    });
-    const indexCommit = await runSnapshotGit(
-      [
-        "commit-tree",
-        basis.indexTree,
-        "-p",
-        originalHead,
-        "-m",
-        `${message} index`,
-      ],
-      {},
-    );
-    const untrackedTree =
-      untrackedEntries.length > 0
-        ? await createSnapshotTree("untracked", untrackedEntries)
-        : null;
-    const untrackedCommit = untrackedTree
-      ? await runSnapshotGit(
-          ["commit-tree", untrackedTree, "-m", `${message} untracked`],
-          {},
-        )
-      : null;
-    const oid = await runSnapshotGit(
-      [
-        "commit-tree",
-        basis.worktreeTree,
-        "-p",
-        originalHead,
-        "-p",
-        indexCommit,
-        ...(untrackedCommit ? ["-p", untrackedCommit] : []),
-        "-m",
-        message,
-      ],
-      {},
-    );
-    return {
-      oid,
-      indexEntries: basis.indexEntries,
-      worktreeEntries: basis.worktreeEntries,
-      worktreeTree: basis.worktreeTree,
-      untrackedEntries,
-      untrackedTree,
-    };
-  };
-
-  const requireRecoverySnapshot = (oid = recoveryStashOid): void => {
-    if (!snapshotCommitted || !oid || oid !== recoveryStashOid)
-      throw new Error("a complete recovery snapshot is required");
   };
 
   const unmergedPaths = async (cwd = root): Promise<string[]> => {
@@ -764,7 +499,8 @@ export function createUpdateTransaction({
     recoveryDir: string;
     conflictReports: RestoreConflict[];
   }> => {
-    const protectedStash = recoveryStashOid || stashOid;
+    const owner = requireRecoveryOwner();
+    const protectedStash = owner.snapshotOid || owner.restoreStashOid;
     if (!protectedStash)
       throw new Error("no protected stash is available for recovery");
     const shortTarget = (cachedTarget?.remote || "unknown").slice(0, 12);
@@ -822,7 +558,7 @@ export function createUpdateTransaction({
           beforeHead: originalHead,
           afterHead: cachedTarget?.remote || null,
           stashOid: protectedStash,
-          originalUntracked,
+          originalUntracked: [...originalUntracked()],
           conflicts: conflictReports,
         },
         null,
@@ -839,88 +575,35 @@ export function createUpdateTransaction({
     branch = await mustGit("rev-parse", "--abbrev-ref", "HEAD");
     if (!branch || branch === "HEAD")
       throw new Error("detached HEAD: switch to the update branch first");
-    backupRef = `refs/iva/update-backups/${safeTimestamp()}`;
-    await mustGit("update-ref", backupRef, originalHead);
+    recoveryOwner = await UpdateRecoveryOwner.create({
+      root,
+      headOid: originalHead,
+      git: recoveryGit,
+      ...(recoveryFileOps ? { files: recoveryFileOps } : {}),
+    });
 
     const backups = join(dataDir, "update-backups");
     mkdirSync(backups, { recursive: true });
     if (existsSync(envPath)) {
-      envBackup = join(backups, `.env-${safeTimestamp()}`);
-      copyFileSync(envPath, envBackup);
-      chmodSync(envBackup, 0o600);
-    }
+      const backup = join(backups, `.env-${safeTimestamp()}`);
+      const mode = statSync(envPath).mode & 0o777;
+      copyFileSync(envPath, backup);
+      chmodSync(backup, 0o600);
+      protectedEnv = { phase: "backup", path: backup, mode };
+    } else protectedEnv = { phase: "absent" };
 
-    const status = await mustGit("status", "--porcelain=v1");
-    const protectedIndexEntries = parseIndexEntries(
-      await mustGit("ls-files", "--cached", "--stage", "-z"),
-    );
-    const untracked = await mustGit(
-      "ls-files",
-      "--others",
-      "--exclude-standard",
-      "-z",
-    );
-    originalUntracked = untracked.split("\0").filter(Boolean);
-    const protectedIndexTree = await mustGit("write-tree");
-    const protectedWorktreeEntries = liveTrackedEntries(protectedIndexEntries);
-    const protectedWorktreeTree = await createSnapshotTree(
-      "detect-worktree",
-      protectedWorktreeEntries,
-    );
-    const originalTree = await mustGit(
-      "rev-parse",
-      "--verify",
-      `${originalHead}^{tree}`,
-    );
-    hadLocalChanges =
-      Boolean(status.trim()) ||
-      originalUntracked.length > 0 ||
-      protectedIndexTree !== originalTree ||
-      protectedWorktreeTree !== protectedIndexTree;
+    const message = `iva-update-${safeTimestamp()}`;
+    const capturedState = await recoveryOwner.capture(message);
+    hadLocalChanges = capturedState.dirty;
     if (hadLocalChanges) {
-      const message = `iva-update-${safeTimestamp()}`;
-      const recovery = await createRecoverySnapshot(message, {
-        indexEntries: protectedIndexEntries,
-        indexTree: protectedIndexTree,
-        worktreeEntries: protectedWorktreeEntries,
-        worktreeTree: protectedWorktreeTree,
-      });
-      await verifyRecoverySnapshot(recovery);
-      recoveryRef = `refs/iva/update-recovery/${safeTimestamp()}-${process.pid}-${recovery.oid}`;
-      await mustGit("update-ref", recoveryRef, recovery.oid);
-      const durableOid = await mustGit("rev-parse", "--verify", recoveryRef);
-      if (durableOid !== recovery.oid)
-        throw new Error("durable recovery ref OID does not match");
-      commitRecoverySnapshot(recovery.oid);
-
-      const stored = await git(
-        "stash",
-        "store",
-        "--message",
-        message,
-        recovery.oid,
-      );
-      if (stored.code !== 0)
-        throw new Error(
-          stored.stderr || stored.stdout || "git stash store failed",
-        );
-
-      requireRecoverySnapshot(recovery.oid);
-      await mustGit("reset", "--hard", originalHead);
-      requireRecoverySnapshot(recovery.oid);
-      removeOriginalUntracked();
-      requireRecoverySnapshot(recovery.oid);
-      const reapplied = await git("stash", "apply", "--index", recovery.oid);
-      if (reapplied.code !== 0)
-        throw new Error(
-          reapplied.stderr || "couldn't prepare local customizations",
-        );
+      await recoveryOwner.storeSnapshot(message);
+      await recoveryOwner.prepareLiveTree();
       try {
         const captured = captureCustomLayer({
           root,
           dataDir,
           baseRevision: originalHead,
-          stashRevision: recovery.oid,
+          stashRevision: recoveryOwner.snapshotOid,
         });
         capturedCustomPaths = captured.paths;
       } catch (error) {
@@ -933,13 +616,10 @@ export function createUpdateTransaction({
 
       // Remove only authored paths, then create the smaller restore stash. The exact full
       // stash remains the rollback source until commit, while authored files live in data.
-      if (capturedCustomPaths.length > 0) {
-        requireRecoverySnapshot(recovery.oid);
+      if (capturedCustomPaths.length > 0)
         await resolveConflictsToHead(capturedCustomPaths);
-      }
       const remaining = await mustGit("status", "--porcelain=v1");
       if (remaining.trim()) {
-        requireRecoverySnapshot(recovery.oid);
         const previousRestoreStash = await git(
           "rev-parse",
           "--verify",
@@ -963,11 +643,9 @@ export function createUpdateTransaction({
           );
         const restoreStash = await resolveNewStashOid(previousRestoreStashOid);
         if (restoreStash.lookupError) throw new Error(restoreStash.lookupError);
-        stashOid = restoreStash.oid;
+        recoveryOwner.setRestoreStashOid(restoreStash.oid);
       }
     } else {
-      // Matching HEAD, index and live-tree snapshots prove that HEAD is complete recovery.
-      snapshotCommitted = true;
       try {
         captureCustomLayer({ root, dataDir, baseRevision: originalHead });
       } catch (error) {
@@ -982,7 +660,7 @@ export function createUpdateTransaction({
       originalHead,
       branch,
       hadLocalChanges,
-      stashOid: recoveryStashOid || stashOid,
+      stashOid: recoveryOwner.snapshotOid || recoveryOwner.restoreStashOid,
     };
   }
 
@@ -1028,12 +706,13 @@ export function createUpdateTransaction({
   }
 
   async function restoreLocalChanges(): Promise<RestoreReport> {
+    const owner = requireRecoveryOwner();
     const customConflicts = candidate?.customConflicts ?? [];
     const customRecoveryDir = candidate?.customRecoveryDir;
     const fallbackReason = candidate?.fallbackReason;
     const customConflictReport = (): RestoreReport | null => {
       if (!customRecoveryDir || customConflicts.length === 0) return null;
-      if (recoveryStashOid) preserveStash = true;
+      if (owner.snapshotOid) owner.retain();
       return {
         status: fallbackReason ? "preserved" : "conflicted",
         conflicts: customConflicts.map((path) => ({
@@ -1043,23 +722,34 @@ export function createUpdateTransaction({
           upstreamMode: null,
         })),
         recoveryDir: customRecoveryDir,
-        stashOid: recoveryStashOid,
+        stashOid: owner.snapshotOid,
       };
     };
-    if (!stashOid) {
+    const finish = async (report: RestoreReport): Promise<RestoreReport> => {
+      await owner.restoreFlagsForCurrentIndex();
+      return report;
+    };
+    if (!owner.restoreStashOid) {
       const customReport = customConflictReport();
-      if (customReport) return customReport;
+      if (customReport) return finish(customReport);
       if (capturedCustomPaths.length > 0 && !fallbackReason) {
         stashApplied = true;
-        return { status: "applied", conflicts: [] };
+        return finish({ status: "applied", conflicts: [] });
       }
-      return { status: "none", conflicts: [] };
+      return finish({ status: "none", conflicts: [] });
     }
-    const result = await git("stash", "apply", "--index", stashOid);
+    const result = await git(
+      "stash",
+      "apply",
+      "--index",
+      owner.restoreStashOid,
+    );
     const conflicts = result.code === 0 ? [] : await unmergedPaths();
     if (result.code === 0 && !fallbackReason) {
       stashApplied = true;
-      return customConflictReport() ?? { status: "applied", conflicts: [] };
+      return finish(
+        customConflictReport() ?? { status: "applied", conflicts: [] },
+      );
     }
     if (result.code !== 0 && conflicts.length === 0 && !fallbackReason)
       throw new Error(
@@ -1070,24 +760,24 @@ export function createUpdateTransaction({
       conflicts,
       reason: fallbackReason || "conflict",
     });
-    preserveStash = true;
+    owner.retain();
     if (fallbackReason) {
-      removeOriginalUntracked();
+      owner.removeOriginalUntracked();
       await mustGit("reset", "--hard", "HEAD");
-      return {
+      return finish({
         status: "preserved",
         conflicts: archived.conflictReports,
         recoveryDir: archived.recoveryDir,
-        stashOid: recoveryStashOid || stashOid,
-      };
+        stashOid: owner.snapshotOid || owner.restoreStashOid,
+      });
     }
     await resolveConflictsToHead(conflicts);
-    return {
+    return finish({
       status: "conflicted",
       conflicts: archived.conflictReports,
       recoveryDir: archived.recoveryDir,
-      stashOid: recoveryStashOid || stashOid,
-    };
+      stashOid: owner.snapshotOid || owner.restoreStashOid,
+    });
   }
 
   // Build the clean target first, then layer the protected local stash onto the detached
@@ -1099,6 +789,7 @@ export function createUpdateTransaction({
     if (!cachedTarget)
       throw new Error("resolveTarget must run before buildCandidate");
     if (cachedTarget.plan !== "fast-forward") return null;
+    const owner = requireRecoveryOwner();
     const targetSha = cachedTarget.remote;
     const staging = join(root, ".iva-update", "staging");
     await teardownCandidate();
@@ -1182,7 +873,11 @@ export function createUpdateTransaction({
           });
         }
       }
-      if (!stashOid && !hasCanonicalCustomizations && !invalidCustomRecoveryDir)
+      if (
+        !owner.restoreStashOid &&
+        !hasCanonicalCustomizations &&
+        !invalidCustomRecoveryDir
+      )
         return candidate;
 
       const cleanOutput = join(staging, ".output.iva-core");
@@ -1228,7 +923,7 @@ export function createUpdateTransaction({
           if (cleanNodeModules)
             renameSync(cleanNodeModules, join(staging, "node_modules"));
         }
-        for (const relative of originalUntracked)
+        for (const relative of originalUntracked())
           rmSync(safeChild(staging, relative), {
             recursive: true,
             force: true,
@@ -1251,10 +946,10 @@ export function createUpdateTransaction({
       };
 
       let conflicts: string[] = [];
-      if (stashOid) {
+      if (owner.restoreStashOid) {
         const applied = await runCommand(
           "git",
-          ["stash", "apply", "--index", stashOid],
+          ["stash", "apply", "--index", owner.restoreStashOid],
           { cwd: staging, env: commandEnv, logFile, verbose },
         );
         conflicts = applied.code === 0 ? [] : await unmergedPaths(staging);
@@ -1367,10 +1062,11 @@ export function createUpdateTransaction({
       // Свежие node_modules обязаны существовать в staging; иначе безопаснее пересобрать in-place.
       if (!existsSync(join(candidate.staging, "node_modules"))) return false;
       if (existsSync(join(root, "node_modules"))) {
-        nodeModulesBackup = join(root, `node_modules.iva-backup-${Date.now()}`);
-        renameSync(join(root, "node_modules"), nodeModulesBackup);
+        const backup = join(root, `node_modules.iva-backup-${Date.now()}`);
+        renameSync(join(root, "node_modules"), backup);
+        nodeModulesState = { phase: "restore", backup };
       } else {
-        promotedNodeModulesWithoutBackup = true;
+        nodeModulesState = { phase: "remove" };
       }
       renameSync(
         join(candidate.staging, "node_modules"),
@@ -1399,105 +1095,139 @@ export function createUpdateTransaction({
   function backupOutput() {
     outputTouched = true;
     const output = join(root, ".output");
-    if (!existsSync(output)) return;
-    outputBackup = join(root, `.output.iva-backup-${Date.now()}`);
-    renameSync(output, outputBackup);
+    if (!existsSync(output)) {
+      outputState = { phase: "remove" };
+      return;
+    }
+    const backup = join(root, `.output.iva-backup-${Date.now()}`);
+    renameSync(output, backup);
+    outputState = { phase: "restore", backup };
   }
 
   function restoreOutput() {
-    if (!outputBackup || !existsSync(outputBackup)) return;
+    if (outputState.phase === "untouched") return;
+    if (outputState.phase === "remove") {
+      rmSync(join(root, ".output"), { recursive: true, force: true });
+      outputState = { phase: "untouched" };
+      return;
+    }
+    if (!existsSync(outputState.backup))
+      throw new Error("output rollback backup is missing");
     rmSync(join(root, ".output"), { recursive: true, force: true });
-    renameSync(outputBackup, join(root, ".output"));
-    outputBackup = "";
+    renameSync(outputState.backup, join(root, ".output"));
+    outputState = { phase: "untouched" };
   }
 
   async function rollback() {
-    let gitRollbackError: Error | null = null;
+    const errors: Error[] = [];
+    const capture = (error: unknown): void => {
+      errors.push(error instanceof Error ? error : new Error(String(error)));
+    };
     if (materializedCustomLayer) {
-      discardCustomLayer(materializedCustomLayer);
-      materializedCustomLayer = null;
+      try {
+        discardCustomLayer(materializedCustomLayer);
+        materializedCustomLayer = null;
+      } catch (error) {
+        capture(error);
+      }
     }
-    const canTransitionGit =
-      snapshotCommitted &&
-      Boolean(originalHead) &&
-      (!hadLocalChanges || Boolean(recoveryStashOid));
-    if (canTransitionGit) {
-      const gitDirResult = await git("rev-parse", "--git-dir");
-      if (gitDirResult.code === 0) {
-        const gitDir = resolve(root, gitDirResult.stdout.trim());
-        const rebaseApply = join(gitDir, "rebase-apply");
-        if (
-          existsSync(join(gitDir, "rebase-merge")) ||
-          (existsSync(rebaseApply) &&
-            !existsSync(join(rebaseApply, "applying")))
-        ) {
-          const aborted = await git("rebase", "--abort");
-          if (aborted.code !== 0)
-            gitRollbackError = new Error(
-              aborted.stderr || aborted.stdout || "git rebase --abort failed",
-            );
+    try {
+      if (protectedEnv.phase === "backup") {
+        if (!existsSync(protectedEnv.path))
+          throw new Error("environment rollback backup is missing");
+        copyFileSync(protectedEnv.path, envPath);
+        chmodSync(envPath, protectedEnv.mode);
+      } else if (protectedEnv.phase === "absent") {
+        rmSync(envPath, { recursive: true, force: true });
+      }
+    } catch (error) {
+      capture(error);
+    }
+    try {
+      if (nodeModulesState.phase === "restore") {
+        if (!existsSync(nodeModulesState.backup))
+          throw new Error("node_modules rollback backup is missing");
+        rmSync(join(root, "node_modules"), { recursive: true, force: true });
+        renameSync(nodeModulesState.backup, join(root, "node_modules"));
+        nodeModulesState = { phase: "untouched" };
+      } else if (nodeModulesState.phase === "remove") {
+        rmSync(join(root, "node_modules"), { recursive: true, force: true });
+        nodeModulesState = { phase: "untouched" };
+      }
+    } catch (error) {
+      capture(error);
+    }
+    try {
+      restoreOutput();
+    } catch (error) {
+      capture(error);
+    }
+    try {
+      if (recoveryOwner) {
+        const gitDirResult = await git("rev-parse", "--git-dir");
+        if (gitDirResult.code === 0) {
+          const gitDir = resolve(root, gitDirResult.stdout.trim());
+          const rebaseApply = join(gitDir, "rebase-apply");
+          if (
+            existsSync(join(gitDir, "rebase-merge")) ||
+            (existsSync(rebaseApply) &&
+              !existsSync(join(rebaseApply, "applying")))
+          ) {
+            const aborted = await git("rebase", "--abort");
+            if (aborted.code !== 0)
+              throw new Error(
+                aborted.stderr || aborted.stdout || "git rebase --abort failed",
+              );
+          }
         }
+        await recoveryOwner.rollback();
+        stashApplied = hadLocalChanges;
       }
-      if (!gitRollbackError) {
-        const reset = await git("reset", "--hard", originalHead);
-        if (reset.code !== 0)
-          gitRollbackError = new Error(
-            reset.stderr || reset.stdout || "git reset --hard failed",
-          );
-      }
-      if (!gitRollbackError && recoveryStashOid) {
-        // A failed stash apply can leave a subset of the original untracked files behind.
-        // Remove only paths the proven full snapshot holds, then re-apply that exact OID.
-        removeOriginalUntracked();
-        const reapplied = await git(
-          "stash",
-          "apply",
-          "--index",
-          recoveryStashOid,
-        );
-        stashApplied = reapplied.code === 0;
-        if (!stashApplied)
-          gitRollbackError = new Error(
-            reapplied.stderr ||
-              reapplied.stdout ||
-              "git stash apply failed during rollback",
-          );
-      }
+    } catch (error) {
+      capture(error);
     }
-    if (envBackup && existsSync(envBackup)) {
-      copyFileSync(envBackup, envPath);
-      chmodSync(envPath, 0o600);
-    }
-    if (nodeModulesBackup && existsSync(nodeModulesBackup)) {
-      rmSync(join(root, "node_modules"), { recursive: true, force: true });
-      renameSync(nodeModulesBackup, join(root, "node_modules"));
-      nodeModulesBackup = "";
-    } else if (promotedNodeModulesWithoutBackup) {
-      rmSync(join(root, "node_modules"), { recursive: true, force: true });
-    }
-    promotedNodeModulesWithoutBackup = false;
-    restoreOutput();
-    if (gitRollbackError) throw gitRollbackError;
+    if (errors.length > 0)
+      throw new AggregateError(
+        errors,
+        `update rollback incomplete: ${errors.map(({ message }) => message).join("; ")}`,
+      );
   }
 
   async function dropExactStash(oid: string) {
     if (!oid) return;
     const list = await git("stash", "list", "--format=%H %gd");
-    if (list.code !== 0) {
-      if (logFile)
-        appendFileSync(
-          logFile,
-          `could not list recovery stashes: ${list.stderr || list.stdout}\n`,
-        );
-      return;
-    }
+    if (list.code !== 0)
+      throw new Error(
+        list.stderr || list.stdout || "could not list recovery stashes",
+      );
     const match = (list.stdout ?? "")
       .split("\n")
       .map((line) => line.trim().split(/\s+/, 2))
       .find(([candidateOid]) => candidateOid === oid);
-    if (match?.[1]) await git("stash", "drop", match[1]);
-    else if (logFile)
+    if (match?.[1]) {
+      const selected = await git("rev-parse", "--verify", match[1]);
+      if (selected.code !== 0 || selected.stdout !== oid)
+        throw new Error(
+          selected.stderr || "recovery stash selector changed before cleanup",
+        );
+      const dropped = await git("stash", "drop", match[1]);
+      if (dropped.code !== 0)
+        throw new Error(
+          dropped.stderr || dropped.stdout || "recovery stash cleanup failed",
+        );
+    } else if (logFile)
       appendFileSync(logFile, `recovery stash not found for cleanup: ${oid}\n`);
+  }
+
+  function discardBackup(path: string, label: string): boolean {
+    try {
+      rmSync(path, { recursive: true, force: true });
+      return true;
+    } catch (error) {
+      if (logFile)
+        appendFileSync(logFile, `${label} cleanup failed: ${String(error)}\n`);
+      return false;
+    }
   }
 
   async function commit() {
@@ -1505,23 +1235,26 @@ export function createUpdateTransaction({
       commitCustomLayer(materializedCustomLayer);
       materializedCustomLayer = null;
     }
-    if (outputBackup) {
-      rmSync(outputBackup, { recursive: true, force: true });
-      outputBackup = "";
-    }
-    if (nodeModulesBackup) {
-      rmSync(nodeModulesBackup, { recursive: true, force: true });
-      nodeModulesBackup = "";
-    }
-    promotedNodeModulesWithoutBackup = false;
-    if (!preserveStash) {
-      await dropExactStash(stashOid);
-      await dropExactStash(recoveryStashOid);
-      if (recoveryRef) await git("update-ref", "-d", recoveryRef);
-    }
     if (updateBranch) await persistUpdateBranch(git, updateBranch);
-    if (backupRef) await git("update-ref", "-d", backupRef);
-    if (envBackup) rmSync(envBackup, { force: true });
+    if (recoveryOwner) await recoveryOwner.cleanup(dropExactStash);
+    if (
+      outputState.phase === "restore" &&
+      discardBackup(outputState.backup, "output backup")
+    )
+      outputState = { phase: "untouched" };
+    if (
+      nodeModulesState.phase === "restore" &&
+      discardBackup(nodeModulesState.backup, "node_modules backup")
+    )
+      nodeModulesState = { phase: "untouched" };
+    if (
+      protectedEnv.phase === "backup" &&
+      discardBackup(protectedEnv.path, "environment backup")
+    )
+      protectedEnv = { phase: "unknown" };
+    if (outputState.phase === "remove") outputState = { phase: "untouched" };
+    if (nodeModulesState.phase === "remove")
+      nodeModulesState = { phase: "untouched" };
   }
 
   async function versions() {
