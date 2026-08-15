@@ -70,6 +70,20 @@ export const handleAwaitNonText = control.handleAwaitNonText;
 
 const errorMessage = (error: unknown) => (error as ErrorLike).message;
 
+async function deleteWebhookOrThrow(
+  dropPendingUpdates: boolean,
+): Promise<void> {
+  const response = (await tg("deleteWebhook", {
+    drop_pending_updates: dropPendingUpdates,
+  })) as TelegramResponse;
+  if (response.ok !== true) {
+    throw new Error(
+      `deleteWebhook failed: ${response.description ?? "Telegram returned ok:false"}`,
+    );
+  }
+  log("deleteWebhook:", `ok (drop_pending=${dropPendingUpdates})`);
+}
+
 const rawCollectQuietMs = Number(
   process.env.TELEGRAM_COLLECT_QUIET_MS ?? COLLECT_QUIET_MS,
 );
@@ -123,13 +137,7 @@ export async function main() {
   // so old messages don't replay in a batch → parallel sessions on one chat (HookConflict).
   // On subsequent starts we do NOT drop the backlog (don't lose messages that arrived while the bridge was down).
   const firstRun = startup.firstRun;
-  const dw = (await tg("deleteWebhook", {
-    drop_pending_updates: firstRun,
-  })) as TelegramResponse;
-  log(
-    "deleteWebhook:",
-    dw.ok ? `ok (drop_pending=${firstRun})` : dw.description,
-  );
+  await deleteWebhookOrThrow(firstRun);
   await registerBotCommands();
 
   if (firstRun) {
@@ -174,7 +182,7 @@ export async function main() {
       log("getUpdates:", data.description);
       // 409/conflict — a webhook is left somewhere; remove it and try again.
       if (/409|conflict|webhook/i.test(String(data.description || ""))) {
-        await tg("deleteWebhook", { drop_pending_updates: false });
+        await deleteWebhookOrThrow(false);
       }
       await sleep(3000);
       continue;

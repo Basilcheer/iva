@@ -17,13 +17,18 @@ import {
 
 const SEED = 18_702;
 const ROOT = join(import.meta.dirname, "../..");
+let startupBotSequence = 0;
 
 async function temporaryStartup(t: TestContext): Promise<{
   markerFile: string;
   lease: TelegramProcessLease;
 }> {
   const directory = await mkdtemp(join(tmpdir(), "iva-startup-state-"));
-  const lease = await acquireTelegramProcessLock({ dataDir: directory });
+  const lease = await acquireTelegramProcessLock({
+    dataDir: directory,
+    botId: `721${process.pid}${++startupBotSequence}`,
+    guardBaseDir: join(directory, ".guard"),
+  });
   t.after(async () => {
     await lease.close();
     await rm(directory, { recursive: true, force: true });

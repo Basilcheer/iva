@@ -7,6 +7,7 @@ import {
   readFileSync,
   rmSync,
   statSync,
+  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -576,6 +577,32 @@ test("a direct acceptance timeout rejects once and returns to Telegram polling",
   );
   assert.deepEqual(retried.inbox, { version: 1, queues: {} });
   assert.deepEqual(retried.queue, { version: 1, queues: {} });
+  assert.deepEqual(
+    parseJson(readFileSync(join(dataDir, "alert-state.json"), "utf8")),
+    {},
+    "a successful durable retry resolves the throttled acceptance alert",
+  );
+});
+
+test("a retained acceptance failure retries without repeating its alert", (t: TestContext) => {
+  const dataDir = makeDataDir(t, "direct-timeout-alert-throttle");
+  writeFileSync(join(dataDir, "alert-state.json"), "{corrupt\n");
+  const result = runHarness("direct-timeout-twice", dataDir, "none", {
+    directAcceptanceTimeoutMs: "25",
+  });
+
+  assert.deepEqual(result.deliveryRoutes, [
+    "/eve/v1/telegram/accepted",
+    "/eve/v1/telegram/accepted",
+  ]);
+  assert.deepEqual(
+    result.failureNotices.map(({ chat_id, text }) => [chat_id, text]),
+    [["1", "Couldn't process the message - repeat it or use /new"]],
+    "the durable retry remains live but one unresolved problem alerts only once",
+  );
+  assert.deepEqual(ownedUpdates(result), [
+    { location: "inbox", updateId: 101 },
+  ]);
 });
 
 test("callback_query delivery stays on the original webhook route", (t: TestContext) => {

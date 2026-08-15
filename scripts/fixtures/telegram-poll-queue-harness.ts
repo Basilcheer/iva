@@ -44,7 +44,7 @@ const dataDir = dataDirArg;
 
 process.env.ASSISTANT_DATA_DIR = dataDir;
 process.env.ASSISTANT_HOST = "http://iva-red.invalid";
-process.env.TELEGRAM_BOT_TOKEN = "999:test-token";
+process.env.TELEGRAM_BOT_TOKEN = "73002:test-token";
 process.env.TELEGRAM_WEBHOOK_SECRET_TOKEN = "test-secret";
 process.env.TELEGRAM_ALLOWED_USER_IDS = "42";
 process.env.TELEGRAM_POLL_SETTLE_MS = "0";
@@ -378,7 +378,7 @@ const fetchHarness = async (url: unknown, options: FetchOptions = {}) => {
       });
     }
     if (
-      mode === "direct-timeout" &&
+      (mode === "direct-timeout" || mode === "direct-timeout-twice") &&
       deliveryRoute === "/eve/v1/telegram/accepted"
     ) {
       directAcceptanceAttempts++;
@@ -562,7 +562,8 @@ const fetchHarness = async (url: unknown, options: FetchOptions = {}) => {
     if (
       mode === "direct-success" ||
       mode === "direct-retry" ||
-      mode === "direct-timeout"
+      mode === "direct-timeout" ||
+      mode === "direct-timeout-twice"
     ) {
       if (getUpdatesCalls === 1) {
         return jsonResponse({
@@ -573,6 +574,9 @@ const fetchHarness = async (url: unknown, options: FetchOptions = {}) => {
               : privateUpdate(101, "direct message"),
           ],
         });
+      }
+      if (mode === "direct-timeout-twice" && getUpdatesCalls === 2) {
+        return jsonResponse({ ok: true, result: [] });
       }
       finish();
     }

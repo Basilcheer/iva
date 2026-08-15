@@ -25,6 +25,7 @@ import {
   ACCEPTANCE_ROUTE,
   ALLOWED,
   BOT_USERNAME,
+  DATA_DIR,
   DIRECT_ACCEPTANCE_TIMEOUT_MS,
   SETTLE_MS,
   log,
@@ -47,6 +48,7 @@ import {
   undrainableLegacyLogged,
 } from "./queue.ts";
 import type { QueuePhase } from "./queue.ts";
+import { alertOnce, alertResolved } from "../lib/notice-policy.ts";
 
 type MaybePromise<T> = T | Promise<T>;
 type ErrorLike = { code?: unknown; message?: unknown };
@@ -73,6 +75,9 @@ type DirectDeliveryOptions = {
   statusImpl?: StatusImpl;
   setStatusIfImpl?: SetStatusIfImpl;
   sendFailureImpl?: (key: string, text: string) => MaybePromise<unknown>;
+  alertImpl?: typeof alertOnce;
+  alertResolvedImpl?: typeof alertResolved;
+  alertDataDir?: string;
   deleteMessageImpl?: (
     key: string,
     messageId: string | number,
@@ -90,6 +95,9 @@ async function deliverDirectUpdate(
     statusImpl = getChatStatus,
     setStatusIfImpl = setChatStatusIf,
     sendFailureImpl = sendStaleRunNotice,
+    alertImpl = alertOnce,
+    alertResolvedImpl = alertResolved,
+    alertDataDir = DATA_DIR,
     deleteMessageImpl = deleteStaleWorkingMessage,
     now = Date.now,
     trImpl = tr,
@@ -129,12 +137,20 @@ async function deliverDirectUpdate(
     if (failureNotified) return;
     failureNotified = true;
     try {
-      await sendFailureImpl(
-        key,
-        trImpl(
-          "Couldn't process the message - repeat it or use /new",
-          "Не получилось обработать сообщение - повтори или /new",
-        ),
+      await alertImpl(
+        alertDataDir,
+        `telegram-acceptance:${key}`,
+        "message acceptance failed",
+        async () => {
+          await sendFailureImpl(
+            key,
+            trImpl(
+              "Couldn't process the message - repeat it or use /new",
+              "Не получилось обработать сообщение - повтори или /new",
+            ),
+          );
+          return true;
+        },
       );
     } catch (error) {
       logImpl(
@@ -152,6 +168,9 @@ async function deliverDirectUpdate(
   // Defensive fallback for injected/custom deliverers and for a pacing deadline
   // that expires before fetch starts.
   if (!accepted && !acceptanceFailureReported) await onAcceptanceFailure();
+  if (accepted) {
+    alertResolvedImpl(alertDataDir, `telegram-acceptance:${key}`);
+  }
   return accepted ? "delivered" : "rejected";
 }
 
@@ -175,6 +194,9 @@ export async function routeMessageUpdate(
     statusImpl = getChatStatus,
     setStatusIfImpl = setChatStatusIf,
     sendFailureImpl = sendStaleRunNotice,
+    alertImpl = alertOnce,
+    alertResolvedImpl = alertResolved,
+    alertDataDir = DATA_DIR,
     deleteMessageImpl = deleteStaleWorkingMessage,
     now = Date.now,
     trImpl = tr,
@@ -207,6 +229,9 @@ export async function routeMessageUpdate(
     statusImpl?: StatusImpl;
     setStatusIfImpl?: SetStatusIfImpl;
     sendFailureImpl?: (key: string, text: string) => MaybePromise<unknown>;
+    alertImpl?: typeof alertOnce;
+    alertResolvedImpl?: typeof alertResolved;
+    alertDataDir?: string;
     deleteMessageImpl?: (
       key: string,
       messageId: string | number,
@@ -248,6 +273,9 @@ export async function routeMessageUpdate(
     statusImpl,
     setStatusIfImpl,
     sendFailureImpl,
+    alertImpl,
+    alertResolvedImpl,
+    alertDataDir,
     deleteMessageImpl,
     now,
     trImpl,
