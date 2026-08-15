@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
+import net from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test, { type TestContext } from "node:test";
@@ -351,7 +352,16 @@ test("invalid candidate metadata and apply failures propagate after cleanup", as
 //
 // Процесс останавливается на первом же вопросе (stdin открыт, но пуст) — до сети дело не
 // доходит: всё, что проверяется, напечатано раньше.
-function fixtureEnv(provider: string): string {
+async function fixtureEnv(provider: string): Promise<string> {
+  const listener = net.createServer();
+  const port = await new Promise<number>((resolve, reject) => {
+    listener.once("error", reject);
+    listener.listen(0, "0.0.0.0", () =>
+      resolve((listener.address() as net.AddressInfo).port),
+    );
+  });
+  await new Promise<void>((resolve) => listener.close(() => resolve()));
+
   return [
     `MODEL_PROVIDER=${provider}`,
     "OLLAMA_API_KEY=key",
@@ -360,6 +370,7 @@ function fixtureEnv(provider: string): string {
     "TELEGRAM_BOT_TOKEN=tg",
     "TELEGRAM_ALLOWED_USER_IDS=1",
     "TELEGRAM_BOT_USERNAME=ivabot",
+    `IVA_PORT=${port}`,
     "AGENT_LANGUAGE=en",
     `ASSISTANT_BEARER=${"b".repeat(43)}`,
     "",
@@ -375,23 +386,19 @@ async function runWizard(
   const root = await sandbox(t);
   const input = join(root, "fixture.env");
   const candidate = join(root, "candidate.env");
-  writeFileSync(input, fixtureEnv(provider));
+  writeFileSync(input, await fixtureEnv(provider));
   const repo = fileURLToPath(new URL("../../", import.meta.url));
   const fetchFixture = fileURLToPath(
     new URL("../fixtures/setup-wizard-fetch.ts", import.meta.url),
   );
-  const clean = { ...process.env };
-  delete clean.FORCE_COLOR;
-  delete clean.JINA_API_KEY;
-  delete clean.DEEPINFRA_API_KEY;
-  delete clean.MEMORY_EMBED_URL;
   const child = spawn(
     process.execPath,
     ["--import", fetchFixture, join(repo, "scripts/setup/main.ts")],
     {
       cwd: repo,
       env: {
-        ...clean,
+        PATH: process.env.PATH,
+        HOME: process.env.HOME,
         NO_COLOR: "1",
         AGENT_LANGUAGE: "en",
         IVA_CONFIG_INPUT: input,
@@ -450,18 +457,37 @@ test("the setup wizard still short-circuits on a complete configuration", async 
   assert.doesNotMatch(output, /MODEL_PROVIDER is invalid/u);
 });
 
-test("the setup wizard writes grep when hybrid gets no embedding key", async (t) => {
+test("the setup wizard writes grep without leaking host secrets", async (t) => {
+  const hostSecrets = {
+    TAVILY_API_KEY: "host-only-tavily-secret",
+    DEEPGRAM_API_KEY: "host-only-deepgram-secret",
+  } as const;
+  const originalSecrets = Object.fromEntries(
+    Object.keys(hostSecrets).map((key) => [key, process.env[key]]),
+  );
+  Object.assign(process.env, hostSecrets);
+  t.after(() => {
+    for (const [key, value] of Object.entries(originalSecrets)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  });
+
   const { candidate, output } = await runWizard(
     t,
     "invalid",
     /Ready — settings validated for apply/u,
     ["2", "test-key", "", "", "", "", "", "y", "", "", "", "", "", ""],
   );
+  const candidateText = readFileSync(candidate, "utf8");
 
   assert.equal(
-    /^MEMORY_SEARCH_MODE=.*$/mu.exec(readFileSync(candidate, "utf8"))?.[0],
+    /^MEMORY_SEARCH_MODE=.*$/mu.exec(candidateText)?.[0],
     "MEMORY_SEARCH_MODE=grep",
   );
+  for (const secret of Object.values(hostSecrets)) {
+    assert.equal(candidateText.includes(secret), false);
+  }
   assert.match(
     output,
     /No key — hybrid skipped\. Memory search stays on free BM25\. Enable later: iva config\./u,
