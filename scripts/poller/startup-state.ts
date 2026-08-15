@@ -4,6 +4,10 @@ import { writeFileAtomic } from "#lib/fs-atomic.ts";
 import type { OffsetState } from "../lib/offset-store.ts";
 import { DATA_DIR } from "./config.ts";
 import { loadOffset } from "./offset.ts";
+import {
+  assertTelegramProcessLease,
+  type TelegramProcessLease,
+} from "./process-lock.ts";
 
 const MARKER_SCHEMA = "iva-telegram-backlog-drop/v1";
 export const BACKLOG_DROP_MARKER_FILE = join(
@@ -14,7 +18,6 @@ export const BACKLOG_DROP_MARKER_FILE = join(
 export type BacklogDropMarker = { schema: typeof MARKER_SCHEMA };
 export type MarkerState = "missing" | "present";
 export type StartupDecision =
-  | { action: "drop-backlog"; offset: null; delivered: null }
   | { action: "resume"; offset: number; delivered: number | null }
   | { action: "write-marker-and-drop"; offset: null; delivered: null }
   | {
@@ -83,21 +86,25 @@ async function loadMarker(
   }
 }
 
-export async function prepareTelegramStartup({
-  markerFile = BACKLOG_DROP_MARKER_FILE,
-  loadOffsetImpl = loadOffset,
-  readFileImpl = readFile,
-  createMarkerImpl = (file: string, data: string) =>
-    writeFileAtomic(file, data, { mode: 0o600 }),
-}: {
-  markerFile?: string;
-  loadOffsetImpl?: () => Promise<OffsetState>;
-  readFileImpl?: typeof readFile;
-  createMarkerImpl?: (file: string, data: string) => Promise<void>;
-} = {}): Promise<
+export async function prepareTelegramStartup(
+  lease: TelegramProcessLease,
+  {
+    markerFile = BACKLOG_DROP_MARKER_FILE,
+    loadOffsetImpl = loadOffset,
+    readFileImpl = readFile,
+    createMarkerImpl = (file: string, data: string) =>
+      writeFileAtomic(file, data, { mode: 0o600 }),
+  }: {
+    markerFile?: string;
+    loadOffsetImpl?: () => Promise<OffsetState>;
+    readFileImpl?: typeof readFile;
+    createMarkerImpl?: (file: string, data: string) => Promise<void>;
+  } = {},
+): Promise<
   | { firstRun: true; offset: null; delivered: null }
   | { firstRun: false; offset: number; delivered: number | null }
 > {
+  assertTelegramProcessLease(lease);
   const [offset, marker] = await Promise.all([
     loadOffsetImpl(),
     loadMarker(markerFile, readFileImpl),
@@ -117,10 +124,7 @@ export async function prepareTelegramStartup({
       `${JSON.stringify({ schema: MARKER_SCHEMA })}\n`,
     );
   }
-  if (
-    decision.action === "drop-backlog" ||
-    decision.action === "write-marker-and-drop"
-  ) {
+  if (decision.action === "write-marker-and-drop") {
     return { firstRun: true, offset: null, delivered: null };
   }
   return {

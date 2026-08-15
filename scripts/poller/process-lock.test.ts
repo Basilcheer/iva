@@ -8,7 +8,6 @@ import {
   rmSync,
   statSync,
   symlinkSync,
-  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -19,6 +18,7 @@ import {
   parseTelegramProcessOwner,
   readProcessStartIdentity,
 } from "./process-lock.ts";
+import { parseBacklogDropMarker } from "./startup-state.ts";
 
 const CHILD = join(
   import.meta.dirname,
@@ -43,6 +43,30 @@ function startChild(
 ) {
   const state: RunningChild = {
     child: spawn(process.execPath, [CHILD, mode, dataDir], {
+      stdio: ["ignore", "pipe", "pipe"],
+    }),
+    stdout: "",
+    stderr: "",
+  };
+  state.child.stdout?.setEncoding("utf8");
+  state.child.stderr?.setEncoding("utf8");
+  state.child.stdout?.on("data", (chunk: string) => {
+    state.stdout += chunk;
+  });
+  state.child.stderr?.on("data", (chunk: string) => {
+    state.stderr += chunk;
+  });
+  t.after(() => {
+    if (state.child.exitCode === null && state.child.signalCode === null) {
+      state.child.kill("SIGKILL");
+    }
+  });
+  return state;
+}
+
+function startMainChild(t: TestContext, dataDir: string): RunningChild {
+  const state: RunningChild = {
+    child: spawn(process.execPath, [MAIN_GUARD_CHILD, dataDir], {
       stdio: ["ignore", "pipe", "pipe"],
     }),
     stdout: "",
@@ -270,42 +294,13 @@ void test("a missing kernel-lock helper fails closed without hanging", async (t)
   }
 });
 
-void test("two Bridge mains permit exactly one first Bot API call", async (t) => {
+void test("OS lease permits exactly one ordered first-run drop attempt", async (t) => {
   const dataDir = mkdtempSync(join(tmpdir(), "iva-main-guard-"));
   t.after(() => rmSync(dataDir, { recursive: true, force: true }));
-  writeFileSync(
-    join(dataDir, "telegram-offset.json"),
-    `${JSON.stringify({ offset: 100 })}\n`,
-    { mode: 0o600 },
-  );
-  writeFileSync(
-    join(dataDir, "telegram-backlog-drop.json"),
-    `${JSON.stringify({ schema: "iva-telegram-backlog-drop/v1" })}\n`,
-    { mode: 0o600 },
-  );
-  const mainContenders = [0, 1].map(() => {
-    const state: RunningChild = {
-      child: spawn(process.execPath, [MAIN_GUARD_CHILD, dataDir], {
-        stdio: ["ignore", "pipe", "pipe"],
-      }),
-      stdout: "",
-      stderr: "",
-    };
-    state.child.stdout?.setEncoding("utf8");
-    state.child.stderr?.setEncoding("utf8");
-    state.child.stdout?.on("data", (chunk: string) => {
-      state.stdout += chunk;
-    });
-    state.child.stderr?.on("data", (chunk: string) => {
-      state.stderr += chunk;
-    });
-    t.after(() => {
-      if (state.child.exitCode === null && state.child.signalCode === null) {
-        state.child.kill("SIGKILL");
-      }
-    });
-    return state;
-  });
+  const mainContenders = [
+    startMainChild(t, dataDir),
+    startMainChild(t, dataDir),
+  ];
 
   await waitFor(
     () => {
@@ -327,6 +322,23 @@ void test("two Bridge mains permit exactly one first Bot API call", async (t) =>
     name.startsWith("first-bot-api-"),
   );
   assert.equal(firstCalls.length, 1);
+  const evidence = JSON.parse(
+    readFileSync(join(dataDir, firstCalls[0]), "utf8"),
+  ) as {
+    method?: unknown;
+    body?: unknown;
+    markerAtCall?: unknown;
+    ownerAtCall?: unknown;
+  };
+  assert.equal(evidence.method, "deleteWebhook");
+  assert.deepEqual(evidence.body, { drop_pending_updates: true });
+  assert.deepEqual(parseBacklogDropMarker(String(evidence.markerAtCall)), {
+    schema: "iva-telegram-backlog-drop/v1",
+  });
+  assert.equal(
+    parseTelegramProcessOwner(String(evidence.ownerAtCall)).pid,
+    Number(firstCalls[0].slice("first-bot-api-".length)),
+  );
   const winnerPid = Number(firstCalls[0].slice("first-bot-api-".length));
   const winner = mainContenders.find(({ child }) => child.pid === winnerPid);
   const loser = mainContenders.find(({ child }) => child.pid !== winnerPid);
@@ -334,4 +346,18 @@ void test("two Bridge mains permit exactly one first Bot API call", async (t) =>
   assert.equal((await waitForExit(loser.child)).code, 1, loser.stderr);
   winner.child.kill("SIGKILL");
   assert.equal((await waitForExit(winner.child)).signal, "SIGKILL");
+
+  const successor = startMainChild(t, dataDir);
+  await waitFor(
+    () =>
+      successor.child.exitCode !== null || successor.child.signalCode !== null,
+    `successor did not fail closed: ${successor.stderr}`,
+  );
+  assert.equal((await waitForExit(successor.child)).code, 1, successor.stderr);
+  assert.match(successor.stderr, /marker exists without an offset/u);
+  assert.equal(
+    readdirSync(dataDir).filter((name) => name.startsWith("first-bot-api-"))
+      .length,
+    1,
+  );
 });

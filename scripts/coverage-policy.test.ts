@@ -8,9 +8,9 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
-const EXPECTED_PRODUCTION_COUNT = 188;
+const EXPECTED_PRODUCTION_COUNT = 192;
 const EXPECTED_INVENTORY_SHA256 =
-  "3a2cf3c805ddf64c9a09f645e86a72e7daff46aa0dbba346a611b22ca940d99f";
+  "9e5d759f67f054954e7231f70f63ea99c975b0e06169c5938d807fd38bb3694a";
 
 // Node's native include globs filter loaded modules; they do not load untouched files.
 // This test pins the exact production path inventory and a separately measured 26-path
@@ -41,6 +41,9 @@ const EXPECTED_INVENTORY_SHA256 =
 // resolver came last: `agent/lib/custom-skills.ts` (99% lines) and `agent/lib/data-dir.ts` (100%)
 // are loaded and reported by their own tests, while the slot file `agent/skills/custom.ts` is
 // loaded by eve alone - measured unreported, like `agent/sandbox.ts` - so the blind spot is 26.
+// The durable Telegram bridge then added `scripts/poller/inbox.ts`,
+// `process-lock.ts`, `startup-state.ts`, and `update-callback.ts`. Scoped coverage
+// reported all four through their proof tests, so the blind spot stays at 26.
 const MEASURED_UNREPORTED_BY_CATEGORY = {
   frameworkBoundaries: [
     "agent/agent.ts",

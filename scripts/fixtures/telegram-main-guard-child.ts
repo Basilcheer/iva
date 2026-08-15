@@ -1,4 +1,4 @@
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 const [dataDir] = process.argv.slice(2);
@@ -14,7 +14,7 @@ let firstBotApi = true;
 Object.defineProperty(globalThis, "fetch", {
   configurable: true,
   writable: true,
-  value: async (url: string | URL | Request) => {
+  value: async (url: string | URL | Request, init?: RequestInit) => {
     const target =
       typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
     if (!target.startsWith("https://api.telegram.org/")) {
@@ -24,9 +24,28 @@ Object.defineProperty(globalThis, "fetch", {
     }
     if (firstBotApi) {
       firstBotApi = false;
-      writeFileSync(join(dataDir, `first-bot-api-${process.pid}`), "called\n", {
-        flag: "wx",
-      });
+      if (typeof init?.body !== "string") {
+        throw new Error("Telegram Bot API fixture expected a JSON body");
+      }
+      const body = JSON.parse(init.body) as unknown;
+      const method = target.slice(target.lastIndexOf("/") + 1);
+      const evidence = {
+        method,
+        body,
+        ownerAtCall: readFileSync(
+          join(dataDir, "telegram-poll-owner.json"),
+          "utf8",
+        ),
+        markerAtCall: readFileSync(
+          join(dataDir, "telegram-backlog-drop.json"),
+          "utf8",
+        ),
+      };
+      writeFileSync(
+        join(dataDir, `first-bot-api-${process.pid}`),
+        `${JSON.stringify(evidence)}\n`,
+        { flag: "wx" },
+      );
       process.stdout.write(
         `${JSON.stringify({ event: "BOT_API", pid: process.pid })}\n`,
       );

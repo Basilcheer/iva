@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawn, spawnSync } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -20,37 +20,91 @@ async function waitForFile(file: string): Promise<void> {
   assert.fail(`timed out waiting for ${file}`);
 }
 
-void test("SIGKILL after durable first-run marker cannot authorize a second backlog drop", async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), "iva-startup-crash-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
-  const child = spawn(process.execPath, [CHILD, "prime", directory], {
-    stdio: ["ignore", "ignore", "pipe"],
+async function waitForExit(
+  child: ChildProcess,
+  timeoutMs = 5_000,
+): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return { code: child.exitCode, signal: child.signalCode };
+  }
+  return new Promise((resolveExit, rejectExit) => {
+    let settled = false;
+    const finish = (
+      result: { code: number | null; signal: NodeJS.Signals | null } | Error,
+    ) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      child.off("error", onError);
+      child.off("exit", onExit);
+      if (result instanceof Error) rejectExit(result);
+      else resolveExit(result);
+    };
+    const onError = (error: Error) => finish(error);
+    const onExit = (code: number | null, signal: NodeJS.Signals | null) =>
+      finish({ code, signal });
+    const timer = setTimeout(
+      () => finish(new Error(`timed out waiting for child ${child.pid} exit`)),
+      timeoutMs,
+    );
+    child.once("error", onError);
+    child.once("exit", onExit);
   });
-  let stderr = "";
-  child.stderr.setEncoding("utf8");
-  child.stderr.on("data", (chunk: string) => {
-    stderr += chunk;
-  });
-  t.after(() => {
-    if (child.exitCode === null && child.signalCode === null)
-      child.kill("SIGKILL");
-  });
+}
 
-  await waitForFile(join(directory, "marker-durable"));
-  child.kill("SIGKILL");
-  const exit = await new Promise<{
-    code: number | null;
-    signal: NodeJS.Signals | null;
-  }>((resolveExit, rejectExit) => {
-    child.once("error", rejectExit);
-    child.once("exit", (code, signal) => resolveExit({ code, signal }));
-  });
-  assert.deepEqual(exit, { code: null, signal: "SIGKILL" }, stderr);
+void test("SIGKILL startup matrix never authorizes a repeated backlog drop", async (t) => {
+  const cases = [
+    ["hold-before-marker", "DROP"],
+    ["hold-after-marker", "AMBIGUOUS"],
+    ["hold-after-drop", "AMBIGUOUS"],
+    ["hold-after-offset", "RESUME"],
+  ] as const;
 
-  const verify = spawnSync(process.execPath, [CHILD, "verify", directory], {
-    encoding: "utf8",
-    timeout: 10_000,
-  });
-  assert.equal(verify.status, 0, verify.stderr);
-  assert.equal(verify.stdout, "AMBIGUOUS\n");
+  for (const [mode, expected] of cases) {
+    await t.test(mode, async (caseTest) => {
+      const directory = await mkdtemp(join(tmpdir(), "iva-startup-crash-"));
+      caseTest.after(() => rm(directory, { recursive: true, force: true }));
+      const child = spawn(process.execPath, [CHILD, mode, directory], {
+        stdio: ["ignore", "ignore", "pipe"],
+      });
+      let stderr = "";
+      child.stderr.setEncoding("utf8");
+      child.stderr.on("data", (chunk: string) => {
+        stderr += chunk;
+      });
+      caseTest.after(() => {
+        if (child.exitCode === null && child.signalCode === null) {
+          child.kill("SIGKILL");
+        }
+      });
+
+      await waitForFile(join(directory, "boundary-ready"));
+      assert.equal(
+        existsSync(join(directory, "telegram-backlog-drop.json")),
+        mode !== "hold-before-marker",
+      );
+      assert.equal(
+        existsSync(join(directory, "drop-attempted")),
+        mode === "hold-after-drop",
+      );
+      assert.equal(
+        existsSync(join(directory, "telegram-offset.json")),
+        mode === "hold-after-offset",
+      );
+      const exitPromise = waitForExit(child);
+      assert.equal(child.kill("SIGKILL"), true);
+      assert.deepEqual(
+        await exitPromise,
+        { code: null, signal: "SIGKILL" },
+        stderr,
+      );
+
+      const probe = spawnSync(process.execPath, [CHILD, "probe", directory], {
+        encoding: "utf8",
+        timeout: 10_000,
+      });
+      assert.equal(probe.status, 0, probe.stderr);
+      assert.equal(probe.stdout, `${expected}\n`);
+    });
+  }
 });

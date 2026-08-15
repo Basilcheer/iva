@@ -42,6 +42,14 @@ export type TelegramProcessLease = {
   close(): Promise<void>;
 };
 
+const activeLeases = new WeakSet<TelegramProcessLease>();
+
+export function assertTelegramProcessLease(lease: TelegramProcessLease): void {
+  if (!activeLeases.has(lease)) {
+    throw new Error("Telegram startup requires an active process lease");
+  }
+}
+
 type SpawnSyncImpl = (
   command: string,
   args: readonly string[],
@@ -250,6 +258,7 @@ export async function acquireTelegramProcessLock({
   });
   let intentionalClose = false;
   let leaseActive = false;
+  let lease: TelegramProcessLease | null = null;
   let holderExit: {
     code: number | null;
     signal: NodeJS.Signals | null;
@@ -263,13 +272,18 @@ export async function acquireTelegramProcessLock({
     );
   child.once("exit", (code, signal) => {
     holderExit = { code, signal };
-    if (!intentionalClose && leaseActive) {
+    const wasActive = leaseActive;
+    leaseActive = false;
+    if (lease !== null) activeLeases.delete(lease);
+    if (!intentionalClose && wasActive) {
       onLeaseLost(holderExitError(holderExit, "unexpectedly"));
     }
   });
   const close = async (): Promise<void> => {
     if (intentionalClose) return;
     intentionalClose = true;
+    leaseActive = false;
+    if (lease !== null) activeLeases.delete(lease);
     child.stdin?.end();
     await childClosed;
   };
@@ -302,6 +316,8 @@ export async function acquireTelegramProcessLock({
     await close();
     throw holderExitError(holderExit, "during acquisition");
   }
+  lease = { owner, lockFile, holderPid: child.pid, close };
   leaseActive = true;
-  return { owner, lockFile, holderPid: child.pid, close };
+  activeLeases.add(lease);
+  return lease;
 }

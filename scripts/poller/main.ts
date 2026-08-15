@@ -22,7 +22,10 @@ import {
   promoteReadyInbox,
   TELEGRAM_INBOX_FILE,
 } from "./inbox.ts";
-import { acquireTelegramProcessLock } from "./process-lock.ts";
+import {
+  acquireTelegramProcessLock,
+  assertTelegramProcessLease,
+} from "./process-lock.ts";
 import { prepareTelegramStartup } from "./startup-state.ts";
 import * as queue from "./queue.ts";
 import * as routing from "./routing.ts";
@@ -84,8 +87,8 @@ export async function main() {
     );
   // The kernel-held lease is the first startup side effect. Reconciliation below
   // can call Bot API, so no weaker in-process flag can guard this boundary.
-  await acquireTelegramProcessLock();
-  const startup = await prepareTelegramStartup();
+  const processLease = await acquireTelegramProcessLock();
+  const startup = await prepareTelegramStartup(processLease);
   log(`telegram-poll start → messages ${ACCEPTANCE_ROUTE}; callbacks ${ROUTE}`);
   await removeStaleUpdateJobs();
   // The update that restarted this bridge left its final screen to us: its own
@@ -138,6 +141,7 @@ export async function main() {
   }
 
   for (;;) {
+    assertTelegramProcessLease(processLease);
     // One head per idle chat/topic per pass. While any queue remains, use a short
     // Telegram long-poll so terminal/stale run-status changes trigger drain quickly.
     try {
