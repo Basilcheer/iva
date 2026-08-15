@@ -12,6 +12,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
+import fc from "fast-check";
 import { createCliRuntime } from "./runtime.ts";
 
 const RUNTIME_MODULE = new URL("./runtime.ts", import.meta.url);
@@ -290,5 +291,67 @@ test("childEnv prepends NODE_BIN_DIR when PATH does not carry it", async (t) => 
   assert.equal(
     createCliRuntime(root).childEnv.PATH,
     `${nodeBinDir}:/nonexistent-a:/nonexistent-b`,
+  );
+});
+
+// КАК ВОСПРОИЗВЕСТИ ПАДЕНИЕ: при провале fast-check печатает в отчёте строку вида
+// `Property failed after N tests { seed: -1234567, path: "12:3:0", endOnFailure: true }`.
+// Подставь их вторым аргументом — fc.assert(prop, { seed: -1234567, path: "12:3:0" }) —
+// и прогон повторится байт в байт, включая shrink.
+test("property: childEnv stably filters PATH and carries NODE_BIN_DIR once", async (t) => {
+  const root = await sandbox(t);
+  const originalPath = process.env.PATH;
+  t.after(() => {
+    process.env.PATH = originalPath;
+  });
+  const nodeBinDir = dirname(process.execPath);
+  const otherSegment = fc.oneof(
+    fc.constantFrom(
+      join(root, "stub-bin"),
+      join(root, "tail-bin"),
+      "/usr/local/bin",
+    ),
+    fc
+      .string({ minLength: 1, maxLength: 40, unit: "grapheme" })
+      .filter((segment) => segment !== nodeBinDir && !segment.includes(":")),
+  );
+  const pathSegments = fc
+    .record({
+      segments: fc.array(fc.oneof(fc.constant(""), otherSegment), {
+        maxLength: 12,
+      }),
+      nodePosition: fc.option(fc.nat(), { nil: undefined }),
+    })
+    .map(({ segments, nodePosition }) => {
+      if (nodePosition === undefined) return segments;
+      const withNode = [...segments];
+      withNode.splice(nodePosition % (withNode.length + 1), 0, nodeBinDir);
+      return withNode;
+    });
+
+  fc.assert(
+    fc.property(pathSegments, (inputSegments) => {
+      process.env.PATH = inputSegments.join(":");
+
+      const result = (createCliRuntime(root).childEnv.PATH ?? "").split(":");
+      const filteredInput = inputSegments.filter(Boolean);
+      const inputWithoutNode = filteredInput.filter(
+        (segment) => segment !== nodeBinDir,
+      );
+
+      assert.equal(
+        result.filter((segment) => segment === nodeBinDir).length,
+        1,
+      );
+      if (!filteredInput.includes(nodeBinDir)) {
+        assert.equal(result[0], nodeBinDir);
+      }
+      assert.deepEqual(
+        result.filter((segment) => segment !== nodeBinDir),
+        inputWithoutNode,
+      );
+      assert.ok(result.every(Boolean));
+    }),
+    { numRuns: 500 },
   );
 });
