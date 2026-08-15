@@ -61,7 +61,10 @@ test("YAML-неоднозначные скаляры квотируются (PyY
 
 test("D6/M13/M14: общий corpus имеет JSON serialization и quote-aware legacy parse", () => {
   for (const value of corpus.scalars) {
-    assert.equal(formatField("value", value), `value: ${JSON.stringify(value)}`);
+    assert.equal(
+      formatField("value", value),
+      `value: ${JSON.stringify(value)}`,
+    );
     assert.equal(parseValue(JSON.stringify(value)), value);
     const list = [value, "sentinel, [x]", "O'Brien"];
     const encoded = JSON.stringify(list);

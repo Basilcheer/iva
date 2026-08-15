@@ -174,7 +174,9 @@ function splitFlowItems(inner: string): string[] {
     }
   }
   if (quote) {
-    throw new FrontmatterParseError("unterminated quote in frontmatter flow list");
+    throw new FrontmatterParseError(
+      "unterminated quote in frontmatter flow list",
+    );
   }
   if (cur.trim().length || out.length) out.push(cur);
   return out;

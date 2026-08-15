@@ -1160,10 +1160,9 @@ const {
   bodyContains,
   mergeCard,
   slugify,
-} =
-  (await import(
-    join(REPO, "agent", "lib", "card-store.ts")
-  )) as typeof import("../agent/lib/card-store.ts");
+} = (await import(
+  join(REPO, "agent", "lib", "card-store.ts")
+)) as typeof import("../agent/lib/card-store.ts");
 
 test("D5: substring не подавляет отдельный факт, exact structural record подавляет", () => {
   const existing = [
