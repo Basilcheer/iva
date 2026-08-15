@@ -10,6 +10,7 @@ import {
 } from "../lib/model-catalog.ts";
 import { classifyRoot } from "../lib/version-layout.ts";
 import { createVersionStore } from "../lib/version-store.ts";
+import { hasEmbeddingSource } from "../lib/memory-mode.ts";
 import type { createCliRuntime } from "./runtime.ts";
 import type { createCliSystemd } from "./systemd.ts";
 
@@ -155,10 +156,7 @@ export function createDoctorCommand(
       const memoryMode = (env.MEMORY_SEARCH_MODE || "grep")
         .trim()
         .toLowerCase();
-      if (
-        memoryMode === "hybrid" &&
-        !(env.JINA_API_KEY || env.DEEPINFRA_API_KEY || "").trim()
-      ) {
+      if (memoryMode === "hybrid" && !hasEmbeddingSource(env)) {
         warn(
           "memory_search: MEMORY_SEARCH_MODE=hybrid but no JINA_API_KEY/DEEPINFRA_API_KEY — falls back to BM25",
         );

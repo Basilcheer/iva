@@ -94,6 +94,70 @@ test("non-systemd doctor preserves exact counter and exit semantics", async (t) 
   assert.deepEqual(exitCodes, [0]);
 });
 
+test("doctor accepts a custom embedding endpoint for hybrid memory search", async (t) => {
+  const root = await sandbox(t);
+  writeFileSync(join(root, ".env"), "present=true\n");
+  const events: Array<[string, string]> = [];
+  const runtime: CliRuntime = {
+    ...createCliRuntime(root),
+    C: NO_COLOR,
+    ok: (message) => events.push(["ok", message]),
+    warn: (message) => events.push(["warn", message]),
+    bad: (message) => events.push(["bad", message]),
+    readEnv: () => ({
+      ...completeEnv(),
+      MEMORY_SEARCH_MODE: "hybrid",
+      MEMORY_EMBED_URL: " https://embeddings.example.test/v1 ",
+    }),
+    hasSystemd: () => false,
+  };
+
+  await createDoctorCommand(runtime, lifecycle(), {
+    nodeVersion: "24.0.0",
+    log: () => undefined,
+    exit: () => undefined,
+  })();
+
+  assert.deepEqual(
+    events.filter(([, message]) => message.startsWith("memory_search:")),
+    [["ok", "memory_search: hybrid"]],
+  );
+});
+
+test("doctor warns when hybrid memory search has no embedding source", async (t) => {
+  const root = await sandbox(t);
+  writeFileSync(join(root, ".env"), "present=true\n");
+  const events: Array<[string, string]> = [];
+  const runtime: CliRuntime = {
+    ...createCliRuntime(root),
+    C: NO_COLOR,
+    ok: (message) => events.push(["ok", message]),
+    warn: (message) => events.push(["warn", message]),
+    bad: (message) => events.push(["bad", message]),
+    readEnv: () => ({
+      ...completeEnv(),
+      MEMORY_SEARCH_MODE: "hybrid",
+    }),
+    hasSystemd: () => false,
+  };
+
+  await createDoctorCommand(runtime, lifecycle(), {
+    nodeVersion: "24.0.0",
+    log: () => undefined,
+    exit: () => undefined,
+  })();
+
+  assert.deepEqual(
+    events.filter(([, message]) => message.startsWith("memory_search:")),
+    [
+      [
+        "warn",
+        "memory_search: MEMORY_SEARCH_MODE=hybrid but no JINA_API_KEY/DEEPINFRA_API_KEY — falls back to BM25",
+      ],
+    ],
+  );
+});
+
 test("missing env remains a failure while the systemd warning stays uncounted", async (t) => {
   const root = await sandbox(t);
   const events: Array<[string, string]> = [];

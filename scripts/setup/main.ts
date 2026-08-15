@@ -32,7 +32,7 @@ import {
 import { catalogProvider, providerEnvKeys } from "../lib/model-catalog.ts";
 import { keptSetupWritePlan } from "../lib/setup-keep.ts";
 import { validateTimeZone } from "../lib/timezone.ts";
-import { resolveMemorySearchMode } from "./memory-mode.ts";
+import { resolveMemorySearchMode } from "../lib/memory-mode.ts";
 import { openrouterErrReason } from "./openrouter.ts";
 
 type Env = Record<string, string>;

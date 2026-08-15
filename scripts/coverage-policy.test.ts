@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const EXPECTED_PRODUCTION_COUNT = 184;
 const EXPECTED_INVENTORY_SHA256 =
-  "ad5ae7f728a3981be992058895cc5058029ce6d2e7d34a1f2b41ed977efd2825";
+  "d7cd169be3aa5f87a16cad3329736bfb1068c5ea9601df154e40c3a6c127ca43";
 
 // Node's native include globs filter loaded modules; they do not load untouched files.
 // This test pins the exact production path inventory and a separately measured 25-path
@@ -34,7 +34,9 @@ const EXPECTED_INVENTORY_SHA256 =
 // `agent/lib/telegram-cancel-client.ts` - all three loaded by `scripts/lib/telegram-cancel.test.ts`
 // and reported, so the blind spot stays at 25. The webhook-mode Stop handler
 // `agent/lib/telegram-stop.ts` came last, loaded by `scripts/telegram-failure-events.test.ts`
-// through the real channel and reported, so the blind spot stays at 25.
+// through the real channel and reported, so the blind spot stays at 25. The memory resolver
+// `scripts/lib/memory-mode.ts` came next, loaded and reported by its own test
+// (`scripts/lib/memory-mode.test.ts`), so the blind spot stays at 25.
 const MEASURED_UNREPORTED_BY_CATEGORY = {
   frameworkBoundaries: [
     "agent/agent.ts",
