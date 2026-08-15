@@ -22,6 +22,8 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import fc from "fast-check";
+import { parseFrontmatter } from "../agent/lib/frontmatter.ts";
 
 const REPO = fileURLToPath(new URL("..", import.meta.url));
 const VAULT = mkdtempSync(join(tmpdir(), "iva-card-"));
@@ -46,6 +48,7 @@ type WriteCardResult = {
   file: string;
   matchedBy: string;
   ok: boolean;
+  status: string;
   type: string;
 };
 type ParseSchema<T> = { parse: (value: unknown) => T };
@@ -1147,10 +1150,240 @@ test("legacy replace_body требует непустой History prefix и до
 });
 
 // ─── лок и атомарная запись ────────────────────────────────────────────────
-const { HISTORY_ENTRY_CAP, acquireLock, atomicWrite, mergeCard, slugify } =
+const {
+  HISTORY_ENTRY_CAP,
+  acquireLock,
+  atomicWrite,
+  bodyContains,
+  mergeCard,
+  slugify,
+} =
   (await import(
     join(REPO, "agent", "lib", "card-store.ts")
   )) as typeof import("../agent/lib/card-store.ts");
+
+test("D5: substring не подавляет отдельный факт, exact structural record подавляет", () => {
+  const existing = [
+    "# D5",
+    "",
+    "A discarded quote said: Alice owns ACME.",
+    "",
+    "## Log",
+    "",
+    "- 2026-08-15: Bob owns Globex.",
+    "",
+  ].join("\n");
+
+  assert.equal(bodyContains(existing, "Alice owns ACME."), false);
+  assert.equal(
+    bodyContains(existing, "A discarded quote said: Alice owns ACME."),
+    true,
+  );
+  assert.equal(bodyContains(existing, "Bob owns Globex."), true);
+  assert.equal(
+    bodyContains(
+      "# D5\n\nCurrent truth.\n\n## Log\n\nlegacy prose: Bob owns Globex.\n",
+      "Bob owns Globex.",
+    ),
+    false,
+    "неоднозначный Log не должен подавлять новый факт",
+  );
+});
+
+test("D5 property: разные normalized facts никогда не подавляются", () => {
+  fc.assert(
+    fc.property(
+      fc
+        .string({ minLength: 1, maxLength: 80 })
+        .filter((fact) => fact.trim().length > 0),
+      fc.string({ minLength: 1, maxLength: 30 }),
+      fc.string({ minLength: 1, maxLength: 30 }),
+      (fact, prefix, suffix) => {
+        const wrapped = `${prefix} ${fact} ${suffix}`;
+        fc.pre(
+          wrapped.replace(/\s+/g, " ").trim().toLowerCase() !==
+            fact.replace(/\s+/g, " ").trim().toLowerCase(),
+        );
+        assert.equal(
+          bodyContains(`# Card\n\n${wrapped}\n`, fact),
+          false,
+          `substring was suppressed: ${JSON.stringify({ fact, wrapped })}`,
+        );
+      },
+    ),
+    { seed: 18_705, numRuns: 200 },
+  );
+});
+
+test("M12: omitted UPDATE/SUPERSEDE metadata сохраняется, explicit меняет только своё поле", async () => {
+  const title = "Tri-state metadata contract";
+  const rel = `cards/projects/${slugify(title)}.md`;
+  const file = join(VAULT, rel);
+  mkdirSync(join(VAULT, "cards", "projects"), { recursive: true });
+  writeFileSync(
+    file,
+    [
+      "---",
+      "type: project",
+      "description: old",
+      "tags: [old]",
+      "status: paused",
+      "confidence: INFERRED",
+      'future_meta: "keep, [exactly]"',
+      "---",
+      `# ${title}`,
+      "",
+      "Current truth.",
+      "",
+    ].join("\n"),
+  );
+
+  const update = await call({
+    operation: "UPDATE",
+    type: "project",
+    title,
+    description: "new description",
+    tags: ["new"],
+    body: "Compatible fact.",
+  });
+  assert.equal(update.ok, true, update.error);
+  assert.equal(update.status, "paused");
+  let fields = parseFrontmatter(read(rel)).fields;
+  assert.ok(fields);
+  assert.equal(fields.status, "paused");
+  assert.equal(fields.confidence, "INFERRED");
+  assert.equal(fields.future_meta, "keep, [exactly]");
+
+  const supersede = await call({
+    operation: "SUPERSEDE",
+    type: "project",
+    title,
+    description: "replacement",
+    tags: ["new"],
+    body: "Replacement truth.",
+    history_entry: "Current truth.",
+  });
+  assert.equal(supersede.ok, true, supersede.error);
+  assert.equal(supersede.status, "paused");
+  fields = parseFrontmatter(read(rel)).fields;
+  assert.ok(fields);
+  assert.equal(fields.status, "paused");
+  assert.equal(fields.confidence, "INFERRED");
+  assert.equal(fields.future_meta, "keep, [exactly]");
+
+  const explicitStatus = await call({
+    operation: "UPDATE",
+    type: "project",
+    title,
+    description: "replacement",
+    tags: ["new"],
+    status: "done",
+    body: "Status changed explicitly.",
+  });
+  assert.equal(explicitStatus.ok, true, explicitStatus.error);
+  assert.equal(explicitStatus.status, "done");
+  fields = parseFrontmatter(read(rel)).fields;
+  assert.ok(fields);
+  assert.equal(fields.status, "done");
+  assert.equal(fields.confidence, "INFERRED");
+  assert.equal(fields.future_meta, "keep, [exactly]");
+
+  const explicitConfidence = await call({
+    operation: "UPDATE",
+    type: "project",
+    title,
+    description: "replacement",
+    tags: ["new"],
+    confidence: "AMBIGUOUS",
+    body: "Confidence changed explicitly.",
+  });
+  assert.equal(explicitConfidence.ok, true, explicitConfidence.error);
+  assert.equal(explicitConfidence.status, "done");
+  fields = parseFrontmatter(read(rel)).fields;
+  assert.ok(fields);
+  assert.equal(fields.status, "done");
+  assert.equal(fields.confidence, "AMBIGUOUS");
+  assert.equal(fields.future_meta, "keep, [exactly]");
+
+  const beforeInvalid = read(rel);
+  const invalidStatus = await call({
+    operation: "UPDATE",
+    type: "project",
+    title,
+    description: "replacement",
+    tags: ["new"],
+    status: "invented",
+    body: "Invalid metadata must not write.",
+  });
+  assert.equal(invalidStatus.ok, false);
+  assert.match(invalidStatus.error, /Недопустимый status/);
+  assert.equal(read(rel), beforeInvalid);
+});
+
+test("M12 property: metadata patch сохраняет absent и меняет только explicit", async () => {
+  let counter = 0;
+  await fc.assert(
+    fc.asyncProperty(
+      fc.constantFrom("active", "paused", "done", "draft"),
+      fc.constantFrom("EXTRACTED", "INFERRED", "AMBIGUOUS"),
+      fc.string({ maxLength: 60 }),
+      async (status, confidence, futureMeta) => {
+        const title = `M12 property ${counter++}`;
+        const rel = `cards/projects/${slugify(title)}.md`;
+        writeFileSync(
+          join(VAULT, rel),
+          [
+            "---",
+            "type: project",
+            'description: "old"',
+            'tags: ["old"]',
+            `status: ${JSON.stringify(status)}`,
+            `confidence: ${JSON.stringify(confidence)}`,
+            `future_meta: ${JSON.stringify(futureMeta)}`,
+            "---",
+            `# ${title}`,
+            "",
+            "Current truth.",
+            "",
+          ].join("\n"),
+        );
+
+        const omitted = await call({
+          operation: "UPDATE",
+          type: "project",
+          title,
+          description: "new",
+          tags: ["new"],
+          body: "Omitted metadata update.",
+        });
+        assert.equal(omitted.ok, true, omitted.error);
+        let fields = parseFrontmatter(read(rel)).fields;
+        assert.ok(fields);
+        assert.equal(fields.status, status);
+        assert.equal(fields.confidence, confidence);
+        assert.equal(fields.future_meta, futureMeta);
+
+        const nextStatus = status === "done" ? "paused" : "done";
+        const explicit = await call({
+          operation: "UPDATE",
+          type: "project",
+          title,
+          description: "new",
+          tags: ["new"],
+          status: nextStatus,
+          body: "Explicit status update.",
+        });
+        assert.equal(explicit.ok, true, explicit.error);
+        fields = parseFrontmatter(read(rel)).fields;
+        assert.ok(fields);
+        assert.equal(fields.status, nextStatus);
+        assert.equal(fields.confidence, confidence);
+        assert.equal(fields.future_meta, futureMeta);
+      },
+    ),
+    { seed: 18_712, numRuns: 50 },
+  );
+});
 
 test("card-store держит полную матрицу historyEntry как единый источник истины", () => {
   const base = {

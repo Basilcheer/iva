@@ -10,6 +10,7 @@ import {
   resolveCard,
   resolveOperation,
 } from "../lib/card-store.js";
+import { parseFrontmatter } from "../lib/frontmatter.js";
 
 // Строго типизированная запись карточки памяти. Заменяет «write_file по наитию» для карточек:
 // zod-enum на type/status берётся из autograph schema.json (единый источник правды), поэтому
@@ -27,6 +28,11 @@ const CARD_TYPE_DIR: Record<string, string> = {
   note: "notes",
 };
 const DESC_CAP = 500;
+
+function storedStatus(content: string, fallback: string): string {
+  const value = parseFrontmatter(content).fields?.status;
+  return typeof value === "string" ? value : fallback;
+}
 
 // Границы входа: пробельная пустота даёт карточку без имени/описания, а перевод строки в
 // однострочном поле уезжает в frontmatter или в разметку и превращается в новую секцию.
@@ -266,7 +272,6 @@ export default defineTool({
 
     // Валидация статуса против схемы типа (жёстко — иначе модель придумает статус).
     const allowed = SCHEMA.status[type] || ["active"];
-    const st = status && allowed.includes(status) ? status : allowed[0];
     if (status && !allowed.includes(status)) {
       return {
         ok: false,
@@ -310,7 +315,7 @@ export default defineTool({
         ok: true,
         file: rel,
         type,
-        status: st,
+        status: storedStatus(readFileSync(file, "utf8"), status ?? allowed[0]),
         action: "noop",
         matchedBy: id.matchedBy,
       };
@@ -379,8 +384,15 @@ export default defineTool({
           type,
           description,
           tags,
-          status: st,
-          confidence: confidence || "EXTRACTED",
+          ...(effectiveOperation === "ADD"
+            ? {
+                status: status ?? allowed[0],
+                confidence: confidence ?? "EXTRACTED",
+              }
+            : {
+                ...(status !== undefined ? { status } : {}),
+                ...(confidence !== undefined ? { confidence } : {}),
+              }),
           ...(domain ? { domain } : {}),
         },
         initialFields: { created: today(), source: `daily/${today()}.md` },
@@ -398,7 +410,7 @@ export default defineTool({
         ok: true,
         file: rel,
         type,
-        status: st,
+        status: storedStatus(content, status ?? allowed[0]),
         action,
         matchedBy: id.matchedBy,
       };

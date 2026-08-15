@@ -193,11 +193,55 @@ export function resolveCard(dir: string, title: string): Identity {
 
 const norm = (s: string) => s.replace(/\s+/g, " ").trim().toLowerCase();
 
-/** Уже ли новый текст (по сути) есть в старом body — чтобы не дописывать дубль. */
+/**
+ * Канонические записи Log. Неоднозначная секция не даёт совпадений: лишний дубль
+ * безопаснее потери нового факта. Однострочная запись хранит факт после даты;
+ * многострочная — под датным буллетом с отступом ровно на два пробела.
+ */
+function logFacts(body: string): string[] {
+  const lines = body.split("\n");
+  const sections = h2Sections(lines, "Log");
+  if (sections.length !== 1) return [];
+
+  const raw = lines.slice(sections[0].start + 1, sections[0].end);
+  while (raw.length && !raw[0].trim()) raw.shift();
+  while (raw.length && !raw.at(-1)?.trim()) raw.pop();
+
+  const facts: string[] = [];
+  for (let index = 0; index < raw.length;) {
+    const marker = /^- \d{4}-\d{2}-\d{2}:(?: (.*))?$/.exec(raw[index]);
+    if (!marker) return [];
+
+    if (marker[1] !== undefined) {
+      facts.push(marker[1]);
+      index++;
+      if (index < raw.length && /^  /.test(raw[index])) return [];
+      continue;
+    }
+
+    index++;
+    const continuation: string[] = [];
+    while (index < raw.length && !/^- \d{4}-\d{2}-\d{2}:/.test(raw[index])) {
+      if (!/^  /.test(raw[index])) return [];
+      continuation.push(raw[index].slice(2));
+      index++;
+    }
+    if (!continuation.length) return [];
+    facts.push(continuation.join("\n"));
+  }
+  return facts;
+}
+
+/**
+ * Уже ли новый факт равен одной структурной записи карточки. Подстрока не считается
+ * дублем: сверяем только всю Compiled Truth или всю однозначно разобранную запись Log.
+ */
 export function bodyContains(existingBody: string, incoming: string): boolean {
-  const a = norm(existingBody);
-  const b = norm(incoming);
-  return b.length === 0 || a.includes(b);
+  const wanted = norm(incoming);
+  if (!wanted) return true;
+  return [compiledTruth(existingBody), ...logFacts(existingBody)].some(
+    (fact) => norm(fact) === wanted,
+  );
 }
 
 interface H2Section {
