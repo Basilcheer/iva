@@ -161,7 +161,17 @@ Default model is deepseek-v4-pro, 131k context. On Go it runs about $14–15/mo 
 ## What's New
 
 <details>
-<summary><b>v0.3.20 · 14.08.2026 — expand the latest releases</b></summary>
+<summary><b>v0.3.21 · 15.08.2026 — expand the latest releases</b></summary>
+
+### 15.08.2026
+
+#### v0.3.21
+
+- A stuck turn can be stopped: the Stop button works through the engine's public interface, long turns no longer die on a timeout, and the bot answers /start.
+- Memory search is 15× faster — the index is built once and updated only on change; the nightly pass processes only the cards that changed.
+- A typo in `MODEL_PROVIDER` no longer borrows another provider's config silently: the agent refuses with the four accepted names, and every repair path leads to the fix. Shipped as a port of contributor PR #171.
+- Re-running the installer is cheap: finished stages are skipped, any failure rolls back on every exit path, secrets never land in /tmp, your edits are never lost.
+- The description of an incoming photo now passes the injection screen — text on an image no longer reaches the agent as an instruction.
 
 ### 14.08.2026
 
@@ -176,20 +186,6 @@ Default model is deepseek-v4-pro, 131k context. On Go it runs about $14–15/mo 
 #### v0.3.19
 
 - The "Building Iva" spinner no longer sticks forever after a Telegram update. The final "✅ Iva updated" now arrives from the bridge, after the restart. A failed message edit is logged and resent as a new message. A false "✅" cannot happen: the bridge stays silent until the installation has settled.
-
-### 11.08.2026
-
-#### v0.3.18
-
-- The nightly memory care is now called Brain. The update renames the systemd units on a live install by itself. An interrupted update never leaves your install without the nightly job.
-- Web content now passes the inbound filter. Pages and search results always arrive; a suspected injection carries a warning. The detector reads English, Russian and Uzbek. Telegram filtering did not change.
-- The docs now match the code: all four card operations, local-first checks instead of CI, and an honest security page.
-
-#### v0.3.17
-
-- Nothing Iva sends to Telegram goes around the secret filter any more. Service notices used to slip past it, so a key printed by a failed provider call or by `iva doctor` could reach your chat in full; the filter now sits on every outgoing call and knows the key formats providers actually issue, including credentials hidden inside a URL.
-- An update no longer fails because a port was taken: the health check moves on to the next one instead of dying on a port someone else grabbed a moment earlier.
-- Every write to your data goes through one tested implementation, so a server killed mid-write leaves neither half a card nor a stuck lock behind.
 
 </details>
 
