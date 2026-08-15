@@ -215,14 +215,14 @@ function logFacts(body: string): string[] {
     if (marker[1] !== undefined) {
       facts.push(marker[1]);
       index++;
-      if (index < raw.length && /^  /.test(raw[index])) return [];
+      if (index < raw.length && /^ {2}/.test(raw[index])) return [];
       continue;
     }
 
     index++;
     const continuation: string[] = [];
     while (index < raw.length && !/^- \d{4}-\d{2}-\d{2}:/.test(raw[index])) {
-      if (!/^  /.test(raw[index])) return [];
+      if (!/^ {2}/.test(raw[index])) return [];
       continuation.push(raw[index].slice(2));
       index++;
     }
