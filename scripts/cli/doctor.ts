@@ -158,7 +158,7 @@ export function createDoctorCommand(
         .toLowerCase();
       if (memoryMode === "hybrid" && !hasEmbeddingSource(env)) {
         warn(
-          "memory_search: MEMORY_SEARCH_MODE=hybrid but no JINA_API_KEY/DEEPINFRA_API_KEY — falls back to BM25",
+          "memory_search: MEMORY_SEARCH_MODE=hybrid but no JINA_API_KEY/DEEPINFRA_API_KEY/MEMORY_EMBED_URL — falls back to BM25",
         );
         warnN++;
       } else {

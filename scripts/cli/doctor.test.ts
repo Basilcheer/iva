@@ -152,7 +152,7 @@ test("doctor warns when hybrid memory search has no embedding source", async (t)
     [
       [
         "warn",
-        "memory_search: MEMORY_SEARCH_MODE=hybrid but no JINA_API_KEY/DEEPINFRA_API_KEY — falls back to BM25",
+        "memory_search: MEMORY_SEARCH_MODE=hybrid but no JINA_API_KEY/DEEPINFRA_API_KEY/MEMORY_EMBED_URL — falls back to BM25",
       ],
     ],
   );

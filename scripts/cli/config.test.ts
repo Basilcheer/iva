@@ -457,6 +457,9 @@ test("the setup wizard still short-circuits on a complete configuration", async 
   assert.doesNotMatch(output, /MODEL_PROVIDER is invalid/u);
 });
 
+// Это полный прогон реального процесса мастера, а не только резолвера.
+// OpenCode выбран: его и Deepgram проверки пропускают сбой сети.
+// Проверки Ollama и OpenRouter без сети зациклили бы мастер.
 test("the setup wizard writes grep without leaking host secrets", async (t) => {
   const hostSecrets = {
     TAVILY_API_KEY: "host-only-tavily-secret",
@@ -477,13 +480,30 @@ test("the setup wizard writes grep without leaking host secrets", async (t) => {
     t,
     "invalid",
     /Ready — settings validated for apply/u,
-    ["2", "test-key", "", "", "", "", "", "y", "", "", "", "", "", ""],
+    [
+      "2", // Provider (1/2/3/4) -> OpenCode
+      "test-key", // Paste the OpenCode API key
+      "", // Model number -> default (deepseek-v4-pro)
+      "", // Paste the Deepgram API key -> keep fixture dg
+      "", // Recognition language (multi = auto ru/uz/en) -> default (multi)
+      "", // Search provider (number) -> default (tavily)
+      "", // tavily API key -> skip
+      "y", // Enable hybrid memory?
+      "", // Embedding provider (number) -> default (jina)
+      "", // jina API key -> empty
+      "", // Paste the Bot token -> keep fixture tg
+      "", // Timezone (IANA, e.g. Asia/Almaty, Asia/Tashkent, Europe/Berlin) -> default (Asia/Almaty)
+      "", // Vault directory (memory + git backup) -> default (vault)
+      "", // Local eve-server port -> default (fixture IVA_PORT)
+    ],
   );
+  assert.ok(existsSync(candidate), output);
   const candidateText = readFileSync(candidate, "utf8");
 
   assert.equal(
     /^MEMORY_SEARCH_MODE=.*$/mu.exec(candidateText)?.[0],
     "MEMORY_SEARCH_MODE=grep",
+    output,
   );
   for (const secret of Object.values(hostSecrets)) {
     assert.equal(candidateText.includes(secret), false);
