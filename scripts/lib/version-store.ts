@@ -228,10 +228,15 @@ export function createVersionStore(home: string) {
     rmSync(flip, { recursive: true, force: true });
     symlinkSync(dir, flip);
     try {
-      // rename() replaces a symlink atomically; anything else there is not ours to keep.
+      // rename() replaces the symlink atomically. A different filesystem object
+      // is foreign state: refuse it and leave manual repair to the operator.
       const link = layout.current;
-      if (existsSync(link) && !lstatSync(link).isSymbolicLink())
-        rmSync(link, { recursive: true, force: true });
+      try {
+        if (!lstatSync(link).isSymbolicLink())
+          throw new Error(`current path is not a symlink: ${link}`);
+      } catch (caught) {
+        if ((caught as NodeJS.ErrnoException).code !== "ENOENT") throw caught;
+      }
       renameSync(flip, link);
     } catch (error) {
       rmSync(flip, { recursive: true, force: true });

@@ -225,16 +225,20 @@ test("a missing, dangling or foreign current link is healed onto the newest vers
   assert.equal(store.currentName(), null);
   assert.equal(store.heal(), "0.3.15-bbbbbbbbbbbb");
 
-  // A real directory left where the link belongs is replaced, not merged into.
+  // A real directory at the reserved path is foreign state. Refuse it and keep
+  // every byte for manual repair instead of guessing that it is safe to delete.
   rmSync(layout.current, { force: true });
   mkdirSync(layout.current);
   writeFileSync(join(layout.current, "junk"), "junk");
-  store.activate("0.3.14-aaaaaaaaaaaa");
-  assert.equal(store.currentName(), "0.3.14-aaaaaaaaaaaa");
-  assert.equal(lstatSync(layout.current).isSymbolicLink(), true);
+  assert.throws(
+    () => store.activate("0.3.14-aaaaaaaaaaaa"),
+    /current.*not a symlink/u,
+  );
+  assert.equal(lstatSync(layout.current).isDirectory(), true);
+  assert.equal(readFileSync(join(layout.current, "junk"), "utf8"), "junk");
 
   // Nothing to heal onto: report it instead of guessing.
-  rmSync(layout.current, { force: true });
+  rmSync(layout.current, { recursive: true, force: true });
   rmSync(layout.versions, { recursive: true, force: true });
   assert.equal(store.heal(), null);
 });
