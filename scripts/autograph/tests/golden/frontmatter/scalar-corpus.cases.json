@@ -1,0 +1,36 @@
+{
+  "scalars": [
+    "",
+    "plain",
+    "00",
+    "2026-08-15",
+    "true",
+    "null",
+    "ACME, Inc.",
+    "[vip]",
+    "O'Brien",
+    "Ива — 東京",
+    "He said \"yes\"",
+    "C:\\vault\\cards",
+    "line one\n---\nline two",
+    " leading and trailing "
+  ],
+  "legacy_single_quoted": [
+    { "encoded": "'O''Brien'", "decoded": "O'Brien" },
+    { "encoded": "'Ива, [vip]'", "decoded": "Ива, [vip]" },
+    { "encoded": "'can''t ''lose'' data'", "decoded": "can't 'lose' data" }
+  ],
+  "garbage": [
+    "[\"unterminated]",
+    "['unterminated]",
+    "[a, b",
+    "\"unterminated",
+    "'unterminated"
+  ],
+  "controlled_errors": [
+    "[\"unterminated]",
+    "['unterminated]",
+    "\"unterminated",
+    "'unterminated"
+  ]
+}

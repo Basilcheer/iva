@@ -422,8 +422,8 @@ def main():
         test("walk_vault ignores .obsidian", len(files2) == len(VAULT_FILES))
 
         # 1.14 write_frontmatter + format_field
-        test("format_field list", format_field('tags', ['a', 'b']) == 'tags: [a, b]')
-        test("format_field string", format_field('type', 'note') == 'type: note')
+        test("format_field list", format_field('tags', ['a', 'b']) == 'tags: ["a","b"]')
+        test("format_field string", format_field('type', 'note') == 'type: "note"')
         test("format_field int", format_field('count', 42) == 'count: 42')
         test("format_field float", format_field('relevance', 0.85) == 'relevance: 0.85')
 
@@ -552,7 +552,7 @@ def main():
         rebuilt_s = write_frontmatter({'description': 'NEW'}, orig_s)
         test("single-space fold rewrite: no stale continuation",
              'line one' not in rebuilt_s and 'line two' not in rebuilt_s
-             and 'description: NEW' in rebuilt_s and 'status: active' in rebuilt_s,
+             and 'description: "NEW"' in rebuilt_s and 'status: active' in rebuilt_s,
              f"got: {rebuilt_s!r}")
 
         # 1.15e blank/comment lines inside a replaced folded block must not
@@ -565,7 +565,7 @@ def main():
         test("fold rewrite after blank/comment: no stale tail",
              'first paragraph' not in rebuilt_p and 'second paragraph' not in rebuilt_p
              and 'paragraph break' not in rebuilt_p
-             and 'description: new' in rebuilt_p and 'status: active' in rebuilt_p,
+             and 'description: "new"' in rebuilt_p and 'status: active' in rebuilt_p,
              f"got: {rebuilt_p!r}")
 
         # The bounded-memory cleaner is the first nightly step. It must share the
@@ -1058,8 +1058,9 @@ def main():
         code, out, err = run([py, str(SCRIPTS_DIR / 'enforce.py'),
                               str(ctrl_vault), str(ctrl_schema), '--apply'])
         remapped = (ctrl_vault / 'old.md').read_text(encoding="utf-8")
+        remapped_fm, _, _ = parse_frontmatter(remapped)
         test("enforce remaps superseded when NOT in enum",
-             'status: superseded' not in remapped and 'status: active' in remapped,
+             remapped_fm.get('status') == 'active',
              remapped[:200])
 
         # enforce must never read giant cards whole. A sparse file keeps the
@@ -1890,9 +1891,9 @@ def main():
              result_q == 'title: "He said \\"hello\\""',
              f"got: {result_q}")
 
-        # 7.8 format_field safe string — no escaping
-        test("format_field no escape for safe string",
-             format_field('type', 'note') == 'type: note')
+        # 7.8 every new string stays a string in typed YAML readers
+        test("format_field quotes safe string",
+             format_field('type', 'note') == 'type: "note"')
 
         # 7.9 extract_wikilinks strips #anchor
         anchor_links = extract_wikilinks("See [[target#heading]] and [[other#sec|display]]")
@@ -1999,11 +2000,11 @@ def main():
         test("dedup merge preserves list fields",
              merged_fm.get('tags') == ['base', 'extra'],
              f"got: {merged_fm.get('tags')}")
-        test("dedup merge uses multiline serializer",
-             'description: >-' in merged_content,
+        test("dedup merge JSON-quotes changed string",
+             f'description: {json.dumps(long_desc)}' in merged_content,
              f"got: {merged_content}")
         test("dedup merge keeps original field order",
-             merged_content.find('type: note') < merged_content.find('tags: [base, extra]') < merged_content.find('description: >-'),
+             merged_content.find('type: note') < merged_content.find('tags: ["base","extra"]') < merged_content.find(f'description: {json.dumps(long_desc)}'),
              f"got: {merged_content}")
         test("dedup merge appends unique body sections",
              '## Imported Section' in merged_body,

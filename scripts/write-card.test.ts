@@ -274,7 +274,7 @@ test("однострочные поля не пропускают markdown-ст�
     tags: ["Foo Bar", " foo-bar ", "NOTE"],
   });
   assert.equal(result.ok, true);
-  assert.match(read(result.file), /tags: \[foo-bar, note\]/);
+  assert.match(read(result.file), /tags: \["foo-bar","note"\]/);
 });
 
 test("tags и domain квотируются, если содержат YAML-спецсимволы", async () => {
@@ -289,7 +289,7 @@ test("tags и domain квотируются, если содержат YAML-сп
   assert.equal(res.ok, true, JSON.stringify(res));
   const out = read(res.file);
   // Пробелы в теге схлопываются в дефис, но двоеточие остаётся — элемент обязан быть в кавычках.
-  assert.ok(out.includes('tags: ["a:-b", plain]'), out);
+  assert.ok(out.includes('tags: ["a:-b","plain"]'), out);
   assert.ok(out.includes('domain: "work: personal"'), out);
 });
 
@@ -518,7 +518,10 @@ test("ADD отбрасывает шумовой history_entry один раз, �
     assert.doesNotMatch(before, /history_entry:/);
     assert.doesNotMatch(before, /rewrite vault/);
     assert.match(before, /# Шумовой history entry на новой карточке/);
-    assert.match(before, /description: Идея должна сохраниться ровно один раз/);
+    assert.match(
+      before,
+      /description: "Идея должна сохраниться ровно один раз"/,
+    );
     assert.match(before, /Полезная истина остается в теле карточки\./);
 
     assert.equal(warnings.length, 1);
@@ -1532,7 +1535,7 @@ test("реплей SUPERSEDE через полночь остаётся noop, а
   };
   const replaced = mergeCard(supersede);
   assert.equal(replaced.action, "replaced");
-  assert.match(replaced.content, /^updated: 2026-08-07$/m);
+  assert.match(replaced.content, /^updated: "2026-08-07"$/m);
 
   // Тот же вызов, повторённый на следующие сутки: единственное отличие - сегодняшний
   // `updated:`, и переписывать ради него карточку нельзя.

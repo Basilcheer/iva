@@ -22,6 +22,11 @@ export interface ParsedFrontmatter {
   lines: string[];
 }
 
+/** Ожидаемая ошибка повреждённого frontmatter, которую caller может обработать. */
+export class FrontmatterParseError extends Error {
+  override readonly name = "FrontmatterParseError";
+}
+
 export function parseFrontmatter(content: string): ParsedFrontmatter {
   const { frontmatter, body } = splitCard(content);
   if (frontmatter === null) return { fields: null, body, lines: [] };
@@ -126,9 +131,10 @@ export function parseFrontmatter(content: string): ParsedFrontmatter {
     if (val.startsWith("[") && val.endsWith("]")) {
       // Квото-осознанный сплит: formatItem пишет `["a, b", c]` — наивный split(",")
       // разорвал бы квотированный элемент и сломал round-trip.
-      fields[key] = splitFlowItems(val.slice(1, -1))
-        .map((x) => unquote(x.trim()))
-        .filter((x) => x.length > 0);
+      const inner = val.slice(1, -1);
+      fields[key] = inner.trim()
+        ? splitFlowItems(inner).map((x) => unquote(x.trim()))
+        : [];
     } else {
       fields[key] = unquote(val);
     }
@@ -152,6 +158,8 @@ function splitFlowItems(inner: string): string[] {
       cur += ch;
       if (ch === "\\" && quote === '"' && i + 1 < inner.length) {
         cur += inner[++i]; // экранированный символ внутри двойных кавычек
+      } else if (ch === "'" && quote === "'" && inner[i + 1] === "'") {
+        cur += inner[++i]; // YAML single quote escapes an apostrophe by doubling it
       } else if (ch === quote) {
         quote = null;
       }
@@ -165,65 +173,80 @@ function splitFlowItems(inner: string): string[] {
       cur += ch;
     }
   }
-  if (cur.trim().length) out.push(cur);
+  if (quote) {
+    throw new FrontmatterParseError("unterminated quote in frontmatter flow list");
+  }
+  if (cur.trim().length || out.length) out.push(cur);
   return out;
 }
 
 function unquote(s: string): string {
-  if (
-    s.length >= 2 &&
-    ((s.startsWith('"') && s.endsWith('"')) ||
-      (s.startsWith("'") && s.endsWith("'")))
-  ) {
-    if (s.startsWith('"')) {
-      try {
-        const parsed: unknown = JSON.parse(s);
-        if (typeof parsed === "string") return parsed;
-      } catch {
-        /* старый повреждённый скаляр разбираем прежним best-effort путём ниже */
-      }
+  if (s.startsWith('"')) {
+    if (s.length < 2 || !s.endsWith('"')) {
+      throw new FrontmatterParseError(
+        "unterminated double-quoted frontmatter scalar",
+      );
+    }
+    try {
+      const parsed: unknown = JSON.parse(s);
+      if (typeof parsed === "string") return parsed;
+    } catch (error) {
+      throw new FrontmatterParseError(
+        `invalid JSON-quoted frontmatter scalar: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    throw new FrontmatterParseError(
+      "JSON-quoted frontmatter scalar is not a string",
+    );
+  }
+  if (s.startsWith("'")) {
+    if (s.length < 2 || !s.endsWith("'")) {
+      throw new FrontmatterParseError(
+        "unterminated single-quoted frontmatter scalar",
+      );
     }
     const inner = s.slice(1, -1);
-    return s.startsWith('"')
-      ? inner.replace(/\\"/g, '"').replace(/\\\\/g, "\\")
-      : inner;
+    let decoded = "";
+    for (let index = 0; index < inner.length; index++) {
+      if (inner[index] !== "'") {
+        decoded += inner[index];
+        continue;
+      }
+      if (inner[index + 1] !== "'") {
+        throw new FrontmatterParseError(
+          "single quote inside frontmatter scalar must be doubled",
+        );
+      }
+      decoded += "'";
+      index++;
+    }
+    return decoded;
   }
   return s;
 }
 
-// Символы, из-за которых голый скаляр перестаёт быть скаляром (или меняет смысл) в YAML.
-const YAML_SPECIAL = /[:#[\]{}"',|>!&*?\n\r\t]/;
-// Голые скаляры, которые PyYAML (autograph) прочитает как bool/null, а не как строку.
-const YAML_AMBIGUOUS = /^(?:true|false|yes|no|on|off|null|~)$/i;
-
-function needsQuote(s: string): boolean {
-  if (s === "") return false;
-  if (YAML_SPECIAL.test(s)) return true;
-  if (s !== s.trim()) return true;
-  if (/^[-?@`%]/.test(s)) return true;
-  if (YAML_AMBIGUOUS.test(s)) return true;
-  return false;
-}
-
-/** Скаляр для flow-списка: `[work, "a: b"]` — элементы тоже квотируются при нужде. */
+/** Новый string всегда JSON-quoted: тип не меняется в любом YAML-reader. */
 export function formatItem(v: string): string {
-  const s = String(v);
-  return needsQuote(s) || s.includes(",") || s.includes(" ")
-    ? JSON.stringify(s)
-    : s;
+  return JSON.stringify(String(v));
 }
 
 export function formatField(key: string, val: FmValue): string {
-  if (Array.isArray(val)) return `${key}: [${val.map(formatItem).join(", ")}]`;
-  const s = String(val);
-  if (s === "") return `${key}:`;
-  if (s.includes("\n")) {
-    return `${key}: |-\n${s
-      .split("\n")
-      .map((line) => `  ${line}`)
-      .join("\n")}`;
+  if (Array.isArray(val)) {
+    return `${key}: ${JSON.stringify(val.map((item) => String(item)))}`;
   }
-  return needsQuote(s) ? `${key}: ${JSON.stringify(s)}` : `${key}: ${s}`;
+  return `${key}: ${formatItem(String(val))}`;
+}
+
+function valuesEqual(left: FmValue | undefined, right: FmValue): boolean {
+  if (Array.isArray(left) || Array.isArray(right)) {
+    return (
+      Array.isArray(left) &&
+      Array.isArray(right) &&
+      left.length === right.length &&
+      left.every((value, index) => value === right[index])
+    );
+  }
+  return left === right;
 }
 
 /**
@@ -236,6 +259,9 @@ export function writeFrontmatter(
   fields: FmFields,
   originalLines: string[],
 ): string {
+  const originalFields = originalLines.length
+    ? parseFrontmatter(`---\n${originalLines.join("\n")}\n---\n`).fields
+    : null;
   const written = new Set<string>();
   const out: string[] = [];
   let skipContinuation = false;
@@ -262,16 +288,11 @@ export function writeFrontmatter(
     const valPart = stripped.slice(colon + 1).trim();
     written.add(key);
     if (Object.prototype.hasOwnProperty.call(fields, key)) {
-      out.push(formatField(key, fields[key]));
+      const unchanged = valuesEqual(originalFields?.[key], fields[key]);
+      out.push(unchanged ? line : formatField(key, fields[key]));
       // '' покрывает блочные списки и pending-значения: их отступные строки тоже
       // заменяются целиком.
-      if (
-        valPart === ">-" ||
-        valPart === ">" ||
-        valPart === "|-" ||
-        valPart === "|" ||
-        valPart === ""
-      ) {
+      if (!unchanged && [">-", ">", "|-", "|", ""].includes(valPart)) {
         skipContinuation = true;
       }
     } else {
