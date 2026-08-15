@@ -17,6 +17,7 @@ Safety:
 """
 
 import argparse
+import os
 import re
 import sys
 import json
@@ -452,10 +453,113 @@ def redirect_links(vault_dir: Path, old_paths: list[str], canonical: str) -> int
     return count
 
 
+class RecoveryError(RuntimeError):
+    """The exact pre-thinning card could not be confirmed in recovery storage."""
+
+
+def _fsync_directory(directory: Path, fsync_impl) -> None:
+    flags = os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0)
+    fd = os.open(directory, flags)
+    try:
+        fsync_impl(fd)
+    finally:
+        os.close(fd)
+
+
+def _durable_directory_chain(
+    directory: Path, boundary: Path, fsync_impl
+) -> None:
+    """Create and fsync every directory entry from boundary through directory."""
+    try:
+        relative = directory.relative_to(boundary)
+    except ValueError as error:
+        raise RecoveryError(
+            f'recovery directory escapes vault boundary: {directory}'
+        ) from error
+
+    parent = boundary
+    for part in relative.parts:
+        child = parent / part
+        child.mkdir(exist_ok=True)
+        # Persist both the new directory inode and its entry in the parent.
+        _fsync_directory(child, fsync_impl)
+        _fsync_directory(parent, fsync_impl)
+        parent = child
+
+
+def _recovery_name(base: Path, counter: int) -> Path:
+    if counter == 0:
+        return base
+    return base.with_name(f'{base.stem}.recovery-{counter}{base.suffix}')
+
+
+def _preserve_before_thinning(
+    source: Path,
+    relative_path: Path,
+    trash_dir: Path,
+    vault_dir: Path,
+    link_impl,
+    fsync_impl,
+) -> Path:
+    """Durably hard-link the current source before its live name can be replaced."""
+    destination_base = trash_dir / relative_path
+
+    # Flush the inode that the recovery hard link will retain.
+    with source.open('rb') as source_file:
+        source_bytes = source_file.read()
+        fsync_impl(source_file.fileno())
+
+    _durable_directory_chain(destination_base.parent, vault_dir, fsync_impl)
+
+    counter = 0
+    while True:
+        destination = _recovery_name(destination_base, counter)
+        if os.path.lexists(destination):
+            try:
+                # A retry after failure-before-replace reuses its confirmed exact copy.
+                if destination.is_file() and destination.read_bytes() == source_bytes:
+                    _fsync_directory(destination.parent, fsync_impl)
+                    return destination
+            except OSError:
+                pass
+            counter += 1
+            continue
+        try:
+            link_impl(source, destination)
+        except FileExistsError:
+            continue  # another writer won the race; inspect that path on the next pass
+        break
+
+    try:
+        same_inode = source.samefile(destination)
+        exact_bytes = destination.read_bytes() == source_bytes
+    except OSError as error:
+        raise RecoveryError(
+            f'cannot verify recovery copy {destination}: {error}'
+        ) from error
+    if not same_inode or not exact_bytes:
+        raise RecoveryError(f'recovery copy verification failed: {destination}')
+
+    # The directory entry must be durable before atomic replacement of the live name.
+    _fsync_directory(destination.parent, fsync_impl)
+    return destination
+
+
 def thin_crm_overlay(
-    vault_dir: Path, crm_path: str, canonical: str, schema: dict | None = None
+    vault_dir: Path,
+    crm_path: str,
+    canonical: str,
+    schema: dict | None = None,
+    *,
+    trash_dir: Path | None = None,
+    link_impl=None,
+    fsync_impl=None,
+    write_impl=None,
 ) -> bool:
-    """Replace a CRM duplicate body with a compact status overlay."""
+    """Replace a CRM body only after its exact source is durably recoverable."""
+    relative_path = Path(crm_path)
+    if relative_path.is_absolute() or '..' in relative_path.parts:
+        raise RecoveryError(f'CRM path must stay inside the vault: {crm_path}')
     full = vault_dir / crm_path
     if not full.exists():
         return False
@@ -483,7 +587,18 @@ def thin_crm_overlay(
     new_content = f"---\n{new_fm}\n---\n{new_body}"
     if new_content == content:
         return False
-    write_card(full, new_content)
+    recovery_root = trash_dir or (
+        vault_dir / '.trash' / f"dedup-{datetime.now().strftime('%Y-%m-%d')}"
+    )
+    _preserve_before_thinning(
+        full,
+        relative_path,
+        recovery_root,
+        vault_dir,
+        link_impl or os.link,
+        fsync_impl or os.fsync,
+    )
+    (write_impl or write_card)(full, new_content)
     return True
 
 
@@ -558,7 +673,13 @@ def apply_manifest(
                     continue
                 changed = 0
                 for crm_path in crm_paths:
-                    if thin_crm_overlay(vault_dir, crm_path, canonical, schema):
+                    if thin_crm_overlay(
+                        vault_dir,
+                        crm_path,
+                        canonical,
+                        schema,
+                        trash_dir=trash_dir,
+                    ):
                         changed += 1
                 applied['thinned'] += changed
                 log_entry = {
