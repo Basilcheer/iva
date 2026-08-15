@@ -339,6 +339,35 @@ test("garbage collection keeps the active version and the rollback target", (t) 
   assert.equal(store.currentName(), "0.3.13-333333333333");
 });
 
+test("garbage collection preserves the settled rollback regardless of mtime", (t) => {
+  const store = createVersionStore(home(t));
+  const rollback = "0.3.12-222222222222";
+  const unrelated = "0.3.13-333333333333";
+  const current = "0.3.14-444444444444";
+  install(store, rollback);
+  install(store, unrelated);
+  install(store, current);
+  store.activate(rollback);
+  store.settle(rollback);
+  store.activate(current);
+  store.settle(current);
+  age(join(store.layout.versions, rollback), 10_000);
+  age(join(store.layout.versions, unrelated), 0);
+
+  assert.deepEqual(store.gc(2), [unrelated]);
+  assert.deepEqual(store.list().sort(), [current, rollback].sort());
+  assert.equal(store.currentName(), current);
+  assert.equal(store.settled(), current);
+  assert.equal(store.previousName(), rollback);
+  const state = JSON.parse(
+    readFileSync(join(store.layout.data, "active.json"), "utf8"),
+  ) as Record<string, unknown>;
+  assert.equal(state.schema, "iva-active/v2");
+  assert.equal(state.version, current);
+  assert.equal(state.previous, rollback);
+  assert.match(String(state.settledAt), /^\d{4}-\d{2}-\d{2}T/u);
+});
+
 test("materialize writes an exact commit tree without leaving git state behind", async (t) => {
   const root = home(t);
   const repo = join(root, "repo");

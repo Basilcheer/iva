@@ -27,6 +27,7 @@ const FLIP_PREFIX = ".current.iva-flip-";
 const LEFTOVER = [FLIP_PREFIX, ".probe-"];
 const VERSION_NAME =
   /^(\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?)-([0-9a-f]{12})(?:\+([0-9a-f]{8}))?(?:~(\d+))?$/;
+const VERSION_ORDER = new Intl.Collator("en", { numeric: true }).compare;
 /** What a version borrows from the installation; the rest of `.eve` is a build cache. */
 export const STATE_DIRS = ["data", "vault", ".eve/.workflow-data"];
 /** Where older builds kept the workflow store: linked where one is, never created. */
@@ -140,16 +141,11 @@ export function createVersionStore(home: string) {
     }
   };
 
-  /** Finished versions, newest first. */
+  /** Finished versions in deterministic release order, newest first. */
   function list(): string[] {
     return names()
       .filter((name) => parseVersionName(name) && isComplete(name))
-      .map((name) => ({
-        name,
-        at: statSync(join(layout.versions, name)).mtimeMs,
-      }))
-      .sort((a, b) => b.at - a.at || b.name.localeCompare(a.name))
-      .map((entry) => entry.name);
+      .sort((a, b) => VERSION_ORDER(b, a));
   }
 
   /** The active version; null when the link is missing, dangling or foreign. */
@@ -170,6 +166,15 @@ export function createVersionStore(home: string) {
 
   function previousName(): string | null {
     const active = currentName();
+    const state = activeState();
+    for (const candidate of [state.previous, state.version]) {
+      if (
+        typeof candidate === "string" &&
+        candidate !== active &&
+        isComplete(candidate)
+      )
+        return candidate;
+    }
     return list().find((name) => name !== active) ?? null;
   }
 
@@ -244,20 +249,51 @@ export function createVersionStore(home: string) {
     }
   }
 
+  function activeState(): Record<string, unknown> {
+    return readJson(join(layout.data, SETTLED));
+  }
+
   /** Flipped, migrated, restarted: an update is owed while this and `current` disagree. */
   function settled(): string | null {
-    const name = readJson(join(layout.data, SETTLED)).version;
+    const name = activeState().version;
     return typeof name === "string" ? name : null;
   }
 
-  /** Written last in an update, so an interrupted one is replayed rather than lost. */
-  function settle(name: string): void {
+  /** Commit one served version and retain the last served version as its rollback. */
+  function settle(
+    name: string,
+    options: { readonly cleanupPending?: boolean } = {},
+  ): void {
+    const before = activeState();
+    const previous = [before.version, before.previous].find(
+      (candidate): candidate is string =>
+        typeof candidate === "string" &&
+        candidate !== name &&
+        isComplete(candidate),
+    );
     mkdirSync(layout.data, { recursive: true });
     writeJson(join(layout.data, SETTLED), {
-      schema: "iva-active/v1",
+      schema: "iva-active/v2",
       version: name,
+      ...(previous ? { previous } : {}),
       settledAt: new Date().toISOString(),
+      ...(options.cleanupPending ? { cleanupPending: true } : {}),
     });
+  }
+
+  /** Cleanup is retryable debt after a version has already served and committed. */
+  function cleanupPending(name: string): boolean {
+    const state = activeState();
+    return state.version === name && state.cleanupPending === true;
+  }
+
+  /** Clear only the debt belonging to the still-settled version. */
+  function finishCleanup(name: string): void {
+    const state = activeState();
+    if (state.version !== name)
+      throw new Error(`cleanup state changed from ${name}`);
+    const { cleanupPending: _pending, ...finished } = state;
+    writeJson(join(layout.data, SETTLED), finished);
   }
 
   /**
@@ -266,7 +302,7 @@ export function createVersionStore(home: string) {
    * it started on. A marker written before this field carries no time at all.
    */
   function settledAt(): string | null {
-    const at = readJson(join(layout.data, SETTLED)).settledAt;
+    const at = activeState().settledAt;
     return typeof at === "string" ? at : null;
   }
 
@@ -317,13 +353,20 @@ export function createVersionStore(home: string) {
     return stale;
   }
 
-  /** Keep the active version plus the newest others; disks on these boxes are small. */
+  /** Keep every state reference, then fill the requested count deterministically. */
   function gc(keep: number): string[] {
     const active = currentName();
-    const kept = new Set(active ? [active] : []);
     const finished = list();
+    const state = activeState();
+    const kept = new Set(
+      [active, state.version, state.previous].filter(
+        (name): name is string =>
+          typeof name === "string" && finished.includes(name),
+      ),
+    );
+    const target = Math.max(keep, kept.size, 1);
     for (const name of finished) {
-      if (kept.size >= Math.max(keep, 1)) break;
+      if (kept.size >= target) break;
       kept.add(name);
     }
     const removed = finished.filter((name) => !kept.has(name));
@@ -414,6 +457,8 @@ export function createVersionStore(home: string) {
     activate,
     settled,
     settle,
+    cleanupPending,
+    finishCleanup,
     settledAt,
     liveFailed,
     recordLive,
