@@ -1007,7 +1007,7 @@ export function mergeCard(input: MergeInput): MergeResult {
 
 const LOCK_STALE_MS = 15_000;
 
-/** Лок карточки — файл `<карточка>.lock` рядом с ней. Занятая карточка это внятная
+/** Лок карточки — каталог `<карточка>.lock` рядом с ней. Занятая карточка это внятная
  * ошибка для модели, а не тихая перезапись чужой правки. */
 export function acquireLock(file: string, timeoutMs = 5000): () => void {
   const lock = `${file}.lock`;

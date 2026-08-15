@@ -8,8 +8,8 @@
 // ива своими write-инструментами, получив buildDistillMessage. Так лимит и «не выдумывай»
 // остаются заботой модели, а мост не знает про формат ядра.
 
-import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { writeFileAtomic } from "#lib/fs-atomic.ts";
 
 // Шесть тем ядра памяти (см. план: обращение · занятие · город/ритм · люди/контекст ·
 // приоритеты · антипаттерны). Вопросы-приглашения к свободному тексту, оба языка рядом —
@@ -98,9 +98,8 @@ export async function saveInterview(
     })
     .join("\n\n");
   const md = `# Core interview — ${stamp}\n\n${body}\n`;
-  await mkdir(vaultDir, { recursive: true });
   const file = join(vaultDir, "core-interview.md");
-  await writeFile(file, md, "utf8");
+  await writeFileAtomic(file, md);
   return file;
 }
 

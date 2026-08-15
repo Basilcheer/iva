@@ -2,6 +2,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  chmodSync,
   mkdtempSync,
   writeFileSync,
   readFileSync,
@@ -337,6 +338,19 @@ test("gws.gwsjson: bad JSON и неверная форма отвергаютс�
   assert.ok(existsSync(path), "client_secret.json записан");
   assert.equal(statSync(path).mode & 0o777, 0o600, "права 0600");
   assert.equal(readFileSync(path, "utf8"), secret);
+
+  chmodSync(path, 0o644);
+  const replacement = JSON.stringify({
+    installed: { client_id: "replacement.apps.googleusercontent.com" },
+  });
+  st.awaitText = { kind: "gwsjson", secret: true, data: {} };
+  await gws.texts?.gwsjson(replacement, fakeMsg(5), st, h.ctx);
+  assert.equal(readFileSync(path, "utf8"), replacement);
+  assert.equal(
+    statSync(path).mode & 0o777,
+    0o600,
+    "replacement restores strict mode before publishing",
+  );
 
   process.env.HOME = prevHome;
 });

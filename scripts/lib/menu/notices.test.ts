@@ -175,7 +175,7 @@ test("junk callback arguments change nothing and throw nothing", async () => {
   assert.deepEqual(redrawn, [], "a junk tap redraws nothing");
 });
 
-test("a settings file that is not an object cannot break the screen", async () => {
+test("corrupt settings render safely but a toggle refuses to replace their bytes", async () => {
   for (const corrupt of ["", "{ not json", "null", "[]", '"ru"', "42"]) {
     writeFileSync(settingsPath, corrupt);
     const view = screen.render({ page: 0 }, makeContext("en"));
@@ -183,7 +183,13 @@ test("a settings file that is not an object cannot break the screen", async () =
       "○ Memory reports",
       "iva_menu:ntc:set:rep:1",
     ]);
-    await screen.on("set", ["rep", "1"], { page: 0 }, makeContext("en"));
-    assert.deepEqual(readSettingsFile(), { memoryReports: { enabled: true } });
+    await assert.rejects(
+      screen.on("set", ["rep", "1"], { page: 0 }, makeContext("en")),
+      (error: unknown) =>
+        (error as { code?: unknown; state?: unknown }).code ===
+          "ESETTINGS_WRITE_REFUSED" &&
+        (error as { state?: unknown }).state === "corrupt",
+    );
+    assert.equal(readFileSync(settingsPath, "utf8"), corrupt);
   }
 });

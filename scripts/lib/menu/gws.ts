@@ -7,10 +7,11 @@
 // client_secret.json — секрет: принимаем текстом только в личке (сообщение удаляет движок,
 // secret:true), содержимое НЕ печатаем/не логируем; пишем файл 0600.
 import { existsSync } from "node:fs";
-import { mkdir, writeFile, chmod, rm } from "node:fs/promises";
+import { rm } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { join } from "node:path";
 import { homedir } from "node:os";
+import { writeFileAtomic } from "#lib/fs-atomic.ts";
 import {
   startAuth,
   relayCode,
@@ -342,9 +343,7 @@ export default {
       }
       st.awaitText = null;
       try {
-        await mkdir(CONFIG_DIR, { recursive: true });
-        await writeFile(SECRET_PATH, raw, { encoding: "utf8", mode: 0o600 });
-        await chmod(SECRET_PATH, 0o600); // mode игнорируется, если файл уже существовал
+        await writeFileAtomic(SECRET_PATH, raw, { mode: 0o600 });
       } catch (error) {
         const message = errorMessage(error);
         return ctx.flows.screen(
