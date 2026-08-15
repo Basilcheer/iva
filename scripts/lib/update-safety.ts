@@ -5,6 +5,7 @@ import {
   copyFileSync,
   existsSync,
   mkdirSync,
+  mkdtempSync,
   readFileSync,
   readdirSync,
   renameSync,
@@ -14,6 +15,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join, resolve, sep } from "node:path";
+import { tmpdir } from "node:os";
 import {
   archiveInvalidCustomLayer,
   captureCustomLayer,
@@ -284,6 +286,7 @@ export function createUpdateTransaction({
   let backupRef = "";
   let stashOid = "";
   let recoveryStashOid = "";
+  let recoveryRef = "";
   let snapshotCommitted = false;
   let hadLocalChanges = false;
   let stashApplied = false;
@@ -312,6 +315,29 @@ export function createUpdateTransaction({
       );
     return result.stdout ?? "";
   };
+  const runSnapshotGit = async (
+    args: string[],
+    extraEnv: NodeJS.ProcessEnv,
+  ): Promise<string> => {
+    const result = await runCommand("git", args, {
+      cwd: root,
+      env: {
+        ...commandEnv,
+        GIT_AUTHOR_NAME: "Iva Update Recovery",
+        GIT_AUTHOR_EMAIL: "iva-update@localhost",
+        GIT_COMMITTER_NAME: "Iva Update Recovery",
+        GIT_COMMITTER_EMAIL: "iva-update@localhost",
+        ...extraEnv,
+      },
+      logFile,
+      verbose,
+    });
+    if (result.code !== 0)
+      throw new Error(
+        result.stderr || result.stdout || `git ${args[0]} failed`,
+      );
+    return result.stdout;
+  };
 
   const safeChild = (base: string, ...parts: string[]): string => {
     const basePath = resolve(base);
@@ -328,33 +354,68 @@ export function createUpdateTransaction({
     }
   };
 
-  const recordRecoverySnapshot = async (
+  const verifyRecoverySnapshot = async (
     oid: string,
-    previousStashOid: string,
+    expectedUntrackedTree: string | null,
   ): Promise<string> => {
-    if (!oid || oid === previousStashOid)
-      throw new Error("git stash did not create a new recovery snapshot");
-    const [commitOid, baseOid, indexOid] = await Promise.all([
-      mustGit("rev-parse", "--verify", `${oid}^{commit}`),
-      mustGit("rev-parse", "--verify", `${oid}^1`),
-      mustGit("rev-parse", "--verify", `${oid}^2`),
-    ]);
-    if (commitOid !== oid || baseOid !== originalHead || !indexOid)
+    const [commitOid, baseOid, indexOid, indexTree, snapshotIndexTree] =
+      await Promise.all([
+        mustGit("rev-parse", "--verify", `${oid}^{commit}`),
+        mustGit("rev-parse", "--verify", `${oid}^1`),
+        mustGit("rev-parse", "--verify", `${oid}^2`),
+        mustGit("write-tree"),
+        mustGit("rev-parse", "--verify", `${oid}^2^{tree}`),
+      ]);
+    const worktree = await git("diff", "--quiet", `${oid}^{tree}`, "--");
+    if (worktree.code > 1)
+      throw new Error(
+        worktree.stderr || worktree.stdout || "git diff verification failed",
+      );
+    if (
+      commitOid !== oid ||
+      baseOid !== originalHead ||
+      !indexOid ||
+      indexTree !== snapshotIndexTree ||
+      worktree.code !== 0
+    )
       throw new Error("git stash recovery snapshot is incomplete");
-    if (originalUntracked.length > 0)
-      await mustGit("rev-parse", "--verify", `${oid}^3`);
-    recoveryStashOid = oid;
-    snapshotCommitted = true;
+    if (originalUntracked.length > 0) {
+      const [snapshotUntrackedTree, snapshotUntrackedText] = await Promise.all([
+        mustGit("rev-parse", "--verify", `${oid}^3^{tree}`),
+        mustGit("ls-tree", "-r", "-z", "--name-only", `${oid}^3`),
+      ]);
+      const snapshotUntracked = snapshotUntrackedText
+        .split("\0")
+        .filter(Boolean)
+        .sort();
+      const expectedUntracked = [...originalUntracked].sort();
+      if (
+        !expectedUntrackedTree ||
+        snapshotUntrackedTree !== expectedUntrackedTree ||
+        snapshotUntracked.length !== expectedUntracked.length ||
+        snapshotUntracked.some(
+          (path, index) => path !== expectedUntracked[index],
+        )
+      )
+        throw new Error("git stash recovery snapshot is incomplete");
+    }
     return oid;
   };
 
-  const resolveRecoverySnapshot = async (
+  const commitRecoverySnapshot = (oid: string): void => {
+    recoveryStashOid = oid;
+    snapshotCommitted = true;
+  };
+
+  const resolveNewStashOid = async (
     previousStashOid: string,
   ): Promise<{ oid: string; lookupError: string | null }> => {
     const primary = await git("rev-parse", "--verify", "refs/stash");
     if (primary.code === 0) {
+      if (!primary.stdout || primary.stdout === previousStashOid)
+        throw new Error("git stash did not create a new recovery snapshot");
       return {
-        oid: await recordRecoverySnapshot(primary.stdout, previousStashOid),
+        oid: primary.stdout,
         lookupError: null,
       };
     }
@@ -371,10 +432,89 @@ export function createUpdateTransaction({
           fallback.stderr || fallback.stdout || "stash ref lookup failed",
         ),
       });
-    return {
-      oid: await recordRecoverySnapshot(fallback.stdout, previousStashOid),
-      lookupError,
-    };
+    if (!fallback.stdout || fallback.stdout === previousStashOid)
+      throw new Error("git stash did not create a new recovery snapshot");
+    return { oid: fallback.stdout, lookupError };
+  };
+
+  const createRecoverySnapshot = async (
+    message: string,
+  ): Promise<{ oid: string; untrackedTree: string | null }> => {
+    const trackedSnapshot = await mustGit("stash", "create", message);
+    let worktreeTree: string;
+    let indexCommit: string;
+    if (trackedSnapshot) {
+      [worktreeTree, indexCommit] = await Promise.all([
+        mustGit("rev-parse", "--verify", `${trackedSnapshot}^{tree}`),
+        mustGit("rev-parse", "--verify", `${trackedSnapshot}^2`),
+      ]);
+    } else {
+      worktreeTree = await mustGit(
+        "rev-parse",
+        "--verify",
+        `${originalHead}^{tree}`,
+      );
+      const indexTree = await mustGit("write-tree");
+      indexCommit = await runSnapshotGit(
+        [
+          "commit-tree",
+          indexTree,
+          "-p",
+          originalHead,
+          "-m",
+          `${message} index`,
+        ],
+        {},
+      );
+    }
+    if (originalUntracked.length === 0)
+      return { oid: trackedSnapshot, untrackedTree: null };
+
+    const snapshotDir = mkdtempSync(join(tmpdir(), "iva-update-snapshot-"));
+    const snapshotIndex = join(snapshotDir, "index");
+    const pathspec = join(snapshotDir, "paths");
+    try {
+      writeFileSync(pathspec, `${originalUntracked.join("\0")}\0`, {
+        mode: 0o600,
+      });
+      const indexEnv = {
+        GIT_INDEX_FILE: snapshotIndex,
+        GIT_LITERAL_PATHSPECS: "1",
+      };
+      await runSnapshotGit(["read-tree", "--empty"], indexEnv);
+      await runSnapshotGit(
+        ["add", `--pathspec-from-file=${pathspec}`, "--pathspec-file-nul"],
+        indexEnv,
+      );
+      const untrackedTree = await runSnapshotGit(["write-tree"], indexEnv);
+      const untrackedCommit = await runSnapshotGit(
+        ["commit-tree", untrackedTree, "-m", `${message} untracked`],
+        {},
+      );
+      const oid = await runSnapshotGit(
+        [
+          "commit-tree",
+          worktreeTree,
+          "-p",
+          originalHead,
+          "-p",
+          indexCommit,
+          "-p",
+          untrackedCommit,
+          "-m",
+          message,
+        ],
+        {},
+      );
+      return { oid, untrackedTree };
+    } finally {
+      rmSync(snapshotDir, { recursive: true, force: true });
+    }
+  };
+
+  const requireRecoverySnapshot = (oid = recoveryStashOid): void => {
+    if (!snapshotCommitted || !oid || oid !== recoveryStashOid)
+      throw new Error("a complete recovery snapshot is required");
   };
 
   const unmergedPaths = async (cwd = root): Promise<string[]> => {
@@ -575,16 +715,6 @@ export function createUpdateTransaction({
     const status = await mustGit("status", "--porcelain=v1");
     hadLocalChanges = Boolean(status.trim());
     if (hadLocalChanges) {
-      const previousStash = await git(
-        "rev-parse",
-        "--verify",
-        "--quiet",
-        "refs/stash",
-      );
-      if (previousStash.code !== 0 && previousStash.stderr)
-        throw new Error(previousStash.stderr);
-      const previousStashOid =
-        previousStash.code === 0 ? previousStash.stdout : "";
       const untracked = await mustGit(
         "ls-files",
         "--others",
@@ -593,33 +723,37 @@ export function createUpdateTransaction({
       );
       originalUntracked = untracked.split("\0").filter(Boolean);
       const message = `iva-update-${safeTimestamp()}`;
-      const stashed = await git(
+      const recovery = await createRecoverySnapshot(message);
+      await verifyRecoverySnapshot(recovery.oid, recovery.untrackedTree);
+      recoveryRef = `refs/iva/update-recovery/${safeTimestamp()}-${process.pid}-${recovery.oid}`;
+      await mustGit("update-ref", recoveryRef, recovery.oid);
+      const durableOid = await mustGit("rev-parse", "--verify", recoveryRef);
+      if (durableOid !== recovery.oid)
+        throw new Error("durable recovery ref OID does not match");
+      commitRecoverySnapshot(recovery.oid);
+
+      const stored = await git(
         "stash",
-        "push",
-        "--include-untracked",
+        "store",
         "--message",
         message,
+        recovery.oid,
       );
-      if (stashed.code !== 0) {
-        try {
-          const recovery = await resolveRecoverySnapshot(previousStashOid);
-          await git("stash", "apply", "--index", recovery.oid);
-        } catch {
-          // A real pre-snapshot failure leaves the original tree authoritative. The stash
-          // push error remains the symptom; an older or unreadable stash is never applied.
-        }
+      if (stored.code !== 0)
         throw new Error(
-          stashed.stderr || stashed.stdout || "git stash push failed",
+          stored.stderr || stored.stdout || "git stash store failed",
         );
-      }
 
-      const recovery = await resolveRecoverySnapshot(previousStashOid);
+      requireRecoverySnapshot(recovery.oid);
+      await mustGit("reset", "--hard", originalHead);
+      requireRecoverySnapshot(recovery.oid);
+      removeOriginalUntracked();
+      requireRecoverySnapshot(recovery.oid);
       const reapplied = await git("stash", "apply", "--index", recovery.oid);
       if (reapplied.code !== 0)
         throw new Error(
           reapplied.stderr || "couldn't prepare local customizations",
         );
-      if (recovery.lookupError) throw new Error(recovery.lookupError);
       try {
         const captured = captureCustomLayer({
           root,
@@ -638,18 +772,37 @@ export function createUpdateTransaction({
 
       // Remove only authored paths, then create the smaller restore stash. The exact full
       // stash remains the rollback source until commit, while authored files live in data.
-      if (capturedCustomPaths.length > 0)
+      if (capturedCustomPaths.length > 0) {
+        requireRecoverySnapshot(recovery.oid);
         await resolveConflictsToHead(capturedCustomPaths);
+      }
       const remaining = await mustGit("status", "--porcelain=v1");
       if (remaining.trim()) {
-        await mustGit(
+        requireRecoverySnapshot(recovery.oid);
+        const previousRestoreStash = await git(
+          "rev-parse",
+          "--verify",
+          "--quiet",
+          "refs/stash",
+        );
+        if (previousRestoreStash.code !== 0 && previousRestoreStash.stderr)
+          throw new Error(previousRestoreStash.stderr);
+        const previousRestoreStashOid =
+          previousRestoreStash.code === 0 ? previousRestoreStash.stdout : "";
+        const stashed = await git(
           "stash",
           "push",
           "--include-untracked",
           "--message",
           `${message}-core-patch`,
         );
-        stashOid = await mustGit("rev-parse", "refs/stash");
+        if (stashed.code !== 0)
+          throw new Error(
+            stashed.stderr || stashed.stdout || "git stash push failed",
+          );
+        const restoreStash = await resolveNewStashOid(previousRestoreStashOid);
+        if (restoreStash.lookupError) throw new Error(restoreStash.lookupError);
+        stashOid = restoreStash.oid;
       }
     } else {
       // A clean status proves that HEAD itself is the complete recovery snapshot.
@@ -1184,6 +1337,7 @@ export function createUpdateTransaction({
     if (!preserveStash) {
       await dropExactStash(stashOid);
       await dropExactStash(recoveryStashOid);
+      if (recoveryRef) await git("update-ref", "-d", recoveryRef);
     }
     if (updateBranch) await persistUpdateBranch(git, updateBranch);
     if (backupRef) await git("update-ref", "-d", backupRef);

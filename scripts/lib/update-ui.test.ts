@@ -972,6 +972,7 @@ type ProtectedTreeState = {
   executable: string;
   executableMode: number;
   nestedUntracked: string;
+  literalPathspecUntracked: string;
 };
 
 function gitHex(cwd: string, ...args: string[]): string {
@@ -994,6 +995,7 @@ function prepareProtectedTree(local: string): ProtectedTreeState {
     join(local, "nested/deep/untracked.bin"),
     Buffer.from([0, 1, 2, 10, 255]),
   );
+  writeFileSync(join(local, ":(glob)*"), Buffer.from([255, 10, 3, 0]));
   return protectedTreeState(local);
 }
 
@@ -1015,6 +1017,9 @@ function protectedTreeState(local: string): ProtectedTreeState {
     nestedUntracked: readFileSync(
       join(local, "nested/deep/untracked.bin"),
     ).toString("hex"),
+    literalPathspecUntracked: readFileSync(join(local, ":(glob)*")).toString(
+      "hex",
+    ),
   };
 }
 
@@ -1046,7 +1051,54 @@ function d10Transaction(
   };
 }
 
-test("rollback never resets a dirty tree when stash push fails before a snapshot", async (t) => {
+test("every pre-snapshot command fault leaves the live tree untouched", async (t) => {
+  const faults = [
+    ['[ "$1" = stash ] && [ "$2" = create ]', "tracked snapshot"],
+    ['[ "$1" = read-tree ]', "untracked index init"],
+    ['[ "$1" = add ]', "literal untracked capture"],
+    ['[ "$1" = write-tree ]', "untracked tree write"],
+    ['[ "$1" = commit-tree ]', "snapshot commit"],
+    ['[ "$1" = diff ] && [ "$2" = --quiet ]', "tracked verification"],
+    ['[ "$1" = ls-tree ]', "untracked verification"],
+    [
+      "[ \"$1\" = update-ref ] && printf '%s' \"$2\" | grep -q '^refs/iva/update-recovery/'",
+      "durable ref write",
+    ],
+    [
+      "[ \"$1\" = rev-parse ] && printf '%s' \"$3\" | grep -q '^refs/iva/update-recovery/'",
+      "durable ref verification",
+    ],
+  ] as const;
+
+  for (const [condition, name] of faults) {
+    await t.test(name, async (t) => {
+      const fixture = updateFixture();
+      t.after(() => rmSync(fixture.temp, { recursive: true, force: true }));
+      const before = prepareProtectedTree(fixture.local);
+      const { calls, tx } = d10Transaction(
+        fixture,
+        `if ${condition}; then\n` +
+          "  printf '%s\\n' 'injected pre-snapshot failure' >&2\n" +
+          "  exit 72\n" +
+          "fi\n",
+      );
+
+      await assert.rejects(
+        () => tx.protect(),
+        /injected pre-snapshot failure/u,
+      );
+      await tx.rollback();
+
+      assert.deepEqual(protectedTreeState(fixture.local), before);
+      assert.doesNotMatch(
+        readFileSync(calls, "utf8"),
+        /reset --hard|rebase --abort|stash apply/u,
+      );
+    });
+  }
+});
+
+test("stash push failure rolls back from an already durable snapshot", async (t) => {
   const fixture = updateFixture();
   t.after(() => rmSync(fixture.temp, { recursive: true, force: true }));
   const before = prepareProtectedTree(fixture.local);
@@ -1062,10 +1114,14 @@ test("rollback never resets a dirty tree when stash push fails before a snapshot
   await tx.rollback();
 
   assert.deepEqual(protectedTreeState(fixture.local), before);
-  assert.doesNotMatch(
-    readFileSync(calls, "utf8"),
-    /reset --hard|rebase --abort/u,
+  const commands = readFileSync(calls, "utf8").split("\n");
+  const durableRef = commands.findIndex((command) =>
+    command.startsWith("update-ref refs/iva/update-recovery/"),
   );
+  const firstReset = commands.findIndex((command) =>
+    command.startsWith("reset --hard "),
+  );
+  assert.ok(durableRef >= 0 && durableRef < firstReset);
 });
 
 test("rollback restores an exact tree when stash push reports failure after writing the snapshot", async (t) => {
@@ -1113,8 +1169,62 @@ test("rollback restores the tree when reported stash failure also loses the firs
 
   assert.deepEqual(protectedTreeState(fixture.local), before);
   const commands = readFileSync(calls, "utf8");
-  assert.match(commands, /for-each-ref --format=%\(objectname\) refs\/stash/u);
+  assert.doesNotMatch(
+    commands,
+    /for-each-ref --format=%\(objectname\) refs\/stash/u,
+  );
   assert.doesNotMatch(commands, /stash apply --index refs\/stash/u);
+});
+
+test("combined stash and all OID lookup failures leave the original tree live", async (t) => {
+  const fixture = updateFixture();
+  t.after(() => rmSync(fixture.temp, { recursive: true, force: true }));
+  const before = prepareProtectedTree(fixture.local);
+  const { tx } = d10Transaction(
+    fixture,
+    'if [ "$1" = stash ] && [ "$2" = push ]; then\n' +
+      '  __REAL_GIT__ "$@"\n' +
+      "  code=$?\n" +
+      '  [ "$code" -eq 0 ] || exit "$code"\n' +
+      "  printf '%s\\n' 'injected post-stash failure' >&2\n" +
+      "  exit 79\n" +
+      "fi\n" +
+      'if [ "$1" = rev-parse ] && [ "$2" = --verify ] && [ "$3" = refs/stash ]; then\n' +
+      "  printf '%s\\n' 'injected stash OID failure' >&2\n" +
+      "  exit 80\n" +
+      "fi\n" +
+      'if [ "$1" = for-each-ref ] && [ "$3" = refs/stash ]; then\n' +
+      "  printf '%s\\n' 'injected fallback OID failure' >&2\n" +
+      "  exit 81\n" +
+      "fi\n",
+  );
+
+  await assert.rejects(() => tx.protect(), /injected post-stash failure/u);
+  await tx.rollback();
+
+  assert.deepEqual(protectedTreeState(fixture.local), before);
+});
+
+test("both restore-stash OID lookups may fail after push without losing the full snapshot", async (t) => {
+  const fixture = updateFixture();
+  t.after(() => rmSync(fixture.temp, { recursive: true, force: true }));
+  const before = prepareProtectedTree(fixture.local);
+  const { tx } = d10Transaction(
+    fixture,
+    'if [ "$1" = rev-parse ] && [ "$2" = --verify ] && [ "$3" = refs/stash ]; then\n' +
+      "  printf '%s\\n' 'injected stash OID failure' >&2\n" +
+      "  exit 82\n" +
+      "fi\n" +
+      'if [ "$1" = for-each-ref ] && [ "$3" = refs/stash ]; then\n' +
+      "  printf '%s\\n' 'injected fallback OID failure' >&2\n" +
+      "  exit 83\n" +
+      "fi\n",
+  );
+
+  await assert.rejects(() => tx.protect(), /injected stash OID failure/u);
+  await tx.rollback();
+
+  assert.deepEqual(protectedTreeState(fixture.local), before);
 });
 
 test("stash OID failure leaves staged, unstaged, modes and nested untracked bytes unchanged", async (t) => {
@@ -1146,6 +1256,7 @@ test("a false-success stash push never applies a pre-existing stash", async (t) 
   git(fixture.local, "commit", "-m", "add older stash fixture");
   writeFileSync(join(fixture.local, "older.txt"), "pre-existing stash\n");
   git(fixture.local, "stash", "push", "--message", "older-user-stash");
+  const olderStashOid = git(fixture.local, "rev-parse", "refs/stash");
   const before = prepareProtectedTree(fixture.local);
   const { calls, tx } = d10Transaction(
     fixture,
@@ -1154,12 +1265,106 @@ test("a false-success stash push never applies a pre-existing stash", async (t) 
 
   await assert.rejects(() => tx.protect());
   await tx.rollback();
+  await tx.commit();
 
   assert.deepEqual(protectedTreeState(fixture.local), before);
+  assert.equal(
+    git(fixture.local, "stash", "list", "--format=%H"),
+    olderStashOid,
+  );
+  assert.equal(
+    git(fixture.local, "show", `${olderStashOid}:older.txt`),
+    "pre-existing stash",
+  );
   assert.doesNotMatch(
     readFileSync(calls, "utf8"),
     /stash apply --index refs\/stash/u,
   );
+});
+
+test("the durable unique ref restores a crashed transaction and disappears only on commit", async (t) => {
+  const fixture = updateFixture();
+  t.after(() => rmSync(fixture.temp, { recursive: true, force: true }));
+  const before = prepareProtectedTree(fixture.local);
+  const tx = createUpdateTransaction({
+    root: fixture.local,
+    dataDir: fixture.data,
+    envPath: join(fixture.local, ".env"),
+  });
+
+  await tx.protect();
+  const recovery = git(
+    fixture.local,
+    "for-each-ref",
+    "--format=%(refname) %(objectname)",
+    "refs/iva/update-recovery",
+  );
+  const [ref, oid] = recovery.split(" ");
+  assert.match(ref ?? "", /^refs\/iva\/update-recovery\//u);
+  assert.equal(ref?.endsWith(oid ?? ""), true);
+  assert.equal(git(fixture.local, "rev-parse", "--verify", ref ?? ""), oid);
+
+  git(fixture.local, "stash", "apply", "--index", oid ?? "");
+  assert.deepEqual(protectedTreeState(fixture.local), before);
+  assert.notEqual(
+    git(
+      fixture.local,
+      "for-each-ref",
+      "--format=%(refname)",
+      "refs/iva/update-recovery",
+    ),
+    "",
+  );
+
+  await tx.commit();
+  assert.equal(
+    git(
+      fixture.local,
+      "for-each-ref",
+      "--format=%(refname)",
+      "refs/iva/update-recovery",
+    ),
+    "",
+  );
+});
+
+test("an only-untracked snapshot preserves modes, nested bytes and a literal pathspec", async (t) => {
+  const fixture = updateFixture();
+  t.after(() => rmSync(fixture.temp, { recursive: true, force: true }));
+  mkdirSync(join(fixture.local, "only/deep"), { recursive: true });
+  writeFileSync(
+    join(fixture.local, "only/deep/data.bin"),
+    Buffer.from([0, 9, 10, 255]),
+  );
+  writeFileSync(join(fixture.local, "only.sh"), "#!/bin/sh\nexit 0\n");
+  chmodSync(join(fixture.local, "only.sh"), 0o755);
+  writeFileSync(join(fixture.local, ":(glob)*"), Buffer.from([255, 0, 4]));
+  const state = () => ({
+    status: gitHex(
+      fixture.local,
+      "status",
+      "--porcelain=v1",
+      "-z",
+      "--untracked-files=all",
+    ),
+    nested: readFileSync(join(fixture.local, "only/deep/data.bin")).toString(
+      "hex",
+    ),
+    executable: readFileSync(join(fixture.local, "only.sh")).toString("hex"),
+    mode: statSync(join(fixture.local, "only.sh")).mode & 0o777,
+    literal: readFileSync(join(fixture.local, ":(glob)*")).toString("hex"),
+  });
+  const before = state();
+  const tx = createUpdateTransaction({
+    root: fixture.local,
+    dataDir: fixture.data,
+    envPath: join(fixture.local, ".env"),
+  });
+
+  await tx.protect();
+  await tx.rollback();
+
+  assert.deepEqual(state(), before);
 });
 
 test("rollback recovers the exact tree after a partial stash apply failure", async (t) => {
