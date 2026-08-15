@@ -458,7 +458,11 @@ class RecoveryError(RuntimeError):
 
 
 def _fsync_directory(directory: Path, fsync_impl) -> None:
-    flags = os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0)
+    flags = (
+        os.O_RDONLY
+        | getattr(os, 'O_DIRECTORY', 0)
+        | getattr(os, 'O_NOFOLLOW', 0)
+    )
     fd = os.open(directory, flags)
     try:
         fsync_impl(fd)
@@ -480,7 +484,15 @@ def _durable_directory_chain(
     parent = boundary
     for part in relative.parts:
         child = parent / part
-        child.mkdir(exist_ok=True)
+        if os.path.lexists(child):
+            if child.is_symlink() or not child.is_dir():
+                raise RecoveryError(
+                    f'recovery directory component is not a real directory: {child}'
+                )
+        else:
+            child.mkdir()
+        if child.is_symlink():
+            raise RecoveryError(f'recovery directory component is a symlink: {child}')
         # Persist both the new directory inode and its entry in the parent.
         _fsync_directory(child, fsync_impl)
         _fsync_directory(parent, fsync_impl)
@@ -517,7 +529,12 @@ def _preserve_before_thinning(
         if os.path.lexists(destination):
             try:
                 # A retry after failure-before-replace reuses its confirmed exact copy.
-                if destination.is_file() and destination.read_bytes() == source_bytes:
+                if (
+                    not destination.is_symlink()
+                    and destination.is_file()
+                    and source.samefile(destination)
+                    and destination.read_bytes() == source_bytes
+                ):
                     _fsync_directory(destination.parent, fsync_impl)
                     return destination
             except OSError:

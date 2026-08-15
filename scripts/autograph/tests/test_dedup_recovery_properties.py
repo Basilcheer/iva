@@ -160,6 +160,45 @@ class DedupRecoveryTests(unittest.TestCase):
         self.assertEqual(first_backup.read_bytes(), first)
         self.assertIn(second, [path.read_bytes() for path in backups])
 
+    def test_symlink_to_live_source_is_never_accepted_as_recovery(self):
+        original = self.write_source("symlink-is-not-recovery")
+        hostile = self.trash / self.relative
+        hostile.parent.mkdir(parents=True)
+        hostile.symlink_to(self.source)
+
+        self.assertTrue(
+            thin_crm_overlay(
+                self.vault,
+                self.relative,
+                "contacts/alice.md",
+                trash_dir=self.trash,
+            )
+        )
+        durable = [
+            path
+            for path in recovery_files(self.trash)
+            if not path.is_symlink() and path.read_bytes() == original
+        ]
+        self.assertEqual(len(durable), 1)
+        self.assertNotEqual(hostile.read_bytes(), original)
+
+    def test_symlink_component_cannot_escape_recovery_tree(self):
+        original = self.write_source("parent-symlink-escape")
+        outside_tmp = tempfile.TemporaryDirectory(prefix="iva-dedup-outside-")
+        self.addCleanup(outside_tmp.cleanup)
+        outside = Path(outside_tmp.name)
+        (self.vault / ".trash").symlink_to(outside, target_is_directory=True)
+
+        with self.assertRaises(RecoveryError):
+            thin_crm_overlay(
+                self.vault,
+                self.relative,
+                "contacts/alice.md",
+                trash_dir=self.trash,
+            )
+        self.assertEqual(self.source.read_bytes(), original)
+        self.assertEqual(list(outside.rglob("*")), [])
+
     def test_approved_manifest_still_creates_recovery_copy(self):
         original = self.write_source("approved-is-not-recovery")
         manifest = self.vault / "approved.json"
