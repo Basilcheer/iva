@@ -10,6 +10,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
+import { CATALOG, catalogProvider } from "./lib/model-catalog.ts";
 import {
   isEntrypoint,
   SHIM_PATH,
@@ -139,7 +140,31 @@ export async function main(argv: readonly string[]): Promise<number> {
   const [home, name, ...flags] = argv;
   if (!home || !name) throw new Error("usage: update-finish <home> <version>");
   const verbose = flags.includes("--verbose");
-  const lock = adoptUpdateLock(layoutFor(home).data);
+  const layout = layoutFor(home);
+
+  // The same MODEL_PROVIDER check the CLI does before it starts an update — repeated here
+  // because on a managed installation the first half of every update is run by the version
+  // already on disk. A check that only exists in the new version can therefore never run
+  // while the value is broken: the old CLI fetches, this half builds, the probe fails, the
+  // update rolls back, and the next attempt repeats it. Forever, not once.
+  //
+  // This function is the first code of the new version to execute on the machine, and it
+  // runs before the build, so refusing here costs the user one fetch instead of a build and
+  // a health cycle - and finally names the value. `iva update` on the release after this one
+  // refuses before even that (scripts/cli/version-update-command.ts).
+  const configured = layout.values.MODEL_PROVIDER ?? "ollama";
+  if (!catalogProvider(configured)) {
+    const outcome: UpdateOutcome = {
+      status: "failed",
+      message: `Invalid MODEL_PROVIDER ${JSON.stringify(configured)}; expected one of: ${Object.keys(CATALOG).join(", ")} — run: iva config`,
+    };
+    const report = process.env.IVA_UPDATE_OUTCOME;
+    if (report) writeFileSync(report, JSON.stringify(outcome));
+    else console.log(JSON.stringify(outcome));
+    return 1;
+  }
+
+  const lock = adoptUpdateLock(layout.data);
   const log: Say = (message) => console.log(`  ${message}`);
   const notify: Say = (message) => console.log(`! ${message}`);
   let outcome: UpdateOutcome;

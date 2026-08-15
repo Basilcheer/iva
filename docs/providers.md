@@ -21,6 +21,8 @@ The first three are plain API keys; the last rides your personal OpenAI subscrip
 MODEL_PROVIDER=opencode   # or ollama / openrouter / codex, then `iva restart`
 ```
 
+Those four names, spelled exactly. Anything else — `ollmaa`, `OLLAMA` — stops the agent at startup with the list of accepted names, instead of running Ollama under a name nobody configured ([troubleshooting.md](troubleshooting.md)).
+
 Start with Go: a quarter of the price, ~23 models to switch between (the wizard pulls the live list, so new ones like `kimi-k3` appear on their own). Keys, model pick and context-window settings live in [configuration.md](configuration.md).
 
 Two things about the live lists. Both catalogs churn — Ollama Cloud retired `gemma3:12b` on 2026-07-15 and Go dropped `gemini-3-flash`, so a hand-written model id in `.env` can start failing without you touching anything; if the bot goes quiet after weeks of silence on your side, re-run `iva config` and re-pick from the live list. And on Ollama Cloud the frontier tags (`kimi-k3` among them) bill as **extra usage** on top of the plan: with an empty extra-usage balance the API answers `402`, so top it up at [ollama.com/settings](https://ollama.com/settings) or stay on `deepseek-v4-pro`.

@@ -79,7 +79,7 @@ outputSchema: z.object({
 }),
 ```
 
-A subagent brings its own provider and model: the planner pins Ollama Cloud (`OLLAMA_API_KEY` / `OLLAMA_MODEL`) in its `agent.ts`, independent of the main agent's `MODEL_PROVIDER` — so a cheap model for a narrow job costs nothing extra to wire.
+A subagent runs on the main provider: the planner takes its model straight from `agent/provider.ts`, so `MODEL_PROVIDER` picks the model for every node of the graph at once. Subagents deliberately keep no provider or env of their own — one selection, one identity, one usage line.
 
 ## Changing the character
 

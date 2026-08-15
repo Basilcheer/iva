@@ -62,6 +62,9 @@ export function layoutFor(home: string) {
     data: stateDir(home, values.ASSISTANT_DATA_DIR, "data"),
     vault: stateDir(home, values.ASSISTANT_VAULT_DIR, "vault"),
     env,
+    // Already parsed to find the state directories; handed back so the updater does not
+    // read and parse the same file again to check one more value.
+    values,
   };
 }
 

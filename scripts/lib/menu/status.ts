@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-unnecessary-type-assertion -- conversion keeps source-compatible runtime indexing. */
 // Экран статуса: одна карта — версия, провайдер·модель·размышления, поиск+ключ, язык,
 // userbot, Google, расход за сегодня. Быстрые поля (env/файлы) читаются синхронно в первом
 // рендере; общая userbot-проба systemd/HTTP/Telethon НЕ ждётся синхронно — сначала
@@ -8,7 +7,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { readEnvValues } from "../env-file.ts";
-import { CATALOG } from "../model-catalog.ts";
+import { catalogModel, catalogProvider } from "../model-catalog.ts";
 import { SEARCH_CATALOG } from "../search-catalog.ts";
 import { readEntries, summarize } from "../usage.ts";
 import { probeUserbotHealth } from "../userbot-health.ts";
@@ -88,12 +87,8 @@ function usageToday(
 
 // Собирает быстрые поля (без медленной пробы) — переиспользуется первым рендером и async-edit'ом.
 function fastFields(env: Env, ctx: MenuContext) {
-  const provider =
-    typeof env.MODEL_PROVIDER === "string" &&
-    Object.hasOwn(CATALOG, env.MODEL_PROVIDER)
-      ? env.MODEL_PROVIDER
-      : "ollama";
-  const cat = CATALOG[provider as keyof typeof CATALOG];
+  const configuredProvider = env.MODEL_PROVIDER ?? "ollama";
+  const cat = catalogProvider(configuredProvider);
   const searchProv =
     typeof env.SEARCH_PROVIDER === "string" &&
     Object.hasOwn(SEARCH_CATALOG, env.SEARCH_PROVIDER)
@@ -102,9 +97,9 @@ function fastFields(env: Env, ctx: MenuContext) {
   const searchCat = SEARCH_CATALOG[searchProv as keyof typeof SEARCH_CATALOG];
   return {
     version: version(ctx.deps.root),
-    provider,
-    model: env[cat.modelVar] || cat.def,
-    effort: (env.THINKING_EFFORT || "").toLowerCase(),
+    provider: cat ? configuredProvider : `invalid (${configuredProvider})`,
+    model: catalogModel(configuredProvider, env) ?? "?",
+    effort: cat ? (env.THINKING_EFFORT || "").toLowerCase() : "",
     searchProv,
     hasKey: Boolean(searchCat && env[searchCat.keyVar]),
     lang: ctx.getLang(),

@@ -62,7 +62,23 @@ Five steps. Each key comes with a direct link to where it lives, and each is val
 - 🧰 **The `iva` command** — installed into `~/.local/bin`: `iva status`, `iva doctor`, `iva update`. Full reference: [cli.md](cli.md).
 - ✅ **Telegram confirmation** — the last thing the installer does is message you from your own bot: "Iva is installed and online. Send me a message — I'll reply." That's the success signal.
 
-Re-running the same command later is safe: it reuses the existing checkout, fast-forwards it, and keeps `.env` and the vault untouched.
+Re-running the same command later is safe, and cheap: it reuses the existing checkout, fast-forwards it, and keeps `.env` and the vault untouched.
+
+Every stage checks whether its work is already done and skips it, so a run after a failure costs seconds instead of minutes:
+
+| Stage           | Skipped when                                                                            |
+| --------------- | --------------------------------------------------------------------------------------- |
+| System packages | the command is already there (`git`, `gh`, `python3`, `ffmpeg`, `pandoc`, `pdftotext`)  |
+| `npm ci`        | `node_modules` matches `package-lock.json` — npm's own record; patches are re-applied   |
+| agent-browser   | the binary is installed and really opens a page                                         |
+| `gws`           | the binary is installed (`iva update` keeps it current)                                 |
+| Build           | `.output` carries this installer's stamp for the current commit, local edits and `.env` |
+
+The wizard, the vault check, the `iva` command and the systemd units are cheap, so they run every time. A run that fails is undone: the checkout goes back to the commit and the changes it started with, and the copies it made of `.env` and of your untracked files are deleted — on Ctrl-C and on a dropped SSH session too.
+
+If the undo itself cannot finish — a read-only checkout, a full disk — nothing it saved is thrown away. Whatever is still the only copy of something stays where it is, and the installer prints each one by name before it exits: the stash entry holding your changes (`git stash list`), the commit it recorded under `refs/iva/update-backups/`, the copy of `.env` under `data/update-backups/`, and the previous build under `.output.iva-install-backup-*`. Read those lines before running anything else. An installation unpacked from an archive instead of cloned has no commit to compare against, so it rebuilds every time; so does one with a file the build cannot read.
+
+Only one installer runs in an installation at a time: a second one is refused by name, with the process id of the one already working. A lock left by a run that no longer exists is taken over, so a power cut cannot leave the installation unusable.
 
 ### Flags and overrides
 

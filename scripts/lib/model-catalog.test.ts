@@ -1,11 +1,64 @@
 import { test } from "node:test";
 /* eslint-disable @typescript-eslint/no-floating-promises, @typescript-eslint/require-await */
 import assert from "node:assert/strict";
+import fc from "fast-check";
 import {
+  MODEL_PROVIDER_NAMES,
+  MODEL_PROVIDERS,
+  resolveModelProvider,
+} from "#lib/model-provider.ts";
+import {
+  CATALOG,
+  catalogModel,
+  catalogProvider,
+  providerEnvKeys,
   FALLBACK_EFFORTS,
   ModelCatalogError,
   fetchModelOptions,
 } from "./model-catalog.ts";
+import { modelSummary } from "./model-summary.ts";
+
+// Каталог — вторая половина шва: по нему строятся кнопки /model, мастер и `iva doctor`
+// (они грузятся на инсталле, где agent/ может не быть, ADR-0003), а принимает значение
+// authored-резолвер. Разъедься перечни — мастер предложил бы провайдера, на котором
+// рантайм откажется стартовать, или доктор объявил бы .env здоровым перед отказом.
+// Порядок тоже общий: он же задаёт порядок имён в сообщении об отказе.
+test("both trees accept exactly the same provider names, in the same order", () => {
+  assert.deepEqual(Object.keys(CATALOG), [...MODEL_PROVIDER_NAMES]);
+});
+
+// Имён мало — разъехаться могут и значения. Каталог показывает дефолтную модель в мастере
+// и в /menu, а берёт её рантайм из своей половины: разойдись они, пользователь согласился
+// бы с одной моделью, а работала бы другая — тот же раскол, что и с именем провайдера.
+test("both trees name the same model variable and the same default model", () => {
+  for (const name of MODEL_PROVIDER_NAMES) {
+    const catalog = CATALOG[name];
+    const authored = MODEL_PROVIDERS[name];
+    assert.equal(catalog.modelVar, authored.modelVar, name);
+    assert.equal(catalog.def, authored.defaultModel, name);
+    // И то же самое с другого конца: пустой env обязан дать ровно дефолт каталога.
+    assert.equal(
+      resolveModelProvider({ MODEL_PROVIDER: name }).model,
+      catalog.def,
+      name,
+    );
+  }
+});
+
+test("the catalog lookup takes exact names only", () => {
+  for (const name of MODEL_PROVIDER_NAMES)
+    assert.equal(catalogProvider(name), CATALOG[name]);
+  for (const value of [
+    "ollmaa",
+    " ollama",
+    "OLLAMA",
+    "",
+    "__proto__",
+    "constructor",
+    undefined,
+  ])
+    assert.equal(catalogProvider(value), undefined, JSON.stringify(value));
+});
 
 test("Codex catalog failure cannot create selectable fallback models", async () => {
   await assert.rejects(
@@ -44,4 +97,136 @@ test("heterogeneous OpenRouter catalog does not invent reasoning choices", async
   const options = await fetchModelOptions("openrouter", "unused");
   assert.ok(options.length > 0);
   assert.ok(options.every((option) => option.reasoningLevels.length === 0));
+});
+
+// Один список обязательных ключей на доктора и мастера. Разъедься они — мастер объявил бы
+// .env настроенным, а доктор на том же файле ругался бы (или наоборот, и никто бы не понял).
+test("required env keys cover the key and the model, and codex asks for neither key", () => {
+  assert.deepEqual(providerEnvKeys(CATALOG.ollama), [
+    "OLLAMA_API_KEY",
+    "OLLAMA_MODEL",
+  ]);
+  assert.deepEqual(providerEnvKeys(CATALOG.opencode), [
+    "OPENCODE_API_KEY",
+    "OPENCODE_MODEL",
+  ]);
+  assert.deepEqual(providerEnvKeys(CATALOG.openrouter), [
+    "OPENROUTER_API_KEY",
+    "OPENROUTER_MODEL",
+  ]);
+  // codex входит по OAuth — ключа в .env нет вовсе.
+  assert.deepEqual(providerEnvKeys(CATALOG.codex), ["CODEX_MODEL"]);
+  for (const name of MODEL_PROVIDER_NAMES) {
+    const keys = providerEnvKeys(CATALOG[name]);
+    assert.equal(keys.includes(CATALOG[name].modelVar), true, name);
+    assert.equal(keys.includes(""), false, name);
+  }
+});
+
+// Одна строка .env — один ответ. До этого их было три: рантайм отдавал пустую строку как
+// есть, Статус подставлял дефолт, экран обновления рисовал «?». Матрица гоняет обе половины
+// правила по мусорным значениям модели и требует совпадения символ в символ.
+test("both trees answer one .env with one model, blank or padded", () => {
+  const raws = [
+    undefined,
+    "",
+    "   ",
+    "\t\n",
+    "deepseek-v4-pro",
+    "  deepseek-v4-pro  ",
+    "\tglm-5.2\n",
+    "opencode-go/glm-5.2",
+    "  opencode-go/glm-5.2  ",
+    "vendor/model",
+  ];
+  for (const name of MODEL_PROVIDER_NAMES) {
+    for (const raw of raws) {
+      const env = raw === undefined ? {} : { [CATALOG[name].modelVar]: raw };
+      assert.equal(
+        catalogModel(name, env),
+        resolveModelProvider({ MODEL_PROVIDER: name, ...env }).model,
+        `${name} / ${JSON.stringify(raw)}`,
+      );
+      // И оно никогда не пустое: провайдеру нельзя уйти без имени модели.
+      assert.notEqual(catalogModel(name, env), "");
+    }
+  }
+});
+
+test("an unknown provider has no model at all", () => {
+  for (const value of ["ollmaa", "OLLAMA", "", "__proto__"])
+    assert.equal(catalogModel(value, { OLLAMA_MODEL: "x" }), undefined, value);
+});
+
+// Резолвер — не единственный, кто читает недоверенную строку из .env: по ней же ходят
+// доктор, мастер, апдейт и экраны. Генератор перебирает вход, а не список.
+// Провал печатает seed и path; fc.assert(prop, { seed, path }) повторяет прогон.
+test("property: only the four exact names resolve to a provider", () => {
+  const names: readonly string[] = MODEL_PROVIDER_NAMES;
+  fc.assert(
+    fc.property(
+      fc
+        .oneof(
+          fc.string(),
+          fc.string({ unit: "grapheme" }),
+          fc.string({ unit: "binary" }),
+          fc.constantFrom(
+            "__proto__",
+            "constructor",
+            "prototype",
+            "toString",
+            "hasOwnProperty",
+          ),
+          fc
+            .tuple(
+              fc.constantFrom(" ", "", "\t"),
+              fc.constantFrom(...MODEL_PROVIDER_NAMES),
+              fc.constantFrom(" ", "", "\n"),
+            )
+            .map(([l, n, r]) => `${l}${n}${r}`),
+        )
+        .filter((value) => !names.includes(value)),
+      (value) => {
+        assert.equal(catalogProvider(value), undefined);
+        assert.equal(catalogModel(value, { OLLAMA_MODEL: "x" }), undefined);
+      },
+    ),
+    { numRuns: 500 },
+  );
+});
+
+test("property: modelSummary answers any environment with strings and never throws", () => {
+  const anyValue = fc.option(fc.string({ unit: "binary" }), { nil: undefined });
+  fc.assert(
+    fc.property(
+      fc.record(
+        {
+          MODEL_PROVIDER: anyValue,
+          OLLAMA_MODEL: anyValue,
+          OPENCODE_MODEL: anyValue,
+          CODEX_MODEL: anyValue,
+          OPENROUTER_MODEL: anyValue,
+          OLLAMA_CONTEXT_WINDOW: anyValue,
+        },
+        { requiredKeys: [] },
+      ),
+      (env) => {
+        const summary = modelSummary(env);
+        assert.equal(typeof summary.provider, "string");
+        assert.equal(typeof summary.model, "string");
+        assert.equal(summary.model.length > 0, true);
+        assert.equal(summary.line, `${summary.provider} · ${summary.model}`);
+        assert.equal(
+          summary.contextWindow === null ||
+            (typeof summary.contextWindow === "number" &&
+              summary.contextWindow > 0),
+          true,
+        );
+        // Известное имя — известная модель; неизвестное честно названо невалидным.
+        const known = Boolean(catalogProvider(env.MODEL_PROVIDER ?? "ollama"));
+        assert.equal(summary.provider.startsWith("invalid ("), !known);
+      },
+    ),
+    { numRuns: 500 },
+  );
 });

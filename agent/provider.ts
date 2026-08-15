@@ -2,6 +2,10 @@ import { wrapLanguageModel, type LanguageModelMiddleware } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { CODEX_BASE_URL, codexAuthHeaders } from "./lib/codex-auth.ts";
+import {
+  resolveModelProvider,
+  type ModelProviderName,
+} from "./lib/model-provider.ts";
 import { CANONICAL_REASONING_EFFORTS as EFFORTS } from "./lib/reasoning-levels.ts";
 
 type WrappableModel = Parameters<typeof wrapLanguageModel>[0]["model"];
@@ -10,19 +14,23 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-// Единый источник конфигурации провайдера модели (выбор раз при старте через MODEL_PROVIDER).
+// Единый источник конфигурации провайдера модели. Имя и текстовую модель выбирает
+// resolveModelProvider — раз при старте и одинаково для рантайма и учёта расхода; неизвестное
+// MODEL_PROVIDER валит загрузку модуля здесь же, до первого запроса к провайдеру.
 // ollama/opencode/openrouter — OpenAI-совместимы (chat/completions, статичный ключ из .env).
 // codex — личная подписка OpenAI (ChatGPT): Responses API + OAuth-токен (data/codex-auth.json,
 // `iva login`). Здесь же зашита vision-модель провайдера — её зовёт agent/vision.ts.
-const PROVIDER = process.env.MODEL_PROVIDER ?? "ollama";
+const selected = resolveModelProvider();
+const PROVIDER = selected.name;
 
+// Читается ровно в одном месте — PROVIDERS[PROVIDER] ниже, поэтому запись выбранного
+// провайдера в поле соседа невозможна. satisfies держит таблицу полной.
 const PROVIDERS = {
   ollama: {
     // OLLAMA_BASE_URL — не пользовательская настройка, а шов для тестов: replica-смоук
     // подставляет сюда локальный mock-провайдер (scripts/lib/mock-openai-server.ts).
     baseURL: process.env.OLLAMA_BASE_URL ?? "https://ollama.com/v1",
     apiKey: process.env.OLLAMA_API_KEY,
-    textModel: process.env.OLLAMA_MODEL ?? "deepseek-v4-pro",
     contextWindow: Number(process.env.OLLAMA_CONTEXT_WINDOW ?? 131072),
     // Дешёвая мультимодалка того же провайдера (проверено на проде: принимает image_url, http 200).
     // Ollama Cloud снимает теги с раздачи: gemma3:12b отвечает 410 "retired at 2026-07-15" —
@@ -34,11 +42,6 @@ const PROVIDERS = {
     // Продукт переименован Zen → Go, но API живёт на легаси-пути /zen/ (у /go/v1 — 404).
     baseURL: "https://opencode.ai/zen/go/v1",
     apiKey: process.env.OPENCODE_API_KEY,
-    // Эндпоинт ждёт bare-ID — срезаем внутренний UI-префикс "opencode-go/" из дефолта и старых .env.
-    textModel: (process.env.OPENCODE_MODEL ?? "deepseek-v4-pro").replace(
-      /^opencode-go\//,
-      "",
-    ),
     contextWindow: Number(process.env.OPENCODE_CONTEXT_WINDOW ?? 131072),
     // gemini-3-flash выпал из каталога Go (401 "Model gemini-3-flash is not supported") — теперь
     // qwen3.7-plus: отвечает 200 и кладёт описание в message.content. У glm-5.2/minimax-m3 текст
@@ -48,9 +51,6 @@ const PROVIDERS = {
   openrouter: {
     baseURL: "https://openrouter.ai/api/v1",
     apiKey: process.env.OPENROUTER_API_KEY,
-    // Слаг модели вида vendor/model (напр. anthropic/claude-sonnet-4.5) — задаётся мастером.
-    // Дефолт — лишь заглушка на случай ручного .env; мастер всегда перезапишет живой проверкой.
-    textModel: process.env.OPENROUTER_MODEL ?? "openai/gpt-5.1",
     contextWindow: Number(process.env.OPENROUTER_CONTEXT_WINDOW ?? 131072),
     // Дешёвая гарантированно-мультимодальная модель для картинок (как qwen3.7-plus у opencode):
     // vision работает независимо от выбранной текстовой модели (та может быть text-only).
@@ -59,16 +59,26 @@ const PROVIDERS = {
   codex: {
     baseURL: CODEX_BASE_URL,
     apiKey: undefined, // авторизация — OAuth-токен подписки, не статичный ключ (см. codexFetch)
-    textModel: process.env.CODEX_MODEL ?? "gpt-5.5",
     contextWindow: Number(process.env.CODEX_CONTEXT_WINDOW ?? 272000),
-    // gpt-5* мультимодальны — картинки идут через ту же подписку (см. agent/vision.ts).
-    visionModel: process.env.CODEX_MODEL ?? "gpt-5.5",
+    // gpt-5* мультимодальны — картинки идут через ту же подписку (см. agent/vision.ts),
+    // поэтому vision-модель подписки — это и есть выбранная текстовая.
+    visionModel: selected.model,
   },
-} as const;
+} as const satisfies Record<
+  ModelProviderName,
+  {
+    baseURL: string;
+    apiKey: string | undefined;
+    contextWindow: number;
+    visionModel: string;
+  }
+>;
 
 export const providerName = PROVIDER;
-export const providerConfig =
-  PROVIDERS[PROVIDER as keyof typeof PROVIDERS] ?? PROVIDERS.ollama;
+export const providerConfig = {
+  ...PROVIDERS[PROVIDER],
+  textModel: selected.model,
+};
 
 // THINKING_EFFORT (.env, пишут /model и /think в Telegram): reasoning-усилие модели.
 // Codex получает его через providerOptions.openai.reasoningEffort ниже. Ollama Cloud
@@ -82,7 +92,7 @@ export const thinkingEffort = EFFORTS.includes(effortRaw)
 const COMPATIBLE_EFFORTS = ["low", "medium", "high"] as const;
 type CompatibleEffort = (typeof COMPATIBLE_EFFORTS)[number];
 export const compatibleThinkingEffort: CompatibleEffort | undefined =
-  (PROVIDER === "ollama" || PROVIDER === "opencode") &&
+  selected.compatibleReasoning &&
   (COMPATIBLE_EFFORTS as readonly string[]).includes(effortRaw)
     ? (effortRaw as CompatibleEffort)
     : undefined;

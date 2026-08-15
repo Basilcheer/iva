@@ -44,6 +44,21 @@ Cause: the model is read once, at process start.
 iva restart
 ```
 
+### Agent dead after editing MODEL_PROVIDER
+
+Cause: exactly four names are accepted — `ollama`, `opencode`, `codex`, `openrouter`. Anything else, a typo or a different case included, is refused at startup instead of quietly running Ollama under the wrong name, so the service stops and says which names it takes:
+
+```bash
+journalctl --user -u iva.service -n 20 --no-pager
+# Error: Invalid MODEL_PROVIDER "ollmaa"; expected one of: ollama, opencode, codex, openrouter — run: iva config
+```
+
+`iva doctor` prints the same line, and the bridge is a separate service, so `/menu` → 📊 Status still answers and shows the provider as `invalid (ollmaa)`. Fix it with `iva config`, with the `/model` wizard in Telegram, or by hand — then `iva restart`. Removing the variable altogether is not a typo: that still means `ollama`.
+
+**Values that used to work.** Before this check, `MODEL_PROVIDER=` (empty) and `MODEL_PROVIDER=OLLAMA` both resolved to Ollama and ran. They are refused now — deliberately: the old behaviour ran one provider under another provider's name, so usage, reasoning and `/menu` disagreed with what was actually being called. If your installation was one of those, it stops on the next restart until you spell one of the four names.
+
+**Updating from such an installation.** The first half of every `iva update` is executed by the code already on your disk, so a check that ships inside the new version cannot run until that version is installed. Coming from a release older than this one, the first attempt fetches and builds, fails the health probe and rolls back; the message names the reason, in the terminal and in the chat. From the version carrying this check onward `iva update` refuses before the build, and the release after it refuses before the fetch. Either way the fix is the same and takes precedence over retrying: correct `MODEL_PROVIDER` with `iva config` or in `.env`, then update.
+
 ### Voice note over 20MB ignored
 
 Cause: Telegram's Bot API download cap ([providers.md](providers.md)) — the bridge never receives the audio. Split before sending:

@@ -7,6 +7,7 @@ import {
   recoverConfigTransaction,
 } from "../lib/config-transaction.ts";
 import { parseEnvText } from "../lib/env-file.ts";
+import { catalogProvider } from "../lib/model-catalog.ts";
 import type { createCliRuntime } from "./runtime.ts";
 import type { createCliSystemd } from "./systemd.ts";
 
@@ -72,9 +73,15 @@ export function createConfigCommand(
     const candidateDir = mkdtempSync(join(tmpdir(), "iva-config-"));
     const candidatePath = join(candidateDir, ".env");
     try {
-      const result = run(NODE, ["scripts/setup.mjs"], {
-        env: { ...childEnv, IVA_CONFIG_OUTPUT: candidatePath },
-      });
+      // IVA_CONFIG_INPUT снимается намеренно: он существует, чтобы прогнать мастера против
+      // фикстуры в тесте, и унаследованный из окружения оператора он молча подменил бы
+      // источник конфигурации — `iva config` обязан читать живой .env установки.
+      const spawnEnv: Record<string, string | undefined> = {
+        ...childEnv,
+        IVA_CONFIG_OUTPUT: candidatePath,
+        IVA_CONFIG_INPUT: undefined,
+      };
+      const result = run(NODE, ["scripts/setup.mjs"], { env: spawnEnv });
       if (result.status !== 0) {
         process.exitCode = result.status ?? 1;
         return;
@@ -86,19 +93,15 @@ export function createConfigCommand(
 
       const nextText = readFileSync(candidatePath, "utf8");
       const nextEnv = parseEnvText(nextText);
+      // Тот же каталог, что у мастера, доктора и кнопок /model, — и тот же перечень имён,
+      // что принимает рантайм (сверяет scripts/lib/model-catalog.test.ts).
       const provider = nextEnv.MODEL_PROVIDER;
-      const selected = (
-        {
-          ollama: ["OLLAMA_MODEL", "OLLAMA_API_KEY"],
-          opencode: ["OPENCODE_MODEL", "OPENCODE_API_KEY"],
-          openrouter: ["OPENROUTER_MODEL", "OPENROUTER_API_KEY"],
-          codex: ["CODEX_MODEL", null],
-        } as Record<string, ProviderSelection | undefined>
-      )[provider];
-      if (!selected)
+      const catalog = catalogProvider(provider);
+      if (!catalog)
         throw new Error(
           "candidate configuration has an invalid model provider",
         );
+      const selected: ProviderSelection = [catalog.modelVar, catalog.keyVar];
       const port = Number(nextEnv.IVA_PORT || DEFAULT_PORT);
       if (!Number.isInteger(port) || port < 1 || port > 65535) {
         throw new Error("candidate configuration has an invalid IVA_PORT");

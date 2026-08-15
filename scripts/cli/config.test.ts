@@ -1,10 +1,12 @@
 /* eslint-disable @typescript-eslint/no-floating-promises, @typescript-eslint/require-await -- Node's test runner owns registrations and async stubs preserve production signatures. */
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { existsSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test, { type TestContext } from "node:test";
+import { fileURLToPath } from "node:url";
 import { createConfigCommand } from "./config.ts";
 import { createCliRuntime } from "./runtime.ts";
 
@@ -339,4 +341,125 @@ test("invalid candidate metadata and apply failures propagate after cleanup", as
 
   await assert.rejects(cmdConfig(), (error) => error === applyError);
   assert.equal(existsSync(dirname(candidatePath)), false);
+});
+
+// Настоящий прогон мастера, которого `iva config` и запускает. Раньше его нельзя было
+// прогнать иначе как подсунув .env в рабочее дерево, поэтому ветка «уже настроена» дожила
+// до релиза с дырой: при MODEL_PROVIDER=ollmaa карты промахивались, ключ выпадал из
+// обязательных, мастер печатал «Iva is already configured» и выходил по дефолтному «нет».
+// IVA_CONFIG_INPUT даёт ему фикстуру вместо живой конфигурации машины.
+//
+// Процесс останавливается на первом же вопросе (stdin открыт, но пуст) — до сети дело не
+// доходит: всё, что проверяется, напечатано раньше.
+function fixtureEnv(provider: string): string {
+  return [
+    `MODEL_PROVIDER=${provider}`,
+    "OLLAMA_API_KEY=key",
+    "OLLAMA_MODEL=deepseek-v4-pro",
+    "DEEPGRAM_API_KEY=dg",
+    "TELEGRAM_BOT_TOKEN=tg",
+    "TELEGRAM_ALLOWED_USER_IDS=1",
+    "TELEGRAM_BOT_USERNAME=ivabot",
+    "AGENT_LANGUAGE=en",
+    `ASSISTANT_BEARER=${"b".repeat(43)}`,
+    "",
+  ].join("\n");
+}
+
+async function runWizard(
+  t: TestContext,
+  provider: string,
+  stopAt: RegExp,
+): Promise<string> {
+  const root = await sandbox(t);
+  const input = join(root, "fixture.env");
+  writeFileSync(input, fixtureEnv(provider));
+  const repo = fileURLToPath(new URL("../../", import.meta.url));
+  const clean = { ...process.env };
+  delete clean.FORCE_COLOR;
+  const child = spawn(process.execPath, [join(repo, "scripts/setup/main.ts")], {
+    cwd: repo,
+    env: {
+      ...clean,
+      NO_COLOR: "1",
+      AGENT_LANGUAGE: "en",
+      IVA_CONFIG_INPUT: input,
+      IVA_CONFIG_OUTPUT: join(root, "candidate.env"),
+    },
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  let output = "";
+  const timer = setTimeout(() => child.kill("SIGKILL"), 20_000);
+  await new Promise<void>((resolve) => {
+    const collect = (chunk: Buffer): void => {
+      output += chunk.toString();
+      if (stopAt.test(output)) child.kill("SIGKILL");
+    };
+    child.stdout.on("data", collect);
+    child.stderr.on("data", collect);
+    child.on("close", () => resolve());
+  });
+  clearTimeout(timer);
+  return output;
+}
+
+test("the setup wizard treats an invalid provider as unconfigured, not as complete", async (t) => {
+  // Пустое значение отдельным случаем: ключ в .env есть, значение пустое. Рантайм, доктор,
+  // статус и апдейт его отвергают, а мастер с `||` схлопывал его в ollama и объявлял
+  // сломанный .env настроенным — то есть ровно в починке и молчал.
+  for (const value of ["ollmaa", "OLLAMA", ""]) {
+    const output = await runWizard(t, value, /Provider \(1\/2\/3\/4\)/u);
+
+    assert.doesNotMatch(output, /already configured/u, value);
+    assert.doesNotMatch(output, /Reconfigure from scratch/u, value);
+    assert.match(
+      output,
+      new RegExp(`MODEL_PROVIDER is invalid \\(${value}\\)`),
+      value,
+    );
+    // И он именно СПРАШИВАЕТ провайдера, а не проходит мимо шага.
+    assert.match(output, /Provider \(1\/2\/3\/4\)/u, value);
+  }
+});
+
+// Контроль: на исправной конфигурации мастер по-прежнему коротко подтверждает и предлагает
+// ничего не трогать. Без него тест выше проходил бы и на мастере, сломанном вообще.
+test("the setup wizard still short-circuits on a complete configuration", async (t) => {
+  const output = await runWizard(t, "ollama", /Reconfigure from scratch/u);
+
+  assert.match(output, /Iva is already configured/u);
+  assert.match(output, /Provider: ollama/u);
+  assert.doesNotMatch(output, /MODEL_PROVIDER is invalid/u);
+});
+
+// IVA_CONFIG_INPUT существует ради одного: прогнать мастера против фикстуры в тесте.
+// Унаследованный из окружения оператора он молча подменил бы источник — мастер прочитал бы
+// чужой файл и записал бы результат поверх живого .env установки. `iva config` снимает его.
+test("iva config never lets an inherited fixture seed replace the live .env", async (t) => {
+  // Мастер «отказался» ниже, и команда выставляет process.exitCode — вернуть как было.
+  const previousExitCode = process.exitCode;
+  t.after(() => {
+    process.exitCode = previousExitCode;
+  });
+  const root = await sandbox(t);
+  const seen: Record<string, string | undefined>[] = [];
+  const base = createCliRuntime(root);
+  const runtime: CliRuntime = {
+    ...base,
+    requireSystemd: () => undefined,
+    childEnv: { ...base.childEnv, IVA_CONFIG_INPUT: "/tmp/somebody-elses.env" },
+    run: (_command, _args, options) => {
+      seen.push({ ...options?.env });
+      return result(1); // Мастер «отказался» — дальше идти незачем.
+    },
+    confirm: async () => true,
+  };
+
+  await createConfigCommand(runtime, { writeUnits: () => [] })([]);
+
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].IVA_CONFIG_INPUT, undefined);
+  // А выход и остальное окружение на месте.
+  assert.equal(typeof seen[0].IVA_CONFIG_OUTPUT, "string");
+  assert.equal(seen[0].PATH, base.childEnv.PATH);
 });

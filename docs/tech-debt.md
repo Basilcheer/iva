@@ -79,6 +79,20 @@ builds the tree. Three shapes, in descending order of preference:
   `scripts/lib/usage.test.ts` round-trips it. A pair without such a test is drift waiting
   to happen; add the test before adding the pair.
 
+  The newest pair is the model provider: `agent/lib/model-provider.ts` holds the names the
+  runtime accepts, each provider's model variable, its default model and the rule that turns
+  a raw `.env` value into the model actually requested; `scripts/lib/model-catalog.ts` holds
+  the same four names in `CATALOG` — with the labels, endpoints and model lists only the
+  wizard needs — plus `catalogModel`, the same rule again. The wizard, `iva doctor`, `iva
+update` and the `/menu` screens load without the authored tree, so they cannot import the
+  first half; the runtime must not carry the catalog's live-fetch code. `scripts/lib/model-catalog.test.ts`
+  imports both and pins names, order, model variables and default models, and runs a matrix
+  of blank and padded values through both halves. The matrix pins that the two halves _agree_,
+  not that either is right: a change made to both at once walks through it, so the rule's own
+  behaviour is held by anchors next to it (`agent/lib/model-provider.test.ts` — the
+  `opencode-go/` strip, the blank-means-default case). One `.env` line answering three
+  different ways on three screens is exactly the drift this shape invites (issue #161).
+
 ## 4. Evals
 
 One file, `scripts/autograph/docs/evals/evals.json`, contains Autograph documentation

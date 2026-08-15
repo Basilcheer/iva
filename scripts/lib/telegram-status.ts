@@ -29,8 +29,14 @@ type TelegramError = Error & { status?: number };
 type Reporter = {
   start(phase: UpdatePhase): Promise<void>;
   done(phase: UpdatePhase): Promise<void>;
-  fail(phase: UpdatePhase, beforeVersion: string): Promise<void>;
+  fail(
+    phase: UpdatePhase,
+    beforeVersion: string,
+    detail?: string,
+  ): Promise<void>;
   busy(): Promise<void>;
+  /** Refusal before the first phase — the message carries what to fix, in the job's language. */
+  badProvider(value: string, accepted: string): Promise<void>;
   postCommitFailure(message: string): Promise<void>;
   /** Whether the user really got the final screen; false is a result to act on. */
   complete(versions: {
@@ -41,6 +47,10 @@ type Reporter = {
   }): Promise<boolean>;
   dispose(): void;
 };
+
+// Сколько причины доезжает в чат. Хвост, а не голова: у сборки и у health-пробы
+// последние строки — это и есть отказ, а начало лога всегда одинаковое.
+const FAIL_DETAIL_CHARS = 400;
 
 // Animated triangle loader from https://t.me/addemoji/iconemoji1.
 // Bots whose owner doesn't have Telegram Premium transparently fall back to ◇.
@@ -62,6 +72,8 @@ const COPY = {
     timerFailure:
       "Iva is ready, but the automatic update timer could not be activated",
     busy: "An update is already running",
+    badProvider:
+      "Fix MODEL_PROVIDER in .env first (iva config) — Iva won't start on this value",
     final: "✅ Iva updated",
     preserved: "Local changes: preserved",
     conflicted: (count: number) =>
@@ -87,6 +99,8 @@ const COPY = {
     timerFailure:
       "Iva готова, но таймер автоматических обновлений не удалось активировать",
     busy: "Обновление уже идёт",
+    badProvider:
+      "Сначала почини MODEL_PROVIDER в .env (iva config) — на этом значении Iva не стартует",
     final: "✅ Iva обновлена",
     preserved: "Локальные изменения: сохранены",
     conflicted: (count: number) =>
@@ -263,16 +277,33 @@ export function createTelegramUpdateReporter({
       currentPhase = null;
       return Promise.resolve();
     },
-    async fail(phase: UpdatePhase, beforeVersion: string) {
+    // `detail` — почему именно не вышло: сообщение ошибки или хвост health-лога. В терминале
+    // причина была всегда, а в чате оставалось голое «Не удалось собрать Iva» — и с ним
+    // пользователь мог только жать /update по кругу. Хвост обрезан, и он проходит тот же
+    // outbound-Gate, что и всё остальное (redactTelegramBody в call ниже).
+    async fail(phase: UpdatePhase, beforeVersion: string, detail?: string) {
       const reason = copy[phase][2];
       currentPhase = null;
-      await finish(`⚠️ ${reason}\n\n${copy.failure(beforeVersion)}`);
+      const tail = (detail ?? "").trim().slice(-FAIL_DETAIL_CHARS);
+      await finish(
+        `⚠️ ${reason}${tail ? `\n\n${tail}` : ""}\n\n${copy.failure(beforeVersion)}`,
+      );
     },
     // The tap that finds an update already running: the message it edited must
     // not be left saying the update is under way.
     async busy() {
       currentPhase = null;
       await finish(`⚠️ ${copy.busy}`);
+    },
+    // Отказ ещё до первой фазы (сломанная конфигурация): сообщение, с которого тап начался,
+    // обязано сказать, что чинить, а не остаться на «Обновляю». Текст собирается ЗДЕСЬ, из
+    // copy этого репортера: язык у него из job.locale — языка того, кто нажал, — а не из
+    // AGENT_LANGUAGE процесса CLI, который на обоих путях апдейта может быть другим.
+    async badProvider(value: string, accepted: string) {
+      currentPhase = null;
+      await finish(
+        `⚠️ ${copy.badProvider}: ${JSON.stringify(value)} (${accepted})`,
+      );
     },
     async postCommitFailure(message: string) {
       currentPhase = null;

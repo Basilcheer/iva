@@ -3,7 +3,7 @@
 // the script will NOT exit until every required secret is entered.
 // No external dependencies.
 import { createInterface } from "node:readline/promises";
-import { createReadStream, existsSync } from "node:fs";
+import { createReadStream, existsSync, openSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
@@ -29,6 +29,7 @@ import {
   probeOpenRouterModel,
   validateModelSelection,
 } from "../lib/model-validation.ts";
+import { catalogProvider, providerEnvKeys } from "../lib/model-catalog.ts";
 import { keptSetupWritePlan } from "../lib/setup-keep.ts";
 import { validateTimeZone } from "../lib/timezone.ts";
 import { openrouterErrReason } from "./openrouter.ts";
@@ -69,7 +70,14 @@ type TelegramUpdatesResponse = {
 type ThrownSetupError = { code?: string; auth?: unknown; message: string };
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "../..");
-const SOURCE_ENV_PATH = join(ROOT, ".env");
+// The configuration this run starts from. Normally the live .env of the installation;
+// `IVA_CONFIG_INPUT` points it elsewhere, which is what lets the wizard be run against a
+// fixture instead of the machine's own configuration - the reason its "already configured"
+// branch went untested until it shipped a bug (issue #161). Symmetric with the output side
+// below, and the two are independent: reading a fixture does not decide where it writes.
+const SOURCE_ENV_PATH = process.env.IVA_CONFIG_INPUT
+  ? resolve(process.env.IVA_CONFIG_INPUT)
+  : join(ROOT, ".env");
 // `iva config` stages a complete candidate outside the live .env, then applies it
 // transactionally. Direct setup/install keeps the historical live path.
 const ENV_PATH = process.env.IVA_CONFIG_OUTPUT
@@ -115,11 +123,21 @@ let LANG = "ru";
 const t = (en: string, ru: string) => (LANG === "en" ? en : ru);
 const KEEP = () => t("…(keep)", "…(оставить)");
 
-// Read from tty even when launched via `curl | bash`.
-const input = process.stdin.isTTY
-  ? process.stdin
-  : createReadStream("/dev/tty");
-const rl = createInterface({ input, output: process.stdout });
+// Read from tty even when launched via `curl | bash`: there stdin is the script itself,
+// so the answers have to come from the terminal. Where there is no controlling terminal
+// at all (a plain spawn without a pty), opening /dev/tty fails with ENXIO and used to kill
+// the wizard on an unhandled error event - read whatever stdin is instead. Opened with
+// openSync, because a createReadStream failure arrives asynchronously and cannot be caught
+// here.
+function promptInput(): NodeJS.ReadableStream {
+  if (process.stdin.isTTY) return process.stdin;
+  try {
+    return createReadStream("", { fd: openSync("/dev/tty", "r") });
+  } catch {
+    return process.stdin;
+  }
+}
+const rl = createInterface({ input: promptInput(), output: process.stdout });
 
 const ask = async (q: string, def = "") => {
   const a = (await rl.question(def ? `${q} [${def}]: ` : `${q}: `)).trim();
@@ -506,32 +524,38 @@ async function main() {
   );
 
   // Already configured? Don't walk every step — ask once.
-  const prov0 = existing.MODEL_PROVIDER || "ollama";
-  const provModel =
-    {
-      opencode: "OPENCODE_MODEL",
-      openrouter: "OPENROUTER_MODEL",
-      codex: "CODEX_MODEL",
-    }[prov0] || "OLLAMA_MODEL";
+  // Провайдер берётся ТОЧНЫМ именем из общего каталога — того же, на который смотрят рантайм
+  // и доктор. Неизвестное имя (опечатка `ollmaa`) не сходится ни с одним ключом: раньше карты
+  // промахивались, API-ключ выпадал из REQUIRED, мастер объявлял сломанный .env настроенным и
+  // выходил — а это тот самый мастер, к которому отказ агента и отправляет (issue #161).
+  // `??`, не `||`: `MODEL_PROVIDER=` в .env — это заданное пустое значение, и рантайм,
+  // доктор, статус и апдейт его отвергают. Схлопни его здесь в ollama — и единственный
+  // экран, который умеет починить, снова объявил бы сломанный .env настроенным.
+  const prov0 = existing.MODEL_PROVIDER ?? "ollama";
+  const cat0 = catalogProvider(prov0);
+  const provModel = cat0?.modelVar ?? "OLLAMA_MODEL";
   // codex — доступ по OAuth-токену (data/codex-auth.json), у ollama/opencode/openrouter — API-ключ в .env.
-  // ollama задан явно: `null ?? default` вернул бы ключ и для codex (null нуллиш) → мастер зацикливался бы.
-  const provKey = {
-    ollama: "OLLAMA_API_KEY",
-    opencode: "OPENCODE_API_KEY",
-    openrouter: "OPENROUTER_API_KEY",
-    codex: null,
-  }[prov0];
+  // Список ключей общий с `iva doctor`: иначе один объявил бы .env полным, а второй — нет.
+  const provKey = cat0?.keyVar ?? null;
   const REQUIRED = [
-    provModel,
+    ...(cat0 ? providerEnvKeys(cat0) : []),
     "DEEPGRAM_API_KEY",
     "TELEGRAM_BOT_TOKEN",
     "TELEGRAM_ALLOWED_USER_IDS",
-    ...(provKey ? [provKey] : []),
   ];
   const loggedInCodex =
     prov0 !== "codex" || existsSync(authFilePath(dataDirAbs(existing)));
   const isComplete =
-    loggedInCodex && REQUIRED.every((k) => (existing[k] || "").trim());
+    Boolean(cat0) &&
+    loggedInCodex &&
+    REQUIRED.every((k) => (existing[k] || "").trim());
+  if (!cat0)
+    console.log(
+      `\n${C.y}  ⚠ ${t(
+        `MODEL_PROVIDER is invalid (${prov0}) — Iva won't start until you pick one below.`,
+        `MODEL_PROVIDER невалиден (${prov0}) — Iva не стартует, пока не выберешь провайдера ниже.`,
+      )}${C.x}`,
+    );
   if (isComplete) {
     console.log(
       `\n${C.b}${C.g}  ${t("Iva is already configured:", "Iva уже настроена:")}${C.x}`,

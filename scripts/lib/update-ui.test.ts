@@ -14,7 +14,8 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { modelSummary } from "./model-summary.ts";
+import { MODEL_PROVIDER_NAMES } from "#lib/model-provider.ts";
+import { SUMMARY_PROVIDER_NAMES, modelSummary } from "./model-summary.ts";
 import { createTerminalProgress } from "./progress.ts";
 import {
   createTelegramUpdateReporter,
@@ -62,6 +63,32 @@ test("modelSummary uses configured provider values without runtime defaults", ()
       line: "OpenAI · gpt-5.5",
     },
   );
+});
+
+// Экран обновления показывает эту строку рядом с версией. Знай он свой набор имён —
+// после опечатки он спокойно назвал бы Ollama, пока агент отказывается стартовать.
+// Сверка идёт в ОБЕ стороны: лишний ключ здесь так же врёт, как недостающий.
+test("modelSummary knows exactly the provider names the runtime accepts", () => {
+  assert.deepEqual(
+    [...SUMMARY_PROVIDER_NAMES].sort(),
+    [...MODEL_PROVIDER_NAMES].sort(),
+  );
+  for (const name of MODEL_PROVIDER_NAMES) {
+    assert.doesNotMatch(
+      modelSummary({ MODEL_PROVIDER: name }).line,
+      /invalid/,
+      name,
+    );
+  }
+  for (const value of ["ollmaa", " ollama", "OLLAMA", ""]) {
+    assert.equal(
+      modelSummary({ MODEL_PROVIDER: value }).line,
+      `invalid (${value}) · ?`,
+      JSON.stringify(value),
+    );
+  }
+  // Отсутствие переменной — по-прежнему Ollama, а не отказ.
+  assert.equal(modelSummary({}).provider, "Ollama");
 });
 
 test("terminal progress is deterministic outside a TTY", () => {
@@ -1881,4 +1908,103 @@ test("a build failure carrying a real key shape is redacted the same way", async
   const text = calls.at(-1)?.body.text ?? "";
   assert.match(text, /provider check failed: \[REDACTED\]/);
   assert.doesNotMatch(text, /sk-or-v1|4f9c1e77/);
+});
+
+// Реальный репортер, а не заглушка из теста апдейта: текст отказа собирается ЗДЕСЬ и берёт
+// язык из job.locale — языка того, кто нажал /update, — а не из AGENT_LANGUAGE процесса CLI.
+test("the update reporter refuses a bad provider in the language of the job", async () => {
+  for (const [locale, expected] of [
+    ["ru", /Сначала почини MODEL_PROVIDER в \.env \(iva config\)/u],
+    ["en", /Fix MODEL_PROVIDER in \.env first \(iva config\)/u],
+  ] as const) {
+    const calls: TelegramCall[] = [];
+    const fetchImpl: MockFetch = async (url, init) => {
+      calls.push({
+        method: url.split("/").at(-1),
+        body: JSON.parse(init.body) as TelegramBody,
+      });
+      return { ok: true, status: 200, json: async () => ({ ok: true }) };
+    };
+    const reporter = createTelegramUpdateReporter({
+      token: "token",
+      job: { chatId: 1, messageId: 100, locale },
+      env: {},
+      fetchImpl,
+    });
+    assert.ok(reporter);
+
+    await reporter.badProvider("ollmaa", "ollama, opencode, codex, openrouter");
+
+    const text = calls.at(-1)?.body.text ?? "";
+    assert.match(text, expected, locale);
+    assert.match(text, /"ollmaa"/u, locale);
+    assert.match(text, /ollama, opencode, codex, openrouter/u, locale);
+    // Это финальный экран: он не должен остаться под лоадером фазы.
+    assert.doesNotMatch(text, /Building Iva|Собираю Iva/u, locale);
+  }
+});
+
+// Терминал причину падения печатал всегда, чат — нет: приходило голое «Couldn't build Iva»
+// и «Retry: /update», по которому пользователь жал обновление снова и снова. Хвост причины
+// (сообщение ошибки или конец health-лога) теперь едет вместе с отказом.
+test("a failed build tells the chat why, redacted and trimmed", async () => {
+  const calls: TelegramCall[] = [];
+  const fetchImpl: MockFetch = async (url, init) => {
+    calls.push({
+      method: url.split("/").at(-1),
+      body: JSON.parse(init.body) as TelegramBody,
+    });
+    return { ok: true, status: 200, json: async () => ({ ok: true }) };
+  };
+  const reporter = createTelegramUpdateReporter({
+    token: "token",
+    job: { chatId: 1, messageId: 100, locale: "en" },
+    env: {},
+    fetchImpl,
+  });
+  assert.ok(reporter);
+
+  await reporter.fail(
+    "build",
+    "0.3.19",
+    'Invalid MODEL_PROVIDER "ollmaa"; expected one of: ollama, opencode, codex, openrouter — run: iva config',
+  );
+
+  const text = calls.at(-1)?.body.text ?? "";
+  assert.match(text, /Couldn't build Iva/u);
+  assert.match(text, /Invalid MODEL_PROVIDER "ollmaa"/u);
+  assert.match(text, /iva config/u);
+  assert.match(text, /0\.3\.19/u);
+});
+
+test("a failure detail is capped and passes the outbound gate", async () => {
+  const calls: TelegramCall[] = [];
+  const fetchImpl: MockFetch = async (url, init) => {
+    calls.push({
+      method: url.split("/").at(-1),
+      body: JSON.parse(init.body) as TelegramBody,
+    });
+    return { ok: true, status: 200, json: async () => ({ ok: true }) };
+  };
+  const reporter = createTelegramUpdateReporter({
+    token: "token",
+    job: { chatId: 1, messageId: 100, locale: "en" },
+    env: {},
+    fetchImpl,
+  });
+  assert.ok(reporter);
+
+  // Хвост лога с ключом внутри: в чат уходит конец, и секрет в нём не переживает гейт.
+  const secret = `sk-or-v1-${"a".repeat(48)}`;
+  await reporter.fail("build", "0.3.19", `${"x".repeat(2000)}\nkey ${secret}`);
+
+  const text = calls.at(-1)?.body.text ?? "";
+  assert.equal(text.includes(secret), false);
+  assert.equal(text.length < 900, true, String(text.length));
+
+  // Без причины сообщение остаётся ровно таким, каким было.
+  await reporter.fail("build", "0.3.19");
+  const plain = calls.at(-1)?.body.text ?? "";
+  assert.match(plain, /Couldn't build Iva/u);
+  assert.doesNotMatch(plain, /xxxx/u);
 });

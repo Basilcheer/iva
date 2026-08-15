@@ -4,8 +4,9 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
+import { MODEL_PROVIDER_NAMES } from "#lib/model-provider.ts";
 import { createCliRuntime } from "./runtime.ts";
-import { createUpdateCommand } from "./update.ts";
+import { ACCEPTED_PROVIDERS, createUpdateCommand } from "./update.ts";
 
 type Runtime = ReturnType<typeof createCliRuntime>;
 type UpdateFactoryOptions = Parameters<typeof createUpdateCommand>[0];
@@ -80,7 +81,12 @@ function runtimeFixture(
   {
     systemdAvailable = false,
     activeUserbot = false,
-  }: { systemdAvailable?: boolean; activeUserbot?: boolean } = {},
+    provider = "codex",
+  }: {
+    systemdAvailable?: boolean;
+    activeUserbot?: boolean;
+    provider?: string;
+  } = {},
 ): Runtime {
   const base = createCliRuntime(root);
   let envRead = 0;
@@ -93,7 +99,7 @@ function runtimeFixture(
       return {
         AGENT_LANGUAGE: "en",
         ASSISTANT_DATA_DIR: "data",
-        MODEL_PROVIDER: "codex",
+        MODEL_PROVIDER: provider,
         CODEX_MODEL: "gpt-test",
       };
     },
@@ -200,6 +206,9 @@ function operationsFixture(
     },
     busy: async () => {
       events.push("reporter.busy");
+    },
+    badProvider: async (value: string, accepted: string) => {
+      events.push(`reporter.badProvider:${value}:${accepted}`);
     },
     postCommitFailure: async (message: string) => {
       events.push(`reporter.postCommitFailure:${message}`);
@@ -686,4 +695,73 @@ test("a post-userbot failure restores its frozen dependencies through the inject
     "ops.removeTelegramJob",
   ]);
   assert.equal(process.exitCode, 1);
+});
+
+// До ветки такие установки обновлялись. После неё новая версия на невалидном имени не
+// поднимается — и без этой проверки апдейт прошёл бы целиком, упёрся в health-check и
+// откатился, ни разу не назвав причину (ADR-0003). Отказ обязан быть ДО замка и до первой
+// записи: установка остаётся ровно такой, какой была.
+test("an update refuses to start on an invalid MODEL_PROVIDER and names the fix", async (t) => {
+  const previousExitCode = process.exitCode;
+  t.after(() => {
+    process.exitCode = previousExitCode;
+  });
+  process.exitCode = undefined;
+  const root = await sandbox(t);
+  const events: string[] = [];
+  const transaction = transactionFixture(events, {
+    changed: true,
+    outputTouched: false,
+    hadLocalChanges: false,
+  });
+  const command = createUpdateCommand({
+    runtime: runtimeFixture(root, events, { provider: "ollmaa" }),
+    systemdLifecycle: { writeUnits: () => [], migrateEnv: () => false },
+    showTree: async () => {},
+    restartUserbotIfActive: () => {},
+    operations: operationsFixture(events, transaction),
+  });
+
+  await command(["--telegram-job", "job-1"]);
+
+  const refusal = `Fix MODEL_PROVIDER in .env first (iva config) — Iva won't start on this value: "ollmaa" (${ACCEPTED_PROVIDERS})`;
+  assertOrder(events, [
+    `terminal.fail:${refusal}`,
+    `reporter.badProvider:ollmaa:${ACCEPTED_PROVIDERS}`,
+    "reporter.dispose",
+    "ops.removeTelegramJob",
+  ]);
+  // Ни замка, ни транзакции, ни сборки: сломанная конфигурация не стоит целого цикла
+  // обновления с откатом.
+  assert.equal(events.includes("ops.acquireUpdateLock"), false);
+  assert.equal(events.includes("ops.createUpdateTransaction"), false);
+  assert.equal(process.exitCode, 1);
+});
+
+test("every accepted provider name passes the update preflight", async (t) => {
+  for (const name of MODEL_PROVIDER_NAMES) {
+    const root = await sandbox(t);
+    const events: string[] = [];
+    const transaction = transactionFixture(events, {
+      changed: false,
+      outputTouched: false,
+      hadLocalChanges: false,
+    });
+    const command = createUpdateCommand({
+      runtime: runtimeFixture(root, events, { provider: name }),
+      systemdLifecycle: { writeUnits: () => [], migrateEnv: () => false },
+      showTree: async () => {},
+      restartUserbotIfActive: () => {},
+      operations: operationsFixture(events, transaction),
+    });
+
+    await command([]);
+
+    assert.equal(events.includes("ops.acquireUpdateLock"), true, name);
+    assert.equal(
+      events.some((event) => event.startsWith("terminal.fail:Fix MODEL")),
+      false,
+      name,
+    );
+  }
 });
