@@ -575,6 +575,13 @@ export function createUpdateTransaction({
     branch = await mustGit("rev-parse", "--abbrev-ref", "HEAD");
     if (!branch || branch === "HEAD")
       throw new Error("detached HEAD: switch to the update branch first");
+    cachedTarget = await inspectTarget();
+    const [stableHead, stableBranch] = await Promise.all([
+      mustGit("rev-parse", "HEAD"),
+      mustGit("rev-parse", "--abbrev-ref", "HEAD"),
+    ]);
+    if (stableHead !== originalHead || stableBranch !== branch)
+      throw new Error("repository changed while resolving the update target");
     recoveryOwner = await UpdateRecoveryOwner.create({
       root,
       headOid: originalHead,
@@ -593,7 +600,12 @@ export function createUpdateTransaction({
     } else protectedEnv = { phase: "absent" };
 
     const message = `iva-update-${safeTimestamp()}`;
-    const capturedState = await recoveryOwner.capture(message);
+    const capturedState = await recoveryOwner.capture(message, {
+      ...(cachedTarget.plan === "none"
+        ? {}
+        : { collisionTarget: cachedTarget.remote }),
+      excludedIgnoredRoots: [".env", ".output", "node_modules"],
+    });
     hadLocalChanges = capturedState.dirty;
     if (hadLocalChanges) {
       await recoveryOwner.storeSnapshot(message);
@@ -645,6 +657,7 @@ export function createUpdateTransaction({
         if (restoreStash.lookupError) throw new Error(restoreStash.lookupError);
         recoveryOwner.setRestoreStashOid(restoreStash.oid);
       }
+      await recoveryOwner.removeIgnoredCollisions();
     } else {
       try {
         captureCustomLayer({ root, dataDir, baseRevision: originalHead });
@@ -666,7 +679,7 @@ export function createUpdateTransaction({
 
   // Fetch + классификация плана интеграции БЕЗ движения HEAD. Отдельный шаг, чтобы
   // buildCandidate() мог собрать target в worktree до любых изменений живого дерева.
-  async function resolveTarget() {
+  async function inspectTarget(): Promise<UpdateTarget> {
     const target = await resolveUpdateTarget({ git });
     updateBranch = target.branch;
     const remote = target.targetHead;
@@ -684,7 +697,11 @@ export function createUpdateTransaction({
         plan = "none";
       else plan = "rebase";
     }
-    cachedTarget = { ...target, remote, plan, changed: plan !== "none" };
+    return { ...target, remote, plan, changed: plan !== "none" };
+  }
+
+  async function resolveTarget() {
+    cachedTarget ??= await inspectTarget();
     return cachedTarget;
   }
 
@@ -707,6 +724,7 @@ export function createUpdateTransaction({
 
   async function restoreLocalChanges(): Promise<RestoreReport> {
     const owner = requireRecoveryOwner();
+    const ignoredCollisions = [...owner.ignoredCollisionPaths];
     const customConflicts = candidate?.customConflicts ?? [];
     const customRecoveryDir = candidate?.customRecoveryDir;
     const fallbackReason = candidate?.fallbackReason;
@@ -729,7 +747,24 @@ export function createUpdateTransaction({
       await owner.restoreFlagsForCurrentIndex();
       return report;
     };
+    const preserveIgnoredCollisions =
+      async (): Promise<RestoreReport | null> => {
+        if (!owner.hasIgnoredCollisions) return null;
+        const archived = await archiveLocalChanges({
+          conflicts: ignoredCollisions,
+          reason: "conflict",
+        });
+        owner.retain();
+        return {
+          status: "preserved",
+          conflicts: archived.conflictReports,
+          recoveryDir: archived.recoveryDir,
+          stashOid: owner.snapshotOid,
+        };
+      };
     if (!owner.restoreStashOid) {
+      const ignoredReport = await preserveIgnoredCollisions();
+      if (ignoredReport) return finish(ignoredReport);
       const customReport = customConflictReport();
       if (customReport) return finish(customReport);
       if (capturedCustomPaths.length > 0 && !fallbackReason) {
@@ -747,6 +782,8 @@ export function createUpdateTransaction({
     const conflicts = result.code === 0 ? [] : await unmergedPaths();
     if (result.code === 0 && !fallbackReason) {
       stashApplied = true;
+      const ignoredReport = await preserveIgnoredCollisions();
+      if (ignoredReport) return finish(ignoredReport);
       return finish(
         customConflictReport() ?? { status: "applied", conflicts: [] },
       );
@@ -756,8 +793,11 @@ export function createUpdateTransaction({
         result.stderr || "local changes could not be restored safely",
       );
 
+    const recoveryConflicts = [
+      ...new Set([...conflicts, ...ignoredCollisions]),
+    ].sort();
     const archived = await archiveLocalChanges({
-      conflicts,
+      conflicts: recoveryConflicts,
       reason: fallbackReason || "conflict",
     });
     owner.retain();

@@ -8,9 +8,9 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
-const EXPECTED_PRODUCTION_COUNT = 193;
+const EXPECTED_PRODUCTION_COUNT = 195;
 const EXPECTED_INVENTORY_SHA256 =
-  "2d483098c86958a9e979597c871d015aab8b944281e58c0d87866c732dc031bd";
+  "45b888dadc673ff0eea73c3a20dc698192e24d7691aad5f2cbf5246058a43cf8";
 
 // Node's native include globs filter loaded modules; they do not load untouched files.
 // This test pins the exact production path inventory and a separately measured 26-path
@@ -44,8 +44,9 @@ const EXPECTED_INVENTORY_SHA256 =
 // The durable Telegram bridge then added `scripts/poller/inbox.ts`,
 // `process-lock.ts`, `startup-state.ts`, and `update-callback.ts`. Scoped coverage
 // reported all four through their proof tests, so the blind spot stays at 26.
-// The recovery owner `scripts/lib/update-recovery.ts` came next, reported at 97.43%
-// lines by the scoped update suite, so the blind spot stays at 26.
+// The recovery owner `scripts/lib/update-recovery.ts` came next. Its target-aware
+// collision and manifest modules followed. The scoped update suite reports all three
+// at 94.55%, 97.53% and 100% lines, so the blind spot stays at 26.
 const MEASURED_UNREPORTED_BY_CATEGORY = {
   frameworkBoundaries: [
     "agent/agent.ts",

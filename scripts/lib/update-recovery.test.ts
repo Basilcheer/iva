@@ -4,90 +4,24 @@ import { execFileSync } from "node:child_process";
 import {
   chmodSync,
   mkdirSync,
-  mkdtempSync,
   readFileSync,
   readdirSync,
   rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { createUpdateTransaction } from "./update-safety.ts";
-
-type Fixture = {
-  temp: string;
-  remote: string;
-  seed: string;
-  local: string;
-  data: string;
-};
-
-function git(cwd: string, ...args: string[]): string {
-  return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
-}
+import {
+  git,
+  recoveryFixture as fixture,
+  recoveryTransaction as transaction,
+  wrappedRecoveryTransaction as wrappedTransaction,
+} from "../fixtures/update-recovery.ts";
 
 function gitHex(cwd: string, ...args: string[]): string {
   return Buffer.from(execFileSync("git", args, { cwd })).toString("hex");
-}
-
-function fixture(): Fixture {
-  const temp = mkdtempSync(join(tmpdir(), "iva-recovery-"));
-  const remote = join(temp, "remote.git");
-  const seed = join(temp, "seed");
-  const local = join(temp, "local");
-  const data = join(temp, "data");
-  git(temp, "init", "--bare", remote);
-  git(temp, "init", "-b", "main", seed);
-  git(seed, "config", "user.email", "test@example.com");
-  git(seed, "config", "user.name", "Iva Test");
-  writeFileSync(
-    join(seed, ".gitignore"),
-    ".env\n.output\n/.iva-update/\nnode_modules\n",
-  );
-  writeFileSync(
-    join(seed, "package.json"),
-    JSON.stringify({ name: "fixture", version: "1.0.0" }),
-  );
-  writeFileSync(join(seed, "tracked.txt"), "base\n");
-  git(seed, "add", ".");
-  git(seed, "commit", "-m", "base");
-  git(seed, "remote", "add", "origin", remote);
-  git(seed, "push", "-u", "origin", "main");
-  git(temp, "clone", "--branch", "main", remote, local);
-  git(local, "config", "user.email", "test@example.com");
-  git(local, "config", "user.name", "Iva Test");
-  mkdirSync(data, { recursive: true });
-  return { temp, remote, seed, local, data };
-}
-
-function transaction(fx: Fixture) {
-  return createUpdateTransaction({
-    root: fx.local,
-    dataDir: fx.data,
-    envPath: join(fx.local, ".env"),
-  });
-}
-
-function wrappedTransaction(fx: Fixture, body: string) {
-  const bin = join(fx.temp, "wrapped-git");
-  const wrapper = join(bin, "git");
-  const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
-  mkdirSync(bin);
-  writeFileSync(
-    wrapper,
-    "#!/bin/sh\n" +
-      body.replaceAll("__REAL_GIT__", JSON.stringify(realGit)) +
-      `\nexec ${JSON.stringify(realGit)} "$@"\n`,
-  );
-  chmodSync(wrapper, 0o755);
-  return createUpdateTransaction({
-    root: fx.local,
-    dataDir: fx.data,
-    envPath: join(fx.local, ".env"),
-    env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}` },
-  });
 }
 
 function rawState(local: string) {
