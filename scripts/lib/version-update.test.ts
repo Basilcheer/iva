@@ -972,6 +972,65 @@ test("the chores of the installation are run around the restart, out of the vers
   );
 });
 
+test("a healthy service stays committed when post-health cleanup fails", async (t) => {
+  const iva = world(t);
+  const logged: string[] = [];
+  const outcome = updated(
+    await iva.update({
+      adopt: () => {
+        throw new Error("retiring the old checkout failed");
+      },
+      log: (message) => logged.push(message),
+    }),
+  );
+
+  const store = createVersionStore(iva.home);
+  assert.equal(store.currentName(), outcome.version);
+  assert.equal(store.settled(), outcome.version);
+  assert.match(logged.join("\n"), /retiring the old checkout failed/u);
+  assert.equal(store.cleanupPending(outcome.version), true);
+
+  let retries = 0;
+  assert.deepEqual(
+    await iva.update({
+      adopt: () => {
+        retries += 1;
+      },
+    }),
+    { status: "current", version: outcome.version },
+  );
+  assert.equal(retries, 1);
+  assert.equal(store.cleanupPending(outcome.version), false);
+  assert.equal(iva.restarts.length, 1, "cleanup retry must not restart service");
+});
+
+test("a crash after service commit leaves cleanup debt for the next run", async (t) => {
+  const iva = world(t);
+  const first = updated(await iva.update());
+  writeFileSync(join(iva.repo, "agent/agent.ts"), "export const agent = 2;\n");
+  iva.release("0.3.15");
+  await killAt(iva.home, "cleanup", iva.target);
+
+  const store = createVersionStore(iva.home);
+  const moved = store.currentName();
+  assert.notEqual(moved, first.version);
+  assert.equal(store.settled(), moved);
+  assert.equal(store.cleanupPending(moved!), true);
+
+  let cleanupRuns = 0;
+  assert.deepEqual(
+    await iva.update({
+      adopt: () => {
+        cleanupRuns += 1;
+      },
+    }),
+    { status: "current", version: moved },
+  );
+  assert.equal(cleanupRuns, 1);
+  assert.equal(store.cleanupPending(moved!), false);
+  assert.equal(iva.restarts.length, 1, "cleanup recovery must not restart");
+});
+
 test("the probe is started once when its port is nobody else's", async (t) => {
   const iva = world(t);
   const ports: number[] = [];

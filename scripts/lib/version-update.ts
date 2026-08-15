@@ -188,6 +188,10 @@ export async function runVersionUpdate(
     const settled =
       active && releaseOf(active) === release && store.settled() === active;
     if (settled && !force) {
+      if (store.cleanupPending(active))
+        return handoff
+          ? await handoff(active)
+          : await finishVersionUpdate({ ...options, name: active, store });
       store.gc(KEEP);
       return { status: "current", version: active };
     }
@@ -246,6 +250,14 @@ export async function finishVersionUpdate({
     ((at, port) =>
       probeVersion({ dir: at, port, env: probeEnvironment(env, port, at) }));
   let custom = builtWith(dir, name, customDir);
+  if (
+    active === name &&
+    store.settled() === name &&
+    store.cleanupPending(name)
+  ) {
+    await runPostHealthCleanup({ name, run, adopt, log, store });
+    return { status: "current", version: name };
+  }
   /** A version being built is garbage nothing points at: a failure takes it away. */
   const discard = (error: unknown): never => {
     rmSync(dir, { recursive: true, force: true });
@@ -337,6 +349,7 @@ export async function finishVersionUpdate({
   // gigabytes, and repairing them once the agent has them open is too late.
   await errand(run, log, {
     what: "the vault cleanup",
+    failure: "the update continues without it",
     command: "uv",
     args: ["run", join(dir, "scripts/autograph/cleanup.py"), ".", "--apply"],
     cwd: store.layout.vault,
@@ -383,17 +396,12 @@ export async function finishVersionUpdate({
 
   // Served: whatever this code did to the installation before, it does not now.
   store.recordLive(name, true);
+  // Service state commits before every optional cleanup. A crash or cleanup
+  // fault leaves explicit debt, never a healthy update reported as unfinished.
+  store.settle(name, { cleanupPending: true });
   // After the service is up: until it runs the new version, the old checkout is
   // what a failed restart falls back to, so it is not ours to remove any earlier.
-  adopt();
-  await errand(run, log, {
-    what: "the Google CLI update",
-    command: "npm",
-    args: ["i", "-g", "@googleworkspace/cli@latest"],
-    cwd: dir,
-  });
-  const removed = store.gc(KEEP);
-  store.settle(name);
+  const removed = await runPostHealthCleanup({ name, run, adopt, log, store });
   return {
     status: "updated",
     version: name,
@@ -402,6 +410,54 @@ export async function finishVersionUpdate({
     migrations,
     removed,
   };
+}
+
+/** Optional installation chores are durable debt after service commit. */
+async function runPostHealthCleanup({
+  name,
+  run,
+  adopt,
+  log,
+  store,
+}: {
+  readonly name: string;
+  readonly run: Runner;
+  readonly adopt: () => void;
+  readonly log: Say;
+  readonly store: Store;
+}): Promise<string[]> {
+  let complete = true;
+  let removed: string[] = [];
+  try {
+    adopt();
+  } catch (error) {
+    complete = false;
+    log(`installation adoption remains pending: ${String(error)}`);
+  }
+  if (
+    !(await errand(run, log, {
+      what: "the Google CLI update",
+      failure: "cleanup remains pending",
+      command: "npm",
+      args: ["i", "-g", "@googleworkspace/cli@latest"],
+      cwd: join(store.layout.versions, name),
+    }))
+  )
+    complete = false;
+  try {
+    removed = store.gc(KEEP);
+  } catch (error) {
+    complete = false;
+    log(`version cleanup remains pending: ${String(error)}`);
+  }
+  if (complete) {
+    try {
+      store.finishCleanup(name);
+    } catch (error) {
+      log(`cleanup state remains pending: ${String(error)}`);
+    }
+  }
+  return removed;
 }
 
 /**
@@ -416,21 +472,24 @@ async function errand(
   log: Say,
   {
     what,
+    failure,
     command,
     args,
     cwd,
   }: {
     readonly what: string;
+    readonly failure: string;
     readonly command: string;
     readonly args: readonly string[];
     readonly cwd: string;
   },
-): Promise<void> {
+): Promise<boolean> {
   const done = await run(command, args, cwd).catch(
     (error: unknown): CommandResult => ({ code: 1, output: String(error) }),
   );
-  if (done.code !== 0)
-    log(`${what} did not run; the update is done without it`);
+  if (done.code === 0) return true;
+  log(`${what} did not run; ${failure}`);
+  return false;
 }
 
 function stockNotice(verb: string, failure: string): string {

@@ -113,6 +113,10 @@ async function main(): Promise<void> {
     // restart to find; the failure it guards has its own tests.
     serving: () => Promise.resolve({ ok: true, log: "" }),
     adopt: () => {
+      if (stallAt === "cleanup") {
+        writeFileSync(marker, "cleanup");
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
+      }
       writeFileSync(join(home, "adopted"), "");
     },
   });
