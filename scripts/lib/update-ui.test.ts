@@ -5,12 +5,15 @@ import { execFileSync } from "node:child_process";
 import {
   chmodSync,
   existsSync,
+  lstatSync,
   mkdtempSync,
   mkdirSync,
+  readlinkSync,
   readFileSync,
   readdirSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -1053,13 +1056,82 @@ function d10Transaction(
 
 test("every pre-snapshot command fault leaves the live tree untouched", async (t) => {
   const faults = [
-    ['[ "$1" = stash ] && [ "$2" = create ]', "tracked snapshot"],
-    ['[ "$1" = read-tree ]', "untracked index init"],
-    ['[ "$1" = add ]', "literal untracked capture"],
-    ['[ "$1" = write-tree ]', "untracked tree write"],
-    ['[ "$1" = commit-tree ]', "snapshot commit"],
-    ['[ "$1" = diff ] && [ "$2" = --quiet ]', "tracked verification"],
-    ['[ "$1" = ls-tree ]', "untracked verification"],
+    ['[ "$1" = ls-files ] && [ "$2" = --cached ]', "tracked index scan"],
+    ['[ "$1" = ls-files ] && [ "$2" = --others ]', "untracked path scan"],
+    ['[ "$1" = write-tree ] && [ -z "$GIT_INDEX_FILE" ]', "index tree write"],
+    [
+      "[ \"$1\" = read-tree ] && printf '%s' \"$GIT_INDEX_FILE\" | grep -q 'detect-worktree'",
+      "worktree index init",
+    ],
+    [
+      '[ "$1" = -c ] && [ "$3" = add ] && printf \'%s\' "$GIT_INDEX_FILE" | grep -q \'detect-worktree\'',
+      "literal worktree capture",
+    ],
+    [
+      "[ \"$1\" = write-tree ] && printf '%s' \"$GIT_INDEX_FILE\" | grep -q 'detect-worktree'",
+      "worktree tree write",
+    ],
+    [
+      '[ "$1" = rev-parse ] && [ "$2" = --verify ] && printf \'%s\' "$3" | grep -Fq \'^{tree}\'',
+      "base tree lookup",
+    ],
+    [
+      "[ \"$1\" = commit-tree ] && printf '%s' \"$*\" | grep -q ' index$'",
+      "index commit",
+    ],
+    [
+      "[ \"$1\" = read-tree ] && printf '%s' \"$GIT_INDEX_FILE\" | grep -q 'iva-update-untracked-snapshot'",
+      "untracked index init",
+    ],
+    [
+      '[ "$1" = -c ] && [ "$3" = add ] && printf \'%s\' "$GIT_INDEX_FILE" | grep -q \'iva-update-untracked-snapshot\'',
+      "literal untracked capture",
+    ],
+    [
+      "[ \"$1\" = write-tree ] && printf '%s' \"$GIT_INDEX_FILE\" | grep -q 'iva-update-untracked-snapshot'",
+      "untracked tree write",
+    ],
+    [
+      "[ \"$1\" = commit-tree ] && printf '%s' \"$*\" | grep -q ' untracked$'",
+      "untracked commit",
+    ],
+    [
+      "[ \"$1\" = commit-tree ] && printf '%s' \"$*\" | grep -q 'iva-update-' && ! printf '%s' \"$*\" | grep -Eq ' (index|untracked)$'",
+      "recovery commit",
+    ],
+    [
+      '[ "$1" = rev-parse ] && [ "$2" = --verify ] && printf \'%s\' "$3" | grep -Fq \'^{commit}\'',
+      "recovery commit verification",
+    ],
+    ['[ "$1" = ls-tree ] && [ "$4" != *"^3" ]', "worktree verification"],
+    [
+      "[ \"$1\" = read-tree ] && printf '%s' \"$GIT_INDEX_FILE\" | grep -q 'verify-worktree'",
+      "worktree verification init",
+    ],
+    [
+      '[ "$1" = -c ] && [ "$3" = add ] && printf \'%s\' "$GIT_INDEX_FILE" | grep -q \'verify-worktree\'',
+      "worktree verification capture",
+    ],
+    [
+      "[ \"$1\" = write-tree ] && printf '%s' \"$GIT_INDEX_FILE\" | grep -q 'verify-worktree'",
+      "worktree verification write",
+    ],
+    [
+      "[ \"$1\" = ls-tree ] && printf '%s' \"$4\" | grep -Fq '^3'",
+      "untracked verification",
+    ],
+    [
+      "[ \"$1\" = read-tree ] && printf '%s' \"$GIT_INDEX_FILE\" | grep -q 'verify-untracked'",
+      "untracked verification init",
+    ],
+    [
+      '[ "$1" = -c ] && [ "$3" = add ] && printf \'%s\' "$GIT_INDEX_FILE" | grep -q \'verify-untracked\'',
+      "untracked verification capture",
+    ],
+    [
+      "[ \"$1\" = write-tree ] && printf '%s' \"$GIT_INDEX_FILE\" | grep -q 'verify-untracked'",
+      "untracked verification write",
+    ],
     [
       "[ \"$1\" = update-ref ] && printf '%s' \"$2\" | grep -q '^refs/iva/update-recovery/'",
       "durable ref write",
@@ -1328,6 +1400,193 @@ test("the durable unique ref restores a crashed transaction and disappears only 
   );
 });
 
+test("the durable snapshot records modes, links and literal paths when core.fileMode is false", async (t) => {
+  const fixture = updateFixture();
+  t.after(() => rmSync(fixture.temp, { recursive: true, force: true }));
+  writeFileSync(join(fixture.local, "mode-tool.sh"), "#!/bin/sh\necho base\n");
+  writeFileSync(join(fixture.local, "staged-mode.sh"), "#!/bin/sh\nexit 0\n");
+  symlinkSync("tracked.txt", join(fixture.local, "tracked-link"));
+  writeFileSync(join(fixture.local, "older.txt"), "older base\n");
+  git(
+    fixture.local,
+    "add",
+    "mode-tool.sh",
+    "staged-mode.sh",
+    "tracked-link",
+    "older.txt",
+  );
+  git(fixture.local, "commit", "-m", "add mode fixture");
+  writeFileSync(join(fixture.local, "older.txt"), "pre-existing stash\n");
+  git(fixture.local, "stash", "push", "--message", "older-user-stash");
+  const olderStashOid = git(fixture.local, "rev-parse", "refs/stash");
+  git(fixture.local, "config", "core.fileMode", "false");
+  writeFileSync(join(fixture.local, "mode-tool.sh"), "#!/bin/sh\necho local\n");
+  chmodSync(join(fixture.local, "mode-tool.sh"), 0o755);
+  chmodSync(join(fixture.local, "staged-mode.sh"), 0o644);
+  git(fixture.local, "update-index", "--chmod=+x", "staged-mode.sh");
+  rmSync(join(fixture.local, "tracked-link"));
+  symlinkSync("mode-tool.sh", join(fixture.local, "tracked-link"));
+  mkdirSync(join(fixture.local, "nested-mode"));
+  writeFileSync(
+    join(fixture.local, "nested-mode/untracked-tool.sh"),
+    "#!/bin/sh\necho untracked\n",
+  );
+  chmodSync(join(fixture.local, "nested-mode/untracked-tool.sh"), 0o755);
+  symlinkSync("../mode-tool.sh", join(fixture.local, "nested-mode/link"));
+  writeFileSync(join(fixture.local, ":(glob)*"), Buffer.from([255, 0, 4]));
+  chmodSync(join(fixture.local, ":(glob)*"), 0o755);
+  const state = () => ({
+    status: gitHex(
+      fixture.local,
+      "status",
+      "--porcelain=v1",
+      "-z",
+      "--untracked-files=all",
+    ),
+    staged: gitHex(fixture.local, "diff", "--binary", "--cached"),
+    modeToolBytes: readFileSync(join(fixture.local, "mode-tool.sh")).toString(
+      "hex",
+    ),
+    modeToolMode: statSync(join(fixture.local, "mode-tool.sh")).mode & 0o777,
+    stagedMode: statSync(join(fixture.local, "staged-mode.sh")).mode & 0o777,
+    trackedLink: readlinkSync(join(fixture.local, "tracked-link")),
+    trackedIsLink: lstatSync(
+      join(fixture.local, "tracked-link"),
+    ).isSymbolicLink(),
+    untrackedMode:
+      statSync(join(fixture.local, "nested-mode/untracked-tool.sh")).mode &
+      0o777,
+    untrackedLink: readlinkSync(join(fixture.local, "nested-mode/link")),
+    literalMode: statSync(join(fixture.local, ":(glob)*")).mode & 0o777,
+    literalBytes: readFileSync(join(fixture.local, ":(glob)*")).toString("hex"),
+  });
+  const before = state();
+  const tx = createUpdateTransaction({
+    root: fixture.local,
+    dataDir: fixture.data,
+    envPath: join(fixture.local, ".env"),
+  });
+
+  await tx.protect();
+  const recoveryOid = git(
+    fixture.local,
+    "for-each-ref",
+    "--format=%(objectname)",
+    "refs/iva/update-recovery",
+  );
+  const treeMode = (revision: string, path: string) =>
+    git(
+      fixture.local,
+      "--literal-pathspecs",
+      "ls-tree",
+      revision,
+      "--",
+      path,
+    ).split(/\s/u, 1)[0];
+
+  assert.equal(treeMode(recoveryOid, "mode-tool.sh"), "100755");
+  assert.equal(treeMode(recoveryOid, "staged-mode.sh"), "100644");
+  assert.equal(treeMode(`${recoveryOid}^2`, "staged-mode.sh"), "100755");
+  assert.equal(treeMode(recoveryOid, "tracked-link"), "120000");
+  assert.equal(
+    treeMode(`${recoveryOid}^3`, "nested-mode/untracked-tool.sh"),
+    "100755",
+  );
+  assert.equal(treeMode(`${recoveryOid}^3`, "nested-mode/link"), "120000");
+  assert.equal(treeMode(`${recoveryOid}^3`, ":(glob)*"), "100755");
+
+  git(fixture.local, "stash", "apply", "--index", recoveryOid);
+  assert.deepEqual(state(), before);
+  await tx.rollback();
+  assert.deepEqual(state(), before);
+  assert.notEqual(
+    git(
+      fixture.local,
+      "for-each-ref",
+      "--format=%(refname)",
+      "refs/iva/update-recovery",
+    ),
+    "",
+  );
+
+  await tx.commit();
+  assert.equal(
+    git(fixture.local, "stash", "list", "--format=%H"),
+    olderStashOid,
+  );
+  assert.equal(
+    git(
+      fixture.local,
+      "for-each-ref",
+      "--format=%(refname)",
+      "refs/iva/update-recovery",
+    ),
+    "",
+  );
+});
+
+test("assume-unchanged cannot hide tracked bytes from the durable snapshot", async (t) => {
+  const fixture = updateFixture();
+  t.after(() => rmSync(fixture.temp, { recursive: true, force: true }));
+  git(fixture.local, "update-index", "--assume-unchanged", "tracked.txt");
+  writeFileSync(join(fixture.local, "tracked.txt"), "hidden local bytes\n");
+  assert.equal(git(fixture.local, "status", "--porcelain=v1"), "");
+  const before = readFileSync(join(fixture.local, "tracked.txt")).toString(
+    "hex",
+  );
+  const tx = createUpdateTransaction({
+    root: fixture.local,
+    dataDir: fixture.data,
+    envPath: join(fixture.local, ".env"),
+  });
+
+  await tx.protect();
+  await tx.rollback();
+
+  assert.equal(
+    readFileSync(join(fixture.local, "tracked.txt")).toString("hex"),
+    before,
+  );
+});
+
+test("core.fileMode false cannot hide a mode-only executable change", async (t) => {
+  const fixture = updateFixture();
+  t.after(() => rmSync(fixture.temp, { recursive: true, force: true }));
+  writeFileSync(join(fixture.local, "mode-only.sh"), "#!/bin/sh\nexit 0\n");
+  chmodSync(join(fixture.local, "mode-only.sh"), 0o644);
+  git(fixture.local, "add", "mode-only.sh");
+  git(fixture.local, "commit", "-m", "add hidden mode fixture");
+  git(fixture.local, "config", "core.fileMode", "false");
+  chmodSync(join(fixture.local, "mode-only.sh"), 0o755);
+  assert.equal(git(fixture.local, "status", "--porcelain=v1"), "");
+  const tx = createUpdateTransaction({
+    root: fixture.local,
+    dataDir: fixture.data,
+    envPath: join(fixture.local, ".env"),
+  });
+
+  await tx.protect();
+  const recoveryOid = git(
+    fixture.local,
+    "for-each-ref",
+    "--format=%(objectname)",
+    "refs/iva/update-recovery",
+  );
+  assert.equal(
+    git(fixture.local, "ls-tree", recoveryOid, "--", "mode-only.sh").split(
+      /\s/u,
+      1,
+    )[0],
+    "100755",
+  );
+
+  await tx.rollback();
+  assert.equal(
+    statSync(join(fixture.local, "mode-only.sh")).mode & 0o777,
+    0o755,
+  );
+});
+
 test("an only-untracked snapshot preserves modes, nested bytes and a literal pathspec", async (t) => {
   const fixture = updateFixture();
   t.after(() => rmSync(fixture.temp, { recursive: true, force: true }));
@@ -1339,6 +1598,15 @@ test("an only-untracked snapshot preserves modes, nested bytes and a literal pat
   writeFileSync(join(fixture.local, "only.sh"), "#!/bin/sh\nexit 0\n");
   chmodSync(join(fixture.local, "only.sh"), 0o755);
   writeFileSync(join(fixture.local, ":(glob)*"), Buffer.from([255, 0, 4]));
+  const collatingPath = "locale";
+  const collatingPathWithZeroWidthSpace = "locale\u200b";
+  assert.equal(collatingPath.localeCompare(collatingPathWithZeroWidthSpace), 0);
+  writeFileSync(join(fixture.local, collatingPath), Buffer.from([1, 2, 3]));
+  writeFileSync(
+    join(fixture.local, collatingPathWithZeroWidthSpace),
+    Buffer.from([3, 2, 1]),
+  );
+  chmodSync(join(fixture.local, collatingPathWithZeroWidthSpace), 0o755);
   const state = () => ({
     status: gitHex(
       fixture.local,
@@ -1353,6 +1621,14 @@ test("an only-untracked snapshot preserves modes, nested bytes and a literal pat
     executable: readFileSync(join(fixture.local, "only.sh")).toString("hex"),
     mode: statSync(join(fixture.local, "only.sh")).mode & 0o777,
     literal: readFileSync(join(fixture.local, ":(glob)*")).toString("hex"),
+    collating: readFileSync(join(fixture.local, collatingPath)).toString("hex"),
+    collatingMode: statSync(join(fixture.local, collatingPath)).mode & 0o777,
+    collatingWithZeroWidthSpace: readFileSync(
+      join(fixture.local, collatingPathWithZeroWidthSpace),
+    ).toString("hex"),
+    collatingWithZeroWidthSpaceMode:
+      statSync(join(fixture.local, collatingPathWithZeroWidthSpace)).mode &
+      0o777,
   });
   const before = state();
   const tx = createUpdateTransaction({
@@ -1365,6 +1641,97 @@ test("an only-untracked snapshot preserves modes, nested bytes and a literal pat
   await tx.rollback();
 
   assert.deepEqual(state(), before);
+});
+
+test("an untracked path ending in a space survives protect and rollback", async (t) => {
+  const fixture = updateFixture();
+  t.after(() => rmSync(fixture.temp, { recursive: true, force: true }));
+  const path = join(fixture.local, "trailing ");
+  writeFileSync(path, Buffer.from([0, 32, 10, 255]));
+  const before = {
+    bytes: readFileSync(path).toString("hex"),
+    status: gitHex(
+      fixture.local,
+      "status",
+      "--porcelain=v1",
+      "-z",
+      "--untracked-files=all",
+    ),
+  };
+  const tx = createUpdateTransaction({
+    root: fixture.local,
+    dataDir: fixture.data,
+    envPath: join(fixture.local, ".env"),
+  });
+
+  await tx.protect();
+  await tx.rollback();
+
+  assert.deepEqual(
+    {
+      bytes: readFileSync(path).toString("hex"),
+      status: gitHex(
+        fixture.local,
+        "status",
+        "--porcelain=v1",
+        "-z",
+        "--untracked-files=all",
+      ),
+    },
+    before,
+  );
+});
+
+test("rollback reports reset failure and does not attempt a destructive apply", async (t) => {
+  const fixture = updateFixture();
+  t.after(() => rmSync(fixture.temp, { recursive: true, force: true }));
+  prepareProtectedTree(fixture.local);
+  const failRollback = join(fixture.temp, "fail-rollback");
+  const { calls, tx } = d10Transaction(
+    fixture,
+    `if [ -f ${JSON.stringify(failRollback)} ] && [ "$1" = reset ] && [ "$2" = --hard ]; then\n` +
+      "  printf '%s\\n' 'injected rollback reset failure' >&2\n" +
+      "  exit 91\n" +
+      "fi\n",
+  );
+  await tx.protect();
+  const beforeRollbackCalls = readFileSync(calls, "utf8").length;
+  writeFileSync(failRollback, "fail\n");
+
+  await assert.rejects(() => tx.rollback(), /injected rollback reset failure/u);
+
+  assert.doesNotMatch(
+    readFileSync(calls, "utf8").slice(beforeRollbackCalls),
+    /stash apply/u,
+  );
+});
+
+test("rollback reports apply failure while the exact durable ref remains recoverable", async (t) => {
+  const fixture = updateFixture();
+  t.after(() => rmSync(fixture.temp, { recursive: true, force: true }));
+  const before = prepareProtectedTree(fixture.local);
+  const failRollback = join(fixture.temp, "fail-rollback");
+  const { tx } = d10Transaction(
+    fixture,
+    `if [ -f ${JSON.stringify(failRollback)} ] && [ "$1" = stash ] && [ "$2" = apply ]; then\n` +
+      "  printf '%s\\n' 'injected rollback apply failure' >&2\n" +
+      "  exit 92\n" +
+      "fi\n",
+  );
+  await tx.protect();
+  const recoveryOid = git(
+    fixture.local,
+    "for-each-ref",
+    "--format=%(objectname)",
+    "refs/iva/update-recovery",
+  );
+  writeFileSync(failRollback, "fail\n");
+
+  await assert.rejects(() => tx.rollback(), /injected rollback apply failure/u);
+
+  rmSync(failRollback);
+  git(fixture.local, "stash", "apply", "--index", recoveryOid);
+  assert.deepEqual(protectedTreeState(fixture.local), before);
 });
 
 test("rollback recovers the exact tree after a partial stash apply failure", async (t) => {

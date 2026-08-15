@@ -4,6 +4,7 @@ import {
   chmodSync,
   copyFileSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -81,6 +82,23 @@ type UpdateTransactionOptions = {
   logFile?: string;
   env?: NodeJS.ProcessEnv;
 };
+type SnapshotTreeEntry = { mode: string; path: string };
+
+function sameSnapshotTreeEntries(
+  actual: readonly { mode: string; path: string }[],
+  expected: readonly { mode: string; path: string }[],
+): boolean {
+  if (actual.length !== expected.length) return false;
+  const expectedModes = new Map(
+    expected.map(({ mode, path }) => [path, mode] as const),
+  );
+  if (expectedModes.size !== expected.length) return false;
+  const actualPaths = new Set(actual.map(({ path }) => path));
+  return (
+    actualPaths.size === actual.length &&
+    actual.every(({ mode, path }) => expectedModes.get(path) === mode)
+  );
+}
 
 function readJsonObject(text: string): Record<string, unknown> | null {
   try {
@@ -354,48 +372,176 @@ export function createUpdateTransaction({
     }
   };
 
-  const verifyRecoverySnapshot = async (
-    oid: string,
-    expectedUntrackedTree: string | null,
+  const parseIndexEntries = (text: string): SnapshotTreeEntry[] =>
+    text
+      .split("\0")
+      .filter(Boolean)
+      .map((record) => {
+        const tab = record.indexOf("\t");
+        const [mode, , stage] = record.slice(0, tab).split(" ");
+        if (tab < 0 || !mode || stage !== "0")
+          throw new Error("the Git index cannot be snapshotted");
+        return { mode, path: record.slice(tab + 1) };
+      });
+
+  const parseTreeEntries = (text: string): SnapshotTreeEntry[] =>
+    text
+      .split("\0")
+      .filter(Boolean)
+      .map((record) => {
+        const tab = record.indexOf("\t");
+        const mode = record.slice(0, record.indexOf(" "));
+        if (tab < 0 || !mode)
+          throw new Error("the recovery tree cannot be verified");
+        return { mode, path: record.slice(tab + 1) };
+      });
+
+  const liveTreeEntry = (
+    path: string,
+    indexMode?: string,
+  ): SnapshotTreeEntry | null => {
+    let stat;
+    try {
+      stat = lstatSync(safeChild(root, path));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw error;
+    }
+    if (stat.isSymbolicLink()) return { mode: "120000", path };
+    if (stat.isFile())
+      return { mode: stat.mode & 0o111 ? "100755" : "100644", path };
+    if (stat.isDirectory() && indexMode === "160000")
+      return { mode: "160000", path };
+    throw new Error(`unsupported working-tree entry: ${path}`);
+  };
+
+  const liveTrackedEntries = (
+    indexEntries: readonly SnapshotTreeEntry[],
+  ): SnapshotTreeEntry[] =>
+    indexEntries
+      .map(({ mode, path }) => liveTreeEntry(path, mode))
+      .filter((entry): entry is SnapshotTreeEntry => entry !== null);
+
+  const createSnapshotTree = async (
+    name: string,
+    entries: readonly SnapshotTreeEntry[],
   ): Promise<string> => {
-    const [commitOid, baseOid, indexOid, indexTree, snapshotIndexTree] =
-      await Promise.all([
-        mustGit("rev-parse", "--verify", `${oid}^{commit}`),
-        mustGit("rev-parse", "--verify", `${oid}^1`),
-        mustGit("rev-parse", "--verify", `${oid}^2`),
-        mustGit("write-tree"),
-        mustGit("rev-parse", "--verify", `${oid}^2^{tree}`),
-      ]);
-    const worktree = await git("diff", "--quiet", `${oid}^{tree}`, "--");
-    if (worktree.code > 1)
+    const snapshotDir = mkdtempSync(
+      join(tmpdir(), `iva-update-${name}-snapshot-`),
+    );
+    const indexEnv = {
+      GIT_INDEX_FILE: join(snapshotDir, "index"),
+      GIT_LITERAL_PATHSPECS: "1",
+    };
+    try {
+      await runSnapshotGit(["read-tree", "--empty"], indexEnv);
+      if (entries.length > 0) {
+        const pathspec = join(snapshotDir, "paths");
+        writeFileSync(
+          pathspec,
+          `${entries.map(({ path }) => path).join("\0")}\0`,
+          { mode: 0o600 },
+        );
+        await runSnapshotGit(
+          [
+            "-c",
+            "core.fileMode=true",
+            "add",
+            "-f",
+            `--pathspec-from-file=${pathspec}`,
+            "--pathspec-file-nul",
+          ],
+          indexEnv,
+        );
+      }
+      return await runSnapshotGit(["write-tree"], indexEnv);
+    } finally {
+      rmSync(snapshotDir, { recursive: true, force: true });
+    }
+  };
+
+  const verifyRecoverySnapshot = async (recovery: {
+    oid: string;
+    indexEntries: SnapshotTreeEntry[];
+    worktreeEntries: SnapshotTreeEntry[];
+    worktreeTree: string;
+    untrackedEntries: SnapshotTreeEntry[];
+    untrackedTree: string | null;
+  }): Promise<string> => {
+    const { oid } = recovery;
+    const [
+      commitOid,
+      baseOid,
+      indexOid,
+      indexTree,
+      snapshotIndexTree,
+      snapshotWorktreeTree,
+    ] = await Promise.all([
+      mustGit("rev-parse", "--verify", `${oid}^{commit}`),
+      mustGit("rev-parse", "--verify", `${oid}^1`),
+      mustGit("rev-parse", "--verify", `${oid}^2`),
+      mustGit("write-tree"),
+      mustGit("rev-parse", "--verify", `${oid}^2^{tree}`),
+      mustGit("rev-parse", "--verify", `${oid}^{tree}`),
+    ]);
+    const snapshotWorktreeEntries = parseTreeEntries(
+      await mustGit("ls-tree", "-r", "-z", oid),
+    );
+    const currentWorktreeEntries = liveTrackedEntries(recovery.indexEntries);
+    const currentWorktreeTree = await createSnapshotTree(
+      "verify-worktree",
+      currentWorktreeEntries,
+    );
+    const incomplete = [
+      [commitOid !== oid, "commit"],
+      [baseOid !== originalHead, "base"],
+      [!indexOid, "index-parent"],
+      [indexTree !== snapshotIndexTree, "index-tree"],
+      [snapshotWorktreeTree !== recovery.worktreeTree, "snapshot-tree"],
+      [snapshotWorktreeTree !== currentWorktreeTree, "worktree-tree"],
+      [
+        !sameSnapshotTreeEntries(
+          snapshotWorktreeEntries,
+          recovery.worktreeEntries,
+        ),
+        "snapshot-modes",
+      ],
+      [
+        !sameSnapshotTreeEntries(
+          currentWorktreeEntries,
+          recovery.worktreeEntries,
+        ),
+        "live-modes",
+      ],
+    ]
+      .filter(([failed]) => failed)
+      .map(([, label]) => label);
+    if (incomplete.length > 0)
       throw new Error(
-        worktree.stderr || worktree.stdout || "git diff verification failed",
+        `git stash recovery snapshot is incomplete: ${incomplete.join(", ")}`,
       );
-    if (
-      commitOid !== oid ||
-      baseOid !== originalHead ||
-      !indexOid ||
-      indexTree !== snapshotIndexTree ||
-      worktree.code !== 0
-    )
-      throw new Error("git stash recovery snapshot is incomplete");
     if (originalUntracked.length > 0) {
       const [snapshotUntrackedTree, snapshotUntrackedText] = await Promise.all([
         mustGit("rev-parse", "--verify", `${oid}^3^{tree}`),
-        mustGit("ls-tree", "-r", "-z", "--name-only", `${oid}^3`),
+        mustGit("ls-tree", "-r", "-z", `${oid}^3`),
       ]);
-      const snapshotUntracked = snapshotUntrackedText
-        .split("\0")
-        .filter(Boolean)
-        .sort();
-      const expectedUntracked = [...originalUntracked].sort();
+      const snapshotUntracked = parseTreeEntries(snapshotUntrackedText);
+      const currentUntracked = originalUntracked
+        .map((path) => liveTreeEntry(path))
+        .filter((entry): entry is SnapshotTreeEntry => entry !== null);
+      const currentUntrackedTree = await createSnapshotTree(
+        "verify-untracked",
+        currentUntracked,
+      );
       if (
-        !expectedUntrackedTree ||
-        snapshotUntrackedTree !== expectedUntrackedTree ||
-        snapshotUntracked.length !== expectedUntracked.length ||
-        snapshotUntracked.some(
-          (path, index) => path !== expectedUntracked[index],
-        )
+        !recovery.untrackedTree ||
+        snapshotUntrackedTree !== recovery.untrackedTree ||
+        snapshotUntrackedTree !== currentUntrackedTree ||
+        !sameSnapshotTreeEntries(
+          snapshotUntracked,
+          recovery.untrackedEntries,
+        ) ||
+        !sameSnapshotTreeEntries(currentUntracked, recovery.untrackedEntries)
       )
         throw new Error("git stash recovery snapshot is incomplete");
     }
@@ -439,77 +585,69 @@ export function createUpdateTransaction({
 
   const createRecoverySnapshot = async (
     message: string,
-  ): Promise<{ oid: string; untrackedTree: string | null }> => {
-    const trackedSnapshot = await mustGit("stash", "create", message);
-    let worktreeTree: string;
-    let indexCommit: string;
-    if (trackedSnapshot) {
-      [worktreeTree, indexCommit] = await Promise.all([
-        mustGit("rev-parse", "--verify", `${trackedSnapshot}^{tree}`),
-        mustGit("rev-parse", "--verify", `${trackedSnapshot}^2`),
-      ]);
-    } else {
-      worktreeTree = await mustGit(
-        "rev-parse",
-        "--verify",
-        `${originalHead}^{tree}`,
-      );
-      const indexTree = await mustGit("write-tree");
-      indexCommit = await runSnapshotGit(
-        [
-          "commit-tree",
-          indexTree,
-          "-p",
-          originalHead,
-          "-m",
-          `${message} index`,
-        ],
-        {},
-      );
-    }
-    if (originalUntracked.length === 0)
-      return { oid: trackedSnapshot, untrackedTree: null };
-
-    const snapshotDir = mkdtempSync(join(tmpdir(), "iva-update-snapshot-"));
-    const snapshotIndex = join(snapshotDir, "index");
-    const pathspec = join(snapshotDir, "paths");
-    try {
-      writeFileSync(pathspec, `${originalUntracked.join("\0")}\0`, {
-        mode: 0o600,
-      });
-      const indexEnv = {
-        GIT_INDEX_FILE: snapshotIndex,
-        GIT_LITERAL_PATHSPECS: "1",
-      };
-      await runSnapshotGit(["read-tree", "--empty"], indexEnv);
-      await runSnapshotGit(
-        ["add", `--pathspec-from-file=${pathspec}`, "--pathspec-file-nul"],
-        indexEnv,
-      );
-      const untrackedTree = await runSnapshotGit(["write-tree"], indexEnv);
-      const untrackedCommit = await runSnapshotGit(
-        ["commit-tree", untrackedTree, "-m", `${message} untracked`],
-        {},
-      );
-      const oid = await runSnapshotGit(
-        [
-          "commit-tree",
-          worktreeTree,
-          "-p",
-          originalHead,
-          "-p",
-          indexCommit,
-          "-p",
-          untrackedCommit,
-          "-m",
-          message,
-        ],
-        {},
-      );
-      return { oid, untrackedTree };
-    } finally {
-      rmSync(snapshotDir, { recursive: true, force: true });
-    }
+    basis: {
+      indexEntries: SnapshotTreeEntry[];
+      indexTree: string;
+      worktreeEntries: SnapshotTreeEntry[];
+      worktreeTree: string;
+    },
+  ): Promise<{
+    oid: string;
+    indexEntries: SnapshotTreeEntry[];
+    worktreeEntries: SnapshotTreeEntry[];
+    worktreeTree: string;
+    untrackedEntries: SnapshotTreeEntry[];
+    untrackedTree: string | null;
+  }> => {
+    const untrackedEntries = originalUntracked.map((path) => {
+      const entry = liveTreeEntry(path);
+      if (!entry)
+        throw new Error(`untracked recovery path disappeared: ${path}`);
+      return entry;
+    });
+    const indexCommit = await runSnapshotGit(
+      [
+        "commit-tree",
+        basis.indexTree,
+        "-p",
+        originalHead,
+        "-m",
+        `${message} index`,
+      ],
+      {},
+    );
+    const untrackedTree =
+      untrackedEntries.length > 0
+        ? await createSnapshotTree("untracked", untrackedEntries)
+        : null;
+    const untrackedCommit = untrackedTree
+      ? await runSnapshotGit(
+          ["commit-tree", untrackedTree, "-m", `${message} untracked`],
+          {},
+        )
+      : null;
+    const oid = await runSnapshotGit(
+      [
+        "commit-tree",
+        basis.worktreeTree,
+        "-p",
+        originalHead,
+        "-p",
+        indexCommit,
+        ...(untrackedCommit ? ["-p", untrackedCommit] : []),
+        "-m",
+        message,
+      ],
+      {},
+    );
+    return {
+      oid,
+      indexEntries: basis.indexEntries,
+      worktreeEntries: basis.worktreeEntries,
+      worktreeTree: basis.worktreeTree,
+      untrackedEntries,
+      untrackedTree,
+    };
   };
 
   const requireRecoverySnapshot = (oid = recoveryStashOid): void => {
@@ -713,18 +851,41 @@ export function createUpdateTransaction({
     }
 
     const status = await mustGit("status", "--porcelain=v1");
-    hadLocalChanges = Boolean(status.trim());
+    const protectedIndexEntries = parseIndexEntries(
+      await mustGit("ls-files", "--cached", "--stage", "-z"),
+    );
+    const untracked = await mustGit(
+      "ls-files",
+      "--others",
+      "--exclude-standard",
+      "-z",
+    );
+    originalUntracked = untracked.split("\0").filter(Boolean);
+    const protectedIndexTree = await mustGit("write-tree");
+    const protectedWorktreeEntries = liveTrackedEntries(protectedIndexEntries);
+    const protectedWorktreeTree = await createSnapshotTree(
+      "detect-worktree",
+      protectedWorktreeEntries,
+    );
+    const originalTree = await mustGit(
+      "rev-parse",
+      "--verify",
+      `${originalHead}^{tree}`,
+    );
+    hadLocalChanges =
+      Boolean(status.trim()) ||
+      originalUntracked.length > 0 ||
+      protectedIndexTree !== originalTree ||
+      protectedWorktreeTree !== protectedIndexTree;
     if (hadLocalChanges) {
-      const untracked = await mustGit(
-        "ls-files",
-        "--others",
-        "--exclude-standard",
-        "-z",
-      );
-      originalUntracked = untracked.split("\0").filter(Boolean);
       const message = `iva-update-${safeTimestamp()}`;
-      const recovery = await createRecoverySnapshot(message);
-      await verifyRecoverySnapshot(recovery.oid, recovery.untrackedTree);
+      const recovery = await createRecoverySnapshot(message, {
+        indexEntries: protectedIndexEntries,
+        indexTree: protectedIndexTree,
+        worktreeEntries: protectedWorktreeEntries,
+        worktreeTree: protectedWorktreeTree,
+      });
+      await verifyRecoverySnapshot(recovery);
       recoveryRef = `refs/iva/update-recovery/${safeTimestamp()}-${process.pid}-${recovery.oid}`;
       await mustGit("update-ref", recoveryRef, recovery.oid);
       const durableOid = await mustGit("rev-parse", "--verify", recoveryRef);
@@ -805,7 +966,7 @@ export function createUpdateTransaction({
         stashOid = restoreStash.oid;
       }
     } else {
-      // A clean status proves that HEAD itself is the complete recovery snapshot.
+      // Matching HEAD, index and live-tree snapshots prove that HEAD is complete recovery.
       snapshotCommitted = true;
       try {
         captureCustomLayer({ root, dataDir, baseRevision: originalHead });
@@ -1251,6 +1412,7 @@ export function createUpdateTransaction({
   }
 
   async function rollback() {
+    let gitRollbackError: Error | null = null;
     if (materializedCustomLayer) {
       discardCustomLayer(materializedCustomLayer);
       materializedCustomLayer = null;
@@ -1268,11 +1430,22 @@ export function createUpdateTransaction({
           existsSync(join(gitDir, "rebase-merge")) ||
           (existsSync(rebaseApply) &&
             !existsSync(join(rebaseApply, "applying")))
-        )
-          await git("rebase", "--abort");
+        ) {
+          const aborted = await git("rebase", "--abort");
+          if (aborted.code !== 0)
+            gitRollbackError = new Error(
+              aborted.stderr || aborted.stdout || "git rebase --abort failed",
+            );
+        }
       }
-      await git("reset", "--hard", originalHead);
-      if (recoveryStashOid) {
+      if (!gitRollbackError) {
+        const reset = await git("reset", "--hard", originalHead);
+        if (reset.code !== 0)
+          gitRollbackError = new Error(
+            reset.stderr || reset.stdout || "git reset --hard failed",
+          );
+      }
+      if (!gitRollbackError && recoveryStashOid) {
         // A failed stash apply can leave a subset of the original untracked files behind.
         // Remove only paths the proven full snapshot holds, then re-apply that exact OID.
         removeOriginalUntracked();
@@ -1283,6 +1456,12 @@ export function createUpdateTransaction({
           recoveryStashOid,
         );
         stashApplied = reapplied.code === 0;
+        if (!stashApplied)
+          gitRollbackError = new Error(
+            reapplied.stderr ||
+              reapplied.stdout ||
+              "git stash apply failed during rollback",
+          );
       }
     }
     if (envBackup && existsSync(envBackup)) {
@@ -1298,6 +1477,7 @@ export function createUpdateTransaction({
     }
     promotedNodeModulesWithoutBackup = false;
     restoreOutput();
+    if (gitRollbackError) throw gitRollbackError;
   }
 
   async function dropExactStash(oid: string) {
