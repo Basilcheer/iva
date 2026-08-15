@@ -1,8 +1,8 @@
 /* eslint-disable @typescript-eslint/no-base-to-string, @typescript-eslint/no-unnecessary-type-assertion -- persisted Telegram payloads and injected I/O retain the original permissive runtime boundary. */
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import { writeFileAtomic } from "#lib/fs-atomic.ts";
 import { parseOffsetFile, serializeOffsetFile } from "../lib/offset-store.ts";
-import { OFFSET_FILE, DATA_DIR, log } from "./config.ts";
+import { OFFSET_FILE, log } from "./config.ts";
 import { tg } from "./transport.ts";
 
 type ErrorLike = { code?: unknown; message?: unknown };
@@ -25,7 +25,6 @@ type TelegramImpl = (
   method: string,
   body: Record<string, unknown>,
 ) => Promise<unknown>;
-type AsyncFileOp = (...args: unknown[]) => Promise<unknown>;
 
 const errorMessage = (error: unknown) => (error as ErrorLike).message;
 
@@ -104,39 +103,17 @@ async function saveOffset(
   delivered: number | null = null,
   {
     file = OFFSET_FILE,
-    dataDir = DATA_DIR,
-    pid = process.pid,
-    tmpId = randomUUID(),
-    mkdirImpl = mkdir as unknown as AsyncFileOp,
-    writeFileImpl = writeFile as unknown as AsyncFileOp,
-    renameImpl = rename as unknown as AsyncFileOp,
-    rmImpl = rm as unknown as AsyncFileOp,
+    writeFileImpl = writeFileAtomic,
   }: {
     file?: string;
-    dataDir?: string;
-    pid?: number;
-    tmpId?: string;
-    mkdirImpl?: AsyncFileOp;
-    writeFileImpl?: AsyncFileOp;
-    renameImpl?: AsyncFileOp;
-    rmImpl?: AsyncFileOp;
+    writeFileImpl?: typeof writeFileAtomic;
   } = {},
 ) {
-  const tmp = `${file}.tmp-${pid}-${tmpId}`;
   try {
-    await mkdirImpl(dataDir, { recursive: true });
-    await writeFileImpl(tmp, serializeOffsetFile(offset, delivered), {
-      encoding: "utf8",
+    await writeFileImpl(file, serializeOffsetFile(offset, delivered), {
       mode: 0o600,
-      flag: "wx",
     });
-    await renameImpl(tmp, file);
   } catch (error) {
-    try {
-      await rmImpl(tmp, { force: true });
-    } catch {
-      /* исходная ошибка записи важнее ошибки уборки tmp */
-    }
     throw new Error(
       `failed to save Telegram offset ${file}: ${String(errorMessage(error))}`,
       { cause: error },

@@ -1,13 +1,21 @@
 /* eslint-disable @typescript-eslint/no-floating-promises, @typescript-eslint/require-await -- Node's test runner owns top-level registrations; injected test doubles preserve the asynchronous runtime contracts. */
 import test, { type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { spawnSync } from "node:child_process";
-import type {
-  TelegramQueueDocument,
-  TelegramQueueUpdate,
+import { spawn, spawnSync } from "node:child_process";
+import { parseOffsetFile } from "./lib/offset-store.ts";
+import {
+  normalizeQueueDocument,
+  type TelegramQueueDocument,
+  type TelegramQueueUpdate,
 } from "./lib/telegram-queue.ts";
 
 type HarnessMessage = {
@@ -23,12 +31,13 @@ type HarnessUpdate = TelegramQueueUpdate & {
   callback_query?: { id: string };
 };
 type HarnessResult = {
-  offset: { offset: number; delivered?: number };
+  offset: { offset: number; delivered?: number | null };
   deliveries: HarnessUpdate[];
   deliveryRoutes: string[];
   reactions: unknown[];
   queueStatuses: Array<{ text?: string }>;
   queue: TelegramQueueDocument;
+  inbox: TelegramQueueDocument;
   requestedOffsets: number[];
   queueDirSyncAttempts: number;
   queueDirSyncSuccesses: number;
@@ -60,6 +69,10 @@ function makeDataDir(t: TestContext, label: string) {
   const path = mkdtempSync(join(tmpdir(), `iva-008-${label}-`));
   t.after(() => rmSync(path, { recursive: true, force: true }));
   return path;
+}
+
+function parseJson(raw: string): unknown {
+  return JSON.parse(raw) as unknown;
 }
 
 function runHarness(
@@ -94,6 +107,32 @@ function runHarness(
   return JSON.parse(
     readFileSync(join(dataDir, "queue-harness-result.json"), "utf8"),
   ) as HarnessResult;
+}
+
+function ownedUpdates(result: Pick<HarnessResult, "inbox" | "queue">) {
+  return [
+    ...Object.values(result.inbox.queues)
+      .flat()
+      .map((item) => ({
+        location: "inbox" as const,
+        updateId: item.updateId,
+      })),
+    ...Object.values(result.queue.queues)
+      .flat()
+      .map((item) => ({
+        location: "delivery" as const,
+        updateId: item.updateId,
+      })),
+  ];
+}
+
+async function waitForFile(file: string): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    if (existsSync(file)) return;
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 10));
+  }
+  assert.fail(`timed out waiting for ${file}`);
 }
 
 test("direct queue runtime normalizes a namespaced reset token", async () => {
@@ -198,7 +237,7 @@ test("direct delivery runtime requires the accepted-route receipt", async (t: Te
 });
 
 for (const fault of ["write", "rename"]) {
-  test(`busy queue ${fault} failure does not advance Telegram offset`, (t: TestContext) => {
+  test(`durable inbox ${fault} failure does not advance Telegram offset`, (t: TestContext) => {
     const dataDir = makeDataDir(t, `disk-${fault}`);
     const result = runHarness("disk-failure", dataDir, fault);
 
@@ -208,6 +247,7 @@ for (const fault of ["write", "rename"]) {
       "the same Telegram update must be retried until its FIFO item is durable",
     );
     assert.deepEqual(result.deliveries, []);
+    assert.deepEqual(ownedUpdates(result), []);
   });
 }
 
@@ -229,6 +269,7 @@ test("directory sync failure requires a durable duplicate retry before offset ad
   assert.equal(result.offset.offset, 102);
   assert.equal(result.queue.queues["1:"].length, 1);
   assert.equal(result.queue.queues["1:"][0].updateId, 101);
+  assert.deepEqual(result.inbox, { version: 1, queues: {} });
 });
 
 test("queued follow-ups auto-drain in FIFO order when the current turn becomes idle", (t: TestContext) => {
@@ -288,13 +329,85 @@ test("collector merges a two-text burst into one durable queue item and delivery
   assert.deepEqual(result.queue, { version: 1, queues: {} });
 });
 
+test("SIGKILL after offset ownership preserves every burst part for restart", async (t: TestContext) => {
+  const dataDir = makeDataDir(t, "burst-crash");
+  const child = spawn(
+    process.execPath,
+    [
+      "--experimental-test-module-mocks",
+      HARNESS,
+      "burst-ownership-crash",
+      dataDir,
+      "none",
+    ],
+    {
+      cwd: ROOT,
+      env: { ...process.env, TELEGRAM_COLLECT_QUIET_MS: "60000" },
+      stdio: ["ignore", "ignore", "pipe"],
+    },
+  );
+  let stderr = "";
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (chunk: string) => {
+    stderr += chunk;
+  });
+  t.after(() => {
+    if (child.exitCode === null && child.signalCode === null)
+      child.kill("SIGKILL");
+  });
+
+  await waitForFile(join(dataDir, "ownership-ready"));
+  child.kill("SIGKILL");
+  const exit = await new Promise<{
+    code: number | null;
+    signal: NodeJS.Signals | null;
+  }>((resolveExit, rejectExit) => {
+    child.once("error", rejectExit);
+    child.once("exit", (code, signal) => resolveExit({ code, signal }));
+  });
+  assert.deepEqual(exit, { code: null, signal: "SIGKILL" }, stderr);
+
+  const crashed: Pick<HarnessResult, "offset" | "inbox" | "queue"> = {
+    offset: parseOffsetFile(
+      readFileSync(join(dataDir, "telegram-offset.json"), "utf8"),
+    ),
+    inbox: normalizeQueueDocument(
+      parseJson(readFileSync(join(dataDir, "telegram-inbox.json"), "utf8")),
+    ).document,
+    queue: existsSync(join(dataDir, "telegram-queue.json"))
+      ? normalizeQueueDocument(
+          parseJson(readFileSync(join(dataDir, "telegram-queue.json"), "utf8")),
+        ).document
+      : { version: 1, queues: {} },
+  };
+  assert.deepEqual(crashed.offset, { offset: 103, delivered: null });
+  assert.deepEqual(ownedUpdates(crashed), [
+    { location: "inbox", updateId: 101 },
+    { location: "inbox", updateId: 102 },
+  ]);
+  assert.equal(
+    statSync(join(dataDir, "telegram-inbox.json")).mode & 0o777,
+    0o600,
+  );
+
+  const restarted = runHarness("restart-drain", dataDir);
+  assert.deepEqual(
+    restarted.deliveries.map((update) => update.update_id),
+    [101, 102],
+  );
+  assert.deepEqual(ownedUpdates(restarted), []);
+});
+
 test("a restarted bridge recovers and drains the persisted FIFO without a third user message", (t: TestContext) => {
   const dataDir = makeDataDir(t, "restart");
   const beforeRestart = runHarness("restart-persist", dataDir);
-  assert.equal(
-    Object.values(beforeRestart.queue.queues).flat().length,
-    2,
-    "the first process must leave both busy-time follow-ups durable",
+  assert.deepEqual(
+    ownedUpdates(beforeRestart),
+    [
+      { location: "inbox", updateId: 102 },
+      { location: "delivery", updateId: 101 },
+    ],
+    "the first process must leave exactly two busy-time follow-ups under durable ownership",
   );
 
   const afterRestart = runHarness("restart-drain", dataDir);
@@ -309,6 +422,7 @@ test("a restarted bridge recovers and drains the persisted FIFO without a third 
     ],
   );
   assert.deepEqual(afterRestart.queue, { version: 1, queues: {} });
+  assert.deepEqual(afterRestart.inbox, { version: 1, queues: {} });
 });
 
 test("a persistently failing queue head does not block other chats or Telegram polling", (t: TestContext) => {
@@ -401,7 +515,9 @@ test("an idle direct message uses one accepted POST and keeps offset semantics",
   assert.equal(delivery.update_id, 101);
   assert.ok(delivery.message);
   assert.equal(typeof delivery.message.iva_durable_queue_receipt, "string");
-  assert.deepEqual(result.offset, { offset: 102, delivered: 101 });
+  assert.deepEqual(result.offset, { offset: 102 });
+  assert.deepEqual(result.inbox, { version: 1, queues: {} });
+  assert.deepEqual(result.queue, { version: 1, queues: {} });
 });
 
 test("a direct acceptance 503 resets immediately, notifies once, then retries", (t: TestContext) => {
@@ -419,7 +535,9 @@ test("a direct acceptance 503 resets immediately, notifies once, then retries", 
     result.failureNotices.map(({ chat_id, text }) => [chat_id, text]),
     [["1", "Couldn't process the message - repeat it or use /new"]],
   );
-  assert.deepEqual(result.offset, { offset: 102, delivered: 101 });
+  assert.deepEqual(result.offset, { offset: 102 });
+  assert.deepEqual(result.inbox, { version: 1, queues: {} });
+  assert.deepEqual(result.queue, { version: 1, queues: {} });
 });
 
 test("a direct acceptance timeout rejects once and returns to Telegram polling", (t: TestContext) => {
@@ -446,6 +564,18 @@ test("a direct acceptance timeout rejects once and returns to Telegram polling",
     "the rejected result must let the main loop advance and poll again",
   );
   assert.deepEqual(result.offset, { offset: 102 });
+  assert.deepEqual(ownedUpdates(result), [
+    { location: "inbox", updateId: 101 },
+  ]);
+
+  const retried = runHarness("restart-direct-drain", dataDir);
+  assert.deepEqual(
+    retried.deliveryRoutes,
+    ["/eve/v1/telegram/accepted"],
+    "a restart must retry the one durably owned message exactly once",
+  );
+  assert.deepEqual(retried.inbox, { version: 1, queues: {} });
+  assert.deepEqual(retried.queue, { version: 1, queues: {} });
 });
 
 test("callback_query delivery stays on the original webhook route", (t: TestContext) => {

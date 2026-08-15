@@ -54,11 +54,14 @@ process.env.AGENT_LANGUAGE = "en";
 mkdirSync(dataDir, { recursive: true });
 const offsetFile = join(dataDir, "telegram-offset.json");
 const queueFile = join(dataDir, "telegram-queue.json");
+const inboxFile = join(dataDir, "telegram-inbox.json");
 const resultFile = join(dataDir, "queue-harness-result.json");
 if (!existsSync(offsetFile))
   writeFileSync(offsetFile, JSON.stringify({ offset: 100 }));
 let queueDirSyncAttempts = 0;
 let queueDirSyncSuccesses = 0;
+let inboxDirectorySyncArmed = false;
+const inboxOwnershipStages = new Set<string>();
 
 const statusModulePath = "#lib/run-status.ts";
 const status = (await import(statusModulePath)) as RunStatusModule;
@@ -71,6 +74,7 @@ if (
   mode === "dir-sync-retry" ||
   mode === "auto-drain" ||
   mode === "collect-burst" ||
+  mode === "burst-ownership-crash" ||
   mode === "restart-persist" ||
   mode === "routing"
 ) {
@@ -121,8 +125,18 @@ if (fault !== "none") {
   const originalRename = fsPromises.rename as unknown as FileOperation;
   const originalOpen = fsPromises.open as unknown as FileOperation;
   namedExports.writeFile = async (path: unknown, ...args: unknown[]) => {
-    if (fault === "write" && String(path).startsWith(`${queueFile}.tmp-`)) {
-      throw Object.assign(new Error("injected queue write failure"), {
+    if (String(path).startsWith(`${inboxFile}.tmp-`)) {
+      const staged = JSON.parse(String(args[0])) as {
+        queues?: Record<string, unknown[]>;
+      };
+      if (
+        Object.values(staged.queues ?? {}).some((items) => items.length > 0)
+      ) {
+        inboxOwnershipStages.add(String(path));
+      }
+    }
+    if (fault === "write" && String(path).startsWith(`${inboxFile}.tmp-`)) {
+      throw Object.assign(new Error("injected inbox write failure"), {
         code: "ENOSPC",
       });
     }
@@ -133,12 +147,17 @@ if (fault !== "none") {
     to: unknown,
     ...args: unknown[]
   ) => {
-    if (fault === "rename" && String(to) === queueFile) {
-      throw Object.assign(new Error("injected queue rename failure"), {
+    if (fault === "rename" && String(to) === inboxFile) {
+      throw Object.assign(new Error("injected inbox rename failure"), {
         code: "EIO",
       });
     }
-    return originalRename(from, to, ...args);
+    const ownsMessage = inboxOwnershipStages.delete(String(from));
+    const result = await originalRename(from, to, ...args);
+    if (fault === "dir-sync-once" && String(to) === inboxFile && ownsMessage) {
+      inboxDirectorySyncArmed = true;
+    }
+    return result;
   };
   namedExports.open = async (
     path: unknown,
@@ -149,10 +168,12 @@ if (fault !== "none") {
     if (
       fault !== "dir-sync-once" ||
       String(path) !== dataDir ||
-      flags !== "r"
+      flags !== "r" ||
+      !inboxDirectorySyncArmed
     ) {
       return handle;
     }
+    inboxDirectorySyncArmed = false;
     return {
       sync: async () => {
         queueDirSyncAttempts++;
@@ -285,7 +306,8 @@ function finish() {
       statusBeforeRetry,
       finalStatus: status.getChatStatus(privateKey),
       offset: readJson(offsetFile, null),
-      queue: readJson(queueFile, {}),
+      queue: readJson(queueFile, { version: 1, queues: {} }),
+      inbox: readJson(inboxFile, { version: 1, queues: {} }),
     }),
   );
   process.exit(0);
@@ -486,6 +508,18 @@ const fetchHarness = async (url: unknown, options: FetchOptions = {}) => {
       if (getUpdatesCalls >= 5) finish();
       return jsonResponse({ ok: true, result: [] });
     }
+    if (mode === "burst-ownership-crash") {
+      if (getUpdatesCalls === 1) {
+        return jsonResponse({
+          ok: true,
+          result: [privateUpdate(101, "first"), privateUpdate(102, "second")],
+        });
+      }
+      writeFileSync(join(dataDir, "ownership-ready"), "ready\n");
+      return new Promise(() => {
+        setInterval(() => {}, 60_000);
+      });
+    }
     if (mode === "restart-persist") {
       if (getUpdatesCalls === 1) {
         return jsonResponse({
@@ -542,6 +576,7 @@ const fetchHarness = async (url: unknown, options: FetchOptions = {}) => {
       }
       finish();
     }
+    if (mode === "restart-direct-drain") finish();
     if (mode === "callback") {
       if (getUpdatesCalls === 1) {
         return jsonResponse({ ok: true, result: [callbackUpdate] });

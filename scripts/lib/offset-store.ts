@@ -4,7 +4,8 @@
 // Маркер delivered сужает окно двойной доставки до единственного апдейта «в полёте»:
 // свежепереигранное (<= delivered, в пределах окна) пропускается — offset двигаем,
 // в eve не шлём.
-type OffsetFile = { offset: number; delivered: number | null };
+export type OffsetState = { offset: number | null; delivered: number | null };
+type OffsetFile = OffsetState & { offset: number };
 
 const asInt = (value: unknown): number | null =>
   typeof value === "number" && Number.isSafeInteger(value) && value >= 0

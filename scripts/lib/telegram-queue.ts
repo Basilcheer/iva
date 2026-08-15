@@ -750,6 +750,7 @@ export function shouldQueueBusyUpdate(
   if (!allowed.size || !allowed.has(from)) return false;
   if (message.chat?.type === "private") return true;
   if (message.chat?.type === "channel") return false;
+  if (isReplyToBot(message)) return true;
   const username = normalizeBotUsername(botUsername);
   return parts.some((part: unknown) => {
     if (!part || typeof part !== "object") return false;

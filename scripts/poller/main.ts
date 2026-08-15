@@ -1,21 +1,11 @@
 import { fileURLToPath } from "node:url";
 
-import {
-  COLLECT_QUIET_MS,
-  collectorOffer,
-  collectorPending,
-  collectorRestore,
-  collectorTakeExpired,
-  createCollector,
-  type TelegramCollectUpdate,
-} from "../lib/telegram-collect.ts";
+import { COLLECT_QUIET_MS } from "../lib/telegram-collect.ts";
 import { alreadyDelivered } from "../lib/offset-store.ts";
 import {
-  isReplyToBot,
   invalidTelegramUpdatesDiagnostic,
   migrateQueueFile,
   parseTelegramUpdates,
-  type TelegramQueueUpdate,
 } from "../lib/telegram-queue.ts";
 import {
   ACCEPTANCE_ROUTE,
@@ -26,7 +16,14 @@ import {
   sleep,
 } from "./config.ts";
 import { tg } from "./transport.ts";
-import { fastForwardOffset, loadOffset, saveOffset } from "./offset.ts";
+import { fastForwardOffset, saveOffset } from "./offset.ts";
+import {
+  admitMessageUpdate,
+  promoteReadyInbox,
+  TELEGRAM_INBOX_FILE,
+} from "./inbox.ts";
+import { acquireTelegramProcessLock } from "./process-lock.ts";
+import { prepareTelegramStartup } from "./startup-state.ts";
 import * as queue from "./queue.ts";
 import * as routing from "./routing.ts";
 import * as updateFlow from "./update-flow.ts";
@@ -77,7 +74,6 @@ const configuredCollectQuietMs =
   Number.isFinite(rawCollectQuietMs) && rawCollectQuietMs >= 0
     ? rawCollectQuietMs
     : COLLECT_QUIET_MS;
-const messageCollector = createCollector({ quietMs: configuredCollectQuietMs });
 
 export async function main() {
   if (!TOKEN)
@@ -86,6 +82,10 @@ export async function main() {
     throw new Error(
       "no TELEGRAM_WEBHOOK_SECRET_TOKEN — the channel won't accept updates",
     );
+  // The kernel-held lease is the first startup side effect. Reconciliation below
+  // can call Bot API, so no weaker in-process flag can guard this boundary.
+  await acquireTelegramProcessLock();
+  const startup = await prepareTelegramStartup();
   log(`telegram-poll start → messages ${ACCEPTANCE_ROUTE}; callbacks ${ROUTE}`);
   await removeStaleUpdateJobs();
   // The update that restarted this bridge left its final screen to us: its own
@@ -98,11 +98,13 @@ export async function main() {
   // migration stops the bridge, so Telegram retains new updates until the old bytes
   // are safely represented as versioned FIFO items.
   await migrateQueueFile(QUEUE_FILE, {
+    strict: true,
     onLegacyQuarantine: (path) =>
       log(
         `legacy Telegram group messages moved to ${path}; sender identity was unavailable`,
       ),
   });
+  await migrateQueueFile(TELEGRAM_INBOX_FILE, { strict: true });
   const reconciledResets = await reconcileScopedResetIntents();
   if (reconciledResets > 0) {
     log(
@@ -112,13 +114,12 @@ export async function main() {
   // Читаем offset ДО любого destructive Telegram-вызова: EACCES/EIO/битый JSON
   // останавливают мост, пока backlog ещё цел. Только подтверждённый ENOENT означает
   // first run и разрешает drop_pending=true.
-  const storedOffset = await loadOffset();
-  let offset = storedOffset.offset ?? 0;
-  let { delivered } = storedOffset;
+  let offset = startup.offset ?? 0;
+  let { delivered } = startup;
   // First run (no offset file) — drop the accumulated install backlog (drop_pending=true),
   // so old messages don't replay in a batch → parallel sessions on one chat (HookConflict).
   // On subsequent starts we do NOT drop the backlog (don't lose messages that arrived while the bridge was down).
-  const firstRun = storedOffset.offset === null;
+  const firstRun = startup.firstRun;
   const dw = (await tg("deleteWebhook", {
     drop_pending_updates: firstRun,
   })) as TelegramResponse;
@@ -144,28 +145,11 @@ export async function main() {
     } catch (error) {
       log("stale run reaper failed:", errorMessage(error));
     }
-    let pendingQueueCount = await drainReadyQueueHeads();
-    let collectorWriteFailed = false;
-    for (const update of collectorTakeExpired(messageCollector, Date.now())) {
-      const routed = await routeMessageUpdate(update);
-      if (routed === "delivered") {
-        const updateId = update.update_id;
-        delivered =
-          delivered === null ? updateId : Math.max(delivered, updateId);
-        await saveOffset(offset, delivered);
-      } else if (routed === "queued") {
-        pendingQueueCount = Math.max(1, pendingQueueCount);
-      } else if (routed === "enqueue-failed") {
-        collectorRestore(messageCollector, update);
-        collectorWriteFailed = true;
-      }
-    }
-    if (collectorWriteFailed) {
-      await sleep(3000);
-      continue;
-    }
-    const pollSeconds =
-      pendingQueueCount > 0 || collectorPending(messageCollector) > 0 ? 1 : 30;
+    const pendingInboxCount = await promoteReadyInbox({
+      collectorOptions: { quietMs: configuredCollectQuietMs },
+    });
+    const pendingQueueCount = await drainReadyQueueHeads();
+    const pollSeconds = pendingQueueCount > 0 || pendingInboxCount > 0 ? 1 : 30;
     let data: TelegramResponse;
     try {
       data = (await tg(
@@ -218,37 +202,21 @@ export async function main() {
         await saveOffset(offset, delivered);
         continue;
       }
-      let candidate: TelegramQueueUpdate = update;
-      let collectedUpdate: TelegramCollectUpdate | null = null;
-      if (update.message && !isReplyToBot(update.message)) {
-        const offered = collectorOffer(messageCollector, update, Date.now());
-        if (offered.status === "buffered") {
-          // The quiet-window buffer is intentionally in-memory. Advancing now avoids
-          // replaying every part, but a process crash can lose this one pending burst.
-          offset = update.update_id + 1;
-          await saveOffset(offset, delivered);
-          continue;
+      if (update.message) {
+        const admitted = await admitMessageUpdate(update);
+        if (admitted === "write-failed") {
+          queueWriteFailed = true;
+          break;
         }
-        if (offered.status === "ready") {
-          candidate = offered.update;
-          collectedUpdate = offered.update;
-          offset = update.update_id + 1;
-          await saveOffset(offset, delivered);
-        }
+        offset = update.update_id + 1;
+        await saveOffset(offset, delivered);
+        continue;
       }
 
-      const routed = await routeMessageUpdate(candidate);
-      if (routed === "enqueue-failed") {
-        if (collectedUpdate)
-          collectorRestore(messageCollector, collectedUpdate);
-        // Passthrough retains the old durable retry point. Collected parts already
-        // advanced offset when buffered and retry from the restored in-memory burst.
-        queueWriteFailed = true;
-        break;
-      }
-      if (!collectedUpdate) offset = update.update_id + 1;
+      const routed = await routeMessageUpdate(update);
+      offset = update.update_id + 1;
       if (routed === "delivered") {
-        const candidateId = candidate.update_id;
+        const candidateId = update.update_id;
         delivered =
           delivered === null ? candidateId : Math.max(delivered, candidateId);
       }

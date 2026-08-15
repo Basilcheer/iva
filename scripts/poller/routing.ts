@@ -162,14 +162,14 @@ export async function routeMessageUpdate(
   update: TelegramQueueUpdate,
   {
     chatKeyImpl = chatKey,
-    loadQueueImpl = loadQueue,
+    loadQueueImpl = () => loadQueue({ strict: true }),
     runningImpl = isRunning,
     inFlight = queueInFlight,
     queueCountImpl = queueCount,
     replyToBotImpl = isReplyToBot,
     shouldQueueImpl = shouldQueueBusyUpdate,
     enqueueImpl = (key: string, candidate: TelegramQueueUpdate) =>
-      enqueueQueueFile(QUEUE_FILE, key, candidate),
+      enqueueQueueFile(QUEUE_FILE, key, candidate, { strict: true }),
     acknowledgeImpl = acknowledgeQueued,
     deliverImpl = pacedDelivery,
     statusImpl = getChatStatus,
@@ -224,8 +224,9 @@ export async function routeMessageUpdate(
     const mustQueue =
       runningImpl(key) || inFlight.has(key) || queueCountImpl(queue, key) > 0;
     if (mustQueue) {
-      if (!shouldQueueImpl(update, { allowedUserIds, botUsername }))
+      if (!shouldQueueImpl(update, { allowedUserIds, botUsername })) {
         return "dropped";
+      }
       let queued;
       try {
         queued = await enqueueImpl(key, update);
