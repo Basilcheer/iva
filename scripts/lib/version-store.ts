@@ -97,6 +97,27 @@ export function releaseOf(name: string): string {
   return at ? versionName(at.version, at.sha, at.overlay) : name;
 }
 
+/** Explicit state references always win; candidate order only fills spare slots. */
+export function retainedVersions(
+  finished: readonly string[],
+  references: readonly (string | null | undefined)[],
+  keep: number,
+): string[] {
+  const available = new Set(finished);
+  const retained = new Set(
+    references.filter(
+      (name): name is string =>
+        typeof name === "string" && available.has(name),
+    ),
+  );
+  const target = Math.max(keep, retained.size, 1);
+  for (const name of finished) {
+    if (retained.size >= target) break;
+    retained.add(name);
+  }
+  return [...retained];
+}
+
 /**
  * What a version is built out of: the commit and the user's files. Two builds
  * with one key run the same code, so what one of them did to the service the
@@ -359,16 +380,16 @@ export function createVersionStore(home: string) {
     const finished = list();
     const state = activeState();
     const kept = new Set(
-      [active, state.version, state.previous].filter(
-        (name): name is string =>
-          typeof name === "string" && finished.includes(name),
+      retainedVersions(
+        finished,
+        [
+          active,
+          typeof state.version === "string" ? state.version : null,
+          typeof state.previous === "string" ? state.previous : null,
+        ],
+        keep,
       ),
     );
-    const target = Math.max(keep, kept.size, 1);
-    for (const name of finished) {
-      if (kept.size >= target) break;
-      kept.add(name);
-    }
     const removed = finished.filter((name) => !kept.has(name));
     for (const name of removed)
       rmSync(join(layout.versions, name), { recursive: true, force: true });

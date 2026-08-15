@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-floating-promises -- Node's test runner owns registration promises */
 import test from "node:test";
 import assert from "node:assert/strict";
+import fc from "fast-check";
 import { execFileSync } from "node:child_process";
 import {
   chmodSync,
@@ -24,6 +25,7 @@ import {
   layoutFor,
   parseVersionName,
   releaseOf,
+  retainedVersions,
   versionName,
 } from "./version-store.ts";
 
@@ -348,7 +350,15 @@ test("garbage collection preserves the settled rollback regardless of mtime", (t
   install(store, unrelated);
   install(store, current);
   store.activate(rollback);
-  store.settle(rollback);
+  mkdirSync(store.layout.data, { recursive: true });
+  writeFileSync(
+    join(store.layout.data, "active.json"),
+    `${JSON.stringify({
+      schema: "iva-active/v1",
+      version: rollback,
+      settledAt: "2026-01-01T00:00:00.000Z",
+    })}\n`,
+  );
   store.activate(current);
   store.settle(current);
   age(join(store.layout.versions, rollback), 10_000);
@@ -366,6 +376,35 @@ test("garbage collection preserves the settled rollback regardless of mtime", (t
   assert.equal(state.version, current);
   assert.equal(state.previous, rollback);
   assert.match(String(state.settledAt), /^\d{4}-\d{2}-\d{2}T/u);
+});
+
+test("explicit retention is invariant under arbitrary mtimes", () => {
+  const current = "0.3.14-444444444444";
+  const rollback = "0.3.13-333333333333";
+  const other = ["0.3.12-222222222222", "0.3.11-111111111111"];
+  const names = [current, rollback, ...other];
+
+  fc.assert(
+    fc.property(
+      fc.tuple(
+        fc.integer(),
+        fc.integer(),
+        fc.integer(),
+        fc.integer(),
+      ),
+      (mtimes) => {
+        const byMtime = names
+          .map((name, index) => ({ name, mtime: mtimes[index] ?? 0 }))
+          .sort((a, b) => b.mtime - a.mtime || a.name.localeCompare(b.name))
+          .map(({ name }) => name);
+        const kept = new Set(
+          retainedVersions(byMtime, [current, rollback], 2),
+        );
+        assert.deepEqual(kept, new Set([current, rollback]));
+      },
+    ),
+    { seed: 18_819, numRuns: 200 },
+  );
 });
 
 test("materialize writes an exact commit tree without leaving git state behind", async (t) => {
