@@ -161,9 +161,14 @@ Default model is deepseek-v4-pro, 131k context. On Go it runs about $14–15/mo 
 ## What's New
 
 <details>
-<summary><b>v0.3.21 · 15.08.2026 — expand the latest releases</b></summary>
+<summary><b>v0.3.22 · 15.08.2026 — expand the latest releases</b></summary>
 
 ### 15.08.2026
+
+#### v0.3.22
+
+- The `iva` CLI no longer reorders PATH for child processes: a directory already on PATH is not added a second time, so the paths the caller put first stay first. Shipped as a port of contributor PR #177.
+- The setup wizard no longer writes hybrid memory mode without an embedding key: with no key and no other source it keeps the free BM25 search and says so in one line. `iva doctor` reads the same resolver as the runtime and names all three sources. Closes issue #180.
 
 #### v0.3.21
 
