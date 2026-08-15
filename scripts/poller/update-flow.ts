@@ -25,6 +25,11 @@ import {
   sleep,
 } from "./config.ts";
 import { edit, reply, tg } from "./transport.ts";
+import {
+  parseUpdateCallbackData,
+  validRecoveryBundleId,
+} from "./update-callback.ts";
+export { parseUpdateCallbackData } from "./update-callback.ts";
 
 type UpdateInfo = Awaited<ReturnType<typeof inspectUpstream>>;
 type UpdateCheckOptions = {
@@ -172,11 +177,7 @@ async function showSavedUpdateConflicts(
   chatId: string | number,
   messageId: number,
 ): Promise<void> {
-  if (
-    !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(bundleId) ||
-    bundleId === "." ||
-    bundleId === ".."
-  ) {
+  if (!validRecoveryBundleId(bundleId)) {
     await edit(
       chatId,
       messageId,
@@ -259,13 +260,17 @@ async function showSavedUpdateConflicts(
 export async function handleUpdateCallback(
   cq: UpdateCallbackQuery,
 ): Promise<true> {
+  const parsed = parseUpdateCallbackData(cq.data);
   const from = String(cq.from?.id ?? "");
   const chatId = cq.message?.chat?.id;
   const messageId = cq.message?.message_id;
   await tg("answerCallbackQuery", { callback_query_id: cq.id }); // clear the button spinner
+  if (parsed === null) {
+    log("ignored invalid update callback data");
+    return true;
+  }
   if (ALLOWED.size === 0 || !ALLOWED.has(from)) return true; // swallow untrusted taps
-  const action = cq.data.slice("iva_update:".length);
-  if (action === "skip") {
+  if (parsed.action === "skip") {
     await edit(
       chatId as string | number,
       messageId as number,
@@ -274,9 +279,9 @@ export async function handleUpdateCallback(
     );
     return true;
   }
-  if (action.startsWith("conflicts:")) {
+  if (parsed.action === "conflicts") {
     await showSavedUpdateConflicts(
-      action.slice("conflicts:".length),
+      parsed.bundleId,
       chatId as string | number,
       messageId as number,
     );

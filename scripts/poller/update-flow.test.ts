@@ -95,7 +95,7 @@ async function press(launcher: string): Promise<string[]> {
       id: "callback",
       from: { id: 42 },
       message: { chat: { id: 1 }, message_id: 10 },
-      data: "iva_update:run",
+      data: "iva_update:do",
     });
   } finally {
     mutableGlobal.fetch = previousFetch;
@@ -103,6 +103,28 @@ async function press(launcher: string): Promise<string[]> {
   }
   return texts;
 }
+
+test("invalid update callback data only clears the Telegram spinner", async () => {
+  const methods: string[] = [];
+  const previousFetch = mutableGlobal.fetch;
+  mutableGlobal.fetch = (url) => {
+    methods.push(url.split("/").at(-1) ?? "");
+    return Promise.resolve({
+      json: () => Promise.resolve({ ok: true, result: {} }),
+    });
+  };
+  try {
+    await handleUpdateCallback({
+      id: "invalid-callback",
+      from: { id: 42 },
+      message: { chat: { id: 1 }, message_id: 10 },
+      data: "iva_update:garbage",
+    });
+  } finally {
+    mutableGlobal.fetch = previousFetch;
+  }
+  assert.deepEqual(methods, ["answerCallbackQuery"]);
+});
 
 test("the /update button leaves the lock to the update it launches", async (t) => {
   const lock = join(dataDir, "update.lock");
