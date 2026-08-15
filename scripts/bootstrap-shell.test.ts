@@ -543,7 +543,10 @@ void test("harden_ssh keeps passwords ON when the key never landed — no lockou
 
     assert.match(output, /warn: no home directory for iva/);
     assert.match(output, /leaving password logins ON/);
-    assert.match(output, /state: DISABLE_PASSWORD_AUTH=false KEY_AUTHORIZED=false/);
+    assert.match(
+      output,
+      /state: DISABLE_PASSWORD_AUTH=false KEY_AUTHORIZED=false/,
+    );
   } finally {
     rmSync(fixture, { recursive: true, force: true });
   }
@@ -568,7 +571,10 @@ void test("harden_ssh disables passwords once the key is really authorized, fixi
 
     assert.match(output, /ok: Key authorized for iva/);
     assert.doesNotMatch(output, /leaving password logins ON/);
-    assert.match(output, /state: DISABLE_PASSWORD_AUTH=true KEY_AUTHORIZED=true/);
+    assert.match(
+      output,
+      /state: DISABLE_PASSWORD_AUTH=true KEY_AUTHORIZED=true/,
+    );
     assert.equal(statSync(keys).mode & 0o777, 0o600);
     assert.equal(
       readFileSync(keys, "utf8"),
@@ -599,7 +605,10 @@ void test("harden_ssh trusts an already-authorized key only after locking its 06
 
     assert.match(output, /ok: Key already authorized for iva/);
     assert.doesNotMatch(output, /leaving password logins ON/);
-    assert.match(output, /state: DISABLE_PASSWORD_AUTH=true KEY_AUTHORIZED=true/);
+    assert.match(
+      output,
+      /state: DISABLE_PASSWORD_AUTH=true KEY_AUTHORIZED=true/,
+    );
     assert.equal(statSync(keys).mode & 0o777, 0o600);
   } finally {
     rmSync(fixture, { recursive: true, force: true });
