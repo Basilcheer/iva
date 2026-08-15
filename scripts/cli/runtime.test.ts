@@ -298,7 +298,7 @@ test("childEnv prepends NODE_BIN_DIR when PATH does not carry it", async (t) => 
 // `Property failed after N tests { seed: -1234567, path: "12:3:0", endOnFailure: true }`.
 // Подставь их вторым аргументом — fc.assert(prop, { seed: -1234567, path: "12:3:0" }) —
 // и прогон повторится байт в байт, включая shrink.
-test("property: childEnv stably filters PATH and carries NODE_BIN_DIR once", async (t) => {
+test("property: childEnv stably filters PATH and prepends NODE_BIN_DIR only when absent", async (t) => {
   const root = await sandbox(t);
   const originalPath = process.env.PATH;
   t.after(() => {
@@ -310,6 +310,9 @@ test("property: childEnv stably filters PATH and carries NODE_BIN_DIR once", asy
       join(root, "stub-bin"),
       join(root, "tail-bin"),
       "/usr/local/bin",
+      `${nodeBinDir}-old`,
+      `x${nodeBinDir}`,
+      `${nodeBinDir}/sub`,
     ),
     fc
       .string({ minLength: 1, maxLength: 40, unit: "grapheme" })
@@ -320,12 +323,13 @@ test("property: childEnv stably filters PATH and carries NODE_BIN_DIR once", asy
       segments: fc.array(fc.oneof(fc.constant(""), otherSegment), {
         maxLength: 12,
       }),
-      nodePosition: fc.option(fc.nat(), { nil: undefined }),
+      nodePositions: fc.array(fc.nat(), { maxLength: 3 }),
     })
-    .map(({ segments, nodePosition }) => {
-      if (nodePosition === undefined) return segments;
+    .map(({ segments, nodePositions }) => {
       const withNode = [...segments];
-      withNode.splice(nodePosition % (withNode.length + 1), 0, nodeBinDir);
+      for (const nodePosition of nodePositions) {
+        withNode.splice(nodePosition % (withNode.length + 1), 0, nodeBinDir);
+      }
       return withNode;
     });
 
@@ -335,21 +339,19 @@ test("property: childEnv stably filters PATH and carries NODE_BIN_DIR once", asy
 
       const result = (createCliRuntime(root).childEnv.PATH ?? "").split(":");
       const filteredInput = inputSegments.filter(Boolean);
-      const inputWithoutNode = filteredInput.filter(
-        (segment) => segment !== nodeBinDir,
-      );
+      const inputNodeCount = filteredInput.filter(
+        (segment) => segment === nodeBinDir,
+      ).length;
 
       assert.equal(
         result.filter((segment) => segment === nodeBinDir).length,
-        1,
+        inputNodeCount || 1,
       );
-      if (!filteredInput.includes(nodeBinDir)) {
-        assert.equal(result[0], nodeBinDir);
+      if (inputNodeCount === 0) {
+        assert.deepEqual(result, [nodeBinDir, ...filteredInput]);
+      } else {
+        assert.deepEqual(result, filteredInput);
       }
-      assert.deepEqual(
-        result.filter((segment) => segment !== nodeBinDir),
-        inputWithoutNode,
-      );
       assert.ok(result.every(Boolean));
     }),
     { numRuns: 500 },
