@@ -650,6 +650,12 @@ test("an update killed after the flip is finished by the next run", async (t) =>
   const name = `0.3.15-${iva.target.sha.slice(0, 12)}`;
   const log = (): string => readFileSync(join(data, "migrated.log"), "utf8");
 
+  // Killed while stopping old writers: no migration starts beside them.
+  await killAt(iva.home, "quiesce", iva.target);
+  assert.equal(store.currentName(), name);
+  assert.equal(store.settled(), first.version);
+  assert.equal(log(), "001\n");
+
   // Killed while migrating: `current` already names the new version, and nothing
   // that comes after the flip has happened.
   await killAt(iva.home, "migrate", iva.target);
@@ -681,6 +687,84 @@ test("an update killed after the flip is finished by the next run", async (t) =>
   assert.equal(store.settled(), name);
   // Only now is the update over.
   assert.deepEqual(await iva.update(), { status: "current", version: name });
+});
+
+test("a state migration runs only after the old writer is quiesced", async (t) => {
+  const iva = world(t);
+  await iva.update();
+  writeFileSync(
+    join(iva.repo, "scripts/migrations/002-no-old-writer.ts"),
+    `import { existsSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+export default function up(context) {
+  if (existsSync(join(context.dataDir, "old-writer"))) {
+    throw new Error("old writer is still live");
+  }
+  writeFileSync(join(context.dataDir, "migration-safe"), "safe");
+}
+`,
+  );
+  iva.release("0.3.15");
+  const oldWriter = join(layoutFor(iva.home).data, "old-writer");
+  writeFileSync(oldWriter, "live");
+  const order: string[] = [];
+
+  const outcome = updated(
+    await iva.update({
+      quiesce: () => {
+        order.push("quiesce");
+        rmSync(oldWriter);
+        return Promise.resolve();
+      },
+      restart: (dir) => {
+        order.push(`restart @${dir}`);
+        return Promise.resolve();
+      },
+    }),
+  );
+
+  assert.deepEqual(order, [
+    "quiesce",
+    `restart @${layoutFor(iva.home).current}`,
+  ]);
+  assert.equal(
+    readFileSync(join(layoutFor(iva.home).data, "migration-safe"), "utf8"),
+    "safe",
+  );
+  assert.equal(createVersionStore(iva.home).settled(), outcome.version);
+});
+
+test("a quiesce fault blocks migrations and attempts service recovery", async (t) => {
+  const iva = world(t);
+  const first = updated(await iva.update());
+  writeFileSync(
+    join(iva.repo, "scripts/migrations/002-must-not-run.ts"),
+    `import { writeFileSync } from "node:fs";
+import { join } from "node:path";
+export default function up(context) {
+  writeFileSync(join(context.dataDir, "unsafe-migration"), "ran");
+}
+`,
+  );
+  iva.release("0.3.15");
+  let recoveries = 0;
+
+  await assert.rejects(
+    iva.update({
+      quiesce: () => Promise.reject(new Error("cannot stop old writer")),
+      restart: () => {
+        recoveries += 1;
+        return Promise.resolve();
+      },
+    }),
+    /cannot stop old writer/u,
+  );
+
+  const store = createVersionStore(iva.home);
+  assert.equal(recoveries, 1);
+  assert.equal(existsSync(join(store.layout.data, "unsafe-migration")), false);
+  assert.equal(store.settled(), first.version);
+  assert.notEqual(store.currentName(), first.version);
 });
 
 test("a restart that fails leaves an update the next run can finish", async (t) => {

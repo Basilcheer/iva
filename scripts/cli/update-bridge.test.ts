@@ -73,10 +73,16 @@ test("the first update moves the installation onto versions and keeps its state"
       `uv run ${iva.home}/versions/${name}/scripts/autograph/cleanup.py . --apply`,
     ),
   );
+  const stopAgent = calls.findIndex((line) => /stop iva\.service$/u.test(line));
+  const stopPoller = calls.findIndex((line) =>
+    /stop iva-telegram-poll\.service$/u.test(line),
+  );
   const restart = calls.findIndex((line) =>
     /restart iva\.service$/u.test(line),
   );
-  assert.ok(cleanup >= 0, calls.join("\n"));
+  assert.ok(stopAgent >= 0, calls.join("\n"));
+  assert.ok(stopPoller > stopAgent, calls.join("\n"));
+  assert.ok(cleanup > stopPoller, calls.join("\n"));
   assert.ok(cleanup < restart, calls.join("\n"));
 
   const dir = join(iva.home, "versions", name);

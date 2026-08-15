@@ -175,6 +175,12 @@ export async function main(argv: readonly string[]): Promise<number> {
       run: commandRunner(verbose),
       log,
       notify,
+      quiesce: async () => {
+        const { createCliRuntime } = await import("./cli/runtime.ts");
+        const runtime = createCliRuntime(layout.current);
+        runtime.systemd.stop(runtime.SERVICES);
+        await Promise.resolve();
+      },
       restart: async (root) => {
         const { createCliRuntime } = await import("./cli/runtime.ts");
         const { createCliSystemd } = await import("./cli/systemd.ts");

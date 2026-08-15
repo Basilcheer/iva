@@ -75,6 +75,8 @@ type FinishOptions = {
   readonly name: string;
   readonly run: Runner;
   readonly probe?: Probe;
+  /** Stop every service that can write shared state before migrations start. */
+  readonly quiesce?: () => Promise<void>;
   readonly restart?: (root: string) => Promise<void>;
   /** Whether the restarted service answers on the port the installation runs on. */
   readonly serving?: (port: number) => Promise<Health>;
@@ -234,6 +236,7 @@ export async function finishVersionUpdate({
   name,
   run,
   probe,
+  quiesce = async () => {},
   restart = async () => {},
   serving = (port) => awaitServing({ port }),
   adopt = () => {},
@@ -338,23 +341,38 @@ export async function finishVersionUpdate({
     store.activate(name);
   }
 
-  // Before the restart: the service must not open state still to be migrated.
-  const migrations = await runMigrations({
-    dir: join(dir, "scripts/migrations"),
-    dataDir: store.layout.data,
-    context: { home, dataDir: store.layout.data, versionDir: dir },
-    log,
-  });
-  // Before it too: the cleaner repairs cards an older frontmatter writer grew to
-  // gigabytes, and repairing them once the agent has them open is too late.
-  await errand(run, log, {
-    what: "the vault cleanup",
-    failure: "the update continues without it",
-    command: "uv",
-    args: ["run", join(dir, "scripts/autograph/cleanup.py"), ".", "--apply"],
-    cwd: store.layout.vault,
-  });
-  await restart(store.layout.current);
+  let migrations: string[] = [];
+  let restartStarted = false;
+  try {
+    // Completion of this callback is the boundary: no old writer can overlap a
+    // present or future migration that changes shared state.
+    await quiesce();
+    migrations = await runMigrations({
+      dir: join(dir, "scripts/migrations"),
+      dataDir: store.layout.data,
+      context: { home, dataDir: store.layout.data, versionDir: dir },
+      log,
+    });
+    // Before the restart: the cleaner repairs cards an older frontmatter writer
+    // grew to gigabytes. Once the new agent opens them, repair is too late.
+    await errand(run, log, {
+      what: "the vault cleanup",
+      failure: "the update continues without it",
+      command: "uv",
+      args: ["run", join(dir, "scripts/autograph/cleanup.py"), ".", "--apply"],
+      cwd: store.layout.vault,
+    });
+    restartStarted = true;
+    await restart(store.layout.current);
+  } catch (error) {
+    // A partial stop or migration fault must not intentionally leave every
+    // service stopped. The unsettled marker still makes the next run retry.
+    if (!restartStarted)
+      await restart(store.layout.current).catch((restartError: unknown) =>
+        log(`service recovery failed: ${String(restartError)}`),
+      );
+    throw error;
+  }
 
   const port = servicePort(env);
   const live = await serving(port);
