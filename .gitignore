@@ -39,6 +39,7 @@ agent/skills/**/*.pem
 # it would land in the next stash and be restored from it - one failed run per 18 MB.
 /.output.iva-install-backup-*/
 /.output.iva-build-backup-*/
+/.output.iva-backup-*/
 
 # Maintainer working notes — kept local, not part of the public repo
 /implementation-notes.md

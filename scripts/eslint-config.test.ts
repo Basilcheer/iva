@@ -2,9 +2,10 @@
 
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { ESLint } from "eslint";
 
 const EXPECTED_IGNORES = [
   ".output/",
@@ -15,7 +16,16 @@ const EXPECTED_IGNORES = [
   ".eve/",
   "services/telegram-userbot/",
   "data/",
+  "**/wt/",
+  "**/.workflow-data/",
+  "**/.iva-update/",
+  "**/.iva-build/",
+  "**/.output.iva-backup-*/",
+  "**/.output.iva-install-backup-*/",
+  "**/.output.iva-build-backup-*/",
 ];
+
+const ROOT = fileURLToPath(new URL("../", import.meta.url));
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -120,4 +130,34 @@ test("ESLint config preserves the migration lint policy", async () => {
 
   const prettierConfig = requireNamedConfig(configs, "config-prettier");
   assert.equal(requireRecord(prettierConfig.rules, "Prettier rules").curly, 0);
+});
+
+test("ESLint sees only canonical project trees", async () => {
+  const eslint = new ESLint({
+    cwd: ROOT,
+    flags: ["unstable_native_nodejs_ts_config"],
+  });
+
+  for (const path of [
+    "nested/wt/checkout/sentinel.test.ts",
+    "nested/.workflow-data/sentinel.test.ts",
+    "nested/.iva-update/checkout/sentinel.test.ts",
+    "nested/.iva-build/checkout/sentinel.test.ts",
+    "nested/.output.iva-backup-1/sentinel.test.ts",
+    "nested/.output.iva-install-backup-1/sentinel.test.ts",
+    "nested/.output.iva-build-backup-1/sentinel.test.ts",
+  ]) {
+    assert.equal(await eslint.isPathIgnored(join(ROOT, path)), true, path);
+  }
+
+  for (const path of [
+    "scripts/wt-source/sentinel.ts",
+    "scripts/.workflow-data-source/sentinel.ts",
+    "scripts/.iva-update-source/sentinel.ts",
+    "scripts/.iva-build-source/sentinel.ts",
+    "scripts/.output-source/sentinel.ts",
+    "scripts/.output.iva-source/sentinel.ts",
+  ]) {
+    assert.equal(await eslint.isPathIgnored(join(ROOT, path)), false, path);
+  }
 });

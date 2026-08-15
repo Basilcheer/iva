@@ -14,6 +14,13 @@ export default defineConfig([
     ".eve/",
     "services/telegram-userbot/",
     "data/",
+    "**/wt/",
+    "**/.workflow-data/",
+    "**/.iva-update/",
+    "**/.iva-build/",
+    "**/.output.iva-backup-*/",
+    "**/.output.iva-install-backup-*/",
+    "**/.output.iva-build-backup-*/",
   ]),
   {
     name: "iva/javascript",
