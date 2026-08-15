@@ -32,6 +32,7 @@ import {
 import { catalogProvider, providerEnvKeys } from "../lib/model-catalog.ts";
 import { keptSetupWritePlan } from "../lib/setup-keep.ts";
 import { validateTimeZone } from "../lib/timezone.ts";
+import { resolveMemorySearchMode } from "./memory-mode.ts";
 import { openrouterErrReason } from "./openrouter.ts";
 
 type Env = Record<string, string>;
@@ -955,7 +956,6 @@ async function main() {
       existing.MEMORY_SEARCH_MODE === "hybrid",
     )
   ) {
-    out.MEMORY_SEARCH_MODE = "hybrid";
     const EMB = [
       {
         id: "jina",
@@ -984,17 +984,27 @@ async function main() {
     const eprov = EMB[ei];
     const eExisting =
       process.env[eprov.key] || existing[eprov.key] || out[eprov.key] || "";
+    console.log(
+      `  ${t("Key for", "Ключ")} ${eprov.id}: ${C.c}${eprov.url}${C.x}. ${t("Enter — skip.", "Enter — пропустить.")}`,
+    );
     let ek = await ask(
       `  ${eprov.id} API key`,
       eExisting ? mask(eExisting) : "",
     );
     if (eExisting && (!ek || ek.endsWith(KEEP()))) ek = eExisting;
     out[eprov.key] = (ek || "").trim();
-    console.log(
-      `  ${C.y}${t("Index will build on the next nightly maintenance (or run: node scripts/memory/embed-index.ts).", "Индекс соберётся при ближайшем ночном обслуживании (или вручную: node scripts/memory/embed-index.ts).")}${C.x}`,
-    );
+    out.MEMORY_SEARCH_MODE = resolveMemorySearchMode(true, out);
+    if (out.MEMORY_SEARCH_MODE === "hybrid") {
+      console.log(
+        `  ${C.y}${t("Index will build on the next nightly maintenance (or run: node scripts/memory/embed-index.ts).", "Индекс соберётся при ближайшем ночном обслуживании (или вручную: node scripts/memory/embed-index.ts).")}${C.x}`,
+      );
+    } else {
+      console.log(
+        `  ${C.y}${t("No key — hybrid skipped. Memory search stays on free BM25. Enable later: iva config.", "Ключа нет — hybrid пропущен. Поиск памяти остаётся на бесплатном BM25. Включить позже: iva config.")}${C.x}`,
+      );
+    }
   } else {
-    out.MEMORY_SEARCH_MODE = "grep";
+    out.MEMORY_SEARCH_MODE = resolveMemorySearchMode(false, out);
   }
 
   // ── Step 3: Telegram bot ──────────────────────────────────────────

@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-floating-promises, @typescript-eslint/require-await -- Node's test runner owns registrations and async stubs preserve production signatures. */
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { existsSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -370,29 +370,47 @@ async function runWizard(
   t: TestContext,
   provider: string,
   stopAt: RegExp,
-): Promise<string> {
+  answers: readonly string[] = [],
+): Promise<{ candidate: string; output: string }> {
   const root = await sandbox(t);
   const input = join(root, "fixture.env");
+  const candidate = join(root, "candidate.env");
   writeFileSync(input, fixtureEnv(provider));
   const repo = fileURLToPath(new URL("../../", import.meta.url));
+  const fetchFixture = fileURLToPath(
+    new URL("../fixtures/setup-wizard-fetch.ts", import.meta.url),
+  );
   const clean = { ...process.env };
   delete clean.FORCE_COLOR;
-  const child = spawn(process.execPath, [join(repo, "scripts/setup/main.ts")], {
-    cwd: repo,
-    env: {
-      ...clean,
-      NO_COLOR: "1",
-      AGENT_LANGUAGE: "en",
-      IVA_CONFIG_INPUT: input,
-      IVA_CONFIG_OUTPUT: join(root, "candidate.env"),
+  delete clean.JINA_API_KEY;
+  delete clean.DEEPINFRA_API_KEY;
+  delete clean.MEMORY_EMBED_URL;
+  const child = spawn(
+    process.execPath,
+    ["--import", fetchFixture, join(repo, "scripts/setup/main.ts")],
+    {
+      cwd: repo,
+      env: {
+        ...clean,
+        NO_COLOR: "1",
+        AGENT_LANGUAGE: "en",
+        IVA_CONFIG_INPUT: input,
+        IVA_CONFIG_OUTPUT: candidate,
+      },
+      stdio: ["pipe", "pipe", "pipe"],
     },
-    stdio: ["pipe", "pipe", "pipe"],
-  });
+  );
   let output = "";
+  let answerIndex = 0;
   const timer = setTimeout(() => child.kill("SIGKILL"), 20_000);
   await new Promise<void>((resolve) => {
     const collect = (chunk: Buffer): void => {
-      output += chunk.toString();
+      const text = chunk.toString();
+      output += text;
+      if (answerIndex < answers.length && text.endsWith(": ")) {
+        child.stdin.write(`${answers[answerIndex]}\n`);
+        answerIndex += 1;
+      }
       if (stopAt.test(output)) child.kill("SIGKILL");
     };
     child.stdout.on("data", collect);
@@ -400,7 +418,7 @@ async function runWizard(
     child.on("close", () => resolve());
   });
   clearTimeout(timer);
-  return output;
+  return { candidate, output };
 }
 
 test("the setup wizard treats an invalid provider as unconfigured, not as complete", async (t) => {
@@ -408,7 +426,7 @@ test("the setup wizard treats an invalid provider as unconfigured, not as comple
   // статус и апдейт его отвергают, а мастер с `||` схлопывал его в ollama и объявлял
   // сломанный .env настроенным — то есть ровно в починке и молчал.
   for (const value of ["ollmaa", "OLLAMA", ""]) {
-    const output = await runWizard(t, value, /Provider \(1\/2\/3\/4\)/u);
+    const { output } = await runWizard(t, value, /Provider \(1\/2\/3\/4\)/u);
 
     assert.doesNotMatch(output, /already configured/u, value);
     assert.doesNotMatch(output, /Reconfigure from scratch/u, value);
@@ -425,11 +443,29 @@ test("the setup wizard treats an invalid provider as unconfigured, not as comple
 // Контроль: на исправной конфигурации мастер по-прежнему коротко подтверждает и предлагает
 // ничего не трогать. Без него тест выше проходил бы и на мастере, сломанном вообще.
 test("the setup wizard still short-circuits on a complete configuration", async (t) => {
-  const output = await runWizard(t, "ollama", /Reconfigure from scratch/u);
+  const { output } = await runWizard(t, "ollama", /Reconfigure from scratch/u);
 
   assert.match(output, /Iva is already configured/u);
   assert.match(output, /Provider: ollama/u);
   assert.doesNotMatch(output, /MODEL_PROVIDER is invalid/u);
+});
+
+test("the setup wizard writes grep when hybrid gets no embedding key", async (t) => {
+  const { candidate, output } = await runWizard(
+    t,
+    "invalid",
+    /Ready — settings validated for apply/u,
+    ["2", "test-key", "", "", "", "", "", "y", "", "", "", "", "", ""],
+  );
+
+  assert.equal(
+    /^MEMORY_SEARCH_MODE=.*$/mu.exec(readFileSync(candidate, "utf8"))?.[0],
+    "MEMORY_SEARCH_MODE=grep",
+  );
+  assert.match(
+    output,
+    /No key — hybrid skipped\. Memory search stays on free BM25\. Enable later: iva config\./u,
+  );
 });
 
 // IVA_CONFIG_INPUT существует ради одного: прогнать мастера против фикстуры в тесте.
