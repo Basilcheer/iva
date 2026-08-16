@@ -351,6 +351,190 @@ test("a same-inode writer cannot lose bytes at the raw tracked replacement bound
   );
 });
 
+test("an afterCreate same-inode writer cannot lose raw tracked bytes", async (t) => {
+  const fx = fixture();
+  t.after(() => rmSync(fx.temp, { recursive: true, force: true }));
+  prepareRawState(fx.local);
+  const tracked = join(fx.local, "tracked.txt");
+  const foreignBytes = Buffer.from([5, 0, 253, 10, 4]);
+  let armed = false;
+  let triggered = false;
+  const tx = createUpdateTransaction({
+    root: fx.local,
+    dataDir: fx.data,
+    envPath: join(fx.local, ".env"),
+    recoveryFileOps: {
+      afterCreate(kind, path) {
+        if (!armed || kind !== "file" || path !== "tracked.txt") return;
+        armed = false;
+        triggered = true;
+        const inode = statSync(tracked, { bigint: true }).ino;
+        writeFileSync(tracked, foreignBytes);
+        assert.equal(statSync(tracked, { bigint: true }).ino, inode);
+      },
+      remove(path) {
+        rmSync(path, { recursive: true, force: true });
+      },
+    },
+  });
+  await tx.protect();
+  armed = true;
+  const recoveryOid = git(
+    fx.local,
+    "for-each-ref",
+    "--format=%(objectname)",
+    "refs/iva/update-recovery",
+  );
+  let restoreError: unknown = null;
+
+  try {
+    await tx.rollback();
+  } catch (error) {
+    restoreError = error;
+  }
+
+  assert.equal(triggered, true);
+  assert.ok(restoreError instanceof Error);
+  assert.deepEqual(readFileSync(tracked), foreignBytes);
+  assert.equal(rawDebtCopies(fx.data, foreignBytes).length, 1);
+  assert.equal(
+    git(
+      fx.local,
+      "for-each-ref",
+      "--format=%(objectname)",
+      "refs/iva/update-recovery",
+    ),
+    recoveryOid,
+  );
+});
+
+test("a raw tracked publish collision preserves the target and retries exactly", async (t) => {
+  const fx = fixture();
+  t.after(() => rmSync(fx.temp, { recursive: true, force: true }));
+  const before = prepareRawState(fx.local);
+  const tracked = join(fx.local, "tracked.txt");
+  const survivor = join(fx.temp, "foreign-tracked-survivor");
+  const foreignBytes = Buffer.from([3, 0, 252, 10, 2]);
+  const desiredBytes = Buffer.from("unstaged\r\n");
+  let armed = false;
+  let triggered = false;
+  const tx = createUpdateTransaction({
+    root: fx.local,
+    dataDir: fx.data,
+    envPath: join(fx.local, ".env"),
+    recoveryFileOps: {
+      afterRawTrackedPrepare() {
+        if (!armed) return;
+        armed = false;
+        triggered = true;
+        writeFileSync(tracked, foreignBytes, { flag: "wx" });
+      },
+      remove(path) {
+        rmSync(path, { recursive: true, force: true });
+      },
+    },
+  });
+  await tx.protect();
+  const preparedBefore = rawDebtCopies(fx.data, desiredBytes).length;
+  armed = true;
+  const recoveryOid = git(
+    fx.local,
+    "for-each-ref",
+    "--format=%(objectname)",
+    "refs/iva/update-recovery",
+  );
+
+  await assert.rejects(() => tx.rollback(), /update rollback incomplete/u);
+
+  assert.equal(triggered, true);
+  assert.deepEqual(readFileSync(tracked), foreignBytes);
+  assert.equal(rawDebtCopies(fx.data, desiredBytes).length, preparedBefore + 1);
+  assert.equal(
+    git(
+      fx.local,
+      "for-each-ref",
+      "--format=%(objectname)",
+      "refs/iva/update-recovery",
+    ),
+    recoveryOid,
+  );
+
+  renameSync(tracked, survivor);
+  await tx.rollback();
+
+  assert.deepEqual(rawState(fx.local), before);
+  assert.deepEqual(readFileSync(survivor), foreignBytes);
+});
+
+for (const phase of ["prepared", "linked"] as const) {
+  test(`a fault after raw tracked ${phase} state retains recovery and retries`, async (t) => {
+    const fx = fixture();
+    t.after(() => rmSync(fx.temp, { recursive: true, force: true }));
+    const before = prepareRawState(fx.local);
+    const desiredBytes = Buffer.from("unstaged\r\n");
+    let armed = false;
+    let triggered = false;
+    const fail = (): void => {
+      if (!armed || triggered) return;
+      triggered = true;
+      throw new Error(`injected raw tracked ${phase} fault`);
+    };
+    const tx = createUpdateTransaction({
+      root: fx.local,
+      dataDir: fx.data,
+      envPath: join(fx.local, ".env"),
+      recoveryFileOps: {
+        afterRawTrackedPrepare() {
+          if (phase === "prepared") fail();
+        },
+        afterCreate(kind, path) {
+          if (phase === "linked" && kind === "file" && path === "tracked.txt")
+            fail();
+        },
+        remove(path) {
+          rmSync(path, { recursive: true, force: true });
+        },
+      },
+    });
+    await tx.protect();
+    const preparedBefore = rawDebtCopies(fx.data, desiredBytes).length;
+    armed = true;
+    const recoveryOid = git(
+      fx.local,
+      "for-each-ref",
+      "--format=%(objectname)",
+      "refs/iva/update-recovery",
+    );
+
+    await assert.rejects(
+      () => tx.rollback(),
+      new RegExp(
+        `update rollback incomplete: injected raw tracked ${phase} fault`,
+        "u",
+      ),
+    );
+
+    assert.equal(triggered, true);
+    assert.equal(
+      rawDebtCopies(fx.data, desiredBytes).length,
+      preparedBefore + 1,
+    );
+    assert.equal(
+      git(
+        fx.local,
+        "for-each-ref",
+        "--format=%(objectname)",
+        "refs/iva/update-recovery",
+      ),
+      recoveryOid,
+    );
+
+    await tx.rollback();
+
+    assert.deepEqual(rawState(fx.local), before);
+  });
+}
+
 test("a post-rename same-inode writer remains in raw retention debt", async (t) => {
   const fx = fixture();
   t.after(() => rmSync(fx.temp, { recursive: true, force: true }));

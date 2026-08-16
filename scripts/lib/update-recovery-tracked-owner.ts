@@ -2,6 +2,7 @@ import {
   closeSync,
   constants,
   fstatSync,
+  linkSync,
   mkdirSync,
   openSync,
   readFileSync,
@@ -15,6 +16,7 @@ import {
   syncDirectory,
   type ResourceFileSnapshot,
   verifyStableFile,
+  writeExclusiveFile,
 } from "./update-resource-identity.ts";
 import {
   createRecoveryLeaf,
@@ -30,6 +32,7 @@ export type RawTrackedHooks = RecoveryIoHooks & {
   beforeRawTrackedRemoval?(path: string, boundary: "index" | "entry"): void;
   beforeRawTrackedReplace?(path: string): void;
   afterRawTrackedQuarantine?(path: string): void;
+  afterRawTrackedPrepare?(path: string): void;
 };
 
 type MissingLease = { kind: "missing"; path: string };
@@ -276,6 +279,10 @@ export class RawTrackedOwner {
   #create(entry: RecoveryContentEntry): void {
     const absolute = safeRecoveryChild(this.#root, entry.path);
     mkdirSync(dirname(absolute), { recursive: true });
+    if (entry.mode !== "120000") {
+      this.#createFile(entry, absolute);
+      return;
+    }
     try {
       createRecoveryLeaf({
         root: this.#root,
@@ -288,6 +295,56 @@ export class RawTrackedOwner {
       if ((error as NodeJS.ErrnoException).code === "EEXIST")
         changed(entry.path);
       throw error;
+    }
+  }
+
+  #createFile(entry: RecoveryContentEntry, absolute: string): void {
+    if (entry.mode !== "100644" && entry.mode !== "100755")
+      throw new Error(`unsupported recovery tree mode: ${entry.mode}`);
+    this.#hooks.beforeCreate?.("file", entry.path);
+    const container = createOwnedContainer(
+      this.#retentionRoot,
+      `.${basename(entry.path)}.iva-raw-publish-`,
+    );
+    const prepared = join(container.path, "owned");
+    try {
+      const snapshot = writeExclusiveFile({
+        path: prepared,
+        bytes: entry.bytes,
+        mode: desiredMode(entry),
+        label: `raw tracked prepared file ${entry.path}`,
+      });
+      this.#hooks.afterRawTrackedPrepare?.(prepared);
+      try {
+        verifyStableFile(
+          prepared,
+          snapshot,
+          `raw tracked prepared file ${entry.path}`,
+        );
+        linkSync(prepared, absolute);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "EEXIST")
+          changed(entry.path, prepared);
+        throw error;
+      }
+      this.#hooks.afterCreate?.("file", entry.path);
+      syncDirectory(dirname(absolute));
+      try {
+        verifyStableFile(
+          prepared,
+          snapshot,
+          `raw tracked prepared file ${entry.path}`,
+        );
+        verifyStableFile(
+          absolute,
+          snapshot,
+          `raw tracked published file ${entry.path}`,
+        );
+      } catch {
+        changed(entry.path, prepared);
+      }
+    } finally {
+      releaseDirectoryLease(container.lease);
     }
   }
 }
