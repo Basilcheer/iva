@@ -161,7 +161,14 @@ Default model is deepseek-v4-pro, 131k context. On Go it runs about $14–15/mo 
 ## What's New
 
 <details>
-<summary><b>v0.3.22 · 15.08.2026 — expand the latest releases</b></summary>
+<summary><b>v0.3.23 · 16.08.2026 — expand the latest releases</b></summary>
+
+### 16.08.2026
+
+#### v0.3.23
+
+- A one-time reminder no longer gets lost silently: reminders go through the new `iva remind` command. When it fires, the agent checks whether the task is still open and words the message itself; the code delivers it with retries on network and Telegram failures. If the brain is down, the original text arrives with a ⏰.
+- A custom skill works right away: a skill dropped into `data/custom/agent/skills/` is visible on the next turn — no rebuild, no restart. Remove the file and the skill is gone.
 
 ### 15.08.2026
 
@@ -185,12 +192,6 @@ Default model is deepseek-v4-pro, 131k context. On Go it runs about $14–15/mo 
 - Morning memory reports no longer arrive unasked: the nightly pass writes the vault silently. The report switch lives in `/menu` → 🔔 Notices, next to the morning digest switch, and applies the same night. An installation that used to get the report hears once where to turn it back on.
 - Every message Iva sends on her own now speaks one language — the one you picked. The report became a human note: 3-5 lines about what she remembered, no internal jargon.
 - Alerts now say what broke, what it costs and what to do. The same problem repeats at most once a week; a problem that changed or came back speaks at once.
-
-### 12.08.2026
-
-#### v0.3.19
-
-- The "Building Iva" spinner no longer sticks forever after a Telegram update. The final "✅ Iva updated" now arrives from the bridge, after the restart. A failed message edit is logged and resent as a new message. A false "✅" cannot happen: the bridge stays silent until the installation has settled.
 
 </details>
 
