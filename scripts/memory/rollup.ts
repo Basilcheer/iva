@@ -22,6 +22,7 @@ import {
 } from "../lib/notice-policy.ts";
 import { resolveDataDir } from "../lib/data-dir.ts";
 import { notificationChat } from "../lib/notification-chat.ts";
+import { readCore } from "./read-core.ts";
 import {
   cancelTurnAndConfirmQuietly,
   canRetryFresh,
@@ -384,7 +385,11 @@ if (result.status === "failed" || !result.message) {
 // the deterministic 05:00 backstop.
 if (period === "daily") {
   const corePath = join(VAULT, "CORE.md");
-  let core = readFileSync(corePath, "utf8");
+  const initialCore = readCore(corePath);
+  if (initialCore.state === "unreadable") throw initialCore.error;
+  // A non-empty pre-existing vault may legitimately have no CORE. The turn starts from
+  // the same empty state that the dynamic CORE instruction already documents and uses.
+  let core = initialCore.state === "valid" ? initialCore.text : "";
   if (core.length > CORE_CAP) {
     const oldLength = core.length;
     console.error(
@@ -408,7 +413,15 @@ if (period === "daily") {
       if ((e as { code?: string }).code === "ROLLUP_TURN_TIMEOUT")
         await dropHungSession("core-correction");
     }
-    core = readFileSync(corePath, "utf8");
+    const correctedCore = readCore(corePath);
+    if (correctedCore.state === "unreadable") throw correctedCore.error;
+    if (correctedCore.state === "missing") {
+      console.error(
+        "rollup daily: CORE.md disappeared during correction; refusing to accept data loss",
+      );
+      process.exit(1);
+    }
+    core = correctedCore.text;
     if (core.length > CORE_CAP) {
       console.error(
         `rollup daily: CORE.md remains over cap after one correction (${core.length}/${CORE_CAP}); ` +
