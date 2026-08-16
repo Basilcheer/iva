@@ -123,6 +123,18 @@ function hasCallbackData(
   return typeof callback.data === "string";
 }
 
+function telegramCallSucceeded(value: unknown): boolean {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as TelegramResult).ok === true
+  );
+}
+
+function replySucceeded(value: SentMessage | null | undefined): boolean {
+  return typeof value?.message_id === "number";
+}
+
 function isTelegramFlowState(value: PendingFlow): value is TelegramFlowState {
   return (
     typeof value.flow === "string" &&
@@ -360,12 +372,13 @@ async function handleControl(
       const from = String(callback.from?.id ?? "");
       // Чужой тап в группе: гасим спиннер молча и ничего не отменяем.
       if (ALLOWED.size === 0 || !ALLOWED.has(from)) {
-        await ackImpl(callback.id);
-        return true;
+        return telegramCallSucceeded(await ackImpl(callback.id));
       }
       const outcome = await requestTurnStop(update, { cancelImpl });
-      await ackImpl(callback.id, stopOutcomeText(outcome));
-      return true;
+      const acknowledged = telegramCallSucceeded(
+        await ackImpl(callback.id, stopOutcomeText(outcome)),
+      );
+      return outcome === "requested" || acknowledged;
     }
     if (parseUpdateCallbackData(callback.data) !== null)
       return handleUpdateCallback(callback);
@@ -441,7 +454,7 @@ async function handleControl(
   const from = String(msg?.from?.id ?? "");
   if (ALLOWED.size === 0 || !ALLOWED.has(from)) return false; // untrusted — let eve drop it
   const chatId = msg?.chat?.id;
-  if (chatId === undefined) return true;
+  if (chatId === undefined) return false;
   // /menu — open the nested settings menu (out-of-band; errors consumed, never reach eve).
   if (cmd === "/menu") {
     await menu
@@ -450,14 +463,12 @@ async function handleControl(
     return true;
   }
   if (cmd === "/help") {
-    await replyImpl(chatId, helpText());
-    return true;
+    return replySucceeded(await replyImpl(chatId, helpText()));
   }
   // /start — кнопка Start у нового пользователя. Без этой ветки приветствие уходило
   // обычным ходом в модель: платный запрос ради «привет». Отвечает мост, out-of-band.
   if (cmd === "/start") {
-    await replyImpl(chatId, startText());
-    return true;
+    return replySucceeded(await replyImpl(chatId, startText()));
   }
   // /stop — interrupt the current turn, the same door as the ⏹ Stop button.
   // Out-of-band so it reaches a busy agent (an ordinary message would be queued by
@@ -465,9 +476,8 @@ async function handleControl(
   if (cmd === "/stop") {
     const outcome = await requestTurnStop(update, { cancelImpl });
     // Успех виден по статус-сообщению: turn.cancelled перепишет его на «Остановлено».
-    if (outcome !== "requested")
-      await replyImpl(chatId, stopOutcomeText(outcome));
-    return true;
+    if (outcome === "requested") return true;
+    return replySucceeded(await replyImpl(chatId, stopOutcomeText(outcome)));
   }
   // /usage — token spend from data/usage.jsonl. Out-of-band and FREE (we don't call the model).
   if (cmd === "/usage") {
@@ -478,16 +488,16 @@ async function handleControl(
         now: Date.now(),
         tz: process.env.ASSISTANT_TIMEZONE,
       });
-      await replyTo(chatId, formatUsageReport(agg));
+      return replySucceeded(await replyTo(chatId, formatUsageReport(agg)));
     } catch (e: unknown) {
-      await replyTo(chatId, "Couldn't read the usage log: " + errorMessage(e));
+      return replySucceeded(
+        await replyTo(chatId, "Couldn't read the usage log: " + errorMessage(e)),
+      );
     }
-    return true;
   }
   // /update — check upstream; if newer, offer inline Update/Skip buttons. Out-of-band.
   if (cmd === "/update") {
-    await handleUpdateCheck(chatId);
-    return true;
+    return handleUpdateCheck(chatId);
   }
   // /model, /think — provider/model/effort wizard (writes .env; applied on restart).
   if (cmd === "/model") {
@@ -525,7 +535,7 @@ async function handleControl(
         ),
       );
     }
-    return true;
+    return replySucceeded(status);
   }
 
   const clearsPrivateQueue = msg?.chat?.type === "private";

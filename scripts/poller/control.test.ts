@@ -24,7 +24,10 @@ type ControlModule = {
   handleControl: (
     update: ControlUpdate,
     deps?: {
-      replyImpl?: (chatId: number | undefined, text: string) => Promise<null>;
+      replyImpl?: (
+        chatId: number | undefined,
+        text: string,
+      ) => Promise<{ message_id: number } | null>;
       ackImpl?: (id: string, text?: string) => Promise<unknown>;
       cancelImpl?: (input: CancelCall) => Promise<unknown>;
     },
@@ -113,7 +116,7 @@ function recordingDeps() {
       },
       replyImpl: async (chatId: number | undefined, text: string) => {
         replies.push([chatId, text]);
-        return null;
+        return { message_id: replies.length };
       },
     },
   };
@@ -385,4 +388,36 @@ test("malformed update callback is not claimed as a local control", async () => 
   } finally {
     globalThis.fetch = previousFetch;
   }
+});
+
+test("a falsey local reply does not authorize offset acknowledgement", async () => {
+  const consumed = await handleControl(
+    {
+      update_id: 10,
+      message: {
+        message_id: 10,
+        date: 1,
+        chat,
+        from: trustedFrom,
+        text: "/help",
+      },
+    },
+    { replyImpl: async () => null },
+  );
+
+  assert.equal(consumed, false);
+});
+
+test("a falsey callback ack does not claim a local control", async () => {
+  status.setChatStatus("7:", {
+    status: "idle",
+    sessionId: null,
+    turnId: null,
+  });
+
+  const consumed = await handleControl(stopButton(), {
+    ackImpl: async () => null,
+  });
+
+  assert.equal(consumed, false);
 });

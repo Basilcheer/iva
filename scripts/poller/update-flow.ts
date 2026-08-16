@@ -89,12 +89,12 @@ export async function handleUpdateCheck(
     markNotifiedImpl = markVersionNotified,
     envImpl = () => readEnvFresh(ENV_PATH),
   }: UpdateCheckOptions = {},
-): Promise<void> {
+): Promise<boolean> {
   const status = (await reply(
     chatId,
     tr("◇ Checking for updates", "◇ Проверяю обновления"),
   )) as TelegramMessage | null;
-  if (!status) return;
+  if (!status || typeof status.message_id !== "number") return false;
   let info;
   try {
     // The same question the daily check asks, and on a converted installation the
@@ -107,7 +107,7 @@ export async function handleUpdateCheck(
       status.message_id,
       tr("⚠️ Couldn't check for updates", "⚠️ Не удалось проверить обновления"),
     );
-    return;
+    return true;
   }
   if (!info.hasCommitUpdate) {
     // Not modelSummary(process.env): the /model wizard edits .env at runtime and restarts
@@ -121,7 +121,7 @@ export async function handleUpdateCheck(
         `✅ У вас актуальная версия\n\nIva v${info.localVersion ?? "?"}\nМодель: ${model.line}`,
       ),
     );
-    return;
+    return true;
   }
   const bump =
     info.remoteVersion && info.remoteVersion !== info.localVersion
@@ -145,6 +145,7 @@ export async function handleUpdateCheck(
         log("update notification state failed:", (error as ErrorLike).message),
     );
   }
+  return true;
 }
 
 const jobsDir = (): string => join(DATA_DIR, "update-jobs");
