@@ -206,7 +206,7 @@ test("activation is atomic, repeatable and reversible without git", (t) => {
   );
 });
 
-test("a missing, dangling or foreign current link is healed onto the newest version", (t) => {
+test("a missing current path is healed onto the newest version", (t) => {
   const root = home(t);
   const store = createVersionStore(root);
   const layout = layoutFor(root);
@@ -216,23 +216,82 @@ test("a missing, dangling or foreign current link is healed onto the newest vers
   assert.equal(store.currentName(), null);
   assert.equal(store.heal(), "0.3.15-bbbbbbbbbbbb");
 
-  // Dangling: the target was removed by hand.
+  // Nothing to heal onto: report it instead of guessing.
   rmSync(layout.current, { force: true });
-  symlinkSync(join(layout.versions, "0.3.99-cccccccccccc"), layout.current);
-  assert.equal(store.currentName(), null);
-  assert.equal(store.heal(), "0.3.15-bbbbbbbbbbbb");
+  rmSync(layout.versions, { recursive: true, force: true });
+  assert.equal(store.heal(), null);
+});
 
-  // Foreign: pointing outside the versions tree is not a valid installation.
-  const foreign = join(root, "elsewhere");
-  mkdirSync(foreign);
-  rmSync(layout.current, { force: true });
+test("an external current symlink blocks healing without changing either owner", (t) => {
+  const root = home(t);
+  const foreign = home(t);
+  const store = createVersionStore(root);
+  const layout = layoutFor(root);
+  install(store, "0.3.14-aaaaaaaaaaaa");
+  install(store, "0.3.15-bbbbbbbbbbbb");
+  const leftover = store.stage("0.3.99-cccccccccccc");
+  writeFileSync(join(leftover, "partial"), "keep");
+  const owner = join(foreign, "owner.txt");
+  const bytes = Buffer.from([0x66, 0x6f, 0x72, 0x65, 0x69, 0x67, 0x6e]);
+  writeFileSync(owner, bytes);
   symlinkSync(foreign, layout.current);
-  assert.equal(store.currentName(), null);
-  assert.equal(store.heal(), "0.3.15-bbbbbbbbbbbb");
+  const target = readlinkSync(layout.current);
 
+  assert.throws(
+    () => store.currentName(),
+    /current.*foreign|outside.*versions/u,
+  );
+  assert.throws(() => store.sweep(), /current.*foreign|outside.*versions/u);
+  assert.throws(() => store.heal(), /current.*foreign|outside.*versions/u);
+  assert.throws(
+    () => store.activate("0.3.14-aaaaaaaaaaaa"),
+    /current.*foreign|outside.*versions/u,
+  );
+  assert.equal(readlinkSync(layout.current), target);
+  assert.deepEqual(readFileSync(owner), bytes);
+  assert.equal(readFileSync(join(leftover, "partial"), "utf8"), "keep");
+});
+
+test("owned relative current links are valid while dangling and hostile links fail closed", (t) => {
+  const root = home(t);
+  const foreign = home(t);
+  const store = createVersionStore(root);
+  const layout = layoutFor(root);
+  const owned = "0.3.14-aaaaaaaaaaaa";
+  install(store, owned);
+  install(store, "0.3.15-bbbbbbbbbbbb");
+
+  const relativeOwned = join("versions", owned);
+  symlinkSync(relativeOwned, layout.current);
+  assert.equal(store.currentName(), owned);
+  assert.equal(store.heal(), owned);
+  assert.equal(readlinkSync(layout.current), relativeOwned);
+
+  const dangling = join(layout.versions, "0.3.99-cccccccccccc");
+  rmSync(layout.current, { force: true });
+  symlinkSync(dangling, layout.current);
+  assert.throws(() => store.currentName(), /current.*dangling|unreadable/u);
+  assert.throws(() => store.heal(), /current.*dangling|unreadable/u);
+  assert.equal(readlinkSync(layout.current), dangling);
+
+  const hostile = join("..", basename(foreign));
+  rmSync(layout.current, { force: true });
+  symlinkSync(hostile, layout.current);
+  assert.throws(
+    () => store.currentName(),
+    /current.*foreign|outside.*versions/u,
+  );
+  assert.throws(() => store.heal(), /current.*foreign|outside.*versions/u);
+  assert.equal(readlinkSync(layout.current), hostile);
+});
+
+test("a non-symlink current object blocks activation without changing its bytes", (t) => {
+  const root = home(t);
+  const store = createVersionStore(root);
+  const layout = layoutFor(root);
+  install(store, "0.3.14-aaaaaaaaaaaa");
   // A real directory at the reserved path is foreign state. Refuse it and keep
   // every byte for manual repair instead of guessing that it is safe to delete.
-  rmSync(layout.current, { force: true });
   mkdirSync(layout.current);
   writeFileSync(join(layout.current, "junk"), "junk");
   assert.throws(
@@ -241,11 +300,6 @@ test("a missing, dangling or foreign current link is healed onto the newest vers
   );
   assert.equal(lstatSync(layout.current).isDirectory(), true);
   assert.equal(readFileSync(join(layout.current, "junk"), "utf8"), "junk");
-
-  // Nothing to heal onto: report it instead of guessing.
-  rmSync(layout.current, { recursive: true, force: true });
-  rmSync(layout.versions, { recursive: true, force: true });
-  assert.equal(store.heal(), null);
 });
 
 test("healing goes back to the version the installation settled on", (t) => {

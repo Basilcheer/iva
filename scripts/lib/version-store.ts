@@ -56,6 +56,11 @@ export type ActiveStateRead =
   | { readonly kind: "valid"; readonly state: ActiveState }
   | { readonly kind: "corrupt-or-unreadable"; readonly reason: string };
 
+type CurrentStateRead =
+  | { readonly kind: "missing" }
+  | { readonly kind: "valid"; readonly name: string }
+  | { readonly kind: "corrupt-or-unowned"; readonly reason: string };
+
 type VersionStoreOptions = {
   /** Fault seam for the active marker's canonical atomic writer. */
   readonly activeWriteOptions?: AtomicWriteOptions;
@@ -319,20 +324,80 @@ export function createVersionStore(
       .sort((a, b) => VERSION_ORDER(b, a));
   }
 
-  /** The active version; null when the link is missing, dangling or foreign. */
-  function currentName(): string | null {
+  /** Missing is first-install state; every existing unowned object is explicit. */
+  function readCurrentState(): CurrentStateRead {
     let target: string;
     let versions: string;
     try {
-      if (!lstatSync(layout.current).isSymbolicLink()) return null;
-      target = realpathSync(layout.current);
-      versions = realpathSync(layout.versions);
-    } catch {
-      return null;
+      if (!lstatSync(layout.current).isSymbolicLink())
+        return {
+          kind: "corrupt-or-unowned",
+          reason: "current path is not a symlink",
+        };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT")
+        return { kind: "missing" };
+      return {
+        kind: "corrupt-or-unowned",
+        reason: error instanceof Error ? error.message : String(error),
+      };
     }
-    if (dirname(target) !== versions) return null;
+    try {
+      target = realpathSync(layout.current);
+    } catch (error) {
+      return {
+        kind: "corrupt-or-unowned",
+        reason: `current symlink is dangling or unreadable: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      };
+    }
+    try {
+      versions = realpathSync(layout.versions);
+    } catch (error) {
+      return {
+        kind: "corrupt-or-unowned",
+        reason: `versions directory is unreadable: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      };
+    }
+    if (dirname(target) !== versions)
+      return {
+        kind: "corrupt-or-unowned",
+        reason: "current symlink target is outside versions",
+      };
     const name = target.slice(versions.length + 1);
-    return parseVersionName(name) && isComplete(name) ? name : null;
+    let directory: boolean;
+    try {
+      directory = statSync(target).isDirectory();
+    } catch (error) {
+      return {
+        kind: "corrupt-or-unowned",
+        reason: `current symlink target is unreadable: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      };
+    }
+    if (!parseVersionName(name) || !directory)
+      return {
+        kind: "corrupt-or-unowned",
+        reason: "current symlink target is not a version directory",
+      };
+    if (!isComplete(name))
+      return {
+        kind: "corrupt-or-unowned",
+        reason: "current symlink target is not a complete version",
+      };
+    return { kind: "valid", name };
+  }
+
+  /** The active version; null only when the `current` path itself is missing. */
+  function currentName(): string | null {
+    const state = readCurrentState();
+    if (state.kind === "missing") return null;
+    if (state.kind === "valid") return state.name;
+    throw new Error(`current is foreign or corrupt: ${state.reason}`);
   }
 
   function previousName(): string | null {
@@ -400,6 +465,7 @@ export function createVersionStore(
   /** Point `current` at a finished version with one rename. */
   function activate(name: string): void {
     activeState(); // Existing invalid state blocks every live mutation.
+    currentName(); // Existing foreign state belongs to someone else.
     const dir = versionDir(name);
     if (!isComplete(name)) throw new Error(`version ${name} is incomplete`);
     linkState(dir); // Whatever a killed probe aimed them at, back at the install.
@@ -411,12 +477,7 @@ export function createVersionStore(
       // rename() replaces the symlink atomically. A different filesystem object
       // is foreign state: refuse it and leave manual repair to the operator.
       const link = layout.current;
-      try {
-        if (!lstatSync(link).isSymbolicLink())
-          throw new Error(`current path is not a symlink: ${link}`);
-      } catch (caught) {
-        if ((caught as NodeJS.ErrnoException).code !== "ENOENT") throw caught;
-      }
+      currentName();
       renameSync(flip, link);
     } catch (error) {
       rmSync(flip, { recursive: true, force: true });
@@ -522,6 +583,7 @@ export function createVersionStore(
   /** Remove what an interrupted update can leave behind. Never touches a version. */
   function sweep(): string[] {
     activeState(); // Never delete leftovers while rollback state is untrusted.
+    currentName(); // Never clean an installation whose live owner is untrusted.
     const stale = names().filter(
       (name) => parseVersionName(name) && !isComplete(name),
     );
