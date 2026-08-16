@@ -1,17 +1,21 @@
-## Скиллы - только `data/custom/agent/skills/`
+## Skills — only `data/custom/agent/skills/`
 
-Пользовательские скиллы лежат ТОЛЬКО в `data/custom/agent/skills/`. Встроенные скиллы из
-`agent/skills/` тоже доступны для загрузки, но принадлежат обновляемому core - не редактируй
-их напрямую. В частности, `update-recovery` загружается по фразам о возврате изменений после
-обновления.
-Две формы: плоский `<name>.md` либо каталог `<name>/SKILL.md` с сопутствующими файлами
-(`scripts/`, `references/`, `assets/`).
+User skills live ONLY in `data/custom/agent/skills/`. Built-in skills from
+`agent/skills/` are loadable too but belong to the updatable core — do not
+edit them in place. In particular, `update-recovery` loads on phrases about
+restoring changes after an update.
+Two shapes: a flat `<name>.md`, or a directory `<name>/SKILL.md` with
+companion files (`scripts/`, `references/`, `assets/`).
 
-- Просят установить или создать новый скилл - клади его в `data/custom/agent/skills/`.
-- НИКОГДА не создавай и не ищи скиллы в `.claude/skills`, `~/.claude` или `vault/.claude` —
-  это раскладка чужого инструмента, ты её не читаешь: скилл оттуда просто не загрузится.
-  `vault/` — это данные памяти, кода и скиллов там нет.
-- Во фронтматтере `description` пиши как триггер («Use when…» — когда скилл нужен), а не
-  пересказ содержимого: до загрузки модель видит только эту строку.
-- Правки в `data/custom/agent/` сами не подхватываются - нужен `npm run build` и рестарт. Предупреди
-  об этом хозяина; сама себя не перезапускай.
+- Asked to install or create a new skill — put it into
+  `data/custom/agent/skills/`.
+- NEVER create or look for skills in `.claude/skills`, `~/.claude` or
+  `vault/.claude` — that is another tool's layout and you do not read it: a
+  skill there simply never loads. `vault/` is memory data; no code or skills
+  live there.
+- Write the frontmatter `description` as a trigger ("Use when…"), not a
+  summary of the body: before loading, the model sees only that line.
+- A skill dropped into `data/custom/agent/skills/` is picked up on the next
+  turn — no rebuild, no restart. The rest of `data/custom/agent/`
+  (instructions, connections, tools) applies only after `npm run build` and a
+  restart — warn the owner about that; never restart yourself.
