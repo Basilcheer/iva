@@ -15,7 +15,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import * as systemdControl from "./systemd-control.ts";
 
 const { createSystemdControl } = systemdControl;
@@ -93,10 +93,18 @@ async function fixture(t: TestContext) {
       '  exit "$IVA_FAKE_SYSTEMCTL_EXIT"',
       "fi",
       'case "$action" in',
+      "  show)",
+      '    unit="$1"',
+      '    if [ -f "$HOME/.config/systemd/user/$unit" ]; then echo loaded; else echo not-found; fi',
+      "    ;;",
       "  enable)",
-      '    [ "${1:-}" = "--now" ] && shift',
+      '    now=0; [ "${1:-}" = "--now" ] && { now=1; shift; }',
       '    unit="$1"',
       '    : > "$IVA_FAKE_SYSTEMD_STATE/$unit.enabled"',
+      '    if [ "$now" -eq 1 ] && [ "${IVA_FAKE_INACTIVE_UNIT:-}" != "$unit" ]; then : > "$IVA_FAKE_SYSTEMD_STATE/$unit.active"; fi',
+      "    ;;",
+      "  start)",
+      '    unit="$1"',
       '    if [ "${IVA_FAKE_INACTIVE_UNIT:-}" != "$unit" ]; then : > "$IVA_FAKE_SYSTEMD_STATE/$unit.active"; fi',
       "    ;;",
       "  restart)",
@@ -156,6 +164,24 @@ async function fixture(t: TestContext) {
       },
     );
 
+  const runScript = (script: string) =>
+    spawnSync(process.execPath, ["--input-type=module", "-e", script], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        HOME: home,
+        NO_COLOR: "1",
+        PATH: `${fakeBin}:/usr/bin:/bin`,
+        IVA_FAKE_SYSTEMCTL_CALLS: calls,
+        IVA_FAKE_SYSTEMCTL_EXIT: "0",
+        IVA_FAKE_FAIL_ACTION: "",
+        IVA_FAKE_SECRET_OUTPUT: SECRET,
+        IVA_FAKE_SYSTEMD_STATE: state,
+        IVA_FAKE_INACTIVE_UNIT: "",
+        IVA_FAKE_FAILED_UNIT: "",
+      },
+    });
+
   return {
     calls,
     envPath,
@@ -164,6 +190,7 @@ async function fixture(t: TestContext) {
     state,
     runStart: (exit = 0) => runCommand("start", { exit }),
     runCommand,
+    runScript,
     seedQuarantineFailure: async () => {
       const eveDir = join(project, ".eve");
       await mkdir(join(eveDir, ".workflow-data"), { recursive: true });
@@ -519,6 +546,86 @@ function nightlyUnitsOnDisk(unitDir: string): string[] {
     existsSync(join(unitDir, unit)),
   );
 }
+
+function updaterBrainTransferScript(project: string): string {
+  const runtime = pathToFileURL(join(project, "scripts/cli/runtime.ts")).href;
+  const systemd = pathToFileURL(join(project, "scripts/cli/systemd.ts")).href;
+  const finish = pathToFileURL(join(ROOT, "scripts/update-finish.ts")).href;
+  return `
+    const { createCliRuntime } = await import(${JSON.stringify(runtime)});
+    const { createCliSystemd } = await import(${JSON.stringify(systemd)});
+    const {
+      captureOptionalWriterState,
+      restoreWriterOwnership,
+      stopWriterUnits,
+    } = await import(${JSON.stringify(finish)});
+    const runtime = createCliRuntime(${JSON.stringify(project)});
+    const before = captureOptionalWriterState(runtime);
+    stopWriterUnits(runtime, before);
+    let unitMigrationStarted = false;
+    const services = createCliSystemd(runtime);
+    services.restartServices({
+      deferBrainMigration: true,
+      afterUnitWrite: () => { unitMigrationStarted = true; },
+    });
+    restoreWriterOwnership(runtime, before, {
+      unitMigrationStarted,
+      legacyMemoryOwnerProven: true,
+    });
+    services.retireDeferredBrainUnits();
+  `;
+}
+
+void test("a disabled legacy Brain timer stays disabled throughout updater ownership transfer", async (t) => {
+  const { calls, home, project, runScript, state } = await fixture(t);
+  const unitDir = join(home, ".config/systemd/user");
+  await seedLegacyBrainUnits(unitDir, project);
+
+  const result = runScript(updaterBrainTransferScript(project));
+  const output = `${result.stdout}\n${result.stderr}`;
+  const systemctlCalls = existsSync(calls)
+    ? (await readFile(calls, "utf8")).trim().split("\n")
+    : [];
+
+  assert.equal(result.status, 0, output);
+  assert.equal(existsSync(join(state, "iva-brain.timer.enabled")), false);
+  assert.equal(existsSync(join(state, "iva-brain.timer.active")), false);
+  assert.equal(
+    systemctlCalls.some(
+      (call) =>
+        call === "--user enable --now iva-brain.timer" ||
+        call === "--user start iva-brain.timer",
+    ),
+    false,
+  );
+});
+
+void test("an active legacy Brain timer can fire only after core restart and exact-state restore", async (t) => {
+  const { calls, home, project, runScript, seedUnit } = await fixture(t);
+  const unitDir = join(home, ".config/systemd/user");
+  await seedLegacyBrainUnits(unitDir, project);
+  await seedUnit("iva-memory-doctor.timer");
+
+  const result = runScript(updaterBrainTransferScript(project));
+  const output = `${result.stdout}\n${result.stderr}`;
+  const systemctlCalls = existsSync(calls)
+    ? (await readFile(calls, "utf8")).trim().split("\n")
+    : [];
+  const coreRestart = systemctlCalls.indexOf("--user restart iva.service");
+  const newTimerStart = systemctlCalls.indexOf("--user start iva-brain.timer");
+  const oldTimerRetire = systemctlCalls.indexOf(
+    "--user disable --now iva-memory-doctor.timer",
+  );
+
+  assert.equal(result.status, 0, output);
+  assert.equal(
+    systemctlCalls.includes("--user enable --now iva-brain.timer"),
+    false,
+  );
+  assert.ok(coreRestart >= 0, systemctlCalls.join("\n"));
+  assert.ok(newTimerStart > coreRestart, systemctlCalls.join("\n"));
+  assert.ok(oldTimerRetire > newTimerStart, systemctlCalls.join("\n"));
+});
 
 void test("the brain rename enables the new timer BEFORE retiring the old memory-doctor pair", async (t) => {
   const { calls, home, project, runCommand } = await fixture(t);

@@ -462,6 +462,7 @@ export async function main(argv: readonly string[]): Promise<number> {
             afterUnitWrite: () => {
               unitMigrationStarted = true;
             },
+            deferBrainMigration: true,
           });
           // Completed restart retires legacy memory units only after proving
           // compiled schedules and their process owner live.
@@ -469,11 +470,13 @@ export async function main(argv: readonly string[]): Promise<number> {
           runtime.systemd.activate([runtime.UPDATE_TIMER]);
           reinstallUserbot(runtime, services, notify);
         } finally {
-          if (optionalWriterState)
+          if (optionalWriterState) {
             restoreWriterOwnership(runtime, optionalWriterState, {
               unitMigrationStarted,
               legacyMemoryOwnerProven,
             });
+            if (unitMigrationStarted) services.retireDeferredBrainUnits();
+          }
         }
         await Promise.resolve();
       },

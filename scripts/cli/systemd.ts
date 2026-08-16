@@ -31,11 +31,17 @@ type QuietOptions = {
 };
 
 type WriteUnitsOptions = {
+  readonly deferBrainMigration?: boolean;
   readonly ensureBearer?: boolean;
 };
 
 type RestartServicesOptions = {
   readonly afterUnitWrite?: () => void;
+  readonly deferBrainMigration?: boolean;
+};
+
+type BrainCleanupOptions = {
+  readonly activateNewTimer?: boolean;
 };
 
 export function createCliSystemd(runtime: CliRuntime) {
@@ -192,6 +198,7 @@ export function createCliSystemd(runtime: CliRuntime) {
 
   // Writes iva.service + all deploy/iva-*.{service,timer} with placeholder substitution. daemon-reload.
   function writeUnits({
+    deferBrainMigration = false,
     ensureBearer = true,
   }: WriteUnitsOptions = {}): string[] {
     hardenPerms();
@@ -212,14 +219,15 @@ export function createCliSystemd(runtime: CliRuntime) {
       written.push(file);
     }
     if (hasSystemd()) systemd.daemonReload();
-    removeLegacyBrainUnits(written);
+    if (!deferBrainMigration) removeLegacyBrainUnits(written);
     return written;
   }
 
   // The Brain rename: iva-memory-doctor.{service,timer} → iva-brain.{service,timer}. deploy/
   // ships only the new pair, so the copy loop above never overwrites or removes the old one —
-  // this retires it by exact name, off every writeUnits() call (update/doctor/config/restart/
-  // install.sh), so every install migrates without a dedicated command.
+  // this retires it by exact name on ordinary writeUnits() calls (doctor/config/restart/
+  // install.sh), so every install migrates without a dedicated command. The quiesced updater
+  // defers retirement until its captured enabled/active state is restored onto the new pair.
   //
   // Order is the whole point. The nightly vault care must never be absent, not even for the
   // window between two steps of an update that dies halfway:
@@ -227,8 +235,7 @@ export function createCliSystemd(runtime: CliRuntime) {
   //      The timer alone is not a nightly job: a half-unpacked deploy/ can carry either file
   //      without the other, and a timer whose iva-brain.service is missing fires at 05:00 into
   //      nothing — while looking migrated. A service without its timer never fires at all.
-  //   2. and the timer enabled+active — `iva update` calls writeUnits() but not
-  //      activateUnits(), so a merely-written unit would still never fire,
+  //   2. and, on ordinary CLI paths, the timer enabled+active,
   //   3. only then may the old pair be disabled and deleted.
   // Any failure in 1–2 keeps the old units: a duplicated nightly run is harmless (both take
   // the same .memory.lock), a missing one costs the user a night of memory care.
@@ -268,7 +275,10 @@ export function createCliSystemd(runtime: CliRuntime) {
     return repointed;
   }
 
-  function removeLegacyBrainUnits(written: readonly string[]): string[] {
+  function removeLegacyBrainUnits(
+    written: readonly string[],
+    { activateNewTimer = true }: BrainCleanupOptions = {},
+  ): string[] {
     if (!hasSystemd()) return [];
     const stale = LEGACY_BRAIN_UNITS.filter((unit) =>
       existsSync(join(UNIT_DIR, unit)),
@@ -292,14 +302,16 @@ export function createCliSystemd(runtime: CliRuntime) {
       keeping();
       return [];
     }
-    try {
-      systemd.activate([BRAIN_TIMER]);
-    } catch (error) {
-      warn(
-        `skipping legacy brain-unit cleanup — ${BRAIN_TIMER} did not come up: ${(error as { message: string }).message}`,
-      );
-      keeping();
-      return [];
+    if (activateNewTimer) {
+      try {
+        systemd.activate([BRAIN_TIMER]);
+      } catch (error) {
+        warn(
+          `skipping legacy brain-unit cleanup — ${BRAIN_TIMER} did not come up: ${(error as { message: string }).message}`,
+        );
+        keeping();
+        return [];
+      }
     }
     try {
       return cleanupSystemdUnits({
@@ -473,8 +485,9 @@ export function createCliSystemd(runtime: CliRuntime) {
   // on the old port (the unit was already baked) while clients read the new one — the same desync.
   function restartServices({
     afterUnitWrite = () => undefined,
+    deferBrainMigration = false,
   }: RestartServicesOptions = {}): void {
-    writeUnits();
+    writeUnits({ deferBrainMigration });
     afterUnitWrite();
     systemd.restart(SERVICES);
     const scheduleOwner = SERVICES[0];
@@ -485,11 +498,18 @@ export function createCliSystemd(runtime: CliRuntime) {
     removeLegacyMemoryUnits();
   }
 
+  function retireDeferredBrainUnits(): string[] {
+    return removeLegacyBrainUnits([BRAIN_SERVICE, BRAIN_TIMER], {
+      activateNewTimer: false,
+    });
+  }
+
   return {
     ensureAssistantBearer,
     writeUnits,
     activateUnits,
     removeUnits,
+    retireDeferredBrainUnits,
     migrateEnv,
     restartServices,
   };
