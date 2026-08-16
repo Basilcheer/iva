@@ -1,4 +1,4 @@
-import { resolveContextWindow } from "../../agent/lib/context-window.ts";
+import { resolveContextWindow } from "../../packages/context-window/index.ts";
 import { catalogModel, catalogProvider } from "./model-catalog.ts";
 
 type Env = Record<string, string | undefined>;

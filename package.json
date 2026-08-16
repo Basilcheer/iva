@@ -36,6 +36,7 @@
     "postinstall": "patch-package"
   },
   "dependencies": {
+    "@iva/context-window": "file:packages/context-window",
     "@iva/data-dir": "file:packages/data-dir",
     "@iva/timezone": "file:packages/timezone",
     "@ai-sdk/openai": "4.0.15",

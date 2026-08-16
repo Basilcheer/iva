@@ -337,7 +337,9 @@ function seed(tree: string): void {
     "scripts/cli",
     "scripts/lib",
     "scripts/migrations",
+    "packages/context-window",
     "packages/data-dir",
+    "packages/timezone",
     "deploy",
   ])
     cpSync(join(REPO, path), join(tree, path), {

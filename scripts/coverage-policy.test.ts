@@ -8,9 +8,9 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
-const EXPECTED_PRODUCTION_COUNT = 206;
+const EXPECTED_PRODUCTION_COUNT = 210;
 const EXPECTED_INVENTORY_SHA256 =
-  "7810e0d37f35a11fa0bf2c302a9a23bf0c2902f90e42cb6f75ed9f5e4d0b0231";
+  "2770f8fb55f967727d9cc2fad728be7b51ab604acef4d75e5272b3372ed2ca71";
 
 // Node's native include globs filter loaded modules; they do not load untouched files.
 // This test pins the exact production path inventory and a separately measured 26-path
@@ -52,6 +52,10 @@ const EXPECTED_INVENTORY_SHA256 =
 // every added module and totals 96.02% lines, 84.69% branches, and 95.50% functions,
 // so the blind spot stays at 26. The resource identity and owner modules followed;
 // their 19-test scoped anchor reports 89.49% and 86.76% lines, so neither is blind.
+// Wave B added `agent/lib/context-window.ts`, `agent/lib/telegram-private-chat.ts`,
+// `scripts/lib/data-dir.ts`, and `scripts/memory/read-core.ts`. Their scoped seam tests
+// report all four at 100% lines. The shared context-window package implementation also
+// reports 100% lines, so moving the resolver does not add a blind spot; the snapshot stays 26.
 const MEASURED_UNREPORTED_BY_CATEGORY = {
   frameworkBoundaries: [
     "agent/agent.ts",

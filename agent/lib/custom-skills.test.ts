@@ -60,7 +60,9 @@ test("a package skill carries its SKILL.md and its sibling files", async () => {
     "scripts/run.py",
   ]);
   assert.equal(
-    Buffer.from(skill.files?.["references/checklist.md"] ?? []).toString("utf8"),
+    Buffer.from(skill.files?.["references/checklist.md"] ?? []).toString(
+      "utf8",
+    ),
     "# Checklist\n\n- sources\n",
   );
   assert.deepEqual(log, []);
@@ -77,7 +79,11 @@ test("SKILL.md itself never lands in files: eve generates it", async () => {
 test("package siblings keep their bytes and their POSIX path", async () => {
   const dir = world();
   const bytes = new Uint8Array([0, 1, 2, 253, 254, 255]);
-  write(dir, "assets/SKILL.md", "---\ndescription: Assets.\n---\n\nUse them.\n");
+  write(
+    dir,
+    "assets/SKILL.md",
+    "---\ndescription: Assets.\n---\n\nUse them.\n",
+  );
   write(dir, "assets/deep/nested/logo.bin", bytes);
 
   const { skills } = await read(dir);
@@ -96,7 +102,10 @@ test("a flat .md skill is named after the file", async () => {
 
   const { skills, log } = await read(dir);
   assert.deepEqual(Object.keys(skills), ["forecast"]);
-  assert.equal(skills.forecast.markdown, "# Forecast\n\nCall the weather tool first.\n");
+  assert.equal(
+    skills.forecast.markdown,
+    "# Forecast\n\nCall the weather tool first.\n",
+  );
   assert.equal(skills.forecast.files, undefined);
   assert.deepEqual(log, []);
 });
@@ -104,7 +113,11 @@ test("a flat .md skill is named after the file", async () => {
 test("both forms live in one directory", async () => {
   const dir = world();
   write(dir, "flat.md", "Flat one.\n");
-  write(dir, "packaged/SKILL.md", "---\ndescription: Packaged.\n---\n\nBody.\n");
+  write(
+    dir,
+    "packaged/SKILL.md",
+    "---\ndescription: Packaged.\n---\n\nBody.\n",
+  );
 
   const { skills } = await read(dir);
   assert.deepEqual(Object.keys(skills).sort(), ["flat", "packaged"]);
@@ -112,8 +125,16 @@ test("both forms live in one directory", async () => {
 
 test("description: frontmatter wins, then the first meaningful line, then the fallback", async () => {
   const dir = world();
-  write(dir, "declared.md", "---\ndescription: Declared plainly.\n---\n\n# Title\n");
-  write(dir, "titled.md", "```\ncode fence first\n```\n\n> ## Reads the fence-free line\n");
+  write(
+    dir,
+    "declared.md",
+    "---\ndescription: Declared plainly.\n---\n\n# Title\n",
+  );
+  write(
+    dir,
+    "titled.md",
+    "```\ncode fence first\n```\n\n> ## Reads the fence-free line\n",
+  );
   write(dir, "blank.md", "\n\n");
   write(dir, "long.md", `${"a".repeat(400)}\n`);
 
@@ -230,7 +251,11 @@ test("files that are not .md are ignored without noise", async () => {
 
 test("a package beats a flat file of the same name", async () => {
   const dir = world();
-  write(dir, "twin/SKILL.md", "---\ndescription: From the package.\n---\n\nBody.\n");
+  write(
+    dir,
+    "twin/SKILL.md",
+    "---\ndescription: From the package.\n---\n\nBody.\n",
+  );
   write(dir, "twin.md", "From the flat file.\n");
 
   const { skills, log } = await read(dir);
@@ -244,7 +269,11 @@ test("a package beats a flat file of the same name", async () => {
 test("a symlinked package is read through the link", async () => {
   const dir = world();
   const elsewhere = world();
-  write(elsewhere, "linked/SKILL.md", "---\ndescription: Linked.\n---\n\nBody.\n");
+  write(
+    elsewhere,
+    "linked/SKILL.md",
+    "---\ndescription: Linked.\n---\n\nBody.\n",
+  );
   symlinkSync(join(elsewhere, "linked"), join(dir, "linked"), "dir");
   symlinkSync(join(elsewhere, "gone"), join(dir, "dangling.md"));
 
