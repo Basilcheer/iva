@@ -1,6 +1,6 @@
 {
   "name": "iva",
-  "version": "0.3.23",
+  "version": "0.3.24",
   "type": "module",
   "bin": {
     "iva": "bin/iva.mjs"
