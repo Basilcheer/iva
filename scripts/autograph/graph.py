@@ -12,9 +12,11 @@ All domain/type logic from schema.json. No hardcoded values.
 """
 
 import json
+import math
 import os
 import re
 import sys
+import tempfile
 from pathlib import Path
 from datetime import date, datetime, timedelta, timezone as datetime_timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -315,21 +317,71 @@ def generate_report(stats: dict, domains: dict) -> str:
     return '\n'.join(lines)
 
 
+class HealthHistoryCorrupt(RuntimeError):
+    """The health history exists but cannot be safely extended."""
+
+
+def _valid_history_entry(value) -> bool:
+    if not isinstance(value, dict):
+        return False
+    entry_date = value.get('date')
+    if (not isinstance(entry_date, str)
+            or re.fullmatch(r'\d{4}-\d{2}-\d{2}', entry_date) is None):
+        return False
+    try:
+        date.fromisoformat(entry_date)
+    except ValueError:
+        return False
+    score = value.get('health_score')
+    return (not isinstance(score, bool)
+            and isinstance(score, (int, float))
+            and math.isfinite(score))
+
+
+def _write_history_durable(hist_path: Path, history: list) -> None:
+    data = json.dumps(history, indent=2).encode('utf-8')
+    fd, tmp = tempfile.mkstemp(
+        dir=str(hist_path.parent), prefix='health-history.', suffix='.tmp')
+    try:
+        with os.fdopen(fd, 'wb') as writer:
+            writer.write(data)
+            writer.flush()
+            os.fsync(writer.fileno())
+        os.replace(tmp, hist_path)
+        directory_fd = os.open(hist_path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
+
+
 def update_history(vault_dir: Path, stats: dict):
     """Append to health-history.json (max 90 entries)."""
     hist_path = vault_dir / '.graph' / 'health-history.json'
-    history = []
-    if hist_path.exists():
+    try:
+        raw = hist_path.read_bytes()
+    except FileNotFoundError:
+        history = []
+    else:
         try:
-            history = json.loads(hist_path.read_text())
-        except Exception:
-            history = []
+            history = json.loads(raw.decode('utf-8'))
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise HealthHistoryCorrupt(
+                'health history is corrupt; left unchanged') from error
+        if (not isinstance(history, list)
+                or not all(_valid_history_entry(entry) for entry in history)):
+            raise HealthHistoryCorrupt(
+                'health history is corrupt; left unchanged')
     history.append({
         'date': datetime.now().strftime('%Y-%m-%d'),
         **stats
     })
     history = history[-90:]  # keep last 90
-    hist_path.write_text(json.dumps(history, indent=2))
+    _write_history_durable(hist_path, history)
 
 
 # ─── FIX BROKEN LINKS ─────────────────────────────────────
@@ -495,7 +547,11 @@ def main():
             json.dumps(graph, indent=2, ensure_ascii=False, default=str))
         (out_dir / 'report.md').write_text(
             generate_report(stats, graph['domains']))
-        update_history(vault_dir, stats)
+        try:
+            update_history(vault_dir, stats)
+        except HealthHistoryCorrupt as error:
+            print(f"Error: {error}", file=sys.stderr)
+            sys.exit(1)
 
         print(f"\n{'='*50}")
         print(f"Health Score:     {stats['health_score']}/100")

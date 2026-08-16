@@ -44,8 +44,8 @@ function shellQuote(value: string): string {
 }
 
 interface HealthHistoryEntry {
-  date?: string;
-  health_score?: number;
+  date: string;
+  health_score: number;
 }
 
 interface SupersedeSkip {
@@ -53,16 +53,34 @@ interface SupersedeSkip {
   reason: "invalid_utf8" | "malformed_frontmatter" | "read_error";
 }
 
+type HealthHistoryState =
+  | { state: "missing" }
+  | { state: "valid"; entries: HealthHistoryEntry[] }
+  | { state: "corrupt" };
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function isHealthHistoryEntry(value: unknown): value is HealthHistoryEntry {
   if (!isRecord(value)) return false;
+  if (typeof value.date !== "string" || !validIsoDate(value.date)) return false;
   return (
-    (value.date === undefined || typeof value.date === "string") &&
-    (value.health_score === undefined || typeof value.health_score === "number")
+    typeof value.health_score === "number" &&
+    Number.isFinite(value.health_score)
   );
+}
+
+function validIsoDate(value: string): boolean {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/u.exec(value);
+  if (!match) return false;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (year < 1 || month < 1 || month > 12) return false;
+  const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  return day >= 1 && day <= (days[month - 1] ?? 0);
 }
 
 if (!existsSync(VAULT)) {
@@ -143,14 +161,24 @@ async function alert(
 const cleared = (key: string): void => alertResolved(DATA_DIR, key);
 
 // Health score is read from the history that graph.py health appends after each run.
-function readHealthHistory(): HealthHistoryEntry[] {
+function readHealthHistory(): HealthHistoryState {
   const p = resolve(VAULT, ".graph/health-history.json");
-  if (!existsSync(p)) return [];
+  let raw: Buffer;
   try {
-    const data: unknown = JSON.parse(readFileSync(p, "utf8"));
-    return Array.isArray(data) ? data.filter(isHealthHistoryEntry) : [];
+    raw = readFileSync(p);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT")
+      return { state: "missing" };
+    return { state: "corrupt" };
+  }
+  try {
+    const text = new TextDecoder("utf-8", { fatal: true }).decode(raw);
+    const data: unknown = JSON.parse(text);
+    if (!Array.isArray(data) || !data.every(isHealthHistoryEntry))
+      return { state: "corrupt" };
+    return { state: "valid", entries: data };
   } catch {
-    return [];
+    return { state: "corrupt" };
   }
 }
 
@@ -215,9 +243,16 @@ const SCHEMA = existsSync(VAULT_SCHEMA)
 // Do NOT ignore failures: otherwise brain would commit/push and exit 0 even though health/
 // decay/moc did not run (no uv/Python, vault not initialized, etc.).
 const failures: string[] = [];
+const CORRUPT_HISTORY_ERROR =
+  "Error: health history is corrupt; left unchanged";
+let corruptHistoryGraphFailure = false;
 function maint(label: string, args: string[]) {
   const r = run("uv", ["run", ...args]);
-  if (r.status !== 0) failures.push(label);
+  if (r.status !== 0) {
+    failures.push(label);
+    if (label === "graph.health" && r.stderr.trim() === CORRUPT_HISTORY_ERROR)
+      corruptHistoryGraphFailure = true;
+  }
   return r;
 }
 // cleanup — streaming repair of bug-bloated cards. MUST run before everything else:
@@ -306,8 +341,13 @@ if (process.env.MEMORY_SEARCH_MODE === "hybrid") {
   if (r.status !== 0) failures.push("embed-index");
 }
 
-if (failures.length) {
-  const steps = failures.join(", ");
+const history = readHealthHistory();
+const maintenanceFailures =
+  corruptHistoryGraphFailure && history.state === "corrupt"
+    ? failures.filter((label) => label !== "graph.health")
+    : failures;
+if (maintenanceFailures.length) {
+  const steps = maintenanceFailures.join(", ");
   await alert(
     "maintenance",
     steps,
@@ -417,13 +457,28 @@ if (unclosed.length) {
 }
 
 // ── 2. Detect health score drop ──
-const history = readHealthHistory();
+if (history.state === "corrupt") {
+  await alert(
+    "health-history-corrupt",
+    "corrupt",
+    T(
+      "Vault health history is corrupt. Graph cannot append a health result, so the health " +
+        "trend is unavailable. The file was left unchanged. Move .graph/health-history.json " +
+        "aside, then run npm run doctor from Iva.",
+      "health-history.json повреждён. Graph не может дописать результат, поэтому история " +
+        "здоровья недоступна. Файл оставлен без изменений. Перемести .graph/health-history.json " +
+        "в сторону, затем запусти npm run doctor из каталога Ивы.",
+    ),
+  );
+} else {
+  cleared("health-history-corrupt");
+}
 // То же правило, что у CORE и фенсов: забываем только то, что реально проверили. Меньше двух
 // точек — сравнивать нечего, проверки не было, и отметка дросселя просто доживает свою неделю.
 let healthDropped = false;
-if (history.length >= 2) {
-  const cur = history[history.length - 1]?.health_score;
-  const prev = history[history.length - 2]?.health_score;
+if (history.state === "valid" && history.entries.length >= 2) {
+  const cur = history.entries[history.entries.length - 1]?.health_score;
+  const prev = history.entries[history.entries.length - 2]?.health_score;
   if (typeof cur === "number" && typeof prev === "number" && cur < prev) {
     healthDropped = true;
     await alert(

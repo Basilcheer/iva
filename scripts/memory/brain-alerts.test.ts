@@ -17,6 +17,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { createHash } from "node:crypto";
@@ -147,6 +148,7 @@ test("every brain alert goes through the throttle and carries both locales", () 
     "backup-scan",
     "core-cap",
     "health-drop",
+    "health-history-corrupt",
     "maintenance",
     "supersede-unreadable",
     "unclosed-fence",
@@ -290,10 +292,16 @@ exit 0
 // иначе установка с мигающим деревом теряет дроссель и получает алерты каждую ночь.
 function runBrainWithoutTree(
   t: TestContext,
-  options: { health?: number[] } = {},
+  options: {
+    health?: number[];
+    healthBytes?: Uint8Array;
+    corruptAlertLastSentAt?: number;
+  } = {},
 ): {
   code: number | null;
+  stdout: string;
   stderr: string;
+  healthBytes?: Buffer;
   state: Record<string, { essence?: string; lastSentAt?: number }>;
 } {
   const home = mkdtempSync(join(tmpdir(), "iva-brain-island-"));
@@ -302,6 +310,7 @@ function runBrainWithoutTree(
   mkdirSync(join(island, "scripts/memory"), { recursive: true });
   mkdirSync(join(island, "scripts/lib"), { recursive: true });
   mkdirSync(join(island, "packages/data-dir"), { recursive: true });
+  mkdirSync(join(island, "packages/timezone"), { recursive: true });
   writeFileSync(
     join(island, "package.json"),
     JSON.stringify({ type: "module" }),
@@ -316,6 +325,7 @@ function runBrainWithoutTree(
     "notice-policy.ts",
     "notice.ts",
     "notification-chat.ts",
+    "timezone.ts",
   ])
     copyFileSync(
       join(ROOT, "scripts/lib", name),
@@ -325,6 +335,11 @@ function runBrainWithoutTree(
     copyFileSync(
       join(ROOT, "packages/data-dir", name),
       join(island, "packages/data-dir", name),
+    );
+  for (const name of ["index.ts", "package.json"])
+    copyFileSync(
+      join(ROOT, "packages/timezone", name),
+      join(island, "packages/timezone", name),
     );
 
   const vault = join(home, "vault");
@@ -342,22 +357,37 @@ function runBrainWithoutTree(
     mkdirSync(join(vault, ".graph"), { recursive: true });
     writeFileSync(
       join(vault, ".graph/health-history.json"),
-      JSON.stringify(options.health.map((health_score) => ({ health_score }))),
+      JSON.stringify(
+        options.health.map((health_score, index) => ({
+          date: `2026-08-${String(index + 1).padStart(2, "0")}`,
+          health_score,
+        })),
+      ),
+    );
+  }
+  if (options.healthBytes) {
+    mkdirSync(join(vault, ".graph"), { recursive: true });
+    writeFileSync(
+      join(vault, ".graph/health-history.json"),
+      options.healthBytes,
     );
   }
 
   const week = 7 * 24 * 60 * 60 * 1000;
-  writeFileSync(
-    join(dataDir, "alert-state.json"),
-    JSON.stringify({
-      "core-cap": { essence: "clamped", lastSentAt: Date.now() - week / 2 },
-      "unclosed-fence": {
-        essence: "cards/broken.md",
-        lastSentAt: Date.now() - week / 2,
-      },
-      "health-drop": { essence: "dropping", lastSentAt: Date.now() - week / 2 },
-    }),
-  );
+  const alertState: Record<string, { essence: string; lastSentAt: number }> = {
+    "core-cap": { essence: "clamped", lastSentAt: Date.now() - week / 2 },
+    "unclosed-fence": {
+      essence: "cards/broken.md",
+      lastSentAt: Date.now() - week / 2,
+    },
+    "health-drop": { essence: "dropping", lastSentAt: Date.now() - week / 2 },
+  };
+  if (options.corruptAlertLastSentAt !== undefined)
+    alertState["health-history-corrupt"] = {
+      essence: "corrupt",
+      lastSentAt: options.corruptAlertLastSentAt,
+    };
+  writeFileSync(join(dataDir, "alert-state.json"), JSON.stringify(alertState));
 
   const result = spawnSync(process.execPath, ["scripts/memory/brain.ts"], {
     cwd: island,
@@ -371,9 +401,12 @@ function runBrainWithoutTree(
       AGENT_LANGUAGE: "ru",
     },
   });
+  const healthPath = join(vault, ".graph/health-history.json");
   return {
     code: result.status,
+    stdout: result.stdout,
     stderr: result.stderr,
+    healthBytes: existsSync(healthPath) ? readFileSync(healthPath) : undefined,
     state: JSON.parse(
       readFileSync(join(dataDir, "alert-state.json"), "utf8"),
     ) as Record<string, { essence?: string; lastSentAt?: number }>,
@@ -420,4 +453,95 @@ test("a check that did run and found nothing does clear its alert", (t) => {
   // Соседи, которых проверить было нечем, по-прежнему на месте.
   assert.equal(typeof run.state["core-cap"]?.lastSentAt, "number");
   assert.equal(typeof run.state["unclosed-fence"]?.lastSentAt, "number");
+});
+
+test("corrupt health history is preserved and raises an actionable alert", (t) => {
+  const raw = Buffer.from([
+    0x5b, 0x7b, 0x22, 0x64, 0x61, 0x74, 0x65, 0x22, 0x3a, 0x22, 0xff, 0x22,
+    0x7d, 0x5d,
+  ]);
+  const run = runBrainWithoutTree(t, { healthBytes: raw });
+
+  assert.equal(run.code, 1);
+  assert.deepEqual(run.healthBytes, raw);
+  assert.match(run.stderr, /health-history\.json повреждён/);
+  assert.match(run.stderr, /оставлен без изменений/);
+  assert.match(run.stderr, /Перемести.*health-history\.json.*npm run doctor/);
+});
+
+test("an unchanged corrupt health history alert is rate-limited", (t) => {
+  const run = runBrainWithoutTree(t, {
+    healthBytes: Buffer.from("[", "utf8"),
+    corruptAlertLastSentAt: Date.now(),
+  });
+
+  assert.equal(run.code, 1);
+  assert.match(
+    run.stdout,
+    /health-history-corrupt is unchanged since the last alert — not repeated/,
+  );
+  assert.doesNotMatch(run.stderr, /health-history\.json повреждён/);
+  assert.equal(
+    typeof run.state["health-history-corrupt"]?.lastSentAt,
+    "number",
+  );
+});
+
+test("a valid health history clears the corrupt-history throttle", (t) => {
+  const run = runBrainWithoutTree(t, {
+    health: [80, 85],
+    corruptAlertLastSentAt: Date.now(),
+  });
+
+  assert.equal(run.code, 1);
+  assert.equal("health-history-corrupt" in run.state, false);
+});
+
+test("a real corrupt Graph failure produces only its specific alert", (t) => {
+  const home = mkdtempSync(join(tmpdir(), "iva-brain-real-graph-"));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const vault = join(home, "vault");
+  const dataDir = join(home, "data");
+  const bin = join(home, "bin");
+  const historyPath = join(vault, ".graph/health-history.json");
+  const raw = Buffer.from('[{"date":"2026-08-15"', "utf8");
+  mkdirSync(join(vault, ".graph"), { recursive: true });
+  mkdirSync(dataDir, { recursive: true });
+  mkdirSync(bin, { recursive: true });
+  writeFileSync(historyPath, raw);
+  const uv = "/opt/homebrew/bin/uv";
+  assert.equal(
+    existsSync(uv),
+    true,
+    "the supported test environment provides uv",
+  );
+  symlinkSync(uv, join(bin, "uv"));
+
+  const result = spawnSync(process.execPath, ["scripts/memory/brain.ts"], {
+    cwd: ROOT,
+    encoding: "utf8",
+    timeout: 60_000,
+    env: {
+      PATH: bin,
+      HOME: home,
+      TMPDIR: tmpdir(),
+      UV_CACHE_DIR: join(home, "uv-cache"),
+      ASSISTANT_VAULT_DIR: vault,
+      ASSISTANT_DATA_DIR: dataDir,
+      ASSISTANT_TIMEZONE: "UTC",
+      AGENT_LANGUAGE: "ru",
+    },
+  });
+
+  assert.equal(result.status, 1);
+  assert.match(
+    result.stdout,
+    /Error: health history is corrupt; left unchanged/,
+  );
+  assert.deepEqual(readFileSync(historyPath), raw);
+  assert.equal(
+    result.stderr.match(/health-history\.json повреждён/gu)?.length ?? 0,
+    1,
+  );
+  assert.doesNotMatch(result.stderr, /Ночной уход за памятью не прошёл/);
 });
