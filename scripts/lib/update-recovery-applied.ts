@@ -1,11 +1,18 @@
 import { type OriginalUntrackedOwner } from "./update-recovery-ownership.ts";
 import { type RecoveryObjectStore } from "./update-recovery-objects.ts";
 import {
+  permissionOverrides,
   sameFlags,
   type IndexFlags,
   type RecoverySnapshot,
   type SnapshotTreeEntry,
 } from "./update-recovery-manifest.ts";
+
+function ordinaryPermissions(mode: string): number | undefined {
+  if (mode === "100755") return 0o755;
+  if (mode === "100644") return 0o644;
+  return undefined;
+}
 
 type AppliedStateGit = {
   run(
@@ -83,9 +90,15 @@ export class AppliedRecoveryVerifier {
       await this.#mustGit(["ls-files", "--cached", "--stage", "-z"], true),
     );
     const indexTree = await this.#mustGit(["write-tree"]);
+    const liveWorktreeEntries = this.#liveTrackedEntries(indexEntries);
     const worktree = await this.#objects.createRawTree(
       "verify-applied",
-      this.#liveTrackedEntries(indexEntries),
+      liveWorktreeEntries,
+    );
+    const durablePermissions = permissionOverrides(snapshot.worktreeEntries);
+    const permissionsMatch = liveWorktreeEntries.every(
+      ({ mode, path, permissions }) =>
+        permissions === (durablePermissions[path] ?? ordinaryPermissions(mode)),
     );
     const flags = await this.#indexFlags();
     const included = (path: string): boolean =>
@@ -112,6 +125,7 @@ export class AppliedRecoveryVerifier {
     const incomplete = [
       [indexTree !== expectedIndexTree, "index"],
       [worktree.tree !== expectedWorktreeTree, "worktree"],
+      [!permissionsMatch, "worktree-permissions"],
       [!sameFlags(flags, snapshot.indexFlags), "index-flags"],
       [finalHead !== headOid, "head"],
     ]

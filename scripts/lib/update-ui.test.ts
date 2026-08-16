@@ -1479,6 +1479,54 @@ test("cleanup retains recovery when the verified applied tree changes before com
   assert.notEqual(git(fixture.local, "stash", "list"), "");
 });
 
+test("cleanup retains recovery when tracked permissions change after confirmation", async (t) => {
+  const fixture = updateFixture();
+  t.after(() => rmSync(fixture.temp, { recursive: true, force: true }));
+  writeFileSync(join(fixture.local, "tracked.txt"), "local change\n");
+  writeFileSync(join(fixture.seed, "upstream.txt"), "upstream\n");
+  git(fixture.seed, "add", "upstream.txt");
+  git(fixture.seed, "commit", "-m", "upstream");
+  git(fixture.seed, "push", "origin", "main");
+  const tx = createUpdateTransaction({
+    root: fixture.local,
+    dataDir: fixture.data,
+    envPath: join(fixture.local, ".env"),
+  });
+
+  await tx.protect();
+  await tx.fetchAndIntegrate();
+  const restored = await tx.restoreLocalChanges();
+  assert.equal(restored.status, "applied");
+  const recovery = git(
+    fixture.local,
+    "for-each-ref",
+    "--format=%(objectname)",
+    "refs/iva/update-recovery",
+  );
+  const stashes = git(fixture.local, "stash", "list", "--format=%H");
+  chmodSync(join(fixture.local, "tracked.txt"), 0o600);
+
+  await assert.rejects(
+    () => tx.commit(),
+    /applied recovery state is incomplete: worktree-permissions/u,
+  );
+
+  assert.equal(
+    statSync(join(fixture.local, "tracked.txt")).mode & 0o777,
+    0o600,
+  );
+  assert.equal(
+    git(
+      fixture.local,
+      "for-each-ref",
+      "--format=%(objectname)",
+      "refs/iva/update-recovery",
+    ),
+    recovery,
+  );
+  assert.equal(git(fixture.local, "stash", "list", "--format=%H"), stashes);
+});
+
 test("the durable snapshot records modes, links and literal paths when core.fileMode is false", async (t) => {
   const fixture = updateFixture();
   t.after(() => rmSync(fixture.temp, { recursive: true, force: true }));
