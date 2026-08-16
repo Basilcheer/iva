@@ -6,8 +6,8 @@ import {
   createOwnedContainer,
   moveOwnedDirectory,
   pathMissing,
+  quarantineOwnedDirectory,
   removeOwnedContainer,
-  removeOwnedDirectory,
   removeOwnedFile,
   releaseDirectoryLease,
   type ResourceContainer,
@@ -166,6 +166,7 @@ class ProtectedFileOwner {
 class PromotedDirectoryOwner {
   readonly #path: string;
   readonly #backupPrefix: string;
+  readonly #retentionRoot: string;
   readonly #label: string;
   readonly #logCleanupFailure: (message: string) => void;
   readonly #hooks: ResourceIdentityHooks;
@@ -174,18 +175,21 @@ class PromotedDirectoryOwner {
   constructor({
     path,
     backupPrefix,
+    retentionRoot,
     label,
     logCleanupFailure,
     hooks,
   }: {
     path: string;
     backupPrefix: string;
+    retentionRoot: string;
     label: string;
     logCleanupFailure: (message: string) => void;
     hooks: ResourceIdentityHooks;
   }) {
     this.#path = path;
     this.#backupPrefix = backupPrefix;
+    this.#retentionRoot = retentionRoot;
     this.#label = label;
     this.#logCleanupFailure = logCleanupFailure;
     this.#hooks = hooks;
@@ -271,13 +275,19 @@ class PromotedDirectoryOwner {
     else if (!pathMissing(this.#path))
       throw new Error(`${this.#label} live ownership changed`);
 
-    if (state.live)
-      removeOwnedDirectory({
+    let debt: string | null = null;
+    if (state.live) {
+      const retained = quarantineOwnedDirectory({
         path: this.#path,
+        quarantineParent: this.#retentionRoot,
         expected: state.live,
         label: `${this.#label} live`,
         hooks: this.#hooks,
       });
+      debt = `${this.#label} rollback cleanup debt retained at ${retained.path}`;
+      releaseDirectoryLease(state.live);
+      releaseDirectoryLease(retained.lease);
+    }
     if (state.backup) {
       moveOwnedDirectory({
         source: state.backup.path,
@@ -289,6 +299,7 @@ class PromotedDirectoryOwner {
       releaseDirectoryLease(state.backup.lease);
     }
     this.#state = { phase: "untouched" };
+    if (debt) this.#logCleanupFailure(debt);
   }
 
   cleanup(): void {
@@ -317,15 +328,29 @@ class PromotedDirectoryOwner {
         this.#state.backup.container.lease,
         `${this.#label} backup container`,
       );
-      removeOwnedDirectory({
-        path: this.#state.backup.path,
-        expected: this.#state.backup.lease,
-        label: `${this.#label} backup`,
-        hooks: this.#hooks,
+      verifyDirectoryTree(
+        this.#state.backup.path,
+        this.#state.backup.lease,
+        `${this.#label} backup`,
+      );
+      const retained = createOwnedContainer(
+        this.#retentionRoot,
+        `.${this.#label}.iva-cleanup-debt-`,
+      );
+      moveOwnedDirectory({
+        source: this.#state.backup.container.path,
+        destination: join(retained.path, "owned"),
+        expected: this.#state.backup.container.lease,
+        label: `${this.#label} backup cleanup debt`,
       });
-      removeOwnedContainer(this.#state.backup.container);
+      releaseDirectoryLease(this.#state.backup.lease);
+      releaseDirectoryLease(this.#state.backup.container.lease);
+      releaseDirectoryLease(retained.lease);
       if (this.#state.live) releaseDirectoryLease(this.#state.live);
       this.#state = { phase: "untouched" };
+      this.#logCleanupFailure(
+        `${this.#label} backup cleanup debt retained at ${retained.path}`,
+      );
     } catch (error) {
       this.#logCleanupFailure(
         `${this.#label} backup cleanup failed: ${String(error)}`,
@@ -375,6 +400,7 @@ export class UpdateResourceOwners {
     this.#output = new PromotedDirectoryOwner({
       path: join(root, ".output"),
       backupPrefix: ".output.iva-backup-",
+      retentionRoot: dataDir,
       label: "output",
       logCleanupFailure,
       hooks: identityHooks,
@@ -382,6 +408,7 @@ export class UpdateResourceOwners {
     this.#nodeModules = new PromotedDirectoryOwner({
       path: join(root, "node_modules"),
       backupPrefix: "node_modules.iva-backup-",
+      retentionRoot: dataDir,
       label: "node_modules",
       logCleanupFailure,
       hooks: identityHooks,

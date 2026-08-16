@@ -465,27 +465,30 @@ function restoreUnexpectedMove({
   changed(label);
 }
 
-export function removeOwnedDirectory({
+export function quarantineOwnedDirectory({
   path,
+  quarantineParent,
   expected,
   label,
   hooks = {},
 }: {
   path: string;
+  quarantineParent: string;
   expected: ResourceDirectoryLease;
   label: string;
   hooks?: ResourceIdentityHooks;
-}): void {
+}): ResourceContainer {
   verifyDirectoryLease(path, expected, label);
   hooks.beforeQuarantineRename?.(path);
   const parent = dirname(path);
   const quarantine = createOwnedContainer(
-    parent,
+    quarantineParent,
     `.${basename(path)}.iva-remove-${process.pid}-${randomUUID()}-`,
   );
   const moved = join(quarantine.path, "owned");
   renameSync(path, moved);
   syncDirectory(parent);
+  if (dirname(moved) !== parent) syncDirectory(dirname(moved));
   const movedIdentity = capturePathIdentity(moved, label);
   if (!sameIdentity(movedIdentity, expected.identity))
     restoreUnexpectedMove({
@@ -496,8 +499,8 @@ export function removeOwnedDirectory({
       label,
     });
   verifyDirectoryLease(moved, expected, label);
-  // This post-rename proof is the deletion linearization point. A mismatch restores
-  // the entire tree; recursive removal never starts from a root-only identity check.
+  // A mismatch restores the whole tree to its original path. A later writer
+  // stays inside either the restored tree or the retained quarantine.
   try {
     verifyDirectoryTree(moved, expected, label);
   } catch {
@@ -514,11 +517,9 @@ export function removeOwnedDirectory({
     quarantine.lease,
     `${label} quarantine`,
   );
-  rmSync(moved, { recursive: true });
-  releaseDirectoryLease(expected);
-  rmdirSync(quarantine.path);
-  syncDirectory(parent);
-  releaseDirectoryLease(quarantine.lease);
+  // Node has no path API that can recursively delete this tree without a
+  // check/delete race. Keep the complete tree behind one durable rename.
+  return quarantine;
 }
 
 export function removeOwnedFile({

@@ -105,6 +105,10 @@ test("a failed build's partial output is adopted before rollback", (t) => {
   assert.deepEqual(errors, []);
   assert.equal(readFileSync(join(live, "server"), "utf8"), "old build\n");
   assert.equal(readdirSync(live).includes("partial"), false);
+  assert.equal(
+    readdirSync(fx.data).some((name) => name.includes("iva-remove")),
+    true,
+  );
 });
 
 test("a replacement environment file is not overwritten from backup", (t) => {
