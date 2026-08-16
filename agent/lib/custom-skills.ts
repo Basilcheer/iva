@@ -1,0 +1,233 @@
+// Скиллы пользователя из data/custom/agent/skills/ — прочитанные с диска, а не собранные.
+//
+// Зачем: скилл, созданный ивой во время разговора, должен работать сразу. Встроенные
+// скиллы вкомпилированы в бандл при сборке, поэтому новый файл рядом с ними виден только
+// после `iva update`. Здесь тот же каталог читается на ходу, а eve отдаёт результат
+// модели как динамический скилл (agent/skills/custom.ts).
+//
+// Формы каталога — те же две, что понимает eve: пакет `<name>/SKILL.md` с соседними
+// файлами и плоский `<name>.md`. Имя скилла = имя папки или файла без `.md`.
+//
+// Функция чистая и не знает про eve: на вход путь, на выход карта скиллов. Она НИКОГДА
+// не кидает наружу — резолвер, бросивший исключение, лишает ход всех динамических
+// скиллов сразу (eve ловит его и пропускает резолвер целиком). Битая запись пропускается
+// одной строкой в лог, остальные скиллы отдаются.
+import type { Dirent } from "node:fs";
+import { readdir, readFile, stat } from "node:fs/promises";
+import { join, relative, sep } from "node:path";
+import { dataDir } from "./data-dir.ts";
+import { parseFrontmatter } from "./frontmatter.ts";
+
+export type CustomSkill = {
+  readonly description: string;
+  readonly markdown: string;
+  /** Соседние файлы пакета (references/, scripts/, assets/) — путь относительно пакета. */
+  readonly files?: Readonly<Record<string, Uint8Array>>;
+};
+
+/** Каталог пользовательских скиллов; сюда же кладёт скиллы сама ива. */
+export function customSkillsDir(): string {
+  return join(dataDir(), "custom", "agent", "skills");
+}
+
+// Имя скилла становится ОДНИМ сегментом пути в песочнице eve, и eve его проверяет
+// (shared/skill-package.js → assertSafeSkillPackageName). Вернём имя вне правила —
+// eve бросит уже у себя, и ход останется вообще без динамических скиллов. Поэтому
+// правило продублировано здесь и лишние имена отсеиваются до возврата.
+const SAFE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+// Описание попадает в системный промпт на каждом ходу. Файл без frontmatter, у которого
+// первая строка длиной в абзац, иначе раздувал бы промпт — режем.
+const DESCRIPTION_CAP = 300;
+
+type Kind = "package" | "flat";
+
+function reason(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function code(error: unknown): string | undefined {
+  return typeof error === "object" && error !== null && "code" in error
+    ? String(error.code)
+    : undefined;
+}
+
+/** Пакет, плоский `.md` или ничего. Симлинк разбирается по цели. */
+async function kindOf(dir: string, entry: Dirent): Promise<Kind | null> {
+  let isDirectory = entry.isDirectory();
+  if (entry.isSymbolicLink()) {
+    try {
+      isDirectory = (await stat(join(dir, entry.name))).isDirectory();
+    } catch {
+      return null; // битый симлинк — тот же случай, что и отсутствующая запись
+    }
+  } else if (!isDirectory && !entry.isFile()) {
+    return null;
+  }
+  if (isDirectory) return "package";
+  return entry.name.endsWith(".md") ? "flat" : null;
+}
+
+function skillName(name: string, kind: Kind): string {
+  return kind === "package" ? name : name.slice(0, -".md".length);
+}
+
+/** Первая осмысленная строка тела — тот же фолбэк описания, что у eve для плоских `.md`. */
+function firstMeaningfulLine(body: string): string | null {
+  let fenced = false;
+  for (const raw of body.split("\n")) {
+    const line = raw.trim();
+    if (line.startsWith("```")) {
+      fenced = !fenced;
+      continue;
+    }
+    if (fenced || !line) continue;
+    // Маркеры снимаются по одному, пока они есть: цитата с заголовком («> ## Заголовок»)
+    // прячет текст за двумя.
+    let stripped = line;
+    for (let i = 0; i < 4; i++) {
+      const next = stripped.replace(/^[#>*-]+\s*/u, "").trim();
+      if (next === stripped) break;
+      stripped = next;
+    }
+    if (stripped) return stripped;
+  }
+  return null;
+}
+
+function describe(name: string, markdown: string): string {
+  let description: string | null;
+  try {
+    const { fields, body } = parseFrontmatter(markdown);
+    const declared = fields?.description;
+    description =
+      typeof declared === "string" && declared.trim()
+        ? declared.trim()
+        : firstMeaningfulLine(body);
+  } catch {
+    // Битый frontmatter — не повод терять скилл: описание берём из тела.
+    description = firstMeaningfulLine(markdown);
+  }
+  // Тот же слабый фолбэк, что у eve: скилл остаётся загружаемым по имени.
+  if (!description) return `Instructions for the ${name} skill.`;
+  return description.length > DESCRIPTION_CAP
+    ? `${description.slice(0, DESCRIPTION_CAP - 1).trimEnd()}…`
+    : description;
+}
+
+/** Соседние файлы пакета. Пути, которые eve не примет, и нечитаемые файлы отбрасываются. */
+async function packageFiles(
+  packageDir: string,
+  name: string,
+  log: (line: string) => void,
+): Promise<Record<string, Uint8Array>> {
+  const files: Record<string, Uint8Array> = {};
+  let entries: Dirent[];
+  try {
+    entries = await readdir(packageDir, {
+      recursive: true,
+      withFileTypes: true,
+    });
+  } catch (error) {
+    log(`[skills] custom skill ${name} files skipped: ${reason(error)}`);
+    return files;
+  }
+  for (const entry of entries) {
+    if (!entry.isFile()) continue;
+    const absolute = join(entry.parentPath, entry.name);
+    const path = relative(packageDir, absolute).split(sep).join("/");
+    // SKILL.md eve генерирует сам из markdown и бросает, если он пришёл файлом.
+    if (path === "SKILL.md") continue;
+    if (path.includes("\\")) continue; // eve примет только POSIX-путь
+    try {
+      files[path] = await readFile(absolute);
+    } catch (error) {
+      log(`[skills] custom skill ${name} file ${path} skipped: ${reason(error)}`);
+    }
+  }
+  return files;
+}
+
+async function readOne(
+  dir: string,
+  entryName: string,
+  kind: Kind,
+  name: string,
+  log: (line: string) => void,
+): Promise<CustomSkill | null> {
+  const markdownPath =
+    kind === "package"
+      ? join(dir, entryName, "SKILL.md")
+      : join(dir, entryName);
+  let markdown: string;
+  try {
+    markdown = await readFile(markdownPath, "utf8");
+  } catch (error) {
+    log(
+      `[skills] custom skill ${name} skipped: ${
+        code(error) === "ENOENT" && kind === "package"
+          ? "no SKILL.md"
+          : reason(error)
+      }`,
+    );
+    return null;
+  }
+  const description = describe(name, markdown);
+  if (kind === "flat") return { description, markdown };
+  const files = await packageFiles(join(dir, entryName), name, log);
+  return Object.keys(files).length > 0
+    ? { description, markdown, files }
+    : { description, markdown };
+}
+
+/**
+ * Карта скиллов из каталога: имя → скилл. Каталога нет — пустая карта без шума
+ * (обычное состояние установки, где пользователь ещё ничего не написал).
+ */
+export async function readCustomSkills(
+  dir: string,
+  log: (line: string) => void = console.error,
+): Promise<Record<string, CustomSkill>> {
+  let entries: Dirent[];
+  try {
+    entries = await readdir(dir, { withFileTypes: true });
+  } catch (error) {
+    if (code(error) !== "ENOENT")
+      log(`[skills] custom skills unreadable: ${reason(error)}`);
+    return {};
+  }
+
+  // Пакет старше плоского файла с тем же именем: он несёт ещё и соседние файлы, а
+  // eve всё равно принял бы только одно имя.
+  const chosen = new Map<string, { entryName: string; kind: Kind }>();
+  for (const entry of [...entries].sort((a, b) => (a.name < b.name ? -1 : 1))) {
+    const kind = await kindOf(dir, entry);
+    if (kind === null) continue;
+    const name = skillName(entry.name, kind);
+    if (!SAFE_NAME.test(name)) {
+      log(
+        `[skills] custom skill ${name} skipped: name must match ${SAFE_NAME.source}`,
+      );
+      continue;
+    }
+    // Сортировка ставит папку `foo` перед файлом `foo.md`, поэтому первым всегда
+    // приходит пакет — второму с тем же именем места нет.
+    const previous = chosen.get(name);
+    if (previous) {
+      log(
+        `[skills] custom skill ${name} skipped: ${entry.name} loses to ${previous.entryName}`,
+      );
+      continue;
+    }
+    chosen.set(name, { entryName: entry.name, kind });
+  }
+
+  const skills: Record<string, CustomSkill> = {};
+  for (const [name, { entryName, kind }] of [...chosen].sort(([a], [b]) =>
+    a < b ? -1 : 1,
+  )) {
+    const skill = await readOne(dir, entryName, kind, name, log);
+    if (skill) skills[name] = skill;
+  }
+  return skills;
+}
