@@ -7,8 +7,8 @@ import {
   moveOwnedDirectory,
   pathMissing,
   quarantineOwnedDirectory,
+  quarantineOwnedFile,
   removeOwnedContainer,
-  removeOwnedFile,
   releaseDirectoryLease,
   type ResourceContainer,
   type ResourceDirectoryLease,
@@ -57,6 +57,7 @@ class ProtectedFileOwner {
   readonly #path: string;
   readonly #backupRoot: string;
   readonly #backupName: () => string;
+  readonly #retentionRoot: string;
   readonly #logCleanupFailure: (message: string) => void;
   readonly #hooks: ResourceIdentityHooks;
   #state: ProtectedFileState = { phase: "uncaptured" };
@@ -65,18 +66,21 @@ class ProtectedFileOwner {
     path,
     backupRoot,
     backupName,
+    retentionRoot,
     logCleanupFailure,
     hooks,
   }: {
     path: string;
     backupRoot: string;
     backupName: () => string;
+    retentionRoot: string;
     logCleanupFailure: (message: string) => void;
     hooks: ResourceIdentityHooks;
   }) {
     this.#path = path;
     this.#backupRoot = backupRoot;
     this.#backupName = backupName;
+    this.#retentionRoot = retentionRoot;
     this.#logCleanupFailure = logCleanupFailure;
     this.#hooks = hooks;
   }
@@ -147,14 +151,19 @@ class ProtectedFileOwner {
         this.#state.backup.container.lease,
         "environment backup container",
       );
-      removeOwnedFile({
+      const retained = quarantineOwnedFile({
         path: this.#state.backup.path,
+        quarantineParent: this.#retentionRoot,
         expected: this.#state.backup.snapshot,
         label: "environment backup",
         hooks: this.#hooks,
       });
       removeOwnedContainer(this.#state.backup.container);
+      releaseDirectoryLease(retained.lease);
       this.#state = { phase: "uncaptured" };
+      this.#logCleanupFailure(
+        `environment backup cleanup debt retained at ${retained.path}`,
+      );
     } catch (error) {
       this.#logCleanupFailure(
         `environment backup cleanup failed: ${String(error)}`,
@@ -394,6 +403,7 @@ export class UpdateResourceOwners {
       path: envPath,
       backupRoot: join(dataDir, "update-backups"),
       backupName: () => `.env-${timestamp()}`,
+      retentionRoot: dataDir,
       logCleanupFailure,
       hooks: identityHooks,
     });

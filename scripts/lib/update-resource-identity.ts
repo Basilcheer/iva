@@ -15,7 +15,6 @@ import {
   readlinkSync,
   readSync,
   renameSync,
-  rmSync,
   rmdirSync,
   writeFileSync,
 } from "node:fs";
@@ -522,27 +521,30 @@ export function quarantineOwnedDirectory({
   return quarantine;
 }
 
-export function removeOwnedFile({
+export function quarantineOwnedFile({
   path,
+  quarantineParent,
   expected,
   label,
   hooks = {},
 }: {
   path: string;
+  quarantineParent: string;
   expected: ResourceFileSnapshot;
   label: string;
   hooks?: ResourceIdentityHooks;
-}): void {
+}): ResourceContainer {
   verifyStableFile(path, expected, label);
   hooks.beforeQuarantineRename?.(path);
   const parent = dirname(path);
   const quarantine = createOwnedContainer(
-    parent,
+    quarantineParent,
     `.${basename(path)}.iva-remove-${process.pid}-${randomUUID()}-`,
   );
   const moved = join(quarantine.path, "owned");
   renameSync(path, moved);
   syncDirectory(parent);
+  if (dirname(moved) !== parent) syncDirectory(dirname(moved));
   const movedIdentity = capturePathIdentity(moved, label);
   try {
     verifyStableFile(moved, expected, label);
@@ -560,10 +562,7 @@ export function removeOwnedFile({
     quarantine.lease,
     `${label} quarantine`,
   );
-  rmSync(moved);
-  rmdirSync(quarantine.path);
-  syncDirectory(parent);
-  releaseDirectoryLease(quarantine.lease);
+  return quarantine;
 }
 
 export function removeOwnedContainer(container: ResourceContainer): void {
