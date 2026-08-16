@@ -100,16 +100,101 @@ fi
 exit 0
 `;
 
-/** A network-free curl that can fail only the optional GitHub CLI repository. */
+const PINNED_ARTIFACTS = {
+  uv: {
+    url: "https://github.com/astral-sh/uv/releases/download/0.12.5/uv-installer.sh",
+    sha256: "504511fbbbd811aeaba6738abc79408956b6c7da0ca35437b3dcc24a41efc111",
+  },
+  nvm: {
+    url: "https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh",
+    sha256: "abdb525ee9f5b48b34d8ed9fc67c6013fb0f659712e401ecd88ab989b3af8f53",
+  },
+  agentBrowser: {
+    url: "https://registry.npmjs.org/agent-browser/-/agent-browser-0.34.0.tgz",
+    sha256: "a4744fb189e598467abcfb3acdde07118d9e5cb43dc3b31727f869af4eb9d598",
+  },
+  gws: {
+    url: "https://registry.npmjs.org/@googleworkspace/cli/-/cli-0.22.5.tgz",
+    sha256: "b3d415a6d1b09589b13f6a71451d3d3927c4dc4701822d6aae549f8ff8f3380a",
+  },
+} as const;
+
+/** A network-free curl that materializes only the synthetic artifacts the installer knows. */
 const CURL = `#!/bin/sh
 echo "curl $*" >> "$IVA_TEST_CALLS"
-case "$*" in
+out=""
+url=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -o) shift; out="$1" ;;
+    http://*|https://*) url="$1" ;;
+  esac
+  shift
+done
+case "$url" in
   *cli.github.com*)
     if [ "$IVA_TEST_FAIL_GH_REPOSITORY" = 1 ]; then exit 22; fi
     printf 'synthetic github keyring\n'
     ;;
+  *uv-installer.sh)
+    if [ "$IVA_TEST_FAIL_ARTIFACT_DOWNLOAD" = uv ]; then exit 22; fi
+    cat >"$out" <<'IVA_UV_INSTALLER'
+#!/bin/sh
+echo "execute uv installer" >> "$IVA_TEST_CALLS"
+if [ "$IVA_TEST_FAIL_ARTIFACT_EXECUTE" = uv ]; then exit 70; fi
+mkdir -p "$HOME/.local/bin"
+ln -sf "$IVA_TEST_RECORDER" "$HOME/.local/bin/uv"
+IVA_UV_INSTALLER
+    ;;
+  *nvm-sh/nvm/v0.40.1/install.sh)
+    if [ "$IVA_TEST_FAIL_ARTIFACT_DOWNLOAD" = nvm ]; then exit 22; fi
+    cat >"$out" <<'IVA_NVM_INSTALLER'
+#!/bin/sh
+echo "execute nvm installer" >> "$IVA_TEST_CALLS"
+mkdir -p "$NVM_DIR"
+cat >"$NVM_DIR/nvm.sh" <<'IVA_NVM_SH'
+nvm() {
+  case "$1" in
+    install)
+      mkdir -p "$NVM_DIR/versions/node/v24.19.0/bin"
+      ln -sf "$IVA_TEST_NODE" "$NVM_DIR/versions/node/v24.19.0/bin/node"
+      : >"$IVA_TEST_NODE_READY_MARKER"
+      ;;
+    which) printf '%s\n' "$NVM_DIR/versions/node/v24.19.0/bin/node" ;;
+  esac
+}
+IVA_NVM_SH
+IVA_NVM_INSTALLER
+    ;;
+  *agent-browser-0.34.0.tgz|*cli-0.22.5.tgz)
+    case "$url" in
+      *agent-browser*) artifact=agent-browser ;;
+      *) artifact=gws ;;
+    esac
+    if [ "$IVA_TEST_FAIL_ARTIFACT_DOWNLOAD" = "$artifact" ]; then exit 22; fi
+    printf 'synthetic npm package\n' >"$out"
+    ;;
 esac
 exit 0
+`;
+
+/** The real hash tool's contract, with one deterministic corruption switch per artifact. */
+const SHA256SUM = `#!/bin/sh
+echo "sha256sum $*" >> "$IVA_TEST_CALLS"
+last=""
+for arg in "$@"; do last="$arg"; done
+name="$(basename "$last")"
+case "$name" in
+  iva-uv-*) artifact=uv; expected=${PINNED_ARTIFACTS.uv.sha256} ;;
+  iva-nvm-*) artifact=nvm; expected=${PINNED_ARTIFACTS.nvm.sha256} ;;
+  iva-agent-browser-*) artifact=agent-browser; expected=${PINNED_ARTIFACTS.agentBrowser.sha256} ;;
+  iva-gws-*) artifact=gws; expected=${PINNED_ARTIFACTS.gws.sha256} ;;
+  *) exit 2 ;;
+esac
+if [ "$IVA_TEST_CORRUPT_ARTIFACT" = "$artifact" ]; then
+  expected=0000000000000000000000000000000000000000000000000000000000000000
+fi
+printf '%s  %s\n' "$expected" "$last"
 `;
 
 /** Package-manager stand-in that can reject only an install containing gh. */
@@ -131,6 +216,10 @@ const COMMAND_MASK = `command() {
   if [ "$1" = -v ]; then
     case " $IVA_TEST_MISSING_COMMANDS " in
       *" $2 "*)
+        if [ "$2" = node ] && [ -e "$IVA_TEST_NODE_READY_MARKER" ]; then
+          builtin command "$@"
+          return
+        fi
         if [ "$2" = gh ] && [ "$IVA_TEST_GH_READY_AFTER_INSTALL" = 1 ]; then
           if [ -e "$IVA_TEST_GH_READY_MARKER" ]; then
             builtin command "$@"
@@ -153,6 +242,10 @@ const COMMAND_MASK = `command() {
  */
 const NPM = `#!/bin/sh
 echo "npm $*" >> "$IVA_TEST_CALLS"
+case "$*" in
+  *iva-agent-browser-*) [ "$IVA_TEST_FAIL_VERIFIED_NPM" = agent-browser ] && exit 71 ;;
+  *iva-gws-*) [ "$IVA_TEST_FAIL_VERIFIED_NPM" = gws ] && exit 71 ;;
+esac
 case "$1" in
   prefix)
     printf '%s\\n' "$IVA_TEST_NPM_PREFIX"
@@ -192,7 +285,7 @@ case "$1" in
     tool=""
     case "$*" in
       *agent-browser*) tool=agent-browser ;;
-      *googleworkspace*) tool=gws ;;
+      *googleworkspace*|*iva-gws-*) tool=gws ;;
     esac
     if [ -n "$tool" ]; then
       mkdir -p "$IVA_TEST_NPM_PREFIX/bin"
@@ -330,6 +423,8 @@ for (const name of ["apt-get", "dnf", "brew"]) {
 }
 writeFileSync(join(TOOLS, "curl"), CURL);
 chmodSync(join(TOOLS, "curl"), 0o755);
+writeFileSync(join(TOOLS, "sha256sum"), SHA256SUM);
+chmodSync(join(TOOLS, "sha256sum"), 0o755);
 const COMMAND_MASK_PATH = join(TOOLS, "command-mask.sh");
 writeFileSync(COMMAND_MASK_PATH, COMMAND_MASK);
 writeFileSync(join(TOOLS, "npm"), NPM);
@@ -440,6 +535,8 @@ function createWorld(t: TestContext, options: { env?: boolean } = {}): World {
     IVA_TEST_CALLS: runOptions.calls ?? defaultCalls,
     IVA_TEST_NPM_PREFIX: npmPrefix,
     IVA_TEST_RECORDER: RECORDER_PATH,
+    IVA_TEST_NODE: process.execPath,
+    IVA_TEST_NODE_READY_MARKER: join(dir, "node-ready"),
     IVA_TEST_GH_ETC_DIR: ghEtc,
     IVA_TEST_GH_READY_AFTER_INSTALL: "",
     IVA_TEST_GH_READY_MARKER: join(dir, "gh-ready"),
@@ -545,6 +642,147 @@ function assertPrivateGhAptBoundary(world: World, calls: string): void {
 void test("install.sh is valid bash", () => {
   execFileSync("bash", ["-n", join(ROOT, "install.sh")]);
 });
+
+void test("all downloaded installers and packages use exact pinned artifacts", () => {
+  const source = readFileSync(join(ROOT, "install.sh"), "utf8");
+  for (const artifact of Object.values(PINNED_ARTIFACTS)) {
+    assert.match(
+      source,
+      new RegExp(artifact.url.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"), "u"),
+    );
+    assert.match(source, new RegExp(`\\b${artifact.sha256}\\b`, "u"));
+  }
+  assert.doesNotMatch(source, /npm i -g agent-browser(?:\s|$)/u);
+  assert.doesNotMatch(source, /npm i -g @googleworkspace\/cli@latest(?:\s|$)/u);
+  assert.doesNotMatch(source, /https:\/\/astral\.sh\/uv\/install\.sh/u);
+});
+
+void test("matching uv and nvm downloads execute only after SHA-256 verification", (t) => {
+  const world = createWorld(t);
+  const result = world.run({
+    env: { IVA_TEST_MISSING_COMMANDS: "uv node" },
+  });
+
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  const calls = world.calls();
+  for (const artifact of [PINNED_ARTIFACTS.uv, PINNED_ARTIFACTS.nvm]) {
+    assert.match(
+      calls,
+      new RegExp(artifact.url.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"), "u"),
+    );
+  }
+  const uvHash = calls.indexOf("sha256sum ", calls.indexOf("iva-uv-"));
+  const uvExec = calls.indexOf("execute uv installer");
+  const nvmHash = calls.indexOf("sha256sum ", calls.indexOf("iva-nvm-"));
+  const nvmExec = calls.indexOf("execute nvm installer");
+  assert.ok(uvHash >= 0 && uvExec > uvHash, calls);
+  assert.ok(nvmHash > uvHash && nvmExec > nvmHash, calls);
+  assert.deepEqual(leftovers(world.tmp), []);
+});
+
+void test("a missing SHA-256 tool stops before executing a download", (t) => {
+  const world = createWorld(t);
+  const result = world.run({
+    env: { IVA_TEST_MISSING_COMMANDS: "uv sha256sum shasum" },
+  });
+
+  assert.notEqual(result.status, 0, result.stdout + result.stderr);
+  assert.match(result.stdout + result.stderr, /SHA-256/iu);
+  assert.doesNotMatch(world.calls(), /execute uv installer/u);
+  assert.deepEqual(leftovers(world.tmp), []);
+});
+
+void test("a failed artifact download leaves no verified-download temp file", (t) => {
+  const world = createWorld(t);
+  const result = world.run({
+    env: {
+      IVA_TEST_FAIL_ARTIFACT_DOWNLOAD: "uv",
+      IVA_TEST_MISSING_COMMANDS: "uv",
+    },
+  });
+
+  assert.notEqual(result.status, 0, result.stdout + result.stderr);
+  assert.doesNotMatch(world.calls(), /sha256sum|execute uv installer/u);
+  assert.deepEqual(leftovers(world.tmp), []);
+});
+
+void test("a verified installer failure leaves no downloaded script", (t) => {
+  const world = createWorld(t);
+  const result = world.run({
+    env: {
+      IVA_TEST_FAIL_ARTIFACT_EXECUTE: "uv",
+      IVA_TEST_MISSING_COMMANDS: "uv",
+    },
+  });
+
+  assert.notEqual(result.status, 0, result.stdout + result.stderr);
+  assert.match(world.calls(), /sha256sum[\s\S]*execute uv installer/u);
+  assert.deepEqual(leftovers(world.tmp), []);
+});
+
+void test("a verified npm install failure leaves no downloaded tarball", (t) => {
+  const world = createWorld(t);
+  const result = world.run({
+    env: { IVA_TEST_FAIL_VERIFIED_NPM: "agent-browser" },
+  });
+
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.match(
+    result.stdout + result.stderr,
+    /couldn't install agent-browser/u,
+  );
+  assert.match(world.calls(), /^npm i -g .*iva-agent-browser-/mu);
+  assert.deepEqual(leftovers(world.tmp), []);
+});
+
+for (const scenario of [
+  {
+    name: "uv",
+    missing: "uv",
+    url: PINNED_ARTIFACTS.uv.url,
+    forbidden: /execute uv installer/u,
+  },
+  {
+    name: "nvm",
+    missing: "node",
+    url: PINNED_ARTIFACTS.nvm.url,
+    forbidden: /execute nvm installer/u,
+  },
+  {
+    name: "agent-browser",
+    missing: "",
+    url: PINNED_ARTIFACTS.agentBrowser.url,
+    forbidden: /^npm i -g .*iva-agent-browser-/mu,
+  },
+  {
+    name: "gws",
+    missing: "",
+    url: PINNED_ARTIFACTS.gws.url,
+    forbidden: /^npm i -g .*iva-gws-/mu,
+  },
+] as const) {
+  void test(`${scenario.name} checksum mismatch stops before execution or install`, (t) => {
+    const world = createWorld(t);
+    const result = world.run({
+      env: {
+        IVA_TEST_CORRUPT_ARTIFACT: scenario.name,
+        IVA_TEST_MISSING_COMMANDS: scenario.missing,
+      },
+    });
+
+    assert.notEqual(result.status, 0, result.stdout + result.stderr);
+    assert.match(result.stdout + result.stderr, /SHA-256|checksum/iu);
+    const calls = world.calls();
+    assert.match(
+      calls,
+      new RegExp(scenario.url.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"), "u"),
+    );
+    assert.match(calls, /sha256sum/u);
+    assert.doesNotMatch(calls, scenario.forbidden);
+    assert.doesNotMatch(result.stdout, /Installation complete/u);
+    assert.deepEqual(leftovers(world.tmp), []);
+  });
+}
 
 void test("optional GitHub CLI repository failure does not stop required apt work", (t) => {
   const world = createWorld(t);
@@ -1409,8 +1647,8 @@ void test("a re-run over a finished install skips the stages that are already do
 
   const firstCalls = world.calls(join(world.dir, "first.log"));
   assert.match(firstCalls, /^npm ci$/mu);
-  assert.match(firstCalls, /^npm i -g agent-browser$/mu);
-  assert.match(firstCalls, /^npm i -g @googleworkspace\/cli@latest$/mu);
+  assert.match(firstCalls, /^npm i -g .*\/iva-agent-browser-[^/\s]+$/mu);
+  assert.match(firstCalls, /^npm i -g .*\/iva-gws-[^/\s]+$/mu);
   assert.match(firstCalls, /^npm exec -- eve build$/mu);
   // A finished install keeps nothing either.
   assert.deepEqual(leftovers(world.tmp), []);
@@ -1473,9 +1711,9 @@ void test("a first install into an empty directory still runs every stage", (t) 
   const calls = world.calls();
   for (const stage of [
     /^npm ci$/mu,
-    /^npm i -g agent-browser$/mu,
+    /^npm i -g .*\/iva-agent-browser-[^/\s]+$/mu,
     /^agent-browser install --with-deps$/mu,
-    /^npm i -g @googleworkspace\/cli@latest$/mu,
+    /^npm i -g .*\/iva-gws-[^/\s]+$/mu,
     /^npm exec -- eve build$/mu,
   ])
     assert.match(calls, stage);

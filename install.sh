@@ -28,6 +28,16 @@ BRANCH="${BRANCH:-main}"
 UPDATE_CHANNEL="$BRANCH"
 INSTALL_DIR="${INSTALL_DIR:-$HOME/iva}"
 NODE_MAJOR_MIN=24
+UV_INSTALLER_URL="https://github.com/astral-sh/uv/releases/download/0.12.5/uv-installer.sh"
+UV_INSTALLER_SHA256="504511fbbbd811aeaba6738abc79408956b6c7da0ca35437b3dcc24a41efc111"
+NVM_INSTALLER_URL="https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh"
+NVM_INSTALLER_SHA256="abdb525ee9f5b48b34d8ed9fc67c6013fb0f659712e401ecd88ab989b3af8f53"
+AGENT_BROWSER_TARBALL_URL="https://registry.npmjs.org/agent-browser/-/agent-browser-0.34.0.tgz"
+AGENT_BROWSER_TARBALL_SHA256="a4744fb189e598467abcfb3acdde07118d9e5cb43dc3b31727f869af4eb9d598"
+GWS_TARBALL_URL="https://registry.npmjs.org/@googleworkspace/cli/-/cli-0.22.5.tgz"
+GWS_TARBALL_SHA256="b3d415a6d1b09589b13f6a71451d3d3927c4dc4701822d6aae549f8ff8f3380a"
+CHECKSUM_MISMATCH_RC=86
+VERIFIED_DOWNLOAD=""
 
 # Every apt run below has to be unattended. On Ubuntu 24.04 with a pending kernel upgrade,
 # needrestart draws an ncurses "Pending kernel upgrade" dialog and dpkg asks about modified
@@ -53,6 +63,60 @@ die()  { echo "${c_red}✗ $*${c_reset}" >&2; exit 1; }
 # asked as the FIRST question (pick_language below). t en ru — picks a string by language.
 IVA_LANG=en
 t() { if [ "$IVA_LANG" = ru ]; then printf '%s' "$2"; else printf '%s' "$1"; fi; }
+
+cleanup_verified_download() {
+  if [ -n "$VERIFIED_DOWNLOAD" ]; then rm -f -- "$VERIFIED_DOWNLOAD" || true; fi
+  VERIFIED_DOWNLOAD=""
+}
+
+sha256_file() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | awk '{print $1}'
+  else
+    return 127
+  fi
+}
+
+# Download into a file owned by this run. Nothing executes or reaches npm before the
+# exact published bytes match the digest pinned beside their immutable URL.
+download_verified() {
+  local label="$1" url="$2" expected="$3" actual="" rc=0
+  cleanup_verified_download
+  VERIFIED_DOWNLOAD="$(mktemp "${TMPDIR:-/tmp}/iva-$label-XXXXXX")" || return
+  if curl -fsSL "$url" -o "$VERIFIED_DOWNLOAD"; then
+    :
+  else
+    rc=$?
+    return "$rc"
+  fi
+  if actual="$(sha256_file "$VERIFIED_DOWNLOAD")"; then
+    :
+  else
+    rc=$?
+    echo "No SHA-256 tool is available for $label" >&2
+    return "$rc"
+  fi
+  if [ "$actual" != "$expected" ]; then
+    echo "SHA-256 mismatch for $label: expected $expected, got $actual" >&2
+    return "$CHECKSUM_MISMATCH_RC"
+  fi
+}
+
+install_verified_npm_tarball() {
+  local label="$1" url="$2" expected="$3" rc=0
+  if download_verified "$label" "$url" "$expected"; then
+    :
+  else
+    rc=$?
+    cleanup_verified_download
+    return "$rc"
+  fi
+  if npm i -g "$VERIFIED_DOWNLOAD"; then rc=0; else rc=$?; fi
+  cleanup_verified_download
+  return "$rc"
+}
 
 # Compact progress for automatic work. Prompts, sudo and the setup wizard never
 # run behind a spinner, so they remain fully readable and interactive.
@@ -332,6 +396,7 @@ rollback_install_update() {
 # lost work.
 cleanup_install_artifacts() {
   set +e
+  cleanup_verified_download
   # The list of names is never the only copy of anything.
   [ -z "$INSTALL_UNTRACKED_LIST" ] || rm -f -- "$INSTALL_UNTRACKED_LIST"
   INSTALL_UNTRACKED_LIST=""
@@ -737,7 +802,10 @@ if command -v uv >/dev/null 2>&1 || [ -x "$HOME/.local/bin/uv" ]; then
   ok "$(t "uv already installed" "uv уже установлен")"
 else
   step "$(t "Installing uv…" "Устанавливаю uv…")"
-  curl -LsSf https://astral.sh/uv/install.sh | sh
+  download_verified uv "$UV_INSTALLER_URL" "$UV_INSTALLER_SHA256" \
+    || die "$(t "uv download or SHA-256 verification failed" "Загрузка uv или проверка SHA-256 не прошла")"
+  sh "$VERIFIED_DOWNLOAD"
+  cleanup_verified_download
 fi
 export PATH="$HOME/.local/bin:$PATH"
 command -v uv >/dev/null 2>&1 && ok "uv $(uv --version 2>/dev/null | awk '{print $2}')" || warn "$(t "uv not on PATH — open a new shell" "uv не на PATH — откройте новый шелл")"
@@ -754,7 +822,10 @@ if [ "$need_node" -eq 1 ]; then
   step "$(t "Installing Node $NODE_MAJOR_MIN+ via nvm…" "Устанавливаю Node $NODE_MAJOR_MIN+ через nvm…")"
   export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
   if [ ! -s "$NVM_DIR/nvm.sh" ]; then
-    curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
+    download_verified nvm "$NVM_INSTALLER_URL" "$NVM_INSTALLER_SHA256" \
+      || die "$(t "nvm download or SHA-256 verification failed" "Загрузка nvm или проверка SHA-256 не прошла")"
+    bash "$VERIFIED_DOWNLOAD"
+    cleanup_verified_download
   fi
   # IMPORTANT: nvm normally does `return <non-zero>` internally (especially with an npm `prefix`
   # in ~/.npmrc — common with ~/.npm-global). So that this does NOT crash the install or
@@ -890,7 +961,9 @@ else
   echo "  ${c_yellow}$(t "Chromium and its system libraries may take 1–3 minutes." "Chromium и системные библиотеки могут устанавливаться 1–3 минуты.")${c_reset}"
   # Refresh the sudo cache ahead of time (a visible prompt here, not a hidden one mid-install).
   if [ "$(id -u)" -ne 0 ] && command -v sudo >/dev/null 2>&1; then sudo -v 2>/dev/null || true; fi
-  if run_stage "$(t "Installing agent-browser" "Ставлю agent-browser")" "$(t "agent-browser installed" "agent-browser установлен")" npm i -g agent-browser; then
+  agent_browser_rc=0
+  if run_stage "$(t "Installing agent-browser" "Ставлю agent-browser")" "$(t "agent-browser installed" "agent-browser установлен")" \
+    install_verified_npm_tarball agent-browser "$AGENT_BROWSER_TARBALL_URL" "$AGENT_BROWSER_TARBALL_SHA256"; then
     run_stage "$(t "Downloading Chromium" "Скачиваю Chromium")" "$(t "Chromium ready" "Chromium готов")" agent-browser install --with-deps \
       || warn "$(t "Finish later: agent-browser install --with-deps" "Завершите позже: agent-browser install --with-deps")"
     # Chrome won't start on Ubuntu 23.10+/24.04: the kernel forbids unprivileged user
@@ -908,6 +981,10 @@ else
       warn "$(t "agent-browser installed but Chrome didn't start — check later: agent-browser open about:blank" "agent-browser поставлен, но Chrome не запустился — проверьте позже: agent-browser open about:blank")"
     fi
   else
+    agent_browser_rc=$?
+    if [ "$agent_browser_rc" -eq "$CHECKSUM_MISMATCH_RC" ]; then
+      die "$(t "agent-browser SHA-256 verification failed" "Проверка SHA-256 agent-browser не прошла")"
+    fi
     warn "$(t "couldn't install agent-browser — browser tasks unavailable, everything else works" "не удалось поставить agent-browser — браузерные задачи недоступны, остальное работает")"
   fi
 fi
@@ -924,10 +1001,19 @@ fi
 CURRENT_STEP="gws"
 if command -v gws >/dev/null 2>&1; then
   ok "$(t "gws already installed" "gws уже установлен")"
-elif run_stage "$(t "Installing Google Workspace CLI" "Ставлю Google Workspace CLI")" "$(t "gws installed" "gws установлен")" npm i -g @googleworkspace/cli@latest && command -v gws >/dev/null 2>&1; then
-  ok "$(t "gws ready — connect Google later: message the bot \"connect Google\"" "gws готов — Google подключишь позже: напиши боту «подключи Google»")"
 else
-  warn "$(t "couldn't install gws — Google-service tasks unavailable, everything else works (retry: npm i -g @googleworkspace/cli)" "не удалось поставить gws — задачи с Google-сервисами недоступны, остальное работает (повторить: npm i -g @googleworkspace/cli)")"
+  gws_rc=0
+  if run_stage "$(t "Installing Google Workspace CLI" "Ставлю Google Workspace CLI")" "$(t "gws installed" "gws установлен")" \
+    install_verified_npm_tarball gws "$GWS_TARBALL_URL" "$GWS_TARBALL_SHA256" \
+    && command -v gws >/dev/null 2>&1; then
+    ok "$(t "gws ready — connect Google later: message the bot \"connect Google\"" "gws готов — Google подключишь позже: напиши боту «подключи Google»")"
+  else
+    gws_rc=$?
+    if [ "$gws_rc" -eq "$CHECKSUM_MISMATCH_RC" ]; then
+      die "$(t "gws SHA-256 verification failed" "Проверка SHA-256 gws не прошла")"
+    fi
+    warn "$(t "couldn't install gws — Google-service tasks unavailable, everything else works (retry: run install.sh again)" "не удалось поставить gws — задачи с Google-сервисами недоступны, остальное работает (повторить: снова запустить install.sh)")"
+  fi
 fi
 
 # ─────────────────────────────────────────────────────────────────────────
