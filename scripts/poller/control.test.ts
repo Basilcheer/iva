@@ -436,6 +436,35 @@ test("a false callback ack result does not claim a local control", async () => {
   assert.equal(consumed, false);
 });
 
+for (const [command, updateId] of [
+  ["/model", 21],
+  ["/think", 22],
+] as const) {
+  test(`${command} is retained when its initial Bot API screen fails`, async () => {
+    const previousFetch = globalThis.fetch;
+    globalThis.fetch = async () =>
+      new Response(JSON.stringify({ ok: false, result: false }), {
+        headers: { "content-type": "application/json" },
+      });
+    try {
+      const consumed = await handleControl({
+        update_id: updateId,
+        message: {
+          message_id: updateId,
+          date: 1,
+          chat,
+          from: trustedFrom,
+          text: command,
+        },
+      });
+
+      assert.equal(consumed, false);
+    } finally {
+      globalThis.fetch = previousFetch;
+    }
+  });
+}
+
 test("model keep callback is retained when only spinner ack succeeds", async () => {
   const previousFetch = globalThis.fetch;
   globalThis.fetch = async () =>

@@ -502,16 +502,16 @@ async function handleControl(
   }
   // /model, /think — provider/model/effort wizard (writes .env; applied on restart).
   if (cmd === "/model") {
-    await handleModelCmd(chatId, from).catch((e: unknown) =>
-      log("wizard /model error:", errorDetails(e).message),
-    );
-    return true;
+    return handleModelCmd(chatId, from).catch((e: unknown) => {
+      log("wizard /model error:", errorDetails(e).message);
+      return false;
+    });
   }
   if (cmd === "/think") {
-    await handleThinkCmd(chatId, from).catch((e: unknown) =>
-      log("wizard /think error:", errorDetails(e).message),
-    );
-    return true;
+    return handleThinkCmd(chatId, from).catch((e: unknown) => {
+      log("wizard /think error:", errorDetails(e).message);
+      return false;
+    });
   }
   // /new retires only this exact Telegram session. /restart does the same first,
   // then restarts the agent process; histories and queues of other chats survive.
