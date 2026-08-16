@@ -436,7 +436,7 @@ test("a false callback ack result does not claim a local control", async () => {
   assert.equal(consumed, false);
 });
 
-test("model keep callback is retained when ack and edit both fail", async () => {
+test("model keep callback is retained when only spinner ack succeeds", async () => {
   const previousFetch = globalThis.fetch;
   globalThis.fetch = async () =>
     new Response(JSON.stringify({ ok: true, result: { message_id: 71 } }), {
@@ -466,12 +466,17 @@ test("model keep callback is retained when ack and edit both fail", async () => 
             ? input.href
             : input.url;
       methods.push(url.split("/").at(-1) ?? "");
-      return new Response(JSON.stringify({ ok: false, result: false }), {
-        headers: { "content-type": "application/json" },
-      });
+      return new Response(
+        JSON.stringify(
+          url.endsWith("/answerCallbackQuery")
+            ? { ok: true, result: true }
+            : { ok: false, result: false },
+        ),
+        { headers: { "content-type": "application/json" } },
+      );
     };
 
-    const consumed = await handleControl({
+    const callback = {
       update_id: 12,
       callback_query: {
         id: "cq-model-keep",
@@ -483,13 +488,38 @@ test("model keep callback is retained when ack and edit both fail", async () => 
         },
         data: "iva_model:keep",
       },
-    });
+    };
+    const consumed = await handleControl(callback);
 
     assert.equal(consumed, false);
     assert.deepEqual(methods, [
       "answerCallbackQuery",
       "editMessageText",
       "sendMessage",
+    ]);
+
+    globalThis.fetch = async (input) => {
+      const url =
+        typeof input === "string"
+          ? input
+          : input instanceof URL
+            ? input.href
+            : input.url;
+      methods.push(url.split("/").at(-1) ?? "");
+      return new Response(
+        JSON.stringify(
+          url.endsWith("/answerCallbackQuery")
+            ? { ok: true, result: true }
+            : { ok: true, result: { message_id: 71 } },
+        ),
+        { headers: { "content-type": "application/json" } },
+      );
+    };
+
+    assert.equal(await handleControl(callback), true);
+    assert.deepEqual(methods.slice(3), [
+      "answerCallbackQuery",
+      "editMessageText",
     ]);
   } finally {
     globalThis.fetch = previousFetch;

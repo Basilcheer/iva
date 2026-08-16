@@ -126,7 +126,7 @@ test("invalid update callback data only clears the Telegram spinner", async () =
   assert.deepEqual(methods, ["answerCallbackQuery"]);
 });
 
-test("skip callback is retained when edit returns a false result", async () => {
+test("skip callback is retained when only spinner ack succeeds", async () => {
   const methods: string[] = [];
   const previousFetch = mutableGlobal.fetch;
   mutableGlobal.fetch = (url) => {
@@ -136,8 +136,8 @@ test("skip callback is retained when edit returns a false result", async () => {
       json: () =>
         Promise.resolve(
           method === "answerCallbackQuery"
-            ? { ok: false, result: true }
-            : { ok: true, result: false },
+            ? { ok: true, result: true }
+            : { ok: false, result: false },
         ),
     });
   };

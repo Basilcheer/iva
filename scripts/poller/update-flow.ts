@@ -51,20 +51,10 @@ type UpdateCallbackQuery = {
 };
 type LaunchResult = { ok: boolean; msg: string };
 type ErrorLike = { message?: unknown };
-type TelegramResponse = { ok?: unknown; result?: unknown };
 type RecoveryReport = {
   schema: "iva-update-conflicts/v1";
   conflicts: { path: string }[];
 };
-
-function callbackAckSucceeded(value: unknown): boolean {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    (value as TelegramResponse).ok === true &&
-    (value as TelegramResponse).result === true
-  );
-}
 
 function messageEditSucceeded(value: unknown): boolean {
   return (
@@ -288,12 +278,10 @@ export async function handleUpdateCallback(
   const from = senderId === undefined ? null : String(senderId);
   const chatId = cq.message?.chat?.id;
   const messageId = cq.message?.message_id;
-  const acknowledged = callbackAckSucceeded(
-    await tg("answerCallbackQuery", { callback_query_id: cq.id }),
-  ); // clear the button spinner
+  await tg("answerCallbackQuery", { callback_query_id: cq.id }); // spinner only; never primary proof
   if (parsed === null) {
     log("ignored invalid update callback data");
-    return acknowledged;
+    return false;
   }
   if (from === null) return false;
   if (ALLOWED.size === 0 || !ALLOWED.has(from)) return true; // explicit terminal drop for a known untrusted sender
@@ -304,7 +292,7 @@ export async function handleUpdateCallback(
       tr("– Update postponed", "– Обновление отложено"),
       { inline_keyboard: [] },
     );
-    return acknowledged || messageEditSucceeded(edited);
+    return messageEditSucceeded(edited);
   }
   if (parsed.action === "conflicts") {
     const shown = await showSavedUpdateConflicts(
@@ -312,7 +300,7 @@ export async function handleUpdateCallback(
       chatId as string | number,
       messageId as number,
     );
-    return acknowledged || shown;
+    return shown;
   }
 
   const jobId = randomBytes(8).toString("hex");
@@ -327,7 +315,7 @@ export async function handleUpdateCallback(
       tr("⚠️ An update is already running", "⚠️ Обновление уже идёт"),
       { inline_keyboard: [] },
     );
-    return acknowledged || messageEditSucceeded(edited);
+    return messageEditSucceeded(edited);
   }
   // The version that runs as the tap is made. What the update moves the box off
   // of, written down while the process that knows it is still alive: after the
@@ -347,7 +335,7 @@ export async function handleUpdateCallback(
     }),
     { mode: 0o600 },
   );
-  const savingNotice = await edit(
+  await edit(
     chatId as string | number,
     messageId as number,
     tr("◇ Saving your changes", "◇ Сохраняю ваши изменения"),
@@ -361,11 +349,7 @@ export async function handleUpdateCallback(
       messageId as number,
       tr("⚠️ Couldn't start the update", "⚠️ Не удалось запустить обновление"),
     );
-    return (
-      acknowledged ||
-      messageEditSucceeded(savingNotice) ||
-      messageEditSucceeded(failureNotice)
-    );
+    return messageEditSucceeded(failureNotice);
   }
   // The durable job now owns reconciliation and the updater process owns execution.
   return true;

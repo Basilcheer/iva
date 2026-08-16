@@ -53,11 +53,6 @@ type WizardTransport = (
 const wizardTg = tg as unknown as WizardTransport;
 const errorMessage = (error: unknown) =>
   (error as { message?: unknown } | null | undefined)?.message;
-const callbackAckSucceeded = (value: unknown) =>
-  typeof value === "object" &&
-  value !== null &&
-  (value as { ok?: unknown }).ok === true &&
-  (value as { result?: unknown }).result === true;
 const messageCallSucceeded = (value: unknown) =>
   typeof value === "object" &&
   value !== null &&
@@ -101,12 +96,12 @@ const wizScreen = (
   st: WizardState,
   text: string,
   rows?: Array<Array<Record<string, unknown>>>,
-) => flows.screen(st, text, rows);
+) => flows.screenWithResult(st, text, rows);
 const endWizard = (
   st: WizardState,
   text: string,
   rows?: Array<Array<Record<string, unknown>>>,
-) => flows.end(st, text, rows);
+) => flows.endWithResult(st, text, rows);
 const wizardIsCurrent = (st: WizardState) =>
   flows.get(st.chatId, st.userId) === st;
 
@@ -270,7 +265,7 @@ async function handleModelCmd(
   const st = newWizard(chatId, from, "model");
   st.msgId = msgId ?? null;
   st.step = "intro";
-  await wizScreen(
+  return wizScreen(
     st,
     tr(
       `Now: provider ${providerLabel} · model ${model} · thinking: ${effortLabel(effort)}.`,
@@ -306,7 +301,7 @@ async function handleThinkCmd(
   // вовсе: нарисовать кнопки ollama значило бы принять настройку, которая никуда не поедет.
   // /model — тот же экран, что чинит причину, и метка провайдера там та же.
   if (!providerIsValid) {
-    await endWizard(
+    return endWizard(
       st,
       tr(
         `Thinking levels need a working provider — MODEL_PROVIDER is ${providerLabel}. Set it via /model.`,
@@ -314,10 +309,9 @@ async function handleThinkCmd(
       ),
       menuRow(),
     );
-    return;
   }
   if (!providerSupportsReasoning(provider)) {
-    await endWizard(
+    return endWizard(
       st,
       tr(
         `Adjustable thinking is unavailable for ${CATALOG[provider].label}. Choose a reasoning-capable provider via /model.`,
@@ -325,12 +319,11 @@ async function handleThinkCmd(
       ),
       menuRow(),
     );
-    return;
   }
   const cat = CATALOG[provider];
   const env = await readEnvValues(ENV_PATH);
   st.step = "loading";
-  await wizScreen(
+  const loadingShown = await wizScreen(
     st,
     tr(
       `Loading thinking levels for ${model}…`,
@@ -338,14 +331,14 @@ async function handleThinkCmd(
     ),
     [cancelRow()],
   );
-  if (!wizardIsCurrent(st)) return;
+  if (!wizardIsCurrent(st)) return loadingShown;
   const loaded = await runWizardRequest(st, () =>
     fetchModelOptions(provider, cat.keyVar ? env[cat.keyVar] : undefined, {
       dataDir: DATA_DIR_ABS,
     }),
   );
   const options = await resolveThinkCatalogLoad(st, loaded);
-  if (options === null) return;
+  if (options === null) return loadingShown;
   const option = options.find((candidate) => candidate.id === model);
   if (!option)
     return showModelValidationError(
@@ -359,7 +352,7 @@ async function handleThinkCmd(
   st.model = model;
   st.efforts = [...option.reasoningLevels];
   st.step = "effort";
-  await wizScreen(
+  return wizScreen(
     st,
     tr(
       `Thinking level for ${model}: ${effortLabel(effort)}.`,
@@ -388,7 +381,7 @@ async function showProviderScreen(st: WizardState) {
     btn(c.label, `iva_model:prov:${id}`),
   ]);
   rows.push(cancelRow());
-  await wizScreen(st, tr("Pick a provider:", "Выбери провайдера:"), rows);
+  return wizScreen(st, tr("Pick a provider:", "Выбери провайдера:"), rows);
 }
 
 async function pickProvider(st: WizardState, provider: string) {
@@ -397,22 +390,22 @@ async function pickProvider(st: WizardState, provider: string) {
   const cat = CATALOG[provider];
   if (cat.auth === "oauth") {
     st.step = "loading";
-    await wizScreen(
+    const loadingShown = await wizScreen(
       st,
       tr("Checking the OpenAI subscription…", "Проверяю подписку OpenAI…"),
       [cancelRow()],
     );
-    if (!wizardIsCurrent(st)) return;
+    if (!wizardIsCurrent(st)) return loadingShown;
     // File presence is not enough — a revoked/expired refresh token would let the wizard
     // finish into a config that 401s every turn. getAccessToken refreshes a stale token
     // and throws when there is no usable auth → device-link login.
     const auth = await runWizardRequest(st, () => getAccessToken(DATA_DIR_ABS));
-    if (auth.stale) return;
+    if (auth.stale) return loadingShown;
     if (!auth.ok) return startCodexLogin(st);
     return showModelScreen(st);
   }
   const env = await readEnvValues(ENV_PATH);
-  if (!wizardIsCurrent(st)) return;
+  if (!wizardIsCurrent(st)) return false;
   if (!cat.keyVar || !env[cat.keyVar] || st.reenterKey === provider) {
     st.reenterKey = null;
     // В группе ключ вводить нельзя (его не удалить) — отказ до установки awaitText.
@@ -421,7 +414,7 @@ async function pickProvider(st: WizardState, provider: string) {
     // отдаёт следующий текст этому визарду (handleKeyMessage), а не eve.
     st.awaitText = { kind: "apikey", secret: true, data: {} };
     st.step = "awaiting_key";
-    await wizScreen(
+    return wizScreen(
       st,
       tr(
         `Need a ${cat.label} API key. Send it in the next message — I'll delete it from the chat right away.\n` +
@@ -431,7 +424,6 @@ async function pickProvider(st: WizardState, provider: string) {
       ),
       [cancelRow()],
     );
-    return;
   }
   return showModelScreen(st);
 }
@@ -439,14 +431,14 @@ async function pickProvider(st: WizardState, provider: string) {
 async function showModelScreen(st: WizardState) {
   const cat = CATALOG[st.provider];
   const env = await readEnvValues(ENV_PATH);
-  if (!wizardIsCurrent(st)) return;
+  if (!wizardIsCurrent(st)) return false;
   st.step = "loading";
-  await wizScreen(
+  const loadingShown = await wizScreen(
     st,
     tr(`Loading models for ${cat.label}…`, `Загружаю модели ${cat.label}…`),
     [cancelRow()],
   );
-  if (!wizardIsCurrent(st)) return;
+  if (!wizardIsCurrent(st)) return loadingShown;
   const loaded = await runWizardRequest(st, () =>
     fetchModelOptions(
       st.provider,
@@ -454,7 +446,7 @@ async function showModelScreen(st: WizardState) {
       { dataDir: DATA_DIR_ABS },
     ),
   );
-  if (loaded.stale) return;
+  if (loaded.stale) return loadingShown;
   if (!loaded.ok) {
     return showModelValidationError(st, loaded.error);
   }
@@ -472,7 +464,7 @@ async function showModelScreen(st: WizardState) {
         `Текущая (только для справки): ${current}.`,
       )
     : "";
-  await wizScreen(
+  return wizScreen(
     st,
     [
       currentLine,
@@ -502,7 +494,7 @@ async function showModelValidationError(st: WizardState, error: unknown) {
     error instanceof ModelValidationError
       ? error.message
       : tr("provider validation failed", "проверка провайдера не прошла");
-  await wizScreen(
+  return wizScreen(
     st,
     tr(
       `Couldn't validate the live model catalog: ${reason}. Your current configuration was not changed.`,
@@ -691,9 +683,7 @@ async function handleWizardCallback(cq: {
   const from = senderId === undefined ? null : String(senderId);
   const chatId = cq.message?.chat?.id;
   const messageId = cq.message?.message_id;
-  const acknowledged = callbackAckSucceeded(
-    await tg("answerCallbackQuery", { callback_query_id: cq.id }),
-  );
+  await tg("answerCallbackQuery", { callback_query_id: cq.id }); // spinner only; never primary proof
   if (from === null) return false;
   if (ALLOWED.size === 0 || !ALLOWED.has(from)) return true; // swallow untrusted taps
   const action = cq.data.replace(/^iva_(model|think):/, "");
@@ -708,11 +698,11 @@ async function handleWizardCallback(cq: {
         "Диалог устарел — отправь /model заново.",
       ),
     });
-    return acknowledged || messageCallSucceeded(expired);
+    return messageCallSucceeded(expired);
   }
-  if (!wizardActionAllowed(st, action)) return acknowledged;
+  if (!wizardActionAllowed(st, action)) return false;
   if (action === "keep") {
-    await endWizard(
+    return endWizard(
       st,
       st.flow === "think"
         ? tr(
@@ -725,57 +715,48 @@ async function handleWizardCallback(cq: {
           ),
       menuRow(),
     );
-    return acknowledged;
   }
   if (action === "cancel") {
-    await endWizard(st, tr("Cancelled.", "Отменено."), menuRow());
-    return acknowledged;
+    return endWizard(st, tr("Cancelled.", "Отменено."), menuRow());
   }
   if (action === "chg") {
-    await showProviderScreen(st);
-    return acknowledged;
+    return showProviderScreen(st);
   }
   if (action.startsWith("prov:")) {
     const p = action.slice("prov:".length);
-    if (CATALOG[p]) await pickProvider(st, p);
-    return acknowledged;
+    return CATALOG[p] ? pickProvider(st, p) : false;
   }
   if (action === "retry") {
     if (st.flow === "think") {
-      await handleThinkCmd(st.chatId, st.userId, {
+      return handleThinkCmd(st.chatId, st.userId, {
         msgId: st.msgId ?? undefined,
       });
-      return acknowledged;
     }
-    await showModelScreen(st);
-    return acknowledged;
+    return showModelScreen(st);
   }
   if (action === "back") {
     if (st.flow === "think") {
-      await endWizard(
+      return endWizard(
         st,
         tr("Kept the current configuration.", "Оставил текущую конфигурацию."),
         menuRow(),
       );
-      return acknowledged;
     }
-    await showProviderScreen(st);
-    return acknowledged;
+    return showProviderScreen(st);
   }
   if (action.startsWith("m:")) {
     const option = selectWizardModel(st, action.slice("m:".length));
-    if (!option) return acknowledged;
+    if (!option) return false;
     if (option.reasoningLevels.length === 0) {
       st.effort = null;
       try {
         await saveWizard(st);
       } catch (e) {
-        if (!wizardIsCurrent(st)) return acknowledged;
+        if (!wizardIsCurrent(st)) return false;
         if (e instanceof ModelValidationError) {
-          await showModelValidationError(st, e);
-          return acknowledged;
+          return showModelValidationError(st, e);
         }
-        await endWizard(
+        return endWizard(
           st,
           tr(
             "Couldn't save .env: " + String(errorMessage(e)),
@@ -783,7 +764,6 @@ async function handleWizardCallback(cq: {
           ),
           menuRow(),
         );
-        return acknowledged;
       }
       // The validated configuration is durably written before any UI rendering.
       if (!wizardIsCurrent(st)) return true;
@@ -791,7 +771,7 @@ async function handleWizardCallback(cq: {
       return true;
     }
     st.step = "effort";
-    await wizScreen(
+    return wizScreen(
       st,
       tr(
         `Thinking level for ${option.id}:`,
@@ -799,20 +779,18 @@ async function handleWizardCallback(cq: {
       ),
       effortRows("iva_model", false, st.efforts),
     );
-    return acknowledged;
   }
   if (action.startsWith("eff:")) {
     const v = action.slice("eff:".length);
-    if (!selectWizardEffort(st, v)) return acknowledged;
+    if (!selectWizardEffort(st, v)) return false;
     try {
       await saveWizard(st);
     } catch (e) {
-      if (!wizardIsCurrent(st)) return acknowledged;
+      if (!wizardIsCurrent(st)) return false;
       if (e instanceof ModelValidationError) {
-        await showModelValidationError(st, e);
-        return acknowledged;
+        return showModelValidationError(st, e);
       }
-      await endWizard(
+      return endWizard(
         st,
         tr(
           "Couldn't save .env: " + String(errorMessage(e)),
@@ -820,7 +798,6 @@ async function handleWizardCallback(cq: {
         ),
         menuRow(),
       );
-      return acknowledged;
     }
     // The validated configuration is durably written before any UI rendering.
     if (!wizardIsCurrent(st)) return true;
@@ -828,7 +805,7 @@ async function handleWizardCallback(cq: {
     return true;
   }
   if (action === "rs:later") {
-    await endWizard(
+    return endWizard(
       st,
       tr(
         "Saved. It'll apply after a restart (/restart).",
@@ -836,7 +813,6 @@ async function handleWizardCallback(cq: {
       ),
       menuRow(),
     );
-    return acknowledged;
   }
   if (action === "rs:now") {
     await endWizard(
@@ -868,10 +844,10 @@ async function handleWizardCallback(cq: {
           "Не удалось перезапустить (systemctl). Проверь сервис на сервере.",
         ),
       );
-      return acknowledged || replySucceeded(failed);
+      return replySucceeded(failed);
     }
   }
-  return acknowledged;
+  return false;
 }
 
 export function resetMessageCopy(
