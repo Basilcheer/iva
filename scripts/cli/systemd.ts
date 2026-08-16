@@ -208,7 +208,6 @@ export function createCliSystemd(runtime: CliRuntime) {
       written.push(file);
     }
     if (hasSystemd()) systemd.daemonReload();
-    removeLegacyMemoryUnits();
     removeLegacyBrainUnits(written);
     return written;
   }
@@ -471,6 +470,12 @@ export function createCliSystemd(runtime: CliRuntime) {
   function restartServices(): void {
     writeUnits();
     systemd.restart(SERVICES);
+    const scheduleOwner = SERVICES[0];
+    if (!scheduleOwner || !systemd.isActive(scheduleOwner))
+      throw new Error("iva.service is not active after unit restart");
+    // The old timers remain the recovery owner until the compiled schedules and
+    // their freshly restarted process owner have both been proved.
+    removeLegacyMemoryUnits();
   }
 
   return {

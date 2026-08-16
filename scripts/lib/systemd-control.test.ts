@@ -161,6 +161,7 @@ async function fixture(t: TestContext) {
     envPath,
     home,
     project,
+    state,
     runStart: (exit = 0) => runCommand("start", { exit }),
     runCommand,
     seedQuarantineFailure: async () => {
@@ -328,7 +329,7 @@ void test("legacy memory-timer cleanup is skipped when the current build doesn't
   // i.e. exactly what a build made before this migration landed looks like.
   await writeFile(join(project, ".output/server/index.mjs"), "");
 
-  const result = runCommand("_install-units");
+  const result = runCommand("restart");
   const output = `${result.stdout}\n${result.stderr}`;
 
   assert.equal(result.status, 0, output);
@@ -354,7 +355,7 @@ void test("a build that only bundles LEGACY_MEMORY_UNITS strings (not the compil
     'const LEGACY_MEMORY_UNITS = ["iva-memory-daily.service", "iva-memory-daily.timer"];\n',
   );
 
-  const result = runCommand("_install-units");
+  const result = runCommand("restart");
   const output = `${result.stdout}\n${result.stderr}`;
 
   assert.equal(result.status, 0, output);
@@ -385,7 +386,7 @@ void test("legacy memory-timer cleanup proceeds once the build actually contains
     );
   }
 
-  const result = runCommand("_install-units");
+  const result = runCommand("restart");
   const output = `${result.stdout}\n${result.stderr}`;
 
   assert.equal(result.status, 0, output);
@@ -401,6 +402,34 @@ void test("legacy memory-timer cleanup proceeds once the build actually contains
       (c) => c === "--user disable --now iva-memory-daily.timer",
     ),
   );
+});
+
+void test("a restart fault after unit write keeps legacy memory units and their state", async (t) => {
+  const { calls, home, project, runCommand, seedUnit, state } =
+    await fixture(t);
+  const unit = "iva-memory-daily.timer";
+  const unitDir = join(home, ".config/systemd/user");
+  await mkdir(unitDir, { recursive: true });
+  await writeFile(join(unitDir, unit), "[Unit]\n");
+  await seedUnit(unit);
+  await mkdir(join(project, ".output/server/_virtual"), { recursive: true });
+  for (const period of ["daily", "weekly", "monthly", "yearly"]) {
+    await writeFile(
+      join(project, `.output/server/_virtual/eve-${period}.schedule.mjs`),
+      scheduleDescriptionMjs(period),
+    );
+  }
+
+  const result = runCommand("restart", { exit: 1, failAction: "restart" });
+  const output = `${result.stdout}\n${result.stderr}`;
+  const systemctlCalls = (await readFile(calls, "utf8")).trim().split("\n");
+
+  assert.equal(result.status, 1, output);
+  assert.equal(await readFile(join(unitDir, unit), "utf8"), "[Unit]\n");
+  assert.equal(existsSync(join(state, `${unit}.enabled`)), true);
+  assert.equal(existsSync(join(state, `${unit}.active`)), true);
+  assert.ok(systemctlCalls.includes("--user restart iva.service"));
+  assert.equal(systemctlCalls.includes(`--user disable --now ${unit}`), false);
 });
 
 void test("a PARTIAL build (only memory-daily compiled) still counts as stale â€” legacy units are preserved", async (t) => {
@@ -420,7 +449,7 @@ void test("a PARTIAL build (only memory-daily compiled) still counts as stale â€
     scheduleDescriptionMjs("daily"),
   );
 
-  const result = runCommand("_install-units");
+  const result = runCommand("restart");
   const output = `${result.stdout}\n${result.stderr}`;
 
   assert.equal(result.status, 0, output);
