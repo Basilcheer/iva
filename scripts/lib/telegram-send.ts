@@ -9,6 +9,8 @@
 //     чанком, но без тегов и без parse_mode (так 400 по сущностям невозможен), fellBack=true;
 //   • любой другой отказ обрывает отчёт: ok=false с первой ошибкой роняет cron-скрипт
 //     ненулевым кодом, а оставшиеся чанки Telegram не получает;
+//   • retryTransient=true даёт каждому HTML/plain-вызову до трёх попыток при сети,
+//     5xx, 408, 425 и 429; по умолчанию повторов нет;
 //   • пустой отчёт — тоже ok=false: слать нечего, и молчать об этом нельзя;
 //   • НИКОГДА не бросает — на любую ошибку возвращает { ok:false, error }.
 // Возвращает { ok, fellBack, error } — вызывающий cron-скрипт по fellBack даёт агенту
@@ -18,8 +20,31 @@ import {
   type OutboxAck,
   type OutboxTransport,
 } from "../../agent/lib/outbox.ts";
+import { classifyDeliverStatus } from "./deliver-policy.ts";
 
 type TelegramRequest = Record<string, unknown>;
+type FetchImpl = typeof fetch;
+type Sleep = (ms: number) => Promise<void>;
+
+type PostAck = OutboxAck & {
+  readonly retryable?: boolean;
+  readonly retryAfterMs?: number;
+};
+
+export type TelegramSendOptions = {
+  readonly caption?: boolean;
+  readonly retryTransient?: boolean;
+  readonly sleep?: Sleep;
+  readonly fetchImpl?: FetchImpl;
+};
+
+const MAX_ATTEMPTS = 3;
+const MAX_RETRY_MS = 30_000;
+
+const realSleep: Sleep = (ms) =>
+  new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 
 // Сообщение брошенной ошибки: у fetch-сбоя оно информативнее, чем String(error).
 function errorMessage(e: unknown): string {
@@ -32,22 +57,72 @@ function errorMessage(e: unknown): string {
   );
 }
 
-async function post(bot: string, body: TelegramRequest): Promise<OutboxAck> {
+function telegramRetryAfterMs(text: string): number | undefined {
   try {
-    const res = await fetch(`https://api.telegram.org/bot${bot}/sendMessage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
+    const parsed: unknown = JSON.parse(text);
+    const value = (parsed as { parameters?: { retry_after?: unknown } } | null)
+      ?.parameters?.retry_after;
+    if (
+      (typeof value !== "number" && typeof value !== "string") ||
+      (typeof value === "string" && !value.trim())
+    )
+      return undefined;
+    const seconds = Number(value);
+    if (!Number.isFinite(seconds) || seconds <= 0) return undefined;
+    return Math.min(MAX_RETRY_MS, seconds * 1000);
+  } catch {
+    return undefined;
+  }
+}
+
+async function post(
+  bot: string,
+  body: TelegramRequest,
+  fetchImpl: FetchImpl,
+): Promise<PostAck> {
+  try {
+    const res = await fetchImpl(
+      `https://api.telegram.org/bot${bot}/sendMessage`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      },
+    );
     if (res.ok) return { ok: true };
+    const text = await res.text();
     // 400 = Telegram не распарсил HTML: единственный статус, где повтор без тегов помогает.
     return {
       ok: false,
-      error: `${res.status}: ${await res.text()}`,
+      error: `${res.status}: ${text}`,
       retryPlain: res.status === 400,
+      retryable: classifyDeliverStatus(res.status) === "retry",
+      ...(res.status === 429
+        ? { retryAfterMs: telegramRetryAfterMs(text) }
+        : {}),
     };
   } catch (e) {
-    return { ok: false, error: errorMessage(e), retryPlain: false };
+    return {
+      ok: false,
+      error: errorMessage(e),
+      retryPlain: false,
+      retryable: true,
+    };
+  }
+}
+
+async function postWithTransientRetry(
+  bot: string,
+  body: TelegramRequest,
+  fetchImpl: FetchImpl,
+  sleep: Sleep,
+): Promise<PostAck> {
+  for (let attempt = 1; ; attempt++) {
+    const ack = await post(bot, body, fetchImpl);
+    if (ack.ok || !ack.retryable || attempt >= MAX_ATTEMPTS) return ack;
+    const retryMs =
+      ack.retryAfterMs ?? Math.min(MAX_RETRY_MS, 1000 * 2 ** (attempt - 1));
+    await sleep(retryMs);
   }
 }
 
@@ -55,15 +130,24 @@ export async function sendTelegramHtml(
   bot: string,
   chat: string,
   md: unknown,
-  { caption = false }: { caption?: boolean } = {},
+  {
+    caption = false,
+    retryTransient = false,
+    sleep = realSleep,
+    fetchImpl = fetch,
+  }: TelegramSendOptions = {},
 ): Promise<{ ok: boolean; fellBack: boolean; error: string }> {
+  const sendPost = retryTransient
+    ? (body: TelegramRequest) =>
+        postWithTransientRetry(bot, body, fetchImpl, sleep)
+    : (body: TelegramRequest) => post(bot, body, fetchImpl);
   // Ночной отчёт — цельный документ, а не диалог: если Telegram отказал не по разметке
   // (flood control, 5xx, бот заблокирован), остаток слать некуда и незачем — добитый
   // 429 продлевает throttle на весь токен, общий с интерактивным каналом. Помечаем
   // такой отказ как stop, и шов бросает хвост — ровно как cron-путь делал до шва.
   const transport: OutboxTransport = {
     sendHtml: async (html) => {
-      const ack = await post(bot, {
+      const ack = await sendPost({
         chat_id: chat,
         text: html,
         parse_mode: "HTML",
@@ -73,7 +157,7 @@ export async function sendTelegramHtml(
     // Повтор без разметки — последний шанс этого чанка. Не вышел и он: дальше по
     // отчёту идти не с чем, каким бы кодом Telegram ни ответил.
     sendPlain: async (text) => {
-      const ack = await post(bot, { chat_id: chat, text });
+      const ack = await sendPost({ chat_id: chat, text });
       return ack.ok ? ack : { ...ack, stop: true };
     },
   };

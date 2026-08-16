@@ -1,5 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import fc from "fast-check";
+
+// КАК ВОСПРОИЗВЕСТИ ПАДЕНИЕ: при провале fast-check печатает в отчёте строку вида
+// `Property failed after N tests { seed: -1234567, path: "12:3:0", endOnFailure: true }`.
+// Подставь их вторым аргументом — fc.assert(prop, { seed: -1234567, path: "12:3:0" }) —
+// и прогон повторится байт в байт, включая shrink.
+const RUNS = { numRuns: 500 };
 
 type CapturedRequest = {
   url: string;
@@ -216,4 +223,247 @@ void test("telegram-send never throws on a report that is not a string", async (
   assert.equal(result.fellBack, false);
   assert.ok(result.error.length > 0);
   assert.deepEqual(requests, []);
+});
+
+type RetryAfter =
+  | { readonly kind: "missing" }
+  | { readonly kind: "invalid-json" }
+  | {
+      readonly kind: "value";
+      readonly value: string | number | boolean | null;
+    };
+
+type HttpOutcome =
+  | { readonly kind: "ok" }
+  | { readonly kind: "throw"; readonly message: string }
+  | {
+      readonly kind: "status";
+      readonly status: number;
+      readonly retryAfter: RetryAfter;
+    };
+
+const retryAfterArbitrary: fc.Arbitrary<RetryAfter> = fc.oneof(
+  fc.constant({ kind: "missing" } as const),
+  fc.constant({ kind: "invalid-json" } as const),
+  fc.record({
+    kind: fc.constant("value" as const),
+    value: fc.oneof(
+      fc.string({ maxLength: 16 }),
+      fc.integer({ min: -60, max: 60 }),
+      fc.double({ noNaN: true, noDefaultInfinity: true }),
+      fc.boolean(),
+      fc.constant(null),
+    ),
+  }),
+);
+
+const httpOutcomeArbitrary: fc.Arbitrary<HttpOutcome> = fc.oneof(
+  fc.constant({ kind: "ok" } as const),
+  fc.record({
+    kind: fc.constant("throw" as const),
+    message: fc.string({ maxLength: 30 }),
+  }),
+  fc.record({
+    kind: fc.constant("status" as const),
+    status: fc.integer({ min: 400, max: 599 }),
+    retryAfter: retryAfterArbitrary,
+  }),
+);
+
+function responseBody(outcome: Extract<HttpOutcome, { kind: "status" }>) {
+  if (outcome.status !== 429) return `status ${outcome.status}`;
+  if (outcome.retryAfter.kind === "invalid-json") return "{";
+  if (outcome.retryAfter.kind === "missing") return "{}";
+  return JSON.stringify({
+    parameters: { retry_after: outcome.retryAfter.value },
+  });
+}
+
+function isRetryable(outcome: HttpOutcome): boolean {
+  return (
+    outcome.kind === "throw" ||
+    (outcome.kind === "status" &&
+      (outcome.status >= 500 || [408, 425, 429].includes(outcome.status)))
+  );
+}
+
+function expectedRetryAfterMs(outcome: HttpOutcome): number | undefined {
+  if (
+    outcome.kind !== "status" ||
+    outcome.status !== 429 ||
+    outcome.retryAfter.kind !== "value"
+  )
+    return undefined;
+  const value = outcome.retryAfter.value;
+  if (
+    (typeof value !== "number" && typeof value !== "string") ||
+    (typeof value === "string" && !value.trim())
+  )
+    return undefined;
+  const seconds = Number(value);
+  if (!Number.isFinite(seconds) || seconds <= 0) return undefined;
+  return Math.min(30_000, seconds * 1000);
+}
+
+function expectedPolicy(outcomes: readonly HttpOutcome[]) {
+  const attempts: Array<{
+    readonly plain: boolean;
+    readonly outcome: HttpOutcome;
+  }> = [];
+  const delays: number[] = [];
+  let cursor = 0;
+
+  const run = (plain: boolean): "ok" | "plain" | "failed" => {
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      const outcome = outcomes[cursor++];
+      attempts.push({ plain, outcome });
+      if (outcome.kind === "ok") return "ok";
+      if (isRetryable(outcome) && attempt < 3) {
+        delays.push(expectedRetryAfterMs(outcome) ?? 1000 * 2 ** (attempt - 1));
+        continue;
+      }
+      if (!plain && outcome.kind === "status" && outcome.status === 400)
+        return "plain";
+      return "failed";
+    }
+    return "failed";
+  };
+
+  const html = run(false);
+  if (html !== "plain")
+    return { attempts, delays, fellBack: false, ok: html === "ok" };
+  const plain = run(true);
+  return { attempts, delays, fellBack: true, ok: plain === "ok" };
+}
+
+void test("a transient 5xx is retried and the second attempt delivers", async () => {
+  const outcomes: HttpOutcome[] = [
+    {
+      kind: "status",
+      status: 503,
+      retryAfter: { kind: "missing" },
+    },
+    { kind: "ok" },
+  ];
+  const delays: number[] = [];
+  let calls = 0;
+
+  const result = await (
+    await import("./telegram-send.ts")
+  ).sendTelegramHtml("test-bot", "test-chat", "remember this", {
+    retryTransient: true,
+    sleep: (ms) => {
+      delays.push(ms);
+      return Promise.resolve();
+    },
+    fetchImpl: () => {
+      const outcome = outcomes[calls++];
+      return Promise.resolve(
+        new Response(outcome.kind === "status" ? responseBody(outcome) : "", {
+          status: outcome.kind === "status" ? outcome.status : 200,
+        }),
+      );
+    },
+  });
+
+  assert.deepEqual(result, { ok: true, fellBack: false, error: "" });
+  assert.equal(calls, 2);
+  assert.deepEqual(delays, [1000]);
+});
+
+void test("omitted and false retryTransient preserve the original single attempt", async () => {
+  const { sendTelegramHtml } = await import("./telegram-send.ts");
+  for (const retryTransient of [undefined, false] as const) {
+    let calls = 0;
+    const result = await sendTelegramHtml(
+      "test-bot",
+      "test-chat",
+      "remember this",
+      {
+        ...(retryTransient === undefined ? {} : { retryTransient }),
+        fetchImpl: () => {
+          calls++;
+          return Promise.resolve(new Response("unavailable", { status: 503 }));
+        },
+      },
+    );
+
+    assert.deepEqual(result, {
+      ok: false,
+      fellBack: false,
+      error: "503: unavailable",
+    });
+    assert.equal(calls, 1);
+  }
+});
+
+void test("property: transient retry is bounded, classified and timed", async () => {
+  await fc.assert(
+    fc.asyncProperty(
+      fc.array(httpOutcomeArbitrary, { minLength: 6, maxLength: 6 }),
+      async (outcomes) => {
+        const expected = expectedPolicy(outcomes);
+        const calls: Array<{ readonly plain: boolean }> = [];
+        const delays: number[] = [];
+        let thrown: unknown;
+        let result:
+          { ok: boolean; fellBack: boolean; error: string } | undefined;
+
+        try {
+          result = await (
+            await import("./telegram-send.ts")
+          ).sendTelegramHtml("test-bot", "test-chat", "remember this", {
+            retryTransient: true,
+            sleep: (ms) => {
+              delays.push(ms);
+              return Promise.resolve();
+            },
+            fetchImpl: (_url, options) => {
+              const { body } = captureRequest(_url, options);
+              calls.push({ plain: !("parse_mode" in body) });
+              const outcome = outcomes[calls.length - 1];
+              if (outcome.kind === "throw")
+                return Promise.reject(new Error(outcome.message));
+              if (outcome.kind === "ok")
+                return Promise.resolve(new Response("", { status: 200 }));
+              return Promise.resolve(
+                new Response(responseBody(outcome), { status: outcome.status }),
+              );
+            },
+          });
+        } catch (error) {
+          thrown = error;
+        }
+
+        assert.equal(thrown, undefined);
+        assert.ok(result);
+        assert.equal(result.ok, expected.ok);
+        assert.equal(result.fellBack, expected.fellBack);
+        assert.deepEqual(
+          calls.map(({ plain }) => plain),
+          expected.attempts.map(({ plain }) => plain),
+        );
+        assert.ok(calls.filter(({ plain }) => !plain).length <= 3);
+        assert.ok(calls.filter(({ plain }) => plain).length <= 3);
+        assert.deepEqual(delays, expected.delays);
+
+        for (const [index, attempt] of expected.attempts.entries()) {
+          const { outcome, plain } = attempt;
+          if (outcome.kind === "ok") assert.equal(index, calls.length - 1);
+          if (
+            outcome.kind === "status" &&
+            [401, 403, 404].includes(outcome.status)
+          )
+            assert.equal(index, calls.length - 1);
+          if (
+            outcome.kind === "status" &&
+            !isRetryable(outcome) &&
+            (plain || outcome.status !== 400)
+          )
+            assert.equal(index, calls.length - 1);
+        }
+      },
+    ),
+    RUNS,
+  );
 });
