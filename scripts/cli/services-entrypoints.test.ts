@@ -138,6 +138,7 @@ void test("restart regenerates units before checked service restarts and reports
     "--user is-active iva.service",
     "--user restart iva-telegram-poll.service",
     "--user is-active iva-telegram-poll.service",
+    "--user is-active iva.service",
   ]);
 });
 
@@ -188,6 +189,7 @@ void test("reset stops services, quarantines every state target with one stamp, 
     "--user is-active iva.service",
     "--user restart iva-telegram-poll.service",
     "--user is-active iva-telegram-poll.service",
+    "--user is-active iva.service",
   ]);
 });
 

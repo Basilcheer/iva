@@ -814,6 +814,9 @@ test("a restart fault preserves a previously missing userbot unit", (t) => {
 
 test("an update whose userbot proxy cannot be rebuilt still installs the version", (t) => {
   const iva = world(t);
+  const unitDir = join(iva.fakeHome, ".config/systemd/user");
+  mkdirSync(unitDir, { recursive: true });
+  writeFileSync(join(unitDir, "iva-telegram-userbot.service"), "[Unit]\n");
   update(iva);
   const first = active(iva);
   // The lock file of the new version is unreadable: `uv` is never reached, and
