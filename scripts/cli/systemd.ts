@@ -34,6 +34,10 @@ type WriteUnitsOptions = {
   readonly ensureBearer?: boolean;
 };
 
+type RestartServicesOptions = {
+  readonly afterUnitWrite?: () => void;
+};
+
 export function createCliSystemd(runtime: CliRuntime) {
   const {
     ROOT,
@@ -467,8 +471,11 @@ export function createCliSystemd(runtime: CliRuntime) {
   // Any restart via `iva` first regenerates the unit → Environment=PORT always equals
   // the current IVA_PORT from .env. Without this, editing IVA_PORT + restart would leave the server
   // on the old port (the unit was already baked) while clients read the new one — the same desync.
-  function restartServices(): void {
+  function restartServices({
+    afterUnitWrite = () => undefined,
+  }: RestartServicesOptions = {}): void {
     writeUnits();
+    afterUnitWrite();
     systemd.restart(SERVICES);
     const scheduleOwner = SERVICES[0];
     if (!scheduleOwner || !systemd.isActive(scheduleOwner))

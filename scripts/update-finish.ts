@@ -261,6 +261,23 @@ export function restoreMigratedWriterState(
   }
 }
 
+export function restoreWriterOwnership(
+  runtime: WriterRuntime,
+  states: readonly OptionalWriterState[],
+  phase: {
+    readonly unitMigrationStarted: boolean;
+    readonly legacyMemoryOwnerProven: boolean;
+  },
+): void {
+  if (!phase.unitMigrationStarted) {
+    restoreOptionalWriterState(runtime, states);
+    return;
+  }
+  restoreMigratedWriterState(runtime, states, {
+    legacyMemoryOwnerProven: phase.legacyMemoryOwnerProven,
+  });
+}
+
 /** Build leftovers of a checkout: not tracked, not state, never worth keeping. */
 const ARTIFACTS =
   ".git .iva-build .iva-update .output .worktrees node_modules".split(" ");
@@ -425,13 +442,11 @@ export async function main(argv: readonly string[]): Promise<number> {
           // Recovery before activation must not rewrite or retire old unit files.
           runtime.systemd.restart(runtime.SERVICES);
         } finally {
-          if (optionalWriterState) {
-            if (unitMigrationStarted)
-              restoreMigratedWriterState(runtime, optionalWriterState, {
-                legacyMemoryOwnerProven,
-              });
-            else restoreOptionalWriterState(runtime, optionalWriterState);
-          }
+          if (optionalWriterState)
+            restoreWriterOwnership(runtime, optionalWriterState, {
+              unitMigrationStarted,
+              legacyMemoryOwnerProven,
+            });
         }
         await Promise.resolve();
       },
@@ -443,16 +458,20 @@ export async function main(argv: readonly string[]): Promise<number> {
         const runtime = createCliRuntime(root);
         const services = createCliSystemd(runtime);
         try {
-          unitMigrationStarted = true;
-          services.restartServices();
-          // Completed writeUnits removes legacy memory units only after proving
-          // compiled schedules; completed restart proves their process owner live.
+          services.restartServices({
+            afterUnitWrite: () => {
+              unitMigrationStarted = true;
+            },
+          });
+          // Completed restart retires legacy memory units only after proving
+          // compiled schedules and their process owner live.
           legacyMemoryOwnerProven = true;
           runtime.systemd.activate([runtime.UPDATE_TIMER]);
           reinstallUserbot(runtime, services, notify);
         } finally {
           if (optionalWriterState)
-            restoreMigratedWriterState(runtime, optionalWriterState, {
+            restoreWriterOwnership(runtime, optionalWriterState, {
+              unitMigrationStarted,
               legacyMemoryOwnerProven,
             });
         }

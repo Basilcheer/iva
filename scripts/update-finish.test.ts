@@ -5,6 +5,7 @@ import {
   captureOptionalWriterState,
   restoreMigratedWriterState,
   restoreOptionalWriterState,
+  restoreWriterOwnership,
   stopWriterUnits,
 } from "./update-finish.ts";
 import {
@@ -446,22 +447,26 @@ test("an active service alone does not prove a migrated memory owner", () => {
   );
 });
 
-test("an enabled legacy Brain timer fails closed without its new owner", () => {
+test("a unit-write fault restores the captured legacy Brain owner", () => {
   const legacyTimer = LEGACY_BRAIN_UNITS.find((unit) =>
     unit.endsWith(".timer"),
   );
   assert.ok(legacyTimer);
   const fake = fakeRuntime({
-    active: [],
+    active: [legacyTimer],
     enabled: [legacyTimer],
     unavailable: ["iva-brain.timer"],
   });
   const before = captureOptionalWriterState(fake.runtime);
   stopWriterUnits(fake.runtime, before);
-  fake.enabledUnits.delete(legacyTimer);
 
-  assert.throws(
-    () => restoreMigratedWriterState(fake.runtime, before),
-    /captured writer iva-brain\.timer disappeared/u,
-  );
+  restoreWriterOwnership(fake.runtime, before, {
+    unitMigrationStarted: false,
+    legacyMemoryOwnerProven: false,
+  });
+
+  assert.equal(fake.activeUnits.has(legacyTimer), true);
+  assert.equal(fake.enabledUnits.has(legacyTimer), true);
+  assert.equal(fake.activeUnits.has("iva-brain.timer"), false);
+  assert.equal(fake.enabledUnits.has("iva-brain.timer"), false);
 });
