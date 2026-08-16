@@ -35,10 +35,16 @@ const { handleUpdateCallback, handleUpdateCheck, removeStaleUpdateJobs } =
       chatId: number,
       options: {
         root?: string;
+        inspectImpl?: () => Promise<{
+          hasCommitUpdate: boolean;
+          hasVersionUpdate: boolean;
+          localVersion?: string | null;
+          remoteVersion?: string | null;
+        }>;
         markNotifiedImpl?: (dataDir: string, version: string) => Promise<void>;
         envImpl?: () => Promise<NodeJS.ProcessEnv>;
       },
-    ) => Promise<void>;
+    ) => Promise<boolean>;
     removeStaleUpdateJobs: () => Promise<void>;
   };
 
@@ -72,6 +78,62 @@ type MockFetch = (
   init: { body?: string },
 ) => Promise<{ json(): Promise<{ ok: boolean; result: unknown }> }>;
 const mutableGlobal: { fetch: MockFetch } = globalThis;
+
+for (const scenario of [
+  {
+    name: "inspect failure",
+    inspectImpl: (): Promise<never> => Promise.reject(new Error("inspect failed")),
+  },
+  {
+    name: "current version",
+    inspectImpl: () =>
+      Promise.resolve({
+        hasCommitUpdate: false,
+        hasVersionUpdate: false,
+        localVersion: "1.2.3",
+        remoteVersion: "1.2.3",
+      }),
+  },
+  {
+    name: "update offer",
+    inspectImpl: () =>
+      Promise.resolve({
+        hasCommitUpdate: true,
+        hasVersionUpdate: true,
+        localVersion: "1.2.3",
+        remoteVersion: "1.2.4",
+      }),
+  },
+] as const) {
+  test(`/update ${scenario.name} is retained when its final edit returns null`, async () => {
+    const methods: string[] = [];
+    const previousFetch = mutableGlobal.fetch;
+    mutableGlobal.fetch = (url) => {
+      const method = url.split("/").at(-1) ?? "";
+      methods.push(method);
+      return Promise.resolve({
+        json: () =>
+          Promise.resolve({
+            ok: true,
+            result: method === "sendMessage" ? { message_id: 73 } : null,
+          }),
+      });
+    };
+    try {
+      assert.equal(
+        await handleUpdateCheck(1, {
+          inspectImpl: scenario.inspectImpl,
+          markNotifiedImpl: () => Promise.resolve(),
+          envImpl: () => Promise.resolve({ MODEL_PROVIDER: "codex" }),
+        }),
+        false,
+      );
+    } finally {
+      mutableGlobal.fetch = previousFetch;
+    }
+    assert.deepEqual(methods, ["sendMessage", "editMessageText"]);
+  });
+}
 
 /**
  * Tap the /update button and collect the texts Telegram was sent. `systemd-run`

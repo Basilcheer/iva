@@ -110,26 +110,31 @@ export async function handleUpdateCheck(
     // is upstream's, so the running commit has to be named.
     info = await inspectImpl(upstreamQuery(root));
   } catch {
-    await edit(
-      chatId,
-      status.message_id,
-      tr("⚠️ Couldn't check for updates", "⚠️ Не удалось проверить обновления"),
+    return messageEditSucceeded(
+      await edit(
+        chatId,
+        status.message_id,
+        tr(
+          "⚠️ Couldn't check for updates",
+          "⚠️ Не удалось проверить обновления",
+        ),
+      ),
     );
-    return true;
   }
   if (!info.hasCommitUpdate) {
     // Not modelSummary(process.env): the /model wizard edits .env at runtime and restarts
     // only the agent — this bridge keeps running, so its env snapshot may hold the old model.
     const model = modelSummary(await envImpl());
-    await edit(
-      chatId,
-      status.message_id,
-      tr(
-        `✅ You're up to date\n\nIva v${info.localVersion ?? "?"}\nModel: ${model.line}`,
-        `✅ У вас актуальная версия\n\nIva v${info.localVersion ?? "?"}\nМодель: ${model.line}`,
+    return messageEditSucceeded(
+      await edit(
+        chatId,
+        status.message_id,
+        tr(
+          `✅ You're up to date\n\nIva v${info.localVersion ?? "?"}\nModel: ${model.line}`,
+          `✅ У вас актуальная версия\n\nIva v${info.localVersion ?? "?"}\nМодель: ${model.line}`,
+        ),
       ),
     );
-    return true;
   }
   const bump =
     info.remoteVersion && info.remoteVersion !== info.localVersion
@@ -147,13 +152,14 @@ export async function handleUpdateCheck(
     ),
     updateOffer(info.localVersion, info.remoteVersion, getLang()).replyMarkup,
   );
-  if (offered && info.hasVersionUpdate) {
+  const offerShown = messageEditSucceeded(offered);
+  if (offerShown && info.hasVersionUpdate) {
     await markNotifiedImpl(DATA_DIR, info.remoteVersion).catch(
       (error: unknown) =>
         log("update notification state failed:", (error as ErrorLike).message),
     );
   }
-  return true;
+  return offerShown;
 }
 
 const jobsDir = (): string => join(DATA_DIR, "update-jobs");
