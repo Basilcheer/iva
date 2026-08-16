@@ -1,16 +1,12 @@
 import {
   closeSync,
   constants,
-  fchmodSync,
   fstatSync,
-  fsyncSync,
-  ftruncateSync,
   mkdirSync,
   openSync,
   readFileSync,
   readlinkSync,
   renameSync,
-  writeSync,
 } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import {
@@ -32,6 +28,8 @@ import {
 
 export type RawTrackedHooks = RecoveryIoHooks & {
   beforeRawTrackedRemoval?(path: string, boundary: "index" | "entry"): void;
+  beforeRawTrackedReplace?(path: string): void;
+  afterRawTrackedQuarantine?(path: string): void;
 };
 
 type MissingLease = { kind: "missing"; path: string };
@@ -118,13 +116,6 @@ export class RawTrackedOwner {
     );
     this.#verify(lease);
     if (lease.kind !== "missing" && sameContents(lease, entry)) return;
-    if (
-      lease.kind === "file" &&
-      (entry.mode === "100644" || entry.mode === "100755")
-    ) {
-      this.#rewriteFile(lease, entry);
-      return;
-    }
     if (lease.kind !== "missing") this.#quarantine(lease);
     this.#create(entry);
   }
@@ -233,53 +224,6 @@ export class RawTrackedOwner {
     }
   }
 
-  #rewriteFile(lease: FileLease, entry: RecoveryContentEntry): void {
-    this.#verify(lease);
-    const mode = desiredMode(entry);
-    if (!lease.snapshot.bytes.equals(entry.bytes)) {
-      const writableMode = lease.snapshot.mode | 0o200;
-      const adjustedMode = writableMode !== lease.snapshot.mode;
-      const path = safeRecoveryChild(this.#root, lease.path);
-      let writer: number | null = null;
-      let temporaryMode = false;
-      try {
-        if (adjustedMode) {
-          fchmodSync(lease.descriptor, writableMode);
-          temporaryMode = true;
-        }
-        writer = openSync(path, constants.O_WRONLY | constants.O_NOFOLLOW);
-        if (temporaryMode) {
-          fchmodSync(lease.descriptor, lease.snapshot.mode);
-          temporaryMode = false;
-        }
-        const opened = fstatSync(writer, { bigint: true });
-        if (!sameIdentity([opened.dev, opened.ino], lease.snapshot.identity))
-          changed(lease.path);
-        this.#verify(lease);
-        let offset = 0;
-        while (offset < entry.bytes.length)
-          offset += writeSync(
-            writer,
-            entry.bytes,
-            offset,
-            entry.bytes.length - offset,
-            offset,
-          );
-        ftruncateSync(writer, entry.bytes.length);
-        fchmodSync(writer, mode);
-        fsyncSync(writer);
-      } finally {
-        if (temporaryMode) fchmodSync(lease.descriptor, lease.snapshot.mode);
-        if (writer !== null) closeSync(writer);
-      }
-    } else {
-      fchmodSync(lease.descriptor, mode);
-      fsyncSync(lease.descriptor);
-    }
-    lease.snapshot = { ...lease.snapshot, mode, bytes: entry.bytes };
-    this.#verify(lease);
-  }
-
   #quarantine(lease: FileLease | SymlinkLease): void {
     this.#verify(lease);
     const absolute = safeRecoveryChild(this.#root, lease.path);
@@ -289,9 +233,11 @@ export class RawTrackedOwner {
     );
     const moved = join(container.path, "owned");
     try {
+      this.#hooks.beforeRawTrackedReplace?.(absolute);
       renameSync(absolute, moved);
       syncDirectory(dirname(absolute));
       syncDirectory(container.path);
+      this.#hooks.afterRawTrackedQuarantine?.(moved);
       try {
         if (lease.kind === "file") {
           const held = fstatSync(lease.descriptor, { bigint: true });
