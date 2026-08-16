@@ -8,8 +8,8 @@ import {
   pathMissing,
   quarantineOwnedDirectory,
   quarantineOwnedFile,
-  removeOwnedContainer,
   releaseDirectoryLease,
+  retainOwnedContainer,
   type ResourceContainer,
   type ResourceDirectoryLease,
   type ResourceFileSnapshot,
@@ -158,11 +158,15 @@ class ProtectedFileOwner {
         label: "environment backup",
         hooks: this.#hooks,
       });
-      removeOwnedContainer(this.#state.backup.container);
+      const containerDebt = retainOwnedContainer({
+        container: this.#state.backup.container,
+        retentionParent: this.#retentionRoot,
+        label: "environment backup container",
+      });
       releaseDirectoryLease(retained.lease);
       this.#state = { phase: "uncaptured" };
       this.#logCleanupFailure(
-        `environment backup cleanup debt retained at ${retained.path}`,
+        `environment backup cleanup debt retained at ${retained.path}; container retained at ${containerDebt}`,
       );
     } catch (error) {
       this.#logCleanupFailure(
@@ -284,7 +288,7 @@ class PromotedDirectoryOwner {
     else if (!pathMissing(this.#path))
       throw new Error(`${this.#label} live ownership changed`);
 
-    let debt: string | null = null;
+    const debts: string[] = [];
     if (state.live) {
       const retained = quarantineOwnedDirectory({
         path: this.#path,
@@ -293,7 +297,9 @@ class PromotedDirectoryOwner {
         label: `${this.#label} live`,
         hooks: this.#hooks,
       });
-      debt = `${this.#label} rollback cleanup debt retained at ${retained.path}`;
+      debts.push(
+        `${this.#label} rollback cleanup debt retained at ${retained.path}`,
+      );
       releaseDirectoryLease(state.live);
       releaseDirectoryLease(retained.lease);
     }
@@ -304,11 +310,18 @@ class PromotedDirectoryOwner {
         expected: state.backup.lease,
         label: `${this.#label} backup`,
       });
-      removeOwnedContainer(state.backup.container);
+      const containerDebt = retainOwnedContainer({
+        container: state.backup.container,
+        retentionParent: this.#retentionRoot,
+        label: `${this.#label} backup container`,
+      });
+      debts.push(
+        `${this.#label} backup container cleanup debt retained at ${containerDebt}`,
+      );
       releaseDirectoryLease(state.backup.lease);
     }
     this.#state = { phase: "untouched" };
-    if (debt) this.#logCleanupFailure(debt);
+    if (debts.length > 0) this.#logCleanupFailure(debts.join("; "));
   }
 
   cleanup(): void {
@@ -342,23 +355,16 @@ class PromotedDirectoryOwner {
         this.#state.backup.lease,
         `${this.#label} backup`,
       );
-      const retained = createOwnedContainer(
-        this.#retentionRoot,
-        `.${this.#label}.iva-cleanup-debt-`,
-      );
-      moveOwnedDirectory({
-        source: this.#state.backup.container.path,
-        destination: join(retained.path, "owned"),
-        expected: this.#state.backup.container.lease,
+      const retained = retainOwnedContainer({
+        container: this.#state.backup.container,
+        retentionParent: this.#retentionRoot,
         label: `${this.#label} backup cleanup debt`,
       });
       releaseDirectoryLease(this.#state.backup.lease);
-      releaseDirectoryLease(this.#state.backup.container.lease);
-      releaseDirectoryLease(retained.lease);
       if (this.#state.live) releaseDirectoryLease(this.#state.live);
       this.#state = { phase: "untouched" };
       this.#logCleanupFailure(
-        `${this.#label} backup cleanup debt retained at ${retained.path}`,
+        `${this.#label} backup cleanup debt retained at ${retained}`,
       );
     } catch (error) {
       this.#logCleanupFailure(

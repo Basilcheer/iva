@@ -15,7 +15,6 @@ import {
   readlinkSync,
   readSync,
   renameSync,
-  rmdirSync,
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, join } from "node:path";
@@ -460,8 +459,14 @@ function restoreUnexpectedMove({
   const restored = capturePathIdentity(original, label);
   if (!sameIdentity(restored, movedIdentity)) changed(label);
   verifyDirectoryLease(container.path, container.lease, `${label} quarantine`);
-  removeOwnedContainer(container);
-  changed(label);
+  const debt = retainOwnedContainer({
+    container,
+    retentionParent: dirname(container.path),
+    label: `${label} quarantine`,
+  });
+  throw new Error(
+    `${label} ownership changed; cleanup debt retained at ${debt}`,
+  );
 }
 
 export function quarantineOwnedDirectory({
@@ -565,9 +570,27 @@ export function quarantineOwnedFile({
   return quarantine;
 }
 
-export function removeOwnedContainer(container: ResourceContainer): void {
-  verifyDirectoryLease(container.path, container.lease, "backup container");
-  rmdirSync(container.path);
-  syncParent(container.path);
+export function retainOwnedContainer({
+  container,
+  retentionParent,
+  label,
+}: {
+  container: ResourceContainer;
+  retentionParent: string;
+  label: string;
+}): string {
+  verifyDirectoryLease(container.path, container.lease, label);
+  const retained = createOwnedContainer(
+    retentionParent,
+    `.${basename(container.path)}.iva-container-debt-`,
+  );
+  moveOwnedDirectory({
+    source: container.path,
+    destination: join(retained.path, "owned"),
+    expected: container.lease,
+    label,
+  });
   releaseDirectoryLease(container.lease);
+  releaseDirectoryLease(retained.lease);
+  return retained.path;
 }
