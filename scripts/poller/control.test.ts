@@ -353,3 +353,36 @@ test("/start from an untrusted user is not answered by the bridge", async () => 
   assert.equal(consumed, false); // дальше его молча уронит allowlist входного пайплайна
   assert.deepEqual(replies, []);
 });
+
+test("malformed update callback is not claimed as a local control", async () => {
+  const methods: string[] = [];
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = async (input) => {
+    const url =
+      typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.href
+          : input.url;
+    methods.push(url.split("/").at(-1) ?? "");
+    return new Response(JSON.stringify({ ok: true, result: {} }), {
+      headers: { "content-type": "application/json" },
+    });
+  };
+  try {
+    const consumed = await handleControl({
+      update_id: 9,
+      callback_query: {
+        id: "cq-invalid-update",
+        from: trustedFrom,
+        message: { message_id: 9, date: 1, chat },
+        data: "iva_update:do-now",
+      },
+    });
+
+    assert.equal(consumed, false);
+    assert.deepEqual(methods, []);
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});

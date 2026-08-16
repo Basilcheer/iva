@@ -34,6 +34,7 @@ import { downloadTelegramFile, edit, reply, sc, tg } from "./transport.ts";
 import { chatKey } from "./offset.ts";
 import { performScopedReset } from "./queue.ts";
 import { deliverDirectUpdate } from "./routing.ts";
+import { parseUpdateCallbackData } from "./update-callback.ts";
 import { handleUpdateCallback, handleUpdateCheck } from "./update-flow.ts";
 import {
   endWizard,
@@ -366,7 +367,7 @@ async function handleControl(
       await ackImpl(callback.id, stopOutcomeText(outcome));
       return true;
     }
-    if (callback.data.startsWith("iva_update:"))
+    if (parseUpdateCallbackData(callback.data) !== null)
       return handleUpdateCallback(callback);
     // Wizard errors must not escape: an uncaught throw would crash the bridge and
     // re-poll the update after restart. Consume the tap either way.
