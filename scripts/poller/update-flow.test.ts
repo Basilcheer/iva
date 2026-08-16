@@ -70,7 +70,7 @@ test("stale update-job cleanup removes only expired JSON job files", async () =>
 type MockFetch = (
   url: string,
   init: { body?: string },
-) => Promise<{ json(): Promise<{ ok: boolean; result: object }> }>;
+) => Promise<{ json(): Promise<{ ok: boolean; result: unknown }> }>;
 const mutableGlobal: { fetch: MockFetch } = globalThis;
 
 /**
@@ -126,13 +126,19 @@ test("invalid update callback data only clears the Telegram spinner", async () =
   assert.deepEqual(methods, ["answerCallbackQuery"]);
 });
 
-test("skip callback is retained when both ack and edit fail", async () => {
+test("skip callback is retained when edit returns a false result", async () => {
   const methods: string[] = [];
   const previousFetch = mutableGlobal.fetch;
   mutableGlobal.fetch = (url) => {
-    methods.push(url.split("/").at(-1) ?? "");
+    const method = url.split("/").at(-1) ?? "";
+    methods.push(method);
     return Promise.resolve({
-      json: () => Promise.resolve({ ok: false, result: {} }),
+      json: () =>
+        Promise.resolve(
+          method === "answerCallbackQuery"
+            ? { ok: false, result: true }
+            : { ok: true, result: false },
+        ),
     });
   };
   try {

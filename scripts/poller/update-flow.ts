@@ -51,22 +51,27 @@ type UpdateCallbackQuery = {
 };
 type LaunchResult = { ok: boolean; msg: string };
 type ErrorLike = { message?: unknown };
-type TelegramResponse = { ok?: unknown };
+type TelegramResponse = { ok?: unknown; result?: unknown };
 type RecoveryReport = {
   schema: "iva-update-conflicts/v1";
   conflicts: { path: string }[];
 };
 
-function telegramCallSucceeded(value: unknown): boolean {
+function callbackAckSucceeded(value: unknown): boolean {
   return (
     typeof value === "object" &&
     value !== null &&
-    (value as TelegramResponse).ok === true
+    (value as TelegramResponse).ok === true &&
+    (value as TelegramResponse).result === true
   );
 }
 
-function telegramResultSucceeded(value: unknown): boolean {
-  return value !== null && value !== undefined;
+function messageEditSucceeded(value: unknown): boolean {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as TelegramMessage).message_id === "number"
+  );
 }
 
 // ── self-update (/update) ──────────────────────────────────────────────────
@@ -192,7 +197,7 @@ async function showSavedUpdateConflicts(
   messageId: number,
 ): Promise<boolean> {
   if (!validRecoveryBundleId(bundleId)) {
-    return telegramResultSucceeded(
+    return messageEditSucceeded(
       await edit(
         chatId,
         messageId,
@@ -227,7 +232,7 @@ async function showSavedUpdateConflicts(
       throw new Error("invalid conflict list");
     report = parsed as RecoveryReport;
   } catch {
-    return telegramResultSucceeded(
+    return messageEditSucceeded(
       await edit(
         chatId,
         messageId,
@@ -255,7 +260,7 @@ async function showSavedUpdateConflicts(
           "Your local changes are saved in full.",
           "Ваши локальные изменения сохранены целиком.",
         );
-  return telegramResultSucceeded(
+  return messageEditSucceeded(
     await edit(
       chatId,
       messageId,
@@ -283,7 +288,7 @@ export async function handleUpdateCallback(
   const from = senderId === undefined ? null : String(senderId);
   const chatId = cq.message?.chat?.id;
   const messageId = cq.message?.message_id;
-  const acknowledged = telegramCallSucceeded(
+  const acknowledged = callbackAckSucceeded(
     await tg("answerCallbackQuery", { callback_query_id: cq.id }),
   ); // clear the button spinner
   if (parsed === null) {
@@ -299,7 +304,7 @@ export async function handleUpdateCallback(
       tr("– Update postponed", "– Обновление отложено"),
       { inline_keyboard: [] },
     );
-    return acknowledged || telegramResultSucceeded(edited);
+    return acknowledged || messageEditSucceeded(edited);
   }
   if (parsed.action === "conflicts") {
     const shown = await showSavedUpdateConflicts(
@@ -322,7 +327,7 @@ export async function handleUpdateCallback(
       tr("⚠️ An update is already running", "⚠️ Обновление уже идёт"),
       { inline_keyboard: [] },
     );
-    return acknowledged || telegramResultSucceeded(edited);
+    return acknowledged || messageEditSucceeded(edited);
   }
   // The version that runs as the tap is made. What the update moves the box off
   // of, written down while the process that knows it is still alive: after the
@@ -358,8 +363,8 @@ export async function handleUpdateCallback(
     );
     return (
       acknowledged ||
-      telegramResultSucceeded(savingNotice) ||
-      telegramResultSucceeded(failureNotice)
+      messageEditSucceeded(savingNotice) ||
+      messageEditSucceeded(failureNotice)
     );
   }
   // The durable job now owns reconciliation and the updater process owns execution.
