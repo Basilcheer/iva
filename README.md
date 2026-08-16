@@ -161,9 +161,18 @@ Default model is deepseek-v4-pro, 131k context. On Go it runs about $14–15/mo 
 ## What's New
 
 <details>
-<summary><b>v0.3.23 · 16.08.2026 — expand the latest releases</b></summary>
+<summary><b>v0.3.24 · 16.08.2026 — expand the latest releases</b></summary>
 
 ### 16.08.2026
+
+#### v0.3.24
+
+- A crash at the wrong moment no longer corrupts data: memory cards, settings and service state are written atomically with fsync — a killed process leaves the old file or the new one, never an empty or half-written one.
+- The Telegram bridge does not lose messages: polling has a single owner, incoming updates survive crashes in a durable queue, and buttons are only acknowledged after the action really happened.
+- An update can be killed at any point: the installation stays on the old version or reaches the new one; the next run cleans up. Rollback is a symlink flip — no network, no rebuild.
+- Every process resolves one data directory: CLI, agent, bridge, nightly jobs and their children use one formula. A broken config is an explicit error, not a silent split of memory into two trees.
+- `/menu`, `/model`, `/think` and their buttons work only in a private chat.
+- A corrupt file is preserved, not overwritten: damaged health history and unreadable cards stay byte-identical on disk and raise an alert. Timezone and context window are validated; a missing `CORE.md` is a normal start.
 
 #### v0.3.23
 
