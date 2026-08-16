@@ -8,9 +8,9 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
-const EXPECTED_PRODUCTION_COUNT = 184;
+const EXPECTED_PRODUCTION_COUNT = 185;
 const EXPECTED_INVENTORY_SHA256 =
-  "d7cd169be3aa5f87a16cad3329736bfb1068c5ea9601df154e40c3a6c127ca43";
+  "77211143274558a2426a423d013a406f5eebe2057f2022c245374e4d19ab4ca1";
 
 // Node's native include globs filter loaded modules; they do not load untouched files.
 // This test pins the exact production path inventory and a separately measured 25-path
@@ -36,7 +36,8 @@ const EXPECTED_INVENTORY_SHA256 =
 // `agent/lib/telegram-stop.ts` came last, loaded by `scripts/telegram-failure-events.test.ts`
 // through the real channel and reported, so the blind spot stays at 25. The memory resolver
 // `scripts/lib/memory-mode.ts` came next, loaded and reported by its own test
-// (`scripts/lib/memory-mode.test.ts`), so the blind spot stays at 25.
+// (`scripts/lib/memory-mode.test.ts`), so the blind spot stays at 25. The Reminder CLI
+// `scripts/cli/remind.ts` followed, reported by its own test, so it stays at 25.
 const MEASURED_UNREPORTED_BY_CATEGORY = {
   frameworkBoundaries: [
     "agent/agent.ts",
