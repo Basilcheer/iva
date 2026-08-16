@@ -376,9 +376,12 @@ export async function finishVersionUpdate({
     // The candidate stays complete, so the next update can retry without rebuild.
     if (rollback !== null && rollback !== name && store.currentName() === name)
       store.activate(rollback);
-    await resumeOldWriters(store.layout.current).catch(
-      (restartError: unknown) =>
-        log(`service recovery failed: ${String(restartError)}`),
+    const recoveryRoot =
+      active === null && store.currentName() === null
+        ? home
+        : store.layout.current;
+    await resumeOldWriters(recoveryRoot).catch((restartError: unknown) =>
+      log(`service recovery failed: ${String(restartError)}`),
     );
     throw error;
   }

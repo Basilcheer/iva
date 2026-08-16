@@ -13,10 +13,8 @@ import {
   symlinkSync,
 } from "node:fs";
 import { dirname, isAbsolute, join } from "node:path";
-import {
-  writeFileAtomicSync,
-  type AtomicWriteOptions,
-} from "../../agent/lib/fs-atomic.ts";
+import { createRequire } from "node:module";
+import type { AtomicWriteOptions } from "../../agent/lib/fs-atomic.ts";
 import { parseEnvText } from "./env-file.ts";
 
 const INCOMPLETE = ".iva-incomplete";
@@ -62,6 +60,19 @@ type VersionStoreOptions = {
   /** Fault seam for the active marker's canonical atomic writer. */
   readonly activeWriteOptions?: AtomicWriteOptions;
 };
+
+type AtomicWriter = Pick<
+  typeof import("../../agent/lib/fs-atomic.ts"),
+  "writeFileAtomicSync"
+>;
+
+const require = createRequire(import.meta.url);
+
+function atomicWriter(): AtomicWriter {
+  // The CLI must still load on a broken install whose authored tree is absent.
+  // Mutation requires the canonical writer and fails closed if that tree is gone.
+  return require("../../agent/lib/fs-atomic.ts") as AtomicWriter;
+}
 
 /** A state directory as the .env spells it: an absolute one as given, the rest inside `root`. */
 export function stateDir(
@@ -645,7 +656,7 @@ export function writeJson(
   body: unknown,
   options: AtomicWriteOptions = {},
 ): void {
-  writeFileAtomicSync(path, `${JSON.stringify(body)}\n`, {
+  atomicWriter().writeFileAtomicSync(path, `${JSON.stringify(body)}\n`, {
     ...options,
     mode: 0o600,
   });

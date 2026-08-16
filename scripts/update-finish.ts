@@ -409,7 +409,11 @@ export async function main(argv: readonly string[]): Promise<number> {
       notify,
       quiesce: async () => {
         const { createCliRuntime } = await import("./cli/runtime.ts");
-        const runtime = createCliRuntime(layout.current);
+        // Before the first conversion there is no current symlink: the checkout
+        // itself is the old writer root and must remain usable until activation.
+        const runtime = createCliRuntime(
+          existsSync(layout.current) ? layout.current : home,
+        );
         optionalWriterState = captureOptionalWriterState(runtime);
         stopWriterUnits(runtime, optionalWriterState);
         await Promise.resolve();

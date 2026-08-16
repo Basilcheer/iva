@@ -164,15 +164,31 @@ if (process.env.IVA_TEST_SYSTEMCTL_FAIL && verb === "restart") {
   process.stderr.write("Failed to connect to bus: No such file or directory\\n");
   process.exit(1);
 }
-if (verb === "is-enabled") process.stdout.write("enabled\\n");
-if (verb === "is-active") process.stdout.write("active\\n");
-
 const run = join(process.env.HOME, ".iva-test-units");
 const pidFile = (unit) => join(run, unit + ".pid");
+const stoppedFile = (unit) => join(run, unit + ".stopped");
+const disabledFile = (unit) => join(run, unit + ".disabled");
+const unitFile = (unit) =>
+  join(process.env.HOME, ".config/systemd/user", unit);
+const queried = args[1] || "";
+if (verb === "show")
+  process.stdout.write(fs.existsSync(unitFile(queried)) ? "loaded\\n" : "not-found\\n");
+if (verb === "is-enabled")
+  process.stdout.write(fs.existsSync(disabledFile(queried)) ? "disabled\\n" : "enabled\\n");
+if (verb === "is-active") {
+  const active =
+    queried === "iva.service"
+      ? fs.existsSync(pidFile(queried))
+      : !fs.existsSync(stoppedFile(queried));
+  process.stdout.write(active ? "active\\n" : "inactive\\n");
+  if (!active) process.exitCode = 3;
+}
 const sleep = (ms) =>
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 
 function stop(unit) {
+  fs.mkdirSync(run, { recursive: true });
+  fs.writeFileSync(stoppedFile(unit), "");
   let pid = 0;
   try {
     pid = Number(fs.readFileSync(pidFile(unit), "utf8"));
@@ -226,15 +242,22 @@ function start(unit) {
   });
   child.unref();
   fs.writeFileSync(pidFile(unit), String(child.pid));
+  fs.rmSync(stoppedFile(unit), { force: true });
 }
 
 // Only the service that serves the port is really run: the rest of the units are
 // timers and helpers with nothing for a health check to find.
-for (const unit of args.slice(1).filter((name) => name === "iva.service")) {
+for (const unit of args.slice(1).filter((name) => /\\.(service|timer)$/.test(name))) {
   if (verb === "stop" || verb === "disable") stop(unit);
+  if (verb === "disable") fs.writeFileSync(disabledFile(unit), "");
   if (verb === "restart" || verb === "start" || verb === "enable") {
-    stop(unit);
-    start(unit);
+    fs.mkdirSync(run, { recursive: true });
+    fs.rmSync(stoppedFile(unit), { force: true });
+    if (verb === "enable") fs.rmSync(disabledFile(unit), { force: true });
+    if (unit === "iva.service") {
+      stop(unit);
+      start(unit);
+    }
   }
 }
 `;
@@ -319,6 +342,11 @@ function seed(tree: string): void {
   cpSync(
     join(REPO, "scripts/update-finish.ts"),
     join(tree, "scripts/update-finish.ts"),
+  );
+  mkdirSync(join(tree, "agent/lib"), { recursive: true });
+  cpSync(
+    join(REPO, "agent/lib/fs-atomic.ts"),
+    join(tree, "agent/lib/fs-atomic.ts"),
   );
   // A stock skill under a name that git has to quote unless it is asked not to.
   mkdirSync(join(tree, "agent/skills"), { recursive: true });
