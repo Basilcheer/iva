@@ -142,7 +142,9 @@ async function packageFiles(
     try {
       files[path] = await readFile(absolute);
     } catch (error) {
-      log(`[skills] custom skill ${name} file ${path} skipped: ${reason(error)}`);
+      log(
+        `[skills] custom skill ${name} file ${path} skipped: ${reason(error)}`,
+      );
     }
   }
   return files;

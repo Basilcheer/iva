@@ -149,7 +149,10 @@ test("a custom skill is served from data/custom, not compiled into the build", a
   const runtimes = join(home, "data/custom/runtimes");
   for (const runtime of readdirSync(runtimes))
     assert.equal(
-      readFileSync(join(runtimes, runtime, "agent/skills/mine/SKILL.md"), "utf8"),
+      readFileSync(
+        join(runtimes, runtime, "agent/skills/mine/SKILL.md"),
+        "utf8",
+      ),
       "stock\n",
       "the runtime the build points at carries the bundled skill, not the custom one",
     );
