@@ -1,63 +1,53 @@
-const [mode, dataDir, botId = "71020", guardBaseDir] = process.argv.slice(2);
-if (!mode || !dataDir)
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
+
+const [mode, dataDir, botId = "71020", guardDirectory, guardIdentity] =
+  process.argv.slice(2);
+if (!mode || !dataDir || !guardDirectory || !guardIdentity) {
   throw new Error(
-    "usage: child <hold|kill-holder|kill-logical-holder|kill-state-holder> <data-dir> [bot-id] [guard-base-dir]",
+    "usage: child <hold|write-on-signal|kill-holder> <data-dir> <bot-id> <guard-directory> <guard-identity>",
   );
+}
 process.env.ASSISTANT_DATA_DIR = dataDir;
 process.env.TELEGRAM_BOT_TOKEN = `${botId}:test-token`;
+if (mode === "write-on-signal") {
+  process.on("SIGUSR1", () => {
+    writeFileSync(join(dataDir, "active-writer"), `${process.pid}\n`);
+  });
+}
 
 try {
   const { acquireTelegramProcessLock } = (await import(
     `../poller/process-lock.ts?child=${process.pid}`
   )) as unknown as {
-    acquireTelegramProcessLock: (options?: {
-      guardBaseDir?: string;
+    acquireTelegramProcessLock: (options: {
+      testGuard: { identity: string; directory: string };
     }) => Promise<{
       owner: unknown;
-      botId: string;
+      resource: string;
       guardRoot: string;
-      logicalGuardRoot: string;
-      stateGuardRoot: string;
       lockFile: string;
-      logicalLockFile: string;
-      stateLockFile: string;
       guardOwnerFile: string;
-      logicalGuardOwnerFile: string;
-      stateGuardOwnerFile: string;
       holderPid: number;
-      logicalHolderPid: number;
-      stateHolderPid: number;
     }>;
   };
   const lease = await acquireTelegramProcessLock({
-    ...(guardBaseDir === undefined ? {} : { guardBaseDir }),
+    testGuard: { identity: guardIdentity, directory: guardDirectory },
   });
   process.stdout.write(
     `${JSON.stringify({
       event: "READY",
       owner: lease.owner,
-      botId: lease.botId,
+      resource: lease.resource,
       guardRoot: lease.guardRoot,
-      logicalGuardRoot: lease.logicalGuardRoot,
-      stateGuardRoot: lease.stateGuardRoot,
       lockFile: lease.lockFile,
-      logicalLockFile: lease.logicalLockFile,
-      stateLockFile: lease.stateLockFile,
       guardOwnerFile: lease.guardOwnerFile,
-      logicalGuardOwnerFile: lease.logicalGuardOwnerFile,
-      stateGuardOwnerFile: lease.stateGuardOwnerFile,
       holderPid: lease.holderPid,
-      logicalHolderPid: lease.logicalHolderPid,
-      stateHolderPid: lease.stateHolderPid,
     })}\n`,
   );
   if (mode === "kill-holder") {
     process.kill(lease.holderPid, "SIGKILL");
-  } else if (mode === "kill-logical-holder") {
-    process.kill(lease.logicalHolderPid, "SIGKILL");
-  } else if (mode === "kill-state-holder") {
-    process.kill(lease.stateHolderPid, "SIGKILL");
-  } else if (mode !== "hold") {
+  } else if (mode !== "hold" && mode !== "write-on-signal") {
     throw new Error(`unknown mode: ${mode}`);
   }
   setInterval(() => {}, 60_000);

@@ -17,7 +17,7 @@ import {
 
 const SEED = 18_702;
 const ROOT = join(import.meta.dirname, "../..");
-let startupBotSequence = 0;
+let startupGuardSequence = 0;
 
 async function temporaryStartup(t: TestContext): Promise<{
   markerFile: string;
@@ -25,9 +25,10 @@ async function temporaryStartup(t: TestContext): Promise<{
 }> {
   const directory = await mkdtemp(join(tmpdir(), "iva-startup-state-"));
   const lease = await acquireTelegramProcessLock({
-    dataDir: directory,
-    botId: `721${process.pid}${++startupBotSequence}`,
-    guardBaseDir: join(directory, ".guard"),
+    testGuard: {
+      identity: `startup-${process.pid}-${++startupGuardSequence}`,
+      directory: join(directory, ".guard"),
+    },
   });
   t.after(async () => {
     await lease.close();
@@ -141,11 +142,16 @@ void test("main is the only production caller and passes its held lease", async 
   const mainSource = await readFile(join(ROOT, callers[0]), "utf8");
   assert.match(
     mainSource,
-    /const processLease = await acquireTelegramProcessLock\(\);[\s\S]*prepareTelegramStartup\(processLease\)/u,
+    /const processLease = await acquireProcessLockImpl\(\);[\s\S]*prepareTelegramStartup\(processLease\)/u,
   );
   assert.match(
     mainSource,
     /for \(;;\) \{\s+assertTelegramProcessLease\(processLease\);/u,
+  );
+  assert.match(
+    mainSource,
+    /void main\(\)\.catch/u,
+    "the production entrypoint must use the immutable uid-global default",
   );
 });
 

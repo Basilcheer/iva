@@ -92,7 +92,12 @@ const configuredCollectQuietMs =
     ? rawCollectQuietMs
     : COLLECT_QUIET_MS;
 
-export async function main() {
+export async function main({
+  acquireProcessLockImpl = acquireTelegramProcessLock,
+}: {
+  /** Test seam; the production entrypoint always uses the uid-global lease. */
+  acquireProcessLockImpl?: typeof acquireTelegramProcessLock;
+} = {}) {
   if (!TOKEN)
     throw new Error("no TELEGRAM_BOT_TOKEN in .env — nothing to poll");
   if (!SECRET)
@@ -101,7 +106,7 @@ export async function main() {
     );
   // The kernel-held lease is the first startup side effect. Reconciliation below
   // can call Bot API, so no weaker in-process flag can guard this boundary.
-  const processLease = await acquireTelegramProcessLock();
+  const processLease = await acquireProcessLockImpl();
   const startup = await prepareTelegramStartup(processLease);
   log(`telegram-poll start → messages ${ACCEPTANCE_ROUTE}; callbacks ${ROUTE}`);
   await removeStaleUpdateJobs();

@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import {
   spawn,
   spawnSync,
@@ -8,9 +8,8 @@ import {
 } from "node:child_process";
 import { existsSync } from "node:fs";
 import { lstat, mkdir, readFile, realpath, stat } from "node:fs/promises";
-import { basename, join, resolve } from "node:path";
+import { join } from "node:path";
 import { writeFileAtomic } from "#lib/fs-atomic.ts";
-import { BOT_USER_ID, DATA_DIR } from "./config.ts";
 
 const OWNER_SCHEMA = "iva-telegram-poll-owner/v2";
 const HOLDER_SCHEMA = "iva-telegram-poll-holder/v2";
@@ -25,14 +24,17 @@ const HOLDER_SOURCE =
   "process.stdin.on('error',()=>process.exit(0));";
 
 const processUid = typeof process.getuid === "function" ? process.getuid() : 0;
+export const TELEGRAM_PROCESS_RESOURCE = `telegram:${processUid}`;
 export const TELEGRAM_PROCESS_GUARD_BASE = join(
   "/tmp",
   `iva-telegram-poll-${processUid}`,
 );
-
-export const TELEGRAM_PROCESS_LOCK_FILE = join(DATA_DIR, "telegram-poll.lock");
+export const TELEGRAM_PROCESS_LOCK_FILE = join(
+  TELEGRAM_PROCESS_GUARD_BASE,
+  "telegram-poll.lock",
+);
 export const TELEGRAM_PROCESS_OWNER_FILE = join(
-  DATA_DIR,
+  TELEGRAM_PROCESS_GUARD_BASE,
   "telegram-poll-owner.json",
 );
 
@@ -45,32 +47,39 @@ export type TelegramProcessOwner = {
 
 export type TelegramProcessLease = {
   owner: TelegramProcessOwner;
-  botId: string;
+  resource: string;
   guardRoot: string;
-  logicalGuardRoot: string;
-  stateGuardRoot: string;
   lockFile: string;
-  logicalLockFile: string;
-  stateLockFile: string;
   guardOwnerFile: string;
-  logicalGuardOwnerFile: string;
-  stateGuardOwnerFile: string;
   holderPid: number;
-  logicalHolderPid: number;
-  stateHolderPid: number;
   close(): Promise<void>;
 };
 
-type GuardScope = "bot" | "logical" | "state";
-
 export type TelegramGuardHolder = {
   schema: typeof HOLDER_SCHEMA;
-  scope: GuardScope;
-  identity: string;
+  resource: string;
   pid: number;
   processStart: string;
   nonce: string;
 };
+
+type TestGuard = {
+  /** Explicit isolation seam for tests; production always uses the uid resource. */
+  identity: string;
+  directory: string;
+};
+
+type SpawnSyncImpl = (
+  command: string,
+  args: readonly string[],
+  options: { encoding: "utf8"; env: NodeJS.ProcessEnv },
+) => SpawnSyncReturns<string>;
+type SpawnImpl = (
+  command: string,
+  args: readonly string[],
+  options: SpawnOptions,
+) => ChildProcess;
+type LiveGuardHolder = { holderPid: number; holder: TelegramGuardHolder };
 
 const activeLeases = new WeakSet<TelegramProcessLease>();
 
@@ -79,20 +88,6 @@ export function assertTelegramProcessLease(lease: TelegramProcessLease): void {
     throw new Error("Telegram startup requires an active process lease");
   }
 }
-
-type SpawnSyncImpl = (
-  command: string,
-  args: readonly string[],
-  options: {
-    encoding: "utf8";
-    env: NodeJS.ProcessEnv;
-  },
-) => SpawnSyncReturns<string>;
-type SpawnImpl = (
-  command: string,
-  args: readonly string[],
-  options: SpawnOptions,
-) => ChildProcess;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -116,23 +111,12 @@ export function parseTelegramProcessOwner(raw: string): TelegramProcessOwner {
   return parsed as TelegramProcessOwner;
 }
 
-function validBotId(value: unknown): value is string {
-  return typeof value === "string" && /^[1-9][0-9]*$/u.test(value);
-}
-
-function validStateIdentity(value: unknown): value is string {
-  return typeof value === "string" && /^[0-9]+:[0-9]+$/u.test(value);
-}
-
-function validLogicalIdentity(value: unknown): value is string {
-  return typeof value === "string" && /^[0-9a-f]{64}$/u.test(value);
-}
-
-function logicalDataDirIdentity(dataDir: string): string {
-  return createHash("sha256")
-    .update("iva-telegram-data-dir/v1\0")
-    .update(resolve(dataDir))
-    .digest("hex");
+function validGuardResource(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    (/^telegram:[0-9]+$/u.test(value) ||
+      /^test:[a-z0-9][a-z0-9-]{0,63}$/u.test(value))
+  );
 }
 
 export function parseTelegramGuardHolderMarker(
@@ -155,21 +139,14 @@ export function parseTelegramGuardHolderMarker(
   if (
     !isRecord(parsed) ||
     parsed.schema !== HOLDER_SCHEMA ||
-    (parsed.scope !== "bot" &&
-      parsed.scope !== "logical" &&
-      parsed.scope !== "state") ||
-    !(
-      (parsed.scope === "bot" && validBotId(parsed.identity)) ||
-      (parsed.scope === "logical" && validLogicalIdentity(parsed.identity)) ||
-      (parsed.scope === "state" && validStateIdentity(parsed.identity))
-    ) ||
+    !validGuardResource(parsed.resource) ||
     !Number.isSafeInteger(parsed.pid) ||
     (parsed.pid as number) <= 0 ||
     typeof parsed.processStart !== "string" ||
     !PROCESS_START_PATTERN.test(parsed.processStart) ||
     typeof parsed.nonce !== "string" ||
     !/^[0-9a-f]{32}$/u.test(parsed.nonce) ||
-    Object.keys(parsed).length !== 6
+    Object.keys(parsed).length !== 5
   ) {
     throw new Error("invalid Telegram guard holder marker");
   }
@@ -247,11 +224,8 @@ function lockCommand(
   };
 }
 
-type LiveGuardHolder = { holderPid: number; holder: TelegramGuardHolder };
-
 function liveGuardHolders(
-  scope: GuardScope,
-  identity: string,
+  resource: string,
   processStartImpl: (pid: number) => string | null,
   spawnSyncImpl: SpawnSyncImpl = spawnSync,
 ): LiveGuardHolder[] {
@@ -279,7 +253,7 @@ function liveGuardHolders(
     ).exec(processLine[3]);
     if (!markerMatch) continue;
     const holder = parseTelegramGuardHolderMarker(markerMatch[1]);
-    if (holder.scope !== scope || holder.identity !== identity) continue;
+    if (holder.resource !== resource) continue;
     if (Number(processLine[2]) !== holder.pid) continue;
     if (processStartImpl(holder.pid) !== holder.processStart) continue;
     holders.push({ holderPid: Number(processLine[1]), holder });
@@ -287,37 +261,16 @@ function liveGuardHolders(
   return holders;
 }
 
-function guardOwnerHasLiveHolder(
-  owner: TelegramProcessOwner,
-  scope: GuardScope,
-  identity: string,
-  processStartImpl: (pid: number) => string | null,
-  listImpl: (
-    scope: GuardScope,
-    identity: string,
-    processStartImpl: (pid: number) => string | null,
-  ) => LiveGuardHolder[],
-): boolean {
-  return listImpl(scope, identity, processStartImpl).some(
-    ({ holder }) =>
-      holder.pid === owner.pid &&
-      holder.processStart === owner.processStart &&
-      holder.nonce === owner.nonce,
-  );
-}
-
 function assertNoOtherGuardHolder(
-  scope: GuardScope,
-  identity: string,
+  resource: string,
   ownNonce: string | null,
   processStartImpl: (pid: number) => string | null,
   listImpl: (
-    scope: GuardScope,
-    identity: string,
+    resource: string,
     processStartImpl: (pid: number) => string | null,
   ) => LiveGuardHolder[],
 ): void {
-  const conflict = listImpl(scope, identity, processStartImpl).find(
+  const conflict = listImpl(resource, processStartImpl).find(
     ({ holder }) => holder.nonce !== ownNonce,
   );
   if (conflict) {
@@ -402,12 +355,25 @@ async function sameDirectory(
   );
 }
 
+function guardContext(testGuard: TestGuard | undefined): {
+  resource: string;
+  directory: string;
+} {
+  if (testGuard === undefined) {
+    return {
+      resource: TELEGRAM_PROCESS_RESOURCE,
+      directory: TELEGRAM_PROCESS_GUARD_BASE,
+    };
+  }
+  const resource = `test:${testGuard.identity}`;
+  if (!validGuardResource(resource)) {
+    throw new Error("invalid test Telegram guard identity");
+  }
+  return { resource, directory: testGuard.directory };
+}
+
 export async function acquireTelegramProcessLock({
-  dataDir = DATA_DIR,
-  botId = BOT_USER_ID,
-  guardBaseDir = TELEGRAM_PROCESS_GUARD_BASE,
-  lockFileName = basename(TELEGRAM_PROCESS_LOCK_FILE),
-  ownerFileName = basename(TELEGRAM_PROCESS_OWNER_FILE),
+  testGuard,
   pid = process.pid,
   nonce = randomUUID().replaceAll("-", ""),
   platform = process.platform,
@@ -423,11 +389,7 @@ export async function acquireTelegramProcessLock({
     process.exit(1);
   },
 }: {
-  dataDir?: string;
-  botId?: string | null;
-  guardBaseDir?: string;
-  lockFileName?: string;
-  ownerFileName?: string;
+  testGuard?: TestGuard;
   pid?: number;
   nonce?: string;
   platform?: NodeJS.Platform;
@@ -435,17 +397,14 @@ export async function acquireTelegramProcessLock({
   timeoutMs?: number;
   processStartImpl?: (pid: number) => string | null;
   listGuardHoldersImpl?: (
-    scope: GuardScope,
-    identity: string,
+    resource: string,
     processStartImpl: (pid: number) => string | null,
   ) => LiveGuardHolder[];
   spawnImpl?: SpawnImpl;
   writeOwnerImpl?: (file: string, data: string) => Promise<void>;
   onLeaseLost?: (error: Error) => void;
 } = {}): Promise<TelegramProcessLease> {
-  if (!validBotId(botId)) {
-    throw new Error("Telegram process guard requires a numeric bot identity");
-  }
+  const { resource, directory } = guardContext(testGuard);
   const processStart = processStartImpl(pid);
   if (processStart === null) {
     throw new Error(`cannot identify Telegram poll process PID ${pid}`);
@@ -453,244 +412,154 @@ export async function acquireTelegramProcessLock({
   const owner = parseTelegramProcessOwner(
     JSON.stringify({ schema: OWNER_SCHEMA, pid, processStart, nonce }),
   );
-  await mkdir(guardBaseDir, { recursive: true, mode: 0o700 });
-  const guardBaseMetadata = await lstat(guardBaseDir);
+  assertNoOtherGuardHolder(
+    resource,
+    null,
+    processStartImpl,
+    listGuardHoldersImpl,
+  );
+
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  const guardMetadata = await lstat(directory);
   if (
-    !guardBaseMetadata.isDirectory() ||
+    !guardMetadata.isDirectory() ||
     (typeof process.getuid === "function" &&
-      guardBaseMetadata.uid !== process.getuid()) ||
-    (guardBaseMetadata.mode & 0o077) !== 0
+      guardMetadata.uid !== process.getuid()) ||
+    (guardMetadata.mode & 0o077) !== 0
   ) {
     throw new Error(
       "Telegram process guard base is not a private owned directory",
     );
   }
-  type HolderExit = {
-    code: number | null;
-    signal: NodeJS.Signals | null;
+  const guardRoot = await realpath(directory);
+  const physicalMetadata = await stat(guardRoot, { bigint: true });
+  const guardIdentity = {
+    dev: physicalMetadata.dev,
+    ino: physicalMetadata.ino,
   };
-  type AcquiredGuard = {
-    scope: GuardScope;
-    identity: string;
-    root: string;
-    lockFile: string;
-    ownerFile: string;
-    child: ChildProcess;
-    childClosed: Promise<void>;
-    exit: HolderExit | null;
-  };
-
+  const lockFile = join(guardRoot, "telegram-poll.lock");
+  const guardOwnerFile = join(guardRoot, "telegram-poll-owner.json");
+  const holder = parseTelegramGuardHolderMarker(
+    holderMarker({
+      schema: HOLDER_SCHEMA,
+      resource,
+      pid,
+      processStart,
+      nonce,
+    }),
+  );
+  const command = lockCommand(
+    lockFile,
+    node,
+    platform,
+    timeoutMs,
+    holderMarker(holder),
+  );
+  const child = spawnImpl(command.command, command.args, {
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  const childClosed = new Promise<void>((resolveClose) => {
+    child.once("close", () => resolveClose());
+  });
   let intentionalClose = false;
   let leaseActive = false;
   let lease: TelegramProcessLease | null = null;
-  const guards: AcquiredGuard[] = [];
-  const holderExitError = (exit: HolderExit, phase: string) =>
+  let holderExit: {
+    code: number | null;
+    signal: NodeJS.Signals | null;
+  } | null = null;
+  const holderExitError = (
+    exit: { code: number | null; signal: NodeJS.Signals | null },
+    phase: string,
+  ) =>
     new Error(
       `Telegram process lock holder exited ${phase} (code=${String(exit.code)}, signal=${String(exit.signal)})`,
     );
-  const assertAllHoldersAlive = (phase: string): void => {
-    const exited = guards.find((guard) => guard.exit !== null);
-    if (exited?.exit) throw holderExitError(exited.exit, phase);
-  };
+  child.once("exit", (code, signal) => {
+    holderExit = { code, signal };
+    const wasActive = leaseActive;
+    leaseActive = false;
+    if (lease !== null) activeLeases.delete(lease);
+    if (!intentionalClose && wasActive) {
+      onLeaseLost(holderExitError(holderExit, "unexpectedly"));
+    }
+  });
   const close = async (): Promise<void> => {
     if (intentionalClose) return;
     intentionalClose = true;
     leaseActive = false;
     if (lease !== null) activeLeases.delete(lease);
-    for (const guard of guards) guard.child.stdin?.end();
-    await Promise.all(guards.map((guard) => guard.childClosed));
+    child.stdin?.end();
+    await childClosed;
   };
 
-  const acquireGuard = async (
-    scope: GuardScope,
-    identity: string,
-  ): Promise<AcquiredGuard> => {
-    // The live process marker is independent of every mutable filesystem
-    // pathname. It keeps the scope singular after guard-root, lock, or owner
-    // replacement; the kernel lock linearizes normal concurrent first use.
-    assertNoOtherGuardHolder(
-      scope,
-      identity,
-      null,
-      processStartImpl,
-      listGuardHoldersImpl,
-    );
-    const directoryName =
-      scope === "state"
-        ? `state-${identity.replace(":", "-")}`
-        : `${scope}-${identity}`;
-    const logicalRoot = join(guardBaseDir, directoryName);
-    await mkdir(logicalRoot, { recursive: true, mode: 0o700 });
-    const root = await realpath(logicalRoot);
-    const metadata = await stat(root, { bigint: true });
-    const rootIdentity = { dev: metadata.dev, ino: metadata.ino };
-    const lockFile = join(root, lockFileName);
-    const ownerFile = join(root, ownerFileName);
-    const holder = parseTelegramGuardHolderMarker(
-      holderMarker({
-        schema: HOLDER_SCHEMA,
-        scope,
-        identity,
-        pid,
-        processStart,
-        nonce,
-      }),
-    );
-    const command = lockCommand(
-      lockFile,
-      node,
-      platform,
-      timeoutMs,
-      holderMarker(holder),
-    );
-    const child = spawnImpl(command.command, command.args, {
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-    const guard: AcquiredGuard = {
-      scope,
-      identity,
-      root,
-      lockFile,
-      ownerFile,
-      child,
-      childClosed: new Promise<void>((resolveClose) => {
-        child.once("close", () => resolveClose());
-      }),
-      exit: null,
-    };
-    guards.push(guard);
-    child.once("exit", (code, signal) => {
-      guard.exit = { code, signal };
-      const wasActive = leaseActive;
-      leaseActive = false;
-      if (lease !== null) activeLeases.delete(lease);
-      if (!intentionalClose && wasActive) {
-        onLeaseLost(holderExitError(guard.exit, "unexpectedly"));
-      }
-    });
-
+  try {
     await waitForLease(child, timeoutMs + 1_000);
-    if (guard.exit !== null) {
-      throw holderExitError(guard.exit, "during acquisition");
+    if (holderExit !== null) {
+      throw holderExitError(holderExit, "during acquisition");
     }
     if (child.pid === undefined) {
       throw new Error("Telegram process lock holder has no PID");
     }
     assertNoOtherGuardHolder(
-      scope,
-      identity,
+      resource,
       nonce,
       processStartImpl,
       listGuardHoldersImpl,
     );
-    if (!(await sameDirectory(logicalRoot, root, rootIdentity))) {
+    if (!(await sameDirectory(directory, guardRoot, guardIdentity))) {
+      throw new Error("Telegram process guard root changed during acquisition");
+    }
+    const previousOwner = await existingGuardOwner(guardOwnerFile);
+    if (
+      previousOwner !== null &&
+      previousOwner.nonce !== nonce &&
+      previousOwner.pid !== pid &&
+      telegramProcessOwnerIsLive(previousOwner, processStartImpl)
+    ) {
       throw new Error(
-        `Telegram process ${scope} guard root changed during acquisition`,
+        `Telegram poll process lock is held by active PID ${previousOwner.pid}`,
       );
     }
-    const previousOwner = await existingGuardOwner(ownerFile);
-    if (previousOwner !== null && previousOwner.nonce !== nonce) {
-      const liveProcess = telegramProcessOwnerIsLive(
-        previousOwner,
-        processStartImpl,
-      );
-      const matchingHolder = guardOwnerHasLiveHolder(
-        previousOwner,
-        scope,
-        identity,
-        processStartImpl,
-        listGuardHoldersImpl,
-      );
-      if (liveProcess && (previousOwner.pid !== pid || matchingHolder)) {
-        throw new Error(
-          `Telegram poll process lock is held by active PID ${previousOwner.pid}`,
-        );
-      }
+    await writeOwnerImpl(guardOwnerFile, `${JSON.stringify(owner)}\n`);
+    if (holderExit !== null) {
+      throw holderExitError(holderExit, "during acquisition");
     }
-    await writeOwnerImpl(ownerFile, `${JSON.stringify(owner)}\n`);
-    assertAllHoldersAlive("during acquisition");
-    if (!(await sameDirectory(logicalRoot, root, rootIdentity))) {
-      throw new Error(
-        `Telegram process ${scope} guard root changed after owner write`,
-      );
+    if (!(await sameDirectory(directory, guardRoot, guardIdentity))) {
+      throw new Error("Telegram process guard root changed after owner write");
     }
-    const publishedOwner = await existingGuardOwner(ownerFile);
+    const publishedOwner = await existingGuardOwner(guardOwnerFile);
     if (
       publishedOwner === null ||
       JSON.stringify(publishedOwner) !== JSON.stringify(owner)
     ) {
-      throw new Error(
-        `Telegram process ${scope} guard owner changed after publication`,
-      );
+      throw new Error("Telegram process guard owner changed after publication");
     }
     assertNoOtherGuardHolder(
-      scope,
-      identity,
+      resource,
       nonce,
       processStartImpl,
       listGuardHoldersImpl,
     );
-    return guard;
-  };
-
-  let botGuard: AcquiredGuard;
-  let logicalGuard: AcquiredGuard;
-  let stateGuard: AcquiredGuard;
-  try {
-    botGuard = await acquireGuard("bot", botId);
-
-    // The normalized configured path is hashed before any DATA_DIR I/O. This
-    // keeps one logical state root singular if a symlink is retargeted, without
-    // leaking the configured path in ps output or a guard pathname.
-    logicalGuard = await acquireGuard(
-      "logical",
-      logicalDataDirIdentity(dataDir),
-    );
-
-    // Physical identity additionally makes distinct symlink aliases to the
-    // same state conflict. The fixed scope order avoids acquisition cycles.
-    await mkdir(dataDir, { recursive: true, mode: 0o700 });
-    const physicalDataDir = await realpath(dataDir);
-    const metadata = await stat(physicalDataDir, { bigint: true });
-    const dataIdentity = { dev: metadata.dev, ino: metadata.ino };
-    const stateIdentity = `${metadata.dev.toString()}:${metadata.ino.toString()}`;
-    stateGuard = await acquireGuard("state", stateIdentity);
-    assertAllHoldersAlive("during acquisition");
-    if (!(await sameDirectory(dataDir, physicalDataDir, dataIdentity))) {
-      throw new Error("Telegram process state root changed during acquisition");
-    }
-    const ownerFile = join(physicalDataDir, ownerFileName);
-    await writeOwnerImpl(ownerFile, `${JSON.stringify(owner)}\n`);
-    assertAllHoldersAlive("during acquisition");
-    if (!(await sameDirectory(dataDir, physicalDataDir, dataIdentity))) {
-      throw new Error("Telegram process state root changed after owner write");
-    }
   } catch (error) {
     await close();
     throw error;
   }
-  assertAllHoldersAlive("during acquisition");
-  if (
-    botGuard.child.pid === undefined ||
-    logicalGuard.child.pid === undefined ||
-    stateGuard.child.pid === undefined
-  )
+  if (child.pid === undefined) {
+    await close();
     throw new Error("Telegram process lock holder has no PID");
+  }
+  if (holderExit !== null) {
+    await close();
+    throw holderExitError(holderExit, "during acquisition");
+  }
   lease = {
     owner,
-    botId,
-    guardRoot: botGuard.root,
-    logicalGuardRoot: logicalGuard.root,
-    stateGuardRoot: stateGuard.root,
-    lockFile: botGuard.lockFile,
-    logicalLockFile: logicalGuard.lockFile,
-    stateLockFile: stateGuard.lockFile,
-    guardOwnerFile: botGuard.ownerFile,
-    logicalGuardOwnerFile: logicalGuard.ownerFile,
-    stateGuardOwnerFile: stateGuard.ownerFile,
-    holderPid: botGuard.child.pid,
-    logicalHolderPid: logicalGuard.child.pid,
-    stateHolderPid: stateGuard.child.pid,
+    resource,
+    guardRoot,
+    lockFile,
+    guardOwnerFile,
+    holderPid: child.pid,
     close,
   };
   leaseActive = true;

@@ -21,6 +21,10 @@ import {
   parseTelegramGuardHolderMarker,
   parseTelegramProcessOwner,
   readProcessStartIdentity,
+  TELEGRAM_PROCESS_GUARD_BASE,
+  TELEGRAM_PROCESS_LOCK_FILE,
+  TELEGRAM_PROCESS_OWNER_FILE,
+  TELEGRAM_PROCESS_RESOURCE,
   telegramProcessOwnerIsLive,
 } from "./process-lock.ts";
 import { parseBacklogDropMarker } from "./startup-state.ts";
@@ -34,24 +38,30 @@ const MAIN_GUARD_CHILD = join(
   "../fixtures/telegram-main-guard-child.ts",
 );
 const SEED = 18_702;
+let guardSequence = 0;
 
+type TestGuard = { identity: string; directory: string };
 type RunningChild = {
   child: ChildProcess;
   stdout: string;
   stderr: string;
 };
+type ReadyEvidence = {
+  resource: string;
+  guardRoot: string;
+  lockFile: string;
+  guardOwnerFile: string;
+  holderPid: number;
+};
 
-function startChild(
-  t: TestContext,
-  mode: "hold" | "kill-holder" | "kill-logical-holder" | "kill-state-holder",
-  dataDir: string,
-  {
-    botId = "71020",
-    guardBaseDir,
-  }: { botId?: string; guardBaseDir?: string } = {},
-) {
-  const args = [CHILD, mode, dataDir, botId];
-  if (guardBaseDir !== undefined) args.push(guardBaseDir);
+function makeGuard(root: string, label: string): TestGuard {
+  return {
+    identity: `${label}-${process.pid}-${++guardSequence}`.slice(0, 64),
+    directory: join(root, "guard"),
+  };
+}
+
+function runningChild(t: TestContext, args: string[]): RunningChild {
   const state: RunningChild = {
     child: spawn(process.execPath, args, {
       stdio: ["ignore", "pipe", "pipe"],
@@ -75,64 +85,44 @@ function startChild(
   return state;
 }
 
-function readyEvidence(state: RunningChild): {
-  botId: string;
-  guardRoot: string;
-  logicalGuardRoot: string;
-  stateGuardRoot: string;
-  lockFile: string;
-  logicalLockFile: string;
-  stateLockFile: string;
-  guardOwnerFile: string;
-  logicalGuardOwnerFile: string;
-  stateGuardOwnerFile: string;
-  holderPid: number;
-  logicalHolderPid: number;
-  stateHolderPid: number;
-} {
+function startChild(
+  t: TestContext,
+  mode: "hold" | "write-on-signal" | "kill-holder",
+  dataDir: string,
+  guard: TestGuard,
+  botId: string,
+): RunningChild {
+  return runningChild(t, [
+    CHILD,
+    mode,
+    dataDir,
+    botId,
+    guard.directory,
+    guard.identity,
+  ]);
+}
+
+function startMainChild(
+  t: TestContext,
+  dataDir: string,
+  guard: TestGuard,
+  mode = "hang",
+): RunningChild {
+  return runningChild(t, [
+    MAIN_GUARD_CHILD,
+    dataDir,
+    mode,
+    guard.directory,
+    guard.identity,
+  ]);
+}
+
+function readyEvidence(state: RunningChild): ReadyEvidence {
   const line = state.stdout
     .split("\n")
     .find((candidate) => candidate.includes('"event":"READY"'));
   assert.ok(line, `missing READY evidence: ${state.stderr}`);
-  return JSON.parse(line) as {
-    botId: string;
-    guardRoot: string;
-    logicalGuardRoot: string;
-    stateGuardRoot: string;
-    lockFile: string;
-    logicalLockFile: string;
-    stateLockFile: string;
-    guardOwnerFile: string;
-    logicalGuardOwnerFile: string;
-    stateGuardOwnerFile: string;
-    holderPid: number;
-    logicalHolderPid: number;
-    stateHolderPid: number;
-  };
-}
-
-function startMainChild(t: TestContext, dataDir: string): RunningChild {
-  const state: RunningChild = {
-    child: spawn(process.execPath, [MAIN_GUARD_CHILD, dataDir], {
-      stdio: ["ignore", "pipe", "pipe"],
-    }),
-    stdout: "",
-    stderr: "",
-  };
-  state.child.stdout?.setEncoding("utf8");
-  state.child.stderr?.setEncoding("utf8");
-  state.child.stdout?.on("data", (chunk: string) => {
-    state.stdout += chunk;
-  });
-  state.child.stderr?.on("data", (chunk: string) => {
-    state.stderr += chunk;
-  });
-  t.after(() => {
-    if (state.child.exitCode === null && state.child.signalCode === null) {
-      state.child.kill("SIGKILL");
-    }
-  });
-  return state;
+  return JSON.parse(line) as ReadyEvidence;
 }
 
 async function waitFor(
@@ -148,14 +138,33 @@ async function waitFor(
   assert.fail(message);
 }
 
-async function waitForExit(child: ChildProcess) {
+async function waitForExit(child: ChildProcess, timeoutMs = 5_000) {
   if (child.exitCode !== null || child.signalCode !== null) {
     return { code: child.exitCode, signal: child.signalCode };
   }
   return new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
     (resolveExit, rejectExit) => {
-      child.once("error", rejectExit);
-      child.once("exit", (code, signal) => resolveExit({ code, signal }));
+      let settled = false;
+      const finish = (
+        result: { code: number | null; signal: NodeJS.Signals | null } | Error,
+      ) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        child.off("error", onError);
+        child.off("exit", onExit);
+        if (result instanceof Error) rejectExit(result);
+        else resolveExit(result);
+      };
+      const onError = (error: Error) => finish(error);
+      const onExit = (code: number | null, signal: NodeJS.Signals | null) =>
+        finish({ code, signal });
+      const timer = setTimeout(
+        () => finish(new Error(`timed out waiting for child ${child.pid}`)),
+        timeoutMs,
+      );
+      child.once("error", onError);
+      child.once("exit", onExit);
     },
   );
 }
@@ -189,7 +198,6 @@ void test("property: arbitrary owner bytes either fail or satisfy the full ident
       try {
         const owner = parseTelegramProcessOwner(raw);
         assert.ok(Number.isSafeInteger(owner.pid) && owner.pid > 0);
-        assert.ok(owner.processStart.length > 0);
         assert.match(owner.nonce, /^[0-9a-f]{32}$/u);
         assert.deepEqual(Object.keys(owner).sort(), [
           "nonce",
@@ -205,11 +213,20 @@ void test("property: arbitrary owner bytes either fail or satisfy the full ident
   );
 });
 
-void test("guard holder marker contains only bot and process identity", () => {
+void test("the production holder resource is uid-global and contains no bot, path, or secret", () => {
+  const uid = typeof process.getuid === "function" ? process.getuid() : 0;
+  assert.equal(TELEGRAM_PROCESS_RESOURCE, `telegram:${uid}`);
+  assert.equal(
+    TELEGRAM_PROCESS_LOCK_FILE,
+    join(TELEGRAM_PROCESS_GUARD_BASE, "telegram-poll.lock"),
+  );
+  assert.equal(
+    TELEGRAM_PROCESS_OWNER_FILE,
+    join(TELEGRAM_PROCESS_GUARD_BASE, "telegram-poll-owner.json"),
+  );
   const holder = {
     schema: "iva-telegram-poll-holder/v2",
-    scope: "bot",
-    identity: "71011",
+    resource: TELEGRAM_PROCESS_RESOURCE,
     pid: process.pid,
     processStart: readProcessStartIdentity(process.pid),
     nonce: "b".repeat(32),
@@ -219,63 +236,34 @@ void test("guard holder marker contains only bot and process identity", () => {
     JSON.stringify(holder),
   ).toString("base64url")}`;
   assert.deepEqual(parseTelegramGuardHolderMarker(marker), holder);
-  assert.equal(marker.includes("test-token"), false);
-});
-
-void test("logical guard holder marker accepts only a path hash", () => {
-  const configuredPath = "/private/configured/telegram-state";
-  const holder = {
-    schema: "iva-telegram-poll-holder/v2",
-    scope: "logical",
-    identity: "c".repeat(64),
-    pid: process.pid,
-    processStart: readProcessStartIdentity(process.pid),
-    nonce: "d".repeat(32),
-  };
-  assert.ok(holder.processStart);
-  const marker = `iva-telegram-poll-holder-v2=${Buffer.from(
-    JSON.stringify(holder),
-  ).toString("base64url")}`;
-  assert.deepEqual(parseTelegramGuardHolderMarker(marker), holder);
-  assert.equal(marker.includes(configuredPath), false);
-
-  const invalid = {
-    ...holder,
-    identity: configuredPath,
-  };
-  assert.throws(
-    () =>
-      parseTelegramGuardHolderMarker(
-        `iva-telegram-poll-holder-v2=${Buffer.from(
-          JSON.stringify(invalid),
-        ).toString("base64url")}`,
-      ),
-    /invalid Telegram guard holder marker/u,
+  const decoded = Buffer.from(marker.split("=")[1], "base64url").toString(
+    "utf8",
   );
+  assert.equal(decoded.includes("test-token"), false);
+  assert.equal(decoded.includes("/private/data"), false);
+  assert.deepEqual(Object.keys(JSON.parse(decoded) as object).sort(), [
+    "nonce",
+    "pid",
+    "processStart",
+    "resource",
+    "schema",
+  ]);
 });
 
-void test("property: arbitrary holder markers fail or satisfy the full public schema", () => {
+void test("property: arbitrary holder markers fail or satisfy the global schema", () => {
   fc.assert(
     fc.property(fc.string(), (raw) => {
       try {
         const holder = parseTelegramGuardHolderMarker(raw);
-        assert.ok(
-          (holder.scope === "bot" && /^[1-9][0-9]*$/u.test(holder.identity)) ||
-            (holder.scope === "logical" &&
-              /^[0-9a-f]{64}$/u.test(holder.identity)) ||
-            (holder.scope === "state" &&
-              /^[0-9]+:[0-9]+$/u.test(holder.identity)),
-        );
+        assert.match(holder.resource, /^(?:telegram:[0-9]+|test:[a-z0-9-]+)$/u);
         assert.ok(Number.isSafeInteger(holder.pid) && holder.pid > 0);
         assert.match(holder.nonce, /^[0-9a-f]{32}$/u);
-        assert.equal(holder.schema, "iva-telegram-poll-holder/v2");
         assert.deepEqual(Object.keys(holder).sort(), [
-          "identity",
           "nonce",
           "pid",
           "processStart",
+          "resource",
           "schema",
-          "scope",
         ]);
       } catch (error) {
         assert.ok(error instanceof Error);
@@ -285,27 +273,16 @@ void test("property: arbitrary holder markers fail or satisfy the full public sc
   );
 });
 
-void test("concurrent physical aliases admit one owner and parent SIGKILL releases the kernel lease", async (t) => {
-  const root = mkdtempSync(join(tmpdir(), "iva-process-lock-"));
+void test("different bots and DATA_DIR values share one uid-global lease", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "iva-process-global-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
-  const dataDir = join(root, "physical");
-  const firstAlias = join(root, "first-alias");
-  const secondAlias = join(root, "second-alias");
-  mkdirSync(dataDir);
-  symlinkSync(dataDir, firstAlias, "dir");
-  symlinkSync(dataDir, secondAlias, "dir");
-  const guardBaseDir = join(root, "guard");
+  const guard = makeGuard(root, "global");
+  const firstData = join(root, "first-data");
+  const secondData = join(root, "second-data");
   const contenders = [
-    startChild(t, "hold", firstAlias, {
-      botId: "71021",
-      guardBaseDir,
-    }),
-    startChild(t, "hold", secondAlias, {
-      botId: "71022",
-      guardBaseDir,
-    }),
+    startChild(t, "hold", firstData, guard, "71021"),
+    startChild(t, "hold", secondData, guard, "71022"),
   ];
-
   await waitFor(
     () =>
       contenders.every(
@@ -314,36 +291,51 @@ void test("concurrent physical aliases admit one owner and parent SIGKILL releas
           child.exitCode !== null ||
           child.signalCode !== null,
       ),
-    `concurrent acquisition did not settle: ${contenders.map((one) => one.stderr).join(" | ")}`,
+    `global contenders did not settle: ${contenders.map(({ stderr }) => stderr).join(" | ")}`,
   );
   assert.equal(
-    contenders.filter((state) => state.stdout.includes('"event":"READY"'))
+    contenders.filter(({ stdout }) => stdout.includes('"event":"READY"'))
       .length,
     1,
-    "physical aliases must have exactly one owner",
   );
-  const winner = contenders.find((state) =>
-    state.stdout.includes('"event":"READY"'),
+  const winner = contenders.find(({ stdout }) =>
+    stdout.includes('"event":"READY"'),
   );
-  const loser = contenders.find((state) => state !== winner);
+  const loser = contenders.find((candidate) => candidate !== winner);
   assert.ok(winner && loser);
   assert.equal((await waitForExit(loser.child)).code, 1, loser.stderr);
+  const evidence = readyEvidence(winner);
+  assert.equal(evidence.resource, `test:${guard.identity}`);
+  assert.equal(statSync(evidence.guardRoot).mode & 0o777, 0o700);
+  assert.equal(statSync(evidence.guardOwnerFile).mode & 0o777, 0o600);
+  assert.equal(
+    parseTelegramProcessOwner(readFileSync(evidence.guardOwnerFile, "utf8"))
+      .pid,
+    winner.child.pid,
+  );
+  const holderCommand = spawnSync(
+    "/bin/ps",
+    ["-o", "command=", "-p", String(evidence.holderPid)],
+    { encoding: "utf8" },
+  );
+  assert.equal(holderCommand.status, 0, holderCommand.stderr);
+  assert.match(holderCommand.stdout, /iva-telegram-poll-holder-v2=/u);
+  assert.equal(holderCommand.stdout.includes(firstData), false);
+  assert.equal(holderCommand.stdout.includes(secondData), false);
+  assert.equal(holderCommand.stdout.includes("test-token"), false);
 
-  winner.child.kill("SIGKILL");
-  assert.equal((await waitForExit(winner.child)).signal, "SIGKILL");
-
+  const winnerExit = waitForExit(winner.child);
+  assert.equal(winner.child.kill("SIGKILL"), true);
+  assert.equal((await winnerExit).signal, "SIGKILL");
   let successor: RunningChild | null = null;
   for (let attempt = 0; attempt < 100; attempt++) {
-    const candidate = startChild(t, "hold", secondAlias, {
-      botId: "71023",
-      guardBaseDir,
-    });
+    const candidate = startChild(t, "hold", secondData, guard, "71023");
     await waitFor(
       () =>
         candidate.stdout.includes('"event":"READY"') ||
         candidate.child.exitCode !== null ||
         candidate.child.signalCode !== null,
-      "successor acquisition did not settle",
+      "successor did not settle",
       2_000,
     );
     if (candidate.stdout.includes('"event":"READY"')) {
@@ -352,382 +344,162 @@ void test("concurrent physical aliases admit one owner and parent SIGKILL releas
     }
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
-  assert.ok(successor, "kernel lease did not recover after owner SIGKILL");
-  const persisted = parseTelegramProcessOwner(
-    readFileSync(join(dataDir, "telegram-poll-owner.json"), "utf8"),
-  );
-  assert.equal(persisted.pid, successor.child.pid);
+  assert.ok(successor, "global lease did not recover after parent SIGKILL");
   assert.equal(
-    statSync(join(dataDir, "telegram-poll-owner.json")).mode & 0o777,
-    0o600,
+    parseTelegramProcessOwner(
+      readFileSync(readyEvidence(successor).guardOwnerFile, "utf8"),
+    ).pid,
+    successor.child.pid,
   );
 });
 
-void test("an active owner cannot be bypassed by replacing the lock inode", async (t) => {
-  const root = mkdtempSync(join(tmpdir(), "iva-process-lock-inode-"));
+void test("the production default conflicts before I/O regardless of botId or DATA_DIR", async () => {
+  const processStart = readProcessStartIdentity(process.pid);
+  assert.ok(processStart);
+  const observedResources: string[] = [];
+  const configuredInstances = [
+    { botId: "71041", dataDir: "/state/one" },
+    { botId: "71042", dataDir: "/state/two" },
+  ];
+  await assert.rejects(
+    acquireTelegramProcessLock({
+      processStartImpl: () => processStart,
+      listGuardHoldersImpl: (resource) => {
+        observedResources.push(resource);
+        return [
+          {
+            holderPid: 999_001,
+            holder: {
+              schema: "iva-telegram-poll-holder/v2",
+              resource,
+              pid: 999_000,
+              processStart,
+              nonce: "e".repeat(32),
+            },
+          },
+        ];
+      },
+    }),
+    /held by active PID 999000/u,
+  );
+  assert.deepEqual(
+    configuredInstances.map(() => observedResources[0]),
+    [TELEGRAM_PROCESS_RESOURCE, TELEGRAM_PROCESS_RESOURCE],
+  );
+  assert.deepEqual(observedResources, [TELEGRAM_PROCESS_RESOURCE]);
+});
+
+void test("direct DATA_DIR recreation cannot admit an aliased second Bridge", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "iva-process-direct-recreate-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
+  const guard = makeGuard(root, "direct-recreate");
   const dataDir = join(root, "data");
-  const guardBaseDir = join(root, "guard");
-  const first = startChild(t, "hold", dataDir, {
-    botId: "71001",
-    guardBaseDir,
-  });
+  const alias = join(root, "new-alias");
+  mkdirSync(dataDir);
+  const first = startChild(t, "write-on-signal", dataDir, guard, "71910");
   await waitFor(
     () => first.stdout.includes('"event":"READY"'),
     `first owner did not acquire: ${first.stderr}`,
   );
+  renameSync(dataDir, join(root, "data.old"));
+  mkdirSync(dataDir);
+  symlinkSync(dataDir, alias, "dir");
+  assert.equal(first.child.kill("SIGUSR1"), true);
+  await waitFor(
+    () => existsSync(join(dataDir, "active-writer")),
+    "first Bridge did not write the recreated state",
+  );
+  assert.equal(
+    readFileSync(join(dataDir, "active-writer"), "utf8"),
+    `${first.child.pid}\n`,
+  );
 
-  rmSync(readyEvidence(first).lockFile, { force: true });
-  const second = startChild(t, "hold", dataDir, {
-    botId: "71001",
-    guardBaseDir,
-  });
+  const second = startChild(t, "hold", alias, guard, "71911");
   await waitFor(
     () =>
       second.stdout.includes('"event":"READY"') ||
       second.child.exitCode !== null ||
       second.child.signalCode !== null,
-    `replacement contender did not settle: ${second.stderr}`,
+    `second owner did not settle: ${second.stderr}`,
   );
-
   assert.equal(
     second.stdout.includes('"event":"READY"'),
     false,
-    `both owners became active: first=${first.child.pid}, second=${second.child.pid}`,
+    `both Bridges write recreated state: first=${first.child.pid}, second=${second.child.pid}`,
   );
-  assert.equal((await waitForExit(second.child)).code, 1, second.stderr);
-  assert.equal(
-    first.child.exitCode,
-    null,
-    "the original owner must remain active",
-  );
-});
-
-void test("the same configured DATA_DIR conflicts across retarget for different bots", async (t) => {
-  const root = mkdtempSync(join(tmpdir(), "iva-process-lock-retarget-"));
-  t.after(() => rmSync(root, { recursive: true, force: true }));
-  const firstTarget = join(root, "first");
-  const secondTarget = join(root, "second");
-  const configuredDataDir = join(root, "configured-data");
-  const guardBaseDir = join(root, "guard");
-  mkdirSync(firstTarget);
-  mkdirSync(secondTarget);
-  symlinkSync(firstTarget, configuredDataDir, "dir");
-
-  const first = startChild(t, "hold", configuredDataDir, {
-    botId: "71002",
-    guardBaseDir,
-  });
-  await waitFor(
-    () => first.stdout.includes('"event":"READY"'),
-    `first owner did not acquire: ${first.stderr}`,
-  );
-  const logicalHolder = readyEvidence(first).logicalHolderPid;
-  const holderCommand = spawnSync(
-    "/bin/ps",
-    ["-o", "command=", "-p", String(logicalHolder)],
-    { encoding: "utf8" },
-  );
-  assert.equal(holderCommand.status, 0, holderCommand.stderr);
-  assert.match(holderCommand.stdout, /iva-telegram-poll-holder-v2=/u);
-  assert.equal(holderCommand.stdout.includes(configuredDataDir), false);
-  assert.equal(holderCommand.stdout.includes("test-token"), false);
-  rmSync(configuredDataDir);
-  symlinkSync(secondTarget, configuredDataDir, "dir");
-
-  const second = startChild(t, "hold", configuredDataDir, {
-    botId: "71902",
-    guardBaseDir,
-  });
-  await waitFor(
-    () =>
-      second.stdout.includes('"event":"READY"') ||
-      second.child.exitCode !== null ||
-      second.child.signalCode !== null,
-    `retargeted contender did not settle: ${second.stderr}`,
-  );
-
-  assert.equal(
-    second.stdout.includes('"event":"READY"'),
-    false,
-    `both owners became active: first=${first.child.pid}, second=${second.child.pid}`,
-  );
-  assert.equal((await waitForExit(second.child)).code, 1, second.stderr);
-  assert.equal(
-    existsSync(join(secondTarget, "telegram-poll-owner.json")),
-    false,
-    "the rejected contender must not touch retargeted state",
-  );
-});
-
-void test("replacing the guard root cannot bypass its active holder", async (t) => {
-  const root = mkdtempSync(join(tmpdir(), "iva-process-guard-root-"));
-  t.after(() => rmSync(root, { recursive: true, force: true }));
-  const guardBaseDir = join(root, "guard");
-  const first = startChild(t, "hold", join(root, "first-data"), {
-    botId: "71003",
-    guardBaseDir,
-  });
-  await waitFor(
-    () => first.stdout.includes('"event":"READY"'),
-    `first owner did not acquire: ${first.stderr}`,
-  );
-  const evidence = readyEvidence(first);
-  renameSync(evidence.guardRoot, `${evidence.guardRoot}.old`);
-  mkdirSync(evidence.guardRoot);
-
-  const secondDataDir = join(root, "second-data");
-  const second = startChild(t, "hold", secondDataDir, {
-    botId: "71003",
-    guardBaseDir,
-  });
-  await waitFor(
-    () =>
-      second.stdout.includes('"event":"READY"') ||
-      second.child.exitCode !== null ||
-      second.child.signalCode !== null,
-    `guard-root contender did not settle: ${second.stderr}`,
-  );
-  assert.equal(second.stdout.includes('"event":"READY"'), false);
-  assert.equal((await waitForExit(second.child)).code, 1, second.stderr);
-  assert.equal(existsSync(secondDataDir), false);
-});
-
-void test("replacing both guard owner and lock cannot bypass the live process identity", async (t) => {
-  const root = mkdtempSync(join(tmpdir(), "iva-process-guard-owner-"));
-  t.after(() => rmSync(root, { recursive: true, force: true }));
-  const dataDir = join(root, "data");
-  const guardBaseDir = join(root, "guard");
-  const first = startChild(t, "hold", dataDir, {
-    botId: "71004",
-    guardBaseDir,
-  });
-  await waitFor(
-    () => first.stdout.includes('"event":"READY"'),
-    `first owner did not acquire: ${first.stderr}`,
-  );
-  const evidence = readyEvidence(first);
-  writeFileSync(evidence.guardOwnerFile, "foreign owner\n");
-  rmSync(evidence.lockFile, { force: true });
-
-  const second = startChild(t, "hold", dataDir, {
-    botId: "71004",
-    guardBaseDir,
-  });
-  await waitFor(
-    () =>
-      second.stdout.includes('"event":"READY"') ||
-      second.child.exitCode !== null ||
-      second.child.signalCode !== null,
-    `owner-replacement contender did not settle: ${second.stderr}`,
-  );
-  assert.equal(second.stdout.includes('"event":"READY"'), false);
   assert.equal((await waitForExit(second.child)).code, 1, second.stderr);
   assert.equal(first.child.exitCode, null);
 });
 
-void test("replacing the logical-state guard cannot bypass a retargeted path", async (t) => {
-  const mutations = ["lock", "owner-and-lock", "root"] as const;
-  for (const [index, mutation] of mutations.entries()) {
+void test("guard root, lock, and owner replacement cannot bypass one constant live resource", async (t) => {
+  const resourceIdentity = `replacement-${process.pid}-${++guardSequence}`;
+  for (const mutation of ["lock", "owner", "owner-and-lock", "root"] as const) {
     await t.test(mutation, async (caseTest) => {
-      const root = mkdtempSync(
-        join(tmpdir(), `iva-process-logical-${mutation}-`),
-      );
+      const root = mkdtempSync(join(tmpdir(), `iva-process-${mutation}-`));
       caseTest.after(() => rmSync(root, { recursive: true, force: true }));
-      const firstTarget = join(root, "first");
-      const secondTarget = join(root, "second");
-      const configuredDataDir = join(root, "configured-data");
-      const guardBaseDir = join(root, "guard");
-      mkdirSync(firstTarget);
-      mkdirSync(secondTarget);
-      symlinkSync(firstTarget, configuredDataDir, "dir");
-      const first = startChild(caseTest, "hold", configuredDataDir, {
-        botId: String(71_070 + index * 2),
-        guardBaseDir,
-      });
+      const guard = {
+        identity: resourceIdentity,
+        directory: join(root, "guard"),
+      };
+      const first = startChild(
+        caseTest,
+        "hold",
+        join(root, "first-data"),
+        guard,
+        "71101",
+      );
       await waitFor(
         () => first.stdout.includes('"event":"READY"'),
-        `first logical owner did not acquire: ${first.stderr}`,
+        `first owner did not acquire: ${first.stderr}`,
       );
       const evidence = readyEvidence(first);
       if (mutation === "root") {
-        renameSync(
-          evidence.logicalGuardRoot,
-          `${evidence.logicalGuardRoot}.old`,
-        );
-        mkdirSync(evidence.logicalGuardRoot);
+        renameSync(evidence.guardRoot, `${evidence.guardRoot}.old`);
+        mkdirSync(evidence.guardRoot, { mode: 0o700 });
       } else {
-        if (mutation === "owner-and-lock") {
-          writeFileSync(evidence.logicalGuardOwnerFile, "foreign owner\n");
+        if (mutation === "owner" || mutation === "owner-and-lock") {
+          writeFileSync(evidence.guardOwnerFile, "foreign owner\n");
         }
-        rmSync(evidence.logicalLockFile, { force: true });
+        if (mutation !== "owner") {
+          rmSync(evidence.lockFile, { force: true });
+        }
       }
-      rmSync(configuredDataDir);
-      symlinkSync(secondTarget, configuredDataDir, "dir");
-
-      const second = startChild(caseTest, "hold", configuredDataDir, {
-        botId: String(71_071 + index * 2),
-        guardBaseDir,
-      });
+      const second = startChild(
+        caseTest,
+        "hold",
+        join(root, "second-data"),
+        guard,
+        "71102",
+      );
       await waitFor(
         () =>
           second.stdout.includes('"event":"READY"') ||
           second.child.exitCode !== null ||
           second.child.signalCode !== null,
-        `logical-guard contender did not settle: ${second.stderr}`,
+        `replacement contender did not settle: ${second.stderr}`,
       );
       assert.equal(second.stdout.includes('"event":"READY"'), false);
       assert.equal((await waitForExit(second.child)).code, 1, second.stderr);
       assert.equal(first.child.exitCode, null);
-      assert.equal(
-        existsSync(join(secondTarget, "telegram-poll-owner.json")),
-        false,
-      );
-    });
-  }
-});
-
-void test("replacing the physical-state guard cannot admit another bot", async (t) => {
-  const mutations = ["lock", "owner-and-lock", "root"] as const;
-  for (const [index, mutation] of mutations.entries()) {
-    await t.test(mutation, async (caseTest) => {
-      const root = mkdtempSync(
-        join(tmpdir(), `iva-process-state-${mutation}-`),
-      );
-      caseTest.after(() => rmSync(root, { recursive: true, force: true }));
-      const dataDir = join(root, "data");
-      const firstAlias = join(root, "first-alias");
-      const secondAlias = join(root, "second-alias");
-      mkdirSync(dataDir);
-      symlinkSync(dataDir, firstAlias, "dir");
-      symlinkSync(dataDir, secondAlias, "dir");
-      const guardBaseDir = join(root, "guard");
-      const first = startChild(caseTest, "hold", firstAlias, {
-        botId: String(71_040 + index * 2),
-        guardBaseDir,
-      });
-      await waitFor(
-        () => first.stdout.includes('"event":"READY"'),
-        `first state owner did not acquire: ${first.stderr}`,
-      );
-      const evidence = readyEvidence(first);
-      if (mutation === "root") {
-        renameSync(evidence.stateGuardRoot, `${evidence.stateGuardRoot}.old`);
-        mkdirSync(evidence.stateGuardRoot);
-      } else {
-        if (mutation === "owner-and-lock") {
-          writeFileSync(evidence.stateGuardOwnerFile, "foreign owner\n");
+      const firstExit = waitForExit(first.child);
+      assert.equal(first.child.kill("SIGKILL"), true);
+      assert.equal((await firstExit).signal, "SIGKILL");
+      await waitFor(() => {
+        try {
+          process.kill(evidence.holderPid, 0);
+          return false;
+        } catch (error) {
+          return (error as NodeJS.ErrnoException).code === "ESRCH";
         }
-        rmSync(evidence.stateLockFile, { force: true });
-      }
-
-      const second = startChild(caseTest, "hold", secondAlias, {
-        botId: String(71_041 + index * 2),
-        guardBaseDir,
-      });
-      await waitFor(
-        () =>
-          second.stdout.includes('"event":"READY"') ||
-          second.child.exitCode !== null ||
-          second.child.signalCode !== null,
-        `state-guard contender did not settle: ${second.stderr}`,
-      );
-      assert.equal(second.stdout.includes('"event":"READY"'), false);
-      assert.equal((await waitForExit(second.child)).code, 1, second.stderr);
-      assert.equal(first.child.exitCode, null);
+      }, `holder ${evidence.holderPid} survived parent exit`);
     });
   }
-});
-
-void test("different Telegram bot identities use independent guard roots", async (t) => {
-  const root = mkdtempSync(join(tmpdir(), "iva-process-bot-scope-"));
-  t.after(() => rmSync(root, { recursive: true, force: true }));
-  const guardBaseDir = join(root, "guard");
-  const first = startChild(t, "hold", join(root, "first-data"), {
-    botId: "71005",
-    guardBaseDir,
-  });
-  const second = startChild(t, "hold", join(root, "second-data"), {
-    botId: "71006",
-    guardBaseDir,
-  });
-  await waitFor(
-    () =>
-      first.stdout.includes('"event":"READY"') &&
-      second.stdout.includes('"event":"READY"'),
-    `independent bot guards did not acquire: ${first.stderr} | ${second.stderr}`,
-  );
-  assert.notEqual(
-    readyEvidence(first).guardRoot,
-    readyEvidence(second).guardRoot,
-  );
-});
-
-void test("different bots cannot own the same physical DATA_DIR", async (t) => {
-  const root = mkdtempSync(join(tmpdir(), "iva-process-state-scope-"));
-  t.after(() => rmSync(root, { recursive: true, force: true }));
-  const dataDir = join(root, "data");
-  const guardBaseDir = join(root, "guard");
-  const contenders = [
-    startChild(t, "hold", dataDir, { botId: "71015", guardBaseDir }),
-    startChild(t, "hold", dataDir, { botId: "71016", guardBaseDir }),
-  ];
-  await waitFor(
-    () =>
-      contenders.every(
-        ({ child, stdout }) =>
-          stdout.includes('"event":"READY"') ||
-          child.exitCode !== null ||
-          child.signalCode !== null,
-      ),
-    `state contenders did not settle: ${contenders.map(({ stderr }) => stderr).join(" | ")}`,
-  );
-  assert.equal(
-    contenders.filter(({ stdout }) => stdout.includes('"event":"READY"'))
-      .length,
-    1,
-    `both bots own the same physical state: ${JSON.stringify(
-      contenders.map(({ child, stdout }) => ({
-        pid: child.pid,
-        ready: stdout.includes('"event":"READY"'),
-      })),
-    )}`,
-  );
-});
-
-void test("the same Telegram bot identity conflicts across different DATA_DIR values", async (t) => {
-  const root = mkdtempSync(join(tmpdir(), "iva-process-same-bot-"));
-  t.after(() => rmSync(root, { recursive: true, force: true }));
-  const guardBaseDir = join(root, "guard");
-  const first = startChild(t, "hold", join(root, "first-data"), {
-    botId: "71012",
-    guardBaseDir,
-  });
-  await waitFor(
-    () => first.stdout.includes('"event":"READY"'),
-    `first bot owner did not acquire: ${first.stderr}`,
-  );
-  const secondDataDir = join(root, "second-data");
-  const second = startChild(t, "hold", secondDataDir, {
-    botId: "71012",
-    guardBaseDir,
-  });
-  await waitFor(
-    () => second.child.exitCode !== null || second.child.signalCode !== null,
-    `same-bot contender did not fail: ${second.stderr}`,
-  );
-  assert.equal((await waitForExit(second.child)).code, 1, second.stderr);
-  assert.equal(second.stdout.includes('"event":"READY"'), false);
-  assert.equal(existsSync(secondDataDir), false);
 });
 
 void test("a same-PID successor with a different start identity takes stale ownership", async (t) => {
   const root = mkdtempSync(join(tmpdir(), "iva-process-pid-reuse-"));
-  t.after(() => rmSync(root, { recursive: true, force: true }));
-  const botId = "71013";
-  const guardBaseDir = join(root, "guard");
-  const guardRoot = join(guardBaseDir, `bot-${botId}`);
-  mkdirSync(guardRoot, { recursive: true, mode: 0o700 });
+  const guard = makeGuard(root, "pid-reuse");
+  mkdirSync(guard.directory, { recursive: true, mode: 0o700 });
   const staleOwner = {
     schema: "iva-telegram-poll-owner/v2" as const,
     pid: process.pid,
@@ -735,164 +507,167 @@ void test("a same-PID successor with a different start identity takes stale owne
     nonce: "c".repeat(32),
   };
   writeFileSync(
-    join(guardRoot, "telegram-poll-owner.json"),
+    join(guard.directory, "telegram-poll-owner.json"),
     `${JSON.stringify(staleOwner)}\n`,
+    { mode: 0o600 },
   );
   assert.equal(telegramProcessOwnerIsLive(staleOwner), false);
-
-  const lease = await acquireTelegramProcessLock({
-    dataDir: join(root, "data"),
-    botId,
-    guardBaseDir,
+  const lease = await acquireTelegramProcessLock({ testGuard: guard });
+  t.after(async () => {
+    await lease.close();
+    rmSync(root, { recursive: true, force: true });
   });
-  t.after(() => lease.close());
   assert.equal(lease.owner.pid, process.pid);
   assert.notEqual(lease.owner.processStart, staleOwner.processStart);
 });
 
 void test("a late release never removes a successor owner record", async (t) => {
   const root = mkdtempSync(join(tmpdir(), "iva-process-late-release-"));
+  const guard = makeGuard(root, "late-release");
+  const lease = await acquireTelegramProcessLock({ testGuard: guard });
   t.after(() => rmSync(root, { recursive: true, force: true }));
-  const lease = await acquireTelegramProcessLock({
-    dataDir: join(root, "data"),
-    botId: "71014",
-    guardBaseDir: join(root, "guard"),
-  });
-  const successor = {
+  const successorBytes = `${JSON.stringify({
     schema: "iva-telegram-poll-owner/v2",
     pid: process.pid,
     processStart: readProcessStartIdentity(process.pid),
     nonce: "d".repeat(32),
-  };
-  assert.ok(successor.processStart);
-  const successorBytes = `${JSON.stringify(successor)}\n`;
-  for (const ownerFile of [
-    lease.guardOwnerFile,
-    lease.logicalGuardOwnerFile,
-    lease.stateGuardOwnerFile,
-  ]) {
-    writeFileSync(ownerFile, successorBytes);
-  }
-
+  })}\n`;
+  writeFileSync(lease.guardOwnerFile, successorBytes);
   await lease.close();
-
-  for (const ownerFile of [
-    lease.guardOwnerFile,
-    lease.logicalGuardOwnerFile,
-    lease.stateGuardOwnerFile,
-  ]) {
-    assert.equal(readFileSync(ownerFile, "utf8"), successorBytes);
-  }
+  assert.equal(readFileSync(lease.guardOwnerFile, "utf8"), successorBytes);
 });
 
-void test("Bridge exits if any kernel lease child dies", async (t) => {
-  for (const mode of [
-    "kill-holder",
-    "kill-logical-holder",
-    "kill-state-holder",
-  ] as const) {
-    await t.test(mode, () => {
-      const dataDir = mkdtempSync(join(tmpdir(), "iva-process-lock-loss-"));
-      try {
-        const result = spawnSync(process.execPath, [CHILD, mode, dataDir], {
-          encoding: "utf8",
-          timeout: 10_000,
-        });
-        assert.equal(result.status, 1, result.stdout);
-        assert.match(result.stderr, /process lock holder exited unexpectedly/u);
-      } finally {
-        rmSync(dataDir, { recursive: true, force: true });
-      }
-    });
-  }
-});
-
-void test("holder death at each publication boundary cannot return an unguarded lease", async (t) => {
-  for (const [holderIndex, scope] of ["bot", "logical", "state"].entries()) {
-    await t.test(scope, async (caseTest) => {
-      const root = mkdtempSync(
-        join(tmpdir(), `iva-process-${scope}-acquire-race-`),
-      );
-      caseTest.after(() => rmSync(root, { recursive: true, force: true }));
-      const holders: ChildProcess[] = [];
-      let ownerWrites = 0;
-      let leaseLostCalls = 0;
-
-      await assert.rejects(
-        acquireTelegramProcessLock({
-          dataDir: join(root, "data"),
-          botId: String(71_060 + holderIndex),
-          guardBaseDir: join(root, "guard"),
-          spawnImpl: (command, args, options) => {
-            const holder = spawn(command, [...args], options);
-            holders.push(holder);
-            return holder;
-          },
-          writeOwnerImpl: async (file, data) => {
-            ownerWrites++;
-            if (ownerWrites === holderIndex + 1) {
-              const holder = holders[holderIndex];
-              assert.ok(holder);
-              holder.kill("SIGKILL");
-              assert.equal((await waitForExit(holder)).signal, "SIGKILL");
-              return;
-            }
-            writeFileSync(file, data, { mode: 0o600 });
-          },
-          onLeaseLost: () => {
-            leaseLostCalls++;
-          },
-        }),
-        /holder exited during acquisition/u,
-      );
-      assert.equal(ownerWrites, holderIndex + 1);
-      assert.equal(leaseLostCalls, 0);
-      for (const prior of holders.slice(0, holderIndex)) {
-        assert.equal((await waitForExit(prior)).code, 0);
-      }
-    });
-  }
-});
-
-void test("a missing kernel-lock helper fails closed without hanging", async (t) => {
-  const dataDir = mkdtempSync(
-    join(tmpdir(), "iva-process-lock-missing-helper-"),
-  );
-  t.after(() => rmSync(dataDir, { recursive: true, force: true }));
-  let timeout: NodeJS.Timeout | undefined;
+void test("Bridge exits if its single kernel lease child dies", () => {
+  const root = mkdtempSync(join(tmpdir(), "iva-process-lock-loss-"));
   try {
-    await assert.rejects(
-      Promise.race([
-        acquireTelegramProcessLock({
-          dataDir,
-          botId: "71008",
-          guardBaseDir: join(dataDir, ".guard"),
-          timeoutMs: 100,
-          spawnImpl: (_command, _args, options) =>
-            spawn("/iva/definitely-missing-lock-helper", [], options),
-        }),
-        new Promise((_, rejectTimeout) => {
-          timeout = setTimeout(
-            () => rejectTimeout(new Error("missing helper path hung")),
-            1_000,
-          );
-        }),
-      ]),
-      /ENOENT/u,
+    const guard = makeGuard(root, "holder-loss");
+    const result = spawnSync(
+      process.execPath,
+      [
+        CHILD,
+        "kill-holder",
+        join(root, "data"),
+        "71201",
+        guard.directory,
+        guard.identity,
+      ],
+      { encoding: "utf8", timeout: 10_000 },
+    );
+    assert.equal(result.status, 1, result.stdout);
+    assert.match(result.stderr, /process lock holder exited unexpectedly/u);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+void test("kernel helper death blocks the first Bot API call", () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "iva-helper-death-boundary-"));
+  try {
+    const guard = makeGuard(dataDir, "helper-death-boundary");
+    const result = spawnSync(
+      process.execPath,
+      [
+        MAIN_GUARD_CHILD,
+        dataDir,
+        "kill-holder-before-bot-api",
+        guard.directory,
+        guard.identity,
+      ],
+      { encoding: "utf8", timeout: 10_000 },
+    );
+    assert.equal(result.status, 1, result.stdout);
+    assert.match(result.stderr, /process lock holder exited unexpectedly/u);
+    assert.equal(
+      existsSync(join(dataDir, "telegram-bot-api-calls.jsonl")),
+      false,
+    );
+    assert.equal(
+      readdirSync(dataDir).some((name) => name.startsWith("first-bot-api-")),
+      false,
     );
   } finally {
-    clearTimeout(timeout);
+    rmSync(dataDir, { recursive: true, force: true });
   }
+});
+
+void test("holder death during publication cannot return an unguarded lease", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "iva-process-acquire-race-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const guard = makeGuard(root, "publication-death");
+  let holder: ChildProcess | null = null;
+  let leaseLostCalls = 0;
+  await assert.rejects(
+    acquireTelegramProcessLock({
+      testGuard: guard,
+      spawnImpl: (command, args, options) => {
+        holder = spawn(command, [...args], options);
+        return holder;
+      },
+      writeOwnerImpl: async () => {
+        assert.ok(holder?.pid);
+        const exit = waitForExit(holder);
+        holder.kill("SIGKILL");
+        assert.equal((await exit).signal, "SIGKILL");
+      },
+      onLeaseLost: () => {
+        leaseLostCalls++;
+      },
+    }),
+    /holder exited during acquisition/u,
+  );
+  assert.equal(leaseLostCalls, 0);
+});
+
+void test("corrupt owner and a missing lock helper both fail closed", async (t) => {
+  await t.test("corrupt owner", async (caseTest) => {
+    const root = mkdtempSync(join(tmpdir(), "iva-process-corrupt-owner-"));
+    caseTest.after(() => rmSync(root, { recursive: true, force: true }));
+    const guard = makeGuard(root, "corrupt-owner");
+    mkdirSync(guard.directory, { recursive: true, mode: 0o700 });
+    writeFileSync(
+      join(guard.directory, "telegram-poll-owner.json"),
+      "{corrupt\n",
+    );
+    await assert.rejects(
+      acquireTelegramProcessLock({ testGuard: guard }),
+      /cannot verify Telegram guard owner/u,
+    );
+  });
+  await t.test("missing helper", async (caseTest) => {
+    const root = mkdtempSync(join(tmpdir(), "iva-process-missing-helper-"));
+    caseTest.after(() => rmSync(root, { recursive: true, force: true }));
+    const guard = makeGuard(root, "missing-helper");
+    await assert.rejects(
+      acquireTelegramProcessLock({
+        testGuard: guard,
+        timeoutMs: 100,
+        spawnImpl: (_command, _args, options) =>
+          spawn("/iva/definitely-missing-lock-helper", [], options),
+      }),
+      /ENOENT/u,
+    );
+  });
+});
+
+void test("the test-only guard identity rejects paths and secrets before I/O", async () => {
+  const directory = join(tmpdir(), `iva-invalid-guard-${process.pid}`);
+  await assert.rejects(
+    acquireTelegramProcessLock({
+      testGuard: { identity: "../../test-token", directory },
+    }),
+    /invalid test Telegram guard identity/u,
+  );
+  assert.equal(existsSync(directory), false);
 });
 
 void test("OS lease permits exactly one ordered first-run drop attempt", async (t) => {
   const dataDir = mkdtempSync(join(tmpdir(), "iva-main-guard-"));
   t.after(() => rmSync(dataDir, { recursive: true, force: true }));
+  const guard = makeGuard(dataDir, "main-drop");
   const mainContenders = [
-    startMainChild(t, dataDir),
-    startMainChild(t, dataDir),
+    startMainChild(t, dataDir, guard),
+    startMainChild(t, dataDir, guard),
   ];
-
   await waitFor(
     () => {
       const firstCalls = readdirSync(dataDir).filter((name) =>
@@ -908,7 +683,6 @@ void test("OS lease permits exactly one ordered first-run drop attempt", async (
     },
     `main guard did not settle: ${mainContenders.map(({ stderr }) => stderr).join(" | ")}`,
   );
-
   const firstCalls = readdirSync(dataDir).filter((name) =>
     name.startsWith("first-bot-api-"),
   );
@@ -935,10 +709,11 @@ void test("OS lease permits exactly one ordered first-run drop attempt", async (
   const loser = mainContenders.find(({ child }) => child.pid !== winnerPid);
   assert.ok(winner && loser);
   assert.equal((await waitForExit(loser.child)).code, 1, loser.stderr);
-  winner.child.kill("SIGKILL");
-  assert.equal((await waitForExit(winner.child)).signal, "SIGKILL");
+  const winnerExit = waitForExit(winner.child);
+  assert.equal(winner.child.kill("SIGKILL"), true);
+  assert.equal((await winnerExit).signal, "SIGKILL");
 
-  const successor = startMainChild(t, dataDir);
+  const successor = startMainChild(t, dataDir, guard);
   await waitFor(
     () =>
       successor.child.exitCode !== null || successor.child.signalCode !== null,
@@ -956,9 +731,16 @@ void test("OS lease permits exactly one ordered first-run drop attempt", async (
 void test("deleteWebhook ok:false aborts before commands, offset, or polling", () => {
   const dataDir = mkdtempSync(join(tmpdir(), "iva-delete-webhook-false-"));
   try {
+    const guard = makeGuard(dataDir, "delete-webhook-false");
     const result = spawnSync(
       process.execPath,
-      [MAIN_GUARD_CHILD, dataDir, "delete-webhook-false"],
+      [
+        MAIN_GUARD_CHILD,
+        dataDir,
+        "delete-webhook-false",
+        guard.directory,
+        guard.identity,
+      ],
       { encoding: "utf8", timeout: 10_000 },
     );
     assert.equal(result.status, 1, result.stdout);

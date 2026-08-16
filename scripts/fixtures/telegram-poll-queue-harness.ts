@@ -1,7 +1,6 @@
 import { mock } from "node:test";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { join } from "node:path";
 
 type JsonRecord = Record<string, unknown>;
 type Message = {
@@ -610,6 +609,26 @@ Object.defineProperty(globalThis, "fetch", {
   writable: true,
 });
 
-const pollPath = resolve("scripts/telegram-poll.mjs");
-process.argv[1] = pollPath;
-await import(pathToFileURL(pollPath).href);
+const testGuardIdentity = `queue-harness-${process.pid}`;
+const { main } = (await import(
+  `../poller/main.ts?harness=${process.pid}`
+)) as unknown as {
+  main: (options: {
+    acquireProcessLockImpl: () => Promise<unknown>;
+  }) => Promise<void>;
+};
+const { acquireTelegramProcessLock } =
+  (await import("../poller/process-lock.ts")) as unknown as {
+    acquireTelegramProcessLock: (options: {
+      testGuard: { identity: string; directory: string };
+    }) => Promise<unknown>;
+  };
+await main({
+  acquireProcessLockImpl: () =>
+    acquireTelegramProcessLock({
+      testGuard: {
+        identity: testGuardIdentity,
+        directory: join(dataDir, ".telegram-process-test-guard"),
+      },
+    }),
+});

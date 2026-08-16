@@ -12,10 +12,12 @@ if (!mode || !directory) {
 }
 const markerFile = join(directory, "telegram-backlog-drop.json");
 const offsetFile = join(directory, "telegram-offset.json");
+const guardIdentity = `startup-crash-${process.pid}`;
 const lease = await acquireTelegramProcessLock({
-  dataDir: directory,
-  botId: "72001",
-  guardBaseDir: join(directory, ".guard"),
+  testGuard: {
+    identity: guardIdentity,
+    directory: join(directory, ".guard"),
+  },
 });
 const prepare = () =>
   prepareTelegramStartup(lease, {
