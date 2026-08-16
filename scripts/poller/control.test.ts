@@ -435,3 +435,63 @@ test("a false callback ack result does not claim a local control", async () => {
 
   assert.equal(consumed, false);
 });
+
+test("model keep callback is retained when ack and edit both fail", async () => {
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = async () =>
+    new Response(JSON.stringify({ ok: true, result: { message_id: 71 } }), {
+      headers: { "content-type": "application/json" },
+    });
+  try {
+    assert.equal(
+      await handleControl({
+        update_id: 11,
+        message: {
+          message_id: 11,
+          date: 1,
+          chat: { id: 71, type: "private" },
+          from: trustedFrom,
+          text: "/model",
+        },
+      }),
+      true,
+    );
+
+    const methods: string[] = [];
+    globalThis.fetch = async (input) => {
+      const url =
+        typeof input === "string"
+          ? input
+          : input instanceof URL
+            ? input.href
+            : input.url;
+      methods.push(url.split("/").at(-1) ?? "");
+      return new Response(JSON.stringify({ ok: false, result: false }), {
+        headers: { "content-type": "application/json" },
+      });
+    };
+
+    const consumed = await handleControl({
+      update_id: 12,
+      callback_query: {
+        id: "cq-model-keep",
+        from: trustedFrom,
+        message: {
+          message_id: 71,
+          date: 1,
+          chat: { id: 71, type: "private" },
+        },
+        data: "iva_model:keep",
+      },
+    });
+
+    assert.equal(consumed, false);
+    assert.deepEqual(methods, [
+      "answerCallbackQuery",
+      "editMessageText",
+      "sendMessage",
+    ]);
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});

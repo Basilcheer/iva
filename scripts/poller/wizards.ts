@@ -53,6 +53,21 @@ type WizardTransport = (
 const wizardTg = tg as unknown as WizardTransport;
 const errorMessage = (error: unknown) =>
   (error as { message?: unknown } | null | undefined)?.message;
+const callbackAckSucceeded = (value: unknown) =>
+  typeof value === "object" &&
+  value !== null &&
+  (value as { ok?: unknown }).ok === true &&
+  (value as { result?: unknown }).result === true;
+const messageCallSucceeded = (value: unknown) =>
+  typeof value === "object" &&
+  value !== null &&
+  (value as { ok?: unknown }).ok === true &&
+  typeof (value as { result?: { message_id?: unknown } }).result
+    ?.message_id === "number";
+const replySucceeded = (value: unknown) =>
+  typeof value === "object" &&
+  value !== null &&
+  typeof (value as { message_id?: unknown }).message_id === "number";
 type WizardSnapshot = {
   msgId?: number | null;
   step?: string;
@@ -672,16 +687,20 @@ async function handleWizardCallback(cq: {
   from?: { id?: string | number };
   message?: { chat?: { id?: number }; message_id?: number };
 }) {
-  const from = String(cq.from?.id ?? "");
+  const senderId = cq.from?.id;
+  const from = senderId === undefined ? null : String(senderId);
   const chatId = cq.message?.chat?.id;
   const messageId = cq.message?.message_id;
-  await tg("answerCallbackQuery", { callback_query_id: cq.id });
+  const acknowledged = callbackAckSucceeded(
+    await tg("answerCallbackQuery", { callback_query_id: cq.id }),
+  );
+  if (from === null) return false;
   if (ALLOWED.size === 0 || !ALLOWED.has(from)) return true; // swallow untrusted taps
   const action = cq.data.replace(/^iva_(model|think):/, "");
   const st = getWizard(chatId, from);
   // No state (bridge restarted / TTL) or a tap on an older wizard message → stale.
   if (isStaleWizard(st, messageId) || st === null) {
-    await tg("editMessageText", {
+    const expired = await tg("editMessageText", {
       chat_id: chatId,
       message_id: messageId,
       text: tr(
@@ -689,9 +708,9 @@ async function handleWizardCallback(cq: {
         "Диалог устарел — отправь /model заново.",
       ),
     });
-    return true;
+    return acknowledged || messageCallSucceeded(expired);
   }
-  if (!wizardActionAllowed(st, action)) return true;
+  if (!wizardActionAllowed(st, action)) return acknowledged;
   if (action === "keep") {
     await endWizard(
       st,
@@ -706,30 +725,30 @@ async function handleWizardCallback(cq: {
           ),
       menuRow(),
     );
-    return true;
+    return acknowledged;
   }
   if (action === "cancel") {
     await endWizard(st, tr("Cancelled.", "Отменено."), menuRow());
-    return true;
+    return acknowledged;
   }
   if (action === "chg") {
     await showProviderScreen(st);
-    return true;
+    return acknowledged;
   }
   if (action.startsWith("prov:")) {
     const p = action.slice("prov:".length);
     if (CATALOG[p]) await pickProvider(st, p);
-    return true;
+    return acknowledged;
   }
   if (action === "retry") {
     if (st.flow === "think") {
       await handleThinkCmd(st.chatId, st.userId, {
         msgId: st.msgId ?? undefined,
       });
-      return true;
+      return acknowledged;
     }
     await showModelScreen(st);
-    return true;
+    return acknowledged;
   }
   if (action === "back") {
     if (st.flow === "think") {
@@ -738,23 +757,23 @@ async function handleWizardCallback(cq: {
         tr("Kept the current configuration.", "Оставил текущую конфигурацию."),
         menuRow(),
       );
-      return true;
+      return acknowledged;
     }
     await showProviderScreen(st);
-    return true;
+    return acknowledged;
   }
   if (action.startsWith("m:")) {
     const option = selectWizardModel(st, action.slice("m:".length));
-    if (!option) return true;
+    if (!option) return acknowledged;
     if (option.reasoningLevels.length === 0) {
       st.effort = null;
       try {
         await saveWizard(st);
       } catch (e) {
-        if (!wizardIsCurrent(st)) return true;
+        if (!wizardIsCurrent(st)) return acknowledged;
         if (e instanceof ModelValidationError) {
           await showModelValidationError(st, e);
-          return true;
+          return acknowledged;
         }
         await endWizard(
           st,
@@ -764,8 +783,9 @@ async function handleWizardCallback(cq: {
           ),
           menuRow(),
         );
-        return true;
+        return acknowledged;
       }
+      // The validated configuration is durably written before any UI rendering.
       if (!wizardIsCurrent(st)) return true;
       await showSaved(st);
       return true;
@@ -779,18 +799,18 @@ async function handleWizardCallback(cq: {
       ),
       effortRows("iva_model", false, st.efforts),
     );
-    return true;
+    return acknowledged;
   }
   if (action.startsWith("eff:")) {
     const v = action.slice("eff:".length);
-    if (!selectWizardEffort(st, v)) return true;
+    if (!selectWizardEffort(st, v)) return acknowledged;
     try {
       await saveWizard(st);
     } catch (e) {
-      if (!wizardIsCurrent(st)) return true;
+      if (!wizardIsCurrent(st)) return acknowledged;
       if (e instanceof ModelValidationError) {
         await showModelValidationError(st, e);
-        return true;
+        return acknowledged;
       }
       await endWizard(
         st,
@@ -800,8 +820,9 @@ async function handleWizardCallback(cq: {
         ),
         menuRow(),
       );
-      return true;
+      return acknowledged;
     }
+    // The validated configuration is durably written before any UI rendering.
     if (!wizardIsCurrent(st)) return true;
     await showSaved(st);
     return true;
@@ -815,7 +836,7 @@ async function handleWizardCallback(cq: {
       ),
       menuRow(),
     );
-    return true;
+    return acknowledged;
   }
   if (action === "rs:now") {
     await endWizard(
@@ -838,18 +859,19 @@ async function handleWizardCallback(cq: {
           `Готово — новая конфигурация активна: ${provider} · ${model} · размышления: ${effortLabel(effort)}.`,
         ),
       );
+      return true;
     } else {
-      await reply(
+      const failed = await reply(
         chatId as number,
         tr(
           "Couldn't restart (systemctl). Check the service on the server.",
           "Не удалось перезапустить (systemctl). Проверь сервис на сервере.",
         ),
       );
+      return acknowledged || replySucceeded(failed);
     }
-    return true;
   }
-  return true;
+  return acknowledged;
 }
 
 export function resetMessageCopy(

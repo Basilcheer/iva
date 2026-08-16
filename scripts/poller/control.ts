@@ -383,15 +383,15 @@ async function handleControl(
     }
     if (parseUpdateCallbackData(callback.data) !== null)
       return handleUpdateCallback(callback);
-    // Wizard errors must not escape: an uncaught throw would crash the bridge and
-    // re-poll the update after restart. Consume the tap either way.
+    // Wizard errors must not escape and crash the bridge. A failed handler returns
+    // false so the callback enters durable inbox ownership before offset advances.
     if (
       callback.data.startsWith("iva_model:") ||
       callback.data.startsWith("iva_think:")
     ) {
       return handleWizardCallback(callback).catch((e: unknown) => {
         log("wizard callback error:", errorDetails(e).message);
-        return true;
+        return false;
       });
     }
     // /menu: тот же принцип consume-on-error — тап меню всегда проглатывается (в eve не уходит).
