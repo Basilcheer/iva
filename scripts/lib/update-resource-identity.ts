@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   chmodSync,
   closeSync,
@@ -10,7 +10,10 @@ import {
   mkdirSync,
   mkdtempSync,
   openSync,
+  readdirSync,
   readFileSync,
+  readlinkSync,
+  readSync,
   renameSync,
   rmSync,
   rmdirSync,
@@ -23,7 +26,14 @@ export type ResourceIdentity = readonly [device: bigint, inode: bigint];
 export type ResourceDirectoryLease = {
   readonly descriptor: number;
   readonly identity: ResourceIdentity;
+  readonly tree: ResourceTreeProof;
   released: boolean;
+};
+
+export type ResourceTreeProof = {
+  readonly digest: string;
+  readonly entries: number;
+  readonly bytes: bigint;
 };
 
 export type ResourceFileSnapshot = {
@@ -94,6 +104,120 @@ function changed(label: string): never {
   throw new Error(`${label} ownership changed`);
 }
 
+function digestField(
+  hash: ReturnType<typeof createHash>,
+  value: string | Buffer,
+): void {
+  const bytes = typeof value === "string" ? Buffer.from(value) : value;
+  const length = Buffer.allocUnsafe(8);
+  length.writeBigUInt64BE(BigInt(bytes.length));
+  hash.update(length);
+  hash.update(bytes);
+}
+
+function digestStat(
+  hash: ReturnType<typeof createHash>,
+  stat: {
+    dev: bigint;
+    ino: bigint;
+    mode: bigint;
+    size: bigint;
+    mtimeNs: bigint;
+    ctimeNs: bigint;
+  },
+  root: boolean,
+): void {
+  digestField(hash, (stat.mode & 0o7777n).toString());
+  if (root) return;
+  for (const value of [
+    stat.dev,
+    stat.ino,
+    stat.size,
+    stat.mtimeNs,
+    stat.ctimeNs,
+  ])
+    digestField(hash, value.toString());
+}
+
+function captureDirectoryTree(path: string, label: string): ResourceTreeProof {
+  const hash = createHash("sha256");
+  const totals = { entries: 0, bytes: 0n };
+  const chunk = Buffer.allocUnsafe(64 * 1024);
+
+  function visit(current: string, relative: string, root: boolean): void {
+    const before = lstat(current);
+    if (!before) changed(label);
+    totals.entries++;
+    digestField(hash, relative);
+
+    if (before.isDirectory() && !before.isSymbolicLink()) {
+      digestField(hash, "directory");
+      digestStat(hash, before, root);
+      const names = readdirSync(current).sort((left, right) =>
+        Buffer.compare(Buffer.from(left), Buffer.from(right)),
+      );
+      for (const name of names)
+        visit(
+          join(current, name),
+          relative ? join(relative, name) : name,
+          false,
+        );
+      const after = lstat(current);
+      if (!after || !sameInspection(before, after)) changed(label);
+      return;
+    }
+
+    if (before.isFile() && !before.isSymbolicLink()) {
+      digestField(hash, "file");
+      const descriptor = openSync(
+        current,
+        constants.O_RDONLY | constants.O_NOFOLLOW,
+      );
+      try {
+        const opened = fstatSync(descriptor, { bigint: true });
+        if (!opened.isFile() || !sameInspection(before, opened)) changed(label);
+        digestStat(hash, opened, false);
+        let fileBytes = 0n;
+        for (;;) {
+          const count = readSync(descriptor, chunk, 0, chunk.length, null);
+          if (count === 0) break;
+          hash.update(chunk.subarray(0, count));
+          fileBytes += BigInt(count);
+        }
+        const finished = fstatSync(descriptor, { bigint: true });
+        const after = lstat(current);
+        if (
+          fileBytes !== opened.size ||
+          !after ||
+          !sameInspection(opened, finished) ||
+          !sameInspection(finished, after)
+        )
+          changed(label);
+        totals.bytes += fileBytes;
+      } finally {
+        closeSync(descriptor);
+      }
+      return;
+    }
+
+    if (before.isSymbolicLink()) {
+      digestField(hash, "symlink");
+      digestStat(hash, before, false);
+      const target = readlinkSync(current, { encoding: "buffer" });
+      digestField(hash, target);
+      const after = lstat(current);
+      if (!after || !sameInspection(before, after)) changed(label);
+      totals.bytes += BigInt(target.length);
+      return;
+    }
+
+    throw new Error(`${label} contains an unsupported filesystem entry`);
+  }
+
+  visit(path, "", true);
+  return { digest: hash.digest("hex"), ...totals };
+}
+
 export function pathMissing(path: string): boolean {
   return lstat(path) === null;
 }
@@ -131,9 +255,19 @@ export function captureDirectoryLease(
       !sameIdentity(identity(opened), identity(after))
     )
       changed(label);
+    const tree = captureDirectoryTree(path, label);
+    const finished = fstatSync(descriptor, { bigint: true });
+    const final = lstat(path);
+    if (
+      !final ||
+      !sameInspection(opened, finished) ||
+      !sameInspection(finished, final)
+    )
+      changed(label);
     return {
       descriptor,
       identity: identity(opened),
+      tree,
       released: false,
     };
   } catch (error) {
@@ -157,6 +291,22 @@ export function verifyDirectoryLease(
     actual.isSymbolicLink() ||
     !sameIdentity(identity(held), expected.identity) ||
     !sameIdentity(identity(actual), expected.identity)
+  )
+    changed(label);
+}
+
+export function verifyDirectoryTree(
+  path: string,
+  expected: ResourceDirectoryLease,
+  label: string,
+): void {
+  verifyDirectoryLease(path, expected, label);
+  const actual = captureDirectoryTree(path, label);
+  verifyDirectoryLease(path, expected, label);
+  if (
+    actual.digest !== expected.tree.digest ||
+    actual.entries !== expected.tree.entries ||
+    actual.bytes !== expected.tree.bytes
   )
     changed(label);
 }
@@ -346,6 +496,19 @@ export function removeOwnedDirectory({
       label,
     });
   verifyDirectoryLease(moved, expected, label);
+  // This post-rename proof is the deletion linearization point. A mismatch restores
+  // the entire tree; recursive removal never starts from a root-only identity check.
+  try {
+    verifyDirectoryTree(moved, expected, label);
+  } catch {
+    restoreUnexpectedMove({
+      moved,
+      original: path,
+      container: quarantine,
+      movedIdentity,
+      label,
+    });
+  }
   verifyDirectoryLease(
     quarantine.path,
     quarantine.lease,

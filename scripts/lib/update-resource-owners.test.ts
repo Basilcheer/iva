@@ -3,6 +3,7 @@
 import assert from "node:assert/strict";
 import {
   chmodSync,
+  existsSync,
   fstatSync,
   mkdirSync,
   mkdtempSync,
@@ -154,6 +155,63 @@ test("a replacement environment backup stays foreign", (t) => {
 });
 
 for (const resource of [".output", "node_modules"] as const) {
+  test(`${resource} live foreign child preserves the whole tree on rollback`, (t) => {
+    const fx = fixture(t);
+    const live = join(fx.root, resource);
+    const source = join(fx.temp, `${resource.slice(1)}-source`);
+    mkdirSync(live);
+    writeFileSync(join(live, "old"), "old\n");
+    mkdirSync(source);
+    writeFileSync(join(source, "owned"), "owned\n");
+    const resources = owner(fx);
+    if (resource === ".output") resources.promoteOutput(source);
+    else resources.promoteNodeModules(source);
+    writeFileSync(join(live, "foreign"), "foreign\n");
+
+    const errors = resources.rollback();
+
+    assert.equal(errors.length, 1);
+    assert.equal(readFileSync(join(live, "owned"), "utf8"), "owned\n");
+    assert.equal(readFileSync(join(live, "foreign"), "utf8"), "foreign\n");
+    assert.equal(
+      existsSync(onlyBackup(fx.root, `${resource}.iva-backup-`)),
+      true,
+    );
+
+    rmSync(join(live, "foreign"));
+    assert.deepEqual(resources.rollback(), []);
+    assert.equal(readFileSync(join(live, "old"), "utf8"), "old\n");
+  });
+
+  test(`${resource} cleanup retains a backup with a foreign child`, (t) => {
+    const fx = fixture(t);
+    const logFile = join(fx.temp, "cleanup.log");
+    const live = join(fx.root, resource);
+    const source = join(fx.temp, `${resource.slice(1)}-source`);
+    mkdirSync(live);
+    writeFileSync(join(live, "old"), "old\n");
+    mkdirSync(source);
+    writeFileSync(join(source, "new"), "new\n");
+    const resources = owner(fx, logFile);
+    if (resource === ".output") resources.promoteOutput(source);
+    else resources.promoteNodeModules(source);
+    const backup = join(
+      onlyBackup(fx.root, `${resource}.iva-backup-`),
+      "owned",
+    );
+    writeFileSync(join(backup, "foreign"), "foreign\n");
+
+    resources.cleanup();
+
+    assert.equal(readFileSync(join(backup, "old"), "utf8"), "old\n");
+    assert.equal(readFileSync(join(backup, "foreign"), "utf8"), "foreign\n");
+    assert.match(readFileSync(logFile, "utf8"), /ownership changed/u);
+
+    rmSync(join(backup, "foreign"));
+    resources.cleanup();
+    assert.equal(existsSync(backup), false);
+  });
+
   test(`${resource} live replacement survives rollback`, (t) => {
     const fx = fixture(t);
     const live = join(fx.root, resource);
@@ -225,6 +283,46 @@ for (const resource of [".output", "node_modules"] as const) {
     assert.match(readFileSync(logFile, "utf8"), /ownership changed/u);
   });
 }
+
+test("a changed live descendant preserves output and makes rollback incomplete", (t) => {
+  const fx = fixture(t);
+  const live = join(fx.root, ".output");
+  const source = join(fx.temp, "output-source");
+  mkdirSync(live);
+  writeFileSync(join(live, "old"), "old\n");
+  mkdirSync(source);
+  writeFileSync(join(source, "owned"), "owned\n");
+  const resources = owner(fx);
+  resources.promoteOutput(source);
+  writeFileSync(join(live, "owned"), "foreign\n");
+
+  const errors = resources.rollback();
+
+  assert.equal(errors.length, 1);
+  assert.equal(readFileSync(join(live, "owned"), "utf8"), "foreign\n");
+  assert.equal(existsSync(onlyBackup(fx.root, ".output.iva-backup-")), true);
+});
+
+test("a removed backup descendant retains node_modules cleanup debt", (t) => {
+  const fx = fixture(t);
+  const logFile = join(fx.temp, "cleanup.log");
+  const live = join(fx.root, "node_modules");
+  const source = join(fx.temp, "node-modules-source");
+  mkdirSync(live);
+  writeFileSync(join(live, "old"), "old\n");
+  mkdirSync(source);
+  writeFileSync(join(source, "new"), "new\n");
+  const resources = owner(fx, logFile);
+  resources.promoteNodeModules(source);
+  const backup = join(onlyBackup(fx.root, "node_modules.iva-backup-"), "owned");
+  rmSync(join(backup, "old"));
+
+  resources.cleanup();
+
+  assert.equal(existsSync(backup), true);
+  assert.equal(existsSync(join(backup, "old")), false);
+  assert.match(readFileSync(logFile, "utf8"), /ownership changed/u);
+});
 
 test("replacement after live precheck is restored from quarantine", (t) => {
   const fx = fixture(t);

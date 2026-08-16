@@ -51,7 +51,7 @@ const EXPECTED_INVENTORY_SHA256 =
 // collision-owner, and snapshot-verifier modules. The 140-test scoped suite reports
 // every added module and totals 96.02% lines, 84.69% branches, and 95.50% functions,
 // so the blind spot stays at 26. The resource identity and owner modules followed;
-// their 23-test scoped anchor reports 89.30% and 86.50% lines, so neither is blind.
+// their 19-test scoped anchor reports 89.49% and 86.76% lines, so neither is blind.
 const MEASURED_UNREPORTED_BY_CATEGORY = {
   frameworkBoundaries: [
     "agent/agent.ts",

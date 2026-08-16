@@ -15,6 +15,7 @@ import {
   type ResourceFileSnapshot,
   type ResourceIdentityHooks,
   verifyDirectoryLease,
+  verifyDirectoryTree,
   verifyStableFile,
   writeExclusiveFile,
 } from "./update-resource-identity.ts";
@@ -259,7 +260,7 @@ class PromotedDirectoryOwner {
         state.backup.container.lease,
         `${this.#label} backup container`,
       );
-      verifyDirectoryLease(
+      verifyDirectoryTree(
         state.backup.path,
         state.backup.lease,
         `${this.#label} backup`,
