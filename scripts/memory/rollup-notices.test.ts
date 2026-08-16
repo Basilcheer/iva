@@ -86,21 +86,21 @@ test("the red line in the instructions exempts both scheduled senders", () => {
     join(ROOT, "agent/instructions.md"),
     "utf8",
   );
-  const red = instructions.slice(0, instructions.indexOf("\nТы — **Iva**"));
-  assert.match(red, /ОТЧЁТ.*ОБЫЧНЫЙ ОТВЕТ ХОДА/u);
+  const red = instructions.slice(0, instructions.indexOf("\nYou are **Iva**"));
+  assert.match(red, /ordinary turn reply/u);
   // Транспорт мимо Outbox из обязательного пути убран: он же обход outbound-гейта.
-  assert.doesNotMatch(red, /ТОЛЬКО RICH MESSAGE/u);
-  assert.match(red, /ЗАПРЕЩЕНО слать отчёт в текущий чат мимо ответа/u);
-  const at = red.indexOf("ИСКЛЮЧЕНИЕ");
+  assert.doesNotMatch(red, /only rich message/iu);
+  assert.match(red, /Never send a reply to the current chat yourself/u);
+  const at = red.indexOf("Exception");
   assert.notEqual(at, -1, "the red line must carry an exception at all");
   const exception = red.slice(at);
-  assert.match(exception, /ФИНАЛЬНЫЙ ТЕКСТ хода/u);
-  assert.match(exception, /ЗАПРЕЩЕН/u);
+  assert.match(exception, /final text of the turn/u);
+  assert.match(exception, /forbidden/u);
   // Оба хода названы В САМОМ исключении, одним предложением: упоминание дайджеста рядом —
   // например во фразе «дайджест из чата — обычный ход» — этому не удовлетворяет.
   assert.match(
     exception,
-    /Их два:[^.]*rollup[^.]*утренний дайджест по расписанию/u,
+    /There are two:[^.]*rollup[^.]*morning\s+digest/u,
     "the exception itself must name the nightly rollup and the scheduled digest",
   );
 });
