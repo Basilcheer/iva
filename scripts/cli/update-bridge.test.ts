@@ -39,6 +39,21 @@ function active(iva: World): string | null {
   return createVersionStore(iva.home).currentName();
 }
 
+test("a foreign wrapper keeps its checkout on the in-place updater", (t) => {
+  const iva = world(t);
+  const foreign = Buffer.from(
+    `#!/bin/sh\n: "${iva.home}/reports"\nexec "${process.execPath}" "${iva.home}/bin/iva.mjs" "$@"\n`,
+  );
+  writeFileSync(iva.shim, foreign);
+
+  update(iva);
+
+  assert.deepEqual(readFileSync(iva.shim), foreign);
+  assert.equal(existsSync(join(iva.home, ".git")), true);
+  assert.equal(existsSync(join(iva.home, "bin/iva.mjs")), true);
+  assert.equal(active(iva), null);
+});
+
 test("the first update moves the installation onto versions and keeps its state", (t) => {
   const iva = world(t);
   const sha = iva.git(iva.home, ["rev-parse", "HEAD"]);
@@ -754,7 +769,10 @@ test("an update puts an active userbot proxy on the version it installs", (t) =>
     join(unitDir, "iva-telegram-userbot.service"),
     "utf8",
   );
-  const python = /^ExecStart=(\S+)/mu.exec(unit)?.[1] ?? "";
+  const python =
+    /^ExecStart=\/usr\/bin\/env "ASSISTANT_DATA_DIR=[^"]+" (\S+)/mu.exec(
+      unit,
+    )?.[1] ?? "";
   assert.match(python, new RegExp(`^${iva.home}/current/`, "u"));
   assert.ok(existsSync(python), `${python} is missing\n${output}`);
   assert.ok(

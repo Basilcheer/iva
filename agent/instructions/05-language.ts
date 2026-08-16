@@ -1,6 +1,7 @@
 import { defineDynamic, defineInstructions } from "eve/instructions";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { resolveDataDir } from "@iva/data-dir";
 
 // Язык ответов агента следует за настройкой интерфейса в /menu: кнопка пишет
 // data/settings.json на лету, поэтому язык модели пересчитывается КАЖДЫЙ турн, а не
@@ -10,9 +11,9 @@ import { join } from "node:path";
 // это по-прежнему единственный источник правды о языке вывода.
 //
 // Разрешение языка продублировано инлайн, а НЕ импортом agent/lib/i18n.ts:
-// инструкции самодостаточны — только eve + node fs/path (гоча eve 0.11.4: authored-
-// модули проекта тут не резолвятся при сборке).
-const DATA_DIR = process.env.ASSISTANT_DATA_DIR ?? "data";
+// инструкции зависят только от eve, @iva/data-dir и node fs/path. Прочие authored-
+// модули проекта тут не резолвятся при сборке (гоча eve 0.11.4).
+const DATA_DIR = resolveDataDir(process.cwd());
 
 // settings.language ("ru"|"en") → env AGENT_LANGUAGE → "ru". Путь относителен cwd
 // (readFileSync резолвит от process.cwd(); iva.service стартует с WorkingDirectory=

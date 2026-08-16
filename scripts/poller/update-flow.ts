@@ -76,6 +76,7 @@ function launchSelfUpdate(jobId: string): Promise<LaunchResult> {
     `--unit=iva-self-update-${Date.now()}`,
     `--working-directory=${ROOT}`,
     `--setenv=PATH=${process.env.PATH || ""}`,
+    `--setenv=ASSISTANT_DATA_DIR=${DATA_DIR}`,
     NODE,
     join(ROOT, "bin/iva.mjs"),
     "update",

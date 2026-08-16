@@ -1,13 +1,14 @@
 import { defineDynamic, defineInstructions } from "eve/instructions";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { resolveDataDir } from "@iva/data-dir";
 
 // Динамическая инструкция: каждый турн инжектит текущие дату/время в часовом поясе
 // пользователя в системный промпт. Локаль следует за языком интерфейса (кнопка в /menu
 // пишет data/settings.json на лету), поэтому язык пересчитывается КАЖДЫЙ турн, а не
-// захватывается на загрузке модуля. Самодостаточна — только eve + node fs/path/Intl.
+// захватывается на загрузке модуля. Зависит только от eve, @iva/data-dir и node fs/path/Intl.
 const TIMEZONE = process.env.ASSISTANT_TIMEZONE ?? "Asia/Almaty";
-const DATA_DIR = process.env.ASSISTANT_DATA_DIR ?? "data";
+const DATA_DIR = resolveDataDir(process.cwd());
 
 // settings.language ("ru"|"en") → env AGENT_LANGUAGE → "ru". Продублировано инлайн, а
 // НЕ импортом agent/lib/i18n.ts: инструкции самодостаточны (гоча eve 0.11.4 —

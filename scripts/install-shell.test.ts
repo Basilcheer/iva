@@ -244,7 +244,8 @@ function createWorld(t: TestContext, options: { env?: boolean } = {}): World {
   cpSync(join(ROOT, "install.sh"), join(dir, "install.sh"));
 
   mkdirSync(join(install, "bin"), { recursive: true });
-  mkdirSync(join(install, "scripts"), { recursive: true });
+  mkdirSync(join(install, "scripts/lib"), { recursive: true });
+  mkdirSync(join(install, "packages/data-dir"), { recursive: true });
   writeFileSync(
     join(install, "package.json"),
     `${JSON.stringify(
@@ -278,6 +279,12 @@ function createWorld(t: TestContext, options: { env?: boolean } = {}): World {
   );
   writeFileSync(join(install, "bin/iva.mjs"), IVA_CLI);
   writeFileSync(join(install, "scripts/init-vault.mjs"), "");
+  cpSync(
+    join(ROOT, "packages/data-dir/index.ts"),
+    join(install, "packages/data-dir/index.ts"),
+  );
+  for (const name of ["env-file.ts", "version-layout.ts", "version-store.ts"])
+    cpSync(join(ROOT, "scripts/lib", name), join(install, "scripts/lib", name));
   writeFileSync(join(install, "README.md"), "# fixture\n");
   // A patched dependency, like the real installation has: the hook that applies it is
   // npm's, so skipping npm has to apply it instead.
@@ -664,6 +671,42 @@ void test("a second installer in the same checkout is refused, a dead one is not
     false,
     "the lock outlived the run that took it",
   );
+});
+
+void test("installer ownership files follow the canonical custom data directory", async (t) => {
+  const world = createWorld(t);
+  writeFileSync(
+    join(world.install, ".env"),
+    "AGENT_LANGUAGE=en\nASSISTANT_DATA_DIR= state/../runtime \n",
+  );
+  const dataDir = join(world.install, "runtime");
+  const lock = join(dataDir, "install.lock");
+  mkdirSync(lock, { recursive: true });
+  writeFileSync(join(lock, "pid"), `${process.pid}\n`);
+
+  const refused = world.run();
+  assert.notEqual(refused.status, 0, refused.stdout + refused.stderr);
+  assert.match(refused.stderr, /runtime\/install\.lock/u);
+  assert.equal(existsSync(join(world.install, "data/install.lock")), false);
+
+  rmSync(lock, { recursive: true, force: true });
+  writeFileSync(join(world.install, "README.md"), "# fixture\nlocal edit\n");
+  const waiting = join(world.dir, "custom-data-building");
+  const run = world.runAsync({ env: { IVA_TEST_BUILD_WAIT: waiting } });
+  for (let waited = 0; !existsSync(waiting) && waited < 20000; waited += 50)
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.ok(existsSync(waiting), "the run never reached the build");
+  assert.equal(existsSync(lock), true);
+  assert.match(
+    readdirSync(join(dataDir, "update-backups")).join("\n"),
+    /^\.env-/mu,
+  );
+  assert.equal(existsSync(join(world.install, "data/update-backups")), false);
+
+  run.signal("SIGHUP");
+  const result = await run.done;
+  assert.notEqual(result.code, 0);
+  assert.equal(existsSync(lock), false);
 });
 
 void test("the fallback copy of .env is private from the first byte", (t) => {

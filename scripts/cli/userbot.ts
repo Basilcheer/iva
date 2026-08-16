@@ -32,6 +32,7 @@ export type UserbotRuntime = Pick<
   | "cap"
   | "systemd"
   | "readEnv"
+  | "dataDirAbs"
   | "writeEnvVars"
 >;
 
@@ -58,6 +59,7 @@ export interface UserbotDependencies {
   readonly randomHex?: (bytes: number) => string;
   readonly probeHealth?: (options: {
     readonly root: string;
+    readonly dataDir: string;
     readonly port: string;
   }) => Promise<UserbotHealth>;
   readonly log?: (message: string) => void;
@@ -90,6 +92,7 @@ export function createUserbotCommands(
     cap,
     systemd,
     readEnv,
+    dataDirAbs,
     writeEnvVars,
   } = runtime;
   const fileSystem: UserbotFileSystem = {
@@ -158,7 +161,9 @@ export function createUserbotCommands(
       );
   }
 
-  function ensureUserbotToken(): void {
+  function ensureUserbotToken({
+    quiet = false,
+  }: { quiet?: boolean } = {}): void {
     if (fileSystem.exists(TOKEN_FILE)) return;
     fileSystem.mkdir(dirname(TOKEN_FILE));
     fileSystem.writePrivate(TOKEN_FILE, randomHex(24));
@@ -167,7 +172,7 @@ export function createUserbotCommands(
     } catch {
       // The token file is already created with mode 0600; chmod is best-effort.
     }
-    ok("Сгенерировал токен прокси (data/telegram-userbot.token).");
+    if (!quiet) ok("Сгенерировал токен прокси (data/telegram-userbot.token).");
   }
 
   function restartUserbotIfActive({
@@ -178,6 +183,7 @@ export function createUserbotCommands(
   }: RestartUserbotOptions = {}): void {
     if (!knownActive && !systemd.isActive(SVC_USERBOT)) return;
     if (!quiet) step("Обновляю userbot-прокси…");
+    ensureUserbotToken({ quiet });
     ensureUserbotVenv({ quiet, requirementsPath, requireHashes });
     systemd.restart([SVC_USERBOT]);
     if (!quiet) ok("userbot-прокси перезапущен на новом коде");
@@ -243,6 +249,7 @@ export function createUserbotCommands(
       const env = readEnv();
       const health = await probeHealth({
         root: ROOT,
+        dataDir: dataDirAbs(env),
         port: env.TELEGRAM_MCP_PORT || "8724",
       });
       log(JSON.stringify(health));
@@ -255,6 +262,7 @@ export function createUserbotCommands(
     const env = readEnv();
     const health = await probeHealth({
       root: ROOT,
+      dataDir: dataDirAbs(env),
       port: env.TELEGRAM_MCP_PORT || "8724",
     });
     log(`${SVC_USERBOT}: ${health.state}`);

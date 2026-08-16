@@ -1,9 +1,6 @@
 import { execFileSync } from "node:child_process";
 import {
-  chmodSync,
   existsSync,
-  mkdirSync,
-  readFileSync,
   readdirSync,
   rmdirSync,
   rmSync,
@@ -13,9 +10,8 @@ import { dirname, join } from "node:path";
 import { CATALOG, catalogProvider } from "./lib/model-catalog.ts";
 import {
   isEntrypoint,
+  refreshOwnedShim,
   SHIM_PATH,
-  shimPointsAt,
-  shimScript,
 } from "./lib/version-layout.ts";
 import {
   adoptUpdateLock,
@@ -305,20 +301,10 @@ function git(home: string, args: string[]): string {
   });
 }
 
-/** Install the shim that outlives every version; rewritten at most once. */
+/** Install the shim that outlives every version; refresh only an owned stale snapshot. */
 export function writeShim(home: string, log: Say): void {
-  let existing = "";
-  try {
-    existing = readFileSync(SHIM_PATH, "utf8");
-  } catch {
-    // A missing shim is written below; the command has to exist either way.
-  }
-  if (existing.includes("$IVA_ROOT/current/bin/iva.mjs")) return;
-  if (existing && !shimPointsAt(existing, home)) return; // someone else's `iva`
-  mkdirSync(dirname(SHIM_PATH), { recursive: true });
-  writeFileSync(SHIM_PATH, shimScript(home, process.execPath));
-  chmodSync(SHIM_PATH, 0o755);
-  log(`rewrote ${SHIM_PATH}`);
+  if (refreshOwnedShim(SHIM_PATH, home, process.execPath, layoutFor(home).data))
+    log(`rewrote ${SHIM_PATH}`);
 }
 
 /**
@@ -374,8 +360,11 @@ export function retireCheckout(home: string): string[] {
  * Files the custom layer of the checkout era recorded as deleted. The overlay that
  * replaces it only adds, so a deletion comes undone and has to be reported.
  */
-export function tombstoned(home: string): string[] {
-  const entries = (readJson(join(home, "data/custom/manifest.json")).entries ??
+export function tombstoned(
+  home: string,
+  dataDir = layoutFor(home).data,
+): string[] {
+  const entries = (readJson(join(dataDir, "custom/manifest.json")).entries ??
     {}) as Record<string, { tombstone?: boolean } | undefined>;
   return Object.keys(entries)
     .filter((path) => entries[path]?.tombstone)
@@ -502,7 +491,7 @@ export async function main(argv: readonly string[]): Promise<number> {
       adopt: () => {
         writeShim(home, log);
         if (!existsSync(join(home, ".git"))) return;
-        const back = tombstoned(home);
+        const back = tombstoned(home, layout.data);
         if (back.length > 0)
           notify(
             `a version cannot have a file of Iva's own deleted from it, so ${back.length} you had removed are back: ${back.join(", ")}`,

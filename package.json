@@ -36,6 +36,7 @@
     "postinstall": "patch-package"
   },
   "dependencies": {
+    "@iva/data-dir": "file:packages/data-dir",
     "@ai-sdk/openai": "4.0.15",
     "@ai-sdk/openai-compatible": "^3.0.11",
     "@vercel/connect": "0.2.2",

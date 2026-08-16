@@ -15,6 +15,10 @@ import {
 import { dirname, isAbsolute, join } from "node:path";
 import { createRequire } from "node:module";
 import type { AtomicWriteOptions } from "../../agent/lib/fs-atomic.ts";
+import {
+  resolveDataDir,
+  VERSION_DIRECTORY_PATTERN,
+} from "../../packages/data-dir/index.ts";
 import { parseEnvText } from "./env-file.ts";
 
 const INCOMPLETE = ".iva-incomplete";
@@ -27,8 +31,6 @@ const STALE_MS = 60 * 60 * 1000;
 const FLIP_PREFIX = ".current.iva-flip-";
 /** Names in `home` that only an interrupted update can leave behind. */
 const LEFTOVER = [FLIP_PREFIX, ".probe-"];
-const VERSION_NAME =
-  /^(\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?)-([0-9a-f]{12})(?:\+([0-9a-f]{8}))?(?:~(\d+))?$/;
 // eslint-disable-next-line @typescript-eslint/unbound-method -- Intl.Collator compare is a bound getter.
 const VERSION_ORDER = new Intl.Collator("en", { numeric: true }).compare;
 /** What a version borrows from the installation; the rest of `.eve` is a build cache. */
@@ -107,7 +109,7 @@ export function layoutFor(home: string) {
     repo: join(home, "repo"),
     versions: join(home, "versions"),
     current: join(home, "current"),
-    data: stateDir(home, values.ASSISTANT_DATA_DIR, "data"),
+    data: resolveDataDir(home, values.ASSISTANT_DATA_DIR),
     vault: stateDir(home, values.ASSISTANT_VAULT_DIR, "vault"),
     env,
     // Already parsed to find the state directories; handed back so the updater does not
@@ -128,7 +130,7 @@ export function versionName(
 }
 
 export function parseVersionName(name: string) {
-  const match = VERSION_NAME.exec(name);
+  const match = VERSION_DIRECTORY_PATTERN.exec(name);
   if (!match) return null;
   return {
     version: match[1],

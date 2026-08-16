@@ -149,7 +149,7 @@ void test("poller config snapshots default root, routes, data, and helper behavi
 void test("poller config keeps explicit host, token, relative data, and allowlist normalization", async () => {
   const token = ["123456", "fixture"].join(":");
   const config = await importConfig({
-    ASSISTANT_DATA_DIR: "runtime-data",
+    ASSISTANT_DATA_DIR: " runtime-data ",
     ASSISTANT_HOST: "https://poll.example.test:9443/",
     IVA_PORT: "9123",
     TELEGRAM_ALLOWED_USER_IDS: " 10,20  20\n003 ",
@@ -191,7 +191,7 @@ void test("poller config keeps explicit host, token, relative data, and allowlis
 
 void test("poller config preserves absolute data directories and removes exactly one host slash", async () => {
   const config = await importConfig({
-    ASSISTANT_DATA_DIR: "/tmp/iva-config-fixture-data",
+    ASSISTANT_DATA_DIR: " /tmp/iva-config-fixture-data ",
     ASSISTANT_HOST: "http://loopback.fixture//",
   });
 

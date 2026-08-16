@@ -52,6 +52,23 @@ type BrainCleanupOptions = {
   readonly activateNewTimer?: boolean;
 };
 
+export function systemdExecArgument(value: string): string {
+  if (/[\0\r\n]/u.test(value))
+    throw new Error("systemd argument contains NUL or a newline");
+  let escaped = "";
+  for (const character of value) {
+    const code = character.charCodeAt(0);
+    if (character === "\\") escaped += "\\\\";
+    else if (character === '"') escaped += '\\"';
+    else if (character === "$") escaped += "$$";
+    else if (character === "%") escaped += "%%";
+    else if (code < 0x20 || code === 0x7f)
+      escaped += `\\x${code.toString(16).padStart(2, "0")}`;
+    else escaped += character;
+  }
+  return `"${escaped}"`;
+}
+
 export function createCliSystemd(runtime: CliRuntime) {
   const {
     ROOT,
@@ -115,6 +132,10 @@ export function createCliSystemd(runtime: CliRuntime) {
     return "UTC";
   }
 
+  function canonicalDataDirEnvironment(): string {
+    return systemdExecArgument(`ASSISTANT_DATA_DIR=${dataDirAbs()}`);
+  }
+
   // ── systemd units: single source of truth ───────────────────────────────
   function ivaServiceBody(): string {
     // PATH with the node directory (= npm global bin under nvm), Restart=always.
@@ -143,7 +164,7 @@ export function createCliSystemd(runtime: CliRuntime) {
       // locally: telegram-poll, the sweep and the memory scripts all talk to 127.0.0.1.
       // Env is not enough here — `eve start` takes options.host ?? "0.0.0.0" and overwrites
       // HOST/NITRO_HOST for the spawned .output/server/index.mjs, so the flag is what binds.
-      `ExecStart=${NODE} ${ROOT}/node_modules/eve/bin/eve.js start --host 127.0.0.1`,
+      `ExecStart=/usr/bin/env ${canonicalDataDirEnvironment()} ${NODE} ${ROOT}/node_modules/eve/bin/eve.js start --host 127.0.0.1`,
       `Environment=PORT=${port}`,
       `Environment=TZ=${timezone}`,
       `Environment=PATH=${NODE_BIN_DIR}:%h/.local/bin:/usr/local/bin:/usr/bin:/bin`,
@@ -218,6 +239,7 @@ export function createCliSystemd(runtime: CliRuntime) {
     const deploy = join(ROOT, "deploy");
     const skipped = new Set(skipUnits);
     const timezone = configuredTimezone();
+    const dataDirEnvironment = canonicalDataDirEnvironment();
     for (const file of readdirSync(deploy)) {
       if (!/^iva-.*\.(service|timer)$/.test(file) || skipped.has(file))
         continue;
@@ -225,6 +247,7 @@ export function createCliSystemd(runtime: CliRuntime) {
         .replaceAll("__PROJECT_DIR__", ROOT)
         .replaceAll("__NODE_BIN__", NODE)
         .replaceAll("__PYTHON_BIN__", VENV_PY)
+        .replaceAll("__DATA_DIR_ENV__", dataDirEnvironment)
         .replaceAll("__TIMEZONE__", timezone);
       writeFileSync(join(UNIT_DIR, file), template);
       written.push(file);

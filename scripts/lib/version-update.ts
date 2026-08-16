@@ -12,6 +12,7 @@ import {
 import { dirname, join, relative, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { isAuthoredPath } from "./authored-paths.ts";
+import { resolveDataDir } from "./data-dir.ts";
 import {
   awaitServing,
   probeEnvironment,
@@ -760,6 +761,7 @@ export function commandRunner(verbose: boolean): Runner {
         cwd,
         env: {
           ...process.env,
+          ASSISTANT_DATA_DIR: resolveDataDir(cwd),
           PATH: `${dirname(process.execPath)}:${process.env.PATH ?? ""}`,
         },
         stdio: ["ignore", io, io],

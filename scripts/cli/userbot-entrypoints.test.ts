@@ -8,6 +8,7 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  realpath,
   rm,
   stat,
   symlink,
@@ -283,6 +284,50 @@ void test("userbot setup creates a 0600 token and preserves venv, unit, activati
   assert.ok(enable > reload, events.join("\n"));
   assert.ok(restart > enable, events.join("\n"));
   assert.doesNotMatch(`${result.stdout}\n${result.stderr}`, new RegExp(SECRET));
+});
+
+void test("userbot setup gives the proxy one canonical custom data directory", async (t) => {
+  const { home, project, run } = await fixture(t, {
+    env: [
+      "TELEGRAM_API_ID=123456",
+      `TELEGRAM_API_HASH=${SECRET}`,
+      "ASSISTANT_DATA_DIR= state/../runtime ",
+      "",
+    ].join("\n"),
+  });
+
+  const result = run(["setup"]);
+
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  const canonical = join(project, "runtime");
+  const physicalCanonical = await realpath(canonical);
+  const canonicalEnvironment = `"ASSISTANT_DATA_DIR=${physicalCanonical.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"`;
+  assert.match(
+    await readFile(join(canonical, "telegram-userbot.token"), "utf8"),
+    /^[a-f0-9]{48}$/,
+  );
+  await assert.rejects(stat(join(project, "data/telegram-userbot.token")), {
+    code: "ENOENT",
+  });
+  assert.match(
+    await readFile(
+      join(home, ".config/systemd/user/iva-telegram-userbot.service"),
+      "utf8",
+    ),
+    new RegExp(`^ExecStart=/usr/bin/env ${canonicalEnvironment} `, "mu"),
+  );
+  for (const unit of [
+    "iva.service",
+    "iva-telegram-poll.service",
+    "iva-brain.service",
+    "iva-update-check.service",
+  ]) {
+    assert.match(
+      await readFile(join(home, ".config/systemd/user", unit), "utf8"),
+      new RegExp(`^ExecStart=/usr/bin/env ${canonicalEnvironment} `, "mu"),
+      unit,
+    );
+  }
 });
 
 void test("userbot setup never rewrites an existing token", async (t) => {

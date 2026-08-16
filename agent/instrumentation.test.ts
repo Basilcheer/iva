@@ -1,6 +1,8 @@
 /* eslint-disable @typescript-eslint/no-floating-promises -- Node's test runner owns registrations. */
 import test from "node:test";
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { resolve } from "node:path";
 import { PROBE_FLAG } from "./lib/eve-health.ts";
 import instrumentation from "./instrumentation.ts";
 
@@ -35,4 +37,30 @@ test("a start that is an update's health probe migrates nothing", (t) => {
   // The timezone is still applied: it decides what the process thinks "now" is,
   // and a probe that starts in the wrong one proves the wrong thing.
   assert.equal(process.env.TZ, "Asia/Tashkent");
+});
+
+test("server start gives every non-TS child the canonical absolute data dir", (t) => {
+  const previous = process.env.ASSISTANT_DATA_DIR;
+  process.env[PROBE_FLAG] = "1";
+  process.env.ASSISTANT_DATA_DIR = " state/../runtime ";
+  t.after(() => {
+    delete process.env[PROBE_FLAG];
+    if (previous === undefined) delete process.env.ASSISTANT_DATA_DIR;
+    else process.env.ASSISTANT_DATA_DIR = previous;
+  });
+
+  boot(t);
+
+  const canonical = resolve(process.cwd(), "runtime");
+  assert.equal(process.env.ASSISTANT_DATA_DIR, canonical);
+  const child = spawnSync(
+    "/bin/sh",
+    ["-c", 'printf %s "$ASSISTANT_DATA_DIR"'],
+    {
+      env: { ASSISTANT_DATA_DIR: process.env.ASSISTANT_DATA_DIR },
+      encoding: "utf8",
+    },
+  );
+  assert.equal(child.status, 0, child.stderr);
+  assert.equal(child.stdout, canonical);
 });

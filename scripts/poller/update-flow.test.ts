@@ -238,10 +238,9 @@ test("the /update button leaves the lock to the update it launches", async (t) =
   const first = await press(bin);
 
   assert.match(first.at(-1) ?? "", /Saving your changes/u);
-  assert.match(
-    readFileSync(launched, "utf8"),
-    /update --telegram-job [0-9a-f]/u,
-  );
+  const command = readFileSync(launched, "utf8");
+  assert.match(command, /update --telegram-job [0-9a-f]/u);
+  assert.match(command, new RegExp(`--setenv=ASSISTANT_DATA_DIR=${dataDir}`));
   assert.equal(
     readdirSync(jobs).length,
     1,

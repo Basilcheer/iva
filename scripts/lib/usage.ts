@@ -7,6 +7,7 @@
 import { closeSync, fstatSync, openSync, readSync } from "node:fs";
 import { join } from "node:path";
 import type { UsageRecord } from "#lib/usage.ts";
+import { resolveDataDir } from "./data-dir.ts";
 
 export type { UsageRecord };
 
@@ -95,7 +96,7 @@ interface Accumulator {
   readonly turns: Set<string>;
 }
 
-const defaultDir = (): string => process.env.ASSISTANT_DATA_DIR || "data";
+const defaultDir = (): string => resolveDataDir(process.cwd());
 
 const usageFilePath = (dataDir: string): string => join(dataDir, "usage.jsonl");
 

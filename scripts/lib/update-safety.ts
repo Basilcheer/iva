@@ -187,7 +187,7 @@ export function createUpdateTransaction({
   env = process.env,
   recoveryFileOps,
 }: UpdateTransactionOptions) {
-  const commandEnv = { ...env };
+  const commandEnv = { ...env, ASSISTANT_DATA_DIR: dataDir };
   let originalHead = "";
   let branch = "";
   let updateBranch = "";

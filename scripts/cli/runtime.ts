@@ -4,9 +4,10 @@ import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { writeEnvAtomicSync } from "../lib/env-file.ts";
+import { resolveDataDir } from "../lib/data-dir.ts";
 import { createSystemdControl } from "../lib/systemd-control.ts";
 import { real } from "../lib/version-layout.ts";
-import { parseVersionName, stateDir } from "../lib/version-store.ts";
+import { parseVersionName } from "../lib/version-store.ts";
 
 type CaptureOptions = Omit<SpawnSyncOptions, "encoding"> & {
   readonly encoding?: BufferEncoding;
@@ -52,6 +53,7 @@ export function createCliRuntime(root: string) {
   const pathEntries = (process.env.PATH || "").split(":").filter(Boolean);
   const childEnv: NodeJS.ProcessEnv = {
     ...process.env,
+    ASSISTANT_DATA_DIR: dataDirAbs(),
     PATH: (pathEntries.includes(NODE_BIN_DIR)
       ? pathEntries
       : [NODE_BIN_DIR, ...pathEntries]
@@ -69,7 +71,7 @@ export function createCliRuntime(root: string) {
   const SVC_USERBOT = "iva-telegram-userbot.service";
   const USERBOT_DIR = join(ROOT, "services/telegram-userbot");
   const VENV_PY = join(USERBOT_DIR, ".venv/bin/python");
-  const TOKEN_FILE = join(ROOT, "data/telegram-userbot.token");
+  const TOKEN_FILE = join(dataDirAbs(), "telegram-userbot.token");
 
   const DEFAULT_PORT = "8723";
   const OLD_DEFAULT_HOST = "http://127.0.0.1:3000";
@@ -148,7 +150,7 @@ export function createCliRuntime(root: string) {
   }
 
   function dataDirAbs(env: Partial<EnvValues> = readEnv()): string {
-    return stateDir(ROOT, env.ASSISTANT_DATA_DIR, "data");
+    return resolveDataDir(ROOT, env.ASSISTANT_DATA_DIR);
   }
 
   async function confirm(question: string, defaultValue = false) {

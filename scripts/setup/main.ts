@@ -33,6 +33,7 @@ import { catalogProvider, providerEnvKeys } from "../lib/model-catalog.ts";
 import { keptSetupWritePlan } from "../lib/setup-keep.ts";
 import { validateTimeZone } from "../lib/timezone.ts";
 import { resolveMemorySearchMode } from "../lib/memory-mode.ts";
+import { resolveDataDir } from "../lib/data-dir.ts";
 import { openrouterErrReason } from "./openrouter.ts";
 
 type Env = Record<string, string>;
@@ -87,8 +88,7 @@ const ENV_PATH = process.env.IVA_CONFIG_OUTPUT
 const STAGING_CONFIG = ENV_PATH !== SOURCE_ENV_PATH;
 // Абсолютный каталог data (тот же, что видит агент из cwd=ROOT). Хранит codex-auth.json (OAuth).
 const dataDirAbs = (env: Env | null | undefined) => {
-  const d = (env && env.ASSISTANT_DATA_DIR) || "data";
-  return d.startsWith("/") ? d : join(ROOT, d);
+  return resolveDataDir(ROOT, env?.ASSISTANT_DATA_DIR);
 };
 const OLLAMA_BASE = "https://ollama.com/v1";
 const OPENCODE_BASE = "https://opencode.ai/zen/go/v1";

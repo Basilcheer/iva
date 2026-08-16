@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import {
   chmodSync,
+  linkSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -19,6 +20,7 @@ import { fileURLToPath } from "node:url";
 import {
   classifyRoot,
   isManagedInstall,
+  refreshOwnedShim,
   shimScript,
 } from "./version-layout.ts";
 
@@ -47,7 +49,7 @@ function installation(t: { after(fn: () => void): void }): string {
 test("a shim without `current` runs the version the installation settled on", (t) => {
   const home = installation(t);
   const shim = join(home, "iva");
-  writeFileSync(shim, shimScript(home, process.execPath));
+  writeFileSync(shim, shimScript(home, process.execPath, join(home, "data")));
   chmodSync(shim, 0o755);
   const run = (): string => execFileSync(shim, { encoding: "utf8" });
 
@@ -67,6 +69,244 @@ test("a shim without `current` runs the version the installation settled on", (t
   // And an active version outranks both.
   symlinkSync(join(home, "versions/0.3.9-bbbbbbbbbbbb"), join(home, "current"));
   assert.equal(run(), "0.3.9-bbbbbbbbbbbb");
+});
+
+test("a shim reads active state from the canonical custom data directory", (t) => {
+  const home = installation(t);
+  const dataDir = join(home, 'state $ " ` \\');
+  mkdirSync(dataDir, { recursive: true });
+  writeFileSync(
+    join(dataDir, "active.json"),
+    `${JSON.stringify({ schema: "iva-active/v1", version: "0.3.9-bbbbbbbbbbbb" })}\n`,
+  );
+  const shim = join(home, "iva");
+  writeFileSync(shim, shimScript(home, process.execPath, dataDir));
+  chmodSync(shim, 0o755);
+
+  assert.equal(execFileSync(shim, { encoding: "utf8" }), "0.3.9-bbbbbbbbbbbb");
+  assert.throws(
+    () => shimScript(home, process.execPath, `${dataDir}\nbroken`),
+    /NUL or a newline/u,
+  );
+});
+
+test("an owned shim refreshes its data snapshot without replacing a foreign command", (t) => {
+  const home = installation(t);
+  const shim = join(home, ".local/bin/iva");
+  const firstData = join(home, "first data");
+  const nextData = join(home, "next data");
+
+  assert.equal(refreshOwnedShim(shim, home, process.execPath, firstData), true);
+  assert.equal(refreshOwnedShim(shim, home, process.execPath, nextData), true);
+  assert.equal(
+    readFileSync(shim, "utf8"),
+    shimScript(home, process.execPath, nextData),
+  );
+
+  const previousDirect = `#!/usr/bin/env bash\nexec "${process.execPath}" "${home}/bin/iva.mjs" "$@"\n`;
+  writeFileSync(shim, previousDirect);
+  assert.equal(refreshOwnedShim(shim, home, process.execPath, nextData), true);
+  assert.equal(
+    readFileSync(shim, "utf8"),
+    shimScript(home, process.execPath, nextData),
+  );
+
+  const foreignExecutable = Buffer.from(
+    `#!/usr/bin/env bash\nexec "/bin/echo" "${home}/bin/iva.mjs" "$@"\n`,
+  );
+  writeFileSync(shim, foreignExecutable);
+  assert.equal(
+    refreshOwnedShim(shim, home, process.execPath, firstData),
+    false,
+  );
+  assert.deepEqual(readFileSync(shim), foreignExecutable);
+
+  const foreignCurrent = Buffer.from(shimScript(home, "/bin/echo", firstData));
+  writeFileSync(shim, foreignCurrent);
+  assert.equal(
+    refreshOwnedShim(shim, home, process.execPath, firstData),
+    false,
+  );
+  assert.deepEqual(readFileSync(shim), foreignCurrent);
+
+  const victim = join(home, "other-file");
+  writeFileSync(victim, previousDirect);
+  rmSync(shim);
+  symlinkSync(victim, shim);
+  assert.equal(
+    refreshOwnedShim(shim, home, process.execPath, firstData),
+    false,
+  );
+  assert.equal(isManagedInstall(classifyRoot(home), shim), false);
+  assert.equal(readFileSync(victim, "utf8"), previousDirect);
+  rmSync(shim);
+
+  linkSync(victim, shim);
+  assert.equal(
+    refreshOwnedShim(shim, home, process.execPath, firstData),
+    false,
+  );
+  assert.equal(isManagedInstall(classifyRoot(home), shim), false);
+  assert.equal(readFileSync(victim, "utf8"), previousDirect);
+  rmSync(shim);
+
+  const previousOwned = shimScript(home, process.execPath, join(home, "data"))
+    .replace(`IVA_DATA="${join(home, "data")}"\n`, "")
+    .replace("$IVA_DATA/active.json", "$IVA_ROOT/data/active.json");
+  writeFileSync(shim, previousOwned);
+  assert.equal(refreshOwnedShim(shim, home, process.execPath, nextData), true);
+  assert.equal(
+    readFileSync(shim, "utf8"),
+    shimScript(home, process.execPath, nextData),
+  );
+
+  writeFileSync(shim, "#!/bin/sh\necho foreign\n");
+  assert.equal(
+    refreshOwnedShim(shim, home, process.execPath, firstData),
+    false,
+  );
+  assert.equal(readFileSync(shim, "utf8"), "#!/bin/sh\necho foreign\n");
+
+  const substitution = Buffer.from(
+    shimScript(home, process.execPath, join(home, "state/$(foreign)")).replace(
+      "\\$(foreign)",
+      "$(foreign)",
+    ),
+  );
+  writeFileSync(shim, substitution);
+  assert.equal(
+    refreshOwnedShim(shim, home, process.execPath, firstData),
+    false,
+  );
+  assert.deepEqual(readFileSync(shim), substitution);
+
+  const hostile = Buffer.from(`#!/bin/sh\necho "${home}/reports"\n`);
+  writeFileSync(shim, hostile);
+  assert.equal(
+    refreshOwnedShim(shim, home, process.execPath, firstData),
+    false,
+  );
+  assert.deepEqual(readFileSync(shim), hostile);
+});
+
+test("a replacement arriving during refresh preserves both inodes", () => {
+  const output = execFileSync(
+    process.execPath,
+    [
+      "--input-type=module",
+      "-e",
+      `import fs,{mkdtempSync,mkdirSync,writeFileSync,readFileSync,renameSync,rmSync} from "node:fs";
+import {syncBuiltinESMExports} from "node:module";
+import {tmpdir} from "node:os"; import {join} from "node:path";
+const dir=mkdtempSync(join(tmpdir(),"iva-shim-swap-"));
+try { const home=join(dir,"home"),shim=join(dir,"iva"),moved=join(dir,"moved");
+mkdirSync(join(home,"bin"),{recursive:true});
+const old=\`#!/usr/bin/env bash\\nexec "\${process.execPath}" "\${home}/bin/iva.mjs" "$@"\\n\`;
+const foreign="#!/bin/sh\\necho foreign\\n"; writeFileSync(shim,old);
+const lstat=fs.lstatSync; let swapped=false;
+fs.lstatSync=((path,options)=>{const stat=lstat(path,options); if(path===shim&&!swapped){renameSync(shim,moved);writeFileSync(shim,foreign);swapped=true;}return stat;});
+syncBuiltinESMExports();
+const {refreshOwnedShim}=await import("./scripts/lib/version-layout.ts?swap-test");
+const result=refreshOwnedShim(shim,home,process.execPath,join(home,"next"));
+console.log(JSON.stringify({result,path:readFileSync(shim,"utf8"),moved:readFileSync(moved,"utf8")}));
+} finally {rmSync(dir,{recursive:true,force:true});}`,
+    ],
+    { cwd: ROOT, encoding: "utf8" },
+  );
+  const result = JSON.parse(output) as {
+    result: boolean;
+    path: string;
+    moved: string;
+  };
+  assert.equal(result.result, false);
+  assert.equal(result.path, "#!/bin/sh\necho foreign\n");
+  assert.match(result.moved, /exec ".+" ".+\/bin\/iva\.mjs" "\$@"/u);
+});
+
+test("a replacement winning publication leaves an explicit recovery", () => {
+  const output = execFileSync(
+    process.execPath,
+    [
+      "--input-type=module",
+      "-e",
+      `import fs from "node:fs"; import {syncBuiltinESMExports} from "node:module";
+import {tmpdir} from "node:os"; import {join} from "node:path";
+const dir=fs.mkdtempSync(join(tmpdir(),"iva-shim-publish-"));
+try {const home=join(dir,"home"),shim=join(dir,"iva"); fs.mkdirSync(join(home,"bin"),{recursive:true});
+const old=\`#!/usr/bin/env bash\\nexec "\${process.execPath}" "\${home}/bin/iva.mjs" "$@"\\n\`;
+const foreign="#!/bin/sh\\necho foreign\\n"; fs.writeFileSync(shim,old);
+const open=fs.openSync; fs.openSync=(path,flags,...rest)=>{if(path===shim&&(flags&fs.constants.O_EXCL))fs.writeFileSync(shim,foreign);return open(path,flags,...rest);};
+syncBuiltinESMExports();
+const {refreshOwnedShim}=await import("./scripts/lib/version-layout.ts?publish-test");
+const result=refreshOwnedShim(shim,home,process.execPath,join(home,"next"));
+const recovery=fs.readdirSync(dir).find(name=>name.startsWith("iva.iva-recovery-"));
+console.log(JSON.stringify({result,path:fs.readFileSync(shim,"utf8"),recovery:fs.readFileSync(join(dir,recovery,"previous"),"utf8")}));
+} finally {fs.rmSync(dir,{recursive:true,force:true});}`,
+    ],
+    { cwd: ROOT, encoding: "utf8" },
+  );
+  const result = JSON.parse(output) as {
+    result: boolean;
+    path: string;
+    recovery: string;
+  };
+  assert.equal(result.result, false);
+  assert.equal(result.path, "#!/bin/sh\necho foreign\n");
+  assert.match(result.recovery, /exec ".+" ".+\/bin\/iva\.mjs" "\$@"/u);
+});
+
+test("a short shim write restores the complete previous command", () => {
+  const output = execFileSync(
+    process.execPath,
+    [
+      "--input-type=module",
+      "-e",
+      `import fs from "node:fs"; import {syncBuiltinESMExports} from "node:module";
+import {tmpdir} from "node:os"; import {join} from "node:path";
+const dir=fs.mkdtempSync(join(tmpdir(),"iva-shim-short-"));
+try {const home=join(dir,"home"),shim=join(dir,"iva"); fs.mkdirSync(join(home,"bin"),{recursive:true});
+const old=\`#!/usr/bin/env bash\\nexec "\${process.execPath}" "\${home}/bin/iva.mjs" "$@"\\n\`; fs.writeFileSync(shim,old);
+const write=fs.writeSync; fs.writeSync=(fd,data,...rest)=>write(fd,data.subarray(0,1),...rest); syncBuiltinESMExports();
+const {refreshOwnedShim}=await import("./scripts/lib/version-layout.ts?short-test");
+let failed=false; try {refreshOwnedShim(shim,home,process.execPath,join(home,"next"));} catch {failed=true;}
+console.log(JSON.stringify({failed,restored:fs.readFileSync(shim,"utf8")===old,entries:fs.readdirSync(dir)}));
+} finally {fs.rmSync(dir,{recursive:true,force:true});}`,
+    ],
+    { cwd: ROOT, encoding: "utf8" },
+  );
+  assert.deepEqual(JSON.parse(output), {
+    failed: true,
+    restored: true,
+    entries: ["home", "iva"],
+  });
+});
+
+test("a close error cannot hide a complete published shim", () => {
+  const output = execFileSync(
+    process.execPath,
+    [
+      "--input-type=module",
+      "-e",
+      `import fs from "node:fs"; import {syncBuiltinESMExports} from "node:module";
+import {tmpdir} from "node:os"; import {join} from "node:path";
+const dir=fs.mkdtempSync(join(tmpdir(),"iva-shim-close-"));
+try {const home=join(dir,"home"),shim=join(dir,"iva"),data=join(home,"next"); fs.mkdirSync(join(home,"bin"),{recursive:true});
+const old=\`#!/usr/bin/env bash\\nexec "\${process.execPath}" "\${home}/bin/iva.mjs" "$@"\\n\`; fs.writeFileSync(shim,old);
+const {refreshOwnedShim,shimScript}=await import("./scripts/lib/version-layout.ts?close-test");
+const close=fs.closeSync; let injected=false; fs.closeSync=(fd)=>{if(!injected){injected=true;throw new Error("close boom");}return close(fd);}; syncBuiltinESMExports();
+let error="",result=false; try {result=refreshOwnedShim(shim,home,process.execPath,data);} catch(cause){error=String(cause);}
+fs.closeSync=close; syncBuiltinESMExports();
+console.log(JSON.stringify({error,result,complete:fs.readFileSync(shim,"utf8")===shimScript(home,process.execPath,data),entries:fs.readdirSync(dir)}));
+} finally {fs.rmSync(dir,{recursive:true,force:true});}`,
+    ],
+    { cwd: ROOT, encoding: "utf8" },
+  );
+  assert.deepEqual(JSON.parse(output), {
+    error: "",
+    result: true,
+    complete: true,
+    entries: ["home", "iva"],
+  });
 });
 
 test("a checkout somebody develops in is never converted, however the shim points", (t) => {
@@ -99,8 +339,30 @@ test("a checkout somebody develops in is never converted, however the shim point
   // Exactly what install.sh leaves behind: one branch, nothing of the user's own
   // on top of it, and a shim on PATH that runs it.
   const shim = join(dir, "iva-shim");
-  writeFileSync(shim, shimScript(home, process.execPath));
-  const managed = (): boolean => isManagedInstall(classifyRoot(home), shim);
+  writeFileSync(shim, shimScript(home, process.execPath, join(home, "data")));
+  const managed = (root = home): boolean =>
+    isManagedInstall(classifyRoot(root), shim);
+  assert.equal(managed(), true);
+
+  const alias = join(dir, "iva-alias");
+  symlinkSync(home, alias);
+  const previousDirect = `#!/usr/bin/env bash\nexec "${process.execPath}" "${alias}/bin/iva.mjs" "$@"\n`;
+  writeFileSync(shim, previousDirect);
+  assert.equal(managed(alias), true);
+  writeFileSync(
+    shim,
+    `#!/usr/bin/env bash\nexec "/bin/echo" "${alias}/bin/iva.mjs" "$@"\n`,
+  );
+  assert.equal(managed(alias), false);
+  writeFileSync(shim, shimScript(alias, "/bin/echo", join(alias, "data")));
+  assert.equal(managed(alias), false);
+  writeFileSync(shim, shimScript(alias, process.execPath, join(alias, "data")));
+  assert.equal(managed(alias), true);
+
+  const foreignWrapper = `#!/bin/sh\n: "${alias}/reports"\nexec "${process.execPath}" "${alias}/bin/iva.mjs" "$@"\n`;
+  writeFileSync(shim, foreignWrapper);
+  assert.equal(managed(alias), false);
+  writeFileSync(shim, shimScript(home, process.execPath, join(home, "data")));
   assert.equal(managed(), true);
 
   // The deliberate ceiling of the test: an installation is free to have edits of
@@ -122,26 +384,50 @@ test("a checkout somebody develops in is never converted, however the shim point
   assert.equal(managed(), false);
 });
 
-test("install.sh writes the same shim the bridge does", (t) => {
+test("install.sh creates and refreshes only its own shim", (t) => {
   const home = installation(t);
+  const dataDir = join(home, "state with spaces");
+  const nextDataDir = join(home, "next state");
+  writeFileSync(join(home, ".env"), "ASSISTANT_DATA_DIR=state with spaces\n");
   const installer = readFileSync(join(ROOT, "install.sh"), "utf8");
-  const block = /\n\{\n([\s\S]*?)\n\} > "\$HOME\/\.local\/bin\/iva"\n/u.exec(
-    installer,
-  );
-  assert.ok(block, "the shim is no longer written by a printf block");
+  const block =
+    /\nnode --input-type=module -e '\n([\s\S]*?)\n' "\$PROJECT_DIR" "\$HOME\/\.local\/bin\/iva"\n/u.exec(
+      installer,
+    );
+  assert.ok(block, "the installer no longer calls the shared shim generator");
 
   // The installer's own lines, run as the installer runs them: an installation
   // that never had a `current` to lose gets the same resolution rules as one the
   // bridge converted, or a lost symlink means two different behaviours.
-  mkdirSync(join(home, ".local/bin"), { recursive: true });
-  execFileSync("sh", ["-c", `{\n${block[1]}\n} > "$HOME/.local/bin/iva"`], {
-    env: { ...process.env, HOME: home, PROJECT_DIR: home },
-  });
-  const node = execFileSync("sh", ["-c", "command -v node"], {
-    encoding: "utf8",
-  }).trim();
-  assert.equal(
-    readFileSync(join(home, ".local/bin/iva"), "utf8"),
-    shimScript(home, node),
+  const target = join(home, ".local/bin/iva");
+  mkdirSync(dirname(target), { recursive: true });
+  execFileSync(
+    process.execPath,
+    ["--input-type=module", "-e", block[1], home, target],
+    { cwd: ROOT },
   );
+  assert.equal(
+    readFileSync(target, "utf8"),
+    shimScript(home, process.execPath, dataDir),
+  );
+
+  writeFileSync(join(home, ".env"), "ASSISTANT_DATA_DIR=next state\n");
+  execFileSync(
+    process.execPath,
+    ["--input-type=module", "-e", block[1], home, target],
+    { cwd: ROOT },
+  );
+  assert.equal(
+    readFileSync(target, "utf8"),
+    shimScript(home, process.execPath, nextDataDir),
+  );
+
+  const foreign = Buffer.from("#!/bin/sh\necho foreign\n");
+  writeFileSync(target, foreign);
+  execFileSync(
+    process.execPath,
+    ["--input-type=module", "-e", block[1], home, target],
+    { cwd: ROOT },
+  );
+  assert.deepEqual(readFileSync(target), foreign);
 });

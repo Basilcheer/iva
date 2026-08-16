@@ -231,7 +231,11 @@ function start(unit) {
       assign(line, env);
   for (const line of body.split("\\n"))
     if (line.startsWith("Environment=")) assign(line.slice(12), env);
-  const exec = (setting("ExecStart") || "").split(" ");
+  const exec = (setting("ExecStart") || "")
+    .match(/(?:[^\\s"]+|"(?:\\\\.|[^"])*")+/g)
+    ?.map((part) =>
+      part.startsWith('"') ? JSON.parse(part.replaceAll("$$", "$")) : part,
+    ) || [""];
   fs.mkdirSync(run, { recursive: true });
   const out = fs.openSync(join(run, unit + ".log"), "a");
   const child = spawn(exec[0], exec.slice(1), {
@@ -333,6 +337,7 @@ function seed(tree: string): void {
     "scripts/cli",
     "scripts/lib",
     "scripts/migrations",
+    "packages/data-dir",
     "deploy",
   ])
     cpSync(join(REPO, path), join(tree, path), {

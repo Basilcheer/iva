@@ -6,6 +6,7 @@ import {
   releaseLock,
   saveJsonAtomic,
 } from "./json-store.ts";
+import { dataDir as configuredDataDir } from "./data-dir.ts";
 
 export const TELEGRAM_MEDIA_CACHE_LIMIT = 500;
 
@@ -24,7 +25,7 @@ type CacheOptions = {
   log?: (message: string) => void;
 };
 
-const cacheFile = (dataDir = process.env.ASSISTANT_DATA_DIR ?? "data") =>
+const cacheFile = (dataDir = configuredDataDir()) =>
   join(dataDir, "media-cache.json");
 
 function isEntry(value: unknown): value is TelegramMediaCacheEntry {
@@ -81,7 +82,7 @@ function resolvesToAttachment(
 export async function getTelegramMediaCacheEntry(
   fileUniqueId: string,
   {
-    dataDir = process.env.ASSISTANT_DATA_DIR ?? "data",
+    dataDir = configuredDataDir(),
     vaultDir = process.env.ASSISTANT_VAULT_DIR ?? "vault",
     log = console.error,
   }: CacheOptions = {},
@@ -102,7 +103,7 @@ export async function saveTelegramMediaCacheEntry(
   fileUniqueId: string,
   entry: TelegramMediaCacheEntry,
   {
-    dataDir = process.env.ASSISTANT_DATA_DIR ?? "data",
+    dataDir = configuredDataDir(),
     log = console.error,
   }: Omit<CacheOptions, "vaultDir"> = {},
 ): Promise<void> {

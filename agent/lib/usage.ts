@@ -19,6 +19,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
+import { dataDir } from "./data-dir.ts";
 
 export interface UsageRecord {
   ts: string;
@@ -41,7 +42,7 @@ interface TurnLike {
   readonly sequence?: number;
 }
 
-const defaultDir = (): string => process.env.ASSISTANT_DATA_DIR || "data";
+const defaultDir = dataDir;
 
 export function usageFilePath(dataDir = defaultDir()): string {
   return join(dataDir, "usage.jsonl");

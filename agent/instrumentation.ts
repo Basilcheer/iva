@@ -28,6 +28,7 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import { defineInstrumentation } from "eve/instrumentation";
 import { PROBE_FLAG, probeEveHealth } from "./lib/eve-health.ts";
+import { dataDir as configuredDataDir } from "./lib/data-dir.ts";
 import { runScheduleMigration } from "./lib/schedule-migration.ts";
 import { validateTimeZone } from "./lib/timezone.ts";
 
@@ -40,6 +41,9 @@ export default defineInstrumentation({
   recordInputs: false,
   recordOutputs: false,
   setup() {
+    // Every non-TS child spawned by a turn inherits one canonical absolute path.
+    process.env.ASSISTANT_DATA_DIR = configuredDataDir();
+
     // Nitro's schedule runner reads the process timezone. Validate before assigning TZ:
     // process.env stringifies every value, and an unknown zone would make every Intl
     // consumer throw a RangeError.
@@ -72,10 +76,7 @@ export default defineInstrumentation({
     // whole async chain below as fire-and-forget with its own catch.
     try {
       const root = process.cwd();
-      const dataDirRaw = process.env.ASSISTANT_DATA_DIR ?? "data";
-      const dataDir = dataDirRaw.startsWith("/")
-        ? dataDirRaw
-        : join(root, dataDirRaw);
+      const dataDir = process.env.ASSISTANT_DATA_DIR;
       // Always loopback, deliberately NOT derived from ASSISTANT_HOST: the listener is
       // bound to 127.0.0.1 by iva.service (`eve start --host 127.0.0.1`) regardless of
       // what ASSISTANT_HOST says, and probeEveHealth only accepts loopback hostnames. A

@@ -13,6 +13,7 @@ import {
   releaseLock,
   saveJsonAtomic,
 } from "./json-store.ts";
+import { dataDir } from "./data-dir.ts";
 
 export const TELEGRAM_ACCEPTANCE_ROUTE = "/eve/v1/telegram/accepted";
 export const TELEGRAM_QUEUE_RECEIPT_FIELD = "iva_durable_queue_receipt";
@@ -238,8 +239,7 @@ export async function handleAcceptedTelegramWebhook<TState>(
   const authenticated = hasValidWebhookSecret(request);
   const botId = configuredBotId();
   const completedFile =
-    options.completedUpdatesFile ??
-    join(process.env.ASSISTANT_DATA_DIR ?? "data", "completed-updates.json");
+    options.completedUpdatesFile ?? join(dataDir(), "completed-updates.json");
   // Старые/нестандартные payload без update_id сохраняют прежний путь обработки.
   if (
     updateId !== null &&

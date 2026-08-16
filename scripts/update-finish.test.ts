@@ -7,7 +7,11 @@ import {
   restoreOptionalWriterState,
   restoreWriterOwnership,
   stopWriterUnits,
+  tombstoned,
 } from "./update-finish.ts";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   LEGACY_BRAIN_UNITS,
   LEGACY_MEMORY_UNITS,
@@ -15,6 +19,20 @@ import {
 
 type WriterRuntime = Parameters<typeof stopWriterUnits>[0];
 const USERBOT = "iva-telegram-userbot.service";
+
+test("tombstones follow the canonical custom data directory", (t) => {
+  const home = mkdtempSync(join(tmpdir(), "iva-tombstones-c4-"));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const dataDir = join(home, "state", "custom-data");
+  mkdirSync(join(dataDir, "custom"), { recursive: true });
+  writeFileSync(join(home, ".env"), "ASSISTANT_DATA_DIR=state/custom-data\n");
+  writeFileSync(
+    join(dataDir, "custom/manifest.json"),
+    `${JSON.stringify({ entries: { "agent/removed.ts": { tombstone: true } } })}\n`,
+  );
+
+  assert.deepEqual(tombstoned(home), ["agent/removed.ts"]);
+});
 
 function fakeRuntime({
   active,

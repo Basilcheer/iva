@@ -83,6 +83,19 @@ test("version names carry the release, the commit and the customization", () => 
     "0.3.15-0123456789ab+beefcafe~2",
   );
   assert.equal(parseVersionName("0.3.15-0123456789ab~3")?.build, 3);
+  assert.deepEqual(parseVersionName(versionName("1.2.3-rc-hotfix", sha)), {
+    version: "1.2.3-rc-hotfix",
+    sha: "0123456789ab",
+    overlay: null,
+    build: 1,
+  });
+  for (const version of ["1.2.3+build.7", "1.2.3-rc.1+build.7"])
+    assert.deepEqual(parseVersionName(versionName(version, sha)), {
+      version,
+      sha: "0123456789ab",
+      overlay: null,
+      build: 1,
+    });
   assert.equal(
     releaseOf("0.3.15-0123456789ab+beefcafe~2"),
     "0.3.15-0123456789ab+beefcafe",
@@ -95,6 +108,81 @@ test("version names carry the release, the commit and the customization", () => 
   assert.equal(parseVersionName(".incomplete"), null);
   assert.equal(parseVersionName("node_modules"), null);
   assert.equal(parseVersionName("0.3.15-XYZ"), null);
+  for (const invalid of [
+    "1.2.3-alpha..beta",
+    "01.2.3",
+    "1.02.3",
+    "1.2.03",
+    "1.2.3-01",
+    "1.2.3+build..7",
+  ])
+    assert.equal(
+      parseVersionName(versionName(invalid, "0123456789abcdef")),
+      null,
+      invalid,
+    );
+});
+
+test("version names round-trip every supported package SemVer shape", () => {
+  const numeric = fc.nat({ max: 999 }).map(String);
+  const identifier = fc
+    .array(
+      fc.constantFrom(
+        ..."0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-",
+      ),
+      {
+        minLength: 1,
+        maxLength: 8,
+      },
+    )
+    .map((characters) => characters.join(""));
+  const prereleaseIdentifier = identifier.filter(
+    (value) => !/^0\d+$/u.test(value),
+  );
+  const prerelease = fc
+    .array(prereleaseIdentifier, { minLength: 1, maxLength: 3 })
+    .map((parts) => parts.join("."));
+  const metadata = fc
+    .array(identifier, { minLength: 1, maxLength: 3 })
+    .map((parts) => parts.join("."));
+  const semver = fc
+    .tuple(
+      numeric,
+      numeric,
+      numeric,
+      fc.option(prerelease, { nil: undefined }),
+      fc.option(metadata, { nil: undefined }),
+    )
+    .map(
+      ([major, minor, patch, prerelease, metadata]) =>
+        `${major}.${minor}.${patch}${prerelease ? `-${prerelease}` : ""}${metadata ? `+${metadata}` : ""}`,
+    );
+  const hex = fc.constantFrom(..."0123456789abcdef");
+  const digest = (length: number) =>
+    fc
+      .array(hex, { minLength: length, maxLength: length })
+      .map((digits) => digits.join(""));
+
+  fc.assert(
+    fc.property(
+      semver,
+      digest(40),
+      fc.option(digest(8), { nil: null }),
+      fc.integer({ min: 1, max: 9 }),
+      (version, sha, overlay, build) => {
+        assert.deepEqual(
+          parseVersionName(versionName(version, sha, overlay, build)),
+          {
+            version,
+            sha: sha.slice(0, 12),
+            overlay,
+            build,
+          },
+        );
+      },
+    ),
+    { seed: 18804, numRuns: 500 },
+  );
 });
 
 test("layout keeps state outside the versions tree", (t) => {

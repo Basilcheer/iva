@@ -5,7 +5,7 @@
 # `iva userbot setup` (она же собирает venv и генерирует токен). Без TELEGRAM_API_ID/HASH
 # в .env serve.py завершится с понятной ошибкой — поэтому не в авто-enable списке.
 #
-# Плейсхолдеры __PROJECT_DIR__/__PYTHON_BIN__ подставляет writeUnits()
+# Плейсхолдеры __PROJECT_DIR__, __PYTHON_BIN__ и __DATA_DIR_ENV__ подставляет writeUnits()
 # (scripts/cli/systemd.ts; bin/iva.mjs остаётся внешним entry shim).
 [Unit]
 Description=Iva Telegram userbot MCP proxy (Telethon session owner)
@@ -18,7 +18,8 @@ EnvironmentFile=__PROJECT_DIR__/.env
 Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
 # The SQLite session holds the MTProto auth key — keep everything the proxy writes private.
 UMask=0077
-ExecStart=__PYTHON_BIN__ serve.py
+# Apply this after EnvironmentFile, so its raw relative value cannot win.
+ExecStart=/usr/bin/env __DATA_DIR_ENV__ __PYTHON_BIN__ serve.py
 Restart=always
 RestartSec=5
 

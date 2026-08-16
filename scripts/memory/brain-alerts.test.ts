@@ -193,6 +193,7 @@ function runBrainWithoutTree(
   const island = join(home, "island");
   mkdirSync(join(island, "scripts/memory"), { recursive: true });
   mkdirSync(join(island, "scripts/lib"), { recursive: true });
+  mkdirSync(join(island, "packages/data-dir"), { recursive: true });
   writeFileSync(
     join(island, "package.json"),
     JSON.stringify({ type: "module" }),
@@ -202,6 +203,7 @@ function runBrainWithoutTree(
     join(island, "scripts/memory/brain.ts"),
   );
   for (const name of [
+    "data-dir.ts",
     "memory-maintenance.ts",
     "notice-policy.ts",
     "notice.ts",
@@ -210,6 +212,11 @@ function runBrainWithoutTree(
     copyFileSync(
       join(ROOT, "scripts/lib", name),
       join(island, "scripts/lib", name),
+    );
+  for (const name of ["index.ts", "package.json"])
+    copyFileSync(
+      join(ROOT, "packages/data-dir", name),
+      join(island, "packages/data-dir", name),
     );
 
   const vault = join(home, "vault");

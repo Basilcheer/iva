@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import { isEntrypoint, upstreamQuery } from "./lib/version-layout.ts";
 import { noticeLang } from "./lib/notice-policy.ts";
 import { acquireUpdateLock } from "./lib/version-store.ts";
+import { resolveDataDir } from "./lib/data-dir.ts";
 import {
   inspectUpstream,
   markVersionNotified,
@@ -34,8 +35,7 @@ type DailyUpdateOptions = {
 };
 
 function dataDir(root: string, env: UpdateEnvironment): string {
-  const configured = env.ASSISTANT_DATA_DIR || "data";
-  return configured.startsWith("/") ? configured : join(root, configured);
+  return resolveDataDir(root, env.ASSISTANT_DATA_DIR);
 }
 
 export async function runDailyUpdateCheck({

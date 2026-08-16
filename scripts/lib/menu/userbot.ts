@@ -11,6 +11,7 @@
 import { execFile } from "node:child_process";
 import { join } from "node:path";
 import { readEnvValues, upsertEnv } from "../env-file.ts";
+import { resolveDataDir } from "../data-dir.ts";
 import { probeUserbotHealth } from "../userbot-health.ts";
 
 type ErrorLike = { code?: unknown; message?: unknown };
@@ -29,6 +30,7 @@ type MenuContext = {
     envPath: string;
     probeUserbotHealth?: (options: {
       root: string;
+      dataDir?: string;
       port: string;
     }) => Promise<Health>;
     runUserbotSetup?: () => Promise<void>;
@@ -50,7 +52,11 @@ type MenuContext = {
 type Exec = (
   file: string,
   args: string[],
-  options: { timeout: number; encoding: "utf8" },
+  options: {
+    timeout: number;
+    encoding: "utf8";
+    env?: NodeJS.ProcessEnv;
+  },
   callback: (error: ErrorLike | null, stdout?: string) => void,
 ) => unknown;
 
@@ -86,13 +92,20 @@ export function runSetupCommand(
   {
     exec = execFile as unknown as Exec,
     timeoutMs = 180_000,
-  }: { exec?: Exec; timeoutMs?: number } = {},
+    dataDir,
+  }: { exec?: Exec; timeoutMs?: number; dataDir?: string } = {},
 ) {
   return new Promise<void>((resolve, reject) => {
     exec(
       process.execPath,
       [bin, "userbot", "setup"],
-      { timeout: timeoutMs, encoding: "utf8" },
+      {
+        timeout: timeoutMs,
+        encoding: "utf8",
+        ...(dataDir
+          ? { env: { ...process.env, ASSISTANT_DATA_DIR: dataDir } }
+          : {}),
+      },
       (error) => {
         if (error) {
           const code = typeof error.code === "number" ? error.code : 1;
@@ -110,7 +123,11 @@ async function probeStatus(
   env: Record<string, string | undefined>,
 ) {
   const probe = ctx.deps.probeUserbotHealth || probeUserbotHealth;
-  return probe({ root: ctx.deps.root, port: env.TELEGRAM_MCP_PORT || "8724" });
+  return probe({
+    root: ctx.deps.root,
+    dataDir: resolveDataDir(ctx.deps.root, env.ASSISTANT_DATA_DIR),
+    port: env.TELEGRAM_MCP_PORT || "8724",
+  });
 }
 
 // Единая сборка карты — используется и render(), и async-перерисовкой после setup.
@@ -307,7 +324,14 @@ export default {
       const bin = join(ctx.deps.root, "bin/iva.mjs");
       // Отсоединённо: НЕ ждём (venv-сборка до 3 мин заблокировала бы poll-цикл). Перерисуем
       // экран по завершении — только если пользователь всё ещё на нём.
-      const setup = ctx.deps.runUserbotSetup || (() => runSetupCommand(bin));
+      const setup =
+        ctx.deps.runUserbotSetup ||
+        (async () => {
+          const env = await readEnvValues(ctx.deps.envPath);
+          return runSetupCommand(bin, {
+            dataDir: resolveDataDir(ctx.deps.root, env.ASSISTANT_DATA_DIR),
+          });
+        });
       setup()
         .then(async () => {
           if (ctx.flows.get(st.chatId, st.userId) === st && st.screen === SID) {

@@ -1,7 +1,8 @@
 // Shared path resolution for agent/schedules/*.ts — root/dataDir/statusPath/lockPath were
 // duplicated identically across all 5 schedule files; one place to change if the status
 // filename, lock filename, or ASSISTANT_DATA_DIR resolution rule ever changes.
-import { isAbsolute, join } from "node:path";
+import { join } from "node:path";
+import { dataDir } from "./data-dir.ts";
 
 export interface SchedulePaths {
   readonly root: string;
@@ -12,12 +13,11 @@ export interface SchedulePaths {
 
 export function resolvePaths(): SchedulePaths {
   const root = process.cwd();
-  const raw = process.env.ASSISTANT_DATA_DIR ?? "data";
-  const dataDir = isAbsolute(raw) ? raw : join(root, raw);
+  const resolvedDataDir = dataDir();
   return {
     root,
-    dataDir,
-    statusPath: join(dataDir, "rollup-status.json"),
+    dataDir: resolvedDataDir,
+    statusPath: join(resolvedDataDir, "rollup-status.json"),
     memoryLockPath: join(root, ".memory.lock"),
   };
 }

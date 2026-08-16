@@ -25,7 +25,7 @@ type ServiceCommand = "doc" | "cln" | "mem";
 type MenuButton = { text: string; callback_data: string };
 type ServiceStatus = "running" | "failed" | "cancelled" | "timeout" | "done";
 type CommandSpec =
-  | { kind: "proc"; argv: string[]; cwd?: string }
+  | { kind: "proc"; argv: string[]; cwd?: string; env?: NodeJS.ProcessEnv }
   | { kind: "unit"; unit: string };
 
 export type MenuServiceView = { text: string; rows: MenuButton[][] };
@@ -108,6 +108,10 @@ export async function commandSpec(
       kind: "proc",
       argv: [process.execPath, join(root, "bin/iva.mjs"), "doctor"],
       cwd: root,
+      env: {
+        ...process.env,
+        ASSISTANT_DATA_DIR: ctx.deps.dataDir,
+      },
     };
   if (cmd === "cln") {
     const env = await readEnvValues(ctx.deps.envPath);

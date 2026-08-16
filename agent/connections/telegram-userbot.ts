@@ -8,6 +8,7 @@
 import { defineMcpClientConnection } from "eve/connections";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { dataDir } from "#lib/data-dir.ts";
 
 const port = process.env.TELEGRAM_MCP_PORT ?? "8724";
 
@@ -18,7 +19,7 @@ function proxyToken(): string {
   if (process.env.TELEGRAM_MCP_TOKEN) return process.env.TELEGRAM_MCP_TOKEN;
   try {
     return readFileSync(
-      join(process.cwd(), "data", "telegram-userbot.token"),
+      join(dataDir(), "telegram-userbot.token"),
       "utf8",
     ).trim();
   } catch {
