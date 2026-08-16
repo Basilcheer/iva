@@ -10,6 +10,7 @@ import test, { type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import {
+  chmodSync,
   copyFileSync,
   existsSync,
   mkdirSync,
@@ -18,6 +19,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -35,7 +37,7 @@ function runBrain(
 ): Run {
   const home = mkdtempSync(join(tmpdir(), "iva-brain-alerts-"));
   t.after(() => rmSync(home, { recursive: true, force: true }));
-  const vault = join(home, "vault");
+  const vault = join(home, "vault with ' quote $ sign");
   const dataDir = join(home, "data");
   mkdirSync(join(vault, "cards"), { recursive: true });
   mkdirSync(dataDir, { recursive: true });
@@ -146,6 +148,7 @@ test("every brain alert goes through the throttle and carries both locales", () 
     "core-cap",
     "health-drop",
     "maintenance",
+    "supersede-unreadable",
     "unclosed-fence",
     "vault-remote",
   ]);
@@ -173,6 +176,111 @@ test("every brain alert goes through the throttle and carries both locales", () 
   assert.match(source, /Память не бэкапится: у vault нет git remote\./u);
   assert.match(source, /"\(repo scope\)\. The nightly brain then creates/u);
   assert.match(source, /"\(scope repo\)\. Ночной brain сам создаст/u);
+  assert.match(source, /Supersede skipped unreadable Cards\./u);
+  assert.match(source, /Supersede пропустил нечитаемые карточки\./u);
+});
+
+test("Supersede skip report raises one actionable throttled Alert without Card data", (t) => {
+  const home = mkdtempSync(join(tmpdir(), "iva-supersede-alert-"));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const vault = join(home, "vault");
+  const dataDir = join(home, "data");
+  const bin = join(home, "bin");
+  mkdirSync(join(vault, "cards"), { recursive: true });
+  mkdirSync(dataDir, { recursive: true });
+  mkdirSync(bin, { recursive: true });
+  writeFileSync(join(vault, "CORE.md"), "# CORE\n");
+  writeFileSync(
+    join(vault, "cards", "private-name.md"),
+    "---\ntype: note\nprivate: [broken\n---\n```\nsecret bytes\n",
+  );
+  writeFileSync(
+    join(vault, "cards", "readable-unclosed.md"),
+    "---\ntype: note\n---\n```\nreadable bytes\n",
+  );
+
+  const skipped = [
+    { path: "cards/private-name.md", reason: "malformed_frontmatter" },
+  ];
+  const uv = join(bin, "uv");
+  writeFileSync(
+    uv,
+    `#!/bin/sh
+/bin/mkdir -p .graph
+printf '%s\\n' '${JSON.stringify({ skipped })}' > .graph/supersede-report.json
+exit 0
+`,
+  );
+  chmodSync(uv, 0o755);
+
+  const run = () =>
+    spawnSync(process.execPath, ["scripts/memory/brain.ts"], {
+      cwd: ROOT,
+      encoding: "utf8",
+      env: {
+        PATH: bin,
+        ASSISTANT_VAULT_DIR: vault,
+        ASSISTANT_DATA_DIR: dataDir,
+        ASSISTANT_TIMEZONE: "UTC",
+        AGENT_LANGUAGE: "en",
+      },
+    });
+
+  const first = run();
+  assert.equal(first.status, 1);
+  assert.match(first.stderr, /Supersede skipped unreadable Cards\./u);
+  assert.match(first.stderr, /Conflicts in 1 Card will not reach Rollup\./u);
+  assert.match(first.stderr, /supersede-report\.json/u);
+  assert.doesNotMatch(first.stderr, /private-name/u);
+  assert.doesNotMatch(first.stderr, /private-bytes/u);
+  assert.doesNotMatch(first.stderr, /secret bytes/u);
+  assert.match(first.stderr, /Cards with an unclosed ``` fence: 1\./u);
+  assert.match(first.stderr, /cards\/readable-unclosed\.md/u);
+
+  const command = first.stderr.match(
+    /Run this command:\n([^\n]+)\nThen open this report/u,
+  )?.[1];
+  assert.ok(command, first.stderr);
+  const reportedPath = first.stderr.match(
+    /Then open this report:\n([^\n]+)\nRepair the listed Cards/u,
+  )?.[1];
+  assert.ok(reportedPath, first.stderr);
+  rmSync(join(vault, ".graph", "supersede-report.json"), { force: true });
+  const replay = spawnSync("/bin/sh", ["-c", command], {
+    cwd: home,
+    encoding: "utf8",
+    env: {
+      HOME: home,
+      PATH: process.env.PATH ?? "/opt/homebrew/bin:/usr/bin:/bin",
+    },
+  });
+  assert.equal(replay.status, 0, replay.stderr);
+  const namedReport = spawnSync("/bin/sh", ["-c", `test -f ${reportedPath}`], {
+    cwd: home,
+    encoding: "utf8",
+  });
+  assert.equal(namedReport.status, 0, namedReport.stderr);
+  const replayedReport: unknown = JSON.parse(
+    readFileSync(join(vault, ".graph", "supersede-report.json"), "utf8"),
+  );
+  assert.deepEqual(replayedReport, { skipped });
+
+  const essence = createHash("sha256")
+    .update(JSON.stringify(skipped))
+    .digest("hex");
+  writeFileSync(
+    join(dataDir, "alert-state.json"),
+    JSON.stringify({
+      "supersede-unreadable": { essence, lastSentAt: Date.now() },
+    }),
+  );
+  const second = run();
+  assert.equal(second.status, 1);
+  assert.doesNotMatch(second.stderr, /Supersede skipped unreadable Cards\./u);
+  assert.match(
+    second.stdout,
+    /supersede-unreadable is unchanged since the last alert — not repeated/u,
+  );
 });
 
 // ── Установка со сломанным agent/ ────────────────────────────────────────────────────────

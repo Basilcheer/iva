@@ -8,6 +8,7 @@
 // Guards: no git-remote/credentials → alert admin on Telegram (gh auth login + git remote),
 // push is skipped. Health score drop → alert on Telegram. Plain Node orchestration.
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -37,9 +38,18 @@ const BOT = process.env.TELEGRAM_BOT_TOKEN;
 const CHAT = notificationChat(); // admin chat
 const TZ = process.env.ASSISTANT_TIMEZONE ?? process.env.TZ ?? "UTC";
 
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", `'"'"'`)}'`;
+}
+
 interface HealthHistoryEntry {
   date?: string;
   health_score?: number;
+}
+
+interface SupersedeSkip {
+  path: string;
+  reason: "invalid_utf8" | "malformed_frontmatter" | "read_error";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -204,9 +214,10 @@ const SCHEMA = existsSync(VAULT_SCHEMA)
 // Do NOT ignore failures: otherwise brain would commit/push and exit 0 even though health/
 // decay/moc did not run (no uv/Python, vault not initialized, etc.).
 const failures: string[] = [];
-function maint(label: string, args: string[]): void {
+function maint(label: string, args: string[]) {
   const r = run("uv", ["run", ...args]);
   if (r.status !== 0) failures.push(label);
+  return r;
 }
 // cleanup — streaming repair of bug-bloated cards. MUST run before everything else:
 // enforce/graph read files whole and get OOM-killed on gigabyte cards; cleanup streams
@@ -231,7 +242,52 @@ maint("engine.decay", [`${SCRIPTS}/engine.py`, "decay", "."]);
 maint("moc.generate", [`${SCRIPTS}/moc.py`, "generate", "."]);
 // supersede — deterministic contradiction scan (dry-run): reports same-entity cards with
 // conflicting fields to .graph/supersede-candidates.json; the nightly LLM rollup resolves them.
-maint("supersede", [`${SCRIPTS}/supersede.py`, "."]);
+const supersedeSkippedPaths = new Set<string>();
+const supersedeRepairCommand =
+  `cd ${shellQuote(ROOT)} && ` +
+  `uv run scripts/autograph/supersede.py ${shellQuote(VAULT)}`;
+const supersedeReportPath = shellQuote(
+  resolve(VAULT, ".graph/supersede-report.json"),
+);
+const supersede = maint("supersede", [`${SCRIPTS}/supersede.py`, "."]);
+if (supersede.status === 0) {
+  const parsed: unknown = JSON.parse(
+    readFileSync(resolve(VAULT, ".graph/supersede-report.json"), "utf8"),
+  );
+  if (!isRecord(parsed) || !Array.isArray(parsed.skipped))
+    throw new Error("invalid supersede report");
+  const skipped = parsed.skipped.filter(
+    (item): item is SupersedeSkip =>
+      isRecord(item) &&
+      typeof item.path === "string" &&
+      (item.reason === "invalid_utf8" ||
+        item.reason === "malformed_frontmatter" ||
+        item.reason === "read_error"),
+  );
+  for (const item of skipped) supersedeSkippedPaths.add(item.path);
+  if (skipped.length) {
+    const count = skipped.length;
+    const essence = createHash("sha256")
+      .update(JSON.stringify(skipped))
+      .digest("hex");
+    await alert(
+      "supersede-unreadable",
+      essence,
+      T(
+        `Supersede skipped unreadable Cards. Conflicts in ${count} ${count === 1 ? "Card" : "Cards"} will not reach Rollup. ` +
+          `Run this command:\n${supersedeRepairCommand}\n` +
+          `Then open this report:\n${supersedeReportPath}\n` +
+          "Repair the listed Cards.",
+        `Supersede пропустил нечитаемые карточки. Противоречия в ${count} ${count === 1 ? "карточке" : "карточках"} не попадут в Rollup. ` +
+          `Выполни команду:\n${supersedeRepairCommand}\n` +
+          `Потом открой отчёт:\n${supersedeReportPath}\n` +
+          "Почини перечисленные карточки.",
+      ),
+    );
+  } else {
+    cleared("supersede-unreadable");
+  }
+}
 // dedup and link_cleanup — dry-run only (autograph policy: never apply automatically).
 maint("dedup", [`${SCRIPTS}/dedup.py`, ".", "--dry-run"]);
 maint("link_cleanup", [`${SCRIPTS}/link_cleanup.py`, "."]);
@@ -332,7 +388,11 @@ if (coreChecked && !coreClamped) cleared("core-cap");
 // sections, so write_card refuses UPDATE and SUPERSEDE on it rather than write the fact
 // into code. Where the author meant to close the fence is unknowable, so brain only names
 // the files - guessing would rewrite the user's text.
-const unclosed = cards ? cards.scanUnclosedFenceCards(VAULT) : [];
+const unclosed = cards
+  ? cards
+      .scanUnclosedFenceCards(VAULT)
+      .filter((path) => !supersedeSkippedPaths.has(path))
+  : [];
 if (unclosed.length) {
   const shown = unclosed.slice(0, 10);
   const rest = unclosed.length - shown.length;
