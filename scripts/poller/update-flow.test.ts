@@ -30,7 +30,7 @@ const { handleUpdateCallback, handleUpdateCheck, removeStaleUpdateJobs } =
       from: { id: number };
       message: { chat: { id: number }; message_id: number };
       data: string;
-    }) => Promise<true>;
+    }) => Promise<boolean>;
     handleUpdateCheck: (
       chatId: number,
       options: {
@@ -124,6 +124,29 @@ test("invalid update callback data only clears the Telegram spinner", async () =
     mutableGlobal.fetch = previousFetch;
   }
   assert.deepEqual(methods, ["answerCallbackQuery"]);
+});
+
+test("skip callback is retained when both ack and edit fail", async () => {
+  const methods: string[] = [];
+  const previousFetch = mutableGlobal.fetch;
+  mutableGlobal.fetch = (url) => {
+    methods.push(url.split("/").at(-1) ?? "");
+    return Promise.resolve({
+      json: () => Promise.resolve({ ok: false, result: {} }),
+    });
+  };
+  try {
+    const handled = await handleUpdateCallback({
+      id: "failed-skip",
+      from: { id: 42 },
+      message: { chat: { id: 1 }, message_id: 10 },
+      data: "iva_update:skip",
+    });
+    assert.equal(handled, false);
+  } finally {
+    mutableGlobal.fetch = previousFetch;
+  }
+  assert.deepEqual(methods, ["answerCallbackQuery", "editMessageText"]);
 });
 
 test("the /update button leaves the lock to the update it launches", async (t) => {

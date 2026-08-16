@@ -51,10 +51,23 @@ type UpdateCallbackQuery = {
 };
 type LaunchResult = { ok: boolean; msg: string };
 type ErrorLike = { message?: unknown };
+type TelegramResponse = { ok?: unknown };
 type RecoveryReport = {
   schema: "iva-update-conflicts/v1";
   conflicts: { path: string }[];
 };
+
+function telegramCallSucceeded(value: unknown): boolean {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as TelegramResponse).ok === true
+  );
+}
+
+function telegramResultSucceeded(value: unknown): boolean {
+  return value !== null && value !== undefined;
+}
 
 // ── self-update (/update) ──────────────────────────────────────────────────
 // Run `iva update` in its OWN transient systemd scope, so it survives the restart of
@@ -177,14 +190,15 @@ async function showSavedUpdateConflicts(
   bundleId: string,
   chatId: string | number,
   messageId: number,
-): Promise<void> {
+): Promise<boolean> {
   if (!validRecoveryBundleId(bundleId)) {
-    await edit(
-      chatId,
-      messageId,
-      tr("⚠️ Invalid recovery bundle", "⚠️ Неверный пакет восстановления"),
+    return telegramResultSucceeded(
+      await edit(
+        chatId,
+        messageId,
+        tr("⚠️ Invalid recovery bundle", "⚠️ Неверный пакет восстановления"),
+      ),
     );
-    return;
   }
   let report: RecoveryReport;
   try {
@@ -213,15 +227,16 @@ async function showSavedUpdateConflicts(
       throw new Error("invalid conflict list");
     report = parsed as RecoveryReport;
   } catch {
-    await edit(
-      chatId,
-      messageId,
-      tr(
-        "⚠️ Saved update details are unavailable",
-        "⚠️ Детали обновления недоступны",
+    return telegramResultSucceeded(
+      await edit(
+        chatId,
+        messageId,
+        tr(
+          "⚠️ Saved update details are unavailable",
+          "⚠️ Детали обновления недоступны",
+        ),
       ),
     );
-    return;
   }
   const visible = report.conflicts.slice(0, 10).map(({ path }) => `- ${path}`);
   if (report.conflicts.length > visible.length) {
@@ -240,53 +255,59 @@ async function showSavedUpdateConflicts(
           "Your local changes are saved in full.",
           "Ваши локальные изменения сохранены целиком.",
         );
-  await edit(
-    chatId,
-    messageId,
-    [
-      tr("✅ The new Iva core is active.", "✅ Новое ядро Iva активно."),
-      "",
-      details,
-      "",
-      tr(
-        "Tell Iva: “restore my update changes”.",
-        "Напишите Иве: «восстанови мои изменения после обновления».",
-      ),
-    ].join("\n"),
-    { inline_keyboard: [] },
+  return telegramResultSucceeded(
+    await edit(
+      chatId,
+      messageId,
+      [
+        tr("✅ The new Iva core is active.", "✅ Новое ядро Iva активно."),
+        "",
+        details,
+        "",
+        tr(
+          "Tell Iva: “restore my update changes”.",
+          "Напишите Иве: «восстанови мои изменения после обновления».",
+        ),
+      ].join("\n"),
+      { inline_keyboard: [] },
+    ),
   );
 }
 
 // Inline-button taps for the /update flow. Handled by the bridge; never delivered to eve.
 export async function handleUpdateCallback(
   cq: UpdateCallbackQuery,
-): Promise<true> {
+): Promise<boolean> {
   const parsed = parseUpdateCallbackData(cq.data);
-  const from = String(cq.from?.id ?? "");
+  const senderId = cq.from?.id;
+  const from = senderId === undefined ? null : String(senderId);
   const chatId = cq.message?.chat?.id;
   const messageId = cq.message?.message_id;
-  await tg("answerCallbackQuery", { callback_query_id: cq.id }); // clear the button spinner
+  const acknowledged = telegramCallSucceeded(
+    await tg("answerCallbackQuery", { callback_query_id: cq.id }),
+  ); // clear the button spinner
   if (parsed === null) {
     log("ignored invalid update callback data");
-    return true;
+    return acknowledged;
   }
-  if (ALLOWED.size === 0 || !ALLOWED.has(from)) return true; // swallow untrusted taps
+  if (from === null) return false;
+  if (ALLOWED.size === 0 || !ALLOWED.has(from)) return true; // explicit terminal drop for a known untrusted sender
   if (parsed.action === "skip") {
-    await edit(
+    const edited = await edit(
       chatId as string | number,
       messageId as number,
       tr("– Update postponed", "– Обновление отложено"),
       { inline_keyboard: [] },
     );
-    return true;
+    return acknowledged || telegramResultSucceeded(edited);
   }
   if (parsed.action === "conflicts") {
-    await showSavedUpdateConflicts(
+    const shown = await showSavedUpdateConflicts(
       parsed.bundleId,
       chatId as string | number,
       messageId as number,
     );
-    return true;
+    return acknowledged || shown;
   }
 
   const jobId = randomBytes(8).toString("hex");
@@ -295,13 +316,13 @@ export async function handleUpdateCallback(
   // not release it, and it is restarted by the very update it is waiting for - so
   // one tap would answer "already running" to every update after it.
   if (updateRunning(DATA_DIR)) {
-    await edit(
+    const edited = await edit(
       chatId as string | number,
       messageId as number,
       tr("⚠️ An update is already running", "⚠️ Обновление уже идёт"),
       { inline_keyboard: [] },
     );
-    return true;
+    return acknowledged || telegramResultSucceeded(edited);
   }
   // The version that runs as the tap is made. What the update moves the box off
   // of, written down while the process that knows it is still alive: after the
@@ -321,7 +342,7 @@ export async function handleUpdateCallback(
     }),
     { mode: 0o600 },
   );
-  await edit(
+  const savingNotice = await edit(
     chatId as string | number,
     messageId as number,
     tr("◇ Saving your changes", "◇ Сохраняю ваши изменения"),
@@ -330,12 +351,18 @@ export async function handleUpdateCallback(
   const r = await launchSelfUpdate(jobId);
   if (!r.ok) {
     await rm(join(jobsDir(), `${jobId}.json`), { force: true });
-    await edit(
+    const failureNotice = await edit(
       chatId as string | number,
       messageId as number,
       tr("⚠️ Couldn't start the update", "⚠️ Не удалось запустить обновление"),
     );
+    return (
+      acknowledged ||
+      telegramResultSucceeded(savingNotice) ||
+      telegramResultSucceeded(failureNotice)
+    );
   }
+  // The durable job now owns reconciliation and the updater process owns execution.
   return true;
 }
 
