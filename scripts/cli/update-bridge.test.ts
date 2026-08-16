@@ -742,13 +742,16 @@ test("the move to versions keeps the files git ignores inside the code tree", (t
   );
 });
 
-test("an update puts the userbot proxy on the version it installs", (t) => {
+test("an update puts an active userbot proxy on the version it installs", (t) => {
   const iva = world(t);
+  const unitDir = join(iva.fakeHome, ".config/systemd/user");
+  mkdirSync(unitDir, { recursive: true });
+  writeFileSync(join(unitDir, "iva-telegram-userbot.service"), "[Unit]\n");
   const output = update(iva);
   // The unit is written against `current`, so the interpreter it execs has to
   // exist in the version that just became current - nothing else creates it.
   const unit = readFileSync(
-    join(iva.fakeHome, ".config/systemd/user/iva-telegram-userbot.service"),
+    join(unitDir, "iva-telegram-userbot.service"),
     "utf8",
   );
   const python = /^ExecStart=(\S+)/mu.exec(unit)?.[1] ?? "";

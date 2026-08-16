@@ -14,6 +14,7 @@ import {
 } from "./lib/legacy-memory-units.ts";
 
 type WriterRuntime = Parameters<typeof stopWriterUnits>[0];
+const USERBOT = "iva-telegram-userbot.service";
 
 function fakeRuntime({
   active,
@@ -97,6 +98,7 @@ function fakeRuntime({
     runtime: {
       BRAIN_TIMER: "iva-brain.timer",
       BRAIN_SERVICE: "iva-brain.service",
+      SVC_USERBOT: USERBOT,
       SERVICES: ["iva.service", "iva-telegram-poll.service"],
       systemd,
     } as unknown as WriterRuntime,
@@ -213,6 +215,131 @@ test("a timer race cannot leave an optional service writing", () => {
       "stop iva-brain.service",
       "stop iva.service iva-telegram-poll.service",
     ],
+  );
+});
+
+test("the timer barrier stops userbot even when it starts after capture", () => {
+  const fake = fakeRuntime({
+    active: ["iva-brain.timer", "iva.service"],
+    enabled: ["iva-brain.timer"],
+    presentUnits: [USERBOT],
+  });
+  const before = captureOptionalWriterState(fake.runtime);
+  assert.equal(before.find((state) => state.unit === USERBOT)?.active, false);
+  Object.assign(fake.runtime.systemd, {
+    stop(units: readonly string[]) {
+      fake.events.push(`stop ${units.join(" ")}`);
+      for (const unit of units) {
+        if (unit === "iva-brain.timer") fake.activeUnits.add(USERBOT);
+        fake.activeUnits.delete(unit);
+      }
+    },
+  });
+  fake.events.length = 0;
+
+  stopWriterUnits(fake.runtime, before);
+
+  assert.equal(fake.activeUnits.has(USERBOT), false);
+  assert.deepEqual(
+    fake.events.filter((event) => event.startsWith("stop ")),
+    [
+      "stop iva-brain.timer",
+      `stop ${USERBOT}`,
+      "stop iva.service iva-telegram-poll.service",
+    ],
+  );
+});
+
+test("a userbot stop fault restores its captured active and enabled state", () => {
+  const fake = fakeRuntime({
+    active: [USERBOT],
+    enabled: [USERBOT],
+    presentUnits: ["iva-brain.timer", "iva-brain.service"],
+  });
+  const before = captureOptionalWriterState(fake.runtime);
+  Object.assign(fake.runtime.systemd, {
+    stop(units: readonly string[]) {
+      fake.events.push(`stop ${units.join(" ")}`);
+      for (const unit of units) fake.activeUnits.delete(unit);
+      if (units.includes(USERBOT)) throw new Error("userbot stop fault");
+    },
+  });
+
+  assert.throws(
+    () => stopWriterUnits(fake.runtime, before),
+    /userbot stop fault/u,
+  );
+  restoreWriterOwnership(fake.runtime, before, {
+    unitMigrationStarted: true,
+    legacyMemoryOwnerProven: false,
+  });
+
+  assert.equal(fake.activeUnits.has(USERBOT), true);
+  assert.equal(fake.enabledUnits.has(USERBOT), true);
+});
+
+test("a disabled userbot stays disabled and stopped after unit migration", () => {
+  const fake = fakeRuntime({
+    active: [],
+    enabled: [],
+    presentUnits: [USERBOT, "iva-brain.timer", "iva-brain.service"],
+  });
+  const before = captureOptionalWriterState(fake.runtime);
+  assert.deepEqual(
+    before.find((state) => state.unit === USERBOT),
+    {
+      unit: USERBOT,
+      loadState: "loaded",
+      active: false,
+      enabled: false,
+    },
+  );
+  stopWriterUnits(fake.runtime, before);
+  fake.activeUnits.add(USERBOT);
+  fake.enabledUnits.add(USERBOT);
+  fake.events.length = 0;
+
+  restoreWriterOwnership(fake.runtime, before, {
+    unitMigrationStarted: true,
+    legacyMemoryOwnerProven: false,
+  });
+
+  assert.equal(fake.activeUnits.has(USERBOT), false);
+  assert.equal(fake.enabledUnits.has(USERBOT), false);
+  assert.equal(fake.events.includes(`start ${USERBOT}`), false);
+  assert.equal(fake.events.includes(`enable ${USERBOT}`), false);
+});
+
+test("a previously missing userbot is never started during restoration", () => {
+  const fake = fakeRuntime({
+    active: [],
+    enabled: [],
+    presentUnits: ["iva-brain.timer", "iva-brain.service"],
+  });
+  const before = captureOptionalWriterState(fake.runtime);
+  assert.deepEqual(
+    before.find((state) => state.unit === USERBOT),
+    {
+      unit: USERBOT,
+      loadState: "not-found",
+      active: false,
+      enabled: false,
+    },
+  );
+  stopWriterUnits(fake.runtime, before);
+  fake.knownUnits.add(USERBOT);
+  fake.events.length = 0;
+
+  restoreWriterOwnership(fake.runtime, before, {
+    unitMigrationStarted: true,
+    legacyMemoryOwnerProven: false,
+  });
+
+  assert.equal(
+    fake.events.some(
+      (event) => event === `start ${USERBOT}` || event === `enable ${USERBOT}`,
+    ),
+    false,
   );
 });
 

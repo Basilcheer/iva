@@ -39,7 +39,7 @@ type Say = (message: string) => void;
 type CliRuntime = ReturnType<typeof createCliRuntime>;
 type WriterRuntime = Pick<
   CliRuntime,
-  "BRAIN_TIMER" | "BRAIN_SERVICE" | "SERVICES" | "systemd"
+  "BRAIN_TIMER" | "BRAIN_SERVICE" | "SERVICES" | "SVC_USERBOT" | "systemd"
 >;
 
 export type OptionalWriterState = {
@@ -106,6 +106,7 @@ export function captureOptionalWriterState(
     ...new Set([
       runtime.BRAIN_TIMER,
       runtime.BRAIN_SERVICE,
+      runtime.SVC_USERBOT,
       ...LEGACY_BRAIN_UNITS,
       ...LEGACY_MEMORY_UNITS,
     ]),
@@ -208,6 +209,10 @@ export function restoreMigratedWriterState(
   states: readonly OptionalWriterState[],
   { legacyMemoryOwnerProven = false } = {},
 ): void {
+  restoreOptionalWriterState(
+    runtime,
+    states.filter((state) => state.unit === runtime.SVC_USERBOT),
+  );
   const brainTimers = new Set([
     runtime.BRAIN_TIMER,
     ...LEGACY_BRAIN_UNITS.filter((unit) => unit.endsWith(".timer")),
@@ -465,7 +470,14 @@ export async function main(argv: readonly string[]): Promise<number> {
             deferMemoryMigration: true,
           });
           runtime.systemd.activate([runtime.UPDATE_TIMER]);
-          reinstallUserbot(runtime, services, notify);
+          if (
+            optionalWriterState?.find(
+              (state) => state.unit === runtime.SVC_USERBOT,
+            )?.active === true
+          )
+            reinstallUserbot(runtime, services, notify, {
+              knownActive: true,
+            });
         } finally {
           if (optionalWriterState) {
             restoreWriterOwnership(runtime, optionalWriterState, {

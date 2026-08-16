@@ -284,10 +284,12 @@ export function reinstallUserbot(
   runtime: UserbotRuntime,
   systemdLifecycle: Pick<CliSystemd, "writeUnits">,
   report: (message: string) => void,
+  { knownActive = false }: Pick<RestartUserbotOptions, "knownActive"> = {},
 ): void {
   try {
     createUserbotCommands(runtime, systemdLifecycle).restartUserbotIfActive({
       quiet: true,
+      knownActive,
     });
   } catch (error) {
     report(
