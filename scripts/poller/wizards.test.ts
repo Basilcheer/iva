@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-floating-promises, @typescript-eslint/require-await -- Node owns test registration; the async request double preserves the wizard boundary. */
 import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
+import { ContextWindowConfigurationError } from "../../agent/lib/context-window.ts";
 import { MODEL_PROVIDER_NAMES } from "#lib/model-provider.ts";
 import { CATALOG } from "../lib/model-catalog.ts";
 import {
@@ -9,12 +10,24 @@ import {
   getWizard,
   handleThinkCmd,
   isStaleWizard,
+  resetMessageCopy,
   runWizardRequest,
   selectWizardEffort,
   selectWizardModel,
   selectableWizardOptions,
   wizardActionAllowed,
 } from "./wizards.ts";
+
+test("reset copy rejects an invalid context window with the typed error", () => {
+  assert.throws(
+    () =>
+      resetMessageCopy("/new", {
+        MODEL_PROVIDER: "codex",
+        CODEX_CONTEXT_WINDOW: "1e3",
+      }),
+    ContextWindowConfigurationError,
+  );
+});
 
 // Визард — путь починки: он открывается ИМЕННО тогда, когда MODEL_PROVIDER набран с
 // опечаткой и агент не стартует. Назови он такую конфигурацию «ollama» — пользователь

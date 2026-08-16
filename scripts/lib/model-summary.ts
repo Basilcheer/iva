@@ -1,3 +1,4 @@
+import { resolveContextWindow } from "../../agent/lib/context-window.ts";
 import { catalogModel, catalogProvider } from "./model-catalog.ts";
 
 type Env = Record<string, string | undefined>;
@@ -35,12 +36,16 @@ export function modelSummary(env: Env = process.env): {
   const known = Boolean(catalogProvider(id)) && Object.hasOwn(PROVIDERS, id);
   const label = known ? PROVIDERS[id].label : `invalid (${id})`;
   const model = known ? (catalogModel(id, env) ?? "?") : "?";
-  const rawContext = known ? Number(env[PROVIDERS[id].context]) : 0;
+  const contextVariable = known ? PROVIDERS[id].context : null;
+  const rawContext = contextVariable ? env[contextVariable] : undefined;
+  const contextWindow =
+    contextVariable && rawContext !== undefined
+      ? resolveContextWindow(contextVariable, rawContext)
+      : null;
   return {
     provider: label,
     model,
-    contextWindow:
-      Number.isFinite(rawContext) && rawContext > 0 ? rawContext : null,
+    contextWindow,
     line: `${label} · ${model}`,
   };
 }

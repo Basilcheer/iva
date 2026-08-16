@@ -19,6 +19,10 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MODEL_PROVIDER_NAMES } from "#lib/model-provider.ts";
+import {
+  CONTEXT_WINDOW_CONFIGURATION_ERROR,
+  ContextWindowConfigurationError,
+} from "../../agent/lib/context-window.ts";
 import { SUMMARY_PROVIDER_NAMES, modelSummary } from "./model-summary.ts";
 import { createTerminalProgress } from "./progress.ts";
 import {
@@ -67,6 +71,39 @@ test("modelSummary uses configured provider values without runtime defaults", ()
       line: "OpenAI · gpt-5.5",
     },
   );
+});
+
+test("modelSummary uses the exact context-window resolver", () => {
+  const cases = [
+    ["ollama", "OLLAMA_CONTEXT_WINDOW"],
+    ["opencode", "OPENCODE_CONTEXT_WINDOW"],
+    ["openrouter", "OPENROUTER_CONTEXT_WINDOW"],
+    ["codex", "CODEX_CONTEXT_WINDOW"],
+  ] as const;
+
+  for (const [provider, variable] of cases) {
+    assert.equal(
+      modelSummary({ MODEL_PROVIDER: provider }).contextWindow,
+      null,
+    );
+    assert.equal(
+      modelSummary({ MODEL_PROVIDER: provider, [variable]: "1" }).contextWindow,
+      1,
+    );
+    for (const raw of ["1.5", "1e3", " ", "9007199254740990.5"]) {
+      assert.throws(
+        () => modelSummary({ MODEL_PROVIDER: provider, [variable]: raw }),
+        (error: unknown) => {
+          assert.ok(error instanceof ContextWindowConfigurationError);
+          assert.equal(error.code, CONTEXT_WINDOW_CONFIGURATION_ERROR);
+          assert.equal(error.variable, variable);
+          assert.equal(error.value, raw);
+          return true;
+        },
+        `${provider}:${JSON.stringify(raw)}`,
+      );
+    }
+  }
 });
 
 // Экран обновления показывает эту строку рядом с версией. Знай он свой набор имён —

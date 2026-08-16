@@ -2,6 +2,7 @@ import { wrapLanguageModel, type LanguageModelMiddleware } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { CODEX_BASE_URL, codexAuthHeaders } from "./lib/codex-auth.ts";
+import { resolveContextWindow } from "./lib/context-window.ts";
 import {
   resolveModelProvider,
   type ModelProviderName,
@@ -31,7 +32,7 @@ const PROVIDERS = {
     // подставляет сюда локальный mock-провайдер (scripts/lib/mock-openai-server.ts).
     baseURL: process.env.OLLAMA_BASE_URL ?? "https://ollama.com/v1",
     apiKey: process.env.OLLAMA_API_KEY,
-    contextWindow: Number(process.env.OLLAMA_CONTEXT_WINDOW ?? 131072),
+    contextWindow: 131072,
     // Дешёвая мультимодалка того же провайдера (проверено на проде: принимает image_url, http 200).
     // Ollama Cloud снимает теги с раздачи: gemma3:12b отвечает 410 "retired at 2026-07-15" —
     // заменён на gemma4:31b (проверено 2026-07-28). Текстовые модели (deepseek, glm, gpt-oss)
@@ -42,7 +43,7 @@ const PROVIDERS = {
     // Продукт переименован Zen → Go, но API живёт на легаси-пути /zen/ (у /go/v1 — 404).
     baseURL: "https://opencode.ai/zen/go/v1",
     apiKey: process.env.OPENCODE_API_KEY,
-    contextWindow: Number(process.env.OPENCODE_CONTEXT_WINDOW ?? 131072),
+    contextWindow: 131072,
     // gemini-3-flash выпал из каталога Go (401 "Model gemini-3-flash is not supported") — теперь
     // qwen3.7-plus: отвечает 200 и кладёт описание в message.content. У glm-5.2/minimax-m3 текст
     // уходит в reasoning, у mimo-v2.5 content пустой — vision.ts читает только content.
@@ -51,7 +52,7 @@ const PROVIDERS = {
   openrouter: {
     baseURL: "https://openrouter.ai/api/v1",
     apiKey: process.env.OPENROUTER_API_KEY,
-    contextWindow: Number(process.env.OPENROUTER_CONTEXT_WINDOW ?? 131072),
+    contextWindow: 131072,
     // Дешёвая гарантированно-мультимодальная модель для картинок (как qwen3.7-plus у opencode):
     // vision работает независимо от выбранной текстовой модели (та может быть text-only).
     visionModel: "google/gemini-2.5-flash",
@@ -59,7 +60,7 @@ const PROVIDERS = {
   codex: {
     baseURL: CODEX_BASE_URL,
     apiKey: undefined, // авторизация — OAuth-токен подписки, не статичный ключ (см. codexFetch)
-    contextWindow: Number(process.env.CODEX_CONTEXT_WINDOW ?? 272000),
+    contextWindow: 272000,
     // gpt-5* мультимодальны — картинки идут через ту же подписку (см. agent/vision.ts),
     // поэтому vision-модель подписки — это и есть выбранная текстовая.
     visionModel: selected.model,
@@ -75,8 +76,15 @@ const PROVIDERS = {
 >;
 
 export const providerName = PROVIDER;
+const contextWindowVariable =
+  `${PROVIDER.toUpperCase()}_CONTEXT_WINDOW` as const;
 export const providerConfig = {
   ...PROVIDERS[PROVIDER],
+  contextWindow: resolveContextWindow(
+    contextWindowVariable,
+    process.env[contextWindowVariable],
+    PROVIDERS[PROVIDER].contextWindow,
+  ),
   textModel: selected.model,
 };
 
