@@ -135,11 +135,13 @@ export function stopWriterUnits(
       (state) => present(state.loadState) && state.unit.endsWith(".service"),
     )
     .map((state) => state.unit);
-  const writers = [...optionalTimers, ...optionalServices, ...runtime.SERVICES];
-  runtime.systemd.stop(writers);
-  for (const unit of writers) {
-    if (unitActive(runtime, unit))
-      throw new Error(`writer ${unit} remained active after stop`);
+  for (const writers of [optionalTimers, optionalServices, runtime.SERVICES]) {
+    if (writers.length === 0) continue;
+    runtime.systemd.stop(writers);
+    for (const unit of writers) {
+      if (unitActive(runtime, unit))
+        throw new Error(`writer ${unit} remained active after stop`);
+    }
   }
 }
 
@@ -204,6 +206,7 @@ function restoreUnitState(
 export function restoreMigratedWriterState(
   runtime: WriterRuntime,
   states: readonly OptionalWriterState[],
+  { legacyMemoryOwnerProven = false } = {},
 ): void {
   const brainTimers = new Set([
     runtime.BRAIN_TIMER,
@@ -248,12 +251,14 @@ export function restoreMigratedWriterState(
     return remaining.get(state.unit.replace(/\.timer$/u, ".service")) === true;
   });
   const owner = runtime.SERVICES[0];
-  if (
-    hadLegacyMemorySchedule &&
-    !completeLegacySchedule &&
-    (!owner || !unitActive(runtime, owner))
-  )
-    throw new Error("legacy memory schedule has no active service owner");
+  if (hadLegacyMemorySchedule && !completeLegacySchedule) {
+    if (!legacyMemoryOwnerProven)
+      throw new Error(
+        "legacy memory schedule owner was not proven by writeUnits",
+      );
+    if (!owner || !unitActive(runtime, owner))
+      throw new Error("legacy memory schedule has no active service owner");
+  }
 }
 
 /** Build leftovers of a checkout: not tracked, not state, never worth keeping. */
@@ -393,6 +398,7 @@ export async function main(argv: readonly string[]): Promise<number> {
   const notify: Say = (message) => console.log(`! ${message}`);
   let optionalWriterState: OptionalWriterState[] | undefined;
   let unitMigrationStarted = false;
+  let legacyMemoryOwnerProven = false;
   let outcome: UpdateOutcome;
   try {
     outcome = await finishVersionUpdate({
@@ -417,7 +423,9 @@ export async function main(argv: readonly string[]): Promise<number> {
         } finally {
           if (optionalWriterState) {
             if (unitMigrationStarted)
-              restoreMigratedWriterState(runtime, optionalWriterState);
+              restoreMigratedWriterState(runtime, optionalWriterState, {
+                legacyMemoryOwnerProven,
+              });
             else restoreOptionalWriterState(runtime, optionalWriterState);
           }
         }
@@ -433,11 +441,16 @@ export async function main(argv: readonly string[]): Promise<number> {
         try {
           unitMigrationStarted = true;
           services.restartServices();
+          // Completed writeUnits removes legacy memory units only after proving
+          // compiled schedules; completed restart proves their process owner live.
+          legacyMemoryOwnerProven = true;
           runtime.systemd.activate([runtime.UPDATE_TIMER]);
           reinstallUserbot(runtime, services, notify);
         } finally {
           if (optionalWriterState)
-            restoreMigratedWriterState(runtime, optionalWriterState);
+            restoreMigratedWriterState(runtime, optionalWriterState, {
+              legacyMemoryOwnerProven,
+            });
         }
         await Promise.resolve();
       },

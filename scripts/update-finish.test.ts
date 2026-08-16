@@ -122,9 +122,13 @@ test("quiesce stops every old writer and leaves update-check alone", () => {
 
   stopWriterUnits(fake.runtime, before);
 
-  assert.equal(
-    fake.events[0],
-    "stop iva-brain.timer iva-brain.service iva.service iva-telegram-poll.service",
+  assert.deepEqual(
+    fake.events.filter((event) => event.startsWith("stop ")),
+    [
+      "stop iva-brain.timer",
+      "stop iva-brain.service",
+      "stop iva.service iva-telegram-poll.service",
+    ],
   );
   assert.equal(fake.activeUnits.has("iva-update-check.timer"), true);
 });
@@ -201,11 +205,14 @@ test("a timer race cannot leave an optional service writing", () => {
   stopWriterUnits(fake.runtime, before);
 
   assert.equal(fake.activeUnits.has("iva-brain.service"), false);
-  const stop = fake.events.find((event) => event.startsWith("stop ")) ?? "";
-  assert.ok(
-    stop.indexOf("iva-brain.timer") < stop.indexOf("iva-brain.service"),
+  assert.deepEqual(
+    fake.events.filter((event) => event.startsWith("stop ")),
+    [
+      "stop iva-brain.timer",
+      "stop iva-brain.service",
+      "stop iva.service iva-telegram-poll.service",
+    ],
   );
-  assert.ok(stop.indexOf("iva-brain.service") < stop.indexOf("iva.service"));
 });
 
 test("an enabled legacy timer stays stopped through migration and returns inactive", () => {
@@ -346,7 +353,9 @@ test("a migrated legacy memory timer keeps an active live service owner", () => 
   fake.activeUnits.add("iva.service");
   fake.events.length = 0;
 
-  restoreMigratedWriterState(fake.runtime, before);
+  restoreMigratedWriterState(fake.runtime, before, {
+    legacyMemoryOwnerProven: true,
+  });
 
   assert.equal(fake.activeUnits.has("iva.service"), true);
   assert.equal(fake.events.includes(`enable ${legacyTimer}`), false);
@@ -405,8 +414,35 @@ test("a migrated legacy memory schedule fails without its live owner", () => {
   fake.knownUnits.delete(legacyTimer.replace(/\.timer$/u, ".service"));
 
   assert.throws(
-    () => restoreMigratedWriterState(fake.runtime, before),
+    () =>
+      restoreMigratedWriterState(fake.runtime, before, {
+        legacyMemoryOwnerProven: true,
+      }),
     /no active service owner/u,
+  );
+});
+
+test("an active service alone does not prove a migrated memory owner", () => {
+  const legacyTimer = LEGACY_MEMORY_UNITS.find((unit) =>
+    unit.endsWith(".timer"),
+  );
+  assert.ok(legacyTimer);
+  const legacyService = legacyTimer.replace(/\.timer$/u, ".service");
+  const fake = fakeRuntime({
+    active: ["iva.service"],
+    enabled: [legacyTimer],
+    presentUnits: [legacyService, "iva-brain.timer", "iva-brain.service"],
+  });
+  const before = captureOptionalWriterState(fake.runtime);
+  stopWriterUnits(fake.runtime, before);
+  fake.enabledUnits.delete(legacyTimer);
+  fake.knownUnits.delete(legacyTimer);
+  fake.knownUnits.delete(legacyService);
+  fake.activeUnits.add("iva.service");
+
+  assert.throws(
+    () => restoreMigratedWriterState(fake.runtime, before),
+    /owner was not proven by writeUnits/u,
   );
 });
 

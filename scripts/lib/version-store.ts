@@ -534,10 +534,11 @@ export function createVersionStore(
 
   /** Make `current` valid again after a manual edit or a crash. */
   function heal(): string | null {
+    const state = activeState();
     const active = currentName();
     if (active) return active;
     // Not the newest on disk: after a rollback that one is the rejected version.
-    const chosen = settled();
+    const chosen = state?.version ?? null;
     const pick = list().find((name) => name === chosen) ?? list()[0];
     if (!pick) return null;
     activate(pick);

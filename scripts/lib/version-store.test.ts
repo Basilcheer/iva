@@ -292,6 +292,21 @@ test("a corrupt active marker blocks healing without changing its bytes", (t) =>
   assert.equal(existsSync(store.layout.current), false);
 });
 
+test("a valid current link cannot hide a corrupt active marker from healing", (t) => {
+  const store = createVersionStore(home(t));
+  install(store, "0.3.14-aaaaaaaaaaaa");
+  store.activate("0.3.14-aaaaaaaaaaaa");
+  const current = readlinkSync(store.layout.current);
+  mkdirSync(store.layout.data, { recursive: true });
+  const marker = join(store.layout.data, "active.json");
+  const corrupt = Buffer.from("{not json");
+  writeFileSync(marker, corrupt);
+
+  assert.throws(() => store.heal(), /active\.json.*corrupt/u);
+  assert.equal(readlinkSync(store.layout.current), current);
+  assert.deepEqual(readFileSync(marker), corrupt);
+});
+
 test("a corrupt active marker blocks rollback selection", (t) => {
   const store = createVersionStore(home(t));
   install(store, "0.3.14-aaaaaaaaaaaa");
