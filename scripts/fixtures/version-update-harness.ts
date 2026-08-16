@@ -109,7 +109,8 @@ async function main(): Promise<void> {
     // The steps after the flip are killable too, and each of them has to be
     // finishable by the run that comes next.
     quiesce: () => hook("quiesce"),
-    restart: () => hook("restart"),
+    resumeOldWriters: () => hook("resume"),
+    startCandidate: () => hook("restart"),
     // Nothing here runs a unit, so there is no service for the wait after the
     // restart to find; the failure it guards has its own tests.
     serving: () => Promise.resolve({ ok: true, log: "" }),

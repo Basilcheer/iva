@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { isUtf8 } from "node:buffer";
 import { createHash } from "node:crypto";
 import { cpSync, mkdirSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { dirname, join, relative, sep } from "node:path";
@@ -21,7 +22,6 @@ import {
   acquireUpdateLock,
   createVersionStore,
   parseVersionName,
-  readJson,
   releaseOf,
   versionName,
   writeJson,
@@ -77,7 +77,10 @@ type FinishOptions = {
   readonly probe?: Probe;
   /** Stop every service that can write shared state before migrations start. */
   readonly quiesce?: () => Promise<void>;
-  readonly restart?: (root: string) => Promise<void>;
+  /** Resume the old writers after a pre-activation fault, without changing units. */
+  readonly resumeOldWriters?: (root: string) => Promise<void>;
+  /** Refresh units and start the candidate only after activation. */
+  readonly startCandidate?: (root: string) => Promise<void>;
   /** Whether the restarted service answers on the port the installation runs on. */
   readonly serving?: (port: number) => Promise<Health>;
   /** Layout changes the installation itself needs: the shim, the old checkout. */
@@ -237,7 +240,8 @@ export async function finishVersionUpdate({
   run,
   probe,
   quiesce = async () => {},
-  restart = async () => {},
+  resumeOldWriters = async () => {},
+  startCandidate = async () => {},
   serving = (port) => awaitServing({ port }),
   adopt = () => {},
   notify = () => {},
@@ -247,17 +251,14 @@ export async function finishVersionUpdate({
   const dir = join(store.layout.versions, name);
   const customDir = join(store.layout.data, "custom");
   const active = store.currentName();
+  const settledBefore = store.settled(); // Validate state before build or mutation.
   const env = store.layout.env;
   const check: Probe =
     probe ??
     ((at, port) =>
       probeVersion({ dir: at, port, env: probeEnvironment(env, port, at) }));
   let custom = builtWith(dir, name, customDir);
-  if (
-    active === name &&
-    store.settled() === name &&
-    store.cleanupPending(name)
-  ) {
+  if (active === name && settledBefore === name && store.cleanupPending(name)) {
     await runPostHealthCleanup({ name, run, adopt, log, store });
     return { status: "current", version: name };
   }
@@ -336,13 +337,19 @@ export async function finishVersionUpdate({
       );
       return { status: "unhealthy", version: name, log: health.log };
     }
-    // Proved: activating it is what lets it see the installation's own state.
+    // Proved and immutable. It remains a candidate until all old writers stop
+    // and every state migration finishes against the old active Version.
     store.complete(name);
-    store.activate(name);
   }
 
-  let migrations: string[] = [];
-  let restartStarted = false;
+  let migrations: string[];
+  const storedPrevious = store.previousName();
+  const rollback =
+    active !== null && active !== name && store.list().includes(active)
+      ? active
+      : storedPrevious !== name
+        ? storedPrevious
+        : null;
   try {
     // Completion of this callback is the boundary: no old writer can overlap a
     // present or future migration that changes shared state.
@@ -362,33 +369,49 @@ export async function finishVersionUpdate({
       args: ["run", join(dir, "scripts/autograph/cleanup.py"), ".", "--apply"],
       cwd: store.layout.vault,
     });
-    restartStarted = true;
-    await restart(store.layout.current);
+    if (store.currentName() !== name) store.activate(name);
+    await startCandidate(store.layout.current);
   } catch (error) {
-    // A partial stop or migration fault must not intentionally leave every
-    // service stopped. The unsettled marker still makes the next run retry.
-    if (!restartStarted)
-      await restart(store.layout.current).catch((restartError: unknown) =>
+    // Every recoverable fault restores the Version that served before this run.
+    // The candidate stays complete, so the next update can retry without rebuild.
+    if (rollback !== null && rollback !== name && store.currentName() === name)
+      store.activate(rollback);
+    await resumeOldWriters(store.layout.current).catch(
+      (restartError: unknown) =>
         log(`service recovery failed: ${String(restartError)}`),
-      );
+    );
     throw error;
   }
 
   const port = servicePort(env);
-  const live = await serving(port);
+  const live = await serving(port).catch((error: unknown) => ({
+    ok: false,
+    log: error instanceof Error ? error.message : String(error),
+  }));
   if (!live.ok) {
     // The probe before the flip ran on scratch state on a scratch port, so an
     // installation that only breaks on its own - a card store it cannot open, a
     // port still held, its unit's environment - fails here and nowhere earlier.
     // Going back is a flip and a restart, and it is not the user's to do by hand
     // through an agent that is down.
-    const back =
-      active !== null && active !== name && store.list().includes(active)
-        ? active
-        : store.previousName();
+    const back = rollback;
     // Written before the rollback: a kill in the middle of one must not leave the
     // next update believing this tree is a good one to hand back.
-    store.recordLive(name, false);
+    let recordFailure: unknown;
+    try {
+      store.recordLive(name, false);
+    } catch (error) {
+      recordFailure = error;
+    }
+    if (back) {
+      store.activate(back);
+      // A restart that fails here leaves a service the user is without either
+      // way, and the flip is what makes the next start the older version's.
+      await resumeOldWriters(store.layout.current).catch((error: unknown) =>
+        log(`the restart onto ${back} failed: ${String(error)}`),
+      );
+      store.settle(back);
+    }
     notify(
       `${name} did not answer on port ${port} after the restart; ` +
         (back
@@ -400,15 +423,12 @@ export async function finishVersionUpdate({
             " update installs this version without them."
           : ""),
     );
-    if (back) {
-      store.activate(back);
-      // A restart that fails here leaves a service the user is without either
-      // way, and the flip is what makes the next start the older version's.
-      await restart(store.layout.current).catch((error: unknown) =>
-        log(`the restart onto ${back} failed: ${String(error)}`),
-      );
-      store.settle(back);
-    }
+    if (recordFailure !== undefined)
+      throw recordFailure instanceof Error
+        ? recordFailure
+        : new Error("recording live failure threw a non-Error value", {
+            cause: recordFailure,
+          });
     return { status: "unhealthy", version: name, log: live.log };
   }
 
@@ -416,14 +436,17 @@ export async function finishVersionUpdate({
   store.recordLive(name, true);
   // Service state commits before every optional cleanup. A crash or cleanup
   // fault leaves explicit debt, never a healthy update reported as unfinished.
-  store.settle(name, { cleanupPending: true });
+  store.settle(name, {
+    cleanupPending: true,
+    previous: active !== name ? active : rollback,
+  });
   // After the service is up: until it runs the new version, the old checkout is
   // what a failed restart falls back to, so it is not ours to remove any earlier.
   const removed = await runPostHealthCleanup({ name, run, adopt, log, store });
   return {
     status: "updated",
     version: name,
-    previous: active === name ? null : active,
+    previous: rollback,
     custom,
     migrations,
     removed,
@@ -583,12 +606,58 @@ async function buildStock(
   await npmStep(dir, run, BUILD, "build");
 }
 
-/** Names already applied. An unreadable marker means "nothing", never a crash. */
+function validMigrationState(
+  value: unknown,
+): value is { schema: "iva-migrations/v1"; applied: string[] } {
+  if (value === null || typeof value !== "object" || Array.isArray(value))
+    return false;
+  const state = value as Record<string, unknown>;
+  const keys = Object.keys(state);
+  return (
+    keys.length === 2 &&
+    keys.every((key) => key === "schema" || key === "applied") &&
+    state.schema === "iva-migrations/v1" &&
+    Array.isArray(state.applied) &&
+    state.applied.every(
+      (name, index, names) =>
+        typeof name === "string" &&
+        MIGRATION_FILE.test(`${name}.ts`) &&
+        names.indexOf(name) === index,
+    )
+  );
+}
+
+/** Names already applied. Missing is valid; every existing invalid marker blocks. */
 function appliedMigrations(dataDir: string): string[] {
-  const applied = readJson(join(dataDir, MIGRATION_MARKER)).applied;
-  return Array.isArray(applied)
-    ? applied.filter((name): name is string => typeof name === "string")
-    : [];
+  const marker = join(dataDir, MIGRATION_MARKER);
+  let bytes: Buffer;
+  try {
+    bytes = readFileSync(marker);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw new Error(
+      `${MIGRATION_MARKER} is corrupt or unreadable: ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error },
+    );
+  }
+  if (!isUtf8(bytes))
+    throw new Error(
+      `${MIGRATION_MARKER} is corrupt or unreadable: invalid UTF-8`,
+    );
+  let state: unknown;
+  try {
+    state = JSON.parse(bytes.toString("utf8"));
+  } catch (error) {
+    throw new Error(
+      `${MIGRATION_MARKER} is corrupt or unreadable: ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error },
+    );
+  }
+  if (!validMigrationState(state))
+    throw new Error(
+      `${MIGRATION_MARKER} is corrupt or unreadable: invalid migration state schema`,
+    );
+  return state.applied;
 }
 
 /** Unapplied migrations this version ships. Each is idempotent; the marker only saves work. */
@@ -609,6 +678,7 @@ export async function runMigrations({
   } catch {
     return [];
   }
+  if (files.length === 0) return [];
   const applied = appliedMigrations(dataDir);
   const done: string[] = [];
   const marker = join(dataDir, MIGRATION_MARKER);

@@ -97,7 +97,11 @@ function world(t: { after(fn: () => void): void }): World {
         run: fixtureRunner(),
         probe: fixtureProbe(),
         notify: (message) => state.notices.push(message),
-        restart: (dir) => {
+        resumeOldWriters: (dir) => {
+          state.restarts.push(dir);
+          return Promise.resolve();
+        },
+        startCandidate: (dir) => {
           state.restarts.push(dir);
           return Promise.resolve();
         },
@@ -650,16 +654,15 @@ test("an update killed after the flip is finished by the next run", async (t) =>
   const name = `0.3.15-${iva.target.sha.slice(0, 12)}`;
   const log = (): string => readFileSync(join(data, "migrated.log"), "utf8");
 
-  // Killed while stopping old writers: no migration starts beside them.
+  // Killed while stopping old writers: the old Version stays active.
   await killAt(iva.home, "quiesce", iva.target);
-  assert.equal(store.currentName(), name);
+  assert.equal(store.currentName(), first.version);
   assert.equal(store.settled(), first.version);
   assert.equal(log(), "001\n");
 
-  // Killed while migrating: `current` already names the new version, and nothing
-  // that comes after the flip has happened.
+  // Killed while migrating: activation still has not happened.
   await killAt(iva.home, "migrate", iva.target);
-  assert.equal(store.currentName(), name);
+  assert.equal(store.currentName(), first.version);
   assert.equal(store.settled(), first.version, "the move is not finished");
   assert.equal(log(), "001\n");
 
@@ -691,7 +694,7 @@ test("an update killed after the flip is finished by the next run", async (t) =>
 
 test("a state migration runs only after the old writer is quiesced", async (t) => {
   const iva = world(t);
-  await iva.update();
+  const first = updated(await iva.update());
   writeFileSync(
     join(iva.repo, "scripts/migrations/002-no-old-writer.ts"),
     `import { existsSync, writeFileSync } from "node:fs";
@@ -713,11 +716,32 @@ export default function up(context) {
     await iva.update({
       quiesce: () => {
         order.push("quiesce");
+        assert.equal(
+          createVersionStore(iva.home).currentName(),
+          first.version,
+          "activation must follow quiesce and migration",
+        );
         rmSync(oldWriter);
         return Promise.resolve();
       },
-      restart: (dir) => {
+      run: async (command, args, cwd) => {
+        if (command === "uv") {
+          order.push("cleanup");
+          assert.equal(
+            createVersionStore(iva.home).currentName(),
+            first.version,
+            "activation must follow migration and cleanup",
+          );
+        }
+        return fixtureRunner()(command, args, cwd);
+      },
+      startCandidate: (dir) => {
         order.push(`restart @${dir}`);
+        assert.notEqual(
+          createVersionStore(iva.home).currentName(),
+          first.version,
+          "activation must precede restart",
+        );
         return Promise.resolve();
       },
     }),
@@ -725,6 +749,7 @@ export default function up(context) {
 
   assert.deepEqual(order, [
     "quiesce",
+    "cleanup",
     `restart @${layoutFor(iva.home).current}`,
   ]);
   assert.equal(
@@ -752,7 +777,7 @@ export default function up(context) {
   await assert.rejects(
     iva.update({
       quiesce: () => Promise.reject(new Error("cannot stop old writer")),
-      restart: () => {
+      resumeOldWriters: () => {
         recoveries += 1;
         return Promise.resolve();
       },
@@ -764,10 +789,66 @@ export default function up(context) {
   assert.equal(recoveries, 1);
   assert.equal(existsSync(join(store.layout.data, "unsafe-migration")), false);
   assert.equal(store.settled(), first.version);
-  assert.notEqual(store.currentName(), first.version);
+  assert.equal(store.currentName(), first.version);
 });
 
-test("a restart that fails leaves an update the next run can finish", async (t) => {
+test("a migration fault keeps the old Version active and restarts old writers", async (t) => {
+  const iva = world(t);
+  const first = updated(await iva.update());
+  writeFileSync(
+    join(iva.repo, "scripts/migrations/002-fail.ts"),
+    `export default function up() { throw new Error("migration exploded"); }\n`,
+  );
+  iva.release("0.3.15");
+  const currentAtRestart: Array<string | null> = [];
+
+  await assert.rejects(
+    iva.update({
+      resumeOldWriters: () => {
+        currentAtRestart.push(createVersionStore(iva.home).currentName());
+        return Promise.resolve();
+      },
+    }),
+    /migration 002-fail failed: migration exploded/u,
+  );
+
+  const store = createVersionStore(iva.home);
+  assert.equal(store.currentName(), first.version);
+  assert.equal(store.settled(), first.version);
+  assert.deepEqual(currentAtRestart, [first.version]);
+});
+
+test("an activation fault keeps the old Version active and restarts old writers", async (t) => {
+  const iva = world(t);
+  const first = updated(await iva.update());
+  writeFileSync(join(iva.repo, "agent/agent.ts"), "export const agent = 2;\n");
+  iva.release("0.3.15");
+  const store = createVersionStore(iva.home);
+  let recoveries = 0;
+
+  await assert.rejects(
+    iva.update({
+      store: {
+        ...store,
+        activate() {
+          throw new Error("activation exploded");
+        },
+      },
+      resumeOldWriters: () => {
+        recoveries += 1;
+        assert.equal(store.currentName(), first.version);
+        return Promise.resolve();
+      },
+    }),
+    /activation exploded/u,
+  );
+
+  assert.equal(recoveries, 1);
+  assert.equal(store.currentName(), first.version);
+  assert.equal(store.settled(), first.version);
+});
+
+test("a restart fault rolls back and leaves a prepared update the next run can finish", async (t) => {
   const iva = world(t);
   const first = updated(await iva.update());
   writeFileSync(join(iva.repo, "agent/agent.ts"), "export const agent = 2;\n");
@@ -777,12 +858,17 @@ test("a restart that fails leaves an update the next run can finish", async (t) 
 
   await assert.rejects(
     iva.update({
-      restart: () => Promise.reject(new Error("Failed to connect to bus")),
+      startCandidate: () =>
+        Promise.reject(new Error("Failed to connect to bus")),
     }),
     /Failed to connect to bus/,
   );
-  assert.equal(store.currentName(), name);
+  assert.equal(store.currentName(), first.version);
   assert.equal(store.settled(), first.version);
+  assert.ok(
+    store.list().includes(name),
+    "the prepared candidate remains retryable",
+  );
 
   let builds = 0;
   const outcome = updated(
@@ -797,6 +883,7 @@ test("a restart that fails leaves an update the next run can finish", async (t) 
   assert.equal(builds, 0);
   assert.equal(store.settled(), name);
   assert.deepEqual(iva.restarts, [
+    layoutFor(iva.home).current,
     layoutFor(iva.home).current,
     layoutFor(iva.home).current,
   ]);
@@ -960,6 +1047,48 @@ test("a version the service died on is rebuilt by the next update, never reused"
   assert.equal(store.liveFailed(outcome.version), false);
 });
 
+test("a live-health fault rolls back to the Version that served", async (t) => {
+  const iva = world(t);
+  const first = updated(await iva.update());
+  writeFileSync(join(iva.repo, "agent/agent.ts"), "export const agent = 2;\n");
+  iva.release("0.3.15");
+
+  const outcome = await iva.update({
+    serving: () => Promise.reject(new Error("health transport failed")),
+  });
+
+  assert.equal(outcome.status, "unhealthy");
+  if (outcome.status === "unhealthy")
+    assert.equal(outcome.log, "health transport failed");
+  const store = createVersionStore(iva.home);
+  assert.equal(store.currentName(), first.version);
+  assert.equal(store.settled(), first.version);
+});
+
+test("a live-failure marker fault cannot block rollback", async (t) => {
+  const iva = world(t);
+  const first = updated(await iva.update());
+  writeFileSync(join(iva.repo, "agent/agent.ts"), "export const agent = 2;\n");
+  iva.release("0.3.15");
+  const store = createVersionStore(iva.home);
+
+  await assert.rejects(
+    iva.update({
+      store: {
+        ...store,
+        recordLive() {
+          throw new Error("failure marker write failed");
+        },
+      },
+      serving: () => Promise.resolve({ ok: false, log: "nothing answered" }),
+    }),
+    /failure marker write failed/u,
+  );
+
+  assert.equal(store.currentName(), first.version);
+  assert.equal(store.settled(), first.version);
+});
+
 test("a first version that does not answer has nowhere to go back to", async (t) => {
   const iva = world(t);
   const current = layoutFor(iva.home).current;
@@ -998,12 +1127,14 @@ test("a rollback the restart refuses still leaves the older version current", as
   const outcome = await iva.update({
     log: (message) => logged.push(message),
     serving: () => Promise.resolve({ ok: false, log: "nothing answered" }),
-    restart: (dir) => {
+    startCandidate: (dir) => {
       iva.restarts.push(dir);
-      // The restart onto the new version goes through; the one back does not.
-      return restarts++ === 0
-        ? Promise.resolve()
-        : Promise.reject(new Error("Failed to connect to bus"));
+      return Promise.resolve();
+    },
+    resumeOldWriters: (dir) => {
+      iva.restarts.push(dir);
+      restarts += 1;
+      return Promise.reject(new Error("Failed to connect to bus"));
     },
   });
 
@@ -1014,6 +1145,7 @@ test("a rollback the restart refuses still leaves the older version current", as
     logged.some((message) => /Failed to connect to bus/.test(message)),
     logged.join("\n"),
   );
+  assert.equal(restarts, 1);
 });
 
 test("the chores of the installation are run around the restart, out of the version installed", async (t) => {
@@ -1024,7 +1156,7 @@ test("the chores of the installation are run around the restart, out of the vers
   const outcome = updated(
     await iva.update({
       log: (message) => logged.push(message),
-      restart: (dir) => {
+      startCandidate: (dir) => {
         calls.push(`restart @${dir}`);
         return Promise.resolve();
       },
@@ -1279,6 +1411,26 @@ test("a broken current link is healed before the update decides what to do", asy
   const outcome = await iva.update();
   assert.deepEqual(outcome, { status: "current", version: first.version });
   assert.equal(createVersionStore(iva.home).currentName(), first.version);
+});
+
+test("corrupt active state blocks update before leftover cleanup", async (t) => {
+  const iva = world(t);
+  const first = updated(await iva.update());
+  const store = createVersionStore(iva.home);
+  const leftover = store.stage("0.3.99-999999999999");
+  writeFileSync(join(leftover, "partial"), "keep");
+  const marker = join(store.layout.data, "active.json");
+  const corrupt = Buffer.from([0xff, 0x00, 0x7b]);
+  writeFileSync(marker, corrupt);
+
+  await assert.rejects(
+    iva.update(),
+    /active\.json.*corrupt|corrupt.*active\.json/u,
+  );
+
+  assert.equal(store.currentName(), first.version);
+  assert.equal(existsSync(leftover), true);
+  assert.deepEqual(readFileSync(marker), corrupt);
 });
 
 test("old versions are collected while the running one and its rollback stay", async (t) => {
