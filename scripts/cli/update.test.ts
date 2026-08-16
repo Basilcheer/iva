@@ -161,6 +161,9 @@ function transactionFixture(events: string[], state: TransactionState) {
     backupOutput: () => {
       events.push("tx.backupOutput");
     },
+    adoptOutput: () => {
+      events.push("tx.adoptOutput");
+    },
     rollback: async () => {
       events.push("tx.rollback");
     },
@@ -526,6 +529,7 @@ test("build failure consults live output state, rolls back and always tears down
     "ops.spawnSync",
     "tx.backupOutput",
     "tx.run:npm-test run build",
+    "tx.adoptOutput",
     "terminal.fail:Couldn't build Iva",
     "tx.rollback",
     "tx.get:outputTouched",

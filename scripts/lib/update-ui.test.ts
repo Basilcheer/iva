@@ -1354,7 +1354,40 @@ test("a false-success stash push never applies a pre-existing stash", async (t) 
   );
 });
 
-test("the durable unique ref restores a crashed transaction and disappears only on commit", async (t) => {
+test("a false-success stash apply cannot release the recovery owner", async (t) => {
+  const fixture = updateFixture();
+  t.after(() => rmSync(fixture.temp, { recursive: true, force: true }));
+  writeFileSync(join(fixture.local, "tracked.txt"), "local change\n");
+  writeFileSync(join(fixture.seed, "upstream.txt"), "upstream\n");
+  git(fixture.seed, "add", "upstream.txt");
+  git(fixture.seed, "commit", "-m", "upstream");
+  git(fixture.seed, "push", "origin", "main");
+  const { tx } = d10Transaction(
+    fixture,
+    'if [ "$1" = stash ] && [ "$2" = apply ]; then\n' + "  exit 0\n" + "fi\n",
+  );
+
+  await tx.protect();
+  await tx.fetchAndIntegrate();
+
+  await assert.rejects(
+    () => tx.restoreLocalChanges(),
+    /applied recovery state is incomplete: worktree/u,
+  );
+
+  assert.notEqual(
+    git(
+      fixture.local,
+      "for-each-ref",
+      "--format=%(objectname)",
+      "refs/iva/update-recovery",
+    ),
+    "",
+  );
+  assert.notEqual(git(fixture.local, "stash", "list"), "");
+});
+
+test("the durable unique ref survives an external restore without verified release", async (t) => {
   const fixture = updateFixture();
   t.after(() => rmSync(fixture.temp, { recursive: true, force: true }));
   const before = prepareProtectedTree(fixture.local);
@@ -1388,7 +1421,7 @@ test("the durable unique ref restores a crashed transaction and disappears only 
   );
 
   await tx.commit();
-  assert.equal(
+  assert.notEqual(
     git(
       fixture.local,
       "for-each-ref",
@@ -1397,6 +1430,53 @@ test("the durable unique ref restores a crashed transaction and disappears only 
     ),
     "",
   );
+});
+
+test("cleanup retains recovery when the verified applied tree changes before commit", async (t) => {
+  const fixture = updateFixture();
+  t.after(() => rmSync(fixture.temp, { recursive: true, force: true }));
+  writeFileSync(join(fixture.local, "tracked.txt"), "local change\n");
+  writeFileSync(join(fixture.seed, "upstream.txt"), "upstream\n");
+  git(fixture.seed, "add", "upstream.txt");
+  git(fixture.seed, "commit", "-m", "upstream");
+  git(fixture.seed, "push", "origin", "main");
+  const tx = createUpdateTransaction({
+    root: fixture.local,
+    dataDir: fixture.data,
+    envPath: join(fixture.local, ".env"),
+  });
+
+  await tx.protect();
+  await tx.fetchAndIntegrate();
+  const restored = await tx.restoreLocalChanges();
+  assert.equal(restored.status, "applied");
+  const recovery = git(
+    fixture.local,
+    "for-each-ref",
+    "--format=%(objectname)",
+    "refs/iva/update-recovery",
+  );
+  writeFileSync(join(fixture.local, "tracked.txt"), "foreign change\n");
+
+  await assert.rejects(
+    () => tx.commit(),
+    /applied recovery state is incomplete: worktree/u,
+  );
+
+  assert.equal(
+    readFileSync(join(fixture.local, "tracked.txt"), "utf8"),
+    "foreign change\n",
+  );
+  assert.equal(
+    git(
+      fixture.local,
+      "for-each-ref",
+      "--format=%(objectname)",
+      "refs/iva/update-recovery",
+    ),
+    recovery,
+  );
+  assert.notEqual(git(fixture.local, "stash", "list"), "");
 });
 
 test("the durable snapshot records modes, links and literal paths when core.fileMode is false", async (t) => {
@@ -1496,7 +1576,10 @@ test("the durable snapshot records modes, links and literal paths when core.file
 
   git(fixture.local, "stash", "apply", "--index", recoveryOid);
   assert.deepEqual(state(), before);
-  await tx.rollback();
+  await assert.rejects(
+    () => tx.rollback(),
+    /untracked recovery ownership changed: :\(glob\)\*/u,
+  );
   assert.deepEqual(state(), before);
   assert.notEqual(
     git(
@@ -1513,7 +1596,7 @@ test("the durable snapshot records modes, links and literal paths when core.file
     git(fixture.local, "stash", "list", "--format=%H"),
     olderStashOid,
   );
-  assert.equal(
+  assert.notEqual(
     git(
       fixture.local,
       "for-each-ref",
@@ -1749,7 +1832,7 @@ test("stash conflict report can still roll back user files byte-for-byte", async
   tx.backupOutput();
   mkdirSync(join(local, ".output"));
   writeFileSync(join(local, ".output", "server"), "bad build");
-  writeFileSync(join(local, ".env"), "SECRET=changed\n");
+  tx.adoptOutput();
   await tx.rollback();
 
   assert.equal(git(local, "rev-parse", "HEAD"), originalHead);

@@ -43,7 +43,7 @@ export type IgnoredCollisionPlan = {
   scopes: string[];
 };
 
-export type IgnoredCollisionIdentity = readonly [device: number, inode: number];
+export type IgnoredCollisionIdentity = readonly [device: bigint, inode: bigint];
 
 export type IgnoredCollisionContentEntry = IgnoredCollisionEntry & {
   bytes: Buffer;
@@ -65,7 +65,7 @@ export function verifyIgnoredCollisionOwnership({
     throw new Error(`ignored recovery collision ownership changed: ${path}`);
   };
   for (const entry of entries) {
-    const stat = lstat(root, entry.path);
+    const stat = lstatExact(root, entry.path);
     if (!stat) return changed(entry.path);
     const target = safeChild(root, entry.path);
     const bytes =
@@ -79,18 +79,18 @@ export function verifyIgnoredCollisionOwnership({
     if (
       !bytes.equals(entry.bytes) ||
       (entry.permissions !== undefined &&
-        (stat.mode & 0o777) !== entry.permissions)
+        Number(stat.mode & 0o777n) !== entry.permissions)
     )
       changed(entry.path);
     current.set(entry.path, [stat.dev, stat.ino]);
   }
   for (const entry of directories) {
-    const stat = lstat(root, entry.path);
+    const stat = lstatExact(root, entry.path);
     if (
       !stat ||
       !stat.isDirectory() ||
       stat.isSymbolicLink() ||
-      (stat.mode & 0o777) !== entry.permissions
+      Number(stat.mode & 0o777n) !== entry.permissions
     )
       return changed(entry.path);
     current.set(entry.path, [stat.dev, stat.ino]);
@@ -259,6 +259,15 @@ function isInside(path: string, directory: string): boolean {
 function lstat(root: string, path: string) {
   try {
     return lstatSync(safeChild(root, path));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+function lstatExact(root: string, path: string) {
+  try {
+    return lstatSync(safeChild(root, path), { bigint: true });
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
     throw error;

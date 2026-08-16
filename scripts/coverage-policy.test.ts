@@ -8,9 +8,9 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
-const EXPECTED_PRODUCTION_COUNT = 195;
+const EXPECTED_PRODUCTION_COUNT = 205;
 const EXPECTED_INVENTORY_SHA256 =
-  "45b888dadc673ff0eea73c3a20dc698192e24d7691aad5f2cbf5246058a43cf8";
+  "cb87cb141cae1905df4154d21cf176d27246d722bf14c5a6c56da6face6df06a";
 
 // Node's native include globs filter loaded modules; they do not load untouched files.
 // This test pins the exact production path inventory and a separately measured 26-path
@@ -46,7 +46,12 @@ const EXPECTED_INVENTORY_SHA256 =
 // reported all four through their proof tests, so the blind spot stays at 26.
 // The recovery owner `scripts/lib/update-recovery.ts` came next. Its target-aware
 // collision and manifest modules followed. The scoped update suite reports all three
-// at 94.55%, 97.53% and 100% lines, so the blind spot stays at 26.
+// at 94.55%, 97.53% and 100% lines, so the blind spot stays at 26. The updater split
+// then added candidate, command, resource, applied-state, ownership, IO, object-store,
+// collision-owner, and snapshot-verifier modules. The 140-test scoped suite reports
+// every added module and totals 96.02% lines, 84.69% branches, and 95.50% functions,
+// so the blind spot stays at 26. The resource identity and owner modules followed;
+// their 23-test scoped anchor reports 89.30% and 86.50% lines, so neither is blind.
 const MEASURED_UNREPORTED_BY_CATEGORY = {
   frameworkBoundaries: [
     "agent/agent.ts",

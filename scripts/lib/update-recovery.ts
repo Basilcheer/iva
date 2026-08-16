@@ -3,37 +3,34 @@ import {
   chmodSync,
   lstatSync,
   mkdirSync,
-  mkdtempSync,
   readFileSync,
   readlinkSync,
   rmSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
-import { dirname, join, resolve, sep } from "node:path";
+import { dirname, resolve, sep } from "node:path";
 import {
-  type IgnoredCollisionContentEntry,
-  type IgnoredCollisionIdentity,
   planIgnoredCollisions,
   removeIgnoredCollisionPaths,
-  restoreIgnoredCollisionDirectories,
-  verifyIgnoredCollisionDirectories,
-  verifyIgnoredCollisionOwnership,
   verifyIgnoredCollisionSet,
 } from "./update-ignored-collisions.ts";
+import { OriginalUntrackedOwner } from "./update-recovery-ownership.ts";
+import type { RecoveryIoHooks } from "./update-recovery-io.ts";
 import {
-  emptyFlags,
   type IndexFlags,
   metadataFor,
   permissionOverrides,
   type RecoverySnapshot,
-  sameFlags,
-  sameLiveEntries,
-  sameStrings,
-  sameTreeEntries,
   type SnapshotTreeEntry,
 } from "./update-recovery-manifest.ts";
+import { IgnoredCollisionOwner } from "./update-recovery-collision-owner.ts";
+import { AppliedRecoveryVerifier } from "./update-recovery-applied.ts";
+import { RecoveryObjectStore } from "./update-recovery-objects.ts";
+import {
+  RECOVERY_METADATA_PREFIX,
+  RecoverySnapshotVerifier,
+} from "./update-recovery-snapshot-verifier.ts";
 
 type CommandResult = { code: number; stdout: string; stderr: string };
 
@@ -49,7 +46,7 @@ export type RecoveryGit = {
   }>;
 };
 
-export type RecoveryFileOps = {
+export type RecoveryFileOps = RecoveryIoHooks & {
   remove(path: string): void;
   removeCollisionLeaf?(path: string): void;
   removeEmptyDirectory?(path: string): void;
@@ -78,12 +75,14 @@ type SnapshotState = {
   phase: "snapshot";
   snapshot: RecoverySnapshot;
   restoreStashOid: string;
-  disposition: "cleanup" | "retain";
+  cleanup:
+    | { kind: "pending" }
+    | { kind: "release"; excludedUntrackedPaths: readonly string[] }
+    | { kind: "retain" }
+    | { kind: "prune-stashes" };
 };
 
 type OwnerState = GuardState | CleanState | SnapshotState;
-
-const RECOVERY_METADATA_PREFIX = "iva-recovery-metadata-v1:";
 
 export class UpdateRecoveryOwner {
   readonly #root: string;
@@ -91,7 +90,11 @@ export class UpdateRecoveryOwner {
   readonly #ref: string;
   readonly #git: RecoveryGit;
   readonly #files: RecoveryFileOps;
-  #collisionOwnership = new Map<string, IgnoredCollisionIdentity>();
+  readonly #objects: RecoveryObjectStore;
+  readonly #collisions: IgnoredCollisionOwner;
+  readonly #untracked: OriginalUntrackedOwner;
+  readonly #applied: AppliedRecoveryVerifier;
+  readonly #snapshotVerifier: RecoverySnapshotVerifier;
   #state: OwnerState = { phase: "guard" };
 
   private constructor({
@@ -112,6 +115,33 @@ export class UpdateRecoveryOwner {
     this.#ref = ref;
     this.#git = git;
     this.#files = files;
+    this.#objects = new RecoveryObjectStore({
+      git,
+      liveBytes: (entry) => this.#liveBytes(entry),
+      removeTemporary: (path) => files.remove(path),
+    });
+    this.#collisions = new IgnoredCollisionOwner({ root, git, hooks: files });
+    this.#untracked = new OriginalUntrackedOwner({ root, git, hooks: files });
+    this.#snapshotVerifier = new RecoverySnapshotVerifier({
+      root,
+      headOid,
+      git,
+      objects: this.#objects,
+      liveTrackedEntries: (entries) => this.#liveTrackedEntries(entries),
+      liveTreeEntry: (path) => this.#liveTreeEntry(path),
+      liveBytes: (entry) => this.#liveBytes(entry),
+      indexFlags: () => this.#indexFlags(),
+      untrackedPaths: () => this.#untrackedPaths(),
+    });
+    this.#applied = new AppliedRecoveryVerifier({
+      git,
+      objects: this.#objects,
+      originalHead: headOid,
+      untracked: this.#untracked,
+      liveTrackedEntries: (entries) => this.#liveTrackedEntries(entries),
+      indexFlags: () => this.#indexFlags(),
+      untrackedPaths: () => this.#untrackedPaths(),
+    });
   }
 
   static async create({
@@ -181,7 +211,7 @@ export class UpdateRecoveryOwner {
   ): Promise<{ dirty: boolean }> {
     if (this.#state.phase !== "guard")
       throw new Error("recovery owner already captured state");
-    const indexEntries = this.#parseIndexEntries(
+    const indexEntries = this.#objects.parseIndexEntries(
       await this.#mustGit(["ls-files", "--cached", "--stage", "-z"], true),
     );
     const indexFlags = await this.#indexFlags();
@@ -193,7 +223,10 @@ export class UpdateRecoveryOwner {
     const untrackedPaths = await this.#untrackedPaths();
     const indexTree = await this.#mustGit(["write-tree"]);
     const worktreeEntries = this.#liveTrackedEntries(indexEntries);
-    const worktree = await this.#createRawTree("worktree", worktreeEntries);
+    const worktree = await this.#objects.createRawTree(
+      "worktree",
+      worktreeEntries,
+    );
     const ignoredCollisions = collisionTarget
       ? await planIgnoredCollisions({
           root: this.#root,
@@ -204,6 +237,10 @@ export class UpdateRecoveryOwner {
           git: this.#git,
         })
       : { entries: [], directories: [], scopes: [] };
+    this.#collisions.capture(
+      ignoredCollisions.entries,
+      ignoredCollisions.directories,
+    );
     const originalTree = await this.#mustGit([
       "rev-parse",
       "--verify",
@@ -236,15 +273,20 @@ export class UpdateRecoveryOwner {
         throw new Error(`untracked recovery path disappeared: ${path}`);
       return entry;
     });
+    const untrackedDirectories =
+      this.#untracked.captureDirectories(untrackedEntries);
     const recoverableUntrackedEntries = [
       ...untrackedEntries,
       ...ignoredCollisions.entries,
     ];
     const untracked =
       recoverableUntrackedEntries.length > 0
-        ? await this.#createRawTree("untracked", recoverableUntrackedEntries)
+        ? await this.#objects.createRawTree(
+            "untracked",
+            recoverableUntrackedEntries,
+          )
         : null;
-    const indexCommit = await this.#snapshotGit([
+    const indexCommit = await this.#objects.snapshotGit([
       "commit-tree",
       indexTree,
       "-p",
@@ -253,7 +295,7 @@ export class UpdateRecoveryOwner {
       `${message} index`,
     ]);
     const untrackedCommit = untracked
-      ? await this.#snapshotGit([
+      ? await this.#objects.snapshotGit([
           "commit-tree",
           untracked.tree,
           "-m",
@@ -268,6 +310,16 @@ export class UpdateRecoveryOwner {
         throw new Error(`ignored recovery blob OID is missing: ${entry.path}`);
       return { ...entry, oid };
     });
+    const capturedUntrackedEntries = untrackedEntries.map((entry) => {
+      const oid = untracked?.entries.find(
+        ({ path }) => path === entry.path,
+      )?.oid;
+      if (!oid)
+        throw new Error(
+          `untracked recovery blob OID is missing: ${entry.path}`,
+        );
+      return { ...entry, oid };
+    });
     const provisional: RecoverySnapshot = {
       oid: "",
       indexTree,
@@ -275,7 +327,8 @@ export class UpdateRecoveryOwner {
       untrackedTree: untracked?.tree ?? null,
       indexEntries,
       worktreeEntries,
-      untrackedEntries,
+      untrackedEntries: capturedUntrackedEntries,
+      untrackedDirectories,
       ignoredCollisionEntries,
       ignoredCollisionDirectories: ignoredCollisions.directories,
       ignoredCollisionScopes: ignoredCollisions.scopes,
@@ -284,7 +337,7 @@ export class UpdateRecoveryOwner {
     const metadata = Buffer.from(
       JSON.stringify(metadataFor(provisional)),
     ).toString("base64url");
-    const oid = await this.#snapshotGit([
+    const oid = await this.#objects.snapshotGit([
       "commit-tree",
       worktree.tree,
       "-p",
@@ -298,7 +351,9 @@ export class UpdateRecoveryOwner {
       `${RECOVERY_METADATA_PREFIX}${metadata}`,
     ]);
     const snapshot = { ...provisional, oid };
-    await this.#verifySnapshot(snapshot, { verifyFlags: true });
+    await this.#snapshotVerifier.verifySnapshot(snapshot, {
+      verifyFlags: true,
+    });
     await this.#mustGit(["update-ref", this.#ref, oid, this.#headOid]);
     const durableOid = await this.#mustGit([
       "rev-parse",
@@ -311,13 +366,11 @@ export class UpdateRecoveryOwner {
       phase: "snapshot",
       snapshot,
       restoreStashOid: "",
-      disposition: "cleanup",
+      cleanup: { kind: "pending" },
     };
-    this.#collisionOwnership = new Map(
-      [
-        ...snapshot.ignoredCollisionEntries,
-        ...snapshot.ignoredCollisionDirectories,
-      ].map(({ path, device, inode }) => [path, [device, inode] as const]),
+    this.#untracked.bindSnapshot(
+      snapshot.untrackedEntries,
+      snapshot.untrackedDirectories,
     );
     return { dirty: true };
   }
@@ -344,13 +397,33 @@ export class UpdateRecoveryOwner {
 
   retain(): void {
     const state = this.#snapshotState();
-    this.#state = { ...state, disposition: "retain" };
+    this.#state = { ...state, cleanup: { kind: "retain" } };
+  }
+
+  async confirmApplied(
+    excludedUntrackedPaths: readonly string[],
+  ): Promise<void> {
+    const state = this.#snapshotState();
+    await this.#applied.verify({
+      snapshot: state.snapshot,
+      restoreStashOid: state.restoreStashOid,
+      excludedUntrackedPaths,
+    });
+    this.#state = {
+      ...state,
+      cleanup: { kind: "release", excludedUntrackedPaths },
+    };
   }
 
   async prepareLiveTree(): Promise<void> {
     const state = this.#snapshotState();
-    await this.#verifySnapshot(state.snapshot, { verifyFlags: true });
-    await this.#verifyIgnoredCollisionOwnership(state.snapshot);
+    await this.#snapshotVerifier.verifySnapshot(state.snapshot, {
+      verifyFlags: true,
+    });
+    await this.#collisions.verify(
+      state.snapshot.ignoredCollisionEntries,
+      state.snapshot.ignoredCollisionDirectories,
+    );
     await this.#restoreSnapshot(state.snapshot, {
       preserveCollisionOwnership: true,
       restoreFlags: false,
@@ -363,10 +436,15 @@ export class UpdateRecoveryOwner {
       await this.#clearIndexFlags(this.#state.indexFlags);
       await this.#mustGit(["reset", "--hard", this.#headOid]);
       await this.#restoreIndexFlags(this.#state.indexFlags);
-      await this.#verifyClean(this.#state);
+      await this.#snapshotVerifier.verifyClean(this.#state);
       return;
     }
-    await this.#restoreSnapshot(this.#state.snapshot, {
+    const state = this.#state;
+    this.#state = {
+      ...state,
+      cleanup: { kind: "prune-stashes" },
+    };
+    await this.#restoreSnapshot(state.snapshot, {
       preserveCollisionOwnership: false,
       restoreFlags: true,
     });
@@ -381,14 +459,22 @@ export class UpdateRecoveryOwner {
     await this.#restoreIndexFlags(flags);
   }
 
-  removeOriginalUntracked(base = this.#root): void {
-    for (const relative of this.originalUntracked)
-      this.#files.remove(this.#safeChild(base, relative));
+  async rebindOriginalUntracked(): Promise<void> {
+    const state = this.#snapshotState();
+    await this.#untracked.verify(
+      state.snapshot.untrackedEntries,
+      state.snapshot.untrackedDirectories,
+      await this.#untrackedPaths(),
+      { rebind: true },
+    );
   }
 
   async removeIgnoredCollisions(): Promise<void> {
     const state = this.#snapshotState();
-    await this.#verifyIgnoredCollisionOwnership(state.snapshot);
+    await this.#collisions.verify(
+      state.snapshot.ignoredCollisionEntries,
+      state.snapshot.ignoredCollisionDirectories,
+    );
     await verifyIgnoredCollisionSet({
       git: this.#git,
       scopes: state.snapshot.ignoredCollisionScopes,
@@ -417,20 +503,33 @@ export class UpdateRecoveryOwner {
     });
   }
 
-  async cleanup(dropExactStash: (oid: string) => Promise<void>): Promise<void> {
-    if (
-      this.#state.phase === "snapshot" &&
-      this.#state.disposition === "retain"
-    )
-      return;
+  async cleanup(
+    dropExactStash: (oid: string) => Promise<void>,
+    transientPaths: readonly string[] = [],
+  ): Promise<void> {
     const owned = await this.#git.run(["rev-parse", "--verify", this.#ref]);
     if (owned.code !== 0 || owned.stdout !== this.recoveryOid)
       throw new Error(
         owned.stderr || "recovery ref no longer points to the owned OID",
       );
     if (this.#state.phase === "snapshot") {
+      if (
+        this.#state.cleanup.kind === "pending" ||
+        this.#state.cleanup.kind === "retain"
+      )
+        return;
+      if (this.#state.cleanup.kind === "release")
+        await this.#applied.verify({
+          snapshot: this.#state.snapshot,
+          restoreStashOid: this.#state.restoreStashOid,
+          excludedUntrackedPaths: [
+            ...this.#state.cleanup.excludedUntrackedPaths,
+            ...transientPaths,
+          ],
+        });
       await dropExactStash(this.#state.restoreStashOid);
       await dropExactStash(this.#state.snapshot.oid);
+      if (this.#state.cleanup.kind === "prune-stashes") return;
     }
     const deleted = await this.#git.run([
       "update-ref",
@@ -460,229 +559,53 @@ export class UpdateRecoveryOwner {
       restoreFlags,
     }: { preserveCollisionOwnership: boolean; restoreFlags: boolean },
   ): Promise<void> {
+    const currentIndex = this.#objects.parseIndexEntries(
+      await this.#mustGit(["ls-files", "--cached", "--stage", "-z"], true),
+    );
+    this.#untracked.assertResetSafe(
+      snapshot.untrackedEntries,
+      snapshot.untrackedDirectories,
+      currentIndex.map(({ path }) => path),
+    );
+    await this.#untracked.verify(
+      snapshot.untrackedEntries,
+      snapshot.untrackedDirectories,
+      await this.#untrackedPaths(),
+    );
     await this.#clearIndexFlags(snapshot.indexFlags);
     await this.#mustGit(["reset", "--hard", this.#headOid]);
-    this.removeOriginalUntracked();
     await this.#mustGit(["read-tree", snapshot.indexTree]);
     await this.#materializeTree(
       snapshot.worktreeTree,
       snapshot.indexEntries.map(({ path }) => path),
     );
-    if (snapshot.untrackedTree)
-      await this.#materializeTree(
-        snapshot.untrackedTree,
-        [],
-        preserveCollisionOwnership,
+    if (!preserveCollisionOwnership && snapshot.untrackedTree) {
+      await this.#untracked.restore(
+        snapshot.untrackedEntries,
+        snapshot.untrackedDirectories,
       );
-    if (!preserveCollisionOwnership)
-      restoreIgnoredCollisionDirectories(
-        this.#root,
+      await this.#collisions.restore(
+        snapshot.ignoredCollisionEntries,
         snapshot.ignoredCollisionDirectories,
       );
+    }
     if (restoreFlags) await this.#restoreIndexFlags(snapshot.indexFlags);
-    await this.#verifySnapshot(snapshot, { verifyFlags: restoreFlags });
-    if (!preserveCollisionOwnership)
-      this.#collisionOwnership = await this.#verifyIgnoredCollisionOwnership(
-        snapshot,
-        true,
-      );
-  }
-
-  async #verifySnapshot(
-    snapshot: RecoverySnapshot,
-    { verifyFlags }: { verifyFlags: boolean },
-  ): Promise<void> {
-    const [commitOid, baseOid, indexBaseOid, indexTree, snapshotIndexTree] =
-      await Promise.all([
-        this.#mustGit(["rev-parse", "--verify", `${snapshot.oid}^{commit}`]),
-        this.#mustGit(["rev-parse", "--verify", `${snapshot.oid}^1`]),
-        this.#mustGit(["rev-parse", "--verify", `${snapshot.oid}^2^1`]),
-        this.#mustGit(["write-tree"]),
-        this.#mustGit(["rev-parse", "--verify", `${snapshot.oid}^2^{tree}`]),
-      ]);
-    const snapshotWorktreeTree = await this.#mustGit([
-      "rev-parse",
-      "--verify",
-      `${snapshot.oid}^{tree}`,
-    ]);
-    const worktreeTreeEntries = this.#parseTreeEntries(
-      await this.#mustGit(["ls-tree", "-r", "-z", snapshot.worktreeTree], true),
-    );
-    const currentWorktreeEntries = this.#liveTrackedEntries(
-      snapshot.indexEntries,
-    );
-    const incomplete = [
-      [commitOid !== snapshot.oid, "commit"],
-      [baseOid !== this.#headOid, "base"],
-      [indexBaseOid !== this.#headOid, "index-base"],
-      [indexTree !== snapshotIndexTree, "index-tree"],
-      [snapshotWorktreeTree !== snapshot.worktreeTree, "snapshot-tree"],
-      [
-        !sameTreeEntries(worktreeTreeEntries, snapshot.worktreeEntries),
-        "snapshot-modes",
-      ],
-      [
-        !sameTreeEntries(currentWorktreeEntries, snapshot.worktreeEntries),
-        "live-modes",
-      ],
-    ]
-      .filter(([failed]) => failed)
-      .map(([, label]) => label);
-    if (incomplete.length > 0)
-      throw new Error(
-        `git recovery snapshot is incomplete: ${incomplete.join(", ")}`,
-      );
-    await this.#verifyLiveBytes(worktreeTreeEntries, snapshot.worktreeEntries);
-
-    if (snapshot.untrackedTree) {
-      const snapshotUntrackedTree = await this.#mustGit([
-        "rev-parse",
-        "--verify",
-        `${snapshot.oid}^3^{tree}`,
-      ]);
-      const untrackedTreeEntries = this.#parseTreeEntries(
-        await this.#mustGit(
-          ["ls-tree", "-r", "-z", snapshot.untrackedTree],
-          true,
-        ),
-      );
-      const recoverableUntrackedEntries = [
-        ...snapshot.untrackedEntries,
-        ...snapshot.ignoredCollisionEntries,
-      ];
-      const currentUntrackedEntries = snapshot.untrackedEntries
-        .map(({ path }) => this.#liveTreeEntry(path))
-        .filter((entry): entry is SnapshotTreeEntry => entry !== null);
-      if (
-        snapshotUntrackedTree !== snapshot.untrackedTree ||
-        !sameTreeEntries(untrackedTreeEntries, recoverableUntrackedEntries) ||
-        !sameTreeEntries(currentUntrackedEntries, snapshot.untrackedEntries)
-      )
-        throw new Error("git recovery snapshot is incomplete: untracked-tree");
-      await this.#verifyLiveBytes(
-        untrackedTreeEntries,
-        recoverableUntrackedEntries,
-      );
-    }
-    verifyIgnoredCollisionDirectories(
-      this.#root,
-      snapshot.ignoredCollisionDirectories,
-    );
-
-    const message = await this.#mustGit([
-      "show",
-      "-s",
-      "--format=%B",
-      snapshot.oid,
-    ]);
-    const encoded = message
-      .split("\n")
-      .find((line) => line.startsWith(RECOVERY_METADATA_PREFIX))
-      ?.slice(RECOVERY_METADATA_PREFIX.length);
-    if (!encoded) throw new Error("git recovery snapshot metadata is missing");
-    let storedMetadata: unknown;
-    try {
-      storedMetadata = JSON.parse(
-        Buffer.from(encoded, "base64url").toString("utf8"),
-      );
-    } catch {
-      throw new Error("git recovery snapshot metadata is invalid");
-    }
-    if (
-      JSON.stringify(storedMetadata) !== JSON.stringify(metadataFor(snapshot))
-    )
-      throw new Error("git recovery snapshot metadata does not match");
-    if (verifyFlags) {
-      const currentFlags = await this.#indexFlags();
-      if (!sameFlags(currentFlags, snapshot.indexFlags))
-        throw new Error("git recovery snapshot index flags do not match");
-    }
-    const currentUntracked = await this.#untrackedPaths();
-    const expectedUntracked = snapshot.untrackedEntries.map(({ path }) => path);
-    if (!sameStrings(currentUntracked, expectedUntracked))
-      throw new Error("git recovery snapshot untracked paths do not match");
-  }
-
-  async #verifyClean(state: CleanState): Promise<void> {
-    const [headOid, originalTree, indexTree, currentFlags, untrackedPaths] =
-      await Promise.all([
-        this.#mustGit(["rev-parse", "--verify", "HEAD"]),
-        this.#mustGit(["rev-parse", "--verify", `${this.#headOid}^{tree}`]),
-        this.#mustGit(["write-tree"]),
-        this.#indexFlags(),
-        this.#untrackedPaths(),
-      ]);
-    const worktreeEntries = this.#liveTrackedEntries(state.indexEntries);
-    const worktree = await this.#createRawTree("verify-clean", worktreeEntries);
-    const incomplete = [
-      [headOid !== this.#headOid, "head"],
-      [indexTree !== state.indexTree || indexTree !== originalTree, "index"],
-      [
-        worktree.tree !== state.worktreeTree || worktree.tree !== indexTree,
-        "worktree",
-      ],
-      [!sameLiveEntries(worktreeEntries, state.worktreeEntries), "modes"],
-      [!sameFlags(currentFlags, state.indexFlags), "index-flags"],
-      [untrackedPaths.length > 0, "untracked"],
-    ]
-      .filter(([failed]) => failed)
-      .map(([, label]) => label);
-    if (incomplete.length > 0)
-      throw new Error(
-        `clean recovery rollback is incomplete: ${incomplete.join(", ")}`,
-      );
-  }
-
-  async #verifyLiveBytes(
-    entries: readonly SnapshotTreeEntry[],
-    expectedEntries: readonly SnapshotTreeEntry[],
-  ): Promise<void> {
-    for (const entry of entries) {
-      if (!entry.oid)
-        throw new Error(`recovery blob OID is missing: ${entry.path}`);
-      const blob = await this.#git.runBuffer(["cat-file", "blob", entry.oid]);
-      if (blob.code !== 0)
-        throw new Error(
-          blob.stderr || `couldn't read recovery blob: ${entry.path}`,
-        );
-      const live = this.#liveBytes(entry);
-      if (!blob.stdout.equals(live))
-        throw new Error(
-          `git recovery snapshot bytes do not match: ${entry.path}`,
-        );
-      const expected = expectedEntries.find(({ path }) => path === entry.path);
-      const current = this.#liveTreeEntry(entry.path);
-      if (current?.permissions !== expected?.permissions)
-        throw new Error(
-          `git recovery snapshot permissions do not match: ${entry.path}`,
-        );
-    }
-  }
-
-  async #verifyIgnoredCollisionOwnership(
-    snapshot: RecoverySnapshot,
-    rebind = false,
-  ): Promise<Map<string, IgnoredCollisionIdentity>> {
-    const entries: IgnoredCollisionContentEntry[] = [];
-    for (const entry of snapshot.ignoredCollisionEntries) {
-      const blob = await this.#git.runBuffer(["cat-file", "blob", entry.oid]);
-      if (blob.code !== 0)
-        throw new Error(
-          blob.stderr || `couldn't read ignored recovery blob: ${entry.path}`,
-        );
-      entries.push({
-        ...entry,
-        bytes: blob.stdout,
-        device: entry.device,
-        inode: entry.inode,
-      });
-    }
-    return verifyIgnoredCollisionOwnership({
-      root: this.#root,
-      entries,
-      directories: snapshot.ignoredCollisionDirectories,
-      ...(rebind ? {} : { identities: this.#collisionOwnership }),
+    await this.#snapshotVerifier.verifySnapshot(snapshot, {
+      verifyFlags: restoreFlags,
     });
+    if (!preserveCollisionOwnership) {
+      await this.#untracked.verify(
+        snapshot.untrackedEntries,
+        snapshot.untrackedDirectories,
+        await this.#untrackedPaths(),
+        { requirePresent: true },
+      );
+      await this.#collisions.verify(
+        snapshot.ignoredCollisionEntries,
+        snapshot.ignoredCollisionDirectories,
+        { rebind: true },
+      );
+    }
   }
 
   async #materializeTree(
@@ -690,7 +613,7 @@ export class UpdateRecoveryOwner {
     removePaths: readonly string[],
     preserveCollisionOwnership = false,
   ) {
-    const entries = this.#parseTreeEntries(
+    const entries = this.#objects.parseTreeEntries(
       await this.#mustGit(["ls-tree", "-r", "-z", tree]),
     );
     for (const path of removePaths)
@@ -709,19 +632,7 @@ export class UpdateRecoveryOwner {
           )
         : undefined;
       if (collision) {
-        verifyIgnoredCollisionOwnership({
-          root: this.#root,
-          entries: [
-            {
-              ...collision,
-              bytes: blob.stdout,
-              device: collision.device,
-              inode: collision.inode,
-            },
-          ],
-          directories: [],
-          identities: this.#collisionOwnership,
-        });
+        this.#collisions.verifyContent({ ...collision, bytes: blob.stdout });
         continue;
       }
       const target = this.#safeChild(this.#root, entry.path);
@@ -748,98 +659,8 @@ export class UpdateRecoveryOwner {
     }
   }
 
-  async #createRawTree(
-    name: string,
-    entries: readonly SnapshotTreeEntry[],
-  ): Promise<{ tree: string; entries: SnapshotTreeEntry[] }> {
-    const snapshotDir = mkdtempSync(
-      join(tmpdir(), `iva-update-${name}-snapshot-`),
-    );
-    const indexEnv = { GIT_INDEX_FILE: join(snapshotDir, "index") };
-    try {
-      await this.#snapshotGit(["read-tree", "--empty"], indexEnv);
-      const resolved: SnapshotTreeEntry[] = [];
-      for (const entry of entries) {
-        let oid: string;
-        if (entry.mode === "120000") {
-          oid = await this.#snapshotGit(
-            ["hash-object", "-w", "--stdin"],
-            {},
-            this.#liveBytes(entry),
-          );
-        } else if (entry.mode === "100644" || entry.mode === "100755") {
-          oid = await this.#snapshotGit([
-            "hash-object",
-            "-w",
-            "--no-filters",
-            "--",
-            entry.path,
-          ]);
-        } else {
-          throw new Error(`unsupported working-tree mode: ${entry.mode}`);
-        }
-        resolved.push({ ...entry, oid });
-      }
-      if (resolved.length > 0) {
-        const input = Buffer.concat(
-          resolved.map(({ mode, oid, path }) =>
-            Buffer.from(`${mode} ${oid}\t${path}\0`),
-          ),
-        );
-        await this.#snapshotGit(
-          ["update-index", "-z", "--index-info"],
-          indexEnv,
-          input,
-        );
-      }
-      const tree = await this.#snapshotGit(["write-tree"], indexEnv);
-      return { tree, entries: resolved };
-    } finally {
-      this.#files.remove(snapshotDir);
-    }
-  }
-
-  #parseIndexEntries(text: string): SnapshotTreeEntry[] {
-    return text
-      .split("\0")
-      .filter(Boolean)
-      .map((record) => {
-        const tab = record.indexOf("\t");
-        const [mode, oid, stage] = record.slice(0, tab).split(" ");
-        if (tab < 0 || !mode || !oid || stage !== "0")
-          throw new Error("the Git index cannot be snapshotted");
-        return { mode, oid, path: record.slice(tab + 1) };
-      });
-  }
-
-  #parseTreeEntries(text: string): SnapshotTreeEntry[] {
-    return text
-      .split("\0")
-      .filter(Boolean)
-      .map((record) => {
-        const tab = record.indexOf("\t");
-        const [mode, , oid] = record.slice(0, tab).split(" ");
-        if (tab < 0 || !mode || !oid)
-          throw new Error("the recovery tree cannot be verified");
-        return { mode, oid, path: record.slice(tab + 1) };
-      });
-  }
-
-  #parseIndexFlags(text: string): IndexFlags {
-    const flags = emptyFlags();
-    for (const record of text.split("\0").filter(Boolean)) {
-      if (record.length < 3 || record[1] !== " ")
-        throw new Error("the Git index flags cannot be snapshotted");
-      const tag = record[0] ?? "";
-      const path = record.slice(2);
-      if (tag !== tag.toUpperCase()) flags.assumeUnchanged.push(path);
-      if (tag.toUpperCase() === "S") flags.skipWorktree.push(path);
-    }
-    return flags;
-  }
-
   async #indexFlags(): Promise<IndexFlags> {
-    return this.#parseIndexFlags(
+    return this.#objects.parseIndexFlags(
       await this.#mustGit(["ls-files", "-v", "-z"], true),
     );
   }
@@ -885,12 +706,20 @@ export class UpdateRecoveryOwner {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
       throw error;
     }
-    if (stat.isSymbolicLink()) return { mode: "120000", path };
+    if (stat.isSymbolicLink())
+      return {
+        mode: "120000",
+        path,
+        device: stat.dev,
+        inode: stat.ino,
+      };
     if (stat.isFile())
       return {
         mode: stat.mode & 0o111 ? "100755" : "100644",
         path,
         permissions: stat.mode & 0o777,
+        device: stat.dev,
+        inode: stat.ino,
       };
     if (stat.isDirectory() && indexMode === "160000")
       throw new Error(`unsupported working-tree entry: ${path} (gitlink)`);
@@ -956,28 +785,6 @@ export class UpdateRecoveryOwner {
     if (this.#state.phase !== "snapshot")
       throw new Error("a complete recovery snapshot is required");
     return this.#state;
-  }
-
-  async #snapshotGit(
-    args: string[],
-    extraEnv: NodeJS.ProcessEnv = {},
-    input?: Buffer,
-  ): Promise<string> {
-    const result = await this.#git.run(args, {
-      env: {
-        GIT_AUTHOR_NAME: "Iva Update Recovery",
-        GIT_AUTHOR_EMAIL: "iva-update@localhost",
-        GIT_COMMITTER_NAME: "Iva Update Recovery",
-        GIT_COMMITTER_EMAIL: "iva-update@localhost",
-        ...extraEnv,
-      },
-      ...(input ? { input } : {}),
-    });
-    if (result.code !== 0)
-      throw new Error(
-        result.stderr || result.stdout || `git ${args[0]} failed`,
-      );
-    return result.stdout;
   }
 
   async #mustGit(args: string[], rawOutput = false): Promise<string> {

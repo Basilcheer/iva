@@ -62,6 +62,7 @@ test("rollback restores an ignored binary when the target starts tracking its pa
     indexFlags: { assumeUnchanged: [], skipWorktree: [] },
     worktreePermissions: {},
     untrackedPermissions: { "ignored.bin": 0o640 },
+    untrackedDirectories: {},
     ignoredCollisionPaths: ["ignored.bin"],
     ignoredCollisionDirectories: {},
     ignoredCollisionScopes: ["ignored.bin"],

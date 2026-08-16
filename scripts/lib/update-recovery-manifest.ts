@@ -23,6 +23,12 @@ export type SnapshotDirectoryEntry = {
   inode: number;
 };
 
+export type SnapshotUntrackedDirectoryEntry = {
+  path: string;
+  permissions: number;
+  children: string[];
+};
+
 export type IndexFlags = {
   assumeUnchanged: string[];
   skipWorktree: string[];
@@ -36,6 +42,7 @@ export type RecoverySnapshot = {
   indexEntries: SnapshotTreeEntry[];
   worktreeEntries: SnapshotTreeEntry[];
   untrackedEntries: SnapshotTreeEntry[];
+  untrackedDirectories: SnapshotUntrackedDirectoryEntry[];
   ignoredCollisionEntries: SnapshotIgnoredCollisionEntry[];
   ignoredCollisionDirectories: SnapshotDirectoryEntry[];
   ignoredCollisionScopes: string[];
@@ -47,6 +54,10 @@ type RecoveryMetadata = {
   indexFlags: IndexFlags;
   worktreePermissions: Record<string, number>;
   untrackedPermissions: Record<string, number>;
+  untrackedDirectories: Record<
+    string,
+    { permissions: number; children: string[] }
+  >;
   ignoredCollisionPaths: string[];
   ignoredCollisionDirectories: Record<string, number>;
   ignoredCollisionScopes: string[];
@@ -123,6 +134,12 @@ export function metadataFor(snapshot: RecoverySnapshot): RecoveryMetadata {
       ...snapshot.untrackedEntries,
       ...snapshot.ignoredCollisionEntries,
     ]),
+    untrackedDirectories: Object.fromEntries(
+      snapshot.untrackedDirectories.map(({ path, permissions, children }) => [
+        path,
+        { permissions, children },
+      ]),
+    ),
     ignoredCollisionPaths: snapshot.ignoredCollisionEntries.map(
       ({ path }) => path,
     ),

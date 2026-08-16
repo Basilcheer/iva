@@ -317,7 +317,7 @@ test("rollback preserves a post-snapshot untracked file and reports incomplete r
 
   await assert.rejects(
     () => tx.rollback(),
-    /update rollback incomplete: git recovery snapshot untracked paths do not match/u,
+    /update rollback incomplete: untracked recovery ownership changed: unexpected path late-user\.bin/u,
   );
 
   assert.deepEqual(readFileSync(late), lateBytes);
@@ -396,18 +396,10 @@ test("one recovery cleanup failure cannot skip env, output or node_modules rollb
       "fi\n",
   );
   chmodSync(fakeNpm, 0o755);
-  let failRemoval = false;
   const tx = createUpdateTransaction({
     root: fx.local,
     dataDir: fx.data,
     envPath: join(fx.local, ".env"),
-    recoveryFileOps: {
-      remove(path) {
-        if (failRemoval && path === join(fx.local, "locked/original.bin"))
-          throw new Error("injected original-untracked cleanup failure");
-        rmSync(path, { recursive: true, force: true });
-      },
-    },
   });
 
   await tx.protect();
@@ -417,12 +409,16 @@ test("one recovery cleanup failure cannot skip env, output or node_modules rollb
   await tx.fetchAndIntegrate();
   await tx.restoreLocalChanges();
   assert.equal(await tx.promoteCandidate(), true);
-  writeFileSync(join(fx.local, ".env"), "SECRET=changed\n", { mode: 0o600 });
-  failRemoval = true;
+  const locked = join(fx.local, "locked/original.bin");
+  const ownedInode = statSync(locked).ino;
+  const foreignBytes = Buffer.from([8, 0, 254, 6]);
+  writeFileSync(locked, foreignBytes);
+  chmodSync(locked, 0o640);
+  assert.equal(statSync(locked).ino, ownedInode);
 
   await assert.rejects(
     () => tx.rollback(),
-    /update rollback incomplete: injected original-untracked cleanup failure/u,
+    /update rollback incomplete: untracked recovery ownership changed: locked\/original\.bin/u,
   );
 
   assert.equal(readFileSync(join(fx.local, ".env"), "utf8"), "SECRET=before\n");
@@ -435,6 +431,8 @@ test("one recovery cleanup failure cannot skip env, output or node_modules rollb
     readFileSync(join(fx.local, "node_modules/marker.txt"), "utf8"),
     "old-modules\n",
   );
+  assert.deepEqual(readFileSync(locked), foreignBytes);
+  assert.equal(statSync(locked).mode & 0o777, 0o640);
   assert.notEqual(
     git(
       fx.local,
