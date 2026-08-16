@@ -67,6 +67,26 @@ const waitForExit = (child: ReturnType<typeof spawn>) =>
 
 const read = (rel: string) => readFileSync(join(VAULT, rel), "utf8");
 
+test("invalid timezone falls back without losing a new Card", async (t) => {
+  const previous = process.env.ASSISTANT_TIMEZONE;
+  process.env.ASSISTANT_TIMEZONE = "Mars/Olympus";
+  t.after(() => {
+    if (previous === undefined) delete process.env.ASSISTANT_TIMEZONE;
+    else process.env.ASSISTANT_TIMEZONE = previous;
+  });
+
+  const result = await call({
+    type: "note",
+    title: "Timezone fallback",
+    description: "invalid timezone uses UTC",
+    tags: ["timezone"],
+    body: "The Card write must complete.",
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(existsSync(join(VAULT, result.file)), true);
+});
+
 // Реальная карточка: без title во frontmatter, свёрнутый скаляр description, латинский
 // легаси-слаг при кириллическом H1, поля вне схемы тула (tier/relevance/phone/…).
 const LEGACY = `---

@@ -16,7 +16,7 @@ import os
 import re
 import sys
 from pathlib import Path
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone as datetime_timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from collections import defaultdict
 
@@ -62,13 +62,13 @@ def _next_month(year: int, month: int) -> date:
 
 
 def _local_today() -> date:
-    timezone = os.environ.get('ASSISTANT_TIMEZONE') or os.environ.get('TZ')
-    if not timezone:
-        return date.today()
+    # Iva's Node boundary resolves ASSISTANT_TIMEZONE once and exports only a validated
+    # TZ. Direct Autograph use gets the same deterministic UTC fallback.
+    timezone = os.environ.get('TZ') or 'UTC'
     try:
         return datetime.now(ZoneInfo(timezone)).date()
     except (ZoneInfoNotFoundError, ValueError):
-        return date.today()
+        return datetime.now(datetime_timezone.utc).date()
 
 
 def expected_future_link(source: str, target: str, today: date | None = None) -> bool:

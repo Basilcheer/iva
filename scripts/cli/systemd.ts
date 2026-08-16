@@ -21,7 +21,7 @@ import {
   LEGACY_MEMORY_UNITS,
 } from "../lib/legacy-memory-units.ts";
 import { cleanupSystemdUnits } from "../lib/systemd-control.ts";
-import { validateTimeZone } from "../lib/timezone.ts";
+import { resolveTimeZone, validateTimeZone } from "../lib/timezone.ts";
 import type { createCliRuntime } from "./runtime.ts";
 
 type CliRuntime = ReturnType<typeof createCliRuntime>;
@@ -123,13 +123,15 @@ export function createCliSystemd(runtime: CliRuntime) {
   // in agent/schedules/memory-*.ts carry no timezone of their own and fire in the process's
   // local time) need — one place so the fallback/validation rule can't drift between them.
   function configuredTimezone(): string {
-    const raw = (readEnv().ASSISTANT_TIMEZONE || "UTC").trim();
+    const raw = readEnv().ASSISTANT_TIMEZONE;
+    const timezone = resolveTimeZone(raw);
+    if (!raw?.trim()) return timezone;
     if (/^[A-Za-z0-9_+/-]+$/.test(raw)) {
-      const timezone = validateTimeZone(raw);
-      if (timezone) return timezone;
+      const validated = validateTimeZone(raw);
+      if (validated) return validated;
     }
     warn(`invalid ASSISTANT_TIMEZONE=${JSON.stringify(raw)}; using UTC`);
-    return "UTC";
+    return timezone;
   }
 
   function canonicalDataDirEnvironment(): string {

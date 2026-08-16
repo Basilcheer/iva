@@ -27,6 +27,7 @@ import {
 import { notificationChat } from "../lib/notification-chat.ts";
 import { redactNotice } from "../lib/notice.ts";
 import { resolveDataDir } from "../lib/data-dir.ts";
+import { resolveTimeZone } from "../lib/timezone.ts";
 
 const VAULT = resolve(process.env.ASSISTANT_VAULT_DIR ?? "vault");
 const DATA_DIR = resolveDataDir(process.cwd());
@@ -36,7 +37,7 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const SCRIPTS = resolve(ROOT, "scripts/autograph");
 const BOT = process.env.TELEGRAM_BOT_TOKEN;
 const CHAT = notificationChat(); // admin chat
-const TZ = process.env.ASSISTANT_TIMEZONE ?? process.env.TZ ?? "UTC";
+const TZ = resolveTimeZone(process.env.ASSISTANT_TIMEZONE);
 
 function shellQuote(value: string): string {
   return `'${value.replaceAll("'", `'"'"'`)}'`;

@@ -8,6 +8,7 @@ import { closeSync, fstatSync, openSync, readSync } from "node:fs";
 import { join } from "node:path";
 import type { UsageRecord } from "#lib/usage.ts";
 import { resolveDataDir } from "./data-dir.ts";
+import { resolveTimeZone } from "./timezone.ts";
 
 export type { UsageRecord };
 
@@ -177,7 +178,7 @@ export function parseWindow(arg?: string): UsageWindow {
 // сравнение, не ловит naive-UTC-midnight баг.
 function localDate(ts: string | number, tz: string | undefined): string {
   return new Intl.DateTimeFormat("en-CA", {
-    timeZone: tz || undefined,
+    timeZone: resolveTimeZone(tz),
     year: "numeric",
     month: "2-digit",
     day: "2-digit",

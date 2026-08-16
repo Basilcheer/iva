@@ -11,6 +11,7 @@ import {
   resolveOperation,
 } from "../lib/card-store.js";
 import { parseFrontmatter } from "../lib/frontmatter.js";
+import { resolveTimeZone } from "../lib/timezone.js";
 
 // Строго типизированная запись карточки памяти. Заменяет «write_file по наитию» для карточек:
 // zod-enum на type/status берётся из autograph schema.json (единый источник правды), поэтому
@@ -172,7 +173,7 @@ function normalizeType(v: unknown): unknown {
 // Транслитерация не нужна — vault хранит кириллические слаги нормально (см. существующие карточки).
 function today(): string {
   return new Intl.DateTimeFormat("en-CA", {
-    timeZone: process.env.ASSISTANT_TIMEZONE || undefined,
+    timeZone: resolveTimeZone(process.env.ASSISTANT_TIMEZONE),
     year: "numeric",
     month: "2-digit",
     day: "2-digit",

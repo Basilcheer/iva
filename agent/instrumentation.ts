@@ -30,7 +30,7 @@ import { defineInstrumentation } from "eve/instrumentation";
 import { PROBE_FLAG, probeEveHealth } from "./lib/eve-health.ts";
 import { dataDir as configuredDataDir } from "./lib/data-dir.ts";
 import { runScheduleMigration } from "./lib/schedule-migration.ts";
-import { validateTimeZone } from "./lib/timezone.ts";
+import { resolveTimeZone, validateTimeZone } from "./lib/timezone.ts";
 
 const log = (...args: unknown[]) =>
   console.log(new Date().toISOString(), ...args);
@@ -47,18 +47,14 @@ export default defineInstrumentation({
     // Nitro's schedule runner reads the process timezone. Validate before assigning TZ:
     // process.env stringifies every value, and an unknown zone would make every Intl
     // consumer throw a RangeError.
-    const rawTz =
-      process.env.ASSISTANT_TIMEZONE ||
-      (process.env.TZ && process.env.TZ !== "undefined"
-        ? process.env.TZ
-        : "UTC");
-    const validatedTz = validateTimeZone(rawTz);
-    const tz = validatedTz ?? "UTC";
-    if (validatedTz === null) {
+    const rawTz = process.env.ASSISTANT_TIMEZONE;
+    const tz = resolveTimeZone(rawTz);
+    if (rawTz?.trim() && validateTimeZone(rawTz) === null) {
       log(
         `schedule-migration: invalid timezone ${rawTz} — falling back to UTC`,
       );
     }
+    process.env.ASSISTANT_TIMEZONE = tz;
     process.env.TZ = tz;
 
     // `iva update` starts this same server from a candidate version to prove it comes

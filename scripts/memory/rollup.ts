@@ -21,6 +21,7 @@ import {
   rollupRanBefore,
 } from "../lib/notice-policy.ts";
 import { resolveDataDir } from "../lib/data-dir.ts";
+import { resolveTimeZone } from "../lib/timezone.ts";
 import { notificationChat } from "../lib/notification-chat.ts";
 import { readCore } from "./read-core.ts";
 import {
@@ -49,7 +50,7 @@ const BEARER = process.env.ASSISTANT_BEARER; // needed if the prod eve channel r
 const BOT = process.env.TELEGRAM_BOT_TOKEN;
 const CHAT = notificationChat();
 const VAULT = process.env.ASSISTANT_VAULT_DIR ?? "vault";
-const TZ = process.env.ASSISTANT_TIMEZONE ?? process.env.TZ ?? "UTC";
+const TZ = resolveTimeZone(process.env.ASSISTANT_TIMEZONE);
 // Format rules and the memory-processor prompts live in the repo, not in the vault: they
 // are product, and must update with it instead of rotting inside every user's vault.
 // Absolute, so the agent can read them whatever its working directory is.
