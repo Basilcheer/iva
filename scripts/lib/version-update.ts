@@ -90,6 +90,8 @@ type FinishOptions = {
   readonly startCandidate?: (root: string) => Promise<void>;
   /** Whether the restarted service answers on the port the installation runs on. */
   readonly serving?: (port: number) => Promise<Health>;
+  /** Retire recovery writers only after live health durably commits the candidate. */
+  readonly retireCommittedWriters?: (root: string) => Promise<void>;
   /** Layout changes the installation itself needs: the shim, the old checkout. */
   readonly adopt?: () => void;
   readonly notify?: Say;
@@ -250,6 +252,7 @@ export async function finishVersionUpdate({
   resumeOldWriters = async () => {},
   startCandidate = async () => {},
   serving = (port) => awaitServing({ port }),
+  retireCommittedWriters = async () => {},
   adopt = () => {},
   notify = () => {},
   log = () => {},
@@ -266,7 +269,14 @@ export async function finishVersionUpdate({
       probeVersion({ dir: at, port, env: probeEnvironment(env, port, at) }));
   let custom = builtWith(dir, name, customDir);
   if (active === name && settledBefore === name && store.cleanupPending(name)) {
-    await runPostHealthCleanup({ name, run, adopt, log, store });
+    await runPostHealthCleanup({
+      name,
+      run,
+      retireCommittedWriters,
+      adopt,
+      log,
+      store,
+    });
     return { status: "current", version: name };
   }
   /** A version being built is garbage nothing points at: a failure takes it away. */
@@ -452,7 +462,14 @@ export async function finishVersionUpdate({
   });
   // After the service is up: until it runs the new version, the old checkout is
   // what a failed restart falls back to, so it is not ours to remove any earlier.
-  const removed = await runPostHealthCleanup({ name, run, adopt, log, store });
+  const removed = await runPostHealthCleanup({
+    name,
+    run,
+    retireCommittedWriters,
+    adopt,
+    log,
+    store,
+  });
   return {
     status: "updated",
     version: name,
@@ -467,18 +484,26 @@ export async function finishVersionUpdate({
 async function runPostHealthCleanup({
   name,
   run,
+  retireCommittedWriters,
   adopt,
   log,
   store,
 }: {
   readonly name: string;
   readonly run: Runner;
+  readonly retireCommittedWriters: (root: string) => Promise<void>;
   readonly adopt: () => void;
   readonly log: Say;
   readonly store: Store;
 }): Promise<string[]> {
   let complete = true;
   let removed: string[] = [];
+  try {
+    await retireCommittedWriters(store.layout.current);
+  } catch (error) {
+    complete = false;
+    log(`writer retirement remains pending: ${String(error)}`);
+  }
   try {
     adopt();
   } catch (error) {

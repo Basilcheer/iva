@@ -400,6 +400,31 @@ void test("a build that only bundles LEGACY_MEMORY_UNITS strings (not the compil
 const scheduleDescriptionMjs = (period: string): string =>
   `var eve_schedule_default = { meta: { description: 'Run eve schedule "memory-${period}" from "schedules/memory-${period}.ts".' } };\n`;
 
+function updaterMemoryTransferScript(
+  project: string,
+  afterRestart = "",
+): string {
+  const runtime = pathToFileURL(join(project, "scripts/cli/runtime.ts")).href;
+  const systemd = pathToFileURL(join(project, "scripts/cli/systemd.ts")).href;
+  return `
+    const { createCliRuntime } = await import(${JSON.stringify(runtime)});
+    const { createCliSystemd } = await import(${JSON.stringify(systemd)});
+    const runtime = createCliRuntime(${JSON.stringify(project)});
+    const services = createCliSystemd(runtime);
+    services.restartServices({ deferMemoryMigration: true });
+    ${afterRestart}
+  `;
+}
+
+async function seedCompiledMemorySchedules(project: string): Promise<void> {
+  await mkdir(join(project, ".output/server/_virtual"), { recursive: true });
+  for (const period of ["daily", "weekly", "monthly", "yearly"])
+    await writeFile(
+      join(project, `.output/server/_virtual/eve-${period}.schedule.mjs`),
+      scheduleDescriptionMjs(period),
+    );
+}
+
 void test("legacy memory-timer cleanup proceeds once the build actually contains ALL FOUR memory schedules", async (t) => {
   const { calls, home, project, runCommand } = await fixture(t);
   const unitDir = join(home, ".config/systemd/user");
@@ -429,6 +454,64 @@ void test("legacy memory-timer cleanup proceeds once the build actually contains
       (c) => c === "--user disable --now iva-memory-daily.timer",
     ),
   );
+});
+
+void test("an updater restart keeps legacy memory recoverable while live health is pending", async (t) => {
+  const { calls, home, project, runScript, seedUnit, state } = await fixture(t);
+  const unit = "iva-memory-daily.timer";
+  const unitDir = join(home, ".config/systemd/user");
+  await mkdir(unitDir, { recursive: true });
+  await writeFile(join(unitDir, unit), "[Unit]\n");
+  await seedUnit(unit);
+  await seedCompiledMemorySchedules(project);
+
+  const result = runScript(updaterMemoryTransferScript(project));
+  const output = `${result.stdout}\n${result.stderr}`;
+  const systemctlCalls = (await readFile(calls, "utf8")).trim().split("\n");
+
+  assert.equal(result.status, 0, output);
+  assert.equal(existsSync(join(unitDir, unit)), true);
+  assert.equal(existsSync(join(state, `${unit}.enabled`)), true);
+  assert.equal(existsSync(join(state, `${unit}.active`)), true);
+  assert.equal(systemctlCalls.includes(`--user disable --now ${unit}`), false);
+});
+
+void test("committed updater cleanup retires legacy memory after active-owner proof", async (t) => {
+  const { home, project, runScript } = await fixture(t);
+  const unit = "iva-memory-daily.timer";
+  const unitDir = join(home, ".config/systemd/user");
+  await mkdir(unitDir, { recursive: true });
+  await writeFile(join(unitDir, unit), "[Unit]\n");
+  await seedCompiledMemorySchedules(project);
+
+  const result = runScript(
+    updaterMemoryTransferScript(project, "services.retireLegacyMemoryUnits();"),
+  );
+  const output = `${result.stdout}\n${result.stderr}`;
+
+  assert.equal(result.status, 0, output);
+  assert.equal(existsSync(join(unitDir, unit)), false);
+});
+
+void test("committed updater cleanup keeps legacy memory when the new owner is inactive", async (t) => {
+  const { calls, home, project, runScript } = await fixture(t);
+  const unit = "iva-memory-daily.timer";
+  const unitDir = join(home, ".config/systemd/user");
+  await mkdir(unitDir, { recursive: true });
+  await writeFile(join(unitDir, unit), "[Unit]\n");
+  await seedCompiledMemorySchedules(project);
+
+  const result = runScript(
+    updaterMemoryTransferScript(
+      project,
+      "runtime.systemd.stop(runtime.SERVICES); services.retireLegacyMemoryUnits();",
+    ),
+  );
+  const systemctlCalls = (await readFile(calls, "utf8")).trim().split("\n");
+
+  assert.notEqual(result.status, 0);
+  assert.equal(existsSync(join(unitDir, unit)), true);
+  assert.equal(systemctlCalls.includes(`--user disable --now ${unit}`), false);
 });
 
 void test("a restart fault after unit write keeps legacy memory units and their state", async (t) => {

@@ -38,6 +38,12 @@ type WriteUnitsOptions = {
 type RestartServicesOptions = {
   readonly afterUnitWrite?: () => void;
   readonly deferBrainMigration?: boolean;
+  readonly deferMemoryMigration?: boolean;
+};
+
+type MemoryCleanupOptions = {
+  readonly requireActiveOwner?: boolean;
+  readonly strict?: boolean;
 };
 
 type BrainCleanupOptions = {
@@ -403,7 +409,10 @@ export function createCliSystemd(runtime: CliRuntime) {
     return remaining.size === 0;
   }
 
-  function removeLegacyMemoryUnits(): string[] {
+  function removeLegacyMemoryUnits({
+    requireActiveOwner = false,
+    strict = false,
+  }: MemoryCleanupOptions = {}): string[] {
     if (!hasSystemd()) return [];
     const units = LEGACY_MEMORY_UNITS.filter((unit) =>
       existsSync(join(UNIT_DIR, unit)),
@@ -414,6 +423,13 @@ export function createCliSystemd(runtime: CliRuntime) {
         "skipping legacy memory-timer cleanup — the current build doesn't contain the eve schedules yet (rebuild with `iva doctor` or `npm run build`, then it will run automatically)",
       );
       return [];
+    }
+    if (requireActiveOwner) {
+      const owner = SERVICES[0];
+      if (!owner || !systemd.isActive(owner))
+        throw new Error(
+          "legacy memory schedules have no active committed service owner",
+        );
     }
     try {
       return cleanupSystemdUnits({
@@ -427,6 +443,7 @@ export function createCliSystemd(runtime: CliRuntime) {
       warn(
         `legacy memory-timer cleanup incomplete: ${(error as { message: string }).message}`,
       );
+      if (strict) throw error;
       return units;
     }
   }
@@ -486,6 +503,7 @@ export function createCliSystemd(runtime: CliRuntime) {
   function restartServices({
     afterUnitWrite = () => undefined,
     deferBrainMigration = false,
+    deferMemoryMigration = false,
   }: RestartServicesOptions = {}): void {
     writeUnits({ deferBrainMigration });
     afterUnitWrite();
@@ -495,7 +513,15 @@ export function createCliSystemd(runtime: CliRuntime) {
       throw new Error("iva.service is not active after unit restart");
     // The old timers remain the recovery owner until the compiled schedules and
     // their freshly restarted process owner have both been proved.
-    removeLegacyMemoryUnits();
+    if (!deferMemoryMigration) removeLegacyMemoryUnits();
+  }
+
+  /** Retire recovery units only after the updater commits the live service. */
+  function retireLegacyMemoryUnits(): string[] {
+    return removeLegacyMemoryUnits({
+      requireActiveOwner: true,
+      strict: true,
+    });
   }
 
   function retireDeferredBrainUnits(): string[] {
@@ -510,6 +536,7 @@ export function createCliSystemd(runtime: CliRuntime) {
     activateUnits,
     removeUnits,
     retireDeferredBrainUnits,
+    retireLegacyMemoryUnits,
     migrateEnv,
     restartServices,
   };

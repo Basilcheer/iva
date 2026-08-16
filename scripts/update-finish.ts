@@ -415,7 +415,6 @@ export async function main(argv: readonly string[]): Promise<number> {
   const notify: Say = (message) => console.log(`! ${message}`);
   let optionalWriterState: OptionalWriterState[] | undefined;
   let unitMigrationStarted = false;
-  let legacyMemoryOwnerProven = false;
   let outcome: UpdateOutcome;
   try {
     outcome = await finishVersionUpdate({
@@ -445,7 +444,7 @@ export async function main(argv: readonly string[]): Promise<number> {
           if (optionalWriterState)
             restoreWriterOwnership(runtime, optionalWriterState, {
               unitMigrationStarted,
-              legacyMemoryOwnerProven,
+              legacyMemoryOwnerProven: false,
             });
         }
         await Promise.resolve();
@@ -463,21 +462,27 @@ export async function main(argv: readonly string[]): Promise<number> {
               unitMigrationStarted = true;
             },
             deferBrainMigration: true,
+            deferMemoryMigration: true,
           });
-          // Completed restart retires legacy memory units only after proving
-          // compiled schedules and their process owner live.
-          legacyMemoryOwnerProven = true;
           runtime.systemd.activate([runtime.UPDATE_TIMER]);
           reinstallUserbot(runtime, services, notify);
         } finally {
           if (optionalWriterState) {
             restoreWriterOwnership(runtime, optionalWriterState, {
               unitMigrationStarted,
-              legacyMemoryOwnerProven,
+              legacyMemoryOwnerProven: false,
             });
             if (unitMigrationStarted) services.retireDeferredBrainUnits();
           }
         }
+        await Promise.resolve();
+      },
+      retireCommittedWriters: async (root) => {
+        const { createCliRuntime } = await import("./cli/runtime.ts");
+        const { createCliSystemd } = await import("./cli/systemd.ts");
+        const runtime = createCliRuntime(root);
+        const services = createCliSystemd(runtime);
+        services.retireLegacyMemoryUnits();
         await Promise.resolve();
       },
       adopt: () => {
