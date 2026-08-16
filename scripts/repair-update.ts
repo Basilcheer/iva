@@ -8,6 +8,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
+import { resolveDataDir } from "./lib/data-dir.ts";
 import { isEntrypoint } from "./lib/version-layout.ts";
 import { createVersionStore, parseVersionName } from "./lib/version-store.ts";
 import { z } from "zod";
@@ -261,7 +262,11 @@ export function runRepairUpdate(
     const update = spawnSync(
       process.execPath,
       [join(root, "bin/iva.mjs"), "update", "--force", "--verbose"],
-      { cwd: root, stdio: "inherit", env: process.env },
+      {
+        cwd: root,
+        stdio: "inherit",
+        env: { ...process.env, ASSISTANT_DATA_DIR: resolveDataDir(root) },
+      },
     );
     if (update.status !== 0) throw new Error("the repaired updater failed");
     if (!activated(root, target))

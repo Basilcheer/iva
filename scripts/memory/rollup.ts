@@ -20,7 +20,10 @@ import {
   memoryReportsEnabled,
   rollupRanBefore,
 } from "../lib/notice-policy.ts";
+import { resolveDataDir } from "../lib/data-dir.ts";
+import { resolveTimeZone } from "../lib/timezone.ts";
 import { notificationChat } from "../lib/notification-chat.ts";
+import { readCore } from "./read-core.ts";
 import {
   cancelTurnAndConfirmQuietly,
   canRetryFresh,
@@ -47,7 +50,7 @@ const BEARER = process.env.ASSISTANT_BEARER; // needed if the prod eve channel r
 const BOT = process.env.TELEGRAM_BOT_TOKEN;
 const CHAT = notificationChat();
 const VAULT = process.env.ASSISTANT_VAULT_DIR ?? "vault";
-const TZ = process.env.ASSISTANT_TIMEZONE ?? process.env.TZ ?? "UTC";
+const TZ = resolveTimeZone(process.env.ASSISTANT_TIMEZONE);
 // Format rules and the memory-processor prompts live in the repo, not in the vault: they
 // are product, and must update with it instead of rotting inside every user's vault.
 // Absolute, so the agent can read them whatever its working directory is.
@@ -183,7 +186,7 @@ const client = new Client({
 // run in the store (nothing can close it), so per-night rotation would just re-create the
 // leak. Abandoned sessions are logged to data/rollup-abandoned.jsonl for the record;
 // `iva reset` clears them together with the store. Parked cursor lives in data/.
-const DATA_DIR = process.env.ASSISTANT_DATA_DIR ?? "data";
+const DATA_DIR = resolveDataDir(process.cwd());
 const SESSION_FILE = join(DATA_DIR, `rollup-session-${period}.json`);
 // 14 days, not 90. The session carries the whole history of previous rollups, and the
 // daily one reuses it every single night: at 90 days the nightly turn opened with ~three
@@ -383,7 +386,11 @@ if (result.status === "failed" || !result.message) {
 // the deterministic 05:00 backstop.
 if (period === "daily") {
   const corePath = join(VAULT, "CORE.md");
-  let core = readFileSync(corePath, "utf8");
+  const initialCore = readCore(corePath);
+  if (initialCore.state === "unreadable") throw initialCore.error;
+  // A non-empty pre-existing vault may legitimately have no CORE. The turn starts from
+  // the same empty state that the dynamic CORE instruction already documents and uses.
+  let core = initialCore.state === "valid" ? initialCore.text : "";
   if (core.length > CORE_CAP) {
     const oldLength = core.length;
     console.error(
@@ -407,7 +414,15 @@ if (period === "daily") {
       if ((e as { code?: string }).code === "ROLLUP_TURN_TIMEOUT")
         await dropHungSession("core-correction");
     }
-    core = readFileSync(corePath, "utf8");
+    const correctedCore = readCore(corePath);
+    if (correctedCore.state === "unreadable") throw correctedCore.error;
+    if (correctedCore.state === "missing") {
+      console.error(
+        "rollup daily: CORE.md disappeared during correction; refusing to accept data loss",
+      );
+      process.exit(1);
+    }
+    core = correctedCore.text;
     if (core.length > CORE_CAP) {
       console.error(
         `rollup daily: CORE.md remains over cap after one correction (${core.length}/${CORE_CAP}); ` +

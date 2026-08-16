@@ -214,6 +214,44 @@ test("runtime startup rejects an invalid provider before choosing a config", () 
   }
 });
 
+test("runtime startup rejects an invalid context window", () => {
+  const cases = [
+    ["ollama", "OLLAMA_CONTEXT_WINDOW"],
+    ["opencode", "OPENCODE_CONTEXT_WINDOW"],
+    ["openrouter", "OPENROUTER_CONTEXT_WINDOW"],
+    ["codex", "CODEX_CONTEXT_WINDOW"],
+  ] as const;
+  for (const [provider, variable] of cases) {
+    for (const value of ["NaN", "0", "-7", "1.5"]) {
+      const result = runInRepo(
+        `await import("./scripts/lib/ts-esm-hooks.ts"); await import("./agent/provider.ts");`,
+        { MODEL_PROVIDER: provider, [variable]: value },
+      );
+
+      assert.notEqual(result.status, 0, `${provider}:${value}`);
+      assert.match(result.stderr, new RegExp(variable), `${provider}:${value}`);
+    }
+  }
+});
+
+test("runtime validates only the selected provider context window", () => {
+  const result = runInRepo(
+    `
+      await import("./scripts/lib/ts-esm-hooks.ts");
+      const provider = await import("./agent/provider.ts");
+      console.log(provider.providerConfig.contextWindow);
+    `,
+    {
+      MODEL_PROVIDER: "ollama",
+      OLLAMA_CONTEXT_WINDOW: "65536",
+      CODEX_CONTEXT_WINDOW: "NaN",
+    },
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout.trim(), "65536");
+});
+
 // ─── Свойства (fast-check) ────────────────────────────────────────────────────────────
 // Якоря выше перечисляют конкретные значения контракта; здесь генераторы ходят по всему
 // входному пространству — именно там и нашлась опечатка issue #161.

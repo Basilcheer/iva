@@ -108,11 +108,17 @@ async function main(): Promise<void> {
     probe: fixtureProbe(hook),
     // The steps after the flip are killable too, and each of them has to be
     // finishable by the run that comes next.
-    restart: () => hook("restart"),
+    quiesce: () => hook("quiesce"),
+    resumeOldWriters: () => hook("resume"),
+    startCandidate: () => hook("restart"),
     // Nothing here runs a unit, so there is no service for the wait after the
     // restart to find; the failure it guards has its own tests.
     serving: () => Promise.resolve({ ok: true, log: "" }),
     adopt: () => {
+      if (stallAt === "cleanup") {
+        writeFileSync(marker, "cleanup");
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
+      }
       writeFileSync(join(home, "adopted"), "");
     },
   });

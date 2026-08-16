@@ -21,7 +21,7 @@ import {
   LEGACY_MEMORY_UNITS,
 } from "../lib/legacy-memory-units.ts";
 import { cleanupSystemdUnits } from "../lib/systemd-control.ts";
-import { validateTimeZone } from "../lib/timezone.ts";
+import { resolveTimeZone, validateTimeZone } from "../lib/timezone.ts";
 import type { createCliRuntime } from "./runtime.ts";
 
 type CliRuntime = ReturnType<typeof createCliRuntime>;
@@ -31,8 +31,43 @@ type QuietOptions = {
 };
 
 type WriteUnitsOptions = {
+  readonly deferBrainMigration?: boolean;
   readonly ensureBearer?: boolean;
+  readonly skipUnits?: readonly string[];
 };
+
+type RestartServicesOptions = {
+  readonly afterUnitWrite?: () => void;
+  readonly deferBrainMigration?: boolean;
+  readonly deferMemoryMigration?: boolean;
+  readonly skipUnits?: readonly string[];
+};
+
+type MemoryCleanupOptions = {
+  readonly requireActiveOwner?: boolean;
+  readonly strict?: boolean;
+};
+
+type BrainCleanupOptions = {
+  readonly activateNewTimer?: boolean;
+};
+
+export function systemdExecArgument(value: string): string {
+  if (/[\0\r\n]/u.test(value))
+    throw new Error("systemd argument contains NUL or a newline");
+  let escaped = "";
+  for (const character of value) {
+    const code = character.charCodeAt(0);
+    if (character === "\\") escaped += "\\\\";
+    else if (character === '"') escaped += '\\"';
+    else if (character === "$") escaped += "$$";
+    else if (character === "%") escaped += "%%";
+    else if (code < 0x20 || code === 0x7f)
+      escaped += `\\x${code.toString(16).padStart(2, "0")}`;
+    else escaped += character;
+  }
+  return `"${escaped}"`;
+}
 
 export function createCliSystemd(runtime: CliRuntime) {
   const {
@@ -88,13 +123,19 @@ export function createCliSystemd(runtime: CliRuntime) {
   // in agent/schedules/memory-*.ts carry no timezone of their own and fire in the process's
   // local time) need — one place so the fallback/validation rule can't drift between them.
   function configuredTimezone(): string {
-    const raw = (readEnv().ASSISTANT_TIMEZONE || "UTC").trim();
+    const raw = readEnv().ASSISTANT_TIMEZONE;
+    const timezone = resolveTimeZone(raw);
+    if (!raw?.trim()) return timezone;
     if (/^[A-Za-z0-9_+/-]+$/.test(raw)) {
-      const timezone = validateTimeZone(raw);
-      if (timezone) return timezone;
+      const validated = validateTimeZone(raw);
+      if (validated) return validated;
     }
     warn(`invalid ASSISTANT_TIMEZONE=${JSON.stringify(raw)}; using UTC`);
-    return "UTC";
+    return timezone;
+  }
+
+  function canonicalDataDirEnvironment(): string {
+    return systemdExecArgument(`ASSISTANT_DATA_DIR=${dataDirAbs()}`);
   }
 
   // ── systemd units: single source of truth ───────────────────────────────
@@ -125,7 +166,7 @@ export function createCliSystemd(runtime: CliRuntime) {
       // locally: telegram-poll, the sweep and the memory scripts all talk to 127.0.0.1.
       // Env is not enough here — `eve start` takes options.host ?? "0.0.0.0" and overwrites
       // HOST/NITRO_HOST for the spawned .output/server/index.mjs, so the flag is what binds.
-      `ExecStart=${NODE} ${ROOT}/node_modules/eve/bin/eve.js start --host 127.0.0.1`,
+      `ExecStart=/usr/bin/env ${canonicalDataDirEnvironment()} ${NODE} ${ROOT}/node_modules/eve/bin/eve.js start --host 127.0.0.1`,
       `Environment=PORT=${port}`,
       `Environment=TZ=${timezone}`,
       `Environment=PATH=${NODE_BIN_DIR}:%h/.local/bin:/usr/local/bin:/usr/bin:/bin`,
@@ -188,7 +229,9 @@ export function createCliSystemd(runtime: CliRuntime) {
 
   // Writes iva.service + all deploy/iva-*.{service,timer} with placeholder substitution. daemon-reload.
   function writeUnits({
+    deferBrainMigration = false,
     ensureBearer = true,
+    skipUnits = [],
   }: WriteUnitsOptions = {}): string[] {
     hardenPerms();
     if (ensureBearer) ensureAssistantBearer({ quiet: true });
@@ -196,27 +239,31 @@ export function createCliSystemd(runtime: CliRuntime) {
     writeFileSync(join(UNIT_DIR, "iva.service"), ivaServiceBody());
     const written = ["iva.service"];
     const deploy = join(ROOT, "deploy");
+    const skipped = new Set(skipUnits);
     const timezone = configuredTimezone();
+    const dataDirEnvironment = canonicalDataDirEnvironment();
     for (const file of readdirSync(deploy)) {
-      if (!/^iva-.*\.(service|timer)$/.test(file)) continue;
+      if (!/^iva-.*\.(service|timer)$/.test(file) || skipped.has(file))
+        continue;
       const template = readFileSync(join(deploy, file), "utf8")
         .replaceAll("__PROJECT_DIR__", ROOT)
         .replaceAll("__NODE_BIN__", NODE)
         .replaceAll("__PYTHON_BIN__", VENV_PY)
+        .replaceAll("__DATA_DIR_ENV__", dataDirEnvironment)
         .replaceAll("__TIMEZONE__", timezone);
       writeFileSync(join(UNIT_DIR, file), template);
       written.push(file);
     }
     if (hasSystemd()) systemd.daemonReload();
-    removeLegacyMemoryUnits();
-    removeLegacyBrainUnits(written);
+    if (!deferBrainMigration) removeLegacyBrainUnits(written);
     return written;
   }
 
   // The Brain rename: iva-memory-doctor.{service,timer} → iva-brain.{service,timer}. deploy/
   // ships only the new pair, so the copy loop above never overwrites or removes the old one —
-  // this retires it by exact name, off every writeUnits() call (update/doctor/config/restart/
-  // install.sh), so every install migrates without a dedicated command.
+  // this retires it by exact name on ordinary writeUnits() calls (doctor/config/restart/
+  // install.sh), so every install migrates without a dedicated command. The quiesced updater
+  // defers retirement until its captured enabled/active state is restored onto the new pair.
   //
   // Order is the whole point. The nightly vault care must never be absent, not even for the
   // window between two steps of an update that dies halfway:
@@ -224,8 +271,7 @@ export function createCliSystemd(runtime: CliRuntime) {
   //      The timer alone is not a nightly job: a half-unpacked deploy/ can carry either file
   //      without the other, and a timer whose iva-brain.service is missing fires at 05:00 into
   //      nothing — while looking migrated. A service without its timer never fires at all.
-  //   2. and the timer enabled+active — `iva update` calls writeUnits() but not
-  //      activateUnits(), so a merely-written unit would still never fire,
+  //   2. and, on ordinary CLI paths, the timer enabled+active,
   //   3. only then may the old pair be disabled and deleted.
   // Any failure in 1–2 keeps the old units: a duplicated nightly run is harmless (both take
   // the same .memory.lock), a missing one costs the user a night of memory care.
@@ -265,7 +311,10 @@ export function createCliSystemd(runtime: CliRuntime) {
     return repointed;
   }
 
-  function removeLegacyBrainUnits(written: readonly string[]): string[] {
+  function removeLegacyBrainUnits(
+    written: readonly string[],
+    { activateNewTimer = true }: BrainCleanupOptions = {},
+  ): string[] {
     if (!hasSystemd()) return [];
     const stale = LEGACY_BRAIN_UNITS.filter((unit) =>
       existsSync(join(UNIT_DIR, unit)),
@@ -289,14 +338,16 @@ export function createCliSystemd(runtime: CliRuntime) {
       keeping();
       return [];
     }
-    try {
-      systemd.activate([BRAIN_TIMER]);
-    } catch (error) {
-      warn(
-        `skipping legacy brain-unit cleanup — ${BRAIN_TIMER} did not come up: ${(error as { message: string }).message}`,
-      );
-      keeping();
-      return [];
+    if (activateNewTimer) {
+      try {
+        systemd.activate([BRAIN_TIMER]);
+      } catch (error) {
+        warn(
+          `skipping legacy brain-unit cleanup — ${BRAIN_TIMER} did not come up: ${(error as { message: string }).message}`,
+        );
+        keeping();
+        return [];
+      }
     }
     try {
       return cleanupSystemdUnits({
@@ -388,7 +439,10 @@ export function createCliSystemd(runtime: CliRuntime) {
     return remaining.size === 0;
   }
 
-  function removeLegacyMemoryUnits(): string[] {
+  function removeLegacyMemoryUnits({
+    requireActiveOwner = false,
+    strict = false,
+  }: MemoryCleanupOptions = {}): string[] {
     if (!hasSystemd()) return [];
     const units = LEGACY_MEMORY_UNITS.filter((unit) =>
       existsSync(join(UNIT_DIR, unit)),
@@ -399,6 +453,13 @@ export function createCliSystemd(runtime: CliRuntime) {
         "skipping legacy memory-timer cleanup — the current build doesn't contain the eve schedules yet (rebuild with `iva doctor` or `npm run build`, then it will run automatically)",
       );
       return [];
+    }
+    if (requireActiveOwner) {
+      const owner = SERVICES[0];
+      if (!owner || !systemd.isActive(owner))
+        throw new Error(
+          "legacy memory schedules have no active committed service owner",
+        );
     }
     try {
       return cleanupSystemdUnits({
@@ -412,6 +473,7 @@ export function createCliSystemd(runtime: CliRuntime) {
       warn(
         `legacy memory-timer cleanup incomplete: ${(error as { message: string }).message}`,
       );
+      if (strict) throw error;
       return units;
     }
   }
@@ -468,9 +530,35 @@ export function createCliSystemd(runtime: CliRuntime) {
   // Any restart via `iva` first regenerates the unit → Environment=PORT always equals
   // the current IVA_PORT from .env. Without this, editing IVA_PORT + restart would leave the server
   // on the old port (the unit was already baked) while clients read the new one — the same desync.
-  function restartServices(): void {
-    writeUnits();
+  function restartServices({
+    afterUnitWrite = () => undefined,
+    deferBrainMigration = false,
+    deferMemoryMigration = false,
+    skipUnits = [],
+  }: RestartServicesOptions = {}): void {
+    writeUnits({ deferBrainMigration, skipUnits });
+    afterUnitWrite();
     systemd.restart(SERVICES);
+    const scheduleOwner = SERVICES[0];
+    if (!scheduleOwner || !systemd.isActive(scheduleOwner))
+      throw new Error("iva.service is not active after unit restart");
+    // The old timers remain the recovery owner until the compiled schedules and
+    // their freshly restarted process owner have both been proved.
+    if (!deferMemoryMigration) removeLegacyMemoryUnits();
+  }
+
+  /** Retire recovery units only after the updater commits the live service. */
+  function retireLegacyMemoryUnits(): string[] {
+    return removeLegacyMemoryUnits({
+      requireActiveOwner: true,
+      strict: true,
+    });
+  }
+
+  function retireDeferredBrainUnits(): string[] {
+    return removeLegacyBrainUnits([BRAIN_SERVICE, BRAIN_TIMER], {
+      activateNewTimer: false,
+    });
   }
 
   return {
@@ -478,6 +566,8 @@ export function createCliSystemd(runtime: CliRuntime) {
     writeUnits,
     activateUnits,
     removeUnits,
+    retireDeferredBrainUnits,
+    retireLegacyMemoryUnits,
     migrateEnv,
     restartServices,
   };

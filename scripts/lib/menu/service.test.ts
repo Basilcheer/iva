@@ -242,6 +242,14 @@ test("cln: cleanup.py берётся из репо, cwd — vault", async () => 
   assert.equal(spec.cwd, join(repoRoot, "vault"));
 });
 
+test("doc: doctor receives the menu's canonical data directory", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "iva-data-"));
+  const h = makeCtx({ deps: { dataDir, root: "/iva", envPath: "/iva/.env" } });
+  const spec = await commandSpec("doc", h.ctx);
+  assert.equal(spec.kind, "proc");
+  assert.equal(spec.env?.ASSISTANT_DATA_DIR, dataDir);
+});
+
 test("go:doc: прогресс с 🔄-entity, финал ✅ с кнопкой Назад", async () => {
   resetForTests();
   const dataDir = mkdtempSync(join(tmpdir(), "iva-data-"));

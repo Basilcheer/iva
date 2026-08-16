@@ -4,10 +4,36 @@
 // строка внутри перезаписываемого folded-блока.
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import fc from "fast-check";
 import {
+  FrontmatterParseError,
+  formatField,
   parseFrontmatter,
   writeFrontmatter,
 } from "../agent/lib/frontmatter.ts";
+
+interface ScalarCorpus {
+  scalars: string[];
+  legacy_single_quoted: Array<{ encoded: string; decoded: string }>;
+  garbage: string[];
+  controlled_errors: string[];
+}
+
+const corpus = JSON.parse(
+  readFileSync(
+    join(
+      dirname(fileURLToPath(import.meta.url)),
+      "autograph/tests/golden/frontmatter/scalar-corpus.cases.json",
+    ),
+    "utf8",
+  ),
+) as ScalarCorpus;
+
+const parseValue = (encoded: string) =>
+  parseFrontmatter(`---\nvalue: ${encoded}\n---\n`).fields?.value;
 
 test("flow-список: запятая внутри кавычек не рвёт элемент (полный round-trip)", () => {
   const parsed = parseFrontmatter(
@@ -30,7 +56,88 @@ test("YAML-неоднозначные скаляры квотируются (PyY
   );
   assert.match(text, /status: "no"/);
   assert.match(text, /note: "null"/);
-  assert.match(text, /ok: обычное/);
+  assert.match(text, /ok: "обычное"/);
+});
+
+test("D6/M13/M14: общий corpus имеет JSON serialization и quote-aware legacy parse", () => {
+  for (const value of corpus.scalars) {
+    assert.equal(
+      formatField("value", value),
+      `value: ${JSON.stringify(value)}`,
+    );
+    assert.equal(parseValue(JSON.stringify(value)), value);
+    const list = [value, "sentinel, [x]", "O'Brien"];
+    const encoded = JSON.stringify(list);
+    assert.equal(formatField("items", list), `items: ${encoded}`);
+    assert.deepEqual(parseValue(encoded), list);
+  }
+  for (const { encoded, decoded } of corpus.legacy_single_quoted) {
+    assert.equal(parseValue(encoded), decoded);
+    assert.deepEqual(parseValue(`[${encoded}]`), [decoded]);
+  }
+  for (const garbage of corpus.garbage) {
+    try {
+      parseValue(garbage);
+    } catch (error) {
+      assert.ok(error instanceof FrontmatterParseError);
+    }
+  }
+  for (const garbage of corpus.controlled_errors) {
+    assert.throws(() => parseValue(garbage), FrontmatterParseError);
+  }
+});
+
+test("D6 property: JSON list strings round-trip без изменения", () => {
+  fc.assert(
+    fc.property(fc.array(fc.string(), { maxLength: 30 }), (values) => {
+      const encoded = formatField("value", values);
+      const parsed = parseFrontmatter(`---\n${encoded}\n---\n`).fields;
+      assert.ok(parsed);
+      assert.deepEqual(parsed.value, values);
+    }),
+    { seed: 18_706, numRuns: 300 },
+  );
+});
+
+test("M13 property: каждый новый string scalar JSON-round-trip", () => {
+  fc.assert(
+    fc.property(fc.string(), (value) => {
+      const encoded = formatField("value", value);
+      assert.equal(encoded, `value: ${JSON.stringify(value)}`);
+      assert.equal(
+        parseFrontmatter(`---\n${encoded}\n---\n`).fields?.value,
+        value,
+      );
+    }),
+    { seed: 18_713, numRuns: 300 },
+  );
+});
+
+test("M14 property: legacy doubled apostrophe декодируется quote-aware", () => {
+  fc.assert(
+    fc.property(
+      fc.string().filter((value) => !/[\r\n]/.test(value)),
+      (value) => {
+        const legacy = `'${value.replace(/'/g, "''")}'`;
+        assert.equal(parseValue(legacy), value);
+        assert.deepEqual(parseValue(`[${legacy}]`), [value]);
+      },
+    ),
+    { seed: 18_714, numRuns: 300 },
+  );
+});
+
+test("frontmatter property: arbitrary input даёт результат или controlled error", () => {
+  fc.assert(
+    fc.property(fc.string(), (garbage) => {
+      try {
+        parseValue(garbage);
+      } catch (error) {
+        assert.ok(error instanceof FrontmatterParseError);
+      }
+    }),
+    { seed: 18_714, numRuns: 300 },
+  );
 });
 
 test("кавычки, переводы строк и разделитель frontmatter проходят безопасный round-trip", () => {
@@ -81,7 +188,7 @@ test("пустая строка внутри перезаписываемого 
     /второй абзац/,
     "хвост старого блока не должен просочиться",
   );
-  assert.match(out, /description: новое/);
+  assert.match(out, /description: "новое"/);
   assert.match(out, /status: active/);
 });
 

@@ -16,6 +16,7 @@ import { allowedTelegramUsers } from "./telegram-allowlist.ts";
 import { chatKeyOf, getChatStatus, isRunning } from "./run-status.ts";
 import { toChannelLocalToken } from "./telegram-continuation-token.ts";
 import { tr } from "./i18n.ts";
+import { isPrivateTelegramChat } from "./telegram-private-chat.ts";
 
 export type StopOutcome = "requested" | "idle" | "failed";
 export type StopCancelRequest = {
@@ -29,7 +30,7 @@ export type StopCallbackQuery = {
   readonly data?: string;
   readonly from?: { readonly id?: number | string };
   readonly message?: {
-    readonly chat: { readonly id: number | string };
+    readonly chat: { readonly id: number | string; readonly type?: string };
     readonly messageThreadId?: number;
   };
 };
@@ -138,6 +139,15 @@ export async function handleTelegramStopCallback(
     !reference
   ) {
     await ackImpl();
+    return "ignored";
+  }
+  if (!isPrivateTelegramChat(reference.chat)) {
+    await ackImpl(
+      tr(
+        "Open a private chat with me to use this control.",
+        "Открой личный чат со мной, чтобы использовать это управление.",
+      ),
+    );
     return "ignored";
   }
 

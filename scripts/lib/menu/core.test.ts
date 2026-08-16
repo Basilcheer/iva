@@ -41,7 +41,8 @@ type Delivery = {
 
 type MenuContext = {
   deps: {
-    deliver: (update: Delivery) => Promise<void>;
+    deliver: (update: Delivery) => Promise<unknown>;
+    admitSynthetic: (update: Delivery) => Promise<boolean>;
     log?: (...parts: unknown[]) => void;
   };
   getLang: () => "en" | "ru";
@@ -65,7 +66,7 @@ type CoreScreen = {
     args: string[],
     state: MenuState,
     context: MenuContext,
-  ) => Promise<void>;
+  ) => Promise<unknown>;
   texts: {
     interview: (
       text: unknown,
@@ -126,12 +127,17 @@ function makeState(overrides: Partial<MenuState> = {}): MenuState {
 function makeContext(lang: "en" | "ru" = "ru") {
   const screens: Array<{ text: string; rows: Rows }> = [];
   const deliveries: Delivery[] = [];
+  const admissions: Delivery[] = [];
   const shown: string[] = [];
   const context: MenuContext = {
     deps: {
       deliver: (update) => {
         deliveries.push(update);
-        return Promise.resolve();
+        return Promise.resolve(true);
+      },
+      admitSynthetic: (update) => {
+        admissions.push(update);
+        return Promise.resolve(true);
       },
       log: () => {},
     },
@@ -152,7 +158,7 @@ function makeContext(lang: "en" | "ru" = "ru") {
       return Promise.resolve();
     },
   };
-  return { context, screens, deliveries, shown };
+  return { context, screens, deliveries, admissions, shown };
 }
 
 void test("core render handles an empty vault and trims an oversized CORE excerpt", async (t) => {
@@ -179,7 +185,7 @@ void test("core render handles an empty vault and trims an oversized CORE excerp
 
 void test("core interview stores the real reply identity and delivers a synthetic threaded distillation update", async (t) => {
   const vault = useVault(t);
-  const { context, deliveries, screens } = makeContext();
+  const { context, deliveries, admissions, screens } = makeContext();
   const state = makeState();
   const sourceMessage = {
     chat: { id: 44, type: "supergroup", title: "Family" },
@@ -201,13 +207,17 @@ void test("core interview stores the real reply identity and delivers a syntheti
     state,
     context,
   );
+  let handled: unknown;
   for (let index = 1; index < 6; index += 1)
-    await core.on("skip", [], state, context);
+    handled = await core.on("skip", [], state, context);
 
+  assert.equal(handled, true);
   assert.equal(state.awaitText, null);
   assert.equal(deliveries.length, 1);
+  assert.equal(admissions.length, 0);
   const [delivery] = deliveries;
-  assert.equal(delivery.update_id, 0);
+  assert.equal(Number.isSafeInteger(delivery.update_id), true);
+  assert.notEqual(delivery.update_id, 0);
   assert.deepEqual(delivery.message.chat, sourceMessage.chat);
   assert.deepEqual(delivery.message.from, sourceMessage.from);
   assert.equal(delivery.message.message_thread_id, 9);
@@ -218,6 +228,93 @@ void test("core interview stores the real reply identity and delivers a syntheti
   const archive = readFileSync(join(vault, "core-interview.md"), "utf8");
   assert.match(archive, /Сергей, на ты/);
   assert.match(archive, /—/);
+});
+
+void test("core durably owns the synthetic update when direct delivery is rejected", async (t) => {
+  const vault = useVault(t);
+  const { context, admissions, screens } = makeContext();
+  context.deps.deliver = () => Promise.resolve(false);
+
+  const handled = await core.on(
+    "fin",
+    [],
+    makeState({
+      data: { iv: { i: 0, qa: [], chat: null, from: null, threadId: null } },
+    }),
+    context,
+  );
+
+  assert.equal(handled, true);
+  assert.equal(admissions.length, 1);
+  assert.match(
+    admissions[0].message.text,
+    /Core memory setup|Настройка core memory/u,
+  );
+  assert.equal(
+    screens.some(({ text }) => /Передал иве/u.test(text)),
+    false,
+  );
+  assert.match(
+    readFileSync(join(vault, "core-interview.md"), "utf8"),
+    /Core interview/u,
+  );
+});
+
+void test("core returns false when synthetic inbox ownership fails", async (t) => {
+  useVault(t);
+  const { context, admissions } = makeContext();
+  context.deps.deliver = () => Promise.resolve(false);
+  context.deps.admitSynthetic = (update) => {
+    admissions.push(update);
+    return Promise.resolve(false);
+  };
+
+  const handled = await core.on(
+    "fin",
+    [],
+    makeState({
+      data: { iv: { i: 0, qa: [], chat: null, from: null, threadId: null } },
+    }),
+    context,
+  );
+
+  assert.equal(handled, false);
+  assert.equal(admissions.length, 1);
+});
+
+void test("core duplicate retry reuses one stable bounded synthetic identity", async (t) => {
+  useVault(t);
+  const english = makeContext("en");
+  const russian = makeContext("ru");
+  english.context.deps.deliver = () => Promise.resolve(false);
+  russian.context.deps.deliver = () => Promise.resolve(false);
+  const retryState = () =>
+    makeState({
+      data: {
+        iv: {
+          i: 1,
+          qa: [{ q: "Name?", a: "Sergey" }],
+          chat: { id: 44, type: "private" },
+          from: { id: 77, is_bot: false },
+          threadId: null,
+        },
+      },
+    });
+
+  assert.equal(await core.on("fin", [], retryState(), english.context), true);
+  assert.equal(await core.on("fin", [], retryState(), russian.context), true);
+  const admissions = [...english.admissions, ...russian.admissions];
+  assert.equal(admissions.length, 2);
+  assert.equal(admissions[0].update_id, admissions[1].update_id);
+  assert.equal(
+    admissions[0].message.message_id,
+    admissions[1].message.message_id,
+  );
+  assert.equal(Number.isSafeInteger(admissions[0].update_id), true);
+  assert.equal(Number.isSafeInteger(admissions[0].message.message_id), true);
+  assert.ok(admissions[0].update_id < 0);
+  assert.ok(admissions[0].message.message_id > 0);
+  assert.equal(admissions[0].update_id, -admissions[0].message.message_id);
 });
 
 void test("core saves the interview but never delivers while the same threaded chat is running", async (t) => {

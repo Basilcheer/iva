@@ -1,9 +1,6 @@
 import { execFileSync } from "node:child_process";
 import {
-  chmodSync,
   existsSync,
-  mkdirSync,
-  readFileSync,
   readdirSync,
   rmdirSync,
   rmSync,
@@ -13,9 +10,8 @@ import { dirname, join } from "node:path";
 import { CATALOG, catalogProvider } from "./lib/model-catalog.ts";
 import {
   isEntrypoint,
+  refreshOwnedShim,
   SHIM_PATH,
-  shimPointsAt,
-  shimScript,
 } from "./lib/version-layout.ts";
 import {
   adoptUpdateLock,
@@ -25,12 +21,263 @@ import {
   STATE_DIRS,
 } from "./lib/version-store.ts";
 import {
+  LEGACY_BRAIN_UNITS,
+  LEGACY_MEMORY_UNITS,
+} from "./lib/legacy-memory-units.ts";
+import {
   commandRunner,
   finishVersionUpdate,
   type UpdateOutcome,
 } from "./lib/version-update.ts";
+import type { createCliRuntime } from "./cli/runtime.ts";
 
 type Say = (message: string) => void;
+type CliRuntime = ReturnType<typeof createCliRuntime>;
+type WriterRuntime = Pick<
+  CliRuntime,
+  "BRAIN_TIMER" | "BRAIN_SERVICE" | "SERVICES" | "SVC_USERBOT" | "systemd"
+>;
+
+export type OptionalWriterState = {
+  readonly unit: string;
+  readonly loadState: string;
+  readonly active: boolean;
+  readonly enabled: boolean;
+};
+
+function unitLoadState(runtime: WriterRuntime, unit: string): string {
+  const result = runtime.systemd.query(
+    "show",
+    unit,
+    "--property=LoadState",
+    "--value",
+  );
+  if (
+    result.code === 0 &&
+    ["loaded", "not-found", "error", "masked", "stub", "merged"].includes(
+      result.out,
+    )
+  )
+    return result.out;
+  throw new Error(`could not read load state for ${unit}: ${result.out}`);
+}
+
+function present(loadState: string): boolean {
+  return loadState !== "not-found";
+}
+
+function unitActive(runtime: WriterRuntime, unit: string): boolean {
+  const result = runtime.systemd.query("is-active", unit);
+  if (
+    ["active", "activating", "deactivating", "reloading"].includes(result.out)
+  )
+    return true;
+  if (["inactive", "failed", "unknown"].includes(result.out)) return false;
+  throw new Error(`could not read active state for ${unit}: ${result.out}`);
+}
+
+function unitEnabled(runtime: WriterRuntime, unit: string): boolean {
+  const result = runtime.systemd.query("is-enabled", unit);
+  if (result.out === "enabled") return true;
+  if (
+    [
+      "disabled",
+      "static",
+      "masked",
+      "indirect",
+      "generated",
+      "transient",
+      "not-found",
+    ].includes(result.out)
+  )
+    return false;
+  throw new Error(`could not read enabled state for ${unit}: ${result.out}`);
+}
+
+/** Snapshot optional writers before any stop can change their runtime state. */
+export function captureOptionalWriterState(
+  runtime: WriterRuntime,
+): OptionalWriterState[] {
+  return [
+    ...new Set([
+      runtime.BRAIN_TIMER,
+      runtime.BRAIN_SERVICE,
+      runtime.SVC_USERBOT,
+      ...LEGACY_BRAIN_UNITS,
+      ...LEGACY_MEMORY_UNITS,
+    ]),
+  ].map((unit) => {
+    const loadState = unitLoadState(runtime, unit);
+    return {
+      unit,
+      loadState,
+      active: present(loadState) && unitActive(runtime, unit),
+      enabled: present(loadState) && unitEnabled(runtime, unit),
+    };
+  });
+}
+
+/** Stop every present writer. Missing optional units remain a valid legacy state. */
+export function stopWriterUnits(
+  runtime: WriterRuntime,
+  optional = captureOptionalWriterState(runtime),
+): void {
+  const optionalTimers = optional
+    .filter(
+      (state) => present(state.loadState) && state.unit.endsWith(".timer"),
+    )
+    .map((state) => state.unit);
+  const optionalServices = optional
+    .filter(
+      (state) => present(state.loadState) && state.unit.endsWith(".service"),
+    )
+    .map((state) => state.unit);
+  for (const writers of [optionalTimers, optionalServices, runtime.SERVICES]) {
+    if (writers.length === 0) continue;
+    runtime.systemd.stop(writers);
+    for (const unit of writers) {
+      if (unitActive(runtime, unit))
+        throw new Error(`writer ${unit} remained active after stop`);
+    }
+  }
+}
+
+function checkedUnitAction(
+  runtime: WriterRuntime,
+  action: "enable" | "start",
+  unit: string,
+): void {
+  const result = runtime.systemd.query(action, unit);
+  if (result.code !== 0)
+    throw new Error(`systemctl --user ${action} ${unit} failed: ${result.out}`);
+}
+
+/** Restore exact optional active/enabled flags without starting a disabled unit. */
+export function restoreOptionalWriterState(
+  runtime: WriterRuntime,
+  states: readonly OptionalWriterState[],
+): void {
+  for (const state of states) {
+    if (!present(state.loadState)) continue;
+    if (!present(unitLoadState(runtime, state.unit)))
+      throw new Error(`captured writer ${state.unit} disappeared`);
+    if (state.enabled !== unitEnabled(runtime, state.unit)) {
+      if (state.enabled) checkedUnitAction(runtime, "enable", state.unit);
+      else runtime.systemd.disableNow([state.unit]);
+    }
+    if (state.active !== unitActive(runtime, state.unit)) {
+      if (state.active) checkedUnitAction(runtime, "start", state.unit);
+      else runtime.systemd.stop([state.unit]);
+    }
+    if (
+      state.enabled !== unitEnabled(runtime, state.unit) ||
+      state.active !== unitActive(runtime, state.unit)
+    )
+      throw new Error(`could not restore ${state.unit} state`);
+  }
+}
+
+function mergedState(
+  states: readonly OptionalWriterState[],
+  units: ReadonlySet<string>,
+): Pick<OptionalWriterState, "active" | "enabled"> {
+  return states
+    .filter((state) => present(state.loadState) && units.has(state.unit))
+    .reduce<{ active: boolean; enabled: boolean }>(
+      (merged, state) => ({
+        active: merged.active || state.active,
+        enabled: merged.enabled || state.enabled,
+      }),
+      { active: false, enabled: false },
+    );
+}
+
+function restoreUnitState(
+  runtime: WriterRuntime,
+  state: OptionalWriterState,
+): void {
+  restoreOptionalWriterState(runtime, [state]);
+}
+
+/** Restore captured writer semantics after writeUnits retires legacy names. */
+export function restoreMigratedWriterState(
+  runtime: WriterRuntime,
+  states: readonly OptionalWriterState[],
+  { legacyMemoryOwnerProven = false } = {},
+): void {
+  restoreOptionalWriterState(
+    runtime,
+    states.filter((state) => state.unit === runtime.SVC_USERBOT),
+  );
+  const brainTimers = new Set([
+    runtime.BRAIN_TIMER,
+    ...LEGACY_BRAIN_UNITS.filter((unit) => unit.endsWith(".timer")),
+  ]);
+  const brainServices = new Set([
+    runtime.BRAIN_SERVICE,
+    ...LEGACY_BRAIN_UNITS.filter((unit) => unit.endsWith(".service")),
+  ]);
+  restoreUnitState(runtime, {
+    unit: runtime.BRAIN_TIMER,
+    loadState: "loaded",
+    ...mergedState(states, brainTimers),
+  });
+  restoreUnitState(runtime, {
+    unit: runtime.BRAIN_SERVICE,
+    loadState: "loaded",
+    ...mergedState(states, brainServices),
+  });
+
+  const legacyMemory = states.filter(
+    (state) =>
+      LEGACY_MEMORY_UNITS.includes(state.unit) && present(state.loadState),
+  );
+  const remaining = new Map(
+    legacyMemory.map((state) => [
+      state.unit,
+      present(unitLoadState(runtime, state.unit)),
+    ]),
+  );
+  restoreOptionalWriterState(
+    runtime,
+    legacyMemory.filter((state) => remaining.get(state.unit)),
+  );
+  const hadLegacyMemorySchedule = legacyMemory.some(
+    (state) => state.active || state.enabled,
+  );
+  const completeLegacySchedule = legacyMemory.every((state) => {
+    if (!state.active && !state.enabled) return true;
+    if (!remaining.get(state.unit)) return false;
+    if (!state.unit.endsWith(".timer")) return true;
+    return remaining.get(state.unit.replace(/\.timer$/u, ".service")) === true;
+  });
+  const owner = runtime.SERVICES[0];
+  if (hadLegacyMemorySchedule && !completeLegacySchedule) {
+    if (!legacyMemoryOwnerProven)
+      throw new Error(
+        "legacy memory schedule owner was not proven by writeUnits",
+      );
+    if (!owner || !unitActive(runtime, owner))
+      throw new Error("legacy memory schedule has no active service owner");
+  }
+}
+
+export function restoreWriterOwnership(
+  runtime: WriterRuntime,
+  states: readonly OptionalWriterState[],
+  phase: {
+    readonly unitMigrationStarted: boolean;
+    readonly legacyMemoryOwnerProven: boolean;
+  },
+): void {
+  if (!phase.unitMigrationStarted) {
+    restoreOptionalWriterState(runtime, states);
+    return;
+  }
+  restoreMigratedWriterState(runtime, states, {
+    legacyMemoryOwnerProven: phase.legacyMemoryOwnerProven,
+  });
+}
 
 /** Build leftovers of a checkout: not tracked, not state, never worth keeping. */
 const ARTIFACTS =
@@ -54,20 +301,10 @@ function git(home: string, args: string[]): string {
   });
 }
 
-/** Install the shim that outlives every version; rewritten at most once. */
+/** Install the shim that outlives every version; refresh only an owned stale snapshot. */
 export function writeShim(home: string, log: Say): void {
-  let existing = "";
-  try {
-    existing = readFileSync(SHIM_PATH, "utf8");
-  } catch {
-    // A missing shim is written below; the command has to exist either way.
-  }
-  if (existing.includes("$IVA_ROOT/current/bin/iva.mjs")) return;
-  if (existing && !shimPointsAt(existing, home)) return; // someone else's `iva`
-  mkdirSync(dirname(SHIM_PATH), { recursive: true });
-  writeFileSync(SHIM_PATH, shimScript(home, process.execPath));
-  chmodSync(SHIM_PATH, 0o755);
-  log(`rewrote ${SHIM_PATH}`);
+  if (refreshOwnedShim(SHIM_PATH, home, process.execPath, layoutFor(home).data))
+    log(`rewrote ${SHIM_PATH}`);
 }
 
 /**
@@ -123,8 +360,11 @@ export function retireCheckout(home: string): string[] {
  * Files the custom layer of the checkout era recorded as deleted. The overlay that
  * replaces it only adds, so a deletion comes undone and has to be reported.
  */
-export function tombstoned(home: string): string[] {
-  const entries = (readJson(join(home, "data/custom/manifest.json")).entries ??
+export function tombstoned(
+  home: string,
+  dataDir = layoutFor(home).data,
+): string[] {
+  const entries = (readJson(join(dataDir, "custom/manifest.json")).entries ??
     {}) as Record<string, { tombstone?: boolean } | undefined>;
   return Object.keys(entries)
     .filter((path) => entries[path]?.tombstone)
@@ -167,6 +407,8 @@ export async function main(argv: readonly string[]): Promise<number> {
   const lock = adoptUpdateLock(layout.data);
   const log: Say = (message) => console.log(`  ${message}`);
   const notify: Say = (message) => console.log(`! ${message}`);
+  let optionalWriterState: OptionalWriterState[] | undefined;
+  let unitMigrationStarted = false;
   let outcome: UpdateOutcome;
   try {
     outcome = await finishVersionUpdate({
@@ -175,22 +417,81 @@ export async function main(argv: readonly string[]): Promise<number> {
       run: commandRunner(verbose),
       log,
       notify,
-      restart: async (root) => {
+      quiesce: async () => {
+        const { createCliRuntime } = await import("./cli/runtime.ts");
+        // Before the first conversion there is no current symlink: the checkout
+        // itself is the old writer root and must remain usable until activation.
+        const runtime = createCliRuntime(
+          existsSync(layout.current) ? layout.current : home,
+        );
+        optionalWriterState = captureOptionalWriterState(runtime);
+        stopWriterUnits(runtime, optionalWriterState);
+        await Promise.resolve();
+      },
+      resumeOldWriters: async (root) => {
+        const { createCliRuntime } = await import("./cli/runtime.ts");
+        const runtime = createCliRuntime(root);
+        try {
+          // Recovery before activation must not rewrite or retire old unit files.
+          runtime.systemd.restart(runtime.SERVICES);
+        } finally {
+          if (optionalWriterState)
+            restoreWriterOwnership(runtime, optionalWriterState, {
+              unitMigrationStarted,
+              legacyMemoryOwnerProven: false,
+            });
+        }
+        await Promise.resolve();
+      },
+      startCandidate: async (root) => {
         const { createCliRuntime } = await import("./cli/runtime.ts");
         const { createCliSystemd } = await import("./cli/systemd.ts");
         const { reinstallUserbot } = await import("./cli/userbot.ts");
         // Units name `current`: they survive every later flip unrewritten.
         const runtime = createCliRuntime(root);
         const services = createCliSystemd(runtime);
-        services.restartServices();
-        runtime.systemd.activate([runtime.UPDATE_TIMER]);
-        reinstallUserbot(runtime, services, notify);
+        const capturedUserbot = optionalWriterState?.find(
+          (state) => state.unit === runtime.SVC_USERBOT,
+        );
+        try {
+          services.restartServices({
+            afterUnitWrite: () => {
+              unitMigrationStarted = true;
+            },
+            ...(capturedUserbot?.loadState === "not-found"
+              ? { skipUnits: [runtime.SVC_USERBOT] }
+              : {}),
+            deferBrainMigration: true,
+            deferMemoryMigration: true,
+          });
+          runtime.systemd.activate([runtime.UPDATE_TIMER]);
+          if (capturedUserbot?.active === true)
+            reinstallUserbot(runtime, services, notify, {
+              knownActive: true,
+            });
+        } finally {
+          if (optionalWriterState) {
+            restoreWriterOwnership(runtime, optionalWriterState, {
+              unitMigrationStarted,
+              legacyMemoryOwnerProven: false,
+            });
+            if (unitMigrationStarted) services.retireDeferredBrainUnits();
+          }
+        }
+        await Promise.resolve();
+      },
+      retireCommittedWriters: async (root) => {
+        const { createCliRuntime } = await import("./cli/runtime.ts");
+        const { createCliSystemd } = await import("./cli/systemd.ts");
+        const runtime = createCliRuntime(root);
+        const services = createCliSystemd(runtime);
+        services.retireLegacyMemoryUnits();
         await Promise.resolve();
       },
       adopt: () => {
         writeShim(home, log);
         if (!existsSync(join(home, ".git"))) return;
-        const back = tombstoned(home);
+        const back = tombstoned(home, layout.data);
         if (back.length > 0)
           notify(
             `a version cannot have a file of Iva's own deleted from it, so ${back.length} you had removed are back: ${back.join(", ")}`,

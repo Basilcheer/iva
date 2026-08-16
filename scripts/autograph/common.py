@@ -222,6 +222,83 @@ def get_entity_extraction_config(schema: dict) -> dict:
 
 
 # ─── FRONTMATTER ───────────────────────────────────────────
+class FrontmatterParseError(ValueError):
+    """Controlled failure for malformed values in the supported YAML subset."""
+
+
+def _split_flow_items(inner: str) -> list[str]:
+    """Split a legacy flow list without treating quoted commas as separators."""
+    out = []
+    current = []
+    quote = None
+    index = 0
+    while index < len(inner):
+        char = inner[index]
+        if quote is not None:
+            current.append(char)
+            if char == '\\' and quote == '"' and index + 1 < len(inner):
+                index += 1
+                current.append(inner[index])
+            elif char == "'" and quote == "'" and index + 1 < len(inner) \
+                    and inner[index + 1] == "'":
+                index += 1
+                current.append(inner[index])
+            elif char == quote:
+                quote = None
+        elif char in ('"', "'"):
+            quote = char
+            current.append(char)
+        elif char == ',':
+            out.append(''.join(current))
+            current = []
+        else:
+            current.append(char)
+        index += 1
+
+    if quote is not None:
+        raise FrontmatterParseError('unterminated quote in frontmatter flow list')
+    if current or out:
+        out.append(''.join(current))
+    return out
+
+
+def _unquote(value: str) -> str:
+    """Decode JSON strings first, then YAML legacy single-quoted strings."""
+    if value.startswith('"'):
+        if len(value) < 2 or not value.endswith('"'):
+            raise FrontmatterParseError('unterminated double-quoted frontmatter scalar')
+        try:
+            decoded = json.loads(value)
+        except json.JSONDecodeError as error:
+            raise FrontmatterParseError(
+                f'invalid JSON-quoted frontmatter scalar: {error}'
+            ) from error
+        if not isinstance(decoded, str):
+            raise FrontmatterParseError('JSON-quoted frontmatter scalar is not a string')
+        return decoded
+
+    if value.startswith("'"):
+        if len(value) < 2 or not value.endswith("'"):
+            raise FrontmatterParseError('unterminated single-quoted frontmatter scalar')
+        inner = value[1:-1]
+        decoded = []
+        index = 0
+        while index < len(inner):
+            char = inner[index]
+            if char != "'":
+                decoded.append(char)
+            elif index + 1 < len(inner) and inner[index + 1] == "'":
+                decoded.append("'")
+                index += 1
+            else:
+                raise FrontmatterParseError(
+                    'single quote inside frontmatter scalar must be doubled'
+                )
+            index += 1
+        return ''.join(decoded)
+    return value
+
+
 def parse_frontmatter(content: str) -> tuple[dict, str, list[str]]:
     """Parse YAML frontmatter from markdown content.
     Returns: (fields_dict, body_after_fm, original_fm_lines)
@@ -262,8 +339,8 @@ def parse_frontmatter(content: str) -> tuple[dict, str, list[str]]:
 
             if multiline_mode == 'list':
                 item = stripped[2:].strip() if stripped.startswith('- ') else stripped
-                if item:
-                    fields[multiline_key].append(item.strip("'\""))
+                if item or stripped.startswith('- '):
+                    fields[multiline_key].append(_unquote(item))
             else:
                 prev = fields.get(multiline_key, '') or ''
                 sep = multiline_sep
@@ -323,10 +400,13 @@ def parse_frontmatter(content: str) -> tuple[dict, str, list[str]]:
             continue
 
         if val.startswith('[') and val.endswith(']'):
-            items = [x.strip().strip("'\"") for x in val[1:-1].split(',') if x.strip()]
-            fields[key] = items
+            inner = val[1:-1]
+            fields[key] = (
+                [_unquote(item.strip()) for item in _split_flow_items(inner)]
+                if inner.strip() else []
+            )
         else:
-            fields[key] = val.strip("'\"")
+            fields[key] = _unquote(val)
 
     if multiline_key and fields.get(multiline_key) is None:
         fields[multiline_key] = ''
@@ -338,6 +418,12 @@ def write_frontmatter(fields: dict, original_lines: list[str]) -> str:
     """Rebuild frontmatter, preserving original order, updating values, appending new.
     Handles multiline YAML values (>-, |-, >, |) — when a key is rewritten,
     its continuation lines are skipped to prevent duplication."""
+    original_fields = None
+    if original_lines:
+        joined_original = '\n'.join(original_lines)
+        original_fields, _, _ = parse_frontmatter(
+            f"---\n{joined_original}\n---\n"
+        )
     written = set()
     out = []
     skip_continuation = False
@@ -364,10 +450,13 @@ def write_frontmatter(fields: dict, original_lines: list[str]) -> str:
         val_part = stripped.partition(':')[2].strip()
         written.add(key)
         if key in fields:
-            out.append(format_field(key, fields[key]))
+            unchanged = original_fields is not None \
+                and key in original_fields \
+                and original_fields[key] == fields[key]
+            out.append(line if unchanged else format_field(key, fields[key]))
             # '' covers block-style lists and pending multiline values —
             # their indented continuation lines are replaced wholesale too.
-            if val_part in ('>-', '>', '|-', '|', ''):
+            if not unchanged and val_part in ('>-', '>', '|-', '|', ''):
                 skip_continuation = True
         else:
             out.append(line)
@@ -414,24 +503,18 @@ def cap_description(desc: str) -> str:
     return desc[:DESC_CAP].rsplit(' ', 1)[0] + '…'
 
 
-YAML_SPECIAL = re.compile(r'[:#\[\]{}"\',|>!&*?]')
-
 def format_field(key: str, val) -> str:
     """Format a single frontmatter field."""
     if isinstance(val, list):
-        return f"{key}: [{', '.join(str(v) for v in val)}]"
+        encoded = json.dumps(
+            [str(item) for item in val], ensure_ascii=False, separators=(',', ':')
+        )
+        return f"{key}: {encoded}"
     if isinstance(val, (int, float)):
         return f"{key}: {val}"
     s = str(val)
-    if '\n' in s:
-        indented = '\n'.join(f'  {line}' for line in s.split('\n'))
-        return f'{key}: |-\n{indented}'
-    if key == 'description' and s and len(s) > 80:
-        return f'{key}: >-\n  {s}'
-    if YAML_SPECIAL.search(s):
-        escaped = s.replace('"', '\\"')
-        return f'{key}: "{escaped}"'
-    return f"{key}: {s}"
+    encoded = json.dumps(s, ensure_ascii=False, separators=(',', ':'))
+    return f"{key}: {encoded}"
 
 
 # ─── FILE OPERATIONS ───────────────────────────────────────

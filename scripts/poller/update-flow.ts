@@ -25,6 +25,11 @@ import {
   sleep,
 } from "./config.ts";
 import { edit, reply, tg } from "./transport.ts";
+import {
+  parseUpdateCallbackData,
+  validRecoveryBundleId,
+} from "./update-callback.ts";
+export { parseUpdateCallbackData } from "./update-callback.ts";
 
 type UpdateInfo = Awaited<ReturnType<typeof inspectUpstream>>;
 type UpdateCheckOptions = {
@@ -51,6 +56,14 @@ type RecoveryReport = {
   conflicts: { path: string }[];
 };
 
+function messageEditSucceeded(value: unknown): boolean {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as TelegramMessage).message_id === "number"
+  );
+}
+
 // ── self-update (/update) ──────────────────────────────────────────────────
 // Run `iva update` in its OWN transient systemd scope, so it survives the restart of
 // THIS bridge (restartServices restarts iva-telegram-poll too — a plain child would be
@@ -63,6 +76,7 @@ function launchSelfUpdate(jobId: string): Promise<LaunchResult> {
     `--unit=iva-self-update-${Date.now()}`,
     `--working-directory=${ROOT}`,
     `--setenv=PATH=${process.env.PATH || ""}`,
+    `--setenv=ASSISTANT_DATA_DIR=${DATA_DIR}`,
     NODE,
     join(ROOT, "bin/iva.mjs"),
     "update",
@@ -84,12 +98,12 @@ export async function handleUpdateCheck(
     markNotifiedImpl = markVersionNotified,
     envImpl = () => readEnvFresh(ENV_PATH),
   }: UpdateCheckOptions = {},
-): Promise<void> {
+): Promise<boolean> {
   const status = (await reply(
     chatId,
     tr("◇ Checking for updates", "◇ Проверяю обновления"),
   )) as TelegramMessage | null;
-  if (!status) return;
+  if (!status || typeof status.message_id !== "number") return false;
   let info;
   try {
     // The same question the daily check asks, and on a converted installation the
@@ -97,26 +111,31 @@ export async function handleUpdateCheck(
     // is upstream's, so the running commit has to be named.
     info = await inspectImpl(upstreamQuery(root));
   } catch {
-    await edit(
-      chatId,
-      status.message_id,
-      tr("⚠️ Couldn't check for updates", "⚠️ Не удалось проверить обновления"),
+    return messageEditSucceeded(
+      await edit(
+        chatId,
+        status.message_id,
+        tr(
+          "⚠️ Couldn't check for updates",
+          "⚠️ Не удалось проверить обновления",
+        ),
+      ),
     );
-    return;
   }
   if (!info.hasCommitUpdate) {
     // Not modelSummary(process.env): the /model wizard edits .env at runtime and restarts
     // only the agent — this bridge keeps running, so its env snapshot may hold the old model.
     const model = modelSummary(await envImpl());
-    await edit(
-      chatId,
-      status.message_id,
-      tr(
-        `✅ You're up to date\n\nIva v${info.localVersion ?? "?"}\nModel: ${model.line}`,
-        `✅ У вас актуальная версия\n\nIva v${info.localVersion ?? "?"}\nМодель: ${model.line}`,
+    return messageEditSucceeded(
+      await edit(
+        chatId,
+        status.message_id,
+        tr(
+          `✅ You're up to date\n\nIva v${info.localVersion ?? "?"}\nModel: ${model.line}`,
+          `✅ У вас актуальная версия\n\nIva v${info.localVersion ?? "?"}\nМодель: ${model.line}`,
+        ),
       ),
     );
-    return;
   }
   const bump =
     info.remoteVersion && info.remoteVersion !== info.localVersion
@@ -134,12 +153,14 @@ export async function handleUpdateCheck(
     ),
     updateOffer(info.localVersion, info.remoteVersion, getLang()).replyMarkup,
   );
-  if (offered && info.hasVersionUpdate) {
+  const offerShown = messageEditSucceeded(offered);
+  if (offerShown && info.hasVersionUpdate) {
     await markNotifiedImpl(DATA_DIR, info.remoteVersion).catch(
       (error: unknown) =>
         log("update notification state failed:", (error as ErrorLike).message),
     );
   }
+  return offerShown;
 }
 
 const jobsDir = (): string => join(DATA_DIR, "update-jobs");
@@ -171,18 +192,15 @@ async function showSavedUpdateConflicts(
   bundleId: string,
   chatId: string | number,
   messageId: number,
-): Promise<void> {
-  if (
-    !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(bundleId) ||
-    bundleId === "." ||
-    bundleId === ".."
-  ) {
-    await edit(
-      chatId,
-      messageId,
-      tr("⚠️ Invalid recovery bundle", "⚠️ Неверный пакет восстановления"),
+): Promise<boolean> {
+  if (!validRecoveryBundleId(bundleId)) {
+    return messageEditSucceeded(
+      await edit(
+        chatId,
+        messageId,
+        tr("⚠️ Invalid recovery bundle", "⚠️ Неверный пакет восстановления"),
+      ),
     );
-    return;
   }
   let report: RecoveryReport;
   try {
@@ -211,15 +229,16 @@ async function showSavedUpdateConflicts(
       throw new Error("invalid conflict list");
     report = parsed as RecoveryReport;
   } catch {
-    await edit(
-      chatId,
-      messageId,
-      tr(
-        "⚠️ Saved update details are unavailable",
-        "⚠️ Детали обновления недоступны",
+    return messageEditSucceeded(
+      await edit(
+        chatId,
+        messageId,
+        tr(
+          "⚠️ Saved update details are unavailable",
+          "⚠️ Детали обновления недоступны",
+        ),
       ),
     );
-    return;
   }
   const visible = report.conflicts.slice(0, 10).map(({ path }) => `- ${path}`);
   if (report.conflicts.length > visible.length) {
@@ -238,49 +257,57 @@ async function showSavedUpdateConflicts(
           "Your local changes are saved in full.",
           "Ваши локальные изменения сохранены целиком.",
         );
-  await edit(
-    chatId,
-    messageId,
-    [
-      tr("✅ The new Iva core is active.", "✅ Новое ядро Iva активно."),
-      "",
-      details,
-      "",
-      tr(
-        "Tell Iva: “restore my update changes”.",
-        "Напишите Иве: «восстанови мои изменения после обновления».",
-      ),
-    ].join("\n"),
-    { inline_keyboard: [] },
+  return messageEditSucceeded(
+    await edit(
+      chatId,
+      messageId,
+      [
+        tr("✅ The new Iva core is active.", "✅ Новое ядро Iva активно."),
+        "",
+        details,
+        "",
+        tr(
+          "Tell Iva: “restore my update changes”.",
+          "Напишите Иве: «восстанови мои изменения после обновления».",
+        ),
+      ].join("\n"),
+      { inline_keyboard: [] },
+    ),
   );
 }
 
 // Inline-button taps for the /update flow. Handled by the bridge; never delivered to eve.
 export async function handleUpdateCallback(
   cq: UpdateCallbackQuery,
-): Promise<true> {
-  const from = String(cq.from?.id ?? "");
+): Promise<boolean> {
+  const parsed = parseUpdateCallbackData(cq.data);
+  const senderId = cq.from?.id;
+  const from = senderId === undefined ? null : String(senderId);
   const chatId = cq.message?.chat?.id;
   const messageId = cq.message?.message_id;
-  await tg("answerCallbackQuery", { callback_query_id: cq.id }); // clear the button spinner
-  if (ALLOWED.size === 0 || !ALLOWED.has(from)) return true; // swallow untrusted taps
-  const action = cq.data.slice("iva_update:".length);
-  if (action === "skip") {
-    await edit(
+  await tg("answerCallbackQuery", { callback_query_id: cq.id }); // spinner only; never primary proof
+  if (parsed === null) {
+    log("ignored invalid update callback data");
+    return false;
+  }
+  if (from === null) return false;
+  if (ALLOWED.size === 0 || !ALLOWED.has(from)) return true; // explicit terminal drop for a known untrusted sender
+  if (parsed.action === "skip") {
+    const edited = await edit(
       chatId as string | number,
       messageId as number,
       tr("– Update postponed", "– Обновление отложено"),
       { inline_keyboard: [] },
     );
-    return true;
+    return messageEditSucceeded(edited);
   }
-  if (action.startsWith("conflicts:")) {
-    await showSavedUpdateConflicts(
-      action.slice("conflicts:".length),
+  if (parsed.action === "conflicts") {
+    const shown = await showSavedUpdateConflicts(
+      parsed.bundleId,
       chatId as string | number,
       messageId as number,
     );
-    return true;
+    return shown;
   }
 
   const jobId = randomBytes(8).toString("hex");
@@ -289,13 +316,13 @@ export async function handleUpdateCallback(
   // not release it, and it is restarted by the very update it is waiting for - so
   // one tap would answer "already running" to every update after it.
   if (updateRunning(DATA_DIR)) {
-    await edit(
+    const edited = await edit(
       chatId as string | number,
       messageId as number,
       tr("⚠️ An update is already running", "⚠️ Обновление уже идёт"),
       { inline_keyboard: [] },
     );
-    return true;
+    return messageEditSucceeded(edited);
   }
   // The version that runs as the tap is made. What the update moves the box off
   // of, written down while the process that knows it is still alive: after the
@@ -324,12 +351,14 @@ export async function handleUpdateCallback(
   const r = await launchSelfUpdate(jobId);
   if (!r.ok) {
     await rm(join(jobsDir(), `${jobId}.json`), { force: true });
-    await edit(
+    const failureNotice = await edit(
       chatId as string | number,
       messageId as number,
       tr("⚠️ Couldn't start the update", "⚠️ Не удалось запустить обновление"),
     );
+    return messageEditSucceeded(failureNotice);
   }
+  // The durable job now owns reconciliation and the updater process owns execution.
   return true;
 }
 

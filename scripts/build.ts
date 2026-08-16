@@ -22,6 +22,7 @@ import {
   rebaseBuildOutput,
   type MaterializedCustomLayer,
 } from "./lib/custom-layer.ts";
+import { resolveDataDir } from "./lib/data-dir.ts";
 import { classifyRoot, isEntrypoint } from "./lib/version-layout.ts";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
@@ -45,8 +46,7 @@ const EXCLUDED_TOP_LEVEL = new Set([
 ]);
 
 function dataDir(): string {
-  const configured = process.env.ASSISTANT_DATA_DIR || "data";
-  return isAbsolute(configured) ? configured : join(ROOT, configured);
+  return resolveDataDir(ROOT);
 }
 
 function copySourceTree(staging: string): void {
@@ -177,7 +177,7 @@ export function buildWithCustomLayer(): void {
     const npm = process.platform === "win32" ? "npm.cmd" : "npm";
     const built = spawnSync(npm, ["run", "build:core"], {
       cwd: staging,
-      env: process.env,
+      env: { ...process.env, ASSISTANT_DATA_DIR: dataDir() },
       stdio: "inherit",
     });
     if (built.error) throw built.error;

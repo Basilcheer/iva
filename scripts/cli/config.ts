@@ -8,6 +8,11 @@ import {
 } from "../lib/config-transaction.ts";
 import { parseEnvText } from "../lib/env-file.ts";
 import { catalogProvider } from "../lib/model-catalog.ts";
+import {
+  classifyRoot,
+  refreshOwnedShim,
+  SHIM_PATH,
+} from "../lib/version-layout.ts";
 import type { createCliRuntime } from "./runtime.ts";
 import type { createCliSystemd } from "./systemd.ts";
 
@@ -18,6 +23,7 @@ type ConfigCommandOverrides = {
   readonly applyConfigTransaction?: typeof applyConfigTransaction;
   readonly probeEveHealth?: typeof probeEveHealth;
   readonly recoverConfigTransaction?: typeof recoverConfigTransaction;
+  readonly refreshDataDirShim?: (dataDir: string) => void;
 };
 
 type ProviderSelection = [model: string, key: string | null];
@@ -30,6 +36,7 @@ export function createConfigCommand(
     applyConfigTransaction: applyTransaction = applyConfigTransaction,
     probeEveHealth: probeHealth = probeEveHealth,
     recoverConfigTransaction: recoverTransaction = recoverConfigTransaction,
+    refreshDataDirShim,
   }: ConfigCommandOverrides = {},
 ) {
   const {
@@ -47,6 +54,13 @@ export function createConfigCommand(
     requireSystemd,
   } = runtime;
   const { writeUnits } = cliSystemd;
+  const install = classifyRoot(runtime.ROOT);
+  const refreshShim =
+    refreshDataDirShim ??
+    ((dataDir: string): void => {
+      if (install.kind !== "version") return;
+      refreshOwnedShim(SHIM_PATH, install.home, NODE, dataDir);
+    });
 
   return async function cmdConfig(args: readonly string[] = []): Promise<void> {
     requireSystemd();
@@ -55,6 +69,7 @@ export function createConfigCommand(
       // whichever .env is currently live before the checked restart. The candidate
       // already carries a valid bearer; skipping its migration here also keeps a
       // rollback snapshot byte-exact for older installations.
+      refreshShim(dataDirAbs());
       writeUnits({ ensureBearer: false });
       systemd.restart(SERVICES);
     };

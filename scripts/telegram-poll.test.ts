@@ -47,6 +47,14 @@ type RouteOptions = {
     patch: Record<string, unknown>,
   ) => Record<string, unknown> | null;
   sendFailureImpl: (chatKey: string, text: string) => Promise<unknown>;
+  alertImpl: (
+    dataDir: string,
+    key: string,
+    essence: string,
+    send: () => Promise<boolean>,
+  ) => Promise<"sent" | "throttled" | "failed">;
+  alertResolvedImpl: (dataDir: string, key: string) => void;
+  alertDataDir: string;
   deleteMessageImpl: (chatKey: string, messageId: number) => Promise<unknown>;
   now: () => number;
   trImpl: (english: string, russian: string) => string;
@@ -205,6 +213,10 @@ function routeDeps(overrides: Partial<RouteOptions> = {}): RouteOptions {
     statusImpl: () => null,
     setStatusIfImpl: () => null,
     sendFailureImpl: async () => {},
+    alertImpl: async (_dataDir, _key, _essence, send) =>
+      (await send()) ? "sent" : "failed",
+    alertResolvedImpl: () => {},
+    alertDataDir: "/tmp/iva-routing-test-alerts",
     deleteMessageImpl: async () => {},
     now: () => 1_000,
     trImpl: (_en, ru) => ru,
@@ -252,6 +264,7 @@ test("routeMessageUpdate enqueues and acknowledges one busy update", async () =>
 
 test("routeMessageUpdate sends one idle update through paced delivery", async () => {
   let delivered = 0;
+  const resolved: Array<[string, string]> = [];
   const result = await routeMessageUpdate(
     routedUpdate,
     routeDeps({
@@ -260,11 +273,15 @@ test("routeMessageUpdate sends one idle update through paced delivery", async ()
         assert.equal(update, routedUpdate);
         return true;
       },
+      alertResolvedImpl: (dataDir, key) => resolved.push([dataDir, key]),
     }),
   );
 
   assert.equal(result, "delivered");
   assert.equal(delivered, 1);
+  assert.deepEqual(resolved, [
+    ["/tmp/iva-routing-test-alerts", "telegram-acceptance:1:"],
+  ]);
 });
 
 test("a direct acceptance timeout is rejected after one cleanup and notification", async () => {

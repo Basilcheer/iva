@@ -2,6 +2,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { TELEGRAM_ACCEPTANCE_ROUTE } from "#lib/telegram-acceptance.ts";
 import { TELEGRAM_CANCEL_ROUTE } from "#lib/telegram-cancel-route.ts";
+import { dataDirSetting, resolveDataDir } from "../lib/data-dir.ts";
 
 export const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 export const NODE = process.execPath;
@@ -14,10 +15,8 @@ export const PORT = process.env.IVA_PORT ?? "8723";
 export const HOST = (
   process.env.ASSISTANT_HOST ?? `http://127.0.0.1:${PORT}`
 ).replace(/\/$/, "");
-export const DATA_DIR_RAW = process.env.ASSISTANT_DATA_DIR ?? "data";
-export const DATA_DIR = DATA_DIR_RAW.startsWith("/")
-  ? DATA_DIR_RAW
-  : join(ROOT, DATA_DIR_RAW);
+export const DATA_DIR_RAW = dataDirSetting(process.env.ASSISTANT_DATA_DIR);
+export const DATA_DIR = resolveDataDir(ROOT, DATA_DIR_RAW);
 // Absolute paths for the /model wizard: .env is read fresh (this process's env goes
 // stale after the wizard edits the file) and data/ holds codex-auth.json.
 export const ENV_PATH = join(ROOT, ".env");

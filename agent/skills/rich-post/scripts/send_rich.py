@@ -24,7 +24,7 @@ Usage:
   python3 send_rich.py --chat <allowlisted id> --md-file -    # explicit recipient
   python3 send_rich.py --md-file post.md --dry-run            # offline check
 """
-import argparse, json, os, re, sys, urllib.request, urllib.parse
+import argparse, json, os, re, subprocess, sys, urllib.request, urllib.parse
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 # agent/skills/rich-post/scripts -> repo root is four levels up.
@@ -82,7 +82,25 @@ def resolve_chat(arg_chat, env_file):
 def allowed_image_roots(env_file):
     data_dir = env_value("ASSISTANT_DATA_DIR", env_file) or "data"
     if not os.path.isabs(data_dir):
-        data_dir = os.path.join(REPO_ROOT, data_dir)
+        node_dir = env_value("NODE_BIN_DIR", env_file)
+        node = os.path.join(node_dir, "node") if node_dir else "node"
+        resolved = subprocess.run(
+            [
+                node,
+                "--input-type=module",
+                "-e",
+                'const {resolveDataDir}=await import("./packages/data-dir/index.ts");process.stdout.write(resolveDataDir(process.argv[1],process.argv[2]));',
+                REPO_ROOT,
+                data_dir,
+            ],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            check=False,
+            text=True,
+        )
+        if resolved.returncode != 0:
+            sys.exit("cannot resolve ASSISTANT_DATA_DIR with Iva's canonical resolver")
+        data_dir = resolved.stdout
     return [os.path.realpath(REPO_ROOT), os.path.realpath(data_dir)]
 
 

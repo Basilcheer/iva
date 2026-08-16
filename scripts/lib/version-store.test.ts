@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-floating-promises -- Node's test runner owns registration promises */
 import test from "node:test";
 import assert from "node:assert/strict";
+import fc from "fast-check";
 import { execFileSync } from "node:child_process";
 import {
   chmodSync,
@@ -13,6 +14,7 @@ import {
   readlinkSync,
   realpathSync,
   rmSync,
+  statSync,
   symlinkSync,
   utimesSync,
   writeFileSync,
@@ -23,9 +25,12 @@ import {
   createVersionStore,
   layoutFor,
   parseVersionName,
+  readActiveState,
   releaseOf,
+  retainedVersions,
   versionName,
 } from "./version-store.ts";
+import { ATOMIC_WRITE_DURABILITY } from "../../agent/lib/fs-atomic.ts";
 
 function home(t: { after(fn: () => void): void }): string {
   const dir = mkdtempSync(join(tmpdir(), "iva-versions-"));
@@ -78,6 +83,19 @@ test("version names carry the release, the commit and the customization", () => 
     "0.3.15-0123456789ab+beefcafe~2",
   );
   assert.equal(parseVersionName("0.3.15-0123456789ab~3")?.build, 3);
+  assert.deepEqual(parseVersionName(versionName("1.2.3-rc-hotfix", sha)), {
+    version: "1.2.3-rc-hotfix",
+    sha: "0123456789ab",
+    overlay: null,
+    build: 1,
+  });
+  for (const version of ["1.2.3+build.7", "1.2.3-rc.1+build.7"])
+    assert.deepEqual(parseVersionName(versionName(version, sha)), {
+      version,
+      sha: "0123456789ab",
+      overlay: null,
+      build: 1,
+    });
   assert.equal(
     releaseOf("0.3.15-0123456789ab+beefcafe~2"),
     "0.3.15-0123456789ab+beefcafe",
@@ -90,6 +108,81 @@ test("version names carry the release, the commit and the customization", () => 
   assert.equal(parseVersionName(".incomplete"), null);
   assert.equal(parseVersionName("node_modules"), null);
   assert.equal(parseVersionName("0.3.15-XYZ"), null);
+  for (const invalid of [
+    "1.2.3-alpha..beta",
+    "01.2.3",
+    "1.02.3",
+    "1.2.03",
+    "1.2.3-01",
+    "1.2.3+build..7",
+  ])
+    assert.equal(
+      parseVersionName(versionName(invalid, "0123456789abcdef")),
+      null,
+      invalid,
+    );
+});
+
+test("version names round-trip every supported package SemVer shape", () => {
+  const numeric = fc.nat({ max: 999 }).map(String);
+  const identifier = fc
+    .array(
+      fc.constantFrom(
+        ..."0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-",
+      ),
+      {
+        minLength: 1,
+        maxLength: 8,
+      },
+    )
+    .map((characters) => characters.join(""));
+  const prereleaseIdentifier = identifier.filter(
+    (value) => !/^0\d+$/u.test(value),
+  );
+  const prerelease = fc
+    .array(prereleaseIdentifier, { minLength: 1, maxLength: 3 })
+    .map((parts) => parts.join("."));
+  const metadata = fc
+    .array(identifier, { minLength: 1, maxLength: 3 })
+    .map((parts) => parts.join("."));
+  const semver = fc
+    .tuple(
+      numeric,
+      numeric,
+      numeric,
+      fc.option(prerelease, { nil: undefined }),
+      fc.option(metadata, { nil: undefined }),
+    )
+    .map(
+      ([major, minor, patch, prerelease, metadata]) =>
+        `${major}.${minor}.${patch}${prerelease ? `-${prerelease}` : ""}${metadata ? `+${metadata}` : ""}`,
+    );
+  const hex = fc.constantFrom(..."0123456789abcdef");
+  const digest = (length: number) =>
+    fc
+      .array(hex, { minLength: length, maxLength: length })
+      .map((digits) => digits.join(""));
+
+  fc.assert(
+    fc.property(
+      semver,
+      digest(40),
+      fc.option(digest(8), { nil: null }),
+      fc.integer({ min: 1, max: 9 }),
+      (version, sha, overlay, build) => {
+        assert.deepEqual(
+          parseVersionName(versionName(version, sha, overlay, build)),
+          {
+            version,
+            sha: sha.slice(0, 12),
+            overlay,
+            build,
+          },
+        );
+      },
+    ),
+    { seed: 18804, numRuns: 500 },
+  );
 });
 
 test("layout keeps state outside the versions tree", (t) => {
@@ -201,7 +294,7 @@ test("activation is atomic, repeatable and reversible without git", (t) => {
   );
 });
 
-test("a missing, dangling or foreign current link is healed onto the newest version", (t) => {
+test("a missing current path is healed onto the newest version", (t) => {
   const root = home(t);
   const store = createVersionStore(root);
   const layout = layoutFor(root);
@@ -211,32 +304,90 @@ test("a missing, dangling or foreign current link is healed onto the newest vers
   assert.equal(store.currentName(), null);
   assert.equal(store.heal(), "0.3.15-bbbbbbbbbbbb");
 
-  // Dangling: the target was removed by hand.
-  rmSync(layout.current, { force: true });
-  symlinkSync(join(layout.versions, "0.3.99-cccccccccccc"), layout.current);
-  assert.equal(store.currentName(), null);
-  assert.equal(store.heal(), "0.3.15-bbbbbbbbbbbb");
-
-  // Foreign: pointing outside the versions tree is not a valid installation.
-  const foreign = join(root, "elsewhere");
-  mkdirSync(foreign);
-  rmSync(layout.current, { force: true });
-  symlinkSync(foreign, layout.current);
-  assert.equal(store.currentName(), null);
-  assert.equal(store.heal(), "0.3.15-bbbbbbbbbbbb");
-
-  // A real directory left where the link belongs is replaced, not merged into.
-  rmSync(layout.current, { force: true });
-  mkdirSync(layout.current);
-  writeFileSync(join(layout.current, "junk"), "junk");
-  store.activate("0.3.14-aaaaaaaaaaaa");
-  assert.equal(store.currentName(), "0.3.14-aaaaaaaaaaaa");
-  assert.equal(lstatSync(layout.current).isSymbolicLink(), true);
-
   // Nothing to heal onto: report it instead of guessing.
   rmSync(layout.current, { force: true });
   rmSync(layout.versions, { recursive: true, force: true });
   assert.equal(store.heal(), null);
+});
+
+test("an external current symlink blocks healing without changing either owner", (t) => {
+  const root = home(t);
+  const foreign = home(t);
+  const store = createVersionStore(root);
+  const layout = layoutFor(root);
+  install(store, "0.3.14-aaaaaaaaaaaa");
+  install(store, "0.3.15-bbbbbbbbbbbb");
+  const leftover = store.stage("0.3.99-cccccccccccc");
+  writeFileSync(join(leftover, "partial"), "keep");
+  const owner = join(foreign, "owner.txt");
+  const bytes = Buffer.from([0x66, 0x6f, 0x72, 0x65, 0x69, 0x67, 0x6e]);
+  writeFileSync(owner, bytes);
+  symlinkSync(foreign, layout.current);
+  const target = readlinkSync(layout.current);
+
+  assert.throws(
+    () => store.currentName(),
+    /current.*foreign|outside.*versions/u,
+  );
+  assert.throws(() => store.sweep(), /current.*foreign|outside.*versions/u);
+  assert.throws(() => store.heal(), /current.*foreign|outside.*versions/u);
+  assert.throws(
+    () => store.activate("0.3.14-aaaaaaaaaaaa"),
+    /current.*foreign|outside.*versions/u,
+  );
+  assert.equal(readlinkSync(layout.current), target);
+  assert.deepEqual(readFileSync(owner), bytes);
+  assert.equal(readFileSync(join(leftover, "partial"), "utf8"), "keep");
+});
+
+test("owned relative current links are valid while dangling and hostile links fail closed", (t) => {
+  const root = home(t);
+  const foreign = home(t);
+  const store = createVersionStore(root);
+  const layout = layoutFor(root);
+  const owned = "0.3.14-aaaaaaaaaaaa";
+  install(store, owned);
+  install(store, "0.3.15-bbbbbbbbbbbb");
+
+  const relativeOwned = join("versions", owned);
+  symlinkSync(relativeOwned, layout.current);
+  assert.equal(store.currentName(), owned);
+  assert.equal(store.heal(), owned);
+  assert.equal(readlinkSync(layout.current), relativeOwned);
+
+  const dangling = join(layout.versions, "0.3.99-cccccccccccc");
+  rmSync(layout.current, { force: true });
+  symlinkSync(dangling, layout.current);
+  assert.throws(() => store.currentName(), /current.*dangling|unreadable/u);
+  assert.throws(() => store.heal(), /current.*dangling|unreadable/u);
+  assert.equal(readlinkSync(layout.current), dangling);
+
+  const hostile = join("..", basename(foreign));
+  rmSync(layout.current, { force: true });
+  symlinkSync(hostile, layout.current);
+  assert.throws(
+    () => store.currentName(),
+    /current.*foreign|outside.*versions/u,
+  );
+  assert.throws(() => store.heal(), /current.*foreign|outside.*versions/u);
+  assert.equal(readlinkSync(layout.current), hostile);
+});
+
+test("a non-symlink current object blocks activation without changing its bytes", (t) => {
+  const root = home(t);
+  const store = createVersionStore(root);
+  const layout = layoutFor(root);
+  install(store, "0.3.14-aaaaaaaaaaaa");
+  // A real directory at the reserved path is foreign state. Refuse it and keep
+  // every byte for manual repair instead of guessing that it is safe to delete.
+  mkdirSync(layout.current);
+  writeFileSync(join(layout.current, "junk"), "junk");
+  assert.throws(
+    () => store.activate("0.3.14-aaaaaaaaaaaa"),
+    /current.*not a symlink/u,
+  );
+  assert.equal(lstatSync(layout.current).isDirectory(), true);
+  assert.equal(readFileSync(join(layout.current, "junk"), "utf8"), "junk");
 });
 
 test("healing goes back to the version the installation settled on", (t) => {
@@ -261,6 +412,134 @@ test("healing goes back to the version the installation settled on", (t) => {
     realpathSync(join(root, "current/data")),
     realpathSync(layout.data),
   );
+});
+
+test("a corrupt active marker blocks healing without changing its bytes", (t) => {
+  const root = home(t);
+  const store = createVersionStore(root);
+  install(store, "0.3.14-aaaaaaaaaaaa");
+  install(store, "0.3.15-bbbbbbbbbbbb");
+  store.activate("0.3.14-aaaaaaaaaaaa");
+  mkdirSync(store.layout.data, { recursive: true });
+  const marker = join(store.layout.data, "active.json");
+  const corrupt = Buffer.from([0x7b, 0x22, 0xff, 0x22, 0x7d]);
+  writeFileSync(marker, corrupt);
+  rmSync(store.layout.current);
+
+  assert.throws(
+    () => store.heal(),
+    /active\.json.*corrupt|corrupt.*active\.json/u,
+  );
+  assert.deepEqual(readFileSync(marker), corrupt);
+  assert.equal(existsSync(store.layout.current), false);
+});
+
+test("a valid current link cannot hide a corrupt active marker from healing", (t) => {
+  const store = createVersionStore(home(t));
+  install(store, "0.3.14-aaaaaaaaaaaa");
+  store.activate("0.3.14-aaaaaaaaaaaa");
+  const current = readlinkSync(store.layout.current);
+  mkdirSync(store.layout.data, { recursive: true });
+  const marker = join(store.layout.data, "active.json");
+  const corrupt = Buffer.from("{not json");
+  writeFileSync(marker, corrupt);
+
+  assert.throws(() => store.heal(), /active\.json.*corrupt/u);
+  assert.equal(readlinkSync(store.layout.current), current);
+  assert.deepEqual(readFileSync(marker), corrupt);
+});
+
+test("a corrupt active marker blocks rollback selection", (t) => {
+  const store = createVersionStore(home(t));
+  install(store, "0.3.14-aaaaaaaaaaaa");
+  install(store, "0.3.15-bbbbbbbbbbbb");
+  store.activate("0.3.15-bbbbbbbbbbbb");
+  mkdirSync(store.layout.data, { recursive: true });
+  writeFileSync(join(store.layout.data, "active.json"), "not json\n");
+
+  assert.throws(
+    () => store.previousName(),
+    /active\.json.*corrupt|corrupt.*active\.json/u,
+  );
+});
+
+test("an unreadable active marker is not treated as missing", (t) => {
+  const store = createVersionStore(home(t));
+  mkdirSync(store.layout.data, { recursive: true });
+  const marker = join(store.layout.data, "active.json");
+  mkdirSync(marker);
+
+  assert.throws(
+    () => store.settled(),
+    /active\.json.*corrupt|corrupt.*active\.json/u,
+  );
+  assert.equal(lstatSync(marker).isDirectory(), true);
+});
+
+test("a symlinked active marker is corrupt even when its target is valid", (t) => {
+  const root = home(t);
+  const store = createVersionStore(root);
+  mkdirSync(store.layout.data, { recursive: true });
+  const marker = join(store.layout.data, "active.json");
+  const target = join(root, "active-target.json");
+  const bytes = Buffer.from(
+    '{"schema":"iva-active/v1","version":"0.3.14-aaaaaaaaaaaa"}\n',
+  );
+  writeFileSync(target, bytes);
+  symlinkSync(target, marker);
+  const before = lstatSync(marker);
+
+  assert.equal(readActiveState(marker).kind, "corrupt-or-unreadable");
+  assert.equal(lstatSync(marker).ino, before.ino);
+  assert.equal(readlinkSync(marker), target);
+  assert.deepEqual(readFileSync(target), bytes);
+});
+
+test("a dangling active marker blocks sweep before it removes a version", (t) => {
+  const root = home(t);
+  const store = createVersionStore(root);
+  const staged = store.stage("0.3.15-bbbbbbbbbbbb");
+  writeFileSync(join(staged, "half-built.txt"), "partial");
+  mkdirSync(store.layout.data, { recursive: true });
+  const marker = join(store.layout.data, "active.json");
+  const target = join(root, "missing-active-target.json");
+  symlinkSync(target, marker);
+  const before = lstatSync(marker);
+
+  let caught: unknown;
+  try {
+    store.sweep();
+  } catch (error) {
+    caught = error;
+  }
+
+  assert.equal(existsSync(staged), true, "sweep removed a staged version");
+  assert.ok(caught instanceof Error);
+  assert.match(caught.message, /active\.json.*corrupt/u);
+  assert.equal(lstatSync(marker).ino, before.ino);
+  assert.equal(lstatSync(marker).isSymbolicLink(), true);
+  assert.equal(readlinkSync(marker), target);
+  assert.equal(existsSync(target), false);
+});
+
+test("invalid UTF-8 is rejected before JSON schema validation", (t) => {
+  const store = createVersionStore(home(t));
+  mkdirSync(store.layout.data, { recursive: true });
+  const marker = join(store.layout.data, "active.json");
+  const corrupt = Buffer.concat([
+    Buffer.from(
+      '{"schema":"iva-active/v1","version":"0.3.14-aaaaaaaaaaaa","x":"',
+    ),
+    Buffer.from([0xff]),
+    Buffer.from('"}\n'),
+  ]);
+  writeFileSync(marker, corrupt);
+
+  assert.deepEqual(readActiveState(marker), {
+    kind: "corrupt-or-unreadable",
+    reason: "invalid UTF-8",
+  });
+  assert.deepEqual(readFileSync(marker), corrupt);
 });
 
 test("two updates racing on the same version let exactly one stage it", (t) => {
@@ -333,6 +612,238 @@ test("garbage collection keeps the active version and the rollback target", (t) 
   // Even keep=1 never removes the active version.
   assert.deepEqual(store.gc(1), ["0.3.14-444444444444"]);
   assert.equal(store.currentName(), "0.3.13-333333333333");
+});
+
+test("garbage collection preserves the settled rollback regardless of mtime", (t) => {
+  const store = createVersionStore(home(t));
+  const rollback = "0.3.12-222222222222";
+  const unrelated = "0.3.13-333333333333";
+  const current = "0.3.14-444444444444";
+  install(store, rollback);
+  install(store, unrelated);
+  install(store, current);
+  store.activate(rollback);
+  mkdirSync(store.layout.data, { recursive: true });
+  writeFileSync(
+    join(store.layout.data, "active.json"),
+    `${JSON.stringify({
+      schema: "iva-active/v1",
+      version: rollback,
+      settledAt: "2026-01-01T00:00:00.000Z",
+    })}\n`,
+  );
+  store.activate(current);
+  store.settle(current);
+  age(join(store.layout.versions, rollback), 10_000);
+  age(join(store.layout.versions, unrelated), 0);
+
+  assert.deepEqual(store.gc(2), [unrelated]);
+  assert.deepEqual(store.list().sort(), [current, rollback].sort());
+  assert.equal(store.currentName(), current);
+  assert.equal(store.settled(), current);
+  assert.equal(store.previousName(), rollback);
+  const state = JSON.parse(
+    readFileSync(join(store.layout.data, "active.json"), "utf8"),
+  ) as Record<string, unknown>;
+  assert.equal(state.schema, "iva-active/v2");
+  assert.equal(state.version, current);
+  assert.equal(state.previous, rollback);
+  assert.match(String(state.settledAt), /^\d{4}-\d{2}-\d{2}T/u);
+});
+
+test("corrupt active bytes block GC and settlement without changing data", (t) => {
+  const store = createVersionStore(home(t));
+  for (const name of [
+    "0.3.12-222222222222",
+    "0.3.13-333333333333",
+    "0.3.14-444444444444",
+  ])
+    install(store, name);
+  store.activate("0.3.14-444444444444");
+  mkdirSync(store.layout.data, { recursive: true });
+  const marker = join(store.layout.data, "active.json");
+  const corrupt = Buffer.from('{"schema":"iva-active/v2","version":');
+  writeFileSync(marker, corrupt);
+  const before = store.list();
+
+  assert.throws(
+    () => store.gc(2),
+    /active\.json.*corrupt|corrupt.*active\.json/u,
+  );
+  assert.deepEqual(store.list(), before);
+  assert.deepEqual(readFileSync(marker), corrupt);
+  assert.throws(
+    () => store.settle("0.3.14-444444444444"),
+    /active\.json.*corrupt|corrupt.*active\.json/u,
+  );
+  assert.deepEqual(readFileSync(marker), corrupt);
+});
+
+test("semantic-invalid v1 and v2 active markers fail closed", (t) => {
+  const store = createVersionStore(home(t));
+  mkdirSync(store.layout.data, { recursive: true });
+  const marker = join(store.layout.data, "active.json");
+  const invalid = [
+    {},
+    { schema: "iva-active/v0", version: "0.3.14-aaaaaaaaaaaa" },
+    { schema: "iva-active/v1", version: "not-a-version" },
+    { schema: "iva-active/v1", version: "0.3.14-aaaaaaaaaaaa", settledAt: 1 },
+    { schema: "iva-active/v1", version: "0.3.14-aaaaaaaaaaaa", extra: true },
+    { schema: "iva-active/v2", version: "0.3.14-aaaaaaaaaaaa" },
+    {
+      schema: "iva-active/v2",
+      version: "0.3.14-aaaaaaaaaaaa",
+      previous: "0.3.14-aaaaaaaaaaaa",
+      settledAt: "2026-08-16T00:00:00.000Z",
+    },
+    {
+      schema: "iva-active/v2",
+      version: "0.3.14-aaaaaaaaaaaa",
+      settledAt: "yesterday",
+      cleanupPending: "yes",
+    },
+  ];
+
+  for (const value of invalid) {
+    writeFileSync(marker, `${JSON.stringify(value)}\n`);
+    assert.throws(
+      () => store.settled(),
+      /active\.json.*corrupt|corrupt.*active\.json/u,
+      JSON.stringify(value),
+    );
+  }
+});
+
+test("arbitrary malformed active bytes fail closed with a fixed seed", (t) => {
+  const store = createVersionStore(home(t));
+  mkdirSync(store.layout.data, { recursive: true });
+  const marker = join(store.layout.data, "active.json");
+  const seed = 41_907;
+
+  fc.assert(
+    fc.property(fc.uint8Array({ maxLength: 96 }), (tail) => {
+      const corrupt = Buffer.concat([Buffer.from([0xff]), Buffer.from(tail)]);
+      writeFileSync(marker, corrupt);
+      assert.throws(
+        () => store.settled(),
+        /active\.json.*corrupt|corrupt.*active\.json/u,
+      );
+      assert.deepEqual(readFileSync(marker), corrupt);
+    }),
+    { seed, numRuns: 200 },
+  );
+});
+
+test("valid active state survives JSON roundtrip", (t) => {
+  const root = home(t);
+  const marker = join(root, "active.json");
+  const versions = ["0.3.14-aaaaaaaaaaaa", "0.3.15-bbbbbbbbbbbb"];
+
+  fc.assert(
+    fc.property(
+      fc.constantFrom(...versions),
+      fc.boolean(),
+      fc.boolean(),
+      (version, v2, cleanupPending) => {
+        const previous = versions.find((name) => name !== version);
+        const state = v2
+          ? {
+              schema: "iva-active/v2" as const,
+              version,
+              previous,
+              settledAt: "2026-08-16T00:00:00.000Z",
+              ...(cleanupPending ? { cleanupPending: true } : {}),
+            }
+          : { schema: "iva-active/v1" as const, version };
+        writeFileSync(marker, `${JSON.stringify(state)}\n`);
+        assert.deepEqual(readActiveState(marker), { kind: "valid", state });
+      },
+    ),
+    { seed: 41_908, numRuns: 100 },
+  );
+});
+
+test("missing active state remains a valid first-install state", (t) => {
+  const store = createVersionStore(home(t));
+  assert.equal(store.settled(), null);
+  assert.equal(store.heal(), null);
+  assert.deepEqual(store.gc(2), []);
+});
+
+test("a post-rename durability fault preserves published cleanup debt", (t) => {
+  const root = home(t);
+  const first = "0.3.14-aaaaaaaaaaaa";
+  const next = "0.3.15-bbbbbbbbbbbb";
+  const store = createVersionStore(root);
+  install(store, first);
+  install(store, next);
+  store.activate(first);
+  store.settle(first);
+  store.activate(next);
+  let injected = false;
+  const faulty = createVersionStore(root, {
+    activeWriteOptions: {
+      afterStep(step) {
+        if (step === "rename" && !injected) {
+          injected = true;
+          throw new Error("directory fsync fault");
+        }
+      },
+    },
+  });
+
+  assert.throws(
+    () => faulty.settle(next, { previous: first, cleanupPending: true }),
+    (error: unknown) =>
+      (error as NodeJS.ErrnoException).code === ATOMIC_WRITE_DURABILITY,
+  );
+
+  const recovered = createVersionStore(root);
+  assert.equal(recovered.settled(), next);
+  assert.equal(recovered.previousName(), first);
+  assert.equal(recovered.cleanupPending(next), true);
+  assert.equal(
+    statSync(join(store.layout.data, "active.json")).mode & 0o777,
+    0o600,
+  );
+});
+
+test("settlement pins the captured pre-flip active Version as previous", (t) => {
+  const store = createVersionStore(home(t));
+  const stale = "0.3.13-333333333333";
+  const active = "0.3.14-444444444444";
+  const next = "0.3.15-555555555555";
+  for (const name of [stale, active, next]) install(store, name);
+  store.activate(stale);
+  store.settle(stale);
+  store.activate(active);
+  store.activate(next);
+
+  store.settle(next, { previous: active });
+
+  assert.equal(store.previousName(), active);
+});
+
+test("explicit retention is invariant under arbitrary mtimes", () => {
+  const current = "0.3.14-444444444444";
+  const rollback = "0.3.13-333333333333";
+  const other = ["0.3.12-222222222222", "0.3.11-111111111111"];
+  const names = [current, rollback, ...other];
+
+  fc.assert(
+    fc.property(
+      fc.tuple(fc.integer(), fc.integer(), fc.integer(), fc.integer()),
+      (mtimes) => {
+        const byMtime = names
+          .map((name, index) => ({ name, mtime: mtimes[index] ?? 0 }))
+          .sort((a, b) => b.mtime - a.mtime || a.name.localeCompare(b.name))
+          .map(({ name }) => name);
+        const kept = new Set(retainedVersions(byMtime, [current, rollback], 2));
+        assert.deepEqual(kept, new Set([current, rollback]));
+      },
+    ),
+    { seed: 18_819, numRuns: 200 },
+  );
 });
 
 test("materialize writes an exact commit tree without leaving git state behind", async (t) => {

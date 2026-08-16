@@ -1,4 +1,4 @@
-import { isAbsolute, join, resolve } from "node:path";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isEntrypoint } from "./lib/version-layout.ts";
 import { z } from "zod";
@@ -6,18 +6,18 @@ import {
   listCustomConflicts,
   resolveCustomConflict,
 } from "./lib/custom-layer.ts";
+import { resolveDataDir } from "./lib/data-dir.ts";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const SideSchema = z.enum(["base", "local", "upstream", "edited"]);
 
 function dataDir(): string {
-  const configured = process.env.ASSISTANT_DATA_DIR || "data";
-  return isAbsolute(configured) ? configured : join(ROOT, configured);
+  return resolveDataDir(ROOT);
 }
 
 export function runCustomRecovery(args: readonly string[]): void {
   const [command = "status", path, rawSide] = args;
-  const customDataDir = resolve(dataDir());
+  const customDataDir = dataDir();
   if (command === "status") {
     let conflicts: ReturnType<typeof listCustomConflicts> = [];
     let manifestError: string | undefined;

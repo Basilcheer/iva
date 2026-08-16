@@ -231,12 +231,16 @@ test("a valid candidate continues after recovery with exact transaction and rest
       },
       applyConfigTransaction: async (target, options = {}) => {
         events.push(["apply", target, existsSync(candidatePath)]);
+        writeFileSync(target.envPath, target.nextText);
         await options.restart?.(target.services);
         await options.health?.(target.healthUrl);
         return { committed: true };
       },
       probeEveHealth: async (url) => {
         events.push(["health", url]);
+      },
+      refreshDataDirShim: (dataDir) => {
+        events.push(["refresh-shim", dataDir]);
       },
     },
   );
@@ -246,6 +250,7 @@ test("a valid candidate continues after recovery with exact transaction and rest
   assert.deepEqual(events, [
     "require-systemd",
     "recover",
+    ["refresh-shim", join(root, "data")],
     ["write-units", { ensureBearer: false }],
     ["restart", runtime.SERVICES],
     ["ok", "Recovered the previous configuration and restarted services"],
@@ -267,6 +272,7 @@ test("a valid candidate continues after recovery with exact transaction and rest
       },
       true,
     ],
+    ["refresh-shim", join(root, "nested/data")],
     ["write-units", { ensureBearer: false }],
     ["restart", runtime.SERVICES],
     ["health", "http://127.0.0.1:8723/eve/v1/health"],

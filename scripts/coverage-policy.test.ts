@@ -8,9 +8,9 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
-const EXPECTED_PRODUCTION_COUNT = 188;
+const EXPECTED_PRODUCTION_COUNT = 210;
 const EXPECTED_INVENTORY_SHA256 =
-  "3a2cf3c805ddf64c9a09f645e86a72e7daff46aa0dbba346a611b22ca940d99f";
+  "2770f8fb55f967727d9cc2fad728be7b51ab604acef4d75e5272b3372ed2ca71";
 
 // Node's native include globs filter loaded modules; they do not load untouched files.
 // This test pins the exact production path inventory and a separately measured 26-path
@@ -41,6 +41,21 @@ const EXPECTED_INVENTORY_SHA256 =
 // resolver came last: `agent/lib/custom-skills.ts` (99% lines) and `agent/lib/data-dir.ts` (100%)
 // are loaded and reported by their own tests, while the slot file `agent/skills/custom.ts` is
 // loaded by eve alone - measured unreported, like `agent/sandbox.ts` - so the blind spot is 26.
+// The durable Telegram bridge then added `scripts/poller/inbox.ts`,
+// `process-lock.ts`, `startup-state.ts`, and `update-callback.ts`. Scoped coverage
+// reported all four through their proof tests, so the blind spot stays at 26.
+// The recovery owner `scripts/lib/update-recovery.ts` came next. Its target-aware
+// collision and manifest modules followed. The scoped update suite reports all three
+// at 94.55%, 97.53% and 100% lines, so the blind spot stays at 26. The updater split
+// then added candidate, command, resource, applied-state, ownership, IO, object-store,
+// collision-owner, and snapshot-verifier modules. The 140-test scoped suite reports
+// every added module and totals 96.02% lines, 84.69% branches, and 95.50% functions,
+// so the blind spot stays at 26. The resource identity and owner modules followed;
+// their 19-test scoped anchor reports 89.49% and 86.76% lines, so neither is blind.
+// Wave B added `agent/lib/context-window.ts`, `agent/lib/telegram-private-chat.ts`,
+// `scripts/lib/data-dir.ts`, and `scripts/memory/read-core.ts`. Their scoped seam tests
+// report all four at 100% lines. The shared context-window package implementation also
+// reports 100% lines, so moving the resolver does not add a blind spot; the snapshot stays 26.
 const MEASURED_UNREPORTED_BY_CATEGORY = {
   frameworkBoundaries: [
     "agent/agent.ts",
@@ -79,7 +94,7 @@ const MEASURED_UNREPORTED_BY_CATEGORY = {
 } as const;
 
 const EXPECTED_COVERAGE_COMMAND =
-  'node --test --test-concurrency=4 --experimental-test-coverage --test-coverage-include="agent/**/*.ts" --test-coverage-include="scripts/**/*.ts" --test-coverage-exclude="**/*.test.ts" --test-coverage-exclude="scripts/fixtures/**/*.ts" --test-coverage-lines=75 --test-coverage-branches=77 --test-coverage-functions=71';
+  'node --test --test-concurrency=4 --experimental-test-coverage --test-coverage-include="agent/**/*.ts" --test-coverage-include="scripts/**/*.ts" --test-coverage-exclude="**/*.test.ts" --test-coverage-exclude="scripts/fixtures/**/*.ts" --test-coverage-lines=75 --test-coverage-branches=77 --test-coverage-functions=71 "agent/**/*.test.ts" "scripts/**/*.test.ts"';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);

@@ -1,12 +1,11 @@
 import { defineTool } from "eve/tools";
 import { z } from "zod";
-import { mkdir, writeFile } from "node:fs/promises";
 import { existsSync, realpathSync } from "node:fs";
 import { dirname, resolve, sep } from "node:path";
+import { writeFileAtomic } from "../lib/fs-atomic.js";
 
 // Host-native запись файла. Переопределяет встроенный write_file eve: пишет реальный
-// файл на VPS через node:fs/promises, создавая родительские директории (mkdir -p).
-// Самодостаточно (eve/tools, zod, node-builtins).
+// файл на VPS через каноническую атомарную запись, создавая родительские директории.
 //
 // Единственное ограничение: перезапись СУЩЕСТВУЮЩЕЙ карточки в <vault>/cards/** запрещена —
 // это полная замена файла, из-за которой терялись поля (tier/relevance/phone…) и старый текст.
@@ -59,8 +58,7 @@ export default defineTool({
           "Используй write_card: он сливает новое содержимое со старым.",
       };
     }
-    await mkdir(dirname(path), { recursive: true });
-    await writeFile(path, content, "utf8");
+    await writeFileAtomic(path, content);
     return { ok: true, path, bytes: Buffer.byteLength(content, "utf8") };
   },
 });

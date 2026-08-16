@@ -1,14 +1,15 @@
 // Всё, что входящее сообщение оставляет в Vault: реплика в дневном файле
 // (`## HH:MM [type]` + контент — формат дневного файла) и блоб вложения рядом с ней.
-// Дата и время — в часовом поясе пользователя (ASSISTANT_TIMEZONE, иначе
-// локальный TZ), поэтому один и тот же день не разъезжается между записями.
+// Дата и время — в проверенном часовом поясе пользователя, поэтому один и тот же день
+// не разъезжается между записями.
 import { appendFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { resolveTimeZone } from "./timezone.ts";
 
 export type VaultStamp = { date: string; hhmm: string; hhmmss: string };
 
 export function localStamp(): VaultStamp {
-  const tz = process.env.ASSISTANT_TIMEZONE || undefined;
+  const tz = resolveTimeZone(process.env.ASSISTANT_TIMEZONE);
   const now = new Date();
   const date = new Intl.DateTimeFormat("en-CA", {
     timeZone: tz,

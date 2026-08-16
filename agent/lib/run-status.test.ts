@@ -16,6 +16,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { acquireFileLockSync, releaseFileLock } from "./fs-atomic.ts";
 
 const dataDir = mkdtempSync(join(tmpdir(), "iva-run-status-"));
 process.env.ASSISTANT_DATA_DIR = dataDir;
@@ -220,11 +221,13 @@ test("a stale per-chat lock is reclaimed after a crashed writer", () => {
   const dir = join(dataDir, "run-status.d");
   const lock = join(dir, `${encoded}.json.lock`);
   mkdirSync(dir, { recursive: true });
-  writeFileSync(lock, "dead-owner", { mode: 0o600 });
+  const crashed = acquireFileLockSync(lock, { timeoutMs: 100, mode: 0o600 });
+  assert.ok(crashed);
   const old = new Date(Date.now() - 31_000);
   utimesSync(lock, old, old);
 
   status.setChatStatus(key, { status: "running", sessionId: "successor" });
+  releaseFileLock(crashed);
 
   assert.equal(status.getChatStatus(key)?.sessionId, "successor");
   assert.equal(existsSync(lock), false);

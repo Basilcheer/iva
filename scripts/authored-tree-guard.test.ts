@@ -103,11 +103,11 @@ function escapes(): string[] {
   return [...found].sort();
 }
 
-test("the authored tree opens no escape out of agent/", () => {
+test("the authored tree has one explicit shared-package edge", () => {
   assert.deepEqual(
     escapes(),
-    [],
-    "agent/ must not import from scripts/ — move the module into agent/lib and let scripts/ import it back through #lib/",
+    ["agent/lib/data-dir.ts -> ../../packages/data-dir/index.ts"],
+    "agent/ may leave its tree only for the canonical data-dir package that Eve bundles",
   );
 });
 

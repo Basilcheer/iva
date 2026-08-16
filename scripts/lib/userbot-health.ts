@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { resolveDataDir } from "./data-dir.ts";
 
 export const USERBOT_HEALTH_TIMEOUT_MS = 1500;
 export const USERBOT_SERVICE = "iva-telegram-userbot.service";
@@ -34,7 +35,7 @@ type RunSystemctl = (
   args: string[],
   options: { signal?: AbortSignal },
 ) => Promise<SystemctlResult>;
-type ReadToken = (root: string) => Promise<string>;
+type ReadToken = (dataDir: string) => Promise<string>;
 type FetchImpl = (
   url: string,
   init: HealthFetchInit,
@@ -42,6 +43,7 @@ type FetchImpl = (
 
 interface ProbeOptions {
   readonly root?: string;
+  readonly dataDir?: string;
   readonly port?: string | number;
   readonly timeoutMs?: number;
   readonly runSystemctl?: RunSystemctl;
@@ -72,10 +74,10 @@ function defaultRunSystemctl(
   });
 }
 
-async function defaultReadToken(root: string): Promise<string> {
+async function defaultReadToken(dataDir: string): Promise<string> {
   try {
     return (
-      await readFile(join(root, "data", "telegram-userbot.token"), "utf8")
+      await readFile(join(dataDir, "telegram-userbot.token"), "utf8")
     ).trim();
   } catch {
     return "";
@@ -89,7 +91,7 @@ function payloadState(payload: unknown): string | undefined {
 }
 
 interface RunProbeOptions {
-  readonly root: string;
+  readonly dataDir: string;
   readonly port: string | number;
   readonly signal: AbortSignal;
   readonly runSystemctl: RunSystemctl;
@@ -98,7 +100,7 @@ interface RunProbeOptions {
 }
 
 async function runProbe({
-  root,
+  dataDir,
   port,
   signal,
   runSystemctl,
@@ -120,7 +122,7 @@ async function runProbe({
     return fixed("off", "service_off");
   }
 
-  const token = String(await readToken(root)).trim();
+  const token = String(await readToken(dataDir)).trim();
   if (!token) return fixed("unreachable", "proxy_token_missing");
 
   const safePort = /^\d{1,5}$/.test(String(port)) ? String(port) : "8724";
@@ -142,6 +144,7 @@ async function runProbe({
 
 export async function probeUserbotHealth({
   root = process.cwd(),
+  dataDir = resolveDataDir(root),
   port = process.env.TELEGRAM_MCP_PORT || "8724",
   timeoutMs = USERBOT_HEALTH_TIMEOUT_MS,
   runSystemctl = defaultRunSystemctl,
@@ -157,7 +160,7 @@ export async function probeUserbotHealth({
     }, timeoutMs);
   });
   const probe = runProbe({
-    root,
+    dataDir,
     port,
     signal: controller.signal,
     runSystemctl,

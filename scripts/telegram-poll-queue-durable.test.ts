@@ -1,13 +1,22 @@
 /* eslint-disable @typescript-eslint/no-floating-promises, @typescript-eslint/require-await -- Node's test runner owns top-level registrations; injected test doubles preserve the asynchronous runtime contracts. */
 import test, { type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { spawnSync } from "node:child_process";
-import type {
-  TelegramQueueDocument,
-  TelegramQueueUpdate,
+import { spawn, spawnSync } from "node:child_process";
+import { parseOffsetFile } from "./lib/offset-store.ts";
+import {
+  normalizeQueueDocument,
+  type TelegramQueueDocument,
+  type TelegramQueueUpdate,
 } from "./lib/telegram-queue.ts";
 
 type HarnessMessage = {
@@ -23,12 +32,13 @@ type HarnessUpdate = TelegramQueueUpdate & {
   callback_query?: { id: string };
 };
 type HarnessResult = {
-  offset: { offset: number; delivered?: number };
+  offset: { offset: number; delivered?: number | null };
   deliveries: HarnessUpdate[];
   deliveryRoutes: string[];
   reactions: unknown[];
   queueStatuses: Array<{ text?: string }>;
   queue: TelegramQueueDocument;
+  inbox: TelegramQueueDocument;
   requestedOffsets: number[];
   queueDirSyncAttempts: number;
   queueDirSyncSuccesses: number;
@@ -60,6 +70,10 @@ function makeDataDir(t: TestContext, label: string) {
   const path = mkdtempSync(join(tmpdir(), `iva-008-${label}-`));
   t.after(() => rmSync(path, { recursive: true, force: true }));
   return path;
+}
+
+function parseJson(raw: string): unknown {
+  return JSON.parse(raw) as unknown;
 }
 
 function runHarness(
@@ -94,6 +108,32 @@ function runHarness(
   return JSON.parse(
     readFileSync(join(dataDir, "queue-harness-result.json"), "utf8"),
   ) as HarnessResult;
+}
+
+function ownedUpdates(result: Pick<HarnessResult, "inbox" | "queue">) {
+  return [
+    ...Object.values(result.inbox.queues)
+      .flat()
+      .map((item) => ({
+        location: "inbox" as const,
+        updateId: item.updateId,
+      })),
+    ...Object.values(result.queue.queues)
+      .flat()
+      .map((item) => ({
+        location: "delivery" as const,
+        updateId: item.updateId,
+      })),
+  ];
+}
+
+async function waitForFile(file: string): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    if (existsSync(file)) return;
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 10));
+  }
+  assert.fail(`timed out waiting for ${file}`);
 }
 
 test("direct queue runtime normalizes a namespaced reset token", async () => {
@@ -198,7 +238,7 @@ test("direct delivery runtime requires the accepted-route receipt", async (t: Te
 });
 
 for (const fault of ["write", "rename"]) {
-  test(`busy queue ${fault} failure does not advance Telegram offset`, (t: TestContext) => {
+  test(`durable inbox ${fault} failure does not advance Telegram offset`, (t: TestContext) => {
     const dataDir = makeDataDir(t, `disk-${fault}`);
     const result = runHarness("disk-failure", dataDir, fault);
 
@@ -208,6 +248,7 @@ for (const fault of ["write", "rename"]) {
       "the same Telegram update must be retried until its FIFO item is durable",
     );
     assert.deepEqual(result.deliveries, []);
+    assert.deepEqual(ownedUpdates(result), []);
   });
 }
 
@@ -229,6 +270,7 @@ test("directory sync failure requires a durable duplicate retry before offset ad
   assert.equal(result.offset.offset, 102);
   assert.equal(result.queue.queues["1:"].length, 1);
   assert.equal(result.queue.queues["1:"][0].updateId, 101);
+  assert.deepEqual(result.inbox, { version: 1, queues: {} });
 });
 
 test("queued follow-ups auto-drain in FIFO order when the current turn becomes idle", (t: TestContext) => {
@@ -288,13 +330,86 @@ test("collector merges a two-text burst into one durable queue item and delivery
   assert.deepEqual(result.queue, { version: 1, queues: {} });
 });
 
+test("SIGKILL after offset ownership preserves every burst part for restart", async (t: TestContext) => {
+  const dataDir = makeDataDir(t, "burst-crash");
+  const child = spawn(
+    process.execPath,
+    [
+      "--experimental-test-module-mocks",
+      HARNESS,
+      "burst-ownership-crash",
+      dataDir,
+      "none",
+    ],
+    {
+      cwd: ROOT,
+      env: { ...process.env, TELEGRAM_COLLECT_QUIET_MS: "60000" },
+      stdio: ["ignore", "ignore", "pipe"],
+    },
+  );
+  let stderr = "";
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (chunk: string) => {
+    stderr += chunk;
+  });
+  t.after(() => {
+    if (child.exitCode === null && child.signalCode === null)
+      child.kill("SIGKILL");
+  });
+
+  await waitForFile(join(dataDir, "ownership-ready"));
+  const childExit = new Promise<{
+    code: number | null;
+    signal: NodeJS.Signals | null;
+  }>((resolveExit, rejectExit) => {
+    child.once("error", rejectExit);
+    child.once("exit", (code, signal) => resolveExit({ code, signal }));
+  });
+  child.kill("SIGKILL");
+  const exit = await childExit;
+  assert.deepEqual(exit, { code: null, signal: "SIGKILL" }, stderr);
+
+  const crashed: Pick<HarnessResult, "offset" | "inbox" | "queue"> = {
+    offset: parseOffsetFile(
+      readFileSync(join(dataDir, "telegram-offset.json"), "utf8"),
+    ),
+    inbox: normalizeQueueDocument(
+      parseJson(readFileSync(join(dataDir, "telegram-inbox.json"), "utf8")),
+    ).document,
+    queue: existsSync(join(dataDir, "telegram-queue.json"))
+      ? normalizeQueueDocument(
+          parseJson(readFileSync(join(dataDir, "telegram-queue.json"), "utf8")),
+        ).document
+      : { version: 1, queues: {} },
+  };
+  assert.deepEqual(crashed.offset, { offset: 103, delivered: null });
+  assert.deepEqual(ownedUpdates(crashed), [
+    { location: "inbox", updateId: 101 },
+    { location: "inbox", updateId: 102 },
+  ]);
+  assert.equal(
+    statSync(join(dataDir, "telegram-inbox.json")).mode & 0o777,
+    0o600,
+  );
+
+  const restarted = runHarness("restart-drain", dataDir);
+  assert.deepEqual(
+    restarted.deliveries.map((update) => update.update_id),
+    [101, 102],
+  );
+  assert.deepEqual(ownedUpdates(restarted), []);
+});
+
 test("a restarted bridge recovers and drains the persisted FIFO without a third user message", (t: TestContext) => {
   const dataDir = makeDataDir(t, "restart");
   const beforeRestart = runHarness("restart-persist", dataDir);
-  assert.equal(
-    Object.values(beforeRestart.queue.queues).flat().length,
-    2,
-    "the first process must leave both busy-time follow-ups durable",
+  assert.deepEqual(
+    ownedUpdates(beforeRestart),
+    [
+      { location: "inbox", updateId: 102 },
+      { location: "delivery", updateId: 101 },
+    ],
+    "the first process must leave exactly two busy-time follow-ups under durable ownership",
   );
 
   const afterRestart = runHarness("restart-drain", dataDir);
@@ -309,6 +424,7 @@ test("a restarted bridge recovers and drains the persisted FIFO without a third 
     ],
   );
   assert.deepEqual(afterRestart.queue, { version: 1, queues: {} });
+  assert.deepEqual(afterRestart.inbox, { version: 1, queues: {} });
 });
 
 test("a persistently failing queue head does not block other chats or Telegram polling", (t: TestContext) => {
@@ -401,7 +517,9 @@ test("an idle direct message uses one accepted POST and keeps offset semantics",
   assert.equal(delivery.update_id, 101);
   assert.ok(delivery.message);
   assert.equal(typeof delivery.message.iva_durable_queue_receipt, "string");
-  assert.deepEqual(result.offset, { offset: 102, delivered: 101 });
+  assert.deepEqual(result.offset, { offset: 102 });
+  assert.deepEqual(result.inbox, { version: 1, queues: {} });
+  assert.deepEqual(result.queue, { version: 1, queues: {} });
 });
 
 test("a direct acceptance 503 resets immediately, notifies once, then retries", (t: TestContext) => {
@@ -419,7 +537,9 @@ test("a direct acceptance 503 resets immediately, notifies once, then retries", 
     result.failureNotices.map(({ chat_id, text }) => [chat_id, text]),
     [["1", "Couldn't process the message - repeat it or use /new"]],
   );
-  assert.deepEqual(result.offset, { offset: 102, delivered: 101 });
+  assert.deepEqual(result.offset, { offset: 102 });
+  assert.deepEqual(result.inbox, { version: 1, queues: {} });
+  assert.deepEqual(result.queue, { version: 1, queues: {} });
 });
 
 test("a direct acceptance timeout rejects once and returns to Telegram polling", (t: TestContext) => {
@@ -446,6 +566,44 @@ test("a direct acceptance timeout rejects once and returns to Telegram polling",
     "the rejected result must let the main loop advance and poll again",
   );
   assert.deepEqual(result.offset, { offset: 102 });
+  assert.deepEqual(ownedUpdates(result), [
+    { location: "inbox", updateId: 101 },
+  ]);
+
+  const retried = runHarness("restart-direct-drain", dataDir);
+  assert.deepEqual(
+    retried.deliveryRoutes,
+    ["/eve/v1/telegram/accepted"],
+    "a restart must retry the one durably owned message exactly once",
+  );
+  assert.deepEqual(retried.inbox, { version: 1, queues: {} });
+  assert.deepEqual(retried.queue, { version: 1, queues: {} });
+  assert.deepEqual(
+    parseJson(readFileSync(join(dataDir, "alert-state.json"), "utf8")),
+    {},
+    "a successful durable retry resolves the throttled acceptance alert",
+  );
+});
+
+test("a retained acceptance failure retries without repeating its alert", (t: TestContext) => {
+  const dataDir = makeDataDir(t, "direct-timeout-alert-throttle");
+  writeFileSync(join(dataDir, "alert-state.json"), "{corrupt\n");
+  const result = runHarness("direct-timeout-twice", dataDir, "none", {
+    directAcceptanceTimeoutMs: "25",
+  });
+
+  assert.deepEqual(result.deliveryRoutes, [
+    "/eve/v1/telegram/accepted",
+    "/eve/v1/telegram/accepted",
+  ]);
+  assert.deepEqual(
+    result.failureNotices.map(({ chat_id, text }) => [chat_id, text]),
+    [["1", "Couldn't process the message - repeat it or use /new"]],
+    "the durable retry remains live but one unresolved problem alerts only once",
+  );
+  assert.deepEqual(ownedUpdates(result), [
+    { location: "inbox", updateId: 101 },
+  ]);
 });
 
 test("callback_query delivery stays on the original webhook route", (t: TestContext) => {
@@ -458,5 +616,281 @@ test("callback_query delivery stays on the original webhook route", (t: TestCont
   assert.ok(delivery);
   assert.ok(delivery.callback_query);
   assert.equal(delivery.callback_query.id, "foreign-callback-101");
-  assert.deepEqual(result.offset, { offset: 102, delivered: 101 });
+  assert.deepEqual(result.offset, { offset: 102 });
+  assert.deepEqual(result.inbox, { version: 1, queues: {} });
+});
+
+test("a rejected callback is durably owned before its offset advances", (t: TestContext) => {
+  const dataDir = makeDataDir(t, "callback-rejected");
+  const result = runHarness("callback-rejected", dataDir);
+
+  assert.deepEqual(result.deliveries, []);
+  assert.deepEqual(result.offset, { offset: 102 });
+  assert.deepEqual(ownedUpdates(result), [
+    { location: "inbox", updateId: 101 },
+  ]);
+});
+
+test("an allowed inline callback is durably owned and delivered", (t: TestContext) => {
+  const dataDir = makeDataDir(t, "inline-callback");
+  const result = runHarness("inline-callback", dataDir);
+
+  assert.deepEqual(result.deliveryRoutes, ["/eve/v1/telegram"]);
+  assert.equal(
+    result.deliveries[0]?.callback_query?.id,
+    "foreign-inline-callback-101",
+  );
+  assert.deepEqual(result.offset, { offset: 102 });
+  assert.deepEqual(ownedUpdates(result), []);
+});
+
+test("an unauthorised callback is an explicit terminal drop, not an endless blocker", (t: TestContext) => {
+  const dataDir = makeDataDir(t, "unauthorized-callback");
+  const result = runHarness("unauthorized-callback", dataDir);
+
+  assert.deepEqual(result.requestedOffsets, [100, 102]);
+  assert.deepEqual(result.offset, { offset: 102 });
+  assert.deepEqual(result.deliveries, []);
+  assert.deepEqual(ownedUpdates(result), []);
+});
+
+test("an allowed callback without a stable ingress key fails closed", (t: TestContext) => {
+  const dataDir = makeDataDir(t, "unownable-callback");
+  const result = runHarness("unownable-callback", dataDir);
+
+  assert.deepEqual(result.requestedOffsets, [100, 100]);
+  assert.deepEqual(result.offset, { offset: 100 });
+  assert.deepEqual(result.deliveries, []);
+  assert.deepEqual(ownedUpdates(result), []);
+});
+
+test("SIGKILL after callback rejection preserves it for restart delivery", async (t: TestContext) => {
+  const dataDir = makeDataDir(t, "callback-rejected-crash");
+  const child = spawn(
+    process.execPath,
+    [
+      "--experimental-test-module-mocks",
+      HARNESS,
+      "callback-rejected-crash",
+      dataDir,
+      "none",
+    ],
+    {
+      cwd: ROOT,
+      env: { ...process.env },
+      stdio: ["ignore", "ignore", "pipe"],
+    },
+  );
+  let stderr = "";
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (chunk: string) => {
+    stderr += chunk;
+  });
+  t.after(() => {
+    if (child.exitCode === null && child.signalCode === null) {
+      child.kill("SIGKILL");
+    }
+  });
+
+  await waitForFile(join(dataDir, "callback-rejected-ready"));
+  const childExit = new Promise<{
+    code: number | null;
+    signal: NodeJS.Signals | null;
+  }>((resolveExit, rejectExit) => {
+    child.once("error", rejectExit);
+    child.once("exit", (code, signal) => resolveExit({ code, signal }));
+  });
+  child.kill("SIGKILL");
+  assert.deepEqual(await childExit, { code: null, signal: "SIGKILL" }, stderr);
+
+  const crashedInbox = normalizeQueueDocument(
+    parseJson(readFileSync(join(dataDir, "telegram-inbox.json"), "utf8")),
+  ).document;
+  assert.deepEqual(
+    parseOffsetFile(
+      readFileSync(join(dataDir, "telegram-offset.json"), "utf8"),
+    ),
+    { offset: 102, delivered: null },
+  );
+  assert.deepEqual(
+    ownedUpdates({
+      inbox: crashedInbox,
+      queue: { version: 1, queues: {} },
+    }),
+    [{ location: "inbox", updateId: 101 }],
+  );
+
+  const restarted = runHarness("restart-callback-drain", dataDir);
+  assert.deepEqual(restarted.deliveryRoutes, ["/eve/v1/telegram"]);
+  assert.equal(
+    restarted.deliveries[0]?.callback_query?.id,
+    "foreign-callback-101",
+  );
+  assert.deepEqual(ownedUpdates(restarted), []);
+});
+
+test("SIGKILL after core synthetic ownership replays distillation text", async (t: TestContext) => {
+  const dataDir = makeDataDir(t, "core-distill-crash");
+  const child = spawn(
+    process.execPath,
+    [
+      "--experimental-test-module-mocks",
+      HARNESS,
+      "core-distill-ownership-crash",
+      dataDir,
+      "hold-after-inbox-sync",
+    ],
+    {
+      cwd: ROOT,
+      env: {
+        ...process.env,
+        TELEGRAM_COLLECT_QUIET_MS: "60000",
+        TELEGRAM_DIRECT_ACCEPTANCE_TIMEOUT_MS: "25",
+      },
+      stdio: ["ignore", "ignore", "pipe"],
+    },
+  );
+  let stderr = "";
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (chunk: string) => {
+    stderr += chunk;
+  });
+  const childExit = new Promise<{
+    code: number | null;
+    signal: NodeJS.Signals | null;
+  }>((resolveExit, rejectExit) => {
+    child.once("error", rejectExit);
+    child.once("exit", (code, signal) => resolveExit({ code, signal }));
+  });
+  t.after(() => {
+    if (child.exitCode === null && child.signalCode === null) {
+      child.kill("SIGKILL");
+    }
+  });
+
+  await waitForFile(join(dataDir, "core-distill-ownership-ready"));
+  child.kill("SIGKILL");
+  assert.deepEqual(await childExit, { code: null, signal: "SIGKILL" }, stderr);
+
+  const crashedInbox = normalizeQueueDocument(
+    parseJson(readFileSync(join(dataDir, "telegram-inbox.json"), "utf8")),
+  ).document;
+  const crashedItems = Object.values(crashedInbox.queues).flat();
+  assert.deepEqual(
+    parseOffsetFile(
+      readFileSync(join(dataDir, "telegram-offset.json"), "utf8"),
+    ),
+    { offset: 100, delivered: null },
+  );
+  assert.equal(crashedItems.length, 1);
+  assert.ok(crashedItems[0].update?.message);
+  assert.equal(crashedItems[0].update?.callback_query, undefined);
+  assert.match(crashedItems[0].update.message.text ?? "", /Sergey/u);
+  assert.match(crashedItems[0].update.message.text ?? "", /Core memory setup/u);
+
+  const restarted = runHarness("restart-drain", dataDir);
+  assert.equal(restarted.deliveries.length, 1);
+  assert.equal(restarted.deliveries[0].callback_query, undefined);
+  assert.match(restarted.deliveries[0].message?.text ?? "", /Sergey/u);
+  assert.match(
+    restarted.deliveries[0].message?.text ?? "",
+    /Core memory setup/u,
+  );
+  assert.deepEqual(ownedUpdates(restarted), []);
+});
+
+test("core synthetic inbox write failure keeps the Telegram callback offset", (t: TestContext) => {
+  const dataDir = makeDataDir(t, "core-distill-write-failure");
+  const result = runHarness("core-distill-write-failure", dataDir, "write", {
+    directAcceptanceTimeoutMs: "25",
+  });
+
+  assert.deepEqual(result.requestedOffsets, [100, 100]);
+  assert.deepEqual(result.offset, { offset: 100 });
+  assert.deepEqual(ownedUpdates(result), []);
+});
+
+test("one-shot core synthetic EIO retries the semantic message without callback-only acknowledgement", (t: TestContext) => {
+  const dataDir = makeDataDir(t, "core-distill-eio-retry");
+  const result = runHarness("core-distill-eio-retry", dataDir, "write-once", {
+    directAcceptanceTimeoutMs: "25",
+  });
+
+  assert.deepEqual(result.requestedOffsets, [100, 100, 102, 102]);
+  assert.equal(
+    result.deliveries.some((update) => update.callback_query !== undefined),
+    false,
+  );
+  const owned = Object.values(result.inbox.queues).flat();
+  assert.equal(owned.length, 1, "duplicate callback retries must dedup");
+  const ownedUpdate = owned[0]?.update;
+  assert.ok(ownedUpdate?.message);
+  assert.equal(ownedUpdate.callback_query, undefined);
+  assert.match(ownedUpdate.message.text ?? "", /Sergey/u);
+  assert.deepEqual(result.offset, { offset: 102 });
+});
+
+test("SIGKILL after first core synthetic EIO reconstructs distillation from the durable interview", async (t: TestContext) => {
+  const dataDir = makeDataDir(t, "core-distill-eio-crash");
+  const child = spawn(
+    process.execPath,
+    [
+      "--experimental-test-module-mocks",
+      HARNESS,
+      "core-distill-eio-crash",
+      dataDir,
+      "write-once",
+    ],
+    {
+      cwd: ROOT,
+      env: {
+        ...process.env,
+        TELEGRAM_DIRECT_ACCEPTANCE_TIMEOUT_MS: "25",
+      },
+      stdio: ["ignore", "ignore", "pipe"],
+    },
+  );
+  let stderr = "";
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (chunk: string) => {
+    stderr += chunk;
+  });
+  const childExit = new Promise<{
+    code: number | null;
+    signal: NodeJS.Signals | null;
+  }>((resolveExit, rejectExit) => {
+    child.once("error", rejectExit);
+    child.once("exit", (code, signal) => resolveExit({ code, signal }));
+  });
+  t.after(() => {
+    if (child.exitCode === null && child.signalCode === null) {
+      child.kill("SIGKILL");
+    }
+  });
+
+  await waitForFile(join(dataDir, "core-distill-eio-ready"));
+  child.kill("SIGKILL");
+  assert.deepEqual(await childExit, { code: null, signal: "SIGKILL" }, stderr);
+  assert.deepEqual(
+    parseOffsetFile(
+      readFileSync(join(dataDir, "telegram-offset.json"), "utf8"),
+    ),
+    { offset: 100, delivered: null },
+  );
+  assert.match(
+    readFileSync(join(dataDir, "vault", "core-interview.md"), "utf8"),
+    /Sergey/u,
+  );
+
+  const restarted = runHarness("core-distill-eio-restart", dataDir);
+  assert.deepEqual(restarted.requestedOffsets, [100, 102]);
+  assert.deepEqual(restarted.offset, { offset: 102 });
+  assert.equal(restarted.deliveries.length, 1);
+  assert.equal(restarted.deliveries[0]?.callback_query, undefined);
+  assert.match(restarted.deliveries[0]?.message?.text ?? "", /Sergey/u);
+  assert.match(
+    restarted.deliveries[0]?.message?.text ?? "",
+    /Core memory setup/u,
+  );
+  assert.deepEqual(ownedUpdates(restarted), []);
 });

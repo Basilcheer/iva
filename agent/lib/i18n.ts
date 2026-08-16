@@ -9,13 +9,11 @@
 import { statSync } from "node:fs";
 import { join } from "node:path";
 import { readSettings } from "./settings.ts";
+import { dataDir } from "./data-dir.ts";
 
 // Тот же путь, что в settings.ts (от cwd, не от import.meta.url — см. там про
 // authored-modules-кэш eve). Нужен для statSync-дросселя ниже.
-const DATA_DIR_RAW = process.env.ASSISTANT_DATA_DIR ?? "data";
-const DATA_DIR = DATA_DIR_RAW.startsWith("/")
-  ? DATA_DIR_RAW
-  : join(process.cwd(), DATA_DIR_RAW);
+const DATA_DIR = dataDir();
 const SETTINGS_FILE = join(DATA_DIR, "settings.json");
 
 // settings.json меняется кнопкой в /menu и должен подхватываться на лету. Но statSync

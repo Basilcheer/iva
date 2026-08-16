@@ -8,6 +8,7 @@
 // Guards: no git-remote/credentials → alert admin on Telegram (gh auth login + git remote),
 // push is skipped. Health score drop → alert on Telegram. Plain Node orchestration.
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -25,21 +26,37 @@ import {
 } from "../lib/notice-policy.ts";
 import { notificationChat } from "../lib/notification-chat.ts";
 import { redactNotice } from "../lib/notice.ts";
+import { resolveDataDir } from "../lib/data-dir.ts";
+import { resolveTimeZone } from "../lib/timezone.ts";
 
 const VAULT = resolve(process.env.ASSISTANT_VAULT_DIR ?? "vault");
-const DATA_DIR = resolve(process.env.ASSISTANT_DATA_DIR ?? "data");
+const DATA_DIR = resolveDataDir(process.cwd());
 // The autograph code lives in THIS repo, not in the vault: the vault is user data only.
 // Absolute paths, because every script is spawned with cwd = VAULT (they take "." as the vault).
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const SCRIPTS = resolve(ROOT, "scripts/autograph");
 const BOT = process.env.TELEGRAM_BOT_TOKEN;
 const CHAT = notificationChat(); // admin chat
-const TZ = process.env.ASSISTANT_TIMEZONE ?? process.env.TZ ?? "UTC";
+const TZ = resolveTimeZone(process.env.ASSISTANT_TIMEZONE);
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", `'"'"'`)}'`;
+}
 
 interface HealthHistoryEntry {
-  date?: string;
-  health_score?: number;
+  date: string;
+  health_score: number;
 }
+
+interface SupersedeSkip {
+  path: string;
+  reason: "invalid_utf8" | "malformed_frontmatter" | "read_error";
+}
+
+type HealthHistoryState =
+  | { state: "missing" }
+  | { state: "valid"; entries: HealthHistoryEntry[] }
+  | { state: "corrupt" };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -47,10 +64,23 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isHealthHistoryEntry(value: unknown): value is HealthHistoryEntry {
   if (!isRecord(value)) return false;
+  if (typeof value.date !== "string" || !validIsoDate(value.date)) return false;
   return (
-    (value.date === undefined || typeof value.date === "string") &&
-    (value.health_score === undefined || typeof value.health_score === "number")
+    typeof value.health_score === "number" &&
+    Number.isFinite(value.health_score)
   );
+}
+
+function validIsoDate(value: string): boolean {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/u.exec(value);
+  if (!match) return false;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (year < 1 || month < 1 || month > 12) return false;
+  const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  return day >= 1 && day <= (days[month - 1] ?? 0);
 }
 
 if (!existsSync(VAULT)) {
@@ -131,14 +161,24 @@ async function alert(
 const cleared = (key: string): void => alertResolved(DATA_DIR, key);
 
 // Health score is read from the history that graph.py health appends after each run.
-function readHealthHistory(): HealthHistoryEntry[] {
+function readHealthHistory(): HealthHistoryState {
   const p = resolve(VAULT, ".graph/health-history.json");
-  if (!existsSync(p)) return [];
+  let raw: Buffer;
   try {
-    const data: unknown = JSON.parse(readFileSync(p, "utf8"));
-    return Array.isArray(data) ? data.filter(isHealthHistoryEntry) : [];
+    raw = readFileSync(p);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT")
+      return { state: "missing" };
+    return { state: "corrupt" };
+  }
+  try {
+    const text = new TextDecoder("utf-8", { fatal: true }).decode(raw);
+    const data: unknown = JSON.parse(text);
+    if (!Array.isArray(data) || !data.every(isHealthHistoryEntry))
+      return { state: "corrupt" };
+    return { state: "valid", entries: data };
   } catch {
-    return [];
+    return { state: "corrupt" };
   }
 }
 
@@ -203,9 +243,17 @@ const SCHEMA = existsSync(VAULT_SCHEMA)
 // Do NOT ignore failures: otherwise brain would commit/push and exit 0 even though health/
 // decay/moc did not run (no uv/Python, vault not initialized, etc.).
 const failures: string[] = [];
-function maint(label: string, args: string[]): void {
+const CORRUPT_HISTORY_ERROR =
+  "Error: health history is corrupt; left unchanged";
+let corruptHistoryGraphFailure = false;
+function maint(label: string, args: string[]) {
   const r = run("uv", ["run", ...args]);
-  if (r.status !== 0) failures.push(label);
+  if (r.status !== 0) {
+    failures.push(label);
+    if (label === "graph.health" && r.stderr.trim() === CORRUPT_HISTORY_ERROR)
+      corruptHistoryGraphFailure = true;
+  }
+  return r;
 }
 // cleanup — streaming repair of bug-bloated cards. MUST run before everything else:
 // enforce/graph read files whole and get OOM-killed on gigabyte cards; cleanup streams
@@ -230,7 +278,52 @@ maint("engine.decay", [`${SCRIPTS}/engine.py`, "decay", "."]);
 maint("moc.generate", [`${SCRIPTS}/moc.py`, "generate", "."]);
 // supersede — deterministic contradiction scan (dry-run): reports same-entity cards with
 // conflicting fields to .graph/supersede-candidates.json; the nightly LLM rollup resolves them.
-maint("supersede", [`${SCRIPTS}/supersede.py`, "."]);
+const supersedeSkippedPaths = new Set<string>();
+const supersedeRepairCommand =
+  `cd ${shellQuote(ROOT)} && ` +
+  `uv run scripts/autograph/supersede.py ${shellQuote(VAULT)}`;
+const supersedeReportPath = shellQuote(
+  resolve(VAULT, ".graph/supersede-report.json"),
+);
+const supersede = maint("supersede", [`${SCRIPTS}/supersede.py`, "."]);
+if (supersede.status === 0) {
+  const parsed: unknown = JSON.parse(
+    readFileSync(resolve(VAULT, ".graph/supersede-report.json"), "utf8"),
+  );
+  if (!isRecord(parsed) || !Array.isArray(parsed.skipped))
+    throw new Error("invalid supersede report");
+  const skipped = parsed.skipped.filter(
+    (item): item is SupersedeSkip =>
+      isRecord(item) &&
+      typeof item.path === "string" &&
+      (item.reason === "invalid_utf8" ||
+        item.reason === "malformed_frontmatter" ||
+        item.reason === "read_error"),
+  );
+  for (const item of skipped) supersedeSkippedPaths.add(item.path);
+  if (skipped.length) {
+    const count = skipped.length;
+    const essence = createHash("sha256")
+      .update(JSON.stringify(skipped))
+      .digest("hex");
+    await alert(
+      "supersede-unreadable",
+      essence,
+      T(
+        `Supersede skipped unreadable Cards. Conflicts in ${count} ${count === 1 ? "Card" : "Cards"} will not reach Rollup. ` +
+          `Run this command:\n${supersedeRepairCommand}\n` +
+          `Then open this report:\n${supersedeReportPath}\n` +
+          "Repair the listed Cards.",
+        `Supersede пропустил нечитаемые карточки. Противоречия в ${count} ${count === 1 ? "карточке" : "карточках"} не попадут в Rollup. ` +
+          `Выполни команду:\n${supersedeRepairCommand}\n` +
+          `Потом открой отчёт:\n${supersedeReportPath}\n` +
+          "Почини перечисленные карточки.",
+      ),
+    );
+  } else {
+    cleared("supersede-unreadable");
+  }
+}
 // dedup and link_cleanup — dry-run only (autograph policy: never apply automatically).
 maint("dedup", [`${SCRIPTS}/dedup.py`, ".", "--dry-run"]);
 maint("link_cleanup", [`${SCRIPTS}/link_cleanup.py`, "."]);
@@ -248,8 +341,13 @@ if (process.env.MEMORY_SEARCH_MODE === "hybrid") {
   if (r.status !== 0) failures.push("embed-index");
 }
 
-if (failures.length) {
-  const steps = failures.join(", ");
+const history = readHealthHistory();
+const maintenanceFailures =
+  corruptHistoryGraphFailure && history.state === "corrupt"
+    ? failures.filter((label) => label !== "graph.health")
+    : failures;
+if (maintenanceFailures.length) {
+  const steps = maintenanceFailures.join(", ");
   await alert(
     "maintenance",
     steps,
@@ -331,7 +429,11 @@ if (coreChecked && !coreClamped) cleared("core-cap");
 // sections, so write_card refuses UPDATE and SUPERSEDE on it rather than write the fact
 // into code. Where the author meant to close the fence is unknowable, so brain only names
 // the files - guessing would rewrite the user's text.
-const unclosed = cards ? cards.scanUnclosedFenceCards(VAULT) : [];
+const unclosed = cards
+  ? cards
+      .scanUnclosedFenceCards(VAULT)
+      .filter((path) => !supersedeSkippedPaths.has(path))
+  : [];
 if (unclosed.length) {
   const shown = unclosed.slice(0, 10);
   const rest = unclosed.length - shown.length;
@@ -355,13 +457,28 @@ if (unclosed.length) {
 }
 
 // ── 2. Detect health score drop ──
-const history = readHealthHistory();
+if (history.state === "corrupt") {
+  await alert(
+    "health-history-corrupt",
+    "corrupt",
+    T(
+      "Vault health history is corrupt. Graph cannot append a health result, so the health " +
+        "trend is unavailable. The file was left unchanged. Move .graph/health-history.json " +
+        "aside, then run npm run doctor from Iva.",
+      "health-history.json повреждён. Graph не может дописать результат, поэтому история " +
+        "здоровья недоступна. Файл оставлен без изменений. Перемести .graph/health-history.json " +
+        "в сторону, затем запусти npm run doctor из каталога Ивы.",
+    ),
+  );
+} else {
+  cleared("health-history-corrupt");
+}
 // То же правило, что у CORE и фенсов: забываем только то, что реально проверили. Меньше двух
 // точек — сравнивать нечего, проверки не было, и отметка дросселя просто доживает свою неделю.
 let healthDropped = false;
-if (history.length >= 2) {
-  const cur = history[history.length - 1]?.health_score;
-  const prev = history[history.length - 2]?.health_score;
+if (history.state === "valid" && history.entries.length >= 2) {
+  const cur = history.entries[history.entries.length - 1]?.health_score;
+  const prev = history.entries[history.entries.length - 2]?.health_score;
   if (typeof cur === "number" && typeof prev === "number" && cur < prev) {
     healthDropped = true;
     await alert(

@@ -39,6 +39,21 @@ function active(iva: World): string | null {
   return createVersionStore(iva.home).currentName();
 }
 
+test("a foreign wrapper keeps its checkout on the in-place updater", (t) => {
+  const iva = world(t);
+  const foreign = Buffer.from(
+    `#!/bin/sh\n: "${iva.home}/reports"\nexec "${process.execPath}" "${iva.home}/bin/iva.mjs" "$@"\n`,
+  );
+  writeFileSync(iva.shim, foreign);
+
+  update(iva);
+
+  assert.deepEqual(readFileSync(iva.shim), foreign);
+  assert.equal(existsSync(join(iva.home, ".git")), true);
+  assert.equal(existsSync(join(iva.home, "bin/iva.mjs")), true);
+  assert.equal(active(iva), null);
+});
+
 test("the first update moves the installation onto versions and keeps its state", (t) => {
   const iva = world(t);
   const sha = iva.git(iva.home, ["rev-parse", "HEAD"]);
@@ -73,10 +88,16 @@ test("the first update moves the installation onto versions and keeps its state"
       `uv run ${iva.home}/versions/${name}/scripts/autograph/cleanup.py . --apply`,
     ),
   );
+  const stopAgent = calls.findIndex((line) => /stop iva\.service$/u.test(line));
+  const stopPoller = calls.findIndex((line) =>
+    /stop iva-telegram-poll\.service$/u.test(line),
+  );
   const restart = calls.findIndex((line) =>
     /restart iva\.service$/u.test(line),
   );
-  assert.ok(cleanup >= 0, calls.join("\n"));
+  assert.ok(stopAgent >= 0, calls.join("\n"));
+  assert.ok(stopPoller > stopAgent, calls.join("\n"));
+  assert.ok(cleanup > stopPoller, calls.join("\n"));
   assert.ok(cleanup < restart, calls.join("\n"));
 
   const dir = join(iva.home, "versions", name);
@@ -736,16 +757,22 @@ test("the move to versions keeps the files git ignores inside the code tree", (t
   );
 });
 
-test("an update puts the userbot proxy on the version it installs", (t) => {
+test("an update puts an active userbot proxy on the version it installs", (t) => {
   const iva = world(t);
+  const unitDir = join(iva.fakeHome, ".config/systemd/user");
+  mkdirSync(unitDir, { recursive: true });
+  writeFileSync(join(unitDir, "iva-telegram-userbot.service"), "[Unit]\n");
   const output = update(iva);
   // The unit is written against `current`, so the interpreter it execs has to
   // exist in the version that just became current - nothing else creates it.
   const unit = readFileSync(
-    join(iva.fakeHome, ".config/systemd/user/iva-telegram-userbot.service"),
+    join(unitDir, "iva-telegram-userbot.service"),
     "utf8",
   );
-  const python = /^ExecStart=(\S+)/mu.exec(unit)?.[1] ?? "";
+  const python =
+    /^ExecStart=\/usr\/bin\/env "ASSISTANT_DATA_DIR=[^"]+" (\S+)/mu.exec(
+      unit,
+    )?.[1] ?? "";
   assert.match(python, new RegExp(`^${iva.home}/current/`, "u"));
   assert.ok(existsSync(python), `${python} is missing\n${output}`);
   assert.ok(
@@ -769,8 +796,45 @@ test("an update puts the userbot proxy on the version it installs", (t) => {
   );
 });
 
+test("an update keeps a previously missing userbot unit missing", (t) => {
+  const iva = world(t);
+  const unit = join(
+    iva.fakeHome,
+    ".config/systemd/user/iva-telegram-userbot.service",
+  );
+  assert.equal(existsSync(unit), false);
+
+  update(iva);
+
+  assert.equal(existsSync(unit), false);
+  assert.doesNotMatch(
+    readFileSync(iva.callsLog, "utf8"),
+    /(?:enable|start|restart) iva-telegram-userbot\.service/u,
+  );
+});
+
+test("a restart fault preserves a previously missing userbot unit", (t) => {
+  const iva = world(t);
+  const unit = join(
+    iva.fakeHome,
+    ".config/systemd/user/iva-telegram-userbot.service",
+  );
+
+  const result = iva.iva(["update"], { IVA_TEST_SYSTEMCTL_FAIL: "1" });
+
+  assert.notEqual(result.status, 0, `${result.stdout}${result.stderr}`);
+  assert.equal(existsSync(unit), false);
+  assert.doesNotMatch(
+    readFileSync(iva.callsLog, "utf8"),
+    /(?:enable|start|restart) iva-telegram-userbot\.service/u,
+  );
+});
+
 test("an update whose userbot proxy cannot be rebuilt still installs the version", (t) => {
   const iva = world(t);
+  const unitDir = join(iva.fakeHome, ".config/systemd/user");
+  mkdirSync(unitDir, { recursive: true });
+  writeFileSync(join(unitDir, "iva-telegram-userbot.service"), "[Unit]\n");
   update(iva);
   const first = active(iva);
   // The lock file of the new version is unreadable: `uv` is never reached, and

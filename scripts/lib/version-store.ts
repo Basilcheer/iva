@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { isUtf8 } from "node:buffer";
 import {
   existsSync,
   lstatSync,
@@ -10,9 +11,14 @@ import {
   rmSync,
   statSync,
   symlinkSync,
-  writeFileSync,
 } from "node:fs";
 import { dirname, isAbsolute, join } from "node:path";
+import { createRequire } from "node:module";
+import type { AtomicWriteOptions } from "../../agent/lib/fs-atomic.ts";
+import {
+  resolveDataDir,
+  VERSION_DIRECTORY_PATTERN,
+} from "../../packages/data-dir/index.ts";
 import { parseEnvText } from "./env-file.ts";
 
 const INCOMPLETE = ".iva-incomplete";
@@ -25,12 +31,56 @@ const STALE_MS = 60 * 60 * 1000;
 const FLIP_PREFIX = ".current.iva-flip-";
 /** Names in `home` that only an interrupted update can leave behind. */
 const LEFTOVER = [FLIP_PREFIX, ".probe-"];
-const VERSION_NAME =
-  /^(\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?)-([0-9a-f]{12})(?:\+([0-9a-f]{8}))?(?:~(\d+))?$/;
+// eslint-disable-next-line @typescript-eslint/unbound-method -- Intl.Collator compare is a bound getter.
+const VERSION_ORDER = new Intl.Collator("en", { numeric: true }).compare;
 /** What a version borrows from the installation; the rest of `.eve` is a build cache. */
 export const STATE_DIRS = ["data", "vault", ".eve/.workflow-data"];
 /** Where older builds kept the workflow store: linked where one is, never created. */
 export const LEGACY_STATE_DIRS = [".workflow-data"];
+
+type ActiveStateV1 = {
+  readonly schema: "iva-active/v1";
+  readonly version: string;
+  readonly settledAt?: string;
+};
+
+type ActiveStateV2 = {
+  readonly schema: "iva-active/v2";
+  readonly version: string;
+  readonly previous?: string;
+  readonly settledAt: string;
+  readonly cleanupPending?: boolean;
+};
+
+export type ActiveState = ActiveStateV1 | ActiveStateV2;
+
+export type ActiveStateRead =
+  | { readonly kind: "missing" }
+  | { readonly kind: "valid"; readonly state: ActiveState }
+  | { readonly kind: "corrupt-or-unreadable"; readonly reason: string };
+
+type CurrentStateRead =
+  | { readonly kind: "missing" }
+  | { readonly kind: "valid"; readonly name: string }
+  | { readonly kind: "corrupt-or-unowned"; readonly reason: string };
+
+type VersionStoreOptions = {
+  /** Fault seam for the active marker's canonical atomic writer. */
+  readonly activeWriteOptions?: AtomicWriteOptions;
+};
+
+type AtomicWriter = Pick<
+  typeof import("../../agent/lib/fs-atomic.ts"),
+  "writeFileAtomicSync"
+>;
+
+const require = createRequire(import.meta.url);
+
+function atomicWriter(): AtomicWriter {
+  // The CLI must still load on a broken install whose authored tree is absent.
+  // Mutation requires the canonical writer and fails closed if that tree is gone.
+  return require("../../agent/lib/fs-atomic.ts") as AtomicWriter;
+}
 
 /** A state directory as the .env spells it: an absolute one as given, the rest inside `root`. */
 export function stateDir(
@@ -59,7 +109,7 @@ export function layoutFor(home: string) {
     repo: join(home, "repo"),
     versions: join(home, "versions"),
     current: join(home, "current"),
-    data: stateDir(home, values.ASSISTANT_DATA_DIR, "data"),
+    data: resolveDataDir(home, values.ASSISTANT_DATA_DIR),
     vault: stateDir(home, values.ASSISTANT_VAULT_DIR, "vault"),
     env,
     // Already parsed to find the state directories; handed back so the updater does not
@@ -80,7 +130,7 @@ export function versionName(
 }
 
 export function parseVersionName(name: string) {
-  const match = VERSION_NAME.exec(name);
+  const match = VERSION_DIRECTORY_PATTERN.exec(name);
   if (!match) return null;
   return {
     version: match[1],
@@ -90,10 +140,125 @@ export function parseVersionName(name: string) {
   };
 }
 
+function exactKeys(
+  value: Record<string, unknown>,
+  allowed: readonly string[],
+): boolean {
+  const keys = Object.keys(value);
+  return (
+    keys.length <= allowed.length && keys.every((key) => allowed.includes(key))
+  );
+}
+
+function isoTimestamp(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  try {
+    return new Date(value).toISOString() === value;
+  } catch {
+    return false;
+  }
+}
+
+function validActiveState(value: unknown): value is ActiveState {
+  if (value === null || typeof value !== "object" || Array.isArray(value))
+    return false;
+  const state = value as Record<string, unknown>;
+  if (typeof state.version !== "string" || !parseVersionName(state.version))
+    return false;
+  if (state.schema === "iva-active/v1")
+    return (
+      exactKeys(state, ["schema", "version", "settledAt"]) &&
+      (state.settledAt === undefined || isoTimestamp(state.settledAt))
+    );
+  if (state.schema !== "iva-active/v2") return false;
+  if (
+    !exactKeys(state, [
+      "schema",
+      "version",
+      "previous",
+      "settledAt",
+      "cleanupPending",
+    ]) ||
+    !isoTimestamp(state.settledAt) ||
+    (state.cleanupPending !== undefined &&
+      typeof state.cleanupPending !== "boolean")
+  )
+    return false;
+  return (
+    state.previous === undefined ||
+    (typeof state.previous === "string" &&
+      state.previous !== state.version &&
+      parseVersionName(state.previous) !== null)
+  );
+}
+
+/** A missing marker is first-install state; every existing invalid marker is explicit. */
+export function readActiveState(path: string): ActiveStateRead {
+  let regularFile: boolean;
+  try {
+    regularFile = lstatSync(path).isFile();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT")
+      return { kind: "missing" };
+    return {
+      kind: "corrupt-or-unreadable",
+      reason: error instanceof Error ? error.message : String(error),
+    };
+  }
+  if (!regularFile)
+    return {
+      kind: "corrupt-or-unreadable",
+      reason: "active state marker is not a regular file",
+    };
+  let bytes: Buffer;
+  try {
+    bytes = readFileSync(path);
+  } catch (error) {
+    return {
+      kind: "corrupt-or-unreadable",
+      reason: error instanceof Error ? error.message : String(error),
+    };
+  }
+  if (!isUtf8(bytes))
+    return { kind: "corrupt-or-unreadable", reason: "invalid UTF-8" };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(bytes.toString("utf8"));
+  } catch (error) {
+    return {
+      kind: "corrupt-or-unreadable",
+      reason: error instanceof Error ? error.message : String(error),
+    };
+  }
+  return validActiveState(parsed)
+    ? { kind: "valid", state: parsed }
+    : { kind: "corrupt-or-unreadable", reason: "invalid active state schema" };
+}
+
 /** The release a directory is a build of; two builds of one release run the same code. */
 export function releaseOf(name: string): string {
   const at = parseVersionName(name);
   return at ? versionName(at.version, at.sha, at.overlay) : name;
+}
+
+/** Explicit state references always win; candidate order only fills spare slots. */
+export function retainedVersions(
+  finished: readonly string[],
+  references: readonly (string | null | undefined)[],
+  keep: number,
+): string[] {
+  const available = new Set(finished);
+  const retained = new Set(
+    references.filter(
+      (name): name is string => typeof name === "string" && available.has(name),
+    ),
+  );
+  const target = Math.max(keep, retained.size, 1);
+  for (const name of finished) {
+    if (retained.size >= target) break;
+    retained.add(name);
+  }
+  return [...retained];
 }
 
 /**
@@ -119,8 +284,22 @@ function unpack(command: string, args: string[], cwd: string): void {
  * is confined to a directory nothing points at, or is one atomic rename, so an
  * interruption leaves garbage and never half a changed installation.
  */
-export function createVersionStore(home: string) {
+export function createVersionStore(
+  home: string,
+  { activeWriteOptions }: VersionStoreOptions = {},
+) {
   const layout = layoutFor(home);
+
+  function activeState(): ActiveState | null {
+    const path = join(layout.data, SETTLED);
+    const result = readActiveState(path);
+    if (result.kind === "missing") return null;
+    if (result.kind === "valid") return result.state;
+    throw new Error(`active.json is corrupt or unreadable: ${result.reason}`);
+  }
+
+  const writeActiveState = (body: ActiveState): void =>
+    writeJson(join(layout.data, SETTLED), body, activeWriteOptions);
 
   const versionDir = (name: string): string => {
     if (!parseVersionName(name)) throw new Error(`invalid version: ${name}`);
@@ -140,36 +319,103 @@ export function createVersionStore(home: string) {
     }
   };
 
-  /** Finished versions, newest first. */
+  /** Finished versions in deterministic release order, newest first. */
   function list(): string[] {
     return names()
       .filter((name) => parseVersionName(name) && isComplete(name))
-      .map((name) => ({
-        name,
-        at: statSync(join(layout.versions, name)).mtimeMs,
-      }))
-      .sort((a, b) => b.at - a.at || b.name.localeCompare(a.name))
-      .map((entry) => entry.name);
+      .sort((a, b) => VERSION_ORDER(b, a));
   }
 
-  /** The active version; null when the link is missing, dangling or foreign. */
-  function currentName(): string | null {
+  /** Missing is first-install state; every existing unowned object is explicit. */
+  function readCurrentState(): CurrentStateRead {
     let target: string;
     let versions: string;
     try {
-      if (!lstatSync(layout.current).isSymbolicLink()) return null;
-      target = realpathSync(layout.current);
-      versions = realpathSync(layout.versions);
-    } catch {
-      return null;
+      if (!lstatSync(layout.current).isSymbolicLink())
+        return {
+          kind: "corrupt-or-unowned",
+          reason: "current path is not a symlink",
+        };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT")
+        return { kind: "missing" };
+      return {
+        kind: "corrupt-or-unowned",
+        reason: error instanceof Error ? error.message : String(error),
+      };
     }
-    if (dirname(target) !== versions) return null;
+    try {
+      target = realpathSync(layout.current);
+    } catch (error) {
+      return {
+        kind: "corrupt-or-unowned",
+        reason: `current symlink is dangling or unreadable: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      };
+    }
+    try {
+      versions = realpathSync(layout.versions);
+    } catch (error) {
+      return {
+        kind: "corrupt-or-unowned",
+        reason: `versions directory is unreadable: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      };
+    }
+    if (dirname(target) !== versions)
+      return {
+        kind: "corrupt-or-unowned",
+        reason: "current symlink target is outside versions",
+      };
     const name = target.slice(versions.length + 1);
-    return parseVersionName(name) && isComplete(name) ? name : null;
+    let directory: boolean;
+    try {
+      directory = statSync(target).isDirectory();
+    } catch (error) {
+      return {
+        kind: "corrupt-or-unowned",
+        reason: `current symlink target is unreadable: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      };
+    }
+    if (!parseVersionName(name) || !directory)
+      return {
+        kind: "corrupt-or-unowned",
+        reason: "current symlink target is not a version directory",
+      };
+    if (!isComplete(name))
+      return {
+        kind: "corrupt-or-unowned",
+        reason: "current symlink target is not a complete version",
+      };
+    return { kind: "valid", name };
+  }
+
+  /** The active version; null only when the `current` path itself is missing. */
+  function currentName(): string | null {
+    const state = readCurrentState();
+    if (state.kind === "missing") return null;
+    if (state.kind === "valid") return state.name;
+    throw new Error(`current is foreign or corrupt: ${state.reason}`);
   }
 
   function previousName(): string | null {
     const active = currentName();
+    const state = activeState();
+    for (const candidate of [
+      state?.schema === "iva-active/v2" ? state.previous : undefined,
+      state?.version,
+    ]) {
+      if (
+        typeof candidate === "string" &&
+        candidate !== active &&
+        isComplete(candidate)
+      )
+        return candidate;
+    }
     return list().find((name) => name !== active) ?? null;
   }
 
@@ -220,6 +466,8 @@ export function createVersionStore(home: string) {
 
   /** Point `current` at a finished version with one rename. */
   function activate(name: string): void {
+    activeState(); // Existing invalid state blocks every live mutation.
+    currentName(); // Existing foreign state belongs to someone else.
     const dir = versionDir(name);
     if (!isComplete(name)) throw new Error(`version ${name} is incomplete`);
     linkState(dir); // Whatever a killed probe aimed them at, back at the install.
@@ -228,10 +476,10 @@ export function createVersionStore(home: string) {
     rmSync(flip, { recursive: true, force: true });
     symlinkSync(dir, flip);
     try {
-      // rename() replaces a symlink atomically; anything else there is not ours to keep.
+      // rename() replaces the symlink atomically. A different filesystem object
+      // is foreign state: refuse it and leave manual repair to the operator.
       const link = layout.current;
-      if (existsSync(link) && !lstatSync(link).isSymbolicLink())
-        rmSync(link, { recursive: true, force: true });
+      currentName();
       renameSync(flip, link);
     } catch (error) {
       rmSync(flip, { recursive: true, force: true });
@@ -241,18 +489,56 @@ export function createVersionStore(home: string) {
 
   /** Flipped, migrated, restarted: an update is owed while this and `current` disagree. */
   function settled(): string | null {
-    const name = readJson(join(layout.data, SETTLED)).version;
-    return typeof name === "string" ? name : null;
+    return activeState()?.version ?? null;
   }
 
-  /** Written last in an update, so an interrupted one is replayed rather than lost. */
-  function settle(name: string): void {
+  /** Commit one served version and retain the last served version as its rollback. */
+  function settle(
+    name: string,
+    options: {
+      readonly cleanupPending?: boolean;
+      readonly previous?: string | null;
+    } = {},
+  ): void {
+    const before = activeState();
+    const previous = [
+      options.previous,
+      before?.version,
+      before?.schema === "iva-active/v2" ? before.previous : undefined,
+    ].find(
+      (candidate): candidate is string =>
+        typeof candidate === "string" &&
+        candidate !== name &&
+        isComplete(candidate),
+    );
     mkdirSync(layout.data, { recursive: true });
-    writeJson(join(layout.data, SETTLED), {
-      schema: "iva-active/v1",
+    writeActiveState({
+      schema: "iva-active/v2",
       version: name,
+      ...(previous ? { previous } : {}),
       settledAt: new Date().toISOString(),
+      ...(options.cleanupPending ? { cleanupPending: true } : {}),
     });
+  }
+
+  /** Cleanup is retryable debt after a version has already served and committed. */
+  function cleanupPending(name: string): boolean {
+    const state = activeState();
+    return (
+      state?.schema === "iva-active/v2" &&
+      state.version === name &&
+      state.cleanupPending === true
+    );
+  }
+
+  /** Clear only the debt belonging to the still-settled version. */
+  function finishCleanup(name: string): void {
+    const state = activeState();
+    if (state?.schema !== "iva-active/v2" || state.version !== name)
+      throw new Error(`cleanup state changed from ${name}`);
+    const finished = { ...state };
+    delete finished.cleanupPending;
+    writeActiveState(finished);
   }
 
   /**
@@ -261,8 +547,7 @@ export function createVersionStore(home: string) {
    * it started on. A marker written before this field carries no time at all.
    */
   function settledAt(): string | null {
-    const at = readJson(join(layout.data, SETTLED)).settledAt;
-    return typeof at === "string" ? at : null;
+    return activeState()?.settledAt ?? null;
   }
 
   function liveFailures(): string[] {
@@ -299,6 +584,8 @@ export function createVersionStore(home: string) {
 
   /** Remove what an interrupted update can leave behind. Never touches a version. */
   function sweep(): string[] {
+    activeState(); // Never delete leftovers while rollback state is untrusted.
+    currentName(); // Never clean an installation whose live owner is untrusted.
     const stale = names().filter(
       (name) => parseVersionName(name) && !isComplete(name),
     );
@@ -312,15 +599,22 @@ export function createVersionStore(home: string) {
     return stale;
   }
 
-  /** Keep the active version plus the newest others; disks on these boxes are small. */
+  /** Keep every state reference, then fill the requested count deterministically. */
   function gc(keep: number): string[] {
     const active = currentName();
-    const kept = new Set(active ? [active] : []);
     const finished = list();
-    for (const name of finished) {
-      if (kept.size >= Math.max(keep, 1)) break;
-      kept.add(name);
-    }
+    const state = activeState();
+    const kept = new Set(
+      retainedVersions(
+        finished,
+        [
+          active,
+          state?.version,
+          state?.schema === "iva-active/v2" ? state.previous : null,
+        ],
+        keep,
+      ),
+    );
     const removed = finished.filter((name) => !kept.has(name));
     for (const name of removed)
       rmSync(join(layout.versions, name), { recursive: true, force: true });
@@ -329,10 +623,11 @@ export function createVersionStore(home: string) {
 
   /** Make `current` valid again after a manual edit or a crash. */
   function heal(): string | null {
+    const state = activeState();
     const active = currentName();
     if (active) return active;
     // Not the newest on disk: after a rollback that one is the rejected version.
-    const chosen = settled();
+    const chosen = state?.version ?? null;
     const pick = list().find((name) => name === chosen) ?? list()[0];
     if (!pick) return null;
     activate(pick);
@@ -409,6 +704,8 @@ export function createVersionStore(home: string) {
     activate,
     settled,
     settle,
+    cleanupPending,
+    finishCleanup,
     settledAt,
     liveFailed,
     recordLive,
@@ -431,11 +728,16 @@ export function readJson(path: string): Record<string, unknown> {
   }
 }
 
-/** Written through a rename, so a reader never sees half a marker. */
-export function writeJson(path: string, body: unknown): void {
-  const temp = `${path}.${process.pid}.tmp`;
-  writeFileSync(temp, `${JSON.stringify(body)}\n`, { mode: 0o600 });
-  renameSync(temp, path);
+/** Durable atomic JSON marker using the project's single canonical writer. */
+export function writeJson(
+  path: string,
+  body: unknown,
+  options: AtomicWriteOptions = {},
+): void {
+  atomicWriter().writeFileAtomicSync(path, `${JSON.stringify(body)}\n`, {
+    ...options,
+    mode: 0o600,
+  });
 }
 
 export type UpdateLock = { readonly path: string; release(): void };

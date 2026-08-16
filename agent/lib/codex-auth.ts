@@ -21,6 +21,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
+import { dataDir } from "./data-dir.ts";
 
 export interface CodexAuth {
   id_token?: string;
@@ -49,7 +50,7 @@ export const ORIGINATOR = "codex_cli_rs";
 export const CLIENT_VERSION = "0.144.0";
 const REFRESH_SKEW_S = 300; // рефрешим за 5 мин до exp (как окно codex CLI)
 
-const defaultDir = (): string => process.env.ASSISTANT_DATA_DIR || "data";
+const defaultDir = dataDir;
 
 // ── хранилище токенов ─────────────────────────────────────────────────────
 export function authFilePath(dataDir = defaultDir()): string {

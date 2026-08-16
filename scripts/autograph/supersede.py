@@ -17,11 +17,16 @@ Default: dry-run → writes .graph/supersede-candidates.json + prints a summary.
 No LLM. Reuses common.py (schema, frontmatter, duplicate grouping) as single source of truth.
 """
 import json
+import re
 import sys
+from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Literal
 
 from common import (
+    FrontmatterParseError,
     SCHEMA_FILENAME,
+    walk_vault,
     load_schema,
     parse_frontmatter,
     write_frontmatter,
@@ -32,21 +37,174 @@ from common import (
 )
 
 
-def scan(vault_dir: Path, schema: dict):
+@dataclass(frozen=True)
+class CardRead:
+    path: str
+    fields: dict
+
+
+@dataclass(frozen=True)
+class CardSkip:
+    path: str
+    reason: Literal["invalid_utf8", "malformed_frontmatter", "read_error"]
+
+
+@dataclass(frozen=True)
+class ScanReport:
+    candidates: list[dict]
+    skipped: list[CardSkip]
+
+
+PLAIN_KEY_FORBIDDEN_STARTS = frozenset("[]{},&*!|>'\"%@`")
+
+
+def _plain_root_key_is_safe(key: str) -> bool:
+    if not key or key[0] in PLAIN_KEY_FORBIDDEN_STARTS:
+        return False
+    if key[0] in "-?" and (len(key) == 1 or key[1].isspace()):
+        return False
+    return True
+
+
+def _flow_delimiters_balanced(value: str) -> bool:
+    """Validate a single-line flow value while ignoring quoted delimiter bytes."""
+    if not value.startswith(("[", "{")):
+        return True
+
+    expected_closers: list[str] = []
+    quote: str | None = None
+    index = 0
+    while index < len(value):
+        char = value[index]
+        if quote == '"':
+            if char == "\\" and index + 1 < len(value):
+                index += 2
+                continue
+            if char == quote:
+                quote = None
+        elif quote == "'":
+            if char == quote and index + 1 < len(value) and value[index + 1] == quote:
+                index += 2
+                continue
+            if char == quote:
+                quote = None
+        elif char in ('"', "'"):
+            quote = char
+        elif char == "#" and (index == 0 or value[index - 1].isspace()):
+            break
+        elif char == "[":
+            expected_closers.append("]")
+        elif char == "{":
+            expected_closers.append("}")
+        elif char in ("]", "}"):
+            if not expected_closers or expected_closers.pop() != char:
+                return False
+            if not expected_closers:
+                trailing = value[index + 1 :]
+                return not trailing.strip() or (
+                    trailing[0].isspace()
+                    and trailing.lstrip().startswith("#")
+                )
+        index += 1
+    return False
+
+
+def _frontmatter_lines_are_safe(lines: list[str]) -> bool:
+    """Reject syntax the shared tolerant parser would silently ignore or promote."""
+    if any(
+        (ord(char) < 0x20 and char != "\t") or ord(char) == 0x7F
+        for line in lines
+        for char in line
+    ):
+        return False
+
+    continuation = False
+    root_keys: set[str] = set()
+    for line in lines:
+        stripped = line.strip()
+        indented = line.startswith((" ", "\t"))
+
+        if continuation and (not stripped or indented):
+            continue
+        continuation = False
+
+        if not stripped or stripped.startswith("#"):
+            continue
+        if indented:
+            return False
+
+        raw_key, separator, raw_value = line.partition(":")
+        key = raw_key.strip()
+        if (
+            not separator
+            or not _plain_root_key_is_safe(key)
+            or key in root_keys
+        ):
+            return False
+        root_keys.add(key)
+
+        value = raw_value.strip()
+        if not value or value.startswith((">", "|")):
+            continuation = True
+        elif not _flow_delimiters_balanced(value):
+            return False
+
+    return True
+
+
+def _exact_frontmatter_lines(text: str) -> list[str] | None:
+    """Return exact frontmatter lines, or None for an unclosed exact opener."""
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    if not normalized.startswith("---\n"):
+        return []
+    match = re.match(r"^---\n(.*?)\n---(?:\n|\Z)", normalized, re.DOTALL)
+    return match.group(1).split("\n") if match else None
+
+
+def read_candidate(vault_dir: Path, path: Path) -> CardRead | CardSkip:
+    """Read one Card strictly, or return a finite structured skip without its bytes."""
+    relative = str(path.relative_to(vault_dir))
+    try:
+        text = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return CardSkip(path=relative, reason="invalid_utf8")
+    except OSError:
+        return CardSkip(path=relative, reason="read_error")
+    exact_lines = _exact_frontmatter_lines(text)
+    if exact_lines is None or not _frontmatter_lines_are_safe(exact_lines):
+        return CardSkip(path=relative, reason="malformed_frontmatter")
+    try:
+        parsed_fields, _, frontmatter_lines = parse_frontmatter(text)
+    except FrontmatterParseError:
+        return CardSkip(path=relative, reason="malformed_frontmatter")
+    if frontmatter_lines != exact_lines:
+        return CardSkip(path=relative, reason="malformed_frontmatter")
+    fields = parsed_fields or {}
+    return CardRead(path=relative, fields=fields)
+
+
+def scan(vault_dir: Path, schema: dict) -> ScanReport:
     # Поля-противоречия и same-entity группировка читаются из схемы (single source of truth).
     conflict_fields = get_conflict_fields(schema)
-    groups = collect_duplicate_groups(vault_dir, schema)
+    reads = [read_candidate(vault_dir, path) for path in walk_vault(vault_dir)]
+    skipped = [result for result in reads if isinstance(result, CardSkip)]
+    cards_by_path = {
+        result.path: result for result in reads if isinstance(result, CardRead)
+    }
+    if not cards_by_path:
+        return ScanReport(candidates=[], skipped=skipped)
+    groups = collect_duplicate_groups(
+        vault_dir,
+        schema,
+        files=[vault_dir / relative for relative in cards_by_path],
+    )
     candidates = []
     for paths in groups.values():
         if len(paths) < 2:
             continue
         cards = []
         for rp in paths:  # rp — vault-относительный путь из collect_duplicate_groups
-            try:
-                fields = parse_frontmatter((vault_dir / rp).read_text(encoding="utf-8"))[0]
-            except Exception:
-                continue
-            fields = fields or {}  # notes may lack frontmatter
+            fields = cards_by_path[rp].fields
             # Already-resolved cards must not re-surface as live conflicts every night.
             if str(fields.get("status", "")).lower() == "superseded":
                 continue
@@ -73,7 +231,7 @@ def scan(vault_dir: Path, schema: dict):
                     "conflicts": conflicts,
                 }
             )
-    return candidates
+    return ScanReport(candidates=candidates, skipped=skipped)
 
 
 def apply_supersede(vault_dir: Path, candidates: list) -> int:
@@ -130,7 +288,8 @@ def main():
     except Exception:
         schema = {}
 
-    candidates = scan(vault_dir, schema)
+    report = scan(vault_dir, schema)
+    candidates = report.candidates
 
     # Отчёт для ночного rollup.
     graph_dir = vault_dir / ".graph"
@@ -138,8 +297,18 @@ def main():
     (graph_dir / "supersede-candidates.json").write_text(
         json.dumps(candidates, ensure_ascii=False, indent=2), encoding="utf-8"
     )
+    (graph_dir / "supersede-report.json").write_text(
+        json.dumps(
+            {"skipped": [asdict(skip) for skip in report.skipped]},
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
 
     print(f"supersede: {len(candidates)} conflict group(s) across same-entity cards")
+    if report.skipped:
+        print(f"supersede: skipped {len(report.skipped)} unreadable card(s)")
     if verbose:
         for c in candidates:
             print(f"  ⚠ {c['entity']}: current={c['current']} | fields={list(c['conflicts'])}")

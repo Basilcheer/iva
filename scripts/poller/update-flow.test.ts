@@ -30,15 +30,21 @@ const { handleUpdateCallback, handleUpdateCheck, removeStaleUpdateJobs } =
       from: { id: number };
       message: { chat: { id: number }; message_id: number };
       data: string;
-    }) => Promise<true>;
+    }) => Promise<boolean>;
     handleUpdateCheck: (
       chatId: number,
       options: {
         root?: string;
+        inspectImpl?: () => Promise<{
+          hasCommitUpdate: boolean;
+          hasVersionUpdate: boolean;
+          localVersion?: string | null;
+          remoteVersion?: string | null;
+        }>;
         markNotifiedImpl?: (dataDir: string, version: string) => Promise<void>;
         envImpl?: () => Promise<NodeJS.ProcessEnv>;
       },
-    ) => Promise<void>;
+    ) => Promise<boolean>;
     removeStaleUpdateJobs: () => Promise<void>;
   };
 
@@ -70,8 +76,65 @@ test("stale update-job cleanup removes only expired JSON job files", async () =>
 type MockFetch = (
   url: string,
   init: { body?: string },
-) => Promise<{ json(): Promise<{ ok: boolean; result: object }> }>;
+) => Promise<{ json(): Promise<{ ok: boolean; result: unknown }> }>;
 const mutableGlobal: { fetch: MockFetch } = globalThis;
+
+for (const scenario of [
+  {
+    name: "inspect failure",
+    inspectImpl: (): Promise<never> =>
+      Promise.reject(new Error("inspect failed")),
+  },
+  {
+    name: "current version",
+    inspectImpl: () =>
+      Promise.resolve({
+        hasCommitUpdate: false,
+        hasVersionUpdate: false,
+        localVersion: "1.2.3",
+        remoteVersion: "1.2.3",
+      }),
+  },
+  {
+    name: "update offer",
+    inspectImpl: () =>
+      Promise.resolve({
+        hasCommitUpdate: true,
+        hasVersionUpdate: true,
+        localVersion: "1.2.3",
+        remoteVersion: "1.2.4",
+      }),
+  },
+] as const) {
+  test(`/update ${scenario.name} is retained when its final edit returns null`, async () => {
+    const methods: string[] = [];
+    const previousFetch = mutableGlobal.fetch;
+    mutableGlobal.fetch = (url) => {
+      const method = url.split("/").at(-1) ?? "";
+      methods.push(method);
+      return Promise.resolve({
+        json: () =>
+          Promise.resolve({
+            ok: true,
+            result: method === "sendMessage" ? { message_id: 73 } : null,
+          }),
+      });
+    };
+    try {
+      assert.equal(
+        await handleUpdateCheck(1, {
+          inspectImpl: scenario.inspectImpl,
+          markNotifiedImpl: () => Promise.resolve(),
+          envImpl: () => Promise.resolve({ MODEL_PROVIDER: "codex" }),
+        }),
+        false,
+      );
+    } finally {
+      mutableGlobal.fetch = previousFetch;
+    }
+    assert.deepEqual(methods, ["sendMessage", "editMessageText"]);
+  });
+}
 
 /**
  * Tap the /update button and collect the texts Telegram was sent. `systemd-run`
@@ -95,7 +158,7 @@ async function press(launcher: string): Promise<string[]> {
       id: "callback",
       from: { id: 42 },
       message: { chat: { id: 1 }, message_id: 10 },
-      data: "iva_update:run",
+      data: "iva_update:do",
     });
   } finally {
     mutableGlobal.fetch = previousFetch;
@@ -103,6 +166,57 @@ async function press(launcher: string): Promise<string[]> {
   }
   return texts;
 }
+
+test("invalid update callback data only clears the Telegram spinner", async () => {
+  const methods: string[] = [];
+  const previousFetch = mutableGlobal.fetch;
+  mutableGlobal.fetch = (url) => {
+    methods.push(url.split("/").at(-1) ?? "");
+    return Promise.resolve({
+      json: () => Promise.resolve({ ok: true, result: {} }),
+    });
+  };
+  try {
+    await handleUpdateCallback({
+      id: "invalid-callback",
+      from: { id: 42 },
+      message: { chat: { id: 1 }, message_id: 10 },
+      data: "iva_update:garbage",
+    });
+  } finally {
+    mutableGlobal.fetch = previousFetch;
+  }
+  assert.deepEqual(methods, ["answerCallbackQuery"]);
+});
+
+test("skip callback is retained when only spinner ack succeeds", async () => {
+  const methods: string[] = [];
+  const previousFetch = mutableGlobal.fetch;
+  mutableGlobal.fetch = (url) => {
+    const method = url.split("/").at(-1) ?? "";
+    methods.push(method);
+    return Promise.resolve({
+      json: () =>
+        Promise.resolve(
+          method === "answerCallbackQuery"
+            ? { ok: true, result: true }
+            : { ok: false, result: false },
+        ),
+    });
+  };
+  try {
+    const handled = await handleUpdateCallback({
+      id: "failed-skip",
+      from: { id: 42 },
+      message: { chat: { id: 1 }, message_id: 10 },
+      data: "iva_update:skip",
+    });
+    assert.equal(handled, false);
+  } finally {
+    mutableGlobal.fetch = previousFetch;
+  }
+  assert.deepEqual(methods, ["answerCallbackQuery", "editMessageText"]);
+});
 
 test("the /update button leaves the lock to the update it launches", async (t) => {
   const lock = join(dataDir, "update.lock");
@@ -124,10 +238,9 @@ test("the /update button leaves the lock to the update it launches", async (t) =
   const first = await press(bin);
 
   assert.match(first.at(-1) ?? "", /Saving your changes/u);
-  assert.match(
-    readFileSync(launched, "utf8"),
-    /update --telegram-job [0-9a-f]/u,
-  );
+  const command = readFileSync(launched, "utf8");
+  assert.match(command, /update --telegram-job [0-9a-f]/u);
+  assert.match(command, new RegExp(`--setenv=ASSISTANT_DATA_DIR=${dataDir}`));
   assert.equal(
     readdirSync(jobs).length,
     1,

@@ -77,74 +77,37 @@ test("first-run fast-forward propagates Telegram and response-shape failures", a
   }
 });
 
-test("saveOffset propagates a write error and never renames the cursor", async () => {
+test("saveOffset propagates the canonical durable-write failure", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "iva-offset-write-error-test-"));
   const file = join(dataDir, "telegram-offset-test.json");
   const calls: Call[] = [];
   await assert.rejects(
     saveOffset(42, 41, {
       file,
-      dataDir,
-      pid: 123,
-      tmpId: "write-error",
-      mkdirImpl: async () => {},
-      writeFileImpl: async (
-        file: unknown,
-        _data: unknown,
-        options: unknown,
-      ) => {
-        calls.push(["write", file, options]);
+      writeFileImpl: async (path, _data, options) => {
+        calls.push(["write", path, options]);
         throw new Error("injected write failure");
       },
-      renameImpl: async (...args: unknown[]) => calls.push(["rename", ...args]),
-      rmImpl: async (...args: unknown[]) => calls.push(["rm", ...args]),
     }),
     /injected write failure/u,
   );
-  assert.equal(
-    calls.some(([kind]) => kind === "rename"),
-    false,
-  );
-  assert.equal(calls[0][1], `${file}.tmp-123-write-error`);
-  assert.deepEqual(calls[0][2], { encoding: "utf8", mode: 0o600, flag: "wx" });
+  assert.deepEqual(calls, [["write", file, { mode: 0o600 }]]);
 });
 
-test("saveOffset publishes a private tmp file with one atomic rename", async () => {
+test("saveOffset delegates one private replacement to the canonical primitive", async () => {
   const dir = mkdtempSync(join(tmpdir(), "iva-offset-save-test-"));
   const file = join(dir, "telegram-offset.json");
   const calls: Call[] = [];
-  const writeFileImpl = async (
-    path: unknown,
-    data: unknown,
-    options: unknown,
-  ) => {
+  const { writeFileAtomic } = await import("#lib/fs-atomic.ts");
+  const writeFileImpl: typeof writeFileAtomic = async (path, data, options) => {
     calls.push(["write", path, options]);
-    const { writeFile } = await import("node:fs/promises");
-    await writeFile(
-      String(path),
-      data as string,
-      options as { encoding: "utf8"; mode: number; flag: "wx" },
-    );
-  };
-  const renameImpl = async (from: unknown, to: unknown) => {
-    calls.push(["rename", from, to]);
-    const { rename } = await import("node:fs/promises");
-    await rename(String(from), String(to));
+    await writeFileAtomic(path, data, options);
   };
   await saveOffset(42, 41, {
     file,
-    dataDir: dir,
-    pid: 456,
-    tmpId: "atomic",
     writeFileImpl,
-    renameImpl,
   });
-  assert.deepEqual(
-    calls.map(([kind]) => kind),
-    ["write", "rename"],
-  );
-  assert.equal(calls[0][1], `${file}.tmp-456-atomic`);
-  assert.deepEqual(calls[1], ["rename", `${file}.tmp-456-atomic`, file]);
+  assert.deepEqual(calls, [["write", file, { mode: 0o600 }]]);
   assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), {
     offset: 42,
     delivered: 41,

@@ -4,14 +4,19 @@ import assert from "node:assert/strict";
 import {
   appendFileSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readlinkSync,
   rmSync,
+  statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import fc from "fast-check";
 import { runMigrations } from "./version-update.ts";
 
 type Fixture = {
@@ -129,26 +134,90 @@ test("a failing migration stops the run and keeps earlier ones recorded", async 
   assert.deepEqual(migrations.applied(), ["001-first"]);
 });
 
-test("an unreadable marker replays migrations, which must therefore be idempotent", async (t) => {
+test("a malformed marker blocks migrations and stays byte-identical", async (t) => {
   const migrations = fixture(t);
-  // The real contract: the migration itself checks the world, not the marker.
-  migrations.write(
-    "001-first.ts",
-    `import { appendFileSync, existsSync, writeFileSync } from "node:fs";\n` +
-      `import { join } from "node:path";\n` +
-      `export default function up(context) {\n` +
-      `  const target = join(context.dataDir, "migrated.txt");\n` +
-      `  if (existsSync(target)) return;\n` +
-      `  writeFileSync(target, "done");\n` +
-      `  appendFileSync(context.log, "first\\n");\n` +
-      `}\n`,
-  );
-  await migrations.run();
-  writeFileSync(join(migrations.dataDir, "migrations.json"), "{not json");
+  migrations.write("001-first.ts", recorder("first"));
+  const marker = join(migrations.dataDir, "migrations.json");
+  const corrupt = Buffer.from("{not json");
+  writeFileSync(marker, corrupt);
 
-  assert.deepEqual(migrations.applied(), []);
-  assert.deepEqual(await migrations.run(), ["001-first"]);
-  assert.deepEqual(migrations.entries(), ["first"]);
+  await assert.rejects(migrations.run(), /migrations\.json is corrupt/u);
+  assert.deepEqual(migrations.entries(), []);
+  assert.deepEqual(readFileSync(marker), corrupt);
+});
+
+test("a dangling migration marker blocks execution without changing its object", async (t) => {
+  const migrations = fixture(t);
+  migrations.write("001-first.ts", recorder("first"));
+  const marker = join(migrations.dataDir, "migrations.json");
+  const target = join(migrations.dataDir, "missing-migrations-target.json");
+  symlinkSync(target, marker);
+  const before = lstatSync(marker);
+
+  let caught: unknown;
+  try {
+    await migrations.run();
+  } catch (error) {
+    caught = error;
+  }
+
+  assert.deepEqual(migrations.entries(), [], "migration ran before validation");
+  assert.ok(caught instanceof Error);
+  assert.match(caught.message, /migrations\.json is corrupt/u);
+  assert.equal(lstatSync(marker).ino, before.ino);
+  assert.equal(lstatSync(marker).isSymbolicLink(), true);
+  assert.equal(readlinkSync(marker), target);
+  assert.equal(existsSync(target), false);
+});
+
+test("invalid UTF-8 blocks migrations before import", async (t) => {
+  const migrations = fixture(t);
+  migrations.write("001-first.ts", recorder("first"));
+  const marker = join(migrations.dataDir, "migrations.json");
+  const corrupt = Buffer.from([0xff, 0xfe, 0x7b]);
+  writeFileSync(marker, corrupt);
+
+  await assert.rejects(migrations.run(), /invalid UTF-8/u);
+  assert.deepEqual(migrations.entries(), []);
+  assert.deepEqual(readFileSync(marker), corrupt);
+});
+
+test("semantic-invalid migration markers fail closed", async (t) => {
+  const migrations = fixture(t);
+  migrations.write("001-first.ts", recorder("first"));
+  const marker = join(migrations.dataDir, "migrations.json");
+  const invalid = [
+    {},
+    { schema: "iva-migrations/v1", applied: "001-first" },
+    { schema: "iva-migrations/v1", applied: ["bad-name"] },
+    { schema: "iva-migrations/v1", applied: ["001-first", "001-first"] },
+    { schema: "iva-migrations/v1", applied: [], extra: true },
+  ];
+
+  for (const state of invalid) {
+    const bytes = Buffer.from(JSON.stringify(state));
+    writeFileSync(marker, bytes);
+    await assert.rejects(migrations.run(), /invalid migration state schema/u);
+    assert.deepEqual(readFileSync(marker), bytes);
+  }
+  assert.deepEqual(migrations.entries(), []);
+});
+
+test("arbitrary malformed migration bytes fail closed with a fixed seed", async (t) => {
+  const migrations = fixture(t);
+  migrations.write("001-first.ts", recorder("first"));
+  const marker = join(migrations.dataDir, "migrations.json");
+
+  await fc.assert(
+    fc.asyncProperty(fc.uint8Array({ maxLength: 128 }), async (tail) => {
+      const bytes = Buffer.concat([Buffer.from([0xff]), Buffer.from(tail)]);
+      writeFileSync(marker, bytes);
+      await assert.rejects(migrations.run(), /migrations\.json is corrupt/u);
+      assert.deepEqual(readFileSync(marker), bytes);
+      assert.deepEqual(migrations.entries(), []);
+    }),
+    { seed: 41909, numRuns: 80 },
+  );
 });
 
 test("a missing migrations directory and an unwritable marker are reported honestly", async (t) => {
@@ -167,4 +236,28 @@ test("a missing migrations directory and an unwritable marker are reported hones
   rmSync(migrations.dataDir, { recursive: true, force: true });
   writeFileSync(migrations.dataDir, "not a directory");
   await assert.rejects(migrations.run());
+});
+
+test("a corrupt marker is irrelevant when the candidate ships no migration", async (t) => {
+  const migrations = fixture(t);
+  migrations.write("README.md", "no migration\n");
+  const marker = join(migrations.dataDir, "migrations.json");
+  const corrupt = Buffer.from([0xff, 0x7b]);
+  writeFileSync(marker, corrupt);
+
+  assert.deepEqual(await migrations.run(), []);
+  assert.deepEqual(readFileSync(marker), corrupt);
+  assert.deepEqual(migrations.entries(), []);
+});
+
+test("the migration marker uses the canonical private atomic writer", async (t) => {
+  const migrations = fixture(t);
+  migrations.write("001-first.ts", recorder("first"));
+
+  await migrations.run();
+
+  assert.equal(
+    statSync(join(migrations.dataDir, "migrations.json")).mode & 0o777,
+    0o600,
+  );
 });

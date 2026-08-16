@@ -17,18 +17,24 @@ type Rendered = { text: string; rows: unknown };
 
 test("userbot menu setup rejects exit 1 with a redacted error", async () => {
   const secret = "setup-stderr-secret";
+  let childDataDir: string | undefined;
   const exec = (
     _cmd: string,
     _args: string[],
-    _opts: { timeout: number; encoding: "utf8" },
+    opts: {
+      timeout: number;
+      encoding: "utf8";
+      env?: NodeJS.ProcessEnv;
+    },
     callback: ExecCallback,
   ) => {
+    childDataDir = opts.env?.ASSISTANT_DATA_DIR;
     const error = Object.assign(new Error(secret), { code: 1 });
     callback(error, "", secret);
   };
 
   await assert.rejects(
-    runSetupCommand("/iva/bin/iva.mjs", { exec }),
+    runSetupCommand("/iva/bin/iva.mjs", { exec, dataDir: "/iva/runtime" }),
     (error: unknown) => {
       assert.ok(error instanceof Error);
       assert.equal(error.message, "userbot setup failed (exit 1)");
@@ -36,6 +42,7 @@ test("userbot menu setup rejects exit 1 with a redacted error", async () => {
       return true;
     },
   );
+  assert.equal(childDataDir, "/iva/runtime");
 });
 
 test("userbot menu renders the shared Telethon authorization state", async () => {

@@ -64,6 +64,7 @@ type UpdateTransaction = {
   git(...args: string[]): Promise<CommandResult>;
   run(command: string, args: string[]): Promise<CommandResult>;
   backupOutput(): void;
+  adoptOutput(): void;
   rollback(): Promise<unknown>;
   commit(): Promise<void>;
   teardownCandidate(): Promise<unknown>;
@@ -417,6 +418,7 @@ export function createUpdateCommand({
         }
         tx.backupOutput();
         const build = await tx.run(NPM, ["run", "build"]);
+        tx.adoptOutput();
         if (build.code !== 0) throw new Error("build failed");
       }
 

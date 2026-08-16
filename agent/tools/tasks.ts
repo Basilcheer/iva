@@ -7,10 +7,11 @@ import {
   releaseLock,
   saveJsonAtomic,
 } from "../lib/json-store.js";
+import { dataDir } from "../lib/data-dir.js";
 
 // Хранилище задач — простой JSON-файл на диске app-runtime (на VPS переживает рестарты).
 // Путь настраивается через ASSISTANT_DATA_DIR; по умолчанию ./data рядом с процессом.
-const DATA_DIR = process.env.ASSISTANT_DATA_DIR ?? "data";
+const DATA_DIR = dataDir();
 const FILE = join(DATA_DIR, "tasks.json");
 const LOCK = `${FILE}.lock`;
 

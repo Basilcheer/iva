@@ -108,6 +108,7 @@ function runtimeFixture({
       }),
     systemd,
     readEnv: () => ({ ...env }),
+    dataDirAbs: () => `${ROOT}/data`,
     writeEnvVars:
       writeEnvVars ?? ((vars) => events.push(`env:${JSON.stringify(vars)}`)),
   };
@@ -508,8 +509,11 @@ void test("cmdUserbot preserves credentials, health, off, and unknown-command be
     env: { TELEGRAM_MCP_PORT: "9999" },
     writeEnvVars: (vars) => writes.push(vars),
   });
-  const healthCalls: Array<{ readonly root: string; readonly port: string }> =
-    [];
+  const healthCalls: Array<{
+    readonly root: string;
+    readonly dataDir: string;
+    readonly port: string;
+  }> = [];
   const logs: string[] = [];
   const commands = createUserbotCommands(
     runtime,
@@ -537,8 +541,8 @@ void test("cmdUserbot preserves credentials, health, off, and unknown-command be
   await commands.cmdUserbot(["diagnose", "--json", "ignored"]);
   await commands.cmdUserbot([]);
   assert.deepEqual(healthCalls, [
-    { root: ROOT, port: "9999" },
-    { root: ROOT, port: "9999" },
+    { root: ROOT, dataDir: `${ROOT}/data`, port: "9999" },
+    { root: ROOT, dataDir: `${ROOT}/data`, port: "9999" },
   ]);
   assert.deepEqual(logs, [
     '{"state":"ready","reason":"ok"}',

@@ -149,3 +149,19 @@ void test("userbot health reports ready from the existing proxy session", async 
 
   assert.deepEqual(health, { state: "ready", reason: "ok" });
 });
+
+void test("userbot health reads the token from the canonical data directory", async () => {
+  let readFrom = "";
+  const health = await probeUserbotHealth({
+    dataDir: "/synthetic/iva/runtime",
+    runSystemctl: activeSystemd,
+    readToken: (dataDir) => {
+      readFrom = dataDir;
+      return Promise.resolve("local-token");
+    },
+    fetchImpl: () => Promise.resolve(response(200, { state: "ready" })),
+  });
+
+  assert.equal(readFrom, "/synthetic/iva/runtime");
+  assert.deepEqual(health, { state: "ready", reason: "ok" });
+});

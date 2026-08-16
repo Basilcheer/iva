@@ -230,6 +230,7 @@ INSTALL_ENV_BACKUP=""
 INSTALL_OUTPUT_BACKUP=""
 INSTALL_UNTRACKED_LIST=""
 INSTALL_LOCK=""
+INSTALL_DATA=""
 # Set once the checkout is known to hold the user's own state again — after a clean
 # rollback, or after a finished install. Only then are the stash entry and the backup
 # ref duplicates that may be dropped.
@@ -240,8 +241,22 @@ INSTALL_TREE_RESTORED=false
 # because creating one is atomic everywhere. A lock whose owner is gone is taken over -
 # a run killed by a power cut must not leave the installation unusable.
 acquire_install_lock() {
-  local lock="$PROJECT_DIR/data/install.lock" owner=""
-  mkdir -p "$PROJECT_DIR/data" 2>/dev/null || true
+  local lock owner=""
+  INSTALL_DATA="$(
+    cd "$PROJECT_DIR"
+    node --input-type=module -e '
+import { loadEnvFile } from "node:process";
+import { join } from "node:path";
+import { resolveDataDir } from "./packages/data-dir/index.ts";
+const root = process.argv[1];
+delete process.env.ASSISTANT_DATA_DIR;
+try { loadEnvFile(join(root, ".env")); }
+catch (cause) { if (cause?.code !== "ENOENT") throw cause; }
+process.stdout.write(resolveDataDir(root, process.env.ASSISTANT_DATA_DIR));
+' "$PROJECT_DIR"
+  )"
+  lock="$INSTALL_DATA/install.lock"
+  mkdir -p "$INSTALL_DATA" 2>/dev/null || true
   if ! mkdir "$lock" 2>/dev/null; then
     # Not a rival installer at all — the directory could not be created here. The lock is a
     # guard rail, not a requirement, so say so and get on with the install.
@@ -295,7 +310,7 @@ prepare_install_update() {
   # copy of .env in data/update-backups/ for the same reason — a world-readable directory
   # is no place for the file that holds every key. git ignores data/, so the copies never
   # reach a stash either.
-  backups="$PROJECT_DIR/data/update-backups"
+  backups="$INSTALL_DATA/update-backups"
   if ! (mkdir -p "$backups" 2>/dev/null && chmod 700 "$backups" 2>/dev/null); then
     backups=""
   fi
@@ -1112,26 +1127,12 @@ mkdir -p "$HOME/.local/bin"
 # Path resolution only, so the same shim keeps working once the install moves to
 # ~/iva/versions/<version> behind the `current` symlink - and keeps working even if
 # that symlink is lost, which is what makes `iva update` able to repair it.
-{
-  printf '#!/bin/sh\n'
-  printf 'IVA_ROOT="%s"\n' "$PROJECT_DIR"
-  printf 'if [ -f "$IVA_ROOT/current/bin/iva.mjs" ]; then\n'
-  printf '  IVA_ROOT="$IVA_ROOT/current"\n'
-  printf 'elif [ ! -f "$IVA_ROOT/bin/iva.mjs" ]; then\n'
-  printf '  settled=$(sed -n '\''s/.*"version":"\\([^"]*\\)".*/\\1/p'\'' "$IVA_ROOT/data/active.json" 2>/dev/null)\n'
-  printf '  if [ -n "$settled" ] && [ -f "$IVA_ROOT/versions/$settled/bin/iva.mjs" ]; then\n'
-  printf '    IVA_ROOT="$IVA_ROOT/versions/$settled"\n'
-  printf '  else\n'
-  printf '    for candidate in $(ls -t "$IVA_ROOT/versions" 2>/dev/null); do\n'
-  printf '      [ -f "$IVA_ROOT/versions/$candidate/bin/iva.mjs" ] || continue\n'
-  printf '      IVA_ROOT="$IVA_ROOT/versions/$candidate"\n'
-  printf '      break\n'
-  printf '    done\n'
-  printf '  fi\n'
-  printf 'fi\n'
-  printf 'exec "%s" "$IVA_ROOT/bin/iva.mjs" "$@"\n' "$(command -v node)"
-} > "$HOME/.local/bin/iva"
-chmod +x "$HOME/.local/bin/iva"
+node --input-type=module -e '
+import { refreshOwnedShim } from "./scripts/lib/version-layout.ts";
+import { layoutFor } from "./scripts/lib/version-store.ts";
+const [home, target] = process.argv.slice(1);
+refreshOwnedShim(target, home, process.execPath, layoutFor(home).data);
+' "$PROJECT_DIR" "$HOME/.local/bin/iva"
 case ":$PATH:" in
   *":$HOME/.local/bin:"*) ok "$(t "The iva command is ready — try: iva help" "Команда iva готова — попробуй: iva help")" ;;
   *) warn "$(t "Add ~/.local/bin to PATH to call iva directly (or: \$HOME/.local/bin/iva help)" "Добавь ~/.local/bin в PATH, чтобы звать iva напрямую (или: \$HOME/.local/bin/iva help)")" ;;

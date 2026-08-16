@@ -9,6 +9,7 @@ import {
   type ChildProcess,
   type SpawnOptions,
 } from "node:child_process";
+import { resolveDataDir } from "./data-dir.ts";
 import { readFileSync } from "node:fs";
 import {
   acquireFileLock,
@@ -297,7 +298,13 @@ export async function runScheduledJob(
         // group (killImpl(-pid, ...) below) reaches flock AND the node it forked.
         child = spawnImpl(cmd, args, {
           cwd: root,
-          env,
+          env: {
+            ...env,
+            ASSISTANT_DATA_DIR: resolveDataDir(
+              root ?? process.cwd(),
+              env.ASSISTANT_DATA_DIR,
+            ),
+          },
           stdio: ["ignore", "pipe", "pipe"],
           detached: true,
         });

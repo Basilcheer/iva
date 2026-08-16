@@ -33,11 +33,18 @@ type Menu = {
 type Callback = {
   id: string;
   from: { id: string };
-  message: { chat: { id: number }; message_id: number };
+  message: { chat: { id: number; type?: string }; message_id: number };
   data: string;
 };
+type CallbackOptions = {
+  from?: string;
+  chat?: number;
+  chatType?: string | null;
+  messageId?: number;
+  id?: string;
+};
 type TextMessage = {
-  chat: { id: number };
+  chat: { id: number; type?: string };
   from: { id: number };
   message_id: number;
   text: string;
@@ -52,7 +59,7 @@ type Screen = {
     state: MenuState,
     context: ScreenContext,
   ) => { text: string; rows: Array<Array<Record<string, unknown>>> };
-  on: (verb: string, args: string[]) => void;
+  on: (verb: string, args: string[]) => unknown;
   texts: {
     demo: (
       text: string,
@@ -151,6 +158,7 @@ function setup({ allowed = new Set(["20"]) }: { allowed?: Set<string> } = {}) {
     reply: (chatId: number, text: string) =>
       Promise.resolve(replies.push({ chatId, text })),
     deliver: () => Promise.resolve(),
+    admitSynthetic: () => Promise.resolve(true),
     log: () => {},
     allowed,
     handleModelCmd: (chatId: number, from: string, opts: { msgId: number }) =>
@@ -174,11 +182,20 @@ function setup({ allowed = new Set(["20"]) }: { allowed?: Set<string> } = {}) {
 
 const cb = (
   data: string,
-  { from = "20", chat = 10, messageId = 100, id = "cq" } = {},
+  {
+    from = "20",
+    chat = 10,
+    chatType = "private",
+    messageId = 100,
+    id = "cq",
+  }: CallbackOptions = {},
 ): Callback => ({
   id,
   from: { id: from },
-  message: { chat: { id: chat }, message_id: messageId },
+  message: {
+    chat: { id: chat, ...(chatType === null ? {} : { type: chatType }) },
+    message_id: messageId,
+  },
   data,
 });
 
@@ -210,6 +227,21 @@ test("грамматика: многоаргументный верб q:<i>:<v> 
   const st = await menu.open(10, "20");
   await menu.onCallback(cb("iva_menu:chr:q:3:1", { messageId: st.msgId }));
   assert.deepEqual(log.on.at(-1), { sid: "chr", verb: "q", args: ["3", "1"] });
+});
+
+test("data-верб возвращает явный false/true proof экранного обработчика", async () => {
+  const { menu, screens } = setup();
+  const st = await menu.open(10, "20");
+  screens.core.on = () => false;
+  assert.equal(
+    await menu.onCallback(cb("iva_menu:core:fin", { messageId: st.msgId })),
+    false,
+  );
+  screens.core.on = () => true;
+  assert.equal(
+    await menu.onCallback(cb("iva_menu:core:fin", { messageId: st.msgId })),
+    true,
+  );
 });
 
 test("навигация o переключает st.screen и рендерит целевой экран", async () => {
@@ -247,7 +279,7 @@ test("после NAV-верба обычное сообщение НЕ пере�
   await menu.onCallback(cb("iva_menu:ub:o", { messageId: st.msgId })); // «Отмена»/«Назад» = o
   await menu.onText(
     {
-      chat: { id: 10 },
+      chat: { id: 10, type: "private" },
       from: { id: 20 },
       message_id: 950,
       text: "обычный вопрос",
@@ -266,6 +298,29 @@ test("stale: нет стейта, o-верб УСЫНОВЛЯЕТ тапнуто
   assert.equal(st.msgId, 555);
   assert.equal(st.screen, "srch");
   assert.equal(log.render.at(-1), "srch");
+});
+
+test("stale group callback is acknowledged without adopting state or dispatching", async () => {
+  for (const chatType of ["group", "supergroup", "channel", null]) {
+    const { menu, flows, calls, log } = setup();
+    const result = await menu.onCallback(
+      cb("iva_menu:srch:o", {
+        chat: -10,
+        chatType,
+        messageId: 555,
+      }),
+    );
+
+    assert.equal(result, true, String(chatType));
+    assert.equal(flows.get(-10, "20"), null, String(chatType));
+    assert.deepEqual(log.render, [], String(chatType));
+    assert.deepEqual(log.on, [], String(chatType));
+    assert.deepEqual(
+      calls.map((call) => call.method),
+      ["answerCallbackQuery"],
+      String(chatType),
+    );
+  }
 });
 
 test("stale: нет стейта, data-верб -> «устарело» (editMessageText), без диспатча в on", async () => {
@@ -371,7 +426,7 @@ test("onText secret: удаляет сообщение ПЕРВЫМ, затем 
   st.awaitText = { kind: "demo", secret: true, data: {} };
   await menu.onText(
     {
-      chat: { id: 10 },
+      chat: { id: 10, type: "private" },
       from: { id: 20 },
       message_id: 900,
       text: "SECRETKEY123",
@@ -391,7 +446,12 @@ test("onText не-secret: сообщение НЕ удаляется, обраб
   st.screen = "core";
   st.awaitText = { kind: "demo", secret: false, data: {} };
   await menu.onText(
-    { chat: { id: 10 }, from: { id: 20 }, message_id: 902, text: "мой ответ" },
+    {
+      chat: { id: 10, type: "private" },
+      from: { id: 20 },
+      message_id: 902,
+      text: "мой ответ",
+    },
     st,
   );
   assert.ok(!calls.some((c) => c.method === "deleteMessage"));
@@ -404,11 +464,41 @@ test("onText: команда прерывает ожидание (flows.end), о
   st.screen = "srch";
   st.awaitText = { kind: "demo", secret: true, data: {} };
   await menu.onText(
-    { chat: { id: 10 }, from: { id: 20 }, message_id: 903, text: "/help" },
+    {
+      chat: { id: 10, type: "private" },
+      from: { id: 20 },
+      message_id: 903,
+      text: "/help",
+    },
     st,
   );
   assert.equal(flows.get(10, "20"), null); // стейт снят
   assert.equal(log.texts.length, 0);
+});
+
+test("group text cannot mutate a pending menu setting", async () => {
+  for (const chatType of ["group", "supergroup", "channel", undefined]) {
+    const { menu, calls, log } = setup();
+    const st = await menu.open(-10, "20");
+    st.screen = "srch";
+    st.awaitText = { kind: "demo", secret: true, data: {} };
+
+    await menu.onText(
+      {
+        chat: { id: -10, type: chatType },
+        from: { id: 20 },
+        message_id: 904,
+        text: "synthetic-setting",
+      },
+      st,
+    );
+
+    assert.deepEqual(log.texts, [], String(chatType));
+    assert.ok(
+      !calls.some((call) => call.method === "deleteMessage"),
+      String(chatType),
+    );
+  }
 });
 
 // Кнопка корня, чей sid не зарегистрирован в SCREENS, в Telegram превращается в вечный

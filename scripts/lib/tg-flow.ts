@@ -49,6 +49,14 @@ type CreateFlowsOptions = {
   log?: () => void;
 };
 
+function messageResultSucceeded(value: TelegramFlowResponse): boolean {
+  return (
+    value.ok === true &&
+    typeof (value.result as { message_id?: unknown } | undefined)
+      ?.message_id === "number"
+  );
+}
+
 // tg(method, params) -> { ok, result, description } (тонкая обёртка над Bot API моста).
 // log принимается по контракту для будущих обработчиков; примитивы ниже не логируют —
 // поведение обязано остаться дословным (тихий фолбэк при неудачной правке).
@@ -113,11 +121,11 @@ export function createFlows({ tg, log = () => {} }: CreateFlowsOptions) {
   }
 
   // wizScreen :393 — правит единственное сообщение флоу на месте (первый раз шлёт).
-  async function screen(
+  async function screenWithResult(
     st: TelegramFlowState,
     text: string,
     rows?: TelegramKeyboard | null,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const reply_markup = rows ? { inline_keyboard: rows } : undefined;
     if (st.msgId) {
       const r = await tg("editMessageText", {
@@ -127,7 +135,8 @@ export function createFlows({ tg, log = () => {} }: CreateFlowsOptions) {
         reply_markup,
       });
       // «message is not modified» = двойной тап перерисовал тот же экран — это успех, не сбой.
-      if (r.ok || /not modified/i.test(r.description || "")) return;
+      if (r.ok) return messageResultSucceeded(r);
+      if (/not modified/i.test(r.description || "")) return true;
       // правка не удалась (сообщение слишком старое / удалено) — падаем на свежее сообщение
     }
     const r = await tg("sendMessage", {
@@ -135,11 +144,31 @@ export function createFlows({ tg, log = () => {} }: CreateFlowsOptions) {
       text,
       reply_markup,
     });
-    if (r.ok) st.msgId = r.result!.message_id;
+    const succeeded = messageResultSucceeded(r);
+    if (succeeded) st.msgId = r.result!.message_id;
+    return succeeded;
+  }
+
+  async function screen(
+    st: TelegramFlowState,
+    text: string,
+    rows?: TelegramKeyboard | null,
+  ): Promise<void> {
+    await screenWithResult(st, text, rows);
   }
 
   // endWizard :406 — снимает стейт и показывает финальный экран. НОВОЕ: опциональные
   // rows (терминальный экран может нести кнопку «‹ Меню» — возврат в меню).
+  async function endWithResult(
+    st: TelegramFlowState,
+    text: string,
+    rows?: TelegramKeyboard | null,
+  ): Promise<boolean> {
+    const succeeded = await screenWithResult(st, text, rows);
+    if (succeeded) flows.delete(key(st.chatId, st.userId));
+    return succeeded;
+  }
+
   async function end(
     st: TelegramFlowState,
     text: string,
@@ -149,5 +178,14 @@ export function createFlows({ tg, log = () => {} }: CreateFlowsOptions) {
     await screen(st, text, rows);
   }
 
-  return { key, get, start, touch, screen, end };
+  return {
+    key,
+    get,
+    start,
+    touch,
+    screen,
+    end,
+    screenWithResult,
+    endWithResult,
+  };
 }

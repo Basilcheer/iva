@@ -34,6 +34,7 @@ import { downloadTelegramFile, edit, reply, sc, tg } from "./transport.ts";
 import { chatKey } from "./offset.ts";
 import { performScopedReset } from "./queue.ts";
 import { deliverDirectUpdate } from "./routing.ts";
+import { parseUpdateCallbackData } from "./update-callback.ts";
 import { handleUpdateCallback, handleUpdateCheck } from "./update-flow.ts";
 import {
   endWizard,
@@ -46,6 +47,8 @@ import {
   resetMessageCopy,
 } from "./wizards.ts";
 import { createMenu } from "../lib/menu/index.ts";
+import { admitTelegramUpdate } from "./inbox.ts";
+import { isPrivateTelegramChat } from "#lib/telegram-private-chat.ts";
 
 type ControlCallbackQuery = TelegramCallbackQuery & { data: string };
 type PendingFlow = {
@@ -54,7 +57,7 @@ type PendingFlow = {
   [key: string]: unknown;
 };
 type AwaitText = { file?: boolean; kind?: string; secret?: boolean };
-type TelegramResult = { ok?: boolean };
+type TelegramResult = { ok?: boolean; result?: unknown };
 type SentMessage = { message_id: number };
 type ErrorDetails = { message?: unknown; resetPhase?: unknown };
 type NonTextIo = {
@@ -122,6 +125,19 @@ function hasCallbackData(
   return typeof callback.data === "string";
 }
 
+function telegramCallSucceeded(value: unknown): boolean {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as TelegramResult).ok === true &&
+    (value as TelegramResult).result === true
+  );
+}
+
+function replySucceeded(value: SentMessage | null | undefined): boolean {
+  return typeof value?.message_id === "number";
+}
+
 function isTelegramFlowState(value: PendingFlow): value is TelegramFlowState {
   return (
     typeof value.flow === "string" &&
@@ -172,6 +188,14 @@ const answerCallback = (callbackQueryId: string, text?: string) =>
     return { ok: false };
   });
 
+const privateChatOnlyText = () =>
+  tr(
+    "Open a private chat with me to use this control.",
+    "Открой личный чат со мной, чтобы использовать это управление.",
+  );
+
+const PRIVATE_ONLY_COMMANDS = new Set(["/menu", "/model", "/think"]);
+
 // ⏹ Стоп: кнопка статус-сообщения и /stop. В long-poll обе двери ведут сюда, в мост:
 // он перехватывает апдейт раньше любой доставки, поэтому «Стоп» доходит и до занятого
 // агента. Решение «есть ли что останавливать» и сам POST на cancel-роут живут в
@@ -215,6 +239,10 @@ const menu = createMenu({
     // с обычной прямой доставкой, но намеренно не проходит busy-time FIFO.
     deliver: (update) =>
       deliverDirectUpdate(update).then((result) => result === "delivered"),
+    admitSynthetic: (update) =>
+      admitTelegramUpdate(update, { trustedLocal: true }).then(
+        (result) => result === "owned",
+      ),
     log,
     allowed: ALLOWED,
     handleModelCmd,
@@ -348,6 +376,23 @@ async function handleControl(
   const cq = update.callback_query;
   if (cq && hasCallbackData(cq)) {
     const callback = cq;
+    const updateCallback = parseUpdateCallbackData(callback.data);
+    const isLocalCallback =
+      callback.data === TELEGRAM_STOP_CALLBACK ||
+      updateCallback !== null ||
+      callback.data.startsWith("iva_model:") ||
+      callback.data.startsWith("iva_think:") ||
+      callback.data.startsWith("iva_menu:");
+    const callbackFrom = String(callback.from?.id ?? "");
+    const callbackAllowed = ALLOWED.size > 0 && ALLOWED.has(callbackFrom);
+    if (
+      isLocalCallback &&
+      callbackAllowed &&
+      !isPrivateTelegramChat(callback.message?.chat)
+    ) {
+      await ackImpl(callback.id, privateChatOnlyText()).catch(() => {});
+      return true;
+    }
     // ⏹ Стоп у статус-сообщения. Тап никогда не уходит в eve: колбэк наш, а отмену
     // мост делает сам через cancel-роут канала. У канала есть свой обработчик той же
     // кнопки (agent/lib/telegram-stop.ts), но он для webhook-режима, где моста нет:
@@ -359,29 +404,29 @@ async function handleControl(
       const from = String(callback.from?.id ?? "");
       // Чужой тап в группе: гасим спиннер молча и ничего не отменяем.
       if (ALLOWED.size === 0 || !ALLOWED.has(from)) {
-        await ackImpl(callback.id);
-        return true;
+        return telegramCallSucceeded(await ackImpl(callback.id));
       }
       const outcome = await requestTurnStop(update, { cancelImpl });
-      await ackImpl(callback.id, stopOutcomeText(outcome));
-      return true;
+      const acknowledged = telegramCallSucceeded(
+        await ackImpl(callback.id, stopOutcomeText(outcome)),
+      );
+      return outcome === "requested" || acknowledged;
     }
-    if (callback.data.startsWith("iva_update:"))
-      return handleUpdateCallback(callback);
-    // Wizard errors must not escape: an uncaught throw would crash the bridge and
-    // re-poll the update after restart. Consume the tap either way.
+    if (updateCallback !== null) return handleUpdateCallback(callback);
+    // Wizard errors must not escape and crash the bridge. A failed handler returns
+    // false so the callback enters durable inbox ownership before offset advances.
     if (
       callback.data.startsWith("iva_model:") ||
       callback.data.startsWith("iva_think:")
     ) {
       return handleWizardCallback(callback).catch((e: unknown) => {
         log("wizard callback error:", errorDetails(e).message);
-        return true;
+        return false;
       });
     }
     // /menu: тот же принцип consume-on-error — тап меню всегда проглатывается (в eve не уходит).
     if (callback.data.startsWith("iva_menu:")) {
-      return menu.onCallback(callback).catch((e: unknown) => {
+      return menu.onCallback(callback, update.update_id).catch((e: unknown) => {
         log("menu callback error:", errorDetails(e).message);
         return true;
       });
@@ -395,7 +440,7 @@ async function handleControl(
   // (below), so a capture works even mid-turn. Non-text is intercepted only while awaiting a SECRET
   // (or a file-capable secret): a document/photo could be the secret itself and must not reach eve.
   // A non-secret await (e.g. the memory interview) lets a non-text message fall through unchanged.
-  if (msg?.from) {
+  if (msg?.from && isPrivateTelegramChat(msg.chat)) {
     const pending = getWizard(msg.chat?.id, String(msg.from.id));
     const a = isAwaitText(pending?.awaitText) ? pending.awaitText : null;
     if (pending && a) {
@@ -440,7 +485,13 @@ async function handleControl(
   const from = String(msg?.from?.id ?? "");
   if (ALLOWED.size === 0 || !ALLOWED.has(from)) return false; // untrusted — let eve drop it
   const chatId = msg?.chat?.id;
-  if (chatId === undefined) return true;
+  if (chatId === undefined) return false;
+  if (PRIVATE_ONLY_COMMANDS.has(cmd) && !isPrivateTelegramChat(msg?.chat)) {
+    await replyImpl(chatId, privateChatOnlyText()).catch((e: unknown) =>
+      log("private-chat rejection failed:", errorMessage(e)),
+    );
+    return true;
+  }
   // /menu — open the nested settings menu (out-of-band; errors consumed, never reach eve).
   if (cmd === "/menu") {
     await menu
@@ -449,14 +500,12 @@ async function handleControl(
     return true;
   }
   if (cmd === "/help") {
-    await replyImpl(chatId, helpText());
-    return true;
+    return replySucceeded(await replyImpl(chatId, helpText()));
   }
   // /start — кнопка Start у нового пользователя. Без этой ветки приветствие уходило
   // обычным ходом в модель: платный запрос ради «привет». Отвечает мост, out-of-band.
   if (cmd === "/start") {
-    await replyImpl(chatId, startText());
-    return true;
+    return replySucceeded(await replyImpl(chatId, startText()));
   }
   // /stop — interrupt the current turn, the same door as the ⏹ Stop button.
   // Out-of-band so it reaches a busy agent (an ordinary message would be queued by
@@ -464,9 +513,8 @@ async function handleControl(
   if (cmd === "/stop") {
     const outcome = await requestTurnStop(update, { cancelImpl });
     // Успех виден по статус-сообщению: turn.cancelled перепишет его на «Остановлено».
-    if (outcome !== "requested")
-      await replyImpl(chatId, stopOutcomeText(outcome));
-    return true;
+    if (outcome === "requested") return true;
+    return replySucceeded(await replyImpl(chatId, stopOutcomeText(outcome)));
   }
   // /usage — token spend from data/usage.jsonl. Out-of-band and FREE (we don't call the model).
   if (cmd === "/usage") {
@@ -477,29 +525,32 @@ async function handleControl(
         now: Date.now(),
         tz: process.env.ASSISTANT_TIMEZONE,
       });
-      await replyTo(chatId, formatUsageReport(agg));
+      return replySucceeded(await replyTo(chatId, formatUsageReport(agg)));
     } catch (e: unknown) {
-      await replyTo(chatId, "Couldn't read the usage log: " + errorMessage(e));
+      return replySucceeded(
+        await replyTo(
+          chatId,
+          "Couldn't read the usage log: " + errorMessage(e),
+        ),
+      );
     }
-    return true;
   }
   // /update — check upstream; if newer, offer inline Update/Skip buttons. Out-of-band.
   if (cmd === "/update") {
-    await handleUpdateCheck(chatId);
-    return true;
+    return handleUpdateCheck(chatId);
   }
   // /model, /think — provider/model/effort wizard (writes .env; applied on restart).
   if (cmd === "/model") {
-    await handleModelCmd(chatId, from).catch((e: unknown) =>
-      log("wizard /model error:", errorDetails(e).message),
-    );
-    return true;
+    return handleModelCmd(chatId, from).catch((e: unknown) => {
+      log("wizard /model error:", errorDetails(e).message);
+      return false;
+    });
   }
   if (cmd === "/think") {
-    await handleThinkCmd(chatId, from).catch((e: unknown) =>
-      log("wizard /think error:", errorDetails(e).message),
-    );
-    return true;
+    return handleThinkCmd(chatId, from).catch((e: unknown) => {
+      log("wizard /think error:", errorDetails(e).message);
+      return false;
+    });
   }
   // /new retires only this exact Telegram session. /restart does the same first,
   // then restarts the agent process; histories and queues of other chats survive.
@@ -524,7 +575,7 @@ async function handleControl(
         ),
       );
     }
-    return true;
+    return replySucceeded(status);
   }
 
   const clearsPrivateQueue = msg?.chat?.type === "private";

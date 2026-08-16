@@ -32,6 +32,7 @@ import {
   CANONICAL_REASONING_EFFORTS,
   FALLBACK_REASONING_EFFORTS,
 } from "./reasoning-levels.ts";
+import { resolveDataDir } from "./data-dir.ts";
 
 export type { CodexAuth };
 
@@ -73,7 +74,7 @@ const DEVICE_PORT = 1455; // codex-совместимый redirect-порт (fal
 const FALLBACK_PORT = 1457;
 
 const b64url = (buf: string | Buffer) => Buffer.from(buf).toString("base64url");
-const defaultDir = () => process.env.ASSISTANT_DATA_DIR || "data";
+const defaultDir = () => resolveDataDir(process.cwd());
 const MODELS_FETCH_TIMEOUT_MS = 10_000;
 // Язык подсказок входа (en по умолчанию — как у codex CLI). Мастер/CLI прокидывают lang.
 const tr = (lang: string, en: string, ru: string) => (lang === "ru" ? ru : en);

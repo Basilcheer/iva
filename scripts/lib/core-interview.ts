@@ -8,8 +8,12 @@
 // ива своими write-инструментами, получив buildDistillMessage. Так лимит и «не выдумывай»
 // остаются заботой модели, а мост не знает про формат ядра.
 
-import { mkdir, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { writeFileAtomic } from "#lib/fs-atomic.ts";
+
+const RECOVERY_PREFIX = "<!-- iva-core-distillation:v1:";
+const RECOVERY_SUFFIX = " -->";
 
 // Шесть тем ядра памяти (см. план: обращение · занятие · город/ритм · люди/контекст ·
 // приоритеты · антипаттерны). Вопросы-приглашения к свободному тексту, оба языка рядом —
@@ -88,6 +92,7 @@ const orDash = (v: unknown): string => {
 export async function saveInterview(
   vaultDir: string,
   qa: unknown,
+  recovery?: unknown,
 ): Promise<string> {
   const items = Array.isArray(qa) ? qa : [];
   const stamp = new Date().toISOString(); // машинная дата в UTC — архив не для глаз, для ивы
@@ -97,11 +102,39 @@ export async function saveInterview(
       return `## ${orDash(q)}\n\n${orDash(a)}`;
     })
     .join("\n\n");
-  const md = `# Core interview — ${stamp}\n\n${body}\n`;
-  await mkdir(vaultDir, { recursive: true });
+  const recoveryLine =
+    recovery === undefined
+      ? ""
+      : `\n${RECOVERY_PREFIX}${Buffer.from(JSON.stringify(recovery)).toString("base64url")}${RECOVERY_SUFFIX}\n`;
+  const md = `# Core interview — ${stamp}\n\n${body}\n${recoveryLine}`;
   const file = join(vaultDir, "core-interview.md");
-  await writeFile(file, md, "utf8");
+  await writeFileAtomic(file, md);
   return file;
+}
+
+export async function readInterviewRecovery(
+  vaultDir: string,
+): Promise<unknown> {
+  let raw: string;
+  try {
+    raw = await readFile(join(vaultDir, "core-interview.md"), "utf8");
+  } catch (error) {
+    if ((error as { code?: unknown }).code === "ENOENT") return null;
+    throw error;
+  }
+  const line = raw.trimEnd().split("\n").at(-1) ?? "";
+  if (!line.startsWith(RECOVERY_PREFIX) || !line.endsWith(RECOVERY_SUFFIX)) {
+    return null;
+  }
+  const encoded = line.slice(RECOVERY_PREFIX.length, -RECOVERY_SUFFIX.length);
+  if (!/^[A-Za-z0-9_-]+$/u.test(encoded)) return null;
+  try {
+    return JSON.parse(
+      Buffer.from(encoded, "base64url").toString("utf8"),
+    ) as unknown;
+  } catch {
+    return null;
+  }
 }
 
 // Синтетическое сообщение «от имени юзера»: мост шлёт его иве вместо реального текста,

@@ -24,9 +24,8 @@ Env:
   TELEGRAM_MCP_TOKEN  bearer secret; every request must send `Authorization: Bearer <token>`
   TELEGRAM_API_ID / TELEGRAM_API_HASH     from my.telegram.org (required)
   TELEGRAM_SESSION_FILE  path to the SQLite session file. Default: <iva_root>/data/
-                         telegram-userbot.session, beside the proxy token. Only this
-                         variable or an ABSOLUTE ASSISTANT_DATA_DIR moves it; a relative
-                         ASSISTANT_DATA_DIR is ignored here (the session follows the token).
+                         telegram-userbot.session, beside the proxy token. The production
+                         unit passes ASSISTANT_DATA_DIR as one canonical absolute path.
 """
 import os
 import shutil
@@ -55,41 +54,43 @@ def _root_dir() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
+def _data_dir() -> Path:
+    """Trust the canonical absolute path supplied by the production unit.
+
+    Missing configuration preserves direct legacy invocations. A relative value is a
+    broken process boundary: fail instead of silently selecting another directory.
+    """
+    data_dir = (os.getenv("ASSISTANT_DATA_DIR") or "").strip()
+    if data_dir:
+        if not os.path.isabs(data_dir):
+            _fail("ASSISTANT_DATA_DIR must be a canonical absolute path")
+        return Path(data_dir)
+    return _root_dir() / "data"
+
+
 def _session_file() -> Path:
     explicit = os.getenv("TELEGRAM_SESSION_FILE")
     if explicit:
         return Path(explicit)
-    data_dir = os.getenv("ASSISTANT_DATA_DIR")
-    # Anchored like the token below, and for a harder reason: the unit runs this proxy
-    # from services/telegram-userbot inside the version directory, so a session resolved
-    # from the working directory is written where the next `iva update` retires it, and
-    # the account has to be linked by QR all over again.
-    #
-    # A RELATIVE ASSISTANT_DATA_DIR is ignored on purpose, and that is a real difference
-    # from the rest of the installation: elsewhere a relative value means <root>/<value>
-    # (scripts/lib/version-store.ts), while `iva userbot setup` writes the proxy token to
-    # <root>/data whatever it says. Session and token are one credential pair and have to
-    # stay in one directory, so both follow the anchor. An absolute value is honored: that
-    # is a state directory somebody moved deliberately, and it already outlives updates.
-    if data_dir and os.path.isabs(data_dir):
-        return Path(data_dir) / SESSION_NAME
-    return _root_dir() / "data" / SESSION_NAME
+    return _data_dir() / SESSION_NAME
 
 
 def _legacy_session_candidates() -> tuple[Path, ...]:
-    """Both cwd-relative places an older release resolved the session to, newest first.
+    """Places an older release resolved the session to, newest first.
 
     The unit's cwd is services/telegram-userbot. A session inside an already retired
     version directory is not reached from here, and was never reachable: it died with
     the version that held it, which is the bug the anchor above stops from recurring.
-    Checking only the one the CURRENT environment would produce misses the installation
-    that gained ASSISTANT_DATA_DIR after the account was already linked: its session
-    sits at the bare cwd path, the proxy would open an empty one beside it, and the
-    owner would be asked to scan a QR code for an account that is still authorized.
+    The old fixed <root>/data anchor comes first when C4 moves a configured installation.
+    Checking only the CURRENT environment also misses installations that gained
+    ASSISTANT_DATA_DIR after the account was linked: their session sits at the bare cwd.
     """
     here = Path.cwd()
     data_dir = os.getenv("ASSISTANT_DATA_DIR")
     candidates = []
+    old_anchor = _root_dir() / "data" / SESSION_NAME
+    if data_dir and os.path.isabs(data_dir) and Path(data_dir) != old_anchor.parent:
+        candidates.append(old_anchor)
     if data_dir and not os.path.isabs(data_dir):
         candidates.append(here / data_dir / SESSION_NAME)
     candidates.append(here / SESSION_NAME)
@@ -210,10 +211,9 @@ def _adopt_legacy_session(path: Path) -> None:
 
 
 def _token_file() -> Path:
-    # Anchored at <iva_root>/data so iva's connection (cwd = iva root) and this proxy
-    # (cwd = services/telegram-userbot) resolve the SAME file: services/telegram-userbot/
-    # serve.py → parents[2] = iva root. `iva userbot setup` writes it (0600).
-    return _root_dir() / "data" / "telegram-userbot.token"
+    # The token and Telethon session are one credential pair. The systemd boundary passes
+    # their canonical absolute directory, and both Python and TypeScript consume it.
+    return _data_dir() / "telegram-userbot.token"
 
 
 def _resolve_token() -> str:

@@ -55,12 +55,18 @@ class SessionFileTest(unittest.TestCase):
         with env(TELEGRAM_SESSION_FILE="/srv/keys/iva.session"):
             self.assertEqual(_session_file(), Path("/srv/keys/iva.session"))
 
-    def test_a_relative_data_dir_resolves_beside_the_installation(self):
-        # The unit runs the proxy from services/telegram-userbot, so a session read
-        # from the working directory dies with the version directory it sat in.
+    def test_a_relative_data_dir_fails_closed(self):
+        errors = io.StringIO()
         with tempfile.TemporaryDirectory() as tmp, working_directory(Path(tmp)):
-            with env(ASSISTANT_DATA_DIR="data"):
-                self.assertEqual(_session_file(), IVA_ROOT / "data" / SESSION_NAME)
+            alternate = Path(tmp) / "runtime" / SESSION_NAME
+            with (
+                env(ASSISTANT_DATA_DIR=" runtime "),
+                redirect_stderr(errors),
+                self.assertRaises(SystemExit),
+            ):
+                _session_file()
+            self.assertFalse(alternate.exists())
+        self.assertIn("must be a canonical absolute path", errors.getvalue())
 
     def test_no_data_dir_resolves_beside_the_installation(self):
         with tempfile.TemporaryDirectory() as tmp, working_directory(Path(tmp)):
@@ -86,7 +92,11 @@ class LegacyCandidateTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, working_directory(Path(tmp)):
             with env(ASSISTANT_DATA_DIR="/mnt/state"):
                 self.assertEqual(
-                    _legacy_session_candidates(), (Path(os.getcwd()) / SESSION_NAME,)
+                    _legacy_session_candidates(),
+                    (
+                        IVA_ROOT / "data" / SESSION_NAME,
+                        Path(os.getcwd()) / SESSION_NAME,
+                    ),
                 )
 
 
@@ -160,6 +170,24 @@ class AdoptLegacySessionTest(unittest.TestCase):
 
         self.assertEqual(self.new.read_text(), "newer")
         self.assertEqual((self.old / SESSION_NAME).read_text(), "older")
+
+    def test_canonical_custom_data_adopts_the_previous_fixed_anchor(self):
+        self.new.write_text("auth key")
+        custom = Path(self.tmp.name) / "runtime" / SESSION_NAME
+        custom.parent.mkdir()
+        errors = io.StringIO()
+
+        with (
+            mock.patch.object(serve, "_root_dir", return_value=Path(self.tmp.name)),
+            env(ASSISTANT_DATA_DIR=str(custom.parent)),
+            working_directory(self.old),
+            redirect_stderr(errors),
+        ):
+            _adopt_legacy_session(custom)
+
+        self.assertEqual(custom.read_text(), "auth key")
+        self.assertFalse(self.new.exists())
+        self.assertIn("session moved from", errors.getvalue())
 
     def test_keeps_the_anchored_session_when_both_exist(self):
         (self.old / SESSION_NAME).write_text("stale")

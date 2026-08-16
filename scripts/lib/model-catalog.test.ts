@@ -7,6 +7,7 @@ import {
   MODEL_PROVIDERS,
   resolveModelProvider,
 } from "#lib/model-provider.ts";
+import { ContextWindowConfigurationError } from "../../agent/lib/context-window.ts";
 import {
   CATALOG,
   catalogModel,
@@ -195,7 +196,7 @@ test("property: only the four exact names resolve to a provider", () => {
   );
 });
 
-test("property: modelSummary answers any environment with strings and never throws", () => {
+test("property: modelSummary returns a summary or the typed context-window error", () => {
   const anyValue = fc.option(fc.string({ unit: "binary" }), { nil: undefined });
   fc.assert(
     fc.property(
@@ -211,7 +212,13 @@ test("property: modelSummary answers any environment with strings and never thro
         { requiredKeys: [] },
       ),
       (env) => {
-        const summary = modelSummary(env);
+        let summary: ReturnType<typeof modelSummary>;
+        try {
+          summary = modelSummary(env);
+        } catch (error) {
+          assert.ok(error instanceof ContextWindowConfigurationError);
+          return;
+        }
         assert.equal(typeof summary.provider, "string");
         assert.equal(typeof summary.model, "string");
         assert.equal(summary.model.length > 0, true);

@@ -5,8 +5,8 @@
 //
 // Весь контент/скоринг — в quiz.ts; этот экран драйвит опрос вслепую (индексы вопросов и
 // ответов), поэтому смена формулировок/архетипов не трогает экран.
-import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { writeFileAtomic } from "#lib/fs-atomic.ts";
 import {
   QUIZ,
   QUIZ_ANSWERS,
@@ -146,11 +146,9 @@ export default {
       if (!code) return ctx.show(st, SID); // нечего применять — вернуться в интро
       const dir = vaultDir();
       try {
-        await mkdir(dir, { recursive: true });
-        await writeFile(
+        await writeFileAtomic(
           join(dir, "PERSONA.md"),
           personaMarkdown(code, ctx.getLang()),
-          "utf8",
         );
       } catch (error) {
         const message = errorMessage(error);

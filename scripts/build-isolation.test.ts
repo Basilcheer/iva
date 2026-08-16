@@ -29,6 +29,10 @@ writeFileSync(
   join(process.cwd(), ".output/app.mjs"),
   "import " + JSON.stringify(join(process.cwd(), "agent/agent.ts")) + ";\\n",
 );
+writeFileSync(
+  join(process.cwd(), ".output/data-dir.txt"),
+  process.env.ASSISTANT_DATA_DIR ?? "",
+);
 `;
 
 const worlds: string[] = [];
@@ -52,6 +56,9 @@ function plantTree(root: string): void {
   cpSync(join(REPO, "scripts/lib"), join(root, "scripts/lib"), {
     recursive: true,
     filter: (source) => !source.endsWith(".test.ts"),
+  });
+  cpSync(join(REPO, "packages/data-dir"), join(root, "packages/data-dir"), {
+    recursive: true,
   });
   writeFileSync(join(root, "scripts/core-build.mjs"), CORE);
   mkdirSync(join(root, "agent/skills/mine"), { recursive: true });
@@ -97,14 +104,37 @@ function git(cwd: string, args: readonly string[]): string {
   }).trim();
 }
 
-function build(root: string): { status: number | null; output: string } {
+function build(
+  root: string,
+  configuredDataDir?: string,
+): { status: number | null; output: string } {
   const result = spawnSync(process.execPath, [join(root, "scripts/build.ts")], {
     cwd: root,
     encoding: "utf8",
-    env: { ...process.env, NO_COLOR: "1" },
+    env: {
+      ...process.env,
+      NO_COLOR: "1",
+      ...(configuredDataDir === undefined
+        ? {}
+        : { ASSISTANT_DATA_DIR: configuredDataDir }),
+    },
   });
   return { status: result.status, output: `${result.stdout}${result.stderr}` };
 }
+
+test("the staging build receives the installation's canonical data directory", () => {
+  const home = join(world(), "iva");
+  const version = join(home, "versions/0.3.15-0123456789ab");
+  mkdirSync(version, { recursive: true });
+  plantTree(version);
+
+  const built = build(version, " runtime ");
+  assert.equal(built.status, 0, built.output);
+  assert.equal(
+    readFileSync(join(version, ".output/data-dir.txt"), "utf8"),
+    join(home, "runtime"),
+  );
+});
 
 test("a checkout still builds through the custom layer it owns", () => {
   const home = join(world(), "iva");
