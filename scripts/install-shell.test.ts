@@ -15,6 +15,7 @@ import {
   readdirSync,
   realpathSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -33,6 +34,116 @@ const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const RECORDER = `#!/bin/sh
 echo "$(basename "$0") $*" >> "$IVA_TEST_CALLS"
 exit 0
+`;
+
+/** sudo records root calls and models only D13's private cleanup and failure boundary. */
+const SUDO = `#!/bin/sh
+echo "sudo $*" >> "$IVA_TEST_CALLS"
+
+replace_managed_path() {
+  [ -n "$IVA_TEST_REPLACE_GH_PATH" ] || return
+  marker="$IVA_TEST_GH_ETC_DIR/.replacement-$IVA_TEST_REPLACE_GH_PATH-done"
+  [ ! -e "$marker" ] || return
+  case "$IVA_TEST_REPLACE_GH_PATH" in
+    keyring)
+      path="$IVA_TEST_GH_ETC_DIR/keyrings/githubcli-archive-keyring.gpg"
+      bytes=FOREIGN_KEYRING_PRESENT
+      ;;
+    source)
+      path="$IVA_TEST_GH_ETC_DIR/sources.list.d/github-cli.list"
+      bytes=FOREIGN_SOURCE_PRESENT
+      ;;
+    *) return ;;
+  esac
+  replacement="$path.foreign.$$"
+  printf '%s\n' "$bytes" >"$replacement"
+  chmod 0640 "$replacement"
+  mv -f "$replacement" "$path"
+  : >"$marker"
+}
+
+last=""
+for arg in "$@"; do last="$arg"; done
+case "$last" in
+  "$TMPDIR"/iva-gh-apt-??????)
+    if [ "$1" = rm ]; then
+      marker="$TMPDIR/.iva-gh-cleanup-failed-once"
+      if [ "$IVA_TEST_FAIL_GH_CLEANUP_ALWAYS" = 1 ]; then exit 74; fi
+      if [ "$IVA_TEST_FAIL_GH_CLEANUP_ONCE" = 1 ] && [ ! -e "$marker" ]; then
+        : >"$marker"
+        exit 73
+      fi
+      /bin/rm -rf -- "$last"
+      exit
+    fi
+    ;;
+esac
+
+saw_apt_get=false
+saw_update=false
+saw_private_gh_config=false
+for arg in "$@"; do
+  [ "$arg" = apt-get ] && saw_apt_get=true
+  [ "$arg" = update ] && saw_update=true
+  case "$arg" in *iva-gh-apt-*) saw_private_gh_config=true ;; esac
+done
+if [ "$saw_apt_get" = true ] && [ "$saw_update" = true ] \
+  && [ "$saw_private_gh_config" = true ]; then
+  replace_managed_path
+fi
+
+if [ "$IVA_TEST_FAIL_GH_PACKAGE" = 1 ]; then
+  for arg in "$@"; do
+    if [ "$arg" = gh ]; then exit 1; fi
+  done
+fi
+exit 0
+`;
+
+/** A network-free curl that can fail only the optional GitHub CLI repository. */
+const CURL = `#!/bin/sh
+echo "curl $*" >> "$IVA_TEST_CALLS"
+case "$*" in
+  *cli.github.com*)
+    if [ "$IVA_TEST_FAIL_GH_REPOSITORY" = 1 ]; then exit 22; fi
+    printf 'synthetic github keyring\n'
+    ;;
+esac
+exit 0
+`;
+
+/** Package-manager stand-in that can reject only an install containing gh. */
+const PACKAGE_MANAGER = `#!/bin/sh
+echo "$(basename "$0") $*" >> "$IVA_TEST_CALLS"
+if [ "$IVA_TEST_FAIL_GH_PACKAGE" = 1 ]; then
+  for arg in "$@"; do
+    if [ "$arg" = gh ]; then exit 1; fi
+  done
+fi
+exit 0
+`;
+
+/**
+ * Non-interactive bash reads this file before install.sh. It lets a world model missing
+ * commands without exposing the real host binaries or adding a production-only test hook.
+ */
+const COMMAND_MASK = `command() {
+  if [ "$1" = -v ]; then
+    case " $IVA_TEST_MISSING_COMMANDS " in
+      *" $2 "*)
+        if [ "$2" = gh ] && [ "$IVA_TEST_GH_READY_AFTER_INSTALL" = 1 ]; then
+          if [ -e "$IVA_TEST_GH_READY_MARKER" ]; then
+            builtin command "$@"
+            return
+          fi
+          : >"$IVA_TEST_GH_READY_MARKER"
+        fi
+        return 1
+        ;;
+    esac
+  fi
+  builtin command "$@"
+}
 `;
 
 /**
@@ -200,13 +311,10 @@ chmodSync(RECORDER_PATH, 0o755);
 // apt-get and a real dpkg, and a missing `gh` sends the installer to cli.github.com over
 // the network. A test suite must not run either.
 for (const name of [
-  "sudo",
   "systemctl",
   "loginctl",
   "uv",
-  "apt-get",
   "dpkg",
-  "curl",
   "gh",
   "python3",
   "ffmpeg",
@@ -214,6 +322,16 @@ for (const name of [
   "pdftotext",
 ])
   symlinkSync(RECORDER_PATH, join(TOOLS, name));
+writeFileSync(join(TOOLS, "sudo"), SUDO);
+chmodSync(join(TOOLS, "sudo"), 0o755);
+for (const name of ["apt-get", "dnf", "brew"]) {
+  writeFileSync(join(TOOLS, name), PACKAGE_MANAGER);
+  chmodSync(join(TOOLS, name), 0o755);
+}
+writeFileSync(join(TOOLS, "curl"), CURL);
+chmodSync(join(TOOLS, "curl"), 0o755);
+const COMMAND_MASK_PATH = join(TOOLS, "command-mask.sh");
+writeFileSync(COMMAND_MASK_PATH, COMMAND_MASK);
 writeFileSync(join(TOOLS, "npm"), NPM);
 chmodSync(join(TOOLS, "npm"), 0o755);
 // node comes in by name, not by its directory: on nvm and fnm the real node sits beside
@@ -235,9 +353,16 @@ function createWorld(t: TestContext, options: { env?: boolean } = {}): World {
   const home = join(dir, "home");
   const tmp = join(dir, "tmp");
   const npmPrefix = join(dir, "npm-global");
+  const ghEtc = join(dir, "gh-etc");
   const defaultCalls = join(dir, "calls.log");
 
-  for (const path of [home, tmp, npmPrefix])
+  for (const path of [
+    home,
+    tmp,
+    npmPrefix,
+    join(ghEtc, "keyrings"),
+    join(ghEtc, "sources.list.d"),
+  ])
     mkdirSync(path, { recursive: true });
   // The installer never sits next to a package.json here, so it takes the branch a piped
   // `curl | bash` takes: the checkout at INSTALL_DIR.
@@ -315,6 +440,11 @@ function createWorld(t: TestContext, options: { env?: boolean } = {}): World {
     IVA_TEST_CALLS: runOptions.calls ?? defaultCalls,
     IVA_TEST_NPM_PREFIX: npmPrefix,
     IVA_TEST_RECORDER: RECORDER_PATH,
+    IVA_TEST_GH_ETC_DIR: ghEtc,
+    IVA_TEST_GH_READY_AFTER_INSTALL: "",
+    IVA_TEST_GH_READY_MARKER: join(dir, "gh-ready"),
+    IVA_TEST_MISSING_COMMANDS: "",
+    BASH_ENV: COMMAND_MASK_PATH,
     ...runOptions.env,
   });
 
@@ -384,9 +514,291 @@ function outputBackups(install: string): string[] {
   );
 }
 
+function optionalGhWarnings(output: string): string[] {
+  return output
+    .split(/\r?\n/u)
+    .filter((line) => /^! .*?(?:GitHub CLI|\bgh\b)/u.test(line));
+}
+
+function ghAptFiles(world: World): { keyring: string; source: string } {
+  return {
+    keyring: join(world.dir, "gh-etc/keyrings/githubcli-archive-keyring.gpg"),
+    source: join(world.dir, "gh-etc/sources.list.d/github-cli.list"),
+  };
+}
+
+function assertNoSharedGhAptPaths(calls: string): void {
+  assert.doesNotMatch(
+    calls,
+    /\/etc\/apt\/(?:keyrings\/githubcli-archive-keyring\.gpg|sources\.list\.d\/github-cli\.list)/u,
+  );
+}
+
+function assertPrivateGhAptBoundary(world: World, calls: string): void {
+  assertNoSharedGhAptPaths(calls);
+  assert.deepEqual(
+    readdirSync(world.tmp).filter((name) => name.startsWith("iva-gh-apt-")),
+    [],
+  );
+}
+
 void test("install.sh is valid bash", () => {
   execFileSync("bash", ["-n", join(ROOT, "install.sh")]);
 });
+
+void test("optional GitHub CLI repository failure does not stop required apt work", (t) => {
+  const world = createWorld(t);
+  const result = world.run({
+    env: {
+      IVA_TEST_MISSING_COMMANDS: "gh pandoc",
+      IVA_TEST_FAIL_GH_REPOSITORY: "1",
+    },
+  });
+
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  const calls = world.calls();
+  const requiredInstall = calls
+    .split("\n")
+    .find(
+      (line) =>
+        line.includes("apt-get") &&
+        line.includes("install") &&
+        line.includes("pandoc"),
+    );
+  assert.ok(requiredInstall, `required package was not attempted:\n${calls}`);
+  assert.doesNotMatch(requiredInstall, /(?:^| )gh(?: |$)/u);
+  assert.match(calls, /^npm ci$/mu);
+  assert.match(calls, /^iva _activate-units$/mu);
+  assert.match(result.stdout, /Installation complete/u);
+  assertPrivateGhAptBoundary(world, calls);
+  const managed = ghAptFiles(world);
+  assert.equal(existsSync(managed.keyring), false);
+  assert.equal(existsSync(managed.source), false);
+  assert.deepEqual(optionalGhWarnings(result.stdout + result.stderr), [
+    "! GitHub CLI is optional and could not be installed; continuing without it",
+  ]);
+});
+
+void test("optional GitHub CLI apt package failure warns once and installation completes", (t) => {
+  const world = createWorld(t);
+  const result = world.run({
+    env: {
+      IVA_TEST_MISSING_COMMANDS: "gh pandoc",
+      IVA_TEST_FAIL_GH_PACKAGE: "1",
+    },
+  });
+
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  const calls = world.calls();
+  const requiredInstall = calls
+    .split("\n")
+    .find(
+      (line) =>
+        line.includes("apt-get") &&
+        line.includes("install") &&
+        line.includes("pandoc"),
+    );
+  assert.ok(requiredInstall, `required package was not attempted:\n${calls}`);
+  assert.doesNotMatch(requiredInstall, /(?:^| )gh(?: |$)/u);
+  assert.match(calls, /^iva _activate-units$/mu);
+  assert.match(result.stdout, /Installation complete/u);
+  assert.match(calls, /Dir::Etc::sourcelist=.*iva-gh-apt-/u);
+  assert.match(calls, /Dir::Etc::sourceparts=-/u);
+  assert.match(calls, /Dir::State::lists=.*iva-gh-apt-/u);
+  assertPrivateGhAptBoundary(world, calls);
+  const managed = ghAptFiles(world);
+  assert.equal(existsSync(managed.keyring), false);
+  assert.equal(existsSync(managed.source), false);
+  assert.deepEqual(optionalGhWarnings(result.stdout + result.stderr), [
+    "! GitHub CLI is optional and could not be installed; continuing without it",
+  ]);
+});
+
+void test("optional GitHub CLI availability wins over a package-manager failure", (t) => {
+  const world = createWorld(t);
+  const result = world.run({
+    env: {
+      IVA_TEST_MISSING_COMMANDS: "gh pandoc",
+      IVA_TEST_FAIL_GH_PACKAGE: "1",
+      IVA_TEST_GH_READY_AFTER_INSTALL: "1",
+    },
+  });
+
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  const calls = world.calls();
+  assert.match(calls, /^iva _activate-units$/mu);
+  assert.match(result.stdout, /Installation complete/u);
+  assert.match(result.stdout, /^✓ gh ready$/mu);
+  assert.deepEqual(optionalGhWarnings(result.stdout + result.stderr), []);
+  assert.doesNotMatch(
+    result.stdout + result.stderr,
+    /GitHub CLI is optional and could not be installed/u,
+  );
+  assertPrivateGhAptBoundary(world, calls);
+});
+
+void test("optional GitHub CLI retries a transient private cleanup failure", (t) => {
+  const world = createWorld(t);
+  const result = world.run({
+    env: {
+      IVA_TEST_MISSING_COMMANDS: "gh pandoc",
+      IVA_TEST_GH_READY_AFTER_INSTALL: "1",
+      IVA_TEST_FAIL_GH_CLEANUP_ONCE: "1",
+    },
+  });
+
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  const calls = world.calls();
+  assert.equal(
+    calls
+      .split("\n")
+      .filter((line) => /sudo rm -rf -- .*\/iva-gh-apt-/u.test(line)).length,
+    2,
+  );
+  assertPrivateGhAptBoundary(world, calls);
+  assert.match(calls, /^iva _activate-units$/mu);
+  assert.match(result.stdout, /Installation complete/u);
+  assert.deepEqual(optionalGhWarnings(result.stdout + result.stderr), []);
+});
+
+void test("optional GitHub CLI reports a persistent private cleanup failure", (t) => {
+  const world = createWorld(t);
+  const result = world.run({
+    env: {
+      IVA_TEST_MISSING_COMMANDS: "gh pandoc",
+      IVA_TEST_GH_READY_AFTER_INSTALL: "1",
+      IVA_TEST_FAIL_GH_CLEANUP_ALWAYS: "1",
+    },
+  });
+
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  const calls = world.calls();
+  assert.equal(
+    calls
+      .split("\n")
+      .filter((line) => /sudo rm -rf -- .*\/iva-gh-apt-/u.test(line)).length,
+    2,
+  );
+  assertNoSharedGhAptPaths(calls);
+  const retained = readdirSync(world.tmp).filter((name) =>
+    name.startsWith("iva-gh-apt-"),
+  );
+  assert.equal(retained.length, 1);
+  assert.match(calls, /^iva _activate-units$/mu);
+  assert.match(result.stdout, /Installation complete/u);
+  assert.deepEqual(optionalGhWarnings(result.stdout + result.stderr), [
+    `! GitHub CLI is ready, but private apt cleanup failed; retained directory: ${join(world.tmp, retained[0])}`,
+  ]);
+  assert.doesNotMatch(
+    result.stdout + result.stderr,
+    /GitHub CLI is optional and could not be installed/u,
+  );
+});
+
+void test("optional GitHub CLI apt failure preserves foreign repository files exactly", (t) => {
+  const world = createWorld(t);
+  const managed = ghAptFiles(world);
+  writeFileSync(managed.keyring, "foreign keyring bytes\n");
+  writeFileSync(managed.source, "foreign source bytes\n");
+  chmodSync(managed.keyring, 0o600);
+  chmodSync(managed.source, 0o640);
+
+  const result = world.run({
+    env: {
+      IVA_TEST_MISSING_COMMANDS: "gh pandoc",
+      IVA_TEST_FAIL_GH_PACKAGE: "1",
+    },
+  });
+
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.equal(
+    readFileSync(managed.keyring, "utf8"),
+    "foreign keyring bytes\n",
+  );
+  assert.equal(readFileSync(managed.source, "utf8"), "foreign source bytes\n");
+  assert.equal(statSync(managed.keyring).mode & 0o777, 0o600);
+  assert.equal(statSync(managed.source).mode & 0o777, 0o640);
+  const calls = world.calls();
+  assert.match(calls, /^iva _activate-units$/mu);
+  assertPrivateGhAptBoundary(world, calls);
+  assert.deepEqual(optionalGhWarnings(result.stdout + result.stderr), [
+    "! GitHub CLI is optional and could not be installed; continuing without it",
+  ]);
+});
+
+for (const replacementKind of ["keyring", "source"] as const) {
+  void test(`optional GitHub CLI private apt failure preserves a foreign ${replacementKind} replacement`, (t) => {
+    const world = createWorld(t);
+    const result = world.run({
+      env: {
+        IVA_TEST_MISSING_COMMANDS: "gh pandoc",
+        IVA_TEST_FAIL_GH_PACKAGE: "1",
+        IVA_TEST_REPLACE_GH_PATH: replacementKind,
+      },
+    });
+
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    const managed = ghAptFiles(world);
+    const replaced = managed[replacementKind];
+    const owned =
+      replacementKind === "keyring" ? managed.source : managed.keyring;
+    assert.equal(
+      readFileSync(replaced, "utf8"),
+      `FOREIGN_${replacementKind.toUpperCase()}_PRESENT\n`,
+    );
+    assert.equal(statSync(replaced).mode & 0o777, 0o640);
+    assert.equal(existsSync(owned), false);
+    const calls = world.calls();
+    assert.ok(
+      calls
+        .split("\n")
+        .some(
+          (line) =>
+            line.includes("apt-get") &&
+            line.includes("install") &&
+            line.includes("pandoc"),
+        ),
+      `required package was not attempted:\n${calls}`,
+    );
+    assert.match(calls, /^iva _activate-units$/mu);
+    assert.match(result.stdout, /Installation complete/u);
+    assert.match(calls, /Dir::Etc::sourcelist=.*iva-gh-apt-/u);
+    assertPrivateGhAptBoundary(world, calls);
+    assert.deepEqual(optionalGhWarnings(result.stdout + result.stderr), [
+      "! GitHub CLI is optional and could not be installed; continuing without it",
+    ]);
+  });
+}
+
+for (const manager of ["dnf", "brew"] as const) {
+  void test(`optional GitHub CLI package failure is isolated under ${manager}`, (t) => {
+    const world = createWorld(t);
+    const hidden =
+      manager === "dnf" ? "apt-get gh pandoc" : "apt-get dnf gh pandoc";
+    const result = world.run({
+      env: {
+        IVA_TEST_MISSING_COMMANDS: hidden,
+        IVA_TEST_FAIL_GH_PACKAGE: "1",
+      },
+    });
+
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    const calls = world.calls();
+    const requiredInstall = calls
+      .split("\n")
+      .find(
+        (line) =>
+          line.includes(`${manager} install `) && line.includes("pandoc"),
+      );
+    assert.ok(requiredInstall, `required package was not attempted:\n${calls}`);
+    assert.doesNotMatch(requiredInstall, /(?:^| )gh(?: |$)/u);
+    assert.match(calls, /^npm ci$/mu);
+    assert.match(calls, /^iva _activate-units$/mu);
+    assert.deepEqual(optionalGhWarnings(result.stdout + result.stderr), [
+      "! GitHub CLI is optional and could not be installed; continuing without it",
+    ]);
+  });
+}
 
 void test("an exit before any work is done stays quiet and succeeds", () => {
   // --help is the earliest exit there is, and it runs the same exit handler every failure

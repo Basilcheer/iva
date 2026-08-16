@@ -604,6 +604,58 @@ elif command -v dnf     >/dev/null 2>&1; then PM="dnf"
 elif command -v brew    >/dev/null 2>&1; then PM="brew"
 fi
 
+# GitHub CLI is useful only for setting up the optional vault backup. Keep its repository
+# private to this attempt: a failed third-party source must never add, replace or delete
+# shared apt configuration.
+OPTIONAL_GH_APT_CLEANUP_DEBT=""
+install_optional_gh_apt() {
+  local tmp_root="${TMPDIR:-/tmp}" apt_tmp="" keyring="" source="" lists="" rc=0
+  local cleanup_rc=0
+  local -a apt_options=()
+  tmp_root="${tmp_root%/}"
+  apt_tmp="$(mktemp -d "$tmp_root/iva-gh-apt-XXXXXX")" || return
+  keyring="$apt_tmp/githubcli-archive-keyring.gpg"
+  source="$apt_tmp/github-cli.list"
+  lists="$apt_tmp/lists"
+
+  mkdir -p "$lists" || rc=$?
+  if [ "$rc" -eq 0 ]; then chmod 0755 "$apt_tmp" "$lists" || rc=$?; fi
+  if [ "$rc" -eq 0 ]; then
+    curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg >"$keyring" || rc=$?
+  fi
+  if [ "$rc" -eq 0 ]; then
+    printf '%s\n' "deb [arch=$(dpkg --print-architecture) signed-by=$keyring] https://cli.github.com/packages stable main" \
+      >"$source" || rc=$?
+  fi
+  if [ "$rc" -eq 0 ]; then chmod 0644 "$keyring" "$source" || rc=$?; fi
+
+  apt_options=(
+    -o "Dir::Etc::sourcelist=$source"
+    -o "Dir::Etc::sourceparts=-"
+    -o "Dir::State::lists=$lists"
+    -o APT::Get::List-Cleanup=0
+  )
+  if [ "$rc" -eq 0 ]; then apt_get "${apt_options[@]}" update -qq || rc=$?; fi
+  if [ "$rc" -eq 0 ]; then apt_get "${apt_options[@]}" install -y -qq gh || rc=$?; fi
+
+  # apt may leave root-owned list files. Retry one transient cleanup failure. Keep the
+  # install outcome separate from cleanup debt so a ready gh is never reported as missing.
+  if ! run_root rm -rf -- "$apt_tmp"; then
+    run_root rm -rf -- "$apt_tmp" || cleanup_rc=$?
+  fi
+  if [ "$cleanup_rc" -ne 0 ]; then OPTIONAL_GH_APT_CLEANUP_DEBT="$apt_tmp"; fi
+  return "$rc"
+}
+
+install_optional_gh() {
+  case "$PM" in
+    apt) install_optional_gh_apt ;;
+    dnf) run_root dnf install -y -q gh ;;
+    brew) brew install gh ;;
+    *) return 1 ;;
+  esac
+}
+
 # A dpkg left half-way through (a reboot during unattended-upgrade) makes every apt run
 # fail, including the ones agent-browser starts on its own for Chromium's libraries —
 # where the failure is only a warning, so the install would keep going for minutes and
@@ -623,7 +675,6 @@ fi
 
 need_pkgs=()
 command -v git    >/dev/null 2>&1 || need_pkgs+=("git")
-command -v gh     >/dev/null 2>&1 || need_pkgs+=("gh")
 command -v python3>/dev/null 2>&1 || need_pkgs+=("python3")
 command -v ffmpeg >/dev/null 2>&1 || need_pkgs+=("ffmpeg")
 command -v pandoc >/dev/null 2>&1 || need_pkgs+=("pandoc")
@@ -646,19 +697,7 @@ if [ "${#need_pkgs[@]}" -gt 0 ]; then
       apt)
         apt_get update -qq || warn "$(t "apt-get update failed" "apt-get update не прошёл")"
         for p in "${need_pkgs[@]}"; do
-          if [ "$p" = "gh" ]; then
-            # gh isn't in the base Debian/Ubuntu repos — add the official source.
-            run_root mkdir -p -m 755 /etc/apt/keyrings
-            curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
-              | run_root tee /etc/apt/keyrings/githubcli-archive-keyring.gpg >/dev/null
-            run_root chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg
-            echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
-              | run_root tee /etc/apt/sources.list.d/github-cli.list >/dev/null
-            apt_get update -qq
-            apt_get install -y -qq gh || warn "$(t "couldn't install gh" "не удалось поставить gh")"
-          else
-            apt_get install -y -qq "$p" || warn "$(t "couldn't install $p" "не удалось поставить $p")"
-          fi
+          apt_get install -y -qq "$p" || warn "$(t "couldn't install $p" "не удалось поставить $p")"
         done
         ;;
       dnf)
@@ -671,7 +710,24 @@ if [ "${#need_pkgs[@]}" -gt 0 ]; then
   fi
 fi
 command -v git >/dev/null 2>&1 && ok "git $(git --version | awk '{print $3}')" || die "$(t "git still not installed" "git так и не установлен")"
-command -v gh  >/dev/null 2>&1 && ok "$(t "gh ready" "gh готов")" || warn "$(t "no gh — set up the vault git backup later" "gh нет — vault-бэкап в git настроишь позже")"
+if command -v gh >/dev/null 2>&1; then
+  ok "$(t "gh ready" "gh готов")"
+else
+  step "$(t "Installing optional GitHub CLI…" "Устанавливаю необязательный GitHub CLI…")"
+  install_optional_gh >>"$INSTALL_LOG" 2>&1 || true
+  if command -v gh >/dev/null 2>&1; then
+    ok "$(t "gh ready" "gh готов")"
+    if [ -n "$OPTIONAL_GH_APT_CLEANUP_DEBT" ]; then
+      warn "$(t "GitHub CLI is ready, but private apt cleanup failed; retained directory: $OPTIONAL_GH_APT_CLEANUP_DEBT" "GitHub CLI готов, но приватный apt-каталог не удалился; сохранённый каталог: $OPTIONAL_GH_APT_CLEANUP_DEBT")"
+    fi
+  else
+    if [ -n "$OPTIONAL_GH_APT_CLEANUP_DEBT" ]; then
+      warn "$(t "GitHub CLI could not be installed, and private apt cleanup failed; retained directory: $OPTIONAL_GH_APT_CLEANUP_DEBT" "GitHub CLI не установился, и приватный apt-каталог не удалился; сохранённый каталог: $OPTIONAL_GH_APT_CLEANUP_DEBT")"
+    else
+      warn "$(t "GitHub CLI is optional and could not be installed; continuing without it" "GitHub CLI необязателен и не установился; продолжаю без него")"
+    fi
+  fi
+fi
 command -v ffmpeg >/dev/null 2>&1 && ok "$(t "ffmpeg ready" "ffmpeg готов")" || warn "$(t "no ffmpeg (nova-3 usually accepts video directly)" "ffmpeg нет (nova-3 обычно принимает видео напрямую)")"
 
 # ─────────────────────────────────────────────────────────────────────────

@@ -37,6 +37,15 @@ void test("bootstrap.sh parses: a truncated or half-edited script never reaches 
   );
 });
 
+void test("bootstrap leaves optional GitHub CLI installation to install.sh", () => {
+  const source = readFileSync(BOOTSTRAP, "utf8");
+  assert.doesNotMatch(source, /\binstall_gh\b/u);
+  assert.doesNotMatch(
+    source,
+    /(?:cli\.github\.com|githubcli-archive-keyring|github-cli\.list)/u,
+  );
+});
+
 void test("bootstrap.sh answers --help before it needs root, and ignores junk flags", () => {
   const output = runBootstrap(["--not-a-flag", "--help"]);
   assert.match(output, /unknown flag: --not-a-flag \(ignoring\)/);

@@ -6,7 +6,7 @@
 #   bash <(curl -fsSL https://raw.githubusercontent.com/smixs/iva/main/bootstrap.sh)
 #
 # What it does, in this order: sets the timezone, updates the system, installs the
-# packages install.sh expects (git, gh, python3, ffmpeg, pandoc, poppler), creates a
+# packages install.sh expects (git, python3, ffmpeg, pandoc, poppler), creates a
 # sudo user with systemd lingering enabled, turns on a firewall that allows SSH only,
 # starts fail2ban, enables unattended security upgrades, and hardens sshd LAST — with
 # a reload, so the session you are typing in is never dropped. It ends with the two
@@ -945,7 +945,7 @@ apt_upgrade() {
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 7. Packages Iva needs, plus gh from its official apt repository.
+# 7. Required packages. install.sh owns the optional GitHub CLI boundary.
 # ─────────────────────────────────────────────────────────────────────────────
 package_installed() {
   local status
@@ -978,32 +978,6 @@ install_packages() {
       warn "some packages did not install — install.sh will report what is still missing"
     fi
     unset IVA_APT_PKGS
-  fi
-  install_gh
-}
-
-install_gh() {
-  if command -v gh >/dev/null 2>&1; then
-    ok "GitHub CLI already installed"
-    return 0
-  fi
-  CURRENT_STEP="installing the GitHub CLI"
-  local keyring="/etc/apt/keyrings/githubcli-archive-keyring.gpg"
-  # gh is not in the base Debian/Ubuntu repositories — add the official source.
-  # shellcheck disable=SC2174  # /etc/apt exists already; only keyrings is created here
-  if ! {
-        mkdir -p -m 755 /etc/apt/keyrings &&
-        curl -fsSL --connect-timeout 10 --retry 2 \
-          https://cli.github.com/packages/githubcli-archive-keyring.gpg -o "$keyring" &&
-        chmod go+r "$keyring"
-      } >>"$LOG_FILE" 2>&1; then
-    warn "couldn't add the GitHub CLI repository — install.sh sets gh up later"
-    return 0
-  fi
-  printf 'deb [arch=%s signed-by=%s] https://cli.github.com/packages stable main\n' \
-    "$(dpkg --print-architecture)" "$keyring" >/etc/apt/sources.list.d/github-cli.list
-  if ! run_sh "Installing the GitHub CLI" "gh installed" 'apt_get update && apt_get install gh'; then
-    warn "couldn't install gh — install.sh sets it up later (vault backup only)"
   fi
 }
 
