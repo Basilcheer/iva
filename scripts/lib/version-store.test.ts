@@ -14,6 +14,7 @@ import {
   readlinkSync,
   realpathSync,
   rmSync,
+  statSync,
   symlinkSync,
   utimesSync,
   writeFileSync,
@@ -24,10 +25,12 @@ import {
   createVersionStore,
   layoutFor,
   parseVersionName,
+  readActiveState,
   releaseOf,
   retainedVersions,
   versionName,
 } from "./version-store.ts";
+import { ATOMIC_WRITE_DURABILITY } from "../../agent/lib/fs-atomic.ts";
 
 function home(t: { after(fn: () => void): void }): string {
   const dir = mkdtempSync(join(tmpdir(), "iva-versions-"));
@@ -269,6 +272,73 @@ test("healing goes back to the version the installation settled on", (t) => {
   );
 });
 
+test("a corrupt active marker blocks healing without changing its bytes", (t) => {
+  const root = home(t);
+  const store = createVersionStore(root);
+  install(store, "0.3.14-aaaaaaaaaaaa");
+  install(store, "0.3.15-bbbbbbbbbbbb");
+  store.activate("0.3.14-aaaaaaaaaaaa");
+  mkdirSync(store.layout.data, { recursive: true });
+  const marker = join(store.layout.data, "active.json");
+  const corrupt = Buffer.from([0x7b, 0x22, 0xff, 0x22, 0x7d]);
+  writeFileSync(marker, corrupt);
+  rmSync(store.layout.current);
+
+  assert.throws(
+    () => store.heal(),
+    /active\.json.*corrupt|corrupt.*active\.json/u,
+  );
+  assert.deepEqual(readFileSync(marker), corrupt);
+  assert.equal(existsSync(store.layout.current), false);
+});
+
+test("a corrupt active marker blocks rollback selection", (t) => {
+  const store = createVersionStore(home(t));
+  install(store, "0.3.14-aaaaaaaaaaaa");
+  install(store, "0.3.15-bbbbbbbbbbbb");
+  store.activate("0.3.15-bbbbbbbbbbbb");
+  mkdirSync(store.layout.data, { recursive: true });
+  writeFileSync(join(store.layout.data, "active.json"), "not json\n");
+
+  assert.throws(
+    () => store.previousName(),
+    /active\.json.*corrupt|corrupt.*active\.json/u,
+  );
+});
+
+test("an unreadable active marker is not treated as missing", (t) => {
+  const store = createVersionStore(home(t));
+  mkdirSync(store.layout.data, { recursive: true });
+  const marker = join(store.layout.data, "active.json");
+  mkdirSync(marker);
+
+  assert.throws(
+    () => store.settled(),
+    /active\.json.*corrupt|corrupt.*active\.json/u,
+  );
+  assert.equal(lstatSync(marker).isDirectory(), true);
+});
+
+test("invalid UTF-8 is rejected before JSON schema validation", (t) => {
+  const store = createVersionStore(home(t));
+  mkdirSync(store.layout.data, { recursive: true });
+  const marker = join(store.layout.data, "active.json");
+  const corrupt = Buffer.concat([
+    Buffer.from(
+      '{"schema":"iva-active/v1","version":"0.3.14-aaaaaaaaaaaa","x":"',
+    ),
+    Buffer.from([0xff]),
+    Buffer.from('"}\n'),
+  ]);
+  writeFileSync(marker, corrupt);
+
+  assert.deepEqual(readActiveState(marker), {
+    kind: "corrupt-or-unreadable",
+    reason: "invalid UTF-8",
+  });
+  assert.deepEqual(readFileSync(marker), corrupt);
+});
+
 test("two updates racing on the same version let exactly one stage it", (t) => {
   const store = createVersionStore(home(t));
   install(store, "0.3.14-aaaaaaaaaaaa");
@@ -376,6 +446,179 @@ test("garbage collection preserves the settled rollback regardless of mtime", (t
   assert.equal(state.version, current);
   assert.equal(state.previous, rollback);
   assert.match(String(state.settledAt), /^\d{4}-\d{2}-\d{2}T/u);
+});
+
+test("corrupt active bytes block GC and settlement without changing data", (t) => {
+  const store = createVersionStore(home(t));
+  for (const name of [
+    "0.3.12-222222222222",
+    "0.3.13-333333333333",
+    "0.3.14-444444444444",
+  ])
+    install(store, name);
+  store.activate("0.3.14-444444444444");
+  mkdirSync(store.layout.data, { recursive: true });
+  const marker = join(store.layout.data, "active.json");
+  const corrupt = Buffer.from('{"schema":"iva-active/v2","version":');
+  writeFileSync(marker, corrupt);
+  const before = store.list();
+
+  assert.throws(
+    () => store.gc(2),
+    /active\.json.*corrupt|corrupt.*active\.json/u,
+  );
+  assert.deepEqual(store.list(), before);
+  assert.deepEqual(readFileSync(marker), corrupt);
+  assert.throws(
+    () => store.settle("0.3.14-444444444444"),
+    /active\.json.*corrupt|corrupt.*active\.json/u,
+  );
+  assert.deepEqual(readFileSync(marker), corrupt);
+});
+
+test("semantic-invalid v1 and v2 active markers fail closed", (t) => {
+  const store = createVersionStore(home(t));
+  mkdirSync(store.layout.data, { recursive: true });
+  const marker = join(store.layout.data, "active.json");
+  const invalid = [
+    {},
+    { schema: "iva-active/v0", version: "0.3.14-aaaaaaaaaaaa" },
+    { schema: "iva-active/v1", version: "not-a-version" },
+    { schema: "iva-active/v1", version: "0.3.14-aaaaaaaaaaaa", settledAt: 1 },
+    { schema: "iva-active/v1", version: "0.3.14-aaaaaaaaaaaa", extra: true },
+    { schema: "iva-active/v2", version: "0.3.14-aaaaaaaaaaaa" },
+    {
+      schema: "iva-active/v2",
+      version: "0.3.14-aaaaaaaaaaaa",
+      previous: "0.3.14-aaaaaaaaaaaa",
+      settledAt: "2026-08-16T00:00:00.000Z",
+    },
+    {
+      schema: "iva-active/v2",
+      version: "0.3.14-aaaaaaaaaaaa",
+      settledAt: "yesterday",
+      cleanupPending: "yes",
+    },
+  ];
+
+  for (const value of invalid) {
+    writeFileSync(marker, `${JSON.stringify(value)}\n`);
+    assert.throws(
+      () => store.settled(),
+      /active\.json.*corrupt|corrupt.*active\.json/u,
+      JSON.stringify(value),
+    );
+  }
+});
+
+test("arbitrary malformed active bytes fail closed with a fixed seed", (t) => {
+  const store = createVersionStore(home(t));
+  mkdirSync(store.layout.data, { recursive: true });
+  const marker = join(store.layout.data, "active.json");
+  const seed = 41_907;
+
+  fc.assert(
+    fc.property(fc.uint8Array({ maxLength: 96 }), (tail) => {
+      const corrupt = Buffer.concat([Buffer.from([0xff]), Buffer.from(tail)]);
+      writeFileSync(marker, corrupt);
+      assert.throws(
+        () => store.settled(),
+        /active\.json.*corrupt|corrupt.*active\.json/u,
+      );
+      assert.deepEqual(readFileSync(marker), corrupt);
+    }),
+    { seed, numRuns: 200 },
+  );
+});
+
+test("valid active state survives JSON roundtrip", (t) => {
+  const root = home(t);
+  const marker = join(root, "active.json");
+  const versions = ["0.3.14-aaaaaaaaaaaa", "0.3.15-bbbbbbbbbbbb"];
+
+  fc.assert(
+    fc.property(
+      fc.constantFrom(...versions),
+      fc.boolean(),
+      fc.boolean(),
+      (version, v2, cleanupPending) => {
+        const previous = versions.find((name) => name !== version);
+        const state = v2
+          ? {
+              schema: "iva-active/v2" as const,
+              version,
+              previous,
+              settledAt: "2026-08-16T00:00:00.000Z",
+              ...(cleanupPending ? { cleanupPending: true } : {}),
+            }
+          : { schema: "iva-active/v1" as const, version };
+        writeFileSync(marker, `${JSON.stringify(state)}\n`);
+        assert.deepEqual(readActiveState(marker), { kind: "valid", state });
+      },
+    ),
+    { seed: 41_908, numRuns: 100 },
+  );
+});
+
+test("missing active state remains a valid first-install state", (t) => {
+  const store = createVersionStore(home(t));
+  assert.equal(store.settled(), null);
+  assert.equal(store.heal(), null);
+  assert.deepEqual(store.gc(2), []);
+});
+
+test("a post-rename durability fault preserves published cleanup debt", (t) => {
+  const root = home(t);
+  const first = "0.3.14-aaaaaaaaaaaa";
+  const next = "0.3.15-bbbbbbbbbbbb";
+  const store = createVersionStore(root);
+  install(store, first);
+  install(store, next);
+  store.activate(first);
+  store.settle(first);
+  store.activate(next);
+  let injected = false;
+  const faulty = createVersionStore(root, {
+    activeWriteOptions: {
+      afterStep(step) {
+        if (step === "rename" && !injected) {
+          injected = true;
+          throw new Error("directory fsync fault");
+        }
+      },
+    },
+  });
+
+  assert.throws(
+    () => faulty.settle(next, { previous: first, cleanupPending: true }),
+    (error: unknown) =>
+      (error as NodeJS.ErrnoException).code === ATOMIC_WRITE_DURABILITY,
+  );
+
+  const recovered = createVersionStore(root);
+  assert.equal(recovered.settled(), next);
+  assert.equal(recovered.previousName(), first);
+  assert.equal(recovered.cleanupPending(next), true);
+  assert.equal(
+    statSync(join(store.layout.data, "active.json")).mode & 0o777,
+    0o600,
+  );
+});
+
+test("settlement pins the captured pre-flip active Version as previous", (t) => {
+  const store = createVersionStore(home(t));
+  const stale = "0.3.13-333333333333";
+  const active = "0.3.14-444444444444";
+  const next = "0.3.15-555555555555";
+  for (const name of [stale, active, next]) install(store, name);
+  store.activate(stale);
+  store.settle(stale);
+  store.activate(active);
+  store.activate(next);
+
+  store.settle(next, { previous: active });
+
+  assert.equal(store.previousName(), active);
 });
 
 test("explicit retention is invariant under arbitrary mtimes", () => {

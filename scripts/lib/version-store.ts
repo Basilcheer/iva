@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { isUtf8 } from "node:buffer";
 import {
   existsSync,
   lstatSync,
@@ -10,9 +11,12 @@ import {
   rmSync,
   statSync,
   symlinkSync,
-  writeFileSync,
 } from "node:fs";
 import { dirname, isAbsolute, join } from "node:path";
+import {
+  writeFileAtomicSync,
+  type AtomicWriteOptions,
+} from "../../agent/lib/fs-atomic.ts";
 import { parseEnvText } from "./env-file.ts";
 
 const INCOMPLETE = ".iva-incomplete";
@@ -32,6 +36,32 @@ const VERSION_ORDER = new Intl.Collator("en", { numeric: true }).compare;
 export const STATE_DIRS = ["data", "vault", ".eve/.workflow-data"];
 /** Where older builds kept the workflow store: linked where one is, never created. */
 export const LEGACY_STATE_DIRS = [".workflow-data"];
+
+type ActiveStateV1 = {
+  readonly schema: "iva-active/v1";
+  readonly version: string;
+  readonly settledAt?: string;
+};
+
+type ActiveStateV2 = {
+  readonly schema: "iva-active/v2";
+  readonly version: string;
+  readonly previous?: string;
+  readonly settledAt: string;
+  readonly cleanupPending?: boolean;
+};
+
+export type ActiveState = ActiveStateV1 | ActiveStateV2;
+
+export type ActiveStateRead =
+  | { readonly kind: "missing" }
+  | { readonly kind: "valid"; readonly state: ActiveState }
+  | { readonly kind: "corrupt-or-unreadable"; readonly reason: string };
+
+type VersionStoreOptions = {
+  /** Fault seam for the active marker's canonical atomic writer. */
+  readonly activeWriteOptions?: AtomicWriteOptions;
+};
 
 /** A state directory as the .env spells it: an absolute one as given, the rest inside `root`. */
 export function stateDir(
@@ -91,6 +121,87 @@ export function parseVersionName(name: string) {
   };
 }
 
+function exactKeys(
+  value: Record<string, unknown>,
+  allowed: readonly string[],
+): boolean {
+  const keys = Object.keys(value);
+  return (
+    keys.length <= allowed.length && keys.every((key) => allowed.includes(key))
+  );
+}
+
+function isoTimestamp(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  try {
+    return new Date(value).toISOString() === value;
+  } catch {
+    return false;
+  }
+}
+
+function validActiveState(value: unknown): value is ActiveState {
+  if (value === null || typeof value !== "object" || Array.isArray(value))
+    return false;
+  const state = value as Record<string, unknown>;
+  if (typeof state.version !== "string" || !parseVersionName(state.version))
+    return false;
+  if (state.schema === "iva-active/v1")
+    return (
+      exactKeys(state, ["schema", "version", "settledAt"]) &&
+      (state.settledAt === undefined || isoTimestamp(state.settledAt))
+    );
+  if (state.schema !== "iva-active/v2") return false;
+  if (
+    !exactKeys(state, [
+      "schema",
+      "version",
+      "previous",
+      "settledAt",
+      "cleanupPending",
+    ]) ||
+    !isoTimestamp(state.settledAt) ||
+    (state.cleanupPending !== undefined &&
+      typeof state.cleanupPending !== "boolean")
+  )
+    return false;
+  return (
+    state.previous === undefined ||
+    (typeof state.previous === "string" &&
+      state.previous !== state.version &&
+      parseVersionName(state.previous) !== null)
+  );
+}
+
+/** A missing marker is first-install state; every existing invalid marker is explicit. */
+export function readActiveState(path: string): ActiveStateRead {
+  let bytes: Buffer;
+  try {
+    bytes = readFileSync(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT")
+      return { kind: "missing" };
+    return {
+      kind: "corrupt-or-unreadable",
+      reason: error instanceof Error ? error.message : String(error),
+    };
+  }
+  if (!isUtf8(bytes))
+    return { kind: "corrupt-or-unreadable", reason: "invalid UTF-8" };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(bytes.toString("utf8"));
+  } catch (error) {
+    return {
+      kind: "corrupt-or-unreadable",
+      reason: error instanceof Error ? error.message : String(error),
+    };
+  }
+  return validActiveState(parsed)
+    ? { kind: "valid", state: parsed }
+    : { kind: "corrupt-or-unreadable", reason: "invalid active state schema" };
+}
+
 /** The release a directory is a build of; two builds of one release run the same code. */
 export function releaseOf(name: string): string {
   const at = parseVersionName(name);
@@ -141,8 +252,22 @@ function unpack(command: string, args: string[], cwd: string): void {
  * is confined to a directory nothing points at, or is one atomic rename, so an
  * interruption leaves garbage and never half a changed installation.
  */
-export function createVersionStore(home: string) {
+export function createVersionStore(
+  home: string,
+  { activeWriteOptions }: VersionStoreOptions = {},
+) {
   const layout = layoutFor(home);
+
+  function activeState(): ActiveState | null {
+    const path = join(layout.data, SETTLED);
+    const result = readActiveState(path);
+    if (result.kind === "missing") return null;
+    if (result.kind === "valid") return result.state;
+    throw new Error(`active.json is corrupt or unreadable: ${result.reason}`);
+  }
+
+  const writeActiveState = (body: ActiveState): void =>
+    writeJson(join(layout.data, SETTLED), body, activeWriteOptions);
 
   const versionDir = (name: string): string => {
     if (!parseVersionName(name)) throw new Error(`invalid version: ${name}`);
@@ -188,7 +313,10 @@ export function createVersionStore(home: string) {
   function previousName(): string | null {
     const active = currentName();
     const state = activeState();
-    for (const candidate of [state.previous, state.version]) {
+    for (const candidate of [
+      state?.schema === "iva-active/v2" ? state.previous : undefined,
+      state?.version,
+    ]) {
       if (
         typeof candidate === "string" &&
         candidate !== active &&
@@ -246,6 +374,7 @@ export function createVersionStore(home: string) {
 
   /** Point `current` at a finished version with one rename. */
   function activate(name: string): void {
+    activeState(); // Existing invalid state blocks every live mutation.
     const dir = versionDir(name);
     if (!isComplete(name)) throw new Error(`version ${name} is incomplete`);
     linkState(dir); // Whatever a killed probe aimed them at, back at the install.
@@ -270,30 +399,32 @@ export function createVersionStore(home: string) {
     }
   }
 
-  function activeState(): Record<string, unknown> {
-    return readJson(join(layout.data, SETTLED));
-  }
-
   /** Flipped, migrated, restarted: an update is owed while this and `current` disagree. */
   function settled(): string | null {
-    const name = activeState().version;
-    return typeof name === "string" ? name : null;
+    return activeState()?.version ?? null;
   }
 
   /** Commit one served version and retain the last served version as its rollback. */
   function settle(
     name: string,
-    options: { readonly cleanupPending?: boolean } = {},
+    options: {
+      readonly cleanupPending?: boolean;
+      readonly previous?: string | null;
+    } = {},
   ): void {
     const before = activeState();
-    const previous = [before.version, before.previous].find(
+    const previous = [
+      options.previous,
+      before?.version,
+      before?.schema === "iva-active/v2" ? before.previous : undefined,
+    ].find(
       (candidate): candidate is string =>
         typeof candidate === "string" &&
         candidate !== name &&
         isComplete(candidate),
     );
     mkdirSync(layout.data, { recursive: true });
-    writeJson(join(layout.data, SETTLED), {
+    writeActiveState({
       schema: "iva-active/v2",
       version: name,
       ...(previous ? { previous } : {}),
@@ -305,16 +436,21 @@ export function createVersionStore(home: string) {
   /** Cleanup is retryable debt after a version has already served and committed. */
   function cleanupPending(name: string): boolean {
     const state = activeState();
-    return state.version === name && state.cleanupPending === true;
+    return (
+      state?.schema === "iva-active/v2" &&
+      state.version === name &&
+      state.cleanupPending === true
+    );
   }
 
   /** Clear only the debt belonging to the still-settled version. */
   function finishCleanup(name: string): void {
     const state = activeState();
-    if (state.version !== name)
+    if (state?.schema !== "iva-active/v2" || state.version !== name)
       throw new Error(`cleanup state changed from ${name}`);
-    const { cleanupPending: _pending, ...finished } = state;
-    writeJson(join(layout.data, SETTLED), finished);
+    const finished = { ...state };
+    delete finished.cleanupPending;
+    writeActiveState(finished);
   }
 
   /**
@@ -323,8 +459,7 @@ export function createVersionStore(home: string) {
    * it started on. A marker written before this field carries no time at all.
    */
   function settledAt(): string | null {
-    const at = activeState().settledAt;
-    return typeof at === "string" ? at : null;
+    return activeState()?.settledAt ?? null;
   }
 
   function liveFailures(): string[] {
@@ -361,6 +496,7 @@ export function createVersionStore(home: string) {
 
   /** Remove what an interrupted update can leave behind. Never touches a version. */
   function sweep(): string[] {
+    activeState(); // Never delete leftovers while rollback state is untrusted.
     const stale = names().filter(
       (name) => parseVersionName(name) && !isComplete(name),
     );
@@ -384,8 +520,8 @@ export function createVersionStore(home: string) {
         finished,
         [
           active,
-          typeof state.version === "string" ? state.version : null,
-          typeof state.previous === "string" ? state.previous : null,
+          state?.version,
+          state?.schema === "iva-active/v2" ? state.previous : null,
         ],
         keep,
       ),
@@ -502,11 +638,16 @@ export function readJson(path: string): Record<string, unknown> {
   }
 }
 
-/** Written through a rename, so a reader never sees half a marker. */
-export function writeJson(path: string, body: unknown): void {
-  const temp = `${path}.${process.pid}.tmp`;
-  writeFileSync(temp, `${JSON.stringify(body)}\n`, { mode: 0o600 });
-  renameSync(temp, path);
+/** Durable atomic JSON marker using the project's single canonical writer. */
+export function writeJson(
+  path: string,
+  body: unknown,
+  options: AtomicWriteOptions = {},
+): void {
+  writeFileAtomicSync(path, `${JSON.stringify(body)}\n`, {
+    ...options,
+    mode: 0o600,
+  });
 }
 
 export type UpdateLock = { readonly path: string; release(): void };
