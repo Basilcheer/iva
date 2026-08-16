@@ -1240,8 +1240,13 @@ test("canonical authored customizations build from data while the live checkout 
   git(fx.local, "pull", "--ff-only");
 
   writeFileSync(join(fx.local, "agent/instructions.md"), "my voice\n");
-  mkdirSync(join(fx.local, "agent/skills/local"), { recursive: true });
-  writeFileSync(join(fx.local, "agent/skills/local/SKILL.md"), "local skill\n");
+  // Скилл пользователь пишет прямо в data/custom — оттуда его читает резолвер, и
+  // обновление ядра его не касается.
+  mkdirSync(join(fx.data, "custom/agent/skills/local"), { recursive: true });
+  writeFileSync(
+    join(fx.data, "custom/agent/skills/local/SKILL.md"),
+    "local skill\n",
+  );
   const target = pushUpstream(
     fx.seed,
     (seed) => writeFileSync(join(seed, "new-core.txt"), "new core\n"),
@@ -1269,6 +1274,7 @@ test("canonical authored customizations build from data while the live checkout 
   assert.equal(
     existsSync(join(fx.local, "agent/skills/local/SKILL.md")),
     false,
+    "the skill is served from data/custom; the updated tree never gets a copy",
   );
   assert.equal(
     readFileSync(join(fx.data, "custom/agent/instructions.md"), "utf8"),
@@ -1277,6 +1283,7 @@ test("canonical authored customizations build from data while the live checkout 
   assert.equal(
     readFileSync(join(fx.data, "custom/agent/skills/local/SKILL.md"), "utf8"),
     "local skill\n",
+    "the user's skill survives the update untouched",
   );
   assert.equal(
     readFileSync(join(fx.local, ".output/server/marker.txt"), "utf8"),

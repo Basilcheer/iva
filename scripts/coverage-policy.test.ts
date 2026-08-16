@@ -8,12 +8,12 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
-const EXPECTED_PRODUCTION_COUNT = 185;
+const EXPECTED_PRODUCTION_COUNT = 188;
 const EXPECTED_INVENTORY_SHA256 =
-  "77211143274558a2426a423d013a406f5eebe2057f2022c245374e4d19ab4ca1";
+  "3a2cf3c805ddf64c9a09f645e86a72e7daff46aa0dbba346a611b22ca940d99f";
 
 // Node's native include globs filter loaded modules; they do not load untouched files.
-// This test pins the exact production path inventory and a separately measured 25-path
+// This test pins the exact production path inventory and a separately measured 26-path
 // blind-spot snapshot. It does not determine what the current import graph loads, claim
 // that the other paths are reported, or notice import-graph changes without path changes.
 // Measured again for this inventory: the web inbound-gate round added `agent/lib/web-gate.ts`
@@ -37,7 +37,10 @@ const EXPECTED_INVENTORY_SHA256 =
 // through the real channel and reported, so the blind spot stays at 25. The memory resolver
 // `scripts/lib/memory-mode.ts` came next, loaded and reported by its own test
 // (`scripts/lib/memory-mode.test.ts`), so the blind spot stays at 25. The Reminder CLI
-// `scripts/cli/remind.ts` followed, reported by its own test, so it stays at 25.
+// `scripts/cli/remind.ts` followed, reported by its own test, so it stays at 25. The live skill
+// resolver came last: `agent/lib/custom-skills.ts` (99% lines) and `agent/lib/data-dir.ts` (100%)
+// are loaded and reported by their own tests, while the slot file `agent/skills/custom.ts` is
+// loaded by eve alone - measured unreported, like `agent/sandbox.ts` - so the blind spot is 26.
 const MEASURED_UNREPORTED_BY_CATEGORY = {
   frameworkBoundaries: [
     "agent/agent.ts",
@@ -49,6 +52,7 @@ const MEASURED_UNREPORTED_BY_CATEGORY = {
     "agent/instructions/25-persona.ts",
     "agent/instructions/now.ts",
     "agent/sandbox.ts",
+    "agent/skills/custom.ts",
     "agent/subagents/planner/agent.ts",
     "agent/subagents/planner/sandbox.ts",
   ],
@@ -127,7 +131,7 @@ function assertProductionPathInventory(
   const measuredUnreported = Object.values(MEASURED_UNREPORTED_BY_CATEGORY)
     .flat()
     .sort();
-  assert.equal(measuredUnreported.length, 25);
+  assert.equal(measuredUnreported.length, 26);
   assert.equal(new Set(measuredUnreported).size, measuredUnreported.length);
   assert.deepEqual(
     measuredUnreported.filter((path) => !productionFiles.includes(path)),

@@ -30,13 +30,19 @@ export { isAuthoredPath };
 
 const CUSTOM_SCHEMA = "iva-custom/v1" as const;
 const GIT_MAX_BUFFER = 64 * 1024 * 1024;
+// Слоты, которые слой забирает из рабочего дерева и кладёт в сборку. Скиллов здесь нет:
+// их читает с диска резолвер agent/skills/custom.ts, и второй путь к тем же файлам был бы
+// задвоением (docs/extending.md). Остальные слоты — код, ему сборка нужна.
 const AUTHORED_PATHSPECS = [
   "agent/instructions.md",
-  "agent/skills",
   "agent/connections",
   "agent/tools",
   "agent/subagents",
 ] as const;
+
+// Скиллы остаются файлами пользователя (isAuthoredPath, дайджест custom-версии) и
+// переживают обновление, но входом сборки быть перестали.
+const SKILLS_PREFIX = "agent/skills/";
 
 const ConflictSchema = z.strictObject({
   localSha256: z
@@ -510,7 +516,11 @@ export function materializeCustomLayer({
       continue;
     }
 
-    applyToTree(root, path, materialized);
+    // Скилл в дерево не кладём — его отдаёт резолвер прямо из data/custom. Исключение
+    // одно: удаление встроенного скилла. Динамика умеет перекрыть одноимённый скилл,
+    // но не убрать его, поэтому tombstone по-прежнему правит дерево.
+    if (!path.startsWith(SKILLS_PREFIX) || materialized === null)
+      applyToTree(root, path, materialized);
     const pendingPath = safeChild(pendingDir, path);
     if (materialized === null) rmSync(pendingPath, { force: true });
     else writePrivateFile(pendingPath, materialized);

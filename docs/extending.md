@@ -4,8 +4,9 @@ Everything Iva does is a file in an `agent/` tree. The shipped files in `agent/`
 refreshed by releases; your custom layer lives in `data/custom/agent/`. `npm run build` combines both in
 a disposable tree, then `iva restart` activates the result ([cli.md](./cli.md)). The live source checkout
 stays clean, so an update cannot be blocked by a customized skill or HTML file. Local edits you already
-made to `agent/instructions.md`, `agent/skills/`, `agent/connections/`, `agent/tools/` or
-`agent/subagents/` move into the custom layer automatically on the first update. Edits anywhere else in
+made to `agent/instructions.md`, `agent/connections/`, `agent/tools/` or `agent/subagents/` move into
+the custom layer automatically on the first update. Skills are the exception: they are read straight
+off disk at run time and never go through a build (see below). Edits anywhere else in
 the tree stay a plain local patch: the updater stashes them and replays them onto the new revision, and
 archives them under `data/update-conflicts/` when they no longer apply.
 
@@ -26,6 +27,11 @@ with a `SKILL.md` plus supporting files. Iva loads both your custom skills and t
 - 📡 **telegram-userbot/** — a guarded personal-account workflow with a separate safety reference.
 - 🎨 **rich-post/** — a directory skill for rich Telegram posts with supporting references.
 - 🩹 **update-recovery/** — merges customizations an update left in `data/update-conflicts/`; triggered by "restore my update changes".
+
+A new skill needs no build: Iva reads `data/custom/agent/skills/` at the start of every turn, so a file
+written during a conversation is loadable on the next one. A skill that shares its name with a bundled
+one replaces it. Tools, connections, subagents and instructions are code that goes into the bundle -
+those still need `iva update`.
 
 ⚠️ Your skills go in `data/custom/agent/skills/` and nowhere else - never in a `.claude/` directory
 (`~/.claude/skills/`, `vault/.claude/skills/`). That is a different tool's layout; Iva does not read it.

@@ -7,6 +7,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   rmSync,
   symlinkSync,
@@ -16,6 +17,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { after, test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { readCustomSkills } from "../agent/lib/custom-skills.ts";
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -123,6 +125,41 @@ test("a checkout still builds through the custom layer it owns", () => {
     readFileSync(join(home, ".output/app.mjs"), "utf8"),
     /data\/custom\/runtimes\//u,
   );
+});
+
+test("a custom skill is served from data/custom, not compiled into the build", async () => {
+  const home = join(world(), "iva");
+  mkdirSync(home, { recursive: true });
+  plantTree(home);
+  git(home, ["init", "--initial-branch=main"]);
+  git(home, ["add", "-A"]);
+  git(home, ["commit", "-m", "initial"]);
+  // Так выглядит установка, у которой скилл был вкомпилен прошлой версией: файл лежит
+  // в data/custom и остаётся там. Новая сборка его не копирует, а резолвер читает.
+  plantCustomization(join(home, "data"));
+
+  const built = build(home);
+  assert.equal(built.status, 0, built.output);
+
+  assert.equal(
+    readFileSync(join(home, "agent/skills/mine/SKILL.md"), "utf8"),
+    "stock\n",
+    "the bundled skill is untouched: the customization is no longer overlaid",
+  );
+  const runtimes = join(home, "data/custom/runtimes");
+  for (const runtime of readdirSync(runtimes))
+    assert.equal(
+      readFileSync(join(runtimes, runtime, "agent/skills/mine/SKILL.md"), "utf8"),
+      "stock\n",
+      "the runtime the build points at carries the bundled skill, not the custom one",
+    );
+
+  const skills = await readCustomSkills(
+    join(home, "data/custom/agent/skills"),
+    () => {},
+  );
+  assert.deepEqual(Object.keys(skills), ["mine"]);
+  assert.equal(skills.mine.markdown, "mine\n");
 });
 
 test("a version builds itself, never the checkout's custom layer", () => {

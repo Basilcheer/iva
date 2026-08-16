@@ -86,8 +86,10 @@ function fixture(t: TestContext): {
     "agent/instructions.md",
     "tone: mine\nkeep-a\nkeep-b\ncore: stock\n",
   );
-  rmSync(join(root, "agent/skills/stock/SKILL.md"));
-  write(root, "agent/skills/local/SKILL.md", "local skill\n");
+  // Слот скиллов слой больше не забирает (их читает резолвер), поэтому «удалённое» и
+  // «неотслеживаемое» показываем на инструментах — слоте, который в сборку идёт.
+  rmSync(join(root, "agent/tools/stock.ts"));
+  write(root, "agent/tools/local.ts", "export default 'local';\n");
   write(root, "scripts/core.ts", "export const local = true;\n");
   git(
     root,
@@ -142,16 +144,16 @@ test("first capture migrates modified, deleted, and untracked authored files onl
 
   assert.deepEqual(captured.paths, [
     "agent/instructions.md",
-    "agent/skills/local/SKILL.md",
-    "agent/skills/stock/SKILL.md",
+    "agent/tools/local.ts",
+    "agent/tools/stock.ts",
   ]);
   assert.equal(
     readFileSync(join(dataDir, "custom/agent/instructions.md"), "utf8"),
     "tone: mine\nkeep-a\nkeep-b\ncore: stock\n",
   );
   assert.equal(
-    readFileSync(join(dataDir, "custom/agent/skills/local/SKILL.md"), "utf8"),
-    "local skill\n",
+    readFileSync(join(dataDir, "custom/agent/tools/local.ts"), "utf8"),
+    "export default 'local';\n",
   );
   assert.equal(
     existsSync(join(dataDir, "custom/scripts/core.ts")),
@@ -162,13 +164,12 @@ test("first capture migrates modified, deleted, and untracked authored files onl
   const manifest = readCustomManifest(dataDir);
   assert.equal(manifest.schema, "iva-custom/v1");
   assert.equal(manifest.entries["agent/instructions.md"]?.tombstone, false);
+  assert.equal(manifest.entries["agent/tools/stock.ts"]?.tombstone, true);
+  assert.equal(manifest.entries["agent/tools/local.ts"]?.originSha256, null);
   assert.equal(
-    manifest.entries["agent/skills/stock/SKILL.md"]?.tombstone,
-    true,
-  );
-  assert.equal(
-    manifest.entries["agent/skills/local/SKILL.md"]?.originSha256,
-    null,
+    manifest.entries["agent/skills/stock/SKILL.md"],
+    undefined,
+    "skills are read from data/custom at run time, not captured into the build",
   );
   assert.match(
     manifest.entries["agent/instructions.md"]?.originSha256 ?? "",
@@ -202,7 +203,7 @@ test("materialization applies clean three-way merges and advances the manifest a
     "agent/instructions.md",
     "tone: stock\nkeep-a\nkeep-b\ncore: upstream\n",
   );
-  write(root, "agent/skills/stock/SKILL.md", "stock skill\n");
+  write(root, "agent/tools/stock.ts", "export default 'stock';\n");
 
   const result = materializeCustomLayer({
     root,
@@ -217,7 +218,7 @@ test("materialization applies clean three-way merges and advances the manifest a
     "tone: mine\nkeep-a\nkeep-b\ncore: upstream\n",
   );
   assert.equal(
-    existsSync(join(root, "agent/skills/stock/SKILL.md")),
+    existsSync(join(root, "agent/tools/stock.ts")),
     false,
     "a user tombstone stays active while upstream is unchanged",
   );
@@ -439,7 +440,7 @@ test("a tombstone conflicts safely when upstream changes the deleted file", (t) 
     baseRevision: base,
     stashRevision: stash,
   });
-  write(root, "agent/skills/stock/SKILL.md", "upstream changed skill\n");
+  write(root, "agent/tools/stock.ts", "export default 'upstream changed';\n");
 
   const result = materializeCustomLayer({
     root,
@@ -448,16 +449,69 @@ test("a tombstone conflicts safely when upstream changes the deleted file", (t) 
     now: new Date("2026-08-07T03:04:05.000Z"),
   });
 
-  assert.deepEqual(result.conflicts, ["agent/skills/stock/SKILL.md"]);
+  assert.deepEqual(result.conflicts, ["agent/tools/stock.ts"]);
   assert.equal(
-    readFileSync(join(root, "agent/skills/stock/SKILL.md"), "utf8"),
-    "upstream changed skill\n",
+    readFileSync(join(root, "agent/tools/stock.ts"), "utf8"),
+    "export default 'upstream changed';\n",
   );
   assert.ok(result.recoveryDir);
   assert.equal(
-    existsSync(join(result.recoveryDir, "local/agent/skills/stock/SKILL.md")),
+    existsSync(join(result.recoveryDir, "local/agent/tools/stock.ts")),
     false,
   );
+});
+
+test("a custom skill stays in data/custom and never reaches the build tree", (t) => {
+  const { root, dataDir, base } = fixture(t);
+  write(dataDir, "custom/agent/skills/local/SKILL.md", "local skill\n");
+  captureCustomLayer({ root, dataDir, baseRevision: base });
+
+  const result = materializeCustomLayer({
+    root,
+    dataDir,
+    targetRevision: "4".repeat(40),
+    now: new Date("2026-08-07T04:05:06.000Z"),
+  });
+
+  assert.deepEqual(result.conflicts, []);
+  assert.equal(
+    existsSync(join(root, "agent/skills/local/SKILL.md")),
+    false,
+    "the resolver reads it from data/custom; a copy in the tree would be the second path",
+  );
+  assert.equal(
+    existsSync(join(result.runtimeRoot, "agent/skills/local/SKILL.md")),
+    false,
+  );
+  assert.equal(
+    readFileSync(join(dataDir, "custom/agent/skills/local/SKILL.md"), "utf8"),
+    "local skill\n",
+    "nothing is removed from the user's disk",
+  );
+});
+
+test("removing a bundled skill still reaches the build tree", (t) => {
+  const { root, dataDir, base } = fixture(t);
+  // Своя копия встроенного скилла, потом снятая: динамика умеет перекрыть одноимённый
+  // скилл, но не убрать его, поэтому удаление остаётся за слоем.
+  write(dataDir, "custom/agent/skills/stock/SKILL.md", "mine\n");
+  captureCustomLayer({ root, dataDir, baseRevision: base });
+  rmSync(join(dataDir, "custom/agent/skills/stock/SKILL.md"));
+  captureCustomLayer({ root, dataDir, baseRevision: base });
+  assert.equal(
+    readCustomManifest(dataDir).entries["agent/skills/stock/SKILL.md"]
+      ?.tombstone,
+    true,
+  );
+
+  materializeCustomLayer({
+    root,
+    dataDir,
+    targetRevision: "5".repeat(40),
+    now: new Date("2026-08-07T05:06:07.000Z"),
+  });
+
+  assert.equal(existsSync(join(root, "agent/skills/stock/SKILL.md")), false);
 });
 
 test("the public build falls back to core when Git metadata is unavailable", (t) => {
