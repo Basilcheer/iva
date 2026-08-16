@@ -18,6 +18,7 @@ import sys
 import re
 import json
 import argparse
+from pathlib import Path
 from typing import NamedTuple
 
 
@@ -27,8 +28,22 @@ class GateResult(NamedTuple):
     findings: list[dict]
 
 
+# Exact carriers cover credentials this project configures but whose values lack
+# a stable provider prefix. The inventory is shared with the TypeScript runtime.
+# Public client_id and TELEGRAM_API_ID are intentionally absent.
+SECRET_KEY_INVENTORY_PATH = (
+    Path(__file__).resolve().parents[1] / 'outbound-sensitive-keys.json'
+)
+SECRET_KEY_INVENTORY = json.loads(SECRET_KEY_INVENTORY_PATH.read_text(encoding='utf-8'))
+NAMED_SECRET_PATTERN = re.compile(
+    r'(?<![A-Za-z0-9_])["\']?(?:' +
+    '|'.join(re.escape(name) for name in SECRET_KEY_INVENTORY) +
+    r')["\']?\s*[=:]\s*["\']?[^\s"\'},]+'
+)
+
 # --- API Key patterns ---
 API_KEY_PATTERNS = [
+    ('named_secret', NAMED_SECRET_PATTERN),
     ('openai', re.compile(r'sk-[A-Za-z0-9]{20,}')),
     ('anthropic', re.compile(r'sk-ant-[A-Za-z0-9\-]{20,}')),
     ('google_api', re.compile(r'AIza[A-Za-z0-9\-_]{35}')),

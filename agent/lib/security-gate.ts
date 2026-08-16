@@ -1,6 +1,8 @@
 // Deterministic inbound and outbound security gates shared by the agent runtime
 // and bare-Node operational scripts.
 
+import secretKeyInventory from "../skills/security-defense/outbound-sensitive-keys.json" with { type: "json" };
+
 const INVISIBLE_RE = /[\p{Cf}\p{Cc}\u034F]/gu;
 const KEEP_CONTROL = new Set(["\n", "\r", "\t"]);
 const WALLET_DRAIN_RE =
@@ -27,6 +29,14 @@ export interface OutboundResult {
 }
 
 type Pattern = readonly [name: string, expression: RegExp];
+
+// Exact carriers cover the credentials this project configures but whose values
+// do not have a stable provider prefix. The sorted inventory is also read by the
+// manual Python gate. Keep public client_id and TELEGRAM_API_ID out of it.
+const NAMED_SECRET_PATTERN = new RegExp(
+  String.raw`(?<![A-Za-z0-9_])["']?(?:${secretKeyInventory.map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})["']?\s*[=:]\s*["']?[^\s"'},]+`,
+  "gu",
+);
 
 const LOOKALIKES: Record<string, string> = {
   А: "A",
@@ -459,6 +469,7 @@ export function sanitizeInbound(
 // deliberately not matched: no rule tells it from ordinary text, and redacting the
 // model's own answers costs more than that miss.
 const API_KEY_PATTERNS: readonly Pattern[] = [
+  ["named_secret", NAMED_SECRET_PATTERN],
   ["openai", /(?<![A-Za-z0-9])sk-(?!ant-|or-)[A-Za-z0-9_-]{20,}/g],
   ["openrouter", /(?<![A-Za-z0-9])sk-or-(?:v\d+-)?[A-Za-z0-9_-]{20,}/g],
   ["anthropic", /(?<![A-Za-z0-9])sk-ant-[A-Za-z0-9_-]{20,}/g],

@@ -10,6 +10,8 @@
 // IVA_TEST_SEED=<seed>.
 import test from "node:test";
 import assert from "node:assert/strict";
+import fc from "fast-check";
+import secretKeyInventory from "../skills/security-defense/outbound-sensitive-keys.json" with { type: "json" };
 import { scanOutbound } from "./security-gate.ts";
 
 const SEED = Number(process.env.IVA_TEST_SEED ?? 20260814) >>> 0 || 1;
@@ -149,6 +151,15 @@ const WORDS = [
 const SEPARATORS = [" ", "\n", ": ", " = ", ' "', " (", "\n> ", ", "];
 const SENTINEL = "ostalnoy-tekst-otveta";
 
+const namedSecretValue = fc
+  .array(fc.constantFrom(...ALNUM), { minLength: 12, maxLength: 48 })
+  .map((chars) => `synthetic${chars.join("")}`);
+const namedSecretCarrier = fc.constantFrom(
+  (name: string, value: string) => `${name}=${value}`,
+  (name: string, value: string) => `${name}: '${value}'`,
+  (name: string, value: string) => JSON.stringify({ [name]: value }),
+);
+
 function wrap(random: () => number, secret: string): string {
   const before: string[] = [SENTINEL];
   for (let i = 0; i < between(random, 0, 6); i++)
@@ -162,6 +173,29 @@ function wrap(random: () => number, secret: string): string {
   // свойство, которое здесь проверяется.
   return `${before.join(" ")}${separator}${secret} ${after.join(" ")} ${SENTINEL}`;
 }
+
+await test("every canonical secret key redacts every generated synthetic value", () => {
+  for (const name of secretKeyInventory) {
+    fc.assert(
+      fc.property(namedSecretValue, namedSecretCarrier, (value, carrier) => {
+        const input = carrier(name, value);
+        const scanned = scanOutbound(input);
+        assert.equal(scanned.clean, false, `${name}: no finding for ${input}`);
+        assert.ok(
+          scanned.findings.some((finding) => finding.name === "named_secret"),
+          `${name}: canonical named_secret rule did not match`,
+        );
+        assert.equal(
+          scanned.text.includes(value),
+          false,
+          `${name}: value leaked`,
+        );
+        assert.match(scanned.text, /\[REDACTED\]/u, `${name}: no redaction`);
+      }),
+      { numRuns: 30, seed: SEED },
+    );
+  }
+});
 
 await test(`ключ любого класса не уезжает в чат целым (seed=${SEED})`, () => {
   const random = makeRandom(SEED);

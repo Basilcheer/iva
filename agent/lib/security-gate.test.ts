@@ -256,6 +256,24 @@ await test("scanOutbound redacts repeated secrets but keeps injection artifacts 
   ]);
 });
 
+await test("scanOutbound redacts every confirmed named-secret carrier", () => {
+  const cases = [
+    ["ASSISTANT_BEARER", "ASSISTANT_BEARER=syntheticBearerValue123456"],
+    ["TELEGRAM_API_HASH", "TELEGRAM_API_HASH=syntheticHashValue123456789"],
+    [
+      "refresh_token",
+      JSON.stringify({ refresh_token: "syntheticRefreshValue123456" }),
+    ],
+  ] as const;
+
+  for (const [name, input] of cases) {
+    const result = scanOutbound(input);
+    assert.equal(result.clean, false, `${name}: no finding`);
+    assert.equal(result.text.includes("synthetic"), false, `${name}: leaked`);
+    assert.match(result.text, /\[REDACTED\]/u, `${name}: not redacted`);
+  }
+});
+
 // The key shapes this installation's providers actually issue: agent/provider.ts
 // (ollama, opencode, openrouter, codex/OpenAI) and agent/lib/embeddings.ts (jina,
 // deepinfra). Values are invented, the shapes are real - a shape the Gate does not
