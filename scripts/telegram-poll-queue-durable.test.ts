@@ -358,14 +358,15 @@ test("SIGKILL after offset ownership preserves every burst part for restart", as
   });
 
   await waitForFile(join(dataDir, "ownership-ready"));
-  child.kill("SIGKILL");
-  const exit = await new Promise<{
+  const childExit = new Promise<{
     code: number | null;
     signal: NodeJS.Signals | null;
   }>((resolveExit, rejectExit) => {
     child.once("error", rejectExit);
     child.once("exit", (code, signal) => resolveExit({ code, signal }));
   });
+  child.kill("SIGKILL");
+  const exit = await childExit;
   assert.deepEqual(exit, { code: null, signal: "SIGKILL" }, stderr);
 
   const crashed: Pick<HarnessResult, "offset" | "inbox" | "queue"> = {
@@ -615,5 +616,115 @@ test("callback_query delivery stays on the original webhook route", (t: TestCont
   assert.ok(delivery);
   assert.ok(delivery.callback_query);
   assert.equal(delivery.callback_query.id, "foreign-callback-101");
-  assert.deepEqual(result.offset, { offset: 102, delivered: 101 });
+  assert.deepEqual(result.offset, { offset: 102 });
+  assert.deepEqual(result.inbox, { version: 1, queues: {} });
+});
+
+test("a rejected callback is durably owned before its offset advances", (t: TestContext) => {
+  const dataDir = makeDataDir(t, "callback-rejected");
+  const result = runHarness("callback-rejected", dataDir);
+
+  assert.deepEqual(result.deliveries, []);
+  assert.deepEqual(result.offset, { offset: 102 });
+  assert.deepEqual(ownedUpdates(result), [
+    { location: "inbox", updateId: 101 },
+  ]);
+});
+
+test("an allowed inline callback is durably owned and delivered", (t: TestContext) => {
+  const dataDir = makeDataDir(t, "inline-callback");
+  const result = runHarness("inline-callback", dataDir);
+
+  assert.deepEqual(result.deliveryRoutes, ["/eve/v1/telegram"]);
+  assert.equal(
+    result.deliveries[0]?.callback_query?.id,
+    "foreign-inline-callback-101",
+  );
+  assert.deepEqual(result.offset, { offset: 102 });
+  assert.deepEqual(ownedUpdates(result), []);
+});
+
+test("an unauthorised callback is an explicit terminal drop, not an endless blocker", (t: TestContext) => {
+  const dataDir = makeDataDir(t, "unauthorized-callback");
+  const result = runHarness("unauthorized-callback", dataDir);
+
+  assert.deepEqual(result.requestedOffsets, [100, 102]);
+  assert.deepEqual(result.offset, { offset: 102 });
+  assert.deepEqual(result.deliveries, []);
+  assert.deepEqual(ownedUpdates(result), []);
+});
+
+test("an allowed callback without a stable ingress key fails closed", (t: TestContext) => {
+  const dataDir = makeDataDir(t, "unownable-callback");
+  const result = runHarness("unownable-callback", dataDir);
+
+  assert.deepEqual(result.requestedOffsets, [100, 100]);
+  assert.deepEqual(result.offset, { offset: 100 });
+  assert.deepEqual(result.deliveries, []);
+  assert.deepEqual(ownedUpdates(result), []);
+});
+
+test("SIGKILL after callback rejection preserves it for restart delivery", async (t: TestContext) => {
+  const dataDir = makeDataDir(t, "callback-rejected-crash");
+  const child = spawn(
+    process.execPath,
+    [
+      "--experimental-test-module-mocks",
+      HARNESS,
+      "callback-rejected-crash",
+      dataDir,
+      "none",
+    ],
+    {
+      cwd: ROOT,
+      env: { ...process.env },
+      stdio: ["ignore", "ignore", "pipe"],
+    },
+  );
+  let stderr = "";
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (chunk: string) => {
+    stderr += chunk;
+  });
+  t.after(() => {
+    if (child.exitCode === null && child.signalCode === null) {
+      child.kill("SIGKILL");
+    }
+  });
+
+  await waitForFile(join(dataDir, "callback-rejected-ready"));
+  const childExit = new Promise<{
+    code: number | null;
+    signal: NodeJS.Signals | null;
+  }>((resolveExit, rejectExit) => {
+    child.once("error", rejectExit);
+    child.once("exit", (code, signal) => resolveExit({ code, signal }));
+  });
+  child.kill("SIGKILL");
+  assert.deepEqual(await childExit, { code: null, signal: "SIGKILL" }, stderr);
+
+  const crashedInbox = normalizeQueueDocument(
+    parseJson(readFileSync(join(dataDir, "telegram-inbox.json"), "utf8")),
+  ).document;
+  assert.deepEqual(
+    parseOffsetFile(
+      readFileSync(join(dataDir, "telegram-offset.json"), "utf8"),
+    ),
+    { offset: 102, delivered: null },
+  );
+  assert.deepEqual(
+    ownedUpdates({
+      inbox: crashedInbox,
+      queue: { version: 1, queues: {} },
+    }),
+    [{ location: "inbox", updateId: 101 }],
+  );
+
+  const restarted = runHarness("restart-callback-drain", dataDir);
+  assert.deepEqual(restarted.deliveryRoutes, ["/eve/v1/telegram"]);
+  assert.equal(
+    restarted.deliveries[0]?.callback_query?.id,
+    "foreign-callback-101",
+  );
+  assert.deepEqual(ownedUpdates(restarted), []);
 });

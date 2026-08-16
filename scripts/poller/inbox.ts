@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import {
   acknowledgeQueueHead,
@@ -17,6 +18,7 @@ import {
   createCollector,
 } from "../lib/telegram-collect.ts";
 import { ALLOWED, BOT_USERNAME, DATA_DIR, log } from "./config.ts";
+import { chatKey } from "./offset.ts";
 import { routeMessageUpdate, type RouteMessageResult } from "./routing.ts";
 
 export const TELEGRAM_INBOX_FILE = join(DATA_DIR, "telegram-inbox.json");
@@ -34,6 +36,80 @@ export type ReadyInboxBatch = {
   updateIds: number[];
 };
 
+export type InboxAdmissionResult =
+  "owned" | "terminal-drop" | "unownable" | "write-failed";
+
+type InboxSender = { id?: string | number; is_bot?: boolean };
+
+export function inboxKeyFor(
+  update: TelegramQueueUpdate | null | undefined,
+): string | null {
+  const hasMessage = update?.message !== undefined;
+  const hasCallback = update?.callback_query !== undefined;
+  if (hasMessage === hasCallback) return null;
+  if (hasMessage) return collectorKeyFor(update);
+  const callback = update?.callback_query;
+  const key = chatKey(update ?? {});
+  if (key !== null) return `callback:${key}`;
+  if (
+    callback?.message !== undefined ||
+    typeof callback?.inline_message_id !== "string" ||
+    callback.inline_message_id.length === 0 ||
+    callback.from?.id === undefined
+  ) {
+    return null;
+  }
+  const sender = createHash("sha256")
+    .update("iva-telegram-inline-callback/v1\0")
+    .update(String(callback.from.id))
+    .digest("hex");
+  return `callback:inline:${sender}`;
+}
+
+function senderPolicy(
+  sender: InboxSender | undefined,
+  allowedUserIds: ReadonlySet<string>,
+): "allowed" | "terminal-drop" | "unownable" {
+  if (sender?.id === undefined) return "unownable";
+  if (allowedUserIds.size === 0 || sender.is_bot === true) {
+    return "terminal-drop";
+  }
+  return allowedUserIds.has(String(sender.id)) ? "allowed" : "terminal-drop";
+}
+
+function admissionPolicy(
+  update: TelegramQueueUpdate,
+  allowedUserIds: ReadonlySet<string>,
+  botUsername: unknown,
+): { action: "own"; key: string } | { action: "terminal-drop" | "unownable" } {
+  const hasMessage = update.message !== undefined;
+  const hasCallback = update.callback_query !== undefined;
+  if (hasMessage === hasCallback) return { action: "unownable" };
+  if (
+    hasCallback &&
+    (typeof update.callback_query?.id !== "string" ||
+      update.callback_query.id.length === 0)
+  ) {
+    return { action: "unownable" };
+  }
+
+  const sender = hasMessage
+    ? update.message?.from
+    : update.callback_query?.from;
+  const senderDecision = senderPolicy(sender, allowedUserIds);
+  if (senderDecision !== "allowed") return { action: senderDecision };
+
+  const key = inboxKeyFor(update);
+  if (key === null) return { action: "unownable" };
+  if (
+    hasMessage &&
+    !shouldQueueBusyUpdate(update, { allowedUserIds, botUsername })
+  ) {
+    return { action: "terminal-drop" };
+  }
+  return { action: "own", key };
+}
+
 export function selectReadyInboxBatch(
   key: string,
   items: readonly TelegramQueueItem[],
@@ -46,7 +122,7 @@ export function selectReadyInboxBatch(
     const update = item.update;
     if (
       !isTelegramQueueUpdate(update) ||
-      collectorKeyFor(update) !== key ||
+      inboxKeyFor(update) !== key ||
       typeof item.enqueuedAt !== "number" ||
       !Number.isFinite(item.enqueuedAt) ||
       item.enqueuedAt < 0
@@ -63,7 +139,7 @@ export function selectReadyInboxBatch(
   return expired ? { update: expired, updateIds } : null;
 }
 
-export async function admitMessageUpdate(
+export async function admitTelegramUpdate(
   update: TelegramQueueUpdate,
   {
     allowedUserIds = ALLOWED,
@@ -80,16 +156,11 @@ export async function admitMessageUpdate(
     ) => Promise<unknown>;
     logImpl?: (...parts: unknown[]) => void;
   } = {},
-): Promise<"owned" | "dropped" | "write-failed"> {
-  const key = collectorKeyFor(update);
-  if (
-    key === null ||
-    !shouldQueueBusyUpdate(update, { allowedUserIds, botUsername })
-  ) {
-    return "dropped";
-  }
+): Promise<InboxAdmissionResult> {
+  const decision = admissionPolicy(update, allowedUserIds, botUsername);
+  if (decision.action !== "own") return decision.action;
   try {
-    await enqueueImpl(key, update);
+    await enqueueImpl(decision.key, update);
     return "owned";
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

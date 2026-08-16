@@ -33,16 +33,17 @@ const errorMessage = (error: unknown) => (error as ErrorLike).message;
 // Deliver one update to the local eve (we mimic a webhook). Three failure classes (see
 // deliver-policy.ts): retry — network/5xx/408/425/429, fast backoff, forever; config —
 // 401/403/404 mean the secret/route is broken, messages must NOT be thrown away, so
-// retry forever with a LONG backoff + alert the owner; drop-class (other 4xx) — eve
+// retry forever with a LONG backoff + alert the owner; bounded-class (other 4xx) — eve
 // не даёт надёжного признака «апдейт битый навсегда» (тот же 409 может быть временным
-// конфликтом хука), поэтому и эти статусы ретраятся, но ОГРАНИЧЕННО: DROP_ATTEMPTS
-// попыток (~5 минут), затем апдейт выбрасывается, чтобы не заморозить все чаты.
+// конфликтом хука), поэтому и эти статусы ретраятся, но ОГРАНИЧЕННО: BOUNDED_ATTEMPTS
+// попыток за один проход. После этого durable caller сохраняет ownership для retry.
 // Direct delivery keeps that policy. Durable queue replay opts into one bounded attempt
 // per drain pass: its on-disk head is the retry mechanism, so one bad chat cannot starve
 // other queues or Telegram polling.
-// Returns true when eve accepted the update, false when it was dropped or retained.
+// Returns true when eve accepted the update. False is never an acknowledgement:
+// the caller must retain durable ownership or surface the failed synthetic action.
 const CONFIG_RETRY_MS = 60_000;
-const DROP_ATTEMPTS = 30;
+const BOUNDED_ATTEMPTS = 30;
 async function deliver(
   update: TelegramUpdate,
   {
@@ -136,18 +137,18 @@ async function deliver(
         );
         return false;
       }
-      if (cls === "drop") {
-        if (attempt < DROP_ATTEMPTS) {
+      if (cls === "bounded") {
+        if (attempt < BOUNDED_ATTEMPTS) {
           log(
-            `deliver: eve replied ${res.status} (attempt ${attempt}/${DROP_ATTEMPTS}) — retrying (may be transient)`,
+            `deliver: eve replied ${res.status} (attempt ${attempt}/${BOUNDED_ATTEMPTS}) — retrying (may be transient)`,
           );
           await sleep(wait);
           continue;
         }
         log(
-          `deliver: eve replied ${res.status} ${DROP_ATTEMPTS} times — DROPPING update ${String(update.update_id)}`,
+          `deliver: eve replied ${res.status} ${BOUNDED_ATTEMPTS} times; giving up this pass; durable owner retains update ${String(update.update_id)}`,
         );
-        await notifyDeliverProblem("drop", res.status);
+        await notifyDeliverProblem("retained", res.status);
         return false;
       }
       if (cls === "config") {
@@ -190,17 +191,17 @@ async function deliver(
         return false;
       }
       if (acceptanceTimeout) {
-        if (attempt < DROP_ATTEMPTS) {
+        if (attempt < BOUNDED_ATTEMPTS) {
           log(
-            `deliver: acceptance timed out (attempt ${attempt}/${DROP_ATTEMPTS}) — retrying`,
+            `deliver: acceptance timed out (attempt ${attempt}/${BOUNDED_ATTEMPTS}) — retrying`,
           );
           await sleep(wait);
           continue;
         }
         log(
-          `deliver: acceptance timed out ${DROP_ATTEMPTS} times — DROPPING update ${String(update.update_id)}`,
+          `deliver: acceptance timed out ${BOUNDED_ATTEMPTS} times; giving up this pass; durable owner retains update ${String(update.update_id)}`,
         );
-        await notifyDeliverProblem("drop", "timeout");
+        await notifyDeliverProblem("retained", "timeout");
         return false;
       }
       log(
@@ -211,7 +212,7 @@ async function deliver(
   }
 }
 
-// Владелец должен узнать и о выброшенном апдейте, и о конфиг-ошибке (secret/route).
+// Владелец должен узнать и о retained-апдейте, и о конфиг-ошибке (secret/route).
 // Один раз на процесс и класс — чтобы серия ошибок не превратилась в спам. Класс
 // помечается «уведомлённым» только ПОСЛЕ успешной отправки: упавший sendMessage не
 // должен навсегда лишать владельца алерта.
@@ -227,8 +228,8 @@ async function notifyDeliverProblem(kind: string, status: unknown) {
           `⚠️ Мост Iva не может доставить в eve: HTTP ${String(status)} — похоже, разъехались webhook-секрет или маршрут. Сообщения не теряются (ретрай раз в 60с). Проверь: journalctl --user -u iva-telegram-poll`,
         )
       : tr(
-          `⚠️ Iva bridge dropped a Telegram update: eve replied ${String(status)} (permanent). Check the logs: journalctl --user -u iva-telegram-poll`,
-          `⚠️ Мост Iva выбросил Telegram-апдейт: eve ответила ${String(status)} (постоянная ошибка). Проверь логи: journalctl --user -u iva-telegram-poll`,
+          `⚠️ Iva bridge retained a Telegram update after repeated HTTP ${String(status)} rejections. It will retry from durable storage. Check the logs: journalctl --user -u iva-telegram-poll`,
+          `⚠️ Мост Iva сохранил Telegram-апдейт после повторных отказов HTTP ${String(status)}. Доставка повторится из дюрабельного хранилища. Проверь логи: journalctl --user -u iva-telegram-poll`,
         );
   try {
     const res = await tg("sendMessage", { chat_id: target, text });
@@ -273,7 +274,7 @@ async function pacedDeliver(update: TelegramUpdate, options?: DeliverOptions) {
         };
   const accepted = await deliver(update, deliverOptions); // wait for delivery — ordered and lossless
   if (key !== null) lastDeliverAt.set(key, Date.now());
-  return accepted; // false = апдейт выброшен как битый, eve его НЕ получила
+  return accepted; // false is retained/not delivered and must never be acknowledged
 }
 
 export { deliver, notifyDeliverProblem, pacedDeliver };

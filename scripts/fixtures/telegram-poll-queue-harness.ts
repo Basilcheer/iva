@@ -196,6 +196,16 @@ if (fault !== "none") {
   });
 }
 
+if (mode === "callback-rejected" || mode === "callback-rejected-crash") {
+  mock.module("../poller/routing.ts", {
+    namedExports: {
+      deliverDirectUpdate: () => Promise.resolve("delivered"),
+      drainReadyQueueHeads: () => Promise.resolve(0),
+      routeMessageUpdate: () => Promise.resolve("rejected"),
+    },
+  });
+}
+
 const privateUpdate = (
   updateId: number,
   text: string,
@@ -227,6 +237,31 @@ const callbackUpdate = {
     id: "foreign-callback-101",
     from: { id: 42, is_bot: false, first_name: "Owner" },
     message: privateUpdate(100, "button owner").message,
+    data: "foreign_callback",
+  },
+};
+const inlineCallbackUpdate = {
+  update_id: 101,
+  callback_query: {
+    id: "foreign-inline-callback-101",
+    from: { id: 42, is_bot: false, first_name: "Owner" },
+    inline_message_id: "inline-message-101",
+    data: "foreign_inline_callback",
+  },
+};
+const unauthorizedCallbackUpdate = {
+  ...callbackUpdate,
+  callback_query: {
+    ...callbackUpdate.callback_query,
+    id: "unauthorized-callback-101",
+    from: { id: 99, is_bot: false, first_name: "Stranger" },
+  },
+};
+const unownableCallbackUpdate = {
+  update_id: 101,
+  callback_query: {
+    id: "unownable-callback-101",
+    from: { id: 42, is_bot: false, first_name: "Owner" },
     data: "foreign_callback",
   },
 };
@@ -579,10 +614,40 @@ const fetchHarness = async (url: unknown, options: FetchOptions = {}) => {
       }
       finish();
     }
-    if (mode === "restart-direct-drain") finish();
-    if (mode === "callback") {
+    if (mode === "restart-direct-drain" || mode === "restart-callback-drain")
+      finish();
+    if (
+      mode === "inline-callback" ||
+      mode === "unauthorized-callback" ||
+      mode === "unownable-callback"
+    ) {
+      if (getUpdatesCalls === 1) {
+        return jsonResponse({
+          ok: true,
+          result: [
+            mode === "inline-callback"
+              ? inlineCallbackUpdate
+              : mode === "unauthorized-callback"
+                ? unauthorizedCallbackUpdate
+                : unownableCallbackUpdate,
+          ],
+        });
+      }
+      finish();
+    }
+    if (
+      mode === "callback" ||
+      mode === "callback-rejected" ||
+      mode === "callback-rejected-crash"
+    ) {
       if (getUpdatesCalls === 1) {
         return jsonResponse({ ok: true, result: [callbackUpdate] });
+      }
+      if (mode === "callback-rejected-crash") {
+        writeFileSync(join(dataDir, "callback-rejected-ready"), "ready\n");
+        return new Promise(() => {
+          setInterval(() => {}, 60_000);
+        });
       }
       finish();
     }

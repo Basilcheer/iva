@@ -14,15 +14,15 @@ void test("401/403/404 — сломанная конфигурация: ретр
   }
 });
 
-void test("постоянные клиентские ошибки дропаются: прочие 4xx", () => {
+void test("постоянные клиентские ошибки ограничивают один delivery pass", () => {
   for (const s of [400, 413, 422]) {
-    assert.equal(classifyDeliverStatus(s), "drop", `status ${s}`);
+    assert.equal(classifyDeliverStatus(s), "bounded", `status ${s}`);
   }
 });
 
-void test("503 acceptance-роута — ограниченный dispatch-дроп, а не вечный 5xx-ретрай", () => {
+void test("503 acceptance-роута — bounded dispatch, а не вечный 5xx-ретрай", () => {
   assert.equal(classifyDeliverStatus(503), "retry");
-  assert.equal(classifyDeliverStatus(503, { acceptance: true }), "drop");
+  assert.equal(classifyDeliverStatus(503, { acceptance: true }), "bounded");
   assert.equal(classifyDeliverStatus(502, { acceptance: true }), "retry");
   assert.equal(classifyDeliverStatus(401, { acceptance: true }), "config");
 });

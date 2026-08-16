@@ -18,7 +18,7 @@ import {
 import { tg } from "./transport.ts";
 import { fastForwardOffset, saveOffset } from "./offset.ts";
 import {
-  admitMessageUpdate,
+  admitTelegramUpdate,
   promoteReadyInbox,
   TELEGRAM_INBOX_FILE,
 } from "./inbox.ts";
@@ -137,7 +137,7 @@ export async function main({
   // останавливают мост, пока backlog ещё цел. Только подтверждённый ENOENT означает
   // first run и разрешает drop_pending=true.
   let offset = startup.offset ?? 0;
-  let { delivered } = startup;
+  const { delivered } = startup;
   // First run (no offset file) — drop the accumulated install backlog (drop_pending=true),
   // so old messages don't replay in a batch → parallel sessions on one chat (HookConflict).
   // On subsequent starts we do NOT drop the backlog (don't lose messages that arrived while the bridge was down).
@@ -201,7 +201,7 @@ export async function main({
       await sleep(3000);
       continue;
     }
-    let queueWriteFailed = false;
+    let ingressBlocked = false;
     for (const update of updates) {
       // Переигровка после краша (Telegram = at-least-once): этот апдейт уже уходил в eve
       // в прошлой жизни процесса — второй раз не доставляем, только двигаем offset.
@@ -219,27 +219,21 @@ export async function main({
         await saveOffset(offset, delivered);
         continue;
       }
-      if (update.message) {
-        const admitted = await admitMessageUpdate(update);
-        if (admitted === "write-failed") {
-          queueWriteFailed = true;
-          break;
+      const admitted = await admitTelegramUpdate(update);
+      if (admitted === "write-failed" || admitted === "unownable") {
+        if (admitted === "unownable") {
+          log(`update ${update.update_id} has no durable ingress key`);
         }
-        offset = update.update_id + 1;
-        await saveOffset(offset, delivered);
-        continue;
+        ingressBlocked = true;
+        break;
       }
-
-      const routed = await routeMessageUpdate(update);
       offset = update.update_id + 1;
-      if (routed === "delivered") {
-        const candidateId = update.update_id;
-        delivered =
-          delivered === null ? candidateId : Math.max(delivered, candidateId);
+      if (admitted === "terminal-drop") {
+        log(`drop update ${update.update_id} — terminal ingress policy`);
       }
       await saveOffset(offset, delivered);
     }
-    if (queueWriteFailed) await sleep(3000);
+    if (ingressBlocked) await sleep(3000);
   }
 }
 
