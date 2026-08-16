@@ -49,6 +49,7 @@ process.env.TELEGRAM_ALLOWED_USER_IDS = "42";
 process.env.TELEGRAM_POLL_SETTLE_MS = "0";
 process.env.TELEGRAM_COLLECT_QUIET_MS ??= "0";
 process.env.AGENT_LANGUAGE = "en";
+process.env.ASSISTANT_VAULT_DIR = join(dataDir, "vault");
 
 mkdirSync(dataDir, { recursive: true });
 const offsetFile = join(dataDir, "telegram-offset.json");
@@ -59,6 +60,7 @@ if (!existsSync(offsetFile))
   writeFileSync(offsetFile, JSON.stringify({ offset: 100 }));
 let queueDirSyncAttempts = 0;
 let queueDirSyncSuccesses = 0;
+let inboxWriteAttempts = 0;
 let inboxDirectorySyncArmed = false;
 const inboxOwnershipStages = new Set<string>();
 
@@ -99,7 +101,10 @@ if (
   });
 } else if (
   mode === "core-distill-ownership-crash" ||
-  mode === "core-distill-write-failure"
+  mode === "core-distill-write-failure" ||
+  mode === "core-distill-eio-retry" ||
+  mode === "core-distill-eio-crash" ||
+  mode === "core-distill-eio-restart"
 ) {
   status.setChatStatus(privateKey, {
     status: "idle",
@@ -135,6 +140,7 @@ if (fault !== "none") {
   const originalOpen = fsPromises.open as unknown as FileOperation;
   namedExports.writeFile = async (path: unknown, ...args: unknown[]) => {
     if (String(path).startsWith(`${inboxFile}.tmp-`)) {
+      inboxWriteAttempts++;
       const staged = JSON.parse(String(args[0])) as {
         queues?: Record<string, unknown[]>;
       };
@@ -147,6 +153,15 @@ if (fault !== "none") {
     if (fault === "write" && String(path).startsWith(`${inboxFile}.tmp-`)) {
       throw Object.assign(new Error("injected inbox write failure"), {
         code: "ENOSPC",
+      });
+    }
+    if (
+      fault === "write-once" &&
+      inboxWriteAttempts === 1 &&
+      String(path).startsWith(`${inboxFile}.tmp-`)
+    ) {
+      throw Object.assign(new Error("injected one-shot inbox write failure"), {
+        code: "EIO",
       });
     }
     return originalWriteFile(path, ...args);
@@ -447,7 +462,9 @@ const fetchHarness = async (url: unknown, options: FetchOptions = {}) => {
       (mode === "direct-timeout" ||
         mode === "direct-timeout-twice" ||
         mode === "core-distill-ownership-crash" ||
-        mode === "core-distill-write-failure") &&
+        mode === "core-distill-write-failure" ||
+        mode === "core-distill-eio-retry" ||
+        mode === "core-distill-eio-crash") &&
       deliveryRoute === "/eve/v1/telegram/accepted"
     ) {
       directAcceptanceAttempts++;
@@ -699,6 +716,27 @@ const fetchHarness = async (url: unknown, options: FetchOptions = {}) => {
         setInterval(() => {}, 60_000);
       });
     }
+    if (mode === "core-distill-eio-retry") {
+      if (getUpdatesCalls <= 3) {
+        return jsonResponse({ ok: true, result: [coreFinishCallbackUpdate] });
+      }
+      finish();
+    }
+    if (mode === "core-distill-eio-crash") {
+      if (getUpdatesCalls === 1) {
+        return jsonResponse({ ok: true, result: [coreFinishCallbackUpdate] });
+      }
+      writeFileSync(join(dataDir, "core-distill-eio-ready"), "ready\n");
+      return new Promise(() => {
+        setInterval(() => {}, 60_000);
+      });
+    }
+    if (mode === "core-distill-eio-restart") {
+      if (getUpdatesCalls === 1) {
+        return jsonResponse({ ok: true, result: [coreFinishCallbackUpdate] });
+      }
+      finish();
+    }
     if (mode === "fair-drain") finish();
     throw new Error(`unknown harness mode: ${mode}`);
   }
@@ -724,7 +762,9 @@ Object.defineProperty(globalThis, "fetch", {
 
 if (
   mode === "core-distill-ownership-crash" ||
-  mode === "core-distill-write-failure"
+  mode === "core-distill-write-failure" ||
+  mode === "core-distill-eio-retry" ||
+  mode === "core-distill-eio-crash"
 ) {
   const { flows } = await import("../poller/wizards.ts");
   const state = flows.start(1, "42", "menu", {

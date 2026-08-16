@@ -401,7 +401,7 @@ async function handleControl(
     }
     // /menu: тот же принцип consume-on-error — тап меню всегда проглатывается (в eve не уходит).
     if (callback.data.startsWith("iva_menu:")) {
-      return menu.onCallback(callback).catch((e: unknown) => {
+      return menu.onCallback(callback, update.update_id).catch((e: unknown) => {
         log("menu callback error:", errorDetails(e).message);
         return true;
       });
@@ -497,7 +497,10 @@ async function handleControl(
       return replySucceeded(await replyTo(chatId, formatUsageReport(agg)));
     } catch (e: unknown) {
       return replySucceeded(
-        await replyTo(chatId, "Couldn't read the usage log: " + errorMessage(e)),
+        await replyTo(
+          chatId,
+          "Couldn't read the usage log: " + errorMessage(e),
+        ),
       );
     }
   }

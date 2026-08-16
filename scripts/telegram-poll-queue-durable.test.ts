@@ -801,14 +801,96 @@ test("SIGKILL after core synthetic ownership replays distillation text", async (
 
 test("core synthetic inbox write failure keeps the Telegram callback offset", (t: TestContext) => {
   const dataDir = makeDataDir(t, "core-distill-write-failure");
-  const result = runHarness(
-    "core-distill-write-failure",
-    dataDir,
-    "write",
-    { directAcceptanceTimeoutMs: "25" },
-  );
+  const result = runHarness("core-distill-write-failure", dataDir, "write", {
+    directAcceptanceTimeoutMs: "25",
+  });
 
   assert.deepEqual(result.requestedOffsets, [100, 100]);
   assert.deepEqual(result.offset, { offset: 100 });
   assert.deepEqual(ownedUpdates(result), []);
+});
+
+test("one-shot core synthetic EIO retries the semantic message without callback-only acknowledgement", (t: TestContext) => {
+  const dataDir = makeDataDir(t, "core-distill-eio-retry");
+  const result = runHarness("core-distill-eio-retry", dataDir, "write-once", {
+    directAcceptanceTimeoutMs: "25",
+  });
+
+  assert.deepEqual(result.requestedOffsets, [100, 100, 102, 102]);
+  assert.equal(
+    result.deliveries.some((update) => update.callback_query !== undefined),
+    false,
+  );
+  const owned = Object.values(result.inbox.queues).flat();
+  assert.equal(owned.length, 1, "duplicate callback retries must dedup");
+  const ownedUpdate = owned[0]?.update;
+  assert.ok(ownedUpdate?.message);
+  assert.equal(ownedUpdate.callback_query, undefined);
+  assert.match(ownedUpdate.message.text ?? "", /Sergey/u);
+  assert.deepEqual(result.offset, { offset: 102 });
+});
+
+test("SIGKILL after first core synthetic EIO reconstructs distillation from the durable interview", async (t: TestContext) => {
+  const dataDir = makeDataDir(t, "core-distill-eio-crash");
+  const child = spawn(
+    process.execPath,
+    [
+      "--experimental-test-module-mocks",
+      HARNESS,
+      "core-distill-eio-crash",
+      dataDir,
+      "write-once",
+    ],
+    {
+      cwd: ROOT,
+      env: {
+        ...process.env,
+        TELEGRAM_DIRECT_ACCEPTANCE_TIMEOUT_MS: "25",
+      },
+      stdio: ["ignore", "ignore", "pipe"],
+    },
+  );
+  let stderr = "";
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (chunk: string) => {
+    stderr += chunk;
+  });
+  const childExit = new Promise<{
+    code: number | null;
+    signal: NodeJS.Signals | null;
+  }>((resolveExit, rejectExit) => {
+    child.once("error", rejectExit);
+    child.once("exit", (code, signal) => resolveExit({ code, signal }));
+  });
+  t.after(() => {
+    if (child.exitCode === null && child.signalCode === null) {
+      child.kill("SIGKILL");
+    }
+  });
+
+  await waitForFile(join(dataDir, "core-distill-eio-ready"));
+  child.kill("SIGKILL");
+  assert.deepEqual(await childExit, { code: null, signal: "SIGKILL" }, stderr);
+  assert.deepEqual(
+    parseOffsetFile(
+      readFileSync(join(dataDir, "telegram-offset.json"), "utf8"),
+    ),
+    { offset: 100, delivered: null },
+  );
+  assert.match(
+    readFileSync(join(dataDir, "vault", "core-interview.md"), "utf8"),
+    /Sergey/u,
+  );
+
+  const restarted = runHarness("core-distill-eio-restart", dataDir);
+  assert.deepEqual(restarted.requestedOffsets, [100, 102]);
+  assert.deepEqual(restarted.offset, { offset: 102 });
+  assert.equal(restarted.deliveries.length, 1);
+  assert.equal(restarted.deliveries[0]?.callback_query, undefined);
+  assert.match(restarted.deliveries[0]?.message?.text ?? "", /Sergey/u);
+  assert.match(
+    restarted.deliveries[0]?.message?.text ?? "",
+    /Core memory setup/u,
+  );
+  assert.deepEqual(ownedUpdates(restarted), []);
 });

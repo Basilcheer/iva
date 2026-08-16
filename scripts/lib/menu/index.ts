@@ -86,6 +86,13 @@ type MenuContext = {
   show: (state: MenuState, screen: string) => Promise<void>;
   backRow: (screen: string) => MenuButton[];
 };
+type MenuCallbackEvent = {
+  updateId: number;
+  callbackId: string;
+  chatId: number;
+  messageId: number;
+  userId: string;
+};
 type MenuView = { text: string; rows: Array<MenuButton[]> };
 type MenuScreen = {
   render?: (
@@ -96,6 +103,13 @@ type MenuScreen = {
     verb: string,
     args: string[],
     state: MenuState,
+    context: MenuContext,
+    event?: MenuCallbackEvent,
+  ) => MaybePromise<unknown>;
+  recover?: (
+    verb: string,
+    args: string[],
+    event: MenuCallbackEvent,
     context: MenuContext,
   ) => MaybePromise<unknown>;
   texts?: Record<
@@ -207,7 +221,7 @@ export function createMenu({
     return { sid: parts[0], verb: parts[1], args: parts.slice(2) };
   }
 
-  async function onCallback(cq: CallbackQuery) {
+  async function onCallback(cq: CallbackQuery, sourceUpdateId?: number) {
     const chatId = cq.message?.chat?.id;
     const userId = String(cq.from?.id ?? "");
     const messageId = cq.message?.message_id;
@@ -224,6 +238,16 @@ export function createMenu({
 
     ctx.lang = getLang();
     const { sid, verb, args } = parse(cq.data);
+    const event =
+      Number.isSafeInteger(sourceUpdateId) && typeof cq.id === "string"
+        ? {
+            updateId: sourceUpdateId!,
+            callbackId: cq.id,
+            chatId,
+            messageId,
+            userId,
+          }
+        : null;
 
     // Псевдо-sid: хендофф в существующие визарды. newWizard внутри заменит flow-слот
     // (single-flow), а визард отрисуется в ЭТО же сообщение (msgId меню).
@@ -266,6 +290,11 @@ export function createMenu({
           msgId: messageId,
         });
       } else {
+        const mod = screens[sid] as MenuScreen | undefined;
+        if (event && typeof mod?.recover === "function") {
+          const recovered = await mod.recover(verb, args, event, ctx);
+          if (recovered !== undefined) return recovered;
+        }
         // Data-верб без живого стейта (рестарт моста / тап по старому меню): мид-флоу данные
         // потеряны — честно говорим «устарело» (mirror :567-570).
         await tg("editMessageText", {
@@ -310,7 +339,8 @@ export function createMenu({
     active.screen = sid;
     const mod = screens[sid] as MenuScreen | undefined;
     if (mod && typeof mod.on === "function") {
-      const handled = await mod.on(verb, args, active, ctx);
+      const handled = await mod.on(verb, args, active, ctx, event ?? undefined);
+      if (handled === "retry") return "retry";
       if (handled === false) return false;
     }
     return true;

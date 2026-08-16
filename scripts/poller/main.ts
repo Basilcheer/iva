@@ -214,7 +214,15 @@ export async function main({
         continue;
       }
       // Control commands (/restart, /help, /new) — the bridge handles them itself, doesn't send to eve.
-      if (await handleControl(update)) {
+      const controlResult = await handleControl(update);
+      if (controlResult === "retry") {
+        // The control owns durable semantic state but not yet its canonical inbox item.
+        // Keep Telegram's ordered offset pinned; admitting the callback itself would lose
+        // the semantic work after a restart because menu flow state is intentionally volatile.
+        ingressBlocked = true;
+        break;
+      }
+      if (controlResult) {
         offset = update.update_id + 1;
         await saveOffset(offset, delivered);
         continue;
