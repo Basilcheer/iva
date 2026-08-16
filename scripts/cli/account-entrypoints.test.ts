@@ -39,6 +39,25 @@ async function createAccountFixture(t: TestContext): Promise<AccountFixture> {
   await cp(join(ROOT, "scripts"), join(project, "scripts"), {
     recursive: true,
   });
+  await cp(
+    join(ROOT, "packages/data-dir"),
+    join(project, "packages/data-dir"),
+    {
+      recursive: true,
+    },
+  );
+  await cp(
+    join(ROOT, "packages/timezone"),
+    join(project, "packages/timezone"),
+    {
+      recursive: true,
+    },
+  );
+  await cp(
+    join(ROOT, "packages/context-window"),
+    join(project, "packages/context-window"),
+    { recursive: true },
+  );
   await symlink(
     join(ROOT, "node_modules"),
     join(project, "node_modules"),
