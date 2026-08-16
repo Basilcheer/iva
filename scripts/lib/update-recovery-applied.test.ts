@@ -9,7 +9,7 @@ import type {
   SnapshotTreeEntry,
 } from "./update-recovery-manifest.ts";
 
-test("applied recovery rejects a chmod-only tracked mismatch", async () => {
+test("applied recovery rechecks tracked permissions after later awaits", async () => {
   const head = "1".repeat(40);
   const tree = "2".repeat(40);
   const blob = "3".repeat(40);
@@ -57,8 +57,11 @@ test("applied recovery rejects a chmod-only tracked mismatch", async () => {
       return { tree, entries: [indexEntry] };
     },
   } as unknown as RecoveryObjectStore;
+  let livePermissions = 0o640;
   const untracked = {
-    async verify() {},
+    async verify() {
+      livePermissions = 0o600;
+    },
   } as unknown as OriginalUntrackedOwner;
   const verifier = new AppliedRecoveryVerifier({
     git,
@@ -66,7 +69,7 @@ test("applied recovery rejects a chmod-only tracked mismatch", async () => {
     originalHead: head,
     untracked,
     liveTrackedEntries: () => [
-      { ...indexEntry, permissions: 0o600, device: 1, inode: 2 },
+      { ...indexEntry, permissions: livePermissions, device: 1, inode: 2 },
     ],
     indexFlags: async () => ({ assumeUnchanged: [], skipWorktree: [] }),
     untrackedPaths: async () => [],
