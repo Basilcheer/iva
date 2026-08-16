@@ -461,20 +461,22 @@ export async function main(argv: readonly string[]): Promise<number> {
         // Units name `current`: they survive every later flip unrewritten.
         const runtime = createCliRuntime(root);
         const services = createCliSystemd(runtime);
+        const capturedUserbot = optionalWriterState?.find(
+          (state) => state.unit === runtime.SVC_USERBOT,
+        );
         try {
           services.restartServices({
             afterUnitWrite: () => {
               unitMigrationStarted = true;
             },
+            ...(capturedUserbot?.loadState === "not-found"
+              ? { skipUnits: [runtime.SVC_USERBOT] }
+              : {}),
             deferBrainMigration: true,
             deferMemoryMigration: true,
           });
           runtime.systemd.activate([runtime.UPDATE_TIMER]);
-          if (
-            optionalWriterState?.find(
-              (state) => state.unit === runtime.SVC_USERBOT,
-            )?.active === true
-          )
+          if (capturedUserbot?.active === true)
             reinstallUserbot(runtime, services, notify, {
               knownActive: true,
             });

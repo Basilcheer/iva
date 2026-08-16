@@ -778,6 +778,40 @@ test("an update puts an active userbot proxy on the version it installs", (t) =>
   );
 });
 
+test("an update keeps a previously missing userbot unit missing", (t) => {
+  const iva = world(t);
+  const unit = join(
+    iva.fakeHome,
+    ".config/systemd/user/iva-telegram-userbot.service",
+  );
+  assert.equal(existsSync(unit), false);
+
+  update(iva);
+
+  assert.equal(existsSync(unit), false);
+  assert.doesNotMatch(
+    readFileSync(iva.callsLog, "utf8"),
+    /(?:enable|start|restart) iva-telegram-userbot\.service/u,
+  );
+});
+
+test("a restart fault preserves a previously missing userbot unit", (t) => {
+  const iva = world(t);
+  const unit = join(
+    iva.fakeHome,
+    ".config/systemd/user/iva-telegram-userbot.service",
+  );
+
+  const result = iva.iva(["update"], { IVA_TEST_SYSTEMCTL_FAIL: "1" });
+
+  assert.notEqual(result.status, 0, `${result.stdout}${result.stderr}`);
+  assert.equal(existsSync(unit), false);
+  assert.doesNotMatch(
+    readFileSync(iva.callsLog, "utf8"),
+    /(?:enable|start|restart) iva-telegram-userbot\.service/u,
+  );
+});
+
 test("an update whose userbot proxy cannot be rebuilt still installs the version", (t) => {
   const iva = world(t);
   update(iva);

@@ -33,12 +33,14 @@ type QuietOptions = {
 type WriteUnitsOptions = {
   readonly deferBrainMigration?: boolean;
   readonly ensureBearer?: boolean;
+  readonly skipUnits?: readonly string[];
 };
 
 type RestartServicesOptions = {
   readonly afterUnitWrite?: () => void;
   readonly deferBrainMigration?: boolean;
   readonly deferMemoryMigration?: boolean;
+  readonly skipUnits?: readonly string[];
 };
 
 type MemoryCleanupOptions = {
@@ -206,6 +208,7 @@ export function createCliSystemd(runtime: CliRuntime) {
   function writeUnits({
     deferBrainMigration = false,
     ensureBearer = true,
+    skipUnits = [],
   }: WriteUnitsOptions = {}): string[] {
     hardenPerms();
     if (ensureBearer) ensureAssistantBearer({ quiet: true });
@@ -213,9 +216,11 @@ export function createCliSystemd(runtime: CliRuntime) {
     writeFileSync(join(UNIT_DIR, "iva.service"), ivaServiceBody());
     const written = ["iva.service"];
     const deploy = join(ROOT, "deploy");
+    const skipped = new Set(skipUnits);
     const timezone = configuredTimezone();
     for (const file of readdirSync(deploy)) {
-      if (!/^iva-.*\.(service|timer)$/.test(file)) continue;
+      if (!/^iva-.*\.(service|timer)$/.test(file) || skipped.has(file))
+        continue;
       const template = readFileSync(join(deploy, file), "utf8")
         .replaceAll("__PROJECT_DIR__", ROOT)
         .replaceAll("__NODE_BIN__", NODE)
@@ -504,8 +509,9 @@ export function createCliSystemd(runtime: CliRuntime) {
     afterUnitWrite = () => undefined,
     deferBrainMigration = false,
     deferMemoryMigration = false,
+    skipUnits = [],
   }: RestartServicesOptions = {}): void {
-    writeUnits({ deferBrainMigration });
+    writeUnits({ deferBrainMigration, skipUnits });
     afterUnitWrite();
     systemd.restart(SERVICES);
     const scheduleOwner = SERVICES[0];
