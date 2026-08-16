@@ -485,6 +485,7 @@ export function createUpdateTransaction({
     recoveryOwner = await UpdateRecoveryOwner.create({
       root,
       headOid: originalHead,
+      retentionRoot: join(dataDir, "update-recovery-debt"),
       git: recoveryGit,
       ...(recoveryFileOps ? { files: recoveryFileOps } : {}),
     });

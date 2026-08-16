@@ -6,6 +6,7 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -222,6 +223,63 @@ test("partial raw materialization failure retains recovery and a retry restores 
 
   assert.deepEqual(rawState(fx.local), before);
 });
+
+for (const boundary of ["index", "entry"] as const) {
+  test(`raw ${boundary} removal preserves a foreign tracked-path replacement`, async (t) => {
+    const fx = fixture();
+    t.after(() => rmSync(fx.temp, { recursive: true, force: true }));
+    prepareRawState(fx.local);
+    const tracked = join(fx.local, "tracked.txt");
+    const displaced = join(fx.temp, `tracked-${boundary}-owned`);
+    const foreignBytes = Buffer.from([0, 255, 7, 10]);
+    let armed = false;
+    let triggered = false;
+    const tx = createUpdateTransaction({
+      root: fx.local,
+      dataDir: fx.data,
+      envPath: join(fx.local, ".env"),
+      recoveryFileOps: {
+        beforeRawTrackedRemoval(path, actualBoundary) {
+          if (!armed || path !== tracked || actualBoundary !== boundary) return;
+          armed = false;
+          triggered = true;
+          try {
+            renameSync(tracked, displaced);
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+          }
+          mkdirSync(tracked);
+          writeFileSync(join(tracked, "foreign.bin"), foreignBytes);
+        },
+        remove(path) {
+          rmSync(path, { recursive: true, force: true });
+        },
+      },
+    });
+    await tx.protect();
+    armed = true;
+    const recoveryOid = git(
+      fx.local,
+      "for-each-ref",
+      "--format=%(objectname)",
+      "refs/iva/update-recovery",
+    );
+
+    await assert.rejects(() => tx.rollback(), /update rollback incomplete/u);
+
+    assert.equal(triggered, true);
+    assert.deepEqual(readFileSync(join(tracked, "foreign.bin")), foreignBytes);
+    assert.equal(
+      git(
+        fx.local,
+        "for-each-ref",
+        "--format=%(objectname)",
+        "refs/iva/update-recovery",
+      ),
+      recoveryOid,
+    );
+  });
+}
 
 test("persistent restore apply failure keeps exact recovery and rolls back without apply", async (t) => {
   const fx = fixture();

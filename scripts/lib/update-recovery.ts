@@ -1,22 +1,17 @@
 import { randomUUID } from "node:crypto";
-import {
-  chmodSync,
-  lstatSync,
-  mkdirSync,
-  readFileSync,
-  readlinkSync,
-  rmSync,
-  symlinkSync,
-  writeFileSync,
-} from "node:fs";
-import { dirname, resolve, sep } from "node:path";
+import { lstatSync, readFileSync, readlinkSync, rmSync } from "node:fs";
+import { resolve, sep } from "node:path";
 import {
   planIgnoredCollisions,
   removeIgnoredCollisionPaths,
   verifyIgnoredCollisionSet,
 } from "./update-ignored-collisions.ts";
 import { OriginalUntrackedOwner } from "./update-recovery-ownership.ts";
-import type { RecoveryIoHooks } from "./update-recovery-io.ts";
+import type { RecoveryContentEntry } from "./update-recovery-io.ts";
+import {
+  RawTrackedOwner,
+  type RawTrackedHooks,
+} from "./update-recovery-tracked-owner.ts";
 import {
   type IndexFlags,
   metadataFor,
@@ -46,7 +41,7 @@ export type RecoveryGit = {
   }>;
 };
 
-export type RecoveryFileOps = RecoveryIoHooks & {
+export type RecoveryFileOps = RawTrackedHooks & {
   remove(path: string): void;
   removeCollisionLeaf?(path: string): void;
   removeEmptyDirectory?(path: string): void;
@@ -88,6 +83,7 @@ export class UpdateRecoveryOwner {
   readonly #root: string;
   readonly #headOid: string;
   readonly #ref: string;
+  readonly #retentionRoot: string;
   readonly #git: RecoveryGit;
   readonly #files: RecoveryFileOps;
   readonly #objects: RecoveryObjectStore;
@@ -101,18 +97,21 @@ export class UpdateRecoveryOwner {
     root,
     headOid,
     ref,
+    retentionRoot,
     git,
     files,
   }: {
     root: string;
     headOid: string;
     ref: string;
+    retentionRoot: string;
     git: RecoveryGit;
     files: RecoveryFileOps;
   }) {
     this.#root = root;
     this.#headOid = headOid;
     this.#ref = ref;
+    this.#retentionRoot = retentionRoot;
     this.#git = git;
     this.#files = files;
     this.#objects = new RecoveryObjectStore({
@@ -147,16 +146,25 @@ export class UpdateRecoveryOwner {
   static async create({
     root,
     headOid,
+    retentionRoot,
     git,
     files = DEFAULT_FILE_OPS,
   }: {
     root: string;
     headOid: string;
+    retentionRoot: string;
     git: RecoveryGit;
     files?: RecoveryFileOps;
   }): Promise<UpdateRecoveryOwner> {
     const ref = `refs/iva/update-recovery/${Date.now()}-${process.pid}-${randomUUID()}`;
-    const owner = new UpdateRecoveryOwner({ root, headOid, ref, git, files });
+    const owner = new UpdateRecoveryOwner({
+      root,
+      headOid,
+      ref,
+      retentionRoot,
+      git,
+      files,
+    });
     await owner.#mustGit(["update-ref", ref, headOid]);
     const durableOid = await owner.#mustGit([
       "rev-parse",
@@ -616,8 +624,7 @@ export class UpdateRecoveryOwner {
     const entries = this.#objects.parseTreeEntries(
       await this.#mustGit(["ls-tree", "-r", "-z", tree]),
     );
-    for (const path of removePaths)
-      this.#files.remove(this.#safeChild(this.#root, path));
+    const contents: RecoveryContentEntry[] = [];
     for (const entry of entries) {
       if (!entry.oid)
         throw new Error(`recovery blob OID is missing: ${entry.path}`);
@@ -626,36 +633,47 @@ export class UpdateRecoveryOwner {
         throw new Error(
           blob.stderr || `couldn't read recovery blob: ${entry.path}`,
         );
-      const collision = preserveCollisionOwnership
-        ? this.#snapshotState().snapshot.ignoredCollisionEntries.find(
-            ({ path }) => path === entry.path,
-          )
-        : undefined;
-      if (collision) {
-        this.#collisions.verifyContent({ ...collision, bytes: blob.stdout });
-        continue;
+      contents.push({ ...entry, bytes: blob.stdout });
+    }
+    const owner = new RawTrackedOwner({
+      root: this.#root,
+      retentionRoot: this.#retentionRoot,
+      hooks: this.#files,
+    });
+    try {
+      const desired = new Map(contents.map((entry) => [entry.path, entry]));
+      const handled = new Set<string>();
+      for (const path of removePaths) {
+        owner.captureIndex(path);
+        const entry = desired.get(path);
+        const collision = preserveCollisionOwnership
+          ? this.#snapshotState().snapshot.ignoredCollisionEntries.find(
+              (candidate) => candidate.path === path,
+            )
+          : undefined;
+        if (entry && collision)
+          this.#collisions.verifyContent({ ...collision, bytes: entry.bytes });
+        else if (entry) owner.restore(entry);
+        else owner.remove(path);
+        owner.release(path);
+        handled.add(path);
       }
-      const target = this.#safeChild(this.#root, entry.path);
-      this.#files.remove(target);
-      mkdirSync(dirname(target), { recursive: true });
-      if (entry.mode === "120000") {
-        symlinkSync(blob.stdout, target);
-      } else if (entry.mode === "100644" || entry.mode === "100755") {
-        const expected =
-          this.#state.phase === "snapshot"
-            ? [
-                ...this.#state.snapshot.worktreeEntries,
-                ...this.#state.snapshot.untrackedEntries,
-                ...this.#state.snapshot.ignoredCollisionEntries,
-              ].find(({ path }) => path === entry.path)
-            : undefined;
-        const permissions =
-          expected?.permissions ?? (entry.mode === "100755" ? 0o755 : 0o644);
-        writeFileSync(target, blob.stdout, { mode: permissions });
-        chmodSync(target, permissions);
-      } else {
-        throw new Error(`unsupported recovery tree mode: ${entry.mode}`);
+      for (const entry of contents) {
+        if (handled.has(entry.path)) continue;
+        const collision = preserveCollisionOwnership
+          ? this.#snapshotState().snapshot.ignoredCollisionEntries.find(
+              ({ path }) => path === entry.path,
+            )
+          : undefined;
+        if (collision) {
+          this.#collisions.verifyContent({ ...collision, bytes: entry.bytes });
+          continue;
+        }
+        owner.restore(entry);
+        owner.release(entry.path);
       }
+    } finally {
+      owner.close();
     }
   }
 
