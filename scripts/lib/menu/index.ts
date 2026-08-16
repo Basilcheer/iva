@@ -20,6 +20,7 @@ import type {
   TelegramQueueMessage as TelegramMessage,
   TelegramQueueUpdate,
 } from "../telegram-queue.ts";
+import { isPrivateTelegramChat } from "#lib/telegram-private-chat.ts";
 
 import root from "./root.ts";
 import search from "./search.ts";
@@ -229,6 +230,7 @@ export function createMenu({
     await tg("answerCallbackQuery", { callback_query_id: cq.id }).catch(
       () => {},
     );
+    if (!isPrivateTelegramChat(cq.message?.chat)) return true;
     // Не-allowlisted тап глотаем ПОСЛЕ ack (mirror :563): флоу существует только у того,
     // кто прошёл гейт /menu, поэтому чужой тап и так не имеет стейта — но глушим явно.
     const allowed = deps.allowed;
@@ -364,6 +366,7 @@ export function createMenu({
     if (!a) return true;
     const chatId = msg.chat?.id;
     if (chatId === undefined) return true;
+    if (!isPrivateTelegramChat(msg.chat)) return true;
     const text = (msg.text || "").trim();
     flows.touch(st);
     // Команда прерывает ожидание: молча висящий промпт пригласил бы вставить ключ позже,

@@ -48,6 +48,7 @@ import {
 } from "./wizards.ts";
 import { createMenu } from "../lib/menu/index.ts";
 import { admitTelegramUpdate } from "./inbox.ts";
+import { isPrivateTelegramChat } from "#lib/telegram-private-chat.ts";
 
 type ControlCallbackQuery = TelegramCallbackQuery & { data: string };
 type PendingFlow = {
@@ -186,6 +187,14 @@ const answerCallback = (callbackQueryId: string, text?: string) =>
     log("answerCallbackQuery failed:", errorMessage(e));
     return { ok: false };
   });
+
+const privateChatOnlyText = () =>
+  tr(
+    "Open a private chat with me to use this control.",
+    "Открой личный чат со мной, чтобы использовать это управление.",
+  );
+
+const PRIVATE_ONLY_COMMANDS = new Set(["/menu", "/model", "/think"]);
 
 // ⏹ Стоп: кнопка статус-сообщения и /stop. В long-poll обе двери ведут сюда, в мост:
 // он перехватывает апдейт раньше любой доставки, поэтому «Стоп» доходит и до занятого
@@ -367,6 +376,23 @@ async function handleControl(
   const cq = update.callback_query;
   if (cq && hasCallbackData(cq)) {
     const callback = cq;
+    const updateCallback = parseUpdateCallbackData(callback.data);
+    const isLocalCallback =
+      callback.data === TELEGRAM_STOP_CALLBACK ||
+      updateCallback !== null ||
+      callback.data.startsWith("iva_model:") ||
+      callback.data.startsWith("iva_think:") ||
+      callback.data.startsWith("iva_menu:");
+    const callbackFrom = String(callback.from?.id ?? "");
+    const callbackAllowed = ALLOWED.size > 0 && ALLOWED.has(callbackFrom);
+    if (
+      isLocalCallback &&
+      callbackAllowed &&
+      !isPrivateTelegramChat(callback.message?.chat)
+    ) {
+      await ackImpl(callback.id, privateChatOnlyText()).catch(() => {});
+      return true;
+    }
     // ⏹ Стоп у статус-сообщения. Тап никогда не уходит в eve: колбэк наш, а отмену
     // мост делает сам через cancel-роут канала. У канала есть свой обработчик той же
     // кнопки (agent/lib/telegram-stop.ts), но он для webhook-режима, где моста нет:
@@ -386,8 +412,7 @@ async function handleControl(
       );
       return outcome === "requested" || acknowledged;
     }
-    if (parseUpdateCallbackData(callback.data) !== null)
-      return handleUpdateCallback(callback);
+    if (updateCallback !== null) return handleUpdateCallback(callback);
     // Wizard errors must not escape and crash the bridge. A failed handler returns
     // false so the callback enters durable inbox ownership before offset advances.
     if (
@@ -415,7 +440,7 @@ async function handleControl(
   // (below), so a capture works even mid-turn. Non-text is intercepted only while awaiting a SECRET
   // (or a file-capable secret): a document/photo could be the secret itself and must not reach eve.
   // A non-secret await (e.g. the memory interview) lets a non-text message fall through unchanged.
-  if (msg?.from) {
+  if (msg?.from && isPrivateTelegramChat(msg.chat)) {
     const pending = getWizard(msg.chat?.id, String(msg.from.id));
     const a = isAwaitText(pending?.awaitText) ? pending.awaitText : null;
     if (pending && a) {
@@ -461,6 +486,12 @@ async function handleControl(
   if (ALLOWED.size === 0 || !ALLOWED.has(from)) return false; // untrusted — let eve drop it
   const chatId = msg?.chat?.id;
   if (chatId === undefined) return false;
+  if (PRIVATE_ONLY_COMMANDS.has(cmd) && !isPrivateTelegramChat(msg?.chat)) {
+    await replyImpl(chatId, privateChatOnlyText()).catch((e: unknown) =>
+      log("private-chat rejection failed:", errorMessage(e)),
+    );
+    return true;
+  }
   // /menu — open the nested settings menu (out-of-band; errors consumed, never reach eve).
   if (cmd === "/menu") {
     await menu

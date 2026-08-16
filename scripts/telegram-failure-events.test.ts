@@ -631,7 +631,7 @@ async function postWebhookUpdate(update: Record<string, unknown>) {
   return response;
 }
 
-function stopTap(chatId: string, fromId: number) {
+function stopTap(chatId: string, fromId: number, chatType?: string) {
   return {
     update_id: 900 + fromId,
     callback_query: {
@@ -640,7 +640,7 @@ function stopTap(chatId: string, fromId: number) {
       message: {
         message_id: 5,
         date: 1,
-        chat: { id: Number(chatId), type: "private" },
+        chat: { id: Number(chatId), type: chatType ?? "private" },
       },
       data: "iva_cancel",
     },
@@ -723,6 +723,28 @@ test("an idle chat and an untrusted tap never reach the cancel route", async () 
   const foreignAcks = callsSince(beforeForeign, "answerCallbackQuery");
   assert.equal(foreignAcks.length, 1, "чужой колбэк остался без ack");
   assert.equal(foreignAcks[0].body!.text, undefined);
+});
+
+test("non-private webhook Stop callbacks never reach the cancel route", async () => {
+  for (const chatType of ["group", "supergroup", "channel"]) {
+    const chatId = String(740 + apiCalls.length);
+    setChatStatus(chatKeyOf(chatId), {
+      status: "running",
+      continuationToken: `${chatId}::`,
+      sessionId: `guarded-${String(chatType)}`,
+      turnId: "turn_private_boundary",
+    });
+    const before = apiCalls.length;
+    const update = stopTap(chatId, 9, chatType);
+    await postWebhookUpdate(update);
+
+    assert.equal(callsSince(before, "cancel").length, 0, String(chatType));
+    const acknowledgements = callsSince(before, "answerCallbackQuery");
+    assert.equal(acknowledgements.length, 1, String(chatType));
+    const text = acknowledgements[0].body?.text;
+    if (typeof text !== "string") assert.fail(String(chatType));
+    assert.match(text, /private|личн/u, String(chatType));
+  }
 });
 
 // Состарить запись run-status, не трогая её раскладку: ищем файл по sessionId и
