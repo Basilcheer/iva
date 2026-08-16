@@ -1246,7 +1246,11 @@ test("a healthy service stays committed when post-health cleanup fails", async (
   );
   assert.equal(retries, 1);
   assert.equal(store.cleanupPending(outcome.version), false);
-  assert.equal(iva.restarts.length, 1, "cleanup retry must not restart service");
+  assert.equal(
+    iva.restarts.length,
+    1,
+    "cleanup retry must not restart service",
+  );
 });
 
 test("writer retirement runs only after live health and service commit", async (t) => {

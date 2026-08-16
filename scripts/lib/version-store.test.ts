@@ -744,20 +744,13 @@ test("explicit retention is invariant under arbitrary mtimes", () => {
 
   fc.assert(
     fc.property(
-      fc.tuple(
-        fc.integer(),
-        fc.integer(),
-        fc.integer(),
-        fc.integer(),
-      ),
+      fc.tuple(fc.integer(), fc.integer(), fc.integer(), fc.integer()),
       (mtimes) => {
         const byMtime = names
           .map((name, index) => ({ name, mtime: mtimes[index] ?? 0 }))
           .sort((a, b) => b.mtime - a.mtime || a.name.localeCompare(b.name))
           .map(({ name }) => name);
-        const kept = new Set(
-          retainedVersions(byMtime, [current, rollback], 2),
-        );
+        const kept = new Set(retainedVersions(byMtime, [current, rollback], 2));
         assert.deepEqual(kept, new Set([current, rollback]));
       },
     ),

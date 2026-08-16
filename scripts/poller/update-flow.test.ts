@@ -82,7 +82,8 @@ const mutableGlobal: { fetch: MockFetch } = globalThis;
 for (const scenario of [
   {
     name: "inspect failure",
-    inspectImpl: (): Promise<never> => Promise.reject(new Error("inspect failed")),
+    inspectImpl: (): Promise<never> =>
+      Promise.reject(new Error("inspect failed")),
   },
   {
     name: "current version",

@@ -238,14 +238,22 @@ void test("core durably owns the synthetic update when direct delivery is reject
   const handled = await core.on(
     "fin",
     [],
-    makeState({ data: { iv: { i: 0, qa: [], chat: null, from: null, threadId: null } } }),
+    makeState({
+      data: { iv: { i: 0, qa: [], chat: null, from: null, threadId: null } },
+    }),
     context,
   );
 
   assert.equal(handled, true);
   assert.equal(admissions.length, 1);
-  assert.match(admissions[0].message.text, /Core memory setup|Настройка core memory/u);
-  assert.equal(screens.some(({ text }) => /Передал иве/u.test(text)), false);
+  assert.match(
+    admissions[0].message.text,
+    /Core memory setup|Настройка core memory/u,
+  );
+  assert.equal(
+    screens.some(({ text }) => /Передал иве/u.test(text)),
+    false,
+  );
   assert.match(
     readFileSync(join(vault, "core-interview.md"), "utf8"),
     /Core interview/u,
@@ -264,7 +272,9 @@ void test("core returns false when synthetic inbox ownership fails", async (t) =
   const handled = await core.on(
     "fin",
     [],
-    makeState({ data: { iv: { i: 0, qa: [], chat: null, from: null, threadId: null } } }),
+    makeState({
+      data: { iv: { i: 0, qa: [], chat: null, from: null, threadId: null } },
+    }),
     context,
   );
 

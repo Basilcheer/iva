@@ -52,8 +52,8 @@ type CreateFlowsOptions = {
 function messageResultSucceeded(value: TelegramFlowResponse): boolean {
   return (
     value.ok === true &&
-    typeof (value.result as { message_id?: unknown } | undefined)?.message_id ===
-      "number"
+    typeof (value.result as { message_id?: unknown } | undefined)
+      ?.message_id === "number"
   );
 }
 

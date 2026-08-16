@@ -29,6 +29,7 @@ const FLIP_PREFIX = ".current.iva-flip-";
 const LEFTOVER = [FLIP_PREFIX, ".probe-"];
 const VERSION_NAME =
   /^(\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?)-([0-9a-f]{12})(?:\+([0-9a-f]{8}))?(?:~(\d+))?$/;
+// eslint-disable-next-line @typescript-eslint/unbound-method -- Intl.Collator compare is a bound getter.
 const VERSION_ORDER = new Intl.Collator("en", { numeric: true }).compare;
 /** What a version borrows from the installation; the rest of `.eve` is a build cache. */
 export const STATE_DIRS = ["data", "vault", ".eve/.workflow-data"];
@@ -247,8 +248,7 @@ export function retainedVersions(
   const available = new Set(finished);
   const retained = new Set(
     references.filter(
-      (name): name is string =>
-        typeof name === "string" && available.has(name),
+      (name): name is string => typeof name === "string" && available.has(name),
     ),
   );
   const target = Math.max(keep, retained.size, 1);

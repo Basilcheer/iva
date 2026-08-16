@@ -218,16 +218,12 @@ test("data-верб возвращает явный false/true proof экран�
   const st = await menu.open(10, "20");
   screens.core.on = () => false;
   assert.equal(
-    await menu.onCallback(
-      cb("iva_menu:core:fin", { messageId: st.msgId }),
-    ),
+    await menu.onCallback(cb("iva_menu:core:fin", { messageId: st.msgId })),
     false,
   );
   screens.core.on = () => true;
   assert.equal(
-    await menu.onCallback(
-      cb("iva_menu:core:fin", { messageId: st.msgId }),
-    ),
+    await menu.onCallback(cb("iva_menu:core:fin", { messageId: st.msgId })),
     true,
   );
 });

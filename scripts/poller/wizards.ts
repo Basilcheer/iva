@@ -57,8 +57,8 @@ const messageCallSucceeded = (value: unknown) =>
   typeof value === "object" &&
   value !== null &&
   (value as { ok?: unknown }).ok === true &&
-  typeof (value as { result?: { message_id?: unknown } }).result
-    ?.message_id === "number";
+  typeof (value as { result?: { message_id?: unknown } }).result?.message_id ===
+    "number";
 const replySucceeded = (value: unknown) =>
   typeof value === "object" &&
   value !== null &&
