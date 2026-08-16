@@ -1,7 +1,14 @@
 import { spawn } from "node:child_process";
 import { isUtf8 } from "node:buffer";
 import { createHash } from "node:crypto";
-import { cpSync, mkdirSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import {
+  cpSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+} from "node:fs";
 import { dirname, join, relative, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { isAuthoredPath } from "./authored-paths.ts";
@@ -633,11 +640,24 @@ function validMigrationState(
 /** Names already applied. Missing is valid; every existing invalid marker blocks. */
 function appliedMigrations(dataDir: string): string[] {
   const marker = join(dataDir, MIGRATION_MARKER);
+  let regularFile: boolean;
+  try {
+    regularFile = lstatSync(marker).isFile();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw new Error(
+      `${MIGRATION_MARKER} is corrupt or unreadable: ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error },
+    );
+  }
+  if (!regularFile)
+    throw new Error(
+      `${MIGRATION_MARKER} is corrupt or unreadable: migration state marker is not a regular file`,
+    );
   let bytes: Buffer;
   try {
     bytes = readFileSync(marker);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
     throw new Error(
       `${MIGRATION_MARKER} is corrupt or unreadable: ${error instanceof Error ? error.message : String(error)}`,
       { cause: error },

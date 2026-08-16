@@ -334,6 +334,52 @@ test("an unreadable active marker is not treated as missing", (t) => {
   assert.equal(lstatSync(marker).isDirectory(), true);
 });
 
+test("a symlinked active marker is corrupt even when its target is valid", (t) => {
+  const root = home(t);
+  const store = createVersionStore(root);
+  mkdirSync(store.layout.data, { recursive: true });
+  const marker = join(store.layout.data, "active.json");
+  const target = join(root, "active-target.json");
+  const bytes = Buffer.from(
+    '{"schema":"iva-active/v1","version":"0.3.14-aaaaaaaaaaaa"}\n',
+  );
+  writeFileSync(target, bytes);
+  symlinkSync(target, marker);
+  const before = lstatSync(marker);
+
+  assert.equal(readActiveState(marker).kind, "corrupt-or-unreadable");
+  assert.equal(lstatSync(marker).ino, before.ino);
+  assert.equal(readlinkSync(marker), target);
+  assert.deepEqual(readFileSync(target), bytes);
+});
+
+test("a dangling active marker blocks sweep before it removes a version", (t) => {
+  const root = home(t);
+  const store = createVersionStore(root);
+  const staged = store.stage("0.3.15-bbbbbbbbbbbb");
+  writeFileSync(join(staged, "half-built.txt"), "partial");
+  mkdirSync(store.layout.data, { recursive: true });
+  const marker = join(store.layout.data, "active.json");
+  const target = join(root, "missing-active-target.json");
+  symlinkSync(target, marker);
+  const before = lstatSync(marker);
+
+  let caught: unknown;
+  try {
+    store.sweep();
+  } catch (error) {
+    caught = error;
+  }
+
+  assert.equal(existsSync(staged), true, "sweep removed a staged version");
+  assert.ok(caught instanceof Error);
+  assert.match(caught.message, /active\.json.*corrupt/u);
+  assert.equal(lstatSync(marker).ino, before.ino);
+  assert.equal(lstatSync(marker).isSymbolicLink(), true);
+  assert.equal(readlinkSync(marker), target);
+  assert.equal(existsSync(target), false);
+});
+
 test("invalid UTF-8 is rejected before JSON schema validation", (t) => {
   const store = createVersionStore(home(t));
   mkdirSync(store.layout.data, { recursive: true });

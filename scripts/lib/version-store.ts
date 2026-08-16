@@ -186,12 +186,26 @@ function validActiveState(value: unknown): value is ActiveState {
 
 /** A missing marker is first-install state; every existing invalid marker is explicit. */
 export function readActiveState(path: string): ActiveStateRead {
+  let regularFile: boolean;
+  try {
+    regularFile = lstatSync(path).isFile();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT")
+      return { kind: "missing" };
+    return {
+      kind: "corrupt-or-unreadable",
+      reason: error instanceof Error ? error.message : String(error),
+    };
+  }
+  if (!regularFile)
+    return {
+      kind: "corrupt-or-unreadable",
+      reason: "active state marker is not a regular file",
+    };
   let bytes: Buffer;
   try {
     bytes = readFileSync(path);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT")
-      return { kind: "missing" };
     return {
       kind: "corrupt-or-unreadable",
       reason: error instanceof Error ? error.message : String(error),

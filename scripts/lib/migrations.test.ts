@@ -4,11 +4,14 @@ import assert from "node:assert/strict";
 import {
   appendFileSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readlinkSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -141,6 +144,30 @@ test("a malformed marker blocks migrations and stays byte-identical", async (t) 
   await assert.rejects(migrations.run(), /migrations\.json is corrupt/u);
   assert.deepEqual(migrations.entries(), []);
   assert.deepEqual(readFileSync(marker), corrupt);
+});
+
+test("a dangling migration marker blocks execution without changing its object", async (t) => {
+  const migrations = fixture(t);
+  migrations.write("001-first.ts", recorder("first"));
+  const marker = join(migrations.dataDir, "migrations.json");
+  const target = join(migrations.dataDir, "missing-migrations-target.json");
+  symlinkSync(target, marker);
+  const before = lstatSync(marker);
+
+  let caught: unknown;
+  try {
+    await migrations.run();
+  } catch (error) {
+    caught = error;
+  }
+
+  assert.deepEqual(migrations.entries(), [], "migration ran before validation");
+  assert.ok(caught instanceof Error);
+  assert.match(caught.message, /migrations\.json is corrupt/u);
+  assert.equal(lstatSync(marker).ino, before.ino);
+  assert.equal(lstatSync(marker).isSymbolicLink(), true);
+  assert.equal(readlinkSync(marker), target);
+  assert.equal(existsSync(target), false);
 });
 
 test("invalid UTF-8 blocks migrations before import", async (t) => {
