@@ -14,7 +14,45 @@ The integration candidate contains the accepted Bridge series through `273b01b`,
 
 D10 intentionally retains uncertain cleanup debt. That debt can grow disk use. A future collector must delete an object only after it proves ownership and liveness.
 
-## 3. Deferred requirements
+## 3. Proven integrity class definitions
+
+These names are review vocabulary. Recording a class here does not create new implementation scope. The anchors below refer to base `a5a78e9`.
+
+### CARD-OWNERSHIP — open
+
+**Definition.** A writer may publish a Card only while it still owns the create or merge decision. A preflight existence check is not ownership.
+
+**Current anchor.** `agent/tools/write_file.ts:28-39` checks whether the target is an existing Card. The check passes when the path is absent. Execution then yields at `agent/tools/write_file.ts:62` before `writeFile()` opens the target with truncate semantics at `:63`. The Card-aware path instead locks, rereads, merges, and publishes at `agent/tools/write_card.ts:332-407`.
+
+**Loss scenario.** The target is absent during `isExistingCard()`. Another writer creates a Card before `write_file` publishes. `write_file` then truncates that foreign Card and destroys unknown frontmatter fields and its body.
+
+**Minimal repro.** Start `write_file.execute()` for an absent `cards/contacts/alice.md`. Before awaiting its promise, create that path with `phone: +998900000000` and `Foreign body`. On `a5a78e9`, the call returns `ok: true`; the final file is only `# Model replacement`, and both the unknown field and foreign body are gone. Existing-Card and symlink tests at `scripts/vault-tools-paths.test.ts:58-84` and `scripts/review-fixes.test.ts:139-161` do not exercise this check-then-write interleaving.
+
+### WRITE-FILE-ATOMICITY — open
+
+**Definition.** A process crash during replacement must leave the target as one complete old or new generation. It must never expose a missing, empty, truncated, or mixed target.
+
+**Current anchor.** `agent/tools/write_file.ts:62-63` calls direct `writeFile()` on the target. Opening an existing target truncates it before the full payload is written.
+
+**Loss scenario.** `write_file` replaces `vault/CORE.md`. `SIGKILL` lands after truncate and before the complete write. The only target path now contains partial bytes, so the next Turn reads damaged or empty CORE.
+
+**Minimal repro.** Fill `CORE.md` with 64 MiB of `A`, start `write_file` with 64 MiB of `B`, wait until the target size differs from 67,108,864, then send `SIGKILL`. On `a5a78e9`, the observed and surviving target sizes are both `0/67108864` bytes.
+
+The Wave B code fix is a separate commit for later integration. This definition records only the proven class and its base anchor.
+
+### DATA-DURABILITY — ALREADY CLOSED
+
+**Definition.** A successful atomic replacement must survive power loss. A complete rename is not durable until the temporary file and the containing directory have crossed their persistence barriers.
+
+**Historical evidence.** Findings D1, M5, and M7 proved this class when the shared writer performed temp-write plus rename without file or directory `fsync`, while PERSONA, interview, and the GWS secret used direct writes. A successful call could therefore disappear or restore the old directory entry after power loss. The review did not perform a real power cut; its minimal proof was the completed write/rename trace with no durability syscall.
+
+**Current closure anchor.** The synchronous protocol writes and syncs the temporary file before rename, then syncs the parent directory at `agent/lib/fs-atomic.ts:412-431`. The asynchronous protocol applies the same barriers at `agent/lib/fs-atomic.ts:519-539`. The historical M5/M7 callers now use that writer at `scripts/lib/core-interview.ts:110-112`, `scripts/lib/menu/character.ts:147-152`, and `scripts/lib/menu/gws.ts:344-347`.
+
+**Minimal regression repro.** Inject one failure after every protocol step. Before rename, the old target must remain. After rename but before directory confirmation, the new target may be published, but the call must fail with `EATOMIC_WRITE_DURABILITY`. `agent/lib/fs-atomic.test.ts:132-167` is the example anchor. The child-process crash anchor at `agent/lib/fs-atomic.test.ts:840-879` kills at write, file-sync, and rename boundaries and accepts only a complete old or new target.
+
+`ALREADY CLOSED` applies to the historical D1/M5/M7 class and these migrated callers. It does not claim that every writer uses the canonical helper, and it does not open a new Wave B production task.
+
+## 4. Deferred requirements
 
 `P1`, `P2`, and `P3` below preserve the review priority. `Owner` blocks implementation until the owner fixes the product contract. `Accepted` means no implementation without a new owner decision.
 
@@ -69,7 +107,7 @@ D10 intentionally retains uncertain cleanup debt. That debt can grow disk use. A
 | C5  | P3          | Glob conversion and walking are duplicated at `agent/tools/glob.ts:12,47` and `agent/tools/grep.ts:11,43`.                                        | Matcher, sorting, or unreadable-directory behavior can drift.                | Resume only after both tools load a shared module under current Eve. | Both tools import one walker and matcher. Current matching, sorting, and unreadable-directory behavior remains exact.                 | Shared-import load test plus matcher, sorting, and unreadable-directory examples. No new PBT unless matcher grammar is specified. | Requires Eve loader proof. Risk: consolidation can change path semantics.                   |
 | M4  | P3; blocked | `scripts/autograph/dedup.py:377-383` applies a documented `1.5x` enrichment policy. The review did not reproduce conflict-field data loss.        | A speculative change could replace the canonical body or alter merge policy. | Do not change M4 without a concrete data-loss counterexample.        | First approve a field-policy table. Then preserve every field classified as loss-sensitive in the reproduced case.                    | Keep the concrete counterexample as an example test. Add PBT only after the field algebra is explicit.                            | Blocked by missing evidence and owner policy. Risk: an unproved fix creates real data loss. |
 
-## 4. Dependencies and future order
+## 5. Dependencies and future order
 
 1. Record owner decisions for S1 and C1. Keep S5-S8 closed unless the owner reopens them.
 2. Land M19 before D11 and D12.
@@ -81,7 +119,7 @@ D10 intentionally retains uncertain cleanup debt. That debt can grow disk use. A
 8. Take S3, C3, and C5 only when their stated contracts exist.
 9. Keep M4 unchanged until a concrete data-loss counterexample exists.
 
-## 5. Non-goals
+## 6. Non-goals
 
 - Do not change production code during this safe-stop.
 - Do not reopen accepted D3, D4, D9, D10, M9-M11, M16, M17, or X1 work.
@@ -90,7 +128,7 @@ D10 intentionally retains uncertain cleanup debt. That debt can grow disk use. A
 - Do not turn S5-S8 into implementation tasks without a new ADR.
 - Do not add PBT where the invariant is not explicit.
 
-## 6. Cross-wave risks
+## 7. Cross-wave risks
 
 - Lock and takeover changes can deadlock updates or admit concurrent owners.
 - Filesystem generation changes can strand the only active path.
@@ -100,7 +138,7 @@ D10 intentionally retains uncertain cleanup debt. That debt can grow disk use. A
 - Installer pinning can fail across platforms without an artifact matrix.
 - D10 retained debt can increase disk use until a proven safe collector exists.
 
-## 7. Temporary operating rules
+## 8. Temporary operating rules
 
 - Do not run two updaters at once.
 - Do not run repair.
