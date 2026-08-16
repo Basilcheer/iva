@@ -55,7 +55,7 @@ type PendingFlow = {
   [key: string]: unknown;
 };
 type AwaitText = { file?: boolean; kind?: string; secret?: boolean };
-type TelegramResult = { ok?: boolean };
+type TelegramResult = { ok?: boolean; result?: unknown };
 type SentMessage = { message_id: number };
 type ErrorDetails = { message?: unknown; resetPhase?: unknown };
 type NonTextIo = {
@@ -127,7 +127,8 @@ function telegramCallSucceeded(value: unknown): boolean {
   return (
     typeof value === "object" &&
     value !== null &&
-    (value as TelegramResult).ok === true
+    (value as TelegramResult).ok === true &&
+    (value as TelegramResult).result === true
   );
 }
 

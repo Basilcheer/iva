@@ -112,7 +112,7 @@ function recordingDeps() {
       },
       ackImpl: async (id: string, text?: string) => {
         acks.push([id, text]);
-        return { ok: true };
+        return { ok: true, result: true };
       },
       replyImpl: async (chatId: number | undefined, text: string) => {
         replies.push([chatId, text]);
@@ -286,7 +286,7 @@ test("a failed cancel request is explained instead of pretending it stopped", as
     },
     ackImpl: async (id: string, text?: string) => {
       acks.push([id, text]);
-      return { ok: true };
+      return { ok: true, result: true };
     },
   });
 
@@ -417,6 +417,20 @@ test("a falsey callback ack does not claim a local control", async () => {
 
   const consumed = await handleControl(stopButton(), {
     ackImpl: async () => null,
+  });
+
+  assert.equal(consumed, false);
+});
+
+test("a false callback ack result does not claim a local control", async () => {
+  status.setChatStatus("7:", {
+    status: "idle",
+    sessionId: null,
+    turnId: null,
+  });
+
+  const consumed = await handleControl(stopButton(), {
+    ackImpl: async () => ({ ok: true, result: false }),
   });
 
   assert.equal(consumed, false);
