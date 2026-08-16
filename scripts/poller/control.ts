@@ -47,6 +47,7 @@ import {
   resetMessageCopy,
 } from "./wizards.ts";
 import { createMenu } from "../lib/menu/index.ts";
+import { admitTelegramUpdate } from "./inbox.ts";
 
 type ControlCallbackQuery = TelegramCallbackQuery & { data: string };
 type PendingFlow = {
@@ -229,6 +230,10 @@ const menu = createMenu({
     // с обычной прямой доставкой, но намеренно не проходит busy-time FIFO.
     deliver: (update) =>
       deliverDirectUpdate(update).then((result) => result === "delivered"),
+    admitSynthetic: (update) =>
+      admitTelegramUpdate(update, { trustedLocal: true }).then(
+        (result) => result === "owned",
+      ),
     log,
     allowed: ALLOWED,
     handleModelCmd,

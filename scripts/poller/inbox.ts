@@ -144,12 +144,15 @@ export async function admitTelegramUpdate(
   {
     allowedUserIds = ALLOWED,
     botUsername = BOT_USERNAME,
+    trustedLocal = false,
     enqueueImpl = (key: string, candidate: TelegramQueueUpdate) =>
       enqueueQueueFile(TELEGRAM_INBOX_FILE, key, candidate, { strict: true }),
     logImpl = log,
   }: {
     allowedUserIds?: ReadonlySet<string>;
     botUsername?: unknown;
+    /** Already-authorized local payload; bypasses external sender/group policy, never key validation. */
+    trustedLocal?: boolean;
     enqueueImpl?: (
       key: string,
       candidate: TelegramQueueUpdate,
@@ -157,7 +160,12 @@ export async function admitTelegramUpdate(
     logImpl?: (...parts: unknown[]) => void;
   } = {},
 ): Promise<InboxAdmissionResult> {
-  const decision = admissionPolicy(update, allowedUserIds, botUsername);
+  const trustedKey = trustedLocal ? inboxKeyFor(update) : null;
+  const decision = trustedLocal
+    ? trustedKey === null
+      ? { action: "unownable" as const }
+      : { action: "own" as const, key: trustedKey }
+    : admissionPolicy(update, allowedUserIds, botUsername);
   if (decision.action !== "own") return decision.action;
   try {
     await enqueueImpl(decision.key, update);

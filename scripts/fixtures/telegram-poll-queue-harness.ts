@@ -97,6 +97,16 @@ if (
     sessionId: null,
     turnId: null,
   });
+} else if (
+  mode === "core-distill-ownership-crash" ||
+  mode === "core-distill-write-failure"
+) {
+  status.setChatStatus(privateKey, {
+    status: "idle",
+    continuationToken: "1::",
+    sessionId: null,
+    turnId: null,
+  });
 }
 if (mode === "group-noise" || mode === "routing") {
   status.setChatStatus(groupKey, {
@@ -153,7 +163,11 @@ if (fault !== "none") {
     }
     const ownsMessage = inboxOwnershipStages.delete(String(from));
     const result = await originalRename(from, to, ...args);
-    if (fault === "dir-sync-once" && String(to) === inboxFile && ownsMessage) {
+    if (
+      (fault === "dir-sync-once" || fault === "hold-after-inbox-sync") &&
+      String(to) === inboxFile &&
+      ownsMessage
+    ) {
       inboxDirectorySyncArmed = true;
     }
     return result;
@@ -165,7 +179,7 @@ if (fault !== "none") {
   ) => {
     const handle = (await originalOpen(path, flags, ...args)) as SyncHandle;
     if (
-      fault !== "dir-sync-once" ||
+      (fault !== "dir-sync-once" && fault !== "hold-after-inbox-sync") ||
       String(path) !== dataDir ||
       flags !== "r" ||
       !inboxDirectorySyncArmed
@@ -176,6 +190,15 @@ if (fault !== "none") {
     return {
       sync: async () => {
         queueDirSyncAttempts++;
+        if (fault === "hold-after-inbox-sync") {
+          await handle.sync();
+          queueDirSyncSuccesses++;
+          writeFileSync(
+            join(dataDir, "core-distill-ownership-ready"),
+            "ready\n",
+          );
+          return new Promise<void>(() => {});
+        }
         if (queueDirSyncAttempts === 1) {
           throw Object.assign(
             new Error("injected queue directory sync failure"),
@@ -238,6 +261,15 @@ const callbackUpdate = {
     from: { id: 42, is_bot: false, first_name: "Owner" },
     message: privateUpdate(100, "button owner").message,
     data: "foreign_callback",
+  },
+};
+const coreFinishCallbackUpdate = {
+  update_id: 101,
+  callback_query: {
+    id: "core-finish-callback-101",
+    from: { id: 42, is_bot: false, first_name: "Owner" },
+    message: privateUpdate(100, "core menu").message,
+    data: "iva_menu:core:fin",
   },
 };
 const inlineCallbackUpdate = {
@@ -412,7 +444,10 @@ const fetchHarness = async (url: unknown, options: FetchOptions = {}) => {
       });
     }
     if (
-      (mode === "direct-timeout" || mode === "direct-timeout-twice") &&
+      (mode === "direct-timeout" ||
+        mode === "direct-timeout-twice" ||
+        mode === "core-distill-ownership-crash" ||
+        mode === "core-distill-write-failure") &&
       deliveryRoute === "/eve/v1/telegram/accepted"
     ) {
       directAcceptanceAttempts++;
@@ -651,6 +686,19 @@ const fetchHarness = async (url: unknown, options: FetchOptions = {}) => {
       }
       finish();
     }
+    if (
+      mode === "core-distill-ownership-crash" ||
+      mode === "core-distill-write-failure"
+    ) {
+      if (getUpdatesCalls === 1) {
+        return jsonResponse({ ok: true, result: [coreFinishCallbackUpdate] });
+      }
+      if (mode === "core-distill-write-failure") finish();
+      writeFileSync(join(dataDir, "core-distill-ownership-ready"), "ready\n");
+      return new Promise(() => {
+        setInterval(() => {}, 60_000);
+      });
+    }
     if (mode === "fair-drain") finish();
     throw new Error(`unknown harness mode: ${mode}`);
   }
@@ -673,6 +721,28 @@ Object.defineProperty(globalThis, "fetch", {
   value: fetchHarness,
   writable: true,
 });
+
+if (
+  mode === "core-distill-ownership-crash" ||
+  mode === "core-distill-write-failure"
+) {
+  const { flows } = await import("../poller/wizards.ts");
+  const state = flows.start(1, "42", "menu", {
+    screen: "core",
+    page: 0,
+    msgId: 100,
+  });
+  state.data = {
+    iv: {
+      i: 1,
+      qa: [{ q: "How should I address you?", a: "Sergey" }],
+      chat: { id: 1, type: "private" },
+      from: { id: 42, is_bot: false, first_name: "Owner" },
+      threadId: null,
+    },
+  };
+  state.awaitText = { kind: "interview", secret: false, data: {} };
+}
 
 const testGuardIdentity = `queue-harness-${process.pid}`;
 const { main } = (await import(

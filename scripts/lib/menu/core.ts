@@ -10,6 +10,7 @@
 // Поэтому перед deliver ОБЯЗАТЕЛЬНА проверка isRunning(chatKey): занято → не доставляем, а
 // честно говорим сохранить и повторить, когда ива освободится.
 import { readFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import {
   INTERVIEW,
@@ -41,12 +42,21 @@ type MenuState = {
     data: Record<string, unknown>;
   } | null;
 };
+type SyntheticUpdate = {
+  update_id: number;
+  message: {
+    message_id: number;
+    date: number;
+    chat: Record<string, unknown>;
+    from: Record<string, unknown>;
+    text: string;
+    message_thread_id?: number;
+  };
+};
 type MenuContext = {
   deps: {
-    deliver: (update: {
-      update_id: number;
-      message: Record<string, unknown>;
-    }) => Promise<unknown>;
+    deliver: (update: SyntheticUpdate) => Promise<unknown>;
+    admitSynthetic: (update: SyntheticUpdate) => Promise<boolean>;
     log?: (...parts: unknown[]) => void;
   };
   getLang: () => string;
@@ -66,6 +76,30 @@ function errorMessage(error: unknown): string {
 function vaultDir() {
   const raw = process.env.ASSISTANT_VAULT_DIR ?? "vault";
   return raw.startsWith("/") ? raw : join(process.cwd(), raw);
+}
+
+function identityId(value: unknown, fallback: string | number): string {
+  if (typeof value === "string") return value;
+  if (typeof value === "number" && Number.isSafeInteger(value)) return `${value}`;
+  return `${fallback}`;
+}
+
+function syntheticIdentity(
+  st: MenuState,
+  iv: Interview,
+  text: string,
+): number {
+  const digest = createHash("sha256")
+    .update("iva-core-distillation/v1\0")
+    .update(identityId(iv.chat?.id, st.chatId))
+    .update("\0")
+    .update(identityId(iv.from?.id, st.userId))
+    .update("\0")
+    .update(String(iv.threadId ?? ""))
+    .update("\0")
+    .update(text)
+    .digest();
+  return digest.readUIntBE(0, 6) || 1;
 }
 
 async function coreExcerpt() {
@@ -177,31 +211,44 @@ async function finish(st: MenuState, ctx: MenuContext) {
     id: st.chatId,
     type: Number(st.chatId) > 0 ? "private" : "supergroup",
   };
+  const text = buildDistillMessage(qa, lang);
+  const identity = syntheticIdentity(
+    st,
+    iv,
+    buildDistillMessage(qa, "en"),
+  );
   const message = {
-    message_id: Date.now(),
-    date: Math.floor(Date.now() / 1000),
+    message_id: identity,
+    date: Math.floor(identity / 100_000) || 1,
     chat,
     from,
-    text: buildDistillMessage(qa, lang),
+    text,
     ...(threadId != null ? { message_thread_id: threadId } : {}),
   };
+  const update = { update_id: -identity, message };
   let delivered: unknown;
   try {
-    delivered = await ctx.deps.deliver({ update_id: 0, message });
+    delivered = await ctx.deps.deliver(update);
   } catch (error) {
     ctx.deps.log?.("core deliver error:", errorMessage(error));
+  }
+  if (delivered === true) {
+    await ctx.flows.screen(
+      st,
+      ctx.tr(
+        "Sent to Iva — she'll distill your answers into the memory core and confirm.",
+        "Передал иве — она сожмёт ответы в ядро памяти и подтвердит.",
+      ),
+      [ctx.backRow(PARENT)],
+    );
+    return true;
+  }
+  try {
+    return (await ctx.deps.admitSynthetic(update)) === true;
+  } catch (error) {
+    ctx.deps.log?.("core synthetic admission error:", errorMessage(error));
     return false;
   }
-  if (delivered !== true) return false;
-  await ctx.flows.screen(
-    st,
-    ctx.tr(
-      "Sent to Iva — she'll distill your answers into the memory core and confirm.",
-      "Передал иве — она сожмёт ответы в ядро памяти и подтвердит.",
-    ),
-    [ctx.backRow(PARENT)],
-  );
-  return true;
 }
 
 export default {

@@ -151,6 +151,7 @@ function setup({ allowed = new Set(["20"]) }: { allowed?: Set<string> } = {}) {
     reply: (chatId: number, text: string) =>
       Promise.resolve(replies.push({ chatId, text })),
     deliver: () => Promise.resolve(),
+    admitSynthetic: () => Promise.resolve(true),
     log: () => {},
     allowed,
     handleModelCmd: (chatId: number, from: string, opts: { msgId: number }) =>

@@ -728,3 +728,87 @@ test("SIGKILL after callback rejection preserves it for restart delivery", async
   );
   assert.deepEqual(ownedUpdates(restarted), []);
 });
+
+test("SIGKILL after core synthetic ownership replays distillation text", async (t: TestContext) => {
+  const dataDir = makeDataDir(t, "core-distill-crash");
+  const child = spawn(
+    process.execPath,
+    [
+      "--experimental-test-module-mocks",
+      HARNESS,
+      "core-distill-ownership-crash",
+      dataDir,
+      "hold-after-inbox-sync",
+    ],
+    {
+      cwd: ROOT,
+      env: {
+        ...process.env,
+        TELEGRAM_COLLECT_QUIET_MS: "60000",
+        TELEGRAM_DIRECT_ACCEPTANCE_TIMEOUT_MS: "25",
+      },
+      stdio: ["ignore", "ignore", "pipe"],
+    },
+  );
+  let stderr = "";
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (chunk: string) => {
+    stderr += chunk;
+  });
+  const childExit = new Promise<{
+    code: number | null;
+    signal: NodeJS.Signals | null;
+  }>((resolveExit, rejectExit) => {
+    child.once("error", rejectExit);
+    child.once("exit", (code, signal) => resolveExit({ code, signal }));
+  });
+  t.after(() => {
+    if (child.exitCode === null && child.signalCode === null) {
+      child.kill("SIGKILL");
+    }
+  });
+
+  await waitForFile(join(dataDir, "core-distill-ownership-ready"));
+  child.kill("SIGKILL");
+  assert.deepEqual(await childExit, { code: null, signal: "SIGKILL" }, stderr);
+
+  const crashedInbox = normalizeQueueDocument(
+    parseJson(readFileSync(join(dataDir, "telegram-inbox.json"), "utf8")),
+  ).document;
+  const crashedItems = Object.values(crashedInbox.queues).flat();
+  assert.deepEqual(
+    parseOffsetFile(
+      readFileSync(join(dataDir, "telegram-offset.json"), "utf8"),
+    ),
+    { offset: 100, delivered: null },
+  );
+  assert.equal(crashedItems.length, 1);
+  assert.ok(crashedItems[0].update?.message);
+  assert.equal(crashedItems[0].update?.callback_query, undefined);
+  assert.match(crashedItems[0].update.message.text ?? "", /Sergey/u);
+  assert.match(crashedItems[0].update.message.text ?? "", /Core memory setup/u);
+
+  const restarted = runHarness("restart-drain", dataDir);
+  assert.equal(restarted.deliveries.length, 1);
+  assert.equal(restarted.deliveries[0].callback_query, undefined);
+  assert.match(restarted.deliveries[0].message?.text ?? "", /Sergey/u);
+  assert.match(
+    restarted.deliveries[0].message?.text ?? "",
+    /Core memory setup/u,
+  );
+  assert.deepEqual(ownedUpdates(restarted), []);
+});
+
+test("core synthetic inbox write failure keeps the Telegram callback offset", (t: TestContext) => {
+  const dataDir = makeDataDir(t, "core-distill-write-failure");
+  const result = runHarness(
+    "core-distill-write-failure",
+    dataDir,
+    "write",
+    { directAcceptanceTimeoutMs: "25" },
+  );
+
+  assert.deepEqual(result.requestedOffsets, [100, 100]);
+  assert.deepEqual(result.offset, { offset: 100 });
+  assert.deepEqual(ownedUpdates(result), []);
+});

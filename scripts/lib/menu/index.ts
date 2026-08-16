@@ -61,6 +61,7 @@ type TelegramTransport = (
 type MenuDeps = {
   allowed?: ReadonlySet<string>;
   deliver(update: TelegramQueueUpdate): MaybePromise<unknown>;
+  admitSynthetic(update: TelegramQueueUpdate): MaybePromise<boolean>;
   handleModelCmd(
     chatId: number,
     userId: TelegramId,

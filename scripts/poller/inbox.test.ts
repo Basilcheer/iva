@@ -285,6 +285,64 @@ void test("admission owns trusted input and drops group noise before any offset 
   assert.deepEqual(owned, [["1::42", 101]]);
 });
 
+void test("trusted local synthetic input uses the canonical inbox despite group ingress policy", async () => {
+  const synthetic = update(-401, "[Core memory setup]");
+  assert.ok(synthetic.message);
+  synthetic.message.message_id = 401;
+  synthetic.message.chat = { id: -100, type: "supergroup" };
+  const owned: Array<[string, number]> = [];
+
+  assert.equal(
+    await admitTelegramUpdate(synthetic, {
+      trustedLocal: true,
+      allowedUserIds: new Set(),
+      enqueueImpl: (key, candidate) => {
+        owned.push([key, candidate.update_id]);
+        return Promise.resolve();
+      },
+    }),
+    "owned",
+  );
+  assert.deepEqual(owned, [["-100::42", -401]]);
+});
+
+void test("trusted local duplicate retry stays one canonical inbox item", async () => {
+  const synthetic = update(-402, "[Core memory setup]");
+  assert.ok(synthetic.message);
+  synthetic.message.message_id = 402;
+  let document: TelegramQueueDocument = { version: 1, queues: {} };
+  const added: boolean[] = [];
+  const enqueueImpl = (key: string, candidate: TelegramQueueUpdate) => {
+    const result = enqueueItem(document, key, createQueueItem(candidate, 1));
+    document = result.document;
+    added.push(result.added);
+    return Promise.resolve();
+  };
+
+  assert.equal(
+    await admitTelegramUpdate(synthetic, { trustedLocal: true, enqueueImpl }),
+    "owned",
+  );
+  assert.equal(
+    await admitTelegramUpdate(synthetic, { trustedLocal: true, enqueueImpl }),
+    "owned",
+  );
+  assert.deepEqual(added, [true, false]);
+  assert.equal(document.queues["1::42"].length, 1);
+});
+
+void test("trusted local inbox write fault fails ownership proof", async () => {
+  const synthetic = update(-403, "[Core memory setup]");
+  assert.equal(
+    await admitTelegramUpdate(synthetic, {
+      trustedLocal: true,
+      enqueueImpl: () => Promise.reject(new Error("injected write fault")),
+      logImpl: () => {},
+    }),
+    "write-failed",
+  );
+});
+
 void test("callback admission owns allowed users, terminally drops known unauthorised users, and fails closed without a key", async () => {
   const owned: Array<[string, number]> = [];
   assert.equal(
