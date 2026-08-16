@@ -308,8 +308,10 @@ export function createMenu({
     // onCallback вызывается из моста через .catch (см. handleControl-интеграцию).
     active.screen = sid;
     const mod = screens[sid] as MenuScreen | undefined;
-    if (mod && typeof mod.on === "function")
-      await mod.on(verb, args, active, ctx);
+    if (mod && typeof mod.on === "function") {
+      const handled = await mod.on(verb, args, active, ctx);
+      if (handled === false) return false;
+    }
     return true;
   }
 

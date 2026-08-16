@@ -46,7 +46,7 @@ type MenuContext = {
     deliver: (update: {
       update_id: number;
       message: Record<string, unknown>;
-    }) => Promise<void>;
+    }) => Promise<unknown>;
     log?: (...parts: unknown[]) => void;
   };
   getLang: () => string;
@@ -185,12 +185,15 @@ async function finish(st: MenuState, ctx: MenuContext) {
     text: buildDistillMessage(qa, lang),
     ...(threadId != null ? { message_thread_id: threadId } : {}),
   };
+  let delivered: unknown;
   try {
-    await ctx.deps.deliver({ update_id: 0, message });
+    delivered = await ctx.deps.deliver({ update_id: 0, message });
   } catch (error) {
     ctx.deps.log?.("core deliver error:", errorMessage(error));
+    return false;
   }
-  return ctx.flows.screen(
+  if (delivered !== true) return false;
+  await ctx.flows.screen(
     st,
     ctx.tr(
       "Sent to Iva — she'll distill your answers into the memory core and confirm.",
@@ -198,6 +201,7 @@ async function finish(st: MenuState, ctx: MenuContext) {
     ),
     [ctx.backRow(PARENT)],
   );
+  return true;
 }
 
 export default {

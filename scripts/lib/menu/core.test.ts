@@ -41,7 +41,7 @@ type Delivery = {
 
 type MenuContext = {
   deps: {
-    deliver: (update: Delivery) => Promise<void>;
+    deliver: (update: Delivery) => Promise<unknown>;
     log?: (...parts: unknown[]) => void;
   };
   getLang: () => "en" | "ru";
@@ -65,7 +65,7 @@ type CoreScreen = {
     args: string[],
     state: MenuState,
     context: MenuContext,
-  ) => Promise<void>;
+  ) => Promise<unknown>;
   texts: {
     interview: (
       text: unknown,
@@ -131,7 +131,7 @@ function makeContext(lang: "en" | "ru" = "ru") {
     deps: {
       deliver: (update) => {
         deliveries.push(update);
-        return Promise.resolve();
+        return Promise.resolve(true);
       },
       log: () => {},
     },
@@ -201,9 +201,11 @@ void test("core interview stores the real reply identity and delivers a syntheti
     state,
     context,
   );
+  let handled: unknown;
   for (let index = 1; index < 6; index += 1)
-    await core.on("skip", [], state, context);
+    handled = await core.on("skip", [], state, context);
 
+  assert.equal(handled, true);
   assert.equal(state.awaitText, null);
   assert.equal(deliveries.length, 1);
   const [delivery] = deliveries;
@@ -218,6 +220,26 @@ void test("core interview stores the real reply identity and delivers a syntheti
   const archive = readFileSync(join(vault, "core-interview.md"), "utf8");
   assert.match(archive, /Сергей, на ты/);
   assert.match(archive, /—/);
+});
+
+void test("core finish returns false without success UI when direct delivery is rejected", async (t) => {
+  const vault = useVault(t);
+  const { context, screens } = makeContext();
+  context.deps.deliver = () => Promise.resolve(false);
+
+  const handled = await core.on(
+    "fin",
+    [],
+    makeState({ data: { iv: { i: 0, qa: [], chat: null, from: null, threadId: null } } }),
+    context,
+  );
+
+  assert.equal(handled, false);
+  assert.equal(screens.some(({ text }) => /Передал иве/u.test(text)), false);
+  assert.match(
+    readFileSync(join(vault, "core-interview.md"), "utf8"),
+    /Core interview/u,
+  );
 });
 
 void test("core saves the interview but never delivers while the same threaded chat is running", async (t) => {

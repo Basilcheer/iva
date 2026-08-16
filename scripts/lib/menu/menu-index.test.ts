@@ -52,7 +52,7 @@ type Screen = {
     state: MenuState,
     context: ScreenContext,
   ) => { text: string; rows: Array<Array<Record<string, unknown>>> };
-  on: (verb: string, args: string[]) => void;
+  on: (verb: string, args: string[]) => unknown;
   texts: {
     demo: (
       text: string,
@@ -210,6 +210,25 @@ test("грамматика: многоаргументный верб q:<i>:<v> 
   const st = await menu.open(10, "20");
   await menu.onCallback(cb("iva_menu:chr:q:3:1", { messageId: st.msgId }));
   assert.deepEqual(log.on.at(-1), { sid: "chr", verb: "q", args: ["3", "1"] });
+});
+
+test("data-верб возвращает явный false/true proof экранного обработчика", async () => {
+  const { menu, screens } = setup();
+  const st = await menu.open(10, "20");
+  screens.core.on = () => false;
+  assert.equal(
+    await menu.onCallback(
+      cb("iva_menu:core:fin", { messageId: st.msgId }),
+    ),
+    false,
+  );
+  screens.core.on = () => true;
+  assert.equal(
+    await menu.onCallback(
+      cb("iva_menu:core:fin", { messageId: st.msgId }),
+    ),
+    true,
+  );
 });
 
 test("навигация o переключает st.screen и рендерит целевой экран", async () => {
