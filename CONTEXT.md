@@ -80,10 +80,28 @@ Markdown-процедура агента (`agent/skills/` — ядровые, cu
 _Avoid_: расширение
 
 **Plugin (плагин)**:
-Папка формата Agent Plugins: `plugin.json`, `skills/`, `mcp.json` и при
-необходимости eve Extension. Единица расширения Ивы. Ставится в custom layer
-из git-URL или локальной папки (ADR-0008).
+Папка формата Agent Plugins: `plugin.json`, `skills/`, `mcp.json` и наш код под
+`sh.iva/` (eve Extension, сервисы). Единица расширения Ивы. Ставится командой
+`iva plugin add` из Marketplace, git-источника или локальной папки в
+`data/custom/plugins/` (ADR-0008, ADR-0009).
 _Avoid_: расширение (как термин), addon, модуль
+
+**Marketplace (маркетплейс)**:
+JSON-список плагинов в git-репо (`.agents/plugins/marketplace.json`, конвенция
+Codex): имя → источник. У Ивы один по умолчанию, владелец добавляет свои. Не
+реестр: без центра и модерации.
+_Avoid_: реестр, registry, стор, каталог
+
+**MCP proxy (прокси)**:
+Сервис Ивы, который держит stdio MCP-сервер плагина и отдаёт его агенту по
+streamable-http на loopback с bearer. Один сервис на один сервер.
+_Avoid_: мост, bridge (это Telegram-поллер), gateway
+
+**Trace (трейс)**:
+Журнал событий хода в `data/trace/`: eve-события через хук плюс швы Ивы
+(Bridge, Inbound pipeline, Gate, Outbox). Пишет ядро; читают вьюер плагина
+`trace` и `iva trace`. Один ход = цепочка событий с общим `turn`.
+_Avoid_: лог (это журнал сервиса), телеметрия, OTel-трасса (внутренность eve)
 
 **Schedule**:
 Внутрипроцессный cron eve (`agent/schedules/`). Systemd-таймеры и
