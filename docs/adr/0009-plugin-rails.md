@@ -8,7 +8,7 @@ ADR-0008 решил, что плагин — единица расширения
 
 ## Что решено
 
-**Стор один — `data/custom/plugins/<name>/`.** Плагин лежит в Custom layer как
+**Папка плагинов одна — `data/custom/plugins/<name>/`.** Плагин лежит в Custom layer как
 git-checkout на запиненном sha и переживает `iva update`. Рядом, отдельными файлами:
 `<name>.config.json` (конфиг eve Extension, читается в рантайме) и `<name>.env` (env
 для MCP-серверов). `PLUGIN_DATA` плагина — `data/plugin-data/<name>/`, переживает
@@ -16,8 +16,8 @@ git-checkout на запиненном sha и переживает `iva update`.
 второе место, откуда берётся плагин, — второе место, где он теряется.
 
 **Состояние — один файл `data/custom/plugins.json`.** Запись на плагин: `name`,
-`source`, `ref` (что отслеживаем), `sha` (что стоит), `enabled`, `trusted`,
-`installedAt`. Плюс список маркетплейсов. Намерение и факт лежат рядом, отдельного
+`source`, `ref` (что отслеживаем), `sha` (что стоит), `digest` (что лежит), `enabled`,
+`trusted`, `installedAt`. Плюс список маркетплейсов. Намерение и факт лежат рядом, отдельного
 lock-файла нет. `enabled` включает скиллы и код плагина; `trusted` отдельно
 разрешает поднимать его MCP-серверы — текст в промпте и процесс на машине не
 включаются одним тумблером (так у pi). `iva plugin sync` доставляет всё из этого
@@ -25,8 +25,10 @@ lock-файла нет. `enabled` включает скиллы и код пла
 
 **Источники: `owner/repo[/подпапка][@ref]`, git-URL, локальная папка, имя из
 Marketplace.** Установка: `fetch --depth 1 --filter=blob:none origin <sha>` →
-`checkout FETCH_HEAD` → сверка `rev-parse HEAD`; sha по `^[a-f0-9]{40,64}$`; грязное
-дерево при `update` не трогаем, а сообщаем. Так делают Codex и `plugins.sh`.
+`checkout FETCH_HEAD` → сверка `rev-parse HEAD`; sha по `^[a-f0-9]{40,64}$`. При установке
+записывается digest дерева плагина; `update` любого вида источника отказывает, если дерево в
+`data/custom/plugins/` разошлось с записанным digest (правки владельца не затираются молча),
+`--force` снимает отказ. Так делают Codex и `plugins.sh`, только они проверяют git status.
 
 **Marketplace — конвенция Codex.** Читаем `.agents/plugins/marketplace.json` в
 git-репо: `name`, `plugins[{name, source, description}]`, `source` — строка-путь или
@@ -88,7 +90,7 @@ trust|list [--available]|sync`, `iva plugin marketplace add|remove|list`. Тул
   апдейте, и это не папка Agent Plugins.
 - Слот `agent/extensions/` в Custom layer руками: это eve Extension, не плагин.
 - Автор коммитит `dist/`: после бампа eve чужой плагин отваливается по контракту.
-- Свой формат маркетплейса и GitHub-топик как стор: первый никто чужой не прочтёт,
+- Свой формат маркетплейса и GitHub-топик вместо Marketplace: первый никто чужой не прочтёт,
   второй — имя займёт кто угодно.
 - Только http-транспорт MCP: половина серверов в дикой природе — stdio.
 - Готовые прокси (`supergateway`, `mcp-proxy`): чужой релиз-цикл, лишние
