@@ -53,3 +53,5 @@ scripts/xfeed/
 # Local working contract, not part of the public product
 CLAUDE.md
 AGENTS.md
+docs/agents/
+.scratch/
