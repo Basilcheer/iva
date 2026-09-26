@@ -379,13 +379,15 @@ interface RunOptions {
   readonly args?: readonly string[];
   readonly env?: Readonly<Record<string, string>>;
   readonly onChild?: (child: import("node:child_process").ChildProcess) => void;
+  /** Каждый кусок stderr ребёнка в момент прихода: наблюдать состояние диска «на строке». */
+  readonly onStderr?: (chunk: string) => void;
 }
 
 async function runRollup(
   host: string,
   paths: { readonly data: string; readonly vault: string },
   period = "monthly",
-  { args = [], env = {}, onChild }: RunOptions = {},
+  { args = [], env = {}, onChild, onStderr }: RunOptions = {},
 ): Promise<RollupRun> {
   return await new Promise<RollupRun>((resolveRun, rejectRun) => {
     const child = spawn(process.execPath, [ROLLUP, period, ...args], {
@@ -414,6 +416,7 @@ async function runRollup(
     child.stdout.setEncoding("utf8");
     child.stderr.on("data", (chunk: string) => {
       stderr += chunk;
+      onStderr?.(chunk);
     });
     child.stdout.on("data", (chunk: string) => {
       stdout += chunk;
@@ -1906,7 +1909,7 @@ test("a git failure that is not a missing path does not empty CORE: no restore, 
   );
 });
 
-test("a stuck index.lock after the turn: CORE is restored on disk, the restore commit fails, exit 1 without 'restored'", async (t) => {
+test("a stuck index.lock after the turn: CORE is restored on disk, 'back to its pre-turn text' is said, the failed commit is the last line, exit 1", async (t) => {
   const { fake, host, paths } = await fakeEve(t);
   writeRawDay(paths.vault, isoDaysAgo(1), "## 10:00 [text]\n\nдень\n");
   const core = writeCore(paths.vault);
@@ -2132,5 +2135,101 @@ test("a snapshot whose CORE blob vanished: ls-tree still lists the path, show fa
   assert.equal(
     vaultLog(paths.vault).some((s) => s.includes("restore")),
     false,
+  );
+});
+
+// Наблюдаемость порядка «откатить → сказать»: двойника алерта нет (адрес Telegram в
+// telegram-send.ts не переопределяется), поэтому момент отката фиксирует git-хук post-commit в
+// тестовом vault (только фикстура, продового кода нет), а момент алерта — приход строки
+// «alert not sent» в stderr. Правильный порядок: коммит отката (и его хук) раньше строки; при
+// перестановке коммит идёт после алерта на десятки миллисекунд (два спавна git) — заметно.
+test("the restore commit lands before the owner is alerted: the post-commit hook sees the pre-turn CORE, and it fires before the 'alert not sent' line", async (t) => {
+  const { fake, host, paths } = await fakeEve(t);
+  writeRawDay(paths.vault, isoDaysAgo(1), "## 10:00 [text]\n\nдень\n");
+  const core = writeCore(paths.vault);
+  vaultGit(paths.vault, "add", "-A");
+  vaultGit(paths.vault, "commit", "-q", "-m", "fixture");
+  const marker = join(paths.root, "restore-committed");
+  const hook = join(paths.vault, ".git", "hooks", "post-commit");
+  writeFileSync(
+    hook,
+    `#!/bin/sh\ncase "$(git log -1 --format=%s)" in *restore*) cp CORE.md ${JSON.stringify(marker)} ;; esac\n`,
+  );
+  chmodSync(hook, 0o755);
+  const done = markDayDone(paths.vault);
+  fake.onTurn = (message) => {
+    done(message);
+    hollow(core.path);
+    vaultGit(paths.vault, "add", "-A");
+    vaultGit(paths.vault, "commit", "-q", "-m", "turn: hollow");
+  };
+  const seen: { restored: boolean; onDisk: string }[] = [];
+
+  const run = await runRollup(host, paths, "daily", {
+    onStderr: (chunk) => {
+      if (seen.length === 0 && chunk.includes("alert not sent:"))
+        seen.push({
+          restored: existsSync(marker),
+          onDisk: readFileSync(core.path, "utf8"),
+        });
+    },
+  });
+
+  assert.equal(run.code, 0, run.stderr);
+  const [atAlert] = seen;
+  assert.ok(atAlert, "the alert line was seen");
+  assert.equal(
+    atAlert.restored,
+    true,
+    "the restore was committed before the alert",
+  );
+  assert.equal(
+    atAlert.onDisk,
+    core.text,
+    "CORE on disk is the pre-turn text at the alert",
+  );
+  assert.equal(
+    readFileSync(marker, "utf8"),
+    core.text,
+    "the hook saw the pre-turn text",
+  );
+});
+
+test("an unfinished correction (cut) whose restore commit fails: 'back to its pre-correction text' first, the failed commit last, exit 1", async (t) => {
+  const { fake, host, paths } = await fakeEve(t);
+  writeRawDay(paths.vault, isoDaysAgo(1), "## 10:00 [text]\n\nдень\n");
+  const core = writeCore(
+    paths.vault,
+    `- ${"длинное предпочтение ".repeat(200)}`,
+    isoDaysAgo(3),
+  );
+  vaultGit(paths.vault, "add", "-A");
+  vaultGit(paths.vault, "commit", "-q", "-m", "fixture");
+  const done = markDayDone(paths.vault);
+  fake.modeFor = (message) => (message.includes("Re-open") ? "cut" : "own");
+  fake.onTurn = (message) => {
+    if (message.includes("Re-open")) {
+      writeFileSync(core.path, "# CORE\n");
+      vaultGit(paths.vault, "add", "-A");
+      vaultGit(paths.vault, "commit", "-q", "-m", "correction: spoil");
+      writeFileSync(join(paths.vault, ".git", "index.lock"), "");
+    } else done(message);
+  };
+
+  const run = await runRollup(host, paths, "daily");
+
+  assert.equal(run.code, 1, run.stderr);
+  const back = run.stderr.indexOf(
+    "CORE.md correction cut — CORE.md is back to its pre-correction text",
+  );
+  const failed = run.stderr.indexOf("CORE.md restored on disk, commit failed:");
+  assert.ok(back >= 0 && failed > back, run.stderr);
+  assert.equal(
+    run.stderr.trimEnd().split("\n").at(-1)?.includes("commit failed"),
+    true,
+  );
+  assert.equal(
+    readFileSync(core.path, "utf8"),
+    setLastDayPointer(core.text, isoDaysAgo(1)),
   );
 });
