@@ -12,10 +12,9 @@ longer fits is left out and named in the tool's answer, so nothing disappears qu
 Spellings that differ only in case or spacing are one spelling; `е` and `ё` are two, the
 search index tells them apart.
 
-The canonical generic templates live in
-`scripts/autograph/docs/references/card-templates.md` — these are the memory-processor-specific
-shapes. Nightly cards are written by `write_card`, so its contract wins over any
-hand-editing recipe you read there: the `body` you pass is plain facts with
+The generic autograph templates are not available in this run; the sections here are enough — these are the
+memory-processor-specific shapes. Nightly cards are written by `write_card`, so its contract wins over any
+hand-editing recipe: the `body` you pass is plain facts with
 no H1/H2 headings — the tool builds the card's `#` title, its `## Log` and
 `## Related`, and `write_card` owns the `## History` section. Pass
 a displaced fact through `history_entry` as a single dated line, `YYYY-MM-DD: fact` — the
@@ -105,5 +104,5 @@ headings, `write_card` refuses a body that carries any.
 - `tags: []` — pick 2–5 relevant kebab-case tags.
 - `aliases: ["The Same Title"]` — repeating the title adds nothing: keep only the
   spellings the title does not already contain (or drop the field).
-- No `## Related` — every card must link (see section `memory-processor/references/linking.md`).
+- No `## Related` — every card must link (see section linking).
 - New card when an existing one covers the subject — update instead.

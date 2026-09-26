@@ -2,7 +2,7 @@
 
 <!-- Always-on: injected into context every turn (≤~1200 chars). Durable facts only.
      Written by the nightly rollup; on an explicit "remember …" the agent appends a line.
-     Rule: scripts/memory/instructions/rules/core-format.md (in the Iva repo) -->
+     The night gets the format rule as text, in its core-format section -->
 
 ## User
 - (name, role, how to address — fills in over time)

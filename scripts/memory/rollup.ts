@@ -65,9 +65,12 @@ import {
 } from "../lib/rollup-stale-cursor.ts";
 import { sendTelegramHtml } from "../lib/telegram-send.ts";
 import { vaultDirOrExit } from "../lib/vault-boundary.ts";
-import { nightInstructions } from "../lib/night-instructions.ts";
+import {
+  nightInstructions,
+  type NightPeriod,
+} from "../lib/night-instructions.ts";
 
-type Period = "daily" | "weekly" | "monthly" | "yearly";
+type Period = NightPeriod;
 
 const PERIODS: readonly Period[] = ["daily", "weekly", "monthly", "yearly"];
 // process.argv: [node, script, <period>] — the period is the first CLI argument.
@@ -86,6 +89,19 @@ if (
   console.error(`Usage: rollup.ts <daily [YYYY-MM-DD]|weekly|monthly|yearly>`);
   process.exit(1);
 }
+
+// Правила ночи читаются один раз при старте: нет файла или он пуст — одна строка причины и
+// код 1 до первого запроса к eve, а не стек.
+const NIGHT_RULES = ((p: Period): string => {
+  try {
+    return nightInstructions(p);
+  } catch (error) {
+    console.error(
+      `rollup ${p}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    process.exit(1);
+  }
+})(period);
 
 const PORT = process.env.IVA_PORT ?? "8723";
 const HOST = process.env.ASSISTANT_HOST ?? `http://127.0.0.1:${PORT}`;
@@ -190,19 +206,26 @@ function buildPrompt(p: Period, now: string, day: string): string {
 
   const intro =
     `You are processing long-term memory (vault: ${VAULT()}). It is now ${now} (${TZ}). ` +
-    `Work strictly by the format rules and memory-processor instructions under "Night ` +
-    `instructions" below: they are complete here, do not look for them on disk. ` +
+    (p === "daily"
+      ? `Work strictly by the memory-processor skill and the format rules under "Night instructions" below. `
+      : `Work strictly by the period's rule below, under "Night instructions". `) +
+    `Each "### Rules: <name>" section is one rule, and "section <name>" in the texts means it; ` +
+    `they are complete here, do not look for them on disk. ` +
     `Do not invent facts — take them from the source files.` +
     // Правила ночи текстом (scripts/lib/night-instructions.ts): путь к ним модель не прочтёт.
-    `\n\n## Night instructions\n\n${nightInstructions(p)}\n\n## Tonight's task\n\n`;
+    `\n\n## Night instructions\n\n${NIGHT_RULES}\n\n## Tonight's task\n\n`;
 
   // Delivery half of the prompt: language, human wording, no self-delivery. Built per call,
   // so a language switched in /menu applies to the next night without a restart.
   const tail = memoryReportTail(tr);
+  // Правила ночи (summarize §4) тоже говорят, что вернуть; отчёт решает хвост доставки.
+  const report =
+    `Where the night instructions say what to return, the report rules below win. ` +
+    tail;
 
   switch (p) {
     case "daily":
-      return intro + dailyTask(day) + tail;
+      return intro + dailyTask(day) + report;
     case "weekly":
       return (
         intro +
@@ -210,7 +233,7 @@ function buildPrompt(p: Period, now: string, day: string): string {
         `read the daily-summaries of those 7 days, pull out cross-cutting topics and the week's takeaways, ` +
         `create a weekly-summary with MOC links down to those daily-summaries. ` +
         childLinkRule("weekly", yesterday, VAULT()) +
-        tail
+        report
       );
     case "monthly":
       return (
@@ -219,7 +242,7 @@ function buildPrompt(p: Period, now: string, day: string): string {
         `read the weekly-summaries of month ${prevMonth}, pull out the main topics and the month's takeaways, ` +
         `create a monthly-summary with MOC links down to the weekly summaries. ` +
         childLinkRule("monthly", prevMonth, VAULT()) +
-        tail
+        report
       );
     case "yearly":
       return (
@@ -228,7 +251,7 @@ function buildPrompt(p: Period, now: string, day: string): string {
         `read the monthly-summaries of year ${prevYear}, pull out the main topics and the year's takeaways, ` +
         `create a yearly-summary with MOC links down to the monthly summaries. ` +
         childLinkRule("yearly", prevYear, VAULT()) +
-        tail
+        report
       );
   }
 }

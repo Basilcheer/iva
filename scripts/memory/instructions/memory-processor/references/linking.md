@@ -54,4 +54,4 @@ uv run scripts/autograph/graph.py health vault vault/schema.json   # broken link
 
 - `[[path/to/card|Display Text]]` — path is vault-relative, no `.md`.
 - Inside tables, escape the pipe: `[[path\|Display]]`.
-- See `scripts/autograph/docs/references/` for the autograph formatting references.
+- The autograph formatting references are not available in this run; the sections here are enough.

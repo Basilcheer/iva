@@ -15,8 +15,8 @@ files yet.
    Iva side `[iva]` (older days: legacy `[eva]`). Read both sides — Iva's replies often carry the conclusion.
 2. Skip every entry up to and including the time of the last
    `<!-- processed-through: HH:MM -->` part marker: an earlier run already processed it.
-   Plan the rest of the day in parts (section `memory-processor/SKILL.md`, «Parts»).
-3. Identify **noteworthy items** (see section `memory-processor/references/classification.md`):
+   Plan the rest of the day in parts (section memory-processor, «Parts»).
+3. Identify **noteworthy items** (see section classification):
    - **entities** — a person, organization, or project that matters beyond today.
    - **decisions** — a choice made, with a reason.
    - **ideas** — a proposal/hypothesis worth revisiting.

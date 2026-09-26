@@ -883,7 +883,7 @@ test("an undone day leaving the catch-up window is named in the log", async (t) 
 
 // Правила ночи идут в промпт текстом (#249): в версионной раскладке путь внутрь
 // scripts/memory/instructions/ модель прочитать не может. Список — второй независимый
-// источник: каждый файл набора виден в промпте своим заголовком и первой строкой-заголовком.
+// источник: каждый файл набора стоит в промпте целиком (без frontmatter) под своим разделом.
 const NIGHT_RULES: Record<string, readonly string[]> = {
   daily: [
     "memory-processor/SKILL.md",
@@ -894,7 +894,6 @@ const NIGHT_RULES: Record<string, readonly string[]> = {
     "memory-processor/references/classification.md",
     "memory-processor/references/card-templates.md",
     "memory-processor/references/linking.md",
-    "memory-processor/references/daily-summary.md",
     "rules/daily-format.md",
     "rules/core-format.md",
   ],
@@ -927,10 +926,38 @@ for (const [period, files] of Object.entries(NIGHT_RULES)) {
         join(ROOT, "scripts/memory/instructions", file),
         "utf8",
       );
-      const heading = text.split("\n").find((line) => line.startsWith("#"));
-      assert.ok(heading, `${file} has a heading`);
-      assert.ok(prompt.includes(`### ${file}\n`), `${period}: ${file} section`);
-      assert.ok(prompt.includes(heading), `${period}: ${file} text`);
+      const body = text.replace(/^---\n[\s\S]*?\n---\n/u, "").trim();
+      const name = file.endsWith("/SKILL.md")
+        ? "memory-processor"
+        : file.replace(/^.*\//u, "").replace(/\.md$/u, "");
+      assert.ok(
+        prompt.includes(`### Rules: ${name}\n\n${body}`),
+        `${period}: ${file} goes in whole under its section`,
+      );
+      assert.equal(
+        prompt.split(`### Rules: ${name}\n`).length,
+        2,
+        `${period}: ${name} goes in once`,
+      );
+      const frontmatter = /^---\n[\s\S]*?\n---\n/u.exec(text)?.[0];
+      if (frontmatter)
+        assert.ok(
+          !prompt.includes(frontmatter),
+          `${period}: ${file} frontmatter`,
+        );
     }
+    // Ни одного пути к файлу правил в обратных кавычках вне bash-блоков.
+    const prose = prompt.replace(/```bash[\s\S]*?```/gu, "");
+    const ruleFiles =
+      /`[^`\n]*\b(?:SKILL|capture|process|link|summarize|classification|card-templates|linking|daily-summary|[a-z]+-format|weekly-reflection)\.md`/u;
+    assert.doesNotMatch(prose, ruleFiles);
+    // Хвост доставки последний перед nonce, строка про приоритет отчёта — прямо перед ним.
+    const task = prompt.indexOf("## Tonight's task");
+    const wins = prompt.indexOf("the report rules below win");
+    assert.ok(task > 0 && wins > task, `${period}: the task follows the rules`);
+    assert.match(
+      prompt.slice(wins),
+      /^the report rules below win\. At the end, return a SHORT report[^]*Only the finished report, with no preamble or reasoning\.\n<!-- rollup-nonce \S+ -->$/u,
+    );
   });
 }
