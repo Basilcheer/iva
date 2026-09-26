@@ -20,13 +20,16 @@
 (* - Heartbeat = TRUE: асинхронный acquireFileLock, таймер держателя       *)
 (*   созревает раз в Period тиков, а колбэк (lstat своего owner-файла,     *)
 (*   utimes папки) выполняется не позже чем через MaxLag тиков после       *)
-(*   созревания: это задержка event loop держателя. FALSE:                 *)
-(*   acquireFileLockSync, сердцебиения нет;                                *)
+(*   созревания. MaxLag — допущение о среде (event loop держателя), не     *)
+(*   свойство кода: время в модели ждёт просроченный колбэк (Tick), а в    *)
+(*   жизни — нет. FALSE: acquireFileLockSync, сердцебиения нет;            *)
 (* - MaxHold: после стольких тиков удержания сердцебиение гаснет           *)
 (*   (предохранитель LOCK_MAX_HOLD_MS).                                     *)
 (* Граница: при Period + MaxLag < Stale и MaxSection < MaxHold инварианты  *)
 (* держатся; MaxLag >= Stale - Period или MaxSection >= MaxHold дают       *)
-(* ожидаемую кражу (FileLock-lag.cfg, FileLock-hold.cfg).                  *)
+(* ожидаемую кражу (FileLock-lag.cfg, FileLock-hold.cfg). Свидетель NotSlow *)
+(* (FileLock-witness.cfg) обязан нарушаться: иначе время в модели стоит и  *)
+(* безопасность держится не на сердцебиении, а на остановке времени.       *)
 (***************************************************************************)
 EXTENDS Naturals, FiniteSets
 
@@ -381,16 +384,26 @@ CrashWindowSafe ==
 \* (контракт 3); без дедлайна это может длиться, с дедлайном вызов вернёт null.
 NoBounded == \A p \in Procs : pc[p] # "bounded"
 
+\* Свидетель: живой держатель просидел в секции не меньше Stale тиков. Обязан
+\* НАРУШАТЬСЯ в конфиге с сердцебиением и MaxSection >= Stale (FileLock-witness.cfg):
+\* только тогда «медленный держатель не обокраден» — про сердцебиение. Мутант без Beat
+\* его не нарушает: охрана ~Lagging останавливает время, и модель вырождается.
+NotSlow == \A p \in Procs : ~(InSection(p) /\ held[p] >= Stale)
+
 \* 4a. Каждый вызов с дедлайном завершается: замок или null (или процесс упал).
 Termination == <>(\A p \in Procs : pc[p] \in {"done", "bounded"} \/ ~alive[p])
 
 \* 4b. Брошенный замок (все owner-файлы — упавших, и никто живой его не
-\* создаёт и не держит) в итоге забирают, пока кто-то живой его ждёт.
+\* создаёт и не держит) в итоге забирают: кто-то живой входит в секцию (по
+\* CrashWindowSafe при Abandoned живых в секции нет, так что это новый захват) —
+\* либо ждать некому (все вернули null или упали). Временное ~Abandoned (кто-то
+\* создал пустую папку) не считается.
 Abandoned ==
   /\ dir # 0
   /\ \A t \in ents : ~alive[Owner(t)]
   /\ ~\E q \in Procs : \/ SyncBusy(q)
                        \/ InSection(q) /\ (heldGen[q] = dir \/ heldTok[q] \in ents)
 Waiting == \E p \in Procs : alive[p] /\ pc[p] \notin {"done", "bounded"}
-EventuallyTaken == (Abandoned /\ Waiting) ~> (~Abandoned \/ ~Waiting)
+Taken == \E p \in Procs : alive[p] /\ pc[p] = "cs"
+EventuallyTaken == (Abandoned /\ Waiting) ~> (Taken \/ ~Waiting)
 =============================================================================

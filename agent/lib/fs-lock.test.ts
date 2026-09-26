@@ -388,12 +388,12 @@ test("a hostile canonical symlink is never traversed or cleaned", async () => {
       contender === "sync"
         ? acquireFileLockSync(path, {
             timeoutMs: 40,
-            staleMs: -1,
+            staleMs: 1,
             retryMs: 5,
           })
         : await acquireFileLock(path, {
             timeoutMs: 40,
-            staleMs: -1,
+            staleMs: 1,
             retryMs: 5,
           });
     assert.equal(held, null);

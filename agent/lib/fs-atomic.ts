@@ -773,6 +773,7 @@ export function acquireFileLockSync(
     mode,
   }: FileLockOptions = {},
 ): FileLock | null {
+  checkStaleMs(path, staleMs);
   // Свежая установка: каталога данных может ещё не быть — лок не должен падать ENOENT.
   const parent = dirname(path);
   const firstCreated = mkdirSync(parent, { recursive: true });
@@ -791,9 +792,9 @@ export function acquireFileLockSync(
 /**
  * То же, что acquireFileLockSync, но ждёт, отпуская event loop, и держатель бьётся:
  * раз в staleMs/3 обновляет mtime каталога лока. Контракт: секция под локом конечна и
- * много короче LOCK_MAX_HOLD_MS; сердцебиение держит лок, пока event loop держателя не
- * заблокирован дольше 2/3 staleMs. Остановленный процесс (SIGSTOP, сон VM, долгий GC)
- * могут обокрасть, как и раньше.
+ * много короче LOCK_MAX_HOLD_MS; сердцебиение держит лок, пока event loop держателя
+ * свободен хотя бы раз в 2/3 staleMs (между двумя срабатываниями таймера). Остановленный
+ * процесс (SIGSTOP, сон VM, долгий GC) могут обокрасть, как и раньше.
  */
 export async function acquireFileLock(
   path: string,
@@ -804,8 +805,7 @@ export async function acquireFileLock(
     mode,
   }: FileLockOptions = {},
 ): Promise<FileLock | null> {
-  if (!Number.isFinite(staleMs))
-    throw new TypeError(`file lock ${path}: staleMs ${staleMs} is not finite`);
+  checkStaleMs(path, staleMs);
   const parent = dirname(path);
   const firstCreated = await mkdir(parent, { recursive: true });
   await syncCreatedDirectories(parent, firstCreated);
@@ -822,36 +822,46 @@ export async function acquireFileLock(
 /** Предохранитель: после стольких мс удержания сердцебиение гаснет, лок протухает. */
 export const LOCK_MAX_HOLD_MS = 600_000;
 const MAX_TIMER_MS = 2 ** 31 - 1;
-const heartbeats = new Map<string, ReturnType<typeof setInterval>>();
+const heartbeats = new Map<string, () => void>();
+
+function checkStaleMs(path: string, staleMs: number): void {
+  // staleMs ≤ 0 делал любой лок брошенным сразу (два писателя), < 3 — период 1 мс.
+  if (!Number.isFinite(staleMs) || staleMs <= 0)
+    throw new TypeError(
+      `file lock ${path}: staleMs ${staleMs} is not positive`,
+    );
+}
 
 function startHeartbeat(lock: FileLock, staleMs: number): FileLock {
-  const until = Date.now() + LOCK_MAX_HOLD_MS;
   const period = Math.min(Math.max(staleMs / 3, 1), MAX_TIMER_MS);
   const say = (what: string) =>
     process.stderr.write(`file lock ${lock.path}: heartbeat ${what}\n`);
   let warned = false;
   const stop = () => {
     clearInterval(beat);
+    clearTimeout(fuse);
     heartbeats.delete(lock.token);
   };
   const beat = setInterval(() => {
-    if (Date.now() > until) {
-      stop();
-      return say(`off after ${LOCK_MAX_HOLD_MS} ms`);
-    }
     try {
       lstatSync(lockOwnerPath(lock.path, lock.token));
       // Между lstat и utimes каталог могут сменить: касание преемника безвредно.
       utimesSync(lock.path, new Date(), new Date());
     } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
+      const code = (error as NodeJS.ErrnoException).code ?? String(error);
       if (code === "ENOENT" || code === "ENOTDIR") return stop();
-      if (!warned) say(String(code));
+      if (!warned) say(`${code}, still running`);
       warned = true;
     }
   }, period);
+  // Предохранитель — свой таймер: срабатывает и при периоде дольше предела.
+  const fuse = setTimeout(() => {
+    stop();
+    say(`off: held longer than ${LOCK_MAX_HOLD_MS} ms, the lock will expire`);
+  }, LOCK_MAX_HOLD_MS);
   beat.unref();
-  heartbeats.set(lock.token, beat);
+  fuse.unref();
+  heartbeats.set(lock.token, stop);
   return lock;
 }
 
@@ -863,8 +873,7 @@ function startHeartbeat(lock: FileLock, staleMs: number): FileLock {
  * в docs/quality/tla-plan-2026-09-26.md).
  */
 export function releaseFileLock({ path, token }: FileLock): void {
-  clearInterval(heartbeats.get(token));
-  heartbeats.delete(token);
+  heartbeats.get(token)?.();
   try {
     removeOwnedLockName(path, token);
     removeEmptyLockDirectory(path);

@@ -11,10 +11,13 @@ import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
   chmodSync,
+  existsSync,
+  mkdirSync,
   mkdtempSync,
   readdirSync,
   rmSync,
   statSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -24,11 +27,15 @@ import { fileURLToPath } from "node:url";
 import {
   LOCK_MAX_HOLD_MS,
   acquireFileLock,
+  acquireFileLockSync,
   releaseFileLock,
 } from "./fs-atomic.ts";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const HARNESS = join(ROOT, "scripts/fixtures/lock-race-harness.ts");
+const UTIMES_FIXTURE = join(ROOT, "scripts/fixtures/lock-heartbeat-utimes.ts");
+// chmod не ограничивает root: у него ошибки прав не бывает, ожидание меняется.
+const isRoot = () => process.getuid?.() === 0;
 const FS_ATOMIC = fileURLToPath(new URL("./fs-atomic.ts", import.meta.url));
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -224,8 +231,19 @@ test("a heartbeat error other than a missing lock keeps the heartbeat running", 
   assert.equal(next, null, "one EACCES switched the heartbeat off for good");
   assert.equal(
     lines.filter((line) => line.includes("heartbeat EACCES")).length,
-    1,
+    isRoot() ? 0 : 1,
   );
+});
+
+// staleMs ≤ 0 делал бы любой лок брошенным сразу (два писателя): TypeError до mkdir в обоих API.
+test("staleMs must be a positive finite number in both APIs, before anything is created", async (t) => {
+  const dir = lockDir(t);
+  for (const staleMs of [Infinity, NaN, 0, -1]) {
+    const lock = join(dir, `${staleMs}`, "state.lock");
+    await assert.rejects(acquireFileLock(lock, { staleMs }), TypeError);
+    assert.throws(() => acquireFileLockSync(lock, { staleMs }), TypeError);
+    assert.equal(existsSync(join(dir, `${staleMs}`)), false, `${staleMs}`);
+  }
 });
 
 test("staleMs must be finite, and a huge one does not overflow the heartbeat timer", async (t) => {
@@ -270,7 +288,7 @@ test("a holder that blocks its own event loop longer than staleMs loses the lock
 // Предохранитель: живой, но зависший держатель не держит лок вечно.
 test("after LOCK_MAX_HOLD_MS the heartbeat stops, so a hung live holder's lock expires", async (t) => {
   const lock = join(lockDir(t), "state.lock");
-  t.mock.timers.enable({ apis: ["setInterval", "Date"], now: Date.now() });
+  t.mock.timers.enable({ apis: ["setInterval", "setTimeout", "Date"] });
   const holder = await acquireFileLock(lock, { staleMs: 30_000 });
   assert.ok(holder);
   const stderr = t.mock.method(process.stderr, "write", () => true);
@@ -292,7 +310,110 @@ test("after LOCK_MAX_HOLD_MS the heartbeat stops, so a hung live holder's lock e
   assert.ok(frozen, "the heartbeat kept running past LOCK_MAX_HOLD_MS");
   assert.ok(staleAge > 30_000, "the hung holder's lock did not expire");
   assert.equal(
-    lines.filter((line) => line.includes("heartbeat off after")).length,
+    lines.filter((line) => line.includes("heartbeat off:")).length,
     1,
   );
+});
+
+// Предохранитель — свой таймер: срабатывает и при периоде сердцебиения дольше предела,
+// а release до предела гасит и его.
+test("the max-hold fuse fires on its own timer, even when the heartbeat period is longer than the limit", async (t) => {
+  const dir = lockDir(t);
+  t.mock.timers.enable({ apis: ["setInterval", "setTimeout", "Date"] });
+  const stderr = t.mock.method(process.stderr, "write", () => true);
+  const lines = () =>
+    stderr.mock.calls.filter((call) =>
+      String(call.arguments[0]).includes("heartbeat off:"),
+    ).length;
+  const released = await acquireFileLock(join(dir, "a.lock"), {
+    staleMs: 6 * LOCK_MAX_HOLD_MS,
+  });
+  assert.ok(released);
+  releaseFileLock(released);
+  const hung = await acquireFileLock(join(dir, "b.lock"), {
+    staleMs: 6 * LOCK_MAX_HOLD_MS,
+  });
+  assert.ok(hung);
+  const mtime = statSync(hung.path).mtimeMs;
+  t.mock.timers.tick(LOCK_MAX_HOLD_MS - 1);
+  const before = lines();
+  t.mock.timers.tick(1);
+  const atLimit = lines();
+  t.mock.timers.tick(6 * LOCK_MAX_HOLD_MS);
+  const later = lines();
+  const touched = statSync(hung.path).mtimeMs !== mtime;
+  stderr.mock.restore();
+  t.mock.timers.reset();
+  releaseFileLock(hung);
+  assert.equal(before, 0, "the fuse fired early, or for the released lock");
+  assert.equal(atLimit, 1, "the fuse did not fire at LOCK_MAX_HOLD_MS");
+  assert.equal(later, 1, "the fuse fired more than once");
+  assert.equal(touched, false, "a period longer than the limit still touched");
+});
+
+// Пропавший лок (ENOENT) или файл вместо папки (ENOTDIR) гасят таймер: вернувшийся на
+// путь каталог со старым owner-файлом больше не освежается, stderr молчит.
+for (const how of ["ENOENT", "ENOTDIR"] as const) {
+  test(`${how} on the owner entry stops the heartbeat for good, silently`, async (t) => {
+    const lock = join(lockDir(t), "state.lock");
+    const holder = await acquireFileLock(lock, { staleMs: 150 });
+    assert.ok(holder);
+    const stderr = t.mock.method(process.stderr, "write", () => true);
+    rmSync(lock, { recursive: true });
+    if (how === "ENOTDIR") writeFileSync(lock, "x");
+    await sleep(250);
+    if (how === "ENOTDIR") rmSync(lock);
+    mkdirSync(lock);
+    writeFileSync(join(lock, `.owner-${holder.token}`), "");
+    const old = new Date(Date.now() - 60_000);
+    utimesSync(lock, old, old);
+    await sleep(400);
+    const age = Date.now() - statSync(lock).mtimeMs;
+    stderr.mock.restore();
+    releaseFileLock(holder);
+    assert.ok(
+      age > 30_000,
+      `the stopped heartbeat touched again: age ${age} ms`,
+    );
+    assert.deepEqual(
+      stderr.mock.calls
+        .map((call) => String(call.arguments[0]))
+        .filter((line) => line.includes("heartbeat")),
+      [],
+    );
+  });
+}
+
+// Ошибка utimes при живом owner-файле (инъекция EPERM/EIO/EACCES/EBUSY через mock.module
+// в отдельном процессе): таймер жив, одна строка stderr, после ошибки каталог снова свежий.
+test("a utimes error with the owner entry in place keeps the heartbeat: one stderr line, then fresh again", (t) => {
+  const codes = ["EPERM", "EIO", "EACCES", "EBUSY"];
+  const run = spawnSync(
+    process.execPath,
+    ["--experimental-test-module-mocks", UTIMES_FIXTURE, lockDir(t), ...codes],
+    { encoding: "utf8", timeout: 30_000 },
+  );
+  assert.equal(run.status, 0, run.stderr);
+  const result = JSON.parse(run.stdout) as Record<
+    string,
+    {
+      failed: number;
+      after: number;
+      age: number;
+      contenderHeld: boolean;
+      lines: string[];
+    }
+  >;
+  for (const code of codes) {
+    const r = result[code];
+    assert.ok(r.failed >= 3, `${code}: ${r.failed} failing touches`);
+    assert.ok(r.after >= 2, `${code}: ${r.after} touches after the error`);
+    assert.ok(r.age < 200, `${code}: directory age ${r.age} ms`);
+    assert.equal(r.contenderHeld, false, `${code}: the lock was taken over`);
+    assert.equal(r.lines.length, 1, `${code}: ${JSON.stringify(r.lines)}`);
+    assert.ok(
+      r.lines[0].includes(code) && r.lines[0].includes(".lock"),
+      r.lines[0],
+    );
+  }
 });
