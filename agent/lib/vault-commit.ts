@@ -89,7 +89,9 @@ export type VaultCommit =
   | { readonly ok: false; readonly reason: string };
 
 type GitRun = {
-  readonly code: number;
+  /** Код выхода git; строка — отказ самого запуска (например
+   * `ERR_CHILD_PROCESS_STDIO_MAXBUFFER`), он не схлопывается в «git не найден». */
+  readonly code: number | string;
   readonly err: string;
   readonly out: string;
   /** Убит по таймауту: `code` при этом пуст, и без флага причина выходила ложной. */
@@ -129,10 +131,12 @@ function killed(error: unknown): boolean {
   return (error as { killed?: unknown } | null)?.killed === true;
 }
 
-/** 127 у отсутствующего в PATH git: код выхода и «команды нет» - разные причины. */
-function exitCode(error: unknown): number {
+/** 127 у отсутствующего в PATH git (`ENOENT` спавна): код выхода и «команды нет» - разные
+ * причины; прочий строковый код Node (буфер, сигнал) остаётся строкой. */
+function exitCode(error: unknown): number | string {
   const code = (error as { code?: unknown }).code;
-  return typeof code === "number" ? code : 127;
+  if (code === "ENOENT") return 127;
+  return typeof code === "number" || typeof code === "string" ? code : 127;
 }
 
 /** Причина отказа одной строкой: git печатает причину первой, а подсказку (`hint:`) после
@@ -141,6 +145,7 @@ function reasonOf(run: GitRun): string {
   if (run.timeout)
     return `git не ответил за ${String(gitTimeoutMs() / 1000)} с`;
   if (run.code === 127) return "git не найден в PATH";
+  if (typeof run.code === "string") return run.code;
   const lines = detail(run)
     .split("\n")
     .map((line) => line.trim())
@@ -395,9 +400,6 @@ export async function commitVaultWrite(
   return outcome;
 }
 
-/** `git show <sha>:<path>` так и говорит, когда пути в коммите нет; всё остальное — отказ. */
-const PATH_NOT_IN_COMMIT = /exists on disk, but not in|does not exist in/u;
-
 /** HEAD vault тем же раннером (таймаут, окружение, разбор отказа). Отказ — исключение. */
 export async function vaultHead(root: string): Promise<string> {
   const run = await git(["rev-parse", "HEAD"], root);
@@ -405,18 +407,24 @@ export async function vaultHead(root: string): Promise<string> {
   return run.out.trim();
 }
 
-/** Текст пути в коммите vault; null — пути в этом коммите нет. Любой другой отказ (битый
- * объект, git не найден, таймаут, переполнение буфера вывода раннера — оно приходит без
- * числового кода и читается как отказ) — исключение, а не «файла не было». */
+/** Текст пути в коммите vault; null — пути в этом коммите нет. «Нет пути» решает не текст
+ * stderr (при пропавшем объекте коммита `git show` печатает ту же фразу), а `ls-tree`: код 0 и
+ * пустой вывод — пути нет; код 0 и строка — путь есть, дальше `show`, и любой его отказ (битый
+ * блоб, таймаут, переполнение буфера раннера) — исключение; код ≠ 0 (битая ревизия, пропавший
+ * объект коммита) — исключение. В пустоту память не откатывается. */
 export async function vaultShow(
   root: string,
   sha: string,
   path: string,
 ): Promise<string | null> {
+  const entry = await git(["ls-tree", sha, "--", path], root);
+  if (entry.code !== 0)
+    throw new Error(`git ls-tree ${sha} -- ${path}: ${reasonOf(entry)}`);
+  if (entry.out.trim() === "") return null;
   const run = await git(["show", `${sha}:${path}`], root);
-  if (run.code === 0) return run.out;
-  if (run.code === 128 && PATH_NOT_IN_COMMIT.test(detail(run))) return null;
-  throw new Error(`git show ${sha}:${path}: ${reasonOf(run)}`);
+  if (run.code !== 0)
+    throw new Error(`git show ${sha}:${path}: ${reasonOf(run)}`);
+  return run.out;
 }
 
 /** Ночной подметальщик: закоммитить всё незакоммиченное в vault - днём это делают писатели, а

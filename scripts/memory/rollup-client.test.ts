@@ -7,6 +7,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -348,7 +349,9 @@ function makeRunDirectory(): {
   readonly root: string;
   readonly vault: string;
 } {
-  const root = mkdtempSync(join(tmpdir(), "iva-rollup-client-"));
+  // realpath: на macOS tmpdir лежит под /var → /private/var, и без него шов vault-commit
+  // молча счёл бы отсутствующий CORE.md путём вне vault.
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "iva-rollup-client-")));
   const data = join(root, "data");
   const vault = join(root, "vault");
   mkdirSync(data);
@@ -1852,7 +1855,7 @@ test("a stuck .git/index.lock in the vault stops the night before the turn: no c
   assert.deepEqual(prompts(fake), [], "the turn is not started");
   assert.match(
     run.stderr,
-    /CORE\.md is not committed .* the turn is not started/u,
+    /CORE\.md on disk does not match its snapshot commit .* the turn is not started/u,
   );
   assert.equal(readFileSync(core.path, "utf8"), core.text);
   assert.deepEqual(
@@ -1896,7 +1899,7 @@ test("a git failure that is not a missing path does not empty CORE: no restore, 
   assert.equal(run.code, 1, run.stderr);
   assert.notEqual(readFileSync(core.path, "utf8"), core.text, "not rewritten");
   assert.notEqual(readFileSync(core.path, "utf8"), "", "not emptied");
-  assert.match(run.stderr, /git show [0-9a-f]+:CORE\.md/u);
+  assert.match(run.stderr, /git (ls-tree|show) [0-9a-f]+/u);
   assert.equal(
     vaultLog(paths.vault).some((s) => s.includes("restore")),
     false,
@@ -1925,5 +1928,203 @@ test("a stuck index.lock after the turn: CORE is restored on disk, the restore c
     vaultLog(paths.vault)[0],
     "turn: half-edit",
     "no restore commit",
+  );
+});
+
+// Сначала сказать владельцу, потом умереть: отказ коммита отката не глотает ни строку о потере,
+// ни алерт; отказ коммита указателя — код 1.
+test("a stuck index.lock after a turn that hollowed a section: the loss and the alert are reported before 'commit failed', exit 1", async (t) => {
+  const { fake, host, paths } = await fakeEve(t);
+  writeRawDay(paths.vault, isoDaysAgo(1), "## 10:00 [text]\n\nдень\n");
+  const core = writeCore(paths.vault);
+  const done = markDayDone(paths.vault);
+  fake.onTurn = (message) => {
+    done(message);
+    hollow(core.path);
+    vaultGit(paths.vault, "add", "-A");
+    vaultGit(paths.vault, "commit", "-q", "-m", "turn: hollow");
+    writeFileSync(join(paths.vault, ".git", "index.lock"), "");
+  };
+
+  const run = await runRollup(host, paths, "daily");
+
+  assert.equal(run.code, 1, run.stderr);
+  const lost = run.stderr.indexOf("CORE.md lost ## Предпочтения");
+  const alert = run.stderr.indexOf("alert not sent:");
+  const failed = run.stderr.indexOf("CORE.md restored on disk, commit failed:");
+  assert.ok(lost >= 0 && alert > lost && failed > alert, run.stderr);
+  assert.equal(readFileSync(core.path, "utf8"), core.text, "restored on disk");
+});
+
+test("a stuck index.lock before the pointer write: the pointer is on disk, its commit fails, exit 1", async (t) => {
+  const { fake, host, paths } = await fakeEve(t);
+  const yesterday = isoDaysAgo(1);
+  writeRawDay(paths.vault, yesterday, "## 10:00 [text]\n\nдень\n");
+  const core = writeCore(paths.vault, "", isoDaysAgo(3));
+  vaultGit(paths.vault, "add", "-A");
+  vaultGit(paths.vault, "commit", "-q", "-m", "fixture");
+  const done = markDayDone(paths.vault);
+  fake.onTurn = (message) => {
+    done(message);
+    writeFileSync(join(paths.vault, ".git", "index.lock"), "");
+  };
+
+  const run = await runRollup(host, paths, "daily");
+
+  assert.equal(run.code, 1, run.stderr);
+  assert.match(run.stderr, /CORE\.md pointer written on disk, commit failed:/u);
+  assert.equal(
+    readFileSync(core.path, "utf8"),
+    setLastDayPointer(core.text, yesterday),
+  );
+  assert.equal(vaultLog(paths.vault)[0], "fixture", "no pointer commit");
+});
+
+test("a vault inside a foreign repository with no CORE.md: the turn runs, a damaging turn's restore cannot be committed, exit 1", async (t) => {
+  const { fake, host, paths } = await fakeEve(t);
+  // Репозиторий выше vault: шов коммитить не станет («репозиторий выше vault»), но ответит
+  // ok:true, committed:false с причиной — это отказ, не «нечего коммитить».
+  rmSync(join(paths.vault, ".git"), { force: true, recursive: true });
+  vaultGit(paths.root, "init", "-q");
+  vaultGit(paths.root, "commit", "-q", "--allow-empty", "-m", "outer");
+  writeRawDay(paths.vault, isoDaysAgo(1), "## 10:00 [text]\n\nдень\n");
+  const corePath = join(paths.vault, "CORE.md");
+  fake.mode = "session-failed";
+  fake.onTurn = () =>
+    writeFileSync(corePath, "# CORE\n\n## Предпочтения\n\n- новое\n");
+
+  const run = await runRollup(host, paths, "daily");
+
+  assert.equal(run.code, 1, run.stderr);
+  assert.equal(
+    prompts(fake).length,
+    1,
+    "the turn did start: no CORE, nothing to snapshot",
+  );
+  assert.match(
+    run.stderr,
+    /CORE\.md restored on disk, commit failed: .*vault/u,
+  );
+  assert.equal(
+    readFileSync(corePath, "utf8"),
+    "",
+    "restored to the empty pre-turn state on disk",
+  );
+});
+
+test("the run stops right before the correction: no snapshot commit, CORE untouched, 'not started', exit 1", async (t) => {
+  const { fake, host, paths } = await fakeEve(t);
+  writeRawDay(paths.vault, isoDaysAgo(1), "## 10:00 [text]\n\nдень\n");
+  writeCore(
+    paths.vault,
+    `- ${"длинное предпочтение ".repeat(200)}`,
+    isoDaysAgo(3),
+  );
+  vaultGit(paths.vault, "add", "-A");
+  vaultGit(paths.vault, "commit", "-q", "-m", "fixture");
+  fake.onTurn = markDayDone(paths.vault);
+  let child: import("node:child_process").ChildProcess | undefined;
+  // Сигнал — когда reset дневной сессии дошёл до сервера: ход дня закончен, коррекция впереди.
+  fake.onReset = () => child?.kill("SIGTERM");
+
+  const run = await runRollup(host, paths, "daily", {
+    onChild: (spawned) => {
+      child = spawned;
+    },
+  });
+
+  assert.equal(run.code, 1, run.stderr);
+  assert.match(run.stderr, /CORE\.md correction not started/u);
+  assert.equal(prompts(fake).length, 1, "no correction turn");
+  assert.equal(
+    vaultLog(paths.vault).some((s) => s.includes("before turn")),
+    false,
+    "no snapshot commit for a correction that did not start",
+  );
+  assert.equal(vaultLog(paths.vault)[0], "file CORE.md: pointer");
+});
+
+// Пропавший объект коммита снимка: `git show <sha>:CORE.md` печатает ту же фразу, что при
+// отсутствии пути; классификация идёт через ls-tree, и это отказ, а не «файла не было».
+function dropObject(vault: string, sha: string): void {
+  const dir = join(vault, ".git", "objects", sha.slice(0, 2));
+  rmSync(join(dir, sha.slice(2)), { force: true });
+  // Упакованных объектов у свежего репозитория нет: loose-файл — единственная копия.
+  assert.equal(existsSync(join(dir, sha.slice(2))), false);
+}
+
+test("a snapshot commit whose object vanished: the day's restore is refused, CORE is not emptied, exit 1", async (t) => {
+  const { fake, host, paths } = await fakeEve(t);
+  writeRawDay(paths.vault, isoDaysAgo(1), "## 10:00 [text]\n\nдень\n");
+  const core = writeCore(paths.vault);
+  vaultGit(paths.vault, "add", "-A");
+  vaultGit(paths.vault, "commit", "-q", "-m", "fixture");
+  const head = vaultGit(paths.vault, "rev-parse", "HEAD").trim();
+  fake.mode = "session-failed";
+  fake.onTurn = () => {
+    appendLine(core.path);
+    dropObject(paths.vault, head);
+  };
+
+  const run = await runRollup(host, paths, "daily");
+
+  assert.equal(run.code, 1, run.stderr);
+  assert.match(run.stderr, /git ls-tree [0-9a-f]+/u);
+  assert.notEqual(readFileSync(core.path, "utf8"), "", "not emptied");
+  assert.match(readFileSync(core.path, "utf8"), /полуправка/u, "not rewritten");
+});
+
+test("a correction whose snapshot commit object vanished is not accepted: a bare '# CORE' does not pass, exit 1", async (t) => {
+  const { fake, host, paths } = await fakeEve(t);
+  writeRawDay(paths.vault, isoDaysAgo(1), "## 10:00 [text]\n\nдень\n");
+  const core = writeCore(
+    paths.vault,
+    `- ${"длинное предпочтение ".repeat(200)}`,
+  );
+  const done = markDayDone(paths.vault);
+  fake.onTurn = (message) => {
+    if (message.includes("Re-open")) {
+      // Снимок коррекции — HEAD после указателя: его объект пропадает во время хода.
+      dropObject(
+        paths.vault,
+        vaultGit(paths.vault, "rev-parse", "HEAD").trim(),
+      );
+      writeFileSync(core.path, "# CORE\n");
+    } else done(message);
+  };
+
+  const run = await runRollup(host, paths, "daily");
+
+  // Снимок прочитан один раз до хода, поэтому потеря названа и файл возвращён на диске; коммит
+  // отката без объекта HEAD не проходит — коррекция не принята.
+  assert.notEqual(run.code, 0, run.stderr);
+  assert.match(run.stderr, /CORE\.md lost .*Указатели/u);
+  assert.match(run.stderr, /restored on disk, commit failed/u);
+  assert.doesNotMatch(run.stdout, /compressed/u);
+  assert.notEqual(readFileSync(core.path, "utf8"), "# CORE\n");
+});
+
+test("a snapshot whose CORE blob vanished: ls-tree still lists the path, show fails — no restore into nothing, exit 1", async (t) => {
+  const { fake, host, paths } = await fakeEve(t);
+  writeRawDay(paths.vault, isoDaysAgo(1), "## 10:00 [text]\n\nдень\n");
+  const core = writeCore(paths.vault);
+  vaultGit(paths.vault, "add", "-A");
+  vaultGit(paths.vault, "commit", "-q", "-m", "fixture");
+  const blob = vaultGit(paths.vault, "rev-parse", "HEAD:CORE.md").trim();
+  fake.mode = "session-failed";
+  fake.onTurn = () => {
+    appendLine(core.path);
+    dropObject(paths.vault, blob);
+  };
+
+  const run = await runRollup(host, paths, "daily");
+
+  assert.equal(run.code, 1, run.stderr);
+  assert.match(run.stderr, /git show [0-9a-f]+:CORE\.md/u);
+  assert.notEqual(readFileSync(core.path, "utf8"), "", "not emptied");
+  assert.match(readFileSync(core.path, "utf8"), /полуправка/u, "not rewritten");
+  assert.equal(
+    vaultLog(paths.vault).some((s) => s.includes("restore")),
+    false,
   );
 });

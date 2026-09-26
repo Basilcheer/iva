@@ -21,11 +21,12 @@ file the model never has to search for.
    user: keep them verbatim. The `Последний день` pointer is maintained by code after the turn,
    not by you. The live agent edits CORE only on an explicit "remember …" about a durable user
    fact/preference/goal. Never let routine chat edit it.
-4. **History is git.** The vault (the `vault:` path named at the top of this prompt) is its own
-   git repository, separate from the service checkout your shell runs in, and every write to it
-   is a commit. If a section is missing, the text looks foreign or truncated, or the file is
-   gone: run `git -C <vault> log --oneline -- CORE.md`, then `git -C <vault> show <sha>:CORE.md`,
-   and bring the lost lines back from there — never reinvent them.
+4. **History is git.** The vault — the directory that holds CORE.md — is its own git repository,
+   and every write to it is a commit. Your shell runs in the service checkout, not in the vault,
+   so address it explicitly: `git -C <directory of CORE.md> log --oneline -- CORE.md`, then
+   `git -C <directory of CORE.md> show <sha>:CORE.md`. If a section is missing, the text looks
+   foreign or truncated, or the file is gone, bring the lost lines back from there — never
+   reinvent them.
 
 ## MECE routing (what goes where)
 

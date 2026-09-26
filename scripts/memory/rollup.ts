@@ -19,7 +19,12 @@ import { Client } from "eve/client";
 import { CORE_CAP } from "#lib/core-cap.ts";
 import { coreDamage, setLastDayPointer } from "#lib/core-clamp.ts";
 import { writeFileAtomicSync } from "#lib/fs-atomic.ts";
-import { commitVaultWrite, vaultHead, vaultShow } from "#lib/vault-commit.ts";
+import {
+  commitVaultWrite,
+  vaultHead,
+  vaultShow,
+  type VaultCommit,
+} from "#lib/vault-commit.ts";
 import { tr } from "#lib/i18n.ts";
 import { readSettings } from "#lib/settings.ts";
 import { JOB_STOP_AT_ENV } from "#lib/schedule-runner.ts";
@@ -567,9 +572,17 @@ async function coreSnapshot(): Promise<string> {
   const sha = await vaultHead(VAULT());
   if ((await coreAt(sha)) !== readCoreText(CORE_PATH))
     throw new Error(
-      `CORE.md is not committed in ${VAULT()} (HEAD ${sha}) — the turn is not started`,
+      `CORE.md on disk does not match its snapshot commit ${sha} in ${VAULT()} — the turn is not started`,
     );
   return sha;
+}
+
+// Отказ коммита памяти: явный, или «не коммитили» с причиной (vault внутри чужого
+// репозитория). «Нечего коммитить» причины не несёт и отказом не является.
+function commitFailed(commit: VaultCommit): string | null {
+  return !commit.ok || (!commit.committed && commit.reason !== undefined)
+    ? (commit.reason ?? "unknown")
+    : null;
 }
 
 // Текст CORE в снимке; файла в коммите не было — пустой текст той же проверке. Иной отказ
@@ -578,24 +591,25 @@ async function coreAt(sha: string): Promise<string> {
   return (await vaultShow(VAULT(), sha, "CORE.md")) ?? "";
 }
 
-// CORE как в снимке: частичную правку оборванного хода не оставляем. true — файл вернули.
-// Откат — тоже правка памяти: коммит обязателен (порча без коммита даёт «нечего коммитить»,
-// это не отказ); отказ коммита — громко и exit 1, «восстановлен» не объявляем.
-async function restoreCore(snapshot: string, why: string): Promise<boolean> {
-  if (readCoreText(CORE_PATH) === snapshot) return false;
+// CORE как в снимке: частичную правку оборванного хода не оставляем. Откат — тоже правка
+// памяти: коммит обязателен (порча без коммита даёт «нечего коммитить», это не отказ); отказ
+// коммита назван строкой и возвращён — вызывающий сначала договаривает владельцу, потом exit 1.
+type Restore = "restored" | "unchanged" | "commit-failed";
+async function restoreCore(snapshot: string, why: string): Promise<Restore> {
+  if (readCoreText(CORE_PATH) === snapshot) return "unchanged";
   writeFileAtomicSync(CORE_PATH, snapshot);
-  const commit = await commitVaultWrite(
-    `file CORE.md: restore (${why})`,
-    [CORE_PATH],
-    VAULT(),
+  const failed = commitFailed(
+    await commitVaultWrite(
+      `file CORE.md: restore (${why})`,
+      [CORE_PATH],
+      VAULT(),
+    ),
   );
-  if (!commit.ok) {
-    console.error(
-      `rollup daily: CORE.md restored on disk, commit failed: ${commit.reason}`,
-    );
-    process.exit(1);
-  }
-  return true;
+  if (failed === null) return "restored";
+  console.error(
+    `rollup daily: CORE.md restored on disk, commit failed: ${failed}`,
+  );
+  return "commit-failed";
 }
 
 // CORE после хода, сессия которого снята. Ход дошёл до исхода или обрезан: его правка
@@ -611,17 +625,20 @@ async function settleCore(
   if (period !== "daily") return;
   const before = await coreAt(snapshot);
   if (run.verdict !== "completed" && run.verdict !== "cut") {
-    if (await restoreCore(before, `${day} ${run.verdict}`))
+    const restore = await restoreCore(before, `${day} ${run.verdict}`);
+    if (restore === "restored")
       console.error(
         `rollup daily: ${day}: the turn ended ${run.verdict} — CORE.md is back to its pre-turn text`,
       );
+    if (restore === "commit-failed") process.exit(1);
     return;
   }
-  await coreDamaged(before, readCoreText(CORE_PATH), day);
+  if (await coreDamaged(before, readCoreText(CORE_PATH), day)) process.exit(1);
 }
 
 // Одна проверка повреждения для дневного хода и коррекции: раздел пропал или опустел —
-// откат к снимку, коммит, алерт владельцу. true — повреждение было.
+// сказать и оповестить владельца, откатить к снимку с коммитом. Возврат: коммит отката не
+// состоялся (вызывающий кончает запуск кодом 1 — после того, как владелец услышал о потере).
 async function coreDamaged(
   before: string,
   after: string,
@@ -632,7 +649,6 @@ async function coreDamaged(
     alertResolved(DATA_DIR, CORE_DAMAGE_ALERT_KEY);
     return false;
   }
-  await restoreCore(before, why);
   const damagedHeadings = [
     // Оба вида потери: пропавшие и выхолощенные разделы.
     ...damage.lostHeadings,
@@ -647,7 +663,7 @@ async function coreDamaged(
     damagedHeadings.join(",") || "emptied",
     coreDamageAlert(tr, damagedHeadings),
   );
-  return true;
+  return (await restoreCore(before, why)) === "commit-failed";
 }
 
 // Daily is the only rollup that touches CORE. Each turn settled its own CORE above; the
@@ -668,7 +684,15 @@ if (period === "daily" && turnsRan) {
   const pointed = lastDay === null ? core : setLastDayPointer(core, lastDay);
   if (pointed !== core) {
     writeFileAtomicSync(CORE_PATH, pointed);
-    await commitVaultWrite("file CORE.md: pointer", [CORE_PATH], VAULT());
+    const failed = commitFailed(
+      await commitVaultWrite("file CORE.md: pointer", [CORE_PATH], VAULT()),
+    );
+    if (failed !== null) {
+      console.error(
+        `rollup daily: CORE.md pointer written on disk, commit failed: ${failed}`,
+      );
+      process.exit(1);
+    }
     core = pointed;
   }
 
@@ -682,6 +706,7 @@ if (period === "daily" && turnsRan) {
     // Остановились — vault не трогаем: снимок только перед стартующим ходом.
     const starting = !stop.signal.aborted && remainingMs() >= NIGHT_MIN_TURN_MS;
     const snapshot = starting ? await coreSnapshot() : null;
+    const before = snapshot === null ? null : await coreAt(snapshot);
     const fixed =
       snapshot === null
         ? null
@@ -699,9 +724,8 @@ if (period === "daily" && turnsRan) {
       );
       process.exit(1);
     }
-    if (fixed?.verdict !== "completed" || snapshot === null) {
-      if (snapshot !== null)
-        await restoreCore(await coreAt(snapshot), "correction");
+    if (fixed?.verdict !== "completed" || before === null) {
+      if (before !== null) await restoreCore(before, "correction");
       console.error(
         `rollup daily: CORE.md correction ${fixed?.verdict ?? "not started"} — CORE.md is back to its pre-correction text (${oldLength}/${CORE_CAP}); brain will clamp it at 05:00`,
       );
@@ -712,8 +736,10 @@ if (period === "daily" && turnsRan) {
     // Коррекция проходит ту же проверку повреждения, что дневной ход: «# CORE» — не сжатие,
     // удалённый файл — пустой текст той же проверки.
     const corrected = correctedCore.state === "valid" ? correctedCore.text : "";
-    if (await coreDamaged(await coreAt(snapshot), corrected, "correction"))
-      process.exit(1);
+    // Повреждение коррекцией — всегда код 1 (откат состоялся или нет: сказано в stderr).
+    const damaged = coreDamage(before, corrected).damaged;
+    await coreDamaged(before, corrected, "correction");
+    if (damaged) process.exit(1);
     core = corrected;
     if (core.length > CORE_CAP) {
       console.error(
