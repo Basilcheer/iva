@@ -105,5 +105,5 @@ headings, `write_card` refuses a body that carries any.
 - `tags: []` — pick 2–5 relevant kebab-case tags.
 - `aliases: ["The Same Title"]` — repeating the title adds nothing: keep only the
   spellings the title does not already contain (or drop the field).
-- No `## Related` — every card must link (see `linking.md`).
+- No `## Related` — every card must link (see section `memory-processor/references/linking.md`).
 - New card when an existing one covers the subject — update instead.

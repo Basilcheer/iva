@@ -3,8 +3,8 @@
 Write the daily-summary card — the day's node in the rollup chain. Then run the mechanical
 autograph pass and mark the transcript processed.
 
-Full template + MOC contract: `references/daily-summary.md` and
-`scripts/memory/instructions/rules/daily-format.md`.
+Full template + MOC contract: sections `memory-processor/references/daily-summary.md` and
+`rules/daily-format.md` below.
 
 ## 1. Write `summaries/daily/YYYY-MM-DD.md`
 
@@ -60,7 +60,7 @@ Quiet day → keep `## Topics` and `## Navigation`; `## Cards created today` may
 
 ## 2. Mark the transcript processed
 
-After each part of a large day, append the part marker (SKILL.md, «Parts») — the summary
+After each part of a large day, append the part marker (section `memory-processor/SKILL.md`, «Parts») — the summary
 above already carries that part:
 
 ```markdown

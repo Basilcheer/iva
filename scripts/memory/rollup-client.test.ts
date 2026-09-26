@@ -880,3 +880,57 @@ test("an undone day leaving the catch-up window is named in the log", async (t) 
     new RegExp(`${leaving}.*left the catch-up window`, "u"),
   );
 });
+
+// Правила ночи идут в промпт текстом (#249): в версионной раскладке путь внутрь
+// scripts/memory/instructions/ модель прочитать не может. Список — второй независимый
+// источник: каждый файл набора виден в промпте своим заголовком и первой строкой-заголовком.
+const NIGHT_RULES: Record<string, readonly string[]> = {
+  daily: [
+    "memory-processor/SKILL.md",
+    "memory-processor/phases/capture.md",
+    "memory-processor/phases/process.md",
+    "memory-processor/phases/link.md",
+    "memory-processor/phases/summarize.md",
+    "memory-processor/references/classification.md",
+    "memory-processor/references/card-templates.md",
+    "memory-processor/references/linking.md",
+    "memory-processor/references/daily-summary.md",
+    "rules/daily-format.md",
+    "rules/core-format.md",
+  ],
+  weekly: ["rules/weekly-reflection.md"],
+  monthly: ["rules/monthly-format.md"],
+  yearly: ["rules/yearly-format.md"],
+};
+
+for (const [period, files] of Object.entries(NIGHT_RULES)) {
+  test(`the ${period} prompt carries its rules as text, with no path into the instructions`, async (t) => {
+    const fake = new FakeEve();
+    const host = await fake.start();
+    const paths = makeRunDirectory();
+    t.after(async () => {
+      await fake.stop();
+      rmSync(paths.root, { force: true, recursive: true });
+    });
+    if (period === "daily") {
+      writeRawDay(paths.vault, isoDaysAgo(1), "## 10:00 [text]\n\nдень\n");
+      fake.onTurn = markDayDone(paths.vault);
+    }
+
+    const run = await runRollup(host, paths, period);
+
+    assert.equal(run.code, 0, run.stderr);
+    const [prompt = ""] = prompts(fake);
+    assert.doesNotMatch(prompt, /scripts\/memory\/instructions/u);
+    for (const file of files) {
+      const text = readFileSync(
+        join(ROOT, "scripts/memory/instructions", file),
+        "utf8",
+      );
+      const heading = text.split("\n").find((line) => line.startsWith("#"));
+      assert.ok(heading, `${file} has a heading`);
+      assert.ok(prompt.includes(`### ${file}\n`), `${period}: ${file} section`);
+      assert.ok(prompt.includes(heading), `${period}: ${file} text`);
+    }
+  });
+}

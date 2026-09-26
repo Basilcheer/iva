@@ -27,10 +27,10 @@ For each item:
      `write_card` owns the `## History` section, so never write that heading
      into `body` yourself.
      Never pass `history_entry` with ADD, UPDATE, or NOOP.
-     See `references/classification.md` → "ADD / UPDATE / SUPERSEDE / NOOP".
+     See section `memory-processor/references/classification.md` → "ADD / UPDATE / SUPERSEDE / NOOP".
      Never use `UPDATE` to hide a contradiction in chronology.
    - Tag each written card with `confidence: EXTRACTED|INFERRED` (see
-     classification.md → "Confidence").
+     section `memory-processor/references/classification.md` → "Confidence").
 2. **Path & filename.** Place by type (see SKILL layout table). Filenames are
    kebab-case slugs:
    - `cards/contacts/jane-doe.md`, `cards/projects/iva-memory.md`,
@@ -38,7 +38,7 @@ For each item:
      `cards/decisions/2026-06-20-systemd-timers.md`,
      `cards/notes/deepgram-nova3-multi.md`
    - Decisions and dated notes may prefix the date for ordering.
-3. **Frontmatter.** Use the template for the type (`references/card-templates.md`).
+3. **Frontmatter.** Use the template for the type (section `memory-processor/references/card-templates.md`).
    - `type` and `status` MUST come from `schema.json` → `node_types`.
    - `description` is a search snippet (what/why), never a title repeat.
    - `tags`: 2–5, lowercase, kebab-case.

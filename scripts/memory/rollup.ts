@@ -6,7 +6,8 @@
 //
 // daily без даты разбирает пропущенные дни окна (rollup-days.ts), с датой — ровно этот день.
 // Requires: a running agent (eve start) and a vault to write into. The processing rules
-// (scripts/memory/instructions/) ship with the repo. Date is in ASSISTANT_TIMEZONE.
+// (scripts/memory/instructions/) ship with the repo and go into the prompt as text.
+// Date is in ASSISTANT_TIMEZONE.
 import {
   appendFileSync,
   existsSync,
@@ -15,8 +16,7 @@ import {
   rmSync,
 } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import { Client, type ClientSession, type MessageResult } from "eve/client";
 import { CORE_CAP } from "#lib/core-cap.ts";
 import { coreDamage, setLastDayPointer } from "#lib/core-clamp.ts";
@@ -65,6 +65,7 @@ import {
 } from "../lib/rollup-stale-cursor.ts";
 import { sendTelegramHtml } from "../lib/telegram-send.ts";
 import { vaultDirOrExit } from "../lib/vault-boundary.ts";
+import { nightInstructions } from "../lib/night-instructions.ts";
 
 type Period = "daily" | "weekly" | "monthly" | "yearly";
 
@@ -91,7 +92,7 @@ const HOST = process.env.ASSISTANT_HOST ?? `http://127.0.0.1:${PORT}`;
 const BEARER = process.env.ASSISTANT_BEARER; // needed if the prod eve channel requires auth
 const BOT = process.env.TELEGRAM_BOT_TOKEN;
 const CHAT = notificationChat();
-// Absolute, like the instructions above: the prompt hands these paths to the model as
+// Absolute: the prompt hands these paths to the model as
 // read_file/write_file targets, and read_file resolves a RELATIVE path against the vault
 // root — a "vault/daily/…" string would come back as vault/vault/daily/… and ENOENT.
 let vaultCache: string | null = null;
@@ -99,13 +100,6 @@ let vaultCache: string | null = null;
 // граница процесса — одна строка причины и код 1, а не стек на импорте модуля.
 const VAULT = (): string => (vaultCache ??= vaultDirOrExit());
 const TZ = resolveTimeZone(process.env.ASSISTANT_TIMEZONE);
-// Format rules and the memory-processor prompts live in the repo, not in the vault: they
-// are product, and must update with it instead of rotting inside every user's vault.
-// Absolute, so the agent can read them whatever its working directory is.
-const INSTRUCTIONS = resolve(
-  dirname(fileURLToPath(import.meta.url)),
-  "instructions",
-);
 
 // daily/weekly may carry a Report to Telegram; monthly/yearly are silent by design (vault
 // only). Whether the Report actually goes out is the owner's switch, read at the end of the
@@ -140,7 +134,7 @@ function dailyTask(day: string): string {
     `Process the raw transcript of the completed day (${VAULT()}/daily/${day}.md): ` +
     `extract entities and create/update autograph cards. ` +
     `Work through the day in parts and mark each finished part in the transcript with a part marker, per the ` +
-    `memory-processor skill (${INSTRUCTIONS}/memory-processor/SKILL.md): a cut run resumes from that marker. ` +
+    `memory-processor skill (section memory-processor/SKILL.md above): a cut run resumes from that marker. ` +
     (resumeAfter === null
       ? ""
       : `Entries up to and including ${resumeAfter} are already processed (the last processed-through ` +
@@ -171,7 +165,7 @@ function dailyTask(day: string): string {
     `Link a card only by the 'file' path write_card returned in this turn, or by a path memory_search ` +
     `or read_file showed you; never derive a path from a title — a slug is lowercased, its punctuation ` +
     `becomes '-', and it is cut at 60 characters, so a derived path points at no file. ` +
-    `Then ${VAULT()}/CORE.md, per the ${INSTRUCTIONS}/rules/core-format.md rule. If the day produced ` +
+    `Then ${VAULT()}/CORE.md, per the rules/core-format.md rule above. If the day produced ` +
     `no new durable fact, preference, goal or behavioral lesson, do not open or write CORE.md. ` +
     `Otherwise edit only the affected lines; never rewrite the file; keep every existing section, ` +
     `including ones not in the template. The pointer to the last day is set by code — leave it alone. ` +
@@ -196,9 +190,11 @@ function buildPrompt(p: Period, now: string, day: string): string {
 
   const intro =
     `You are processing long-term memory (vault: ${VAULT()}). It is now ${now} (${TZ}). ` +
-    `Work strictly by the format rules in ${INSTRUCTIONS}/rules/ and the memory-processor ` +
-    `instructions in ${INSTRUCTIONS}/memory-processor/. ` +
-    `Do not invent facts — take them from the source files. `;
+    `Work strictly by the format rules and memory-processor instructions under "Night ` +
+    `instructions" below: they are complete here, do not look for them on disk. ` +
+    `Do not invent facts — take them from the source files.` +
+    // Правила ночи текстом (scripts/lib/night-instructions.ts): путь к ним модель не прочтёт.
+    `\n\n## Night instructions\n\n${nightInstructions(p)}\n\n## Tonight's task\n\n`;
 
   // Delivery half of the prompt: language, human wording, no self-delivery. Built per call,
   // so a language switched in /menu applies to the next night without a restart.

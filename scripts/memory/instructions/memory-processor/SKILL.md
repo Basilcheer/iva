@@ -24,7 +24,7 @@ used — you are the enrichment.
 - `daily/YYYY-MM-DD.md` — the day's raw two-sided transcript
   (`## HH:MM [text|voice|video|photo|forward from: …]` for the user,
   `## HH:MM [iva]` for Iva's replies; older days may use legacy `[eva]`).
-  See `scripts/memory/instructions/rules/daily-format.md`.
+  See the `rules/daily-format.md` section below.
 - `schema.json` — the vault schema (types, domains, decay).
 - Existing cards under `cards/**` and prior summaries under `summaries/`,
   `weekly|monthly|yearly/` — for linking and dedup.
@@ -57,13 +57,13 @@ Always pick `type` and `status` from `schema.json` → `node_types`. Never inven
 
 ## Flow (4 phases)
 
-1. **CAPTURE** (`phases/capture.md`) — read the transcript, segment it, and decide
+1. **CAPTURE** (section `memory-processor/phases/capture.md` below) — read the transcript, segment it, and decide
    what is noteworthy: which entities, decisions, ideas, and topics the day produced.
-2. **PROCESS** (`phases/process.md`) — create / update cards for the noteworthy items,
+2. **PROCESS** (section `memory-processor/phases/process.md` below) — create / update cards for the noteworthy items,
    choosing exactly one `ADD | UPDATE | SUPERSEDE | NOOP` operation, then type +
    description-snippet + tags + status; dedup against existing cards.
-3. **LINK** (`phases/link.md`) — wire every new card to its domain hub + 2–3 neighbors.
-4. **SUMMARIZE** (`phases/summarize.md`) — write the daily-summary card: the day's
+3. **LINK** (section `memory-processor/phases/link.md` below) — wire every new card to its domain hub + 2–3 neighbors.
+4. **SUMMARIZE** (section `memory-processor/phases/summarize.md` below) — write the daily-summary card: the day's
    TOPICS plus a MOC linking up to the week, down to the created cards, and down to
    the raw daily transcript. Then run the mechanical autograph pass.
 
@@ -80,7 +80,7 @@ raw file, not in the session, so a cut run is resumed instead of started over.
 - The rollup script reads the last part marker and hands you the time it stopped at:
   continue with the first entry after it and extend the existing summary — never redo
   earlier parts.
-- After the last part: the processed marker (`phases/summarize.md` §2), then the mechanical
+- After the last part: the processed marker (section `memory-processor/phases/summarize.md` below, §2), then the mechanical
   pass. The day counts as done only with the processed marker — a summary without it is an
   unfinished day, and a run that returns a report without it leaves the night unfinished.
 - Both markers are the last lines of the raw file, each on its own line. The rollup script
@@ -114,10 +114,10 @@ Markdown) and let the nightly Brain run the mechanical pass later.
 ## Hard rules
 
 - **Never modify existing transcript entries.** Append only the two processing markers —
-  the part marker and the processed marker — to the end of the file (see
-  `scripts/memory/instructions/rules/daily-format.md`).
+  the part marker and the processed marker — to the end of the file (see the
+  `rules/daily-format.md` section below).
 - **No orphans.** Every card created here must link to a hub and ≥2 neighbors before
-  you finish (`phases/link.md`).
+  you finish (section `memory-processor/phases/link.md` below).
 - **description is a search snippet, not the title.** One line, what/why, ~150 chars.
 - **tags:** 2–5, lowercase, kebab-case.
 - **Idempotent.** A day whose file ends with the processed marker is done: do not process
@@ -134,10 +134,10 @@ Markdown) and let the nightly Brain run the mechanical pass later.
 
 ## References
 
-- `references/classification.md` — what becomes a card vs. stays in the transcript.
-- `references/card-templates.md` — frontmatter templates per type.
-- `references/linking.md` — hub + neighbor linking protocol.
-- `references/daily-summary.md` — the daily-summary card spec (topics + MOC).
+- `memory-processor/references/classification.md` (section below) — what becomes a card vs. stays in the transcript.
+- `memory-processor/references/card-templates.md` (section below) — frontmatter templates per type.
+- `memory-processor/references/linking.md` (section below) — hub + neighbor linking protocol.
+- `memory-processor/references/daily-summary.md` (section below) — the daily-summary card spec (topics + MOC).
 - `scripts/autograph/docs/SKILL.md` — the typed vault engine (graph, decay, MOC, dedup).
-- `scripts/memory/instructions/rules/{daily,weekly,monthly,yearly}-format.md` — format +
-  rollup chain navigation rules.
+- `rules/daily-format.md` and `rules/core-format.md` (sections below) — format +
+  rollup chain navigation rules; the weekly, monthly and yearly nights carry their own.
