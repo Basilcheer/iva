@@ -145,15 +145,16 @@ function reasonOf(run: GitRun): string {
   if (run.timeout)
     return `git не ответил за ${String(gitTimeoutMs() / 1000)} с`;
   if (run.code === 127) return "git не найден в PATH";
-  if (typeof run.code === "string") return run.code;
   const lines = detail(run)
     .split("\n")
     .map((line) => line.trim())
     .filter((line) => line && !HINT_LINE.test(line));
-  return (lines[0] ?? `git вышел с кодом ${String(run.code)}`).slice(
-    0,
-    REASON_CAP,
-  );
+  // Строковый код раннера (буфер, сигнал) — сам код и первая строка, что git успел сказать.
+  const reason =
+    typeof run.code === "string"
+      ? `${run.code}: ${lines[0] ?? ""}`
+      : (lines[0] ?? `git вышел с кодом ${String(run.code)}`);
+  return reason.slice(0, REASON_CAP);
 }
 
 const sleep = (ms: number) =>
@@ -407,7 +408,9 @@ export async function vaultHead(root: string): Promise<string> {
   return run.out.trim();
 }
 
-/** Текст пути в коммите vault; null — пути в этом коммите нет. «Нет пути» решает не текст
+/** Текст пути в коммите vault; null — пути в этом коммите нет. Путь — обычный blob: каталог,
+ * gitlink и symlink функция не различает (ls-tree их перечислит, show отдаст как текст).
+ * «Нет пути» решает не текст
  * stderr (при пропавшем объекте коммита `git show` печатает ту же фразу), а `ls-tree`: код 0 и
  * пустой вывод — пути нет; код 0 и строка — путь есть, дальше `show`, и любой его отказ (битый
  * блоб, таймаут, переполнение буфера раннера) — исключение; код ≠ 0 (битая ревизия, пропавший

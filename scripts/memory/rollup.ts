@@ -593,8 +593,9 @@ async function coreAt(sha: string): Promise<string> {
 
 // CORE как в снимке: частичную правку оборванного хода не оставляем. Откат — тоже правка
 // памяти: коммит обязателен (порча без коммита даёт «нечего коммитить», это не отказ); отказ
-// коммита назван строкой и возвращён — вызывающий сначала договаривает владельцу, потом exit 1.
-type Restore = "restored" | "unchanged" | "commit-failed";
+// коммита возвращается с причиной — файл на диске уже возвращён, вызывающий сначала говорит
+// это владельцу, отказ коммита называет последней строкой и выходит кодом 1.
+type Restore = "restored" | "unchanged" | { readonly commitFailed: string };
 async function restoreCore(snapshot: string, why: string): Promise<Restore> {
   if (readCoreText(CORE_PATH) === snapshot) return "unchanged";
   writeFileAtomicSync(CORE_PATH, snapshot);
@@ -605,11 +606,16 @@ async function restoreCore(snapshot: string, why: string): Promise<Restore> {
       VAULT(),
     ),
   );
-  if (failed === null) return "restored";
+  return failed === null ? "restored" : { commitFailed: failed };
+}
+
+// Последняя строка перед выходом: откат уже на диске и уже назван, владелец уже услышал.
+function exitOnCommitFailure(restore: Restore): void {
+  if (typeof restore !== "object") return;
   console.error(
-    `rollup daily: CORE.md restored on disk, commit failed: ${failed}`,
+    `rollup daily: CORE.md restored on disk, commit failed: ${restore.commitFailed}`,
   );
-  return "commit-failed";
+  process.exit(1);
 }
 
 // CORE после хода, сессия которого снята. Ход дошёл до исхода или обрезан: его правка
@@ -626,29 +632,33 @@ async function settleCore(
   const before = await coreAt(snapshot);
   if (run.verdict !== "completed" && run.verdict !== "cut") {
     const restore = await restoreCore(before, `${day} ${run.verdict}`);
-    if (restore === "restored")
+    // Файл возвращён и при отказе коммита: строка верна в обоих случаях.
+    if (restore !== "unchanged")
       console.error(
         `rollup daily: ${day}: the turn ended ${run.verdict} — CORE.md is back to its pre-turn text`,
       );
-    if (restore === "commit-failed") process.exit(1);
+    exitOnCommitFailure(restore);
     return;
   }
-  if (await coreDamaged(before, readCoreText(CORE_PATH), day)) process.exit(1);
+  exitOnCommitFailure(
+    (await coreDamaged(before, readCoreText(CORE_PATH), day)).restore,
+  );
 }
 
 // Одна проверка повреждения для дневного хода и коррекции: раздел пропал или опустел —
-// сказать и оповестить владельца, откатить к снимку с коммитом. Возврат: коммит отката не
-// состоялся (вызывающий кончает запуск кодом 1 — после того, как владелец услышал о потере).
+// откатить к снимку, потом сказать и оповестить владельца (алерт «вернула файл» не обгоняет
+// сам возврат: между ними могут быть ENOSPC или kill). Выход — у вызывающего, по `restore`.
 async function coreDamaged(
   before: string,
   after: string,
   why: string,
-): Promise<boolean> {
+): Promise<{ readonly damaged: boolean; readonly restore: Restore }> {
   const damage = coreDamage(before, after);
   if (!damage.damaged) {
     alertResolved(DATA_DIR, CORE_DAMAGE_ALERT_KEY);
-    return false;
+    return { damaged: false, restore: "unchanged" };
   }
+  const restore = await restoreCore(before, why);
   const damagedHeadings = [
     // Оба вида потери: пропавшие и выхолощенные разделы.
     ...damage.lostHeadings,
@@ -663,7 +673,7 @@ async function coreDamaged(
     damagedHeadings.join(",") || "emptied",
     coreDamageAlert(tr, damagedHeadings),
   );
-  return (await restoreCore(before, why)) === "commit-failed";
+  return { damaged: true, restore };
 }
 
 // Daily is the only rollup that touches CORE. Each turn settled its own CORE above; the
@@ -725,10 +735,12 @@ if (period === "daily" && turnsRan) {
       process.exit(1);
     }
     if (fixed?.verdict !== "completed" || before === null) {
-      if (before !== null) await restoreCore(before, "correction");
+      const restore =
+        before === null ? "unchanged" : await restoreCore(before, "correction");
       console.error(
         `rollup daily: CORE.md correction ${fixed?.verdict ?? "not started"} — CORE.md is back to its pre-correction text (${oldLength}/${CORE_CAP}); brain will clamp it at 05:00`,
       );
+      exitOnCommitFailure(restore);
       process.exit(1);
     }
     const correctedCore = readCore(CORE_PATH);
@@ -737,8 +749,12 @@ if (period === "daily" && turnsRan) {
     // удалённый файл — пустой текст той же проверки.
     const corrected = correctedCore.state === "valid" ? correctedCore.text : "";
     // Повреждение коррекцией — всегда код 1 (откат состоялся или нет: сказано в stderr).
-    const damaged = coreDamage(before, corrected).damaged;
-    await coreDamaged(before, corrected, "correction");
+    const { damaged, restore } = await coreDamaged(
+      before,
+      corrected,
+      "correction",
+    );
+    exitOnCommitFailure(restore);
     if (damaged) process.exit(1);
     core = corrected;
     if (core.length > CORE_CAP) {

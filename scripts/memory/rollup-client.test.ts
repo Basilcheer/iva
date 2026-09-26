@@ -1922,8 +1922,14 @@ test("a stuck index.lock after the turn: CORE is restored on disk, the restore c
 
   assert.equal(run.code, 1, run.stderr);
   assert.equal(readFileSync(core.path, "utf8"), core.text, "restored on disk");
-  assert.match(run.stderr, /CORE\.md restored on disk, commit failed:/u);
-  assert.doesNotMatch(run.stderr, /is back to its pre-turn text/u);
+  // Файл возвращён и при отказе коммита: строка возврата, затем строка отказа — последней.
+  const back = run.stderr.indexOf("is back to its pre-turn text");
+  const failed = run.stderr.indexOf("CORE.md restored on disk, commit failed:");
+  assert.ok(back >= 0 && failed > back, run.stderr);
+  assert.equal(
+    run.stderr.trimEnd().split("\n").at(-1)?.includes("commit failed"),
+    true,
+  );
   assert.equal(
     vaultLog(paths.vault)[0],
     "turn: half-edit",
