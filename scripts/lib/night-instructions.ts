@@ -1,6 +1,7 @@
 // Правила ночи идут в промпт текстом, а не путём. Модель вместо данного ей абсолютного пути
 // звала read_file путём от корня проекта, а такой путь read_file ищет в vault (и намеренно
-// не выходит за него): ENOENT, ночь работала без скилла и не ставила отметку конца дня (#249). Каждый файл идёт разделом `### Rules: <имя>`, тексты ссылаются на разделы по имени.
+// не выходит за него): ENOENT, ночь работала без скилла и не ставила отметку конца дня (#249).
+// Каждый файл идёт разделом `### Rules: <имя>`, тексты ссылаются на разделы по имени.
 import { readFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -58,26 +59,31 @@ function readInstruction(dir: string, name: string): string {
   return body;
 }
 
-/** Все правила ночи одной строкой; нет файла или он пуст — ошибка с его именем. */
+/** Один файл правил своим разделом; нет файла или он пуст — ошибка с его именем. */
+export function nightInstructionSection(
+  name: string,
+  dir: string = INSTRUCTIONS_DIR,
+): string {
+  return `### Rules: ${sectionName(name)}\n\n${readInstruction(dir, name)}`;
+}
+
+/** Все правила ночи одной строкой. */
 export function nightInstructions(
   period: NightPeriod,
   dir: string = INSTRUCTIONS_DIR,
 ): string {
   return SETS[period]
-    .map(
-      (name) =>
-        `### Rules: ${sectionName(name)}\n\n${readInstruction(dir, name)}`,
-    )
+    .map((name) => nightInstructionSection(name, dir))
     .join("\n\n");
 }
 
 /** Граница процесса, как у vaultDirOrExit: нет файла или он пуст — одна строка и код 1. */
 export function nightInstructionsOrExit(
   period: NightPeriod,
-  dir: string = INSTRUCTIONS_DIR,
+  load: () => string = () => nightInstructions(period),
 ): string {
   try {
-    return nightInstructions(period, dir);
+    return load();
   } catch (error) {
     console.error(
       `rollup ${period}: ${error instanceof Error ? error.message : String(error)}`,

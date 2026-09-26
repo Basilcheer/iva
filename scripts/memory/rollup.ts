@@ -8,16 +8,14 @@
 // Requires: a running agent (eve start) and a vault to write into. The processing rules
 // (scripts/memory/instructions/) ship with the repo and go into the prompt as text.
 // Date is in ASSISTANT_TIMEZONE.
-import {
-  appendFileSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  rmSync,
-} from "node:fs";
-import { randomUUID } from "node:crypto";
+//
+// Порядок запуска: аргументы → .memory.lock → сохранённая сессия упавшего процесса снимается
+// → только потом инструкции, vault, timezone, CORE и дни (их отказ завершает запуск, и живой
+// сессии за ним уже нет). Каждый ход — своя сессия eve (scripts/lib/night-session.ts),
+// предел хода считает ночной клиент (scripts/lib/rollup-turn.ts).
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { Client, type ClientSession, type MessageResult } from "eve/client";
+import { Client } from "eve/client";
 import { CORE_CAP } from "#lib/core-cap.ts";
 import { coreDamage, setLastDayPointer } from "#lib/core-clamp.ts";
 import { writeFileAtomicSync } from "#lib/fs-atomic.ts";
@@ -25,6 +23,7 @@ import { commitVaultWrite } from "#lib/vault-commit.ts";
 import { tr } from "#lib/i18n.ts";
 import { readSettings } from "#lib/settings.ts";
 import { JOB_STOP_AT_ENV } from "#lib/schedule-runner.ts";
+import { memoryLockPath } from "#lib/schedule-paths.ts";
 import {
   alertOnce,
   alertResolved,
@@ -40,29 +39,39 @@ import { childLinkRule } from "../lib/rollup-children.ts";
 import { resolveTimeZone } from "../lib/timezone.ts";
 import { notificationChat } from "../lib/notification-chat.ts";
 import { readCore } from "./read-core.ts";
+import { underMemoryLock } from "../lib/memory-lock.ts";
+import { NIGHT_MIN_TURN_MS, resolveStopAt } from "../lib/rollup-turn.ts";
 import {
-  cancelTurnAndConfirmQuietly,
-  resolveStopAt,
-  withTurnTimeout,
-} from "../lib/rollup-turn.ts";
+  resetSavedSession,
+  runNightTurn,
+  saveSession,
+  type NightSessionContext,
+  type NightTurnContext,
+  type NightTurnRun,
+} from "../lib/night-session.ts";
+import {
+  addAttempt,
+  clearDay,
+  DAY_PAUSED_ALERT_KEY,
+  dayPausedAlert,
+  isExhausted,
+  readAttempts,
+  type AttemptReason,
+} from "../lib/rollup-attempts.ts";
 import {
   dayProgress,
   droppedDay,
   isDayDone,
   LOOKBACK_DAYS,
+  pausedDays,
   pendingDays,
   shiftDate,
   type DayState,
 } from "../lib/rollup-days.ts";
-import {
-  attachRollupNonce,
-  isOwnTurnResult,
-  parsePersistedRollupSession,
-  sentNotBeforeIso,
-} from "../lib/rollup-stale-cursor.ts";
 import { sendTelegramHtml } from "../lib/telegram-send.ts";
 import { vaultDirOrExit } from "../lib/vault-boundary.ts";
 import {
+  nightInstructionSection,
   nightInstructionsOrExit,
   type NightPeriod,
 } from "../lib/night-instructions.ts";
@@ -87,13 +96,10 @@ if (
   process.exit(1);
 }
 
-// Правила ночи читаются один раз при старте; отказ — одна строка и код 1 до запроса к eve.
-const NIGHT_RULES = nightInstructionsOrExit(period);
-// Ход коррекции CORE идёт в своей сессии: правило формата ему нужно текстом.
-const CORE_FORMAT_RULE =
-  NIGHT_RULES.split(/\n\n(?=### Rules: )/u).find((section) =>
-    section.startsWith("### Rules: core-format\n"),
-  ) ?? "";
+// Один писатель ночной памяти: раннер держит .memory.lock сам и говорит об этом окружением,
+// прямой запуск перезапускает себя под тем же flock (scripts/lib/memory-lock.ts).
+const locked = underMemoryLock(memoryLockPath(process.cwd()));
+if (locked !== null) process.exit(locked);
 
 const PORT = process.env.IVA_PORT ?? "8723";
 const HOST = process.env.ASSISTANT_HOST ?? `http://127.0.0.1:${PORT}`;
@@ -107,7 +113,6 @@ let vaultCache: string | null = null;
 // Лениво: неверная настройка вольта всплывает на первом использовании, где её ловит
 // граница процесса — одна строка причины и код 1, а не стек на импорте модуля.
 const VAULT = (): string => (vaultCache ??= vaultDirOrExit());
-const TZ = resolveTimeZone(process.env.ASSISTANT_TIMEZONE);
 
 // daily/weekly may carry a Report to Telegram; monthly/yearly are silent by design (vault
 // only). Whether the Report actually goes out is the owner's switch, read at the end of the
@@ -254,49 +259,13 @@ const client = new Client({
   ...(BEARER ? { auth: { bearer: () => Promise.resolve(BEARER) } } : {}),
 });
 
-// Каждый день ночи — своя сессия eve, снятая сразу после хода: блок правил и прошлые дни не
-// копятся в контексте следующего дня и следующей ночи. Файл сессии хранит её id, пока идёт ход;
-// найденный при старте файл остался от упавшего процесса — ту сессию снимаем.
-const DATA_DIR = resolveDataDir(process.cwd());
-const SESSION_FILE = join(DATA_DIR, `rollup-session-${period}.json`);
-// Did a rollup ever run on this installation? Read here, before this run leaves traces of
-// its own, and read from every trace at once (session files of all four periods, the schedule
-// status file, daily summaries in the vault) — one session file is not enough: it lives only
-// while a turn runs. It separates an installation that used to get the morning report from a fresh
-// one, which has nothing to miss and must hear nothing. Best-effort by design: ADR-0007.
-const RAN_BEFORE = rollupRanBefore(DATA_DIR, VAULT());
+const reasonOf = (error: unknown): string =>
+  error instanceof Error ? error.message : String(error);
 
-// Сессия упавшего процесса: её ход мог остаться на сервере, поэтому снимаем и удаляем файл.
-async function resetCrashedSession(): Promise<void> {
-  if (!existsSync(SESSION_FILE)) return;
-  // Нечитаемый файл или файл старого формата — не сессия: снимать нечего, файл удаляем.
-  const saved = (() => {
-    try {
-      return parsePersistedRollupSession(
-        JSON.parse(readFileSync(SESSION_FILE, "utf8")),
-      );
-    } catch {
-      return null;
-    }
-  })();
-  if (saved) {
-    logAbandoned(saved.sessionId, "crash");
-    await resetSession(saved.sessionId, "crash");
-  }
-  rmSync(SESSION_FILE, { force: true });
-}
-
-// Курсор потока не персистим: на диске только ID сессии идущего хода.
-function saveSession(sessionId: string): void {
-  writeFileAtomicSync(
-    SESSION_FILE,
-    JSON.stringify({ sessionId, createdAt: Date.now() }),
-  );
-}
-
-// Брошенные сессии (упавший процесс, неподтверждённая отмена) — в журнал: по нему видно,
-// чьи run-обёртки остались в сторе.
-function logAbandoned(sessionId: string, reason: string): void {
+// Брошенные сессии (упавший процесс, неснятая сессия, create без ответа) — в журнал: по нему
+// видно, чьи сессии могли остаться на сервере. Диагностика: на ветвление не влияет, отказ
+// записи ночь не роняет. null — id неизвестен (ответа create не было).
+function logAbandoned(sessionId: string | null, reason: string): void {
   try {
     mkdirSync(DATA_DIR, { recursive: true });
     appendFileSync(
@@ -314,103 +283,64 @@ function logAbandoned(sessionId: string, reason: string): void {
   }
 }
 
-async function resetSession(
-  sessionId: string,
-  reason: string,
-  attached?: ClientSession,
-): Promise<boolean> {
-  try {
-    const target = attached ?? client.sessions.attach(sessionId);
-    await target.reset({ reason: `Rollup: ${reason}` });
-    return true;
-  } catch (error) {
-    console.error(
-      `rollup ${period}: could not reset session ${sessionId} (${reason}):`,
-      error,
-    );
-    return false;
-  }
+// Остановка — срок или сигнал: новых сессий нет, идущий ход снимается уборкой. Обработчики
+// постоянные: повторный сигнал ничего не делает и не отдаёт процесс стандартному завершению
+// посреди уборки. Сигнал до установки обработчика, OOM и kill -9 оставляют файл сессии —
+// его снимет следующий старт.
+const stop = new AbortController();
+function requestStop(why: string): void {
+  if (stop.signal.aborted) return;
+  console.error(
+    `rollup ${period}: ${why} — stopping: no new session, the current one is cleaned up`,
+  );
+  stop.abort(new Error(`rollup stopped: ${why}`));
 }
+for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"] as const)
+  process.on(signal, () => requestStop(signal));
 
-// Ход осел (успех, ошибка, срок): сессия снята, файл удалён, следующий ход — в новой.
-// Не снялась — файл остаётся, и следующий старт снимет её как брошенную.
-async function retireSession(
-  session: ClientSession | undefined,
-  reason: string,
-): Promise<void> {
-  live = undefined;
-  if (
-    session &&
-    !(await resetSession(session.state.sessionId, reason, session))
-  )
-    return;
-  rmSync(SESSION_FILE, { force: true });
-}
+// Каждый ход ночи — своя сессия eve, снятая сразу после хода: блок правил и прошлые дни не
+// копятся в контексте следующего дня и следующей ночи. Файл сессии хранит её id, пока ход
+// может жить; найденный при старте файл остался от упавшего процесса — ту сессию снимаем
+// первой, до всего, что способно завершить запуск.
+const DATA_DIR = resolveDataDir(process.cwd());
+const SESSION_FILE = join(DATA_DIR, `rollup-session-${period}.json`);
+const night: NightSessionContext = {
+  sessions: client.sessions,
+  file: SESSION_FILE,
+  stop: stop.signal,
+  log: (line) => console.error(`rollup ${period}: ${line}`),
+  abandoned: logAbandoned,
+};
+if (!(await resetSavedSession(night))) process.exit(1);
 
-// Срок один — срок запуска у раннера (agent/lib/schedule-runner.ts): каждый ход получает
-// остаток до момента «работу кончить», а после него остаётся срок остановки до SIGTERM.
+// Правила ночи читаются один раз; отказ — одна строка и код 1.
+const NIGHT_RULES = nightInstructionsOrExit(period);
+// Ход коррекции CORE идёт в своей сессии: правило формата ему нужно текстом.
+const CORE_FORMAT_RULE =
+  period === "daily"
+    ? nightInstructionsOrExit(period, () =>
+        nightInstructionSection("rules/core-format.md"),
+      )
+    : "";
+const TZ = resolveTimeZone(process.env.ASSISTANT_TIMEZONE);
+// Did a rollup ever run on this installation? Read here, before this run leaves traces of
+// its own, and read from every trace at once (session files of all four periods, the schedule
+// status file, daily summaries in the vault) — one session file is not enough: it lives only
+// while a turn runs (a crashed run's file is already reset above). It separates an
+// installation that used to get the morning report from a fresh one, which has nothing to miss
+// and must hear nothing. Best-effort by design: ADR-0007.
+const RAN_BEFORE = rollupRanBefore(DATA_DIR, VAULT());
+// Свой след прогон оставляет только ходами: id сессии ложится в файл после ответа create.
+const turns: NightTurnContext = {
+  ...night,
+  save: (sessionId) => saveSession(SESSION_FILE, sessionId),
+};
+
+// Срок один — срок запуска у раннера (agent/lib/schedule-runner.ts): после него остаётся срок
+// остановки до SIGTERM. Срок останавливает запуск так же, как сигнал.
 const STOP_AT = resolveStopAt(process.env[JOB_STOP_AT_ENV], Date.now());
 const remainingMs = (): number => STOP_AT - Date.now();
-
-// Сессия и последний принятый ход на сервере. Их гасит любой обрыв: срок, SIGTERM,
-// ход без отчёта. Выход процесса отпускает .memory.lock, а живой ход писал бы vault дальше.
-let live:
-  { session: ClientSession; result?: Promise<MessageResult> } | undefined;
-// Остановка началась: ни один новый ход после неё не уходит на сервер (SIGTERM может
-// прийти, пока ход ещё дочитывает поток перед отправкой).
-let stopping = false;
-
-// Ход целиком (create + result) под сроком. ID сессии ложится в файл, как только сервер её
-// создал: упавший процесс оставит след, и следующий старт её снимет.
-const guardedTurn = (prompt: string, label: string) =>
-  withTurnTimeout(
-    async () => {
-      if (stopping) throw new Error("rollup is stopping — the send is refused");
-      const sentNotBefore = sentNotBeforeIso();
-      const created = await client.sessions.create({ message: prompt });
-      saveSession(created.session.state.sessionId);
-      const result = created.response.result();
-      live = { session: created.session, result };
-      return { result: await result, sentNotBefore, session: created.session };
-    },
-    { timeoutMs: remainingMs(), label },
-  );
-
-// Ход в своей сессии; сбой или срок гасит ход и снимает сессию, ошибка уходит наверх.
-async function freshTurn(prompt: string, label: string) {
-  try {
-    return await guardedTurn(prompt, label);
-  } catch (error) {
-    const failed = live?.session;
-    await stopLive(label);
-    await retireSession(failed, `${label}-failed`);
-    throw error;
-  }
-}
-
-// Гасит ход на сервере вместе с его задачами и ждёт подтверждения. Без подтверждения
-// сессия брошена и сброшена: второго писателя за ней не будет.
-async function stopLive(reason: string): Promise<void> {
-  stopping = true;
-  if (!live) return;
-  const { session, result } = live;
-  if (await cancelTurnAndConfirmQuietly(session, result)) return;
-  console.error(
-    `rollup ${period}: could not confirm cancellation of the turn (${reason})`,
-  );
-  logAbandoned(session.state.sessionId, `${reason}-cancel-unconfirmed`);
-  await resetSession(
-    session.state.sessionId,
-    `${reason}-cancel-unconfirmed`,
-    session,
-  );
-}
-
-// SIGTERM раннера — тот же обрыв, что и свой срок: сначала погасить ход, потом выйти.
-process.once("SIGTERM", () => {
-  console.error(`rollup ${period}: SIGTERM — stopping the server turn`);
-  void stopLive("sigterm").finally(() => process.exit(1));
-});
+setTimeout(() => requestStop("stop time"), remainingMs()).unref();
 
 // Сырой день и его сводка — вход детерминированной половины (rollup-days.ts).
 function readDay(date: string): DayState {
@@ -449,6 +379,9 @@ function readCoreText(path: string): string {
   return read.state === "valid" ? read.text : "";
 }
 
+// Сессия последнего хода — ключ журнала для алертов и отчёта этого запуска.
+let nightSession = "";
+
 const today = localDate();
 const yesterday = shiftDate(today, -1);
 // Отметку конца скилл ставит только законченному дню: сегодня и будущее — не день сводки.
@@ -458,6 +391,21 @@ if (dateArg !== undefined && dateArg >= today) {
   );
   process.exit(1);
 }
+// Попытки дня (scripts/lib/rollup-attempts.ts): день с тремя наблюдёнными отказами догон не
+// берёт, владелец слышит об этом. Ручной запуск с датой — решение владельца: предел его не
+// держит, и оповещение он не трогает.
+const ATTEMPTS_FILE = join(DATA_DIR, "rollup-attempts.json");
+const attempts = (() => {
+  if (period !== "daily") return {};
+  try {
+    return readAttempts(ATTEMPTS_FILE);
+  } catch (error) {
+    console.error(`rollup daily: ${reasonOf(error)}`);
+    process.exit(1);
+  }
+})();
+const exhausted = (date: string): boolean => isExhausted(attempts[date]);
+const catchUp = period === "daily" && dateArg === undefined;
 // Дни этого запуска: для daily — дата из аргумента или пропущенные дни окна, старые
 // первыми; прочие периоды считают свой период от вчера.
 const days =
@@ -465,115 +413,116 @@ const days =
     ? [yesterday]
     : dateArg !== undefined
       ? [dateArg]
-      : pendingDays(yesterday, readDay);
-const dropped =
-  period === "daily" && dateArg === undefined
-    ? droppedDay(yesterday, readDay)
-    : null;
+      : pendingDays(yesterday, readDay, exhausted);
+const paused = catchUp ? pausedDays(yesterday, readDay, exhausted) : [];
+if (paused.length > 0)
+  await alertOwner(
+    DAY_PAUSED_ALERT_KEY,
+    paused.join(","),
+    dayPausedAlert(tr, paused, attempts),
+  );
+else if (catchUp) alertResolved(DATA_DIR, DAY_PAUSED_ALERT_KEY);
+const dropped = catchUp ? droppedDay(yesterday, readDay) : null;
 if (dropped !== null)
   console.error(
     `rollup daily: ${dropped} is not processed and left the catch-up window — run rollup.ts daily ${dropped} to process it`,
   );
 if (days.length === 0) {
-  console.log(`rollup daily (${today}): every day of the window is processed`);
+  console.log(
+    paused.length > 0
+      ? `rollup daily (${today}): ${paused.join(", ")} wait for the owner after repeated failures`
+      : `rollup daily (${today}): every day of the window is processed`,
+  );
   process.exit(0);
 }
 // Снимок CORE ДО хода: файл правит сама ночь, и пропажу секции видно только сравнением
-// с тем, что было. Читается всегда, даже если ночь CORE не откроет вовсе.
+// с тем, что было. Читается всегда, даже если ночь CORE не откроет вовсе. Снимок живёт в
+// памяти: после hard kill восстанавливать нечем (остаток, specs/README.md).
 const coreBeforeTurn = period === "daily" ? readCoreText(CORE_PATH) : "";
-await resetCrashedSession();
 
-// Обход vercel/eve#2461: result() на резюмнутой сессии может вернуть чужой ход.
-// Nonce делает промпт уникальным для этого Rollup; guardedTurn сдвигает курсор
-// на хвост перед каждым send. Снять, когда eve свяжет result() с отправленным ходом.
-async function refuseForeignResult(
-  activeSession: ClientSession,
-  result: MessageResult,
-  prompt: string,
-  sentNotBefore: string,
-): Promise<void> {
-  if (isOwnTurnResult(result.events, { prompt, sentNotBefore })) return;
-  const cancelConfirmed = await cancelTurnAndConfirmQuietly(
-    activeSession,
-    live?.result,
-  );
-  if (!cancelConfirmed) {
-    console.error(
-      `rollup ${period}: result does not match the prompt just sent (stale stream cursor); cancellation was not confirmed — keeping session`,
-    );
-    logAbandoned(
-      activeSession.state.sessionId,
-      "stale-result-cancel-unconfirmed",
-    );
-    await resetSession(
-      activeSession.state.sessionId,
-      "stale-result-cancel-unconfirmed",
-      activeSession,
-    );
-    process.exit(1);
-  }
-  console.error(
-    `rollup ${period}: result does not match the prompt just sent (stale stream cursor); cancellation confirmed — dropping session`,
-  );
-  logAbandoned(activeSession.state.sessionId, "stale-result");
-  await resetSession(
-    activeSession.state.sessionId,
-    "stale-result",
-    activeSession,
-  );
-  try {
-    rmSync(SESSION_FILE, { force: true });
-  } catch {
-    /* ID сессии — кэш, его потеря не должна ронять ночь */
-  }
-  process.exit(1);
+// Отказ самого дня (обрез, ход без отчёта, незакрытый день) — попытка дня.
+function markAttempt(day: string, reason: AttemptReason): void {
+  if (period === "daily")
+    addAttempt(ATTEMPTS_FILE, day, reason, new Date().toISOString());
 }
 
-// Один день — один ход в своей сессии. Провал любого дня гасит ход и роняет запуск:
-// провал не двигает «последний успех», и догон продолжит день с его отметки.
-const reports: string[] = [];
-// Сессия последнего дня — ключ журнала для алертов и отчёта этого запуска.
-let nightSession = "";
-for (const day of days) {
-  const prompt = attachRollupNonce(
-    buildPrompt(period, today, day, NIGHT_RULES),
-    randomUUID(),
-  );
-  const turn = await freshTurn(prompt, "main-turn");
-  nightSession = turn.session.state.sessionId;
-  await refuseForeignResult(
-    turn.session,
-    turn.result,
-    prompt,
-    turn.sentNotBefore,
-  );
-  // An interactive turn ends with status "waiting" (the session is ready for the next
-  // message), so we rely on the presence of text rather than a "completed" status.
-  const message =
-    turn.result.status === "failed" ? "" : (turn.result.message ?? "");
-  const noReport = !message;
+type DayEnd = "done" | "cut" | "stop";
+
+// Итог дня после уборки его сессии. Состояние дня читается уже после reset.
+function dayEnd(day: string, run: NightTurnRun): DayEnd {
+  if (run.verdict === "cut") {
+    markAttempt(day, "cut");
+    console.error(
+      `rollup ${period}: ${day} was cut by the turn ceiling — partial progress, the next run resumes it from its part marker`,
+    );
+    return "cut";
+  }
+  if (run.verdict !== "completed") {
+    console.error(
+      `rollup ${period}: ${day}: the turn ended ${run.verdict} — no attempt is counted, the next run retries`,
+    );
+    return "stop";
+  }
+  const message = run.turn?.message ?? "";
+  if (!message) {
+    markAttempt(day, "no-report");
+    console.error(`rollup ${period}: agent returned no report for ${day}`);
+    return "stop";
+  }
   // Отчёт без отметки конца дня — незаконченный день, а не сделанный: следующий запуск
   // продолжит его с последней отметки части.
   const state = readDay(day);
-  const unfinished =
-    period === "daily" && state.raw !== null && !isDayDone(state);
-  const failure = noReport ? "no-report" : unfinished ? "day-unfinished" : "";
-  // Провал гасит задачи хода до того, как сессия снята.
-  if (failure) await stopLive(failure);
-  await retireSession(turn.session, failure || "day-done");
-  if (noReport) {
-    console.error(
-      `rollup ${period}: agent returned no report (status=${turn.result.status})`,
-    );
-    process.exit(1);
-  }
-  if (unfinished) {
+  if (period === "daily" && state.raw !== null && !isDayDone(state)) {
+    markAttempt(day, "day-unfinished");
     console.error(
       `rollup daily: ${day} is not marked done after the turn — the next run resumes it`,
     );
-    process.exit(1);
+    return "stop";
   }
+  if (period === "daily") clearDay(ATTEMPTS_FILE, day);
   reports.push(message);
+  return "done";
+}
+
+// Один день — один ход в своей сессии. Обрез пределом — частичный прогресс: попытка дня,
+// догон идёт дальше, запуск кончается кодом 1. Прочие отказы и неснятая сессия
+// останавливают догон: провал не двигает «последний успех», и догон продолжит день с его
+// отметки.
+const reports: string[] = [];
+// Запуск кончится кодом 1.
+let failed = false;
+// Каждый ход дошёл до исхода (успех или обрез): CORE доводится как после успеха.
+let settled = true;
+let turnsRan = false;
+for (const day of days) {
+  if (stop.signal.aborted || remainingMs() < NIGHT_MIN_TURN_MS) {
+    console.error(
+      `rollup ${period}: ${day} is not started — ${stop.signal.aborted ? "the run is stopping" : `${Math.round(remainingMs() / 1000)} s left before the stop time`}; the next run takes it`,
+    );
+    failed = true;
+    break;
+  }
+  turnsRan = true;
+  let end: DayEnd;
+  try {
+    const run = await runNightTurn(
+      turns,
+      buildPrompt(period, today, day, NIGHT_RULES),
+      day,
+    );
+    if (run.sessionId !== null) nightSession = run.sessionId;
+    end = run.retired ? dayEnd(day, run) : "stop";
+  } catch (error) {
+    // Ошибка клиента после хода (сводка, чтение дня, запись попытки): уборка уже прошла,
+    // попытка не ставится, CORE проверяется ниже.
+    console.error(`rollup ${period}: ${day}: ${reasonOf(error)}`);
+    end = "stop";
+  }
+  if (end === "done") continue;
+  failed = true;
+  if (end === "cut") continue;
+  settled = false;
+  break;
 }
 const report = reports.join("\n\n");
 
@@ -604,11 +553,23 @@ async function alertOwner(
     );
 }
 
+// CORE как в снимке: частичную правку оборванного хода не оставляем.
+async function restoreCore(snapshot: string, why: string): Promise<void> {
+  if (readCoreText(CORE_PATH) === snapshot) return;
+  writeFileAtomicSync(CORE_PATH, snapshot);
+  await commitVaultWrite(
+    `file CORE.md: restore (${why})`,
+    [CORE_PATH],
+    VAULT(),
+  );
+}
+
 // Daily is the only rollup that touches CORE. Verify the actual file, not just the turn
-// status: a lost section is rolled back here, the last-day pointer is written here, and
-// one same-session correction of the cap is allowed — then fail loudly and leave brain as
-// the deterministic 05:00 backstop.
-if (period === "daily") {
+// status: a lost section is rolled back here after every turn the process saw end (success,
+// cut or failure), the last-day pointer is written and one correction of the cap is allowed
+// only when every turn reached its outcome — then fail loudly and leave brain as the
+// deterministic 05:00 backstop.
+if (period === "daily" && turnsRan) {
   // A non-empty pre-existing vault may legitimately have no CORE. The turn starts from
   // the same empty state that the dynamic CORE instruction already documents and uses.
   let core = readCoreText(CORE_PATH);
@@ -639,6 +600,7 @@ if (period === "daily") {
   } else {
     alertResolved(DATA_DIR, CORE_DAMAGE_ALERT_KEY);
   }
+  if (!settled) process.exit(1);
 
   // Указатель на последний день ведёт код: дата известна точно, а модели тут нечего
   // решать — за неё она платила бы полным перезаписыванием файла. Пишем только если
@@ -656,20 +618,26 @@ if (period === "daily") {
     console.error(
       `rollup daily: CORE.md still exceeds the cap (${oldLength}/${CORE_CAP}); requesting one correction`,
     );
-    // Своя сессия и правило формата текстом: сессии дней уже сняты. Сбой — «коррекция не
-    // удалась»: файл перечитывается как есть, и дальше срабатывает проверка капа.
-    const fixed = await freshTurn(
-      `${CORE_FORMAT_RULE}\n\nRe-open ${CORE_PATH}: it is ${oldLength} characters, above the hard ${CORE_CAP}-character cap. ` +
-        "Compress it now per the core-format section above. Preserve every heading and the Pointers/Указатели " +
-        "section; remove stale Preferences/Предпочтения first. Do not return until the file itself is within the cap.",
-      "core-correction",
-    ).catch((e: unknown) => {
+    // Своя сессия и правило формата текстом: сессии дней уже сняты. Коррекция не дошла до
+    // исхода (обрез, сбой, остановка) — CORE как до неё, и дальше срабатывает проверка капа.
+    const fixed =
+      stop.signal.aborted || remainingMs() < NIGHT_MIN_TURN_MS
+        ? null
+        : await runNightTurn(
+            turns,
+            `${CORE_FORMAT_RULE}\n\nRe-open ${CORE_PATH}: it is ${oldLength} characters, above the hard ${CORE_CAP}-character cap. ` +
+              "Compress it now per the core-format section above. Preserve every heading and the Pointers/Указатели " +
+              "section; remove stale Preferences/Предпочтения first. Do not return until the file itself is within the cap.",
+            "core-correction",
+          );
+    if (fixed?.verdict !== "completed") {
+      await restoreCore(core, "correction");
       console.error(
-        `rollup daily: CORE.md correction turn failed (${(e as Error).message})`,
+        `rollup daily: CORE.md correction ${fixed?.verdict ?? "not started"} — CORE.md is back to its pre-correction text (${oldLength}/${CORE_CAP}); brain will clamp it at 05:00`,
       );
-      return null;
-    });
-    if (fixed) await retireSession(fixed.session, "core-correction");
+      process.exit(1);
+    }
+    if (!fixed.retired) failed = true;
     const correctedCore = readCore(CORE_PATH);
     if (correctedCore.state === "unreadable") throw correctedCore.error;
     if (correctedCore.state === "missing") {
@@ -693,6 +661,8 @@ if (period === "daily") {
 }
 
 console.log(`rollup ${period} (${today}):\n${report}`);
+// Отказ дня (обрез, провал, неснятая сессия, остановка): отчёт остаётся в журнале.
+if (failed) process.exit(1);
 
 // Telegram report only for daily/weekly, and only when the owner turned Reports on. What
 // leaves the chat is one decision, taken in the policy module and proven there by test:

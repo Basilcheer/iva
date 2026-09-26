@@ -356,7 +356,7 @@ function turnBoundary(state: TurnState): {
 
 /**
  * Ход встал на лимит сессии: он гасится тем же путём, что и ход сводки
- * (scripts/lib/rollup-turn.ts), — session.cancel с задачами, чтобы порождённая им задача
+ * (scripts/lib/night-session.ts), — session.cancel с задачами, чтобы порождённая им задача
  * не работала дальше. Отказ остановки ход не спасает, он виден в журнале.
  */
 async function stopParkedTurn(

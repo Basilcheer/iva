@@ -123,7 +123,10 @@ test("missed days come oldest first, only undone, under the cap, inside the wind
         .map(([date]) => date)
         .sort()
         .slice(0, MAX_DAYS_PER_RUN);
-      assert.deepEqual(pendingDays(YESTERDAY, read), expected);
+      assert.deepEqual(
+        pendingDays(YESTERDAY, read, () => false),
+        expected,
+      );
     }),
     RUNS,
   );
@@ -137,10 +140,10 @@ test("a failed night stays pending the next night instead of reading as done", (
   ]);
   const read = (date: string): DayState =>
     days.get(date) ?? { raw: null, summaryExists: true };
-  assert.deepEqual(pendingDays("2026-09-22", read), [
-    "2026-09-21",
-    "2026-09-22",
-  ]);
+  assert.deepEqual(
+    pendingDays("2026-09-22", read, () => false),
+    ["2026-09-21", "2026-09-22"],
+  );
 });
 
 test("the undone day that just left the window is named, not dropped silently", () => {

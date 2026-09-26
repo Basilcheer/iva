@@ -39,12 +39,15 @@ const DEFAULT_KILL_GRACE_MS = 10_000;
 // Срок остановки ночной сводки (killGraceMs её задания, agent/lib/schedule-paths.ts):
 // ребёнок получает момент «работу кончить» (JOB_STOP_AT_ENV) ровно за этот срок до SIGTERM
 // и столько же живёт после SIGTERM до SIGKILL — сводка успевает отменить ход на сервере и
-// дождаться подтверждения по любому из двух путей (scripts/lib/rollup-turn.ts). Прочим
-// заданиям гасить нечего, у них прежние 10 с.
+// снять его сессию, каждое действие не дольше трети этого срока (scripts/lib/night-session.ts).
+// Прочим заданиям гасить нечего, у них прежние 10 с.
 export const JOB_STOP_GRACE_MS = 90_000;
 // Имя переменной с моментом «работу кончить», epoch ms. Её ставит только раннер, поверх
 // окружения сервиса: у ребёнка одно число, и оно выведено из срока запуска.
 export const JOB_STOP_AT_ENV = "IVA_JOB_STOP_AT";
+// Раннер держит .memory.lock своим flock вокруг ребёнка и говорит ему об этом: ребёнок
+// (scripts/lib/memory-lock.ts) второй раз замок не берёт. Срок признаком владения не служит.
+export const MEMORY_LOCK_HELD_ENV = "IVA_MEMORY_LOCK_HELD";
 const TAIL_MAX = 4000;
 // The admission critical section below is a handful of synchronous fs calls — always
 // microseconds. A lock still held after this long almost certainly means its owner
@@ -273,20 +276,25 @@ function spawnWake(
   child.unref();
 }
 
-// Окружение ребёнка: родительское, каталог данных и момент «работу кончить», если у
-// запуска есть срок. Снимок окружения сервиса этот момент не перекрывает.
+// Окружение ребёнка: родительское, каталог данных, момент «работу кончить», если у
+// запуска есть срок, и признак замка, если ребёнок идёт под flock. Снимок окружения
+// сервиса ни то, ни другое не перекрывает.
 function childEnv(
   env: NodeJS.ProcessEnv,
   root: string | undefined,
   stopAt: number | null,
+  lockHeld: boolean,
 ): NodeJS.ProcessEnv {
+  const rest = { ...env };
+  delete rest[MEMORY_LOCK_HELD_ENV];
   return {
-    ...env,
+    ...rest,
     ASSISTANT_DATA_DIR: resolveDataDir(
       root ?? process.cwd(),
       env.ASSISTANT_DATA_DIR,
     ),
     ...(stopAt === null ? {} : { [JOB_STOP_AT_ENV]: String(stopAt) }),
+    ...(lockHeld ? { [MEMORY_LOCK_HELD_ENV]: "1" } : {}),
   };
 }
 
@@ -487,6 +495,7 @@ function spawnChild(
           env,
           root,
           timeoutMs === null ? null : startedAt + timeoutMs - killGraceMs,
+          Boolean(lockPath),
         ),
         stdio: ["ignore", "pipe", "pipe"],
         detached: true,

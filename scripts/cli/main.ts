@@ -103,6 +103,7 @@ ${C.b}Commands:${C.x}
   ${C.c}iva trace${C.x} <cmd>      the turn journal: tail|show [turn]|open
   ${C.c}iva notify${C.x} <text>    send one Telegram message verbatim
   ${C.c}iva jobs ack${C.x} <name>  close an open schedule failure
+  ${C.c}iva jobs skip memory-daily${C.x} <date>  close a night-memory day without processing it
   ${C.c}iva remind${C.x} <text>    let the agent judge one Reminder, then send it to Telegram
   ${C.c}iva post${C.x} --md-file <p>  rich Telegram post to the digest chat or an allowlisted --chat
   ${C.c}iva userbot${C.x} [creds|setup|status|diagnose --json|off]  personal-account userbot proxy

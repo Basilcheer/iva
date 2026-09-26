@@ -91,7 +91,7 @@ test("the loader boundary exits 1 with one line: missing file, empty file, front
         "--input-type=module",
         "-e",
         `const m = await import(${JSON.stringify(join(import.meta.dirname, "night-instructions.ts"))});` +
-          `m.nightInstructionsOrExit("monthly", ${JSON.stringify(dir)}); console.log("loaded");`,
+          `m.nightInstructionsOrExit("monthly", () => m.nightInstructions("monthly", ${JSON.stringify(dir)})); console.log("loaded");`,
       ],
       { encoding: "utf8" },
     );

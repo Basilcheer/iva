@@ -1,177 +1,126 @@
 /* eslint-disable @typescript-eslint/no-floating-promises -- Node's test runner owns registration promises. */
-// В eve 0.51.1 result() всё ещё читает поток с курсора экземпляра и останавливается на
-// первой границе хода, не сверяя её с только что отправленным сообщением (vercel/eve#2461).
+// Сессия ночного хода (scripts/lib/night-session.ts): снятие сохранённой сессии при старте,
+// create → файл → чтение → уборка, остановка на каждом шаге. Двойник client.sessions eve
+// помнит вызовы по порядку; поток хода — async-итератор, который, как у eve
+// (open-stream.js), тихо кончается по abort своего сигнала.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-import { type ClientSession } from "eve/client";
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import fc from "fast-check";
 import {
-  attachRollupNonce,
-  drainStreamBefore,
-  drainStreamToTail,
-  isOwnTurnResult,
   parsePersistedRollupSession,
-  sentNotBeforeIso,
-} from "./rollup-stale-cursor.ts";
+  resetSavedSession,
+  runNightTurn,
+  saveSession,
+  type NightTurnContext,
+  type NightSessionHandle,
+} from "./night-session.ts";
+import { NIGHT_MAX_STEPS } from "./rollup-turn.ts";
 
-function asClientStream(session: {
-  stream(options?: {
-    follow: false;
-    signal?: AbortSignal;
-  }): AsyncIterable<unknown>;
-}): Pick<ClientSession, "stream"> {
-  return session as Pick<ClientSession, "stream">;
+const TURN = "turn_day";
+const SEED = 20260926;
+let nextId = 0;
+const ev = (type: string, data: Record<string, unknown> = {}) => ({
+  type,
+  data: { turnId: TURN, sequence: 0, ...data },
+  meta: { at: "2026-09-26T04:00:00.000Z", id: `evt_${++nextId}` },
+});
+const done = (message = "отчёт") => [
+  ev("turn.started"),
+  ev("step.started", { stepIndex: 0 }),
+  ev("step.completed", { stepIndex: 0, usage: { inputTokens: 10 } }),
+  ev("message.completed", { finishReason: "stop", message, stepIndex: 0 }),
+  ev("turn.completed"),
+  ev("session.waiting", { wait: "next-user-message" }),
+];
+
+interface FakeOptions {
+  /** События хода; функция — чтобы видеть сигнал и файл в момент чтения. */
+  readonly events?: (signal: AbortSignal) => AsyncIterable<unknown>;
+  /** create до ответа: бросить (abort) или вызвать что-то в этот момент. */
+  readonly onCreate?: (signal: AbortSignal) => void;
+  readonly createFails?: boolean;
+  /** Ответ create дошёл, хотя сигнал поднят во время POST. */
+  readonly lateResponse?: boolean;
+  readonly reset?: (id: string) => Promise<unknown>;
+  readonly cancel?: () => Promise<{ status: string }>;
 }
 
-const HERE = dirname(fileURLToPath(import.meta.url));
-const ROLLUP_SRC = readFileSync(join(HERE, "../memory/rollup.ts"), "utf8");
-
-interface StreamEvent {
-  readonly type: string;
-  readonly data?: { readonly message?: string; readonly finishReason?: string };
-  readonly meta?: { readonly at: string };
-}
-
-function received(message: string, at: string): StreamEvent {
-  return {
-    type: "message.received",
-    data: { message },
-    meta: { at },
-  };
-}
-
-function completed(message: string, at: string): StreamEvent {
-  return {
-    type: "message.completed",
-    data: { message, finishReason: "stop" },
-    meta: { at },
-  };
-}
-
-function waiting(at: string): StreamEvent {
-  return { type: "session.waiting", meta: { at } };
-}
-
-function turn(prompt: string, report: string, at: string): StreamEvent[] {
-  return [received(prompt, at), completed(report, at), waiting(at)];
-}
-
-function isTurnBoundary(event: StreamEvent): boolean {
-  return (
-    event.type === "session.completed" ||
-    event.type === "session.failed" ||
-    event.type === "session.waiting"
-  );
-}
-
-// Модель result() eve 0.51.1: collect Turn events с курсора до первой границы.
-function resultFromCursor(
-  stream: readonly StreamEvent[],
-  streamIndex: number,
-): {
-  readonly events: StreamEvent[];
-  readonly message: string | undefined;
-  readonly status: "completed" | "failed" | "waiting";
-} {
-  const events: StreamEvent[] = [];
-  for (let i = streamIndex; i < stream.length; i++) {
-    const event = stream[i];
-    if (event === undefined) break;
-    events.push(event);
-    if (isTurnBoundary(event)) break;
-  }
-  let message: string | undefined;
-  let status: "completed" | "failed" | "waiting" = "completed";
-  for (const event of events) {
-    if (
-      event.type === "message.completed" &&
-      event.data?.finishReason !== "tool-calls"
-    ) {
-      message = event.data?.message;
-    }
-    if (event.type === "session.waiting") status = "waiting";
-    if (event.type === "session.failed") status = "failed";
-  }
-  return { events, message, status };
-}
-
-// origin/main в scripts/memory/rollup.ts: после result() нет сверки с промптом —
-// любой waiting-ход с непустым текстом уходит в Telegram.
-function mainWouldDeliver(result: {
-  readonly status: string;
-  readonly message: string | undefined;
-}): boolean {
-  return result.status !== "failed" && Boolean(result.message);
-}
-
-// PR 204: точный текст промпта + meta.at не старше process start минус 60с.
-function pr204Owns(
-  events: readonly StreamEvent[],
-  prompt: string,
-  sentNotBefore: string,
-): boolean {
-  return events.some(
-    (event) =>
-      event.type === "message.received" &&
-      event.data?.message === prompt &&
-      (event.meta?.at ?? "") >= sentNotBefore,
-  );
-}
-
-class FakeSession {
-  streamIndex: number;
-  readonly events: StreamEvent[];
-  constructor(events: StreamEvent[], streamIndex: number) {
-    this.events = events;
-    this.streamIndex = streamIndex;
-  }
-  stream(options?: {
-    follow: false;
-    signal?: AbortSignal;
-  }): AsyncIterable<StreamEvent> {
-    if ((options ?? { follow: false }).follow !== false)
-      throw new Error("expected follow:false");
-    const signal = options?.signal;
-    return {
-      [Symbol.asyncIterator]: () => {
-        let closed = false;
-        const stop = (): void => {
-          closed = true;
-        };
-        signal?.addEventListener("abort", stop, { once: true });
-        if (signal?.aborted) stop();
-        return {
-          next: async () => {
-            await Promise.resolve();
-            if (closed || signal?.aborted) {
-              return { done: true as const, value: undefined };
-            }
-            if (this.streamIndex >= this.events.length) {
-              return { done: true as const, value: undefined };
-            }
-            const value = this.events[this.streamIndex];
-            this.streamIndex += 1;
-            return { done: false as const, value };
-          },
-          return: () => {
-            closed = true;
-            return Promise.resolve({ done: true as const, value: undefined });
-          },
-        };
+function world(
+  t: { after: (fn: () => void) => void },
+  options: FakeOptions = {},
+) {
+  const dir = mkdtempSync(join(tmpdir(), "iva-night-session-"));
+  t.after(() => {
+    chmodSync(dir, 0o755);
+    rmSync(dir, { force: true, recursive: true });
+  });
+  const calls: string[] = [];
+  const signals: AbortSignal[] = [];
+  const log: string[] = [];
+  const abandoned: string[] = [];
+  const handle = (id: string): NightSessionHandle => ({
+    state: { sessionId: id },
+    cancel: (o) => {
+      calls.push(
+        `cancel ${id} ${o.turnId ?? "(active)"}${o.tasks ? " +tasks" : ""}`,
+      );
+      signals.push(o.signal);
+      return options.cancel?.() ?? Promise.resolve({ status: "accepted" });
+    },
+    reset: (o) => {
+      calls.push(`reset ${id} ${o.reason}`);
+      signals.push(o.signal);
+      return (
+        options.reset?.(id) ??
+        Promise.resolve({ status: "reset", previousSessionId: id })
+      );
+    },
+  });
+  const stop = new AbortController();
+  const file = join(dir, "rollup-session-daily.json");
+  const ctx: NightTurnContext = {
+    file,
+    save: (sessionId) => saveSession(file, sessionId),
+    stop: stop.signal,
+    log: (line) => log.push(line),
+    abandoned: (id, reason) => abandoned.push(`${id} ${reason}`),
+    sessions: {
+      create: ({ signal }) => {
+        calls.push("create");
+        options.onCreate?.(signal);
+        if (options.createFails || (signal.aborted && !options.lateResponse))
+          return Promise.reject(new DOMException("aborted", "AbortError"));
+        const events = options.events?.(signal) ?? iterate(done());
+        return Promise.resolve({ session: handle("s1"), response: events });
       },
-    };
-  }
+      attach: (id) => handle(id),
+    },
+  };
+  return { ctx, calls, signals, log, abandoned, stop, file, dir };
 }
 
-const OLD_PROMPT =
-  "You are processing long-term memory. It is now 2026-08-19. Process the completed day 2026-08-18.";
-const TONIGHT_PROMPT =
-  "You are processing long-term memory. It is now 2026-08-24. Process the completed day 2026-08-23.";
-const OLD_REPORT = "Обработан день 2026-08-18";
-const TONIGHT_REPORT = "Обработан день 2026-08-23";
+async function* iterate(events: readonly unknown[]) {
+  for (const event of events) yield await Promise.resolve(event);
+}
+
+/** Поток, который после events ждёт; abort сигнала кончает его без границы, как у eve. */
+async function* hangAfter(events: readonly unknown[], signal: AbortSignal) {
+  yield* iterate(events);
+  if (signal.aborted) return;
+  await new Promise<void>((resolve) =>
+    signal.addEventListener("abort", () => resolve(), { once: true }),
+  );
+}
 
 test("the persisted Rollup session is exactly sessionId plus createdAt", () => {
   assert.deepEqual(
@@ -212,411 +161,346 @@ test("property: persisted Rollup session parsing never crashes on junk", () => {
   );
 });
 
-test("origin/main delivers a lagged-cursor result from a previous night", () => {
-  const stream = [
-    ...turn(OLD_PROMPT, OLD_REPORT, "2026-08-19T04:01:00.000Z"),
-    ...turn(TONIGHT_PROMPT, TONIGHT_REPORT, "2026-08-24T04:01:00.000Z"),
-  ];
-  // Курсор отстал на один ход: result() останавливается на первой границе и отдаёт старый отчёт.
-  const result = resultFromCursor(stream, 0);
-  assert.equal(result.status, "waiting");
-  assert.equal(result.message, OLD_REPORT);
-  assert.equal(
-    mainWouldDeliver(result),
-    true,
-    "main has no ownership check, so the five-day-old report would be delivered",
-  );
+test("a create rejected before a response from the server leaves no result: the session id is unknown, nothing is reset", async (t) => {
+  const { ctx, calls, abandoned, log, file } = world(t, { createFails: true });
+  const run = await runNightTurn(ctx, "day", "2026-09-25");
+  assert.deepEqual(run, {
+    verdict: "broken",
+    turn: null,
+    sessionId: null,
+    retired: false,
+  });
+  assert.deepEqual(calls, ["create"]);
+  assert.deepEqual(abandoned, ["null 2026-09-25-create-failed"]);
+  assert.match(log.join("\n"), /session id unknown/u);
+  assert.equal(existsSync(file), false);
 });
 
-test("a lagged cursor result is not this Turn's result", () => {
-  const stream = [
-    ...turn(OLD_PROMPT, OLD_REPORT, "2026-08-19T04:01:00.000Z"),
-    ...turn(TONIGHT_PROMPT, TONIGHT_REPORT, "2026-08-24T04:01:00.000Z"),
-  ];
-  const result = resultFromCursor(stream, 0);
-  const tonight = attachRollupNonce(TONIGHT_PROMPT, "tonight");
-  assert.equal(
-    isOwnTurnResult(result.events, {
-      prompt: tonight,
-      sentNotBefore: sentNotBeforeIso(Date.parse("2026-08-24T04:00:00.000Z")),
-    }),
-    false,
-  );
-});
-
-test("isOwnTurnResult fails closed on malformed timestamps", () => {
-  const prompt = attachRollupNonce(TONIGHT_PROMPT, "tonight");
-  const sentNotBefore = "2026-08-24T04:00:00.000Z";
-  assert.equal(
-    isOwnTurnResult([received(prompt, "zzzz")], {
-      prompt,
-      sentNotBefore,
-    }),
-    false,
-  );
-  assert.equal(
-    isOwnTurnResult([received(prompt, "2026-08-24T03:30:00-01:00")], {
-      prompt,
-      sentNotBefore,
-    }),
-    true,
-  );
-  assert.equal(
-    isOwnTurnResult([received(prompt, "2026-08-24T04:30:00+05:00")], {
-      prompt,
-      sentNotBefore,
-    }),
-    false,
-  );
-});
-
-test("property: ownership check never crashes on junk events", () => {
-  fc.assert(
-    fc.property(
-      fc.array(fc.anything(), { maxLength: 30 }),
-      (events: unknown[]) => {
-        assert.equal(
-          typeof isOwnTurnResult(events, {
-            prompt: "expected",
-            sentNotBefore: "2026-08-24T04:00:00.000Z",
-          }),
-          "boolean",
-        );
-      },
-    ),
-    { seed: 18_713, numRuns: 200 },
-  );
-});
-
-test("drainStreamToTail advances a lagged cursor to the tail before send", async () => {
-  const stream = [
-    ...turn(OLD_PROMPT, OLD_REPORT, "2026-08-19T04:01:00.000Z"),
-    ...turn(TONIGHT_PROMPT, TONIGHT_REPORT, "2026-08-24T04:01:00.000Z"),
-  ];
-  const session = new FakeSession(stream, 0);
-  await drainStreamToTail(asClientStream(session), undefined, 1000);
-  assert.equal(session.streamIndex, stream.length);
-  const tonight = attachRollupNonce(TONIGHT_PROMPT, "tonight");
-  const live = [
-    ...stream,
-    ...turn(tonight, TONIGHT_REPORT, "2026-08-24T04:02:00.000Z"),
-  ];
-  const result = resultFromCursor(live, session.streamIndex);
-  assert.equal(result.message, TONIGHT_REPORT);
-  assert.equal(
-    isOwnTurnResult(result.events, {
-      prompt: tonight,
-      sentNotBefore: "2026-08-24T04:00:00.000Z",
-    }),
-    true,
-  );
-});
-
-test("drainStreamToTail reports a stream error without throwing itself", async () => {
-  const session = {
-    stream(options?: {
-      follow: false;
-      signal?: AbortSignal;
-    }): AsyncIterable<never> {
-      if ((options ?? { follow: false }).follow !== false)
-        throw new Error("expected follow:false");
-      throw new Error("stream unavailable");
-    },
-  };
-  const errors: string[] = [];
-  await drainStreamToTail(session, (error) => errors.push(error.message), 1000);
-  assert.deepEqual(errors, ["stream unavailable"]);
-});
-
-test("drainStreamBefore refuses the action when the stream drain fails", async () => {
-  const streamError = new Error("stream unavailable before send");
-  const session = {
-    stream(): AsyncIterable<never> {
-      throw streamError;
-    },
-  };
-  let actionCalls = 0;
-  const reported: Error[] = [];
-
-  await assert.rejects(
-    () =>
-      drainStreamBefore(
-        asClientStream(session),
-        () => {
-          actionCalls++;
-          return Promise.resolve();
-        },
-        (error) => reported.push(error),
-        1000,
-      ),
-    (error) => error === streamError,
-  );
-
-  assert.equal(actionCalls, 0);
-  assert.deepEqual(reported, [streamError]);
-});
-
-test("drainStreamToTail finishes when both next and return hang past the timeout", async () => {
-  const session = {
-    stream(options?: {
-      follow: false;
-      signal?: AbortSignal;
-    }): AsyncIterable<never> {
-      if ((options ?? { follow: false }).follow !== false)
-        throw new Error("expected follow:false");
-      const signal = options?.signal;
-      return {
-        [Symbol.asyncIterator]: () => ({
-          next: () =>
-            new Promise<IteratorResult<never>>((_resolve, reject) => {
-              const fail = (): void => {
-                reject(
-                  signal?.reason instanceof Error
-                    ? signal.reason
-                    : new Error("aborted"),
-                );
-              };
-              if (signal?.aborted) {
-                fail();
-                return;
-              }
-              signal?.addEventListener("abort", fail, { once: true });
-            }),
-          return: () => new Promise<IteratorResult<never>>(() => {}),
-        }),
-      };
-    },
-  };
-  const errors: string[] = [];
-  const started = Date.now();
-  await drainStreamToTail(session, (error) => errors.push(error.message), 50);
-  const elapsed = Date.now() - started;
-  assert.ok(
-    elapsed < 1000,
-    `hung drain must finish within the timeout, took ${elapsed}ms`,
-  );
-  assert.equal(errors.length, 1);
-  assert.match(errors[0] ?? "", /timed out/);
-});
-
-test("drainStreamToTail passes abort signal so a late next does not advance the cursor", async () => {
-  let hasSignal = false;
-  let streamIndex = 0;
-  let closed = false;
-  let pendingResolve: ((result: IteratorResult<unknown>) => void) | undefined;
-  const session = {
-    stream(options?: {
-      follow: false;
-      signal?: AbortSignal;
-    }): AsyncIterable<unknown> {
-      hasSignal = options?.signal !== undefined;
-      const signal = options?.signal;
-      return {
-        [Symbol.asyncIterator]: () => ({
-          next: () =>
-            new Promise<IteratorResult<unknown>>((resolve, reject) => {
-              pendingResolve = (result) => {
-                if (closed || signal?.aborted) {
-                  resolve({ done: true, value: undefined });
-                  return;
-                }
-                streamIndex += 1;
-                resolve(result);
-              };
-              const fail = (): void => {
-                closed = true;
-                reject(
-                  signal?.reason instanceof Error
-                    ? signal.reason
-                    : new Error("aborted"),
-                );
-              };
-              if (signal?.aborted) {
-                fail();
-                return;
-              }
-              signal?.addEventListener("abort", fail, { once: true });
-            }),
-          return: () => {
-            closed = true;
-            return Promise.resolve({ done: true as const, value: undefined });
-          },
-        }),
-      };
-    },
-  };
-  const errors: string[] = [];
-  await drainStreamToTail(
-    asClientStream(session),
-    (error) => errors.push(error.message),
-    50,
-  );
-  assert.equal(hasSignal, true);
-  assert.equal(errors.length, 1);
-  assert.match(errors[0] ?? "", /timed out/);
-  pendingResolve?.({ done: false, value: { type: "late" } });
-  assert.equal(streamIndex, 0);
-});
-
-test("PR 204 still accepts a delayed previous Turn event; a Rollup nonce does not", () => {
-  const processStart = Date.parse("2026-08-24T04:00:00.000Z");
-  const delayedAt = "2026-08-24T04:00:05.000Z";
-  const previous = attachRollupNonce(TONIGHT_PROMPT, "previous");
-  const tonight = attachRollupNonce(TONIGHT_PROMPT, "tonight");
-  const delayedPrevious = received(previous, delayedAt);
-  const delayedSameText = received(TONIGHT_PROMPT, delayedAt);
-
-  assert.equal(
-    pr204Owns(
-      [delayedSameText],
-      TONIGHT_PROMPT,
-      new Date(processStart - 60_000).toISOString(),
-    ),
-    true,
-    "PR 204: same-date prompt + 60s slack accepts a delayed previous Turn event",
-  );
-  assert.equal(
-    isOwnTurnResult([delayedSameText], {
-      prompt: TONIGHT_PROMPT,
-      sentNotBefore: sentNotBeforeIso(processStart),
-    }),
-    true,
-    "time check without a nonce still accepts an event stamped after process start",
-  );
-  assert.equal(
-    isOwnTurnResult([delayedPrevious], {
-      prompt: tonight,
-      sentNotBefore: sentNotBeforeIso(processStart),
-    }),
-    false,
-  );
-  assert.equal(
-    isOwnTurnResult([received(tonight, delayedAt)], {
-      prompt: tonight,
-      sentNotBefore: sentNotBeforeIso(processStart),
-    }),
-    true,
-  );
-});
-
-test("sentNotBefore is the send instant, without a 60s slack window", () => {
-  const processStart = Date.parse("2026-08-24T04:00:00.000Z");
-  const tonight = attachRollupNonce(TONIGHT_PROMPT, "tonight");
-  const earlierSameNight = received(tonight, "2026-08-24T03:59:50.000Z");
-  assert.equal(
-    isOwnTurnResult([earlierSameNight], {
-      prompt: tonight,
-      sentNotBefore: sentNotBeforeIso(processStart),
-    }),
-    false,
-  );
-  assert.equal(
-    pr204Owns(
-      [received(TONIGHT_PROMPT, "2026-08-24T03:59:50.000Z")],
-      TONIGHT_PROMPT,
-      new Date(processStart - 60_000).toISOString(),
-    ),
-    true,
-  );
-});
-
-test("rollup.ts creates a fresh session per turn and refuses a foreign result before retiring it", () => {
-  assert.match(ROLLUP_SRC, /vercel\/eve#2461/);
-  // Файл сессии хода — ровно id плюс время: его и читает снятие брошенной сессии.
-  assert.equal(
-    parsePersistedRollupSession({ sessionId: "wrun_day", createdAt: 1 })
-      ?.sessionId,
-    "wrun_day",
-  );
-  assert.match(ROLLUP_SRC, /isOwnTurnResult\(/);
-  assert.match(ROLLUP_SRC, /attachRollupNonce\(/);
-  assert.match(ROLLUP_SRC, /sentNotBeforeIso\(/);
-  // Файл старого формата — не сессия: его удаляют без сброса.
-  assert.equal(
-    parsePersistedRollupSession({ createdAt: 1, state: { sessionId: "x" } }),
-    null,
-  );
-  assert.match(ROLLUP_SRC, /client\.sessions\.create\(\{ message: prompt \}\)/);
-  // Nonce делает каждый промпт хода уникальным, даже одного и того же дня.
-  assert.notEqual(
-    attachRollupNonce(TONIGHT_PROMPT, "a"),
-    attachRollupNonce(TONIGHT_PROMPT, "b"),
-  );
-  assert.equal(
-    parsePersistedRollupSession({ sessionId: " wrun_space ", createdAt: 1 }),
-    null,
-  );
-  const removedLegacyClient = ["legacy", "ClientSession"].join("");
-  const removedSingularSession = ["client", "session("].join(".");
-  assert.equal(ROLLUP_SRC.includes(removedLegacyClient), false);
-  assert.equal(ROLLUP_SRC.includes(removedSingularSession), false);
-  assert.doesNotMatch(ROLLUP_SRC, /attach\(saved\.sessionId,\s*\{/);
-  assert.doesNotMatch(ROLLUP_SRC, /Date\.now\(\) - 60_000/);
-  assert.doesNotMatch(ROLLUP_SRC, /drainBeforeSend/);
-  const refuseAt = ROLLUP_SRC.indexOf("await refuseForeignResult(");
-  const retireAt = ROLLUP_SRC.indexOf("await retireSession(turn.session,");
-  assert.ok(
-    refuseAt > 0 && refuseAt < retireAt,
-    "refuse stale before the day's session is retired",
-  );
-});
-
-test("the production pre-send helper drains before every send and a foreign result is refused", async () => {
-  const order: string[] = [];
-  const prompt = attachRollupNonce(TONIGHT_PROMPT, "tonight");
-  const foreign = turn(OLD_PROMPT, OLD_REPORT, "2026-08-19T04:01:00.000Z");
-  const session = {
-    stream(options?: { follow?: boolean; signal?: AbortSignal }) {
-      if (options?.follow !== false) throw new Error("expected follow:false");
-      order.push("drain");
-      return {
-        async *[Symbol.asyncIterator]() {
-          /* empty tail: nothing parked ahead of send */
-        },
-      };
-    },
-    send() {
-      order.push("send");
-      return Promise.resolve();
-    },
-    result() {
-      order.push("result");
-      return Promise.resolve({ events: resultFromCursor(foreign, 0).events });
-    },
-  };
-  await drainStreamBefore(
-    asClientStream(session),
-    () => session.send(),
-    undefined,
-    1000,
-  );
-  await drainStreamBefore(
-    asClientStream(session),
-    () => session.send(),
-    undefined,
-    1000,
-  );
-  await drainStreamBefore(
-    asClientStream(session),
-    () => session.send(),
-    undefined,
-    1000,
-  );
-  const result = await session.result();
-  assert.deepEqual(order, [
-    "drain",
-    "send",
-    "drain",
-    "send",
-    "drain",
-    "send",
-    "result",
+test("the file names the session while its turn is read, and is gone after the reset with the result", async (t) => {
+  const seen: string[] = [];
+  const w = world(t, {
+    events: () =>
+      (async function* () {
+        seen.push(readFileSync(w.file, "utf8"));
+        yield* iterate(done("отчёт дня"));
+      })(),
+  });
+  const run = await runNightTurn(w.ctx, "day", "2026-09-25");
+  assert.equal(run.verdict, "completed");
+  assert.equal(run.turn?.message, "отчёт дня");
+  assert.equal(run.retired, true);
+  assert.deepEqual(Object.keys(JSON.parse(seen[0] ?? "{}") as object).sort(), [
+    "createdAt",
+    "sessionId",
   ]);
   assert.equal(
-    isOwnTurnResult(result.events, {
-      prompt,
-      sentNotBefore: sentNotBeforeIso(Date.parse("2026-08-24T04:00:00.000Z")),
-    }),
-    false,
+    parsePersistedRollupSession(JSON.parse(seen[0] ?? "{}"))?.sessionId,
+    "s1",
   );
+  assert.deepEqual(w.calls, [
+    "create",
+    "reset s1 Rollup: 2026-09-25-completed",
+  ]);
+  assert.equal(existsSync(w.file), false);
+});
+
+test("no_active_session at start is a confirmed reset, not an error: the file is removed", async (t) => {
+  const { ctx, file } = world(t, {
+    reset: () => Promise.resolve({ status: "no_active_session" }),
+  });
+  writeFileSync(file, JSON.stringify({ sessionId: "wrun_gone", createdAt: 1 }));
+  assert.equal(await resetSavedSession(ctx), true);
+  assert.equal(existsSync(file), false);
+});
+
+test("an unreadable or foreign-format session file fails closed: the start stops without a reset", async (t) => {
+  for (const junk of [
+    "{not json",
+    JSON.stringify({ state: { sessionId: "wrun_legacy", streamIndex: 3 } }),
+    JSON.stringify({ sessionId: "", createdAt: 1 }),
+  ]) {
+    const { ctx, calls, log, file } = world(t);
+    writeFileSync(file, junk);
+    assert.equal(await resetSavedSession(ctx), false, junk);
+    assert.deepEqual(calls, [], "nothing to address: fail closed");
+    assert.equal(
+      readFileSync(file, "utf8"),
+      junk,
+      "the file stays for the owner",
+    );
+    assert.match(
+      log.join("\n"),
+      /rollup-session-daily\.json is unreadable or not a session file/u,
+    );
+  }
+});
+
+test("a reset the client refuses (a foreign previousSessionId) keeps the file and refuses the start", async (t) => {
+  const { ctx, file, log } = world(t, {
+    // Так клиент eve бросает на чужой previousSessionId (session-controls.js).
+    reset: () =>
+      Promise.reject(new Error("Reset route returned an invalid response.")),
+  });
+  writeFileSync(
+    file,
+    JSON.stringify({ sessionId: "wrun_saved", createdAt: 1 }),
+  );
+  assert.equal(await resetSavedSession(ctx), false);
+  assert.match(readFileSync(file, "utf8"), /wrun_saved/u);
+  assert.match(
+    log.join("\n"),
+    /session wrun_saved was not reset .*keeps it for the next run/u,
+  );
+});
+
+test("session.failed is reset only: the cancel of the turn is never called", async (t) => {
+  const w = world(t, {
+    events: () =>
+      iterate([
+        ev("turn.started"),
+        ev("session.failed", {
+          code: "Error",
+          message: "hook threw",
+          sessionId: "s1",
+        }),
+      ]),
+  });
+  const run = await runNightTurn(w.ctx, "day", "2026-09-25");
+  assert.equal(run.verdict, "session-failed");
+  assert.deepEqual(w.calls, [
+    "create",
+    "reset s1 Rollup: 2026-09-25-session-failed",
+  ]);
+});
+
+test("a stop while the ceiling cancel is pending leaves one cancel and a reset", async (t) => {
+  const steps = Array.from({ length: NIGHT_MAX_STEPS + 1 }, (_, i) =>
+    ev("step.started", { stepIndex: i }),
+  );
+  const w = world(t, {
+    events: (signal) => hangAfter([ev("turn.started"), ...steps], signal),
+    // Отмена по пределу висит, пока срок не поднял остановку.
+    cancel: () => {
+      w.stop.abort();
+      return new Promise((resolve) =>
+        setTimeout(() => resolve({ status: "accepted" }), 20),
+      );
+    },
+  });
+  const run = await runNightTurn(w.ctx, "day", "2026-09-25");
+  assert.equal(run.verdict, "broken");
+  assert.equal(run.turn?.cutRequested, true);
+  assert.deepEqual(w.calls, [
+    "create",
+    `cancel s1 ${TURN} +tasks`,
+    "reset s1 Rollup: 2026-09-25-broken",
+  ]);
+});
+
+test(`property: the start never crashes on junk session files and resets only a valid one (seed ${SEED})`, async (t) => {
+  const junk = fc.oneof(
+    fc.string(),
+    fc.jsonValue().map((value) => JSON.stringify(value)),
+    fc
+      .record({ sessionId: fc.string(), createdAt: fc.double() })
+      .map((value) => JSON.stringify(value)),
+  );
+  await fc.assert(
+    fc.asyncProperty(junk, async (text) => {
+      const { ctx, calls, file } = world(t);
+      writeFileSync(file, text);
+      let valid: string | null;
+      try {
+        valid =
+          parsePersistedRollupSession(JSON.parse(text))?.sessionId ?? null;
+      } catch {
+        valid = null;
+      }
+      const started = await resetSavedSession(ctx);
+      assert.equal(started, valid !== null);
+      assert.deepEqual(
+        calls,
+        valid === null ? [] : [`reset ${valid} Rollup: crash`],
+      );
+      assert.equal(
+        existsSync(file),
+        valid === null,
+        "junk stays for the owner, a reset session goes",
+      );
+    }),
+    { seed: SEED, numRuns: 60 },
+  );
+});
+
+test("a file that cannot be removed after the reset fails the start, and the next run resets it again", async (t) => {
+  const { ctx, file, dir, calls } = world(t);
+  writeFileSync(
+    file,
+    JSON.stringify({ sessionId: "wrun_stuck", createdAt: 1 }),
+  );
+  chmodSync(dir, 0o555);
+  assert.equal(await resetSavedSession(ctx), false);
+  chmodSync(dir, 0o755);
+  assert.equal(existsSync(file), true);
+  assert.equal(
+    await resetSavedSession(ctx),
+    true,
+    "the next start finishes it",
+  );
+  assert.deepEqual(calls, [
+    "reset wrun_stuck Rollup: crash",
+    "reset wrun_stuck Rollup: crash",
+  ]);
+});
+
+test("a stream that ends without a boundary cancels the turn with its tasks, then resets", async (t) => {
+  const w = world(t, {
+    events: () =>
+      iterate([ev("turn.started"), ev("step.started", { stepIndex: 0 })]),
+  });
+  const run = await runNightTurn(w.ctx, "day", "2026-09-25");
+  assert.equal(run.verdict, "broken");
+  assert.deepEqual(w.calls, [
+    "create",
+    `cancel s1 ${TURN} +tasks`,
+    "reset s1 Rollup: 2026-09-25-broken",
+  ]);
+  // Ход, чей turnId не пришёл, гасится как активный ход своей сессии.
+  const quiet = world(t, { events: () => iterate([]) });
+  await runNightTurn(quiet.ctx, "day", "2026-09-25");
+  assert.deepEqual(quiet.calls.slice(1, 2), ["cancel s1 (active) +tasks"]);
+});
+
+test("a failed session file write resets the fresh session and never reads the turn", async (t) => {
+  let pulled = 0;
+  const w = world(t, {
+    events: () =>
+      (async function* () {
+        pulled += 1;
+        yield* iterate(done());
+      })(),
+  });
+  // Каталог данных без права записи: ENOSPC/EACCES на атомарной записи файла сессии.
+  chmodSync(w.dir, 0o555);
+  const run = await runNightTurn(w.ctx, "day", "2026-09-25");
+  chmodSync(w.dir, 0o755);
+  assert.equal(run.retired, false, "the run must stop");
+  assert.equal(pulled, 0);
+  assert.deepEqual(w.calls, ["create", "reset s1 Rollup: 2026-09-25-unsaved"]);
+});
+
+test("a reset that fails after the turn keeps the session file, and no new session is allowed", async (t) => {
+  const w = world(t, {
+    reset: () => Promise.reject(new Error("503 Service Unavailable")),
+  });
+  const run = await runNightTurn(w.ctx, "day", "2026-09-25");
+  assert.equal(run.verdict, "completed");
+  assert.equal(run.retired, false);
+  assert.match(readFileSync(w.file, "utf8"), /"sessionId":"s1"/u);
+  assert.deepEqual(w.abandoned, ["s1 2026-09-25-completed-reset-failed"]);
+});
+
+test("a saved session of a previous run is reset before the turn, then its file is removed and the crash is journaled", async (t) => {
+  const { ctx, calls, file, abandoned, signals } = world(t);
+  writeFileSync(
+    file,
+    JSON.stringify({ sessionId: "wrun_crashed", createdAt: 1 }),
+  );
+  assert.equal(await resetSavedSession(ctx), true);
+  assert.deepEqual(calls, ["reset wrun_crashed Rollup: crash"]);
+  assert.equal(existsSync(file), false);
+  assert.deepEqual(abandoned, ["wrun_crashed crash"]);
+  assert.ok(signals[0] instanceof AbortSignal, "the reset is bounded");
+});
+
+test("a missing session file at start is nothing to reset: not an error, the turn goes on", async (t) => {
+  const { ctx, calls } = world(t);
+  assert.equal(await resetSavedSession(ctx), true);
+  assert.deepEqual(calls, []);
+});
+
+test("a late create response after the stop is only reset: never saved, not read", async (t) => {
+  let read = false;
+  const w = world(t, {
+    // Ответ POST уже в пути, когда сигнал поднимает остановку: create отдаёт сессию.
+    lateResponse: true,
+    onCreate: () => w.stop.abort(),
+    events: () =>
+      (async function* () {
+        read = true;
+        yield* iterate(done());
+      })(),
+  });
+  const run = await runNightTurn(w.ctx, "day", "2026-09-25");
+  assert.equal(run.retired, true);
+  assert.deepEqual(w.calls, ["create", "reset s1 Rollup: 2026-09-25-stopped"]);
+  assert.equal(read, false, "the stream of a stopped run is not read");
+  assert.equal(existsSync(w.file), false, "and its id is never saved");
+});
+
+test("a pause (session.waiting without an outcome) until the stop is cancelled and reset like a broken turn", async (t) => {
+  const w = world(t, {
+    events: (signal) =>
+      hangAfter(
+        [
+          ev("turn.started"),
+          ev("authorization.required", {
+            name: "gws",
+            description: "d",
+            stepIndex: 0,
+            webhookUrl: "https://x",
+          }),
+          ev("session.waiting", { wait: "next-user-message" }),
+        ],
+        signal,
+      ),
+  });
+  setTimeout(() => w.stop.abort(), 30);
+  const run = await runNightTurn(w.ctx, "day", "2026-09-25");
+  assert.equal(run.verdict, "broken");
+  assert.deepEqual(w.calls.slice(1), [
+    `cancel s1 ${TURN} +tasks`,
+    "reset s1 Rollup: 2026-09-25-broken",
+  ]);
+});
+
+test("the session file record refuses a foreign shape: exact keys, a trimmed id, a finite time", () => {
+  const parse = parsePersistedRollupSession;
+  const valid = parse({ sessionId: "wrun_a", createdAt: 1 });
+  assert.equal(valid?.sessionId, "wrun_a");
+  assert.equal(parse({ sessionId: "wrun_a", createdAt: 0 })?.createdAt, 0);
+  assert.equal(parse(null), null);
+  assert.equal(parse("wrun_a"), null);
+  assert.equal(parse([]), null);
+  assert.equal(parse({}), null);
+  assert.equal(parse({ sessionId: "wrun_a" }), null);
+  assert.equal(parse({ createdAt: 1 }), null);
+  assert.equal(parse({ sessionId: 7, createdAt: 1 }), null);
+  assert.equal(parse({ sessionId: "", createdAt: 1 }), null);
+  assert.equal(parse({ sessionId: "wrun_a ", createdAt: 1 }), null);
+  assert.equal(parse({ sessionId: "wrun_a", createdAt: "1" }), null);
+  assert.equal(parse({ sessionId: "wrun_a", createdAt: NaN }), null);
+  assert.equal(parse({ sessionId: "wrun_a", createdAt: Infinity }), null);
+  assert.equal(parse({ sessionId: "wrun_a", createdAt: 1, extra: 1 }), null);
+  assert.equal(parse({ sessionId: "wrun_a", createdAt: 1, state: {} }), null);
+});
+
+test("the night stop during reading aborts the stream from the client without an error: one cancel, then a reset, and the file is gone", async (t) => {
+  const w = world(t, {
+    events: (signal) =>
+      hangAfter(
+        [ev("turn.started"), ev("step.started", { stepIndex: 0 })],
+        signal,
+      ),
+  });
+  setTimeout(() => w.stop.abort(), 30);
+  const run = await runNightTurn(w.ctx, "day", "2026-09-25");
+  assert.equal(run.verdict, "broken");
+  assert.equal(run.retired, true);
+  assert.deepEqual(w.calls, [
+    "create",
+    `cancel s1 ${TURN} +tasks`,
+    "reset s1 Rollup: 2026-09-25-broken",
+  ]);
+  assert.equal(existsSync(w.file), false);
 });

@@ -162,10 +162,9 @@ grows a native catch-up story.
 
 ## 10. Rollup-turn workarounds for vercel/eve#1450
 
-`scripts/lib/rollup-turn.ts` and the timeout/safety-net logic in
-`scripts/memory/rollup.ts` work around an open upstream bug
-([vercel/eve#1450](https://github.com/vercel/eve/issues/1450)). Once that's fixed
-upstream, remove the workarounds rather than leaving them as permanent scaffolding.
+Closed (T96). A parked session no longer resumes: every night turn creates its own
+session, and the turn's deadline is the abort signal of its create and stream
+(`scripts/lib/night-session.ts`), not a timer race. The `Promise.race` timeout is gone.
 
 ## 11. Cron/name metadata duplicated across schedules, migration, and the menu
 
@@ -283,17 +282,9 @@ Until then the workaround in a group is to reply to one of Iva's messages.
 
 ## 16. Rollup stale-cursor workaround for vercel/eve#2461
 
-`scripts/lib/rollup-stale-cursor.ts` and the drain/ownership checks in
-`scripts/memory/rollup.ts` work around an open upstream bug
-([vercel/eve#2461](https://github.com/vercel/eve/issues/2461)): on a resumed
-session, eve's client `result()` reads from the saved stream cursor and stops at
-the first turn boundary without correlating it with the message just sent. Once
-the cursor lags, the nightly report is a replay of an old turn.
-
-The Iva-side workaround is two small layers around eve, not a second session
-system: drain `stream({ follow: false })` before every send into the parked
-session, and refuse a result whose `message.received` is not this Turn's prompt
-(per-execution nonce, `sentNotBefore` at send time). Remove both when a released
-eve correlates `result()` with the sent turn.
+Closed (T96). The bug ([vercel/eve#2461](https://github.com/vercel/eve/issues/2461))
+needs a resumed session: `result()` read from a lagging cursor. The night now
+creates a fresh session per turn and reads its stream from index 0, so the drain,
+the prompt nonce and the foreign-result check are removed.
 
 The `ai` pin is gone: Iva used to override `ai` to 7.0.39 against eve 0.51.1's peer `ai ^7.0.82`, so eve's bundled `@ai-sdk/code-mode` (it imports `experimental_toolCaller`) did not link and any Workflow/code-mode tool would crash server start. `package.json` now asks for `ai ^7.0.82` with no override. ADR-0013 rejected the workflow-tool route for Reminders (variant C) partly on that pin; the pin no longer stands in its way, the rest of the ADR's reasoning does.

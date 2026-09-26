@@ -15,6 +15,10 @@ export interface SchedulePaths {
   readonly factsPath: string;
 }
 
+/** Замок ночной памяти установки: его держат раннер, прямой запуск ночи и `iva jobs skip`. */
+export const memoryLockPath = (root: string): string =>
+  join(root, ".memory.lock");
+
 export function resolvePaths(): SchedulePaths {
   const root = process.cwd();
   const resolvedDataDir = dataDir();
@@ -22,7 +26,7 @@ export function resolvePaths(): SchedulePaths {
     root,
     dataDir: resolvedDataDir,
     statusPath: join(resolvedDataDir, "rollup-status.json"),
-    memoryLockPath: join(root, ".memory.lock"),
+    memoryLockPath: memoryLockPath(root),
     factsPath: jobFactsFile(resolvedDataDir),
   };
 }

@@ -245,6 +245,8 @@ void test("lockPath given: the spawned command is flock-wrapped in the documente
     "weekly",
   ]);
   assert.equal(seen!.opts.cwd, root);
+  // Ребёнок под flock раннера знает, что замок уже взят, и не берёт его второй раз.
+  assert.equal(seen!.opts.env?.IVA_MEMORY_LOCK_HELD, "1");
   assert.equal(result.ok, true);
 });
 
@@ -253,16 +255,18 @@ void test("no lockPath: the spawned command invokes nodeBin directly (digest cas
   await writeFile(join(root, "ok.ts"), "process.exit(0);\n");
   const statusPath = join(root, "data/rollup-status.json");
 
-  let seen: Pick<SeenSpawn, "cmd" | "args"> | null = null;
+  let seen: SeenSpawn | null = null;
   await runScheduledJob({
     name: "digest",
     argv: ["scripts/daily-digest.ts"],
     root,
     nodeBin: process.execPath,
     statusPath,
+    // Признак замка из окружения сервиса ребёнку без flock не достаётся.
+    env: { ...process.env, IVA_MEMORY_LOCK_HELD: "1" },
     log: () => {},
     spawnImpl: (cmd, args, opts) => {
-      seen = { cmd, args };
+      seen = { cmd, args, opts };
       return realSpawn(process.execPath, [join(root, "ok.ts")], opts);
     },
   });
@@ -272,6 +276,7 @@ void test("no lockPath: the spawned command invokes nodeBin directly (digest cas
     "--env-file-if-exists=.env",
     "scripts/daily-digest.ts",
   ]);
+  assert.equal(seen!.opts.env?.IVA_MEMORY_LOCK_HELD, undefined);
 });
 
 void test("root без .env: ребёнок стартует, и node говорит об этом одной честной строкой", async () => {

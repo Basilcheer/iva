@@ -38,6 +38,7 @@ import {
   withStatusLock,
   writeStatusAtomic,
 } from "./schedule-runner.ts";
+import { memoryLockPath } from "./schedule-paths.ts";
 import { addDaysToDate, zonedParts, zonedToUtcMs } from "./zoned-time.ts";
 
 type Period = "daily" | "weekly" | "monthly" | "yearly";
@@ -265,7 +266,7 @@ export function catchUpJob(
     argv: ["scripts/memory/rollup.ts", period],
     root,
     nodeBin,
-    lockPath: root ? join(root, ".memory.lock") : undefined,
+    lockPath: root ? memoryLockPath(root) : undefined,
     statusPath,
     factsPath: jobFactsFile(dirname(statusPath)),
     killGraceMs: JOB_STOP_GRACE_MS,

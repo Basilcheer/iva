@@ -328,7 +328,9 @@ const rollupSource = readFileSync(
 
 test("CORE is snapshotted before the turn and pointed at the day after it", () => {
   const snapshot = rollupSource.indexOf("const coreBeforeTurn =");
-  const turn = rollupSource.indexOf("buildPrompt(period, today, day)");
+  const turn = rollupSource.indexOf(
+    "buildPrompt(period, today, day, NIGHT_RULES)",
+  );
   const guard = rollupSource.indexOf("coreDamage(coreBeforeTurn, core)");
   const pointer = rollupSource.indexOf("setLastDayPointer(core, lastDay)");
 

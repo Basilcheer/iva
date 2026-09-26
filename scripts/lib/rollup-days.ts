@@ -62,22 +62,44 @@ export function shiftDate(iso: string, deltaDays: number): string {
   return dt.toISOString().slice(0, 10);
 }
 
-// Неразобранные дни окна, старые первыми, не больше потолка. Вчера берётся всегда, пока
-// оно не сделано: тихий день без транскрипта тоже получает свою сводку, как раньше.
-// Старшие дни — только с транскриптом, иначе окно свежей установки гнало бы пустые ночи.
+// Неразобранные дни окна, старые первыми, не больше потолка, без дней, исчерпавших
+// попытки.
 export function pendingDays(
   yesterday: string,
   read: (date: string) => DayState,
+  exhausted: (date: string) => boolean,
 ): string[] {
-  const pending: string[] = [];
+  return windowCandidates(yesterday, read)
+    .filter((date) => !exhausted(date))
+    .slice(0, MAX_DAYS_PER_RUN);
+}
+
+// Неразобранные дни окна, которые попытки исчерпали (scripts/lib/rollup-attempts.ts):
+// о них надо сказать владельцу, а не молча пропускать.
+export function pausedDays(
+  yesterday: string,
+  read: (date: string) => DayState,
+  exhausted: (date: string) => boolean,
+): string[] {
+  return windowCandidates(yesterday, read).filter(exhausted);
+}
+
+// Кандидаты окна. Вчера берётся всегда, пока оно не сделано: тихий день без транскрипта
+// тоже получает свою сводку. Старшие дни — только с транскриптом, иначе окно свежей
+// установки гнало бы пустые ночи.
+function windowCandidates(
+  yesterday: string,
+  read: (date: string) => DayState,
+): string[] {
+  const candidates: string[] = [];
   for (let back = LOOKBACK_DAYS - 1; back >= 0; back--) {
     const date = shiftDate(yesterday, -back);
     const state = read(date);
     if (isDayDone(state)) continue;
     if (state.raw === null && date !== yesterday) continue;
-    pending.push(date);
+    candidates.push(date);
   }
-  return pending.slice(0, MAX_DAYS_PER_RUN);
+  return candidates;
 }
 
 // Неразобранный день, который этой ночью вышел из окна догона: его больше не возьмут,

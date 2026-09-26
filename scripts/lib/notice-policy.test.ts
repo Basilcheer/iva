@@ -131,7 +131,7 @@ test("a rollup that ran here before leaves a trace that survives its own cleanup
   writeFileSync(join(data, "rollup-session-weekly.json"), "{}");
   assert.equal(rollupRanBefore(data, vault), true);
 
-  // dropHungSession снёс курсор — статус расписаний остаётся.
+  // Файл сессии живёт только пока идёт ход — статус расписаний остаётся.
   rmSync(join(data, "rollup-session-weekly.json"));
   // Бронь текущего прогона (спавнер пишет её ДО запуска) следом не считается.
   writeFileSync(
