@@ -2,8 +2,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fc from "fast-check";
 import {
+  NIGHT_CANCEL_MS,
   NIGHT_MAX_INPUT_TOKENS,
   NIGHT_MAX_STEPS,
+  NIGHT_RESET_MS,
   nightTurnReader,
   readNightTurn,
   resolveStopAt,
@@ -506,4 +508,23 @@ void test("an honest finish on exactly 120 steps is not a cut: it returns its re
   assert.equal(run.verdict, "completed");
   assert.equal(run.turn.steps, 120);
   assert.equal(run.turn.message, "отчёт ночи");
+});
+
+void test("the cleanup deadlines: the reset outlasts the 30 s the eve server waits for a live turn, and cancel plus reset fit into the runner's grace", () => {
+  // waitForCommandHookRelease, COMMAND_HOOK_READY_TIMEOUT_MS = 3e4 (eve 0.51.1,
+  // dist/src/execution/workflow-runtime.js): a shorter client deadline would abort every
+  // reset of a live session before the server could answer.
+  assert.equal(NIGHT_CANCEL_MS, 20_000);
+  assert.equal(NIGHT_RESET_MS, 40_000);
+  assert.ok(NIGHT_RESET_MS > 30_000);
+  assert.ok(NIGHT_CANCEL_MS + NIGHT_RESET_MS <= JOB_STOP_GRACE_MS - 10_000);
+});
+
+void test("an event type off the prototype (constructor, toString) is no outcome: the turn stays live", () => {
+  const { turn, observe } = nightTurnReader(() => {});
+  observe(ev("turn.started", { turnId: TURN }));
+  for (const type of ["constructor", "toString", "__proto__", "hasOwnProperty"])
+    observe(ev(type, { turnId: TURN }));
+  assert.equal(turn.outcome, null);
+  assert.equal(turnMayBeLive(turn), true);
 });

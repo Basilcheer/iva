@@ -21,6 +21,8 @@ const ROLLUP = join(ROOT, "scripts/memory/rollup.ts");
 const SESSION_NAME = "rollup-session-monthly.json";
 
 interface RecordedRequest {
+  /** Момент приёма запроса сервером. */
+  readonly at: number;
   readonly body: unknown;
   readonly method: string;
   readonly pathname: string;
@@ -40,10 +42,17 @@ interface RollupRun {
 /**
  * own — ход с отчётом; hang — ход идёт и не кончается; no-report — ход кончился без
  * отчёта; cut — ход идёт за предел шагов, cancel гасит его; turn-failed — модель уронила
- * ход; session-failed — сессия упала (исключение хука eve).
+ * ход; session-failed — сессия упала (исключение хука eve); stream-breaks — поток хода
+ * рвётся на повторном GET кодом 400 (клиент eve его не повторяет).
  */
 type FakeMode =
-  "own" | "hang" | "no-report" | "cut" | "turn-failed" | "session-failed";
+  | "own"
+  | "hang"
+  | "no-report"
+  | "cut"
+  | "turn-failed"
+  | "session-failed"
+  | "stream-breaks";
 
 function event(type: string, data?: Record<string, unknown>): object {
   return {
@@ -78,6 +87,7 @@ function turn(message: string, mode: FakeMode = "own"): object[] {
   switch (mode) {
     // Ход, который ещё идёт: сервер принял сообщение, конца хода нет.
     case "hang":
+    case "stream-breaks":
       return [...opening, ...step(turnId, 0)];
     // Ход кончился, а финального сообщения нет.
     case "no-report":
@@ -144,6 +154,10 @@ function sendJson(
 
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** Запрос без ответа: ждёт, пока клиент сам не оборвёт соединение по своему сроку. */
+const held = (response: import("node:http").ServerResponse) =>
+  new Promise<void>((resolve) => response.once("close", () => resolve()));
+
 class FakeEve {
   readonly requests: RecordedRequest[] = [];
   readonly server: Server;
@@ -160,6 +174,12 @@ class FakeEve {
   ) => "reset" | "no_active_session" | "foreign" | "error" = () => "reset";
   /** Когда сервер снял сессию: подтверждение reset ушло клиенту. */
   readonly resetAt = new Map<string, number>();
+  /** Зависший cancel / reset: ответа нет, пока клиент сам не оборвёт запрос по сроку. */
+  holdCancel = false;
+  holdReset = false;
+  /** Когда клиент оборвал зависший запрос (его срок сработал). */
+  readonly cancelAbortedAt: number[] = [];
+  readonly resetAbortedAt: number[] = [];
   /** Файловый эффект хода: тест дописывает vault так, как это сделала бы модель. */
   onTurn?: (message: string) => void;
   /** Хуки момента: POST create принят, GET потока, POST reset принят. */
@@ -168,6 +188,7 @@ class FakeEve {
   onReset?: (sessionId: string) => void;
   #nextSession = 1;
   #events = new Map<string, object[]>();
+  #prompts = new Map<string, string>();
 
   constructor() {
     this.server = createServer((request, response) => {
@@ -202,6 +223,7 @@ class FakeEve {
     const method = request.method ?? "GET";
     const body = method === "POST" ? await readJson(request) : undefined;
     this.requests.push({
+      at: Date.now(),
       body,
       method,
       pathname: url.pathname,
@@ -211,6 +233,7 @@ class FakeEve {
     if (method === "POST" && url.pathname === "/eve/v1/session") {
       const sessionId = `wrun_fake_${this.#nextSession++}`;
       const message = this.#message(body);
+      this.#prompts.set(sessionId, message);
       this.#events.set(
         sessionId,
         turn(message, this.modeFor?.(message) ?? this.mode),
@@ -225,6 +248,11 @@ class FakeEve {
     const cancel = url.pathname.match(/^\/eve\/v1\/session\/([^/]+)\/cancel$/u);
     if (method === "POST" && cancel) {
       const cancelled = decodeURIComponent(cancel[1] ?? "");
+      if (this.holdCancel) {
+        await held(response);
+        this.cancelAbortedAt.push(Date.now());
+        return;
+      }
       const events = this.#events.get(cancelled) ?? [];
       const turnId = events
         .map((item) => (item as { data?: { turnId?: string } }).data?.turnId)
@@ -247,6 +275,11 @@ class FakeEve {
     if (method === "POST" && reset) {
       const previousSessionId = decodeURIComponent(reset[1] ?? "");
       this.onReset?.(previousSessionId);
+      if (this.holdReset) {
+        await held(response);
+        this.resetAbortedAt.push(Date.now());
+        return;
+      }
       await pause(this.resetDelayMs);
       const reply = this.resetReply(previousSessionId);
       if (reply === "error") {
@@ -274,6 +307,11 @@ class FakeEve {
       await pause(this.streamDelayMs);
       const events = this.#events.get(sessionId) ?? [];
       const startIndex = Number(url.searchParams.get("startIndex") ?? "0");
+      // Поток рвётся на повторном GET: первые события (и turnId) клиент уже прочитал.
+      if (this.#mode(sessionId) === "stream-breaks" && startIndex > 0) {
+        sendJson(response, { error: "bad cursor" }, 400);
+        return;
+      }
       response.writeHead(200, {
         "content-type": "application/x-ndjson; charset=utf-8",
         "x-eve-stream-tail-index": String(events.length - 1),
@@ -288,6 +326,11 @@ class FakeEve {
 
     response.writeHead(404, { "content-type": "text/plain" });
     response.end("not found");
+  }
+
+  #mode(sessionId: string): FakeMode {
+    const message = this.#prompts.get(sessionId) ?? "";
+    return this.modeFor?.(message) ?? this.mode;
   }
 
   #message(body: unknown): string {
@@ -451,6 +494,7 @@ test("production rollup drops the saved session file after a no_active_session r
   const run = await runRollup(host, paths);
   assert.equal(run.code, 0, run.stderr);
   assert.deepEqual(sessionCalls(fake), [
+    "cancel wrun_existing",
     "reset wrun_existing",
     "create",
     "reset wrun_fake_1",
@@ -474,12 +518,16 @@ test("a session file left after a crashed run is reset as crash before a fresh s
   const run = await runRollup(host, paths);
   assert.equal(run.code, 0, run.stderr);
   assert.match(run.stdout, /fake monthly report/u, "the night itself runs");
+  // Уборка сохранённой сессии идёт раньше всего: отмена её активного хода (id хода
+  // неизвестен, с задачами), затем reset — сервер на reset живой ход не ждёт.
   assert.equal(
     fake.requests[0]?.pathname,
-    "/eve/v1/session/wrun_crashed/reset",
+    "/eve/v1/session/wrun_crashed/cancel",
     "the crashed session is retired before anything else",
   );
+  assert.deepEqual(fake.requests[0]?.body, { tasks: true });
   assert.deepEqual(sessionCalls(fake), [
+    "cancel wrun_crashed",
     "reset wrun_crashed",
     "create",
     "reset wrun_fake_1",
@@ -489,10 +537,10 @@ test("a session file left after a crashed run is reset as crash before a fresh s
     false,
     "the crashed session gets no second writer",
   );
-  assert.equal(
-    fake.requests.some(({ pathname }) => pathname.endsWith("/cancel")),
-    false,
-    "a finished turn is retired by reset, not cancelled",
+  assert.deepEqual(
+    cancelBodies(fake),
+    [{ tasks: true }],
+    "the fresh turn finished on its own: only the crashed session is cancelled",
   );
   assert.match(
     readFileSync(join(paths.data, "rollup-abandoned.jsonl"), "utf8"),
@@ -617,16 +665,25 @@ async function fakeEve(t: import("node:test").TestContext) {
   return { fake, host, paths };
 }
 
-/** Что сервер увидел по сессиям: создание, отправка в существующую, снятие — по порядку. */
+/** Что сервер увидел по сессиям: создание, отправка, отмена, снятие — по порядку. */
 function sessionCalls(fake: FakeEve): string[] {
   return fake.requests.flatMap(({ method, pathname }) => {
     if (method !== "POST") return [];
     if (pathname === "/eve/v1/session") return ["create"];
-    const reset = /^\/eve\/v1\/session\/([^/]+)\/reset$/u.exec(pathname);
-    if (reset) return [`reset ${reset[1]}`];
+    const command = /^\/eve\/v1\/session\/([^/]+)\/(reset|cancel)$/u.exec(
+      pathname,
+    );
+    if (command) return [`${command[2]} ${command[1]}`];
     const send = /^\/eve\/v1\/session\/([^/]+)$/u.exec(pathname);
     return send ? [`send ${send[1]}`] : [];
   });
+}
+
+/** Момент приёма сервером первого запроса этого вида к сессии. */
+function requestAt(fake: FakeEve, suffix: string): number | undefined {
+  return fake.requests.find(
+    ({ method, pathname }) => method === "POST" && pathname.endsWith(suffix),
+  )?.at;
 }
 
 function writeRawDay(vault: string, date: string, text: string): string {
@@ -670,7 +727,11 @@ test("SIGTERM from the runner stops the server turn the same way: one cancel wit
   const [cancel] = cancelBodies(fake) as { tasks?: boolean; turnId?: string }[];
   assert.equal(cancel?.tasks, true);
   assert.match(cancel?.turnId ?? "", /^turn_/u);
-  assert.deepEqual(sessionCalls(fake), ["create", "reset wrun_fake_1"]);
+  assert.deepEqual(sessionCalls(fake), [
+    "create",
+    "cancel wrun_fake_1",
+    "reset wrun_fake_1",
+  ]);
   assert.equal(existsSync(join(paths.data, SESSION_NAME)), false);
 });
 
@@ -822,7 +883,10 @@ test("SIGTERM while resetting a crashed session keeps the send from going out", 
   assert.equal(run.code, 1, run.stderr);
   assert.equal(run.signal, null, "the handler was in place");
   assert.deepEqual(prompts(fake), [], "no turn may start after the stop");
-  assert.deepEqual(sessionCalls(fake), ["reset wrun_saved"]);
+  assert.deepEqual(sessionCalls(fake), [
+    "cancel wrun_saved",
+    "reset wrun_saved",
+  ]);
   assert.equal(
     existsSync(sessionFile),
     false,
@@ -947,6 +1011,19 @@ const hollow = (path: string) =>
     ),
   );
 
+/** Правка хода внутри непустого раздела: заголовки целы, только байты другие. */
+const appendLine = (
+  path: string,
+  line = "- 2026-09: полуправка оборванного хода",
+) =>
+  writeFileSync(
+    path,
+    readFileSync(path, "utf8").replace(
+      "- 2026-07: отвечать коротко, без преамбул",
+      `- 2026-07: отвечать коротко, без преамбул\n${line}`,
+    ),
+  );
+
 function attemptsOf(data: string): Record<string, { reason: string }[]> {
   const file = join(data, "rollup-attempts.json");
   return existsSync(file)
@@ -994,7 +1071,11 @@ test("a reset refused at start (a foreign previousSessionId or a 503) keeps the 
     const run = await runRollup(host, paths);
 
     assert.equal(run.code, 1, run.stderr);
-    assert.deepEqual(sessionCalls(fake), ["reset wrun_saved"], reply);
+    assert.deepEqual(
+      sessionCalls(fake),
+      ["cancel wrun_saved", "reset wrun_saved"],
+      reply,
+    );
     assert.match(readFileSync(sessionFile, "utf8"), /wrun_saved/u);
   }
 });
@@ -1013,7 +1094,10 @@ test("a saved session is reset and removed before a bad vault setting ends the r
   });
 
   assert.equal(run.code, 1, run.stderr);
-  assert.deepEqual(sessionCalls(fake), ["reset wrun_saved"]);
+  assert.deepEqual(sessionCalls(fake), [
+    "cancel wrun_saved",
+    "reset wrun_saved",
+  ]);
   assert.equal(existsSync(sessionFile), false);
   assert.deepEqual(prompts(fake), []);
 });
@@ -1068,6 +1152,7 @@ test("a day cut by the turn ceiling is partial progress: one cancel, an attempt,
   assert.match(cancels[0]?.turnId ?? "", /^turn_/u);
   assert.deepEqual(sessionCalls(fake), [
     "create",
+    "cancel wrun_fake_1",
     "reset wrun_fake_1",
     "create",
     "reset wrun_fake_2",
@@ -1118,7 +1203,7 @@ test("three observed failures pause the day, and the next run leaves it to the o
   );
 });
 
-test("a failed turn (turn.failed) counts no attempt of the day", async (t) => {
+test("a failed turn (turn.failed) counts no attempt of the day, and its tasks are cancelled before the reset", async (t) => {
   const { fake, host, paths } = await fakeEve(t);
   writeRawDay(paths.vault, isoDaysAgo(1), "## 10:00 [text]\n\nдень\n");
   fake.mode = "turn-failed";
@@ -1128,14 +1213,24 @@ test("a failed turn (turn.failed) counts no attempt of the day", async (t) => {
   assert.equal(run.code, 1, run.stderr);
   assert.deepEqual(attemptsOf(paths.data), {});
   assert.match(run.stderr, /the turn ended failed — no attempt is counted/u);
+  // Отказ хода снимает задачи: отмена с задачами своего хода, затем reset.
+  const [cancel] = cancelBodies(fake) as { tasks?: boolean; turnId?: string }[];
+  assert.equal(cancel?.tasks, true);
+  assert.match(cancel?.turnId ?? "", /^turn_/u);
+  assert.deepEqual(sessionCalls(fake), [
+    "create",
+    "cancel wrun_fake_1",
+    "reset wrun_fake_1",
+  ]);
 });
 
-test("session.failed resets the session only, never cancels, counts no attempt and restores CORE", async (t) => {
+test("session.failed resets the session only, never cancels, counts no attempt and restores CORE byte for byte", async (t) => {
   const { fake, host, paths } = await fakeEve(t);
   writeRawDay(paths.vault, isoDaysAgo(1), "## 10:00 [text]\n\nдень\n");
   const core = writeCore(paths.vault);
   fake.mode = "session-failed";
-  fake.onTurn = () => hollow(core.path);
+  // Ход дописал строку в непустой раздел: заголовки целы, coreDamage этого не видит.
+  fake.onTurn = () => appendLine(core.path);
 
   const run = await runRollup(host, paths, "daily");
 
@@ -1144,6 +1239,268 @@ test("session.failed resets the session only, never cancels, counts no attempt a
   assert.deepEqual(sessionCalls(fake), ["create", "reset wrun_fake_1"]);
   assert.deepEqual(attemptsOf(paths.data), {});
   assert.equal(readFileSync(core.path, "utf8"), core.text);
+  assert.match(run.stderr, /CORE\.md is back to its pre-turn text/u);
+});
+
+for (const mode of ["turn-failed", "stream-breaks"] as const) {
+  test(`a turn that ends ${mode} after adding a line to a non-empty CORE section leaves CORE byte-equal to its snapshot`, async (t) => {
+    const { fake, host, paths } = await fakeEve(t);
+    writeRawDay(paths.vault, isoDaysAgo(1), "## 10:00 [text]\n\nдень\n");
+    const core = writeCore(paths.vault);
+    fake.mode = mode;
+    fake.onTurn = () => appendLine(core.path);
+
+    const run = await runRollup(host, paths, "daily");
+
+    assert.equal(run.code, 1, run.stderr);
+    assert.deepEqual(attemptsOf(paths.data), {});
+    assert.equal(readFileSync(core.path, "utf8"), core.text, mode);
+    assert.equal(
+      cancelBodies(fake).length,
+      1,
+      "the turn or its tasks are cancelled once",
+    );
+    assert.deepEqual(sessionCalls(fake), [
+      "create",
+      "cancel wrun_fake_1",
+      "reset wrun_fake_1",
+    ]);
+  });
+}
+
+test("SIGTERM while a daily turn is read restores CORE byte for byte, and exits only after cancel and reset", async (t) => {
+  const { fake, host, paths } = await fakeEve(t);
+  writeRawDay(paths.vault, isoDaysAgo(1), "## 10:00 [text]\n\nдень\n");
+  const core = writeCore(paths.vault);
+  fake.mode = "hang";
+  fake.resetDelayMs = 300;
+  fake.onTurn = () => appendLine(core.path);
+  let child: import("node:child_process").ChildProcess | undefined;
+  let gets = 0;
+  fake.onStream = () => {
+    if (++gets === 2) child?.kill("SIGTERM");
+  };
+
+  const run = await runRollup(host, paths, "daily", {
+    onChild: (spawned) => {
+      child = spawned;
+    },
+  });
+
+  assert.equal(run.code, 1, run.stderr);
+  assert.equal(run.signal, null);
+  assert.equal(readFileSync(core.path, "utf8"), core.text);
+  assert.deepEqual(attemptsOf(paths.data), {});
+  const cancelAt = requestAt(fake, "/cancel");
+  const resetAt = fake.resetAt.get("wrun_fake_1");
+  assert.ok(cancelAt && resetAt, "cancel and reset reached the server");
+  assert.ok(cancelAt <= requestAt(fake, "/reset")!, "cancel goes first");
+  assert.ok(resetAt <= run.exitAt, "the exit waits for the confirmed reset");
+});
+
+test("the CORE snapshot is taken per turn: a failed second day rolls back to the first day's legitimate edit, not to the run start", async (t) => {
+  const { fake, host, paths } = await fakeEve(t);
+  const older = isoDaysAgo(2);
+  const yesterday = isoDaysAgo(1);
+  writeRawDay(paths.vault, older, "## 10:00 [text]\n\nпозавчера\n");
+  writeRawDay(paths.vault, yesterday, "## 10:00 [text]\n\nвчера\n");
+  const core = writeCore(paths.vault);
+  const done = markDayDone(paths.vault);
+  let afterDayOne = "";
+  fake.modeFor = (message) =>
+    message.includes(`daily/${older}.md`) ? "own" : "session-failed";
+  fake.onTurn = (message) => {
+    if (message.includes(`daily/${older}.md`)) {
+      appendLine(core.path, "- 2026-09: законная правка дня 1");
+      afterDayOne = readFileSync(core.path, "utf8");
+      done(message);
+    } else appendLine(core.path, "- 2026-09: полуправка упавшего дня 2");
+  };
+
+  const run = await runRollup(host, paths, "daily");
+
+  assert.equal(run.code, 1, run.stderr);
+  assert.notEqual(afterDayOne, core.text);
+  assert.equal(readFileSync(core.path, "utf8"), afterDayOne);
+});
+
+test("an unconfirmed reset after a turn leaves the vault alone: CORE keeps the turn's edit, no restore, the file stays, exit 1", async (t) => {
+  const { fake, host, paths } = await fakeEve(t);
+  writeRawDay(paths.vault, isoDaysAgo(1), "## 10:00 [text]\n\nдень\n");
+  const core = writeCore(paths.vault);
+  fake.mode = "session-failed";
+  fake.resetReply = () => "error";
+  fake.onTurn = () => appendLine(core.path);
+
+  const run = await runRollup(host, paths, "daily");
+
+  assert.equal(run.code, 1, run.stderr);
+  // Ход может быть жив: второго писателя CORE ночь не добавляет.
+  assert.notEqual(readFileSync(core.path, "utf8"), core.text);
+  assert.doesNotMatch(
+    run.stderr,
+    /back to its pre-turn text|restored the pre-turn file/u,
+  );
+  assert.match(
+    readFileSync(join(paths.data, "rollup-session-daily.json"), "utf8"),
+    /wrun_fake_1/u,
+  );
+});
+
+test("an unconfirmed reset after a completed turn skips the damage check too: a hollowed section is not restored while the turn may be live", async (t) => {
+  const { fake, host, paths } = await fakeEve(t);
+  writeRawDay(paths.vault, isoDaysAgo(1), "## 10:00 [text]\n\nдень\n");
+  const core = writeCore(paths.vault);
+  fake.resetReply = () => "error";
+  fake.onTurn = () => hollow(core.path);
+
+  const run = await runRollup(host, paths, "daily");
+
+  assert.equal(run.code, 1, run.stderr);
+  assert.notEqual(readFileSync(core.path, "utf8"), core.text);
+  assert.doesNotMatch(run.stderr, /restored the pre-turn file/u);
+});
+
+test("a confirmed cut with an unconfirmed reset still counts the day's attempt, and the catch-up stops there", async (t) => {
+  const { fake, host, paths } = await fakeEve(t);
+  const older = isoDaysAgo(2);
+  writeRawDay(paths.vault, older, "## 10:00 [text]\n\nпозавчера\n");
+  writeRawDay(paths.vault, isoDaysAgo(1), "## 10:00 [text]\n\nвчера\n");
+  fake.mode = "cut";
+  fake.resetReply = () => "error";
+
+  const run = await runRollup(host, paths, "daily");
+
+  assert.equal(run.code, 1, run.stderr);
+  assert.deepEqual(
+    Object.entries(attemptsOf(paths.data)).map(([day, list]) => [
+      day,
+      list.map(({ reason }) => reason),
+    ]),
+    [[older, ["cut"]]],
+  );
+  assert.equal(
+    prompts(fake).length,
+    1,
+    "no second day after an unconfirmed reset",
+  );
+  assert.deepEqual(sessionCalls(fake), [
+    "create",
+    "cancel wrun_fake_1",
+    "reset wrun_fake_1",
+  ]);
+});
+
+test("a CORE correction whose session is not retired leaves CORE as the turn left it", async (t) => {
+  const { fake, host, paths } = await fakeEve(t);
+  writeRawDay(paths.vault, isoDaysAgo(1), "## 10:00 [text]\n\nдень\n");
+  const core = writeCore(
+    paths.vault,
+    `- ${"длинное предпочтение ".repeat(200)}`,
+  );
+  const done = markDayDone(paths.vault);
+  fake.resetReply = (id) => (id === "wrun_fake_2" ? "error" : "reset");
+  fake.onTurn = (message) => {
+    if (message.includes("Re-open")) writeFileSync(core.path, "# CORE\n");
+    else done(message);
+  };
+
+  const run = await runRollup(host, paths, "daily");
+
+  assert.equal(run.code, 1, run.stderr);
+  assert.equal(readFileSync(core.path, "utf8"), "# CORE\n");
+  assert.match(run.stderr, /correction completed, its session is not retired/u);
+});
+
+// Сроки процесса: срок запуска и сроки уборки укорочены через шов rollup-turn.ts, чтобы
+// проводка IVA_JOB_STOP_AT → таймер → остановка → cancel → reset → выход и границы
+// зависшей уборки прошли за секунды. Двойник держит ответ, пока клиент сам не оборвёт запрос.
+test("a turn past the job's stop time is cancelled with its tasks and reset before the process exits", async (t) => {
+  const { fake, host, paths } = await fakeEve(t);
+  fake.mode = "hang";
+
+  const run = await runRollup(host, paths, "monthly", {
+    env: {
+      IVA_JOB_STOP_AT: String(Date.now() + 2500),
+      IVA_NIGHT_MIN_TURN_MS: "500",
+    },
+  });
+
+  assert.equal(run.code, 1, run.stderr);
+  assert.equal(run.signal, null, "the stop time is our own handler");
+  assert.match(run.stderr, /stop time — stopping/u);
+  const [cancel] = cancelBodies(fake) as { tasks?: boolean; turnId?: string }[];
+  assert.equal(cancel?.tasks, true);
+  assert.match(cancel?.turnId ?? "", /^turn_/u);
+  assert.deepEqual(sessionCalls(fake), [
+    "create",
+    "cancel wrun_fake_1",
+    "reset wrun_fake_1",
+  ]);
+  const resetAt = fake.resetAt.get("wrun_fake_1");
+  assert.ok(resetAt && resetAt <= run.exitAt, "the exit waits for the reset");
+  assert.equal(existsSync(join(paths.data, SESSION_NAME)), false);
+});
+
+test("a reset that hangs at start ends by its own deadline: the file is kept, nothing is created, exit 1", async (t) => {
+  const { fake, host, paths } = await fakeEve(t);
+  fake.holdReset = true;
+  const sessionFile = join(paths.data, SESSION_NAME);
+  writeFileSync(
+    sessionFile,
+    JSON.stringify({ sessionId: "wrun_saved", createdAt: 1 }),
+  );
+
+  const startedAt = Date.now();
+  const run = await runRollup(host, paths, "monthly", {
+    env: { IVA_NIGHT_CANCEL_MS: "300", IVA_NIGHT_RESET_MS: "500" },
+  });
+
+  assert.equal(run.code, 1, run.stderr);
+  assert.deepEqual(sessionCalls(fake), [
+    "cancel wrun_saved",
+    "reset wrun_saved",
+  ]);
+  assert.equal(fake.resetAbortedAt.length, 1, "the client gave up the reset");
+  assert.ok(
+    run.exitAt - startedAt < 5000,
+    "the deadline, not the runner, ended it",
+  );
+  assert.match(run.stderr, /was not reset .*keeps it for the next run/u);
+  assert.match(readFileSync(sessionFile, "utf8"), /wrun_saved/u);
+  assert.deepEqual(prompts(fake), []);
+});
+
+test("a cancel that hangs is bounded by its own deadline: the reset follows it, and the process exits after the reset", async (t) => {
+  const { fake, host, paths } = await fakeEve(t);
+  fake.mode = "hang";
+  fake.holdCancel = true;
+  let child: import("node:child_process").ChildProcess | undefined;
+  let gets = 0;
+  fake.onStream = () => {
+    if (++gets === 2) child?.kill("SIGTERM");
+  };
+
+  const run = await runRollup(host, paths, "monthly", {
+    env: { IVA_NIGHT_CANCEL_MS: "300" },
+    onChild: (spawned) => {
+      child = spawned;
+    },
+  });
+
+  assert.equal(run.code, 1, run.stderr);
+  assert.equal(run.signal, null);
+  assert.equal(fake.cancelAbortedAt.length, 1, "the client gave up the cancel");
+  const resetRequestedAt = requestAt(fake, "/reset");
+  const cancelAbortedAt = fake.cancelAbortedAt[0];
+  assert.ok(
+    resetRequestedAt && cancelAbortedAt && cancelAbortedAt <= resetRequestedAt,
+    "the reset waits for the cancel to end",
+  );
+  const resetAt = fake.resetAt.get("wrun_fake_1");
+  assert.ok(resetAt && resetAt <= run.exitAt);
+  assert.match(run.stderr, /cancel of turn turn_[^ ]+: failed/u);
+  assert.equal(existsSync(join(paths.data, SESSION_NAME)), false);
 });
 
 test("a create that SIGTERM aborts before its response leaves the session id unknown: exit 1, nothing reset", async (t) => {
@@ -1253,7 +1610,13 @@ test("an unwritable session file after create resets the new session and ends th
   chmodSync(paths.data, 0o755);
 
   assert.equal(run.code, 1, run.stderr);
-  assert.deepEqual(sessionCalls(fake), ["create", "reset wrun_fake_1"]);
+  // Ход уже идёт на сервере, а его id не наблюдался: отмена активного хода, затем reset.
+  assert.deepEqual(sessionCalls(fake), [
+    "create",
+    "cancel wrun_fake_1",
+    "reset wrun_fake_1",
+  ]);
+  assert.deepEqual(cancelBodies(fake), [{ tasks: true }]);
   assert.equal(
     fake.requests.some(({ pathname }) => pathname.endsWith("/stream")),
     false,
@@ -1273,7 +1636,10 @@ test("a session file that cannot be removed after the turn ends the run, and the
   fake.onStream = undefined;
   const next = await runRollup(host, paths);
   assert.equal(next.code, 0, next.stderr);
-  assert.deepEqual(sessionCalls(fake).slice(2, 3), ["reset wrun_fake_1"]);
+  assert.deepEqual(sessionCalls(fake).slice(2, 4), [
+    "cancel wrun_fake_1",
+    "reset wrun_fake_1",
+  ]);
 });
 
 test("a client error after the turn (an unreadable day) resets the session, counts no attempt and ends the run", async (t) => {

@@ -54,6 +54,7 @@ test("без подкоманды и имени — usage", async () => {
 // отметка конца дня кодом, коммит vault, стирание попыток дня; отказ коммита — ошибка,
 // попытки на месте.
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -142,16 +143,37 @@ test("skip closes a past day with the end marker the night reads, commits it and
   assert.match(state.ok[0] ?? "", /closed 2026-09-24/u);
 });
 
-test("skip refuses today, a future day, a bad date and a day without its raw file", async (t) => {
+test("skip refuses today, a future day, a bad date and a foreign job", async (t) => {
   const { cmd, skip, state } = skipHarness(t);
   for (const date of ["2026-09-26", "2026-10-01", "2026-02-30"])
     await assert.rejects(skip(date), /is not a finished day/u);
-  await assert.rejects(skip("2026-09-20"), /nothing to close/u);
+  assert.deepEqual(state.ok, [], "a refusal reports nothing as done");
   await assert.rejects(
     cmd(["skip", "digest", "2026-09-20"]),
     /usage: iva jobs/u,
   );
   assert.deepEqual(state.commits, []);
+});
+
+test("skip closes a quiet day without its raw file: the night takes yesterday even without a transcript, so the file is created from the end marker", async (t) => {
+  const { skip, vault, state } = skipHarness(t);
+  // Свежий vault: каталога daily/ ещё нет, команда создаёт и его.
+  rmSync(join(vault, "daily"), { force: true, recursive: true });
+  const raw = join(vault, "daily", "2026-09-23.md");
+  assert.equal(existsSync(raw), false);
+
+  await skip("2026-09-23");
+
+  const text = readFileSync(raw, "utf8");
+  assert.equal(dayProgress(text).done, true);
+  assert.match(text, /^\n<!-- processed: skipped by owner .* -->\n$/u);
+  assert.deepEqual(state.commits, [
+    `file daily/2026-09-23.md: skipped by owner ${raw} ${vault}`,
+  ]);
+  assert.equal(
+    state.ok.at(-1),
+    "closed 2026-09-23 without processing; the night leaves it alone",
+  );
 });
 
 test("a failed vault commit fails the command and keeps the attempts; a rerun finishes the commit", async (t) => {

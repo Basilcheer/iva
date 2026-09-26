@@ -215,14 +215,17 @@ NoCreateOverSaved == pc \in {"init", "ready", "posted"} => file = NONE
 \* (2) после остановки ни одна сессия не сохраняется и не читается — только снимается.
 NothingAfterStop == ~afterStop
 
-\* (3) вне окна create живая сессия сервера имеет id в файле.
-\*     Окно create: POST в пути; ответ пришёл, а id в файл не лёг (saveSession не
-\*     удался или stopping) и уборка ещё идёт; всё, что из окна вышло без reset, — lost.
+\* (3) каждая известная процессу живая сессия сервера имеет id в файле либо стоит в окне
+\*     create. Окно create: POST в пути; ответ пришёл, а id в файл не лёг (saveSession не
+\*     удался или stopping) и уборка ещё идёт. Всё, что вышло из окна без reset, — lost:
+\*     процесс его id не знает, файл о нём не говорит, модель его не считает — это
+\*     названный остаток (specs/README.md), а не доказанное свойство.
 InWindow(s) == (pc = "posted" /\ s = pending) \/ s \in Unsaved
-LiveHasFile == \A s \in live : s = file \/ s \in lost \/ InWindow(s)
+KnownLiveHasFile == \A s \in live : s = file \/ s \in lost \/ InWindow(s)
 
-\* Следствие (1)+(3): вне окна create на сервере не больше одного писателя периода.
-OneWriter == Cardinality(live \ lost) <= 1
+\* Следствие (1)+(3): вне окна create среди известных процессу сессий не больше одного
+\* писателя периода. Потерянные в окне (lost) сюда не входят.
+OneKnownWriter == Cardinality(live \ lost) <= 1
 
 \* Живость: без падений каждый запуск доходит до выхода. Проверяется с
 \* WF на всех шагах процесса; среда (Signal, Crash, Corrupt) не обязана случаться.

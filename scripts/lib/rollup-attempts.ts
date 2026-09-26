@@ -109,7 +109,7 @@ export function dayPausedAlert(
     })
     .join("\n");
   return tr(
-    `Night memory: these days failed ${MAX_FAILED_ATTEMPTS} times in a row, so I stopped retrying them until you decide. The last cause and the command that closes the day without processing it:\n${lines}`,
+    `Night memory: these days failed ${MAX_FAILED_ATTEMPTS} times in a row, so I set them aside until you decide. The last cause and the command that closes the day without processing it:\n${lines}`,
     `Ночная память: эти дни не разобрались ${MAX_FAILED_ATTEMPTS} раза подряд, я перестала их пробовать, пока ты не решишь. Последняя причина и команда, которая закрывает день без разбора:\n${lines}`,
   );
 }

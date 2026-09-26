@@ -1,7 +1,8 @@
 // Сессия ночного хода: одна на ход. Её id лежит в data/rollup-session-<период>.json, пока
-// ход может жить; уборка — ограниченный reset и удаление файла. Безопасность «второго
-// писателя нет» держится на подтверждённом reset, а не на turn.cancelled: отмена только
-// экономит работу сервера. Модель порядков — specs/NightSession.tla.
+// ход может жить; уборка — отмена активного хода с задачами, ограниченный reset и удаление
+// файла. Безопасность «второго писателя нет» держится на подтверждённом reset, а не на
+// turn.cancelled: отмена гасит ход раньше, чем сервер стал бы ждать его на reset, и снимает
+// задачи. Модель порядков — specs/NightSession.tla.
 //
 // Остатки (specs/README.md): окно create — abort или падение до ответа POST оставляет
 // сессию без id в файле, её добивает sessionTimeoutMs eve (24 ч); задачи хода после reset
@@ -9,7 +10,8 @@
 import { readFileSync, rmSync } from "node:fs";
 import { writeFileAtomicSync } from "#lib/fs-atomic.ts";
 import {
-  NIGHT_CLEANUP_MS,
+  NIGHT_CANCEL_MS,
+  NIGHT_RESET_MS,
   readNightTurn,
   turnMayBeLive,
   turnSummary,
@@ -123,22 +125,33 @@ function readSavedSession(
   }
 }
 
+/** Отмена перед reset: id хода; null — активный ход, id не наблюдался; false — ход кончился сам. */
+type CancelBefore = string | null | false;
+
 /**
- * Уборка: ограниченный reset (клиент eve сам сверяет previousSessionId). reset или
+ * Уборка: отмена активного хода с задачами (сервер на reset ждал бы живой ход до 30 с),
+ * затем ограниченный reset (клиент eve сам сверяет previousSessionId). reset или
  * no_active_session — писателя нет, файл снимается. Иначе файл остаётся, и следующий
- * старт повторит reset.
+ * старт повторит уборку.
  */
-async function resetNightSession(
+interface Retire {
+  readonly reason: string;
+  /** id сессии лежит в файле: неснятая остаётся там до следующего старта. */
+  readonly saved: boolean;
+  readonly cancel: CancelBefore;
+}
+
+async function retireSession(
   ctx: NightSessionContext,
   session: NightSessionHandle,
-  reason: string,
-  saved: boolean,
+  { reason, saved, cancel }: Retire,
 ): Promise<boolean> {
+  if (cancel !== false) await cancelOf(ctx, session, reason)(cancel);
   const id = session.state.sessionId;
   try {
     await session.reset({
       reason: `Rollup: ${reason}`,
-      signal: AbortSignal.timeout(NIGHT_CLEANUP_MS),
+      signal: AbortSignal.timeout(NIGHT_RESET_MS),
     });
   } catch (error) {
     ctx.abandoned(id, `${reason}-reset-failed`);
@@ -162,7 +175,8 @@ async function resetNightSession(
 
 /**
  * Старт: сохранённая сессия — след упавшего процесса, её ход мог остаться на сервере.
- * Снимается до всего остального; false — выход с кодом 1 без create.
+ * Снимается до всего остального (отмена активного хода без id, затем reset); false — выход
+ * с кодом 1 без create.
  */
 export async function resetSavedSession(
   ctx: NightSessionContext,
@@ -176,12 +190,11 @@ export async function resetSavedSession(
     return false;
   }
   ctx.abandoned(saved.sessionId, "crash");
-  return await resetNightSession(
-    ctx,
-    ctx.sessions.attach(saved.sessionId),
-    "crash",
-    true,
-  );
+  return await retireSession(ctx, ctx.sessions.attach(saved.sessionId), {
+    reason: "crash",
+    saved: true,
+    cancel: null,
+  });
 }
 
 /** Отмена с задачами, ограниченная сроком; не бросает, отдаёт статус для журнала. */
@@ -195,7 +208,7 @@ function cancelOf(
       .cancel({
         ...(turnId === null ? {} : { turnId }),
         tasks: true,
-        signal: AbortSignal.timeout(NIGHT_CLEANUP_MS),
+        signal: AbortSignal.timeout(NIGHT_CANCEL_MS),
       })
       .then(
         ({ status }) => status,
@@ -213,8 +226,8 @@ type OpenedTurn = {
 };
 
 /**
- * create → файл. Ответа нет — id неизвестен; ответ при остановке — только reset; файл не
- * записался — reset и конец запуска. Иначе сессия названа в файле и её ход можно читать.
+ * create → файл. Ответа нет — id неизвестен; ответ при остановке — только уборка; файл не
+ * записался — уборка и конец запуска. Иначе сессия названа в файле и её ход можно читать.
  */
 async function openTurn(
   ctx: NightTurnContext,
@@ -238,25 +251,51 @@ async function openTurn(
     turn: null,
     sessionId: session.state.sessionId,
   };
-  // Ответ пришёл, когда запуск уже останавливается: сессию не храним и не читаем.
+  // Ответ пришёл, когда запуск уже останавливается: сессию не храним и не читаем; её ход
+  // уже идёт на сервере, отмена без id.
   if (ctx.stop.aborted)
     return {
       ...stopped,
-      retired: await resetNightSession(ctx, session, `${label}-stopped`, false),
+      retired: await retireSession(ctx, session, {
+        reason: `${label}-stopped`,
+        saved: false,
+        cancel: null,
+      }),
     };
   try {
     ctx.save(session.state.sessionId);
   } catch (error) {
     ctx.log(`${label}: ${ctx.file} was not written (${reasonOf(error)})`);
-    await resetNightSession(ctx, session, `${label}-unsaved`, false);
+    await retireSession(ctx, session, {
+      reason: `${label}-unsaved`,
+      saved: false,
+      cancel: null,
+    });
     return { ...stopped, retired: false };
   }
   return created;
 }
 
 /**
- * Один ход в своей сессии: create → файл → чтение одним владельцем → уборка. Ошибка
- * клиента в чтении или сводке не обходит уборку.
+ * Что отменять перед reset: обрез уже отменён; failed (turn.failed, чужая отмена) — задачи
+ * хода могли остаться, отмена с задачами; broken без границы — ход мог остаться живым;
+ * completed и session.failed — только reset.
+ */
+function cancelBefore(
+  turn: NightTurn | null,
+  verdict: TurnVerdict,
+): CancelBefore {
+  if (turn === null) return null;
+  if (turn.cutRequested) return false;
+  if (verdict === "failed" || (verdict === "broken" && turnMayBeLive(turn)))
+    return turn.turnId;
+  return false;
+}
+
+/**
+ * Один ход в своей сессии: create → файл → чтение одним владельцем → уборка (отмена, если
+ * ход мог остаться живым или его задачи — затем reset). Ошибка клиента в чтении или сводке
+ * не обходит уборку.
  */
 export async function runNightTurn(
   ctx: NightTurnContext,
@@ -280,16 +319,13 @@ export async function runNightTurn(
       ctx.log(`${label}: the turn stream broke (${reasonOf(read.error)})`);
     ctx.log(`${label}: ${turnSummary(turn, verdict)}`);
   } finally {
-    // (a) ход мог остаться живым и отмена ещё не запрашивалась — одна отмена;
+    // (a) отмена, если ход или его задачи могли остаться, и отмена по пределу не уходила;
     // (b) всегда reset и удаление файла.
-    if (verdict === "broken" && !turn?.cutRequested && turnMayBeLive(turn))
-      await cancel(turn?.turnId ?? null);
-    retired = await resetNightSession(
-      ctx,
-      session,
-      `${label}-${verdict}`,
-      true,
-    );
+    retired = await retireSession(ctx, session, {
+      reason: `${label}-${verdict}`,
+      saved: true,
+      cancel: cancelBefore(turn, verdict),
+    });
   }
   return { verdict, turn, sessionId: session.state.sessionId, retired };
 }

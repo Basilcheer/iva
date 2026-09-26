@@ -435,11 +435,6 @@ if (days.length === 0) {
   );
   process.exit(0);
 }
-// Снимок CORE ДО хода: файл правит сама ночь, и пропажу секции видно только сравнением
-// с тем, что было. Читается всегда, даже если ночь CORE не откроет вовсе. Снимок живёт в
-// памяти: после hard kill восстанавливать нечем (остаток, specs/README.md).
-const coreBeforeTurn = period === "daily" ? readCoreText(CORE_PATH) : "";
-
 // Отказ самого дня (обрез, ход без отчёта, незакрытый день) — попытка дня.
 function markAttempt(day: string, reason: AttemptReason): void {
   if (period === "daily")
@@ -448,7 +443,8 @@ function markAttempt(day: string, reason: AttemptReason): void {
 
 type DayEnd = "done" | "cut" | "stop";
 
-// Итог дня после уборки его сессии. Состояние дня читается уже после reset.
+// Итог дня по исходу его хода. Обрез подтверждён — попытка дня, снята сессия или нет:
+// подтверждение уборки решает только, идёт ли догон дальше (цикл ниже).
 function dayEnd(day: string, run: NightTurnRun): DayEnd {
   if (run.verdict === "cut") {
     markAttempt(day, "cut");
@@ -459,7 +455,7 @@ function dayEnd(day: string, run: NightTurnRun): DayEnd {
   }
   if (run.verdict !== "completed") {
     console.error(
-      `rollup ${period}: ${day}: the turn ended ${run.verdict} — no attempt is counted, the next run retries`,
+      `rollup ${period}: ${day}: the turn ended ${run.verdict} — no attempt is counted, the next run takes the day again`,
     );
     return "stop";
   }
@@ -491,7 +487,8 @@ function dayEnd(day: string, run: NightTurnRun): DayEnd {
 const reports: string[] = [];
 // Запуск кончится кодом 1.
 let failed = false;
-// Каждый ход дошёл до исхода (успех или обрез): CORE доводится как после успеха.
+// Каждый ход дошёл до исхода (успех или обрез) и его сессия снята: CORE доводится как
+// после успеха.
 let settled = true;
 let turnsRan = false;
 for (const day of days) {
@@ -505,16 +502,24 @@ for (const day of days) {
   turnsRan = true;
   let end: DayEnd;
   try {
+    // Снимок CORE ДО каждого хода: файл правит сама ночь, и что с правкой делать, решает
+    // исход этого хода (settleCore). Снимок живёт в памяти: после hard kill восстанавливать
+    // нечем (остаток, specs/README.md).
+    const coreBeforeTurn = period === "daily" ? readCoreText(CORE_PATH) : "";
     const run = await runNightTurn(
       turns,
       buildPrompt(period, today, day, NIGHT_RULES),
       day,
     );
     if (run.sessionId !== null) nightSession = run.sessionId;
-    end = run.retired ? dayEnd(day, run) : "stop";
+    // Неснятая сессия: ход может быть жив, vault не трогаем — ни CORE, ни коммита
+    // (остаток: снимок в памяти, позже CORE не восстановить).
+    if (run.retired) await settleCore(day, run, coreBeforeTurn);
+    const dayResult = dayEnd(day, run);
+    end = run.retired ? dayResult : "stop";
   } catch (error) {
-    // Ошибка клиента после хода (сводка, чтение дня, запись попытки): уборка уже прошла,
-    // попытка не ставится, CORE проверяется ниже.
+    // Ошибка клиента (снимок CORE, сводка, чтение дня, запись попытки): уборка хода уже
+    // прошла или ход не начинался, попытка не ставится.
     console.error(`rollup ${period}: ${day}: ${reasonOf(error)}`);
     end = "stop";
   }
@@ -553,54 +558,71 @@ async function alertOwner(
     );
 }
 
-// CORE как в снимке: частичную правку оборванного хода не оставляем.
-async function restoreCore(snapshot: string, why: string): Promise<void> {
-  if (readCoreText(CORE_PATH) === snapshot) return;
+// CORE как в снимке: частичную правку оборванного хода не оставляем. true — файл вернули.
+async function restoreCore(snapshot: string, why: string): Promise<boolean> {
+  if (readCoreText(CORE_PATH) === snapshot) return false;
   writeFileAtomicSync(CORE_PATH, snapshot);
+  // Откат CORE - тоже правка памяти: без коммита ночной подметальщик сделал бы вид,
+  // что модель ничего не теряла.
   await commitVaultWrite(
     `file CORE.md: restore (${why})`,
     [CORE_PATH],
     VAULT(),
   );
+  return true;
 }
 
-// Daily is the only rollup that touches CORE. Verify the actual file, not just the turn
-// status: a lost section is rolled back here after every turn the process saw end (success,
-// cut or failure), the last-day pointer is written and one correction of the cap is allowed
-// only when every turn reached its outcome — then fail loudly and leave brain as the
+// CORE после хода, сессия которого снята. Ход дошёл до исхода или обрезан: его правка
+// законна, но он мог снести секцию целиком — в том числе пользовательскую, которой нет в
+// шаблоне. Это потеря данных, поэтому файл возвращается как был, и владелец слышит об этом:
+// молчаливый откат читался бы как «ночь ничего не записала» (ADR-0002, ADR-0007). Любой
+// другой исход — ход не завершён, его правка CORE — полуправка: файл байт в байт как до хода.
+async function settleCore(
+  day: string,
+  run: NightTurnRun,
+  before: string,
+): Promise<void> {
+  if (period !== "daily") return;
+  if (run.verdict !== "completed" && run.verdict !== "cut") {
+    if (await restoreCore(before, `${day} ${run.verdict}`))
+      console.error(
+        `rollup daily: ${day}: the turn ended ${run.verdict} — CORE.md is back to its pre-turn text`,
+      );
+    return;
+  }
+  const damage = coreDamage(before, readCoreText(CORE_PATH));
+  if (!damage.damaged) {
+    alertResolved(DATA_DIR, CORE_DAMAGE_ALERT_KEY);
+    return;
+  }
+  writeFileAtomicSync(CORE_PATH, before);
+  await commitVaultWrite("file CORE.md: restore", [CORE_PATH], VAULT());
+  const damagedHeadings = [
+    // Оба вида потери: пропавшие и выхолощенные разделы.
+    ...damage.lostHeadings,
+    ...damage.hollowedHeadings,
+  ];
+  const lost = damagedHeadings.map((h) => `## ${h}`).join(", ");
+  console.error(
+    `rollup daily: CORE.md lost ${lost || "all of its content"} during the turn — restored the pre-turn file`,
+  );
+  await alertOwner(
+    CORE_DAMAGE_ALERT_KEY,
+    damagedHeadings.join(",") || "emptied",
+    coreDamageAlert(tr, damagedHeadings),
+  );
+}
+
+// Daily is the only rollup that touches CORE. Each turn settled its own CORE above; the
+// last-day pointer is written and one correction of the cap is allowed only when every turn
+// reached its outcome and its session is retired — then fail loudly and leave brain as the
 // deterministic 05:00 backstop.
 if (period === "daily" && turnsRan) {
+  // Ход не дошёл до исхода или сессия не снята: vault дальше не трогаем.
+  if (!settled) process.exit(1);
   // A non-empty pre-existing vault may legitimately have no CORE. The turn starts from
   // the same empty state that the dynamic CORE instruction already documents and uses.
   let core = readCoreText(CORE_PATH);
-
-  // Ход мог снести секцию целиком — в том числе пользовательскую, которой нет в шаблоне.
-  // Это потеря данных, поэтому файл возвращается как был, и владелец слышит об этом:
-  // молчаливый откат читался бы как «ночь ничего не записала» (ADR-0002, ADR-0007).
-  const damage = coreDamage(coreBeforeTurn, core);
-  if (damage.damaged) {
-    writeFileAtomicSync(CORE_PATH, coreBeforeTurn);
-    // Откат CORE - тоже правка памяти: без коммита ночной подметальщик сделал бы вид,
-    // что модель ничего не теряла.
-    await commitVaultWrite("file CORE.md: restore", [CORE_PATH], VAULT());
-    core = coreBeforeTurn;
-    const damagedHeadings = [
-      ...damage.lostHeadings,
-      ...damage.hollowedHeadings,
-    ];
-    const lost = damagedHeadings.map((h) => `## ${h}`).join(", ");
-    console.error(
-      `rollup daily: CORE.md lost ${lost || "all of its content"} during the turn — restored the pre-turn file`,
-    );
-    await alertOwner(
-      CORE_DAMAGE_ALERT_KEY,
-      damagedHeadings.join(",") || "emptied",
-      coreDamageAlert(tr, damagedHeadings),
-    );
-  } else {
-    alertResolved(DATA_DIR, CORE_DAMAGE_ALERT_KEY);
-  }
-  if (!settled) process.exit(1);
 
   // Указатель на последний день ведёт код: дата известна точно, а модели тут нечего
   // решать — за неё она платила бы полным перезаписыванием файла. Пишем только если
@@ -630,6 +652,13 @@ if (period === "daily" && turnsRan) {
               "section; remove stale Preferences/Предпочтения first. Do not return until the file itself is within the cap.",
             "core-correction",
           );
+    // Сессия коррекции не снята: ход может быть жив, CORE не трогаем (остаток).
+    if (fixed !== null && !fixed.retired) {
+      console.error(
+        `rollup daily: CORE.md correction ${fixed.verdict}, its session is not retired — CORE.md is left as the turn left it (${oldLength}/${CORE_CAP}); brain will clamp it at 05:00`,
+      );
+      process.exit(1);
+    }
     if (fixed?.verdict !== "completed") {
       await restoreCore(core, "correction");
       console.error(
@@ -637,7 +666,6 @@ if (period === "daily" && turnsRan) {
       );
       process.exit(1);
     }
-    if (!fixed.retired) failed = true;
     const correctedCore = readCore(CORE_PATH);
     if (correctedCore.state === "unreadable") throw correctedCore.error;
     if (correctedCore.state === "missing") {

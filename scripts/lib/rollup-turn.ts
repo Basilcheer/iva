@@ -24,11 +24,22 @@ import {
 // Снимается вместе со старой ночью на этапе 1 ADR-0016 (ночь из четырёх шагов кода).
 export const NIGHT_MAX_STEPS = 120;
 export const NIGHT_MAX_INPUT_TOKENS = 8_000_000;
-// Отмена и reset уборки — каждая не дольше трети срока остановки раннера: обе вместе
-// укладываются в 90 с между «работу кончить» и SIGKILL.
-export const NIGHT_CLEANUP_MS = JOB_STOP_GRACE_MS / 3;
+// Тестовый шов (как IVA_VAULT_GIT_TIMEOUT_MS в agent/lib/vault-commit.ts): тест процесса
+// укорачивает сроки, чтобы прогнать срок запуска и зависшую уборку за секунды. В работе
+// переменные не заданы, и действуют числа ниже.
+function testMs(name: string, fallback: number): number {
+  const ms = Number(process.env[name]);
+  return Number.isInteger(ms) && ms > 0 ? ms : fallback;
+}
+// Уборка сессии — отмена активного хода, затем reset, каждая своим сроком. Сервер eve на
+// reset сам ждёт до 30 с, пока живой ход освободит сессию (waitForCommandHookRelease,
+// COMMAND_HOOK_READY_TIMEOUT_MS в node_modules/eve/dist/src/execution/workflow-runtime.js):
+// срок reset больше серверного, чтобы ответ или исключение дошли до клиента, а отмена перед
+// ним гасит ход, и сервер не ждёт. 20 + 40 = 60 с ≤ JOB_STOP_GRACE_MS (90 с) минус выход.
+export const NIGHT_CANCEL_MS = testMs("IVA_NIGHT_CANCEL_MS", 20_000);
+export const NIGHT_RESET_MS = testMs("IVA_NIGHT_RESET_MS", 40_000);
 // Дневной ход не начинается, если до срока меньше: он не успел бы ничего и оставил бы уборку.
-export const NIGHT_MIN_TURN_MS = 5 * 60_000;
+export const NIGHT_MIN_TURN_MS = testMs("IVA_NIGHT_MIN_TURN_MS", 5 * 60_000);
 
 const MAX_TIMER_MS = 2 ** 31 - 1;
 
@@ -79,11 +90,11 @@ export interface NightTurn {
 export type TurnVerdict =
   "completed" | "cut" | "failed" | "session-failed" | "broken";
 
-const OUTCOMES: Readonly<Record<string, Outcome>> = {
-  "turn.completed": "completed",
-  "turn.cancelled": "cancelled",
-  "turn.failed": "failed",
-};
+const OUTCOMES: ReadonlyMap<string, Outcome> = new Map([
+  ["turn.completed", "completed"],
+  ["turn.cancelled", "cancelled"],
+  ["turn.failed", "failed"],
+]);
 const BOUNDARIES = new Set([
   "session.waiting",
   "session.completed",
@@ -193,8 +204,8 @@ export function nightTurnReader(log: (line: string) => void) {
     turn.boundary = null;
     if (!ours(event)) return false;
     if (STEP_EVENTS.has(event.type)) return step(event);
-    const outcome = OUTCOMES[event.type];
-    if (outcome) turn.outcome = outcome;
+    const outcome = OUTCOMES.get(event.type);
+    if (outcome !== undefined) turn.outcome = outcome;
     if (
       event.type === "message.completed" &&
       event.data.finishReason !== "tool-calls"

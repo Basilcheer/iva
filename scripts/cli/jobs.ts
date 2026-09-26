@@ -7,8 +7,8 @@
 // .memory.lock, что ночь (путь из agent/lib/schedule-paths.ts), код ставит в хвост сырого дня
 // ту же отметку конца, что ставит скилл, коммитит vault и стирает попытки дня. Отказ коммита —
 // код 1 и попытки на месте: повтор команды доводит коммит.
-import { appendFileSync, existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { resolveVaultDir } from "../../packages/vault-dir/index.ts";
 import { readEnvFresh } from "../lib/env-file.ts";
 import { dayProgress, shiftDate } from "../lib/rollup-days.ts";
@@ -47,6 +47,19 @@ function localDate(now: Date, timeZone: string): string {
 
 function isCalendarDate(date: string): boolean {
   return /^\d{4}-\d{2}-\d{2}$/u.test(date) && shiftDate(date, 0) === date;
+}
+
+// Отметка конца дня, которую читает ночь. Тихий день без транскрипта ночь тоже берёт
+// (вчера — всегда): закрыть его можно только той же отметкой, и файл дня создаётся из неё.
+function markSkipped(raw: string, now: Date): void {
+  const exists = existsSync(raw);
+  if (exists && dayProgress(readFileSync(raw, "utf8")).done) return;
+  if (!exists) mkdirSync(dirname(raw), { recursive: true });
+  appendFileSync(
+    raw,
+    `\n<!-- processed: skipped by owner ${now.toISOString()} -->\n`,
+    "utf8",
+  );
 }
 
 export function createJobsCommand(
@@ -90,14 +103,7 @@ export function createJobsCommand(
       );
     const vault = resolveVaultDir(ROOT, env.ASSISTANT_VAULT_DIR);
     const raw = join(vault, "daily", `${date}.md`);
-    if (!existsSync(raw))
-      throw new Error(`no raw day ${raw} — nothing to close`);
-    if (!dayProgress(readFileSync(raw, "utf8")).done)
-      appendFileSync(
-        raw,
-        `\n<!-- processed: skipped by owner ${now.toISOString()} -->\n`,
-        "utf8",
-      );
+    markSkipped(raw, now);
     const commit =
       dependencies.commit ??
       (await import("#lib/vault-commit.ts")).commitVaultWrite;
@@ -112,7 +118,7 @@ export function createJobsCommand(
       );
     const { clearDay } = await import("../lib/rollup-attempts.ts");
     clearDay(join(dataDirAbs(env), "rollup-attempts.json"), date);
-    ok(`closed ${date} without processing; the night will not retry it`);
+    ok(`closed ${date} without processing; the night leaves it alone`);
   }
 
   return async function cmdJobs(args: readonly string[]): Promise<void> {
