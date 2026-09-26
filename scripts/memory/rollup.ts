@@ -14,13 +14,12 @@
 // сессии за ним уже нет). Каждый ход — своя сессия eve (scripts/lib/night-session.ts),
 // предел хода считает ночной клиент (scripts/lib/rollup-turn.ts).
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
-import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { Client } from "eve/client";
 import { CORE_CAP } from "#lib/core-cap.ts";
 import { coreDamage, setLastDayPointer } from "#lib/core-clamp.ts";
 import { writeFileAtomicSync } from "#lib/fs-atomic.ts";
-import { commitVaultWrite, gitEnv } from "#lib/vault-commit.ts";
+import { commitVaultWrite, vaultHead, vaultShow } from "#lib/vault-commit.ts";
 import { tr } from "#lib/i18n.ts";
 import { readSettings } from "#lib/settings.ts";
 import { JOB_STOP_AT_ENV } from "#lib/schedule-runner.ts";
@@ -512,8 +511,8 @@ for (const day of days) {
       day,
     );
     if (run.sessionId !== null) nightSession = run.sessionId;
-    // Неснятая сессия: ход может быть жив, vault не трогаем — ни CORE, ни коммита
-    // (остаток: снимок в памяти, позже CORE не восстановить).
+    // Неснятая сессия: ход может быть жив, vault не трогаем — ни CORE, ни коммита; история
+    // на месте, восстановить можно позже.
     if (run.retired) await settleCore(day, run, coreBeforeTurn);
     // dayEnd идёт и при неснятой сессии: пишет только data/rollup-attempts.json, vault читает.
     const dayResult = dayEnd(day, run);
@@ -559,42 +558,43 @@ async function alertOwner(
     );
 }
 
-// git в vault (окружение — белый список шва). Снимок CORE — история vault, не память
-// процесса: грязный CORE коммитится, sha HEAD запоминается; после hard kill история на месте.
-// Vault без git — ошибка (init-vault всегда делает его репозиторием).
-function vaultGit(...args: string[]) {
-  return spawnSync("git", args, {
-    cwd: VAULT(),
-    env: gitEnv(),
-    encoding: "utf8",
-  });
-}
-
+// Снимок CORE — история vault, не память процесса: грязный CORE коммитится (файла нет —
+// коммитить нечего), sha HEAD — снимок, и он сверяется с файлом: коммит не состоялся (vault
+// внутри чужого репозитория, занятый индекс, чужой коммит между) — ход не начинается.
 async function coreSnapshot(): Promise<string> {
-  await commitVaultWrite("file CORE.md: before turn", [CORE_PATH], VAULT());
-  const head = vaultGit("rev-parse", "HEAD");
-  if (head.status !== 0)
-    throw new Error(`${VAULT()} has no git HEAD: ${head.stderr.trim()}`);
-  return head.stdout.trim();
+  if (existsSync(CORE_PATH))
+    await commitVaultWrite("file CORE.md: before turn", [CORE_PATH], VAULT());
+  const sha = await vaultHead(VAULT());
+  if ((await coreAt(sha)) !== readCoreText(CORE_PATH))
+    throw new Error(
+      `CORE.md is not committed in ${VAULT()} (HEAD ${sha}) — the turn is not started`,
+    );
+  return sha;
 }
 
-// Текст CORE в снимке; файла в коммите не было — пустой текст той же проверке.
-function coreAt(sha: string): string {
-  const shown = vaultGit("show", `${sha}:CORE.md`);
-  return shown.status === 0 ? shown.stdout : "";
+// Текст CORE в снимке; файла в коммите не было — пустой текст той же проверке. Иной отказ
+// git (vaultShow) — исключение: откатывать в пустоту нельзя.
+async function coreAt(sha: string): Promise<string> {
+  return (await vaultShow(VAULT(), sha, "CORE.md")) ?? "";
 }
 
 // CORE как в снимке: частичную правку оборванного хода не оставляем. true — файл вернули.
+// Откат — тоже правка памяти: коммит обязателен (порча без коммита даёт «нечего коммитить»,
+// это не отказ); отказ коммита — громко и exit 1, «восстановлен» не объявляем.
 async function restoreCore(snapshot: string, why: string): Promise<boolean> {
   if (readCoreText(CORE_PATH) === snapshot) return false;
   writeFileAtomicSync(CORE_PATH, snapshot);
-  // Откат CORE - тоже правка памяти: без коммита ночной подметальщик сделал бы вид,
-  // что модель ничего не теряла.
-  await commitVaultWrite(
+  const commit = await commitVaultWrite(
     `file CORE.md: restore (${why})`,
     [CORE_PATH],
     VAULT(),
   );
+  if (!commit.ok) {
+    console.error(
+      `rollup daily: CORE.md restored on disk, commit failed: ${commit.reason}`,
+    );
+    process.exit(1);
+  }
   return true;
 }
 
@@ -609,7 +609,7 @@ async function settleCore(
   snapshot: string,
 ): Promise<void> {
   if (period !== "daily") return;
-  const before = coreAt(snapshot);
+  const before = await coreAt(snapshot);
   if (run.verdict !== "completed" && run.verdict !== "cut") {
     if (await restoreCore(before, `${day} ${run.verdict}`))
       console.error(
@@ -679,9 +679,11 @@ if (period === "daily" && turnsRan) {
     );
     // Своя сессия и правило формата текстом: сессии дней уже сняты. Коррекция не дошла до
     // исхода (обрез, сбой, остановка) — CORE как до неё, и дальше срабатывает проверка капа.
-    const snapshot = await coreSnapshot();
+    // Остановились — vault не трогаем: снимок только перед стартующим ходом.
+    const starting = !stop.signal.aborted && remainingMs() >= NIGHT_MIN_TURN_MS;
+    const snapshot = starting ? await coreSnapshot() : null;
     const fixed =
-      stop.signal.aborted || remainingMs() < NIGHT_MIN_TURN_MS
+      snapshot === null
         ? null
         : await runNightTurn(
             turns,
@@ -697,8 +699,9 @@ if (period === "daily" && turnsRan) {
       );
       process.exit(1);
     }
-    if (fixed?.verdict !== "completed") {
-      await restoreCore(coreAt(snapshot), "correction");
+    if (fixed?.verdict !== "completed" || snapshot === null) {
+      if (snapshot !== null)
+        await restoreCore(await coreAt(snapshot), "correction");
       console.error(
         `rollup daily: CORE.md correction ${fixed?.verdict ?? "not started"} — CORE.md is back to its pre-correction text (${oldLength}/${CORE_CAP}); brain will clamp it at 05:00`,
       );
@@ -709,7 +712,7 @@ if (period === "daily" && turnsRan) {
     // Коррекция проходит ту же проверку повреждения, что дневной ход: «# CORE» — не сжатие,
     // удалённый файл — пустой текст той же проверки.
     const corrected = correctedCore.state === "valid" ? correctedCore.text : "";
-    if (await coreDamaged(coreAt(snapshot), corrected, "correction"))
+    if (await coreDamaged(await coreAt(snapshot), corrected, "correction"))
       process.exit(1);
     core = corrected;
     if (core.length > CORE_CAP) {

@@ -395,6 +395,30 @@ export async function commitVaultWrite(
   return outcome;
 }
 
+/** `git show <sha>:<path>` так и говорит, когда пути в коммите нет; всё остальное — отказ. */
+const PATH_NOT_IN_COMMIT = /exists on disk, but not in|does not exist in/u;
+
+/** HEAD vault тем же раннером (таймаут, окружение, разбор отказа). Отказ — исключение. */
+export async function vaultHead(root: string): Promise<string> {
+  const run = await git(["rev-parse", "HEAD"], root);
+  if (run.code !== 0) throw new Error(`${root}: ${reasonOf(run)}`);
+  return run.out.trim();
+}
+
+/** Текст пути в коммите vault; null — пути в этом коммите нет. Любой другой отказ (битый
+ * объект, git не найден, таймаут, переполнение буфера вывода раннера — оно приходит без
+ * числового кода и читается как отказ) — исключение, а не «файла не было». */
+export async function vaultShow(
+  root: string,
+  sha: string,
+  path: string,
+): Promise<string | null> {
+  const run = await git(["show", `${sha}:${path}`], root);
+  if (run.code === 0) return run.out;
+  if (run.code === 128 && PATH_NOT_IN_COMMIT.test(detail(run))) return null;
+  throw new Error(`git show ${sha}:${path}: ${reasonOf(run)}`);
+}
+
 /** Ночной подметальщик: закоммитить всё незакоммиченное в vault - днём это делают писатели, а
  * он подбирает то, что осталось. Механизм тот же, что у правки: свой репозиторий, своё
  * окружение, пути литералами. */

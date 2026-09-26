@@ -104,8 +104,11 @@ Post ==
   /\ pc = "ready"
   /\ IF stopping \/ (day = Days /\ corrected) \/ ~NewSession
      THEN Go("exited") /\ UNCHANGED <<afterStop, corrected>> /\ exitOk' = (day = Days)
-     ELSE /\ Go("posted") /\ afterStop' = (afterStop \/ stopping)
-          /\ corrected' = (corrected \/ day = Days) /\ UNCHANGED exitOk
+     ELSE \/ /\ Go("posted") /\ afterStop' = (afterStop \/ stopping)
+             /\ corrected' = (corrected \/ day = Days) /\ UNCHANGED exitOk
+          \* кап не превышен: коррекция не нужна, запуск кончается успехом
+          \/ /\ day = Days /\ Go("exited") /\ exitOk' = TRUE
+             /\ UNCHANGED <<afterStop, corrected>>
   /\ UNCHANGED <<file, fileOk, live, lost, nextId, run, day, cur, pending,
                  stopping, core>>
 
@@ -173,12 +176,13 @@ Unlink ==
   /\ pc = "unlink"
   /\ \/ /\ file' = NONE /\ cur' = NONE /\ core' = "intact"
         /\ day' = IF day < Days THEN day + 1 ELSE day  \* коррекция день не растит
-        \* обрез дня — догон идёт дальше; прочие отказы — exit 1
-        /\ \/ Go("ready")
-           \/ Go("exited")
-     \/ /\ UNCHANGED <<file, day, cur, core>> /\ Go("exited")
+        \* обрез дня — догон идёт дальше; прочие отказы — exit 1; после коррекции
+        \* выход — успех запуска (exit 0)
+        /\ \/ Go("ready") /\ UNCHANGED exitOk
+           \/ Go("exited") /\ exitOk' = (corrected /\ day = Days)
+     \/ /\ UNCHANGED <<file, day, cur, core, exitOk>> /\ Go("exited")
   /\ UNCHANGED <<fileOk, live, lost, nextId, run, pending, stopping,
-                 afterStop, exitOk, corrected>>
+                 afterStop, corrected>>
 
 (* ---------------------------- среда ------------------------------------ *)
 \* Сигнал или срок: только флаг. Повторный ничего не меняет.
@@ -213,7 +217,8 @@ NextRun ==
   /\ pc \in Done /\ run < MaxRuns
   /\ run' = run + 1 /\ Go("start") /\ day' = 0 /\ cur' = NONE /\ pending' = NONE
   /\ stopping' = FALSE /\ exitOk' = FALSE /\ corrected' = FALSE
-  \* снимок в памяти умер с процессом: повреждённый CORE — база следующей ночи (остаток)
+  \* снимок — коммит в истории vault, но его sha знал только умерший процесс: следующая
+  \* ночь берёт текущий CORE за базу (остаток; история для ручного восстановления есть)
   /\ core' = "intact"
   /\ UNCHANGED <<file, fileOk, live, lost, nextId, afterStop>>
 

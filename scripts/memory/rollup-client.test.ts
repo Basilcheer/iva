@@ -1836,3 +1836,94 @@ for (const [how, spoil] of [
     ]);
   });
 }
+
+// Снимок и откат живут в истории vault: отказы git — громкие, ход не стартует или ночь
+// кончается кодом 1, CORE в пустоту не откатывается.
+test("a stuck .git/index.lock in the vault stops the night before the turn: no create, exit 1, CORE untouched", async (t) => {
+  const { fake, host, paths } = await fakeEve(t);
+  writeRawDay(paths.vault, isoDaysAgo(1), "## 10:00 [text]\n\nдень\n");
+  const core = writeCore(paths.vault);
+  // Живой замок (свежий mtime): шов ждёт, огрызком не считает, коммит «before turn» не идёт.
+  writeFileSync(join(paths.vault, ".git", "index.lock"), "");
+
+  const run = await runRollup(host, paths, "daily");
+
+  assert.equal(run.code, 1, run.stderr);
+  assert.deepEqual(prompts(fake), [], "the turn is not started");
+  assert.match(
+    run.stderr,
+    /CORE\.md is not committed .* the turn is not started/u,
+  );
+  assert.equal(readFileSync(core.path, "utf8"), core.text);
+  assert.deepEqual(
+    vaultLog(paths.vault),
+    ["init-vault"],
+    "no snapshot commit slipped through",
+  );
+});
+
+test("a first night without CORE.md takes its snapshot without a commit: no pathspec failure, the turn runs", async (t) => {
+  const { fake, host, paths } = await fakeEve(t);
+  writeRawDay(paths.vault, isoDaysAgo(1), "## 10:00 [text]\n\nдень\n");
+  fake.onTurn = markDayDone(paths.vault);
+
+  const run = await runRollup(host, paths, "daily");
+
+  assert.equal(run.code, 0, run.stderr);
+  assert.doesNotMatch(run.stderr, /pathspec|before turn/u);
+  // Единственная запись ночи в истории — указатель; снимка «before turn» нет.
+  assert.deepEqual(vaultLog(paths.vault), [
+    "file CORE.md: pointer",
+    "init-vault",
+  ]);
+});
+
+test("a git failure that is not a missing path does not empty CORE: no restore, no restore commit, exit 1", async (t) => {
+  const { fake, host, paths } = await fakeEve(t);
+  writeRawDay(paths.vault, isoDaysAgo(1), "## 10:00 [text]\n\nдень\n");
+  const core = writeCore(paths.vault);
+  const objects = join(paths.vault, ".git", "objects");
+  fake.mode = "session-failed";
+  // Ход дописал строку; объекты git стали нечитаемы — `git show` снимка отказывает не из-за пути.
+  fake.onTurn = () => {
+    appendLine(core.path);
+    chmodSync(objects, 0o000);
+  };
+
+  const run = await runRollup(host, paths, "daily");
+  chmodSync(objects, 0o755);
+
+  assert.equal(run.code, 1, run.stderr);
+  assert.notEqual(readFileSync(core.path, "utf8"), core.text, "not rewritten");
+  assert.notEqual(readFileSync(core.path, "utf8"), "", "not emptied");
+  assert.match(run.stderr, /git show [0-9a-f]+:CORE\.md/u);
+  assert.equal(
+    vaultLog(paths.vault).some((s) => s.includes("restore")),
+    false,
+  );
+});
+
+test("a stuck index.lock after the turn: CORE is restored on disk, the restore commit fails, exit 1 without 'restored'", async (t) => {
+  const { fake, host, paths } = await fakeEve(t);
+  writeRawDay(paths.vault, isoDaysAgo(1), "## 10:00 [text]\n\nдень\n");
+  const core = writeCore(paths.vault);
+  fake.mode = "session-failed";
+  fake.onTurn = () => {
+    appendLine(core.path);
+    vaultGit(paths.vault, "add", "-A");
+    vaultGit(paths.vault, "commit", "-q", "-m", "turn: half-edit");
+    writeFileSync(join(paths.vault, ".git", "index.lock"), "");
+  };
+
+  const run = await runRollup(host, paths, "daily");
+
+  assert.equal(run.code, 1, run.stderr);
+  assert.equal(readFileSync(core.path, "utf8"), core.text, "restored on disk");
+  assert.match(run.stderr, /CORE\.md restored on disk, commit failed:/u);
+  assert.doesNotMatch(run.stderr, /is back to its pre-turn text/u);
+  assert.equal(
+    vaultLog(paths.vault)[0],
+    "turn: half-edit",
+    "no restore commit",
+  );
+});
