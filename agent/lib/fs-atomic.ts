@@ -833,7 +833,8 @@ function checkStaleMs(path: string, staleMs: number): void {
 }
 
 function startHeartbeat(lock: FileLock, staleMs: number): FileLock {
-  const period = Math.min(Math.max(staleMs / 3, 1), MAX_TIMER_MS);
+  // Не чаще 100 мс: staleMs в единицы мс — тестовый, горячий цикл ему не положен.
+  const period = Math.min(Math.max(staleMs / 3, 100), MAX_TIMER_MS);
   const say = (what: string) =>
     process.stderr.write(`file lock ${lock.path}: heartbeat ${what}\n`);
   let warned = false;
@@ -850,6 +851,8 @@ function startHeartbeat(lock: FileLock, staleMs: number): FileLock {
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code ?? String(error);
       if (code === "ENOENT" || code === "ENOTDIR") return stop();
+      // Прочие ошибки (EACCES, EIO…) — попытка на следующем тике, одна строка stderr.
+      // Постоянный отказ защиту не сохраняет: каталог стареет, через staleMs его заберут.
       if (!warned) say(`${code}, still running`);
       warned = true;
     }

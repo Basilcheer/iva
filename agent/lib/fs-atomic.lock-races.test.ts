@@ -34,8 +34,9 @@ import {
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const HARNESS = join(ROOT, "scripts/fixtures/lock-race-harness.ts");
 const UTIMES_FIXTURE = join(ROOT, "scripts/fixtures/lock-heartbeat-utimes.ts");
-// chmod не ограничивает root: у него ошибки прав не бывает, ожидание меняется.
+// chmod не ограничивает root: у него ошибки прав не бывает, тест на неё пропускается.
 const isRoot = () => process.getuid?.() === 0;
+const rootSkip = { skip: isRoot() && "root ignores mode bits" };
 const FS_ATOMIC = fileURLToPath(new URL("./fs-atomic.ts", import.meta.url));
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -214,7 +215,7 @@ test("a release that cannot remove its owner entry still stops the heartbeat, so
 });
 
 // Гасит сердцебиение только ENOENT/ENOTDIR (лока нет); прочие ошибки — одна строка stderr.
-test("a heartbeat error other than a missing lock keeps the heartbeat running", async (t) => {
+test("EACCES keeps the heartbeat running", rootSkip, async (t) => {
   const lock = join(lockDir(t), "state.lock");
   const holder = await acquireFileLock(lock, { staleMs: 300 });
   assert.ok(holder);
@@ -231,7 +232,7 @@ test("a heartbeat error other than a missing lock keeps the heartbeat running", 
   assert.equal(next, null, "one EACCES switched the heartbeat off for good");
   assert.equal(
     lines.filter((line) => line.includes("heartbeat EACCES")).length,
-    isRoot() ? 0 : 1,
+    1,
   );
 });
 
@@ -244,6 +245,26 @@ test("staleMs must be a positive finite number in both APIs, before anything is 
     assert.throws(() => acquireFileLockSync(lock, { staleMs }), TypeError);
     assert.equal(existsSync(join(dir, `${staleMs}`)), false, `${staleMs}`);
   }
+});
+
+// Нижняя граница периода: staleMs в единицы мс не даёт горячего цикла.
+test("a tiny staleMs does not make the heartbeat tick faster than every 100 ms", async (t) => {
+  const lock = join(lockDir(t), "state.lock");
+  t.mock.timers.enable({
+    apis: ["setInterval", "setTimeout", "Date"],
+    now: Date.now(),
+  });
+  const holder = await acquireFileLock(lock, { staleMs: 1 });
+  assert.ok(holder);
+  const created = statSync(lock).mtimeMs;
+  t.mock.timers.tick(99);
+  const at99 = statSync(lock).mtimeMs;
+  t.mock.timers.tick(1);
+  const at100 = statSync(lock).mtimeMs;
+  t.mock.timers.reset();
+  releaseFileLock(holder);
+  assert.equal(at99, created, "the heartbeat ticked before 100 ms");
+  assert.notEqual(at100, created, "the heartbeat did not tick at 100 ms");
 });
 
 test("staleMs must be finite, and a huge one does not overflow the heartbeat timer", async (t) => {
