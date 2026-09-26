@@ -1,6 +1,6 @@
 # CORE
 
-<!-- Always-on: injected into context every turn (≤~1200 chars). Durable facts only.
+<!-- Always-on: injected into context every turn (≤~3600 chars). Durable facts only.
      Written by the nightly rollup; on an explicit "remember …" the agent appends a line.
      The night gets the format rule as text, in its core-format section -->
 

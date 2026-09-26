@@ -520,19 +520,32 @@ test("sentNotBefore is the send instant, without a 60s slack window", () => {
   );
 });
 
-test("rollup.ts uses the shared pre-send drain and refuses a foreign result", () => {
+test("rollup.ts creates a fresh session per turn and refuses a foreign result before retiring it", () => {
   assert.match(ROLLUP_SRC, /vercel\/eve#2461/);
-  assert.match(ROLLUP_SRC, /drainStreamBefore\(/);
+  // Файл сессии хода — ровно id плюс время: его и читает снятие брошенной сессии.
+  assert.equal(
+    parsePersistedRollupSession({ sessionId: "wrun_day", createdAt: 1 })
+      ?.sessionId,
+    "wrun_day",
+  );
   assert.match(ROLLUP_SRC, /isOwnTurnResult\(/);
   assert.match(ROLLUP_SRC, /attachRollupNonce\(/);
   assert.match(ROLLUP_SRC, /sentNotBeforeIso\(/);
-  assert.match(
-    ROLLUP_SRC,
-    /response: await session\.send\(prompt\),\s+sentNotBefore,\s+session,/,
+  // Файл старого формата — не сессия: его удаляют без сброса.
+  assert.equal(
+    parsePersistedRollupSession({ createdAt: 1, state: { sessionId: "x" } }),
+    null,
   );
   assert.match(ROLLUP_SRC, /client\.sessions\.create\(\{ message: prompt \}\)/);
-  assert.match(ROLLUP_SRC, /client\.sessions\.attach\(saved\.sessionId\)/);
-  assert.match(ROLLUP_SRC, /JSON\.stringify\(\{ sessionId, createdAt \}\)/);
+  // Nonce делает каждый промпт хода уникальным, даже одного и того же дня.
+  assert.notEqual(
+    attachRollupNonce(TONIGHT_PROMPT, "a"),
+    attachRollupNonce(TONIGHT_PROMPT, "b"),
+  );
+  assert.equal(
+    parsePersistedRollupSession({ sessionId: " wrun_space ", createdAt: 1 }),
+    null,
+  );
   const removedLegacyClient = ["legacy", "ClientSession"].join("");
   const removedSingularSession = ["client", "session("].join(".");
   assert.equal(ROLLUP_SRC.includes(removedLegacyClient), false);
@@ -540,13 +553,11 @@ test("rollup.ts uses the shared pre-send drain and refuses a foreign result", ()
   assert.doesNotMatch(ROLLUP_SRC, /attach\(saved\.sessionId,\s*\{/);
   assert.doesNotMatch(ROLLUP_SRC, /Date\.now\(\) - 60_000/);
   assert.doesNotMatch(ROLLUP_SRC, /drainBeforeSend/);
-  const ownAt = ROLLUP_SRC.indexOf("isOwnTurnResult(");
-  const saveAt = ROLLUP_SRC.indexOf(
-    "saveSession(activeSession.state.sessionId, sessionCreatedAt);",
-  );
+  const refuseAt = ROLLUP_SRC.indexOf("await refuseForeignResult(");
+  const retireAt = ROLLUP_SRC.indexOf("await retireSession(turn.session,");
   assert.ok(
-    ownAt > 0 && ownAt < saveAt,
-    "refuse stale before saving the cursor",
+    refuseAt > 0 && refuseAt < retireAt,
+    "refuse stale before the day's session is retired",
   );
 });
 

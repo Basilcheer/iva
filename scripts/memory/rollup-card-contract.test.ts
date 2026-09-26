@@ -139,9 +139,9 @@ void test("memory-processor phase and its reference teach one history_entry cont
   }
 });
 
-/** The memory-processor instructions send the model to the autograph references for canonical
- * card shapes, and the nightly dedup merge appends to the same section. Both must show
- * the one line format write_card stores, or the model learns to write a second one. */
+/** The nightly dedup merge appends to a card's History, and the autograph references document
+ * that section for whoever edits cards outside the night (the night's prompt no longer carries
+ * them). Both must show the one line format write_card stores, or History gets a second one. */
 void test("autograph references and the dedup merge keep one History line format", () => {
   for (const name of [
     "SKILL.md",

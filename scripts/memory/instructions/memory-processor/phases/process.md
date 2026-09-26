@@ -31,7 +31,7 @@ For each item:
      Never use `UPDATE` to hide a contradiction in chronology.
    - Tag each written card with `confidence: EXTRACTED|INFERRED` (see
      section classification → "Confidence").
-2. **Path & filename.** Place by type (see SKILL layout table). Filenames are
+2. **Path & filename.** Place by type (section memory-processor, «Layout & types»). Filenames are
    kebab-case slugs:
    - `cards/contacts/jane-doe.md`, `cards/projects/iva-memory.md`,
      `cards/ideas/layered-memory-with-decay.md`,

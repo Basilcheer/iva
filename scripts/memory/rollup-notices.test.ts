@@ -44,7 +44,7 @@ test("what leaves the chat is decided by the policy, not by the script", () => {
   // Четвёртый аргумент — только имя хода для журнала (ADR-0010): что уходит в чат, он
   // не решает. Сама отправка остаётся тем же одним швом.
   assert.equal(
-    block.split("session: activeSession.state.sessionId").length - 1,
+    block.split("session: nightSession").length - 1,
     2,
     "both Report seams must carry the Rollup session ID into Trace",
   );

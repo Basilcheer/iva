@@ -35,13 +35,7 @@ interface RollupRun {
 }
 
 type FakeMode =
-  | "own"
-  | "hang"
-  | "no-report"
-  | "foreign"
-  | "foreign-cancel-confirmed"
-  | "send-disconnect"
-  | "session-not-active";
+  "own" | "hang" | "no-report" | "foreign" | "foreign-cancel-confirmed";
 
 function event(type: string, data?: Record<string, unknown>): object {
   return {
@@ -94,6 +88,7 @@ class FakeEve {
   /** Ответы потока и отмены приходят с задержкой: медленный сервер. */
   streamDelayMs = 0;
   cancelDelayMs = 0;
+  resetDelayMs = 0;
   /** Когда сервер реально погасил ход (дописал turn.cancelled). */
   cancelledAt?: number;
   /** Файловый эффект хода: тест дописывает vault так, как это сделала бы модель. */
@@ -143,7 +138,12 @@ class FakeEve {
     if (method === "POST" && url.pathname === "/eve/v1/session") {
       const sessionId = `wrun_fake_${this.#nextSession++}`;
       const message = this.#message(body);
-      this.#events.set(sessionId, turn(message, this.mode));
+      const foreign =
+        this.mode === "foreign" || this.mode === "foreign-cancel-confirmed";
+      this.#events.set(
+        sessionId,
+        turn(foreign ? "foreign rollup prompt" : message, this.mode),
+      );
       this.onTurn?.(message);
       sendJson(response, { sessionId });
       return;
@@ -176,6 +176,14 @@ class FakeEve {
       return;
     }
 
+    const reset = url.pathname.match(/^\/eve\/v1\/session\/([^/]+)\/reset$/u);
+    if (method === "POST" && reset) {
+      await new Promise((resolve) => setTimeout(resolve, this.resetDelayMs));
+      const previousSessionId = decodeURIComponent(reset[1] ?? "");
+      sendJson(response, { ok: true, previousSessionId, status: "reset" });
+      return;
+    }
+
     const stream = url.pathname.match(/^\/eve\/v1\/session\/([^/]+)\/stream$/u);
     if (method === "GET" && stream) {
       await new Promise((resolve) => setTimeout(resolve, this.streamDelayMs));
@@ -198,16 +206,6 @@ class FakeEve {
     if (method === "POST" && send) {
       const sessionId = decodeURIComponent(send[1] ?? "");
       const message = this.#message(body);
-      if (this.mode === "session-not-active") {
-        response.writeHead(409, { "content-type": "application/json" });
-        response.end(
-          JSON.stringify({
-            code: "session_not_active",
-            error: "session is not active",
-          }),
-        );
-        return;
-      }
       this.#events.set(sessionId, [
         ...(this.#events.get(sessionId) ?? []),
         ...turn(
@@ -218,10 +216,6 @@ class FakeEve {
         ),
       ]);
       this.onTurn?.(message);
-      if (this.mode === "send-disconnect") {
-        request.socket.destroy();
-        return;
-      }
       sendJson(response, { sessionId });
       return;
     }
@@ -313,15 +307,10 @@ async function runRollup(
   });
 }
 
-test("production rollup creates for legacy state, then attaches, drains, and sends", async (t) => {
-  const fake = new FakeEve();
-  const host = await fake.start();
-  const paths = makeRunDirectory();
-  t.after(async () => {
-    await fake.stop();
-    rmSync(paths.root, { force: true, recursive: true });
-  });
+test("production rollup creates a fresh session each run, resets it after the turn and drops its file", async (t) => {
+  const { fake, host, paths } = await fakeEve(t);
   const sessionFile = join(paths.data, SESSION_NAME);
+  // Файл старого формата (eve <=0.30) не читается как сессия: удаляется без сброса.
   writeFileSync(
     sessionFile,
     JSON.stringify({
@@ -339,43 +328,35 @@ test("production rollup creates for legacy state, then attaches, drains, and sen
     "string",
     "create receives create({ message }) as a string on the public wire",
   );
-  const saved = JSON.parse(readFileSync(sessionFile, "utf8")) as Record<
-    string,
-    unknown
-  >;
-  assert.deepEqual(Object.keys(saved).sort(), ["createdAt", "sessionId"]);
-  assert.equal(saved.sessionId, "wrun_fake_1");
-  assert.equal(typeof saved.createdAt, "number");
+  assert.deepEqual(sessionCalls(fake), ["create", "reset wrun_fake_1"]);
+  assert.equal(existsSync(sessionFile), false, "the file outlives no turn");
+  assert.equal(
+    existsSync(join(paths.data, "rollup-abandoned.jsonl")),
+    false,
+    "a legacy file is not a session: nothing abandoned, nothing reset",
+  );
 
   const beforeSecond = fake.requests.length;
   const second = await runRollup(host, paths);
   assert.equal(second.code, 0, second.stderr);
-  const resumed = fake.requests.slice(beforeSecond);
-  assert.deepEqual(
-    resumed.slice(0, 2).map(({ method, pathname }) => ({ method, pathname })),
-    [
-      { method: "GET", pathname: "/eve/v1/session/wrun_fake_1/stream" },
-      { method: "POST", pathname: "/eve/v1/session/wrun_fake_1" },
-    ],
-    "attach performs a bounded drain before positional send(message)",
-  );
-  assert.match(
-    resumed[0]?.search ?? "",
-    /(?:^|[?&])includeTailIndex=1(?:&|$)/u,
-  );
+  // Следующий запуск не возвращается в прошлую сессию: создаёт свою и снимает её.
+  const secondRun = sessionCalls(fake).slice(2);
+  assert.deepEqual(secondRun, ["create", "reset wrun_fake_2"]);
+  assert.equal(fake.requests[beforeSecond]?.pathname, "/eve/v1/session");
   assert.equal(
-    typeof (resumed[1]?.body as { message?: unknown }).message,
+    typeof (fake.requests[beforeSecond]?.body as { message?: unknown }).message,
     "string",
-    "send(message) must not nest the prompt in another message object",
+    "the second run creates with the prompt as a plain string",
   );
   assert.equal(
-    resumed.some(
-      ({ method, pathname }) =>
-        method === "POST" && pathname === "/eve/v1/session",
-    ),
+    fake.requests
+      .slice(beforeSecond)
+      .some(({ pathname }) => pathname.includes("wrun_fake_1")),
     false,
   );
-  assert.deepEqual(JSON.parse(readFileSync(sessionFile, "utf8")), saved);
+  assert.equal(existsSync(sessionFile), false);
+  assert.doesNotMatch(first.stderr + second.stderr, /could not reset/u);
+  assert.equal(prompts(fake).length, 2, "one turn per run");
 });
 
 test("production rollup keeps the session when a foreign result cannot be cancelled", async (t) => {
@@ -428,85 +409,67 @@ test("production rollup drops the session after confirmed cancellation of a fore
   );
 });
 
-test("a send disconnect after server acceptance blocks a fresh retry without confirmed cancellation", async (t) => {
-  const fake = new FakeEve();
-  fake.mode = "send-disconnect";
-  const host = await fake.start();
-  const paths = makeRunDirectory();
-  t.after(async () => {
-    await fake.stop();
-    rmSync(paths.root, { force: true, recursive: true });
-  });
-  writeFileSync(
-    join(paths.data, SESSION_NAME),
-    JSON.stringify({ sessionId: "wrun_existing", createdAt: Date.now() }),
-  );
-
-  const run = await runRollup(host, paths);
-  assert.notEqual(run.code, 0);
-  assert.match(run.stderr, /refusing fresh retry/u);
-  assert.equal(
-    fake.requests.filter(
-      ({ method, pathname }) =>
-        method === "POST" && pathname === "/eve/v1/session/wrun_existing",
-    ).length,
-    1,
-    "the server received the ambiguous send before dropping its response",
-  );
-  assert.equal(
-    fake.requests.some(
-      ({ method, pathname }) =>
-        method === "POST" && pathname === "/eve/v1/session",
-    ),
-    false,
-    "an unconfirmed cancellation must not create a second writer",
-  );
-  assert.equal(
-    fake.requests.some(
-      ({ method, pathname }) =>
-        method === "POST" &&
-        pathname === "/eve/v1/session/wrun_existing/cancel",
-    ),
-    true,
-  );
-  assert.match(
-    readFileSync(join(paths.data, "rollup-abandoned.jsonl"), "utf8"),
-    /"reason":"cancel-unconfirmed"/u,
-  );
-});
-
-test("a structured 409 session_not_active permits one fresh retry", async (t) => {
-  const fake = new FakeEve();
-  fake.mode = "session-not-active";
-  const host = await fake.start();
-  const paths = makeRunDirectory();
-  t.after(async () => {
-    await fake.stop();
-    rmSync(paths.root, { force: true, recursive: true });
-  });
+test("a session file left after a crashed run is reset as crash before a fresh session", async (t) => {
+  const { fake, host, paths } = await fakeEve(t);
   const sessionFile = join(paths.data, SESSION_NAME);
   writeFileSync(
     sessionFile,
-    JSON.stringify({ sessionId: "wrun_existing", createdAt: Date.now() }),
+    JSON.stringify({ sessionId: "wrun_crashed", createdAt: Date.now() }),
   );
 
   const run = await runRollup(host, paths);
   assert.equal(run.code, 0, run.stderr);
+  assert.match(run.stdout, /fake monthly report/u, "the night itself runs");
   assert.equal(
-    fake.requests.filter(
-      ({ method, pathname }) =>
-        method === "POST" && pathname === "/eve/v1/session",
-    ).length,
-    1,
+    fake.requests[0]?.pathname,
+    "/eve/v1/session/wrun_crashed/reset",
+    "the crashed session is retired before anything else",
   );
+  assert.deepEqual(sessionCalls(fake), [
+    "reset wrun_crashed",
+    "create",
+    "reset wrun_fake_1",
+  ]);
+  assert.equal(
+    sessionCalls(fake).includes("send wrun_crashed"),
+    false,
+    "the crashed session gets no second writer",
+  );
+  assert.equal(
+    fake.requests.some(({ pathname }) => pathname.endsWith("/cancel")),
+    false,
+    "a finished turn is retired by reset, not cancelled",
+  );
+  assert.match(
+    readFileSync(join(paths.data, "rollup-abandoned.jsonl"), "utf8"),
+    /"reason":"crash","sessionId":"wrun_crashed"/u,
+  );
+  assert.equal(existsSync(sessionFile), false);
+  assert.equal(prompts(fake).length, 1, "the crashed session gets no prompt");
+  assert.doesNotMatch(run.stderr, /could not reset/u);
+});
+
+test("each missed day of one run gets a fresh session: the second day never goes to the first one's session", async (t) => {
+  const { fake, host, paths } = await fakeEve(t);
+  writeRawDay(paths.vault, isoDaysAgo(2), "## 10:00 [text]\n\nпозавчера\n");
+  writeRawDay(paths.vault, isoDaysAgo(1), "## 10:00 [text]\n\nвчера\n");
+  fake.onTurn = markDayDone(paths.vault);
+
+  const run = await runRollup(host, paths, "daily");
+  assert.equal(run.code, 0, run.stderr);
+  assert.deepEqual(sessionCalls(fake), [
+    "create",
+    "reset wrun_fake_1",
+    "create",
+    "reset wrun_fake_2",
+  ]);
   assert.equal(
     fake.requests.some(({ pathname }) => pathname.endsWith("/cancel")),
     false,
   );
   assert.equal(
-    (JSON.parse(readFileSync(sessionFile, "utf8")) as { sessionId: string })
-      .sessionId,
-    "wrun_fake_1",
+    existsSync(join(paths.data, "rollup-session-daily.json")),
+    false,
   );
 });
 
@@ -586,6 +549,30 @@ function markDayDone(vault: string): (message: string) => void {
     if (existsSync(raw))
       writeFileSync(raw, readFileSync(raw, "utf8") + DONE_MARKER);
   };
+}
+
+/** Двойник eve и каталог запуска, убираемые после теста. */
+async function fakeEve(t: import("node:test").TestContext) {
+  const fake = new FakeEve();
+  const host = await fake.start();
+  const paths = makeRunDirectory();
+  t.after(async () => {
+    await fake.stop();
+    rmSync(paths.root, { force: true, recursive: true });
+  });
+  return { fake, host, paths };
+}
+
+/** Что сервер увидел по сессиям: создание, отправка в существующую, снятие — по порядку. */
+function sessionCalls(fake: FakeEve): string[] {
+  return fake.requests.flatMap(({ method, pathname }) => {
+    if (method !== "POST") return [];
+    if (pathname === "/eve/v1/session") return ["create"];
+    const reset = /^\/eve\/v1\/session\/([^/]+)\/reset$/u.exec(pathname);
+    if (reset) return [`reset ${reset[1]}`];
+    const send = /^\/eve\/v1\/session\/([^/]+)$/u.exec(pathname);
+    return send ? [`send ${send[1]}`] : [];
+  });
 }
 
 function writeRawDay(vault: string, date: string, text: string): string {
@@ -785,12 +772,11 @@ for (const how of ["stop time", "SIGTERM"] as const) {
   });
 }
 
-test("SIGTERM while draining the stream before a send keeps the send from going out", async (t) => {
+test("SIGTERM while resetting a crashed session keeps the send from going out", async (t) => {
   const fake = new FakeEve();
   fake.mode = "hang";
-  fake.streamDelayMs = 600;
-  // Остановка дольше чтения потока: чтение кончится, пока процесс ещё гасит сессию.
-  fake.cancelDelayMs = 1200;
+  // Сброс брошенной сессии идёт дольше, чем до сигнала: ход ещё не начат.
+  fake.resetDelayMs = 1200;
   const host = await fake.start();
   const paths = makeRunDirectory();
   t.after(async () => {
@@ -946,18 +932,20 @@ for (const [period, files] of Object.entries(NIGHT_RULES)) {
           `${period}: ${file} frontmatter`,
         );
     }
-    // Ни одного пути к файлу правил в обратных кавычках вне bash-блоков.
-    const prose = prompt.replace(/```bash[\s\S]*?```/gu, "");
+    // Вне блоков кода — ни одного имени файла правил, в кавычках или без.
+    const prose = prompt.replace(/```[\s\S]*?```/gu, "");
     const ruleFiles =
-      /`[^`\n]*\b(?:SKILL|capture|process|link|summarize|classification|card-templates|linking|daily-summary|[a-z]+-format|weekly-reflection)\.md`/u;
+      /\b(?:SKILL|capture|process|link|summarize|classification|card-templates|linking|daily-summary|[a-z]+-format|weekly-reflection)\.md\b|\b(?:rules|phases|references)\//u;
     assert.doesNotMatch(prose, ruleFiles);
-    // Хвост доставки последний перед nonce, строка про приоритет отчёта — прямо перед ним.
+    // Хвост доставки последний перед nonce, задание ночи — после правил и до хвоста.
     const task = prompt.indexOf("## Tonight's task");
-    const wins = prompt.indexOf("the report rules below win");
-    assert.ok(task > 0 && wins > task, `${period}: the task follows the rules`);
+    const tail = prompt.indexOf("At the end, return a SHORT report");
+    assert.ok(task > 0 && tail > task, `${period}: the task follows the rules`);
+    // Что вернуть, решает только хвост доставки: у правил ночи своего «верни» нет.
+    assert.doesNotMatch(prompt.slice(0, tail), /^(?:#+ .*Hand back|Return )/mu);
     assert.match(
-      prompt.slice(wins),
-      /^the report rules below win\. At the end, return a SHORT report[^]*Only the finished report, with no preamble or reasoning\.\n<!-- rollup-nonce \S+ -->$/u,
+      prompt.slice(tail),
+      /^At the end, return a SHORT report[^]*Only the finished report, with no preamble or reasoning\.\n<!-- rollup-nonce \S+ -->$/u,
     );
   });
 }
