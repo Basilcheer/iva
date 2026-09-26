@@ -40,11 +40,12 @@ VARIABLES
   pending,   \* сессия, созданная сервером по идущему POST (NONE — ещё нет)
   stopping,
   afterStop, \* призрак: create или чтение начались при stopping (инвариант 2)
-  core,      \* CORE относительно снимка процесса: intact | damaged
-  exitOk     \* запуск кончился успехом (exit 0)
+  core,      \* intact — повреждения по проверке процесса нет | damaged
+  exitOk,    \* запуск кончился успехом (exit 0): цикл пройден, failed не выставлен
+  corrected  \* ход коррекции CORE после последнего дня уже был (он не обязателен)
 
 vars == <<file, fileOk, live, lost, nextId, run, pc, day, cur, pending, stopping,
-          afterStop, core, exitOk>>
+          afterStop, core, exitOk, corrected>>
 
 States == {"start", "resetStart", "unlinkStart", "init", "ready", "posted",
            "reading", "cleanup", "unlink", "exited", "dead"}
@@ -54,7 +55,7 @@ Init ==
   /\ file = NONE /\ fileOk = TRUE /\ live = {} /\ lost = {} /\ nextId = 1
   /\ run = 1 /\ pc = "start" /\ day = 0 /\ cur = NONE /\ pending = NONE
   /\ stopping = FALSE /\ afterStop = FALSE
-  /\ core = "intact" /\ exitOk = FALSE
+  /\ core = "intact" /\ exitOk = FALSE /\ corrected = FALSE
 
 Go(l) == pc' = l
 
@@ -69,7 +70,7 @@ Start ==
      ELSE IF ~fileOk THEN Go("exited")          \* нечитаем: exit 1, create нет
      ELSE Go("resetStart")
   /\ UNCHANGED <<file, fileOk, live, lost, nextId, run, day, cur, pending,
-                 stopping, afterStop, core, exitOk>>
+                 stopping, afterStop, core, exitOk, corrected>>
 
 \* reset сохранённой сессии: применён или нет; подтверждён — только если цели нет.
 ResetStart ==
@@ -79,14 +80,14 @@ ResetStart ==
        /\ IF confirmed /\ file \notin live' THEN Go("unlinkStart")
           ELSE Go("exited")                     \* файл цел, exit 1, create нет
   /\ UNCHANGED <<file, fileOk, lost, nextId, run, day, cur, pending, stopping,
-                 afterStop, core, exitOk>>
+                 afterStop, core, exitOk, corrected>>
 
 UnlinkStart ==
   /\ pc = "unlinkStart"
   /\ \/ file' = NONE /\ Go("init")
      \/ UNCHANGED file /\ Go("exited")           \* unlink не удался: exit 1
   /\ UNCHANGED <<fileOk, live, lost, nextId, run, day, cur, pending, stopping,
-                 afterStop, core, exitOk>>
+                 afterStop, core, exitOk, corrected>>
 
 \* Инструкции, vault, RAN_BEFORE, timezone, CORE, дни — только после уборки.
 InitStep ==
@@ -94,14 +95,17 @@ InitStep ==
   /\ \/ Go("ready")
      \/ Go("exited")                             \* отказ инициализации: exit 1
   /\ UNCHANGED <<file, fileOk, live, lost, nextId, run, day, cur, pending,
-                 stopping, afterStop, core, exitOk>>
+                 stopping, afterStop, core, exitOk, corrected>>
 
 (* ---------------------------- ход дня ---------------------------------- *)
+\* Ход дня, а после последнего дня — один необязательный ход коррекции CORE: тот же
+\* жизненный цикл во второй сессии (create → файл → чтение → уборка).
 Post ==
   /\ pc = "ready"
-  /\ IF stopping \/ day = Days \/ ~NewSession
-     THEN Go("exited") /\ UNCHANGED afterStop /\ exitOk' = (day = Days)
-     ELSE Go("posted") /\ afterStop' = (afterStop \/ stopping) /\ UNCHANGED exitOk
+  /\ IF stopping \/ (day = Days /\ corrected) \/ ~NewSession
+     THEN Go("exited") /\ UNCHANGED <<afterStop, corrected>> /\ exitOk' = (day = Days)
+     ELSE /\ Go("posted") /\ afterStop' = (afterStop \/ stopping)
+          /\ corrected' = (corrected \/ day = Days) /\ UNCHANGED exitOk
   /\ UNCHANGED <<file, fileOk, live, lost, nextId, run, day, cur, pending,
                  stopping, core>>
 
@@ -110,7 +114,7 @@ ServerCreate ==
   /\ pc = "posted" /\ pending = NONE /\ NewSession
   /\ pending' = nextId /\ nextId' = nextId + 1 /\ live' = live \cup {nextId}
   /\ UNCHANGED <<file, fileOk, lost, run, pc, day, cur, stopping, afterStop, core,
-                 exitOk>>
+                 exitOk, corrected>>
 
 \* Ответ create дошёл. stopping — только reset; иначе saveSession (синхронно в том
 \* же тике) и чтение; ошибка saveSession — уборка.
@@ -121,7 +125,8 @@ Response ==
      ELSE \/ /\ file' = pending /\ Go("reading")
              /\ afterStop' = (afterStop \/ stopping)
           \/ /\ Go("cleanup") /\ UNCHANGED <<file, afterStop>>
-  /\ UNCHANGED <<fileOk, live, lost, nextId, run, day, stopping, core, exitOk>>
+  /\ UNCHANGED <<fileOk, live, lost, nextId, run, day, stopping, core, exitOk,
+                 corrected>>
 
 \* abort до ответа POST: id неизвестен, сервер мог создать сессию или создаст её позже.
 AbortPost ==
@@ -133,7 +138,7 @@ AbortPost ==
         /\ nextId' = nextId + 1
      \/ /\ pending = NONE /\ UNCHANGED <<live, lost, nextId>>
   /\ pending' = NONE /\ Go("exited")
-  /\ UNCHANGED <<file, fileOk, run, day, cur, stopping, afterStop, core, exitOk>>
+  /\ UNCHANGED <<file, fileOk, run, day, cur, stopping, afterStop, core, exitOk, corrected>>
 
 \* Ход кончился: граница, обрез, обрыв, abort по сроку или сигналу — дальше уборка.
 \* Ход (день или коррекция) мог испортить CORE: снёс раздел, вернул «# CORE», оставил
@@ -143,7 +148,7 @@ TurnEnds ==
   /\ Go("cleanup")
   /\ core' \in {core, "damaged"}
   /\ UNCHANGED <<file, fileOk, live, lost, nextId, run, day, cur, pending,
-                 stopping, afterStop, exitOk>>
+                 stopping, afterStop, exitOk, corrected>>
 
 \* Сессия уборки, чей id не лёг в файл.
 Unsaved == IF pc = "cleanup" /\ cur # file THEN {cur} ELSE {}
@@ -159,20 +164,21 @@ Cleanup ==
           \* (saveSession не удался, ответ create при stopping) — id только в stderr
           ELSE Go("exited") /\ lost' = lost \cup Unsaved
   /\ UNCHANGED <<file, fileOk, nextId, run, day, cur, pending, stopping,
-                 afterStop, core, exitOk>>
+                 afterStop, core, exitOk, corrected>>
 
 \* unlink после подтверждённого reset; следующий день — новый create.
 \* Сессия снята и файла нет — единственное место, где vault правится после хода:
 \* повреждение CORE откатывается к снимку (иначе неснятая сессия — второй писатель).
 Unlink ==
   /\ pc = "unlink"
-  /\ \/ /\ file' = NONE /\ day' = day + 1 /\ cur' = NONE /\ core' = "intact"
+  /\ \/ /\ file' = NONE /\ cur' = NONE /\ core' = "intact"
+        /\ day' = IF day < Days THEN day + 1 ELSE day  \* коррекция день не растит
         \* обрез дня — догон идёт дальше; прочие отказы — exit 1
         /\ \/ Go("ready")
            \/ Go("exited")
      \/ /\ UNCHANGED <<file, day, cur, core>> /\ Go("exited")
   /\ UNCHANGED <<fileOk, live, lost, nextId, run, pending, stopping,
-                 afterStop, exitOk>>
+                 afterStop, exitOk, corrected>>
 
 (* ---------------------------- среда ------------------------------------ *)
 \* Сигнал или срок: только флаг. Повторный ничего не меняет.
@@ -180,7 +186,7 @@ Signal ==
   /\ pc \notin Done /\ ~stopping
   /\ stopping' = TRUE
   /\ UNCHANGED <<file, fileOk, live, lost, nextId, run, pc, day, cur, pending,
-                 afterStop, core, exitOk>>
+                 afterStop, core, exitOk, corrected>>
 
 \* Hard kill на любом шаге. Идущий POST мог создать сессию и после смерти клиента.
 Crash ==
@@ -193,20 +199,20 @@ Crash ==
      \/ /\ ~(pc = "posted" /\ pending # NONE)
         /\ lost' = lost \cup Unsaved /\ UNCHANGED <<live, nextId>>
   /\ pending' = NONE /\ Go("dead")
-  /\ UNCHANGED <<file, fileOk, run, day, cur, stopping, afterStop, core, exitOk>>
+  /\ UNCHANGED <<file, fileOk, run, day, cur, stopping, afterStop, core, exitOk, corrected>>
 
 \* Ручная порча файла между запусками.
 Corrupt ==
   /\ pc \in Done /\ file # NONE /\ fileOk
   /\ fileOk' = FALSE
   /\ UNCHANGED <<file, live, lost, nextId, run, pc, day, cur, pending, stopping,
-                 afterStop, core, exitOk>>
+                 afterStop, core, exitOk, corrected>>
 
 \* Следующая ночь: новый процесс, память пуста, файл и сервер — как оставили.
 NextRun ==
   /\ pc \in Done /\ run < MaxRuns
   /\ run' = run + 1 /\ Go("start") /\ day' = 0 /\ cur' = NONE /\ pending' = NONE
-  /\ stopping' = FALSE /\ exitOk' = FALSE
+  /\ stopping' = FALSE /\ exitOk' = FALSE /\ corrected' = FALSE
   \* снимок в памяти умер с процессом: повреждённый CORE — база следующей ночи (остаток)
   /\ core' = "intact"
   /\ UNCHANGED <<file, fileOk, live, lost, nextId, afterStop>>
@@ -225,7 +231,7 @@ TypeOK ==
   /\ file \in 0..MaxSessions /\ cur \in 0..MaxSessions /\ pending \in 0..MaxSessions
   /\ live \subseteq 1..MaxSessions /\ lost \subseteq 1..MaxSessions
   /\ stopping \in BOOLEAN /\ fileOk \in BOOLEAN
-  /\ core \in {"intact", "damaged"} /\ exitOk \in BOOLEAN
+  /\ core \in {"intact", "damaged"} /\ exitOk \in BOOLEAN /\ corrected \in BOOLEAN
 
 \* (1) create не уходит, пока сохранённая сессия не подтверждена снятой и файл не снят;
 \*     инициализация, способная завершить запуск, тоже идёт только после этого.
@@ -246,15 +252,16 @@ KnownLiveHasFile == \A s \in live : s = file \/ s \in lost \/ InWindow(s)
 \* писателя периода. Потерянные в окне (lost) сюда не входят.
 OneKnownWriter == Cardinality(live \ lost) <= 1
 
-\* (4) ночь кончилась успехом ⇒ CORE равен снимку или проверен: повреждение любого хода
-\*     (дня или коррекции) откатывается до выхода. Hard kill — остаток (NextRun).
+\* (4) ночь кончилась успехом ⇒ повреждения CORE по проверке процесса нет: повреждение
+\*     любого хода (дня или коррекции) откатывается до выхода. Hard kill — остаток (NextRun).
 CoreIntactOnSuccess == exitOk => core = "intact"
 
 \* (5, шаговое) CORE возвращается к снимку только в уборке после подтверждённого reset
 \*     (шаг Unlink) — иначе запись vault шла бы поверх сессии, которая может быть жива.
-\*     Второй разрешённый переход — новая база после смерти процесса (NextRun, остаток).
+\*     Второй разрешённый переход — новая база следующей ночи (шаг NextRun, остаток).
 RestoreOnlyAfterConfirmedReset ==
-  [][core = "damaged" /\ core' = "intact" => pc = "unlink" \/ pc \in Done]_vars
+  [][core = "damaged" /\ core' = "intact" =>
+       pc = "unlink" \/ (pc \in Done /\ pc' = "start")]_vars
 
 \* Живость: без падений каждый запуск доходит до выхода. Проверяется с
 \* WF на всех шагах процесса; среда (Signal, Crash, Corrupt) не обязана случаться.

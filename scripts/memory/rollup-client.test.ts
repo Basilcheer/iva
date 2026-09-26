@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-floating-promises -- Node's test runner owns registration promises. */
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import {
   chmodSync,
   existsSync,
@@ -15,6 +15,7 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
+import { setLastDayPointer } from "#lib/core-clamp.ts";
 
 const ROOT = resolve(import.meta.dirname, "../..");
 const ROLLUP = join(ROOT, "scripts/memory/rollup.ts");
@@ -352,8 +353,24 @@ function makeRunDirectory(): {
   const vault = join(root, "vault");
   mkdirSync(data);
   mkdirSync(vault);
+  // Vault — свой git-репозиторий, как после init-vault: снимок CORE перед ходом — коммит.
+  vaultGit(vault, "init", "-q");
+  vaultGit(vault, "commit", "-q", "--allow-empty", "-m", "init-vault");
   return { data, root, vault };
 }
+
+/** git в vault от тестовой identity. */
+function vaultGit(vault: string, ...args: string[]): string {
+  return execFileSync(
+    "git",
+    ["-c", "user.name=t", "-c", "user.email=t@x", ...args],
+    { cwd: vault, encoding: "utf8" },
+  );
+}
+
+/** Темы коммитов vault, новые первыми. */
+const vaultLog = (vault: string): string[] =>
+  vaultGit(vault, "log", "--format=%s").trim().split("\n");
 
 interface RunOptions {
   readonly args?: readonly string[];
@@ -983,7 +1000,11 @@ test("an undone day leaving the catch-up window is named in the log", async (t) 
 // ── Сессия, предел и попытки: таблица отказов T96 (specs/NightSession.tla) ─────────────
 
 /** CORE с пользовательскими предпочтениями и указателем на вчера; extra раздувает файл. */
-function writeCore(vault: string, extra = ""): { path: string; text: string } {
+function writeCore(
+  vault: string,
+  extra = "",
+  lastDay = isoDaysAgo(1),
+): { path: string; text: string } {
   const path = join(vault, "CORE.md");
   const text = [
     "# CORE",
@@ -995,7 +1016,7 @@ function writeCore(vault: string, extra = ""): { path: string; text: string } {
     "",
     "## Указатели",
     "",
-    `- Последний день: summaries/daily/${isoDaysAgo(1)} · Индекс: MOC.md`,
+    `- Последний день: summaries/daily/${lastDay} · Индекс: MOC.md`,
     "",
   ].join("\n");
   writeFileSync(path, text);
@@ -1226,8 +1247,13 @@ test("session.failed resets the session only, never cancels, counts no attempt a
   writeRawDay(paths.vault, isoDaysAgo(1), "## 10:00 [text]\n\nдень\n");
   const core = writeCore(paths.vault);
   fake.mode = "session-failed";
-  // Ход дописал строку в непустой раздел: заголовки целы, coreDamage этого не видит.
-  fake.onTurn = () => appendLine(core.path);
+  // Ход дописал строку в непустой раздел и закоммитил её, как write_file модели: заголовки
+  // целы, coreDamage этого не видит.
+  fake.onTurn = () => {
+    appendLine(core.path);
+    vaultGit(paths.vault, "add", "-A");
+    vaultGit(paths.vault, "commit", "-q", "-m", "turn: half-edit");
+  };
 
   const run = await runRollup(host, paths, "daily");
 
@@ -1237,6 +1263,12 @@ test("session.failed resets the session only, never cancels, counts no attempt a
   assert.deepEqual(attemptsOf(paths.data), {});
   assert.equal(readFileSync(core.path, "utf8"), core.text);
   assert.match(run.stderr, /CORE\.md is back to its pre-turn text/u);
+  // Снимок — коммит истории vault: грязная фикстура закоммичена перед ходом, откат — после.
+  assert.deepEqual(vaultLog(paths.vault).slice(0, 3), [
+    `file CORE.md: restore (${isoDaysAgo(1)} session-failed)`,
+    "turn: half-edit",
+    "file CORE.md: before turn",
+  ]);
 });
 
 for (const mode of ["turn-failed", "stream-breaks"] as const) {
@@ -1745,29 +1777,62 @@ for (const [period, files] of Object.entries(NIGHT_RULES)) {
   });
 }
 
-test("a completed CORE correction that returns a bare '# CORE' fails the damage check: CORE is back to its pre-correction text, exit 1, the owner is alerted", async (t) => {
-  const { fake, host, paths } = await fakeEve(t);
-  writeRawDay(paths.vault, isoDaysAgo(1), "## 10:00 [text]\n\nдень\n");
-  const core = writeCore(
-    paths.vault,
-    `- ${"длинное предпочтение ".repeat(200)}`,
-  );
-  const done = markDayDone(paths.vault);
-  fake.onTurn = (message) => {
-    if (message.includes("Re-open")) writeFileSync(core.path, "# CORE\n");
-    else done(message);
-  };
+// Коррекция идёт после записи указателя: откат возвращает снимок с новым указателем, а не
+// файл до ночи. Указатель фикстуры заведомо устаревший, чтобы эти два текста различались.
+for (const [how, spoil] of [
+  [
+    "returns a bare '# CORE'",
+    (path: string) => writeFileSync(path, "# CORE\n"),
+  ],
+  ["deletes CORE.md", (path: string) => rmSync(path)],
+] as const) {
+  test(`a completed CORE correction that ${how} fails the damage check: CORE is back to the text after the pointer, exit 1, the owner is alerted`, async (t) => {
+    const { fake, host, paths } = await fakeEve(t);
+    const yesterday = isoDaysAgo(1);
+    writeRawDay(paths.vault, yesterday, "## 10:00 [text]\n\nдень\n");
+    const core = writeCore(
+      paths.vault,
+      `- ${"длинное предпочтение ".repeat(200)}`,
+      isoDaysAgo(3),
+    );
+    const pointed = setLastDayPointer(core.text, yesterday);
+    assert.notEqual(pointed, core.text, "the fixture pointer is stale");
+    // Фикстура закоммичена (CORE чистый — коммита «before turn» не будет); ход коммитит свою
+    // порчу, как write_file модели: откат тогда меняет дерево против HEAD и виден в истории.
+    const git = (...args: string[]) => vaultGit(paths.vault, ...args);
+    git("add", "-A");
+    git("commit", "-q", "-m", "fixture");
+    const done = markDayDone(paths.vault);
+    fake.onTurn = (message) => {
+      if (message.includes("Re-open")) {
+        spoil(core.path);
+        git("add", "-A");
+        git("commit", "-q", "-m", "turn: spoil");
+      } else done(message);
+    };
 
-  const run = await runRollup(host, paths, "daily");
+    const run = await runRollup(host, paths, "daily");
 
-  assert.equal(run.code, 1, run.stderr);
-  assert.equal(readFileSync(core.path, "utf8"), core.text);
-  assert.match(run.stderr, /CORE\.md lost .*restored the pre-turn file/u);
-  assert.match(run.stderr, /alert not sent:/u, "the damage alert is raised");
-  assert.deepEqual(sessionCalls(fake), [
-    "create",
-    "reset wrun_fake_1",
-    "create",
-    "reset wrun_fake_2",
-  ]);
-});
+    assert.equal(run.code, 1, run.stderr);
+    assert.equal(readFileSync(core.path, "utf8"), pointed);
+    assert.match(run.stderr, /CORE\.md lost .*restored the pre-turn file/u);
+    assert.match(run.stderr, /alert not sent:/u, "the damage alert is raised");
+    assert.equal(
+      git("log", "-1", "--format=%s"),
+      "file CORE.md: restore (correction)\n",
+      "the restore is committed",
+    );
+    assert.equal(git("status", "--porcelain"), "", "nothing left uncommitted");
+    assert.equal(
+      vaultLog(paths.vault).filter((s) => s.includes("before turn")).length,
+      0,
+      "a clean CORE takes no snapshot commit",
+    );
+    assert.deepEqual(sessionCalls(fake), [
+      "create",
+      "reset wrun_fake_1",
+      "create",
+      "reset wrun_fake_2",
+    ]);
+  });
+}

@@ -21,6 +21,10 @@ file the model never has to search for.
    user: keep them verbatim. The `Последний день` pointer is maintained by code after the turn,
    not by you. The live agent edits CORE only on an explicit "remember …" about a durable user
    fact/preference/goal. Never let routine chat edit it.
+4. **History is git.** CORE and the whole vault live under git and every write is a commit. If a
+   section is missing, the text looks foreign or truncated, or the file is gone: run
+   `git log --oneline -- CORE.md` and `git show <sha>:CORE.md`, bring the lost lines back from
+   there — never reinvent them.
 
 ## MECE routing (what goes where)
 

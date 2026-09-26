@@ -61,4 +61,4 @@ docs/agents/
 .worktrees/
 
 # TLC state dumps (specs/): TLC runs from a temporary copy
-states/
+/states/

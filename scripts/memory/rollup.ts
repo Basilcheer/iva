@@ -14,12 +14,13 @@
 // сессии за ним уже нет). Каждый ход — своя сессия eve (scripts/lib/night-session.ts),
 // предел хода считает ночной клиент (scripts/lib/rollup-turn.ts).
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { Client } from "eve/client";
 import { CORE_CAP } from "#lib/core-cap.ts";
 import { coreDamage, setLastDayPointer } from "#lib/core-clamp.ts";
 import { writeFileAtomicSync } from "#lib/fs-atomic.ts";
-import { commitVaultWrite } from "#lib/vault-commit.ts";
+import { commitVaultWrite, gitEnv } from "#lib/vault-commit.ts";
 import { tr } from "#lib/i18n.ts";
 import { readSettings } from "#lib/settings.ts";
 import { JOB_STOP_AT_ENV } from "#lib/schedule-runner.ts";
@@ -502,10 +503,9 @@ for (const day of days) {
   turnsRan = true;
   let end: DayEnd;
   try {
-    // Снимок CORE ДО каждого хода: файл правит сама ночь, и что с правкой делать, решает
-    // исход этого хода (settleCore). Снимок живёт в памяти: после hard kill восстанавливать
-    // нечем (остаток, specs/README.md).
-    const coreBeforeTurn = period === "daily" ? readCoreText(CORE_PATH) : "";
+    // Снимок CORE ДО каждого хода — коммит в истории vault (coreSnapshot): что с правкой хода
+    // делать, решает его исход (settleCore), откат — из этого коммита.
+    const coreBeforeTurn = period === "daily" ? await coreSnapshot() : "";
     const run = await runNightTurn(
       turns,
       buildPrompt(period, today, day, NIGHT_RULES),
@@ -559,6 +559,31 @@ async function alertOwner(
     );
 }
 
+// git в vault (окружение — белый список шва). Снимок CORE — история vault, не память
+// процесса: грязный CORE коммитится, sha HEAD запоминается; после hard kill история на месте.
+// Vault без git — ошибка (init-vault всегда делает его репозиторием).
+function vaultGit(...args: string[]) {
+  return spawnSync("git", args, {
+    cwd: VAULT(),
+    env: gitEnv(),
+    encoding: "utf8",
+  });
+}
+
+async function coreSnapshot(): Promise<string> {
+  await commitVaultWrite("file CORE.md: before turn", [CORE_PATH], VAULT());
+  const head = vaultGit("rev-parse", "HEAD");
+  if (head.status !== 0)
+    throw new Error(`${VAULT()} has no git HEAD: ${head.stderr.trim()}`);
+  return head.stdout.trim();
+}
+
+// Текст CORE в снимке; файла в коммите не было — пустой текст той же проверке.
+function coreAt(sha: string): string {
+  const shown = vaultGit("show", `${sha}:CORE.md`);
+  return shown.status === 0 ? shown.stdout : "";
+}
+
 // CORE как в снимке: частичную правку оборванного хода не оставляем. true — файл вернули.
 async function restoreCore(snapshot: string, why: string): Promise<boolean> {
   if (readCoreText(CORE_PATH) === snapshot) return false;
@@ -581,9 +606,10 @@ async function restoreCore(snapshot: string, why: string): Promise<boolean> {
 async function settleCore(
   day: string,
   run: NightTurnRun,
-  before: string,
+  snapshot: string,
 ): Promise<void> {
   if (period !== "daily") return;
+  const before = coreAt(snapshot);
   if (run.verdict !== "completed" && run.verdict !== "cut") {
     if (await restoreCore(before, `${day} ${run.verdict}`))
       console.error(
@@ -653,6 +679,7 @@ if (period === "daily" && turnsRan) {
     );
     // Своя сессия и правило формата текстом: сессии дней уже сняты. Коррекция не дошла до
     // исхода (обрез, сбой, остановка) — CORE как до неё, и дальше срабатывает проверка капа.
+    const snapshot = await coreSnapshot();
     const fixed =
       stop.signal.aborted || remainingMs() < NIGHT_MIN_TURN_MS
         ? null
@@ -671,7 +698,7 @@ if (period === "daily" && turnsRan) {
       process.exit(1);
     }
     if (fixed?.verdict !== "completed") {
-      await restoreCore(core, "correction");
+      await restoreCore(coreAt(snapshot), "correction");
       console.error(
         `rollup daily: CORE.md correction ${fixed?.verdict ?? "not started"} — CORE.md is back to its pre-correction text (${oldLength}/${CORE_CAP}); brain will clamp it at 05:00`,
       );
@@ -679,16 +706,12 @@ if (period === "daily" && turnsRan) {
     }
     const correctedCore = readCore(CORE_PATH);
     if (correctedCore.state === "unreadable") throw correctedCore.error;
-    if (correctedCore.state === "missing") {
-      console.error(
-        "rollup daily: CORE.md disappeared during correction; refusing to accept data loss",
-      );
+    // Коррекция проходит ту же проверку повреждения, что дневной ход: «# CORE» — не сжатие,
+    // удалённый файл — пустой текст той же проверки.
+    const corrected = correctedCore.state === "valid" ? correctedCore.text : "";
+    if (await coreDamaged(coreAt(snapshot), corrected, "correction"))
       process.exit(1);
-    }
-    // Коррекция проходит ту же проверку повреждения, что дневной ход: «# CORE» — не сжатие.
-    if (await coreDamaged(core, correctedCore.text, "correction"))
-      process.exit(1);
-    core = correctedCore.text;
+    core = corrected;
     if (core.length > CORE_CAP) {
       console.error(
         `rollup daily: CORE.md remains over cap after one correction (${core.length}/${CORE_CAP}); ` +
