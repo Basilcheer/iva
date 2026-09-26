@@ -26,6 +26,7 @@ import {
   rmSync,
   rmdirSync,
   statSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { mkdir, open, realpath, rename, rm, stat } from "node:fs/promises";
@@ -69,7 +70,11 @@ export type FileLock = {
 export type FileLockOptions = {
   /** Сколько ждать освобождения, прежде чем сдаться. */
   timeoutMs?: number;
-  /** Возраст лока, после которого он считается брошенным упавшим процессом. */
+  /**
+   * Возраст лока, после которого он считается брошенным упавшим процессом. Один путь —
+   * один staleMs: период сердцебиения держателя берётся из его staleMs, протухание —
+   * из staleMs претендента.
+   */
   staleMs?: number;
   /** Пауза между попытками захвата. */
   retryMs?: number;
@@ -755,7 +760,9 @@ const waitBuffer = new Int32Array(new SharedArrayBuffer(4));
 /**
  * Захват лока без освобождения event loop. Возвращает держателя или null, если
  * таймаут истёк: что значит «не досталось» — ошибка или работа без лока — решает
- * вызывающий, у которого есть слова для своего пользователя.
+ * вызывающий, у которого есть слова для своего пользователя. Сердцебиения нет:
+ * секция под этим локом синхронная и обязана быть много короче staleMs, иначе лок
+ * живого держателя сочтут брошенным и заберут (specs/FileLock-sync-slow.cfg).
  */
 export function acquireFileLockSync(
   path: string,
@@ -781,7 +788,13 @@ export function acquireFileLockSync(
   }
 }
 
-/** То же, что acquireFileLockSync, но ждёт, отпуская event loop. */
+/**
+ * То же, что acquireFileLockSync, но ждёт, отпуская event loop, и держатель бьётся:
+ * раз в staleMs/3 обновляет mtime каталога лока. Контракт: секция под локом конечна и
+ * много короче LOCK_MAX_HOLD_MS; сердцебиение держит лок, пока event loop держателя не
+ * заблокирован дольше 2/3 staleMs. Остановленный процесс (SIGSTOP, сон VM, долгий GC)
+ * могут обокрасть, как и раньше.
+ */
 export async function acquireFileLock(
   path: string,
   {
@@ -791,17 +804,55 @@ export async function acquireFileLock(
     mode,
   }: FileLockOptions = {},
 ): Promise<FileLock | null> {
+  if (!Number.isFinite(staleMs))
+    throw new TypeError(`file lock ${path}: staleMs ${staleMs} is not finite`);
   const parent = dirname(path);
   const firstCreated = await mkdir(parent, { recursive: true });
   await syncCreatedDirectories(parent, firstCreated);
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     const attempt = attemptLock(path, staleMs, mode);
-    if (typeof attempt !== "string") return attempt;
+    if (typeof attempt !== "string") return startHeartbeat(attempt, staleMs);
     if (Date.now() > deadline) return null;
     if (attempt === "busy")
       await new Promise((resolve) => setTimeout(resolve, retryMs));
   }
+}
+
+/** Предохранитель: после стольких мс удержания сердцебиение гаснет, лок протухает. */
+export const LOCK_MAX_HOLD_MS = 600_000;
+const MAX_TIMER_MS = 2 ** 31 - 1;
+const heartbeats = new Map<string, ReturnType<typeof setInterval>>();
+
+function startHeartbeat(lock: FileLock, staleMs: number): FileLock {
+  const until = Date.now() + LOCK_MAX_HOLD_MS;
+  const period = Math.min(Math.max(staleMs / 3, 1), MAX_TIMER_MS);
+  const say = (what: string) =>
+    process.stderr.write(`file lock ${lock.path}: heartbeat ${what}\n`);
+  let warned = false;
+  const stop = () => {
+    clearInterval(beat);
+    heartbeats.delete(lock.token);
+  };
+  const beat = setInterval(() => {
+    if (Date.now() > until) {
+      stop();
+      return say(`off after ${LOCK_MAX_HOLD_MS} ms`);
+    }
+    try {
+      lstatSync(lockOwnerPath(lock.path, lock.token));
+      // Между lstat и utimes каталог могут сменить: касание преемника безвредно.
+      utimesSync(lock.path, new Date(), new Date());
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "ENOENT" || code === "ENOTDIR") return stop();
+      if (!warned) say(String(code));
+      warned = true;
+    }
+  }, period);
+  beat.unref();
+  heartbeats.set(lock.token, beat);
+  return lock;
 }
 
 /**
@@ -812,6 +863,8 @@ export async function acquireFileLock(
  * в docs/quality/tla-plan-2026-09-26.md).
  */
 export function releaseFileLock({ path, token }: FileLock): void {
+  clearInterval(heartbeats.get(token));
+  heartbeats.delete(token);
   try {
     removeOwnedLockName(path, token);
     removeEmptyLockDirectory(path);
