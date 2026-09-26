@@ -20,6 +20,7 @@ import type { NightTurnContext, NightSessionHandle } from "./night-session.ts";
 
 // Сроки уборки для этого файла короткие (шов rollup-turn.ts): тест зависшего cancel/reset
 // не ждёт боевые 20 и 40 с. Модули читают окружение при загрузке, поэтому импорт ниже.
+process.env.IVA_NIGHT_TEST_DEADLINES = "1";
 process.env.IVA_NIGHT_CANCEL_MS = "60";
 process.env.IVA_NIGHT_RESET_MS = "90";
 const {

@@ -1002,27 +1002,24 @@ function writeCore(vault: string, extra = ""): { path: string; text: string } {
   return { path, text };
 }
 
-const hollow = (path: string) =>
-  writeFileSync(
-    path,
-    readFileSync(path, "utf8").replace(
-      "- 2026-07: отвечать коротко, без преамбул",
-      "",
-    ),
+/** Правка файла ходом; фикстура без искомой строки — ошибка теста, а не тихий no-op. */
+function editCore(path: string, replacement: string): void {
+  const before = readFileSync(path, "utf8");
+  const after = before.replace(
+    "- 2026-07: отвечать коротко, без преамбул",
+    replacement,
   );
+  assert.notEqual(after, before, `${path}: the fixture line is not there`);
+  writeFileSync(path, after);
+}
+
+const hollow = (path: string) => editCore(path, "");
 
 /** Правка хода внутри непустого раздела: заголовки целы, только байты другие. */
 const appendLine = (
   path: string,
   line = "- 2026-09: полуправка оборванного хода",
-) =>
-  writeFileSync(
-    path,
-    readFileSync(path, "utf8").replace(
-      "- 2026-07: отвечать коротко, без преамбул",
-      `- 2026-07: отвечать коротко, без преамбул\n${line}`,
-    ),
-  );
+) => editCore(path, `- 2026-07: отвечать коротко, без преамбул\n${line}`);
 
 function attemptsOf(data: string): Record<string, { reason: string }[]> {
   const file = join(data, "rollup-attempts.json");
@@ -1422,6 +1419,7 @@ test("a turn past the job's stop time is cancelled with its tasks and reset befo
   const run = await runRollup(host, paths, "monthly", {
     env: {
       IVA_JOB_STOP_AT: String(Date.now() + 2500),
+      IVA_NIGHT_TEST_DEADLINES: "1",
       IVA_NIGHT_MIN_TURN_MS: "500",
     },
   });
@@ -1453,7 +1451,11 @@ test("a reset that hangs at start ends by its own deadline: the file is kept, no
 
   const startedAt = Date.now();
   const run = await runRollup(host, paths, "monthly", {
-    env: { IVA_NIGHT_CANCEL_MS: "300", IVA_NIGHT_RESET_MS: "500" },
+    env: {
+      IVA_NIGHT_TEST_DEADLINES: "1",
+      IVA_NIGHT_CANCEL_MS: "300",
+      IVA_NIGHT_RESET_MS: "500",
+    },
   });
 
   assert.equal(run.code, 1, run.stderr);
@@ -1482,7 +1484,7 @@ test("a cancel that hangs is bounded by its own deadline: the reset follows it, 
   };
 
   const run = await runRollup(host, paths, "monthly", {
-    env: { IVA_NIGHT_CANCEL_MS: "300" },
+    env: { IVA_NIGHT_TEST_DEADLINES: "1", IVA_NIGHT_CANCEL_MS: "300" },
     onChild: (spawned) => {
       child = spawned;
     },
@@ -1742,3 +1744,30 @@ for (const [period, files] of Object.entries(NIGHT_RULES)) {
     );
   });
 }
+
+test("a completed CORE correction that returns a bare '# CORE' fails the damage check: CORE is back to its pre-correction text, exit 1, the owner is alerted", async (t) => {
+  const { fake, host, paths } = await fakeEve(t);
+  writeRawDay(paths.vault, isoDaysAgo(1), "## 10:00 [text]\n\nдень\n");
+  const core = writeCore(
+    paths.vault,
+    `- ${"длинное предпочтение ".repeat(200)}`,
+  );
+  const done = markDayDone(paths.vault);
+  fake.onTurn = (message) => {
+    if (message.includes("Re-open")) writeFileSync(core.path, "# CORE\n");
+    else done(message);
+  };
+
+  const run = await runRollup(host, paths, "daily");
+
+  assert.equal(run.code, 1, run.stderr);
+  assert.equal(readFileSync(core.path, "utf8"), core.text);
+  assert.match(run.stderr, /CORE\.md lost .*restored the pre-turn file/u);
+  assert.match(run.stderr, /alert not sent:/u, "the damage alert is raised");
+  assert.deepEqual(sessionCalls(fake), [
+    "create",
+    "reset wrun_fake_1",
+    "create",
+    "reset wrun_fake_2",
+  ]);
+});

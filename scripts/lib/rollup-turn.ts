@@ -25,9 +25,13 @@ import {
 export const NIGHT_MAX_STEPS = 120;
 export const NIGHT_MAX_INPUT_TOKENS = 8_000_000;
 // Тестовый шов (как IVA_VAULT_GIT_TIMEOUT_MS в agent/lib/vault-commit.ts): тест процесса
-// укорачивает сроки, чтобы прогнать срок запуска и зависшую уборку за секунды. В работе
-// переменные не заданы, и действуют числа ниже.
+// укорачивает сроки, чтобы прогнать срок запуска и зависшую уборку за секунды. Открыт только
+// под тестовым признаком IVA_NIGHT_TEST_DEADLINES=1: его ставят тестовые файлы и харнесс
+// процесса, в .env сервиса он не попадает; без признака переменные сроков не читаются, и
+// действуют числа ниже. Шов читается при загрузке модуля; тестовые файлы node изолированы по
+// процессам, поэтому признак одного файла не течёт в другой.
 function testMs(name: string, fallback: number): number {
+  if (process.env.IVA_NIGHT_TEST_DEADLINES !== "1") return fallback;
   const ms = Number(process.env[name]);
   return Number.isInteger(ms) && ms > 0 ? ms : fallback;
 }

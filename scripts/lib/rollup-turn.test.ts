@@ -14,6 +14,7 @@ import {
   turnVerdict,
 } from "./rollup-turn.ts";
 import { DEFAULT_TIMEOUT_MS, JOB_STOP_GRACE_MS } from "#lib/schedule-runner.ts";
+import { execFileSync } from "node:child_process";
 
 // Читатель хода ночи: предел, исход, граница. Шаги несут turnId, stepIndex и usage;
 // граница — session.waiting / session.completed / session.failed. Помощники — в конце файла.
@@ -527,4 +528,36 @@ void test("an event type off the prototype (constructor, toString) is no outcome
     observe(ev(type, { turnId: TURN }));
   assert.equal(turn.outcome, null);
   assert.equal(turnMayBeLive(turn), true);
+});
+
+void test("the deadline overrides are read only under IVA_NIGHT_TEST_DEADLINES=1: a service .env with the variables changes nothing", () => {
+  // Константы читаются при загрузке модуля, поэтому каждый набор окружения — свой процесс.
+  const constants = (env: Record<string, string>) =>
+    JSON.parse(
+      execFileSync(
+        process.execPath,
+        [
+          "--input-type=module",
+          "-e",
+          'const m = await import("./scripts/lib/rollup-turn.ts"); console.log(JSON.stringify([m.NIGHT_CANCEL_MS, m.NIGHT_RESET_MS, m.NIGHT_MIN_TURN_MS]));',
+        ],
+        {
+          cwd: new URL("../..", import.meta.url),
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            IVA_NIGHT_CANCEL_MS: "1",
+            IVA_NIGHT_RESET_MS: "2",
+            IVA_NIGHT_MIN_TURN_MS: "3",
+            ...env,
+          },
+          stdio: ["ignore", "pipe", "pipe"],
+        },
+      ),
+    ) as number[];
+  assert.deepEqual(
+    constants({ IVA_NIGHT_TEST_DEADLINES: "" }),
+    [20_000, 40_000, 300_000],
+  );
+  assert.deepEqual(constants({ IVA_NIGHT_TEST_DEADLINES: "1" }), [1, 2, 3]);
 });

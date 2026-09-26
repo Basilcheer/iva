@@ -331,9 +331,7 @@ test("CORE is snapshotted before the turn and pointed at the day after it", () =
   const turn = rollupSource.indexOf(
     "buildPrompt(period, today, day, NIGHT_RULES)",
   );
-  const guard = rollupSource.indexOf(
-    "coreDamage(before, readCoreText(CORE_PATH))",
-  );
+  const guard = rollupSource.indexOf("coreDamage(before, after)");
   const pointer = rollupSource.indexOf("setLastDayPointer(core, lastDay)");
 
   assert.ok(snapshot >= 0 && turn >= 0 && guard >= 0 && pointer >= 0);

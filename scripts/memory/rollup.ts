@@ -515,6 +515,7 @@ for (const day of days) {
     // Неснятая сессия: ход может быть жив, vault не трогаем — ни CORE, ни коммита
     // (остаток: снимок в памяти, позже CORE не восстановить).
     if (run.retired) await settleCore(day, run, coreBeforeTurn);
+    // dayEnd идёт и при неснятой сессии: пишет только data/rollup-attempts.json, vault читает.
     const dayResult = dayEnd(day, run);
     end = run.retired ? dayResult : "stop";
   } catch (error) {
@@ -590,13 +591,22 @@ async function settleCore(
       );
     return;
   }
-  const damage = coreDamage(before, readCoreText(CORE_PATH));
+  await coreDamaged(before, readCoreText(CORE_PATH), day);
+}
+
+// Одна проверка повреждения для дневного хода и коррекции: раздел пропал или опустел —
+// откат к снимку, коммит, алерт владельцу. true — повреждение было.
+async function coreDamaged(
+  before: string,
+  after: string,
+  why: string,
+): Promise<boolean> {
+  const damage = coreDamage(before, after);
   if (!damage.damaged) {
     alertResolved(DATA_DIR, CORE_DAMAGE_ALERT_KEY);
-    return;
+    return false;
   }
-  writeFileAtomicSync(CORE_PATH, before);
-  await commitVaultWrite("file CORE.md: restore", [CORE_PATH], VAULT());
+  await restoreCore(before, why);
   const damagedHeadings = [
     // Оба вида потери: пропавшие и выхолощенные разделы.
     ...damage.lostHeadings,
@@ -611,6 +621,7 @@ async function settleCore(
     damagedHeadings.join(",") || "emptied",
     coreDamageAlert(tr, damagedHeadings),
   );
+  return true;
 }
 
 // Daily is the only rollup that touches CORE. Each turn settled its own CORE above; the
@@ -674,6 +685,9 @@ if (period === "daily" && turnsRan) {
       );
       process.exit(1);
     }
+    // Коррекция проходит ту же проверку повреждения, что дневной ход: «# CORE» — не сжатие.
+    if (await coreDamaged(core, correctedCore.text, "correction"))
+      process.exit(1);
     core = correctedCore.text;
     if (core.length > CORE_CAP) {
       console.error(
