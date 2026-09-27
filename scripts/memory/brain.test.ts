@@ -1,17 +1,20 @@
 // Brain настоящим процессом: коммит незакоммиченного, граф ссылок, Alert о длинном CORE
-// через шов Notice (без чата — строкой в журнал) и бэкап без remote.
+// через шов Notice (без чата — строкой в журнал) и бэкап: remote, приватный remote через
+// авторизованный gh, отказ с Alert без gh и при неудачном push.
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import test from "node:test";
+import test, { type TestContext } from "node:test";
 
 const ROOT = resolve(import.meta.dirname, "../..");
 const git = (cwd: string, ...args: string[]) =>
@@ -29,6 +32,9 @@ void test("Brain коммитит правку владельца, строит 
   git(vault, "config", "user.name", "Brain");
   git(vault, "add", "-A");
   git(vault, "commit", "-qm", "initial");
+  const bare = join(root, "backup.git");
+  git(root, "init", "-q", "--bare", bare);
+  git(vault, "remote", "add", "origin", bare);
   writeFileSync(join(vault, "cards/b.md"), "# B\n");
   writeFileSync(join(vault, "CORE.md"), `# CORE\n\n- ${"x".repeat(5000)}\n`);
   const run = spawnSync(
@@ -56,4 +62,88 @@ void test("Brain коммитит правку владельца, строит 
   assert.equal(git(vault, "status", "--porcelain"), "");
   assert.ok(existsSync(join(vault, ".graph/vault-graph.json")));
   assert.match(git(vault, "log", "--format=%s"), /brain: owner changes/u);
+  assert.equal(git(bare, "rev-parse", "HEAD"), git(vault, "rev-parse", "HEAD"));
+});
+
+/** vault под git, data и каталог bin для двойника gh; Brain — настоящим процессом. */
+function brainFixture(t: TestContext) {
+  const root = mkdtempSync(join(tmpdir(), "iva-brain-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const [vault, data, bin] = ["vault", "data", "bin"].map((d) => join(root, d));
+  for (const dir of [join(vault, "cards"), data, bin])
+    mkdirSync(dir, { recursive: true });
+  writeFileSync(join(vault, "cards/a.md"), "# A\n");
+  git(vault, "init", "-q");
+  git(vault, "config", "user.email", "brain@example.invalid");
+  git(vault, "config", "user.name", "Brain");
+  git(vault, "add", "-A");
+  git(vault, "commit", "-qm", "initial");
+  const gh = (script: string) => {
+    writeFileSync(join(bin, "gh"), `#!/bin/sh\n${script}\n`);
+    chmodSync(join(bin, "gh"), 0o755);
+  };
+  const brain = () =>
+    spawnSync(
+      process.execPath,
+      [
+        "--import",
+        join(ROOT, "scripts/lib/ts-esm-hooks.ts"),
+        join(ROOT, "scripts/memory/brain.ts"),
+      ],
+      {
+        cwd: ROOT,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          PATH: `${bin}:${process.env.PATH ?? ""}`,
+          ASSISTANT_VAULT_DIR: vault,
+          ASSISTANT_DATA_DIR: data,
+          TELEGRAM_BOT_TOKEN: "",
+          TELEGRAM_DIGEST_CHAT_ID: "",
+          TELEGRAM_ALLOWED_USER_IDS: "",
+        },
+      },
+    );
+  return { root, vault, gh, brain };
+}
+
+void test("Brain без origin и без входа gh: отказ и Alert с действием владельца (#13)", (t) => {
+  const fx = brainFixture(t);
+  fx.gh("exit 1");
+  const run = fx.brain();
+  assert.equal(run.status, 1, run.stderr);
+  assert.match(run.stderr, /brain alert: .*gh auth login/u);
+});
+
+void test("Brain без origin с авторизованным gh: приватный iva-vault и push (#13)", (t) => {
+  const fx = brainFixture(t);
+  const bare = join(fx.root, "iva-vault.git");
+  const log = join(fx.root, "gh.log");
+  fx.gh(
+    [
+      `echo "$@" >> ${log}`,
+      'if [ "$1 $2" = "repo create" ]; then',
+      `  git init -q --bare ${bare} && git -C "$6" remote add origin ${bare} && git -C "$6" push -q origin HEAD`,
+      "fi",
+      "exit 0",
+    ].join("\n"),
+  );
+  const run = fx.brain();
+  assert.equal(run.status, 0, run.stderr);
+  assert.match(
+    readFileSync(log, "utf8"),
+    /repo create iva-vault --private --source/u,
+  );
+  assert.equal(
+    git(bare, "rev-parse", "HEAD"),
+    git(fx.vault, "rev-parse", "HEAD"),
+  );
+});
+
+void test("Brain: push не ушёл — код 1 и Alert о бэкапе", (t) => {
+  const fx = brainFixture(t);
+  git(fx.vault, "remote", "add", "origin", join(fx.root, "нет.git"));
+  const run = fx.brain();
+  assert.equal(run.status, 1, run.stderr);
+  assert.match(run.stderr, /brain alert: Бэкап vault не ушёл/u);
 });
