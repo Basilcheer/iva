@@ -376,8 +376,11 @@ async function askDay(
     const earlier_parts = answers.map((answer) => answer.gist);
     const data = { date, entries, known, previous: context[0], earlier_parts };
     const ask = { skill: skill("day"), input: data, schema: dayAnswer, signal };
-    const answer = await call.callBySchema({ ...ask, validate: summarized });
-    answers.push(usable(answer, day, cards));
+    let kept!: DayAnswer; // выжимка проверяется после отбрасывания негодного
+    const validate = (raw: DayAnswer) =>
+      summarized((kept = usable(raw, day, cards)));
+    await call.callBySchema({ ...ask, validate });
+    answers.push(kept);
   }
   return answers;
 }
@@ -438,16 +441,21 @@ class Day {
     const { pass, date } = { pass: this.cache.pass!, date: this.cache.date };
     const key = cs.normalizeName(item.name);
     let name = cs.sanitizeField(item.name, 160);
-    const taken = this.cards.some((card) => namesOf(card).includes(key));
+    const path = (n: string) =>
+      `cards/${cs.TYPE_DIR[item.type]}/${cs.slugify(n)}`;
+    // Занято: то же имя у Card или по пути новой лежит читаемая Card с другим именем.
+    const taken = this.cards.some(
+      (card) => namesOf(card).includes(key) || card.card === path(name),
+    );
     if (!pass.created[key]) {
       if (taken) alerts.push(`Похоже на дубль: ${item.name}. Склеить Card?`);
-      const card = `cards/${cs.TYPE_DIR[item.type]}/${cs.slugify(taken ? `${name} (${date})` : name)}`;
+      const card = path(taken ? `${name} (${date})` : name);
       if (existsSync(cardFile(card))) return card;
       pass.created[key] = card;
       writeCache(this.cache);
     }
     const card = pass.created[key];
-    if (!card.endsWith(`/${cs.slugify(name)}`)) name = `${name} (${date})`;
+    if (card !== path(name)) name = `${name} (${date})`;
     const [type, source] = [item.type, `daily/${date}.md`];
     const description = cs.sanitizeField(item.description);
     const fields = { type, description, tags: [type], status: "active" };
@@ -491,17 +499,18 @@ class Day {
   /** Концы связи: обе Card есть или создаются этой ночью и пишутся; Card ради связи,
    * которая не запишется, не создаётся. */
   ends(answer: DayAnswer, link: { a: string; b: string }) {
-    const known = (name: string) =>
-      !this.cards.some((card) => card.card === name) || this.draft(name);
-    if (link.a === link.b || !known(link.a) || !known(link.b)) return null;
+    const before = new Set(this.drafts.keys());
     const [a, b] = [this.cardOf(answer, link.a), this.cardOf(answer, link.b)];
     const [da, db] = [a && this.draft(a), b && this.draft(b)];
-    return da && db && a !== b
-      ? ([
-          [da, b!],
-          [db, a!],
-        ] as const)
-      : null;
+    if (da && db && a !== b)
+      return [
+        [da, b!],
+        [db, a!],
+      ] as const;
+    // Отказ: черновики, заведённые только этой проверкой, не пишутся.
+    for (const card of this.drafts.keys())
+      if (!before.has(card)) this.drafts.delete(card);
+    return null;
   }
 
   /** Связь пишется в Related обеих Card. */
@@ -712,9 +721,10 @@ async function applyTruth(run: TruthRun): Promise<boolean> {
   });
 }
 
-/** Card с truth_pending, когда дней в очереди нет: B этой ночью по вчерашний день.
- * Правда, ждущая дольше трёх ночей, — Alert (по полю, без своего состояния). */
-async function retryTruth(today: string, queueLeft: boolean): Promise<void> {
+/** Card с truth_pending: B каждой ночью по вчерашний день, что бы ни осталось в очереди
+ * (старые дни потом — только в Log). Правда, ждущая дольше трёх ночей, — Alert (по полю,
+ * без своего состояния). */
+async function retryTruth(today: string): Promise<void> {
   const cards = readCards().filter(
     (card) => str(card.fields, "truth_pending") && !judged.has(card.card),
   );
@@ -723,7 +733,7 @@ async function retryTruth(today: string, queueLeft: boolean): Promise<void> {
     if (since < shift(today, -3))
       alerts.push(`${card.card}: правда ждёт с ${since}; B не справился`);
   }
-  if (!cards.length || queueLeft) return;
+  if (!cards.length) return;
   const pass = { truth: cards.map((card) => card.card), b: {} };
   const run = { date: shift(today, -1), pass, save: () => {} };
   try {
@@ -1136,7 +1146,7 @@ async function night(manual: string | undefined): Promise<number> {
   const ready = queue.filter((date) => !attempts.isExhausted(tried[date]));
   const { done, code } = await runDays(ready);
   const queueLeft = dayQueue(today);
-  await retryTruth(today, queueLeft.length > 0);
+  await retryTruth(today);
   await runCore(done.at(-1));
   fallbacks.push(...(await periods()));
   cleanupCaches();

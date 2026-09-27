@@ -1329,3 +1329,99 @@ void test("занятый дневной замок Card: ночь не пише
   assert.equal(fx.model.prompts.length, 2);
   assert.equal(logRows(read(file)).length, 1);
 });
+
+// ── Круг 3 ───────────────────────────────────────────────────────────────────────────
+void test("пустышка A после отбрасывания: единственный пункт на неизвестную реплику — не выжимка, повтор и no-report", async (t) => {
+  const fx = await fixture(t);
+  day(fx, "## 10:00 [text]\nЗапустил Аврору\n");
+  const empty = A({ gist: "", points: [{ text: "Выдумка", src: "e999" }] });
+  fx.model.replies = [empty, empty];
+  const result = await night(fx);
+  assert.equal(result.code, 1);
+  assert.equal(fx.model.prompts.length, 2);
+  assert.match(fx.model.prompts[1], /Ошибка прошлого ответа: .*выжимк/u);
+  assert.equal(existsSync(summary(fx)), false);
+});
+
+void test("коллизия слага с исправной чужой Card: занятое имя — `Имя (D)` и Alert, чужая Card байт в байт", async (t) => {
+  const fx = await fixture(t);
+  day(fx, "## 10:00 [text]\nВстреча с !!!\n");
+  const foreign = card(fx, "cards/contacts/card", [
+    "---",
+    'type: "contact"',
+    "---",
+    "# Служебная",
+    "",
+    "## Log",
+    "",
+    "## Related",
+    "",
+  ]);
+  const before = read(foreign);
+  fx.model.replies = [
+    A({
+      new_cards: [{ name: "!!!", type: "contact" }],
+      facts: [{ card: "!!!", text: "Встреча", src: "e1", quote: "Встреча" }],
+    }),
+    B(),
+  ];
+  const result = await night(fx);
+  assert.equal(result.code, 0, result.stderr);
+  assert.equal(read(foreign), before);
+  assert.match(result.stderr, /Похоже на дубль: !!!/u);
+  const made = ls(join(fx.vault, "cards/contacts")).split("\n");
+  assert.equal(made.length, 2, made.join(", "));
+  const fresh = made.find((name) => name !== "card.md")!;
+  assert.match(read(join(fx.vault, "cards/contacts", fresh)), /Встреча/u);
+});
+
+void test("truth_pending: B этой ночью и при остатке дневной очереди (#r3-4)", async (t) => {
+  const fx = await fixture(t);
+  const dates = ["2020-01-01", "2020-01-02", "2020-01-03", "2020-01-04"];
+  for (const date of dates) day(fx, `## 10:00 [text]\nДень ${date}\n`, date);
+  const file = card(fx, "cards/projects/аврора", [
+    ...aurora.slice(0, 4),
+    'truth_pending: "2020-01-10"',
+    ...aurora.slice(4, 12),
+    "- 2020-01-10: Курс сменён · [[daily/2020-01-10]] 10:00",
+    ...aurora.slice(12),
+  ]);
+  fx.model.replies = [
+    ...dates.slice(0, 3).map((date) => A({ gist: date })),
+    B({ card: "cards/projects/аврора", truth: "Курс сменён" }),
+  ];
+  const result = await night(fx, null);
+  assert.equal(result.code, 0, result.stderr);
+  assert.equal(fx.model.prompts.length, 4);
+  assert.match(fx.model.prompts[3], /Курс сменён/u);
+  assert.match(read(file), /# Аврора\n\nКурс сменён\n\n## Log/u);
+  assert.doesNotMatch(read(file), /truth_pending/u);
+  assert.equal(existsSync(summary(fx, dates[3])), false);
+});
+
+void test("отказ связи не оставляет новую Card, заведённую только ради неё (второй конец — битый файл)", async (t) => {
+  const fx = await fixture(t);
+  day(fx, "## 10:00 [text]\nАльфа и Борис\n");
+  const broken = card(fx, "cards/contacts/борис", [
+    "---",
+    'description: "битая кавычка',
+    "---",
+    "# Борис",
+    "",
+  ]);
+  const before = read(broken);
+  fx.model.replies = [
+    A({
+      new_cards: [
+        { name: "Альфа", type: "project" },
+        { name: "Борис", type: "contact" },
+      ],
+      links: [{ a: "Альфа", b: "Борис", src: "e1" }],
+    }),
+  ];
+  const result = await night(fx);
+  assert.equal(result.code, 0, result.stderr);
+  assert.equal(existsSync(join(fx.vault, "cards/projects/альфа.md")), false);
+  assert.equal(read(broken), before);
+  assert.match(result.stderr, /связь Альфа ↔ Борис не записана/u);
+});
