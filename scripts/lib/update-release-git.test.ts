@@ -9,7 +9,11 @@ import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 import { resolveReleaseTarget } from "./update-channel.ts";
 import { gitAt, inspectUpstream } from "./update-check.ts";
-import { ensureMirror, resolveTarget } from "../cli/version-update-command.ts";
+import {
+  ensureMirror,
+  releaseNote,
+  resolveTarget,
+} from "../cli/version-update-command.ts";
 import { parseVersionName, versionName } from "./version-store.ts";
 
 const git = (cwd: string, ...args: string[]) =>
@@ -50,11 +54,28 @@ void test("stable, установка на коммите после после�
   const target = await fx.target(after);
   assert.equal(target.beta, false);
   assert.equal(target.targetHead, after);
-  assert.deepEqual(await resolveTarget(fx.mirror, after), {
+  const aim = await resolveTarget(fx.mirror, after);
+  assert.deepEqual(aim, {
     sha: after,
     version: "1.0.0",
     beta: false,
+    release: "v1.0.0",
+    newer: true,
   });
+  // Установка новее выпуска: не «последняя стабильная», а «новее выпуска v1.0.0».
+  assert.equal(
+    releaseNote(aim, "ru"),
+    "Стоит сборка новее последнего выпуска (v1.0.0). Следующий выпуск поставлю, когда выйдет.",
+  );
+  assert.equal(
+    releaseNote(aim, "en"),
+    "This build is newer than the latest release (v1.0.0). I'll install the next release when it's out.",
+  );
+  const exact = await resolveTarget(fx.mirror, fx.first);
+  assert.equal(exact.newer, false);
+  assert.equal(releaseNote(exact, "ru"), "Это последняя стабильная версия.");
+  assert.equal(releaseNote(exact, "en"), "That is the latest stable release.");
+  assert.equal(releaseNote({ ...exact, beta: true }, "ru"), null);
 });
 
 void test("stable, вышла новая метка: ставится метка, а не вершина ветки", async (t) => {

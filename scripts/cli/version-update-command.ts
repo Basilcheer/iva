@@ -178,13 +178,15 @@ export async function ensureMirror(home: string): Promise<string> {
 export async function resolveTarget(
   repo: string,
   installed?: string,
-): Promise<{ sha: string; version: string; beta: boolean }> {
+): Promise<ReleaseAim> {
   const git = (...args: string[]) => gitAt(repo, args);
   let sha = "";
   let beta = true;
+  let [release, newer] = [undefined as string | undefined, false];
   try {
     const target = await resolveReleaseTarget({ git, installed });
     [sha, beta] = [target.targetHead ?? "", target.beta];
+    if ("tag" in target) [release, newer] = [target.tag, target.newer];
   } catch (error) {
     if (!(await readBeta(git))) throw error;
   }
@@ -193,7 +195,29 @@ export async function resolveTarget(
     await requireGit(gitAt, repo, ["show", `${sha}:package.json`]),
   );
   if (!version) throw new Error(`no package version at ${sha}`);
-  return { sha, version, beta };
+  return { sha, version, beta, release, newer };
+}
+
+/** Цель `iva update`: `release` — новейший выпуск, `newer` — установка новее него. */
+type ReleaseAim = {
+  sha: string;
+  version: string;
+  beta: boolean;
+  release?: string;
+  newer?: boolean;
+};
+
+/** Строка под «уже обновлена» без бета-обновлений: стоит выпуск или сборка новее него. */
+export function releaseNote(aim: ReleaseAim, locale: string): string | null {
+  if (aim.beta) return null;
+  const ru = locale === "ru";
+  if (!aim.newer)
+    return ru
+      ? "Это последняя стабильная версия."
+      : "That is the latest stable release.";
+  return ru
+    ? `Стоит сборка новее последнего выпуска (${aim.release}). Следующий выпуск поставлю, когда выйдет.`
+    : `This build is newer than the latest release (${aim.release}). I'll install the next release when it's out.`;
 }
 
 /** The commit that runs: the active version's, else the checkout's own HEAD. */
@@ -208,21 +232,16 @@ async function installedCommit(home: string): Promise<string | undefined> {
  * already on its newest release says so under the "up to date" line.
  */
 function releaseUpdate(home: string) {
-  let beta = true;
+  let aim: ReleaseAim | undefined;
   return {
     target: async (repo: string) => {
-      const aim = await resolveTarget(repo, await installedCommit(home));
-      beta = aim.beta;
+      aim = await resolveTarget(repo, await installedCommit(home));
       return aim;
     },
     said: (outcome: UpdateOutcome | null, env: Record<string, string>) => {
-      if (outcome?.status !== "current" || beta) return;
-      const ru = (env.AGENT_LANGUAGE || process.env.AGENT_LANGUAGE) === "ru";
-      console.log(
-        ru
-          ? "   Это последняя стабильная версия."
-          : "   That is the latest stable release.",
-      );
+      const language = env.AGENT_LANGUAGE || process.env.AGENT_LANGUAGE;
+      const note = aim && releaseNote(aim, language === "ru" ? "ru" : "en");
+      if (outcome?.status === "current" && note) console.log(`   ${note}`);
     },
   };
 }

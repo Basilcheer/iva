@@ -164,6 +164,8 @@ export async function resolveReleaseTarget(
     ...target,
     beta: false,
     tag,
+    // Установка новее выпуска (его потомок), а не он сам.
+    newer: Boolean(ahead) && installed !== release,
     targetHead: ahead ? installed : release,
   };
 }
