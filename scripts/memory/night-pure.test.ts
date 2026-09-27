@@ -303,3 +303,134 @@ void test("resolveStopAt: будущий срок раннера принима�
   assert.throws(() => resolveStopAt("999", 1000));
   assert.throws(() => resolveStopAt("later", 1000));
 });
+
+// ── Указатель «Последний день» в CORE ведёт код ночи (setLastDayPointer) ────────────
+const { setLastDayPointer } = await import("../../agent/lib/core-clamp.ts");
+const POINTED = [
+  "# CORE",
+  "",
+  "## Пользователь",
+  "",
+  "- владелец",
+  "",
+  "## Указатели",
+  "",
+  "- Последний день: summaries/daily/2026-08-20 · Индекс: MOC.md",
+  "",
+].join("\n");
+
+void test("указатель: меняется одна ссылка, хвост строки цел; старый vault/ нормализуется; повтор — байт в байт", () => {
+  const pointed = setLastDayPointer(POINTED, "2026-08-23");
+  assert.equal(pointed, POINTED.replace("2026-08-20", "2026-08-23"));
+  assert.equal(setLastDayPointer(pointed, "2026-08-23"), pointed);
+  const legacy = POINTED.replace(
+    "summaries/daily/2026-08-20 · Индекс: MOC.md",
+    "vault/summaries/daily/2026-08-20 · Индекс: vault/MOC.md",
+  );
+  assert.equal(
+    setLastDayPointer(legacy, "2026-08-23"),
+    legacy.replace(
+      "vault/summaries/daily/2026-08-20",
+      "summaries/daily/2026-08-23",
+    ),
+  );
+  const empty = "## Указатели\n\n- Последний день: · Индекс: MOC.md\n";
+  assert.equal(
+    setLastDayPointer(empty, "2026-08-23"),
+    "## Указатели\n\n- Последний день: summaries/daily/2026-08-23 · Индекс: MOC.md\n",
+  );
+});
+
+void test("указатель: нет строки — дописывается в раздел Указатели; нет раздела — в конец; пустой CORE — только раздел", () => {
+  const lost = POINTED.replace(
+    "- Последний день: summaries/daily/2026-08-20 · Индекс: MOC.md\n",
+    "- Индекс: MOC.md\n\n## Мои заметки\n\n- хвост\n",
+  );
+  assert.match(
+    setLastDayPointer(lost, "2026-08-23"),
+    /- Индекс: MOC\.md\n- Последний день: summaries\/daily\/2026-08-23\n\n## Мои заметки/u,
+  );
+  const bare = "# CORE\n\n## Пользователь\n\n- владелец\n";
+  const appended = setLastDayPointer(bare, "2026-08-23");
+  assert.equal(
+    appended,
+    `${bare}\n## Указатели\n\n- Последний день: summaries/daily/2026-08-23\n`,
+  );
+  assert.equal(setLastDayPointer(appended, "2026-08-23"), appended);
+  assert.equal(
+    setLastDayPointer("", "2026-08-23"),
+    "## Указатели\n\n- Последний день: summaries/daily/2026-08-23\n",
+  );
+  assert.throws(() => setLastDayPointer(POINTED, "2026-8-3"), TypeError);
+  assert.throws(() => setLastDayPointer(POINTED, "вчера"), TypeError);
+});
+
+const isoDay = fc
+  .date({
+    min: new Date("2000-01-01"),
+    max: new Date("2099-12-31"),
+    noInvalidDate: true,
+  })
+  .map((date) => date.toISOString().slice(0, 10));
+const coreLine = line.filter(
+  (value) => !value.startsWith("#") && !/Последний день|Last day/u.test(value),
+);
+
+void test(`указатель: правится ровно одна строка, повтор ничего не меняет, CRLF держится (seed ${SEED})`, () => {
+  fc.assert(
+    fc.property(
+      fc.array(coreLine, { maxLength: 6 }),
+      fc.array(coreLine, { maxLength: 3 }),
+      fc.boolean(),
+      isoDay,
+      (before, after, crlf, date) => {
+        const newline = crlf ? "\r\n" : "\n";
+        const lines = [
+          "# CORE",
+          "",
+          ...before,
+          "## Указатели",
+          "",
+          "- Последний день: summaries/daily/2001-01-01 · хвост",
+          "",
+          ...after,
+        ];
+        const text = lines.join(newline);
+        const pointed = setLastDayPointer(text, date);
+        const at = lines.findIndex((row) => row.includes("Последний день"));
+        const changed = pointed
+          .split(newline)
+          .flatMap((row, index) => (row === lines[index] ? [] : [index]));
+        assert.equal(pointed.split(newline).length, lines.length);
+        assert.deepEqual(changed, date === "2001-01-01" ? [] : [at]);
+        assert.equal(
+          pointed.split(newline)[at],
+          `- Последний день: summaries/daily/${date} · хвост`,
+        );
+        assert.equal(setLastDayPointer(pointed, date), pointed);
+      },
+    ),
+    CHECKS,
+  );
+});
+
+void test(`указатель: мусор на входе — без исключения, идемпотентно, прежние строки на месте (seed ${SEED})`, () => {
+  const junk = fc.oneof(
+    fc.constantFrom("", "\n", "\r\n\r\n", "# CORE", "просто текст"),
+    fc.string({ unit: "binary", maxLength: 200 }),
+    fc
+      .array(fc.string({ unit: "grapheme", maxLength: 20 }), { maxLength: 8 })
+      .map((rows) => rows.join("\r\n")),
+  );
+  fc.assert(
+    fc.property(junk, isoDay, (text, date) => {
+      const once = setLastDayPointer(text, date);
+      assert.ok(once.includes(`summaries/daily/${date}`));
+      assert.equal(setLastDayPointer(once, date), once);
+      const kept = once.split(/\r?\n/u);
+      for (const row of text.split(/\r?\n/u))
+        if (!row.includes("Последний день")) assert.ok(kept.includes(row));
+    }),
+    CHECKS,
+  );
+});
