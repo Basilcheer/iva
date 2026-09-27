@@ -119,9 +119,9 @@ Install as a normal user, not as root — Iva's shell tool runs as whoever insta
 
 ### Updates
 
-- `iva update` installs released versions only (`vX.Y.Z` tags): the stable channel, the default.
-- `iva beta` switches to every accepted change as soon as it lands; `iva stable` switches back (nothing is rolled back — the next release catches up). Then run `iva update`.
-- The same switch is in Telegram: `/menu` → 🛠 Maintenance → 🧪 Update channel. `iva version` shows the channel.
+- `iva update` installs releases only (`vX.Y.Z` tags) — the default.
+- `iva beta` turns on beta updates: every accepted change as soon as it lands; `iva stable` turns them off (nothing is rolled back — the next release catches up). Then run `iva update`.
+- The same switch is in Telegram: `/menu` → 🛠 Maintenance → 🧪 Updates. `iva version` shows which one is on.
 
 ### The first minute
 
