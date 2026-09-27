@@ -190,7 +190,10 @@ export async function updaterCompat(
 ): Promise<UpdaterCompat> {
   const minUpdater = await readMinUpdater(git, commit);
   if (!minUpdater) return { status: "ok" };
-  const comparison = compareStableVersions(own, minUpdater);
+  // Пререлиз (бета) — чуть младше своего релиза: сравнивается его ядро X.Y.Z.
+  const core = own.replace(/-[0-9A-Za-z.-]+$/u, "");
+  const bare = compareStableVersions(core, minUpdater);
+  const comparison = bare === 0 && core !== own ? 1 : bare;
   if (comparison === null)
     throw new Error(
       `cannot compare the installed release ${JSON.stringify(own)} with minUpdater ${JSON.stringify(minUpdater)}`,

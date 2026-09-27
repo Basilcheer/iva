@@ -710,6 +710,16 @@ test("the marker of a fetched tree decides whether this updater may install it",
     assert.deepEqual(await updaterCompat(at(local), marked, own), {
       status: "ok",
     });
+  // Бета-обновлятор — чуть младше своего релиза: 0.4.9-beta.1 < 0.4.9, но > 0.3.29.
+  for (const own of ["0.3.30-beta.1", "0.4.9-beta.1"])
+    assert.deepEqual(await updaterCompat(at(local), marked, own), {
+      status: "ok",
+    });
+  assert.deepEqual(await updaterCompat(at(local), marked, "0.3.29-beta.1"), {
+    status: "too-old",
+    own: "0.3.29-beta.1",
+    minUpdater: "0.3.29",
+  });
 
   writeFileSync(join(seed, "update-compat.json"), "{ not json\n");
   git(seed, "add", "update-compat.json");
@@ -725,7 +735,11 @@ test("the marker of a fetched tree decides whether this updater may install it",
 
 test("this checkout names its own release, and the refusal says how to repair it", () => {
   const own = updaterVersion();
-  assert.match(own, /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/);
+  // Релиз X.Y.Z или бета X.Y.Z-beta.N (канал бета, 0.4.9-beta.1).
+  assert.match(
+    own,
+    /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-beta\.(0|[1-9]\d*))?$/,
+  );
   assert.throws(
     () => updaterVersion(mkdtempSync(join(tmpdir(), "iva-no-package-"))),
     /no readable release/,
