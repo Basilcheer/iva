@@ -507,3 +507,52 @@ void test("a copy of .env that was never finished cannot replace a whole one", a
     "an unfinished copy overwrote the copy that was whole",
   );
 });
+
+// ── Канал новой установки ──────────────────────────────────────────────────
+// stable (по умолчанию) — последняя метка vX.Y.Z на ветке, ветка остаётся; IVA_CHANNEL=beta —
+// вершина ветки и канал бета.
+void test("новая установка: stable — последняя метка на той же ветке, beta — вершина и iva.channel, меток нет — отказ с IVA_CHANNEL=beta", (t) => {
+  const dir = workspace(t);
+  const git = (...args: string[]) =>
+    execFileSync("git", ["-C", dir, ...args], { encoding: "utf8" }).trim();
+  git("init", "-q", "-b", "main");
+  const commit = (message: string) => {
+    git(
+      "-c",
+      "user.email=t@t",
+      "-c",
+      "user.name=t",
+      "commit",
+      "-qm",
+      message,
+      "--allow-empty",
+    );
+    return git("rev-parse", "HEAD");
+  };
+  commit("old");
+  const run = (channel: string) =>
+    spawnSync(
+      "bash",
+      [
+        "-c",
+        `set -euo pipefail\n${shellFunction("checkout_channel")}\ncheckout_channel "$1"`,
+        "_",
+        dir,
+      ],
+      { encoding: "utf8", env: { ...process.env, IVA_CHANNEL: channel } },
+    );
+  const bare = run("");
+  assert.equal(bare.status, 1);
+  assert.match(bare.stderr, /IVA_CHANNEL=beta/u);
+  git("tag", "v0.4.8");
+  const release = git("rev-parse", "HEAD");
+  git("tag", "v0.4.9-beta.1", commit("beta"));
+  const tip = commit("tip");
+  assert.equal(run("").status, 0);
+  assert.equal(git("rev-parse", "HEAD"), release);
+  assert.equal(git("branch", "--show-current"), "main");
+  git("reset", "-q", "--hard", tip);
+  assert.equal(run("beta").status, 0);
+  assert.equal(git("rev-parse", "HEAD"), tip);
+  assert.equal(git("config", "--local", "--get", "iva.channel"), "beta");
+});

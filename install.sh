@@ -857,6 +857,23 @@ fi
 command -v node >/dev/null 2>&1 || die "$(t "Node $NODE_MAJOR_MIN+ failed to install. Install it manually (nvm install $NODE_MAJOR_MIN) and re-run." "Node $NODE_MAJOR_MIN+ не установился. Поставьте вручную (nvm install $NODE_MAJOR_MIN) и перезапустите.")"
 ok "Node $(node -v)"
 
+# Канал новой установки: stable (по умолчанию) — последняя метка vX.Y.Z на ветке, ветка
+# остаётся той же (за ней следит обновлятор); IVA_CHANNEL=beta — вершина ветки и канал бета.
+checkout_channel() {
+  if [ "${IVA_CHANNEL:-stable}" = beta ]; then
+    git -C "$1" config --local iva.channel beta
+    return 0
+  fi
+  local release
+  release="$(git -C "$1" tag --list 'v*' --merged HEAD --sort=-v:refname \
+    | grep -E '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' | head -n 1 || true)"
+  if [ -z "$release" ]; then
+    echo "no stable release on this branch yet; for the newest build install with IVA_CHANNEL=beta" >&2
+    return 1
+  fi
+  git -C "$1" reset -q --hard "$release"
+}
+
 # ─────────────────────────────────────────────────────────────────────────
 # 4. Project code (current directory / an installation that exists / clone). SCRIPT_DIR is
 #    resolved at the top.
@@ -886,6 +903,7 @@ elif [ -d "$INSTALL_DIR/.git" ] || [ -d "$INSTALL_DIR/versions" ]; then
 else
   run_stage "$(t "Cloning Iva" "Клонирую Iva")" "$(t "Iva downloaded" "Iva загружена")" \
     git clone --branch "$BRANCH" "$REPO_URL" "$INSTALL_DIR"
+  checkout_channel "$INSTALL_DIR" || die "$(t "no stable release to install" "нет стабильной версии для установки")"
   PROJECT_DIR="$INSTALL_DIR"
   acquire_install_lock
 fi

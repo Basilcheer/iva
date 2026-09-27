@@ -557,6 +557,8 @@ function createWorld(t: TestContext, options: { env?: boolean } = {}): World {
   git("init", "--quiet", "--initial-branch=main");
   git("add", "-A");
   git("commit", "--quiet", "-m", "fixture");
+  // A release is a vX.Y.Z tag: a new installation checks out the newest one.
+  git("tag", "v1.0.0");
   execFileSync("git", ["clone", "--quiet", "--bare", install, remote]);
   git("remote", "add", "origin", remote);
 
