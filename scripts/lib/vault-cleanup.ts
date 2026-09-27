@@ -69,11 +69,7 @@ function collapseSample(sample: string): string {
   );
 }
 
-interface Line {
-  readonly text: string | null;
-  readonly truncated: boolean;
-  readonly next: number;
-}
+type Line = { text: string | null; truncated: boolean; next: number };
 
 /** Строка файла с позиции pos: не длиннее LINE_CAP байт, остаток до \n пропускается.
  * text null — байты не UTF-8. null — конец файла. */
@@ -109,11 +105,8 @@ function line(head: Buffer[], truncated: boolean, next: number): Line {
 const formatDescription = (value: string) =>
   `description: ${JSON.stringify(value)}`;
 
-interface Header {
-  readonly output: string[];
-  changed: boolean;
-  block: { lines: string[]; sample: string | null } | null;
-}
+type Block = { lines: string[]; sample: string | null };
+type Header = { output: string[]; changed: boolean; block: Block | null };
 
 function flushBlock(header: Header): void {
   const block = header.block!;
@@ -136,7 +129,7 @@ function flushBlock(header: Header): void {
 }
 
 /** Продолжение блочного description: короткие строки копятся, огромная — образец. */
-function blockLine(block: NonNullable<Header["block"]>, row: Line): void {
+function blockLine(block: Block, row: Line): void {
   const text = row.text!;
   if (row.truncated || text.length > BLOCK_SMALL) block.sample ??= text.trim();
   else if (block.sample === null) block.lines.push(text.trim());
@@ -240,11 +233,7 @@ export function markdownFiles(dir: string): string[] {
     .sort();
 }
 
-export interface CleanupSummary {
-  readonly cleaned: number;
-  readonly saved: number;
-  readonly failures: readonly string[];
-}
+type CleanupSummary = { cleaned: number; saved: number; failures: string[] };
 
 export function cleanupVault(
   root: string,

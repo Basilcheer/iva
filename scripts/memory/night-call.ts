@@ -12,15 +12,9 @@ import { parseJson } from "./night-input.ts";
 // прошёл схему — один повтор с текстом ошибки, потом NightSchemaError. Своих сетевых
 // повторов нет. Ceiling проверяется до вызова; неизвестный usage закрывает следующие.
 
-export class NightCeilingError extends Error {
-  override readonly name = "NightCeilingError";
-}
-export class NightSchemaError extends Error {
-  override readonly name = "NightSchemaError";
-}
-class NightNetworkError extends Error {
-  override readonly name = "NightNetworkError";
-}
+export class NightCeilingError extends Error {}
+export class NightSchemaError extends Error {}
+class NightNetworkError extends Error {}
 
 export const nightModelName = providerConfig.textModel;
 const model = makeTextModel({
@@ -29,14 +23,8 @@ const model = makeTextModel({
 const SYSTEM =
   "Ты выполняешь один шаг ночной памяти. Ответ — один JSON-объект по формату из инструкции, без пояснений.";
 // Низкое рассуждение там, где провайдер его принимает.
-const low =
-  providerName === "codex"
-    ? {
-        providerOptions: {
-          openai: { reasoningEffort: "low", reasoningSummary: null },
-        },
-      }
-    : {};
+const openai = { reasoningEffort: "low", reasoningSummary: null };
+const low = providerName === "codex" ? { providerOptions: { openai } } : {};
 
 export const ceiling = {
   calls: 0,

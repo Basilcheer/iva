@@ -90,12 +90,7 @@ type CoreAnswer = z.infer<typeof coreAnswer>;
 // ── Кэш дня ──────────────────────────────────────────────────────────────────────────
 type Candidate = { id: string; text: string; source: string };
 /** pre — хеш файла при чтении для B (CAS), post — хеш записанного ночью. */
-type TruthEntry = {
-  pre: string;
-  answer?: TruthCard;
-  post?: string;
-  done?: boolean;
-};
+type Truth = { pre: string; answer?: TruthCard; post?: string; done?: boolean };
 interface Pass {
   readonly from: number;
   readonly upto: number;
@@ -105,7 +100,7 @@ interface Pass {
   created: Record<string, string>;
   applied?: boolean;
   truth?: string[];
-  b: Record<string, TruthEntry>;
+  b: Record<string, Truth>;
 }
 interface DayCache {
   readonly v: 1;
@@ -267,14 +262,12 @@ function knownFor(cards: readonly Card[], dayText: string, date: string) {
   return cards.flatMap((card) => {
     const type = str(card.fields, "type");
     const short = { card: card.card, type, name: card.name };
-    const log = cs.sectionRows(card.body, "Log") ?? [];
     if (namesOf(card).some((n) => n.length >= 3 && haystack.includes(` ${n} `)))
       return {
         ...short,
         aliases: card.aliases,
         description: str(card.fields, "description").slice(0, 160),
         truth: cs.truthOf(card.body).slice(0, 300),
-        today: log.filter((row) => logDate(row) === date),
       };
     const fresh = str(card.fields, "created") >= shift(date, -30);
     const active = fresh && str(card.fields, "status") !== "superseded";
@@ -490,40 +483,33 @@ async function applyCards(
 }
 
 // ── Step 2: правда Card (вызов B) ────────────────────────────────────────────────────
-function statuses(type: string): string[] {
+/** Допустимые status по типу Card из schema.json vault. */
+function statuses(): Record<string, { status?: string[] }> {
+  type Schema = { node_types?: Record<string, { status?: string[] }> };
   try {
-    const schema = JSON.parse(
-      readFileSync(join(vault, "schema.json"), "utf8"),
-    ) as {
-      node_types?: Record<string, { status?: string[] }>;
-    };
-    return schema.node_types?.[type]?.status ?? [];
+    return (
+      (JSON.parse(readIf(join(vault, "schema.json")) ?? "{}") as Schema)
+        .node_types ?? {}
+    );
   } catch {
-    return [];
+    return {}; // битая schema.json — B выбирает статус без подсказки, запись от этого не зависит
   }
 }
 
+/** Card для B: поля frontmatter, правда, хвост Log и факты с truth_pending по день D. */
 function truthInput(card: Card, date: string) {
   const log = cs.sectionRows(card.body, "Log") ?? [];
   const since = str(card.fields, "truth_pending") || date;
-  const at = (row: string) => logDate(row) >= since && logDate(row) <= date;
-  const [truth, get] = [
-    cs.truthOf(card.body),
-    (key: string) => str(card.fields, key),
-  ];
+  const facts = log.filter(
+    (row) => logDate(row) >= since && logDate(row) <= date,
+  );
+  const truth = cs.truthOf(card.body);
   return {
-    ...{
-      card: card.card,
-      name: card.name,
-      truth,
-      truth_date: get("truth_date"),
-    },
-    ...{ description: get("description"), status: get("status") },
-    ...{
-      statuses: statuses(get("type")),
-      log: log.slice(-10),
-      facts: log.filter(at),
-    },
+    card: card.card,
+    fields: card.fields,
+    truth,
+    log: log.slice(-10),
+    facts,
   };
 }
 
@@ -534,7 +520,8 @@ async function askTruth(cache: DayCache): Promise<void> {
     const batch = waiting
       .slice(at, at + limits.CARDS_PER_TRUTH_CALL)
       .flatMap((card) => readCard(card) ?? []);
-    const data = { date, cards: batch.map((card) => truthInput(card, date)) };
+    const cards = batch.map((card) => truthInput(card, date));
+    const data = { date, statuses: statuses(), cards };
     const ask = {
       skill: skill("card"),
       input: data,
@@ -596,7 +583,7 @@ function truthApplied(
 
 /** CAS: файл тот же, что при чтении для B, — правка целиком. Иначе правка человека
  * побеждает: ответ стирается, Card получает truth_pending, B — следующей ночью. */
-function applyTruthCard(cache: DayCache, card: string, entry: TruthEntry) {
+function applyTruthCard(cache: DayCache, card: string, entry: Truth) {
   const current = readCard(card);
   const hash = current ? textHash(current.raw) : "";
   if (entry.done || hash === entry.post) return null;
@@ -615,7 +602,7 @@ function applyTruthCard(cache: DayCache, card: string, entry: TruthEntry) {
 function giveUp(
   cache: DayCache,
   card: string,
-  entry: TruthEntry,
+  entry: Truth,
   current: Card | null,
 ) {
   if (!current || textHash(current.raw) !== entry.pre)
@@ -1070,9 +1057,8 @@ async function main(): Promise<number> {
   try {
     return await night(manual);
   } catch (error) {
-    console.error(
-      `memory-night: ${error instanceof Error ? error.message : String(error)}`,
-    );
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`memory-night: ${message}`);
     return 1;
   } finally {
     clearTimeout(timer);
