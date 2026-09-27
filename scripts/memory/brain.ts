@@ -73,30 +73,34 @@ async function alertCoreCap(): Promise<void> {
 const run = (command: string, args: string[]) =>
   spawnSync(command, args, { cwd: vault, encoding: "utf8" });
 
-/** origin vault есть или создан: приватный iva-vault через уже авторизованный gh. */
-function ensureRemote(): boolean {
+const NO_REMOTE =
+  "Память не бэкапится: у vault нет git remote. Зайди на сервер и выполни: gh auth login (scope repo). Brain сам создаст приватный репозиторий iva-vault и включит бэкап.";
+
+/** origin vault: настроенный владельцем не трогается; нет — приватный iva-vault через уже
+ * авторизованный gh. Уже существующий iva-vault привязывается, только если gh подтвердил,
+ * что он приватный. null — remote есть, иначе текст Alert. */
+function ensureRemote(): string | null {
   const origin = () => run("git", ["remote", "get-url", "origin"]).status === 0;
-  if (origin()) return true;
-  if (run("gh", ["auth", "status"]).status !== 0) return false;
+  if (origin()) return null;
+  if (run("gh", ["auth", "status"]).status !== 0) return NO_REMOTE;
   run("gh", ["auth", "setup-git"]);
   const create = ["repo", "create", "iva-vault", "--private", "--source"];
-  if (run("gh", [...create, vault, "--remote", "origin", "--push"]).status) {
-    // Репозиторий уже есть — origin на <login>/iva-vault.
-    const login = run("gh", ["api", "user", "--jq", ".login"]).stdout.trim();
-    const url = `https://github.com/${login}/iva-vault.git`;
-    if (login) run("git", ["remote", "add", "origin", url]);
-  }
-  return origin();
+  if (!run("gh", [...create, vault, "--remote", "origin", "--push"]).status)
+    return origin() ? null : NO_REMOTE;
+  const login = run("gh", ["api", "user", "--jq", ".login"]).stdout.trim();
+  const repo = `${login}/iva-vault`;
+  const view = ["repo", "view", repo, "--json", "visibility", "--jq"];
+  if (!login || run("gh", [...view, ".visibility"]).stdout.trim() !== "PRIVATE")
+    return `Бэкап vault не включён: репозиторий ${repo} не приватный или gh не смог это проверить, Brain его не привязал. Сделай его приватным (gh repo edit ${repo} --visibility private) или укажи свой origin.`;
+  run("git", ["remote", "add", "origin", `https://github.com/${repo}.git`]);
+  return origin() ? null : NO_REMOTE;
 }
 
 async function pushBackup(): Promise<boolean> {
-  if (!ensureRemote()) {
-    console.error("brain: no remote and gh unavailable — backup skipped");
-    await alertOnce(dataDir, "vault-remote", "missing", () =>
-      send(
-        "Память не бэкапится: у vault нет git remote. Зайди на сервер и выполни: gh auth login (scope repo). Brain сам создаст приватный репозиторий iva-vault и включит бэкап.",
-      ),
-    );
+  const missing = ensureRemote();
+  if (missing) {
+    console.error("brain: no private remote — backup skipped");
+    await alertOnce(dataDir, "vault-remote", missing, () => send(missing));
     return false;
   }
   const push = run("git", ["push", "origin", "HEAD"]);

@@ -147,3 +147,57 @@ void test("Brain: push не ушёл — код 1 и Alert о бэкапе", (t)
   assert.equal(run.status, 1, run.stderr);
   assert.match(run.stderr, /brain alert: Бэкап vault не ушёл/u);
 });
+
+/** gh-двойник: create отказывает (репозиторий есть), view отвечает видимостью. */
+function existingRepo(fx: ReturnType<typeof brainFixture>, visibility: string) {
+  const log = join(fx.root, "gh.log");
+  fx.gh(
+    [
+      `echo "$@" >> ${log}`,
+      'case "$1 $2" in',
+      '  "repo create") exit 1 ;;',
+      '  "api user") echo tester ;;',
+      `  "repo view") echo ${visibility} ;;`,
+      "esac",
+      "exit 0",
+    ].join("\n"),
+  );
+  // github.com-адрес уходит в локальный bare-репозиторий: сети нет.
+  const bare = join(fx.root, "iva-vault.git");
+  git(fx.root, "init", "-q", "--bare", bare);
+  git(
+    fx.vault,
+    "config",
+    `url.${fx.root}/.insteadOf`,
+    "https://github.com/tester/",
+  );
+  return { bare, log };
+}
+
+void test("Brain: уже существующий iva-vault публичный — remote не добавлен, push нет, Alert (r3 #1)", (t) => {
+  const fx = brainFixture(t);
+  const { bare } = existingRepo(fx, "PUBLIC");
+  const run = fx.brain();
+  assert.equal(run.status, 1, run.stderr);
+  assert.match(run.stderr, /brain alert: .*tester\/iva-vault.*не приватный/u);
+  assert.equal(
+    spawnSync("git", ["remote", "get-url", "origin"], { cwd: fx.vault }).status,
+    2,
+  );
+  assert.equal(git(bare, "rev-list", "--all", "--count"), "0");
+});
+
+void test("Brain: уже существующий iva-vault приватный — origin привязан и push ушёл (r3 #1)", (t) => {
+  const fx = brainFixture(t);
+  const { bare, log } = existingRepo(fx, "PRIVATE");
+  const run = fx.brain();
+  assert.equal(run.status, 0, run.stderr);
+  assert.match(
+    readFileSync(log, "utf8"),
+    /repo view tester\/iva-vault --json visibility/u,
+  );
+  assert.equal(
+    git(bare, "rev-parse", "HEAD"),
+    git(fx.vault, "rev-parse", "HEAD"),
+  );
+});
