@@ -84,6 +84,21 @@ node -e 'const p=require(process.argv[1]); if(p.name!=="iva") process.exit(1)' \
 top="$(git -C "$INSTALL_DIR" rev-parse --show-toplevel)"
 [ "$(cd "$top" && pwd -P)" = "$INSTALL_DIR" ] || die "invalid Iva checkout"
 
+# Новая установка и ремонт ставят новейший выпуск (метку vX.Y.Z на ветке, ADR-0017), если
+# он не старше первого выпуска с бета-обновлениями, иначе вершину ветки; IVA_BETA=1 или
+# iva.beta=true — вершину. Ветка остаётся той же: за ней следит обновлятор. Та же функция
+# стоит в install.sh и repair.sh: оба запускаются через curl | bash и самодостаточны.
+checkout_release() {
+  local first="0.4.9" tag
+  if [ "${IVA_BETA:-}" = 1 ]; then git -C "$1" config --local iva.beta true; fi
+  [ "$(git -C "$1" config --local --get iva.beta || true)" != true ] || return 0
+  tag="$(git -C "$1" tag --list 'v*' --merged HEAD --sort=-v:refname \
+    | grep -E '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' | head -n 1 || true)"
+  [ -n "$tag" ] || return 0
+  [ "$(printf '%s\n%s\n' "$first" "${tag#v}" | sort -V | head -n 1)" = "$first" ] || return 0
+  git -C "$1" reset -q --hard "$tag"
+}
+
 # Ремонт запускает код, который сам же и притянул: тянуть его можно только из репозитория
 # проекта. Локальный bare-репозиторий - фикстура теста, всё прочее чужое.
 is_official_remote() {
@@ -101,7 +116,7 @@ if ! is_official_remote "$origin_url"; then
     || die "origin is not github.com/smixs/iva-agent"
 fi
 
-# Тот же канал, на котором сидит установка: `iva rollback` пишет его в git config, и
+# Та же ветка, на которой сидит установка: `iva rollback` пишет её в git config, и
 # ремонт не имеет права молча вернуть человека на main.
 branch="$(git -C "$INSTALL_DIR" config --get iva.updateBranch || true)"
 [ -n "$branch" ] || branch="main"
@@ -111,6 +126,8 @@ say "Getting Iva $branch..." "Получаю Iva ($branch)..."
 # (клон без него, свёрнутый refspec), и тогда reset падал бы, оставив дерево как было.
 git -C "$INSTALL_DIR" fetch --quiet origin "$branch"
 git -C "$INSTALL_DIR" reset --quiet --hard FETCH_HEAD
+git -C "$INSTALL_DIR" fetch --quiet --prune origin "+refs/tags/*:refs/tags/*"
+checkout_release "$INSTALL_DIR"
 say "Local changes to Iva's code were removed." "Локальные правки в коде удалены."
 say "Your .env, data/, vault/ and attachments/ stay in place." "Ваши .env, data/, vault/ и attachments/ остались на месте."
 

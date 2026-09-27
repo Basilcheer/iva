@@ -857,21 +857,19 @@ fi
 command -v node >/dev/null 2>&1 || die "$(t "Node $NODE_MAJOR_MIN+ failed to install. Install it manually (nvm install $NODE_MAJOR_MIN) and re-run." "Node $NODE_MAJOR_MIN+ не установился. Поставьте вручную (nvm install $NODE_MAJOR_MIN) и перезапустите.")"
 ok "Node $(node -v)"
 
-# Канал новой установки: stable (по умолчанию) — последняя метка vX.Y.Z на ветке, ветка
-# остаётся той же (за ней следит обновлятор); IVA_CHANNEL=beta — вершина ветки и канал бета.
-checkout_channel() {
-  if [ "${IVA_CHANNEL:-stable}" = beta ]; then
-    git -C "$1" config --local iva.channel beta
-    return 0
-  fi
-  local release
-  release="$(git -C "$1" tag --list 'v*' --merged HEAD --sort=-v:refname \
+# Новая установка и ремонт ставят новейший выпуск (метку vX.Y.Z на ветке, ADR-0017), если
+# он не старше первого выпуска с бета-обновлениями, иначе вершину ветки; IVA_BETA=1 или
+# iva.beta=true — вершину. Ветка остаётся той же: за ней следит обновлятор. Та же функция
+# стоит в install.sh и repair.sh: оба запускаются через curl | bash и самодостаточны.
+checkout_release() {
+  local first="0.4.9" tag
+  if [ "${IVA_BETA:-}" = 1 ]; then git -C "$1" config --local iva.beta true; fi
+  [ "$(git -C "$1" config --local --get iva.beta || true)" != true ] || return 0
+  tag="$(git -C "$1" tag --list 'v*' --merged HEAD --sort=-v:refname \
     | grep -E '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' | head -n 1 || true)"
-  if [ -z "$release" ]; then
-    echo "no stable release on this branch yet; for the newest build install with IVA_CHANNEL=beta" >&2
-    return 1
-  fi
-  git -C "$1" reset -q --hard "$release"
+  [ -n "$tag" ] || return 0
+  [ "$(printf '%s\n%s\n' "$first" "${tag#v}" | sort -V | head -n 1)" = "$first" ] || return 0
+  git -C "$1" reset -q --hard "$tag"
 }
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -903,7 +901,7 @@ elif [ -d "$INSTALL_DIR/.git" ] || [ -d "$INSTALL_DIR/versions" ]; then
 else
   run_stage "$(t "Cloning Iva" "Клонирую Iva")" "$(t "Iva downloaded" "Iva загружена")" \
     git clone --branch "$BRANCH" "$REPO_URL" "$INSTALL_DIR"
-  checkout_channel "$INSTALL_DIR" || die "$(t "no stable release to install" "нет стабильной версии для установки")"
+  checkout_release "$INSTALL_DIR"
   PROJECT_DIR="$INSTALL_DIR"
   acquire_install_lock
 fi

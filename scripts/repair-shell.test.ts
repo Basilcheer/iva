@@ -311,3 +311,39 @@ test("repair refuses an installation whose origin is not the project", (t) => {
   assert.equal(failure.status, 1);
   assert.match(failure.output, /origin is not github\.com\/smixs\/iva-agent/u);
 });
+
+// Выпуски (ADR-0017): ремонт чекаута ставит новейший выпуск vX.Y.Z, если он не старше
+// 0.4.9 (первый с бета-обновлениями), иначе вершину; при бета-обновлениях — вершину.
+function publish(remote: string, tag: string | null, fixture: string): string {
+  const work = join(fixture, `work-${Date.now()}-${Math.random()}`);
+  git(fixture, "clone", "--quiet", remote, work);
+  writeFileSync(join(work, "bin/iva.mjs"), `// ${tag ?? "tip"}\n`);
+  git(work, "commit", "--quiet", "-am", tag ?? "tip");
+  if (tag) git(work, "tag", tag);
+  git(work, "push", "--quiet", "--tags", "origin", "main");
+  return git(work, "rev-parse", "HEAD");
+}
+
+test("repair puts a checkout on the newest release from 0.4.9, else on the tip; beta updates — the tip", (t) => {
+  const { install, remote, run } = checkout(t);
+  const fixture = join(install, "..");
+  publish(remote, "v0.4.8", fixture);
+  const oldTip = publish(remote, null, fixture);
+  run();
+  assert.equal(
+    git(install, "rev-parse", "HEAD"),
+    oldTip,
+    "0.4.8 is older than 0.4.9",
+  );
+
+  const release = publish(remote, "v0.4.9", fixture);
+  publish(remote, "v0.4.10-beta.1", fixture);
+  const tip = publish(remote, null, fixture);
+  run();
+  assert.equal(git(install, "rev-parse", "HEAD"), release);
+  assert.equal(git(install, "branch", "--show-current"), "main");
+
+  git(install, "config", "iva.beta", "true");
+  run();
+  assert.equal(git(install, "rev-parse", "HEAD"), tip);
+});

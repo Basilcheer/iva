@@ -508,10 +508,10 @@ void test("a copy of .env that was never finished cannot replace a whole one", a
   );
 });
 
-// ── Канал новой установки ──────────────────────────────────────────────────
-// stable (по умолчанию) — последняя метка vX.Y.Z на ветке, ветка остаётся; IVA_CHANNEL=beta —
-// вершина ветки и канал бета.
-void test("новая установка: stable — последняя метка на той же ветке, beta — вершина и iva.channel, меток нет — отказ с IVA_CHANNEL=beta", (t) => {
+// ── Выпуск новой установки (ADR-0017) ──────────────────────────────────────
+// Новейший выпуск vX.Y.Z на ветке, если он не старше 0.4.9 (первый с бета-обновлениями),
+// иначе вершина; IVA_BETA=1 — вершина и iva.beta=true. Ветка остаётся той же.
+void test("новая установка: выпуск от 0.4.9 на той же ветке, старше — вершина, меток нет — вершина, IVA_BETA=1 — вершина и iva.beta", (t) => {
   const dir = workspace(t);
   const git = (...args: string[]) =>
     execFileSync("git", ["-C", dir, ...args], { encoding: "utf8" }).trim();
@@ -529,30 +529,43 @@ void test("новая установка: stable — последняя метк
     );
     return git("rev-parse", "HEAD");
   };
-  commit("old");
-  const run = (channel: string) =>
+  const run = (beta = "") =>
     spawnSync(
       "bash",
       [
         "-c",
-        `set -euo pipefail\n${shellFunction("checkout_channel")}\ncheckout_channel "$1"`,
+        `set -euo pipefail\n${shellFunction("checkout_release")}\ncheckout_release "$1"`,
         "_",
         dir,
       ],
-      { encoding: "utf8", env: { ...process.env, IVA_CHANNEL: channel } },
+      { encoding: "utf8", env: { ...process.env, IVA_BETA: beta } },
     );
-  const bare = run("");
-  assert.equal(bare.status, 1);
-  assert.match(bare.stderr, /IVA_CHANNEL=beta/u);
+  const bare = commit("old");
+  assert.equal(run().status, 0);
+  assert.equal(git("rev-parse", "HEAD"), bare, "no release: the tip");
   git("tag", "v0.4.8");
+  const oldTip = commit("after 0.4.8");
+  assert.equal(run().status, 0);
+  assert.equal(
+    git("rev-parse", "HEAD"),
+    oldTip,
+    "0.4.8 is older than 0.4.9: the tip",
+  );
+  git("tag", "v0.4.9", commit("0.4.9"));
   const release = git("rev-parse", "HEAD");
-  git("tag", "v0.4.9-beta.1", commit("beta"));
+  git("tag", "v0.4.10-beta.1", commit("beta"));
   const tip = commit("tip");
-  assert.equal(run("").status, 0);
+  assert.equal(run().status, 0);
   assert.equal(git("rev-parse", "HEAD"), release);
   assert.equal(git("branch", "--show-current"), "main");
+  assert.throws(() => git("config", "--local", "--get", "iva.beta"));
   git("reset", "-q", "--hard", tip);
-  assert.equal(run("beta").status, 0);
+  assert.equal(run("1").status, 0);
   assert.equal(git("rev-parse", "HEAD"), tip);
-  assert.equal(git("config", "--local", "--get", "iva.channel"), "beta");
+  assert.equal(git("config", "--local", "--get", "iva.beta"), "true");
+});
+
+void test("repair.sh несёт ту же checkout_release, что install.sh, байт в байт", () => {
+  const repair = readFileSync(join(ROOT, "repair.sh"), "utf8");
+  assert.ok(repair.includes(shellFunction("checkout_release")));
 });
