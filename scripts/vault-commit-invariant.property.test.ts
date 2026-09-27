@@ -231,7 +231,8 @@ function indexOf(dir: string, paths: readonly string[]): string {
 /** Путь записи заранее: он же нужен, чтобы заготовить чужую работу рядом и в нём самом. */
 function writeRelOf(kind: Kind, name: string, title: string): string {
   if (kind === "card") return `cards/notes/${title.toLowerCase()}.md`;
-  return `daily/${name}`;
+  // write_file пишет память только вне ночных каталогов: library/ пишется и коммитится.
+  return kind === "file" ? `library/${name}` : `daily/${name}`;
 }
 
 /** Свежий vault прогона: свой репозиторий, база владельца в истории, при нужде - `.gitignore`
@@ -240,6 +241,7 @@ function makeVaultDir(outcome: Outcome, ignore: string | null): string {
   const dir = mkdtempSync(join(tmpdir(), "iva-pbt-vault-"));
   mkdirSync(join(dir, "cards", "notes"), { recursive: true });
   mkdirSync(join(dir, "daily"), { recursive: true });
+  mkdirSync(join(dir, "library"), { recursive: true });
   cpSync(SCHEMA, join(dir, "schema.json"));
   if (ignore !== null) writeFileSync(join(dir, ".gitignore"), ignore);
   writeFileSync(
@@ -374,7 +376,7 @@ function ignoreFor(spec: WriteCase, rel: string): string | null {
   if (spec.outcome !== "ignored") return null;
   return spec.kind === "card"
     ? "cards/notes/*\n"
-    : `daily/${rel.slice("daily/".length)}\n`;
+    : `${rel}\n`;
 }
 
 /** Второй путь многопутёвого вызова: его нет в индексе, поэтому `git add` отказывает уже
@@ -470,16 +472,16 @@ async function seedAndWrite(
   const abs = join(vault, ...rel.split("/"));
   if (spec.kind === "card") {
     const result = await tool.card({
-      body: `Факт ${token}.`,
+      text: `Факт ${token}.`,
       description: "Описание",
-      operation: "ADD",
+      operation: "fact",
       tags: ["pbt"],
       title: spec.title,
       type: "note",
     });
     assert.equal(result.ok, true, result.error);
     assert.equal(
-      result.file,
+      `${result.file}.md`,
       rel,
       "имя карточки то же, что заготовлено сценарием",
     );
