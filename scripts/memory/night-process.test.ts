@@ -911,3 +911,51 @@ void test("неделя из готовых дней собирается одн
   );
   assert.match(result.stderr, /night-fallback/u);
 });
+
+void test("связь пишется в Related обеих Card; связь с неизвестной Card отброшена", async (t) => {
+  const fx = await fixture(t);
+  day(fx, "## 10:00 [text]\nАнна и Борис взяли Аврору\n");
+  const contact = (name: string) => [
+    "---",
+    'type: "contact"',
+    "---",
+    `# ${name}`,
+    "",
+    "## Log",
+    "",
+    "## Related",
+    "",
+  ];
+  const anna = card(fx, "cards/contacts/анна", contact("Анна"));
+  const boris = card(fx, "cards/contacts/борис", contact("Борис"));
+  const quote = "Анна и Борис взяли Аврору";
+  fx.model.replies = [
+    A({
+      facts: [
+        {
+          card: "cards/contacts/анна",
+          text: "Анна в Авроре",
+          src: "e1",
+          quote,
+        },
+        {
+          card: "cards/contacts/борис",
+          text: "Борис в Авроре",
+          src: "e1",
+          quote,
+        },
+      ],
+      links: [
+        { a: "cards/contacts/анна", b: "cards/contacts/борис", src: "e1" },
+        { a: "cards/contacts/анна", b: "Никто", src: "e1" },
+      ],
+    }),
+    B({ card: "cards/contacts/анна" }, { card: "cards/contacts/борис" }),
+  ];
+  const result = await night(fx);
+  assert.equal(result.code, 0, result.stderr);
+  assert.match(read(anna), /## Related\n\n- \[\[cards\/contacts\/борис\]\]/u);
+  assert.match(read(boris), /## Related\n\n- \[\[cards\/contacts\/анна\]\]/u);
+  assert.match(result.stderr, /отброшено: .*Никто/u);
+  assert.equal(git(fx.vault, "status", "--porcelain"), "");
+});
