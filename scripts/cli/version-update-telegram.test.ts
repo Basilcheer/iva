@@ -394,7 +394,7 @@ test("a release that needs a newer updater says so in the chat, command intact",
   const refusal = iva.finals().at(-1) ?? "";
   assert.match(
     refusal,
-    /Ваша Iva \(\d+\.\d+\.\d+\) слишком старая, чтобы обновиться сама\./u,
+    /Ваша Iva \(\d+\.\d+\.\d+(?:-beta\.\d+)?\) слишком старая, чтобы обновиться сама\./u,
   );
   assert.equal(
     refusal.includes(
