@@ -14,7 +14,12 @@ import {
   removeTelegramJob,
   reporterFor,
 } from "../lib/telegram-status.ts";
-import { resolveUpdateTarget } from "../lib/update-channel.ts";
+import {
+  CHANNEL_CONFIG,
+  readChannel,
+  resolveChannelTarget,
+  type Channel,
+} from "../lib/update-channel.ts";
 import {
   gitAt,
   installedVersion,
@@ -145,14 +150,17 @@ export async function ensureMirror(home: string): Promise<string> {
   rmSync(staging, { recursive: true, force: true });
   const git = (root: string, args: string[]): Promise<string> =>
     requireGit(gitAt, root, args);
-  const key = "iva.updateBranch"; // What the installation follows, not the clone.
+  // What the installation follows, not the clone: its branch and its channel.
+  const keys = ["iva.updateBranch", CHANNEL_CONFIG];
   try {
     await git(home, ["clone", "--mirror", join(home, ".git"), staging]);
     const origin = await git(home, ["remote", "get-url", "origin"]);
     await git(staging, ["remote", "set-url", "origin", origin]);
-    const branch = (await gitAt(home, ["config", "--local", "--get", key]))
-      .stdout;
-    if (branch) await git(staging, ["config", key, branch]);
+    for (const key of keys) {
+      const value = (await gitAt(home, ["config", "--local", "--get", key]))
+        .stdout;
+      if (value) await git(staging, ["config", key, value]);
+    }
     renameSync(staging, repo);
   } catch (error) {
     rmSync(staging, { recursive: true, force: true });
@@ -162,27 +170,61 @@ export async function ensureMirror(home: string): Promise<string> {
 }
 
 /**
- * What the next version is built from. An unreachable remote is not a failure: the
- * newest mirrored commit is the honest answer, so an offline update is a no-op.
+ * What the next version is built from, by the installation's channel. On beta an
+ * unreachable remote is not a failure: the newest mirrored commit is the honest answer,
+ * so an offline update is a no-op. Stable never guesses a release: offline or with no
+ * release tag it refuses. `installed` is the commit that runs; stable never goes below it.
  */
 export async function resolveTarget(
   repo: string,
-): Promise<{ sha: string; version: string }> {
+  installed?: string,
+): Promise<{ sha: string; version: string; channel: Channel }> {
+  const git = (...args: string[]) => gitAt(repo, args);
   let sha = "";
+  let channel: Channel = "beta";
   try {
-    const target = await resolveUpdateTarget({
-      git: (...args) => gitAt(repo, args),
-    });
-    sha = target.targetHead ?? "";
-  } catch {
-    // Offline, or a remote that refuses the fetch.
+    const target = await resolveChannelTarget({ git, installed });
+    [sha, channel] = [target.targetHead ?? "", target.channel];
+  } catch (error) {
+    if ((await readChannel(git)) === "stable") throw error;
   }
   if (!sha) sha = await requireGit(gitAt, repo, ["rev-parse", "HEAD"]);
   const version = packageVersion(
     await requireGit(gitAt, repo, ["show", `${sha}:package.json`]),
   );
   if (!version) throw new Error(`no package version at ${sha}`);
-  return { sha, version };
+  return { sha, version, channel };
+}
+
+/** The commit that runs: the active version's, else the checkout's own HEAD. */
+async function installedCommit(home: string): Promise<string | undefined> {
+  const active = createVersionStore(home).currentName();
+  const at = active ? parseVersionName(active)?.sha : undefined;
+  return at ?? ((await gitAt(home, ["rev-parse", "HEAD"])).stdout || undefined);
+}
+
+/**
+ * `iva update` by channel: the target is resolved from the commit that runs, and stable
+ * already on its newest release says so under the "up to date" line.
+ */
+function channelUpdate(home: string) {
+  let channel: Channel | undefined;
+  return {
+    target: async (repo: string) => {
+      const aim = await resolveTarget(repo, await installedCommit(home));
+      channel = aim.channel;
+      return aim;
+    },
+    said: (outcome: UpdateOutcome | null, env: Record<string, string>) => {
+      if (outcome?.status !== "current" || channel !== "stable") return;
+      const ru = (env.AGENT_LANGUAGE || process.env.AGENT_LANGUAGE) === "ru";
+      console.log(
+        ru
+          ? "   Это последняя стабильная версия."
+          : "   That is the latest stable release.",
+      );
+    },
+  };
 }
 
 /** The job file of a `/update --force` from the chat carries the flag. */
@@ -371,7 +413,8 @@ export function createVersionUpdateCommand(
   }
 
   async function run(args: readonly string[]): Promise<void> {
-    await pipeline(args, resolveTarget);
+    const update = channelUpdate(install.home);
+    update.said(await pipeline(args, update.target), runtime.readEnv());
   }
 
   /**

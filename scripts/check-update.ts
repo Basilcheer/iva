@@ -10,6 +10,7 @@ import {
   markVersionNotified,
   notificationChat,
   readNotifiedVersion,
+  betaOffer,
   sendUpdateOffer,
   updateOffer,
   type GitCommand,
@@ -91,20 +92,38 @@ async function whatsNewBlock({
   }
 }
 
-export async function runDailyUpdateCheck({
-  root = ROOT,
-  env = process.env,
-  inspectImpl = inspectUpstream,
-  sendImpl = sendUpdateOffer,
-  readStateImpl = readNotifiedVersion,
-  writeStateImpl = markVersionNotified,
-  gitImpl = gitAt,
-}: DailyUpdateOptions = {}) {
-  const token = String(env.TELEGRAM_BOT_TOKEN ?? "").trim();
-  const chatId = notificationChat(env);
+/** CHANGELOG.md на коммите ветки; не читается — пустой, Alert уходит без списка. */
+async function textAt(gitImpl: GitCommand, root: string, ref: string) {
+  const shown = await gitImpl(root, ["show", `${ref}:CHANGELOG.md`]);
+  if (typeof shown === "string") return shown;
+  return shown.code === 0 ? (shown.stdout ?? "") : "";
+}
+
+type DailyUpdateDeps = Required<DailyUpdateOptions>;
+type DailyCheck = {
+  deps: DailyUpdateDeps;
+  storage: string;
+  token: string;
+  chatId: string;
+  upstream: { root: string; head: string };
+};
+
+export async function runDailyUpdateCheck(options: DailyUpdateOptions = {}) {
+  const deps: DailyUpdateDeps = {
+    root: ROOT,
+    env: process.env,
+    inspectImpl: inspectUpstream,
+    sendImpl: sendUpdateOffer,
+    readStateImpl: readNotifiedVersion,
+    writeStateImpl: markVersionNotified,
+    gitImpl: gitAt,
+    ...options,
+  };
+  const token = String(deps.env.TELEGRAM_BOT_TOKEN ?? "").trim();
+  const chatId = notificationChat(deps.env);
   if (!token || !chatId) return { status: "not-configured" as const };
 
-  const storage = dataDir(root, env);
+  const storage = dataDir(deps.root, deps.env);
   // The same lock the updater itself takes, with the same rules about when a
   // holder counts as gone: two answers to that question on one file is how a
   // crashed update ends up blocking the daily check for hours.
@@ -113,43 +132,65 @@ export async function runDailyUpdateCheck({
   try {
     // One answer to «which repository», for the inspection and for the README it reads:
     // on the versioned layout that is the mirror, never the install root.
-    const upstream = upstreamQuery(root);
-    const info = await inspectImpl(upstream);
-    if (!info.hasVersionUpdate) return { status: "current" as const, info };
-    if ((await readStateImpl(storage)) === info.remoteVersion) {
-      return { status: "already-notified" as const, info };
-    }
-
-    // The update prompt is an Alert (ADR-0007) and speaks the one language the owner picked:
-    // settings.language first, AGENT_LANGUAGE after it — the same resolver the chat uses.
-    const locale = await noticeLang(env);
-    const offer = updateOffer(
-      info.localVersion,
-      info.remoteVersion,
-      locale,
-      info.updaterTooOld,
-    );
-    // An Alert that only names two numbers leaves the owner to guess what the update
-    // brings; the What's New of the offered release says it, in their language.
-    const whatsNew = await whatsNewBlock({
-      root: upstream.root,
-      ref: info.remote,
-      locale,
-      installedVersion: info.localVersion,
-      remoteVersion: info.remoteVersion,
-      gitImpl,
-    });
-    // What's New стоит перед кнопками: кнопки — часть текста и закрывают сообщение.
-    const body = offer.text.slice(0, -offer.actions.length).trimEnd();
-    const text = whatsNew
-      ? `${body}\n\n${whatsNew}\n\n${offer.actions}`
-      : offer.text;
-    await sendImpl({ token, chatId, offer: { ...offer, text } });
-    await writeStateImpl(storage, info.remoteVersion);
-    return { status: "notified" as const, info };
+    const upstream = upstreamQuery(deps.root);
+    const info = await deps.inspectImpl(upstream);
+    const check = { deps, storage, token, chatId, upstream };
+    // Бета: новые коммиты ветки, помнится коммит; стабильный: новая метка, помнится версия.
+    return info.channel === "beta"
+      ? await notifyBeta(check, info)
+      : await notifyStable(check, info);
   } finally {
     lock.release();
   }
+}
+
+async function notifyBeta(check: DailyCheck, info: UpdateInfo) {
+  const { deps, storage, token, chatId, upstream } = check;
+  if (!info.hasCommitUpdate) return { status: "current" as const, info };
+  if ((await deps.readStateImpl(storage)) === info.remote)
+    return { status: "already-notified" as const, info };
+  const changelog = await textAt(deps.gitImpl, upstream.root, info.remote);
+  const locale = await noticeLang(deps.env);
+  const offer = betaOffer(info.remoteVersion ?? "?", changelog, locale);
+  await deps.sendImpl({ token, chatId, offer });
+  await deps.writeStateImpl(storage, info.remote);
+  return { status: "notified" as const, info };
+}
+
+async function notifyStable(check: DailyCheck, info: UpdateInfo) {
+  const { deps, storage, token, chatId, upstream } = check;
+  if (!info.hasVersionUpdate) return { status: "current" as const, info };
+  if ((await deps.readStateImpl(storage)) === info.remoteVersion) {
+    return { status: "already-notified" as const, info };
+  }
+
+  // The update prompt is an Alert (ADR-0007) and speaks the one language the owner picked:
+  // settings.language first, AGENT_LANGUAGE after it — the same resolver the chat uses.
+  const locale = await noticeLang(deps.env);
+  const offer = updateOffer(
+    info.localVersion,
+    info.remoteVersion,
+    locale,
+    info.updaterTooOld,
+  );
+  // An Alert that only names two numbers leaves the owner to guess what the update
+  // brings; the What's New of the offered release says it, in their language.
+  const whatsNew = await whatsNewBlock({
+    root: upstream.root,
+    ref: info.remote,
+    locale,
+    installedVersion: info.localVersion,
+    remoteVersion: info.remoteVersion,
+    gitImpl: deps.gitImpl,
+  });
+  // What's New стоит перед кнопками: кнопки — часть текста и закрывают сообщение.
+  const body = offer.text.slice(0, -offer.actions.length).trimEnd();
+  const text = whatsNew
+    ? `${body}\n\n${whatsNew}\n\n${offer.actions}`
+    : offer.text;
+  await deps.sendImpl({ token, chatId, offer: { ...offer, text } });
+  await deps.writeStateImpl(storage, info.remoteVersion);
+  return { status: "notified" as const, info };
 }
 
 export async function main(entryUrl = import.meta.url): Promise<void> {

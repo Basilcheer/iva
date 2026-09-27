@@ -88,6 +88,9 @@ function repoFixture() {
   git(temp, "clone", "--branch", "main", remote, local);
   git(local, "config", "user.email", "test@example.com");
   git(local, "config", "user.name", "Test");
+  // Эти проверки — о вершине ветки: канал бета (stable ждёт метку vX.Y.Z,
+  // update-channel-git.test.ts).
+  git(local, "config", "iva.channel", "beta");
   return { temp, remote, seed, local };
 }
 
@@ -780,4 +783,49 @@ test("the update Alert carries the repair command only for an updater that is to
       info.updaterTooOld,
     ).text.includes(REPAIR_COMMAND),
   );
+});
+
+test("beta: Alert о новых коммитах ветки — версия и заголовки Unreleased (≤ 5), тот же коммит второй раз не шлётся", async () => {
+  const { temp, seed, local } = repoFixture();
+  const rows = Array.from(
+    { length: 6 },
+    (_, i) => `- 🔧 **Правка ${i + 1}**: подробности ${i + 1}.`,
+  );
+  writeFileSync(
+    join(seed, "CHANGELOG.md"),
+    `# Changelog\n\n## [Unreleased]\n\n${rows.join("\n")}\n\n## [1.2.3] - 2026-01-01\n\n- 🐞 **Старое**: было.\n`,
+  );
+  writeFileSync(
+    join(seed, "package.json"),
+    '{"name":"iva","version":"1.2.4-beta.1"}\n',
+  );
+  git(seed, "add", "-A");
+  git(seed, "commit", "-m", "beta build");
+  git(seed, "push");
+  const sent: string[] = [];
+  const env = {
+    TELEGRAM_BOT_TOKEN: "t",
+    TELEGRAM_DIGEST_CHAT_ID: "1",
+    AGENT_LANGUAGE: "ru",
+    ASSISTANT_DATA_DIR: join(temp, "data"),
+  };
+  const check = () =>
+    runDailyUpdateCheck({
+      root: local,
+      env,
+      sendImpl: async ({ offer }) => void sent.push(offer.text),
+    });
+  assert.equal((await check()).status, "notified");
+  assert.equal(sent.length, 1);
+  assert.match(sent[0], /1\.2\.4-beta\.1/u);
+  for (const n of [1, 2, 3, 4, 5])
+    assert.match(sent[0], new RegExp(`Правка ${n}\\b`, "u"));
+  assert.doesNotMatch(sent[0], /Правка 6|Старое|подробности/u);
+  assert.equal((await check()).status, "already-notified");
+  writeFileSync(join(seed, "more.txt"), "x\n");
+  git(seed, "add", "-A");
+  git(seed, "commit", "-m", "another");
+  git(seed, "push");
+  assert.equal((await check()).status, "notified");
+  assert.equal(sent.length, 2);
 });

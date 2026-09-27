@@ -12,7 +12,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { notificationChat } from "./notification-chat.ts";
 import { button, escapeRichText, screenPayload } from "./telegram-buttons.ts";
-import { resolveUpdateTarget, type GitResult } from "./update-channel.ts";
+import { resolveChannelTarget, type GitResult } from "./update-channel.ts";
 
 export { notificationChat };
 
@@ -236,17 +236,15 @@ export async function inspectUpstream({
       ? { code: 0, stdout: result, stderr: "" }
       : result;
   };
-  const target = await resolveUpdateTarget({ git: run, remote });
   const local = await requireGit(gitImpl, root, ["rev-parse", head]);
-  const remoteHead = target.targetHead ?? "";
-  const behind =
-    Number(
-      await requireGit(gitImpl, root, [
-        "rev-list",
-        "--count",
-        `${head}..${remoteHead}`,
-      ]),
-    ) || 0;
+  // Цель канала: stable — метка, beta — вершина ветки; ниже установленного — никогда.
+  const target = await resolveChannelTarget({
+    git: run,
+    remote,
+    installed: local,
+  });
+  const remoteHead = target.targetHead;
+  const behind = await commitsBehind(gitImpl, root, `${head}..${remoteHead}`);
   const localVersion = packageVersion(
     await requireGit(gitImpl, root, ["show", `${head}:package.json`]),
   );
@@ -265,6 +263,7 @@ export async function inspectUpstream({
     localVersion ?? undefined,
   );
   const common = {
+    channel: target.channel,
     branch: target.branch,
     currentBranch: target.currentBranch,
     legacyMigration: target.legacyMigration,
@@ -276,17 +275,25 @@ export async function inspectUpstream({
     hasCommitUpdate,
     updaterTooOld: compat.status === "too-old",
   };
-  if (hasVersionUpdate && remoteVersion !== null) {
-    return {
-      ...common,
-      remoteVersion,
-      hasVersionUpdate: true as const,
-    };
-  }
-  return {
-    ...common,
-    hasVersionUpdate: false as const,
-  };
+  return withVersionUpdate(common, hasVersionUpdate, remoteVersion);
+}
+
+/** Сколько коммитов в диапазоне; нечисло — ноль. */
+async function commitsBehind(gitImpl: GitCommand, root: string, range: string) {
+  return (
+    Number(await requireGit(gitImpl, root, ["rev-list", "--count", range])) || 0
+  );
+}
+
+/** Итог проверки: новая версия есть только с известным номером. */
+function withVersionUpdate<T extends object>(
+  common: T,
+  hasVersionUpdate: boolean,
+  remoteVersion: string | null,
+) {
+  if (hasVersionUpdate && remoteVersion !== null)
+    return { ...common, remoteVersion, hasVersionUpdate: true as const };
+  return { ...common, hasVersionUpdate: false as const };
 }
 
 /**
@@ -339,6 +346,35 @@ export function updateOffer(
     text: `${head}\n\n${tail}\n\n${actions}`,
     actions,
   };
+}
+
+/** Заголовки строк CHANGELOG `Unreleased` (эмодзи и жирный заголовок), не больше пяти. */
+function unreleasedHeadlines(changelog: string): string[] {
+  const section =
+    changelog.split(/^## /mu).find((part) => part.startsWith("[Unreleased]")) ??
+    "";
+  return [...section.matchAll(/^- (\S+) \*\*(.+?)\*\*/gmu)]
+    .slice(0, 5)
+    .map(([, emoji, title]) => `${emoji} ${title}`);
+}
+
+/** Alert канала бета: новая сборка ветки — её версия и что в ней из CHANGELOG. */
+export function betaOffer(
+  version: string,
+  changelog: string,
+  locale = "en",
+): UpdateOffer {
+  const ru = locale === "ru";
+  const head = `${ru ? "🧪 Новая бета-сборка Ивы" : "🧪 A new Iva beta build"}\n\nv${escapeRichText(version)}`;
+  const news = unreleasedHeadlines(changelog)
+    .map((line) => `• ${escapeRichText(line)}`)
+    .join("\n");
+  const actions = updateOfferActionLines(
+    locale,
+    ru ? "бета-сборку" : "the beta build",
+  );
+  const parts = [head, news, updateKeepsLine(locale), actions];
+  return { text: parts.filter(Boolean).join("\n\n"), actions };
 }
 
 export async function sendUpdateOffer({

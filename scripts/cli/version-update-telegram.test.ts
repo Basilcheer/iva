@@ -112,7 +112,9 @@ function world(
   git(home, ["config", "iva.updateBranch", "main"]);
   git(home, ["add", "-A"]);
   git(home, ["commit", "-m", "release"]);
-  git(home, ["push", "-q", "origin", "main"]);
+  // A release is a vX.Y.Z tag: the stable channel installs only those.
+  git(home, ["tag", "v0.3.19"]);
+  git(home, ["push", "-q", "--tags", "origin", "main"]);
 
   const dataDir = join(home, "data");
   const jobPath = join(dataDir, "update-jobs", "job-1.json");
