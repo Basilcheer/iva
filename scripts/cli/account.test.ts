@@ -258,8 +258,8 @@ test("version retains undefined metadata, Symbol failure, and missing-file fallb
   missingPackage.cmdVersion();
 
   assert.deepEqual(logs, [
-    ["iva undefined · commit abc1234 · channel stable"],
-    ["iva ? · commit ? · channel stable"],
+    ["iva undefined · commit abc1234 · updates stable"],
+    ["iva ? · commit ? · updates stable"],
   ]);
 });
 

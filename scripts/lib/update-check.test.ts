@@ -88,9 +88,9 @@ function repoFixture() {
   git(temp, "clone", "--branch", "main", remote, local);
   git(local, "config", "user.email", "test@example.com");
   git(local, "config", "user.name", "Test");
-  // Эти проверки — о вершине ветки: канал бета (stable ждёт метку vX.Y.Z,
-  // update-channel-git.test.ts).
-  git(local, "config", "iva.channel", "beta");
+  // Эти проверки — о вершине ветки: бета-обновления (иначе обновление ждёт выпуск,
+  // метку vX.Y.Z — update-release-git.test.ts).
+  git(local, "config", "iva.beta", "true");
   return { temp, remote, seed, local };
 }
 
@@ -735,7 +735,7 @@ test("the marker of a fetched tree decides whether this updater may install it",
 
 test("this checkout names its own release, and the refusal says how to repair it", () => {
   const own = updaterVersion();
-  // Релиз X.Y.Z или бета X.Y.Z-beta.N (канал бета, 0.4.9-beta.1).
+  // Релиз X.Y.Z или бета X.Y.Z-beta.N (бета-обновления, 0.4.9-beta.1).
   assert.match(
     own,
     /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-beta\.(0|[1-9]\d*))?$/,
@@ -842,4 +842,26 @@ test("beta: Alert о новых коммитах ветки — версия и 
   git(seed, "push");
   assert.equal((await check()).status, "notified");
   assert.equal(sent.length, 2);
+});
+
+test("beta: сборка требует обновлятор новее установленного — в Alert инструкция ремонта вместо кнопки", async () => {
+  const { temp, seed, local } = repoFixture();
+  writeFileSync(join(seed, "update-compat.json"), '{"minUpdater":"99.0.0"}\n');
+  git(seed, "add", "-A");
+  git(seed, "commit", "-m", "needs a newer updater");
+  git(seed, "push");
+  const sent: string[] = [];
+  const result = await runDailyUpdateCheck({
+    root: local,
+    env: {
+      TELEGRAM_BOT_TOKEN: "t",
+      TELEGRAM_DIGEST_CHAT_ID: "1",
+      AGENT_LANGUAGE: "en",
+      ASSISTANT_DATA_DIR: join(temp, "data"),
+    },
+    sendImpl: async ({ offer }) => void sent.push(offer.text),
+  });
+  assert.equal(result.status, "notified");
+  assert.ok(sent[0]?.includes(REPAIR_COMMAND), sent[0]);
+  assert.deepEqual(actionCallbacks(sent[0] ?? ""), []);
 });

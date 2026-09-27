@@ -4,7 +4,7 @@ import { join } from "node:path";
 import type { createCliRuntime } from "./runtime.ts";
 import type { createCliSystemd } from "./systemd.ts";
 import { resolveVaultDir } from "../../packages/vault-dir/index.ts";
-import { channelOf } from "../lib/update-channel.ts";
+import { betaOf } from "../lib/update-channel.ts";
 
 type CliRuntime = ReturnType<typeof createCliRuntime>;
 type SystemdLifecycle = ReturnType<typeof createCliSystemd>;
@@ -131,9 +131,9 @@ export function createAccountCommands(
     } catch {
       // Keep the fallback version marker when package metadata is unavailable.
     }
-    const channel = channelOf(ROOT);
+    const updates = betaOf(ROOT) ? "beta" : "stable";
     log(
-      `iva ${version as string} · commit ${gitHead() || "?"} · channel ${channel}`,
+      `iva ${version as string} · commit ${gitHead() || "?"} · updates ${updates}`,
     );
   }
 

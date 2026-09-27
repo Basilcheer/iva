@@ -112,7 +112,7 @@ function world(
   git(home, ["config", "iva.updateBranch", "main"]);
   git(home, ["add", "-A"]);
   git(home, ["commit", "-m", "release"]);
-  // A release is a vX.Y.Z tag: the stable channel installs only those.
+  // A release is a vX.Y.Z tag: an update without beta updates installs only those.
   git(home, ["tag", "v0.3.19"]);
   git(home, ["push", "-q", "--tags", "origin", "main"]);
 

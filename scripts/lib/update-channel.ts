@@ -112,36 +112,33 @@ export async function persistUpdateBranch(
   await requireGit(git, "config", "--local", UPDATE_BRANCH_CONFIG, branch);
 }
 
-/** Канал установки: stable — только вышедшие версии (метки vX.Y.Z), beta — вершина ветки. */
-export type Channel = "stable" | "beta";
-export const CHANNEL_CONFIG = "iva.channel";
+/** Бета-обновления (Beta updates): `iva.beta` = true — обновление ставит вершину ветки;
+ * ключа нет — ставит новейший выпуск (Release, метка vX.Y.Z). ADR-0017. */
+export const BETA_CONFIG = "iva.beta";
 const RELEASE_TAG = /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u;
 
-/** iva.channel; ключа нет — stable, чужое значение — stable и строка-предупреждение. */
-export async function readChannel(git: Git): Promise<Channel> {
-  const value = output(await git("config", "--local", "--get", CHANNEL_CONFIG));
-  if (value === "beta" || value === "stable") return value;
-  if (value)
-    console.warn(
-      `⚠️ ${CHANNEL_CONFIG}=${value}: not stable or beta, using stable`,
-    );
-  return "stable";
+/** Включены ли бета-обновления; чужое значение — нет, и строка-предупреждение. */
+export async function readBeta(git: Git): Promise<boolean> {
+  const value = output(await git("config", "--local", "--get", BETA_CONFIG));
+  if (value && value !== "true" && value !== "false")
+    console.warn(`⚠️ ${BETA_CONFIG}=${value}: not true, installing releases`);
+  return value === "true";
 }
 
 /**
- * Цель обновления по каналу. beta — вершина ветки обновления. stable — самая новая
- * метка vX.Y.Z, достижимая из вершины; установленный коммит (`installed`), который
- * сам эта метка или её потомок, — сама установка: назад обновление не ходит.
+ * Цель обновления. Бета — вершина ветки обновления. Иначе — новейший выпуск: метка
+ * vX.Y.Z, достижимая из вершины; установленный коммит (`installed`), который сам этот
+ * выпуск или его потомок, — сама установка: назад обновление не ходит.
  */
-export async function resolveChannelTarget(
+export async function resolveReleaseTarget(
   options: ResolveUpdateTargetOptions & { installed?: string },
 ) {
   const git = options.git!;
   const target = await resolveUpdateTarget(options);
-  const channel = await readChannel(git);
-  if (channel === "beta") return { ...target, channel };
+  if (await readBeta(git)) return { ...target, beta: true };
   const remote = options.remote ?? "origin";
-  await requireGit(git, "fetch", remote, "+refs/tags/*:refs/tags/*");
+  // --prune: метка, удалённая из origin (отозванный выпуск), уходит и отсюда.
+  await requireGit(git, "fetch", "--prune", remote, "+refs/tags/*:refs/tags/*");
   const tags = await requireGit(
     git,
     "tag",
@@ -154,7 +151,7 @@ export async function resolveChannelTarget(
   const tag = tags.split("\n").find((name) => RELEASE_TAG.test(name));
   if (!tag)
     throw new Error(
-      `no stable release on ${target.branch} yet; for the newest build run: iva beta`,
+      `no release on ${target.branch} yet; for the newest build run: iva beta`,
     );
   const release = await requireGit(git, "rev-parse", `${tag}^{commit}`);
   const installed = options.installed
@@ -163,11 +160,16 @@ export async function resolveChannelTarget(
   const ahead =
     installed &&
     (await git("merge-base", "--is-ancestor", release, installed)).code === 0;
-  return { ...target, channel, tag, targetHead: ahead ? installed : release };
+  return {
+    ...target,
+    beta: false,
+    tag,
+    targetHead: ahead ? installed : release,
+  };
 }
 
-/** Где лежит iva.channel: git установки и её зеркало (обновление читает зеркало). */
-function channelRepos(root: string): string[] {
+/** Где лежит iva.beta: git установки и её зеркало (обновление читает зеркало). */
+function betaRepos(root: string): string[] {
   const install = classifyRoot(root);
   const repos = new Set([install.home, gitRootFor(install)]);
   const isRepo = (dir: string) =>
@@ -175,26 +177,26 @@ function channelRepos(root: string): string[] {
   return [...repos].filter(isRepo);
 }
 
-/** Канал установки для показа (iva version, status, меню); чужое значение — stable. */
-export function channelOf(root: string): Channel {
+/** Бета-обновления установки для показа (iva version, status, меню). */
+export function betaOf(root: string): boolean {
   const repo = gitRootFor(classifyRoot(root));
-  const args = ["-C", repo, "config", "--local", "--get", CHANNEL_CONFIG];
-  const value = spawnSync("git", args, { encoding: "utf8" }).stdout?.trim();
-  return value === "beta" ? "beta" : "stable";
+  const args = ["-C", repo, "config", "--local", "--get", BETA_CONFIG];
+  return spawnSync("git", args, { encoding: "utf8" }).stdout?.trim() === "true";
 }
 
-/** iva beta / iva stable и кнопка меню: канал в git установки и в зеркале. */
-export function setChannel(root: string, channel: Channel): boolean {
-  const written = channelRepos(root).map(
-    (repo) =>
-      spawnSync("git", [
-        "-C",
-        repo,
-        "config",
-        "--local",
-        CHANNEL_CONFIG,
-        channel,
-      ]).status === 0,
-  );
+/** iva beta / iva stable и кнопка меню: iva.beta=true или ключа нет, в установке и
+ * в зеркале. */
+export function setBeta(root: string, on: boolean): boolean {
+  const args = on ? [BETA_CONFIG, "true"] : ["--unset-all", BETA_CONFIG];
+  const written = betaRepos(root).map((repo) => {
+    const status = spawnSync("git", [
+      "-C",
+      repo,
+      "config",
+      "--local",
+      ...args,
+    ]).status;
+    return status === 0 || (!on && status === 5); // 5: ключа и так нет
+  });
   return written.length > 0 && written.every(Boolean);
 }

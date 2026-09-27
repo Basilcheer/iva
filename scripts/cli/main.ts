@@ -14,7 +14,7 @@ import { createTraceCommands } from "./trace.ts";
 import { createTreeRenderer } from "./tree.ts";
 import { createUserbotCommands } from "./userbot.ts";
 import { createVersionUpdateCommand } from "./version-update-command.ts";
-import { setChannel, type Channel } from "../lib/update-channel.ts";
+import { setBeta } from "../lib/update-channel.ts";
 
 export type CliCommand = (args: readonly string[]) => unknown;
 
@@ -59,27 +59,25 @@ export function dispatchCli(
   });
 }
 
-/** iva beta / iva stable: только переключают канал; обновляет iva update. */
-function channelCommands(
+/** iva beta / iva stable: включают и выключают бета-обновления; обновляет iva update. */
+function betaCommands(
   root: string,
   runtime: ReturnType<typeof createCliRuntime>,
 ) {
-  const command = (channel: Channel) => (): void => {
-    if (!setChannel(root, channel))
-      throw new Error("no git repository here: the channel was not recorded");
+  const command = (on: boolean) => (): void => {
+    if (!setBeta(root, on))
+      throw new Error("no git repository here: the setting was not recorded");
     const language =
       runtime.readEnv().AGENT_LANGUAGE || process.env.AGENT_LANGUAGE;
     const ru = language === "ru";
-    const name = ru
-      ? { beta: "бета", stable: "стабильный" }
-      : { beta: "beta", stable: "stable" };
+    const name = ru ? (on ? "бета" : "стабильные") : on ? "beta" : "stable";
     console.log(
       ru
-        ? `Канал обновлений: ${name[channel]}. Обновиться: iva update`
-        : `Update channel: ${name[channel]}. To update: iva update`,
+        ? `Обновления: ${name}. Обновиться: iva update`
+        : `Updates: ${name}. To update: iva update`,
     );
   };
-  return { beta: command("beta"), stable: command("stable") };
+  return { beta: command(true), stable: command(false) };
 }
 
 /** `iva help`: every command in one screen. */
@@ -89,7 +87,7 @@ ${C.b}Iva CLI${C.x} — manage your personal agent
 
 ${C.b}Commands:${C.x}
   ${C.c}iva update${C.x}         update: git pull + build + restart
-  ${C.c}iva beta${C.x} / ${C.c}stable${C.x}   update channel: every accepted change / released versions only
+  ${C.c}iva beta${C.x} / ${C.c}stable${C.x}   updates: every accepted change (beta) / releases only
   ${C.c}iva config${C.x}         configure: model, Telegram, Deepgram, TZ, vault
   ${C.c}iva login${C.x} [--browser]  sign in to an OpenAI subscription (ChatGPT) for MODEL_PROVIDER=codex
   ${C.c}iva rollback${C.x}       go back to the previous version (symlink flip + restart)
@@ -145,7 +143,7 @@ export function createCliMain(root: string) {
 
   const commands: Readonly<Record<string, CliCommand>> = {
     update: versionUpdate.run,
-    ...channelCommands(root, runtime),
+    ...betaCommands(root, runtime),
     rollback: versionUpdate.rollback,
     userbot: userbot.cmdUserbot,
     config: cmdConfig,

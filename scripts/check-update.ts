@@ -136,7 +136,7 @@ export async function runDailyUpdateCheck(options: DailyUpdateOptions = {}) {
     const info = await deps.inspectImpl(upstream);
     const check = { deps, storage, token, chatId, upstream };
     // Бета: новые коммиты ветки, помнится коммит; стабильный: новая метка, помнится версия.
-    return info.channel === "beta"
+    return info.beta
       ? await notifyBeta(check, info)
       : await notifyStable(check, info);
   } finally {
@@ -151,7 +151,8 @@ async function notifyBeta(check: DailyCheck, info: UpdateInfo) {
     return { status: "already-notified" as const, info };
   const changelog = await textAt(deps.gitImpl, upstream.root, info.remote);
   const locale = await noticeLang(deps.env);
-  const offer = betaOffer(info.remoteVersion ?? "?", changelog, locale);
+  const version = info.remoteVersion ?? "?";
+  const offer = betaOffer(version, changelog, locale, info.updaterTooOld);
   await deps.sendImpl({ token, chatId, offer });
   await deps.writeStateImpl(storage, info.remote);
   return { status: "notified" as const, info };

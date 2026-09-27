@@ -12,7 +12,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { notificationChat } from "./notification-chat.ts";
 import { button, escapeRichText, screenPayload } from "./telegram-buttons.ts";
-import { resolveChannelTarget, type GitResult } from "./update-channel.ts";
+import { resolveReleaseTarget, type GitResult } from "./update-channel.ts";
 
 export { notificationChat };
 
@@ -248,8 +248,8 @@ export async function inspectUpstream({
       : result;
   };
   const local = await requireGit(gitImpl, root, ["rev-parse", head]);
-  // Цель канала: stable — метка, beta — вершина ветки; ниже установленного — никогда.
-  const target = await resolveChannelTarget({
+  // Цель: выпуск (метка) или вершина при бета-обновлениях; ниже установленного — никогда.
+  const target = await resolveReleaseTarget({
     git: run,
     remote,
     installed: local,
@@ -274,7 +274,7 @@ export async function inspectUpstream({
     localVersion ?? undefined,
   );
   const common = {
-    channel: target.channel,
+    beta: target.beta,
     branch: target.branch,
     currentBranch: target.currentBranch,
     legacyMigration: target.legacyMigration,
@@ -369,22 +369,26 @@ function unreleasedHeadlines(changelog: string): string[] {
     .map(([, emoji, title]) => `${emoji} ${title}`);
 }
 
-/** Alert канала бета: новая сборка ветки — её версия и что в ней из CHANGELOG. */
+/** Alert бета-обновлений: новая сборка ветки — её версия и что в ней из CHANGELOG.
+ * Обновлятор установки старше нужного сборке — вместо кнопки инструкция ремонта. */
 export function betaOffer(
   version: string,
   changelog: string,
   locale = "en",
+  updaterTooOld = false,
 ): UpdateOffer {
   const ru = locale === "ru";
   const head = `${ru ? "🧪 Новая бета-сборка Ивы" : "🧪 A new Iva beta build"}\n\nv${escapeRichText(version)}`;
   const news = unreleasedHeadlines(changelog)
     .map((line) => `• ${escapeRichText(line)}`)
     .join("\n");
-  const actions = updateOfferActionLines(
-    locale,
-    ru ? "бета-сборку" : "the beta build",
-  );
-  const parts = [head, news, updateKeepsLine(locale), actions];
+  const actions = updaterTooOld
+    ? ""
+    : updateOfferActionLines(locale, ru ? "бета-сборку" : "the beta build");
+  const tail = updaterTooOld
+    ? repairInstructions(locale)
+    : updateKeepsLine(locale);
+  const parts = [head, news, tail, actions];
   return { text: parts.filter(Boolean).join("\n\n"), actions };
 }
 

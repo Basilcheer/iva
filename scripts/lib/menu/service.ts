@@ -11,7 +11,7 @@ import { updateRunning } from "../version-store.ts";
 import { button } from "./buttons.ts";
 import { menuStyle } from "../telegram-buttons.ts";
 import { writeSettings } from "#lib/settings.ts";
-import { channelOf, setChannel } from "../update-channel.ts";
+import { betaOf, setBeta } from "../update-channel.ts";
 import {
   LOADERS,
   currentRun,
@@ -263,7 +263,7 @@ function idleView(
       "check for and install a new version.",
       "проверить и поставить новую версию.",
     )}`,
-    channelLine(ctx),
+    updatesLine(ctx),
     menuStyle() === "rich"
       ? `${button(T("◀︎ Classic menu", "◀︎ Старое меню"), "iva_menu:svc:menu:classic")} — ${T(
           "buttons under the message, as before 0.4.2.",
@@ -281,18 +281,18 @@ function idleView(
   return { text: lines.join("\n\n") };
 }
 
-/** Одна кнопка канала обновлений: показывает текущий, нажатие переключает. */
-function channelLine(ctx: MenuServiceContext): string {
+/** Одна кнопка бета-обновлений: показывает, что ставит обновление; нажатие переключает. */
+function updatesLine(ctx: MenuServiceContext): string {
   const T = ctx.tr;
-  const beta = channelOf(ctx.deps.root) === "beta";
-  const name = beta ? T("beta", "бета") : T("stable", "стабильный");
-  return `${button(T(`🧪 Update channel: ${name}`, `🧪 Канал обновлений: ${name}`), "iva_menu:svc:ch")} — ${T(
+  const beta = betaOf(ctx.deps.root);
+  const name = beta ? T("beta", "бета") : T("stable", "стабильные");
+  return `${button(T(`🧪 Updates: ${name}`, `🧪 Обновления: ${name}`), "iva_menu:svc:beta")} — ${T(
     beta
-      ? "every accepted change; tap for released versions only."
-      : "released versions only; tap for every accepted change (beta).",
+      ? "every accepted change; tap for releases only."
+      : "releases only; tap for every accepted change (beta).",
     beta
-      ? "всё принятое сразу; нажми — только вышедшие версии."
-      : "только вышедшие версии; нажми — всё принятое сразу (бета).",
+      ? "всё принятое сразу; нажми — только выпуски."
+      : "только выпуски; нажми — всё принятое сразу (бета).",
   )}`;
 }
 
@@ -425,10 +425,9 @@ const VERBS: Record<string, Verb> = {
     writeSettings({ menuStyle: args[0] });
     return ctx.show(st, "r"); // корень сразу в новом стиле
   },
-  ch: (_args, st, ctx) => {
-    const beta = channelOf(ctx.deps.root) === "beta";
-    setChannel(ctx.deps.root, beta ? "stable" : "beta");
-    return ctx.show(st, "svc"); // канал ставится при следующем обновлении
+  beta: (_args, st, ctx) => {
+    setBeta(ctx.deps.root, !betaOf(ctx.deps.root));
+    return ctx.show(st, "svc"); // ставится при следующем обновлении
   },
 };
 

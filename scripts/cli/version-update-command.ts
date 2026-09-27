@@ -15,10 +15,9 @@ import {
   reporterFor,
 } from "../lib/telegram-status.ts";
 import {
-  CHANNEL_CONFIG,
-  readChannel,
-  resolveChannelTarget,
-  type Channel,
+  BETA_CONFIG,
+  readBeta,
+  resolveReleaseTarget,
 } from "../lib/update-channel.ts";
 import {
   gitAt,
@@ -150,8 +149,8 @@ export async function ensureMirror(home: string): Promise<string> {
   rmSync(staging, { recursive: true, force: true });
   const git = (root: string, args: string[]): Promise<string> =>
     requireGit(gitAt, root, args);
-  // What the installation follows, not the clone: its branch and its channel.
-  const keys = ["iva.updateBranch", CHANNEL_CONFIG];
+  // What the installation follows, not the clone: its branch and beta updates.
+  const keys = ["iva.updateBranch", BETA_CONFIG];
   try {
     await git(home, ["clone", "--mirror", join(home, ".git"), staging]);
     const origin = await git(home, ["remote", "get-url", "origin"]);
@@ -170,7 +169,8 @@ export async function ensureMirror(home: string): Promise<string> {
 }
 
 /**
- * What the next version is built from, by the installation's channel. On beta an
+ * What the next version is built from: the newest release, or the tip with beta updates
+ * on (ADR-0017). With beta updates an
  * unreachable remote is not a failure: the newest mirrored commit is the honest answer,
  * so an offline update is a no-op. Stable never guesses a release: offline or with no
  * release tag it refuses. `installed` is the commit that runs; stable never goes below it.
@@ -178,22 +178,22 @@ export async function ensureMirror(home: string): Promise<string> {
 export async function resolveTarget(
   repo: string,
   installed?: string,
-): Promise<{ sha: string; version: string; channel: Channel }> {
+): Promise<{ sha: string; version: string; beta: boolean }> {
   const git = (...args: string[]) => gitAt(repo, args);
   let sha = "";
-  let channel: Channel = "beta";
+  let beta = true;
   try {
-    const target = await resolveChannelTarget({ git, installed });
-    [sha, channel] = [target.targetHead ?? "", target.channel];
+    const target = await resolveReleaseTarget({ git, installed });
+    [sha, beta] = [target.targetHead ?? "", target.beta];
   } catch (error) {
-    if ((await readChannel(git)) === "stable") throw error;
+    if (!(await readBeta(git))) throw error;
   }
   if (!sha) sha = await requireGit(gitAt, repo, ["rev-parse", "HEAD"]);
   const version = packageVersion(
     await requireGit(gitAt, repo, ["show", `${sha}:package.json`]),
   );
   if (!version) throw new Error(`no package version at ${sha}`);
-  return { sha, version, channel };
+  return { sha, version, beta };
 }
 
 /** The commit that runs: the active version's, else the checkout's own HEAD. */
@@ -204,19 +204,19 @@ async function installedCommit(home: string): Promise<string | undefined> {
 }
 
 /**
- * `iva update` by channel: the target is resolved from the commit that runs, and stable
+ * `iva update` by release: the target is resolved from the commit that runs, and one
  * already on its newest release says so under the "up to date" line.
  */
-function channelUpdate(home: string) {
-  let channel: Channel | undefined;
+function releaseUpdate(home: string) {
+  let beta = true;
   return {
     target: async (repo: string) => {
       const aim = await resolveTarget(repo, await installedCommit(home));
-      channel = aim.channel;
+      beta = aim.beta;
       return aim;
     },
     said: (outcome: UpdateOutcome | null, env: Record<string, string>) => {
-      if (outcome?.status !== "current" || channel !== "stable") return;
+      if (outcome?.status !== "current" || beta) return;
       const ru = (env.AGENT_LANGUAGE || process.env.AGENT_LANGUAGE) === "ru";
       console.log(
         ru
@@ -413,7 +413,7 @@ export function createVersionUpdateCommand(
   }
 
   async function run(args: readonly string[]): Promise<void> {
-    const update = channelUpdate(install.home);
+    const update = releaseUpdate(install.home);
     update.said(await pipeline(args, update.target), runtime.readEnv());
   }
 
