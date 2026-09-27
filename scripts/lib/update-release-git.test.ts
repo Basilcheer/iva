@@ -61,6 +61,8 @@ void test("stable, вышла новая метка: ставится метка
   const fx = fixture(t);
   const released = fx.commit("1.1.0", true);
   fx.commit("1.1.0");
+  // Метка-пререлиз на вершине сортируется выше выпуска, но выпуском не является.
+  fx.commit("1.2.0-beta.1", true);
   assert.equal((await fx.target(fx.first)).targetHead, released);
   assert.equal((await resolveTarget(fx.mirror, fx.first)).sha, released);
 });
