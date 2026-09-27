@@ -132,7 +132,7 @@ function readCache(date: string): DayCache | null {
     const valid = value?.v === 1 && value.date === date;
     if (valid && Number.isSafeInteger(value.through)) return value;
   } catch (error) {
-    throw new Error(`${broken}: ${String(error)}`);
+    throw new Error(`${broken}: ${String(error)}`, { cause: error });
   }
   throw new Error(broken);
 }
