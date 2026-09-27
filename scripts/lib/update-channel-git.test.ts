@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 import { resolveChannelTarget } from "./update-channel.ts";
-import { gitAt } from "./update-check.ts";
+import { gitAt, inspectUpstream } from "./update-check.ts";
 import { ensureMirror, resolveTarget } from "../cli/version-update-command.ts";
 import { parseVersionName, versionName } from "./version-store.ts";
 
@@ -120,6 +120,10 @@ void test("переключение beta → stable на установке но
   assert.equal((await fx.target(installed)).targetHead, installed);
   const next = fx.commit("1.1.0", true);
   assert.equal((await fx.target(installed)).targetHead, next);
+  // Ежедневная проверка предлагает этот релиз: бета 1.1.0-beta.1 младше 1.1.0.
+  const info = await inspectUpstream({ root: fx.mirror, head: installed });
+  assert.equal(info.hasVersionUpdate, true);
+  assert.equal(info.remoteVersion, "1.1.0");
 });
 
 void test("ветка обновления не main: каналы работают на её вершине и её метках", async (t) => {

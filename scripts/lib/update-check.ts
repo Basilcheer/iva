@@ -101,6 +101,17 @@ export function compareStableVersions(
   return 0;
 }
 
+/** Как compareStableVersions, но установленный пререлиз (бета X.Y.Z-…) — чуть младше
+ * своего релиза X.Y.Z: сравнивается его ядро. */
+function compareInstalled(
+  installed: string | null,
+  other: string | null,
+): number | null {
+  const core = String(installed).replace(/-[0-9A-Za-z.-]+$/u, "");
+  const bare = compareStableVersions(core, other);
+  return bare === 0 && core !== installed ? 1 : bare;
+}
+
 /** The file a release uses to name the oldest CLI that can install it. */
 export const UPDATE_COMPAT_FILE = "update-compat.json";
 
@@ -190,10 +201,7 @@ export async function updaterCompat(
 ): Promise<UpdaterCompat> {
   const minUpdater = await readMinUpdater(git, commit);
   if (!minUpdater) return { status: "ok" };
-  // Пререлиз (бета) — чуть младше своего релиза: сравнивается его ядро X.Y.Z.
-  const core = own.replace(/-[0-9A-Za-z.-]+$/u, "");
-  const bare = compareStableVersions(core, minUpdater);
-  const comparison = bare === 0 && core !== own ? 1 : bare;
+  const comparison = compareInstalled(own, minUpdater);
   if (comparison === null)
     throw new Error(
       `cannot compare the installed release ${JSON.stringify(own)} with minUpdater ${JSON.stringify(minUpdater)}`,
@@ -254,7 +262,7 @@ export async function inspectUpstream({
   const remoteVersion = packageVersion(
     await requireGit(gitImpl, root, ["show", `${remoteHead}:package.json`]),
   );
-  const versionComparison = compareStableVersions(localVersion, remoteVersion);
+  const versionComparison = compareInstalled(localVersion, remoteVersion);
   const hasCommitUpdate = behind > 0 && local !== remoteHead;
   const hasVersionUpdate = hasCommitUpdate && versionComparison === 1;
   // The same marker both updaters read, from the ref this call already fetched: an
