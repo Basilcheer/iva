@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -55,4 +56,32 @@ void test("строка description больше порога чтения и б
     changed,
     `---\ntype: note\ndescription: ${JSON.stringify(unit)}\nstatus: active\n---\n${body}`,
   );
+});
+
+void test("CLI чистки: dry-run печатает строку, которую читает меню, --apply чистит", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "iva-vault-cleanup-cli-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  writeFileSync(
+    join(root, "card.md"),
+    '---\ndescription: "a b a b a b"\n---\n# A\n',
+  );
+  const cli = (...args: string[]) =>
+    spawnSync(
+      process.execPath,
+      [join(import.meta.dirname, "../vault-cleanup.ts"), ...args],
+      { encoding: "utf8" },
+    );
+  const dry = cli(root);
+  assert.equal(dry.status, 0, dry.stderr);
+  assert.match(
+    dry.stdout,
+    /cleanup \(dry-run\): 1 file\(s\), \d+ bytes of bug garbage — run with --apply to fix/u,
+  );
+  const applied = cli(root, "--apply");
+  assert.match(applied.stdout, /cleanup \(applied\): 1 file\(s\)/u);
+  assert.match(
+    readFileSync(join(root, "card.md"), "utf8"),
+    /description: "a b"/u,
+  );
+  assert.equal(cli().status, 1);
 });
