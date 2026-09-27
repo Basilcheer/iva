@@ -64,7 +64,7 @@ function betaCommands(
   root: string,
   runtime: ReturnType<typeof createCliRuntime>,
 ) {
-  const command = (on: boolean) => (): void => {
+  const switchTo = (on: boolean): void => {
     if (!setBeta(root, on))
       throw new Error("no git repository here: the setting was not recorded");
     const language =
@@ -77,6 +77,10 @@ function betaCommands(
         : `Updates: ${name}. To update: iva update`,
     );
   };
+  // Промис, а не синхронный throw: отказ уходит в .catch диспетчера одной строкой
+  // «✗ …», а не стеком Node.
+  const command = (on: boolean) => (): Promise<void> =>
+    Promise.resolve().then(() => switchTo(on));
   return { beta: command(true), stable: command(false) };
 }
 

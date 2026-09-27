@@ -6,7 +6,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
-import { createCliMain } from "./main.ts";
+import { createCliMain, dispatchCli } from "./main.ts";
 import service, { type MenuServiceState } from "../lib/menu/service.ts";
 
 const git = (cwd: string, ...args: string[]) =>
@@ -87,4 +87,21 @@ void test("меню обслуживания: одна кнопка обновл
   assert.match(screens[0], />🧪 Обновления: бета</u);
   await service.on("beta", [], st, ctx);
   assert.equal(fx.beta(join(fx.home, "repo")), "");
+});
+
+void test("iva beta вне git-дерева: одна строка отказа и код 1, без стека", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "iva-beta-nogit-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const cli = createCliMain(dir);
+  const refused: string[] = [];
+  const codes: number[] = [];
+  await dispatchCli(["beta"], cli.commands, {
+    bad: (line) => void refused.push(line),
+    help: () => {},
+    exit: ((code: number) => void codes.push(code)) as (code: number) => never,
+  });
+  assert.deepEqual(refused, [
+    "no git repository here: the setting was not recorded",
+  ]);
+  assert.deepEqual(codes, [1]);
 });
