@@ -162,6 +162,8 @@ void test("main composition exposes the exact legacy command key set without exe
 
   assert.deepEqual(Object.keys(cli.commands), [
     "update",
+    "beta",
+    "stable",
     "rollback",
     "userbot",
     "config",

@@ -11,6 +11,7 @@ import { updateRunning } from "../version-store.ts";
 import { button } from "./buttons.ts";
 import { menuStyle } from "../telegram-buttons.ts";
 import { writeSettings } from "#lib/settings.ts";
+import { channelOf, setChannel } from "../update-channel.ts";
 import {
   LOADERS,
   currentRun,
@@ -262,6 +263,7 @@ function idleView(
       "check for and install a new version.",
       "проверить и поставить новую версию.",
     )}`,
+    channelLine(ctx),
     menuStyle() === "rich"
       ? `${button(T("◀︎ Classic menu", "◀︎ Старое меню"), "iva_menu:svc:menu:classic")} — ${T(
           "buttons under the message, as before 0.4.2.",
@@ -277,6 +279,21 @@ function idleView(
     )}`,
   );
   return { text: lines.join("\n\n") };
+}
+
+/** Одна кнопка канала обновлений: показывает текущий, нажатие переключает. */
+function channelLine(ctx: MenuServiceContext): string {
+  const T = ctx.tr;
+  const beta = channelOf(ctx.deps.root) === "beta";
+  const name = beta ? T("beta", "бета") : T("stable", "стабильный");
+  return `${button(T(`🧪 Update channel: ${name}`, `🧪 Канал обновлений: ${name}`), "iva_menu:svc:ch")} — ${T(
+    beta
+      ? "every accepted change; tap for released versions only."
+      : "released versions only; tap for every accepted change (beta).",
+    beta
+      ? "всё принятое сразу; нажми — только вышедшие версии."
+      : "только вышедшие версии; нажми — всё принятое сразу (бета).",
+  )}`;
 }
 
 /** Чистка трогает vault чужим процессом, а мост в это время свободен: правки владельца в
@@ -386,6 +403,55 @@ async function startCommand(
   }
 }
 
+type Verb = (
+  args: string[],
+  st: MenuServiceState,
+  ctx: MenuServiceContext,
+) => unknown;
+
+/** Глагол кнопки экрана → действие. */
+const VERBS: Record<string, Verb> = {
+  c: (args, st, ctx) =>
+    isServiceCommand(args[0]) ? confirmView(args[0], st, ctx) : undefined,
+  go: (args, st, ctx) =>
+    isServiceCommand(args[0]) ? startCommand(args[0], st, ctx) : undefined,
+  ab: (_args, st, ctx) =>
+    cancelRun()
+      ? ctx.flows.screen(st, ctx.tr("Stopping…", "Останавливаю…"))
+      : ctx.show(st, "svc"), // нечего отменять — перерисовать текущее состояние
+  up: (_args, st, ctx) => ctx.deps.handleUpdateCheck?.(st.chatId),
+  menu: (args, st, ctx) => {
+    if (args[0] !== "rich" && args[0] !== "classic") return undefined;
+    writeSettings({ menuStyle: args[0] });
+    return ctx.show(st, "r"); // корень сразу в новом стиле
+  },
+  ch: (_args, st, ctx) => {
+    const beta = channelOf(ctx.deps.root) === "beta";
+    setChannel(ctx.deps.root, beta ? "stable" : "beta");
+    return ctx.show(st, "svc"); // канал ставится при следующем обновлении
+  },
+};
+
+function confirmView(
+  cmd: ServiceCommand,
+  st: MenuServiceState,
+  ctx: MenuServiceContext,
+): unknown {
+  const T = ctx.tr;
+  return ctx.flows.screen(
+    st,
+    [
+      `# ${label(cmd, T)}`,
+      describe(cmd, T),
+      `${button(T("▶ Run", "▶ Запустить"), `iva_menu:svc:go:${cmd}`)} — ${T(
+        "start it now.",
+        "запустить сейчас.",
+      )}`,
+      backLine(ctx),
+    ].join("\n\n"),
+  );
+}
+
 const service = {
   parent: "r",
   // eslint-disable-next-line @typescript-eslint/require-await -- async preserves the original synchronous run snapshot before returning a Promise.
@@ -398,40 +464,13 @@ const service = {
       ? progressView(run, ctx)
       : idleView(st, ctx);
   },
-  async on(
+  on(
     verb: string,
     args: string[],
     st: MenuServiceState,
     ctx: MenuServiceContext,
-  ): Promise<unknown> {
-    const T = ctx.tr;
-    if (verb === "c" && isServiceCommand(args[0])) {
-      const cmd = args[0];
-      return ctx.flows.screen(
-        st,
-        [
-          `# ${label(cmd, T)}`,
-          describe(cmd, T),
-          `${button(T("▶ Run", "▶ Запустить"), `iva_menu:svc:go:${cmd}`)} — ${T(
-            "start it now.",
-            "запустить сейчас.",
-          )}`,
-          backLine(ctx),
-        ].join("\n\n"),
-      );
-    }
-    if (verb === "go" && isServiceCommand(args[0]))
-      return startCommand(args[0], st, ctx);
-    if (verb === "ab") {
-      if (cancelRun())
-        return ctx.flows.screen(st, T("Stopping…", "Останавливаю…"));
-      return ctx.show(st, "svc"); // нечего отменять — перерисовать текущее состояние
-    }
-    if (verb === "up") return ctx.deps.handleUpdateCheck?.(st.chatId);
-    if (verb === "menu" && (args[0] === "rich" || args[0] === "classic")) {
-      writeSettings({ menuStyle: args[0] });
-      return ctx.show(st, "r"); // корень сразу в новом стиле
-    }
+  ): unknown {
+    return Object.hasOwn(VERBS, verb) ? VERBS[verb](args, st, ctx) : undefined;
   },
 };
 
