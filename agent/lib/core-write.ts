@@ -1,14 +1,15 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { disappearedLines } from "./card-store.ts";
+import { disappearedLines, withCardLock } from "./card-store.ts";
 import { CORE_CAP } from "./core-cap.ts";
+import { LAST_DAY_LABEL } from "./core-clamp.ts";
 import { writeFileAtomicSync } from "./fs-atomic.ts";
 import { commitVaultWrite } from "./vault-commit.ts";
 
 // Единственный писатель CORE днём и ночью: исчезнувшие строки дословно уходят в
 // CORE.history.md, файл длиннее CORE_CAP не пишется (ночь может только сокращать уже
-// раздутый), сверка хеша перед записью, запись коммитится.
+// раздутый), сверка хеша, запись и коммит — под замком дневных писателей Card.
 
 export function textHash(text: string): string {
   return createHash("sha256").update(text).digest("hex");
@@ -40,12 +41,14 @@ export function coreExcess(
   return Math.max(0, next.length - limit);
 }
 
-/** Исчезнувшие строки CORE дословно дописываются в CORE.history.md; false — нечего. */
+/** Исчезнувшие строки CORE дословно дописываются в CORE.history.md; false — нечего.
+ * Указатель «Последний день» ведёт код, его смена — не история. */
 function writeHistory(options: WriteCoreOptions, before: string): boolean {
   const pointer = options.source ? ` · ${options.source}` : "";
-  const rows = disappearedLines(before, options.next).map(
-    (line) => `- ${options.date}: ${line} (${options.reason})${pointer}`,
-  );
+  const lines = disappearedLines(before, options.next);
+  const rows = lines
+    .filter((line) => !LAST_DAY_LABEL.test(line))
+    .map((line) => `- ${options.date}: ${line} (${options.reason})${pointer}`);
   if (!rows.length) return false;
   const history = join(options.vault, "CORE.history.md");
   const old = existsSync(history) ? readFileSync(history, "utf8") : "";
@@ -55,6 +58,12 @@ function writeHistory(options: WriteCoreOptions, before: string): boolean {
 }
 
 export async function writeCore(
+  options: WriteCoreOptions,
+): Promise<WriteCoreResult> {
+  return await withCardLock(options.vault, () => writeCoreLocked(options));
+}
+
+async function writeCoreLocked(
   options: WriteCoreOptions,
 ): Promise<WriteCoreResult> {
   const { vault, next } = options;
@@ -69,10 +78,10 @@ export async function writeCore(
       error: `CORE длиннее ${CORE_CAP} знаков: освободи ${excess} знаков`,
     };
   if (before === next) return { ok: true };
+  writeFileAtomicSync(path, next);
   const paths = writeHistory(options, before)
     ? [path, join(vault, "CORE.history.md")]
     : [path];
-  writeFileAtomicSync(path, next);
   const commit = await commitVaultWrite(
     `CORE: ${options.reason}`,
     paths,

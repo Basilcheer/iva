@@ -5,7 +5,13 @@
 // дополняет один ## Log, SUPERSEDE заменяет Compiled Truth и переносит прежний факт
 // в ## History, а NOOP не пишет файл.
 
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  statSync,
+} from "node:fs";
 import { join } from "node:path";
 import { hasUnclosedFence, outsideFences, scanFences } from "./card-text.ts";
 import { acquireFileLock, releaseFileLock } from "./fs-atomic.ts";
@@ -1516,6 +1522,21 @@ const LOCK_STALE_MS = 15_000;
 /** Лок карточки — каталог `<карточка>.lock` рядом с ней. Занятая карточка это внятная
  * ошибка для модели, а не тихая перезапись чужой правки. Ждём, отпуская event loop: под
  * этим локом идёт ещё и коммит правки, а синхронное ожидание заморозило бы его. */
+/** Замок дневных писателей Card (write_card), CORE и ночи: чтение, сверка хеша, запись
+ * и коммит — одна секция. */
+export async function withCardLock<T>(
+  vault: string,
+  work: () => Promise<T>,
+): Promise<T> {
+  mkdirSync(join(vault, "cards"), { recursive: true });
+  const release = await acquireLock(join(vault, "cards", ".write_card"));
+  try {
+    return await work();
+  } finally {
+    release();
+  }
+}
+
 export async function acquireLock(
   file: string,
   timeoutMs = 5000,

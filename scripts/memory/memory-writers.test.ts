@@ -310,3 +310,113 @@ void test("поля ночи truth_date и truth_pending живы после с�
   assert.match(content, /truth_date: "2026-09-26"/u);
   assert.match(content, /truth_pending: "2026-09-25"/u);
 });
+
+void test("незакрытый фенс: fact, truth и merge отказывают до записи, байты Card целы (#14)", async (t) => {
+  const fx = fixture(t);
+  const dir = join(fx.vault, "cards/notes");
+  mkdirSync(dir, { recursive: true });
+  const fenced = [
+    "---",
+    'type: "note"',
+    "---",
+    "# Фенс",
+    "",
+    "```",
+    "## History",
+    "код",
+    "",
+    "## Log",
+    "",
+    "## Related",
+    "",
+    "## History",
+    "",
+  ].join("\n");
+  const clean = fenced
+    .replace("```\n## History\nкод\n", "")
+    .replace("# Фенс", "# Чистая");
+  writeFileSync(join(dir, "фенс.md"), fenced);
+  writeFileSync(join(dir, "чистая.md"), clean);
+  git(fx.vault, "add", ".");
+  git(fx.vault, "commit", "-qm", "cards");
+  const calls = [
+    { operation: "fact", type: "note", title: "Фенс", text: "факт" },
+    {
+      operation: "truth",
+      type: "note",
+      title: "Фенс",
+      text: "Правда",
+      reason: "r",
+    },
+    {
+      operation: "merge",
+      target: "Фенс",
+      duplicate: "Чистая",
+      confirmed_by_owner: true,
+    },
+    {
+      operation: "merge",
+      target: "Чистая",
+      duplicate: "Фенс",
+      confirmed_by_owner: true,
+    },
+  ];
+  for (const input of calls) {
+    const result = (await writeCard.execute(input as never, context)) as {
+      ok: boolean;
+      error?: string;
+    };
+    assert.equal(result.ok, false, JSON.stringify(input));
+    assert.match(result.error ?? "", /блок кода/u);
+    assert.equal(readFileSync(join(dir, "фенс.md"), "utf8"), fenced);
+    assert.equal(readFileSync(join(dir, "чистая.md"), "utf8"), clean);
+  }
+});
+
+void test("CORE: замок дневных писателей держит и CORE, файл пишется раньше History, указатель в History не уходит (#1, #9, Н-4)", async (t) => {
+  const fx = fixture(t);
+  const { acquireLock } = await import("../../agent/lib/card-store.ts");
+  const file = join(fx.vault, "CORE.md");
+  const before = readFileSync(file, "utf8");
+  mkdirSync(join(fx.vault, "cards"), { recursive: true });
+  const release = await acquireLock(join(fx.vault, "cards", ".write_card"));
+  const busy = await writeCore({
+    vault: fx.vault,
+    next: `${before}- занято\n`,
+    reason: "day",
+    date: "2026-09-27",
+    mode: "day",
+  }).catch((error: unknown) => ({ ok: false, error: String(error) }));
+  release();
+  assert.equal(busy.ok, false);
+  assert.match(busy.error ?? "", /занята/u);
+  assert.equal(readFileSync(file, "utf8"), before);
+
+  const pointed = (day: string) =>
+    `${before}\n## Указатели\n\n- Последний день: summaries/daily/${day}\n`;
+  for (const day of ["2026-09-25", "2026-09-26"]) {
+    const result = await writeCore({
+      vault: fx.vault,
+      next: pointed(day),
+      reason: `night ${day}`,
+      date: day,
+      mode: "night",
+    });
+    assert.equal(result.ok, true, result.error);
+  }
+  assert.equal(existsSync(join(fx.vault, "CORE.history.md")), false);
+
+  mkdirSync(join(fx.vault, "CORE.history.md"));
+  const next = pointed("2026-09-26").replace(
+    "## Пользователь\n",
+    "## Пользователь\n\n- новое\n",
+  );
+  await writeCore({
+    vault: fx.vault,
+    next: next.replace("## Предпочтения\n", ""),
+    reason: "night",
+    date: "2026-09-27",
+    mode: "night",
+  }).catch(() => undefined);
+  assert.match(readFileSync(file, "utf8"), /- новое/u);
+});

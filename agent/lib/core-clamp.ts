@@ -205,7 +205,7 @@ export function clampCore(text: string): string {
 // SECTION_KIND выше; здесь — обе локали самой метки. Значение (путь до сводки) кончается
 // на первом пробеле или `·`, поэтому хвост строки («· Индекс: MOC.md») переживает правку
 // байт в байт, а старое значение с префиксом `vault/` заменяется целиком.
-const LAST_DAY_LABEL =
+export const LAST_DAY_LABEL =
   /^(\s*[-*][ \t]+(?:Последний день|Last day)[ \t]*:[ \t]*)([^\s·]*)(.*)$/u;
 const DAILY_SUMMARY_PREFIX = "summaries/daily/";
 // Канонический вид секции указателей — на случай, когда её нет вовсе.

@@ -4,7 +4,6 @@ import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { basename, dirname, join, relative, sep } from "node:path";
 import { resolveVaultDir } from "@iva/vault-dir";
 import {
-  acquireLock,
   ALIASES_MAX,
   aliasList,
   disappearedLines,
@@ -19,6 +18,7 @@ import {
   slugify,
   truthOf,
   TYPE_DIR,
+  withCardLock,
   withTruth,
 } from "../lib/card-store.ts";
 import { hasUnclosedFence } from "../lib/card-text.ts";
@@ -105,6 +105,15 @@ function render(parsed: ParsedFrontmatter, fields: FmFields, body: string) {
   return `---\n${writeFrontmatter(fields, parsed.lines)}\n---\n${body.trim()}\n`;
 }
 
+/** Незакрытый блок кода: заголовок внутри кода нельзя принять за границу раздела —
+ * fact, truth и merge отказывают до записи. */
+function fenced(...cards: CardRecord[]) {
+  const card = cards.find((item) => hasUnclosedFence(item.parsed.body));
+  return card
+    ? { ok: false, error: `Card ${card.path}: незакрытый блок кода` }
+    : null;
+}
+
 // Правка записана — ход не падает; отказ коммита шов сам пишет в журнал (vault-commit).
 async function save(vault: string, files: string[], message: string) {
   await commitVaultWrite(message, files, vault);
@@ -152,11 +161,9 @@ async function writeFact(input: FactInput) {
       error: `Card ${card.path} есть, но не читается; поправь её`,
     };
   const rows = sectionRows(card.parsed.body, "Log");
-  if (hasUnclosedFence(card.parsed.body) || rows === null)
-    return {
-      ok: false,
-      error: `Card ${card.path}: незакрытый блок кода или неоднозначный Log`,
-    };
+  if (fenced(card)) return fenced(card);
+  if (rows === null)
+    return { ok: false, error: `Card ${card.path}: неоднозначный Log` };
   const row = `- ${date}: ${sanitizeField(input.text)} · ${input.source ?? `[[daily/${date}]]`}`;
   if (rows.some((existing) => logFactKey(existing) === logFactKey(row)))
     return { ok: true, action: "fact", file: card.path };
@@ -180,6 +187,7 @@ async function writeTruth(input: z.infer<typeof truthInput>) {
         : "Card не найдена; truth не создаёт Card",
     };
   const card = found[0];
+  if (fenced(card)) return fenced(card);
   const history = sectionRows(card.parsed.body, "History");
   if (history === null)
     return { ok: false, error: `Card ${card.path}: неоднозначный History` };
@@ -220,6 +228,7 @@ async function mergeCards(input: z.infer<typeof mergeInput>) {
   const [target, duplicate] = [targets[0], duplicates[0]];
   if (target.file === duplicate.file)
     return { ok: false, error: "Card нельзя склеить с самой собой" };
+  if (fenced(target, duplicate)) return fenced(target, duplicate);
   let body = target.parsed.body;
   for (const heading of ["Log", "History", "Related"]) {
     const left = sectionRows(target.parsed.body, heading);
@@ -275,23 +284,19 @@ export default defineTool({
     mergeInput,
   ]),
   async execute(input) {
-    let release = () => {};
     try {
-      // Одна правка Card за раз: параллельные ходы не сливаются в один коммит.
-      const cards = join(resolveVaultDir(process.cwd()), "cards");
-      mkdirSync(cards, { recursive: true });
-      release = await acquireLock(join(cards, ".write_card"));
-      if (input.operation === "fact") return await writeFact(input);
-      if (input.operation === "truth") return await writeTruth(input);
-      if (input.confirmed_by_owner !== true)
-        return { ok: false, error: "merge требует confirmed_by_owner=true" };
-      return await mergeCards(input);
+      // Одна правка Card за раз (и с ночью): параллельные ходы не сливаются в коммит.
+      return await withCardLock(resolveVaultDir(process.cwd()), async () => {
+        if (input.operation === "fact") return await writeFact(input);
+        if (input.operation === "truth") return await writeTruth(input);
+        if (input.confirmed_by_owner !== true)
+          return { ok: false, error: "merge требует confirmed_by_owner=true" };
+        return await mergeCards(input);
+      });
     } catch (error) {
       const text = vaultDirErrorText(error);
       if (text !== null) return { ok: false, error: text };
       throw error;
-    } finally {
-      release();
     }
   },
 });
