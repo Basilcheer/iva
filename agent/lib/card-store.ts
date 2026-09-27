@@ -21,7 +21,7 @@ import {
   writeFrontmatter,
   type FmFields,
   type FmValue,
-} from "./frontmatter.js";
+} from "./frontmatter.ts";
 
 export function listCardFiles(vault: string): string[] {
   const root = join(vault, "cards");
