@@ -8,11 +8,7 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { hasUnclosedFence, outsideFences, scanFences } from "./card-text.ts";
-import {
-  acquireFileLock,
-  releaseFileLock,
-  writeFileAtomicSync,
-} from "./fs-atomic.ts";
+import { acquireFileLock, releaseFileLock } from "./fs-atomic.ts";
 import {
   parseFrontmatter,
   parseFrontmatterOrSkip,
@@ -21,7 +17,14 @@ import {
   type FmValue,
 } from "./frontmatter.js";
 
-export { outsideFences } from "./card-text.ts";
+export function listCardFiles(vault: string): string[] {
+  const root = join(vault, "cards");
+  if (!existsSync(root)) return [];
+  return readdirSync(root, { recursive: true, withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".md"))
+    .map((entry) => join(entry.parentPath, entry.name))
+    .sort();
+}
 
 // ─── identity ──────────────────────────────────────────────────────────────
 
@@ -260,7 +263,7 @@ interface NamedH2Section extends H2Section {
   key: string;
 }
 
-export function h2Sections(lines: string[], heading: string): H2Section[] {
+function h2Sections(lines: string[], heading: string): H2Section[] {
   const escaped = heading.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const wanted = new RegExp(`^ {0,3}##\\s+${escaped}\\s*$`, "i");
   const outside = outsideFences(lines);
@@ -327,7 +330,7 @@ function normalizeRelatedTarget(raw: string): string {
     .toLowerCase();
 }
 
-function replaceH2Sections(
+export function replaceH2Sections(
   body: string,
   heading: string,
   content: string[],
@@ -399,6 +402,102 @@ export function mergeRelated(body: string, related: string[]): string {
   if (!sections.length && !prose.length && !links.length) return body;
   const content = [...prose, ...links.map((link) => `- [[${link}]]`)];
   return replaceH2Sections(body, "Related", content);
+}
+
+/** Папка Card по типу из schema.json. */
+export const TYPE_DIR: Record<string, string> = {
+  contact: "contacts",
+  project: "projects",
+  decision: "decisions",
+  idea: "ideas",
+  note: "notes",
+};
+
+/** aliases из frontmatter: список или строка через запятую. */
+export function aliasList(value: unknown): string[] {
+  if (Array.isArray(value)) return value.map(String);
+  return typeof value === "string"
+    ? value
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean)
+    : [];
+}
+
+/** Поле Card одной строкой: без фенсов, разделителей frontmatter и заголовков. Один
+ * санитайзер на дневной write_card и ночь. */
+export function sanitizeField(value: string, max = 500): string {
+  return value
+    .replace(/```/gu, "")
+    .replace(/^---\s*$/gmu, "")
+    .replace(/^#+\s*/gmu, "")
+    .replace(/\s+/gu, " ")
+    .trim()
+    .slice(0, max)
+    .trim();
+}
+
+/** Непустые строки секции `## heading`; null — секций больше одной. */
+export function sectionRows(body: string, heading: string): string[] | null {
+  const lines = body.split("\n");
+  const sections = h2Sections(lines, heading);
+  if (sections.length > 1) return null;
+  if (sections.length === 0) return [];
+  return lines
+    .slice(sections[0].start + 1, sections[0].end)
+    .filter((line) => line.trim());
+}
+
+/** Факт Log без даты и указателя на день: по этому ключу Log не дублирует факт. */
+export function logFactKey(row: string): string {
+  return row
+    .replace(/^- \d{4}-\d{2}-\d{2}:\s*/u, "")
+    .replace(/\s+·\s+\[\[daily\/[^\]]+\]\](?:\s+\d{2}:\d{2})?\s*$/u, "")
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/ё/gu, "е")
+    .replace(/\s+/gu, " ")
+    .trim();
+}
+
+// Compiled Truth в теле: между H1 и первым `##`, без пустых строк по краям.
+function truthBounds(lines: string[]): [number, number, number] {
+  let start = 0;
+  while (start < lines.length && !lines[start].trim()) start++;
+  if (/^ {0,3}#\s/u.test(lines[start] ?? "")) start++;
+  while (start < lines.length && !lines[start].trim()) start++;
+  let end = lines.findIndex(
+    (line, index) => index >= start && /^ {0,3}##\s/u.test(line),
+  );
+  if (end < 0) end = lines.length;
+  let last = end;
+  while (last > start && !lines[last - 1].trim()) last--;
+  return [start, last, end];
+}
+
+export function truthOf(body: string): string {
+  const lines = body.split("\n");
+  const [start, last] = truthBounds(lines);
+  return lines.slice(start, last).join("\n");
+}
+
+export function withTruth(body: string, truth: string): string {
+  const lines = body.split("\n");
+  const [start, , end] = truthBounds(lines);
+  const text = truth.trim() ? [...truth.trim().split("\n"), ""] : [];
+  return [...lines.slice(0, start), ...text, ...lines.slice(end)].join("\n");
+}
+
+/** Строки before, которых нет в after (с учётом повторов): они уходят в History. */
+export function disappearedLines(before: string, after: string): string[] {
+  const remaining = after.split("\n");
+  return before.split("\n").filter((line) => {
+    if (!line.trim()) return false;
+    const index = remaining.indexOf(line);
+    if (index < 0) return true;
+    remaining.splice(index, 1);
+    return false;
+  });
 }
 
 /** Строки секции как они лежат в карточке. Пустая строка внутри уже сохранённой записи -
@@ -799,7 +898,7 @@ function replaceCompiledTruth(
   };
 }
 
-export type CardOperation = "ADD" | "UPDATE" | "SUPERSEDE" | "NOOP";
+type CardOperation = "ADD" | "UPDATE" | "SUPERSEDE" | "NOOP";
 export const HISTORY_ENTRY_CAP = 500;
 
 interface OperationInput {
@@ -816,7 +915,7 @@ interface OperationInput {
  * Вызывающий обязан передавать в mergeCard сырую operation — по её отсутствию
  * отличается легаси-путь replace_body, где ## History приходит внутри body.
  */
-export function resolveOperation(input: OperationInput): CardOperation {
+function resolveOperation(input: OperationInput): CardOperation {
   if (input.operation) return input.operation;
   if (input.replaceBody) return "SUPERSEDE";
   return input.existing === undefined ? "ADD" : "UPDATE";
@@ -828,7 +927,7 @@ export function resolveOperation(input: OperationInput): CardOperation {
  * вытесненный факт передаётся через historyEntry. Тул и стор обязаны решать это
  * одинаково, иначе один пускает вызов, а второй роняет его английским исключением.
  */
-export function isLegacyHistoryReplace(
+function isLegacyHistoryReplace(
   operation: CardOperation | undefined,
   replaceBody: boolean | undefined,
   body: string,
@@ -900,7 +999,7 @@ export function aliasKey(value: string): string {
 /** Алиасы, которым не хватит места: тот же ключ и тот же потолок, что у слияния. Нужен
  * вызывающему, который решает про запись до слияния: NOOP в write_card ничего не пишет, но
  * обязан назвать написание, которого владелец в карточке не найдёт. */
-export function droppedAliases(
+function droppedAliases(
   previous: FmValue | undefined,
   next: readonly string[],
 ): string[] {
@@ -1431,9 +1530,4 @@ export async function acquireLock(
   return () => {
     releaseFileLock(held);
   };
-}
-
-/** Запись через временный файл + rename: читатель никогда не видит половину карточки. */
-export function atomicWrite(file: string, content: string): void {
-  writeFileAtomicSync(file, content);
 }

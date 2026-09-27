@@ -89,6 +89,14 @@ const BLIND_SPOT: ReadonlyArray<{
     path: "scripts/replica-smoke.ts",
     why: "ручной стенд; e2e идет через capture/analyze",
   },
+  {
+    path: "scripts/memory/brain.ts",
+    why: "отдельный процесс; TS-граф и git-швы проверяются отдельно",
+  },
+  {
+    path: "scripts/memory/night-call.ts",
+    why: "процессная ночь проверяет вызов через HTTP-двойник",
+  },
 ];
 
 const EXPECTED_COVERAGE_COMMAND =

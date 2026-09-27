@@ -48,7 +48,6 @@ const EMBED_EXTS = [
   ".wav",
 ];
 
-const WIKILINK = /\[\[([^\]|]+?)(?:\|([^\]]+))?\]\]/g;
 const DAY_MS = 86_400_000;
 
 interface LinkIndex {
@@ -248,7 +247,7 @@ export function weekOfDay(day: string): string | null {
  * Месяц, которому принадлежит ISO-неделя: месяц её четверга — так эту связь читает
  * граф. `null` для недели, которой в году нет (53-я в 52-недельном году).
  */
-export function monthOfWeek(week: string): string | null {
+function monthOfWeek(week: string): string | null {
   const match = /^(\d{4})-W(\d{2})$/.exec(week);
   if (!match) return null;
   const [year, number] = match.slice(1).map(Number);
@@ -367,25 +366,6 @@ function isInside(root: string, path: string): boolean {
   return !inside.startsWith("..") && !isAbsolute(inside);
 }
 
-/** Цели wikilinks из текста: без alias и без #якоря, в порядке появления. */
-export function wikilinkTargets(text: string): string[] {
-  const targets: string[] = [];
-  for (const match of text.matchAll(WIKILINK)) {
-    const anchor = match[1].indexOf("#");
-    const target = (
-      anchor === -1 ? match[1] : match[1].slice(0, anchor)
-    ).trim();
-    if (target) targets.push(target);
-  }
-  return targets;
-}
-
-/** Элемент `related`: путь/слаг, иногда в скобках и с alias'ом. */
-export function relatedTarget(raw: string): string {
-  const value = raw.trim().replace(/^\[\[/, "").replace(/\]\]$/, "");
-  return value.split("|")[0].trim();
-}
-
 /**
  * Цели, которые не резолвятся ни в один файл vault'а. `source` — rel-путь записываемого
  * файла без .md: он нужен для future-link роллапа и делает ссылку на самого себя
@@ -418,13 +398,4 @@ export function unresolvedLinkTargets(
     unresolved.push(target);
   }
   return unresolved;
-}
-
-/** Текст отказа — один на оба тула: одинаковая ошибка не должна читаться по-разному. */
-export function brokenLinksError(targets: readonly string[]): string {
-  return (
-    `Ссылки ведут в никуда: ${targets.map((t) => `[[${t}]]`).join(", ")}. Ничего не записано. ` +
-    "Сначала создай карточку через write_card или напиши без [[ ]]; " +
-    "точный путь проверь через memory_search/read_file."
-  );
 }

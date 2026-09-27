@@ -2,7 +2,7 @@
 
 <!-- Always-on: injected into context every turn (≤~3600 chars). Durable facts only.
      Written by the nightly rollup; on an explicit "remember …" the agent appends a line.
-     The night gets the format rule as text, in its core-format section -->
+     The night takes the line format from its CORE step instruction (scripts/memory/instructions/night/core.md) -->
 
 ## User
 - (name, role, how to address — fills in over time)

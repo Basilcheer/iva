@@ -10,184 +10,96 @@ import {
   resolve,
   sep,
 } from "node:path";
-import { writeFileAtomic } from "../lib/fs-atomic.js";
-import { parseFrontmatterOrSkip } from "../lib/frontmatter.js";
 import { resolveVaultDir } from "@iva/vault-dir";
-import { vaultDirErrorText } from "../lib/vault-error.ts";
+import { writeFileAtomic } from "../lib/fs-atomic.js";
+import { writeCore } from "../lib/core-write.ts";
 import { commitVaultWrite } from "../lib/vault-commit.ts";
-import {
-  brokenLinksError,
-  unresolvedLinkTargets,
-  wikilinkTargets,
-} from "../lib/vault-links.ts";
+import { localStamp } from "../lib/vault-daily.ts";
+import { vaultDirErrorText } from "../lib/vault-error.ts";
 
-// Host-native запись файла. Переопределяет встроенный write_file eve: пишет реальный
-// файл на VPS через каноническую атомарную запись, создавая родительские директории.
-//
-// Единственное ограничение: перезапись СУЩЕСТВУЮЩЕЙ карточки в <vault>/cards/** запрещена —
-// это полная замена файла, из-за которой терялись поля (tier/relevance/phone…) и старый текст.
-// Такие правки идут через write_card (он сливает). Всё остальное (vault/CORE.md, daily,
-// новые файлы в cards/) write_file пишет как раньше — см. instructions/10-map.md.
+// Память в vault пишет её код: сырой день и выжимки ведёт ночь, Card меняет write_card,
+// CORE проходит общий писатель с лимитом и History. Остальное в vault (library/ скилла
+// documents) пишется как файл и коммитится; вне vault — просто файл.
+const MEMORY = /^(?:daily|summaries|weekly|monthly|yearly|cards)(?:\/|$)/u;
 
-type PathProbe =
-  | { readonly kind: "path"; readonly path: string }
-  | { readonly kind: "absent" }
-  | { readonly kind: "unreadable"; readonly reason: string };
-
-// Сравниваем РЕАЛЬНЫЕ пути (realpath), а не лексические: симлинк vault/alias → cards
-// не должен обходить гард. Три исхода, а не два: «нет» и «не смог посмотреть» ведут к
-// противоположным решениям, и склеивать их нельзя.
-function probe(path: string): PathProbe {
-  try {
-    return { kind: "path", path: realpathSync(path) };
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "ENOENT"
-      ? { kind: "absent" }
-      : { kind: "unreadable", reason: (error as Error).message };
-  }
-}
-
-type CardVerdict =
-  { readonly card: boolean } | { readonly undecidable: string };
-
-// Решить «карточка или нет» можно, только зная, где вольт. Раньше нерезолвимый вольт
-// читался как «не карточка», то есть гвард открывался наружу и молчал: путь к вольту по
-// умолчанию относительный (`vault`), так что любой процесс с другим рабочим каталогом
-// затирал карточку целиком и возвращал модели ok:true.
-function cardVerdict(path: string): CardVerdict {
-  const abs = resolve(path);
-  // Файла нет — перезаписывать нечего, и где вольт, знать не требуется.
-  if (!existsSync(abs)) return { card: false };
-
-  const vault = resolveVaultDir(process.cwd());
-  const cardsPath = join(vault, "cards");
-  const realVault = probe(vault);
-  if (realVault.kind === "absent")
-    return {
-      undecidable: `каталога вольта ${vault} нет (ASSISTANT_VAULT_DIR задан относительно рабочего каталога?)`,
-    };
-  if (realVault.kind === "unreadable") return { undecidable: realVault.reason };
-
-  const cards = probe(join(realVault.path, "cards"));
-  // Вольт на месте, а cards/ в нём ещё нет — защищать нечего.
-  if (cards.kind === "absent") return { card: false };
-  if (cards.kind === "unreadable") return { undecidable: cards.reason };
-
-  const real = probe(abs);
-  // Исчез между проверкой и резолвом — перезаписывать снова нечего.
-  if (real.kind === "absent") return { card: false };
-  if (real.kind === "unreadable")
-    return { undecidable: `${cardsPath}: ${real.reason}` };
-
-  return {
-    card: real.path === cards.path || real.path.startsWith(cards.path + sep),
-  };
-}
-
-// Ссылки [[…]] внутри вольта: цель, которой нет, режет health score графа, и ночной
-// graph.fix её не чинит. Проверяется только markdown внутри вольта — файл снаружи и
-// не-markdown к графу отношения не имеют. Оба пути сравниваются реальными: vault в
-// раскладке versions/ — симлинк, и путь через него иначе выглядел бы «снаружи», и
-// проверка молча выключалась бы. Если вольта нет — проверять нечего и не по чему.
-function vaultRelPath(path: string): string | null {
-  if (!path.toLowerCase().endsWith(".md")) return null;
-  const vault = resolveVaultDir(process.cwd());
-  const root = probe(vault);
-  if (root.kind !== "path") return null;
-  const rel = relative(root.path, realPathOfTarget(resolve(path)));
-  if (rel.startsWith("..") || isAbsolute(rel)) return null;
-  return rel.split(sep).join("/").replace(/\.md$/i, "");
-}
-
-/** Реальный путь файла, которого может ещё не быть: реальный ближайший существующий
- * предок плюс остаток пути как есть. */
-function realPathOfTarget(abs: string): string {
+/** Реальный путь файла, которого может ещё не быть: симлинк не обходит запрет. */
+function realTarget(abs: string): string {
   const rest: string[] = [];
-  let current = abs;
-  for (;;) {
+  for (let current = abs; ; current = dirname(current)) {
     try {
       return join(realpathSync(current), ...rest.reverse());
     } catch {
-      const parent = dirname(current);
-      if (parent === current) return abs;
+      if (dirname(current) === current) return abs;
       rest.push(basename(current));
-      current = parent;
     }
   }
 }
 
+/** Перезапись существующего файла, когда vault или его cards/ не видно: проверить,
+ * не Card ли это, нельзя — отказ, а не тихое разрешение. cards/ ещё нет — защищать нечего. */
+function unverifiable(vault: string, path: string): string | null {
+  if (!existsSync(path)) return null;
+  for (const dir of [vault, join(vault, "cards")])
+    try {
+      realpathSync(dir);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (dir !== vault && code === "ENOENT") continue;
+      const why = code === "ENOENT" ? "каталога vault нет" : String(error);
+      return `не могу проверить ${dir}: ${why}`;
+    }
+  return null;
+}
+
 export default defineTool({
   description:
-    "Записать файл (UTF-8) на хост; директории создаются, файл перезаписывается целиком. " +
-    "Возвращает { ok, path, bytes }. " +
-    "Карточку vault/cards/** нельзя — используй write_card.",
+    "Записать UTF-8 файл, директории создаются. В vault: CORE.md через общий писатель CORE (лимит, History); daily/, summaries/, weekly/, monthly/, yearly/ и cards/ закрыты (Card меняет write_card); остальное, например library/, пишется и коммитится.",
   inputSchema: z.object({
     path: z.string().min(1).describe("Абсолютный путь"),
-    content: z.string().describe("Содержимое (UTF-8)"),
+    content: z.string().describe("Содержимое UTF-8"),
   }),
   async execute({ path, content }) {
-    let verdict: CardVerdict;
-    let source: string | null;
+    const bytes = Buffer.byteLength(content, "utf8");
     try {
-      verdict = cardVerdict(path);
-      source = vaultRelPath(path);
+      const vault = resolveVaultDir(process.cwd());
+      const blocked = unverifiable(vault, resolve(path));
+      if (blocked) {
+        console.error(`[write_file] ${blocked}`);
+        return { ok: false, path, error: blocked };
+      }
+      const rel = relative(realTarget(vault), realTarget(resolve(path)))
+        .split(sep)
+        .join("/");
+      if (rel.startsWith("..") || isAbsolute(rel)) {
+        await writeFileAtomic(path, content);
+        return { ok: true, path, bytes };
+      }
+      if (rel === "CORE.md") {
+        const result = await writeCore({
+          vault,
+          next: content,
+          reason: "day write_file",
+          date: localStamp().date,
+          mode: "day",
+        });
+        return result.ok
+          ? { ok: true, path, bytes }
+          : { ok: false, path, error: result.error ?? "CORE не записан" };
+      }
+      if (MEMORY.test(rel))
+        return {
+          ok: false,
+          path,
+          error:
+            "write_file не пишет память: сырой день и выжимки ведёт ночь, Card меняет write_card.",
+        };
+      await writeFileAtomic(path, content);
+      await commitVaultWrite(`file ${rel}: write`, [path], vault);
+      return { ok: true, path, bytes };
     } catch (error) {
       const text = vaultDirErrorText(error);
       if (text !== null) return { ok: false, path, error: text };
       throw error;
     }
-    if ("undecidable" in verdict) {
-      const error = `не могу проверить ${join(resolveVaultDir(process.cwd()), "cards")}: ${verdict.undecidable}`;
-      console.error(`[write_file] ${error}`);
-      return { ok: false, path, error };
-    }
-    if (verdict.card) {
-      return {
-        ok: false,
-        path,
-        error:
-          "Карточка уже существует — write_file затёр бы её целиком (поля вне схемы и старый текст). " +
-          "Используй write_card: он сливает новое содержимое со старым.",
-      };
-    }
-    if (source !== null) {
-      // Ночной обход графа читает ТЕЛО карточки; ссылка во frontmatter ему не ссылка,
-      // и отказывать по ней нельзя. Битый frontmatter — читаем файл целиком, как graph.py.
-      const body =
-        parseFrontmatterOrSkip(content, path, () => {})?.body || content;
-      const broken = unresolvedLinkTargets(wikilinkTargets(body), {
-        vaultDir: resolveVaultDir(process.cwd()),
-        source,
-      });
-      if (broken.length)
-        return { ok: false, path, error: brokenLinksError(broken) };
-    }
-    await writeFileAtomic(path, content);
-    // Внутри vault файл - часть памяти, и правка оставляет след в её истории; вне vault
-    // (или когда vault не разрешился) коммитить нечего.
-    const vault = optionalVault();
-    if (vault)
-      await commitVaultWrite(
-        `file ${fileRel(vault, path)}: write`,
-        [path],
-        vault,
-      );
-    return { ok: true, path, bytes: Buffer.byteLength(content, "utf8") };
   },
 });
-
-/** Vault для сообщения коммита: нерезолвимый (или вовсе не настроенный) - коммитить
- * нечего, и запись файла из-за этого не падает. */
-function optionalVault(): string {
-  try {
-    return resolveVaultDir(process.cwd());
-  } catch {
-    return "";
-  }
-}
-
-/** Путь файла для сообщения коммита: от vault, с прямыми слэшами. Вне vault он не попадёт
- * ни в одно сообщение - шов такой путь не коммитит. */
-function fileRel(vault: string, path: string): string {
-  return relative(vault, resolve(path)).split(sep).join("/");
-}

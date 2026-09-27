@@ -728,13 +728,8 @@ async function cleanVault(run: UpdateRun): Promise<void> {
   await errand(run.run, run.log, {
     what: "the vault cleanup",
     failure: "the update continues without it",
-    command: "uv",
-    args: [
-      "run",
-      join(run.dir, "scripts/autograph/cleanup.py"),
-      ".",
-      "--apply",
-    ],
+    command: process.execPath,
+    args: [join(run.dir, "scripts/vault-cleanup.ts"), ".", "--apply"],
     cwd: vault,
   });
   await pair?.after();

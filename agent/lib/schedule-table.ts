@@ -11,10 +11,7 @@
 // ASSISTANT_TIMEZONE at startup — so "0 4 * * *" means 04:00 local. The reminders dispatcher
 // ticks every minute on top of them; its own entry sits below.
 export const SCHEDULE_CRON = {
-  "memory-daily": "0 4 * * *",
-  "memory-weekly": "15 4 * * 1",
-  "memory-monthly": "20 4 1 * *",
-  "memory-yearly": "25 4 1 1 *",
+  "memory-night": "0 4 * * *",
   digest: "0 8 * * *",
   // Дневной сторож расписаний (T20 п.4): после ночных rollup, до рабочего дня.
   "jobs-watchdog": "17 7 * * *",

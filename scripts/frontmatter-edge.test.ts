@@ -26,7 +26,7 @@ const corpus = JSON.parse(
   readFileSync(
     join(
       dirname(fileURLToPath(import.meta.url)),
-      "autograph/tests/golden/frontmatter/scalar-corpus.cases.json",
+      "fixtures/frontmatter-scalar-corpus.cases.json",
     ),
     "utf8",
   ),

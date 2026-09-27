@@ -1961,7 +1961,7 @@ test("rollup-status свежий и здоровый — строка ok", async
   writeFileSync(
     join(root, "data/rollup-status.json"),
     JSON.stringify({
-      "memory-daily": { lastSuccessAt: Date.now(), lastExitCode: 0 },
+      "memory-night": { lastSuccessAt: Date.now(), lastExitCode: 0 },
     }),
   );
 
@@ -1970,7 +1970,7 @@ test("rollup-status свежий и здоровый — строка ok", async
     events.some(
       ([level, message]) =>
         level === "ok" &&
-        /memory-daily schedule last succeeded 0h ago/u.test(message),
+        /memory-night schedule last succeeded 0h ago/u.test(message),
     ),
     `нет ok-строки свежего расписания: ${JSON.stringify(events)}`,
   );
@@ -1982,7 +1982,7 @@ test("rollup-status старый и с провалом — строки пре�
   writeFileSync(
     join(root, "data/rollup-status.json"),
     JSON.stringify({
-      "memory-daily": {
+      "memory-night": {
         lastSuccessAt: Date.now() - 30 * 60 * 60 * 1000,
         lastExitCode: 1,
       },
@@ -1994,7 +1994,7 @@ test("rollup-status старый и с провалом — строки пре�
     events.some(
       ([level, message]) =>
         level === "warn" &&
-        /memory-daily schedule hasn't succeeded in 30h \(> 26h\)/u.test(
+        /memory-night schedule hasn't succeeded in 30h \(> 26h\)/u.test(
           message,
         ),
     ),
@@ -2004,7 +2004,7 @@ test("rollup-status старый и с провалом — строки пре�
     events.some(
       ([level, message]) =>
         level === "warn" &&
-        /memory-daily schedule's last run exited 1/u.test(message),
+        /memory-night schedule's last run exited 1/u.test(message),
     ),
     `нет warn-строки кода провала: ${JSON.stringify(events)}`,
   );

@@ -50,7 +50,7 @@ test("без подкоманды и имени — usage", async () => {
   await assert.rejects(cmd(["list"]), /usage: iva jobs ack/u);
 });
 
-// `iva jobs skip memory-daily <date>`: под замком ночи (путь из резолвера schedule-paths)
+// `iva jobs skip memory-night <date>`: под замком ночи (путь из резолвера schedule-paths)
 // отметка конца дня кодом, коммит vault, стирание попыток дня; отказ коммита — ошибка,
 // попытки на месте.
 import {
@@ -63,7 +63,6 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { dayProgress } from "../lib/rollup-days.ts";
 
 function skipHarness(t: { after: (fn: () => void) => void }) {
   const root = mkdtempSync(join(tmpdir(), "iva-cli-jobs-skip-"));
@@ -117,7 +116,7 @@ function skipHarness(t: { after: (fn: () => void) => void }) {
       "2026-09-23": [{ at, reason: "no-report" }],
     }),
   );
-  const skip = (date = "2026-09-24") => cmd(["skip", "memory-daily", date]);
+  const skip = (date = "2026-09-24") => cmd(["skip", "memory-night", date]);
   return { cmd, skip, root, vault, raw, attempts, state };
 }
 
@@ -131,7 +130,7 @@ test("skip closes a past day with the end marker the night reads, commits it and
     text,
     /<!-- processed: skipped by owner 2026-09-26T09:00:00\.000Z -->\n$/u,
   );
-  assert.equal(dayProgress(text).done, true);
+  assert.match(text, /^<!-- processed: .*-->$/mu);
   assert.deepEqual(state.locks, [join(root, ".memory.lock")]);
   assert.deepEqual(state.commits, [
     `file daily/2026-09-24.md: skipped by owner ${raw} ${vault}`,
@@ -165,7 +164,7 @@ test("skip closes a quiet day without its raw file: the night takes yesterday ev
   await skip("2026-09-23");
 
   const text = readFileSync(raw, "utf8");
-  assert.equal(dayProgress(text).done, true);
+  assert.match(text, /^<!-- processed: .*-->$/mu);
   assert.match(text, /^\n<!-- processed: skipped by owner .* -->\n$/u);
   assert.deepEqual(state.commits, [
     `file daily/2026-09-23.md: skipped by owner ${raw} ${vault}`,

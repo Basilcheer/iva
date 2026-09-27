@@ -47,18 +47,16 @@ card("cards/notes/печать.md", "Печать");
 card("cards/notes/двойник.md", "Двойник A");
 card("cards/projects/двойник.md", "Двойник B");
 
-// Оба тула импортируются ПОСЛЕ фикстур: write_card читает схему вольта на импорте.
+// Тулы импортируются ПОСЛЕ фикстур вольта.
 const { default: writeCard } = await import("../agent/tools/write_card.ts");
 const { default: writeFile } = await import("../agent/tools/write_file.ts");
 
-type CardResult = { ok: boolean; error: string; file: string };
 type FileResult = { ok: boolean; error: string; path: string };
-const cardTool = writeCard as unknown as {
-  execute: (input: unknown) => Promise<CardResult>;
-  inputSchema: { parse: (value: unknown) => unknown };
-};
+type CardResult = { ok: boolean; error: string; file: string };
 const callCard = (args: unknown) =>
-  cardTool.execute(cardTool.inputSchema.parse(args));
+  (
+    writeCard as unknown as { execute: (input: unknown) => Promise<CardResult> }
+  ).execute(args);
 
 function toolContext(): ToolContext {
   const unavailable = (): never => {
@@ -231,114 +229,92 @@ test("родитель роллапа: не просрочен — норма, �
   );
 });
 
-// ─── write_card ────────────────────────────────────────────────────────────
+// ─── write_card: ссылки больше не отказ, поиск Card по имени ─────────────────
 
-test("write_card: рабочие ссылки в теле и related записываются", async () => {
+test("write_card: ссылки в факте пишутся как есть, ночь их не сторожит", async () => {
   const result = await callCard({
-    operation: "ADD",
+    operation: "fact",
     type: "note",
-    title: "Заметка со ссылками",
-    description: "проверка живых ссылок",
-    tags: ["test"],
-    body: "Разговор с [[иванов-иван-иванович|Иваном]] про [[romashka]].",
-    related: ["cards/notes/печать"],
+    title: "Печать",
+    text: "Обсудили [[romashka]] и [[несуществующая-карточка]]",
+    tags: [],
+    aliases: [],
   });
   assert.equal(result.ok, true, result.error);
+  const text = readFileSync(join(VAULT, "cards/notes/печать.md"), "utf8");
+  assert.match(text, /\[\[romashka\]\]/u);
+  assert.match(text, /\[\[несуществующая-карточка\]\]/u);
 });
 
-test("write_card: опечатка в ссылке — отказ, карточки на диске нет", async () => {
-  const result = await callCard({
-    operation: "ADD",
-    type: "note",
-    title: "Заметка с опечаткой",
-    description: "ссылка ведёт в никуда",
-    tags: ["test"],
-    body: "Смотри [[печaть]] и [[ivanov-ivan-ivanovich]].",
-  });
-  assert.equal(result.ok, false);
-  assert.match(result.error, /печaть/);
-  assert.match(result.error, /ivanov-ivan-ivanovich/);
-  assert.equal(
-    existsSync(join(VAULT, "cards", "notes", "заметка-с-опечаткой.md")),
-    false,
-    "отказ обязан не оставлять файла",
-  );
-});
-
-test("write_card: битая связь в related — отказ", async () => {
-  const result = await callCard({
-    operation: "ADD",
-    type: "note",
-    title: "Заметка с битым related",
-    description: "связь на несуществующую карточку",
-    tags: ["test"],
-    body: "текст без ссылок",
-    related: ["cards/contacts/ооо-василёк"],
-  });
-  assert.equal(result.ok, false);
-  assert.match(result.error, /ооо-василёк/);
-});
-
-// Проверяется вход, а не слитая карточка: старая битая ссылка в лежащей карточке не
-// должна блокировать новый факт в неё.
-test("write_card: старая битая ссылка в карточке не мешает UPDATE", async () => {
-  const rel = join("cards", "notes", "старая-с-битой-ссылкой.md");
+test("write_card: старая битая ссылка в Card не мешает новому факту", async () => {
   writeFileSync(
-    join(VAULT, rel),
-    "---\ntype: note\ndescription: старая\ntags: [test]\nstatus: active\n---\n\n# Старая с битой ссылкой\n\nбыло [[карточка-которой-нет]]\n",
-    "utf8",
+    join(VAULT, "cards/notes/старая.md"),
+    "---\ntype: note\n---\n# Старая\n\n[[нигде]]\n\n## Log\n",
   );
   const result = await callCard({
-    operation: "UPDATE",
+    operation: "fact",
     type: "note",
-    title: "Старая с битой ссылкой",
-    description: "старая",
-    tags: ["test"],
-    body: "новый факт без ссылок",
+    title: "Старая",
+    text: "Новый факт",
+    tags: [],
+    aliases: [],
   });
   assert.equal(result.ok, true, result.error);
-  assert.match(readFileSync(join(VAULT, rel), "utf8"), /новый факт без ссылок/);
+  const text = readFileSync(join(VAULT, "cards/notes/старая.md"), "utf8");
+  assert.match(text, /Новый факт/u);
+  assert.match(text, /\[\[нигде\]\]/u, "старая ссылка владельца цела");
+  assert.equal(text.match(/^- \d{4}-\d{2}-\d{2}: /gmu)?.length, 1);
+});
+
+test("write_card: имя двух Card — отказ со списком, ни одна не тронута", async () => {
+  const result = await callCard({
+    operation: "fact",
+    type: "note",
+    title: "двойник",
+    text: "факт",
+    tags: [],
+    aliases: [],
+  });
+  assert.equal(result.ok, false);
+  assert.match(result.error, /cards\/notes\/двойник/u);
+  assert.match(result.error, /cards\/projects\/двойник/u);
+});
+
+test("write_card: truth не создаёт Card", async () => {
+  const result = await callCard({
+    operation: "truth",
+    type: "note",
+    title: "Нет такой",
+    text: "правда",
+    reason: "проверка",
+  });
+  assert.equal(result.ok, false);
+  assert.match(result.error, /не найдена/u);
+  assert.equal(existsSync(join(VAULT, "cards/notes/нет-такой.md")), false);
 });
 
 // ─── write_file ────────────────────────────────────────────────────────────
 
-test("write_file: markdown вольта с битой ссылкой — отказ, файл не создан", async () => {
-  const path = join(VAULT, "summaries", "daily", "2020-01-01.md");
-  mkdirSync(join(VAULT, "summaries", "daily"), { recursive: true });
-  const result = await callFile(path, "# День\n\nписал [[roma-shka]].\n");
-  assert.equal(result.ok, false);
-  assert.match(result.error, /roma-shka/);
-  assert.equal(existsSync(path), false);
-});
-
-test("write_file: просроченный родитель роллапа — тоже битая ссылка", async () => {
-  const path = join(VAULT, "summaries", "daily", "2020-01-02.md");
-  const result = await callFile(path, "Итог недели: [[weekly/2020-W01]].\n");
-  assert.equal(result.ok, false);
-  assert.match(result.error, /weekly\/2020-W01/);
-});
-
-test("write_file: ещё не созданный weekly текущего дня записывается", async () => {
-  const today = new Date();
-  const stamp = today.toISOString().slice(0, 10);
-  const monday = new Date(
-    Date.UTC(
-      today.getUTCFullYear(),
-      today.getUTCMonth(),
-      today.getUTCDate() - ((today.getUTCDay() + 6) % 7),
-    ),
-  );
-  const thursday = new Date(monday.getTime() + 3 * 86_400_000);
-  const week = Math.floor(
-    (thursday.getTime() - Date.UTC(thursday.getUTCFullYear(), 0, 1)) /
-      (7 * 86_400_000) +
-      1,
-  );
-  const label = `weekly/${thursday.getUTCFullYear()}-W${String(week).padStart(2, "0")}`;
-  const path = join(VAULT, "summaries", "daily", `${stamp}.md`);
-  const result = await callFile(path, `Родитель: [[${label}]].\n`);
+test("write_file: markdown в library/ с любой ссылкой пишется", async () => {
+  const file = join(VAULT, "library", "книга", "01.md");
+  const result = await callFile(file, "Глава со ссылкой [[никуда]]\n");
   assert.equal(result.ok, true, result.error);
-  assert.match(readFileSync(path, "utf8"), /Родитель/);
+  assert.equal(existsSync(file), true);
+  assert.equal(readFileSync(file, "utf8"), "Глава со ссылкой [[никуда]]\n");
+});
+
+test("write_file: weekly/ закрыт — выжимки пишет ночь", async () => {
+  const file = join(VAULT, "weekly", "2026-W39.md");
+  const result = await callFile(file, "# неделя\n");
+  assert.equal(result.ok, false);
+  assert.equal(existsSync(file), false);
+  assert.match(result.error, /память/u);
+});
+
+test("write_file: summaries/ закрыт", async () => {
+  const file = join(VAULT, "summaries", "daily", "2026-09-26.md");
+  assert.equal((await callFile(file, "# день\n")).ok, false);
+  assert.equal(existsSync(file), false);
 });
 
 test("write_file: файл вне вольта не проверяется", async () => {

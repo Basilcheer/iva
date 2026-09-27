@@ -864,7 +864,10 @@ export default function up(context) {
         return Promise.resolve();
       },
       run: async (command, args, cwd) => {
-        if (command === "uv") {
+        if (
+          command === process.execPath &&
+          args[0]?.endsWith("scripts/vault-cleanup.ts")
+        ) {
           order.push("cleanup");
           assert.equal(
             createVersionStore(iva.home).currentName(),
@@ -1345,7 +1348,7 @@ test("the chores of the installation are run around the restart, out of the vers
   // frontmatter writer grew to gigabytes, and once the agent has them open the
   // repair is too late. The Google CLI is refreshed after everything else.
   assert.deepEqual(calls.slice(-3), [
-    `uv run ${join(dir, "scripts/autograph/cleanup.py")} . --apply @${layout.vault}`,
+    `${process.execPath} ${join(dir, "scripts/vault-cleanup.ts")} . --apply @${layout.vault}`,
     `restart @${layout.current}`,
     `npm i -g @googleworkspace/cli@latest @${dir}`,
   ]);
@@ -1366,7 +1369,8 @@ test("an errand without output names the exit code alone", async (t) => {
     await iva.update({
       log: (message) => logged.push(message),
       run: (command, args, cwd) =>
-        command === "uv"
+        command === process.execPath &&
+        args[0]?.endsWith("scripts/vault-cleanup.ts")
           ? Promise.resolve({ code: 127, output: "\n  \n" })
           : build(command, args, cwd),
     }),
@@ -1406,7 +1410,11 @@ test("the vault cleanup leaves a commit pair named after the version, and git ca
   const outcome = updated(
     await iva.update({
       run: (command, args, cwd) => {
-        if (command !== "uv") return build(command, args, cwd);
+        if (
+          command !== process.execPath ||
+          !args[0]?.endsWith("scripts/vault-cleanup.ts")
+        )
+          return build(command, args, cwd);
         // Чистка чинит карточку, раздутое старшее описание: правка vault мимо инструментов.
         writeFileSync(join(layout.vault, "карточка.md"), "# Починено\n");
         return Promise.resolve({ code: 0, output: "" });

@@ -144,11 +144,10 @@ function seedLegacyMemory(fx: Fixture): void {
 function seedSchedules(fx: Fixture, extension = "mjs"): void {
   const dir = join(fx.project, ".output/server/_virtual");
   mkdirSync(dir, { recursive: true });
-  for (const period of ["daily", "weekly", "monthly", "yearly"])
-    writeFileSync(
-      join(dir, `eve-${period}.schedule.${extension}`),
-      `description: "schedules/memory-${period}.ts"\n`,
-    );
+  writeFileSync(
+    join(dir, `eve-night.schedule.${extension}`),
+    'description: "schedules/memory-night.ts"\n',
+  );
 }
 
 // ── writeUnits ──────────────────────────────────────────────────────────────

@@ -31,20 +31,18 @@ export function resolvePaths(): SchedulePaths {
   };
 }
 
-export type MemoryPeriod = "daily" | "weekly" | "monthly" | "yearly";
-
-// Same command shape every memory-*.ts schedule spawns: `flock -w 3900 .memory.lock node
-// --env-file-if-exists=.env scripts/memory/rollup.ts <period>` — see agent/lib/schedule-runner.ts.
-export function memoryRollupJob(period: MemoryPeriod) {
+// The single code-driven night replaces four conversational rollups.
+export function memoryNightJob() {
   const { root, statusPath, memoryLockPath, factsPath } = resolvePaths();
   return {
-    name: `memory-${period}`,
-    argv: ["scripts/memory/rollup.ts", period],
+    name: "memory-night",
+    argv: ["scripts/memory/night.ts"],
     root,
     nodeBin: process.execPath,
     lockPath: memoryLockPath,
     statusPath,
     factsPath,
     killGraceMs: JOB_STOP_GRACE_MS,
+    wake: false,
   };
 }

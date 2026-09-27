@@ -142,14 +142,24 @@ const loadTools = async () => {
 
 const tool = await loadTools();
 
-const card = (overrides: Record<string, unknown>) => ({
-  body: "Факт из разговора.",
-  description: "Описание карточки",
-  tags: ["test"],
-  title: "Проверочная карточка",
-  type: "note",
-  ...overrides,
-});
+/** Ввод write_card: факт в Card (создаёт её, если нет) или новая правда — `truth`. */
+const card = (overrides: Record<string, unknown>) => {
+  const {
+    body = "Факт из разговора.",
+    operation,
+    title = "Проверочная карточка",
+  } = overrides;
+  return operation === "truth"
+    ? { operation, type: "note", title, text: body, reason: "владелец уточнил" }
+    : {
+        operation: "fact",
+        type: "note",
+        title,
+        text: body,
+        description: "Описание карточки",
+        tags: ["test"],
+      };
+};
 
 /** Причина отказа одной строкой уходит в журнал: строки журнала возвращаются рядом со
  * значением перехваченного вызова. */
@@ -168,69 +178,45 @@ async function journal<T>(
   return { logged: lines.join("\n"), value };
 }
 
-test("ADD, UPDATE и SUPERSEDE оставляют по коммиту с карточкой и операцией", async (t) => {
+test("fact и truth оставляют по коммиту с карточкой и операцией; повтор факта — без коммита", async (t) => {
   const vault = makeVault(t);
   const added = await tool.card(
-    card({
-      body: "работает в TDI Group.",
-      description: "работает в TDI Group",
-      operation: "ADD",
-      title: "Батыр",
-    }),
+    card({ body: "работает в TDI Group.", title: "Батыр" }),
   );
   assert.equal(added.ok, true, added.error);
-  assert.deepEqual(subjects(vault), ["card батыр: ADD"]);
+  assert.deepEqual(subjects(vault), ["card батыр: fact"]);
   assert.deepEqual(touched(vault), ["cards/notes/батыр.md"]);
   assert.equal(porcelain(vault), "");
 
   const updated = await tool.card(
-    card({
-      description: "работает в TDI Group",
-      operation: "UPDATE",
-      title: "Батыр",
-      body: "Позвонил по смете.",
-    }),
+    card({ title: "Батыр", body: "Позвонил по смете." }),
   );
   assert.equal(updated.ok, true, updated.error);
-  assert.deepEqual(subjects(vault), ["card батыр: UPDATE", "card батыр: ADD"]);
+  assert.deepEqual(subjects(vault), ["card батыр: fact", "card батыр: fact"]);
   assert.deepEqual(touched(vault), ["cards/notes/батыр.md"]);
 
   const replaced = await tool.card(
-    card({
-      body: "Ушёл из TDI Group.",
-      description: "Работает в Majento",
-      history_entry: `${day()}: работает в TDI Group`,
-      operation: "SUPERSEDE",
-      title: "Батыр",
-    }),
+    card({ operation: "truth", title: "Батыр", body: "Работает в Majento" }),
   );
   assert.equal(replaced.ok, true, replaced.error);
-  assert.deepEqual(subjects(vault), [
-    "card батыр: SUPERSEDE",
-    "card батыр: UPDATE",
-    "card батыр: ADD",
-  ]);
+  assert.deepEqual(subjects(vault)[0], "card батыр: truth");
   assert.equal(porcelain(vault), "");
 
-  // Чтение карточки коммитов не делает: коммит - это правка, а не обращение.
-  const noop = await tool.card(
-    card({
-      operation: "NOOP",
-      title: "Батыр",
-      description: "Работает в Majento",
-    }),
+  // Повтор того же факта карточку не меняет и коммита не делает.
+  const again = await tool.card(
+    card({ title: "Батыр", body: "Позвонил по смете." }),
   );
-  assert.equal(noop.ok, true, noop.error);
+  assert.equal(again.ok, true, again.error);
   assert.equal(subjects(vault).length, 3);
 });
 
 test("write_file коммитит только то, что лежит внутри vault", async (t) => {
   const vault = makeVault(t);
-  const inside = join(vault, "daily", "2026-09-21.md");
-  const written = await tool.file(inside, "Дневная запись\n");
+  const inside = join(vault, "library", "book", "01.md");
+  const written = await tool.file(inside, "Глава\n");
   assert.equal(written.ok, true, written.error);
-  assert.deepEqual(subjects(vault), ["file daily/2026-09-21.md: write"]);
-  assert.deepEqual(touched(vault), ["daily/2026-09-21.md"]);
+  assert.deepEqual(subjects(vault), ["file library/book/01.md: write"]);
+  assert.deepEqual(touched(vault), ["library/book/01.md"]);
 
   const outside = join(vault, "..", `outside-${String(process.pid)}.md`);
   t.after(() => rmSync(outside, { force: true }));
@@ -246,19 +232,19 @@ test("write_file коммитит только то, что лежит внут�
 
 test("чужая незакоммиченная правка переживает коммит и в него не попадает", async (t) => {
   const vault = makeVault(t);
-  await tool.card(card({ operation: "ADD", title: "Первая" }));
+  await tool.card(card({ title: "Первая" }));
 
   const foreign = join(vault, "cards", "notes", "чужая.md");
   writeFileSync(foreign, "# Чужая правка владельца\n");
   const result = await tool.card(
-    card({ operation: "ADD", title: "Вторая", body: "Вторая карточка." }),
+    card({ title: "Вторая", body: "Вторая карточка." }),
   );
   assert.equal(result.ok, true, result.error);
 
   assert.equal(readFileSync(foreign, "utf8"), "# Чужая правка владельца\n");
   assert.deepEqual(touched(vault), ["cards/notes/вторая.md"]);
   assert.match(porcelain(vault), /^\?\? cards\/notes\/чужая\.md$/mu);
-  assert.deepEqual(subjects(vault), ["card вторая: ADD", "card первая: ADD"]);
+  assert.deepEqual(subjects(vault), ["card вторая: fact", "card первая: fact"]);
 });
 
 test("двадцать параллельных правок разных карточек дают двадцать коммитов", async (t) => {
@@ -266,9 +252,7 @@ test("двадцать параллельных правок разных кар
   const titles = Array.from({ length: 20 }, (_, index) => `Карточка-${index}`);
   const results = await Promise.all(
     titles.map((title, index) =>
-      tool.card(
-        card({ body: `Факт ${index}.`, operation: "ADD", title: title }),
-      ),
+      tool.card(card({ body: `Факт ${index}.`, title: title })),
     ),
   );
   assert.deepEqual(
@@ -286,14 +270,13 @@ test("двадцать параллельных правок разных кар
 
 test("пять параллельных правок одной карточки не теряют ни одну", async (t) => {
   const vault = makeVault(t);
-  await tool.card(card({ operation: "ADD", title: "Одна" }));
+  await tool.card(card({ title: "Одна" }));
   const results = await Promise.all(
     Array.from({ length: 5 }, (_, index) =>
       tool.card(
         card({
           body: `Уточнение ${index}.`,
           description: `Описание ${index}`,
-          operation: "UPDATE",
           title: "Одна",
         }),
       ),
@@ -311,14 +294,14 @@ test("пять параллельных правок одной карточки
 test("vault не репозиторий: правка записывается, причина отказа в журнале", async (t) => {
   const vault = makeVault(t, { repo: false });
   const { logged, value: result } = await journal(() =>
-    tool.card(card({ operation: "ADD", title: "Без-гита" })),
+    tool.card(card({ title: "Без-гита" })),
   );
   assert.equal(result.ok, true, result.error);
   assert.match(
     readFileSync(join(vault, "cards", "notes", "без-гита.md"), "utf8"),
     /^# /mu,
   );
-  assert.match(logged, /^\[vault-commit\] card без-гита: ADD: /u);
+  assert.match(logged, /^\[vault-commit\] card без-гита: fact: /u);
   assert.equal(logged.split("\n").length, 1, "причина отказа - одна строка");
 });
 
@@ -328,7 +311,7 @@ test("git не в PATH: правка записывается, ход не па�
   const { logged, value: result } = await journal(async () => {
     process.env.PATH = "";
     try {
-      return await tool.card(card({ operation: "ADD", title: "Без-PATH" }));
+      return await tool.card(card({ title: "Без-PATH" }));
     } finally {
       process.env.PATH = path;
     }
@@ -353,11 +336,9 @@ test("в vault нет identity: коммит всё равно есть, кон�
     process.env.GIT_CONFIG_SYSTEM = previous.system;
   });
 
-  const result = await tool.card(
-    card({ operation: "ADD", title: "Без имени" }),
-  );
+  const result = await tool.card(card({ title: "Без имени" }));
   assert.equal(result.ok, true, result.error);
-  assert.deepEqual(subjects(vault), ["card без-имени: ADD"]);
+  assert.deepEqual(subjects(vault), ["card без-имени: fact"]);
   assert.equal(
     sh(["log", "-1", "--pretty=%an <%ae>"], vault),
     "Iva <iva@localhost>",
@@ -371,15 +352,13 @@ test("в vault нет identity: коммит всё равно есть, кон�
 
 test("замок индекса от убитого коммита снимается, следующий коммит работает", async (t) => {
   const vault = makeVault(t);
-  await tool.card(card({ operation: "ADD", title: "До-замка" }));
+  await tool.card(card({ title: "До-замка" }));
   const lock = join(vault, ".git", "index.lock");
   writeFileSync(lock, "");
   const past = new Date(Date.now() - 5 * 60 * 1000);
   utimesSync(lock, past, past);
 
-  const result = await tool.card(
-    card({ operation: "ADD", title: "После-замка" }),
-  );
+  const result = await tool.card(card({ title: "После-замка" }));
   assert.equal(result.ok, true, result.error);
   assert.equal(
     existsSync(lock),
@@ -387,8 +366,8 @@ test("замок индекса от убитого коммита снимае�
     "огрызок убитого коммита не остаётся навсегда",
   );
   assert.deepEqual(subjects(vault), [
-    "card после-замка: ADD",
-    "card до-замка: ADD",
+    "card после-замка: fact",
+    "card до-замка: fact",
   ]);
 });
 
@@ -397,7 +376,7 @@ test("свежий замок индекса: правка сохранена, �
   const lock = join(vault, ".git", "index.lock");
   writeFileSync(lock, "");
   const { logged, value: result } = await journal(() =>
-    tool.card(card({ operation: "ADD", title: "Занят" })),
+    tool.card(card({ title: "Занят" })),
   );
   assert.equal(result.ok, true, result.error);
   assert.match(logged, /lock file may be stale|index\.lock/u);
@@ -408,9 +387,9 @@ test("свежий замок индекса: правка сохранена, �
   );
 
   rmSync(lock);
-  const later = await tool.card(card({ operation: "ADD", title: "Свободен" }));
+  const later = await tool.card(card({ title: "Свободен" }));
   assert.equal(later.ok, true, later.error);
-  assert.deepEqual(subjects(vault), ["card свободен: ADD"]);
+  assert.deepEqual(subjects(vault), ["card свободен: fact"]);
 });
 
 test("SIGKILL посреди коммита не ломает ни vault, ни следующие коммиты", async (t) => {
@@ -427,7 +406,7 @@ for (let index = 0; index < 40; index += 1) {
   const file = join(vault, "cards", "notes", \`loop-\${index}.md\`);
   writeFileSync(file, \`# loop \${index}\\n\`);
   process.stdout.write("written\\n");
-  await seam.commitVaultWrite(\`card loop-\${index}: ADD\`, [file]);
+  await seam.commitVaultWrite(\`card loop-\${index}: fact\`, [file]);
 }
 `,
   );
@@ -458,11 +437,9 @@ for (let index = 0; index < 40; index += 1) {
   assert.ok(subjects(vault).length >= 1, "после убийства коммит проходит");
   assert.equal(trySh(["fsck", "--no-progress"], vault).length >= 0, true);
 
-  const after = await tool.card(
-    card({ operation: "ADD", title: "После-смерти" }),
-  );
+  const after = await tool.card(card({ title: "После-смерти" }));
   assert.equal(after.ok, true, after.error);
-  assert.equal(subjects(vault)[0], "card после-смерти: ADD");
+  assert.equal(subjects(vault)[0], "card после-смерти: fact");
   assert.equal(porcelain(vault), "");
 });
 
@@ -480,9 +457,7 @@ test("коммит правки в vault из двух тысяч карточе
     const times: number[] = [];
     for (let index = 0; index < 5; index += 1) {
       const started = Date.now();
-      const result = await tool.card(
-        card({ operation: "ADD", title: `${prefix}-${index}` }),
-      );
+      const result = await tool.card(card({ title: `${prefix}-${index}` }));
       assert.equal(result.ok, true, result.error);
       times.push(Date.now() - started);
     }
@@ -499,7 +474,7 @@ test("коммит правки в vault из двух тысяч карточе
   console.log(
     `      vault из 2000 карточек: правка ${String(plain)} мс, с коммитом ${String(committed)} мс, цена коммита ${String(delta)} мс`,
   );
-  assert.ok(subjects(vault).includes("card с-гитом-0: ADD"));
+  assert.ok(subjects(vault).includes("card с-гитом-0: fact"));
   assert.ok(
     committed < 1000,
     `правка с коммитом заняла ${String(committed)} мс`,
@@ -521,12 +496,12 @@ test("чужой staged-файл остаётся staged и в коммит за
   sh(["add", "--", "owner-staged.md"], vault);
 
   const result = await tool.card(
-    card({ body: "Вторая карточка.", operation: "ADD", title: "Вторая" }),
+    card({ body: "Вторая карточка.", title: "Вторая" }),
   );
   assert.equal(result.ok, true, result.error);
 
   assert.deepEqual(touched(vault), ["cards/notes/вторая.md"]);
-  assert.deepEqual(subjects(vault), ["card вторая: ADD"]);
+  assert.deepEqual(subjects(vault), ["card вторая: fact"]);
   assert.match(
     porcelain(vault),
     /^A {2}owner-staged\.md$/mu,
@@ -545,7 +520,7 @@ test("осиротевшая запись убитого хода не уезж�
   sh(["add", "--", "cards/notes/сирота.md"], vault);
 
   const result = await tool.card(
-    card({ body: "Следующая карточка.", operation: "ADD", title: "Следующая" }),
+    card({ body: "Следующая карточка.", title: "Следующая" }),
   );
   assert.equal(result.ok, true, result.error);
 
@@ -557,7 +532,7 @@ test("упавший pre-commit: запись на диске, коммита н
   hook(vault, "echo 'hook says no' >&2\nexit 1");
 
   const { logged, value: result } = await journal(() =>
-    tool.card(card({ operation: "ADD", title: "Падхук" })),
+    tool.card(card({ title: "Падхук" })),
   );
   assert.equal(result.ok, true, result.error);
   assert.match(logged, /hook says no/u);
@@ -574,11 +549,11 @@ test("упавший pre-commit: запись на диске, коммита н
 
   rmSync(join(vault, ".git", "hooks", "pre-commit"));
   const later = await tool.card(
-    card({ body: "Следующая карточка.", operation: "ADD", title: "Следующая" }),
+    card({ body: "Следующая карточка.", title: "Следующая" }),
   );
   assert.equal(later.ok, true, later.error);
   assert.deepEqual(touched(vault), ["cards/notes/следующая.md"]);
-  assert.deepEqual(subjects(vault), ["card следующая: ADD"]);
+  assert.deepEqual(subjects(vault), ["card следующая: fact"]);
 });
 test("vault внутри чужого репозитория: память не уезжает в чужую историю", async (t) => {
   const parent = mkdtempSync(join(tmpdir(), "iva-parent-"));
@@ -602,7 +577,7 @@ test("vault внутри чужого репозитория: память не 
   process.env.ASSISTANT_VAULT_DIR = vault;
 
   const { logged, value: result } = await journal(() =>
-    tool.card(card({ operation: "ADD", title: "Внутри" })),
+    tool.card(card({ title: "Внутри" })),
   );
   assert.equal(result.ok, true, result.error);
   assert.equal(existsSync(join(vault, "cards", "notes", "внутри.md")), true);
@@ -612,7 +587,7 @@ test("vault внутри чужого репозитория: память не 
     "чужой репозиторий не знает о записи в память",
   );
   assert.equal(trySh(["status", "--porcelain"], parent), "?? vault/");
-  assert.match(logged, /^\[vault-commit\] card внутри: ADD: /u);
+  assert.match(logged, /^\[vault-commit\] card внутри: fact: /u);
   assert.equal(logged.split("\n").length, 1, "причина отказа - одна строка");
 });
 test("git не ответил за таймаут: причина - таймаут, а не «нет в PATH»", async (t) => {
@@ -624,7 +599,7 @@ test("git не ответил за таймаут: причина - таймау
   });
   const started = Date.now();
   const { logged, value: result } = await journal(() =>
-    tool.card(card({ operation: "ADD", title: "Тишина" })),
+    tool.card(card({ title: "Тишина" })),
   );
   const elapsed = Date.now() - started;
   assert.equal(result.ok, true, result.error);
@@ -640,7 +615,7 @@ test("в журнал уходит причина отказа, а не подс
   sh(["commit", "-q", "-m", "ignore cards"], vault);
 
   const { logged, value: result } = await journal(() =>
-    tool.card(card({ operation: "ADD", title: "Скрытая" })),
+    tool.card(card({ title: "Скрытая" })),
   );
   assert.equal(result.ok, true, result.error);
   assert.match(logged, /ignored by one of your \.gitignore files/u);
@@ -652,7 +627,7 @@ test("read-only .git: причина в журнале, без пустого о
   const started = Date.now();
   const outcome = await journal(async () => {
     try {
-      return await tool.card(card({ operation: "ADD", title: "Закрытый" }));
+      return await tool.card(card({ title: "Закрытый" }));
     } finally {
       chmodSync(join(vault, ".git"), 0o700);
     }
@@ -727,12 +702,12 @@ test("чужой GIT_DIR в окружении не уводит коммит и
   const before = fingerprint(foreign);
   process.env.GIT_DIR = join(foreign, ".git");
   const { logged, value: result } = await journal(() =>
-    tool.card(card({ operation: "ADD", title: "Не-туда" })),
+    tool.card(card({ title: "Не-туда" })),
   );
   delete process.env.GIT_DIR;
 
   assert.equal(result.ok, true, result.error);
-  assert.deepEqual(subjects(vault), ["card не-туда: ADD"]);
+  assert.deepEqual(subjects(vault), ["card не-туда: fact"]);
   assert.deepEqual(
     subjects(foreign),
     ["foreign base"],
@@ -760,17 +735,17 @@ test("имя файла с глобом забирает только свой �
 
 test("intent-to-add владельца переживает неудачный коммит", async (t) => {
   const vault = makeVault(t);
-  mkdirSync(join(vault, "daily"), { recursive: true });
-  const file = join(vault, "daily", "2026-09-21.md");
+  mkdirSync(join(vault, "library"), { recursive: true });
+  const file = join(vault, "library", "2026-09-21.md");
   writeFileSync(file, "старое\n");
-  sh(["add", "-N", "--", "daily/2026-09-21.md"], vault);
-  const before = indexState(vault, "daily/2026-09-21.md");
+  sh(["add", "-N", "--", "library/2026-09-21.md"], vault);
+  const before = indexState(vault, "library/2026-09-21.md");
   hook(vault, "exit 1");
 
   const result = await tool.file(file, "новое содержимое\n");
   assert.equal(result.ok, true, result.error);
   assert.equal(
-    indexState(vault, "daily/2026-09-21.md"),
+    indexState(vault, "library/2026-09-21.md"),
     before,
     "помета intent-to-add возвращается вместе с записью индекса",
   );
@@ -812,7 +787,7 @@ test("vault подкаталог своего репозитория: причи
   process.env.ASSISTANT_VAULT_DIR = vault;
 
   const { logged, value: result } = await journal(() =>
-    tool.card(card({ operation: "ADD", title: "Подкаталог" })),
+    tool.card(card({ title: "Подкаталог" })),
   );
   assert.equal(result.ok, true, result.error);
   assert.match(logged, /выше vault/u);
@@ -840,11 +815,11 @@ test("подметальщик Brain коммитит только в свой �
 
 test("нечего коммитить: коммита нет, журнал молчит, чужой staged цел", async (t) => {
   const vault = makeVault(t);
-  mkdirSync(join(vault, "daily"), { recursive: true });
-  const file = join(vault, "daily", "2026-09-21.md");
+  mkdirSync(join(vault, "library"), { recursive: true });
+  const file = join(vault, "library", "2026-09-21.md");
   writeFileSync(file, "текст\n");
-  sh(["add", "--", "daily/2026-09-21.md"], vault);
-  sh(["commit", "-q", "-m", "daily"], vault);
+  sh(["add", "--", "library/2026-09-21.md"], vault);
+  sh(["commit", "-q", "-m", "library"], vault);
   const foreign = join(vault, "owner-staged.md");
   writeFileSync(foreign, "чужая работа\n");
   sh(["add", "--", "owner-staged.md"], vault);
@@ -853,7 +828,7 @@ test("нечего коммитить: коммита нет, журнал мо�
     tool.file(file, "текст\n"),
   );
   assert.equal(result.ok, true, result.error);
-  assert.deepEqual(subjects(vault), ["daily"]);
+  assert.deepEqual(subjects(vault), ["library"]);
   assert.equal(
     logged,
     "",

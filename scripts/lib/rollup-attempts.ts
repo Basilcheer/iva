@@ -105,7 +105,7 @@ export function dayPausedAlert(
     .map((date) => {
       const last = attempts[date]?.at(-1)?.reason;
       const cause = last ? `${tr(...REASON_TEXT[last])}\n` : "";
-      return `${date}: ${cause}iva jobs skip memory-daily ${date}`;
+      return `${date}: ${cause}iva jobs skip memory-night ${date}`;
     })
     .join("\n");
   return tr(

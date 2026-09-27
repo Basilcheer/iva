@@ -8,13 +8,6 @@ export interface VaultPair {
   readonly before: () => Promise<void>;
 }
 
-/** Итог коммита подметальщика: причину отказа он печатает сам, значение нужно только для
- * журнала вызывающего. */
-export type SweepResult = {
-  readonly ok: boolean;
-  readonly reason?: string;
-};
-
 /** Модуль шва достаётся динамическим импортом на вызове, а не на загрузке: установка без
  * агентского дерева обязана грузиться (обновлятор, меню, ночной бин). Отсутствие шва - не
  * отказ вызывающего, но и не тишина: одно объяснение в журнал, чтобы поломка модуля не
@@ -38,12 +31,4 @@ export async function loadVaultPair(
   root: string,
 ): Promise<VaultPair | null> {
   return await seamModule((seam) => seam.vaultWritePair(label, root));
-}
-
-/** Ночной подметальщик: коммит всего незакоммиченного в vault. */
-export async function loadVaultSweep(
-  message: string,
-  root: string,
-): Promise<SweepResult | null> {
-  return await seamModule((seam) => seam.commitVaultSweep(message, root));
 }

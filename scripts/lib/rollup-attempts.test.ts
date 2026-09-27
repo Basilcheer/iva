@@ -86,10 +86,10 @@ void test("the paused-day alert names the last cause and the command that closes
   assert.match(text, /не разобрались 3 раза подряд/u);
   assert.match(
     text,
-    /2026-09-23: ход остановлен пределом ночи\niva jobs skip memory-daily 2026-09-23/u,
+    /2026-09-23: ход остановлен пределом ночи\niva jobs skip memory-night 2026-09-23/u,
   );
   assert.match(
     text,
-    /2026-09-24: отчёт пришёл, а день не закрыт\niva jobs skip memory-daily 2026-09-24/u,
+    /2026-09-24: отчёт пришёл, а день не закрыт\niva jobs skip memory-night 2026-09-24/u,
   );
 });

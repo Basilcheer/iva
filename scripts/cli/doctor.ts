@@ -857,13 +857,8 @@ function checkRollupStatus(ctx: DoctorContext): void {
     // No rollup-status.json yet (fresh install, or nothing has fired yet) — not an error.
   }
   if (!rollupStatus) return;
-  const staleAfterHours = {
-    daily: 26,
-    weekly: 8 * 24,
-    monthly: 32 * 24,
-    yearly: 370 * 24,
-  };
-  for (const period of ["daily", "weekly", "monthly", "yearly"] as const) {
+  const staleAfterHours = { night: 26 };
+  for (const period of ["night"] as const) {
     // "memory-<period>" — the `name` each agent/schedules/memory-*.ts passes to
     // runScheduledJob, not the bare period (see scripts/lib/schedule-runner.ts).
     const entry = (rollupStatus as RollupStatus)[`memory-${period}`];

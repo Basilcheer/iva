@@ -216,10 +216,7 @@ test("up: хендофф в deps.handleUpdateCheck с chatId", async () => {
   assert.equal(called, 10);
 });
 
-// Регрессия 0.3.2: кнопка спавнила cleanup.py по пути ВНУТРИ vault'а, куда его клал синк.
-// Юзеры с 0.3.0 прыжком на 0.3.2 получали «Failed to spawn … (os error 2)». Скрипт обязан
-// браться из репо и реально существовать, а vault остаётся только рабочим каталогом.
-test("cln: cleanup.py берётся из репо, cwd — vault", async () => {
+test("cln: TypeScript cleaner берётся из репо, cwd — vault", async () => {
   const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "../../..");
   const dataDir = mkdtempSync(join(tmpdir(), "iva-data-"));
   const h = makeCtx({
@@ -227,10 +224,13 @@ test("cln: cleanup.py берётся из репо, cwd — vault", async () => 
   });
   const spec = await commandSpec("cln", h.ctx);
   assert.equal(spec.kind, "proc");
-  assert.deepEqual(spec.argv.slice(0, 2), ["uv", "run"]);
-  assert.equal(spec.argv[2], join(repoRoot, "scripts/autograph/cleanup.py"));
-  assert.ok(existsSync(spec.argv[2]), `нет скрипта: ${spec.argv[2]}`);
-  assert.deepEqual(spec.argv.slice(3), [".", "--apply"]);
+  assert.deepEqual(spec.argv.slice(0, 2), [
+    process.execPath,
+    join(repoRoot, "scripts/vault-cleanup.ts"),
+  ]);
+  assert.ok(existsSync(spec.argv[1]), `нет скрипта: ${spec.argv[1]}`);
+  assert.deepEqual(spec.argv.slice(2), [".", "--apply"]);
+  assert.equal(spec.argv.length, 4);
   assert.equal(spec.cwd, join(repoRoot, "vault"));
 });
 
@@ -280,7 +280,7 @@ test("go:cln: сводка парсит финальную строку cleanup"
       root: "/nonexistent",
       envPath: join(dataDir, ".env"),
       svcRun: fastRun,
-      // Строка ДОСЛОВНО как её печатает scripts/autograph/cleanup.py (режим — applied).
+      // Строка дословно как её печатает scripts/vault-cleanup.ts.
       svcSpec: () => ({
         kind: "proc",
         argv: [

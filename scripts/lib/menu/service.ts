@@ -93,8 +93,8 @@ const describe = (cmd: ServiceCommand, T: MenuServiceContext["tr"]): string =>
       "Проходит по карточкам памяти стримингом и убирает раздутые description из бага 0.3.0. Тела карточек не трогает.\nОбычно меньше минуты; гигабайтные файлы — дольше.",
     ),
     mem: T(
-      "Runs the nightly brain now, without waiting for 05:00: cleanup → enforce → graph → git push.\nUsually 1–10 minutes.",
-      "Запускает ночной цикл памяти сейчас, не дожидаясь 05:00: cleanup → enforce → graph → git push.\nОбычно 1–10 минут.",
+      "Runs the nightly brain now, without waiting for 05:00: commit what is uncommitted → link graph → CORE alert → git push.\nUsually under a minute.",
+      "Запускает ночной уход за vault сейчас, не дожидаясь 05:00: коммит незакоммиченного → граф ссылок → Alert по CORE → git push.\nОбычно меньше минуты.",
     ),
   })[cmd];
 
@@ -120,15 +120,12 @@ export async function commandSpec(
   if (cmd === "cln") {
     const env = await readEnvValues(ctx.deps.envPath);
     const vaultDir = resolveVaultDir(root, env.ASSISTANT_VAULT_DIR);
-    // Скрипт живёт в репо (в vault'е его может не быть — до 0.3.3 его туда клал синк, и
-    // прыжок 0.3.0 → 0.3.2 оставлял кнопку без файла: «Failed to spawn … (os error 2)»).
-    // Путь абсолютный, cwd — vault: скрипты autograph берут vault первым аргументом («.»).
+    // Путь абсолютный: обновляемая установка не зависит от cwd vault.
     return {
       kind: "proc",
       argv: [
-        "uv",
-        "run",
-        join(root, "scripts/autograph/cleanup.py"),
+        process.execPath,
+        join(root, "scripts/vault-cleanup.ts"),
         ".",
         "--apply",
       ],
@@ -160,7 +157,7 @@ function progressView(
 }
 
 // Финальная сводка. Чистка: парсим «cleanup (applied): N file(s), X bytes …» → файлы и МБ.
-// Режим в выводе cleanup.py — applied/dry-run (не apply): ошибёшься — сводка молча
+// Режим в выводе vault-cleanup.ts — applied/dry-run (не apply): ошибёшься — сводка молча
 // деградирует до дежурного «Готово».
 function summaryText(run: ServiceRun, ctx: MenuServiceContext): string {
   const T = ctx.tr;

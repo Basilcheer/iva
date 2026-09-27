@@ -80,7 +80,7 @@ test("write_file отказывается перезаписать сущест�
   );
 });
 
-test("write_file создаёт НОВЫЙ файл в cards/ как обычно", async () => {
+test("write_file не создаёт Card: новые файлы в cards/ создаёт write_card", async () => {
   const fresh = join(VAULT, "cards", "contacts", "новый.md");
   const res = settled(
     await writeFile.execute(
@@ -88,8 +88,8 @@ test("write_file создаёт НОВЫЙ файл в cards/ как обычн�
       testToolContext("write_file"),
     ),
   );
-  assert.equal(res.ok, true);
-  assert.equal(readFileSync(fresh, "utf8"), "# Новый\n");
+  assert.equal(res.ok, false);
+  assert.equal(existsSync(fresh), false);
 });
 
 test("write_file по-прежнему пишет vault/CORE.md (см. instructions/10-map.md)", async () => {

@@ -2,7 +2,7 @@
 // ровно одна: без неё провал закрывался бы только успешным перезапуском, а «я посмотрела,
 // чинить нечего» сказать нечем. Ставит acked=true на последней строке-провале имени.
 //
-// `iva jobs skip memory-daily <date>` — закрыть день ночной памяти без разбора: день, трижды
+// `iva jobs skip memory-night <date>` — закрыть день ночной памяти без разбора: день, трижды
 // не разобранный ночью, ждёт этого решения (scripts/lib/rollup-attempts.ts). Под тем же
 // .memory.lock, что ночь (путь из agent/lib/schedule-paths.ts), код ставит в хвост сырого дня
 // ту же отметку конца, что ставит скилл, коммитит vault и стирает попытки дня. Отказ коммита —
@@ -11,7 +11,6 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { resolveVaultDir } from "../../packages/vault-dir/index.ts";
 import { readEnvFresh } from "../lib/env-file.ts";
-import { dayProgress, shiftDate } from "../lib/rollup-days.ts";
 import { resolveTimeZone } from "../lib/timezone.ts";
 // `import type` стирается при компиляции: таблица фактов живёт в authored tree, а
 // `iva jobs` обязан грузиться и там, где agent/ нет (scripts/authored-tree-guard.test.ts),
@@ -34,7 +33,7 @@ export type JobsDependencies = {
 };
 
 const USAGE =
-  "usage: iva jobs ack <name> | iva jobs skip memory-daily <YYYY-MM-DD>";
+  "usage: iva jobs ack <name> | iva jobs skip memory-night <YYYY-MM-DD>";
 
 function localDate(now: Date, timeZone: string): string {
   return new Intl.DateTimeFormat("en-CA", {
@@ -46,14 +45,18 @@ function localDate(now: Date, timeZone: string): string {
 }
 
 function isCalendarDate(date: string): boolean {
-  return /^\d{4}-\d{2}-\d{2}$/u.test(date) && shiftDate(date, 0) === date;
+  return (
+    /^\d{4}-\d{2}-\d{2}$/u.test(date) &&
+    new Date(`${date}T00:00:00Z`).toISOString().slice(0, 10) === date
+  );
 }
 
 // Отметка конца дня, которую читает ночь. Тихий день без транскрипта ночь тоже берёт
 // (вчера — всегда): закрыть его можно только той же отметкой, и файл дня создаётся из неё.
 function markSkipped(raw: string, now: Date): void {
   const exists = existsSync(raw);
-  if (exists && dayProgress(readFileSync(raw, "utf8")).done) return;
+  if (exists && /^<!-- processed: .*-->$/mu.test(readFileSync(raw, "utf8")))
+    return;
   if (!exists) mkdirSync(dirname(raw), { recursive: true });
   appendFileSync(
     raw,
@@ -124,7 +127,7 @@ export function createJobsCommand(
   return async function cmdJobs(args: readonly string[]): Promise<void> {
     const [subcommand, name, date] = args;
     if (subcommand === "ack" && name) return await ack(name);
-    if (subcommand === "skip" && name === "memory-daily" && date)
+    if (subcommand === "skip" && name === "memory-night" && date)
       return await skipDay(date);
     throw new Error(USAGE);
   };

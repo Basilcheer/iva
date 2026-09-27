@@ -41,7 +41,7 @@ import {
 import { memoryLockPath } from "./schedule-paths.ts";
 import { addDaysToDate, zonedParts, zonedToUtcMs } from "./zoned-time.ts";
 
-type Period = "daily" | "weekly" | "monthly" | "yearly";
+type Period = "night";
 
 interface ExecResult {
   readonly code: number;
@@ -108,10 +108,7 @@ export const LEGACY_MEMORY_UNITS: readonly string[] = [
 // How late a missed run may still be caught up, per period — a catch-up policy of this
 // module alone, not schedule metadata.
 const PERIOD_GRACE_MS: Record<Period, number> = {
-  daily: 20 * 60 * 60 * 1000,
-  weekly: 3 * 24 * 60 * 60 * 1000,
-  monthly: 7 * 24 * 60 * 60 * 1000,
-  yearly: 14 * 24 * 60 * 60 * 1000,
+  night: 20 * 60 * 60 * 1000,
 };
 const PERIODS = Object.keys(PERIOD_GRACE_MS) as Period[];
 
@@ -263,13 +260,14 @@ export function catchUpJob(
 ): RunScheduledJobOptions {
   return {
     name: statusKey(period),
-    argv: ["scripts/memory/rollup.ts", period],
+    argv: ["scripts/memory/night.ts"],
     root,
     nodeBin,
     lockPath: root ? memoryLockPath(root) : undefined,
     statusPath,
     factsPath: jobFactsFile(dirname(statusPath)),
     killGraceMs: JOB_STOP_GRACE_MS,
+    wake: false,
     log,
   };
 }

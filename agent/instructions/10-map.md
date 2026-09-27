@@ -14,19 +14,18 @@ root, so there the path does start with `vault/`.
 Creating a fact card (contact/project/decision/idea/note) — write it with the
 **`write_card`** tool, not `write_file`: it guarantees a valid type and schema
 (no invented types, no extra fields). Do not use `write_file` for cards. Every
-call names its `operation`: `ADD` for a new subject, `UPDATE` for a new fact
-that fits the card's current truth (it goes to `## Log`, and the card's
-`description` goes back verbatim), `SUPERSEDE` when the new fact CONTRADICTS the
-Compiled Truth — then pass the displaced value as `history_entry`, one dated line
-`YYYY-MM-DD: fact`. Other spellings of a name (language, translit, colloquial,
-typo) go into `aliases`, and that is what makes the card findable by any of them.
+call names its `operation`: `fact` appends a dated source-backed Card fact,
+`truth` replaces Compiled Truth and archives the displaced value, and `merge`
+joins two duplicates only after the owner explicitly confirms it. Other
+spellings of a name (language, translit, colloquial, typo) go into `aliases`,
+and that is what makes the card findable by any of them.
 
 ### What lives where (coarse → precise)
 
 - `CORE.md` — who the user is, standing preferences, ≤3 active goals,
   pointers. ALREADY in context (the "CORE" block) — do not re-read it.
-- `MOC.md` — the topic index of the vault: topic hubs → cards. READ FIRST for
-  "what do I know about X".
+- `MOC.md` — an optional owner-maintained topic index. The night does not
+  regenerate it; use `memory_search` for recall.
 - `summaries/daily/YYYY-MM-DD.md` — the day summary (topics + links). Take it
   INSTEAD of the raw log.
 - `weekly/`, `monthly/`, `yearly/` — week/month/year summaries.
@@ -72,9 +71,9 @@ typo) go into `aliases`, and that is what makes the card findable by any of them
   transcript hook).
 - Voice, video and audio are transcribed into the daily file before you see
   them (Deepgram).
-- At night eve schedules run the rollup daily→weekly→monthly→yearly; a
-  separate systemd watchdog runs the Brain pass. They turn the raw day into
-  cards and summaries and update `CORE.md`. Do not run them by hand.
+- At 04:00 the single `memory-night` eve schedule processes queued days,
+  cards, links, CORE and ready week/month/year summaries; a separate systemd
+  watchdog runs the Brain pass. Do not run them by hand.
 - Heavy procedures are skills: load one by name and the body arrives
   (`morning-digest`, `web-research`, `agent-browser`, `google-workspace`,
   `security-defense`, `telegram-userbot`, `rich-post`, `documents`,
