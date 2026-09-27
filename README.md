@@ -117,6 +117,12 @@ Brand-new VPS, still logged in as root? Run `bash <(curl -fsSL https://raw.githu
 
 Install as a normal user, not as root — Iva's shell tool runs as whoever installed it. Headless installs take `--skip-setup` or `--non-interactive`. Prefer to read before you run? Fetch it with `curl -fsSL https://raw.githubusercontent.com/smixs/iva-agent/main/install.sh -o install.sh`, read it, then `bash install.sh`. Wizard walkthrough and an SSH primer for first-time VPS owners: [docs/install.md](docs/install.md).
 
+### Updates
+
+- `iva update` installs released versions only (`vX.Y.Z` tags): the stable channel, the default.
+- `iva beta` switches to every accepted change as soon as it lands; `iva stable` switches back (nothing is rolled back — the next release catches up). Then run `iva update`.
+- The same switch is in Telegram: `/menu` → 🛠 Maintenance → 🧪 Update channel. `iva version` shows the channel.
+
 ### The first minute
 
 Three messages, and you can watch the memory work:
