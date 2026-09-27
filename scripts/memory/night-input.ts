@@ -73,25 +73,31 @@ export function markedDone(raw: string): boolean {
   return false;
 }
 
-function normalizeEvidence(value: string): string {
-  return value
-    .normalize("NFKC")
-    .toLowerCase()
-    .replace(/ё/gu, "е")
-    .replace(/[«»„“”‟❝❞＂"]/gu, "'")
-    .replace(/[‐‑‒–—―−]/gu, "-")
-    .replace(/\s+/gu, " ")
-    .trim();
+/** Слова без пунктуации: регистр, ё, кавычки, тире и знаки не различаются. */
+function words(value: string): string {
+  const plain = value.normalize("NFKC").toLowerCase().replace(/ё/gu, "е");
+  return plain.replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 }
 
-/** Цитата — дословный кусок собственной реплики владельца. */
+/** Цитата — те же слова в том же порядке, что в собственной реплике владельца. */
 export function quoteBelongsTo(entry: DayEntry, quote: string): boolean {
-  const needle = normalizeEvidence(quote);
+  const needle = words(quote);
   return (
     entry.origin === "owner" &&
     needle.length > 0 &&
-    normalizeEvidence(entry.text).includes(needle)
+    ` ${words(entry.text)} `.includes(` ${needle} `)
   );
+}
+
+/** Отпечаток шага: вход, модель и текст инструкции (promptVersion). */
+export function stepHash(
+  step: string,
+  model: string,
+  skill: string,
+  inputs: unknown,
+): string {
+  const promptVersion = canonicalHash(skill);
+  return canonicalHash({ v: 1, step, model, promptVersion, inputs });
 }
 
 export function prefixHash(
@@ -143,8 +149,9 @@ export function summaryEdited(text: string): boolean {
   }
 }
 
-/** Мягкий разбор: ограды markdown сняты, JSON — от первой { до последней }. */
-export function parseJson(text: string): unknown {
+/** Мягкий разбор: сначала снята ограда markdown, потом JSON от первой { до последней }. */
+export function parseJson(answer: string): unknown {
+  const text = /```(?:json)?\s*([\s\S]*?)```/u.exec(answer)?.[1] ?? answer;
   const start = text.indexOf("{");
   const end = text.lastIndexOf("}");
   if (start < 0 || end < start) throw new Error("в ответе нет JSON-объекта");

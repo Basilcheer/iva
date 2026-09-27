@@ -5,11 +5,16 @@ import { weekOfDay } from "#lib/vault-links.ts";
 import { commitVaultWrite } from "#lib/vault-commit.ts";
 import { writeFileAtomicSync } from "#lib/fs-atomic.ts";
 import { parseFrontmatterOrSkip } from "#lib/frontmatter.ts";
-import { canonicalHash, srcList, summaryText } from "./night-input.ts";
-import { callBySchema, NightSchemaError } from "./night-call.ts";
+import * as input from "./night-input.ts";
+import {
+  callBySchema,
+  NightCeilingError,
+  NightSchemaError,
+} from "./night-call.ts";
 
 // Неделя, месяц (календарный), год: один вызов на период, когда он кончился и готов
-// каждый ребёнок. Ответ не по форме — выжимка из description детей (mode: fallback).
+// каждый ребёнок. Ответ не по форме — выжимка из description детей (mode: fallback),
+// следующая ночь пересобирает её моделью; изменённый вход детей — тоже.
 
 type Period = "weekly" | "monthly" | "yearly";
 type Child = { id: string; path?: string };
@@ -17,7 +22,7 @@ const periodAnswer = z.object({
   gist: z.string().default(""),
   topics: z.array(z.string()).default([]),
   points: z
-    .array(z.object({ text: z.string().min(1), src: srcList }))
+    .array(z.object({ text: z.string().min(1), src: input.srcList }))
     .default([]),
 });
 
@@ -87,20 +92,35 @@ function summaryOf(vault: string, child: Child): string {
 
 type Ask = { skill: string; model: string; signal: AbortSignal };
 
+/** Собирать ли: файла нет; или файл ночи (body_hash) с другим входом или fallback.
+ * Правленый владельцем не трогается (строка Job); без body_hash — старая ночь, готов. */
+function due(file: string, hash: string, jobs: string[], label: string) {
+  if (!existsSync(file)) return true;
+  const text = readFileSync(file, "utf8");
+  const fields = parseFrontmatterOrSkip(text, file)?.fields;
+  if (typeof fields?.body_hash !== "string") return false;
+  if (!input.summaryEdited(text))
+    return fields.input_hash !== hash || fields.mode === "fallback";
+  jobs.push(`${label} изменён вручную; период не пересобирается`);
+  return false;
+}
+
 async function buildPeriod(
   vault: string,
-  period: Period,
-  id: string,
+  [period, id]: [Period, string],
   ask: Ask,
+  jobs: string[],
 ) {
   const file = join(vault, period, `${id}.md`);
-  const children = existsSync(file) ? null : periodChildren(vault, period, id);
+  const children = periodChildren(vault, period, id);
   if (!children) return null;
   const values = children.map((child) => ({
     id: child.id,
     missing: !child.path,
     summary: summaryOf(vault, child),
   }));
+  const hash = input.stepHash(period, ask.model, ask.skill, values);
+  if (!due(file, hash, jobs, `${period} ${id}`)) return null;
   let answer: z.infer<typeof periodAnswer>;
   let fallback = false;
   try {
@@ -149,46 +169,59 @@ async function buildPeriod(
     topics: answer.topics,
     tags: answer.topics.length ? answer.topics : [period],
     source: "night",
-    input_hash: canonicalHash({
-      v: 1,
-      step: period,
-      model: ask.model,
-      inputs: values,
-    }),
+    input_hash: hash,
     ...(fallback ? { mode: "fallback" } : {}),
   };
   mkdirSync(dirname(file), { recursive: true });
-  writeFileAtomicSync(file, summaryText(fields, body));
+  writeFileAtomicSync(file, input.summaryText(fields, body));
   if (!(await commitVaultWrite(`${period} ${id}: night`, [file], vault)).ok)
     throw new Error(`${period} ${id} не закоммичен`);
   return fallback ? `${period}/${id}` : "";
 }
 
-/** Прошлые неделя, месяц и год, если готовы; сбой периода не роняет ночь, а идёт
- * строкой в факт Job. Возвращает периоды, собранные без модели. */
+/** Периоды, кончившиеся до сегодня, с днями в последних 35: недели, месяцы, годы,
+ * каждый вид от старших к новым. */
+function finishedPeriods(today: string): Array<[Period, string]> {
+  const found = new Map<string, [Period, string]>();
+  for (let back = 35; back >= 1; back--) {
+    const day = iso(Date.parse(`${today}T00:00:00Z`) - back * DAY_MS);
+    const ids: Array<[Period, string, string]> = [
+      ["weekly", weekOfDay(day)!, daysOf(weekOfDay(day)!).at(-1)!],
+      ["monthly", day.slice(0, 7), daysOf(day.slice(0, 7)).at(-1)!],
+      ["yearly", day.slice(0, 4), `${day.slice(0, 4)}-12-31`],
+    ];
+    for (const [period, id, last] of ids)
+      if (last < today) found.set(`${period}/${id}`, [period, id]);
+  }
+  const rank = (period: Period) =>
+    ["weekly", "monthly", "yearly"].indexOf(period);
+  return [...found.values()].sort(([a], [b]) => rank(a) - rank(b));
+}
+
+/** Периоды, которые эта ночь уже собирала. */
+const tried = new Set<string>();
+
+/** Готовые периоды, которых нет или чей вход изменился; сбой периода не роняет ночь, а
+ * идёт строкой в факт Job, предел ночи останавливает сборку. Возвращает периоды,
+ * собранные без модели. */
 export async function buildReadyPeriods(
   vault: string,
   today: string,
   ask: Ask,
   jobs: string[],
 ): Promise<string[]> {
-  const yesterday = Date.parse(`${today}T00:00:00Z`) - DAY_MS;
-  const lastSunday = iso(yesterday - new Date(yesterday).getUTCDay() * DAY_MS);
-  const lastMonth = iso(
-    Date.parse(`${today.slice(0, 7)}-01T00:00:00Z`) - DAY_MS,
-  ).slice(0, 7);
   const fallbacks: string[] = [];
-  const periods: Array<[Period, string]> = [
-    ["weekly", weekOfDay(lastSunday)!],
-    ["monthly", lastMonth],
-    ["yearly", String(Number(today.slice(0, 4)) - 1)],
-  ];
-  for (const [period, id] of periods)
+  // Второй проход ночи не трогает собранное этой ночью: fallback пересобирает следующая.
+  const periods = finishedPeriods(today).filter((p) => !tried.has(p.join("/")));
+  for (const period of periods)
     try {
-      const made = await buildPeriod(vault, period, id, ask);
+      const made = await buildPeriod(vault, period, ask, jobs);
+      if (made !== null) tried.add(period.join("/"));
       if (made) fallbacks.push(made);
     } catch (error) {
-      jobs.push(`${period} ${id} не собран: ${String(error)}`);
+      tried.add(period.join("/"));
+      jobs.push(`${period.join(" ")} не собран: ${String(error)}`);
+      if (error instanceof NightCeilingError) break;
     }
   return fallbacks;
 }

@@ -122,14 +122,19 @@ const commit = async (message: string, files: string[]) =>
 
 const cacheFile = (date: string) => join(CACHE_DIR, `${date}.json`);
 
+/** Нет файла — нет кэша; битый или нечитаемый — отказ ночи: в нём ответы и факты. */
 function readCache(date: string): DayCache | null {
+  const file = cacheFile(date);
+  if (!existsSync(file)) return null;
+  const broken = `кэш ${date} не читается: ${file}; поправь или удали файл`;
   try {
-    const value = JSON.parse(readFileSync(cacheFile(date), "utf8")) as DayCache;
-    const valid = value.v === 1 && value.date === date;
-    return valid && Number.isSafeInteger(value.through) ? value : null;
-  } catch {
-    return null;
+    const value = JSON.parse(readFileSync(file, "utf8")) as DayCache | null;
+    const valid = value?.v === 1 && value.date === date;
+    if (valid && Number.isSafeInteger(value.through)) return value;
+  } catch (error) {
+    throw new Error(`${broken}: ${String(error)}`);
   }
+  throw new Error(broken);
 }
 
 function writeCache(cache: DayCache): void {
@@ -171,8 +176,14 @@ const render = (fields: fm.FmFields, body: string) =>
 
 function readCard(card: string): Card | null {
   const file = cardFile(card);
-  if (!existsSync(file)) return null;
-  const raw = readFileSync(file, "utf8");
+  let raw: string;
+  try {
+    raw = readFileSync(file, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT")
+      jobs.push(`${card}: не читается, пропущена: ${String(error)}`);
+    return null;
+  }
   const parsed = fm.parseFrontmatterOrSkip(raw, file, (row) => jobs.push(row));
   if (!parsed) return null;
   const { body, fields = {} } = parsed;
@@ -185,6 +196,10 @@ const readCards = () =>
   cs
     .listCardFiles(vault)
     .flatMap((file) => readCard(file.slice(vault.length + 1, -3)) ?? []);
+
+/** Card пишутся под замком дневного write_card (сверка хеша и запись — одна секция). */
+const underCardLock = <T>(work: () => Promise<T>) =>
+  cs.withCardLock(vault, work);
 
 /** Card, которую ночь может дописать: frontmatter цел, фенсы закрыты, Log один. */
 function writable(card: string): Card | null {
@@ -218,22 +233,22 @@ function queuePending(cache: DayCache, card: string, rows: readonly string[]) {
 }
 
 async function applyPending(): Promise<void> {
-  for (const cache of cacheDates().flatMap((date) => readCache(date) ?? [])) {
-    for (const [card, rows] of Object.entries(cache.pending ?? {})) {
-      const found = writable(card);
-      if (!found) {
-        alerts.push(`Поправь Card ${card}: факты ждут`);
-        continue;
-      }
-      writeAtomic(
-        found.file,
-        render(found.fields, withFacts(found.body, rows)),
-      );
-      if (!(await commit(`${card}: pending facts`, [found.file])))
-        throw new Error(`${card}: отложенные факты не закоммичены`);
-      delete cache.pending![card];
-      writeCache(cache);
+  for (const cache of cacheDates().flatMap((date) => readCache(date) ?? []))
+    await underCardLock(() => applyCachePending(cache));
+}
+
+async function applyCachePending(cache: DayCache): Promise<void> {
+  for (const [card, rows] of Object.entries(cache.pending ?? {})) {
+    const found = writable(card);
+    if (!found) {
+      alerts.push(`Поправь Card ${card}: факты ждут`);
+      continue;
     }
+    writeAtomic(found.file, render(found.fields, withFacts(found.body, rows)));
+    if (!(await commit(`${card}: pending facts`, [found.file])))
+      throw new Error(`${card}: отложенные факты не закоммичены`);
+    delete cache.pending![card];
+    writeCache(cache);
   }
 }
 
@@ -275,15 +290,42 @@ function knownFor(cards: readonly Card[], dayText: string, date: string) {
   });
 }
 
+/** Имя Card из ответа → путь существующей Card или имя новой; `cards/<папка>/<x>` —
+ * это Card `<x>`. Неизвестное имя остаётся как есть и отпадает при проверке. */
+const CARD_PATH = /^cards\/[^/]+\//u;
+function cardName(name: string, cards: Card[], fresh: string[]): string {
+  if (cards.some((card) => card.card === name)) return name;
+  const key = cs.normalizeName(name.replace(CARD_PATH, ""));
+  const made = fresh.find((item) => cs.normalizeName(item) === key);
+  const found = cards.filter((card) => namesOf(card).includes(key));
+  return made ?? (found.length === 1 ? found[0].card : name);
+}
+
 /** Строго только то, без чего запись опасна: Card существует или новая, у факта
- * дословная цитата из реплики владельца. Негодное отбрасывается по одному (строка в
- * факте Job); неизвестные номера реплик отпадают. */
-function usable(answer: DayAnswer, entries: DayEntry[], cards: Card[]) {
+ * цитата из реплики владельца (строка Log ведёт на эту реплику). Негодное отбрасывается
+ * по одному (строка в факте Job); неизвестные номера реплик отпадают. */
+function usable(raw: DayAnswer, entries: DayEntry[], cards: Card[]) {
+  const new_cards = raw.new_cards.map((item) => ({
+    ...item,
+    name: item.name.replace(CARD_PATH, ""),
+  }));
+  const fresh = new_cards.map((item) => item.name);
+  const name = (value: string) => cardName(value, cards, fresh);
+  const ref = <T extends { card: string }>(i: T) => ({
+    ...i,
+    card: name(i.card),
+  });
+  const answer = {
+    ...raw,
+    new_cards,
+    facts: raw.facts.map(ref),
+    aliases: raw.aliases.map(ref),
+    links: raw.links.map((l) => ({ ...l, a: name(l.a), b: name(l.b) })),
+  };
   const byId = new Map(entries.map((entry) => [entry.id, entry]));
-  const names = new Set(cards.map((card) => card.card));
-  answer.new_cards.forEach((card) => names.add(card.name));
+  const names = new Set([...cards.map((card) => card.card), ...fresh]);
   const said = (ids: string[], quote: string) =>
-    ids.some((id) => input.quoteBelongsTo(byId.get(id)!, quote));
+    ids.find((id) => input.quoteBelongsTo(byId.get(id)!, quote));
   type Item = { src: string[] };
   const keep = <T extends Item>(
     items: T[],
@@ -295,17 +337,29 @@ function usable(answer: DayAnswer, entries: DayEntry[], cards: Card[]) {
       jobs.push(`отброшено: ${JSON.stringify(item)}`);
       return [];
     });
+  // Реплика с цитатой — первой: на неё ведёт строка Log.
+  const quoted = (f: DayAnswer["facts"][number]) => {
+    const at = said(f.src, f.quote);
+    if (at) f.src = [at, ...f.src.filter((id) => id !== at)];
+    return names.has(f.card) && at !== undefined;
+  };
   return {
     ...answer,
     points: keep(answer.points),
-    facts: keep(answer.facts, (f) => names.has(f.card) && said(f.src, f.quote)),
+    facts: keep(answer.facts, quoted),
     aliases: keep(
       answer.aliases,
-      (a) => names.has(a.card) && said(a.src, a.alias),
+      (a) => names.has(a.card) && said(a.src, a.alias) !== undefined,
     ),
     links: keep(answer.links, (l) => names.has(l.a) && names.has(l.b)),
     core: keep(answer.core),
   };
+}
+
+/** Ответ A без выжимки при репликах владельца — не по форме (повтор с текстом ошибки). */
+function summarized(answer: DayAnswer): void {
+  if (!answer.gist.trim() && !answer.points.length)
+    throw new Error("нет выжимки дня: нужны gist или points");
 }
 
 /** A по частям дня; часть видит выжимку предыдущих и пишет выжимку всего дня. */
@@ -322,7 +376,8 @@ async function askDay(
     const earlier_parts = answers.map((answer) => answer.gist);
     const data = { date, entries, known, previous: context[0], earlier_parts };
     const ask = { skill: skill("day"), input: data, schema: dayAnswer, signal };
-    answers.push(usable(await call.callBySchema(ask), day, cards));
+    const answer = await call.callBySchema({ ...ask, validate: summarized });
+    answers.push(usable(answer, day, cards));
   }
   return answers;
 }
@@ -377,8 +432,9 @@ class Day {
   }
 
   /** Путь новой Card: из кэша дня или по свободному имени; занятое имя — `Имя (D)` и
-   * Alert. null — на месте лежит чужой файл, он не затирается. */
-  newCard(item: NewCard): string | null {
+   * Alert. На месте лежит чужой файл — его путь без черновика: файл не затирается, факты
+   * ждут в pending под этим путём. */
+  newCard(item: NewCard): string {
     const { pass, date } = { pass: this.cache.pass!, date: this.cache.date };
     const key = cs.normalizeName(item.name);
     let name = cs.sanitizeField(item.name, 160);
@@ -386,7 +442,7 @@ class Day {
     if (!pass.created[key]) {
       if (taken) alerts.push(`Похоже на дубль: ${item.name}. Склеить Card?`);
       const card = `cards/${cs.TYPE_DIR[item.type]}/${cs.slugify(taken ? `${name} (${date})` : name)}`;
-      if (existsSync(cardFile(card))) return null;
+      if (existsSync(cardFile(card))) return card;
       pass.created[key] = card;
       writeCache(this.cache);
     }
@@ -398,7 +454,8 @@ class Day {
     Object.assign(fields, { created: date, source });
     const body = `# ${name}\n\n## Log\n\n## Related\n\n## History\n`;
     const file = cardFile(card);
-    return this.draft(card, () => ({ file, fields, body, before: "" })) && card;
+    this.draft(card, () => ({ file, fields, body, before: "" }));
+    return card;
   }
 
   cardOf(answer: DayAnswer, name: string): string | null {
@@ -418,8 +475,7 @@ class Day {
       const card = this.cardOf(answer, name);
       const draft = card ? this.draft(card) : null;
       if (!draft) {
-        if (rows.length)
-          queuePending(this.cache, card ?? `cards/${cs.slugify(name)}`, rows);
+        if (card && rows.length) queuePending(this.cache, card, rows);
         continue;
       }
       draft.body = withFacts(draft.body, rows);
@@ -432,20 +488,30 @@ class Day {
     }
   }
 
-  /** Связь пишется в Related обеих Card, если оба файла есть. */
+  /** Концы связи: обе Card есть или создаются этой ночью и пишутся; Card ради связи,
+   * которая не запишется, не создаётся. */
+  ends(answer: DayAnswer, link: { a: string; b: string }) {
+    const known = (name: string) =>
+      !this.cards.some((card) => card.card === name) || this.draft(name);
+    if (link.a === link.b || !known(link.a) || !known(link.b)) return null;
+    const [a, b] = [this.cardOf(answer, link.a), this.cardOf(answer, link.b)];
+    const [da, db] = [a && this.draft(a), b && this.draft(b)];
+    return da && db && a !== b
+      ? ([
+          [da, b!],
+          [db, a!],
+        ] as const)
+      : null;
+  }
+
+  /** Связь пишется в Related обеих Card. */
   links(answer: DayAnswer): void {
     for (const link of answer.links) {
-      const [a, b] = [this.cardOf(answer, link.a), this.cardOf(answer, link.b)];
-      const ends = a && b && a !== b ? [this.draft(a), this.draft(b)] : [];
-      const ready = ends.every((draft) => draft && existsSync(draft.file));
-      if (ends.length !== 2 || !ready) {
-        jobs.push(`связь ${link.a} ↔ ${link.b} не записана: файла Card нет`);
+      const pairs = this.ends(answer, link);
+      if (!pairs) {
+        jobs.push(`связь ${link.a} ↔ ${link.b} не записана: Card не пишется`);
         continue;
       }
-      const pairs = [
-        [ends[0]!, b!],
-        [ends[1]!, a!],
-      ] as const;
       for (const [draft, other] of pairs) {
         const related = cs.sectionRows(draft.body, "Related") ?? [];
         if (related.length < limits.RELATED_MAX)
@@ -460,6 +526,7 @@ class Day {
 function truthCandidates(touched: ReadonlySet<string>, date: string): string[] {
   const due = (card: Card) => {
     const since = str(card.fields, "truth_pending");
+    if (str(card.fields, "truth_date") > date) return false; // правда новее дня
     return touched.has(card.card) || (since !== "" && since <= date);
   };
   return readCards()
@@ -513,8 +580,17 @@ function truthInput(card: Card, date: string) {
   };
 }
 
-async function askTruth(cache: DayCache): Promise<void> {
-  const { pass, date } = { pass: cache.pass!, date: cache.date };
+/** Прогон B: день (пишется в кэш дня) или Card с truth_pending без нового дня. */
+type TruthRun = {
+  readonly date: string;
+  readonly pass: Pick<Pass, "truth" | "b">;
+  save(): void;
+};
+/** Card, по которым B уже прошёл этой ночью. */
+const judged = new Set<string>();
+
+async function askTruth(run: TruthRun): Promise<void> {
+  const { pass, date } = run;
   const waiting = (pass.truth ?? []).filter((card) => !pass.b[card]);
   for (let at = 0; at < waiting.length; at += limits.CARDS_PER_TRUTH_CALL) {
     const batch = waiting
@@ -540,7 +616,7 @@ async function askTruth(cache: DayCache): Promise<void> {
         pre: textHash(card.raw),
         answer: answer.find((a) => a.card === card.card),
       };
-    writeCache(cache);
+    run.save();
   }
 }
 
@@ -583,15 +659,15 @@ function truthApplied(
 
 /** CAS: файл тот же, что при чтении для B, — правка целиком. Иначе правка человека
  * побеждает: ответ стирается, Card получает truth_pending, B — следующей ночью. */
-function applyTruthCard(cache: DayCache, card: string, entry: Truth) {
+function applyTruthCard(run: TruthRun, card: string, entry: Truth) {
   const current = readCard(card);
   const hash = current ? textHash(current.raw) : "";
   if (entry.done || hash === entry.post) return null;
   const answer = hash === entry.pre ? entry.answer : undefined;
-  const next = answer ? truthApplied(current!, answer, cache.date) : null;
-  if (next === null) return giveUp(cache, card, entry, current);
+  const next = answer ? truthApplied(current!, answer, run.date) : null;
+  if (next === null) return giveUp(run, card, entry, current);
   entry.post = textHash(next);
-  writeCache(cache);
+  run.save();
   if (next === current!.raw) return null;
   writeAtomic(current!.file, next);
   return current!.file;
@@ -600,7 +676,7 @@ function applyTruthCard(cache: DayCache, card: string, entry: Truth) {
 /** Ответ не применим (правка человека, неоднозначная History, нет ответа): ответ
  * стирается, Card получает truth_pending. */
 function giveUp(
-  cache: DayCache,
+  run: TruthRun,
   card: string,
   entry: Truth,
   current: Card | null,
@@ -611,25 +687,51 @@ function giveUp(
     );
   delete entry.answer;
   entry.done = true;
-  writeCache(cache);
+  run.save();
   const pending = str(current?.fields, "truth_pending");
-  if (!current || (pending && pending <= cache.date)) return null;
-  const fields = { ...current.fields, truth_pending: cache.date };
+  if (!current || (pending && pending <= run.date)) return null;
+  const fields = { ...current.fields, truth_pending: run.date };
   writeAtomic(current.file, render(fields, current.body));
   return current.file;
 }
 
-async function applyTruth(cache: DayCache): Promise<boolean> {
-  await askTruth(cache);
-  const entries = Object.entries(cache.pass!.b);
-  const files = entries.flatMap(
-    ([card, entry]) => applyTruthCard(cache, card, entry) ?? [],
+/** B, затем CAS и запись под замком дневных писателей. */
+async function applyTruth(run: TruthRun): Promise<boolean> {
+  await askTruth(run);
+  const entries = Object.entries(run.pass.b);
+  entries.forEach(([card]) => judged.add(card));
+  return await underCardLock(async () => {
+    const files = entries.flatMap(
+      ([card, entry]) => applyTruthCard(run, card, entry) ?? [],
+    );
+    const message = `memory day ${run.date}: Compiled Truth`;
+    if (!(await commit(message, files))) return false;
+    for (const [, entry] of entries) entry.done = true;
+    run.save();
+    return true;
+  });
+}
+
+/** Card с truth_pending, когда дней в очереди нет: B этой ночью по вчерашний день.
+ * Правда, ждущая дольше трёх ночей, — Alert (по полю, без своего состояния). */
+async function retryTruth(today: string, queueLeft: boolean): Promise<void> {
+  const cards = readCards().filter(
+    (card) => str(card.fields, "truth_pending") && !judged.has(card.card),
   );
-  const message = `memory day ${cache.date}: Compiled Truth`;
-  if (!(await commit(message, files))) return false;
-  for (const [, entry] of entries) entry.done = true;
-  writeCache(cache);
-  return true;
+  for (const card of cards) {
+    const since = str(card.fields, "truth_pending");
+    if (since < shift(today, -3))
+      alerts.push(`${card.card}: правда ждёт с ${since}; B не справился`);
+  }
+  if (!cards.length || queueLeft) return;
+  const pass = { truth: cards.map((card) => card.card), b: {} };
+  const run = { date: shift(today, -1), pass, save: () => {} };
+  try {
+    if (!(await applyTruth(run))) jobs.push("правда Card не закоммичена");
+  } catch (error) {
+    if (!(error instanceof call.NightCeilingError)) throw error;
+    jobs.push("правда Card ждёт: предел ночи");
+  }
 }
 
 // ── Выжимка дня: пишется последней, вместе с отметкой конца в сыром дне ─────────────
@@ -647,7 +749,6 @@ function summaryOf(cache: DayCache, entries: DayEntry[], raw: string): string {
   const listed = cards.length ? cards : ["- Нет"];
   const body = [`# ${date}`, "", ...points, "", "## Карточки дня", ""];
   const inputs = entries.slice(pass.from, pass.upto);
-  const hash = { v: 1, step: "A", model: call.nightModelName, inputs };
   const topics = last?.topics ?? [];
   const fields = {
     type: "daily-summary",
@@ -656,7 +757,7 @@ function summaryOf(cache: DayCache, entries: DayEntry[], raw: string): string {
     topics,
     tags: topics.length ? topics : ["daily"],
     source: "night",
-    input_hash: input.canonicalHash(hash),
+    input_hash: input.stepHash("A", call.nightModelName, skill("day"), inputs),
     through: String(pass.upto),
   };
   const text = [...body, ...listed, ...attached, ""].join("\n");
@@ -749,11 +850,14 @@ async function processDay(date: string): Promise<boolean> {
   if (!cache?.pass) return true;
   cache.pass.a ??= await askPass(cache, entries);
   writeCache(cache);
-  if (!cache.pass.applied && !(await applyCards(cache, entries)))
+  const cards = () => applyCards(cache, entries);
+  if (!cache.pass.applied && !(await underCardLock(cards)))
     return fail(`${date}: Card не закоммичены`);
   cache.pass.applied = true;
   writeCache(cache);
-  if (!(await applyTruth(cache))) return fail(`${date}: правда не закоммичена`);
+  const save = () => writeCache(cache);
+  if (!(await applyTruth({ date, pass: cache.pass, save })))
+    return fail(`${date}: правда не закоммичена`);
   if (await finishDay(cache, entries, raw)) return true;
   return fail(`${date}: выжимка не закоммичена`);
 }
@@ -827,7 +931,6 @@ function coreApplied(before: string, answer: CoreAnswer): string {
   return next.join("");
 }
 
-/** Кандидаты CORE из кэша дней; применённые отмечаются только после коммита CORE. */
 /** Ответ C, применённый к CORE; null — отказ формы или Ceiling, кандидаты ждут. */
 async function askCore(before: string, candidates: Candidate[]) {
   const data = { sections: coreSections(before), candidates };
@@ -853,7 +956,6 @@ async function askCore(before: string, candidates: Candidate[]) {
   }
 }
 
-/** Кандидаты CORE из кэша дней; применённые отмечаются только после коммита CORE. */
 /** Дни с кандидатами CORE, ещё не применёнными. */
 const coreWaiting = () =>
   cacheDates()
@@ -912,16 +1014,17 @@ async function notify(key: string, body: string): Promise<void> {
 async function report(done: readonly string[]): Promise<void> {
   const send = telegram();
   const lines = done.map((date) => `${date}: ${gistOf(date)}`);
+  const text = ["Ночь памяти", ...lines, ...jobs].join("\n");
   const delivery = await notice.deliverMemoryReport({
     dataDir,
     settings,
     ranBefore: notice.rollupRanBefore(dataDir, vault),
-    report: ["Ночь памяти", ...lines, ...jobs].join("\n"),
+    report: text,
     tr: await notice.noticeTranslator(),
     send: send ? { report: send, notice: send } : null,
   });
   if (delivery.status === "failed")
-    console.error(`memory-night: Report: ${delivery.error}`);
+    console.error(`memory-night: Report: ${delivery.error}\n${text}`);
 }
 
 /** Вчера нет сырого дня, а в usage.jsonl есть ходы чата — транскрипт не записался. */
@@ -935,12 +1038,12 @@ function transcriptLost(today: string): string {
     : "";
 }
 
-async function alertsAtEnd(today: string, fallbacks: readonly string[]) {
+async function alertsAtEnd(today: string, left: string[], fallbacks: string[]) {
   const tried = attempts.readAttempts(ATTEMPTS);
   const paused = Object.keys(tried).filter((d) =>
     attempts.isExhausted(tried[d]),
   );
-  const old = dayQueue(today).filter((date) => date < shift(today, -7));
+  const old = left.filter((date) => date < shift(today, -7));
   const lost = transcriptLost(today);
   const russian = (_english: string, body: string) => body;
   const pausedText = attempts.dayPausedAlert(russian, paused, tried);
@@ -1005,8 +1108,11 @@ async function runDays(dates: readonly string[]) {
 
 async function night(manual: string | undefined): Promise<number> {
   const sweep = await commitVaultSweep("memory-night: до ночи", vault);
-  if (!sweep.ok)
-    throw new Error(`vault не закоммичен до ночи: ${sweep.reason}`);
+  if (!sweep.ok) {
+    const why = `vault не закоммичен до ночи: ${sweep.reason}`;
+    await notify("night-sweep", `Ночь памяти не началась: ${why}`);
+    throw new Error(why);
+  }
   try {
     call = await import("./night-call.ts");
   } catch (error) {
@@ -1029,10 +1135,12 @@ async function night(manual: string | undefined): Promise<number> {
     : dayQueue(today).slice(0, limits.DAYS_PER_NIGHT);
   const ready = queue.filter((date) => !attempts.isExhausted(tried[date]));
   const { done, code } = await runDays(ready);
+  const queueLeft = dayQueue(today);
+  await retryTruth(today, queueLeft.length > 0);
   await runCore(done.at(-1));
   fallbacks.push(...(await periods()));
   cleanupCaches();
-  await alertsAtEnd(today, fallbacks);
+  await alertsAtEnd(today, queueLeft, fallbacks);
   if (done.length) await report(done);
   const { calls, inputTokens, unknownUsage, usageLost } = call.ceiling;
   if (usageLost) jobs.push(`usage.jsonl не записан: ${usageLost}`);

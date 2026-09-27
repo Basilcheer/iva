@@ -10,6 +10,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -22,6 +23,9 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test, { type TestContext } from "node:test";
+import "../lib/ts-esm-hooks.ts";
+
+const cs = await import("../../agent/lib/card-store.ts");
 
 const ROOT = resolve(import.meta.dirname, "../..");
 const NIGHT = join(ROOT, "scripts/memory/night.ts");
@@ -658,12 +662,22 @@ void test("открытый фенс и чужой файл на месте но
   assert.equal(read(fenced), fencedBefore);
   assert.equal(read(foreign), foreignBefore);
   assert.match(result.stderr, /Поправь Card cards\/projects\/аврора/u);
+  assert.match(result.stderr, /Поправь Card cards\/contacts\/борис/u);
   writeFileSync(fenced, fencedBefore.replace("открыто\n", "открыто\n```\n"));
+  writeFileSync(
+    foreign,
+    foreignBefore
+      .replace('"битая кавычка', '"починено"')
+      .replace("Текст владельца\n", "Текст владельца\n\n## Log\n"),
+  );
   commit(fx.vault);
   const fixed = await night(fx, null);
   assert.equal(fixed.code, 0, fixed.stderr);
   assert.equal(fx.model.prompts.length, 1);
   assert.equal(logRows(read(fenced)).length, 1);
+  assert.deepEqual(logRows(read(foreign)), [
+    `- ${DATE}: Борис в команде · [[daily/${DATE}]] 10:00`,
+  ]);
 });
 
 void test("предел ночи: большой расход на A — B не начат, попытка cut, код 1; без usage следующий вызов закрыт", async (t) => {
@@ -958,4 +972,360 @@ void test("связь пишется в Related обеих Card; связь с �
   assert.match(read(boris), /## Related\n\n- \[\[cards\/contacts\/анна\]\]/u);
   assert.match(result.stderr, /отброшено: .*Никто/u);
   assert.equal(git(fx.vault, "status", "--porcelain"), "");
+});
+
+// ── Круг 2: ответы формы настоящих моделей (real2) и находки ревью ─────────────────
+const REAL_DAY = [
+  "## 09:10 [text]",
+  "Утром созвонился с Анной. Она переехала в Ташкент, теперь живёт там.",
+  "",
+  "## 09:15 [text]",
+  "Анна ушла из Яндекса, теперь работает в Uzum.",
+  "",
+  "## 11:00 [text]",
+  "Запустили проект Альфа вместе с Анной, первый клиент — Сбер.",
+  "",
+  "## 18:20 [text]",
+  "Встреча с Борисом из Uzum по интеграции платежей, он пришлёт договор до пятницы.",
+  "",
+].join("\n");
+const ls = (dir: string) =>
+  existsSync(dir) ? readdirSync(dir).sort().join("\n") : "";
+
+void test("real2: связь двух новых Card пишется, имя-путь — это Card, цитата с другой пунктуацией принята, выдумка отброшена", async (t) => {
+  const fx = await fixture(t);
+  day(fx, REAL_DAY);
+  const contact = (name: string) => ({ name, type: "contact" });
+  fx.model.replies = [
+    A({
+      new_cards: [
+        contact("Анна"),
+        { name: "Альфа", type: "project" },
+        contact("Сбер"),
+        contact("cards/contacts/борис"),
+        { name: "Uzum", type: "project" },
+        contact("Яндекс"),
+      ],
+      facts: [
+        {
+          card: "cards/contacts/анна",
+          text: "Анна ведёт проект Альфа",
+          src: ["e3"],
+          quote: "Запустили проект Альфа вместе с Анной.",
+        },
+        {
+          card: "cards/contacts/анна",
+          text: "Живёт в Ташкенте",
+          src: ["e1"],
+          quote: "живёт в Ташкенте",
+        },
+        {
+          card: "cards/contacts/борис",
+          text: "Борис из Uzum",
+          src: "e4",
+          quote: "Встреча с Борисом из Uzum",
+        },
+      ],
+      links: [
+        { a: "Альфа", b: "Сбер", src: ["e3"] },
+        { a: "Uzum", b: "Борис", src: ["e4"] },
+        { a: "Яндекс", b: "Никто", src: ["e2"] },
+      ],
+    }),
+    B({ card: "cards/contacts/анна" }, { card: "cards/contacts/борис" }),
+  ];
+  const result = await night(fx);
+  assert.equal(result.code, 0, result.stderr);
+  const path = (card: string) => join(fx.vault, `${card}.md`);
+  assert.equal(
+    ls(join(fx.vault, "cards/contacts")),
+    "анна.md\nборис.md\nсбер.md",
+  );
+  const anna = read(path("cards/contacts/анна"));
+  assert.deepEqual(logRows(anna), [
+    `- ${DATE}: Анна ведёт проект Альфа · [[daily/${DATE}]] 11:00`,
+  ]);
+  assert.match(result.stderr, /отброшено: .*живёт в Ташкенте/u);
+  assert.match(
+    logRows(read(path("cards/contacts/борис")))[0],
+    /Борис из Uzum/u,
+  );
+  const related = (card: string) => cs.sectionRows(read(path(card)), "Related");
+  assert.deepEqual(related("cards/projects/альфа"), [
+    "- [[cards/contacts/сбер]]",
+  ]);
+  assert.deepEqual(related("cards/contacts/сбер"), [
+    "- [[cards/projects/альфа]]",
+  ]);
+  assert.deepEqual(related("cards/projects/uzum"), [
+    "- [[cards/contacts/борис]]",
+  ]);
+  assert.deepEqual(related("cards/contacts/борис"), [
+    "- [[cards/projects/uzum]]",
+  ]);
+  assert.doesNotMatch(ls(join(fx.vault, "cards/contacts")), /яндекс/u);
+  assert.equal(git(fx.vault, "status", "--porcelain"), "");
+});
+
+void test("Card с truth_date позже разбираемого дня: факт только в Log, B не зовётся, truth_pending нет (#2)", async (t) => {
+  const fx = await fixture(t);
+  day(fx, "## 10:00 [text]\nАврора сменила курс\n");
+  const file = card(fx, "cards/projects/аврора", [
+    ...aurora.slice(0, 4),
+    'truth_date: "2026-09-27"',
+    ...aurora.slice(4),
+  ]);
+  fx.model.replies = [
+    A({
+      facts: [
+        {
+          card: "cards/projects/аврора",
+          text: "Курс сменён",
+          src: "e1",
+          quote: "Аврора сменила курс",
+        },
+      ],
+    }),
+  ];
+  const result = await night(fx);
+  assert.equal(result.code, 0, result.stderr);
+  assert.equal(fx.model.prompts.length, 1);
+  assert.equal(logRows(read(file)).length, 1);
+  assert.match(read(file), /truth_date: "2026-09-27"/u);
+  assert.doesNotMatch(read(file), /truth_pending/u);
+});
+
+void test("время строки Log — от той реплики из src, где стоит цитата (#3)", async (t) => {
+  const fx = await fixture(t);
+  day(fx, "## 09:00 [text]\nУтро\n\n## 15:30 [text]\nАврора сменила курс\n");
+  const file = card(fx, "cards/projects/аврора", aurora);
+  fx.model.replies = [
+    A({
+      facts: [
+        {
+          card: "cards/projects/аврора",
+          text: "Курс сменён",
+          src: ["e1", "e2"],
+          quote: "Аврора сменила курс",
+        },
+      ],
+    }),
+    B({ card: "cards/projects/аврора" }),
+  ];
+  assert.equal((await night(fx)).code, 0);
+  assert.deepEqual(logRows(read(file)), [
+    `- ${DATE}: Курс сменён · [[daily/${DATE}]] 15:30`,
+  ]);
+});
+
+void test("битый кэш дня с отложенными фактами не считается отсутствующим: код 1, строка Job, кэш цел (#4)", async (t) => {
+  const fx = await fixture(t);
+  day(fx, "## 10:00 [text]\nФакт\n");
+  mkdirSync(join(fx.data, "memory/night"), { recursive: true });
+  const cache = join(fx.data, "memory/night", `${DATE}.json`);
+  const broken =
+    '{"v":1,"date":"2026-09-26","pending":{"cards/projects/аврора":["- факт';
+  writeFileSync(cache, broken);
+  const result = await night(fx, null);
+  assert.equal(result.code, 1);
+  assert.equal(fx.model.prompts.length, 0);
+  assert.match(result.stderr, new RegExp(`кэш ${DATE}.*не читается`, "u"));
+  assert.equal(read(cache), broken);
+});
+
+void test("одна нечитаемая Card не останавливает скан: строка Job, остальные идут (#5)", async (t) => {
+  const fx = await fixture(t);
+  day(fx, "## 10:00 [text]\nАврора сменила курс\n");
+  const file = card(fx, "cards/projects/аврора", aurora);
+  // Файл вне git (ignored): sweep его не читает, читает только скан Card.
+  writeFileSync(join(fx.vault, ".gitignore"), "cards/notes/закрытая.md\n");
+  commit(fx.vault);
+  const locked = card(fx, "cards/notes/закрытая", ["# Закрытая", ""]);
+  chmodSync(locked, 0o000);
+  fx.model.replies = [
+    A({
+      facts: [
+        {
+          card: "cards/projects/аврора",
+          text: "Курс сменён",
+          src: "e1",
+          quote: "Аврора сменила курс",
+        },
+      ],
+    }),
+    B({ card: "cards/projects/аврора" }),
+  ];
+  const result = await night(fx);
+  assert.equal(result.code, 0, result.stderr);
+  assert.equal(logRows(read(file)).length, 1);
+  assert.match(result.stderr, /cards\/notes\/закрытая.*не читается/u);
+});
+
+void test("truth_pending: B каждой ночью и без нового дня; Alert, когда правда ждёт дольше трёх ночей (#7)", async (t) => {
+  const fx = await fixture(t);
+  const file = card(fx, "cards/projects/аврора", [
+    ...aurora.slice(0, 4),
+    'truth_pending: "2020-01-01"',
+    ...aurora.slice(4, 12),
+    "- 2020-01-01: Курс сменён · [[daily/2020-01-01]] 10:00",
+    ...aurora.slice(12),
+  ]);
+  fx.model.replies = [{ text: "не понял" }, { text: "опять не понял" }];
+  const failed = await night(fx, null);
+  assert.equal(failed.code, 0, failed.stderr);
+  assert.equal(fx.model.prompts.length, 2);
+  assert.match(fx.model.prompts[0], /Курс сменён/u);
+  assert.match(read(file), /truth_pending: "2020-01-01"/u);
+  assert.match(
+    failed.stderr,
+    /alert night-pending.*аврора.*ждёт с 2020-01-01/u,
+  );
+  fx.model.replies = [
+    B({ card: "cards/projects/аврора", truth: "Курс сменён" }),
+  ];
+  const fixed = await night(fx, null);
+  assert.equal(fixed.code, 0, fixed.stderr);
+  assert.match(read(file), /# Аврора\n\nКурс сменён\n\n## Log/u);
+  assert.doesNotMatch(read(file), /truth_pending/u);
+});
+
+void test("периоды: все пропущенные недели за 35 дней, старшие первыми; fallback пересобирается; правленый не трогается, изменённый вход пересобирает (#10–#12)", async (t) => {
+  const fx = await fixture(t);
+  const monday = new Date(Date.parse(`${TODAY}T00:00:00Z`));
+  monday.setUTCDate(monday.getUTCDate() - ((monday.getUTCDay() + 6) % 7) - 14);
+  const days = Array.from({ length: 14 }, (_, index) =>
+    new Date(monday.getTime() + index * 86_400_000).toISOString().slice(0, 10),
+  );
+  mkdirSync(join(fx.vault, "summaries/daily"), { recursive: true });
+  for (const date of days)
+    writeFileSync(
+      summary(fx, date),
+      `---\ndescription: "день ${date}"\n---\n# ${date}\n`,
+    );
+  commit(fx.vault);
+  const P = (gist: string) => ({ gist, topics: [], points: [] });
+  fx.model.replies = [
+    { text: "неделя" },
+    { text: "неделя" },
+    ...Array.from({ length: 8 }, () => P("модель")),
+  ];
+  const first = await night(fx, null);
+  assert.equal(first.code, 0, first.stderr);
+  const weeks = ls(join(fx.vault, "weekly")).split("\n");
+  assert.equal(weeks.length, 2, first.stderr);
+  const [older, newer] = weeks.map((name) => name.replace(/\.md$/u, ""));
+  const at = (id: string) => fx.model.prompts.findIndex((p) => p.includes(id));
+  assert.ok(
+    at(older) >= 0 && at(older) < at(newer),
+    fx.model.prompts.join("\n"),
+  );
+  const weekly = (id: string) => join(fx.vault, "weekly", `${id}.md`);
+  assert.match(read(weekly(older)), /mode: "fallback"/u);
+  fx.model.replies = Array.from({ length: 8 }, () => P("пересобрано"));
+  const second = await night(fx, null);
+  assert.equal(second.code, 0, second.stderr);
+  assert.doesNotMatch(read(weekly(older)), /mode: "fallback"/u);
+  assert.match(read(weekly(older)), /description: "пересобрано"/u);
+  const calls = fx.model.prompts.length;
+  const third = await night(fx, null);
+  assert.equal(third.code, 0, third.stderr);
+  assert.equal(fx.model.prompts.length, calls, "неизменный вход — без вызова");
+  writeFileSync(weekly(newer), `${read(weekly(newer))}\nправка владельца\n`);
+  writeFileSync(
+    summary(fx, days[0]),
+    `---\ndescription: "день поздний"\n---\n# ${days[0]}\n`,
+  );
+  commit(fx.vault);
+  const edited = read(weekly(newer));
+  fx.model.replies = Array.from({ length: 8 }, () => P("вход изменился"));
+  const fourth = await night(fx, null);
+  assert.equal(fourth.code, 0, fourth.stderr);
+  assert.equal(read(weekly(newer)), edited);
+  assert.match(
+    fourth.stderr,
+    new RegExp(`weekly ${newer}.*изменён вручную`, "u"),
+  );
+  assert.match(read(weekly(older)), /description: "вход изменился"/u);
+});
+
+void test("ответ-пустышка A при репликах владельца — не по форме: повтор с текстом ошибки, потом no-report, выжимки нет (ДЕФ-2)", async (t) => {
+  const fx = await fixture(t);
+  day(fx, "## 10:00 [text]\nЗапустил Аврору\n");
+  fx.model.replies = [{ refusal: "не могу" }, {}];
+  const result = await night(fx);
+  assert.equal(result.code, 1);
+  assert.equal(fx.model.prompts.length, 2);
+  assert.match(fx.model.prompts[1], /Ошибка прошлого ответа: .*выжимк/u);
+  assert.equal(existsSync(summary(fx)), false);
+  assert.match(read(join(fx.data, "rollup-attempts.json")), /no-report/u);
+});
+
+void test("отказ общего коммита правок владельца перед ночью: Alert с причиной, ничего не пишется (Н-6)", async (t) => {
+  const fx = await fixture(t);
+  day(fx, "## 10:00 [text]\nФакт\n");
+  writeFileSync(join(fx.vault, "заметка.md"), "правка владельца\n");
+  const hook = join(fx.vault, ".git/hooks/pre-commit");
+  writeFileSync(hook, "#!/bin/sh\necho причина-хука >&2\nexit 1\n");
+  chmodSync(hook, 0o755);
+  const head = git(fx.vault, "rev-parse", "HEAD");
+  const result = await night(fx);
+  assert.equal(result.code, 1);
+  assert.equal(fx.model.prompts.length, 0);
+  assert.match(result.stderr, /alert night-sweep: .*не закоммичен/u);
+  assert.equal(git(fx.vault, "rev-parse", "HEAD"), head);
+  assert.equal(existsSync(summary(fx)), false);
+});
+
+void test("Report ночи: дни с выжимкой уходят швом Notice; без чата текст отчёта — в журнал", async (t) => {
+  const fx = await fixture(t);
+  day(fx, "## 10:00 [text]\nЗапустил проект Аврора\n");
+  writeFileSync(
+    join(fx.data, "settings.json"),
+    JSON.stringify({ memoryReports: { enabled: true } }),
+  );
+  fx.model.replies = [A()];
+  const result = await night(fx);
+  assert.equal(result.code, 0, result.stderr);
+  assert.match(
+    result.stderr,
+    new RegExp(
+      `Report: no chat configured\\n[\\s\\S]*${DATE}: Запущен проект Аврора`,
+      "u",
+    ),
+  );
+});
+
+void test("занятый дневной замок Card: ночь не пишет Card и ждёт; после освобождения доделывает без второго A (#1)", async (t) => {
+  const fx = await fixture(t);
+  day(fx, "## 10:00 [text]\nАврора сменила курс\n");
+  const file = card(fx, "cards/projects/аврора", aurora);
+  const before = read(file);
+  fx.model.replies = [
+    A({
+      facts: [
+        {
+          card: "cards/projects/аврора",
+          text: "Курс сменён",
+          src: "e1",
+          quote: "Аврора сменила курс",
+        },
+      ],
+    }),
+  ];
+  // Замок берёт дневной write_card, пока ночь ждёт ответ A.
+  const held = fx.model.hold(1);
+  const run = spawnNight(fx);
+  await held.reached;
+  const release = await cs.acquireLock(join(fx.vault, "cards", ".write_card"));
+  held.release();
+  const busy = await run.result;
+  release();
+  assert.equal(busy.code, 1);
+  assert.match(busy.stderr, /занята/u);
+  assert.equal(read(file), before);
+  fx.model.replies = [B({ card: "cards/projects/аврора" })];
+  const resumed = await night(fx, null);
+  assert.equal(resumed.code, 0, resumed.stderr);
+  assert.equal(fx.model.prompts.length, 2);
+  assert.equal(logRows(read(file)).length, 1);
 });

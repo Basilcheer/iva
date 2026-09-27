@@ -13,6 +13,7 @@ const {
   parseJson,
   prefixHash,
   quoteBelongsTo,
+  stepHash,
   summaryEdited,
   summaryText,
 } = await import("./night-input.ts");
@@ -138,6 +139,52 @@ void test(`цитата владельца переживает ё, тире и 
   );
 });
 
+void test(`цитата сверяется без пунктуации: слова и порядок те же; выдумка, перестановка и обрывок слова — нет (real2, seed ${SEED})`, () => {
+  const word = fc.stringMatching(/^[а-яa-z0-9]{1,8}$/u);
+  const mark = fc.constantFrom(" ", ", ", ". ", " — ", "; ", ": ", "! ", " (");
+  fc.assert(
+    fc.property(
+      fc.array(fc.tuple(word, mark), { minLength: 3, maxLength: 8 }),
+      fc.nat(),
+      fc.array(mark, { minLength: 8, maxLength: 8 }),
+      (parts, cut, other) => {
+        const text = parts.map(([w, m]) => `${w}${m}`).join("");
+        const words = parts.map(([w]) => w);
+        const from = cut % (words.length - 1);
+        const taken = words.slice(from, from + 2);
+        const quote = taken.map((w, i) => `${w}${other[i]}`).join("");
+        assert.equal(quoteBelongsTo(owner(text), quote), true, text);
+        const swapped = [...taken].reverse();
+        if (
+          swapped.join(" ") !== taken.join(" ") &&
+          !` ${words.join(" ")} `.includes(` ${swapped.join(" ")} `)
+        )
+          assert.equal(quoteBelongsTo(owner(text), swapped.join(" ")), false);
+      },
+    ),
+    CHECKS,
+  );
+  const said = owner(
+    "Запустили проект Альфа вместе с Анной, первый клиент — Сбер.",
+  );
+  assert.equal(
+    quoteBelongsTo(said, "Запустили проект Альфа вместе с Анной."),
+    true,
+  );
+  assert.equal(quoteBelongsTo(said, "проект Альфа вместе с Анн"), false);
+  const moved = owner("Она переехала в Ташкент, теперь живёт там.");
+  assert.equal(quoteBelongsTo(moved, "живёт в Ташкенте"), false);
+  assert.equal(quoteBelongsTo(owner("..."), "."), false);
+});
+
+void test("отпечаток шага меняется вместе с текстом инструкции (promptVersion, #18)", () => {
+  const inputs = [{ id: "e1", text: "день" }];
+  const base = stepHash("A", "model", "инструкция v1", inputs);
+  assert.equal(stepHash("A", "model", "инструкция v1", inputs), base);
+  assert.notEqual(stepHash("A", "model", "инструкция v2", inputs), base);
+  assert.notEqual(stepHash("weekly", "model", "инструкция v1", inputs), base);
+});
+
 void test(`дедуп Log: факт с другим днём и указателем — тот же (seed ${SEED})`, () => {
   fc.assert(
     fc.property(line, (fact) => {
@@ -176,6 +223,11 @@ void test("мягкий разбор ответа: ограды markdown и те
   assert.deepEqual(parseJson('Вот:\n```json\n{"a":{"b":1}}\n```\nготово'), {
     a: { b: 1 },
   });
+  assert.deepEqual(
+    parseJson('```json {"a":1} ```\nПояснение: поле `src` — список {id}.'),
+    { a: 1 },
+  );
+  assert.deepEqual(parseJson('{"a":"```"}'), { a: "```" });
   assert.throws(() => parseJson("нет json"), /JSON/u);
 });
 
