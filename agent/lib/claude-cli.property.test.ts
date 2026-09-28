@@ -150,7 +150,8 @@ test("обратный перевод: кадры ассистента дают 
 });
 
 // Модель пишет имя инструмента как придётся: без префикса Iva, с чужим префиксом MCP, в другом
-// регистре, с `-` вместо `_`. Любое такое написание инструмента набора — тот же вызов.
+// регистре, с `-` вместо `_`. Инструмент набора узнаётся только по точному имени и по имени с
+// префиксом `mcp__iva__`: угадывание превращало `Bash` от Claude в `bash` Ивы и исполняло его.
 // Неузнанное имя (и свои инструменты CLI) уходит в eve как есть: на него eve отвечает модели
 // tool-error со списком доступных, а шаг не падает.
 const IVA_TOOL = fc
@@ -161,11 +162,6 @@ const SERVER = fc.oneof(
   fc.stringMatching(/^[a-z0-9]{1,10}$/u),
 );
 
-/** Ключ сравнения имён для генератора — повторён здесь, чтобы тест не верил коду на слово. */
-function spelling(name: string): string {
-  return name.toLowerCase().replaceAll("-", "_");
-}
-
 function callOf(wire: string, inventory: readonly string[]) {
   return readCompletion(
     [{ content: [{ type: "tool_use", id: "toolu_x", name: wire, input: {} }] }],
@@ -174,15 +170,25 @@ function callOf(wire: string, inventory: readonly string[]) {
   ).calls;
 }
 
-test(`любое написание имени инструмента набора — тот же вызов (seed ${SEED})`, () => {
+/** Написание имени: регистр и `-`/`_` меняются по генератору. */
+function respelled(name: string, edits: readonly string[]): string {
+  return [...name]
+    .map((char, at) => {
+      const edit = edits[at];
+      if (edit === "upper") return char.toUpperCase();
+      if (edit === "lower") return char.toLowerCase();
+      if (edit === "swap")
+        return char === "-" ? "_" : char === "_" ? "-" : char;
+      return char;
+    })
+    .join("");
+}
+
+test(`только точное имя и имя с префиксом mcp__iva__ — тот же вызов (seed ${SEED})`, () => {
   console.error(`[claude-cli property] seed ${SEED}, прогонов ${RUNS}`);
   fc.assert(
     fc.property(
-      fc.uniqueArray(IVA_TOOL, {
-        minLength: 1,
-        maxLength: 6,
-        selector: spelling,
-      }),
+      fc.uniqueArray(IVA_TOOL, { minLength: 1, maxLength: 6 }),
       fc.nat(),
       fc.option(SERVER, { nil: undefined }),
       fc.array(fc.constantFrom("keep", "upper", "lower", "swap"), {
@@ -192,23 +198,65 @@ test(`любое написание имени инструмента набор
       fc.boolean(),
       (inventory, pick, server, edits, dashedPrefix) => {
         const name = inventory[pick % inventory.length] ?? "";
-        const body = [...name]
-          .map((char, at) => {
-            const edit = edits[at];
-            if (edit === "upper") return char.toUpperCase();
-            if (edit === "lower") return char.toLowerCase();
-            if (edit === "swap")
-              return char === "-" ? "_" : char === "_" ? "-" : char;
-            return char;
-          })
-          .join("");
+        for (const exact of [name, CLAUDE_TOOL_PREFIX + name])
+          assert.deepEqual(
+            callOf(exact, inventory).map((call) => call.name),
+            [name],
+            `${exact} → ${name}`,
+          );
         const glue = dashedPrefix ? "--" : "__";
+        const body = respelled(name, edits);
         const wire =
           server === undefined ? body : `mcp${glue}${server}${glue}${body}`;
+        const bare = wire.startsWith(CLAUDE_TOOL_PREFIX)
+          ? wire.slice(CLAUDE_TOOL_PREFIX.length)
+          : wire;
         assert.deepEqual(
           callOf(wire, inventory).map((call) => call.name),
-          [name],
-          `${wire} → ${name}`,
+          [bare],
+          `${wire} уходит как есть, без угадывания`,
+        );
+      },
+    ),
+    SETTINGS,
+  );
+});
+
+// Ф10: свои инструменты CLI не исполняются, даже когда у Ивы есть инструмент с тем же именем
+// в другом регистре или под чужим сервером MCP.
+test(`Bash, Grep, Glob от Claude — не инструменты набора с bash, grep, glob (seed ${SEED})`, () => {
+  const inventory = ["bash", "grep", "glob", "write_card", "memory_search"];
+  for (const wire of [
+    "Bash",
+    "Grep",
+    "Glob",
+    "BASH",
+    "mcp__other__bash",
+    "mcp__claude_ai_iva__bash",
+    "mcp--iva--bash",
+    "mcp__iva__Bash",
+  ])
+    assert.equal(
+      inventory.includes(callOf(wire, inventory)[0]?.name ?? ""),
+      false,
+      `${wire} не исполняется инструментом Ивы`,
+    );
+  fc.assert(
+    fc.property(
+      fc.constantFrom("bash", "grep", "glob"),
+      fc.array(fc.constantFrom("keep", "upper", "lower"), {
+        minLength: 4,
+        maxLength: 4,
+      }),
+      fc.option(SERVER, { nil: undefined }),
+      (name, edits, server) => {
+        const body = respelled(name, edits);
+        const wire = server === undefined ? body : `mcp__${server}__${body}`;
+        fc.pre(wire !== name && wire !== CLAUDE_TOOL_PREFIX + name);
+        assert.equal(
+          inventory.includes(callOf(wire, inventory)[0]?.name ?? ""),
+          false,
+          `${wire} не исполняется инструментом Ивы`,
         );
       },
     ),

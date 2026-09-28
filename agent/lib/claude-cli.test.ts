@@ -1102,7 +1102,9 @@ test("имя без префикса, которого нет в наборе ш
   );
 });
 
-test("имя в другом написании — тот же инструмент набора, и на старте блока, и в вызове", async (t) => {
+// Угадывания нет: другое написание уходит в eve как есть и получает там tool-error, иначе
+// `Bash` от Claude стал бы `bash` Ивы и исполнился.
+test("имя в другом написании уходит в eve как есть, и на старте блока, и в вызове", async (t) => {
   const wire = "mcp__claude_ai_iva__Memory-Search";
   scriptCli(
     t,
@@ -1128,11 +1130,11 @@ test("имя в другом написании — тот же инструме
     partsOfType(untimed(parts), "tool-input-start").map(
       (part) => part.toolName,
     ),
-    ["memory_search"],
+    [wire],
   );
   assert.deepEqual(
     partsOfType(untimed(parts), "tool-call").map((part) => part.toolName),
-    ["memory_search"],
+    [wire],
   );
 });
 

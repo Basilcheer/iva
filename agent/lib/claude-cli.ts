@@ -698,29 +698,17 @@ export function readCompletion(
 }
 
 /**
- * Имя вызова для eve. Модель пишет имя как придётся (0.4.9, `memory_search` без префикса на
- * первом шаге): без префикса Iva, с чужим префиксом MCP, в другом регистре, с `-` вместо `_`.
- * Написание, которое узнаёт ровно один инструмент набора шага, — это он. Неузнанное имя (и свои
- * инструменты CLI вроде `Bash`: CLI их не исполняет, они выключены `--tools`) уходит в eve как
- * есть, без префикса Iva: на ошибку модели eve отвечает ей tool-error со списком доступных, как
- * у любого вендора, и ход идёт дальше.
+ * Имя вызова для eve. Инструмент набора узнаётся только по точному имени и по имени с префиксом
+ * Iva: модель видит имена только в этом виде (муляж MCP `iva`, `--strict-mcp-config`). Всё
+ * остальное — без префикса, в другом регистре, с чужим префиксом MCP, свои инструменты CLI вроде
+ * `Bash` — уходит в eve как есть: угадывание сделало бы `Bash` от Claude инструментом `bash` Ивы.
+ * На ошибку модели eve отвечает ей tool-error со списком доступных, как у любого вендора.
  */
 function ivaToolName(wireName: string, inventory: readonly string[]): string {
   if (inventory.includes(wireName)) return wireName;
-  const key = toolKey(wireName);
-  const [only, ...rest] = inventory.filter((name) => toolKey(name) === key);
-  if (only !== undefined && rest.length === 0) return only;
   return wireName.startsWith(CLAUDE_TOOL_PREFIX)
     ? wireName.slice(CLAUDE_TOOL_PREFIX.length)
     : wireName;
-}
-
-/** Имя без регистра, без разницы `-`/`_` и без префикса MCP любого сервера. */
-function toolKey(name: string): string {
-  return name
-    .toLowerCase()
-    .replaceAll("-", "_")
-    .replace(/^mcp__.+?__/u, "");
 }
 
 function toolCall(
