@@ -208,3 +208,23 @@ void test("Brain: уже существующий iva-vault приватный �
     git(fx.vault, "rev-parse", "HEAD"),
   );
 });
+
+// Язык владельца, как в v0.4.8 (noticeTranslator): settings.language=en — Alert
+// по-английски, каждый из трёх.
+void test("Brain говорит с владельцем на его языке: без origin, неудачный push и длинный CORE", (t) => {
+  const fx = brainFixture(t);
+  fx.gh("exit 1");
+  const data = join(fx.root, "data");
+  writeFileSync(join(data, "settings.json"), '{"language":"en"}\n');
+  writeFileSync(join(fx.vault, "CORE.md"), `# CORE\n\n- ${"x".repeat(5000)}\n`);
+  const noRemote = fx.brain();
+  assert.match(
+    noRemote.stderr,
+    /brain alert: Memory is not backed up: the vault has no git remote\./u,
+  );
+  assert.match(noRemote.stderr, /brain alert: CORE\.md is longer than/u);
+  git(fx.vault, "remote", "add", "origin", join(fx.root, "нет.git"));
+  const failed = fx.brain();
+  assert.match(failed.stderr, /brain alert: The vault backup did not reach/u);
+  assert.doesNotMatch(noRemote.stderr + failed.stderr, /[а-яё]{4}/iu);
+});

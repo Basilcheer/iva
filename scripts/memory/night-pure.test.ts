@@ -280,6 +280,37 @@ void test("месяц ждёт неготового ребёнка с транс
   assert.equal(periodChildren(vault, "monthly", "2026-08"), null);
 });
 
+void test("неделя, все дни которой закрыты skip или на паузе, не держит месяц", (t) => {
+  const vault = mkdtempSync(join(tmpdir(), "iva-period-"));
+  t.after(() => rmSync(vault, { recursive: true, force: true }));
+  const children = periodChildIds("monthly", "2026-08");
+  const week = children.find((child) => child.includes("W"))!;
+  const write = (dir: string, name: string, text = "x") => {
+    mkdirSync(join(vault, dir), { recursive: true });
+    writeFileSync(join(vault, dir, `${name}.md`), text);
+  };
+  for (const child of children.filter((c) => c !== week))
+    write(child.includes("W") ? "weekly" : "summaries/daily", child);
+  const days = periodChildIds("weekly", week);
+  for (const date of days.slice(1))
+    write(
+      "daily",
+      date,
+      "## 10:00 [text]\nx\n\n<!-- processed: skipped by owner -->\n",
+    );
+  write("daily", days[0], "## 10:00 [text]\nx\n");
+  assert.equal(
+    periodChildren(vault, "monthly", "2026-08"),
+    null,
+    "день ждёт ночи",
+  );
+  const month = periodChildren(vault, "monthly", "2026-08", new Set([days[0]]));
+  assert.deepEqual(
+    month?.find((child) => child.id === week),
+    { id: week },
+  );
+});
+
 void test("предел и размер части закреплены в одном модуле", () => {
   assert.deepEqual(NIGHT_CEILING, { calls: 40, inputTokens: 300_000 });
   assert.equal(PART_SIZE, 48_000);

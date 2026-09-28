@@ -1052,28 +1052,19 @@ void test("iva status stays quiet about legacy units once the brain rename is do
   assert.doesNotMatch(output, /iva-memory-doctor/);
 });
 
-void test("doctor surfaces problems from a fresh nightly memory report", async (t) => {
-  const { project, runCommand } = await fixture(t);
-  const graph = join(project, "vault/.graph");
-  await mkdir(graph, { recursive: true });
-  await writeFile(
-    join(graph, "enforce-report.json"),
-    JSON.stringify({
-      review: 2,
-      duplicates: 1,
-      skipped_oversize: 3,
-      unknown: 99,
-    }),
-  );
+// enforce-report.json писал удалённый autograph (enforce.py); новый Brain его не пишет.
+// Живость Brain доктор видит по состоянию iva-brain.service, а не по отчёту.
+void test("doctor does not ask for the enforce report nobody writes any more", async (t) => {
+  const { project, runCommand, seedUnit } = await fixture(t);
+  await seedUnit("iva-brain.timer");
+  await mkdir(join(project, "vault/.graph"), { recursive: true });
 
   const result = runCommand("doctor");
   const output = `${result.stdout}\n${result.stderr}`;
 
-  assert.match(
-    output,
-    /ночной maintenance сообщает о проблемах: review=2, duplicates=1, skipped_oversize=3/,
-  );
-  assert.doesNotMatch(output, /unknown=99/);
+  assert.doesNotMatch(output, /maintenance/u);
+  // Живость Brain по-прежнему проверяется: по состоянию его юнита.
+  assert.match(output, /iva-brain\.service has no failed state/u);
 });
 
 void test("userbot setup restarts an already enabled and active unit for new desired config", async (t) => {

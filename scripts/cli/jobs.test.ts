@@ -216,3 +216,19 @@ test("skip runs under the night's .memory.lock: a held lock changes nothing", as
   );
   assert.deepEqual(state.commits, []);
 });
+
+// Отметка в середине файла (после неё день дописали) ночь не считает: ночь читает только
+// хвост (markedDone). skip судит тем же правилом и дописывает отметку в хвост.
+test("skip closes a day whose old marker sits mid-file: the night sees the day as done", async (t) => {
+  const { skip, raw } = skipHarness(t);
+  writeFileSync(
+    raw,
+    "## 10:00 [text]\nhello\n\n<!-- processed: memory-night 2026-09-24 -->\n\n## 23:59 [text]\nlate entry\n",
+  );
+  const { markedDone } = await import("../memory/night-input.ts");
+  assert.equal(markedDone(readFileSync(raw, "utf8")), false);
+
+  await skip();
+
+  assert.equal(markedDone(readFileSync(raw, "utf8")), true);
+});

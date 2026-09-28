@@ -53,10 +53,14 @@ function isCalendarDate(date: string): boolean {
 
 // Отметка конца дня, которую читает ночь. Тихий день без транскрипта ночь тоже берёт
 // (вчера — всегда): закрыть его можно только той же отметкой, и файл дня создаётся из неё.
-function markSkipped(raw: string, now: Date): void {
+// Закрыт ли день, судит правило самой ночи (markedDone: отметка в хвосте).
+function markSkipped(
+  raw: string,
+  now: Date,
+  markedDone: (text: string) => boolean,
+): void {
   const exists = existsSync(raw);
-  if (exists && /^<!-- processed: .*-->$/mu.test(readFileSync(raw, "utf8")))
-    return;
+  if (exists && markedDone(readFileSync(raw, "utf8"))) return;
   if (!exists) mkdirSync(dirname(raw), { recursive: true });
   appendFileSync(
     raw,
@@ -106,7 +110,8 @@ export function createJobsCommand(
       );
     const vault = resolveVaultDir(ROOT, env.ASSISTANT_VAULT_DIR);
     const raw = join(vault, "daily", `${date}.md`);
-    markSkipped(raw, now);
+    const { markedDone } = await import("../memory/night-input.ts");
+    markSkipped(raw, now, markedDone);
     const commit =
       dependencies.commit ??
       (await import("#lib/vault-commit.ts")).commitVaultWrite;

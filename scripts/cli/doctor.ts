@@ -17,7 +17,6 @@ import {
 } from "../lib/plugin-units.ts";
 import { LEGACY_BRAIN_UNITS } from "../lib/legacy-memory-units.ts";
 import { classifyAgentListeners } from "../lib/listener-security.ts";
-import { readMemoryMaintenanceReport } from "../lib/memory-maintenance.ts";
 import {
   CATALOG,
   catalogProvider,
@@ -105,21 +104,26 @@ export async function scheduleFactsReport(
   const { openJobFailures } = await import("#lib/open-failures.ts");
   const { SCHEDULE_CRON } = await import("#lib/schedule-table.ts");
   const facts = readFactsSync(jobFactsFile(dataDirectory));
-  const names = [
-    ...new Set([...Object.keys(SCHEDULE_CRON), ...facts.map((f) => f.name)]),
-  ].sort();
+  // Только живые расписания: факты пишет их раннер, а строки снятых (memory-daily,
+  // -weekly, -monthly, -yearly ушли в ночь) остаются в jobs.json навсегда.
+  const live = (name: string) => Object.hasOwn(SCHEDULE_CRON, name);
+  const names = Object.keys(SCHEDULE_CRON).sort();
   const lastRuns: string[] = [];
   for (const name of names) {
     const latest: JobFact | null = latestFact(facts, name);
     if (!latest) continue;
     const when = new Date(latest.finishedAt).toISOString();
+    const reason = latest.error ?? "без причины";
     lastRuns.push(
       latest.ok
         ? `${name}: ok, ${when}`
-        : `${name}: провал (${latest.error ?? "без причины"}), ${when}`,
+        : latest.acked // закрыт iva jobs ack: без предупреждения
+          ? `${name}: закрытый провал (${reason}), ${when}`
+          : `${name}: провал (${reason}), ${when}`,
     );
   }
-  return { lastRuns, openFailures: openJobFailures(facts, now), facts };
+  const openFailures = openJobFailures(facts, now).filter((f) => live(f.name));
+  return { lastRuns, openFailures, facts };
 }
 
 /** Сколько ждём `/health` прокси: он на loopback, и медленный ответ — уже симптом. */
@@ -316,8 +320,7 @@ export function createDoctorCommand(
     checkRollupStatus(ctx);
     await checkReminders(ctx);
     await checkBridge(ctx);
-    const vaultPath = checkVault(ctx);
-    checkMaintenance(ctx, vaultPath);
+    checkVault(ctx);
     return finishDoctor(ctx);
   };
 }
@@ -1144,7 +1147,7 @@ async function checkBridge(ctx: DoctorContext): Promise<void> {
 }
 
 // 6. Vault + git origin (report only — we don't initiate git operations)
-function checkVault(ctx: DoctorContext): string {
+function checkVault(ctx: DoctorContext): void {
   const vaultPath = resolveVaultDir(ctx.root, ctx.env.ASSISTANT_VAULT_DIR);
   if (!existsSync(vaultPath)) {
     ctx.warn(
@@ -1158,33 +1161,6 @@ function checkVault(ctx: DoctorContext): string {
     ctx.warn(
       `vault without git origin — memory backup not configured:\n    gh repo create <user>/iva-vault --private --source="${vaultPath}" --remote=origin --push`,
     );
-  }
-  return vaultPath;
-}
-
-/**
- * enforce-report.json is produced by iva-brain.service, so only complain about
- * missing/stale output when that timer is enabled. A fresh report is still useful either way.
- */
-function checkMaintenance(ctx: DoctorContext, vaultPath: string): void {
-  const maintenanceTimerEnabled = ctx.systemd.isEnabled(ctx.brainTimer);
-  const maintenanceReport = readMemoryMaintenanceReport(
-    join(vaultPath, ".graph/enforce-report.json"),
-  );
-  if (maintenanceReport.status === "fresh") {
-    if (maintenanceReport.problems.length) {
-      ctx.warn(
-        `ночной maintenance сообщает о проблемах: ${maintenanceReport.problems
-          .map(({ key, count }) => `${key}=${count}`)
-          .join(", ")}`,
-      );
-    } else {
-      ctx.ok("Ночной maintenance-отчёт свежий, проблем нет");
-    }
-  } else if (maintenanceTimerEnabled) {
-    if (maintenanceReport.status === "invalid")
-      ctx.warn("ночной maintenance оставил нечитаемый отчёт");
-    else ctx.warn("ночной maintenance давно не отчитывался");
   }
 }
 

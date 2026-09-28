@@ -10,8 +10,46 @@ import {
   collapseRepeatedDescription,
 } from "./vault-cleanup.ts";
 
+const UNIT = "Sales lead for the Q3 pipeline review";
+
+// Значения из collapse_repeated_description v0.4.8 (scripts/autograph/common.py) на тех же
+// входах: половины — только длиннее 40 знаков, период — только единица длиннее 20.
+const PYTHON_048: Record<string, string> = {
+  "Duran Duran": "Duran Duran",
+  "Bora Bora": "Bora Bora",
+  "да да": "да да",
+  "bye bye": "bye bye",
+  "New York New York": "New York New York",
+  "Нью-Йорк Нью-Йорк": "Нью-Йорк Нью-Йорк",
+  "#tag #tag": "#tag #tag",
+  "a: b a: b": "a: b a: b",
+  "it''s ok it''s ok": "it''s ok it''s ok",
+  [UNIT]: UNIT,
+  [`${UNIT} ${UNIT}`]: UNIT,
+  [`${UNIT} ${UNIT} ${UNIT}`]: UNIT,
+  ["short unit x ".repeat(6).trim()]: "short unit x ".repeat(3).trim(),
+  ["ab ".repeat(22).trim()]: "ab ".repeat(11).trim(),
+};
+
+void test("описание из повторённого слова остаётся, как в v0.4.8; раздутое схлопывается", () => {
+  for (const [input, expected] of Object.entries(PYTHON_048))
+    assert.equal(collapseRepeatedDescription(input), expected, input);
+});
+
+void test("чистка не трогает Card с коротким повтором в description", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "iva-vault-cleanup-short-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const text = '---\ndescription: "Duran Duran"\n---\n# Band\n';
+  writeFileSync(join(root, "card.md"), text);
+  assert.equal(cleanupVault(root, true).cleaned, 0);
+  assert.equal(readFileSync(join(root, "card.md"), "utf8"), text);
+});
+
 void test("description collapse and cap preserve a single bounded value", () => {
-  assert.equal(collapseRepeatedDescription("one two one two"), "one two");
+  assert.equal(
+    collapseRepeatedDescription(`${UNIT} ${UNIT} ${UNIT} ${UNIT}`),
+    UNIT,
+  );
   assert.equal(capDescription("word ".repeat(200)).length <= 501, true);
 });
 
@@ -22,19 +60,19 @@ void test("streaming cleanup changes frontmatter and keeps body byte-identical",
   const body = "# Card\n\nbody\n```\n---\n```\n";
   writeFileSync(
     file,
-    `---\ntype: note\ndescription: "same same same same same same same same"\n---\n${body}`,
+    `---\ntype: note\ndescription: "${UNIT} ${UNIT} ${UNIT} ${UNIT}"\n---\n${body}`,
   );
   const dry = cleanupVault(root, false);
   assert.equal(dry.cleaned, 1);
   assert.match(
     readFileSync(file, "utf8"),
-    /same same same same same same same same/u,
+    new RegExp(`${UNIT} ${UNIT} ${UNIT} ${UNIT}`, "u"),
   );
   const applied = cleanupVault(root, true);
   assert.equal(applied.cleaned, 1);
   const changed = readFileSync(file, "utf8");
   assert.equal(changed.slice(changed.indexOf("# Card")), body);
-  assert.match(changed, /description: "same"/u);
+  assert.ok(changed.includes(`description: "${UNIT}"`), changed);
   assert.equal(cleanupVault(root, true).cleaned, 0);
 });
 
@@ -63,7 +101,7 @@ void test("CLI чистки: dry-run печатает строку, котору
   t.after(() => rmSync(root, { recursive: true, force: true }));
   writeFileSync(
     join(root, "card.md"),
-    '---\ndescription: "a b a b a b"\n---\n# A\n',
+    `---\ndescription: "${UNIT} ${UNIT} ${UNIT}"\n---\n# A\n`,
   );
   const cli = (...args: string[]) =>
     spawnSync(
@@ -81,7 +119,7 @@ void test("CLI чистки: dry-run печатает строку, котору
   assert.match(applied.stdout, /cleanup \(applied\): 1 file\(s\)/u);
   assert.match(
     readFileSync(join(root, "card.md"), "utf8"),
-    /description: "a b"/u,
+    new RegExp(`description: "${UNIT}"`, "u"),
   );
   assert.equal(cli().status, 1);
 });

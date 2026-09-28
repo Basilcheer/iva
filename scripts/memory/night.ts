@@ -1136,8 +1136,16 @@ async function night(manual: string | undefined): Promise<number> {
   await applyPending();
   const today = localDate();
   const ask = { skill: skill("period"), model: call.nightModelName, signal };
+  const paused = () => {
+    const tried = attempts.readAttempts(ATTEMPTS);
+    return new Set(
+      Object.keys(tried).filter((d) => attempts.isExhausted(tried[d])),
+    );
+  };
   const periods = async (): Promise<string[]> =>
-    manual ? [] : buildReadyPeriods(vault, today, ask, jobs);
+    manual
+      ? []
+      : buildReadyPeriods(vault, today, { ...ask, paused: paused() }, jobs);
   const fallbacks = await periods();
   const tried = attempts.readAttempts(ATTEMPTS);
   const queue = manual

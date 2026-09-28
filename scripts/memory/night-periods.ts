@@ -58,11 +58,22 @@ export function periodChildIds(period: Period, id: string): string[] {
   );
 }
 
-/** Готовые дети или null. Ребёнок без файла и без единого сырого дня — «нет данных». */
+/** День с данными: есть выжимка или ночь его ещё разберёт. Закрытый без выжимки —
+ * отметка в хвосте (iva jobs skip) или пауза после трёх попыток — данных не даст. */
+function dayHasData(vault: string, day: string, paused: ReadonlySet<string>) {
+  if (existsSync(join(vault, "summaries/daily", `${day}.md`))) return true;
+  const raw = join(vault, "daily", `${day}.md`);
+  if (!existsSync(raw) || paused.has(day)) return false;
+  return !input.markedDone(readFileSync(raw, "utf8"));
+}
+
+/** Готовые дети или null. Ребёнок без файла, у которого ни один день не даст данных
+ * (нет сырого дня, день закрыт или на паузе), — «нет данных». */
 export function periodChildren(
   vault: string,
   period: Period,
   id: string,
+  paused: ReadonlySet<string> = new Set(),
 ): Child[] | null {
   const children: Child[] = [];
   for (const child of periodChildIds(period, id)) {
@@ -71,12 +82,10 @@ export function periodChildren(
       : child.length === 7
         ? `monthly/${child}`
         : `summaries/daily/${child}`;
-    const raw = daysOf(child).some((day) =>
-      existsSync(join(vault, "daily", `${day}.md`)),
-    );
     if (existsSync(join(vault, `${path}.md`)))
       children.push({ id: child, path });
-    else if (raw) return null;
+    else if (daysOf(child).some((day) => dayHasData(vault, day, paused)))
+      return null;
     else children.push({ id: child });
   }
   return children.some((child) => child.path) ? children : null;
@@ -90,7 +99,13 @@ function summaryOf(vault: string, child: Child): string {
   return typeof fields?.description === "string" ? fields.description : "";
 }
 
-type Ask = { skill: string; model: string; signal: AbortSignal };
+/** paused — дни на паузе после трёх попыток: выжимки у них не будет. */
+type Ask = {
+  skill: string;
+  model: string;
+  signal: AbortSignal;
+  paused: ReadonlySet<string>;
+};
 
 /** Собирать ли: файла нет; или файл ночи (body_hash) с другим входом или fallback.
  * Правленый владельцем не трогается (строка Job); без body_hash — старая ночь, готов. */
@@ -112,7 +127,7 @@ async function buildPeriod(
   jobs: string[],
 ) {
   const file = join(vault, period, `${id}.md`);
-  const children = periodChildren(vault, period, id);
+  const children = periodChildren(vault, period, id, ask.paused);
   if (!children) return null;
   const values = children.map((child) => ({
     id: child.id,

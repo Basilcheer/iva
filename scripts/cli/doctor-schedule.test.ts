@@ -16,7 +16,7 @@ const HOUR = 60 * 60 * 1000;
 
 function fact(overrides: Partial<JobFact> = {}): JobFact {
   return {
-    name: "memory-daily",
+    name: "memory-night",
     startedAt: NOW - 2 * HOUR,
     finishedAt: NOW - 2 * HOUR + 1000,
     ok: false,
@@ -40,11 +40,11 @@ test("последний запуск каждого имени: ok и пров�
   const report = await scheduleFactsReport(dir, NOW);
   assert.deepEqual(report.lastRuns, [
     "digest: ok, 2026-09-13T10:00:01.000Z",
-    "memory-daily: провал (exited 1), 2026-09-13T10:00:01.000Z",
+    "memory-night: провал (exited 1), 2026-09-13T10:00:01.000Z",
   ]);
   assert.deepEqual(
     report.openFailures.map((entry) => entry.name),
-    ["memory-daily"],
+    ["memory-night"],
   );
 });
 
@@ -58,4 +58,39 @@ test("закрытый провал не считается открытым, и
   const report = await scheduleFactsReport(dir, NOW);
   assert.deepEqual(report.openFailures, []);
   assert.equal(report.lastRuns.length, 1);
+});
+
+// Снятые расписания (memory-daily, -weekly, -monthly, -yearly ушли в ночь): их последний
+// провал в jobs.json остаётся навсегда, и доктор не говорит о том, чего больше нет.
+test("снятое расписание не выводится и не считается открытым провалом", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "t20-doctor-"));
+  for (const name of [
+    "memory-daily",
+    "memory-weekly",
+    "memory-monthly",
+    "memory-yearly",
+  ])
+    await recordFact(jobFactsFile(dir), fact({ name }), NOW);
+  await recordFact(jobFactsFile(dir), fact({ name: "digest" }), NOW);
+  const report = await scheduleFactsReport(dir, NOW);
+  assert.deepEqual(report.lastRuns, [
+    "digest: провал (exited 1), 2026-09-13T10:00:01.000Z",
+  ]);
+  assert.deepEqual(
+    report.openFailures.map((entry) => entry.name),
+    ["digest"],
+  );
+});
+
+// iva jobs ack закрывает провал: строка остаётся, но без «: провал», по которой доктор
+// предупреждает.
+test("провал, закрытый iva jobs ack, не предупреждает", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "t20-doctor-"));
+  await recordFact(jobFactsFile(dir), fact({ acked: true }), NOW);
+  const report = await scheduleFactsReport(dir, NOW);
+  assert.deepEqual(report.lastRuns, [
+    "memory-night: закрытый провал (exited 1), 2026-09-13T10:00:01.000Z",
+  ]);
+  assert.ok(!report.lastRuns[0].includes(": провал"));
+  assert.deepEqual(report.openFailures, []);
 });

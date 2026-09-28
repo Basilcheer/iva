@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { resolveDataDir } from "../lib/data-dir.ts";
-import { alertOnce } from "../lib/notice-policy.ts";
+import { alertOnce, noticeTranslator } from "../lib/notice-policy.ts";
 import { notificationChat } from "../lib/notification-chat.ts";
 import { vaultDirOrExit } from "../lib/vault-boundary.ts";
 
@@ -20,6 +20,8 @@ async function authoredTree() {
   };
 }
 let tree: Awaited<ReturnType<typeof authoredTree>>;
+// Язык владельца (settings.language), как в v0.4.8: каждый Alert — парой en/ru.
+let T: Awaited<ReturnType<typeof noticeTranslator>>;
 
 // Alert тем же швом, что у ночи и сторожа: Outbox, разметка, трасса.
 async function send(text: string): Promise<boolean> {
@@ -28,7 +30,7 @@ async function send(text: string): Promise<boolean> {
   const sent =
     token && chat ? await tree.sendTelegramHtml(token, chat, text) : null;
   if (!sent?.ok)
-    console.error(`brain alert: ${text} (${sent?.error ?? "нет чата"})`);
+    console.error(`brain alert: ${text} (${sent?.error ?? "no chat"})`);
   return sent?.ok ?? false;
 }
 
@@ -57,7 +59,10 @@ async function alertCoreCap(): Promise<void> {
   if (length <= tree.CORE_CAP) return;
   await alertOnce(dataDir, "core-over-cap", String(length), () =>
     send(
-      `CORE.md длиннее ${tree.CORE_CAP} знаков (${length}). Сократи его в vault; Brain не режет файл автоматически.`,
+      T(
+        `CORE.md is longer than ${tree.CORE_CAP} characters (${length}). Shorten it in the vault; Brain does not trim the file itself.`,
+        `CORE.md длиннее ${tree.CORE_CAP} знаков (${length}). Сократи его в vault; Brain не режет файл автоматически.`,
+      ),
     ),
   );
 }
@@ -65,8 +70,11 @@ async function alertCoreCap(): Promise<void> {
 const run = (command: string, args: string[]) =>
   spawnSync(command, args, { cwd: vault, encoding: "utf8" });
 
-const NO_REMOTE =
-  "Память не бэкапится: у vault нет git remote. Зайди на сервер и выполни: gh auth login (scope repo). Brain сам создаст приватный репозиторий iva-vault и включит бэкап.";
+const noRemote = () =>
+  T(
+    "Memory is not backed up: the vault has no git remote. On the server run: gh auth login (repo scope). Brain then creates a private iva-vault repository and turns the backup on.",
+    "Память не бэкапится: у vault нет git remote. Зайди на сервер и выполни: gh auth login (scope repo). Brain сам создаст приватный репозиторий iva-vault и включит бэкап.",
+  );
 
 /** origin vault: настроенный владельцем не трогается; нет — приватный iva-vault через уже
  * авторизованный gh. Уже существующий iva-vault привязывается, только если gh подтвердил,
@@ -74,18 +82,21 @@ const NO_REMOTE =
 function ensureRemote(): string | null {
   const origin = () => run("git", ["remote", "get-url", "origin"]).status === 0;
   if (origin()) return null;
-  if (run("gh", ["auth", "status"]).status !== 0) return NO_REMOTE;
+  if (run("gh", ["auth", "status"]).status !== 0) return noRemote();
   run("gh", ["auth", "setup-git"]);
   const create = ["repo", "create", "iva-vault", "--private", "--source"];
   if (!run("gh", [...create, vault, "--remote", "origin", "--push"]).status)
-    return origin() ? null : NO_REMOTE;
+    return origin() ? null : noRemote();
   const login = run("gh", ["api", "user", "--jq", ".login"]).stdout.trim();
   const repo = `${login}/iva-vault`;
   const view = ["repo", "view", repo, "--json", "visibility", "--jq"];
   if (!login || run("gh", [...view, ".visibility"]).stdout.trim() !== "PRIVATE")
-    return `Бэкап vault не включён: репозиторий ${repo} не приватный или gh не смог это проверить, Brain его не привязал. Сделай его приватным (gh repo edit ${repo} --visibility private) или укажи свой origin.`;
+    return T(
+      `The vault backup is off: the repository ${repo} is not private or gh could not check it, so Brain did not attach it. Make it private (gh repo edit ${repo} --visibility private) or set your own origin.`,
+      `Бэкап vault не включён: репозиторий ${repo} не приватный или gh не смог это проверить, Brain его не привязал. Сделай его приватным (gh repo edit ${repo} --visibility private) или укажи свой origin.`,
+    );
   run("git", ["remote", "add", "origin", `https://github.com/${repo}.git`]);
-  return origin() ? null : NO_REMOTE;
+  return origin() ? null : noRemote();
 }
 
 async function pushBackup(): Promise<boolean> {
@@ -101,7 +112,10 @@ async function pushBackup(): Promise<boolean> {
   console.error(`brain: backup push failed: ${reason}`);
   await alertOnce(dataDir, "brain-backup", reason, () =>
     send(
-      "Бэкап vault не ушёл в git remote. Проверь `git -C vault push origin HEAD` и доступ к remote.",
+      T(
+        "The vault backup did not reach the git remote. Check `git -C vault push origin HEAD` and access to the remote.",
+        "Бэкап vault не ушёл в git remote. Проверь `git -C vault push origin HEAD` и доступ к remote.",
+      ),
     ),
   );
   return false;
@@ -112,6 +126,7 @@ async function main(): Promise<number> {
     console.error(`brain: vault not found: ${vault}`);
     return 1;
   }
+  T = await noticeTranslator();
   try {
     tree = await authoredTree();
   } catch (error) {

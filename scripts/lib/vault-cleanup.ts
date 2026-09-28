@@ -31,22 +31,22 @@ const IGNORED = new Set([
   "archive",
 ]);
 
+/** Порт collapse_repeated_description v0.4.8: половины — только у строки длиннее 40
+ * знаков, период — только единица длиннее 20, иначе законный короткий повтор
+ * («Duran Duran») остаётся как есть. */
 export function collapseRepeatedDescription(value: string): string {
   let text = value.trim();
-  for (
-    let half = text.length >> 1;
-    half > 0 && text.slice(0, half).trim() === text.slice(half).trim();
-    half = text.length >> 1
-  )
-    text = text.slice(0, half).trim();
-  const words = text.split(/\s+/u);
-  for (let period = 1; period <= words.length / 2; period++)
-    if (
-      words.length % period === 0 &&
-      words.every((word, index) => word === words[index % period])
-    )
-      return words.slice(0, period).join(" ");
-  return text;
+  while (text.length > 40) {
+    const half = text.length >> 1;
+    const first = text.slice(0, half).trim();
+    if (!first || first !== text.slice(half).trim()) break;
+    text = first;
+  }
+  const unit = `${text} `;
+  const period = (unit + unit).indexOf(unit, 1);
+  return period > 20 && period < unit.length && unit.length % period === 0
+    ? unit.slice(0, period).trim()
+    : text;
 }
 
 export function capDescription(value: string): string {

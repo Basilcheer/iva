@@ -936,6 +936,58 @@ void test("неделя из готовых дней собирается одн
   assert.match(result.stderr, /night-fallback/u);
 });
 
+// День, закрытый iva jobs skip или вставший на паузу после трёх попыток, выжимки не
+// получит никогда: неделя собирается без него («нет данных»), а не ждёт вечно.
+for (const closed of ["skip", "pause"] as const)
+  void test(`неделя с днём без выжимки (${closed}) собирается, день — «нет данных»`, async (t) => {
+    const fx = await fixture(t);
+    const monday = new Date(Date.parse(`${TODAY}T00:00:00Z`));
+    monday.setUTCDate(monday.getUTCDate() - ((monday.getUTCDay() + 6) % 7) - 7);
+    const days = Array.from({ length: 7 }, (_, index) =>
+      new Date(monday.getTime() + index * 86_400_000)
+        .toISOString()
+        .slice(0, 10),
+    );
+    mkdirSync(join(fx.vault, "summaries/daily"), { recursive: true });
+    for (const date of days.slice(0, 6))
+      writeFileSync(
+        summary(fx, date),
+        `---\ndescription: "день ${date}"\n---\n# ${date}\n`,
+      );
+    const marker =
+      "\n<!-- processed: skipped by owner 2026-09-20T00:00:00.000Z -->\n";
+    day(
+      fx,
+      `## 10:00 [text]\nтяжёлый день\n${closed === "skip" ? marker : ""}`,
+      days[6],
+    );
+    if (closed === "pause") {
+      const at = "2026-09-20T00:00:00.000Z";
+      const tries = Array.from({ length: 3 }, () => ({ at, reason: "cut" }));
+      writeFileSync(
+        join(fx.data, "rollup-attempts.json"),
+        JSON.stringify({ [days[6]]: tries }),
+      );
+    }
+    fx.model.replies = [{ text: JSON.stringify({ gist: "неделя" }) }];
+    const result = await night(fx, null);
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(fx.model.prompts.length, 1, result.stderr);
+    assert.doesNotMatch(fx.model.prompts[0], /тяжёлый день/u);
+    const weekly = execFileSync("ls", [join(fx.vault, "weekly")], {
+      encoding: "utf8",
+    }).trim();
+    assert.match(weekly, /^\d{4}-W\d{2}\.md$/u);
+    const alerts = result.stderr.match(
+      /memory-night alert rollup-day-paused/gu,
+    );
+    assert.equal(
+      alerts?.length ?? 0,
+      closed === "pause" ? 1 : 0,
+      result.stderr,
+    );
+  });
+
 void test("связь пишется в Related обеих Card; связь с неизвестной Card отброшена", async (t) => {
   const fx = await fixture(t);
   day(fx, "## 10:00 [text]\nАнна и Борис взяли Аврору\n");
