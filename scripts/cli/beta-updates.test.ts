@@ -238,3 +238,17 @@ void test("setBeta failure table: any single failed write leaves every key as it
       }
   assert.deepEqual(broken, []);
 });
+
+// QA круга 3: config.lock — отказ называет причину, а не «нет git-репозитория».
+void test("iva beta with git config locked: the refusal names the lock", async (t) => {
+  const fx = install(t);
+  writeFileSync(join(fx.home, "repo", "config.lock"), "");
+  const refused: string[] = [];
+  await dispatchCli(["beta"], createCliMain(fx.home).commands, {
+    bad: (line) => void refused.push(line),
+    help: () => {},
+    exit: ((code: number) => void code) as (code: number) => never,
+  });
+  assert.equal(refused.length, 1);
+  assert.match(refused[0], /another process.*try again/u);
+});

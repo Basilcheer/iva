@@ -14,7 +14,7 @@ import { createTraceCommands } from "./trace.ts";
 import { createTreeRenderer } from "./tree.ts";
 import { createUserbotCommands } from "./userbot.ts";
 import { createVersionUpdateCommand } from "./version-update-command.ts";
-import { setBeta } from "../lib/update-channel.ts";
+import { betaRepos, setBeta } from "../lib/update-channel.ts";
 
 export type CliCommand = (args: readonly string[]) => unknown;
 
@@ -66,7 +66,11 @@ function betaCommands(
 ) {
   const switchTo = (on: boolean): void => {
     if (!setBeta(root, on))
-      throw new Error("no git repository here: the setting was not recorded");
+      throw new Error(
+        betaRepos(root).length
+          ? "the update setting was not written: git config is held by another process (or not writable); nothing changed, try again"
+          : "no git repository here: the setting was not recorded",
+      );
     const language =
       runtime.readEnv().AGENT_LANGUAGE || process.env.AGENT_LANGUAGE;
     const ru = language === "ru";

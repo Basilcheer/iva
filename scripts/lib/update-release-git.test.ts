@@ -398,3 +398,16 @@ void test("resolver failure table: a failed step refuses, never a target below t
     broken.push(`missing branch: ${missing}`);
   assert.deepEqual(broken, []);
 });
+
+// QA круга 3: на стабильных активный коммит, которого нет в зеркале, с полным SHA тоже
+// отказ, а не выпуск ниже установленного.
+void test("stable: the installed commit missing from the mirror (full SHA) refuses, no release below it", async (t) => {
+  const fx = fixture(t);
+  fx.commit("1.1.0", true);
+  const missing = "ab".repeat(20);
+  await assert.rejects(fx.target(missing), /is not in the mirror/u);
+  await assert.rejects(
+    resolveTarget(fx.mirror, missing),
+    /is not in the mirror/u,
+  );
+});

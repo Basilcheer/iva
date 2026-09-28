@@ -141,21 +141,25 @@ export async function betaChannel(git: Git): Promise<boolean> {
   return (await readBeta(git)) || branch === BETA_BRANCH;
 }
 
-/** Цель не ниже установленного: назад обновление не ходит нигде; откат — только явный. */
-async function notBelow(git: Git, target: string, installed?: string) {
-  if (!installed || !target) return target;
+/** Активный коммит в зеркале. Нет его — безопасность перехода не доказать: отказ. */
+async function installedIn(git: Git, installed: string): Promise<string> {
   const found = await git(
     "rev-parse",
     "--verify",
     "-q",
     `${installed}^{commit}`,
   );
-  // Активного коммита нет в зеркале: безопасность перехода не доказать — отказ.
   if (found.code !== 0)
     throw new Error(
       `the installed commit ${installed} is not in the mirror; nothing was installed`,
     );
-  const at = output(found);
+  return output(found);
+}
+
+/** Цель не ниже установленного: назад обновление не ходит нигде; откат — только явный. */
+async function notBelow(git: Git, target: string, installed?: string) {
+  if (!installed || !target) return target;
+  const at = await installedIn(git, installed);
   if (at === target) return target;
   const older = await git("merge-base", "--is-ancestor", target, at);
   return older.code === 0 ? at : target;
@@ -213,7 +217,7 @@ export async function resolveReleaseTarget(
     );
   const release = await requireGit(git, "rev-parse", `${tag}^{commit}`);
   const installed = options.installed
-    ? await requireGit(git, "rev-parse", options.installed)
+    ? await installedIn(git, options.installed)
     : "";
   const ahead =
     installed &&
@@ -229,7 +233,7 @@ export async function resolveReleaseTarget(
 }
 
 /** Где лежит iva.beta: git установки и её зеркало (обновление читает зеркало). */
-function betaRepos(root: string): string[] {
+export function betaRepos(root: string): string[] {
   const install = classifyRoot(root);
   const repos = new Set([install.home, gitRootFor(install)]);
   const isRepo = (dir: string) =>
