@@ -67,6 +67,54 @@ const mergeInput = z.object({
   confirmed_by_owner: z.literal(true),
 });
 
+// На провод уходит одна плоская схема: объединение схем в корне провайдеры не принимают
+// (Anthropic требует input_schema.type), а без инструмента падает весь ход. Что нужно каждой
+// операции, модель читает в описаниях полей; строгую форму операции проверяет execute и
+// отвечает текстом, который модель сама исправит.
+const wireInput = z.object({
+  operation: z
+    .enum(["fact", "truth", "merge"])
+    .describe(
+      "fact: type, title, text (одна строка), по желанию description, tags, aliases, source. " +
+        "truth: type, title, text (новый Compiled Truth), reason, по желанию source. " +
+        "merge: target, duplicate, confirmed_by_owner=true.",
+    ),
+  type: z.enum(TYPES).optional().describe("fact, truth: тип Card"),
+  title: z.string().optional().describe("fact, truth: имя Card"),
+  text: z
+    .string()
+    .optional()
+    .describe("fact: факт одной строкой; truth: новый Compiled Truth"),
+  description: z.string().optional().describe("fact: выжимка, до 500 символов"),
+  tags: z.array(z.string()).optional().describe("fact: до 6 тегов"),
+  aliases: z.array(z.string()).optional().describe("fact: другие написания"),
+  source: z.string().optional().describe("fact, truth: откуда факт"),
+  reason: z.string().optional().describe("truth: почему меняется истина"),
+  target: z.string().optional().describe("merge: Card, которая остаётся"),
+  duplicate: z.string().optional().describe("merge: дубль, который вливается"),
+  confirmed_by_owner: z
+    .boolean()
+    .optional()
+    .describe("merge: true только по явной просьбе владельца"),
+});
+
+const operationSchemas = z.discriminatedUnion("operation", [
+  factInput,
+  truthInput,
+  mergeInput,
+]);
+
+function operationInput(
+  raw: z.infer<typeof wireInput>,
+): z.infer<typeof operationSchemas> | { error: string } {
+  const parsed = operationSchemas.safeParse(raw);
+  if (parsed.success) return parsed.data;
+  const issues = parsed.error.issues
+    .map((issue) => `${issue.path.join(".") || "input"}: ${issue.message}`)
+    .join("; ");
+  return { error: `write_card ${raw.operation}: ${issues}` };
+}
+
 interface CardRecord {
   readonly file: string;
   readonly path: string;
@@ -278,19 +326,15 @@ async function mergeCards(input: z.infer<typeof mergeInput>) {
 export default defineTool({
   description:
     "Card памяти: fact дописывает факт (и может создать Card после поиска), truth меняет Compiled Truth с архивом, merge склеивает дубль только по явной просьбе владельца.",
-  inputSchema: z.discriminatedUnion("operation", [
-    factInput,
-    truthInput,
-    mergeInput,
-  ]),
-  async execute(input) {
+  inputSchema: wireInput,
+  async execute(raw) {
+    const input = operationInput(raw);
+    if ("error" in input) return { ok: false, error: input.error };
     try {
       // Одна правка Card за раз (и с ночью): параллельные ходы не сливаются в коммит.
       return await withCardLock(resolveVaultDir(process.cwd()), async () => {
         if (input.operation === "fact") return await writeFact(input);
         if (input.operation === "truth") return await writeTruth(input);
-        if (input.confirmed_by_owner !== true)
-          return { ok: false, error: "merge требует confirmed_by_owner=true" };
         return await mergeCards(input);
       });
     } catch (error) {

@@ -144,6 +144,10 @@ void test("write_card truth архивирует вытеснённую прав
     context,
   );
   assert.equal((refused as { ok?: boolean }).ok, false);
+  assert.match(
+    (refused as { error?: string }).error ?? "",
+    /confirmed_by_owner/u,
+  );
   const merged = await writeCard.execute(
     {
       operation: "merge",
@@ -241,6 +245,19 @@ void test("ночь может только сокращать уже разду
     mode: "night",
   });
   assert.equal(longer.ok, false);
+});
+
+void test("write_card без полей операции отвечает текстом и ничего не пишет", async (t) => {
+  const fx = fixture(t);
+  const before = git(fx.vault, "rev-parse", "HEAD");
+  const result = (await writeCard.execute(
+    { operation: "fact", type: "note", text: "факт без имени" },
+    context,
+  )) as { ok?: boolean; error?: string };
+  assert.equal(result.ok, false);
+  assert.match(result.error ?? "", /^write_card fact: .*title/u);
+  assert.equal(git(fx.vault, "rev-parse", "HEAD"), before);
+  assert.equal(git(fx.vault, "status", "--porcelain"), "");
 });
 
 void test("write_card не затирает нечитаемый файл на месте новой Card (ДЕФ-4 днём)", async (t) => {
