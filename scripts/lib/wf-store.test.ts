@@ -17,6 +17,7 @@ import {
   quarantineDir,
   quarantinePath,
   queuedInputTargets,
+  recoverInterruptedSessionState,
   resetStateTargets,
   rewriteRunStatusesForUpdate,
   sessionStateTargets,
@@ -219,4 +220,97 @@ void test("update rewrite leaves terminal chats alone and does not re-arm a noti
       JSON.parse(readFileSync(join(dir, `${name}.json`), "utf8")),
       record,
     );
+});
+
+void test("restart recovery retires workflow state but preserves the Telegram queue", () => {
+  const root = mkdtempSync(join(tmpdir(), "wf-store-restart-"));
+  const dataDir = join(root, "data");
+  const statusDir = join(dataDir, "run-status.d");
+  const workflow = join(root, ".eve/.workflow-data");
+  const legacyWorkflow = join(root, ".workflow-data");
+  mkdirSync(statusDir, { recursive: true });
+  mkdirSync(workflow, { recursive: true });
+  mkdirSync(legacyWorkflow, { recursive: true });
+  writeFileSync(join(workflow, "active.json"), "active");
+  writeFileSync(join(legacyWorkflow, "active.json"), "legacy");
+  writeFileSync(
+    join(statusDir, "running.json"),
+    JSON.stringify({
+      status: "running",
+      updatedAt: Date.now(),
+      sessionId: "interrupted-session",
+    }),
+  );
+  writeFileSync(
+    join(statusDir, "idle.json"),
+    JSON.stringify({ status: "idle", updatedAt: 123 }),
+  );
+  const queue = join(dataDir, "telegram-queue.json");
+  writeFileSync(queue, '{"version":2,"queues":{"1:":["queued"]}}');
+
+  const result = recoverInterruptedSessionState(root, dataDir, "restart");
+
+  assert.equal(result.interrupted, 1);
+  assert.deepEqual(result.quarantined.sort(), [
+    `${workflow}.trash-restart`,
+    `${legacyWorkflow}.trash-restart`,
+  ]);
+  assert.equal(existsSync(workflow), false);
+  assert.equal(existsSync(legacyWorkflow), false);
+  assert.equal(
+    readFileSync(queue, "utf8"),
+    '{"version":2,"queues":{"1:":["queued"]}}',
+  );
+  const running = JSON.parse(
+    readFileSync(join(statusDir, "running.json"), "utf8"),
+  ) as { updatedAt?: unknown };
+  assert.equal(running.updatedAt, 0);
+  assert.deepEqual(
+    JSON.parse(readFileSync(join(statusDir, "idle.json"), "utf8")),
+    { status: "idle", updatedAt: 123 },
+  );
+});
+
+void test("restart recovery leaves parked workflow state untouched", () => {
+  const root = mkdtempSync(join(tmpdir(), "wf-store-clean-restart-"));
+  const dataDir = join(root, "data");
+  const workflow = join(root, ".eve/.workflow-data");
+  mkdirSync(join(dataDir, "run-status.d"), { recursive: true });
+  mkdirSync(workflow, { recursive: true });
+  writeFileSync(join(workflow, "parked.json"), "parked");
+  writeFileSync(
+    join(dataDir, "run-status.d/idle.json"),
+    JSON.stringify({ status: "idle", updatedAt: 123 }),
+  );
+
+  assert.deepEqual(recoverInterruptedSessionState(root, dataDir, "clean"), {
+    interrupted: 0,
+    quarantined: [],
+  });
+  assert.equal(readFileSync(join(workflow, "parked.json"), "utf8"), "parked");
+});
+
+void test("restart recovery is repeatable across two starts before Bridge reaps the turn", () => {
+  const root = mkdtempSync(join(tmpdir(), "wf-store-double-restart-"));
+  const dataDir = join(root, "data");
+  const statusDir = join(dataDir, "run-status.d");
+  const workflow = join(root, ".eve/.workflow-data");
+  mkdirSync(statusDir, { recursive: true });
+  mkdirSync(workflow, { recursive: true });
+  writeFileSync(
+    join(statusDir, "running.json"),
+    JSON.stringify({ status: "running", updatedAt: Date.now() }),
+  );
+
+  const first = recoverInterruptedSessionState(root, dataDir, "restart");
+  mkdirSync(workflow, { recursive: true });
+  writeFileSync(join(workflow, "second-start.json"), "active");
+  const second = recoverInterruptedSessionState(root, dataDir, "restart");
+
+  assert.equal(first.interrupted, 1);
+  assert.equal(second.interrupted, 1);
+  assert.deepEqual(readdirSync(join(root, ".eve")).sort(), [
+    ".workflow-data.trash-restart",
+    ".workflow-data.trash-restart-1",
+  ]);
 });

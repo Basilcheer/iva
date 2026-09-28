@@ -171,6 +171,14 @@ test("writeUnits writes every unit with its placeholders filled and closes the s
     assert.match(service, /^Environment=PORT=9001$/m);
     assert.match(service, /^Environment=TZ=Europe\/Moscow$/m);
     assert.match(service, new RegExp(`^WorkingDirectory=${fx.project}$`, "m"));
+    assert.ok(
+      service
+        .split("\n")
+        .includes(
+          `ExecStartPre=/usr/bin/env "ASSISTANT_DATA_DIR=${join(fx.project, "data")}" ${process.execPath} ${fx.project}/scripts/recover-interrupted-turns.ts`,
+        ),
+      service,
+    );
     assert.match(service, /--host 127\.0\.0\.1$/m);
     // PATH юнита — тот, по которому доктор ищет claude (packages/claude-command).
     const nodeBin = createCliRuntime(fx.project).NODE_BIN_DIR;

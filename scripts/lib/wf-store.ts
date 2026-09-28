@@ -84,6 +84,33 @@ export function sessionStateTargets(root: string, dataDir: string): string[] {
   ];
 }
 
+function interruptedRunStatusFiles(dataDir: string): string[] {
+  const dir = join(dataDir, "run-status.d");
+  let names: string[];
+  try {
+    names = readdirSync(dir);
+  } catch (error) {
+    if (hasErrorCode(error, "ENOENT")) return [];
+    throw error;
+  }
+  return names
+    .filter((name) => name.endsWith(".json"))
+    .map((name) => join(dir, name))
+    .filter((file) => {
+      try {
+        const parsed: unknown = JSON.parse(readFileSync(file, "utf8"));
+        return (
+          typeof parsed === "object" &&
+          parsed !== null &&
+          !Array.isArray(parsed) &&
+          (parsed as { status?: unknown }).status === "running"
+        );
+      } catch {
+        return false;
+      }
+    });
+}
+
 function writeRunStatusAtomicSync(path: string, value: unknown): void {
   const parent = dirname(path);
   let temporaryPath = "";
@@ -116,40 +143,55 @@ function writeRunStatusAtomicSync(path: string, value: unknown): void {
 }
 
 /** Make only interrupted runs immediately reapable after an update clears sessions. */
-export function rewriteRunStatusesForUpdate(dataDir: string): void {
-  const dir = join(dataDir, "run-status.d");
-  let names: string[];
-  try {
-    names = readdirSync(dir);
-  } catch (error) {
-    if (hasErrorCode(error, "ENOENT")) return;
-    throw error;
-  }
-
-  for (const name of names) {
-    if (!name.endsWith(".json")) continue;
-    const file = join(dir, name);
+export function rewriteRunStatusesForUpdate(dataDir: string): number {
+  let rewritten = 0;
+  for (const file of interruptedRunStatusFiles(dataDir)) {
     try {
-      const parsed: unknown = JSON.parse(readFileSync(file, "utf8"));
-      if (
-        typeof parsed !== "object" ||
-        parsed === null ||
-        Array.isArray(parsed)
-      )
-        continue;
-      // An update interrupts an in-flight turn, not an idle or terminal chat. Rewriting
-      // every saved record re-arms the stale-run notification after every plugin build,
-      // even when the owner has sent nothing and there is no session to reset.
-      if ((parsed as { status?: unknown }).status !== "running") continue;
+      const parsed = JSON.parse(readFileSync(file, "utf8")) as Record<
+        string,
+        unknown
+      >;
       writeRunStatusAtomicSync(file, {
         ...parsed,
         status: "running",
         updatedAt: 0,
       });
+      rewritten++;
     } catch {
       // One damaged chat record must not block the update or its healthy neighbors.
     }
   }
+  return rewritten;
+}
+
+/** Retire the workflow store only when the previous Iva process died mid-turn. */
+export function recoverInterruptedSessionState(
+  root: string,
+  dataDir: string,
+  stamp = new Date().toISOString().replace(/[:.]/g, "-"),
+): { interrupted: number; quarantined: string[] } {
+  const interrupted = interruptedRunStatusFiles(dataDir).length;
+  if (interrupted === 0) return { interrupted: 0, quarantined: [] };
+
+  const moved: Array<{ path: string; trash: string }> = [];
+  try {
+    for (const target of [
+      join(root, ".eve", ".workflow-data"),
+      join(root, ".workflow-data"),
+    ]) {
+      const path = throughLink(target);
+      const trash = quarantinePath(target, stamp);
+      if (trash) moved.push({ path, trash });
+    }
+  } catch (error) {
+    for (const { path, trash } of moved.reverse()) {
+      rmSync(path, { recursive: true, force: true });
+      renameSync(trash, path);
+    }
+    throw error;
+  }
+  rewriteRunStatusesForUpdate(dataDir);
+  return { interrupted, quarantined: moved.map(({ trash }) => trash) };
 }
 
 /** Inbound Telegram input belongs to reset, never to an update. */
