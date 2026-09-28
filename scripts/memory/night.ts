@@ -648,10 +648,15 @@ async function askTruth(run: TruthRun): Promise<void> {
 }
 
 /** Статус из ответа B. Статус, поставленный днём по слову владельца (status_date), ночь
- * того же или более раннего дня не меняет: новое слово о нём приходит только следующими днями. */
+ * того же или более раннего дня не меняет: новое слово о нём приходит только следующими днями.
+ * Статус вне schema.json для типа Card не пишется — то же правило, что у write_card днём. */
 function nightStatus(card: Card, answer: TruthCard, date: string): string {
   if (!answer.status || str(card.fields, "status_date") >= date) return "";
-  return cs.sanitizeField(answer.status, 40);
+  const status = cs.sanitizeField(answer.status, 40);
+  const allowed = cs.cardStatuses(vault)[str(card.fields, "type")] ?? [
+    "active",
+  ];
+  return allowed.includes(status) ? status : "";
 }
 
 /** Card по ответу B: правда и description целиком, прежнее дословно в History. */

@@ -1801,3 +1801,34 @@ void test("B не затирает status, поставленный днём в�
     assert.match(read(file), new RegExp(`status_date: "${statusDate}"`, "u"));
   }
 });
+
+// Статус от B сверяется со schema.json vault, как статус дня у write_card: статус вне
+// допустимых для типа Card ночь не пишет, статус Card остаётся прежним.
+void test("B не пишет статус вне schema.json: статус Card прежний, допустимый ставится", async (t) => {
+  for (const [answer, expected] of [
+    ["paused", "active"],
+    ["выдумка", "active"],
+    ["Done", "active"],
+    ["done", "done"],
+  ] as const) {
+    const fx = await fixture(t);
+    day(fx, "## 10:00 [text]\nАврора на паузе\n");
+    const file = card(fx, "cards/projects/аврора", aurora);
+    fx.model.replies = [
+      A({
+        facts: [
+          {
+            card: "cards/projects/аврора",
+            text: "Проект на паузе",
+            src: "e1",
+            quote: "Аврора на паузе",
+          },
+        ],
+      }),
+      B({ card: "cards/projects/аврора", status: answer }),
+    ];
+    const result = await night(fx);
+    assert.equal(result.code, 0, result.stderr);
+    assert.match(read(file), new RegExp(`status: "${expected}"`, "u"), answer);
+  }
+});
