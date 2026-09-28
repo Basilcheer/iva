@@ -156,7 +156,7 @@ export function nightReport(tr: Translate, facts: NightFacts): string {
   else if (facts.problems)
     lines.push(
       tr(
-        "Some small changes were not saved; the details are in the log: iva logs.",
+        "Some small changes were not saved; the details are in the service journal: iva logs.",
         "Часть мелких правок не записалась; подробности — в журнале: iva logs.",
       ),
     );
