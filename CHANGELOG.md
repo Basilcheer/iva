@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 - ♻️ **Рестарт посреди ответа больше не блокирует следующие сообщения**: если процесс Ивы остановился с активным ходом, перед следующим запуском зависшее workflow-состояние уходит в карантин, а Bridge сразу закрывает оборванный ход одной строкой и продолжает сохранённую очередь. `/new` снова отвечает без ручного `iva reset`; рестарт одного Bridge живой ход не затрагивает. Restarting Iva mid-turn no longer wedges the command inbox: startup retires interrupted workflow state, preserves and drains the Telegram queue, and leaves a Bridge-only restart alone.
+- 🚑 **Ход на Claude не падает, когда модель забыла префикс инструмента**: в 0.4.9 Opus на первом шаге новой сессии назвал `memory_search` без префикса `mcp__iva__`, и весь ход пользователя падал с `Claude returned a tool outside the current inventory`. Теперь имя инструмента Ивы из набора шага без префикса — тот же вызов; свои инструменты CLI (`Bash`, `Read`) по-прежнему отклоняются. A Claude tool call that names an Iva tool of the current step without the `mcp__iva__` prefix now runs as that tool instead of failing the turn.
 
 ## [0.4.9] - 2026-09-28
 
