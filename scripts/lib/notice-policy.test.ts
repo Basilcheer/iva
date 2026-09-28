@@ -992,6 +992,53 @@ test(`nightReport: форма при любых фактах (seed ${REPORT_SEED
   );
 });
 
+// Выжимка дня — слова модели: переводы строк и пробелы в ней не раздувают Report. В Report она
+// одна строка, повторные пробелы схлопнуты, Report остаётся в 2–5 строках.
+test(`nightReport: выжимка дня — одна строка при любом тексте (seed ${REPORT_SEED})`, () => {
+  const piece = fc.oneof(
+    fc.string({ maxLength: 12 }),
+    fc.constantFrom(
+      "\n",
+      "\r\n",
+      "\r",
+      "  ",
+      "\t",
+      "\u2028",
+      "\u2029",
+      "\n\n\n",
+    ),
+  );
+  const gist = fc.array(piece, { maxLength: 8 }).map((parts) => parts.join(""));
+  const facts = fc.record({
+    days: fc.array(fc.record({ date: fc.constant("2026-09-26"), gist }), {
+      minLength: 1,
+      maxLength: 4,
+    }),
+    created: fc.nat(3),
+    updated: fc.nat(3),
+    failedDays: fc.nat(2),
+    problems: fc.boolean(),
+  });
+  fc.assert(
+    fc.property(facts, fc.constantFrom(EN, RU), (value, tr) => {
+      const report = nightReport(tr, value);
+      const lines = report.split("\n");
+      assert.ok(lines.length >= 2 && lines.length <= 5, lines.join("|"));
+      assert.doesNotMatch(report, /[\r\t\u2028\u2029]| {2}/u);
+      const gists = value.days
+        .slice(-2)
+        .map((day) => day.gist.replace(/\s+/gu, " ").trim())
+        .filter(Boolean);
+      for (const one of gists)
+        assert.ok(
+          lines.some((line) => line.endsWith(`: ${one}`)),
+          `${JSON.stringify(one)} в Report`,
+        );
+    }),
+    { seed: REPORT_SEED, numRuns: 300 },
+  );
+});
+
 test("nightReport: русские склонения дней", () => {
   const facts = (n: number, failed: number) => ({
     days: Array.from({ length: n }, () => ({ date: "2026-09-26", gist: "" })),

@@ -119,7 +119,7 @@ const ruPlural = (n: number, one: string, few: string, many: string) => {
   return d10 >= 2 && d10 <= 4 && (d100 < 12 || d100 > 14) ? few : many;
 };
 
-/** Report ночи: 3–5 строк от первого лица на языке владельца, собранных кодом из фактов
+/** Report ночи: 2–5 строк от первого лица на языке владельца, собранных кодом из фактов
  * ночи. Служебных строк и путей нет; провалы — одной строкой. */
 export function nightReport(tr: Translate, facts: NightFacts): string {
   const n = facts.days.length;
@@ -141,8 +141,10 @@ export function nightReport(tr: Translate, facts: NightFacts): string {
           `Новых карточек: ${created}, дополнено: ${updated}.`,
         )
       : tr("No new facts for Cards.", "Новых фактов для карточек не было."),
+    // Выжимка — слова модели: в Report она одна строка, иначе раздувает его за 5 строк.
     ...facts.days
       .slice(-2)
+      .map((day) => ({ ...day, gist: day.gist.replace(/\s+/gu, " ").trim() }))
       .filter((day) => day.gist)
       .map((day) => `${human(day.date)}: ${day.gist}`),
   ];
