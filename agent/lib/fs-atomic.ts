@@ -873,7 +873,7 @@ function startHeartbeat(lock: FileLock, staleMs: number): FileLock {
  * пустого каталога. Поэтому поздний release не удалит owner-entry преемника и его
  * каталог с owner-entry. Пустой каталог претендента, ещё не записавшего owner-entry,
  * путевой rmdir снести может: претендент это видит и повторяет попытку (контракт 3
- * в docs/quality/tla-plan-2026-09-26.md).
+ * в specs/FileLock.tla).
  */
 export function releaseFileLock({ path, token }: FileLock): void {
   heartbeats.get(token)?.();

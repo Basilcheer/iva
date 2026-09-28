@@ -350,7 +350,7 @@ Spec == Init /\ [][Next]_vars
           /\ WF_vars(Tick)
 
 ----------------------------------------------------------------------------
-(* Инварианты: docs/quality/tla-plan-2026-09-26.md, замок 1–4.            *)
+(* Инварианты замка 1–4 перечислены ниже.                               *)
 TypeOK ==
   /\ dir \in 0..nextGen /\ ents \subseteq Tokens /\ age \in 0..Stale
   /\ dir = 0 => ents = {}
