@@ -1866,3 +1866,44 @@ void test("Report ночи считает все созданные за ноч�
     result.stderr,
   );
 });
+
+// Со схемой сверяется точный ответ B, как у write_card днём: " done " в схеме нет и не пишется,
+// допустимый статус длиннее 40 символов пишется точно, без обрезки.
+void test("B: статус сверяется со схемой точной строкой, длинный допустимый пишется целиком", async (t) => {
+  const long = "waiting-for-external-approval-and-vendor-confirmation";
+  for (const [answer, expected] of [
+    [" done ", "active"],
+    [long, long],
+  ] as const) {
+    const fx = await fixture(t);
+    writeFileSync(
+      join(fx.vault, "schema.json"),
+      JSON.stringify({
+        node_types: { project: { status: ["active", "done", long] } },
+      }),
+    );
+    commit(fx.vault, "schema");
+    day(fx, "## 10:00 [text]\nАврора ждёт подтверждения\n");
+    const file = card(fx, "cards/projects/аврора", aurora);
+    fx.model.replies = [
+      A({
+        facts: [
+          {
+            card: "cards/projects/аврора",
+            text: "Проект ждёт подтверждения",
+            src: "e1",
+            quote: "Аврора ждёт подтверждения",
+          },
+        ],
+      }),
+      B({ card: "cards/projects/аврора", status: answer }),
+    ];
+    const result = await night(fx);
+    assert.equal(result.code, 0, result.stderr);
+    assert.match(
+      read(file),
+      new RegExp(`^status: "${expected}"$`, "mu"),
+      JSON.stringify(answer),
+    );
+  }
+});

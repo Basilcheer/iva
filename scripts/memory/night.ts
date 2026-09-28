@@ -655,11 +655,11 @@ async function askTruth(run: TruthRun): Promise<void> {
  * Статус вне schema.json для типа Card не пишется — то же правило, что у write_card днём. */
 function nightStatus(card: Card, answer: TruthCard, date: string): string {
   if (!answer.status || str(card.fields, "status_date") >= date) return "";
-  const status = cs.sanitizeField(answer.status, 40);
+  // Сверяется точный ответ модели, как у write_card днём; пишется разрешённое схемой значение.
   const allowed = cs.cardStatuses(vault)[str(card.fields, "type")] ?? [
     "active",
   ];
-  return allowed.includes(status) ? status : "";
+  return allowed.includes(answer.status) ? answer.status : "";
 }
 
 /** Card по ответу B: правда и description целиком, прежнее дословно в History. */
