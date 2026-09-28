@@ -229,9 +229,11 @@ test("родитель роллапа: не просрочен — норма, �
   );
 });
 
-// ─── write_card: ссылки больше не отказ, поиск Card по имени ─────────────────
+// ─── write_card: битые ссылки — отказ, поиск Card по имени ──────────────────
 
-test("write_card: ссылки в факте пишутся как есть, ночь их не сторожит", async () => {
+test("write_card: ссылка в факте в никуда отказывает до записи", async () => {
+  const file = join(VAULT, "cards/notes/печать.md");
+  const before = readFileSync(file, "utf8");
   const result = await callCard({
     operation: "fact",
     type: "note",
@@ -240,10 +242,9 @@ test("write_card: ссылки в факте пишутся как есть, н�
     tags: [],
     aliases: [],
   });
-  assert.equal(result.ok, true, result.error);
-  const text = readFileSync(join(VAULT, "cards/notes/печать.md"), "utf8");
-  assert.match(text, /\[\[romashka\]\]/u);
-  assert.match(text, /\[\[несуществующая-карточка\]\]/u);
+  assert.equal(result.ok, false, result.error);
+  assert.match(result.error ?? "", /Ссылки ведут в никуда/u);
+  assert.equal(readFileSync(file, "utf8"), before);
 });
 
 test("write_card: старая битая ссылка в Card не мешает новому факту", async () => {
@@ -295,12 +296,12 @@ test("write_card: truth не создаёт Card", async () => {
 
 // ─── write_file ────────────────────────────────────────────────────────────
 
-test("write_file: markdown в library/ с любой ссылкой пишется", async () => {
+test("write_file: markdown в library/ с битой ссылкой отказывает", async () => {
   const file = join(VAULT, "library", "книга", "01.md");
   const result = await callFile(file, "Глава со ссылкой [[никуда]]\n");
-  assert.equal(result.ok, true, result.error);
-  assert.equal(existsSync(file), true);
-  assert.equal(readFileSync(file, "utf8"), "Глава со ссылкой [[никуда]]\n");
+  assert.equal(result.ok, false, result.error);
+  assert.match(result.error ?? "", /Ссылки ведут в никуда/u);
+  assert.equal(existsSync(file), false);
 });
 
 test("write_file: weekly/ закрыт — выжимки пишет ночь", async () => {

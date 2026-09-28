@@ -12,10 +12,12 @@ import {
 } from "node:path";
 import { resolveVaultDir } from "@iva/vault-dir";
 import { writeFileAtomic } from "../lib/fs-atomic.js";
+import { parseFrontmatterOrSkip } from "../lib/frontmatter.ts";
 import { writeCore } from "../lib/core-write.ts";
 import { commitVaultWrite } from "../lib/vault-commit.ts";
 import { localStamp } from "../lib/vault-daily.ts";
 import { vaultDirErrorText } from "../lib/vault-error.ts";
+import { brokenLinksIn } from "../lib/vault-links.ts";
 
 // Память в vault пишет её код: сырой день и выжимки ведёт ночь, Card меняет write_card,
 // CORE проходит общий писатель с лимитом и History. Остальное в vault (library/ скилла
@@ -51,6 +53,46 @@ function unverifiable(vault: string, path: string): string | null {
   return null;
 }
 
+async function writeVaultFile(
+  vault: string,
+  rel: string,
+  path: string,
+  content: string,
+) {
+  const bytes = Buffer.byteLength(content, "utf8");
+  if (MEMORY.test(rel))
+    return {
+      ok: false,
+      path,
+      error:
+        "write_file не пишет память: сырой день и выжимки ведёт ночь, Card меняет write_card.",
+    };
+  if (rel.endsWith(".md")) {
+    const body =
+      parseFrontmatterOrSkip(content, path, () => {})?.body ?? content;
+    const broken = brokenLinksIn(body, {
+      vaultDir: vault,
+      source: rel.slice(0, -3),
+    });
+    if (broken) return { ok: false, path, error: broken };
+  }
+  if (rel === "CORE.md") {
+    const result = await writeCore({
+      vault,
+      next: content,
+      reason: "day write_file",
+      date: localStamp().date,
+      mode: "day",
+    });
+    return result.ok
+      ? { ok: true, path, bytes }
+      : { ok: false, path, error: result.error ?? "CORE не записан" };
+  }
+  await writeFileAtomic(path, content);
+  await commitVaultWrite(`file ${rel}: write`, [path], vault);
+  return { ok: true, path, bytes };
+}
+
 export default defineTool({
   description:
     "Записать UTF-8 файл, директории создаются. В vault: CORE.md через общий писатель CORE (лимит, History); daily/, summaries/, weekly/, monthly/, yearly/ и cards/ закрыты (Card меняет write_card); остальное, например library/, пишется и коммитится.",
@@ -74,28 +116,7 @@ export default defineTool({
         await writeFileAtomic(path, content);
         return { ok: true, path, bytes };
       }
-      if (rel === "CORE.md") {
-        const result = await writeCore({
-          vault,
-          next: content,
-          reason: "day write_file",
-          date: localStamp().date,
-          mode: "day",
-        });
-        return result.ok
-          ? { ok: true, path, bytes }
-          : { ok: false, path, error: result.error ?? "CORE не записан" };
-      }
-      if (MEMORY.test(rel))
-        return {
-          ok: false,
-          path,
-          error:
-            "write_file не пишет память: сырой день и выжимки ведёт ночь, Card меняет write_card.",
-        };
-      await writeFileAtomic(path, content);
-      await commitVaultWrite(`file ${rel}: write`, [path], vault);
-      return { ok: true, path, bytes };
+      return await writeVaultFile(vault, rel, path, content);
     } catch (error) {
       const text = vaultDirErrorText(error);
       if (text !== null) return { ok: false, path, error: text };

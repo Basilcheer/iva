@@ -17,8 +17,14 @@ const {
   summaryEdited,
   summaryText,
 } = await import("./night-input.ts");
-const { disappearedLines, logFactKey, sanitizeField, truthOf, withTruth } =
-  await import("../../agent/lib/card-store.ts");
+const {
+  compiledTruthInput,
+  disappearedLines,
+  logFactKey,
+  sanitizeField,
+  truthOf,
+  withTruth,
+} = await import("../../agent/lib/card-store.ts");
 const { periodChildIds, periodChildren } = await import("./night-periods.ts");
 const { buildVaultGraph } = await import("./graph.ts");
 const { resolveStopAt } = await import("../lib/rollup-turn.ts");
@@ -228,7 +234,18 @@ void test("мягкий разбор ответа: ограды markdown и те
     { a: 1 },
   );
   assert.deepEqual(parseJson('{"a":"```"}'), { a: "```" });
+  assert.deepEqual(parseJson('```json\n{"a":"```\\ncode\\n```"}\n```'), {
+    a: "```\ncode\n```",
+  });
   assert.throws(() => parseJson("нет json"), /JSON/u);
+});
+
+void test("B сохраняет markdown и архивирует только исчезнувшую строку", () => {
+  const tail = `\n\n### Команда\n\n  - вложенный пункт\n\n    npm run build\n${"x".repeat(700)}`;
+  const before = `Старое${tail}`;
+  const after = `Новое${tail}`;
+  assert.equal(compiledTruthInput(after), after);
+  assert.deepEqual(disappearedLines(before, after), ["Старое"]);
 });
 
 void test("выжимка без body_hash — граница перехода, с несошедшимся — правка владельца", () => {

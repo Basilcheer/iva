@@ -47,7 +47,6 @@ const EMBED_EXTS = [
   ".m4a",
   ".wav",
 ];
-
 const DAY_MS = 86_400_000;
 
 interface LinkIndex {
@@ -398,4 +397,19 @@ export function unresolvedLinkTargets(
     unresolved.push(target);
   }
   return unresolved;
+}
+
+/** Проверка новых wikilinks для обоих файловых инструментов. */
+export function brokenLinksIn(
+  text: string,
+  options: { vaultDir: string; source: string },
+): string | null {
+  const raw = [...text.matchAll(/\[\[([^\]|]+?)(?:\|[^\]]+)?\]\]/gu)].map(
+    (match) => match[1].split("#", 1)[0].trim(),
+  );
+  const targets = unresolvedLinkTargets(raw.filter(Boolean), options);
+  return targets.length
+    ? `Ссылки ведут в никуда: ${targets.map((target) => `[[${target}]]`).join(", ")}. Ничего не записано. ` +
+        "Сначала создай карточку через write_card или напиши без [[ ]]; точный путь проверь через memory_search/read_file."
+    : null;
 }

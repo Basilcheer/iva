@@ -171,8 +171,12 @@ const namesOf = (card: Card) =>
   [card.name, basename(card.file, ".md"), ...card.aliases].map(
     cs.normalizeName,
   );
-const render = (fields: fm.FmFields, body: string) =>
-  `---\n${fm.writeFrontmatter(fields, [])}\n---\n${body.trim()}\n`;
+const render = (fields: fm.FmFields, body: string, original = "") => {
+  const parsed = original
+    ? fm.parseFrontmatter(original)
+    : { fields: null, body: "", lines: [] };
+  return fm.renderCardDocument(parsed, fields, body);
+};
 
 function readCard(card: string): Card | null {
   const file = cardFile(card);
@@ -186,6 +190,7 @@ function readCard(card: string): Card | null {
   }
   const parsed = fm.parseFrontmatterOrSkip(raw, file, (row) => jobs.push(row));
   if (!parsed) return null;
+  parsed.eol = raw.includes("\r\n") ? "\r\n" : "\n";
   const { body, fields = {} } = parsed;
   const name = cs.extractH1(body) ?? basename(file, ".md");
   const aliases = cs.aliasList(fields?.aliases);
@@ -244,7 +249,10 @@ async function applyCachePending(cache: DayCache): Promise<void> {
       alerts.push(`Поправь Card ${card}: факты ждут`);
       continue;
     }
-    writeAtomic(found.file, render(found.fields, withFacts(found.body, rows)));
+    writeAtomic(
+      found.file,
+      render(found.fields, withFacts(found.body, rows), found.raw),
+    );
     if (!(await commit(`${card}: pending facts`, [found.file])))
       throw new Error(`${card}: отложенные факты не закоммичены`);
     delete cache.pending![card];
@@ -426,7 +434,7 @@ class Day {
 
   write(): string[] {
     return [...this.drafts.values()].flatMap((draft) => {
-      const next = draft ? render(draft.fields, draft.body) : "";
+      const next = draft ? render(draft.fields, draft.body, draft.before) : "";
       if (!draft || next === draft.before) return [];
       mkdirSync(dirname(draft.file), { recursive: true });
       writeAtomic(draft.file, next);
@@ -640,11 +648,7 @@ function truthApplied(
   let body = card.body;
   const moved: string[] = [];
   if (typeof answer.truth === "string") {
-    const next = answer.truth
-      .split("\n")
-      .map((line) => cs.sanitizeField(line))
-      .filter(Boolean)
-      .join("\n");
+    const next = cs.compiledTruthInput(answer.truth);
     moved.push(...cs.disappearedLines(cs.truthOf(body), next));
     body = cs.withTruth(body, next);
   }
@@ -663,6 +667,7 @@ function truthApplied(
     rows.length
       ? cs.replaceH2Sections(body, "History", [...history, ...rows])
       : body,
+    card.raw,
   );
 }
 
@@ -700,7 +705,7 @@ function giveUp(
   const pending = str(current?.fields, "truth_pending");
   if (!current || (pending && pending <= run.date)) return null;
   const fields = { ...current.fields, truth_pending: run.date };
-  writeAtomic(current.file, render(fields, current.body));
+  writeAtomic(current.file, render(fields, current.body, current.raw));
   return current.file;
 }
 

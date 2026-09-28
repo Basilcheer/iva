@@ -12,6 +12,7 @@ import {
   FrontmatterParseError,
   formatField,
   parseFrontmatter,
+  renderCardDocument,
   writeFrontmatter,
 } from "../agent/lib/frontmatter.ts";
 
@@ -219,4 +220,50 @@ test("literal |- сохраняет пустую строку между абз�
   assert.ok(second.fields);
   assert.equal(second.fields.note, first.fields.note);
   assert.equal(second.fields.kind, "note");
+});
+
+test("ночная правка поля сохраняет остальные строки frontmatter и CRLF byte-identical", () => {
+  const safe = fc
+    .stringMatching(/^[a-z]{1,12}$/u)
+    .filter((value) => value !== "true" && value !== "false");
+  fc.assert(
+    fc.property(
+      fc.integer({ min: -10_000, max: 10_000 }),
+      fc.boolean(),
+      fc.array(safe, { maxLength: 5 }),
+      safe,
+      (number, boolean, list, word) => {
+        const lines = [
+          "# owner comment",
+          `tier: ${number}`,
+          `pinned: ${boolean}`,
+          "created: 2026-01-05",
+          `tags: [${list.join(", ")}]`,
+          "meta:",
+          `  source: ${word}`,
+          `  score: ${number}`,
+          "description: >-",
+          `  ${word} first`,
+          "",
+          `  ${word} second`,
+        ];
+        const source = `---\r\n${lines.join("\r\n")}\r\n---\r\n# Card\r\n`;
+        const parsed = parseFrontmatter(source);
+        parsed.eol = "\r\n";
+        const output = renderCardDocument(
+          parsed,
+          { ...(parsed.fields ?? {}), truth_date: "2026-09-26" },
+          parsed.body,
+        );
+        assert.ok(output.includes("\r\n"));
+        const frontmatterStart = output.indexOf("\r\n") + 2;
+        const renderedLines = output
+          .slice(frontmatterStart, output.indexOf("\r\n---\r\n"))
+          .split("\r\n")
+          .filter((line) => !line.startsWith("truth_date:"));
+        assert.deepEqual(renderedLines, lines);
+      },
+    ),
+    { seed: 20_260_928, numRuns: 200, endOnFailure: true },
+  );
 });

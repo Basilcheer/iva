@@ -151,11 +151,22 @@ export function summaryEdited(text: string): boolean {
 
 /** Мягкий разбор: сначала снята ограда markdown, потом JSON от первой { до последней }. */
 export function parseJson(answer: string): unknown {
-  const text = /```(?:json)?\s*([\s\S]*?)```/u.exec(answer)?.[1] ?? answer;
+  const text = answer.trim();
   const start = text.indexOf("{");
-  const end = text.lastIndexOf("}");
-  if (start < 0 || end < start) throw new Error("в ответе нет JSON-объекта");
-  return JSON.parse(text.slice(start, end + 1));
+  if (start < 0) throw new Error("в ответе нет JSON-объекта");
+  for (
+    let end = text.indexOf("}", start);
+    end >= 0;
+    end = text.indexOf("}", end + 1)
+  ) {
+    try {
+      return JSON.parse(text.slice(start, end + 1));
+    } catch (error) {
+      // Вложенный объект, `}` внутри строки или текст после ответа: пробуем следующую.
+      if (!(error instanceof SyntaxError)) throw error;
+    }
+  }
+  throw new Error("в ответе нет JSON-объекта");
 }
 
 /** src — всегда список номеров; одна строка тоже принимается (терпимая форма ответа). */

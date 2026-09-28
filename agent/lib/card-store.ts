@@ -449,9 +449,10 @@ export function sectionRows(body: string, heading: string): string[] | null {
   const sections = h2Sections(lines, heading);
   if (sections.length > 1) return null;
   if (sections.length === 0) return [];
-  return lines
-    .slice(sections[0].start + 1, sections[0].end)
-    .filter((line) => line.trim());
+  const rows = lines.slice(sections[0].start + 1, sections[0].end);
+  while (rows.length && !rows[0].trim()) rows.shift();
+  while (rows.length && !rows.at(-1)?.trim()) rows.pop();
+  return rows;
 }
 
 /** Факт Log без даты и указателя на день: по этому ключу Log не дублирует факт. */
@@ -493,6 +494,9 @@ export function withTruth(body: string, truth: string): string {
   const text = truth.trim() ? [...truth.trim().split("\n"), ""] : [];
   return [...lines.slice(0, start), ...text, ...lines.slice(end)].join("\n");
 }
+
+export const compiledTruthInput = (value: string) =>
+  value.replace(/\r\n?/gu, "\n").trim();
 
 /** Строки before, которых нет в after (с учётом повторов): они уходят в History. */
 export function disappearedLines(before: string, after: string): string[] {

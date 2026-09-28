@@ -5,6 +5,7 @@ import { basename, dirname, join, relative, sep } from "node:path";
 import { resolveVaultDir } from "@iva/vault-dir";
 import {
   ALIASES_MAX,
+  aliasKey,
   aliasList,
   disappearedLines,
   extractH1,
@@ -19,15 +20,17 @@ import {
   truthOf,
   TYPE_DIR,
   withCardLock,
+  compiledTruthInput,
   withTruth,
 } from "../lib/card-store.ts";
-import { hasUnclosedFence } from "../lib/card-text.ts";
+import { hasUnclosedFence, outsideFences } from "../lib/card-text.ts";
 import {
   parseFrontmatterOrSkip,
-  writeFrontmatter,
+  renderCardDocument,
   type FmFields,
   type ParsedFrontmatter,
 } from "../lib/frontmatter.ts";
+import { brokenLinksIn } from "../lib/vault-links.ts";
 import { writeFileAtomicSync } from "../lib/fs-atomic.ts";
 import { commitVaultWrite } from "../lib/vault-commit.ts";
 import { localStamp } from "../lib/vault-daily.ts";
@@ -57,6 +60,7 @@ const truthInput = z.object({
   type: z.enum(TYPES),
   title: oneLine,
   text: z.string(),
+  description: oneLine.max(500).optional(),
   reason: oneLine,
   source: oneLine.optional(),
 });
@@ -129,8 +133,10 @@ function cardPath(vault: string, file: string): string {
 
 function readCards(vault: string): CardRecord[] {
   return listCardFiles(vault).flatMap((file) => {
-    const parsed = parseFrontmatterOrSkip(readFileSync(file, "utf8"), file);
+    const content = readFileSync(file, "utf8");
+    const parsed = parseFrontmatterOrSkip(content, file);
     if (!parsed) return [];
+    parsed.eol = content.includes("\r\n") ? "\r\n" : "\n";
     const title = extractH1(parsed.body) ?? basename(file, ".md");
     const aliases = aliasList(parsed.fields?.aliases);
     return [{ file, path: cardPath(vault, file), title, aliases, parsed }];
@@ -143,14 +149,22 @@ function candidates(cards: readonly CardRecord[], value: string): CardRecord[] {
   if (byPath.length) return byPath;
   const key = normalizeName(value);
   return cards.filter((card) =>
-    [card.title, basename(card.file, ".md"), ...card.aliases]
+    [
+      card.title,
+      card.title.replace(/\s*\([^()]*\)\s*$/u, ""),
+      basename(card.file, ".md"),
+      ...card.aliases,
+    ]
       .map(normalizeName)
       .includes(key),
   );
 }
 
-function render(parsed: ParsedFrontmatter, fields: FmFields, body: string) {
-  return `---\n${writeFrontmatter(fields, parsed.lines)}\n---\n${body.trim()}\n`;
+function brokenLinks(vault: string, source: string, text: string) {
+  return brokenLinksIn(text, {
+    vaultDir: vault,
+    source,
+  });
 }
 
 /** Незакрытый блок кода: заголовок внутри кода нельзя принять за границу раздела —
@@ -192,9 +206,13 @@ function newCard(vault: string, input: FactInput, date: string): CardRecord {
   return { file, path: cardPath(vault, file), title, aliases: [], parsed };
 }
 
-async function writeFact(input: FactInput) {
-  const vault = resolveVaultDir(process.cwd());
-  const date = localStamp().date;
+function selectFactCard(
+  vault: string,
+  input: FactInput,
+  date: string,
+):
+  | { ok: true; card: CardRecord; existing: boolean }
+  | { ok: false; error: string } {
   const found = candidates(readCards(vault), input.title);
   if (found.length > 1)
     return {
@@ -202,26 +220,112 @@ async function writeFact(input: FactInput) {
       error: `Неоднозначная Card: ${found.map((c) => c.path).join(", ")}`,
     };
   const card = found[0] ?? newCard(vault, input, date);
-  // Файл на месте новой Card есть, но не читается: чужой текст не затирается.
   if (!found[0] && existsSync(card.file))
     return {
       ok: false,
       error: `Card ${card.path} есть, но не читается; поправь её`,
     };
+  return { ok: true, card, existing: found.length === 1 };
+}
+
+function existingFact(
+  card: CardRecord,
+  input: FactInput,
+  date: string,
+  rows: string[],
+) {
+  const fields: FmFields = { ...(card.parsed.fields ?? {}), updated: date };
+  const aliases = [
+    ...aliasList(fields.aliases),
+    ...input.aliases.map((value) => sanitizeField(value, 80)),
+  ].filter(
+    (value, index, all) =>
+      all.findIndex((other) => aliasKey(other) === aliasKey(value)) === index,
+  );
+  if (aliases.length) fields.aliases = aliases.slice(0, ALIASES_MAX);
+  const tags = [
+    ...aliasList(fields.tags),
+    ...input.tags.map((value) => sanitizeField(value, 80)),
+  ];
+  if (tags.length) fields.tags = [...new Set(tags)];
+  let body = replaceH2Sections(card.parsed.body, "Log", rows);
+  if (!input.description) return { fields, body };
+  const next = sanitizeField(input.description);
+  const before = fields.description;
+  if (typeof before === "string" && before !== next) {
+    const history = sectionRows(body, "History");
+    if (history === null) return { error: "History неоднозначный" };
+    body = replaceH2Sections(body, "History", [
+      ...history,
+      `- ${date}: ${before}`,
+    ]);
+  }
+  fields.description = next;
+  return { fields, body };
+}
+
+async function writeFact(input: FactInput) {
+  const vault = resolveVaultDir(process.cwd());
+  const date = localStamp().date;
+  const selected = selectFactCard(vault, input, date);
+  if (!selected.ok) return selected;
+  const { card, existing } = selected;
   const rows = sectionRows(card.parsed.body, "Log");
   if (fenced(card)) return fenced(card);
   if (rows === null)
     return { ok: false, error: `Card ${card.path}: неоднозначный Log` };
+  const linkError = brokenLinks(vault, card.path, input.text);
+  if (linkError) return { ok: false, error: linkError };
   const row = `- ${date}: ${sanitizeField(input.text)} · ${input.source ?? `[[daily/${date}]]`}`;
   if (rows.some((existing) => logFactKey(existing) === logFactKey(row)))
     return { ok: true, action: "fact", file: card.path };
-  const body = replaceH2Sections(card.parsed.body, "Log", [...rows, row]);
+  const changed = existing
+    ? existingFact(card, input, date, [...rows, row])
+    : {
+        fields: card.parsed.fields ?? {},
+        body: replaceH2Sections(card.parsed.body, "Log", [...rows, row]),
+      };
+  if ("error" in changed)
+    return { ok: false, error: `Card ${card.path}: ${changed.error}` };
   writeFileAtomicSync(
     card.file,
-    render(card.parsed, card.parsed.fields ?? {}, body),
+    renderCardDocument(card.parsed, changed.fields, changed.body),
   );
   await save(vault, [card.file], `card ${basename(card.file, ".md")}: fact`);
   return { ok: true, action: "fact", file: card.path };
+}
+
+function truthChange(
+  card: CardRecord,
+  input: z.infer<typeof truthInput>,
+  history: string[],
+  date: string,
+) {
+  const next = compiledTruthInput(input.text);
+  const source = input.source ?? `[[daily/${date}]]`;
+  const disappeared = disappearedLines(truthOf(card.parsed.body), next);
+  const description = sanitizeField(input.description ?? next);
+  const beforeDescription = card.parsed.fields?.description;
+  if (
+    typeof beforeDescription === "string" &&
+    beforeDescription !== description &&
+    !disappeared.includes(beforeDescription)
+  )
+    disappeared.push(beforeDescription);
+  const moved = disappeared.map(
+    (line) => `- ${date}: ${line} (${sanitizeField(input.reason)} · ${source})`,
+  );
+  const body = replaceH2Sections(withTruth(card.parsed.body, next), "History", [
+    ...history,
+    ...moved,
+  ]);
+  const fields: FmFields = {
+    ...(card.parsed.fields ?? {}),
+    ...(description ? { description } : {}),
+    truth_date: date,
+  };
+  delete fields.truth_pending;
+  return { body, fields };
 }
 
 async function writeTruth(input: z.infer<typeof truthInput>) {
@@ -239,26 +343,65 @@ async function writeTruth(input: z.infer<typeof truthInput>) {
   const history = sectionRows(card.parsed.body, "History");
   if (history === null)
     return { ok: false, error: `Card ${card.path}: неоднозначный History` };
-  const next = input.text
-    .replace(/\r\n?/gu, "\n")
-    .split("\n")
-    .map((line) => sanitizeField(line))
-    .filter(Boolean)
-    .join("\n");
+  const linkError = brokenLinks(vault, card.path, input.text);
+  if (linkError) return { ok: false, error: linkError };
   const date = localStamp().date;
-  const source = input.source ?? `[[daily/${date}]]`;
-  const moved = disappearedLines(truthOf(card.parsed.body), next).map(
-    (line) => `- ${date}: ${line} (${sanitizeField(input.reason)} · ${source})`,
-  );
-  const body = replaceH2Sections(withTruth(card.parsed.body, next), "History", [
-    ...history,
-    ...moved,
-  ]);
-  const fields: FmFields = { ...(card.parsed.fields ?? {}), truth_date: date };
-  delete fields.truth_pending;
-  writeFileAtomicSync(card.file, render(card.parsed, fields, body));
+  const { body, fields } = truthChange(card, input, history, date);
+  writeFileAtomicSync(card.file, renderCardDocument(card.parsed, fields, body));
   await save(vault, [card.file], `card ${basename(card.file, ".md")}: truth`);
   return { ok: true, action: "truth", file: card.path };
+}
+
+function mergedSections(target: CardRecord, duplicate: CardRecord) {
+  let body = target.parsed.body;
+  for (const heading of ["Log", "History", "Related"]) {
+    const left = sectionRows(target.parsed.body, heading);
+    const right = sectionRows(duplicate.parsed.body, heading);
+    if (left === null || right === null)
+      return { error: `${heading} неоднозначный` };
+    body = replaceH2Sections(body, heading, [...new Set([...left, ...right])]);
+  }
+  return { body: mergeRelated(body, [duplicate.path]) };
+}
+
+function carriedKnowledge(duplicate: CardRecord): string {
+  const lines = duplicate.parsed.body.split("\n");
+  const outside = outsideFences(lines);
+  let keep = true;
+  const carried = lines.flatMap((line, index) => {
+    const heading = outside[index] ? /^ {0,3}##\s+(.+?)\s*$/u.exec(line) : null;
+    if (heading) keep = !["Log", "History", "Related"].includes(heading[1]);
+    if (!keep || (outside[index] && /^ {0,3}#\s/u.test(line))) return [];
+    return [heading ? line.replace(/^ {0,3}##/u, "###") : line];
+  });
+  const description = duplicate.parsed.fields?.description;
+  return [
+    typeof description === "string" ? `Описание: ${description}` : "",
+    carried.join("\n").trim(),
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+function mergedFields(target: CardRecord, duplicate: CardRecord): FmFields {
+  const aliases = [
+    ...new Set(
+      [...target.aliases, duplicate.title, ...duplicate.aliases].map((value) =>
+        sanitizeField(value, 80),
+      ),
+    ),
+  ].slice(0, ALIASES_MAX);
+  const tags = [
+    ...new Set([
+      ...aliasList(target.parsed.fields?.tags),
+      ...aliasList(duplicate.parsed.fields?.tags),
+    ]),
+  ];
+  return {
+    ...(target.parsed.fields ?? {}),
+    aliases,
+    ...(tags.length ? { tags } : {}),
+  };
 }
 
 async function mergeCards(input: z.infer<typeof mergeInput>) {
@@ -277,25 +420,15 @@ async function mergeCards(input: z.infer<typeof mergeInput>) {
   if (target.file === duplicate.file)
     return { ok: false, error: "Card нельзя склеить с самой собой" };
   if (fenced(target, duplicate)) return fenced(target, duplicate);
-  let body = target.parsed.body;
-  for (const heading of ["Log", "History", "Related"]) {
-    const left = sectionRows(target.parsed.body, heading);
-    const right = sectionRows(duplicate.parsed.body, heading);
-    if (left === null || right === null)
-      return { ok: false, error: `${heading} неоднозначный` };
-    body = replaceH2Sections(body, heading, [...new Set([...left, ...right])]);
-  }
-  body = mergeRelated(body, [duplicate.path]);
-  const aliases = [
-    ...new Set(
-      [...target.aliases, duplicate.title, ...duplicate.aliases].map((value) =>
-        sanitizeField(value, 80),
-      ),
-    ),
-  ].slice(0, ALIASES_MAX);
+  const combined = mergedSections(target, duplicate);
+  if ("error" in combined) return { ok: false, error: combined.error };
+  let { body } = combined;
+  const knowledge = carriedKnowledge(duplicate);
+  if (knowledge)
+    body = `${body.trimEnd()}\n\n## Из ${duplicate.title}\n\n${knowledge}\n`;
   writeFileAtomicSync(
     target.file,
-    render(target.parsed, { ...(target.parsed.fields ?? {}), aliases }, body),
+    renderCardDocument(target.parsed, mergedFields(target, duplicate), body),
   );
   const duplicateFields = {
     ...(duplicate.parsed.fields ?? {}),
@@ -304,7 +437,7 @@ async function mergeCards(input: z.infer<typeof mergeInput>) {
   };
   writeFileAtomicSync(
     duplicate.file,
-    render(
+    renderCardDocument(
       duplicate.parsed,
       duplicateFields,
       `# ${duplicate.title}\n\nСклеено с [[${target.path}]].\n`,

@@ -20,6 +20,7 @@ export interface ParsedFrontmatter {
   body: string;
   /** Исходные строки frontmatter (без ограничителей `---`) — нужны writeFrontmatter. */
   lines: string[];
+  eol?: "\n" | "\r\n";
 }
 
 /** Ожидаемая ошибка повреждённого frontmatter, которую caller может обработать. */
@@ -333,4 +334,14 @@ export function writeFrontmatter(
   }
 
   return out.join("\n");
+}
+
+/** Общий рендер Card для дневного писателя и ночи: меняются только названные поля. */
+export function renderCardDocument(
+  parsed: ParsedFrontmatter,
+  fields: FmFields,
+  body: string,
+): string {
+  const text = `---\n${writeFrontmatter(fields, parsed.lines)}\n---\n${body.trim()}\n`;
+  return parsed.eol === "\r\n" ? text.replace(/\n/gu, "\r\n") : text;
 }

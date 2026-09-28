@@ -90,6 +90,83 @@ void test("write_card fact сохраняет чужие поля и дедуп�
   assert.equal(readFileSync(file, "utf8"), once);
 });
 
+void test("write_card fact находит уточнённое имя, сливает поля и не правит старый Log", async (t) => {
+  const fx = fixture(t);
+  const dir = join(fx.vault, "cards/contacts");
+  const file = join(dir, "shima.md");
+  mkdirSync(dir, { recursive: true });
+  const oldLog = [
+    "- 2026-08-17:",
+    "  Первый абзац",
+    "  ",
+    "  Второй абзац",
+    "  ```",
+    "  код:",
+    "",
+    "  строка",
+    "  ```",
+  ].join("\n");
+  writeFileSync(
+    file,
+    [
+      "---",
+      'type: "contact"',
+      'description: "коллега"',
+      'tags: ["work"]',
+      'aliases: ["Ivan Petrov"]',
+      "---",
+      "# Иван Петров (Ваня из Enji)",
+      "",
+      "Старая правда",
+      "",
+      "## Log",
+      "",
+      oldLog,
+      "",
+      "## Related",
+      "",
+      "## History",
+      "",
+    ].join("\n"),
+  );
+  git(fx.vault, "add", ".");
+  git(fx.vault, "commit", "-qm", "card");
+
+  const first = await writeCard.execute(
+    {
+      operation: "fact",
+      type: "contact",
+      title: "Иван Петров",
+      text: "Переехал в Алматы",
+      aliases: ["Ваня"],
+      description: "коллега из Алматы",
+      tags: ["almaty"],
+    },
+    context,
+  );
+  assert.equal((first as { ok?: boolean }).ok, true, JSON.stringify(first));
+  assert.equal(existsSync(join(dir, "иван-петров.md")), false);
+  const changed = readFileSync(file, "utf8");
+  assert.match(changed, /aliases: \["Ivan Petrov","Ваня"\]/u);
+  assert.match(changed, /tags: \["work","almaty"\]/u);
+  assert.match(changed, /description: "коллега из Алматы"/u);
+  assert.ok(changed.includes(oldLog), changed);
+
+  const byAlias = await writeCard.execute(
+    {
+      operation: "fact",
+      type: "contact",
+      title: "Ваня",
+      text: "Ведёт продажи",
+      aliases: [],
+      tags: [],
+    },
+    context,
+  );
+  assert.equal((byAlias as { ok?: boolean }).ok, true, JSON.stringify(byAlias));
+  assert.equal(existsSync(join(dir, "ваня.md")), false);
+});
+
 void test("write_card truth архивирует вытеснённую правду, merge требует подтверждение", async (t) => {
   const fx = fixture(t);
   const dir = join(fx.vault, "cards/notes");
@@ -113,7 +190,10 @@ void test("write_card truth архивирует вытеснённую прав
       "",
     ].join("\n");
   writeFileSync(join(dir, "главная.md"), card("Главная", "Старая правда"));
-  writeFileSync(join(dir, "дубль.md"), card("Дубль", "Другая правда"));
+  writeFileSync(
+    join(dir, "дубль.md"),
+    card("Дубль", "Другая правда\n\n## Роли\n\n- Роль дубля"),
+  );
   git(fx.vault, "add", ".");
   git(fx.vault, "commit", "-qm", "cards");
 
@@ -132,6 +212,8 @@ void test("write_card truth архивирует вытеснённую прав
   const changed = readFileSync(join(dir, "главная.md"), "utf8");
   assert.match(changed, /Новая правда/u);
   assert.match(changed, /Старая правда \(владелец уточнил/u);
+  assert.match(changed, /description: "Новая правда"/u);
+  assert.match(changed, /- \d{4}-\d{2}-\d{2}: Главная/u);
   assert.match(changed, /custom: "alive"/u);
 
   const refused = await writeCard.execute(
@@ -162,6 +244,9 @@ void test("write_card truth архивирует вытеснённую прав
     readFileSync(join(dir, "дубль.md"), "utf8"),
     /status: "superseded"/u,
   );
+  const target = readFileSync(join(dir, "главная.md"), "utf8");
+  assert.match(target, /Другая правда/u);
+  assert.match(target, /Роль дубля/u);
 });
 
 void test("write_file пишет снаружи и в library/, отказывает памяти vault и держит CORE cap", async (t) => {
