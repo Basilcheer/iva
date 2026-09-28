@@ -566,7 +566,7 @@ export default defineTool({
     "Card памяти: fact дописывает факт (и может создать Card после поиска), truth меняет Compiled Truth с архивом, merge склеивает дубль только по явной просьбе владельца. fact и truth меняют status Card, когда владелец сказал о нём (проект закрыт, решение принято).",
   inputSchema: wireInput,
   async execute(raw) {
-    if (raw.operation === "merge" && raw.status)
+    if (raw.operation === "merge" && raw.status !== undefined)
       return {
         ok: false,
         error:

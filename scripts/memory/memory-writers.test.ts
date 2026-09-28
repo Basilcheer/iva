@@ -933,6 +933,35 @@ void test("write_card: свой статус из schema.json проходит �
   }
 });
 
+// merge статус не меняет: любое переданное поле status — отказ, включая пустую строку и
+// пробел (провод берёт строку, поэтому проверяется наличие поля, а не его истинность).
+void test("write_card merge с любым status — отказ текстом, склейки нет", async (t) => {
+  const fx = fixture(t);
+  for (const title of ["Аврора", "Аврора 2"])
+    assert.equal((await run(fact({ title, text: "Факт" }))).ok, true);
+  const files = ["аврора", "аврора-2"].map((name) =>
+    join(fx.vault, `cards/projects/${name}.md`),
+  );
+  const before = files.map((file) => readFileSync(file, "utf8"));
+  const head = git(fx.vault, "rev-parse", "HEAD");
+  for (const status of ["", " ", "done"]) {
+    const merge = await run({
+      operation: "merge",
+      target: "Аврора",
+      duplicate: "Аврора 2",
+      confirmed_by_owner: true,
+      status,
+    });
+    assert.equal(merge.ok, false, JSON.stringify({ status, merge }));
+    assert.match(merge.error ?? "", /merge: status не меняется склейкой/u);
+    assert.deepEqual(
+      files.map((file) => readFileSync(file, "utf8")),
+      before,
+    );
+    assert.equal(git(fx.vault, "rev-parse", "HEAD"), head);
+  }
+});
+
 // Property: любая последовательность fact/truth со status или без. Статус Card всегда из
 // допустимых для её типа; принятый status — последний принятый, иначе active; отказ не
 // меняет байты Card. Провал печатает seed; повтор: IVA_CARD_STATUS_SEED=<seed>.
