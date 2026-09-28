@@ -39,19 +39,11 @@ async function commitOwnerChanges(): Promise<boolean> {
   return result.ok;
 }
 
-async function refreshGraph(): Promise<boolean> {
+// Граф - производные данные: .gitignore vault из шаблона исключает .graph/, в git он не идёт.
+function refreshGraph(): boolean {
   try {
-    const graph = tree.writeVaultGraph(vault);
-    const commit = await tree.commitVaultWrite(
-      "brain: link graph",
-      [graph],
-      vault,
-    );
-    if (!commit.ok)
-      console.error(
-        `brain: graph commit failed: ${commit.reason ?? "unknown"}`,
-      );
-    return commit.ok;
+    tree.writeVaultGraph(vault);
+    return true;
   } catch (error) {
     console.error("brain: graph failed:", error);
     return false;
@@ -127,7 +119,7 @@ async function main(): Promise<number> {
     return 1;
   }
   const ownerCommitted = await commitOwnerChanges();
-  const graphRefreshed = await refreshGraph();
+  const graphRefreshed = refreshGraph();
   await alertCoreCap();
   const pushed = await pushBackup();
   return ownerCommitted && graphRefreshed && pushed ? 0 : 1;

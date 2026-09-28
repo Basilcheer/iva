@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import {
   chmodSync,
+  copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -27,6 +28,11 @@ void test("Brain коммитит правку владельца, строит 
   mkdirSync(join(vault, "cards"), { recursive: true });
   mkdirSync(data);
   writeFileSync(join(vault, "cards/a.md"), "# A\n\n[[cards/b]]\n");
+  // .gitignore установки из шаблона: граф - производные данные, git его не берёт.
+  copyFileSync(
+    join(ROOT, "vault-template/.gitignore"),
+    join(vault, ".gitignore"),
+  );
   git(vault, "init", "-q");
   git(vault, "config", "user.email", "brain@example.invalid");
   git(vault, "config", "user.name", "Brain");
@@ -61,6 +67,7 @@ void test("Brain коммитит правку владельца, строит 
   assert.match(run.stderr, /brain alert: CORE\.md длиннее/u);
   assert.equal(git(vault, "status", "--porcelain"), "");
   assert.ok(existsSync(join(vault, ".graph/vault-graph.json")));
+  assert.equal(git(vault, "ls-files", ".graph"), "");
   assert.match(git(vault, "log", "--format=%s"), /brain: owner changes/u);
   assert.equal(git(bare, "rev-parse", "HEAD"), git(vault, "rev-parse", "HEAD"));
 });
