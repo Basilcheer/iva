@@ -698,19 +698,29 @@ export function readCompletion(
 }
 
 /**
- * Имя вызова для eve. Без префикса Iva это свой инструмент CLI (`Bash`, `Read`): Iva его не
- * исполняет, и шаг отказывает. Исключение — имя инструмента Ивы из набора шага: модель забыла
- * префикс (0.4.9, `memory_search` на первом шаге), и это тот же вызов. Имя с префиксом уходит
- * как есть, даже если его нет в наборе шага: это ошибка модели, и eve отвечает на неё модели
- * tool-error, как у любого вендора.
+ * Имя вызова для eve. Модель пишет имя как придётся (0.4.9, `memory_search` без префикса на
+ * первом шаге): без префикса Iva, с чужим префиксом MCP, в другом регистре, с `-` вместо `_`.
+ * Написание, которое узнаёт ровно один инструмент набора шага, — это он. Неузнанное имя (и свои
+ * инструменты CLI вроде `Bash`: CLI их не исполняет, они выключены `--tools`) уходит в eve как
+ * есть, без префикса Iva: на ошибку модели eve отвечает ей tool-error со списком доступных, как
+ * у любого вендора, и ход идёт дальше.
  */
 function ivaToolName(wireName: string, inventory: readonly string[]): string {
   if (inventory.includes(wireName)) return wireName;
-  if (!wireName.startsWith(CLAUDE_TOOL_PREFIX))
-    throw new ClaudeCliError(
-      `Claude returned a tool outside the current inventory: ${wireName}`,
-    );
-  return wireName.slice(CLAUDE_TOOL_PREFIX.length);
+  const key = toolKey(wireName);
+  const [only, ...rest] = inventory.filter((name) => toolKey(name) === key);
+  if (only !== undefined && rest.length === 0) return only;
+  return wireName.startsWith(CLAUDE_TOOL_PREFIX)
+    ? wireName.slice(CLAUDE_TOOL_PREFIX.length)
+    : wireName;
+}
+
+/** Имя без регистра, без разницы `-`/`_` и без префикса MCP любого сервера. */
+function toolKey(name: string): string {
+  return name
+    .toLowerCase()
+    .replaceAll("-", "_")
+    .replace(/^mcp__.+?__/u, "");
 }
 
 function toolCall(
