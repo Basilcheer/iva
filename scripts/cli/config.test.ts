@@ -414,6 +414,9 @@ async function runWizard(
         IVA_CONFIG_OUTPUT: candidate,
       },
       stdio: ["pipe", "pipe", "pipe"],
+      // Своя сессия без управляющего терминала: иначе мастер открывает /dev/tty того, кто
+      // запустил тесты, ждёт ответов оттуда, а ответы из pipe не читает.
+      detached: true,
     },
   );
   let output = "";
