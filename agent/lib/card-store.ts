@@ -395,20 +395,6 @@ export const TYPE_DIR: Record<string, string> = {
   note: "notes",
 };
 
-/** Все status Card из шаблона schema.json: перечисление на проводе write_card. */
-export const CARD_STATUSES = [
-  "active",
-  "inactive",
-  "done",
-  "paused",
-  "cancelled",
-  "draft",
-  "explored",
-  "archived",
-  "reverted",
-  "superseded",
-] as const;
-
 // Шаблон vault-template/schema.json: vault без читаемой schema.json.
 const DEFAULT_STATUSES: Record<string, string[]> = {
   contact: ["active", "inactive", "superseded"],
