@@ -32,9 +32,8 @@ type RuntimeColors = {
   readonly x: string;
 };
 
-/** Create the shared, side-effect-free-at-import runtime used by the Iva CLI. `gitHead`
- * берёт коммит версии из имени её каталога: своего .git у него нет, и git поднялся бы к
- * чужому дереву выше (домашняя папка под git). */
+/** Create the shared, side-effect-free-at-import runtime used by the Iva CLI. `gitHead` —
+ * из имени каталога версии: своего .git нет, и git поднялся бы к чужому дереву выше. */
 export function createCliRuntime(root: string) {
   const ROOT = root;
   // Through the symlink: on the immutable layout `<root>/.env` points at the

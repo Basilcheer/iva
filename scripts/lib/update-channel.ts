@@ -114,9 +114,8 @@ export async function persistUpdateBranch(
   await requireGit(git, "config", "--local", UPDATE_BRANCH_CONFIG, branch);
 }
 
-/** Бета-обновления (Beta updates) — Update branch `beta` (ADR-0018): обновление ставит
- * вершину ветки. `iva.beta` пишется для прежних бета-сборок: при main или без ветки он
- * переводит установку на beta, при своей ветке — вершина своей ветки. */
+/** Beta updates — Update branch `beta` (ADR-0018); флаг `iva.beta` — для прежних бета-сборок:
+ * при main или без ветки уводит на beta, при своей ветке ставит её вершину. */
 export const BETA_CONFIG = "iva.beta";
 const RELEASE_TAG = /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u;
 
@@ -136,8 +135,7 @@ export async function betaChannel(git: Git): Promise<boolean> {
   return (await readBeta(git)) || branch === BETA_BRANCH;
 }
 
-/** Цель не ниже установленного: предок установленного коммита — сама установка. Назад
- * обновление не ходит ни в одном канале; откат — только явный. */
+/** Цель не ниже установленного: назад обновление не ходит нигде; откат — только явный. */
 async function notBelow(git: Git, target: string, installed?: string) {
   const at = installed ? output(await git("rev-parse", installed)) : "";
   if (!at || !target || at === target) return target;
@@ -147,8 +145,7 @@ async function notBelow(git: Git, target: string, installed?: string) {
 
 type UpdateTarget = Awaited<ReturnType<typeof resolveUpdateTarget>>;
 
-/** Бета-цель или null: ветка beta или флаг; прежний opt-in (флаг при main или без
- * ветки, ADR-0017) переходит на ветку beta и записывает её один раз. */
+/** Бета-цель или null; прежний opt-in (флаг при main) переходит на beta один раз. */
 async function betaTarget(
   git: Git,
   remote: string,
@@ -222,8 +219,7 @@ function betaRepos(root: string): string[] {
   return [...repos].filter(isRepo);
 }
 
-/** Бета-обновления установки для показа (iva version, status, меню): ветка beta или
- * прежний флаг при main и без ветки. */
+/** Бета для показа (iva version, status, меню): ветка beta или флаг при main/без ветки. */
 export function betaOf(root: string): boolean {
   const repo = gitRootFor(classifyRoot(root));
   const get = (key: string) =>
@@ -235,8 +231,7 @@ export function betaOf(root: string): boolean {
   return branch === BETA_BRANCH || (legacy && get(BETA_CONFIG) === "true");
 }
 
-/** iva beta / iva stable и кнопка меню: решает ветка (beta или main, ADR-0018), флаг —
- * для прежних бета-сборок. Ветка не записалась — false, флаг не тронут. */
+/** iva beta / stable и меню: решает ветка; не записалась — false, флаг не тронут. */
 export function setBeta(root: string, on: boolean): boolean {
   const config = (repo: string, args: string[]) =>
     spawnSync("git", ["-C", repo, "config", "--local", ...args]).status;

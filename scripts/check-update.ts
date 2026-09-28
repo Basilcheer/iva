@@ -139,12 +139,7 @@ export async function runDailyUpdateCheck(options: DailyUpdateOptions = {}) {
       info = await deps.inspectImpl(upstream);
     } catch (error) {
       // Бета без ветки (нет сети или ветки): молчим, как current; отказ скажет iva update.
-      const git = async (...args: string[]) => {
-        const result = await deps.gitImpl(upstream.root, args);
-        return typeof result === "string"
-          ? { code: 0, stdout: result }
-          : result;
-      };
+      const git = (...args: string[]) => gitAt(upstream.root, args);
       if (await betaChannel(git)) return { status: "current" as const };
       throw error;
     }
