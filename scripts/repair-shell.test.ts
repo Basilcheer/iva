@@ -401,3 +401,77 @@ test("repair on beta takes the beta tip; on main it keeps an installation newer 
     "beta: the tip of beta",
   );
 });
+
+/** Ветка beta в origin на шаг впереди main: коммит бета-сборки. */
+function betaBuild(remote: string, fixture: string): string {
+  const work = join(fixture, `work-beta-${Math.random()}`);
+  git(fixture, "clone", "--quiet", remote, work);
+  git(work, "switch", "--quiet", "-c", "beta");
+  writeFileSync(join(work, "bin/iva.mjs"), "// beta build\n");
+  git(work, "commit", "--quiet", "-am", "beta build");
+  git(work, "push", "--quiet", "--force", "origin", "beta");
+  return git(work, "rev-parse", "HEAD");
+}
+
+// Круг 2 (QA D1): настоящая картина после перевода — main = v0.4.8, бета-сборка в beta.
+// Checkout на бета-сборке с веткой main ремонт не откатывает на v0.4.8.
+test("repair on main keeps a beta build when main is still v0.4.8", (t) => {
+  const { install, remote, run } = checkout(t);
+  const fixture = join(install, "..");
+  publish(remote, "v0.4.8", fixture);
+  const build = betaBuild(remote, fixture);
+  git(install, "fetch", "--quiet", "origin", "beta");
+  git(install, "reset", "--quiet", "--hard", build);
+
+  run();
+
+  assert.equal(git(install, "rev-parse", "HEAD"), build);
+});
+
+// Своя ветка (iva rollback → release/<v>): ремонт идёт только за ней, бета-сборка в
+// посторонней ветке beta ничего для неё не доказывает.
+test("repair on a pinned release branch goes to that branch, not to a beta build", (t) => {
+  const { install, remote, run } = checkout(t);
+  const fixture = join(install, "..");
+  const release = publish(remote, "v0.4.9", fixture);
+  git(remote, "update-ref", "refs/heads/release/0.4.9", release);
+  const build = betaBuild(remote, fixture);
+  git(install, "config", "iva.updateBranch", "release/0.4.9");
+  git(install, "fetch", "--quiet", "origin", "beta");
+  git(install, "reset", "--quiet", "--hard", build);
+
+  run();
+
+  assert.equal(git(install, "rev-parse", "HEAD"), release);
+});
+
+// origin не отвечает: ремонт ничего не сбрасывает, одна строка и ненулевой код.
+test("repair with origin unreachable changes nothing and says so", (t) => {
+  const { install, run } = checkout(t);
+  writeFileSync(join(install, "bin/iva.mjs"), "// my own updater\n");
+  const head = git(install, "rev-parse", "HEAD");
+  git(
+    install,
+    "remote",
+    "set-url",
+    "origin",
+    "git@github.com:smixs/iva-agent.git",
+  );
+
+  const failure = (() => {
+    try {
+      return { output: run({ GIT_SSH_COMMAND: "false" }), status: 0 };
+    } catch (error) {
+      const failed = error as { status?: number; stderr?: string };
+      return { output: String(failed.stderr), status: failed.status };
+    }
+  })();
+
+  assert.notEqual(failure.status, 0);
+  assert.match(failure.output, /can't check origin/u);
+  assert.equal(git(install, "rev-parse", "HEAD"), head);
+  assert.equal(
+    readFileSync(join(install, "bin/iva.mjs"), "utf8"),
+    "// my own updater\n",
+  );
+});

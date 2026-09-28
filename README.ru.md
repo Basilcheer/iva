@@ -130,7 +130,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/smixs/iva-agent/main/bootstr
 - `iva update` ставит только выпуски (метки `vX.Y.Z`) — так по умолчанию.
 - В `main` только выпуски; всё принятое сначала попадает в ветку `beta`.
 - `iva beta` включает бета-обновления: вершина ветки `beta`; `iva stable` выключает их и возвращает на `main` (отката нет — догонит следующий выпуск). Потом `iva update`.
-- Любая установка, включая 0.4.8, переходит на бету одной командой: `curl -fsSL https://raw.githubusercontent.com/smixs/iva-agent/beta/beta.sh | bash`. Новая установка сразу на бете: `IVA_BETA=1` перед `bash` в команде установки.
+- Любая установка, включая 0.4.8, переходит на бету одной командой: `curl -fsSL https://raw.githubusercontent.com/smixs/iva-agent/beta/beta.sh | bash`. Новая установка сразу на бете: `curl -fsSL https://raw.githubusercontent.com/smixs/iva-agent/beta/install.sh | IVA_BETA=1 bash`.
 - То же в Telegram: `/menu` → 🛠 Обслуживание → 🧪 Обновления. `iva version` показывает, что включено.
 
 ### Первая минута

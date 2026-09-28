@@ -425,10 +425,16 @@ const VERBS: Record<string, Verb> = {
     writeSettings({ menuStyle: args[0] });
     return ctx.show(st, "r"); // корень сразу в новом стиле
   },
-  beta: (_args, st, ctx) => {
-    setBeta(ctx.deps.root, !betaOf(ctx.deps.root));
-    return ctx.show(st, "svc"); // ставится при следующем обновлении
-  },
+  beta: (_args, st, ctx) =>
+    setBeta(ctx.deps.root, !betaOf(ctx.deps.root))
+      ? ctx.show(st, "svc") // ставится при следующем обновлении
+      : ctx.flows.screen(
+          st,
+          ctx.tr(
+            "The update setting was not recorded (git config failed). Try again or run: iva beta",
+            "Настройка обновлений не записана (git config не прошёл). Повтори или выполни: iva beta",
+          ),
+        ),
 };
 
 function confirmView(

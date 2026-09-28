@@ -24,8 +24,11 @@ printf '\n  \033[36m⏳ Preparing environment / Идёт подготовка о
 set -Eeuo pipefail
 
 REPO_URL="${REPO_URL:-https://github.com/smixs/iva-agent.git}"
-# IVA_BETA=1 - бета-обновления: ветка beta, в main только выпуски (ADR-0018).
-if [ "${IVA_BETA:-}" = 1 ]; then BRANCH="${BRANCH:-beta}"; fi
+# IVA_BETA=1 - бета-обновления: всегда ветка beta, в main только выпуски (ADR-0018).
+if [ "${IVA_BETA:-}" = 1 ]; then
+  [ "${BRANCH:-beta}" = beta ] || printf 'IVA_BETA=1: BRANCH=%s ignored, installing the beta branch\n' "$BRANCH" >&2
+  BRANCH=beta
+fi
 BRANCH="${BRANCH:-main}"
 UPDATE_CHANNEL="$BRANCH"
 INSTALL_DIR="${INSTALL_DIR:-$HOME/iva}"
@@ -418,6 +421,17 @@ repair_script_url() {
 # It hands the tree to repair.sh, which is where `iva update`, the bridge and the repair
 # command all go, and exits with what came back. The installer keeps no second copy of that
 # route - and no second answer to whether a tree may be updated at all.
+# IVA_BETA=1 над существующей установкой: выбор - в зеркало и .git до передачи обновлятору.
+record_beta_choice() {
+  [ "${IVA_BETA:-}" = 1 ] || return 0
+  local repo
+  for repo in "$INSTALL_DIR/repo" "$INSTALL_DIR/.git"; do
+    [ -e "$repo" ] || continue
+    git --git-dir="$repo" config --local iva.updateBranch beta
+    git --git-dir="$repo" config --local iva.beta true
+  done
+}
+
 hand_installation_to_repair() {
   local url script rc=0
   url="$(repair_script_url)" || die "$(t "REPO_URL is not a GitHub repository of the project, so there is no repair.sh to update $INSTALL_DIR with: run 'iva update' yourself." "REPO_URL не репозиторий проекта на GitHub, взять repair.sh для обновления $INSTALL_DIR неоткуда: запустите 'iva update' сами.")"
@@ -864,16 +878,15 @@ ok "Node $(node -v)"
 # iva.beta=true — вершину. Ветка остаётся той же: за ней следит обновлятор. Та же функция
 # стоит в install.sh и repair.sh: оба запускаются через curl | bash и самодостаточны.
 checkout_release() {
-  local first="0.4.9" tag
+  local first="0.4.9" tag target=HEAD
   if [ "${IVA_BETA:-}" = 1 ]; then git -C "$1" config --local iva.beta true; fi
   [ "$(git -C "$1" config --local --get iva.beta || true)" != true ] || return 0
   tag="$(git -C "$1" tag --list 'v*' --merged HEAD --sort=-v:refname \
     | grep -E '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' | head -n 1 || true)"
-  [ -n "$tag" ] || return 0
-  [ "$(printf '%s\n%s\n' "$first" "${tag#v}" | sort -V | head -n 1)" = "$first" ] || return 0
-  # $2 - коммит, стоявший до ремонта: новее выпуска (его потомок) - он и остаётся.
-  if [ -n "${2:-}" ] && git -C "$1" merge-base --is-ancestor "$tag" "$2" 2>/dev/null; then tag="$2"; fi
-  git -C "$1" reset -q --hard "$tag"
+  if [ -n "$tag" ] && [ "$(printf '%s\n%s\n' "$first" "${tag#v}" | sort -V | head -n 1)" = "$first" ]; then target="$tag"; fi
+  # $2 - коммит, стоявший до ремонта: новее цели (её потомок) - он и остаётся.
+  if [ -n "${2:-}" ] && git -C "$1" merge-base --is-ancestor "$target" "$2" 2>/dev/null; then target="$2"; fi
+  git -C "$1" reset -q --hard "$target"
 }
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -901,6 +914,7 @@ elif [ -d "$INSTALL_DIR/.git" ] || [ -d "$INSTALL_DIR/versions" ]; then
   # «index.lock: File exists» вместо отказа по имени. Версионную раскладку сторожит замок
   # самого обновлятора.
   if [ -d "$INSTALL_DIR/.git" ]; then PROJECT_DIR="$INSTALL_DIR"; acquire_install_lock "$INSTALL_DIR/data"; fi
+  record_beta_choice
   hand_installation_to_repair
 else
   run_stage "$(t "Cloning Iva" "Клонирую Iva")" "$(t "Iva downloaded" "Iva загружена")" \

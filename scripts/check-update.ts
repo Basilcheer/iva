@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import { isEntrypoint, upstreamQuery } from "./lib/version-layout.ts";
 import { noticeLang } from "./lib/notice-policy.ts";
 import { acquireUpdateLock } from "./lib/version-store.ts";
+import { betaChannel } from "./lib/update-channel.ts";
 import { resolveDataDir } from "./lib/data-dir.ts";
 import {
   gitAt,
@@ -133,7 +134,20 @@ export async function runDailyUpdateCheck(options: DailyUpdateOptions = {}) {
     // One answer to «which repository», for the inspection and for the README it reads:
     // on the versioned layout that is the mirror, never the install root.
     const upstream = upstreamQuery(deps.root);
-    const info = await deps.inspectImpl(upstream);
+    let info: UpdateInfo;
+    try {
+      info = await deps.inspectImpl(upstream);
+    } catch (error) {
+      // Бета без ветки (нет сети или ветки): молчим, как current; отказ скажет iva update.
+      const git = async (...args: string[]) => {
+        const result = await deps.gitImpl(upstream.root, args);
+        return typeof result === "string"
+          ? { code: 0, stdout: result }
+          : result;
+      };
+      if (await betaChannel(git)) return { status: "current" as const };
+      throw error;
+    }
     const check = { deps, storage, token, chatId, upstream };
     // Бета: новые коммиты ветки, помнится коммит; стабильный: новая метка, помнится версия.
     return info.beta

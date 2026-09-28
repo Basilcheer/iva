@@ -85,11 +85,27 @@ function repoFixture() {
   git(temp, "init", "--bare", remote);
   git(seed, "remote", "add", "origin", remote);
   git(seed, "push", "-u", "origin", "main");
+  // Бета — ветка beta (ADR-0018): каждый push seed кладёт ту же историю и в неё.
+  git(
+    seed,
+    "config",
+    "--add",
+    "remote.origin.push",
+    "refs/heads/main:refs/heads/main",
+  );
+  git(
+    seed,
+    "config",
+    "--add",
+    "remote.origin.push",
+    "refs/heads/main:refs/heads/beta",
+  );
+  git(seed, "push");
   git(temp, "clone", "--branch", "main", remote, local);
   git(local, "config", "user.email", "test@example.com");
   git(local, "config", "user.name", "Test");
   // Эти проверки — о вершине ветки: бета-обновления (иначе обновление ждёт выпуск,
-  // метку vX.Y.Z — update-release-git.test.ts).
+  // метку vX.Y.Z — update-release-git.test.ts). Прежний флаг при main уводит на beta.
   git(local, "config", "iva.beta", "true");
   return { temp, remote, seed, local };
 }
@@ -158,11 +174,11 @@ test("a merged legacy feature branch discovers updates from main", async () => {
   );
   git(seed, "add", "package.json");
   git(seed, "commit", "-m", "release");
-  git(seed, "push", "origin", "main");
+  git(seed, "push");
 
   const info = await inspectUpstream({ root: local });
   assert.equal(info.currentBranch, "feat/legacy");
-  assert.equal(info.branch, "main");
+  assert.equal(info.branch, "beta");
   assert.equal(info.legacyMigration, true);
   assert.equal(info.remote, git(seed, "rev-parse", "HEAD"));
   assert.equal(info.hasVersionUpdate, true);
@@ -864,4 +880,19 @@ test("beta: сборка требует обновлятор новее уста
   assert.equal(result.status, "notified");
   assert.ok(sent[0]?.includes(REPAIR_COMMAND), sent[0]);
   assert.deepEqual(actionCallbacks(sent[0] ?? ""), []);
+});
+
+// Круг 2 (QA D3): бета включена, ветка beta недоступна (нет сети или ветки) — ежедневная
+// проверка молчит, как «current»; отказ скажет сам iva update. Настоящий git: зеркало с
+// веткой beta в config и origin без ветки beta.
+test("daily check on beta with the beta branch unavailable stays quiet as current", async () => {
+  const { local } = repoFixture();
+  git(local, "config", "iva.updateBranch", "beta");
+  git(local, "remote", "set-url", "origin", join(local, "нет.git"));
+  const result = await runDailyUpdateCheck({
+    root: local,
+    env: { TELEGRAM_BOT_TOKEN: "t", TELEGRAM_DIGEST_CHAT_ID: "1" },
+    sendImpl: async () => assert.fail("nothing to offer"),
+  });
+  assert.equal(result.status, "current");
 });

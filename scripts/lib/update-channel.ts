@@ -114,17 +114,57 @@ export async function persistUpdateBranch(
   await requireGit(git, "config", "--local", UPDATE_BRANCH_CONFIG, branch);
 }
 
-/** Бета-обновления (Beta updates): `iva.beta` = true — обновление ставит вершину ветки;
- * ключа нет — ставит новейший выпуск (Release, метка vX.Y.Z). ADR-0017. */
+/** Бета-обновления (Beta updates) — Update branch `beta` (ADR-0018): обновление ставит
+ * вершину ветки. `iva.beta` пишется для прежних бета-сборок: при main или без ветки он
+ * переводит установку на beta, при своей ветке — вершина своей ветки. */
 export const BETA_CONFIG = "iva.beta";
 const RELEASE_TAG = /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u;
 
 /** Включены ли бета-обновления; чужое значение — нет, и строка-предупреждение. */
-export async function readBeta(git: Git): Promise<boolean> {
+async function readBeta(git: Git): Promise<boolean> {
   const value = output(await git("config", "--local", "--get", BETA_CONFIG));
   if (value && value !== "true" && value !== "false")
     console.warn(`⚠️ ${BETA_CONFIG}=${value}: not true, installing releases`);
   return value === "true";
+}
+
+/** Ставится ли вершина ветки: ветка beta или флаг iva.beta. */
+export async function betaChannel(git: Git): Promise<boolean> {
+  const branch = output(
+    await git("config", "--local", "--get", UPDATE_BRANCH_CONFIG),
+  );
+  return (await readBeta(git)) || branch === BETA_BRANCH;
+}
+
+/** Цель не ниже установленного: предок установленного коммита — сама установка. Назад
+ * обновление не ходит ни в одном канале; откат — только явный. */
+async function notBelow(git: Git, target: string, installed?: string) {
+  const at = installed ? output(await git("rev-parse", installed)) : "";
+  if (!at || !target || at === target) return target;
+  const older = await git("merge-base", "--is-ancestor", target, at);
+  return older.code === 0 ? at : target;
+}
+
+type UpdateTarget = Awaited<ReturnType<typeof resolveUpdateTarget>>;
+
+/** Бета-цель или null: ветка beta или флаг; прежний opt-in (флаг при main или без
+ * ветки, ADR-0017) переходит на ветку beta и записывает её один раз. */
+async function betaTarget(
+  git: Git,
+  remote: string,
+  resolved: UpdateTarget,
+  installed?: string,
+) {
+  let target = resolved;
+  const flag = await readBeta(git);
+  if (flag && (!target.configured || target.branch === DEFAULT_UPDATE_BRANCH)) {
+    const targetHead = await fetchBranch(git, remote, BETA_BRANCH);
+    await persistUpdateBranch(git, BETA_BRANCH);
+    target = { ...target, branch: BETA_BRANCH, configured: true, targetHead };
+  }
+  if (!flag && target.branch !== BETA_BRANCH) return null;
+  const head = await notBelow(git, target.targetHead, installed);
+  return { ...target, beta: true, targetHead: head };
 }
 
 /**
@@ -136,9 +176,10 @@ export async function resolveReleaseTarget(
   options: ResolveUpdateTargetOptions & { installed?: string },
 ) {
   const git = options.git!;
-  const target = await resolveUpdateTarget(options);
-  if (await readBeta(git)) return { ...target, beta: true };
   const remote = options.remote ?? "origin";
+  const target = await resolveUpdateTarget(options);
+  const beta = await betaTarget(git, remote, target, options.installed);
+  if (beta) return beta;
   // --prune: метка, удалённая из origin (отозванный выпуск), уходит и отсюда.
   await requireGit(git, "fetch", "--prune", remote, "+refs/tags/*:refs/tags/*");
   const tags = await requireGit(
@@ -181,27 +222,32 @@ function betaRepos(root: string): string[] {
   return [...repos].filter(isRepo);
 }
 
-/** Бета-обновления установки для показа (iva version, status, меню). */
+/** Бета-обновления установки для показа (iva version, status, меню): ветка beta или
+ * прежний флаг при main и без ветки. */
 export function betaOf(root: string): boolean {
   const repo = gitRootFor(classifyRoot(root));
-  const args = ["-C", repo, "config", "--local", "--get", BETA_CONFIG];
-  return spawnSync("git", args, { encoding: "utf8" }).stdout?.trim() === "true";
+  const get = (key: string) =>
+    spawnSync("git", ["-C", repo, "config", "--local", "--get", key], {
+      encoding: "utf8",
+    }).stdout?.trim() ?? "";
+  const branch = get(UPDATE_BRANCH_CONFIG);
+  const legacy = [DEFAULT_UPDATE_BRANCH, ""].includes(branch);
+  return branch === BETA_BRANCH || (legacy && get(BETA_CONFIG) === "true");
 }
 
-/** iva beta / iva stable и кнопка меню: бета — iva.beta=true и ветка beta, стабильные —
- * ключа нет и ветка main (ADR-0018), в установке и в зеркале. */
+/** iva beta / iva stable и кнопка меню: решает ветка (beta или main, ADR-0018), флаг —
+ * для прежних бета-сборок. Ветка не записалась — false, флаг не тронут. */
 export function setBeta(root: string, on: boolean): boolean {
-  const beta = on ? [BETA_CONFIG, "true"] : ["--unset-all", BETA_CONFIG];
+  const config = (repo: string, args: string[]) =>
+    spawnSync("git", ["-C", repo, "config", "--local", ...args]).status;
+  const repos = betaRepos(root);
   const branch = [
     UPDATE_BRANCH_CONFIG,
     on ? BETA_BRANCH : DEFAULT_UPDATE_BRANCH,
   ];
-  const config = (repo: string, args: string[]) =>
-    spawnSync("git", ["-C", repo, "config", "--local", ...args]).status;
-  const written = betaRepos(root).map((repo) => {
-    const status = config(repo, beta);
-    const flag = status === 0 || (!on && status === 5); // 5: ключа и так нет
-    return flag && config(repo, branch) === 0;
-  });
-  return written.length > 0 && written.every(Boolean);
+  if (!repos.length || !repos.every((repo) => config(repo, branch) === 0))
+    return false;
+  const flag = on ? [BETA_CONFIG, "true"] : ["--unset-all", BETA_CONFIG];
+  // 5: ключа и так нет
+  return repos.every((repo) => [0, on ? 0 : 5].includes(config(repo, flag)!));
 }

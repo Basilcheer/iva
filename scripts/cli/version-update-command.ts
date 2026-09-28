@@ -16,7 +16,7 @@ import {
 } from "../lib/telegram-status.ts";
 import {
   BETA_CONFIG,
-  readBeta,
+  betaChannel,
   resolveReleaseTarget,
 } from "../lib/update-channel.ts";
 import {
@@ -170,27 +170,28 @@ export async function ensureMirror(home: string): Promise<string> {
 
 /**
  * What the next version is built from: the newest release, or the tip with beta updates
- * on (ADR-0017). With beta updates an
- * unreachable remote is not a failure: the newest mirrored commit is the honest answer,
- * so an offline update is a no-op. Stable never guesses a release: offline or with no
- * release tag it refuses. `installed` is the commit that runs; stable never goes below it.
+ * on (ADR-0017, ADR-0018). Neither guesses: offline, with no beta branch or with no
+ * release tag it refuses. `installed` is the commit that runs; no update goes below it.
  */
 export async function resolveTarget(
   repo: string,
   installed?: string,
 ): Promise<ReleaseAim> {
   const git = (...args: string[]) => gitAt(repo, args);
-  let sha = "";
-  let beta = true;
-  let [release, newer] = [undefined as string | undefined, false];
+  let target: Awaited<ReturnType<typeof resolveReleaseTarget>>;
   try {
-    const target = await resolveReleaseTarget({ git, installed });
-    [sha, beta] = [target.targetHead ?? "", target.beta];
-    if ("tag" in target) [release, newer] = [target.tag, target.newer];
+    target = await resolveReleaseTarget({ git, installed });
   } catch (error) {
-    if (!(await readBeta(git))) throw error;
+    // Бета без ветки (нет сети или ветки): HEAD зеркала — это main, то есть откат.
+    if (!(await betaChannel(git))) throw error;
+    throw new Error(
+      "the beta branch is unavailable (no network or no such branch); nothing was installed",
+      { cause: error },
+    );
   }
-  if (!sha) sha = await requireGit(gitAt, repo, ["rev-parse", "HEAD"]);
+  const [sha, beta] = [target.targetHead, target.beta];
+  const [release, newer] =
+    "tag" in target ? [target.tag, target.newer] : [undefined, false];
   const version = packageVersion(
     await requireGit(gitAt, repo, ["show", `${sha}:package.json`]),
   );

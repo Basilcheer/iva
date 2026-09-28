@@ -48,6 +48,16 @@ function fixture(t: TestContext) {
   return { temp, remote, seed, mirror, first, commit, beta, target };
 }
 
+/** Выпуск 1.0.0 на main, ветка beta на шаг впереди; зеркало снято после обеих. */
+function fx2(t: TestContext) {
+  const fx = fixture(t);
+  git(fx.seed, "switch", "-q", "-c", "beta");
+  const betaTip = fx.commit("1.1.0-beta.1");
+  git(fx.seed, "switch", "-q", "main");
+  git(fx.mirror, "fetch", "-q", "origin", "+refs/heads/*:refs/heads/*");
+  return { ...fx, betaTip };
+}
+
 void test("stable, установка на коммите после последней метки: цель — она сама, ничего не ставится, не откат", async (t) => {
   const fx = fixture(t);
   const after = fx.commit("1.0.0");
@@ -92,6 +102,8 @@ void test("beta: вершина ветки, а не метка", async (t) => {
   const fx = fixture(t);
   fx.commit("1.1.0", true);
   const tip = fx.commit("1.2.0-beta.1");
+  // Бета — ветка beta (ADR-0018); прежний флаг при main уводит на неё.
+  git(fx.seed, "push", "-q", "origin", "HEAD:refs/heads/beta");
   fx.beta("true");
   const target = await fx.target(fx.first);
   assert.equal(target.beta, true);
@@ -129,16 +141,22 @@ void test("сеть при забирании меток: тот же отказ
   await assert.rejects(fx.target(tip), /couldn't fetch|fatal/u);
   await assert.rejects(resolveTarget(fx.mirror, tip), /couldn't fetch|fatal/u);
   fx.beta("true");
-  // Бета без сети, как и прежде: свежайший коммит зеркала, обновление — no-op.
-  assert.equal((await resolveTarget(fx.mirror, tip)).sha, tip);
+  // Бета без сети (QA D2): отказ, а не коммит зеркала — HEAD зеркала может быть main.
+  await assert.rejects(
+    resolveTarget(fx.mirror, tip),
+    /beta branch is unavailable/u,
+  );
 });
 
 void test("переключение beta → stable на установке новее метки: ничего не ставится до следующей метки", async (t) => {
   const fx = fixture(t);
   fx.beta("true");
   const installed = fx.commit("1.1.0-beta.1");
+  git(fx.seed, "push", "-q", "origin", "HEAD:refs/heads/beta");
   assert.equal((await fx.target(installed)).targetHead, installed);
-  fx.beta("false");
+  // iva stable: ветка main, флага нет.
+  git(fx.mirror, "config", "iva.updateBranch", "main");
+  git(fx.mirror, "config", "--unset", "iva.beta");
   assert.equal((await fx.target(installed)).targetHead, installed);
   const next = fx.commit("1.1.0", true);
   assert.equal((await fx.target(installed)).targetHead, next);
@@ -186,6 +204,49 @@ void test("iva beta — вершина ветки beta; iva stable — выпу�
   assert.equal("tag" in stable && stable.tag, "v1.0.0");
   assert.equal(stable.targetHead, tip);
   assert.equal((await target(fx.first)).targetHead, fx.first);
+});
+
+// Круг 2. Прежний opt-in (iva.beta=true при ветке main) уходит на ветку beta, и ветка
+// переписывается один раз: main теперь только выпуски.
+void test("прежний opt-in: флаг при main — вершина beta, iva.updateBranch=beta", async (t) => {
+  const fx = fx2(t);
+  git(fx.mirror, "config", "iva.updateBranch", "main");
+  fx.beta("true");
+  const target = await fx.target(fx.first);
+  assert.equal(target.branch, "beta");
+  assert.equal(target.targetHead, fx.betaTip);
+  assert.equal(git(fx.mirror, "config", "--get", "iva.updateBranch"), "beta");
+});
+
+// Никакого автоматического отката: вершина беты — предок установленного, цель — он сам.
+void test("бета: вершина ветки старше установленного — цель установленный коммит", async (t) => {
+  const fx = fx2(t);
+  git(fx.mirror, "config", "iva.updateBranch", "beta");
+  fx.beta("true");
+  const installed = fx.betaTip;
+  git(fx.seed, "push", "-q", "-f", "origin", `${fx.first}:refs/heads/beta`);
+  assert.equal((await fx.target(installed)).targetHead, installed);
+  assert.equal((await resolveTarget(fx.mirror, installed)).sha, installed);
+});
+
+void test("бета офлайн: отказ «ветка beta недоступна», не HEAD зеркала (QA D2)", async (t) => {
+  const fx = fx2(t);
+  git(fx.mirror, "config", "iva.updateBranch", "beta");
+  rmSync(fx.remote, { recursive: true, force: true });
+  await assert.rejects(
+    resolveTarget(fx.mirror, fx.betaTip),
+    /beta branch is unavailable/u,
+  );
+});
+
+void test("бета, у origin нет ветки beta: отказ, а не вершина main (QA D2)", async (t) => {
+  const fx = fixture(t);
+  const main = fx.commit("1.1.0");
+  git(fx.mirror, "config", "iva.updateBranch", "beta");
+  await assert.rejects(
+    resolveTarget(fx.mirror, main),
+    /beta branch is unavailable/u,
+  );
 });
 
 void test("зеркало ~/iva/repo получает iva.beta установки так же, как iva.updateBranch", async (t) => {
