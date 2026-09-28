@@ -4,6 +4,7 @@
 // node-скрипт, который говорит на том же stream-json: подтверждает переигрывание истории
 // `result num_turns:0`, отвечает на последний кадр и умеет ломаться так, как ломается настоящий
 // CLI (ошибка API в assistant, обрыв без result, тишина, отказ на инструмент вне списка).
+import "../../scripts/fixtures/no-host-anthropic.ts";
 import assert from "node:assert/strict";
 import {
   chmodSync,
@@ -38,10 +39,6 @@ import { classifyModelCallError } from "../../node_modules/eve/dist/src/harness/
 // делал его красным без дефекта. os.tmpdir() читает TMPDIR на каждом вызове.
 const PRIVATE_TMP = mkdtempSync(join(tmpdir(), "iva-claude-cli-test-"));
 process.env.TMPDIR = PRIVATE_TMP;
-// Тест не наследует настройку Anthropic с машины разработчика: хост с ANTHROPIC_BASE_URL или
-// ключом (так запускают из агентной сессии) валил бы все ходы отказом CLI без дефекта в коде.
-for (const key of Object.keys(process.env))
-  if (/^(ANTHROPIC_|CLAUDE_CODE_USE_)/u.test(key)) delete process.env[key];
 process.on("exit", () => rmSync(PRIVATE_TMP, { recursive: true, force: true }));
 import {
   CLAUDE_MESSAGE_ID_PREFIX,

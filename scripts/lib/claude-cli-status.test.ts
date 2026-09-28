@@ -3,6 +3,7 @@
 // Здесь проверяется вся работа с ним: статус, живой список моделей и живая проба.
 // CLI подменён скриптом с тем же контрактом, что у настоящего: `auth status` отвечает
 // JSON, рукопожатие initialize — пикером, проба — потоком stream-json.
+import "../fixtures/no-host-anthropic.ts";
 import assert from "node:assert/strict";
 import {
   chmodSync,
@@ -28,11 +29,6 @@ import {
   listClaudeModels,
   probeClaudeModel,
 } from "./claude-cli-status.ts";
-
-// Тест не наследует настройку Anthropic с машины разработчика: хост с ANTHROPIC_BASE_URL или
-// ключом (так запускают из агентной сессии) валил бы все ходы отказом CLI без дефекта в коде.
-for (const key of Object.keys(process.env))
-  if (/^(ANTHROPIC_|CLAUDE_CODE_USE_)/u.test(key)) delete process.env[key];
 
 const tempRoots: string[] = [];
 test.after(() => {

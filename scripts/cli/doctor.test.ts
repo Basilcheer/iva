@@ -1,4 +1,5 @@
 /* eslint-disable @typescript-eslint/no-floating-promises -- Node's test runner owns registrations. */
+import "../fixtures/no-host-anthropic.ts";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import {
