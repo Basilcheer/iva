@@ -175,7 +175,7 @@ test("writeUnits writes every unit with its placeholders filled and closes the s
       service
         .split("\n")
         .includes(
-          `ExecStartPre=/usr/bin/env "ASSISTANT_DATA_DIR=${join(fx.project, "data")}" ${process.execPath} ${fx.project}/scripts/recover-interrupted-turns.ts`,
+          `ExecStartPre=-/usr/bin/env "ASSISTANT_DATA_DIR=${join(fx.project, "data")}" ${process.execPath} ${fx.project}/scripts/recover-interrupted-turns.ts`,
         ),
       service,
     );

@@ -180,8 +180,10 @@ void test(
 
     eve = startEve(app, env, port, () => {});
     await waitForHealth(port, eve);
+    // The owner's next message goes to the interrupted session itself: without
+    // recovery its inbox lock survives the kill and the next turn never starts.
     const started = await post(port, bearer, "/restart-hang/send", {
-      address: "restart-owner",
+      address: "1::",
       message: "BLOCK_UNTIL_RESTART",
     });
     assert.equal(started.status, 200);
