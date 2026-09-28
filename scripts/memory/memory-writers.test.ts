@@ -894,6 +894,45 @@ void test("write_card: допустимые статусы берутся из s
   assert.equal((await run(fact({ status: "done" }))).ok, true);
 });
 
+// Статус из schema.json vault, которого нет в шаблоне, представим на проводе: провод берёт
+// строку, а допустимые для типа Card проверяет execute и называет их в отказе.
+void test("write_card: свой статус из schema.json проходит провод и ставится, чужой — отказ с допустимыми", async (t) => {
+  const fx = fixture(t);
+  writeFileSync(
+    join(fx.vault, "schema.json"),
+    JSON.stringify({
+      node_types: { project: { status: ["active", "blocked", "done"] } },
+    }),
+  );
+  // Провод — та же zod-схема, которую eve проверяет до execute.
+  const schema = writeCard.inputSchema as unknown as {
+    safeParse: (value: unknown) => { success: boolean };
+  };
+  const wire = (value: unknown) => schema.safeParse(value).success;
+  assert.equal(wire(fact({ status: "blocked" })), true);
+  const blocked = await run(fact({ status: "blocked" }));
+  assert.equal(blocked.ok, true, JSON.stringify(blocked));
+  const file = join(fx.vault, "cards/projects/аврора.md");
+  assert.equal(statusOf(readFileSync(file, "utf8")), "blocked");
+  const before = readFileSync(file, "utf8");
+  for (const status of [
+    "paused",
+    "Done",
+    "done\nx: 1",
+    "x".repeat(10_000),
+    "",
+  ]) {
+    assert.equal(wire(fact({ status })), true);
+    const reply = await run(fact({ text: "Ещё факт", status }));
+    assert.equal(reply.ok, false, JSON.stringify(reply).slice(0, 200));
+    assert.match(
+      reply.error ?? "",
+      /project\. Допустимы: active, blocked, done/u,
+    );
+    assert.equal(readFileSync(file, "utf8"), before);
+  }
+});
+
 // Property: любая последовательность fact/truth со status или без. Статус Card всегда из
 // допустимых для её типа; принятый status — последний принятый, иначе active; отказ не
 // меняет байты Card. Провал печатает seed; повтор: IVA_CARD_STATUS_SEED=<seed>.

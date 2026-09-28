@@ -5,7 +5,6 @@ import { basename, dirname, join, relative, sep } from "node:path";
 import { resolveVaultDir } from "@iva/vault-dir";
 import {
   ALIASES_MAX,
-  CARD_STATUSES,
   aliasList,
   cardStatuses,
   disappearedLines,
@@ -58,7 +57,7 @@ const factInput = z.object({
   tags: z.array(oneLine).max(6).default([]),
   aliases: z.array(oneLine.max(80)).max(ALIASES_MAX).default([]),
   source: oneLine.optional(),
-  status: z.enum(CARD_STATUSES).optional(),
+  status: z.string().optional(),
 });
 const truthInput = z.object({
   operation: z.literal("truth"),
@@ -68,7 +67,7 @@ const truthInput = z.object({
   description: oneLine.max(500).optional(),
   reason: oneLine,
   source: oneLine.optional(),
-  status: z.enum(CARD_STATUSES).optional(),
+  status: z.string().optional(),
 });
 const mergeInput = z.object({
   operation: z.literal("merge"),
@@ -104,7 +103,7 @@ const wireInput = z.object({
   source: z.string().optional().describe("fact, truth: откуда факт"),
   reason: z.string().optional().describe("truth: почему меняется истина"),
   status: z
-    .enum(CARD_STATUSES)
+    .string()
     .optional()
     .describe(
       "fact, truth: новый статус Card только по слову владельца (проект закрыт → done, решение отменено → reverted); допустимые по типу — в schema.json vault",
@@ -198,13 +197,13 @@ function statusError(
   card: CardRecord,
   input: FactInput | TruthInput,
 ) {
-  if (!input.status) return null;
+  if (input.status === undefined) return null;
   const type = String(card.parsed.fields?.type ?? input.type);
   const allowed = cardStatuses(vault)[type] ?? ["active"];
   if (allowed.includes(input.status)) return null;
   return {
     ok: false,
-    error: `status "${input.status}" не годится для Card типа ${type}. Допустимы: ${allowed.join(", ")}; или не передавай status.`,
+    error: `status ${JSON.stringify(input.status.slice(0, 80))} не годится для Card типа ${type}. Допустимы: ${allowed.join(", ")}; или не передавай status.`,
   };
 }
 
