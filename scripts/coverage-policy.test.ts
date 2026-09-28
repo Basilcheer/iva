@@ -94,10 +94,6 @@ const BLIND_SPOT: ReadonlyArray<{
     why: "стенд приёмки: живой ход на настоящем провайдере, сам и есть проверка",
   },
   {
-    path: "scripts/lib/eve-app.ts",
-    why: "запуск стендов replica и live-turn, проверяется их прогоном",
-  },
-  {
     path: "scripts/memory/night-call.ts",
     why: "процессная ночь проверяет вызов через HTTP-двойник",
   },
