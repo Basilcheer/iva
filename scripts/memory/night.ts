@@ -45,7 +45,9 @@ const CORE_TEMPLATE =
   "# CORE\n\n## Пользователь\n\n## Предпочтения\n\n## Активные цели\n";
 const DAY_MS = 86_400_000;
 const jobs: string[] = [];
-const alerts: string[] = [];
+// Alert — парой en/ru: текст на языке владельца, суть для дросселя — английская строка.
+const alerts: Array<[string, string]> = [];
+let T: notice.Translate = (_english, russian) => russian;
 let call!: typeof import("./night-call.ts");
 let signal!: AbortSignal;
 
@@ -227,9 +229,10 @@ function queuePending(cache: DayCache, card: string, rows: readonly string[]) {
     [card]: [...(cache.pending?.[card] ?? []), ...rows],
   };
   writeCache(cache);
-  alerts.push(
+  alerts.push([
+    `Fix Card ${card}: frontmatter, code block or Log; facts are waiting`,
     `Поправь Card ${card}: frontmatter, блок кода или Log; факты ждут`,
-  );
+  ]);
 }
 
 async function applyPending(): Promise<void> {
@@ -241,7 +244,10 @@ async function applyCachePending(cache: DayCache): Promise<void> {
   for (const [card, rows] of Object.entries(cache.pending ?? {})) {
     const found = writable(card);
     if (!found) {
-      alerts.push(`Поправь Card ${card}: факты ждут`);
+      alerts.push([
+        `Fix Card ${card}: facts are waiting`,
+        `Поправь Card ${card}: факты ждут`,
+      ]);
       continue;
     }
     writeAtomic(
@@ -458,7 +464,11 @@ class Day {
       (card) => namesOf(card).includes(key) || card.card === path(name),
     );
     if (!pass.created[key]) {
-      if (taken) alerts.push(`Похоже на дубль: ${item.name}. Склеить Card?`);
+      if (taken)
+        alerts.push([
+          `Looks like a duplicate: ${item.name}. Merge the Cards?`,
+          `Похоже на дубль: ${item.name}. Склеить Card?`,
+        ]);
       const card = path(taken ? `${name} (${date})` : name);
       if (existsSync(cardFile(card))) return card;
       pass.created[key] = card;
@@ -705,9 +715,10 @@ function giveUp(
   current: Card | null,
 ) {
   if (!current || textHash(current.raw) !== entry.pre)
-    alerts.push(
+    alerts.push([
+      `${card}: Compiled Truth was changed by a person; the night did not overwrite it`,
       `${card}: Compiled Truth изменён человеком, ночь его не перетёрла`,
-    );
+    ]);
   delete entry.answer;
   entry.done = true;
   run.save();
@@ -748,7 +759,10 @@ async function retryTruth(today: string): Promise<void> {
   for (const card of cards) {
     const since = str(card.fields, "truth_pending");
     if (since < shift(today, -3))
-      alerts.push(`${card.card}: правда ждёт с ${since}; B не справился`);
+      alerts.push([
+        `${card.card}: the truth has been waiting since ${since}; step B did not manage it`,
+        `${card.card}: правда ждёт с ${since}; B не справился`,
+      ]);
   }
   if (!cards.length) return;
   const pass = { truth: cards.map((card) => card.card), b: {} };
@@ -976,9 +990,10 @@ async function askCore(before: string, candidates: Candidate[]) {
       error instanceof call.NightSchemaError ||
       error instanceof call.NightCeilingError;
     if (!known) throw error;
-    alerts.push(
+    alerts.push([
+      `CORE was not updated, the candidates wait for the next night: ${error.message}`,
       `CORE не обновлён, кандидаты ждут следующей ночи: ${error.message}`,
-    );
+    ]);
     return null;
   }
 }
@@ -1028,9 +1043,10 @@ function telegram() {
     : null;
 }
 
-async function notify(key: string, body: string): Promise<void> {
-  const send = telegram();
-  await notice.alertOnce(dataDir, key, body, async () => {
+/** essence — английский текст: смена языка не делает ту же проблему новой. */
+async function notify(key: string, english: string, russian: string) {
+  const [send, body] = [telegram(), T(english, russian)];
+  await notice.alertOnce(dataDir, key, english, async () => {
     const sent = send ? await send(body) : { ok: false, error: "нет чата" };
     if (!sent.ok)
       console.error(`memory-night alert ${key}: ${body} (${sent.error})`);
@@ -1072,28 +1088,40 @@ async function alertsAtEnd(today: string, left: string[], fallbacks: string[]) {
   );
   const old = left.filter((date) => date < shift(today, -7));
   const lost = transcriptLost(today);
-  const russian = (_english: string, body: string) => body;
-  const pausedText = attempts.dayPausedAlert(russian, paused, tried);
-  const all: Array<[string, unknown, string]> = [
-    [attempts.DAY_PAUSED_ALERT_KEY, paused.length, pausedText],
+  const pausedText = (tr: notice.Translate) =>
+    attempts.dayPausedAlert(tr, paused, tried);
+  const english: notice.Translate = (en) => en;
+  const russian: notice.Translate = (_en, ru) => ru;
+  const pending = (tr: notice.Translate) =>
+    alerts.map((pair) => tr(...pair)).join("\n");
+  const all: Array<[string, unknown, string, string]> = [
+    [
+      attempts.DAY_PAUSED_ALERT_KEY,
+      paused.length,
+      pausedText(english),
+      pausedText(russian),
+    ],
     [
       "night-fallback",
       fallbacks.length,
+      `Periods built without the model: ${fallbacks.join(", ")}`,
       `Периоды собраны без модели: ${fallbacks.join(", ")}`,
     ],
-    ["night-pending", alerts.length, alerts.join("\n")],
+    ["night-pending", alerts.length, pending(english), pending(russian)],
     [
       "night-tail",
       old.length,
+      `The night queue holds days older than 7 days: ${old.join(", ")}. Check iva jobs.`,
       `Очередь ночи старше 7 дней: ${old.join(", ")}. Проверь iva jobs.`,
     ],
     [
       "night-transcript",
       lost,
+      `There is no raw day for ${lost}, although the chat worked. Check vault/daily.`,
       `За ${lost} нет сырого дня, хотя чат работал. Проверь vault/daily.`,
     ],
   ];
-  for (const [key, due, body] of all) if (due) await notify(key, body);
+  for (const [key, due, en, ru] of all) if (due) await notify(key, en, ru);
 }
 
 // ── Ночь ─────────────────────────────────────────────────────────────────────────────
@@ -1134,10 +1162,15 @@ async function runDays(dates: readonly string[]) {
 }
 
 async function night(manual: string | undefined): Promise<number> {
+  T = await notice.noticeTranslator();
   const sweep = await commitVaultSweep("memory-night: до ночи", vault);
   if (!sweep.ok) {
     const why = `vault не закоммичен до ночи: ${sweep.reason}`;
-    await notify("night-sweep", `Ночь памяти не началась: ${why}`);
+    await notify(
+      "night-sweep",
+      `Night memory did not start: the vault is not committed before the night: ${sweep.reason}`,
+      `Ночь памяти не началась: ${why}`,
+    );
     throw new Error(why);
   }
   try {
@@ -1145,6 +1178,7 @@ async function night(manual: string | undefined): Promise<number> {
   } catch (error) {
     await notify(
       "night-model",
+      `Night memory cannot start the model: ${String(error)}`,
       `Ночная память не запускает модель: ${String(error)}`,
     );
     throw error;

@@ -1625,3 +1625,53 @@ void test("отказ связи не оставляет новую Card, зав
   assert.equal(read(broken), before);
   assert.match(result.stderr, /связь Альфа ↔ Борис не записана/u);
 });
+
+// Alert ночи — на языке владельца (settings.language), как у Brain; дроссель Alert судит
+// по сути, а не по тексту: смена языка ту же проблему новой не делает.
+void test("Alert ночи на языке владельца, смена языка не повторяет его", async (t) => {
+  const fx = await fixture(t);
+  const sent = join(fx.data, "telegram-sent.log");
+  const double = join(fx.data, "telegram-double.mjs");
+  writeFileSync(
+    double,
+    `import { appendFileSync } from "node:fs";
+const real = globalThis.fetch;
+globalThis.fetch = async (url, init) => {
+  if (!String(url).includes("api.telegram.org")) return real(url, init);
+  appendFileSync(${JSON.stringify(sent)}, String(init?.body ?? "") + "\\n");
+  return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }));
+};
+`,
+  );
+  const yesterday = new Date(Date.parse(`${TODAY}T00:00:00Z`) - 86_400_000)
+    .toISOString()
+    .slice(0, 10);
+  writeFileSync(
+    join(fx.data, "usage.jsonl"),
+    `${JSON.stringify({ ts: `${yesterday}T10:00:00.000Z`, source: "chat" })}\n`,
+  );
+  const env = {
+    TELEGRAM_BOT_TOKEN: "123:abc",
+    TELEGRAM_DIGEST_CHAT_ID: "42",
+    NODE_OPTIONS: `--import ${double}`,
+  };
+  const transcriptAlerts = () =>
+    existsSync(sent)
+      ? readFileSync(sent, "utf8")
+          .split("\n")
+          .filter((row) => /vault\/daily/u.test(row))
+      : [];
+  writeFileSync(join(fx.data, "settings.json"), '{"language":"en"}\n');
+  const first = await night(fx, null, env);
+  assert.equal(first.code, 0, first.stderr);
+  assert.equal(transcriptAlerts().length, 1, first.stderr);
+  assert.match(transcriptAlerts()[0], /no raw day/u);
+  assert.doesNotMatch(transcriptAlerts()[0], /нет сырого дня/u);
+  writeFileSync(join(fx.data, "settings.json"), '{"language":"ru"}\n');
+  // Тот же день часом позже: каждый процесс стартует с IVA_TEST_NOW, и без сдвига
+  // вторая ночь оказалась бы раньше первой отправки.
+  const later = new Date(Date.parse(NOW) + 3_600_000).toISOString();
+  const second = await night(fx, null, { ...env, IVA_TEST_NOW: later });
+  assert.equal(second.code, 0, second.stderr);
+  assert.equal(transcriptAlerts().length, 1, "без повтора на другом языке");
+});
