@@ -67,6 +67,26 @@ async function alertCoreCap(): Promise<void> {
   );
 }
 
+/** Индекс эмбеддингов hybrid-поиска (vault/.index), как в v0.4.8: только при hybrid; без
+ * ключа embed-index сам выходит с кодом 0. Провал не отменяет бэкап, владелец слышит Alert. */
+async function refreshEmbeddings(): Promise<boolean> {
+  if (process.env.MEMORY_SEARCH_MODE !== "hybrid") return true;
+  const script = join(import.meta.dirname, "embed-index.ts");
+  const args = ["--env-file-if-exists=.env", script];
+  const { status } = spawnSync(process.execPath, args, { stdio: "inherit" });
+  if (status === 0) return true;
+  console.error(`brain: embed-index failed (exit ${status})`);
+  await alertOnce(dataDir, "embed-index", "failed", () =>
+    send(
+      T(
+        "The hybrid search index was not rebuilt: new Cards are found by words only. Check the embeddings key and run: node --env-file=.env scripts/memory/embed-index.ts",
+        "Индекс эмбеддингов не пересобран: новые Card находятся только по словам. Проверь ключ эмбеддингов и выполни: node --env-file=.env scripts/memory/embed-index.ts",
+      ),
+    ),
+  );
+  return false;
+}
+
 const run = (command: string, args: string[]) =>
   spawnSync(command, args, { cwd: vault, encoding: "utf8" });
 
@@ -143,11 +163,13 @@ async function main(): Promise<number> {
     console.error(`brain: agent tree did not load: ${String(error)}`);
     return 1;
   }
+  // Индекс до коммита, как в v0.4.8: он уходит в бэкап той же ночью.
+  const indexed = await refreshEmbeddings();
   const ownerCommitted = await commitOwnerChanges();
   const graphRefreshed = refreshGraph();
   await alertCoreCap();
   const pushed = await pushBackup();
-  return ownerCommitted && graphRefreshed && pushed ? 0 : 1;
+  return ownerCommitted && graphRefreshed && indexed && pushed ? 0 : 1;
 }
 
 process.exitCode = await main();

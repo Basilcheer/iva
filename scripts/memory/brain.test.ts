@@ -89,7 +89,7 @@ function brainFixture(t: TestContext) {
     writeFileSync(join(bin, "gh"), `#!/bin/sh\n${script}\n`);
     chmodSync(join(bin, "gh"), 0o755);
   };
-  const brain = () =>
+  const brain = (env: Record<string, string> = {}) =>
     spawnSync(
       process.execPath,
       [
@@ -108,6 +108,12 @@ function brainFixture(t: TestContext) {
           TELEGRAM_BOT_TOKEN: "",
           TELEGRAM_DIGEST_CHAT_ID: "",
           TELEGRAM_ALLOWED_USER_IDS: "",
+          MEMORY_SEARCH_MODE: "",
+          JINA_API_KEY: "",
+          DEEPINFRA_API_KEY: "",
+          MEMORY_EMBED_PROVIDER: "",
+          MEMORY_EMBED_URL: "",
+          ...env,
         },
       },
     );
@@ -287,4 +293,77 @@ globalThis.fetch = async (_url, init) => {
     1,
     "та же проблема на другом языке — без повтора",
   );
+});
+
+/** Brain с origin и двойником эмбеддингов (NODE_OPTIONS доходит до дочернего embed-index):
+ * status — HTTP-код ответа провайдера. Сеть не нужна. */
+function embedFixture(t: TestContext, status: number) {
+  const fx = brainFixture(t);
+  // .gitignore установки из шаблона: граф - производные данные, git его не берёт.
+  copyFileSync(
+    join(ROOT, "vault-template/.gitignore"),
+    join(fx.vault, ".gitignore"),
+  );
+  git(fx.vault, "add", "-A");
+  git(fx.vault, "commit", "-qm", "gitignore");
+  const bare = join(fx.root, "backup.git");
+  git(fx.root, "init", "-q", "--bare", bare);
+  git(fx.vault, "remote", "add", "origin", bare);
+  const calls = join(fx.root, "embed-calls.log");
+  const double = join(fx.root, "embed-double.mjs");
+  writeFileSync(
+    double,
+    `import { appendFileSync } from "node:fs";
+globalThis.fetch = async (url, init) => {
+  appendFileSync(${JSON.stringify(calls)}, String(url) + "\\n");
+  const input = JSON.parse(String(init?.body ?? "{}")).input ?? [];
+  return new Response(
+    JSON.stringify({ data: input.map(() => ({ embedding: [1, 0] })) }),
+    { status: ${status} },
+  );
+};
+`,
+  );
+  const run = (mode: string) =>
+    fx.brain({
+      MEMORY_SEARCH_MODE: mode,
+      JINA_API_KEY: "jina-test-key",
+      NODE_OPTIONS: `--import ${double}`,
+    });
+  const index = join(fx.vault, ".index/embeddings.json");
+  const called = () => existsSync(calls);
+  const backedUp = () =>
+    git(bare, "rev-parse", "HEAD") === git(fx.vault, "rev-parse", "HEAD") &&
+    git(fx.vault, "status", "--porcelain") === "";
+  return { run, index, called, backedUp };
+}
+
+void test("Brain при hybrid пересобирает индекс эмбеддингов и делает бэкап", (t) => {
+  const fx = embedFixture(t, 200);
+  const run = fx.run("hybrid");
+  assert.equal(run.status, 0, run.stderr);
+  assert.ok(fx.called(), "embed-index позвал провайдера эмбеддингов");
+  const { vectors } = JSON.parse(readFileSync(fx.index, "utf8")) as {
+    vectors: Record<string, number[]>;
+  };
+  assert.deepEqual(Object.keys(vectors), ["cards/a.md"]);
+  assert.ok(fx.backedUp());
+});
+
+void test("Brain без hybrid индекс эмбеддингов не трогает", (t) => {
+  const fx = embedFixture(t, 200);
+  const run = fx.run("grep");
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(fx.called(), false);
+  assert.equal(existsSync(fx.index), false);
+  assert.ok(fx.backedUp());
+});
+
+void test("Brain: провал индекса эмбеддингов — бэкап всё равно, код 1 и Alert", (t) => {
+  const fx = embedFixture(t, 500);
+  const run = fx.run("hybrid");
+  assert.equal(run.status, 1, run.stderr);
+  assert.ok(fx.called());
+  assert.ok(fx.backedUp(), "провал индекса не отменяет бэкап");
+  assert.match(run.stderr, /brain alert: .*эмбеддинг/u);
 });
