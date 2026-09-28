@@ -925,6 +925,13 @@ test("daily failure table: only an unreachable or missing beta branch is quiet",
       },
       "error",
     ],
+    // R4: origin и ветка есть, fetch падает локально — ошибка видна, а не тишина.
+    [
+      "fetch (local)",
+      (fx) =>
+        mkdirSync(join(fx.local, ".git", "FETCH_HEAD"), { recursive: true }),
+      "error",
+    ],
     [
       "branch name",
       (fx) => git(fx.local, "config", "iva.updateBranch", "a..b"),

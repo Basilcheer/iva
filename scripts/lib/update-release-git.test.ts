@@ -194,11 +194,11 @@ void test("iva beta — вершина ветки beta; iva stable — выпу�
   git(repo, "config", "iva.updateBranch", "main");
   const target = (installed: string) =>
     resolveReleaseTarget({ git: (...args) => gitAt(repo, args), installed });
-  assert.equal(setBeta(home, true), true);
+  assert.equal(setBeta(home, true), "ok");
   const beta = await target(fx.first);
   assert.equal(beta.branch, "beta");
   assert.equal(beta.targetHead, tip);
-  assert.equal(setBeta(home, false), true);
+  assert.equal(setBeta(home, false), "ok");
   const stable = await target(tip);
   assert.equal(stable.branch, "main");
   assert.equal("tag" in stable && stable.tag, "v1.0.0");
@@ -307,6 +307,7 @@ void test("resolver failure table: a failed step refuses, never a target below t
     step: string;
     setup: () => void;
     fail?: RegExp;
+    code?: number;
     installed: string;
     expect: "unavailable" | "other";
   };
@@ -350,6 +351,34 @@ void test("resolver failure table: a failed step refuses, never a target below t
         writeFileSync(join(fx.mirror, "config.lock"), "");
       },
     },
+    // R4: merge-base упал (нет промежуточного объекта), а не ответил «не предок».
+    {
+      step: "merge-base",
+      installed: fx.betaTip,
+      expect: "other",
+      setup: () =>
+        git(fx.seed, "push", "-q", "-f", "origin", `${older}:refs/heads/beta`),
+      fail: /^merge-base --is-ancestor/u,
+      code: 128,
+    },
+    // R4: прежний opt-in без активного коммита — отказ и ветка не переписана.
+    {
+      step: "migration before notBelow",
+      installed: "ab".repeat(20),
+      expect: "other",
+      setup: () => {
+        git(fx.mirror, "config", "iva.updateBranch", "main");
+        fx.beta("true");
+      },
+    },
+    // R4: origin отвечает, ветка есть, а fetch падает локально (FETCH_HEAD не пишется).
+    {
+      step: "fetch (local)",
+      installed: fx.betaTip,
+      expect: "other",
+      setup: () =>
+        mkdirSync(join(fx.mirror, "FETCH_HEAD"), { recursive: true }),
+    },
     {
       step: "fetch tags",
       installed: fx.first,
@@ -362,9 +391,21 @@ void test("resolver failure table: a failed step refuses, never a target below t
     git(fx.seed, "push", "-q", "-f", "origin", `${fx.betaTip}:refs/heads/beta`);
     reset();
     row.setup();
+    const config = () =>
+      ["iva.updateBranch", "iva.beta"].map(
+        (key) =>
+          spawnSync("git", ["-C", fx.mirror, "config", "--get", key], {
+            encoding: "utf8",
+          }).stdout,
+      );
+    const before = JSON.stringify(config());
     const gitDouble = (...args: string[]) =>
       row.fail?.test(args.join(" "))
-        ? Promise.resolve({ code: 1, stdout: "", stderr: "fatal: injected" })
+        ? Promise.resolve({
+            code: row.code ?? 1,
+            stdout: "",
+            stderr: "fatal: injected",
+          })
         : gitAt(fx.mirror, args);
     const outcome = await resolveReleaseTarget({
       git: gitDouble,
@@ -376,6 +417,11 @@ void test("resolver failure table: a failed step refuses, never a target below t
       .then((target) => `target ${target.sha}`)
       .catch((error: Error) => `refused: ${error.message}`);
     rmSync(join(fx.mirror, "config.lock"), { force: true });
+    rmSync(join(fx.mirror, "FETCH_HEAD"), { recursive: true, force: true });
+    if (aim.startsWith("refused") && JSON.stringify(config()) !== before)
+      broken.push(
+        `${row.step}: config changed on refusal ${JSON.stringify(config())}`,
+      );
     const unavailable = /beta branch is unavailable/u.test(aim);
     if (outcome.startsWith("target") && outcome !== `target ${row.installed}`)
       if (row.step !== "fetch tags") broken.push(`${row.step}: ${outcome}`);

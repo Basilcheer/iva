@@ -124,7 +124,7 @@ void test("iva beta: запись ветки не прошла — флаг не
   const fx = install(t);
   writeFileSync(join(fx.home, "repo", "config.lock"), "");
   const { setBeta } = await import("../lib/update-channel.ts");
-  assert.equal(setBeta(fx.home, true), false);
+  assert.equal(setBeta(fx.home, true), "unchanged");
   assert.equal(fx.beta(fx.home), "");
   assert.equal(fx.beta(join(fx.home, "repo")), "");
   const screens: string[] = [];
@@ -231,7 +231,7 @@ void test("setBeta failure table: any single failed write leaves every key as it
         const result = setBeta(fx.home, on);
         delete process.env.IVA_FAIL_GIT;
         const after = JSON.stringify(keys());
-        if (result || after !== before)
+        if (result !== "unchanged" || after !== before)
           broken.push(
             `on=${on} ${repo} ${write}: ${result} ${before} → ${after}`,
           );
@@ -251,4 +251,37 @@ void test("iva beta with git config locked: the refusal names the lock", async (
   });
   assert.equal(refused.length, 1);
   assert.match(refused[0], /another process.*try again/u);
+});
+
+// R4 (Sol 3.2): восстановительная запись тоже не прошла (lock держится) — механизма нет,
+// но команда говорит, что настройка могла записаться частично, и просит повторить.
+void test("iva beta: the restore write fails too — the refusal says it may be partly written", async (t) => {
+  const fx = install(t);
+  const bin = mkdtempSync(join(tmpdir(), "iva-git-double-"));
+  t.after(() => rmSync(bin, { recursive: true, force: true }));
+  const real = execFileSync("sh", ["-c", "command -v git"], {
+    encoding: "utf8",
+  }).trim();
+  writeFileSync(
+    join(bin, "git"),
+    `#!/bin/sh\nif [ -n "$IVA_FAIL_GIT" ] && printf '%s' "$*" | grep -Eq -e "$IVA_FAIL_GIT"; then exit 255; fi\nexec ${real} "$@"\n`,
+  );
+  chmodSync(join(bin, "git"), 0o755);
+  const path = process.env.PATH;
+  process.env.PATH = `${bin}:${path ?? ""}`;
+  // Флаг в checkout не пишется, и возврат прежней ветки (её не было) в checkout тоже.
+  const home = fx.home.replace(/[.*+?^${}()|[\]\\/]/gu, "\\$&");
+  process.env.IVA_FAIL_GIT = `-C (/private)?${home} config --local (iva\\.beta true|--unset-all iva\\.updateBranch)`;
+  t.after(() => {
+    process.env.PATH = path;
+    delete process.env.IVA_FAIL_GIT;
+  });
+  const refused: string[] = [];
+  await dispatchCli(["beta"], createCliMain(fx.home).commands, {
+    bad: (line) => void refused.push(line),
+    help: () => {},
+    exit: ((code: number) => void code) as (code: number) => never,
+  });
+  assert.equal(refused.length, 1);
+  assert.match(refused[0], /may be partly written.*iva beta/u);
 });

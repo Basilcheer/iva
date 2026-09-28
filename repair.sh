@@ -143,8 +143,9 @@ keep=""
 if [ "$branch" = main ] && [ -n "$installed" ]; then
   for head in $heads; do git -C "$INSTALL_DIR" merge-base --is-ancestor "$installed" "$head" && { keep="$installed"; break; }; done
 fi
-checkout_release "$INSTALL_DIR" "$keep" "$tip"
+# Ветка пишется до сброса: не записалась - ничего не сброшено.
 git -C "$INSTALL_DIR" config --local iva.updateBranch "$branch"
+checkout_release "$INSTALL_DIR" "$keep" "$tip"
 say "Local changes to Iva's code were removed." "Локальные правки в коде удалены."
 say "Your .env, data/, vault/ and attachments/ stay in place." "Ваши .env, data/, vault/ и attachments/ остались на месте."
 

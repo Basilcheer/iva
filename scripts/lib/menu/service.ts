@@ -425,16 +425,22 @@ const VERBS: Record<string, Verb> = {
     writeSettings({ menuStyle: args[0] });
     return ctx.show(st, "r"); // корень сразу в новом стиле
   },
-  beta: (_args, st, ctx) =>
-    setBeta(ctx.deps.root, !betaOf(ctx.deps.root))
-      ? ctx.show(st, "svc") // ставится при следующем обновлении
-      : ctx.flows.screen(
-          st,
-          ctx.tr(
+  beta: (_args, st, ctx) => {
+    const result = setBeta(ctx.deps.root, !betaOf(ctx.deps.root));
+    if (result === "ok") return ctx.show(st, "svc"); // ставится при следующем обновлении
+    return ctx.flows.screen(
+      st,
+      result === "partial"
+        ? ctx.tr(
+            "The update setting may be partly written (git config failed). Tap again or run: iva beta / iva stable",
+            "Настройка обновлений могла записаться частично (git config не прошёл). Нажми ещё раз или выполни: iva beta / iva stable",
+          )
+        : ctx.tr(
             "The update setting was not recorded (git config failed). Try again or run: iva beta",
             "Настройка обновлений не записана (git config не прошёл). Повтори или выполни: iva beta",
           ),
-        ),
+    );
+  },
 };
 
 function confirmView(

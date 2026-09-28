@@ -45,10 +45,14 @@ async function fetchBranch(
   const valid = await git("check-ref-format", "--branch", branch);
   if (valid.code !== 0) throw new Error(`invalid update branch: ${branch}`);
   const fetched = await git("fetch", "--prune", remote, `refs/heads/${branch}`);
-  if (fetched.code !== 0)
-    throw new BranchUnavailableError(
-      fetched.stderr || `couldn't fetch ${remote}/${branch}`,
-    );
+  if (fetched.code !== 0) {
+    // Недоступна — только если origin не ответил или ветки у него нет; иначе сбой здесь.
+    const listed = await git("ls-remote", remote, `refs/heads/${branch}`);
+    const reason = fetched.stderr || `couldn't fetch ${remote}/${branch}`;
+    throw listed.code !== 0 || !output(listed)
+      ? new BranchUnavailableError(reason)
+      : new Error(reason);
+  }
   return requireGit(git, "rev-parse", "FETCH_HEAD");
 }
 
@@ -161,8 +165,17 @@ async function notBelow(git: Git, target: string, installed?: string) {
   if (!installed || !target) return target;
   const at = await installedIn(git, installed);
   if (at === target) return target;
-  const older = await git("merge-base", "--is-ancestor", target, at);
-  return older.code === 0 ? at : target;
+  return (await isAncestor(git, target, at)) ? at : target;
+}
+
+/** Предок ли: код 0 — да, 1 — нет, любой другой — не проверено, отказ. */
+async function isAncestor(git: Git, older: string, newer: string) {
+  const { code } = await git("merge-base", "--is-ancestor", older, newer);
+  if (code !== 0 && code !== 1)
+    throw new Error(
+      "can't check whether the target is older than the installed commit (git merge-base failed); nothing was installed",
+    );
+  return code === 0;
 }
 
 type UpdateTarget = Awaited<ReturnType<typeof resolveUpdateTarget>>;
@@ -176,13 +189,16 @@ async function betaTarget(
 ) {
   let target = resolved;
   const flag = await readBeta(git);
-  if (flag && (!target.configured || target.branch === DEFAULT_UPDATE_BRANCH)) {
+  const migrate =
+    flag && (!target.configured || target.branch === DEFAULT_UPDATE_BRANCH);
+  if (migrate) {
     const targetHead = await fetchBranch(git, remote, BETA_BRANCH);
-    await persistUpdateBranch(git, BETA_BRANCH);
     target = { ...target, branch: BETA_BRANCH, configured: true, targetHead };
   }
   if (!flag && target.branch !== BETA_BRANCH) return null;
   const head = await notBelow(git, target.targetHead, installed);
+  // Ветка переписывается, только когда цель получена и проверена.
+  if (migrate) await persistUpdateBranch(git, BETA_BRANCH);
   return { ...target, beta: true, targetHead: head };
 }
 
@@ -219,9 +235,7 @@ export async function resolveReleaseTarget(
   const installed = options.installed
     ? await installedIn(git, options.installed)
     : "";
-  const ahead =
-    installed &&
-    (await git("merge-base", "--is-ancestor", release, installed)).code === 0;
+  const ahead = installed && (await isAncestor(git, release, installed));
   return {
     ...target,
     beta: false,
@@ -233,7 +247,7 @@ export async function resolveReleaseTarget(
 }
 
 /** Где лежит iva.beta: git установки и её зеркало (обновление читает зеркало). */
-export function betaRepos(root: string): string[] {
+function betaRepos(root: string): string[] {
   const install = classifyRoot(root);
   const repos = new Set([install.home, gitRootFor(install)]);
   const isRepo = (dir: string) =>
@@ -255,7 +269,10 @@ export function betaOf(root: string): boolean {
 
 /** iva beta / stable и меню: ветка и флаг во всех репозиториях установки. Любая запись не
  * прошла — прежние значения возвращаются везде, false. */
-export function setBeta(root: string, on: boolean): boolean {
+export function setBeta(
+  root: string,
+  on: boolean,
+): "ok" | "unchanged" | "partial" | "no-repo" {
   const git = (repo: string, args: string[]) =>
     spawnSync("git", ["-C", repo, "config", "--local", ...args], {
       encoding: "utf8",
@@ -271,12 +288,13 @@ export function setBeta(root: string, on: boolean): boolean {
     [0, value ? 0 : 5].includes(
       git(repo, value ? [key, value] : ["--unset-all", key]).status!,
     );
-  const ok = repos.every((repo) =>
-    keys.every((key, k) => put(repo, key, want[k])),
+  if (!repos.length) return "no-repo";
+  // Возвращается только то, что записалось: неудачная запись файл не трогала.
+  const written: Array<[number, number]> = [];
+  const ok = repos.every((repo, r) =>
+    keys.every((key, k) => put(repo, key, want[k]) && written.push([r, k])),
   );
-  if (!ok)
-    repos.forEach((repo, r) =>
-      keys.forEach((key, k) => put(repo, key, before[r][k])),
-    );
-  return repos.length > 0 && ok;
+  if (ok) return "ok";
+  const back = written.map(([r, k]) => put(repos[r], keys[k], before[r][k]));
+  return back.every(Boolean) ? "unchanged" : "partial";
 }

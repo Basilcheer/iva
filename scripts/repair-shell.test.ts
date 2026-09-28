@@ -553,8 +553,22 @@ test("repair failure table: every step fails alone, nothing is left half-done or
   const fx = failureTable(t);
   const same = (a: object, b: object) =>
     JSON.stringify(a) === JSON.stringify(b);
-  const done = (after: ReturnType<typeof fx.state>) =>
-    after.head === fx.tip && (after.branch === "beta" || after.flag === "true");
+  // Доведено: код 0, вершина beta и ветка beta. Не доведено: ненулевой код, HEAD и
+  // рабочее дерево как были; ветка может быть уже переписана (запись идёт до сброса,
+  // следующий ремонт доводит), флаг — как был.
+  const done = (after: ReturnType<typeof fx.state>, code: number) =>
+    code === 0 && after.head === fx.tip && after.branch === "beta";
+  const kept = (
+    after: ReturnType<typeof fx.state>,
+    before: ReturnType<typeof fx.state>,
+    code: number,
+  ) =>
+    code !== 0 &&
+    same(
+      [after.head, after.tree, after.flag],
+      [before.head, before.tree, before.flag],
+    ) &&
+    [before.branch, "beta"].includes(after.branch);
   const broken: string[] = [];
   // Без отказа: бета по ветке без флага и прежний opt-in (флаг при main) — вершина beta.
   for (const legacy of [false, true]) {
@@ -570,7 +584,7 @@ test("repair failure table: every step fails alone, nothing is left half-done or
     const before = fx.seed(true);
     const code = fx.attempt(step);
     const after = fx.state();
-    if (!(same(after, before) ? code !== 0 : done(after)))
+    if (!done(after, code) && !kept(after, before, code))
       broken.push(`${step}: exit ${code}, ${JSON.stringify(after)}`);
   }
   assert.deepEqual(broken, []);
