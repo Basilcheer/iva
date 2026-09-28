@@ -1,5 +1,7 @@
 # Changelog
 
+## [Unreleased]
+
 ## [0.4.9] - 2026-09-28
 
 - 💾 **Переписка на Claude снова читается из кэша**: метка кэша закрепляется на стабильном префиксе переписки вместо меняющегося хвоста, поэтому следующие запросы переиспользуют уже переданный контекст. Claude conversations use the prompt cache again: the cache breakpoint stays on a stable conversation prefix instead of the changing tail, so later requests reuse the context already sent.

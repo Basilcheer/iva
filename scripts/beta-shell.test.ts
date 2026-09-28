@@ -65,7 +65,7 @@ test("beta.sh on a 0.4.8 installation: branch beta and iva.beta in the mirror, t
   git(dir, "init", "-q", "--bare", "-b", "main", join(home, "repo"));
   git(join(home, "repo"), "config", "iva.updateBranch", "main");
 
-  const result = run({ IVA_TEST_FLIP: "0.4.9-beta.1-abcdef012345" });
+  const result = run({ IVA_TEST_FLIP: "0.4.10-beta.1-abcdef012345" });
 
   assert.equal(result.status, 0, result.stderr);
   assert.equal(config(join(home, "repo"), "iva.updateBranch"), "beta");
@@ -79,7 +79,7 @@ test("beta.sh on a 0.4.8 installation: branch beta and iva.beta in the mirror, t
   assert.match(result.stdout, /was main/u);
   assert.match(
     readFileSync(join(home, "data/active.json"), "utf8"),
-    /0\.4\.9-beta\.1/u,
+    /0\.4\.10-beta\.1/u,
   );
 });
 
@@ -87,7 +87,7 @@ test("beta.sh on a checkout: the checkout's git gets the setting, and a missing 
   const { home, handoff, run } = fixture(t);
   mkdirSync(join(home, "bin"), { recursive: true });
   writeFileSync(join(home, "bin/iva.mjs"), STUB);
-  writeFileSync(join(home, "package.json"), '{"version":"0.4.9-beta.1"}\n');
+  writeFileSync(join(home, "package.json"), '{"version":"0.4.10-beta.1"}\n');
   git(home, "init", "-q", "-b", "main");
   git(home, "config", "iva.updateBranch", "main");
 
@@ -124,7 +124,7 @@ function versioned(fx: ReturnType<typeof fixture>, current = true) {
 test("beta.sh finds a versioned installation without current, like repair.sh", (t) => {
   const fx = fixture(t);
   const version = versioned(fx, false);
-  const result = fx.run({ IVA_TEST_FLIP: "0.4.9-beta.1-abcdef012345" });
+  const result = fx.run({ IVA_TEST_FLIP: "0.4.10-beta.1-abcdef012345" });
   assert.equal(result.status, 0, result.stderr);
   assert.equal(
     readFileSync(fx.handoff, "utf8"),
@@ -150,7 +150,7 @@ test("beta.sh names the branch the installation was on", (t) => {
   const fx = fixture(t);
   versioned(fx);
   git(join(fx.home, "repo"), "config", "iva.updateBranch", "release/0.4.0");
-  const result = fx.run({ IVA_TEST_FLIP: "0.4.9-beta.1-abcdef012345" });
+  const result = fx.run({ IVA_TEST_FLIP: "0.4.10-beta.1-abcdef012345" });
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /was release\/0\.4\.0/u);
 });
