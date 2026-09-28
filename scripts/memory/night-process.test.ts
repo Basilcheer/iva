@@ -1499,6 +1499,22 @@ const auroraDay = () => [
   B({ card: "cards/projects/аврора", truth: "Проект запуска" }),
 ];
 
+void test("Report ночи: дни с выжимкой уходят швом Notice; без чата текст отчёта — в журнал", async (t) => {
+  const fx = await fixture(t);
+  day(fx, "## 10:00 [text]\nЗапустил проект Аврора\n");
+  writeFileSync(
+    join(fx.data, "settings.json"),
+    JSON.stringify({ memoryReports: { enabled: true } }),
+  );
+  fx.model.replies = [A()];
+  const result = await night(fx);
+  assert.equal(result.code, 0, result.stderr);
+  assert.match(
+    result.stderr,
+    /Report: no chat configured\n[\s\S]*Запущен проект Аврора/u,
+  );
+});
+
 void test("Report ночи по-русски: 3 строки человеческими словами, без служебных строк и дат ISO", async (t) => {
   const fx = await fixture(t);
   day(fx, "## 10:00 [text]\nЗапустил проект Аврора\n");
