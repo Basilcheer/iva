@@ -45,6 +45,8 @@ const CORE_TEMPLATE =
   "# CORE\n\n## Пользователь\n\n## Предпочтения\n\n## Активные цели\n";
 const DAY_MS = 86_400_000;
 const jobs: string[] = [];
+// Card этой ночи для Report: новые и дополненные фактом.
+const tally = { created: new Set<string>(), updated: new Set<string>() };
 // Alert — парой en/ru: текст на языке владельца, суть для дросселя — английская строка.
 const alerts: Array<[string, string]> = [];
 let T: notice.Translate = (_english, russian) => russian;
@@ -579,6 +581,9 @@ async function applyCards(
   for (const answer of cache.pass!.a!) day.links(answer);
   files.push(...day.write());
   if (!(await commit(`memory day ${cache.date}: Card`, files))) return false;
+  const created = new Set(Object.values(cache.pass!.created));
+  for (const card of day.touched)
+    (created.has(card) ? tally.created : tally.updated).add(card);
   cache.touched = [...new Set([...cache.touched, ...day.touched])];
   cache.pass!.truth = truthCandidates(day.touched, cache.date);
   return true;
@@ -1045,16 +1050,22 @@ async function notify(key: string, english: string, russian: string) {
   });
 }
 
-async function report(done: readonly string[]): Promise<void> {
+async function report(done: readonly string[], failedDays: number) {
   const send = telegram();
-  const lines = done.map((date) => `${date}: ${gistOf(date)}`);
-  const text = ["Ночь памяти", ...lines, ...jobs].join("\n");
+  const text = notice.nightReport(T, {
+    days: done.map((date) => ({ date, gist: gistOf(date) })),
+    created: tally.created.size,
+    updated: [...tally.updated].filter((card) => !tally.created.has(card))
+      .length,
+    failedDays,
+    problems: jobs.length > 0,
+  });
   const delivery = await notice.deliverMemoryReport({
     dataDir,
     settings,
     ranBefore: notice.rollupRanBefore(dataDir, vault),
     report: text,
-    tr: await notice.noticeTranslator(),
+    tr: T,
     send: send ? { report: send, notice: send } : null,
   });
   if (delivery.status === "failed")
@@ -1201,7 +1212,7 @@ async function night(manual: string | undefined): Promise<number> {
   fallbacks.push(...(await periods()));
   cleanupCaches();
   await alertsAtEnd(today, queueLeft, fallbacks);
-  if (done.length) await report(done);
+  if (done.length) await report(done, ready.length - done.length);
   const { calls, inputTokens, unknownUsage, usageLost } = call.ceiling;
   if (usageLost) jobs.push(`usage.jsonl не записан: ${usageLost}`);
   const usage = `${calls} call(s), ${inputTokens} input tokens`;

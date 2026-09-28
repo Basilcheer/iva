@@ -101,6 +101,68 @@ export function memoryReportTail(tr: Translate): string {
   );
 }
 
+/** Факты ночи для Report: разобранные дни с выжимкой, Card, провалы. */
+export type NightFacts = {
+  readonly days: ReadonlyArray<{
+    readonly date: string;
+    readonly gist: string;
+  }>;
+  readonly created: number;
+  readonly updated: number;
+  readonly failedDays: number;
+  readonly problems: boolean;
+};
+
+const ruPlural = (n: number, one: string, few: string, many: string) => {
+  const [d10, d100] = [n % 10, n % 100];
+  if (d10 === 1 && d100 !== 11) return one;
+  return d10 >= 2 && d10 <= 4 && (d100 < 12 || d100 > 14) ? few : many;
+};
+
+/** Report ночи: 3–5 строк от первого лица на языке владельца, собранных кодом из фактов
+ * ночи. Служебных строк и путей нет; провалы — одной строкой. */
+export function nightReport(tr: Translate, facts: NightFacts): string {
+  const n = facts.days.length;
+  const when = new Intl.DateTimeFormat(tr("en-US", "ru-RU"), {
+    day: "numeric",
+    month: "long",
+    timeZone: "UTC",
+  });
+  const human = (date: string) => when.format(new Date(`${date}T00:00:00Z`));
+  const { created, updated, failedDays } = facts;
+  const lines = [
+    tr(
+      `Last night I went through ${n} ${n === 1 ? "day" : "days"} of memory.`,
+      `Ночью я разобрала ${n} ${ruPlural(n, "день", "дня", "дней")} памяти.`,
+    ),
+    created + updated
+      ? tr(
+          `New Cards: ${created}, updated: ${updated}.`,
+          `Новых карточек: ${created}, дополнено: ${updated}.`,
+        )
+      : tr("No new facts for Cards.", "Новых фактов для карточек не было."),
+    ...facts.days
+      .slice(-2)
+      .filter((day) => day.gist)
+      .map((day) => `${human(day.date)}: ${day.gist}`),
+  ];
+  if (failedDays)
+    lines.push(
+      tr(
+        `Not everything worked: ${failedDays} ${failedDays === 1 ? "day was" : "days were"} not processed, I will try again next night.`,
+        `Не всё получилось: ${failedDays} ${ruPlural(failedDays, "день не разобран", "дня не разобраны", "дней не разобраны")}, попробую следующей ночью.`,
+      ),
+    );
+  else if (facts.problems)
+    lines.push(
+      tr(
+        "Some small changes were not saved; the details are in the log: iva logs.",
+        "Часть мелких правок не записалась; подробности — в журнале: iva logs.",
+      ),
+    );
+  return lines.join("\n");
+}
+
 /** Одноразовый Notice после апдейта: утро замолчало не потому, что что-то сломалось. */
 export function memoryReportsOffNotice(tr: Translate): string {
   return tr(

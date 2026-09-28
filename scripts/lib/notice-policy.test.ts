@@ -22,6 +22,7 @@ import {
   deliverMemoryReport,
   memoryReportTail,
   memoryReportsEnabled,
+  nightReport,
   noticeLang,
   ownerKnowsTheSwitch,
   noticeTranslator,
@@ -30,6 +31,7 @@ import {
   type ReportsOffNotice,
   type Translate,
 } from "./notice-policy.ts";
+import fc from "fast-check";
 import { sendTelegramHtml } from "./telegram-send.ts";
 import { runScheduledJob } from "#lib/schedule-runner.ts";
 
@@ -950,4 +952,61 @@ test("the weekly throttle works on an installation whose agent/ is gone", (t) =>
       .lastSentAt,
     "number",
   );
+});
+
+// Report ночи: при любых фактах 2–5 строк, провал — одна строка, дат ISO и служебного
+// текста нет. Провал печатает seed; повтор: IVA_NIGHT_REPORT_SEED=<seed>.
+const REPORT_SEED = Number(process.env.IVA_NIGHT_REPORT_SEED ?? 20_260_928);
+
+test(`nightReport: форма при любых фактах (seed ${REPORT_SEED})`, () => {
+  const date = fc
+    .date({
+      min: new Date("2020-01-01T00:00:00Z"),
+      max: new Date("2030-12-31T00:00:00Z"),
+      noInvalidDate: true,
+    })
+    .map((value) => value.toISOString().slice(0, 10));
+  const facts = fc.record({
+    days: fc.array(
+      fc.record({ date, gist: fc.constantFrom("", "Запуск Авроры", "Week") }),
+      { minLength: 1, maxLength: 6 },
+    ),
+    created: fc.nat(30),
+    updated: fc.nat(30),
+    failedDays: fc.nat(4),
+    problems: fc.boolean(),
+  });
+  fc.assert(
+    fc.property(facts, fc.constantFrom(EN, RU), (value, tr) => {
+      const lines = nightReport(tr, value).split("\n");
+      assert.ok(lines.length >= 2 && lines.length <= 5, lines.join("|"));
+      assert.equal(
+        lines.filter((line) => /\d{4}-\d{2}-\d{2}/u.test(line)).length,
+        0,
+      );
+      const failure = /Not everything|Не всё|Some small|Часть мелких/u;
+      const failures = lines.filter((line) => failure.test(line)).length;
+      assert.equal(failures, value.failedDays || value.problems ? 1 : 0);
+    }),
+    { seed: REPORT_SEED, numRuns: 300 },
+  );
+});
+
+test("nightReport: русские склонения дней", () => {
+  const facts = (n: number, failed: number) => ({
+    days: Array.from({ length: n }, () => ({ date: "2026-09-26", gist: "" })),
+    created: 0,
+    updated: 0,
+    failedDays: failed,
+    problems: false,
+  });
+  assert.match(
+    nightReport(RU, facts(1, 0)),
+    /^Ночью я разобрала 1 день памяти/u,
+  );
+  assert.match(nightReport(RU, facts(3, 0)), /разобрала 3 дня памяти/u);
+  assert.match(nightReport(RU, facts(5, 0)), /разобрала 5 дней памяти/u);
+  assert.match(nightReport(RU, facts(11, 0)), /разобрала 11 дней памяти/u);
+  assert.match(nightReport(RU, facts(1, 2)), /2 дня не разобраны/u);
+  assert.match(nightReport(EN, facts(2, 1)), /1 day was not processed/u);
 });

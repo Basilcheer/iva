@@ -1476,23 +1476,98 @@ void test("отказ общего коммита правок владельц�
   assert.equal(existsSync(summary(fx)), false);
 });
 
-void test("Report ночи: дни с выжимкой уходят швом Notice; без чата текст отчёта — в журнал", async (t) => {
-  const fx = await fixture(t);
-  day(fx, "## 10:00 [text]\nЗапустил проект Аврора\n");
+/** Report ночи без чата печатается в журнал после строки «Report: no chat configured». */
+const reportOf = (stderr: string) =>
+  /Report: no chat configured\n([\s\S]*?)(?:\nmemory-night: |$)/u.exec(
+    stderr,
+  )?.[1] ?? null;
+
+function reportsOn(fx: Fixture, language: string) {
   writeFileSync(
     join(fx.data, "settings.json"),
-    JSON.stringify({ memoryReports: { enabled: true } }),
+    JSON.stringify({ language, memoryReports: { enabled: true } }),
   );
-  fx.model.replies = [A()];
+}
+
+const auroraDay = () => [
+  A({
+    new_cards: [newAurora],
+    facts: [
+      { card: "Аврора", text: "Проект запущен", src: "e1", quote: "Запустил" },
+    ],
+  }),
+  B({ card: "cards/projects/аврора", truth: "Проект запуска" }),
+];
+
+void test("Report ночи по-русски: 3 строки человеческими словами, без служебных строк и дат ISO", async (t) => {
+  const fx = await fixture(t);
+  day(fx, "## 10:00 [text]\nЗапустил проект Аврора\n");
+  reportsOn(fx, "ru");
+  fx.model.replies = auroraDay();
   const result = await night(fx);
   assert.equal(result.code, 0, result.stderr);
-  assert.match(
+  assert.equal(
+    reportOf(result.stderr),
+    [
+      "Ночью я разобрала 1 день памяти.",
+      "Новых карточек: 1, дополнено: 0.",
+      "26 сентября: Запущен проект Аврора",
+    ].join("\n"),
     result.stderr,
-    new RegExp(
-      `Report: no chat configured\\n[\\s\\S]*${DATE}: Запущен проект Аврора`,
-      "u",
-    ),
   );
+});
+
+void test("Report ночи по-английски при language=en", async (t) => {
+  const fx = await fixture(t);
+  day(fx, "## 10:00 [text]\nЗапустил проект Аврора\n");
+  reportsOn(fx, "en");
+  fx.model.replies = auroraDay();
+  const result = await night(fx);
+  assert.equal(result.code, 0, result.stderr);
+  assert.equal(
+    reportOf(result.stderr),
+    [
+      "Last night I went through 1 day of memory.",
+      "New Cards: 1, updated: 0.",
+      "September 26: Запущен проект Аврора",
+    ].join("\n"),
+    result.stderr,
+  );
+});
+
+void test("Report ночи с провалом: одна человеческая строка, служебного текста нет", async (t) => {
+  const fx = await fixture(t);
+  day(fx, "## 10:00 [text]\nПервый день\n", "2026-09-25");
+  day(fx, "## 10:00 [text]\nЗапустил проект Аврора\n");
+  reportsOn(fx, "ru");
+  fx.model.replies = [
+    { text: "Не понял задачу" },
+    { text: "Вот ответ словами" },
+    A(),
+  ];
+  const result = await night(fx, null);
+  assert.equal(result.code, 1, result.stderr);
+  const report = reportOf(result.stderr) ?? "";
+  assert.equal(
+    report,
+    [
+      "Ночью я разобрала 1 день памяти.",
+      "Новых фактов для карточек не было.",
+      "26 сентября: Запущен проект Аврора",
+      "Не всё получилось: 1 день не разобран, попробую следующей ночью.",
+    ].join("\n"),
+    result.stderr,
+  );
+  assert.doesNotMatch(report, /ответ A|не по форме|\d{4}-\d{2}-\d{2}/u);
+});
+
+void test("пустая ночь Report не шлёт", async (t) => {
+  const fx = await fixture(t);
+  reportsOn(fx, "ru");
+  const result = await night(fx, null);
+  assert.equal(result.code, 0, result.stderr);
+  assert.equal(reportOf(result.stderr), null, result.stderr);
+  assert.equal(fx.model.prompts.length, 0);
 });
 
 void test("занятый дневной замок Card: ночь не пишет Card и ждёт; после освобождения доделывает без второго A (#1)", async (t) => {
