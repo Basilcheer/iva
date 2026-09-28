@@ -731,8 +731,12 @@ function toolCall(
     name: ivaToolName(text(block.name), inventory),
     // Отсутствующие аргументы — пустой объект (так их шлёт Anthropic для инструмента без
     // параметров), а всё остальное уезжает как есть, включая null: подменять значение модели
-    // на своё — это выдумывать вызов, которого не было.
-    input: JSON.stringify(block.input === undefined ? {} : block.input),
+    // на своё — это выдумывать вызов, которого не было. `partial_json` — сырые аргументы, которые
+    // реле не разобрало как JSON (blockStop): их разбирает и отвергает eve.
+    input:
+      typeof block.partial_json === "string"
+        ? block.partial_json
+        : JSON.stringify(block.input === undefined ? {} : block.input),
   };
 }
 

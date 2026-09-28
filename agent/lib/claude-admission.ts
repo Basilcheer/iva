@@ -324,15 +324,16 @@ class SseCapture {
     if (partial === undefined) return;
     const block = this.message.content[index];
     if (block === undefined) return;
+    this.args.delete(index);
     try {
       // Инструмент без аргументов API стримит пустым `partial_json` (Fable, 22.09.2026):
       // пустая строка — это `{}`, а не недоклеенный JSON.
       block.input = partial.trim() === "" ? {} : JSON.parse(partial);
-      this.args.delete(index);
     } catch {
-      // Недоклеенный JSON — это не целый ответ: запись остаётся в args, и признак целостности
-      // (`message_stop`) такую попытку не пропустит.
-      return;
+      // Блок закрыт, а аргументы не JSON — это ошибка модели, а не обрыв: сырые аргументы
+      // уходят в eve как есть (`partial_json`), и eve отвечает модели ошибкой аргументов. Обрыв
+      // до конца блока оставляет запись в args, и `message_stop` такой ответ целым не назовёт.
+      block.partial_json = partial;
     }
   }
 

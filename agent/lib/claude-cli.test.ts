@@ -1914,6 +1914,86 @@ test("обрыв ответа API назван обрывом, а не отка�
   assert.match(error.message, /broke off before message_stop/u);
 });
 
+// Аудит ошибок модели, находка 4: вызов закрыт и `message_stop` пришёл, а аргументы модели не
+// JSON. Шаг не падает обрывом API: сырые аргументы уходят в eve, eve отвечает модели ошибкой
+// аргументов, и история следующего шага собирается.
+test("битые аргументы вызова при целом ответе доходят до модели ошибкой, ход идёт дальше", async (t) => {
+  const broken = relayAnswer("В Ташкенте +31").map((event) =>
+    event.replace(
+      JSON.stringify('{"city":"Ташкент"}'),
+      JSON.stringify('{"city":'),
+    ),
+  );
+  assert.notDeepEqual(broken, relayAnswer("В Ташкенте +31"));
+  const upstream = await stubApi(t, broken);
+  fakeCli(t, "relay", { FAKE_CLAUDE_PRINT: "В Ташкенте +31" });
+  const claude = makeClaudeCliModel(MODEL, {
+    silenceTimeoutMs: 10_000,
+    upstream: upstream.url,
+  });
+  const prompts: LanguageModelV4Prompt[] = [];
+  const model = new MockLanguageModelV4({
+    doStream: async (options) => {
+      prompts.push(options.prompt);
+      if (prompts.length === 1) return claude.doStream(options);
+      return {
+        stream: simulateReadableStream<LanguageModelV4StreamPart>({
+          chunks: [
+            { type: "text-start", id: "t" },
+            { type: "text-delta", id: "t", delta: "Готово" },
+            { type: "text-end", id: "t" },
+            {
+              type: "finish",
+              finishReason: { unified: "stop", raw: "end_turn" },
+              usage: {
+                inputTokens: {
+                  total: 1,
+                  noCache: 1,
+                  cacheRead: 0,
+                  cacheWrite: 0,
+                },
+                outputTokens: { total: 1, text: 1, reasoning: 0 },
+              },
+            },
+          ],
+        }),
+      };
+    },
+  });
+  let executed = 0;
+  const agent = new ToolLoopAgent({
+    model,
+    stopWhen: isStepCount(3),
+    tools: {
+      weather: tool({
+        description: "Погода в городе",
+        inputSchema: jsonSchema<{ city: string }>(
+          WEATHER.inputSchema as Parameters<typeof jsonSchema>[0],
+        ),
+        execute: () => {
+          executed += 1;
+          return "+30";
+        },
+      }),
+    },
+  });
+  const result = await agent.stream({ prompt: "привет" });
+  assert.equal(await result.text, "Готово");
+  assert.equal(prompts.length, 2, "после битых аргументов был второй шаг");
+  assert.equal(executed, 0);
+  const [answer] =
+    prompts[1]
+      ?.filter((message) => message.role === "tool")
+      .flatMap((message) => message.content) ?? [];
+  assert.ok(answer?.type === "tool-result");
+  assert.equal(answer.toolCallId, "toolu_relay");
+  assert.match(
+    answer.output.type === "error-text" ? answer.output.value : "",
+    /Invalid input for tool weather/u,
+  );
+  assert.doesNotThrow(() => claudeHistory(prompts[1] ?? []));
+});
+
 test("целый ответ API, начатый словами «API Error», — ответ модели, а не отказ", async (t) => {
   const upstream = await stubApi(
     t,

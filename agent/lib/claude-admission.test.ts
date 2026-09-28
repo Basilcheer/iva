@@ -489,3 +489,61 @@ test("инструмент без аргументов: пустой partial_jso
   const call = admission.capture.message?.content[1] as { input?: unknown };
   assert.deepEqual(call.input, {});
 });
+
+// Аудит ошибок модели, находка 4: вызов закрыт, `message_stop` пришёл, а аргументы модели не JSON.
+// Это ошибка модели, а не обрыв API: ответ целый, сырые аргументы уходят в eve, и eve отвечает
+// модели ошибкой аргументов. Настоящий обрыв до `message_stop` по-прежнему не целый ответ.
+function withArgs(partial: string, until?: string): unknown[] {
+  const events = answerEvents().map((event) => {
+    const row = event as { type: string; index?: number; delta?: unknown };
+    if (row.type === "content_block_delta" && row.index === 1)
+      return { ...row, delta: { type: "input_json_delta", partial_json: "" } };
+    return event;
+  });
+  const at = events.findIndex(
+    (event) => (event as { type: string; index?: number }).index === 1,
+  );
+  events.splice(at + 1, 0, {
+    type: "content_block_delta",
+    index: 1,
+    delta: { type: "input_json_delta", partial_json: partial },
+  });
+  if (until === undefined) return events;
+  const types = events.map((event) => (event as { type: string }).type);
+  return events.slice(0, types.lastIndexOf(until));
+}
+
+test("битые аргументы при пришедшем message_stop — целый ответ с сырыми аргументами", async (t) => {
+  for (const partial of [
+    '{"city":',
+    "{city: Ташкент}",
+    "не json",
+    '{"a":1}}',
+  ]) {
+    const upstream = await fakeUpstream(t, { events: withArgs(partial) });
+    const admission = await startAdmission(upstream.url, 5_000);
+    t.after(() => admission.close());
+    await (await post(admission)).text();
+    assert.equal(admission.capture.complete, true, partial);
+    const call = admission.capture.message?.content[1] as {
+      partial_json?: unknown;
+    };
+    assert.equal(
+      call.partial_json,
+      partial,
+      "аргументы модели уходят как есть",
+    );
+  }
+});
+
+test("обрыв до message_stop с битыми аргументами — не целый ответ", async (t) => {
+  for (const until of ["content_block_stop", "message_delta", "message_stop"]) {
+    const upstream = await fakeUpstream(t, {
+      events: withArgs('{"city":', until),
+    });
+    const admission = await startAdmission(upstream.url, 5_000);
+    t.after(() => admission.close());
+    await (await post(admission)).text();
+    assert.equal(admission.capture.complete, false, until);
+  }
+});
