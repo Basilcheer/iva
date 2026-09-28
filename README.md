@@ -171,7 +171,21 @@ Default model is deepseek-v4-pro, 131k context. On Go it runs about $14–15/mo 
 ## What's New
 
 <details>
-<summary><b>v0.4.8 · 24.09.2026 — expand the latest releases</b></summary>
+<summary><b>v0.4.9 · 28.09.2026 — expand the latest releases</b></summary>
+
+### 28.09.2026
+
+#### v0.4.9
+
+- 🌙 **Nightly memory now runs as four code-driven steps**: short structured requests turn the day into Cards, links, CORE and summaries, while code writes the files. The format reaches every supported provider, facts require exact quotes from the owner, and a concurrent human edit is preserved.
+- 💾 **Claude conversations use the prompt cache again**: each request pins the cache breakpoint to a stable conversation prefix instead of the changing tail, so later requests reuse the context already sent.
+- 🧪 **Releases live in main and beta updates follow the beta branch**: `iva beta` opts in, `iva stable` returns to releases, and updates never move an installation backwards.
+- 🃏 **Cards stay writable after the day, night and merge**: a new Compiled Truth cannot replace Card structure with headings or an open code fence, successful nightly writes clear `truth_pending`, and repeated facts and multiline Card content survive merge.
+- 🧹 **Iva suggests `/new` when a conversation fills its context**: a quiet hint appears once at 50, 75 and 90 percent in a private Telegram chat, resets after compaction and stays out of groups and background turns.
+- 🚑 **Tool schemas work on every provider again**: `write_card` sends one flat object schema for all operations, validates the selected operation itself and tells the model what to correct. A guard checks every tool exactly as eve serializes it.
+- 🔒 **A long Card edit keeps its file lock**: a live holder refreshes the lock while it works, the lock of a crashed holder can still be taken after it becomes stale, and a separate ten-minute fuse prevents a stuck section from holding the lock forever.
+- 🧠 **Nightly Brain reaches the private vault backup again**: the derived link graph is no longer committed, and a missing remote is created or attached only after GitHub confirms that the repository is private.
+- 🔁 **Three observed failures pause that day for the owner**: the catch-up stops retrying it, reports the last cause once and waits for `iva jobs skip memory-daily <date>` before moving on.
 
 ### 24.09.2026
 
@@ -197,16 +211,6 @@ Default model is deepseek-v4-pro, 131k context. On Go it runs about $14–15/mo 
 - 🔗 **Links to nowhere are refused at write time**: `write_card` and `write_file` refuse a markdown file inside the vault whose `[[link]]` points at no file and name the broken targets; weekly, monthly and yearly Rollups link only summaries that exist (#224, thanks @AndyShaman).
 - 📎 **An attachment of any format is not a broken link**: the nightly graph check accepts a link to `attachments/…` with any extension, DOCX included, as long as it is a regular file inside the vault (#229, thanks @yakovmakovets).
 - 🔎 **Glob and grep see the vault through a symlink**: relative `cwd` and `path` start at the vault root, as `read_file` does, and the walk follows symlinked folders without visiting the same real folder twice.
-
-### 22.09.2026
-
-#### v0.4.6
-
-- 🪪 **Claude on a Pro/Max subscription: no key, through the Claude Code CLI, default claude-fable-5-1**: the sixth vendor is `MODEL_PROVIDER=claude`. Iva calls the Claude Code CLI already installed and signed in on the same server and uses it as the model, so tools, memory, reminders, compaction and `/stop` stay hers. The model list comes live from the CLI and shows exactly what the subscription opens.
-- ⏹ **Stop kills the work at once and always gets there**: a stop kills the whole process group immediately, not only the talk with the model, and the button and `/stop` no longer answer "nothing is running" to a turn that has gone quiet. "Stopped" is written only after the agent has confirmed it.
-- ⏳ **The turn status is a loader and a ⏹ button on one line**: in the rich style the word "Working" is gone. The line is the loader, and the ⏹ button sits in that same line. The classic style still keeps the button on its own row under the line, because a plain message cannot hold the button inside the text.
-- 🔘 **The root /menu has no captions, only buttons**: the line under each button that said what it does is gone. The root screen is the title and the button rows.
-- 🔌 **A tool call with no arguments no longer drops the turn**: on Claude, a tool call streamed with an empty argument payload used to fail JSON parsing, so the answer looked unfinished and the turn was retried. Empty arguments are now an empty object, and the answer counts as whole.
 
 </details>
 
