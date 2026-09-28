@@ -161,11 +161,12 @@ async function post(
   admission: Admission,
   path = "/v1/messages",
   headers: Record<string, string> = {},
+  body: string = JSON.stringify({ model: "claude-fable-5-1", stream: true }),
 ): Promise<Response> {
   return await fetch(`${admission.url}${path}`, {
     method: "POST",
     headers: { "content-type": "application/json", ...headers },
-    body: JSON.stringify({ model: "claude-fable-5-1", stream: true }),
+    body,
   });
 }
 
@@ -193,6 +194,61 @@ test("первый запрос уходит на api.anthropic.com с заго�
   assert.equal(request.headers["accept-encoding"], "identity");
   assert.equal(request.headers.host, new URL(upstream.url).host);
   assert.equal(upstream.bodies.length, 1);
+});
+
+test("перенесённая метка уходит с пересчитанным Content-Length", async (t) => {
+  const upstream = await fakeUpstream(t);
+  const queried = [{ type: "text", text: "точный кадр Iva" }];
+  const admission = await startAdmission(upstream.url, 5_000, queried);
+  t.after(() => admission.close());
+  const input = JSON.stringify(
+    {
+      model: "claude-fable-5-1",
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "ранний ответ" }],
+        },
+        {
+          role: "user",
+          content: [
+            ...queried,
+            {
+              type: "text",
+              text: "изменчивый хвост CLI",
+              cache_control: { type: "ephemeral" },
+            },
+          ],
+        },
+      ],
+    },
+    null,
+    2,
+  );
+
+  await (await post(admission, "/v1/messages", {}, input)).text();
+
+  const [request] = upstream.requests;
+  const [body] = upstream.bodies;
+  assert.ok(request !== undefined && body !== undefined);
+  assert.equal(
+    request.headers["content-length"],
+    String(Buffer.byteLength(body)),
+  );
+  assert.notEqual(
+    request.headers["content-length"],
+    String(Buffer.byteLength(input)),
+  );
+  const forwarded = JSON.parse(body) as {
+    messages: { content: Record<string, unknown>[] }[];
+  };
+  assert.deepEqual(forwarded.messages[1]?.content[0]?.cache_control, {
+    type: "ephemeral",
+  });
+  assert.equal(
+    "cache_control" in (forwarded.messages[1]?.content[1] ?? {}),
+    false,
+  );
 });
 
 test("ответ запоминается: блоки, склейка input_json_delta и расход", async (t) => {

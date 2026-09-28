@@ -96,13 +96,25 @@ function dump(extra) {
 }
 
 async function scenario() {
-  if (mode === "relay" || mode === "relay-mismatch") {
+  if (mode === "relay" || mode === "relay-mismatch" || mode === "relay-cache") {
     // Подделка ходит в реле так же, как настоящий CLI: POST на ANTHROPIC_BASE_URL с query,
     // своими заголовками (в том числе секретным) и без ожидания второго ответа.
+    const relayMessages = mode === "relay-cache"
+      ? [
+          { role: "assistant", content: [{ type: "text", text: "stable answer" }] },
+          {
+            role: "user",
+            content: [
+              ...frames.at(-1).message.content,
+              { type: "text", text: "volatile CLI tail", cache_control: { type: "ephemeral" } },
+            ],
+          },
+        ]
+      : [{ role: "user", content: "привет" }];
     const answer = await fetch(process.env.ANTHROPIC_BASE_URL + "/v1/messages?beta=true", {
       method: "POST",
       headers: { "content-type": "application/json", authorization: "Bearer " + (process.env.FAKE_CLAUDE_TOKEN ?? "") },
-      body: JSON.stringify({ model: arg("--model"), stream: true, messages: [{ role: "user", content: "привет" }] }),
+      body: JSON.stringify({ model: arg("--model"), stream: true, messages: relayMessages }),
     });
     const body = await answer.text();
     const received = body
@@ -479,6 +491,7 @@ type SeenRequest = {
   readonly contentLength: string | undefined;
   /** Длина тела, которое заглушка прочитала: с ней сверяется объявленная длина. */
   readonly body: number;
+  readonly payload: unknown;
 };
 
 /** Поднимает заглушку API: адрес получает реле как upstream, запросы — тест. */
@@ -491,13 +504,15 @@ async function stubApi(
     const chunks: Buffer[] = [];
     request.on("data", (chunk: Buffer) => chunks.push(chunk));
     request.on("end", () => {
+      const body = Buffer.concat(chunks);
       seen.push({
         url: request.url,
         authorization: request.headers.authorization,
         acceptEncoding: request.headers["accept-encoding"],
         transferEncoding: request.headers["transfer-encoding"],
         contentLength: request.headers["content-length"],
-        body: Buffer.concat(chunks).length,
+        body: body.length,
+        payload: JSON.parse(body.toString("utf8")) as unknown,
       });
       response.writeHead(200, { "content-type": "text/event-stream" });
       for (const event of events) response.write(event);
@@ -1603,6 +1618,31 @@ test("реле отдаёт наружу пойманный ответ: и те�
   assert.equal(relay.upstreamRequests, 1, "ход — это ровно один запрос к API");
   assert.equal(relay.deniedRequests, 0);
   assert.equal(relay.cacheWriteTokens, 800);
+});
+
+test("адаптер передаёт реле последний спрашивающий кадр", async (t) => {
+  const upstream = await stubApi(t, relayAnswer("Готово"));
+  fakeCli(t, "relay-cache");
+  const model = makeClaudeCliModel(MODEL, {
+    silenceTimeoutMs: 10_000,
+    upstream: upstream.url,
+  });
+
+  await drain(
+    await model.doStream({ prompt: userPrompt("закрепи этот кадр") }),
+  );
+
+  const payload = upstream.seen[0]?.payload as {
+    messages: { content: Record<string, unknown>[] }[];
+  };
+  assert.equal(payload.messages[1]?.content[0]?.text, "закрепи этот кадр");
+  assert.deepEqual(payload.messages[1]?.content[0]?.cache_control, {
+    type: "ephemeral",
+  });
+  assert.equal(
+    "cache_control" in (payload.messages[1]?.content[1] ?? {}),
+    false,
+  );
 });
 
 // Боевая ветка Fable: CLI, получив ответ, идёт за продолжением сам. Реле его отбивает, CLI

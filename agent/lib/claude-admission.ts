@@ -29,6 +29,7 @@ import {
 import { request as httpsRequest } from "node:https";
 import { StringDecoder } from "node:string_decoder";
 import { setTimeout as delay } from "node:timers/promises";
+import { isDeepStrictEqual } from "node:util";
 
 /** Блок ответа модели в форме Anthropic Messages API — как он пришёл от api.anthropic.com. */
 export type NativeBlock = Record<string, unknown> & { type: string };
@@ -40,6 +41,105 @@ export type NativeMessage = {
   usage?: Record<string, unknown>;
   [key: string]: unknown;
 };
+
+type BlockPosition = {
+  readonly message: number;
+  readonly block: number;
+  readonly value: Record<string, unknown>;
+};
+const UNCACHEABLE_BLOCKS = new Set(["thinking", "redacted_thinking"]);
+function withoutCacheControl(value: unknown): unknown {
+  if (!isRecord(value)) return value;
+  const plain = { ...value };
+  delete plain.cache_control;
+  return plain;
+}
+function messageBlocks(messages: readonly unknown[]): BlockPosition[] {
+  const blocks: BlockPosition[] = [];
+  for (const [message, candidate] of messages.entries()) {
+    if (!isRecord(candidate) || !Array.isArray(candidate.content)) continue;
+    for (const [block, value] of candidate.content.entries()) {
+      if (isRecord(value)) blocks.push({ message, block, value });
+    }
+  }
+  return blocks;
+}
+function matchingUserPrefix(
+  value: unknown,
+  queried: readonly NativeBlock[],
+  message: number,
+): BlockPosition[] {
+  if (
+    !isRecord(value) ||
+    value.role !== "user" ||
+    !Array.isArray(value.content)
+  )
+    return [];
+  const content: unknown[] = value.content;
+  const prefix: BlockPosition[] = [];
+  let matched = 0;
+  const compared = Math.min(content.length, queried.length);
+  for (let block = 0; block < compared; block += 1) {
+    const sent: unknown = content[block];
+    if (
+      !isDeepStrictEqual(
+        withoutCacheControl(sent),
+        withoutCacheControl(queried[block]),
+      )
+    )
+      break;
+    matched = block + 1;
+    if (isRecord(sent)) prefix.push({ message, block, value: sent });
+  }
+  const firstChanged: unknown = content[matched];
+  if (isRecord(firstChanged) && firstChanged.type === "tool_result") return [];
+  return prefix;
+}
+function stableTarget(
+  messages: readonly unknown[],
+  blocks: readonly BlockPosition[],
+  queried: readonly NativeBlock[],
+): BlockPosition | undefined {
+  const lastAssistant = messages.reduce<number>(
+    (last, message, index) =>
+      isRecord(message) && message.role === "assistant" ? index : last,
+    -1,
+  );
+  const stable = blocks.filter(({ message }) => message <= lastAssistant);
+  const newest = messages[lastAssistant + 1];
+  stable.push(...matchingUserPrefix(newest, queried, lastAssistant + 1));
+  return [...stable]
+    .reverse()
+    .find(({ value }) => !UNCACHEABLE_BLOCKS.has(String(value.type)));
+}
+const earlier = (target: BlockPosition, source: BlockPosition): boolean =>
+  target.message < source.message ||
+  (target.message === source.message && target.block < source.block);
+/** Перенос message-метки на стабильный префикс; источник: Hermes plugin, MIT. */
+export function pinMessageBreakpoint(
+  payload: Buffer,
+  queried: readonly NativeBlock[] | undefined,
+): Buffer {
+  if (queried === undefined || queried.length === 0) return payload;
+  try {
+    const body = JSON.parse(payload.toString("utf8")) as unknown;
+    if (!isRecord(body) || !Array.isArray(body.messages)) return payload;
+    const messages: unknown[] = body.messages;
+    const blocks = messageBlocks(messages);
+    const marked = blocks.filter(({ value }) => "cache_control" in value);
+    if (marked.length !== 1) return payload;
+    const target = stableTarget(messages, blocks, queried);
+    const source = marked[0];
+    if (target === undefined || source === undefined) return payload;
+    if (!earlier(target, source)) return payload;
+    const marker = source.value.cache_control;
+    delete source.value.cache_control;
+    target.value.cache_control = marker;
+    return Buffer.from(JSON.stringify(body));
+  } catch {
+    return payload;
+  }
+}
 
 /** Что реле успело собрать из ответа: незавершённый (обрыв, ошибка) ответ не считается. */
 type AdmissionCapture = {
@@ -277,10 +377,16 @@ class AdmissionGate implements Admission {
   private readonly server: Server;
   readonly upstream: URL;
   readonly timeoutMs: number;
+  readonly queried: readonly NativeBlock[] | undefined;
 
-  constructor(upstream: URL, timeoutMs: number) {
+  constructor(
+    upstream: URL,
+    timeoutMs: number,
+    queried: readonly NativeBlock[] | undefined,
+  ) {
     this.upstream = upstream;
     this.timeoutMs = timeoutMs;
+    this.queried = queried;
     this.server = createServer();
     this.server.on("request", (request, response) => {
       handle(this, request, response);
@@ -347,10 +453,11 @@ class AdmissionGate implements Admission {
 export async function startAdmission(
   upstream: string,
   timeoutMs: number,
+  queried?: readonly NativeBlock[],
 ): Promise<Admission> {
   const target = new URL(upstream);
   assertUpstream(target);
-  const gate = new AdmissionGate(target, timeoutMs);
+  const gate = new AdmissionGate(target, timeoutMs, queried);
   await gate.listen();
   return gate;
 }
@@ -420,10 +527,11 @@ function forward(
   request.on("end", () => {
     gate.track(request.socket);
     gate.track(response.socket);
+    const payload = pinMessageBreakpoint(Buffer.concat(chunks), gate.queried);
     const upstream = openUpstream(
       gate,
       request.headers,
-      Buffer.concat(chunks),
+      payload,
       searchOf(request.url ?? ""),
     );
     upstream.on("response", (answer) => {
@@ -482,6 +590,7 @@ function openUpstream(
   }
   // identity: сжатие сломало бы и разбор SSE, и поток байт обратно в CLI.
   clean["accept-encoding"] = "identity";
+  clean["content-length"] = String(payload.byteLength);
   const send = target.protocol === "https:" ? httpsRequest : httpRequest;
   const upstream = send(
     {

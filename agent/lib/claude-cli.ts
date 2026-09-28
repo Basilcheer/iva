@@ -1253,7 +1253,11 @@ async function runCall(context: RunContext): Promise<void> {
   try {
     const prepared = prepareCall(model, options, session);
     assertLive(options.abortSignal);
-    const admission = await startAdmission(run.upstream, run.silenceMs);
+    const admission = await startAdmission(
+      run.upstream,
+      run.silenceMs,
+      prepared.frames.at(-1)?.message.content,
+    );
     session.adopt(admission);
     const env = claudeEnv(
       process.env,
