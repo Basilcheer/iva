@@ -676,6 +676,7 @@ function toolInput(input: unknown): unknown {
 export function readCompletion(
   messages: readonly NativeMessage[],
   usage: Record<string, unknown> | undefined = messages.at(-1)?.usage,
+  inventory: readonly string[] = [],
 ): ClaudeCompletion {
   const blocks = messages.flatMap((message) => message.content ?? []);
   return {
@@ -687,7 +688,7 @@ export function readCompletion(
       .join(""),
     calls: blocks
       .filter((block) => block.type === "tool_use")
-      .map((block) => toolCall(block)),
+      .map((block) => toolCall(block, inventory)),
     stopReason: stopReasonOf(messages),
     usage: claudeUsage(usage),
     hasUsage:
@@ -698,10 +699,13 @@ export function readCompletion(
 
 /**
  * Имя вызова для eve. Без префикса Iva это свой инструмент CLI (`Bash`, `Read`): Iva его не
- * исполняет, и шаг отказывает. Имя с префиксом уходит как есть, даже если его нет в наборе
- * шага: это ошибка модели, и eve отвечает на неё модели tool-error, как у любого вендора.
+ * исполняет, и шаг отказывает. Исключение — имя инструмента Ивы из набора шага: модель забыла
+ * префикс (0.4.9, `memory_search` на первом шаге), и это тот же вызов. Имя с префиксом уходит
+ * как есть, даже если его нет в наборе шага: это ошибка модели, и eve отвечает на неё модели
+ * tool-error, как у любого вендора.
  */
-function ivaToolName(wireName: string): string {
+function ivaToolName(wireName: string, inventory: readonly string[]): string {
+  if (inventory.includes(wireName)) return wireName;
   if (!wireName.startsWith(CLAUDE_TOOL_PREFIX))
     throw new ClaudeCliError(
       `Claude returned a tool outside the current inventory: ${wireName}`,
@@ -709,10 +713,13 @@ function ivaToolName(wireName: string): string {
   return wireName.slice(CLAUDE_TOOL_PREFIX.length);
 }
 
-function toolCall(block: ClaudeBlock): ClaudeToolCall {
+function toolCall(
+  block: ClaudeBlock,
+  inventory: readonly string[],
+): ClaudeToolCall {
   return {
     id: text(block.id),
-    name: ivaToolName(text(block.name)),
+    name: ivaToolName(text(block.name), inventory),
     // Отсутствующие аргументы — пустой объект (так их шлёт Anthropic для инструмента без
     // параметров), а всё остальное уезжает как есть, включая null: подменять значение модели
     // на своё — это выдумывать вызов, которого не было.
@@ -1247,7 +1254,7 @@ async function runCall(context: RunContext): Promise<void> {
   const { model, options, session, controller, run } = context;
   const step: StepStream = {
     text: new TextStream(controller),
-    blocks: new BlockStream(controller),
+    blocks: new BlockStream(controller, toolNames(options)),
     controller,
   };
   try {
@@ -1283,7 +1290,7 @@ async function runCall(context: RunContext): Promise<void> {
     // Ход, снятый пока CLI отвечал, наружу не едет: eve его уже не ждёт, а убитый процесс
     // оставил бы огрызок ответа, который выглядел бы как настоящий.
     assertLive(options.abortSignal);
-    const completion = complete(admission, seen, exit);
+    const completion = complete(admission, seen, exit, toolNames(options));
     // Уборка ДО первой части ответа: ни `finish`, ни `process.exit` по нему не должны обгонять
     // удаление системного промпта хода — иначе падение или рестарт сразу после шага оставляют
     // его в /tmp (QA: четыре папки после четырёх пробников). Ответ уже собран: ни реле, ни
@@ -1295,6 +1302,11 @@ async function runCall(context: RunContext): Promise<void> {
   } finally {
     await session.close();
   }
+}
+
+/** Имена инструментов Ивы в наборе шага. */
+function toolNames(options: LanguageModelV4CallOptions): string[] {
+  return (options.tools ?? []).map((tool) => tool.name);
 }
 
 /** Кадр за кадром; на переигрывании ждём `result num_turns:0` — иначе история не принята. */
@@ -1431,9 +1443,11 @@ export class BlockStream {
   private readonly open = new Map<number, OpenBlock>();
   private readonly started: StreamedCall[] = [];
   private readonly sink: PartSink;
+  private readonly inventory: readonly string[];
 
-  constructor(sink: PartSink) {
+  constructor(sink: PartSink, inventory: readonly string[] = []) {
     this.sink = sink;
+    this.inventory = inventory;
   }
 
   /** Вызовы, чьё начало ушло наружу, в порядке прихода. */
@@ -1468,7 +1482,7 @@ export class BlockStream {
       this.sink.enqueue({ type: "reasoning-start", id });
       this.open.set(index, { kind: "reasoning", id });
     } else if (type === "tool_use") {
-      const toolName = ivaToolName(text(block?.name));
+      const toolName = ivaToolName(text(block?.name), this.inventory);
       const id = text(block?.id);
       this.started.push({ id, name: toolName });
       this.sink.enqueue({ type: "tool-input-start", id, toolName });
@@ -1573,6 +1587,7 @@ function complete(
   admission: Admission,
   seen: Collected,
   exit: number | null,
+  inventory: readonly string[],
 ): ClaudeCompletion {
   const captured = capturedMessage(admission, seen);
   const assistants = captured === null ? seen.assistants : [captured];
@@ -1586,6 +1601,7 @@ function complete(
   const completion = readCompletion(
     assistants,
     captured === null ? asRecord(result?.usage) : captured.usage,
+    inventory,
   );
   if (!expected && !isToolBoundary(completion, result, exit))
     assertSuite(result, exit);

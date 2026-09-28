@@ -1039,6 +1039,54 @@ test("вызов инструмента объявляется на старте
   );
 });
 
+// 0.4.9 на поле: Opus на первом шаге новой сессии назвал `memory_search` без префикса, и
+// весь ход упал. Имя инструмента Ивы из набора шага — тот же вызов, чужое — отказ, как раньше.
+function bareMemorySearch(t: TestContext): void {
+  scriptCli(
+    t,
+    [
+      MESSAGE_START,
+      blockStart(0, toolUse("toolu_m", "memory_search", { query: "кофе" })),
+      blockStop(0),
+      MESSAGE_STOP,
+      assistantSays([toolUse("toolu_m", "memory_search", { query: "кофе" })]),
+      MAX_TURNS,
+    ],
+    { FAKE_CLAUDE_EXIT: "1" },
+  );
+}
+
+test("имя инструмента Ивы без префикса из набора шага — тот же вызов", async (t) => {
+  bareMemorySearch(t);
+  const { parts, error } = await timed(
+    await makeClaudeCliModel(MODEL).doStream({
+      prompt: userPrompt(),
+      tools: [WEATHER, { ...WEATHER, name: "memory_search" }],
+    }),
+  );
+  assert.equal(error, undefined);
+  assert.deepEqual(
+    partsOfType(untimed(parts), "tool-call").map((part) => [
+      part.toolName,
+      part.toolCallId,
+      part.input,
+    ]),
+    [["memory_search", "toolu_m", '{"query":"кофе"}']],
+  );
+});
+
+test("имя без префикса, которого нет в наборе шага, — отказ шага", async (t) => {
+  bareMemorySearch(t);
+  const { error } = await timed(
+    await makeClaudeCliModel(MODEL).doStream({
+      prompt: userPrompt(),
+      tools: [WEATHER],
+    }),
+  );
+  assert.ok(error instanceof ClaudeCliError);
+  assert.match(error.message, /outside the current inventory: memory_search/u);
+});
+
 test("свой инструмент CLI отвергается на старте блока, не дожидаясь конца ответа", async (t) => {
   scriptCli(t, [
     MESSAGE_START,

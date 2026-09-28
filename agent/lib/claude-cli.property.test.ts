@@ -152,31 +152,34 @@ test("обратный перевод: кадры ассистента дают 
 
 // Имя без префикса Iva — свой инструмент CLI, и шаг отказывает. Имя с префиксом уходит в eve
 // как есть, даже если его нет в наборе шага: на ошибку модели eve отвечает ей tool-error.
-test("инструмент без префикса Iva — отказ на любом имени, с префиксом — вызов", () => {
+test("имя из набора шага с префиксом и без — один вызов, чужое без префикса — отказ", () => {
   console.error(`[claude-cli property] seed ${SEED}, прогонов ${RUNS}`);
+  const toolName = fc.stringMatching(/^[A-Za-z0-9_-]{1,20}$/u);
   fc.assert(
     fc.property(
-      fc.stringMatching(/^[A-Za-z0-9_-]{1,20}$/u),
+      fc.uniqueArray(toolName, { maxLength: 6 }),
+      toolName,
       fc.boolean(),
-      (name, prefixed) => {
-        const block = {
-          type: "tool_use",
-          id: "toolu_x",
-          name: (prefixed ? CLAUDE_TOOL_PREFIX : "") + name,
-          input: {},
-        };
-        if (prefixed)
-          assert.deepEqual(
-            readCompletion([{ content: [block] }]).calls.map(
-              (call) => call.name,
-            ),
-            [name],
-          );
-        else
-          assert.throws(
-            () => readCompletion([{ content: [block] }]),
-            ClaudeCliError,
-          );
+      fc.boolean(),
+      (others, name, listed, prefixed) => {
+        const inventory = listed ? [...others, name] : others;
+        const call = (wire: string) =>
+          readCompletion(
+            [
+              {
+                content: [
+                  { type: "tool_use", id: "toolu_x", name: wire, input: {} },
+                ],
+              },
+            ],
+            undefined,
+            inventory,
+          ).calls;
+        const wire = (prefixed ? CLAUDE_TOOL_PREFIX : "") + name;
+        if (prefixed || inventory.includes(name))
+          assert.deepEqual(call(wire), call(CLAUDE_TOOL_PREFIX + name));
+        else assert.throws(() => call(wire), ClaudeCliError);
+        assert.equal(call(CLAUDE_TOOL_PREFIX + name)[0]?.name, name);
       },
     ),
     SETTINGS,
