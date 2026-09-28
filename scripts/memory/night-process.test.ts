@@ -1675,3 +1675,38 @@ globalThis.fetch = async (url, init) => {
   assert.equal(second.code, 0, second.stderr);
   assert.equal(transcriptAlerts().length, 1, "без повтора на другом языке");
 });
+
+// Статус, который днём поставил владелец (status_date), ночь этого дня не меняет; статус
+// более раннего дня B менять вправе.
+void test("B не затирает status, поставленный днём владельцем; ранний статус меняет", async (t) => {
+  for (const [statusDate, expected] of [
+    [DATE, "done"],
+    ["2026-09-20", "active"],
+  ] as const) {
+    const fx = await fixture(t);
+    day(fx, "## 10:00 [text]\nАврора снова в работе?\n");
+    const file = card(fx, "cards/projects/аврора", [
+      ...aurora.slice(0, 3),
+      'status: "done"',
+      `status_date: "${statusDate}"`,
+      ...aurora.slice(4),
+    ]);
+    fx.model.replies = [
+      A({
+        facts: [
+          {
+            card: "cards/projects/аврора",
+            text: "Вопрос о работе",
+            src: "e1",
+            quote: "Аврора снова в работе",
+          },
+        ],
+      }),
+      B({ card: "cards/projects/аврора", status: "active" }),
+    ];
+    const result = await night(fx);
+    assert.equal(result.code, 0, result.stderr);
+    assert.match(read(file), new RegExp(`status: "${expected}"`, "u"));
+    assert.match(read(file), new RegExp(`status_date: "${statusDate}"`, "u"));
+  }
+});

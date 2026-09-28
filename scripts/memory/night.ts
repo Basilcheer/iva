@@ -585,19 +585,6 @@ async function applyCards(
 }
 
 // ── Step 2: правда Card (вызов B) ────────────────────────────────────────────────────
-/** Допустимые status по типу Card из schema.json vault. */
-function statuses(): Record<string, { status?: string[] }> {
-  type Schema = { node_types?: Record<string, { status?: string[] }> };
-  try {
-    return (
-      (JSON.parse(readIf(join(vault, "schema.json")) ?? "{}") as Schema)
-        .node_types ?? {}
-    );
-  } catch {
-    return {}; // битая schema.json — B выбирает статус без подсказки, запись от этого не зависит
-  }
-}
-
 /** Card для B: поля frontmatter, правда, хвост Log и факты с truth_pending по день D. */
 function truthInput(card: Card, date: string) {
   const log = cs.sectionRows(card.body, "Log") ?? [];
@@ -632,7 +619,7 @@ async function askTruth(run: TruthRun): Promise<void> {
       .slice(at, at + limits.CARDS_PER_TRUTH_CALL)
       .flatMap((card) => readCard(card) ?? []);
     const cards = batch.map((card) => truthInput(card, date));
-    const data = { date, statuses: statuses(), cards };
+    const data = { date, statuses: cs.cardStatuses(vault), cards };
     const ask = {
       skill: skill("card"),
       input: data,
@@ -674,7 +661,11 @@ function truthApplied(
   const description = cs.sanitizeField(answer.description ?? "") || before;
   if (before && description !== before) moved.push(before);
   if (description) fields.description = description;
-  if (answer.status) fields.status = cs.sanitizeField(answer.status, 40);
+  // Статус, поставленный днём по слову владельца (status_date), ночь того же или более
+  // раннего дня не меняет: новое слово о статусе приходит только следующими днями.
+  const dayStatus = str(card.fields, "status_date") >= date;
+  if (answer.status && !dayStatus)
+    fields.status = cs.sanitizeField(answer.status, 40);
   const history = cs.sectionRows(body, "History");
   if (history === null) return null;
   const rows = moved.map(

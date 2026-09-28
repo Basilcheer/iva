@@ -18,7 +18,10 @@ call names its `operation`: `fact` appends a dated source-backed Card fact,
 `truth` replaces Compiled Truth and archives the displaced value, and `merge`
 joins two duplicates only after the owner explicitly confirms it. `truth`
 may send `description`: a separate one-line summary of the new Compiled Truth.
-Without it, the first phrase becomes the summary; never flatten the whole truth. Other
+Without it, the first phrase becomes the summary; never flatten the whole truth.
+`fact` and `truth` take an optional `status` when the owner says so ("the project
+is closed" → `done`, "the decision is reverted" → `reverted`); the tool names the
+statuses allowed for the Card type if one does not fit. Other
 spellings of a name (language, translit, colloquial, typo) go into `aliases`,
 and that is what makes the card findable by any of them.
 

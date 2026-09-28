@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- 🃏 **Статус Card днём по слову владельца**: «проект закрыт», «решение отменено» — Ива сразу ставит Card статус через `write_card` (`fact` или `truth` с необязательным `status`), не дожидаясь ночи. Допустимые статусы по типу берутся из `schema.json` vault; неподходящий статус инструмент отклоняет и называет допустимые. Статус, поставленный днём, ночь того же дня не меняет. The day turn sets a Card status when the owner says so; the night of that day keeps it.
+
 ## [0.4.9] - 2026-09-28
 
 - 💾 **Переписка на Claude снова читается из кэша**: метка кэша закрепляется на стабильном префиксе переписки вместо меняющегося хвоста, поэтому следующие запросы переиспользуют уже переданный контекст. Claude conversations use the prompt cache again: the cache breakpoint stays on a stable conversation prefix instead of the changing tail, so later requests reuse the context already sent.

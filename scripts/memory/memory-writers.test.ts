@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 import type { ToolContext } from "eve/tools";
+import fc from "fast-check";
 import "../lib/ts-esm-hooks.ts";
 
 const writeCard = (await import("../../agent/tools/write_card.ts")).default;
@@ -791,4 +792,183 @@ void test("CORE: замок дневных писателей держит и CO
     mode: "night",
   }).catch(() => undefined);
   assert.match(readFileSync(file, "utf8"), /- новое/u);
+});
+
+// ── Статус Card днём (решение владельца 28.09.2026) ─────────────────────────────────
+type Reply = { ok?: boolean; error?: string; file?: string };
+const run = async (input: Record<string, unknown>) =>
+  (await writeCard.execute(input as never, context)) as Reply;
+const statusOf = (text: string) => /^status: "?([^"\n]+)"?$/mu.exec(text)?.[1];
+const statusDateOf = (text: string) =>
+  /^status_date: "?([^"\n]+)"?$/mu.exec(text)?.[1];
+const fact = (parts: Record<string, unknown>) => ({
+  operation: "fact",
+  type: "project",
+  title: "Аврора",
+  text: "Проект закрыт",
+  tags: [],
+  aliases: [],
+  ...parts,
+});
+
+void test("write_card fact со status: новая и существующая Card получают статус и дату статуса", async (t) => {
+  const fx = fixture(t);
+  const created = await run(fact({ status: "done" }));
+  assert.equal(created.ok, true, JSON.stringify(created));
+  const file = join(fx.vault, "cards/projects/аврора.md");
+  assert.equal(statusOf(readFileSync(file, "utf8")), "done");
+  assert.match(
+    statusDateOf(readFileSync(file, "utf8")) ?? "",
+    /^\d{4}-\d{2}-\d{2}$/u,
+  );
+  const paused = await run(fact({ text: "Проект на паузе", status: "paused" }));
+  assert.equal(paused.ok, true, JSON.stringify(paused));
+  assert.equal(statusOf(readFileSync(file, "utf8")), "paused");
+  // Без status факт статус не трогает.
+  const plain = await run(fact({ text: "Ещё факт" }));
+  assert.equal(plain.ok, true, JSON.stringify(plain));
+  assert.equal(statusOf(readFileSync(file, "utf8")), "paused");
+  assert.equal(git(fx.vault, "status", "--porcelain"), "");
+});
+
+void test("write_card truth со status меняет статус вместе с правдой", async (t) => {
+  const fx = fixture(t);
+  const made = await run(
+    fact({ type: "decision", title: "Переезд", text: "Решили переезжать" }),
+  );
+  assert.equal(made.ok, true, JSON.stringify(made));
+  const truth = await run({
+    operation: "truth",
+    type: "decision",
+    title: "Переезд",
+    text: "Переезд отменён.",
+    reason: "владелец передумал",
+    status: "reverted",
+  });
+  assert.equal(truth.ok, true, JSON.stringify(truth));
+  const text = readFileSync(
+    join(fx.vault, "cards/decisions/переезд.md"),
+    "utf8",
+  );
+  assert.equal(statusOf(text), "reverted");
+  assert.ok(statusDateOf(text));
+});
+
+void test("write_card: status не по типу Card и status у merge — отказ текстом, Card байт в байт", async (t) => {
+  const fx = fixture(t);
+  assert.equal(
+    (await run(fact({ type: "contact", title: "Анна", text: "Коллега" }))).ok,
+    true,
+  );
+  const file = join(fx.vault, "cards/contacts/анна.md");
+  const before = readFileSync(file, "utf8");
+  const head = git(fx.vault, "rev-parse", "HEAD");
+  const wrong = await run(
+    fact({ type: "contact", title: "Анна", text: "Уволилась", status: "done" }),
+  );
+  assert.equal(wrong.ok, false);
+  assert.match(wrong.error ?? "", /done.*contact.*active, inactive/u);
+  const merge = await run({
+    operation: "merge",
+    target: "Анна",
+    duplicate: "Анна",
+    confirmed_by_owner: true,
+    status: "inactive",
+  });
+  assert.equal(merge.ok, false);
+  assert.match(merge.error ?? "", /merge.*status/u);
+  assert.equal(readFileSync(file, "utf8"), before);
+  assert.equal(git(fx.vault, "rev-parse", "HEAD"), head);
+});
+
+void test("write_card: допустимые статусы берутся из schema.json vault", async (t) => {
+  const fx = fixture(t);
+  writeFileSync(
+    join(fx.vault, "schema.json"),
+    JSON.stringify({ node_types: { project: { status: ["active", "done"] } } }),
+  );
+  const paused = await run(fact({ status: "paused" }));
+  assert.equal(paused.ok, false);
+  assert.match(paused.error ?? "", /active, done/u);
+  assert.equal(existsSync(join(fx.vault, "cards/projects/аврора.md")), false);
+  assert.equal((await run(fact({ status: "done" }))).ok, true);
+});
+
+// Property: любая последовательность fact/truth со status или без. Статус Card всегда из
+// допустимых для её типа; принятый status — последний принятый, иначе active; отказ не
+// меняет байты Card. Провал печатает seed; повтор: IVA_CARD_STATUS_SEED=<seed>.
+const STATUS_SEED = Number(process.env.IVA_CARD_STATUS_SEED ?? 20_260_928);
+const ALLOWED: Record<string, string[]> = {
+  project: ["active", "done", "paused", "cancelled", "draft", "superseded"],
+  contact: ["active", "inactive", "superseded"],
+};
+const STATUS_VALUES = [
+  "active",
+  "inactive",
+  "done",
+  "paused",
+  "cancelled",
+  "draft",
+  "explored",
+  "archived",
+  "reverted",
+  "superseded",
+];
+
+void test(`write_card status: последовательности операций держат инвариант (seed ${STATUS_SEED})`, async (t) => {
+  const op = fc.record({
+    operation: fc.constantFrom("fact", "truth"),
+    status: fc.option(fc.constantFrom(...STATUS_VALUES), { nil: undefined }),
+  });
+  await fc.assert(
+    fc.asyncProperty(
+      fc.constantFrom("project", "contact"),
+      fc.array(op, { minLength: 1, maxLength: 5 }),
+      async (type, ops) => {
+        const fx = fixture(t);
+        writeFileSync(
+          join(fx.vault, "schema.json"),
+          JSON.stringify({
+            node_types: Object.fromEntries(
+              Object.entries(ALLOWED).map(([k, v]) => [k, { status: v }]),
+            ),
+          }),
+        );
+        const dir = type === "project" ? "projects" : "contacts";
+        const file = join(fx.vault, "cards", dir, "аврора.md");
+        let expected: string | undefined;
+        for (const [index, item] of ops.entries()) {
+          const before = existsSync(file) ? readFileSync(file, "utf8") : null;
+          const input =
+            item.operation === "fact"
+              ? fact({ type, text: `Факт ${index}`, status: item.status })
+              : {
+                  operation: "truth",
+                  type,
+                  title: "Аврора",
+                  text: `Правда ${index}.`,
+                  reason: "новое",
+                  status: item.status,
+                };
+          const reply = await run(input);
+          const allowed = !item.status || ALLOWED[type].includes(item.status);
+          const cardExists = before !== null || item.operation === "fact";
+          if (!allowed || !cardExists) {
+            assert.equal(reply.ok, false, JSON.stringify(reply));
+            assert.equal(
+              existsSync(file) ? readFileSync(file, "utf8") : null,
+              before,
+            );
+            continue;
+          }
+          assert.equal(reply.ok, true, JSON.stringify(reply));
+          if (item.status) expected = item.status;
+          const status = statusOf(readFileSync(file, "utf8"));
+          assert.equal(status, expected ?? "active");
+          assert.ok(ALLOWED[type].includes(status ?? ""));
+        }
+      },
+    ),
+    { seed: STATUS_SEED, numRuns: 25 },
+  );
 });

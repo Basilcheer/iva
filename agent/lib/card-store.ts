@@ -395,6 +395,47 @@ export const TYPE_DIR: Record<string, string> = {
   note: "notes",
 };
 
+/** Все status Card из шаблона schema.json: перечисление на проводе write_card. */
+export const CARD_STATUSES = [
+  "active",
+  "inactive",
+  "done",
+  "paused",
+  "cancelled",
+  "draft",
+  "explored",
+  "archived",
+  "reverted",
+  "superseded",
+] as const;
+
+// Шаблон vault-template/schema.json: vault без читаемой schema.json.
+const DEFAULT_STATUSES: Record<string, string[]> = {
+  contact: ["active", "inactive", "superseded"],
+  project: ["active", "done", "paused", "cancelled", "draft", "superseded"],
+  decision: ["active", "superseded", "reverted"],
+  idea: ["active", "explored", "archived", "draft", "superseded"],
+  note: ["active", "draft", "archived", "superseded"],
+};
+
+/** Допустимые status по типу Card: schema.json vault, без неё — шаблон. Одно правило
+ * для дня (write_card) и ночи (вход B). */
+export function cardStatuses(vault: string): Record<string, string[]> {
+  type Schema = { node_types?: Record<string, { status?: unknown }> };
+  let schema: Schema;
+  try {
+    schema = JSON.parse(
+      readFileSync(join(vault, "schema.json"), "utf8"),
+    ) as Schema;
+  } catch {
+    return { ...DEFAULT_STATUSES };
+  }
+  const statuses = { ...DEFAULT_STATUSES };
+  for (const [type, node] of Object.entries(schema.node_types ?? {}))
+    if (Array.isArray(node?.status)) statuses[type] = node.status.map(String);
+  return statuses;
+}
+
 /** aliases из frontmatter: список или строка через запятую. */
 export function aliasList(value: unknown): string[] {
   if (Array.isArray(value)) return value.map(String);
