@@ -10,11 +10,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import fc from "fast-check";
 import type { LanguageModelV4StreamPart } from "@ai-sdk/provider";
-import {
-  BlockStream,
-  CLAUDE_TOOL_PREFIX,
-  ClaudeCliError,
-} from "./claude-cli.ts";
+import { BlockStream, CLAUDE_TOOL_PREFIX } from "./claude-cli.ts";
 
 const SEED = Number(process.env.IVA_CLAUDE_PBT_SEED ?? 20_260_923);
 const RUNS = Number(process.env.IVA_CLAUDE_PBT_RUNS ?? 300);
@@ -36,7 +32,8 @@ const blockArbitrary: fc.Arbitrary<Native> = fc.oneof(
       fc
         .stringMatching(/^[a-z_]{1,8}$/u)
         .map((name) => CLAUDE_TOOL_PREFIX + name),
-      fc.constantFrom("Bash", "Read", "mcp__other__x"),
+      fc.constantFrom("Bash", "Read", "mcp__other__x", "", CLAUDE_TOOL_PREFIX),
+      fc.string({ unit: "binary", maxLength: 12 }),
     ),
     input: fc.constant({}),
   }),
@@ -150,29 +147,21 @@ test("поток блоков отдаёт каждую содержательн
             if (block.type === "tool_use") {
               const name = String(block.name);
               const id = String(block.id);
-              if (!name.startsWith(CLAUDE_TOOL_PREFIX)) {
-                // (d) Имя без префикса — отказ шага, и начала вызова нет.
-                assert.ok(
-                  thrown instanceof ClaudeCliError,
-                  "отказ — ошибка шага",
-                );
-                assert.deepEqual(
-                  emitted,
-                  ends,
-                  "отказ не выпускает начала вызова",
-                );
-                break;
-              }
+              // (d) Набора у потока нет: имя с префиксом Iva теряет префикс, любое другое
+              // (свой инструмент CLI, мусор) уходит в eve как есть, и шаг не падает.
+              const toolName = name.startsWith(CLAUDE_TOOL_PREFIX)
+                ? name.slice(CLAUDE_TOOL_PREFIX.length)
+                : name;
               assert.deepEqual(emitted, [
                 ...ends,
                 {
                   type: "tool-input-start",
                   id,
-                  toolName: name.slice(CLAUDE_TOOL_PREFIX.length),
+                  toolName,
                 },
               ]);
               open.set(at, { kind: "tool", id });
-              tools.push({ id, name: name.slice(CLAUDE_TOOL_PREFIX.length) });
+              tools.push({ id, name: toolName });
             } else if (
               block.type === "thinking" ||
               block.type === "redacted_thinking"
@@ -233,7 +222,7 @@ test("поток блоков отдаёт каждую содержательн
           assert.equal(
             thrown,
             undefined,
-            "бросает только отказ на старте вызова",
+            "поток блоков не бросает ни на каком событии",
           );
         }
         blocks.close();

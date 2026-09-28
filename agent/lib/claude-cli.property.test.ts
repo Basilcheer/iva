@@ -20,7 +20,6 @@ import type {
 import type { NativeMessage } from "./claude-admission.ts";
 import {
   CLAUDE_TOOL_PREFIX,
-  ClaudeCliError,
   claudeHistory,
   claudeSessionCwd,
   claudeSessionCwdEnabled,
@@ -150,36 +149,116 @@ test("обратный перевод: кадры ассистента дают 
   );
 });
 
-// Имя без префикса Iva — свой инструмент CLI, и шаг отказывает. Имя с префиксом уходит в eve
-// как есть, даже если его нет в наборе шага: на ошибку модели eve отвечает ей tool-error.
-test("имя из набора шага с префиксом и без — один вызов, чужое без префикса — отказ", () => {
+// Модель пишет имя инструмента как придётся: без префикса Iva, с чужим префиксом MCP, в другом
+// регистре, с `-` вместо `_`. Любое такое написание инструмента набора — тот же вызов.
+// Неузнанное имя (и свои инструменты CLI) уходит в eve как есть: на него eve отвечает модели
+// tool-error со списком доступных, а шаг не падает.
+const IVA_TOOL = fc
+  .stringMatching(/^[A-Za-z][A-Za-z0-9_-]{0,19}$/u)
+  .filter((name) => !/^mcp[_-]{2}/iu.test(name));
+const SERVER = fc.oneof(
+  fc.constantFrom("iva", "claude_ai_iva", "IVA", "plugin_iva_iva"),
+  fc.stringMatching(/^[a-z0-9]{1,10}$/u),
+);
+
+/** Ключ сравнения имён для генератора — повторён здесь, чтобы тест не верил коду на слово. */
+function spelling(name: string): string {
+  return name.toLowerCase().replaceAll("-", "_");
+}
+
+function callOf(wire: string, inventory: readonly string[]) {
+  return readCompletion(
+    [{ content: [{ type: "tool_use", id: "toolu_x", name: wire, input: {} }] }],
+    undefined,
+    inventory,
+  ).calls;
+}
+
+test(`любое написание имени инструмента набора — тот же вызов (seed ${SEED})`, () => {
   console.error(`[claude-cli property] seed ${SEED}, прогонов ${RUNS}`);
-  const toolName = fc.stringMatching(/^[A-Za-z0-9_-]{1,20}$/u);
   fc.assert(
     fc.property(
-      fc.uniqueArray(toolName, { maxLength: 6 }),
-      toolName,
+      fc.uniqueArray(IVA_TOOL, {
+        minLength: 1,
+        maxLength: 6,
+        selector: spelling,
+      }),
+      fc.nat(),
+      fc.option(SERVER, { nil: undefined }),
+      fc.array(fc.constantFrom("keep", "upper", "lower", "swap"), {
+        minLength: 20,
+        maxLength: 20,
+      }),
       fc.boolean(),
-      fc.boolean(),
-      (others, name, listed, prefixed) => {
-        const inventory = listed ? [...others, name] : others;
-        const call = (wire: string) =>
-          readCompletion(
-            [
-              {
-                content: [
-                  { type: "tool_use", id: "toolu_x", name: wire, input: {} },
-                ],
-              },
-            ],
-            undefined,
-            inventory,
-          ).calls;
-        const wire = (prefixed ? CLAUDE_TOOL_PREFIX : "") + name;
-        if (prefixed || inventory.includes(name))
-          assert.deepEqual(call(wire), call(CLAUDE_TOOL_PREFIX + name));
-        else assert.throws(() => call(wire), ClaudeCliError);
-        assert.equal(call(CLAUDE_TOOL_PREFIX + name)[0]?.name, name);
+      (inventory, pick, server, edits, dashedPrefix) => {
+        const name = inventory[pick % inventory.length] ?? "";
+        const body = [...name]
+          .map((char, at) => {
+            const edit = edits[at];
+            if (edit === "upper") return char.toUpperCase();
+            if (edit === "lower") return char.toLowerCase();
+            if (edit === "swap")
+              return char === "-" ? "_" : char === "_" ? "-" : char;
+            return char;
+          })
+          .join("");
+        const glue = dashedPrefix ? "--" : "__";
+        const wire =
+          server === undefined ? body : `mcp${glue}${server}${glue}${body}`;
+        assert.deepEqual(
+          callOf(wire, inventory).map((call) => call.name),
+          [name],
+          `${wire} → ${name}`,
+        );
+      },
+    ),
+    SETTINGS,
+  );
+});
+
+test(`имя, совпавшее с несколькими инструментами набора, не угадывается (seed ${SEED})`, () => {
+  fc.assert(
+    fc.property(IVA_TOOL, (name) => {
+      const lower = name.toLowerCase().replaceAll("-", "_");
+      const inventory = [lower, lower.replaceAll("_", "-").toUpperCase()];
+      fc.pre(new Set(inventory).size === 2);
+      const wire = `${CLAUDE_TOOL_PREFIX}${lower.toUpperCase()}`;
+      fc.pre(!inventory.includes(wire.slice(CLAUDE_TOOL_PREFIX.length)));
+      assert.deepEqual(
+        callOf(wire, inventory).map((call) => call.name),
+        [lower.toUpperCase()],
+      );
+    }),
+    SETTINGS,
+  );
+});
+
+test(`любая строка имени не роняет разбор ответа (seed ${SEED})`, () => {
+  fc.assert(
+    fc.property(
+      fc.oneof(
+        fc.string({ unit: "binary", maxLength: 80 }),
+        fc.constantFrom(
+          "",
+          "Bash",
+          "Read",
+          "mcp__",
+          "mcp____",
+          CLAUDE_TOOL_PREFIX,
+        ),
+        IVA_TOOL.map((name) => `mcp__other__${name}`),
+      ),
+      fc.uniqueArray(IVA_TOOL, { maxLength: 6 }),
+      (wire, inventory) => {
+        const [call] = callOf(wire, inventory);
+        assert.ok(call !== undefined);
+        const bare = wire.startsWith(CLAUDE_TOOL_PREFIX)
+          ? wire.slice(CLAUDE_TOOL_PREFIX.length)
+          : wire;
+        assert.ok(
+          inventory.includes(call.name) || call.name === bare,
+          "имя — инструмент набора или то, что прислала модель",
+        );
       },
     ),
     SETTINGS,

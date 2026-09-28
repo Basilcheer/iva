@@ -3,7 +3,7 @@
 // подписочным токеном владельца, а проверять надо ПЕРЕВОД, а не чужую сеть. Подделка — это
 // node-скрипт, который говорит на том же stream-json: подтверждает переигрывание истории
 // `result num_turns:0`, отвечает на последний кадр и умеет ломаться так, как ломается настоящий
-// CLI (ошибка API в assistant, обрыв без result, тишина, отказ на инструмент вне списка).
+// CLI (ошибка API в assistant, обрыв без result, тишина, свой инструмент CLI вне списка).
 import "../../scripts/fixtures/no-host-anthropic.ts";
 import assert from "node:assert/strict";
 import {
@@ -32,6 +32,14 @@ import type {
   LanguageModelV4StreamPart,
   LanguageModelV4StreamResult,
 } from "@ai-sdk/provider";
+import {
+  ToolLoopAgent,
+  isStepCount,
+  jsonSchema,
+  simulateReadableStream,
+  tool,
+} from "ai";
+import { MockLanguageModelV4 } from "ai/test";
 import { classifyModelCallError } from "../../node_modules/eve/dist/src/harness/model-call-error.js";
 
 // Свой TMPDIR на файл: тест «временная папка уходит раньше» считает папки iva-claude-* в
@@ -944,14 +952,18 @@ test("tool_use и error_max_turns с кодом 1 — штатный конец 
   assert.equal(textOf(parts), "Сейчас ");
 });
 
-test("инструмент вне списка — отказ, а не вызов чего попало", async (t) => {
+// Свой инструмент CLI Iva не исполняет, но и шаг им не роняет: вызов уходит в eve как есть, и
+// eve отвечает модели tool-error со списком доступных, как на любое незнакомое имя.
+test("инструмент вне списка уходит в eve как есть, а не роняет шаг", async (t) => {
   fakeCli(t, "foreign-tool");
   const model = makeClaudeCliModel(MODEL);
-  const error = await failureOf(async () =>
-    drain(await model.doStream({ prompt: userPrompt(), tools: [WEATHER] })),
+  const parts = await drain(
+    await model.doStream({ prompt: userPrompt(), tools: [WEATHER] }),
   );
-  assert.equal(error.name, "ClaudeCliError");
-  assert.match(error.message, /outside the current inventory: Bash/u);
+  assert.deepEqual(
+    partsOfType(parts, "tool-call").map((part) => [part.toolName, part.input]),
+    [["Bash", "{}"]],
+  );
 });
 
 // Сторож первой части (provider.ts) снимается только содержательной частью. Модель, которая
@@ -1075,37 +1087,170 @@ test("имя инструмента Ивы без префикса из набо
   );
 });
 
-test("имя без префикса, которого нет в наборе шага, — отказ шага", async (t) => {
+test("имя без префикса, которого нет в наборе шага, уходит в eve как есть", async (t) => {
   bareMemorySearch(t);
-  const { error } = await timed(
-    await makeClaudeCliModel(MODEL).doStream({
-      prompt: userPrompt(),
-      tools: [WEATHER],
-    }),
-  );
-  assert.ok(error instanceof ClaudeCliError);
-  assert.match(error.message, /outside the current inventory: memory_search/u);
-});
-
-test("свой инструмент CLI отвергается на старте блока, не дожидаясь конца ответа", async (t) => {
-  scriptCli(t, [
-    MESSAGE_START,
-    blockStart(0, toolUse("toolu_9", "Bash", {})),
-    { pause: 5_000 },
-  ]);
-  const started = performance.now();
   const { parts, error } = await timed(
     await makeClaudeCliModel(MODEL).doStream({
       prompt: userPrompt(),
       tools: [WEATHER],
     }),
   );
-  assert.ok(error instanceof ClaudeCliError);
-  assert.match(error.message, /outside the current inventory: Bash/u);
-  assert.ok(performance.now() - started < 4_000, "отказ раньше конца паузы");
-  assert.equal(partsOfType(untimed(parts), "tool-input-start").length, 0);
+  assert.equal(error, undefined);
+  assert.deepEqual(
+    partsOfType(untimed(parts), "tool-call").map((part) => part.toolName),
+    ["memory_search"],
+  );
 });
 
+test("имя в другом написании — тот же инструмент набора, и на старте блока, и в вызове", async (t) => {
+  const wire = "mcp__claude_ai_iva__Memory-Search";
+  scriptCli(
+    t,
+    [
+      MESSAGE_START,
+      blockStart(0, toolUse("toolu_m", wire, {})),
+      blockDelta(0, { type: "input_json_delta", partial_json: "{}" }),
+      blockStop(0),
+      MESSAGE_STOP,
+      assistantSays([toolUse("toolu_m", wire, {})]),
+      MAX_TURNS,
+    ],
+    { FAKE_CLAUDE_EXIT: "1" },
+  );
+  const { parts, error } = await timed(
+    await makeClaudeCliModel(MODEL).doStream({
+      prompt: userPrompt(),
+      tools: [WEATHER, { ...WEATHER, name: "memory_search" }],
+    }),
+  );
+  assert.equal(error, undefined);
+  assert.deepEqual(
+    partsOfType(untimed(parts), "tool-input-start").map(
+      (part) => part.toolName,
+    ),
+    ["memory_search"],
+  );
+  assert.deepEqual(
+    partsOfType(untimed(parts), "tool-call").map((part) => part.toolName),
+    ["memory_search"],
+  );
+});
+
+test("свой инструмент CLI объявляется на старте блока как есть и не роняет шаг", async (t) => {
+  scriptCli(
+    t,
+    [
+      MESSAGE_START,
+      blockStart(0, toolUse("toolu_9", "Bash", {})),
+      { pause: PAUSE_MS },
+      blockStop(0),
+      MESSAGE_STOP,
+      assistantSays([toolUse("toolu_9", "Bash", {})]),
+      MAX_TURNS,
+    ],
+    { FAKE_CLAUDE_EXIT: "1" },
+  );
+  const { parts, error } = await timed(
+    await makeClaudeCliModel(MODEL).doStream({
+      prompt: userPrompt(),
+      tools: [WEATHER],
+    }),
+  );
+  assert.equal(error, undefined);
+  assert.ok(
+    momentOf(parts, "tool-call") - momentOf(parts, "tool-input-start") >=
+      0.8 * PAUSE_MS,
+    "начало вызова ушло до паузы",
+  );
+  assert.deepEqual(
+    partsOfType(untimed(parts), "tool-input-start").map(
+      (part) => part.toolName,
+    ),
+    ["Bash"],
+  );
+});
+
+// Сквозной путь: шаг claude отдаёт неузнанное имя, цикл инструментов AI SDK (на нём eve строит
+// шаг, harness/tool-loop.js) не бросает, а кладёт в историю tool-error со списком доступных, и
+// следующий шаг модели идёт дальше. Второй шаг — муляж: его дело только показать, что он был
+// и что увидел.
+test("неузнанное имя доходит до модели tool-error со списком доступных, ход идёт дальше", async (t) => {
+  scriptCli(
+    t,
+    [
+      MESSAGE_START,
+      blockStart(0, toolUse("toolu_9", "Bash", { command: "ls" })),
+      blockStop(0),
+      MESSAGE_STOP,
+      assistantSays([toolUse("toolu_9", "Bash", { command: "ls" })]),
+      MAX_TURNS,
+    ],
+    { FAKE_CLAUDE_EXIT: "1" },
+  );
+  const claude = makeClaudeCliModel(MODEL);
+  const prompts: LanguageModelV4Prompt[] = [];
+  const model = new MockLanguageModelV4({
+    doStream: async (options) => {
+      prompts.push(options.prompt);
+      if (prompts.length === 1) return claude.doStream(options);
+      return {
+        stream: simulateReadableStream<LanguageModelV4StreamPart>({
+          chunks: [
+            { type: "text-start", id: "t" },
+            { type: "text-delta", id: "t", delta: "Готово" },
+            { type: "text-end", id: "t" },
+            {
+              type: "finish",
+              finishReason: { unified: "stop", raw: "end_turn" },
+              usage: {
+                inputTokens: {
+                  total: 1,
+                  noCache: 1,
+                  cacheRead: 0,
+                  cacheWrite: 0,
+                },
+                outputTokens: { total: 1, text: 1, reasoning: 0 },
+              },
+            },
+          ],
+        }),
+      };
+    },
+  });
+  let executed = 0;
+  const agent = new ToolLoopAgent({
+    model,
+    stopWhen: isStepCount(3),
+    tools: {
+      weather: tool({
+        description: "Погода в городе",
+        inputSchema: jsonSchema<{ city: string }>(
+          WEATHER.inputSchema as Parameters<typeof jsonSchema>[0],
+        ),
+        execute: () => {
+          executed += 1;
+          return "+30";
+        },
+      }),
+    },
+  });
+  const result = await agent.stream({ prompt: "привет" });
+  assert.equal(await result.text, "Готово");
+  assert.equal(prompts.length, 2, "после неузнанного вызова был второй шаг");
+  assert.equal(executed, 0);
+  const results = prompts[1]
+    ?.filter((message) => message.role === "tool")
+    .flatMap((message) => message.content);
+  assert.equal(results?.length, 1);
+  const [answer] = results ?? [];
+  assert.ok(answer?.type === "tool-result");
+  assert.equal(answer.toolCallId, "toolu_9");
+  assert.equal(answer.output.type, "error-text");
+  assert.match(
+    answer.output.type === "error-text" ? answer.output.value : "",
+    /unavailable tool 'Bash'\. Available tools: weather\./u,
+  );
+});
 // Имя с префиксом Iva, которого нет в наборе шага, — ошибка модели, а не поломка шага: eve
 // отвечает на неё модели tool-error, как у любого другого вендора.
 test("незнакомый инструмент Iva уходит в eve, а не роняет шаг", async (t) => {
