@@ -1832,3 +1832,37 @@ void test("B не пишет статус вне schema.json: статус Card 
     assert.match(read(file), new RegExp(`status: "${expected}"`, "u"), answer);
   }
 });
+
+// «Новых карточек» в Report — все Card, созданные за ночь, а не только те, куда лёг факт:
+// Card ради связи тоже новая. Card, которая не записалась (связь отвергнута), не считается.
+void test("Report ночи считает все созданные за ночь Card, включая Card ради связи", async (t) => {
+  const fx = await fixture(t);
+  day(fx, "## 10:00 [text]\nАльфа работает со Сбером\n");
+  reportsOn(fx, "ru");
+  fx.model.replies = [
+    A({
+      gist: "",
+      new_cards: [
+        { name: "Альфа", type: "project" },
+        { name: "Сбер", type: "contact" },
+        { name: "Яндекс", type: "contact" },
+      ],
+      links: [
+        { a: "Альфа", b: "Сбер", src: "e1" },
+        { a: "Яндекс", b: "Никто", src: "e1" },
+      ],
+    }),
+  ];
+  const result = await night(fx);
+  assert.equal(result.code, 0, result.stderr);
+  assert.equal(
+    ls(join(fx.vault, "cards/contacts")),
+    "сбер.md",
+    "Card ради отвергнутой связи не пишется",
+  );
+  assert.match(
+    reportOf(result.stderr) ?? "",
+    /^Новых карточек: 2, дополнено: 0\.$/mu,
+    result.stderr,
+  );
+});

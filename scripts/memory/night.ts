@@ -581,9 +581,12 @@ async function applyCards(
   for (const answer of cache.pass!.a!) day.links(answer);
   files.push(...day.write());
   if (!(await commit(`memory day ${cache.date}: Card`, files))) return false;
+  // Новая — любая записанная Card этой ночи (и ради связи), а не только та, где лёг факт.
   const created = new Set(Object.values(cache.pass!.created));
+  for (const card of created)
+    if (existsSync(cardFile(card))) tally.created.add(card);
   for (const card of day.touched)
-    (created.has(card) ? tally.created : tally.updated).add(card);
+    if (!created.has(card)) tally.updated.add(card);
   cache.touched = [...new Set([...cache.touched, ...day.touched])];
   cache.pass!.truth = truthCandidates(day.touched, cache.date);
   return true;
