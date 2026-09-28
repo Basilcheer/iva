@@ -313,6 +313,72 @@ test(`любая строка имени не роняет разбор отве
   );
 });
 
+// Неузнанное имя вызова возвращается в историю следующего запроса. Anthropic принимает только
+// `^[A-Za-z0-9_-]{1,64}$`: иначе отказ на каждом следующем шаге сессии. Имя набора не меняется —
+// иначе кэш промпта не прочитает историю.
+test(`имя вызова в истории всегда годится для провода (seed ${SEED})`, () => {
+  fc.assert(
+    fc.property(
+      fc.oneof(
+        fc.string({ unit: "binary", maxLength: 100 }),
+        fc.constantFrom("", "bad name!", "поиск", "a".repeat(90), "Bash"),
+        IVA_TOOL,
+      ),
+      fc.stringMatching(/^toolu_[A-Za-z0-9]{1,8}$/u),
+      (name, id) => {
+        const { frames } = claudeHistory([
+          { role: "user", content: [{ type: "text", text: "привет" }] },
+          {
+            role: "assistant",
+            content: [
+              {
+                type: "tool-call",
+                toolCallId: id,
+                toolName: name,
+                input: "{}",
+              },
+            ],
+          },
+          {
+            role: "tool",
+            content: [
+              {
+                type: "tool-result",
+                toolCallId: id,
+                toolName: name,
+                output: { type: "error-text", value: "нет такого" },
+              },
+            ],
+          },
+        ]);
+        const blocks = frames.flatMap((frame) => frame.message.content);
+        const call = blocks.find((block) => block.type === "tool_use");
+        const result = blocks.find((block) => block.type === "tool_result");
+        const wire = String(call?.name);
+        assert.match(
+          wire,
+          /^[A-Za-z0-9_-]{1,64}$/u,
+          `${JSON.stringify(name)} → ${wire}`,
+        );
+        assert.ok(wire.startsWith(CLAUDE_TOOL_PREFIX));
+        if (/^[A-Za-z0-9_-]{1,54}$/u.test(name))
+          assert.equal(
+            wire,
+            CLAUDE_TOOL_PREFIX + name,
+            "имя набора не меняется",
+          );
+        if (name === "") assert.equal(wire, `${CLAUDE_TOOL_PREFIX}unknown`);
+        assert.equal(
+          result?.tool_use_id,
+          id,
+          "результат остаётся парой вызова",
+        );
+      },
+    ),
+    SETTINGS,
+  );
+});
+
 test("история без вопроса в конце отвергается, а не уезжает как есть", () => {
   console.error(`[claude-cli property] seed ${SEED}, прогонов ${RUNS}`);
   fc.assert(
