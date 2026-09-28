@@ -33,6 +33,10 @@ async function requireGit(git: Git, ...args: string[]): Promise<string> {
   return output(result);
 }
 
+/** Ветку не получить: нет сети или такой ветки у origin. Единственная ошибка, при которой
+ * бета молчит (daily) или отказывает строкой «ветка beta недоступна» (iva update). */
+export class BranchUnavailableError extends Error {}
+
 async function fetchBranch(
   git: Git,
   remote: string,
@@ -42,7 +46,9 @@ async function fetchBranch(
   if (valid.code !== 0) throw new Error(`invalid update branch: ${branch}`);
   const fetched = await git("fetch", "--prune", remote, `refs/heads/${branch}`);
   if (fetched.code !== 0)
-    throw new Error(fetched.stderr || `couldn't fetch ${remote}/${branch}`);
+    throw new BranchUnavailableError(
+      fetched.stderr || `couldn't fetch ${remote}/${branch}`,
+    );
   return requireGit(git, "rev-parse", "FETCH_HEAD");
 }
 
@@ -137,8 +143,20 @@ export async function betaChannel(git: Git): Promise<boolean> {
 
 /** Цель не ниже установленного: назад обновление не ходит нигде; откат — только явный. */
 async function notBelow(git: Git, target: string, installed?: string) {
-  const at = installed ? output(await git("rev-parse", installed)) : "";
-  if (!at || !target || at === target) return target;
+  if (!installed || !target) return target;
+  const found = await git(
+    "rev-parse",
+    "--verify",
+    "-q",
+    `${installed}^{commit}`,
+  );
+  // Активного коммита нет в зеркале: безопасность перехода не доказать — отказ.
+  if (found.code !== 0)
+    throw new Error(
+      `the installed commit ${installed} is not in the mirror; nothing was installed`,
+    );
+  const at = output(found);
+  if (at === target) return target;
   const older = await git("merge-base", "--is-ancestor", target, at);
   return older.code === 0 ? at : target;
 }
@@ -231,18 +249,30 @@ export function betaOf(root: string): boolean {
   return branch === BETA_BRANCH || (legacy && get(BETA_CONFIG) === "true");
 }
 
-/** iva beta / stable и меню: решает ветка; не записалась — false, флаг не тронут. */
+/** iva beta / stable и меню: ветка и флаг во всех репозиториях установки. Любая запись не
+ * прошла — прежние значения возвращаются везде, false. */
 export function setBeta(root: string, on: boolean): boolean {
-  const config = (repo: string, args: string[]) =>
-    spawnSync("git", ["-C", repo, "config", "--local", ...args]).status;
+  const git = (repo: string, args: string[]) =>
+    spawnSync("git", ["-C", repo, "config", "--local", ...args], {
+      encoding: "utf8",
+    });
+  const keys = [UPDATE_BRANCH_CONFIG, BETA_CONFIG];
+  const want = [on ? BETA_BRANCH : DEFAULT_UPDATE_BRANCH, on ? "true" : ""];
   const repos = betaRepos(root);
-  const branch = [
-    UPDATE_BRANCH_CONFIG,
-    on ? BETA_BRANCH : DEFAULT_UPDATE_BRANCH,
-  ];
-  if (!repos.length || !repos.every((repo) => config(repo, branch) === 0))
-    return false;
-  const flag = on ? [BETA_CONFIG, "true"] : ["--unset-all", BETA_CONFIG];
-  // 5: ключа и так нет
-  return repos.every((repo) => [0, on ? 0 : 5].includes(config(repo, flag)!));
+  const before = repos.map((repo) =>
+    keys.map((key) => git(repo, ["--get", key]).stdout.trim()),
+  );
+  // Пусто — ключа нет: снять (код 5 — его и так не было).
+  const put = (repo: string, key: string, value: string) =>
+    [0, value ? 0 : 5].includes(
+      git(repo, value ? [key, value] : ["--unset-all", key]).status!,
+    );
+  const ok = repos.every((repo) =>
+    keys.every((key, k) => put(repo, key, want[k])),
+  );
+  if (!ok)
+    repos.forEach((repo, r) =>
+      keys.forEach((key, k) => put(repo, key, before[r][k])),
+    );
+  return repos.length > 0 && ok;
 }

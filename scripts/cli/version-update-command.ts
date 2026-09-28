@@ -17,6 +17,7 @@ import {
 import {
   BETA_CONFIG,
   betaChannel,
+  BranchUnavailableError,
   resolveReleaseTarget,
 } from "../lib/update-channel.ts";
 import {
@@ -183,6 +184,7 @@ export async function resolveTarget(
     target = await resolveReleaseTarget({ git, installed });
   } catch (error) {
     // Бета без ветки (нет сети или ветки): HEAD зеркала — это main, то есть откат.
+    if (!(error instanceof BranchUnavailableError)) throw error;
     if (!(await betaChannel(git))) throw error;
     throw new Error(
       "the beta branch is unavailable (no network or no such branch); nothing was installed",

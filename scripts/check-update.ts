@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import { isEntrypoint, upstreamQuery } from "./lib/version-layout.ts";
 import { noticeLang } from "./lib/notice-policy.ts";
 import { acquireUpdateLock } from "./lib/version-store.ts";
-import { betaChannel } from "./lib/update-channel.ts";
+import { betaChannel, BranchUnavailableError } from "./lib/update-channel.ts";
 import { resolveDataDir } from "./lib/data-dir.ts";
 import {
   gitAt,
@@ -140,7 +140,8 @@ export async function runDailyUpdateCheck(options: DailyUpdateOptions = {}) {
     } catch (error) {
       // Бета без ветки (нет сети или ветки): молчим, как current; отказ скажет iva update.
       const git = (...args: string[]) => gitAt(upstream.root, args);
-      if (await betaChannel(git)) return { status: "current" as const };
+      if (error instanceof BranchUnavailableError && (await betaChannel(git)))
+        return { status: "current" as const };
       throw error;
     }
     const check = { deps, storage, token, chatId, upstream };

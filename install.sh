@@ -878,12 +878,15 @@ ok "Node $(node -v)"
 # iva.beta=true — вершину. Ветка остаётся той же: за ней следит обновлятор. Та же функция
 # стоит в install.sh и repair.sh: оба запускаются через curl | bash и самодостаточны.
 checkout_release() {
-  local first="0.4.9" tag target=HEAD
+  local first="0.4.9" tag target="${3:-HEAD}"
   if [ "${IVA_BETA:-}" = 1 ]; then git -C "$1" config --local iva.beta true; fi
-  [ "$(git -C "$1" config --local --get iva.beta || true)" != true ] || return 0
-  tag="$(git -C "$1" tag --list 'v*' --merged HEAD --sort=-v:refname \
-    | grep -E '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' | head -n 1 || true)"
-  if [ -n "$tag" ] && [ "$(printf '%s\n%s\n' "$first" "${tag#v}" | sort -V | head -n 1)" = "$first" ]; then target="$tag"; fi
+  # Бета - ветка beta или прежний флаг (ADR-0018): вершина. Иначе новейший выпуск.
+  if [ "$(git -C "$1" config --local --get iva.beta || true)" != true ] \
+    && [ "$(git -C "$1" config --local --get iva.updateBranch || true)" != beta ]; then
+    tag="$(git -C "$1" tag --list 'v*' --merged "$target" --sort=-v:refname \
+      | grep -E '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' | head -n 1 || true)"
+    if [ -n "$tag" ] && [ "$(printf '%s\n%s\n' "$first" "${tag#v}" | sort -V | head -n 1)" = "$first" ]; then target="$tag"; fi
+  fi
   # $2 - коммит, стоявший до ремонта: новее цели (её потомок) - он и остаётся.
   if [ -n "${2:-}" ] && git -C "$1" merge-base --is-ancestor "$target" "$2" 2>/dev/null; then target="$2"; fi
   git -C "$1" reset -q --hard "$target"

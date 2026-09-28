@@ -896,3 +896,54 @@ test("daily check on beta with the beta branch unavailable stays quiet as curren
   });
   assert.equal(result.status, "current");
 });
+
+// ── Круг 3: таблица отказов ежедневной проверки на бете ──────────────────────────────
+// Молчит, как current, только сеть и отсутствующая ветка beta. Повреждённый
+// update-compat.json на вершине и негодное имя ветки показываются, как до беты.
+test("daily failure table: only an unreachable or missing beta branch is quiet", async () => {
+  const rows: Array<
+    [string, (fx: ReturnType<typeof repoFixture>) => void, "current" | "error"]
+  > = [
+    [
+      "network",
+      (fx) =>
+        git(fx.local, "remote", "set-url", "origin", join(fx.local, "нет.git")),
+      "current",
+    ],
+    [
+      "missing branch",
+      (fx) => git(fx.remote, "update-ref", "-d", "refs/heads/beta"),
+      "current",
+    ],
+    [
+      "update-compat.json",
+      (fx) => {
+        writeFileSync(join(fx.seed, "update-compat.json"), "{ not json");
+        git(fx.seed, "add", "update-compat.json");
+        git(fx.seed, "commit", "-m", "broken compat");
+        git(fx.seed, "push");
+      },
+      "error",
+    ],
+    [
+      "branch name",
+      (fx) => git(fx.local, "config", "iva.updateBranch", "a..b"),
+      "error",
+    ],
+  ];
+  const broken: string[] = [];
+  for (const [step, inject, expect] of rows) {
+    const fx = repoFixture();
+    inject(fx);
+    const outcome = await runDailyUpdateCheck({
+      root: fx.local,
+      env: { TELEGRAM_BOT_TOKEN: "t", TELEGRAM_DIGEST_CHAT_ID: "1" },
+      sendImpl: async () => {},
+    }).then(
+      (result) => result.status,
+      () => "error",
+    );
+    if (outcome !== expect) broken.push(`${step}: ${outcome}`);
+  }
+  assert.deepEqual(broken, []);
+});

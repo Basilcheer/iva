@@ -2,7 +2,7 @@
 // репозиторий с метками vX.Y.Z и коммитами после них. Одна строка таблицы отказов спеки
 // выпусков и бета-обновлений — один тест.
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -292,4 +292,109 @@ void test("метка, удалённая из origin, удаляется и и�
   const target = await fx.target(fx.first);
   assert.equal("tag" in target ? target.tag : "", "v1.0.0");
   assert.equal(target.targetHead, fx.first);
+});
+
+// ── Круг 3: таблица отказов резолвера обновления ─────────────────────────────────────
+// Шаги: rev-parse активного коммита, check-ref-format, fetch ветки, запись миграции
+// (config), fetch меток. Отказ ровно на одном шаге (двойник git резолвера). Инвариант:
+// отказ или цель не ниже установленного; «ветка beta недоступна» — только сеть и
+// отсутствующая ветка, остальное показывается как есть. Отката нет никогда.
+void test("resolver failure table: a failed step refuses, never a target below the installed commit", async (t) => {
+  const fx = fx2(t);
+  const older = fx.first;
+  const broken: string[] = [];
+  type Row = {
+    step: string;
+    setup: () => void;
+    fail?: RegExp;
+    installed: string;
+    expect: "unavailable" | "other";
+  };
+  const reset = () => {
+    for (const key of ["iva.updateBranch", "iva.beta"])
+      spawnSync("git", ["-C", fx.mirror, "config", "--unset-all", key]);
+    git(fx.mirror, "config", "iva.updateBranch", "beta");
+  };
+  const rows: Row[] = [
+    // Активного коммита нет в зеркале (пересоздано, gc), beta откатили назад.
+    {
+      step: "rev-parse installed",
+      installed: "ab".repeat(20),
+      expect: "other",
+      setup: () =>
+        git(fx.seed, "push", "-q", "-f", "origin", `${older}:refs/heads/beta`),
+    },
+    {
+      step: "fetch branch (network)",
+      installed: fx.betaTip,
+      expect: "unavailable",
+      setup: () => {},
+      fail: /^fetch --prune origin refs\/heads\/beta$/u,
+    },
+    {
+      step: "check-ref-format",
+      installed: fx.betaTip,
+      expect: "other",
+      setup: () => {
+        git(fx.mirror, "config", "iva.updateBranch", "a..b");
+        fx.beta("true");
+      },
+    },
+    {
+      step: "config (migration)",
+      installed: fx.betaTip,
+      expect: "other",
+      setup: () => {
+        git(fx.mirror, "config", "iva.updateBranch", "main");
+        fx.beta("true");
+        writeFileSync(join(fx.mirror, "config.lock"), "");
+      },
+    },
+    {
+      step: "fetch tags",
+      installed: fx.first,
+      expect: "other",
+      setup: () => git(fx.mirror, "config", "iva.updateBranch", "main"),
+      fail: /refs\/tags/u,
+    },
+  ];
+  for (const row of rows) {
+    git(fx.seed, "push", "-q", "-f", "origin", `${fx.betaTip}:refs/heads/beta`);
+    reset();
+    row.setup();
+    const gitDouble = (...args: string[]) =>
+      row.fail?.test(args.join(" "))
+        ? Promise.resolve({ code: 1, stdout: "", stderr: "fatal: injected" })
+        : gitAt(fx.mirror, args);
+    const outcome = await resolveReleaseTarget({
+      git: gitDouble,
+      installed: row.installed,
+    })
+      .then((target) => `target ${target.targetHead}`)
+      .catch((error: Error) => `refused: ${error.message}`);
+    const aim = await resolveTarget(fx.mirror, row.installed)
+      .then((target) => `target ${target.sha}`)
+      .catch((error: Error) => `refused: ${error.message}`);
+    rmSync(join(fx.mirror, "config.lock"), { force: true });
+    const unavailable = /beta branch is unavailable/u.test(aim);
+    if (outcome.startsWith("target") && outcome !== `target ${row.installed}`)
+      if (row.step !== "fetch tags") broken.push(`${row.step}: ${outcome}`);
+    if (
+      row.fail === undefined &&
+      unavailable !== (row.expect === "unavailable")
+    )
+      broken.push(`${row.step}: ${aim}`);
+    if (row.fail !== undefined && !outcome.startsWith("refused"))
+      broken.push(`${row.step}: not refused: ${outcome}`);
+  }
+  // Сеть и отсутствующая ветка у настоящего resolveTarget — «ветка beta недоступна».
+  reset();
+  git(fx.seed, "push", "-q", "origin", ":refs/heads/beta");
+  const missing = await resolveTarget(fx.mirror, fx.betaTip).then(
+    (target) => `target ${target.sha}`,
+    (error: Error) => error.message,
+  );
+  if (!/beta branch is unavailable/u.test(missing))
+    broken.push(`missing branch: ${missing}`);
+  assert.deepEqual(broken, []);
 });

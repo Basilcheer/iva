@@ -2,7 +2,13 @@
 // временной установке под git с зеркалом repo/ (обновление читает iva.beta из зеркала).
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
@@ -185,4 +191,50 @@ void test("iva version в каталоге версии: коммит из им�
   const lines = printed(t);
   await createCliMain(version).commands.version([]);
   assert.match(lines[0], /commit 0123456789ab/u);
+});
+
+// ── Круг 3: таблица отказов setBeta ──────────────────────────────────────────────────
+// Каждая запись в каждый репозиторий (checkout, зеркало): ветка, флаг — для iva beta и
+// iva stable. Двойник git на PATH роняет ровно одну запись. Инвариант: false и все ключи
+// обоих репозиториев как до вызова, либо true и всё записано.
+void test("setBeta failure table: any single failed write leaves every key as it was", async (t) => {
+  const fx = install(t);
+  const bin = mkdtempSync(join(tmpdir(), "iva-git-double-"));
+  t.after(() => rmSync(bin, { recursive: true, force: true }));
+  const real = execFileSync("sh", ["-c", "command -v git"], {
+    encoding: "utf8",
+  }).trim();
+  writeFileSync(
+    join(bin, "git"),
+    `#!/bin/sh\nif [ -n "$IVA_FAIL_GIT" ] && printf '%s' "$*" | grep -Eq -e "$IVA_FAIL_GIT"; then exit 255; fi\nexec ${real} "$@"\n`,
+  );
+  chmodSync(join(bin, "git"), 0o755);
+  const path = process.env.PATH;
+  process.env.PATH = `${bin}:${path ?? ""}`;
+  t.after(() => {
+    process.env.PATH = path;
+    delete process.env.IVA_FAIL_GIT;
+  });
+  const { setBeta } = await import("../lib/update-channel.ts");
+  const repos = [fx.home, join(fx.home, "repo")];
+  const keys = () => repos.map((repo) => [fx.branch(repo), fx.beta(repo)]);
+  const quote = (text: string) => text.replace(/[.*+?^${}()|[\]\\/]/gu, "\\$&");
+  const broken: string[] = [];
+  for (const on of [true, false])
+    for (const repo of repos)
+      for (const write of on
+        ? ["iva.updateBranch beta", "iva.beta true"]
+        : ["iva.updateBranch main", "--unset-all iva.beta"]) {
+        setBeta(fx.home, !on);
+        const before = JSON.stringify(keys());
+        process.env.IVA_FAIL_GIT = `-C (/private)?${quote(repo)} config --local ${quote(write)}`;
+        const result = setBeta(fx.home, on);
+        delete process.env.IVA_FAIL_GIT;
+        const after = JSON.stringify(keys());
+        if (result || after !== before)
+          broken.push(
+            `on=${on} ${repo} ${write}: ${result} ${before} → ${after}`,
+          );
+      }
+  assert.deepEqual(broken, []);
 });
