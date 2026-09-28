@@ -29,6 +29,11 @@ import {
   probeClaudeModel,
 } from "./claude-cli-status.ts";
 
+// Тест не наследует настройку Anthropic с машины разработчика: хост с ANTHROPIC_BASE_URL или
+// ключом (так запускают из агентной сессии) валил бы все ходы отказом CLI без дефекта в коде.
+for (const key of Object.keys(process.env))
+  if (/^(ANTHROPIC_|CLAUDE_CODE_USE_)/u.test(key)) delete process.env[key];
+
 const tempRoots: string[] = [];
 test.after(() => {
   for (const dir of tempRoots) rmSync(dir, { recursive: true, force: true });
