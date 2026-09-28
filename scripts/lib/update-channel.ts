@@ -4,6 +4,8 @@ import { join } from "node:path";
 import { classifyRoot, gitRootFor } from "./version-layout.ts";
 
 export const DEFAULT_UPDATE_BRANCH = "main";
+/** Ветка бета-обновлений: в main только выпуски (ADR-0018). */
+const BETA_BRANCH = "beta";
 export const UPDATE_BRANCH_CONFIG = "iva.updateBranch";
 
 export type GitResult = {
@@ -186,19 +188,20 @@ export function betaOf(root: string): boolean {
   return spawnSync("git", args, { encoding: "utf8" }).stdout?.trim() === "true";
 }
 
-/** iva beta / iva stable и кнопка меню: iva.beta=true или ключа нет, в установке и
- * в зеркале. */
+/** iva beta / iva stable и кнопка меню: бета — iva.beta=true и ветка beta, стабильные —
+ * ключа нет и ветка main (ADR-0018), в установке и в зеркале. */
 export function setBeta(root: string, on: boolean): boolean {
-  const args = on ? [BETA_CONFIG, "true"] : ["--unset-all", BETA_CONFIG];
+  const beta = on ? [BETA_CONFIG, "true"] : ["--unset-all", BETA_CONFIG];
+  const branch = [
+    UPDATE_BRANCH_CONFIG,
+    on ? BETA_BRANCH : DEFAULT_UPDATE_BRANCH,
+  ];
+  const config = (repo: string, args: string[]) =>
+    spawnSync("git", ["-C", repo, "config", "--local", ...args]).status;
   const written = betaRepos(root).map((repo) => {
-    const status = spawnSync("git", [
-      "-C",
-      repo,
-      "config",
-      "--local",
-      ...args,
-    ]).status;
-    return status === 0 || (!on && status === 5); // 5: ключа и так нет
+    const status = config(repo, beta);
+    const flag = status === 0 || (!on && status === 5); // 5: ключа и так нет
+    return flag && config(repo, branch) === 0;
   });
   return written.length > 0 && written.every(Boolean);
 }

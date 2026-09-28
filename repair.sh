@@ -96,6 +96,8 @@ checkout_release() {
     | grep -E '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' | head -n 1 || true)"
   [ -n "$tag" ] || return 0
   [ "$(printf '%s\n%s\n' "$first" "${tag#v}" | sort -V | head -n 1)" = "$first" ] || return 0
+  # $2 - коммит, стоявший до ремонта: новее выпуска (его потомок) - он и остаётся.
+  if [ -n "${2:-}" ] && git -C "$1" merge-base --is-ancestor "$tag" "$2" 2>/dev/null; then tag="$2"; fi
   git -C "$1" reset -q --hard "$tag"
 }
 
@@ -118,16 +120,24 @@ fi
 
 # Та же ветка, на которой сидит установка: `iva rollback` пишет её в git config, и
 # ремонт не имеет права молча вернуть человека на main.
+# IVA_BETA=1 переводит установку на бету: ветка beta (ADR-0018).
+if [ "${IVA_BETA:-}" = 1 ]; then git -C "$INSTALL_DIR" config --local iva.updateBranch beta; fi
 branch="$(git -C "$INSTALL_DIR" config --get iva.updateBranch || true)"
 [ -n "$branch" ] || branch="main"
 
 say "Getting Iva $branch..." "Получаю Iva ($branch)..."
 # FETCH_HEAD, не `origin/<ветка>`: remote-tracking ref у установки может не существовать
 # (клон без него, свёрнутый refspec), и тогда reset падал бы, оставив дерево как было.
+installed="$(git -C "$INSTALL_DIR" rev-parse -q --verify HEAD || true)"
+beta_tip="$(git -C "$INSTALL_DIR" fetch --quiet origin beta 2>/dev/null && git -C "$INSTALL_DIR" rev-parse FETCH_HEAD || true)"
 git -C "$INSTALL_DIR" fetch --quiet origin "$branch"
 git -C "$INSTALL_DIR" reset --quiet --hard FETCH_HEAD
 git -C "$INSTALL_DIR" fetch --quiet --prune origin "+refs/tags/*:refs/tags/*"
-checkout_release "$INSTALL_DIR"
+# Коммит до ремонта в счёт, только если он есть в origin (ветка установки или beta):
+# правку владельца ремонт затирает.
+in_origin() { git -C "$INSTALL_DIR" merge-base --is-ancestor "$installed" "$1" 2>/dev/null; }
+[ -n "$installed" ] && { in_origin HEAD || { [ -n "$beta_tip" ] && in_origin "$beta_tip"; }; } || installed=""
+checkout_release "$INSTALL_DIR" "$installed"
 say "Local changes to Iva's code were removed." "Локальные правки в коде удалены."
 say "Your .env, data/, vault/ and attachments/ stay in place." "Ваши .env, data/, vault/ и attachments/ остались на месте."
 

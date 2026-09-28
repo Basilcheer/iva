@@ -120,7 +120,9 @@ Install as a normal user, not as root — Iva's shell tool runs as whoever insta
 ### Updates
 
 - `iva update` installs releases only (`vX.Y.Z` tags) — the default.
-- `iva beta` turns on beta updates: every accepted change as soon as it lands; `iva stable` turns them off (nothing is rolled back — the next release catches up). Then run `iva update`.
+- `main` holds releases only; every accepted change lands in the `beta` branch first.
+- `iva beta` turns on beta updates: the tip of the `beta` branch; `iva stable` turns them off and goes back to `main` (nothing is rolled back — the next release catches up). Then run `iva update`.
+- Any installation, 0.4.8 included, switches to beta with one command: `curl -fsSL https://raw.githubusercontent.com/smixs/iva-agent/beta/beta.sh | bash`. A new installation on beta: `IVA_BETA=1` before `bash` in the install command.
 - The same switch is in Telegram: `/menu` → 🛠 Maintenance → 🧪 Updates. `iva version` shows which one is on.
 
 ### The first minute

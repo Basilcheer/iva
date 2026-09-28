@@ -347,3 +347,57 @@ test("repair puts a checkout on the newest release from 0.4.9, else on the tip; 
   run();
   assert.equal(git(install, "rev-parse", "HEAD"), tip);
 });
+
+// ADR-0018: бета — ветка beta; ремонт на beta ставит её вершину, на main — выпуск, но
+// установку новее выпуска не откатывает (ADR-0017: обновление назад не ходит).
+test("repair on beta takes the beta tip; on main it keeps an installation newer than the release", (t) => {
+  const { install, remote, run } = checkout(t);
+  const fixture = join(install, "..");
+  const release = publish(remote, "v0.4.9", fixture);
+  const newer = publish(remote, null, fixture);
+  const betaTip = (() => {
+    const work = join(fixture, "work-beta");
+    git(fixture, "clone", "--quiet", remote, work);
+    git(work, "switch", "--quiet", "-c", "beta");
+    writeFileSync(join(work, "bin/iva.mjs"), "// beta\n");
+    git(work, "commit", "--quiet", "-am", "beta");
+    git(work, "push", "--quiet", "origin", "beta");
+    return git(work, "rev-parse", "HEAD");
+  })();
+
+  git(install, "fetch", "--quiet", "origin", "main");
+  git(install, "reset", "--quiet", "--hard", newer);
+  run();
+  assert.equal(
+    git(install, "rev-parse", "HEAD"),
+    newer,
+    "newer than v0.4.9: stays",
+  );
+  git(install, "reset", "--quiet", "--hard", `${release}~1`);
+  run();
+  assert.equal(
+    git(install, "rev-parse", "HEAD"),
+    release,
+    "older: the release",
+  );
+  // Бета-сборка после iva stable (ветка main, iva.beta нет): новее выпуска, остаётся.
+  git(install, "fetch", "--quiet", "origin", "beta");
+  git(install, "reset", "--quiet", "--hard", betaTip);
+  run();
+  assert.equal(
+    git(install, "rev-parse", "HEAD"),
+    betaTip,
+    "a beta build: stays",
+  );
+
+  run({ IVA_BETA: "1" });
+  assert.equal(git(install, "rev-parse", "HEAD"), betaTip);
+  assert.equal(git(install, "config", "--get", "iva.updateBranch"), "beta");
+  assert.equal(git(install, "config", "--get", "iva.beta"), "true");
+  run();
+  assert.equal(
+    git(install, "rev-parse", "HEAD"),
+    betaTip,
+    "beta: the tip of beta",
+  );
+});

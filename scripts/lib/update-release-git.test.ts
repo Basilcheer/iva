@@ -7,7 +7,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
-import { resolveReleaseTarget } from "./update-channel.ts";
+import { resolveReleaseTarget, setBeta } from "./update-channel.ts";
 import { gitAt, inspectUpstream } from "./update-check.ts";
 import {
   ensureMirror,
@@ -161,6 +161,31 @@ void test("ветка обновления не main: выпуски и бета
   assert.equal(stable.targetHead, devTag);
   fx.beta("true");
   assert.equal((await fx.target(fx.first)).targetHead, devTip);
+});
+
+// ADR-0018: выпуски в main, бета — ветка beta. iva beta / iva stable переводят и ветку.
+void test("iva beta — вершина ветки beta; iva stable — выпуск main, установку новее выпуска не откатывает", async (t) => {
+  const fx = fixture(t);
+  git(fx.seed, "switch", "-q", "-c", "beta");
+  const tip = fx.commit("1.1.0-beta.1");
+  git(fx.seed, "switch", "-q", "main");
+  const home = join(fx.temp, "home");
+  mkdirSync(home);
+  const repo = join(home, "repo");
+  git(fx.temp, "clone", "-q", "--mirror", fx.remote, repo);
+  git(repo, "config", "iva.updateBranch", "main");
+  const target = (installed: string) =>
+    resolveReleaseTarget({ git: (...args) => gitAt(repo, args), installed });
+  assert.equal(setBeta(home, true), true);
+  const beta = await target(fx.first);
+  assert.equal(beta.branch, "beta");
+  assert.equal(beta.targetHead, tip);
+  assert.equal(setBeta(home, false), true);
+  const stable = await target(tip);
+  assert.equal(stable.branch, "main");
+  assert.equal("tag" in stable && stable.tag, "v1.0.0");
+  assert.equal(stable.targetHead, tip);
+  assert.equal((await target(fx.first)).targetHead, fx.first);
 });
 
 void test("зеркало ~/iva/repo получает iva.beta установки так же, как iva.updateBranch", async (t) => {

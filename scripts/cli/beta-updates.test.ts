@@ -29,14 +29,14 @@ function install(t: TestContext) {
     "--allow-empty",
   );
   git(home, "clone", "-q", "--mirror", join(home, ".git"), join(home, "repo"));
-  const beta = (dir: string) => {
+  const read = (key: string) => (dir: string) => {
     try {
-      return git(dir, "config", "--local", "--get", "iva.beta");
+      return git(dir, "config", "--local", "--get", key);
     } catch {
       return "";
     }
   };
-  return { home, beta };
+  return { home, beta: read("iva.beta"), branch: read("iva.updateBranch") };
 }
 
 function printed(t: TestContext): string[] {
@@ -45,7 +45,7 @@ function printed(t: TestContext): string[] {
   return lines;
 }
 
-void test("iva beta / iva stable: iva.beta в установке и зеркале, одна строка с iva update", async (t) => {
+void test("iva beta / iva stable: iva.beta и ветка beta/main в установке и зеркале, одна строка с iva update", async (t) => {
   const fx = install(t);
   const lines = printed(t);
   process.env.AGENT_LANGUAGE = "ru";
@@ -53,10 +53,14 @@ void test("iva beta / iva stable: iva.beta в установке и зеркал
   await cli.commands.beta([]);
   assert.equal(fx.beta(fx.home), "true");
   assert.equal(fx.beta(join(fx.home, "repo")), "true");
+  assert.equal(fx.branch(fx.home), "beta");
+  assert.equal(fx.branch(join(fx.home, "repo")), "beta");
   assert.deepEqual(lines, ["Обновления: бета. Обновиться: iva update"]);
   await cli.commands.stable([]);
   assert.equal(fx.beta(join(fx.home, "repo")), "");
   assert.equal(fx.beta(fx.home), "");
+  assert.equal(fx.branch(fx.home), "main");
+  assert.equal(fx.branch(join(fx.home, "repo")), "main");
   assert.equal(lines[1], "Обновления: стабильные. Обновиться: iva update");
   await cli.commands.version([]);
   assert.match(lines[2], /iva 0\.4\.9-beta\.1 · commit \S+ · updates stable/u);
@@ -84,9 +88,11 @@ void test("меню обслуживания: одна кнопка обновл
   );
   await service.on("beta", [], st, ctx);
   assert.equal(fx.beta(join(fx.home, "repo")), "true");
+  assert.equal(fx.branch(join(fx.home, "repo")), "beta");
   assert.match(screens[0], />🧪 Обновления: бета</u);
   await service.on("beta", [], st, ctx);
   assert.equal(fx.beta(join(fx.home, "repo")), "");
+  assert.equal(fx.branch(join(fx.home, "repo")), "main");
 });
 
 void test("iva beta вне git-дерева: одна строка отказа и код 1, без стека", async (t) => {

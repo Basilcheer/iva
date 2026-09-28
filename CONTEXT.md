@@ -180,14 +180,16 @@ Markdown-файлы `data/custom/agent/instructions/*.md`, которые чит
 _Avoid_: кастомная персона, замена инструкции, override
 
 **Release (выпуск)**:
-Опубликованная версия проекта: метка `vX.Y.Z` на Update branch и запись в CHANGELOG.
-Обычное обновление ставит новейший выпуск и никогда не уводит установку назад (ADR-0017).
+Опубликованная версия проекта: метка `vX.Y.Z` на `main` и запись в CHANGELOG. В `main`
+живут только выпуски (ADR-0018). Обычное обновление ставит новейший выпуск и никогда не
+уводит установку назад (ADR-0017).
 Только патч-инкременты; минор и мажор объявляет владелец.
 _Avoid_: версия (без уточнения), стабильный канал
 
 **Beta updates (бета-обновления)**:
-Выбор владельца установки (`iva beta` / `iva stable`, git-config `iva.beta`): обновление
-ставит вершину Update branch, а не новейший Release. По умолчанию выключены (ADR-0017).
+Выбор владельца установки (`iva beta` / `iva stable`, git-config `iva.beta` и Update branch
+`beta`): обновление ставит вершину ветки `beta`, а не новейший Release. `iva stable` снимает
+`iva.beta` и возвращает Update branch `main`. По умолчанию выключены (ADR-0017, ADR-0018).
 _Avoid_: бета-канал, канал обновления, update channel
 
 **Version (каталог версии)**:
@@ -196,7 +198,8 @@ _Avoid_: бета-канал, канал обновления, update channel
 _Avoid_: билд, инсталляция
 
 **Update branch**:
-Git-ветка, с которой `iva update` берёт код.
+Git-ветка, с которой `iva update` берёт код (git-config `iva.updateBranch`): `main` —
+выпуски, `beta` — бета-обновления (ADR-0018), `release/<v>` — после `iva rollback`.
 _Avoid_: канал обновления, update channel (channel зарезервирован за eve)
 
 **Button (кнопка)**:

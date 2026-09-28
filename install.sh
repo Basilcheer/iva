@@ -24,6 +24,8 @@ printf '\n  \033[36m⏳ Preparing environment / Идёт подготовка о
 set -Eeuo pipefail
 
 REPO_URL="${REPO_URL:-https://github.com/smixs/iva-agent.git}"
+# IVA_BETA=1 - бета-обновления: ветка beta, в main только выпуски (ADR-0018).
+if [ "${IVA_BETA:-}" = 1 ]; then BRANCH="${BRANCH:-beta}"; fi
 BRANCH="${BRANCH:-main}"
 UPDATE_CHANNEL="$BRANCH"
 INSTALL_DIR="${INSTALL_DIR:-$HOME/iva}"
@@ -869,6 +871,8 @@ checkout_release() {
     | grep -E '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' | head -n 1 || true)"
   [ -n "$tag" ] || return 0
   [ "$(printf '%s\n%s\n' "$first" "${tag#v}" | sort -V | head -n 1)" = "$first" ] || return 0
+  # $2 - коммит, стоявший до ремонта: новее выпуска (его потомок) - он и остаётся.
+  if [ -n "${2:-}" ] && git -C "$1" merge-base --is-ancestor "$tag" "$2" 2>/dev/null; then tag="$2"; fi
   git -C "$1" reset -q --hard "$tag"
 }
 
