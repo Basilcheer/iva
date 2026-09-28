@@ -90,6 +90,14 @@ const BLIND_SPOT: ReadonlyArray<{
     why: "ручной стенд; e2e идет через capture/analyze",
   },
   {
+    path: "scripts/live-turn.ts",
+    why: "стенд приёмки: живой ход на настоящем провайдере, сам и есть проверка",
+  },
+  {
+    path: "scripts/lib/eve-app.ts",
+    why: "запуск стендов replica и live-turn, проверяется их прогоном",
+  },
+  {
     path: "scripts/memory/night-call.ts",
     why: "процессная ночь проверяет вызов через HTTP-двойник",
   },
