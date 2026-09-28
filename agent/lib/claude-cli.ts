@@ -544,7 +544,7 @@ function assistantBlocks(
       blocks.push({
         type: "tool_use",
         id: part.toolCallId,
-        name: CLAUDE_TOOL_PREFIX + part.toolName,
+        name: historyToolName(part.toolName),
         input: toolInput(part.input),
       });
     // Рассуждение в историю не возвращается: у claude replaysReasoning=false (его режет
@@ -555,6 +555,17 @@ function assistantBlocks(
       );
   }
   return blocks;
+}
+
+/**
+ * Имя вызова в истории. Неузнанное имя модели возвращается в следующий запрос, а Anthropic
+ * принимает только `[A-Za-z0-9_-]{1,64}`: имя кодируется тем же wireToolName, что и у middleware
+ * провода (допустимое уходит как есть, кэш промпта не меняется); пустое — `unknown`.
+ */
+function historyToolName(name: string): string {
+  return (
+    CLAUDE_TOOL_PREFIX + wireToolName(name || "unknown", CLAUDE_TOOL_NAME_MAX)
+  );
 }
 
 function toolResultBlocks(
