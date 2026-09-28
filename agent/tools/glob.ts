@@ -4,6 +4,8 @@ import { relative, sep } from "node:path";
 import {
   globToRegExp,
   resolveVaultToolRoot,
+  WALK_HINT,
+  walkBound,
   walkFiles,
 } from "../lib/vault-file-search.ts";
 
@@ -26,18 +28,21 @@ export default defineTool({
       .describe("Glob-паттерн, напр. **/*.ts или daily/*.md"),
     cwd: z.string().optional().describe("Абсолютный или от корня vault путь"),
   }),
-  async execute({ pattern, cwd }) {
+  async execute({ pattern, cwd }, { abortSignal }) {
     const root = resolveVaultToolRoot(cwd);
-    const all = (await walkFiles(root)).map((file) =>
+    const bound = walkBound(abortSignal);
+    const all = (await walkFiles(root, bound)).map((file) =>
       relative(root, file).split(sep).join("/"),
     );
     const re = globToRegExp(pattern);
     const matches = all.filter((p) => re.test(p)).sort();
-    if (matches.length <= MAX_PATHS) return matches;
+    const hint = bound.truncated ? [`… ${WALK_HINT}`] : [];
+    if (matches.length <= MAX_PATHS) return [...matches, ...hint];
     const rest = matches.length - MAX_PATHS;
     return [
       ...matches.slice(0, MAX_PATHS),
       `… ещё ${rest} путей из ${matches.length}: сузь pattern или cwd`,
+      ...hint,
     ];
   },
 });
