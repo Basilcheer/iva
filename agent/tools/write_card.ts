@@ -5,12 +5,12 @@ import { basename, dirname, join, relative, sep } from "node:path";
 import { resolveVaultDir } from "@iva/vault-dir";
 import {
   ALIASES_MAX,
-  aliasKey,
   aliasList,
   disappearedLines,
   extractH1,
   listCardFiles,
   logFactKey,
+  mergeAliases,
   mergeRelated,
   normalizeName,
   replaceH2Sections,
@@ -19,11 +19,14 @@ import {
   slugify,
   truthOf,
   TYPE_DIR,
+  unionList,
   withCardLock,
+  compiledTruthError,
   compiledTruthInput,
+  namedH2Sections,
   withTruth,
 } from "../lib/card-store.ts";
-import { hasUnclosedFence, outsideFences } from "../lib/card-text.ts";
+import { hasUnclosedFence } from "../lib/card-text.ts";
 import {
   parseFrontmatterOrSkip,
   renderCardDocument,
@@ -60,7 +63,7 @@ const truthInput = z.object({
   type: z.enum(TYPES),
   title: oneLine,
   text: z.string(),
-  description: oneLine.max(500).optional(),
+  description: oneLine.max(500),
   reason: oneLine,
   source: oneLine.optional(),
 });
@@ -71,16 +74,14 @@ const mergeInput = z.object({
   confirmed_by_owner: z.literal(true),
 });
 
-// На провод уходит одна плоская схема: объединение схем в корне провайдеры не принимают
-// (Anthropic требует input_schema.type), а без инструмента падает весь ход. Что нужно каждой
-// операции, модель читает в описаниях полей; строгую форму операции проверяет execute и
-// отвечает текстом, который модель сама исправит.
+// На провод уходит плоский object; строгую форму операции проверяет execute и отвечает
+// модели текстом, потому что объединения схем в корне провайдеры не принимают.
 const wireInput = z.object({
   operation: z
     .enum(["fact", "truth", "merge"])
     .describe(
       "fact: type, title, text (одна строка), по желанию description, tags, aliases, source. " +
-        "truth: type, title, text (новый Compiled Truth), reason, по желанию source. " +
+        "truth: type, title, text (новый Compiled Truth), description (выжимка), reason, по желанию source. " +
         "merge: target, duplicate, confirmed_by_owner=true.",
     ),
   type: z.enum(TYPES).optional().describe("fact, truth: тип Card"),
@@ -89,7 +90,10 @@ const wireInput = z.object({
     .string()
     .optional()
     .describe("fact: факт одной строкой; truth: новый Compiled Truth"),
-  description: z.string().optional().describe("fact: выжимка, до 500 символов"),
+  description: z
+    .string()
+    .optional()
+    .describe("fact, truth: выжимка текущей правды, до 500 символов"),
   tags: z.array(z.string()).optional().describe("fact: до 6 тегов"),
   aliases: z.array(z.string()).optional().describe("fact: другие написания"),
   source: z.string().optional().describe("fact, truth: откуда факт"),
@@ -136,7 +140,6 @@ function readCards(vault: string): CardRecord[] {
     const content = readFileSync(file, "utf8");
     const parsed = parseFrontmatterOrSkip(content, file);
     if (!parsed) return [];
-    parsed.eol = content.includes("\r\n") ? "\r\n" : "\n";
     const title = extractH1(parsed.body) ?? basename(file, ".md");
     const aliases = aliasList(parsed.fields?.aliases);
     return [{ file, path: cardPath(vault, file), title, aliases, parsed }];
@@ -160,15 +163,7 @@ function candidates(cards: readonly CardRecord[], value: string): CardRecord[] {
   );
 }
 
-function brokenLinks(vault: string, source: string, text: string) {
-  return brokenLinksIn(text, {
-    vaultDir: vault,
-    source,
-  });
-}
-
-/** Незакрытый блок кода: заголовок внутри кода нельзя принять за границу раздела —
- * fact, truth и merge отказывают до записи. */
+/** Незакрытый блок кода делает границы разделов неоднозначными. */
 function fenced(...cards: CardRecord[]) {
   const card = cards.find((item) => hasUnclosedFence(item.parsed.body));
   return card
@@ -235,33 +230,61 @@ function existingFact(
   rows: string[],
 ) {
   const fields: FmFields = { ...(card.parsed.fields ?? {}), updated: date };
-  const aliases = [
-    ...aliasList(fields.aliases),
-    ...input.aliases.map((value) => sanitizeField(value, 80)),
-  ].filter(
-    (value, index, all) =>
-      all.findIndex((other) => aliasKey(other) === aliasKey(value)) === index,
+  const { aliases, dropped } = mergeAliases(
+    fields.aliases,
+    input.aliases.map((value) => sanitizeField(value, 80)),
   );
-  if (aliases.length) fields.aliases = aliases.slice(0, ALIASES_MAX);
-  const tags = [
-    ...aliasList(fields.tags),
-    ...input.tags.map((value) => sanitizeField(value, 80)),
-  ];
-  if (tags.length) fields.tags = [...new Set(tags)];
+  if (aliases.length) fields.aliases = aliases;
+  const tags = unionList(
+    fields.tags,
+    input.tags.map((value) => sanitizeField(value, 80)),
+  );
+  if (tags?.length) fields.tags = tags;
   let body = replaceH2Sections(card.parsed.body, "Log", rows);
-  if (!input.description) return { fields, body };
+  if (!input.description) return { fields, body, dropped };
   const next = sanitizeField(input.description);
   const before = fields.description;
   if (typeof before === "string" && before !== next) {
     const history = sectionRows(body, "History");
-    if (history === null) return { error: "History неоднозначный" };
+    if (history === null) return { error: "History неоднозначный", dropped };
     body = replaceH2Sections(body, "History", [
       ...history,
       `- ${date}: ${before}`,
     ]);
   }
   fields.description = next;
-  return { fields, body };
+  return { fields, body, dropped };
+}
+
+function factChange(
+  card: CardRecord,
+  input: FactInput,
+  rows: string[],
+  state: { date: string; existing: boolean },
+) {
+  const { date, existing } = state;
+  const row = `- ${date}: ${sanitizeField(input.text)} · ${input.source ?? `[[daily/${date}]]`}`;
+  const duplicate = rows.some(
+    (stored) => logFactKey(stored) === logFactKey(row),
+  );
+  return existing
+    ? existingFact(card, input, date, duplicate ? rows : [...rows, row])
+    : {
+        fields: card.parsed.fields ?? {},
+        body: replaceH2Sections(card.parsed.body, "Log", [...rows, row]),
+        dropped: [],
+      };
+}
+
+function factReply(path: string, dropped: string[]) {
+  const reply: { ok: true; action: "fact"; file: string; note?: string } = {
+    ok: true,
+    action: "fact",
+    file: path,
+  };
+  if (dropped.length)
+    reply.note = `Алиасы не поместились (потолок ${ALIASES_MAX}): ${dropped.join(", ")}`;
+  return reply;
 }
 
 async function writeFact(input: FactInput) {
@@ -274,25 +297,20 @@ async function writeFact(input: FactInput) {
   if (fenced(card)) return fenced(card);
   if (rows === null)
     return { ok: false, error: `Card ${card.path}: неоднозначный Log` };
-  const linkError = brokenLinks(vault, card.path, input.text);
+  const linkError = brokenLinksIn(input.text, {
+    vaultDir: vault,
+    source: card.path,
+  });
   if (linkError) return { ok: false, error: linkError };
-  const row = `- ${date}: ${sanitizeField(input.text)} · ${input.source ?? `[[daily/${date}]]`}`;
-  if (rows.some((existing) => logFactKey(existing) === logFactKey(row)))
-    return { ok: true, action: "fact", file: card.path };
-  const changed = existing
-    ? existingFact(card, input, date, [...rows, row])
-    : {
-        fields: card.parsed.fields ?? {},
-        body: replaceH2Sections(card.parsed.body, "Log", [...rows, row]),
-      };
+  const changed = factChange(card, input, rows, { date, existing });
   if ("error" in changed)
     return { ok: false, error: `Card ${card.path}: ${changed.error}` };
-  writeFileAtomicSync(
-    card.file,
-    renderCardDocument(card.parsed, changed.fields, changed.body),
-  );
-  await save(vault, [card.file], `card ${basename(card.file, ".md")}: fact`);
-  return { ok: true, action: "fact", file: card.path };
+  const next = renderCardDocument(card.parsed, changed.fields, changed.body);
+  if (!existing || next !== readFileSync(card.file, "utf8")) {
+    writeFileAtomicSync(card.file, next);
+    await save(vault, [card.file], `card ${basename(card.file, ".md")}: fact`);
+  }
+  return factReply(card.path, changed.dropped);
 }
 
 function truthChange(
@@ -304,7 +322,7 @@ function truthChange(
   const next = compiledTruthInput(input.text);
   const source = input.source ?? `[[daily/${date}]]`;
   const disappeared = disappearedLines(truthOf(card.parsed.body), next);
-  const description = sanitizeField(input.description ?? next);
+  const description = sanitizeField(input.description);
   const beforeDescription = card.parsed.fields?.description;
   if (
     typeof beforeDescription === "string" &&
@@ -343,36 +361,63 @@ async function writeTruth(input: z.infer<typeof truthInput>) {
   const history = sectionRows(card.parsed.body, "History");
   if (history === null)
     return { ok: false, error: `Card ${card.path}: неоднозначный History` };
-  const linkError = brokenLinks(vault, card.path, input.text);
+  const truthError = compiledTruthError(input.text);
+  if (truthError) return { ok: false, error: truthError };
+  const linkError = brokenLinksIn(input.text, {
+    vaultDir: vault,
+    source: card.path,
+  });
   if (linkError) return { ok: false, error: linkError };
   const date = localStamp().date;
   const { body, fields } = truthChange(card, input, history, date);
-  writeFileAtomicSync(card.file, renderCardDocument(card.parsed, fields, body));
+  writeFileAtomicSync(
+    card.file,
+    renderCardDocument(card.parsed, fields, body, ["truth_pending"]),
+  );
   await save(vault, [card.file], `card ${basename(card.file, ".md")}: truth`);
   return { ok: true, action: "truth", file: card.path };
 }
 
 function mergedSections(target: CardRecord, duplicate: CardRecord) {
   let body = target.parsed.body;
-  for (const heading of ["Log", "History", "Related"]) {
+  for (const heading of ["Log", "History"]) {
     const left = sectionRows(target.parsed.body, heading);
     const right = sectionRows(duplicate.parsed.body, heading);
     if (left === null || right === null)
       return { error: `${heading} неоднозначный` };
-    body = replaceH2Sections(body, heading, [...new Set([...left, ...right])]);
+    const key = (row: string) => (heading === "Log" ? logFactKey(row) : row);
+    const seen = new Set(left.filter((row) => row.startsWith("- ")).map(key));
+    let append = false;
+    const fresh = right.filter((row) => {
+      if (row.startsWith("- ")) {
+        append = !seen.has(key(row));
+        seen.add(key(row));
+      }
+      return append;
+    });
+    body = replaceH2Sections(body, heading, [...left, ...fresh]);
   }
+  const related = sectionRows(duplicate.parsed.body, "Related");
+  if (related === null) return { error: "Related неоднозначный" };
+  body = replaceH2Sections(body, "Related", [
+    ...new Set([...(sectionRows(body, "Related") ?? []), ...related]),
+  ]);
   return { body: mergeRelated(body, [duplicate.path]) };
 }
 
 function carriedKnowledge(duplicate: CardRecord): string {
   const lines = duplicate.parsed.body.split("\n");
-  const outside = outsideFences(lines);
-  let keep = true;
+  const sections = namedH2Sections(lines);
   const carried = lines.flatMap((line, index) => {
-    const heading = outside[index] ? /^ {0,3}##\s+(.+?)\s*$/u.exec(line) : null;
-    if (heading) keep = !["Log", "History", "Related"].includes(heading[1]);
-    if (!keep || (outside[index] && /^ {0,3}#\s/u.test(line))) return [];
-    return [heading ? line.replace(/^ {0,3}##/u, "###") : line];
+    const section = sections.find((item) => item.start === index);
+    const dropped = sections.some(
+      (item) =>
+        ["log", "history", "related"].includes(item.key) &&
+        index >= item.start &&
+        index < item.end,
+    );
+    if (dropped || (index === 0 && /^ {0,3}#\s/u.test(line))) return [];
+    return [section ? line.replace(/^ {0,3}##/u, "###") : line];
   });
   const description = duplicate.parsed.fields?.description;
   return [
@@ -383,43 +428,44 @@ function carriedKnowledge(duplicate: CardRecord): string {
     .join("\n\n");
 }
 
+function selectMergeCards(
+  cards: readonly CardRecord[],
+  input: z.infer<typeof mergeInput>,
+) {
+  const targets = candidates(cards, input.target);
+  const duplicates = candidates(cards, input.duplicate);
+  if (targets.length !== 1 || duplicates.length !== 1)
+    return { error: "merge требует две однозначные существующие Card" };
+  const [target, duplicate] = [targets[0], duplicates[0]];
+  if (target.file === duplicate.file)
+    return { error: "Card нельзя склеить с самой собой" };
+  const fenceError = fenced(target, duplicate);
+  return fenceError ?? { target, duplicate };
+}
+
 function mergedFields(target: CardRecord, duplicate: CardRecord): FmFields {
-  const aliases = [
-    ...new Set(
-      [...target.aliases, duplicate.title, ...duplicate.aliases].map((value) =>
-        sanitizeField(value, 80),
-      ),
+  const { aliases } = mergeAliases(
+    target.parsed.fields?.aliases,
+    [duplicate.title, ...duplicate.aliases].map((value) =>
+      sanitizeField(value, 80),
     ),
-  ].slice(0, ALIASES_MAX);
-  const tags = [
-    ...new Set([
-      ...aliasList(target.parsed.fields?.tags),
-      ...aliasList(duplicate.parsed.fields?.tags),
-    ]),
-  ];
+  );
+  const tags = unionList(
+    target.parsed.fields?.tags,
+    aliasList(duplicate.parsed.fields?.tags),
+  );
   return {
     ...(target.parsed.fields ?? {}),
     aliases,
-    ...(tags.length ? { tags } : {}),
+    ...(tags?.length ? { tags } : {}),
   };
 }
 
 async function mergeCards(input: z.infer<typeof mergeInput>) {
   const vault = resolveVaultDir(process.cwd());
-  const cards = readCards(vault);
-  const [targets, duplicates] = [
-    candidates(cards, input.target),
-    candidates(cards, input.duplicate),
-  ];
-  if (targets.length !== 1 || duplicates.length !== 1)
-    return {
-      ok: false,
-      error: "merge требует две однозначные существующие Card",
-    };
-  const [target, duplicate] = [targets[0], duplicates[0]];
-  if (target.file === duplicate.file)
-    return { ok: false, error: "Card нельзя склеить с самой собой" };
-  if (fenced(target, duplicate)) return fenced(target, duplicate);
+  const selected = selectMergeCards(readCards(vault), input);
+  if ("error" in selected) return { ok: false, error: selected.error };
+  const { target, duplicate } = selected;
   const combined = mergedSections(target, duplicate);
   if ("error" in combined) return { ok: false, error: combined.error };
   let { body } = combined;

@@ -264,7 +264,7 @@ interface H2Section {
   end: number;
 }
 
-interface NamedH2Section extends H2Section {
+export interface NamedH2Section extends H2Section {
   heading: string;
   key: string;
 }
@@ -305,7 +305,7 @@ function hasOutsideHeading(body: string, pattern: RegExp): boolean {
   return lines.some((line, index) => outside[index] && pattern.test(line));
 }
 
-function namedH2Sections(lines: string[]): NamedH2Section[] {
+export function namedH2Sections(lines: string[]): NamedH2Section[] {
   const outside = outsideFences(lines);
   const starts = lines.flatMap((line, index) => {
     if (!outside[index]) return [];
@@ -497,6 +497,18 @@ export function withTruth(body: string, truth: string): string {
 
 export const compiledTruthInput = (value: string) =>
   value.replace(/\r\n?/gu, "\n").trim();
+
+export function compiledTruthError(value: string): string | null {
+  const truth = compiledTruthInput(value);
+  const lines = truth.split("\n");
+  const { open, outside } = scanFences(lines);
+  if (open) return "Compiled Truth: незакрытый блок кода";
+  return lines.some(
+    (line, index) => outside[index] && /^ {0,3}#{1,2}\s/u.test(line),
+  )
+    ? "Compiled Truth не принимает H1/H2"
+    : null;
+}
 
 /** Строки before, которых нет в after (с учётом повторов): они уходят в History. */
 export function disappearedLines(before: string, after: string): string[] {
@@ -986,7 +998,7 @@ function listField(value: FmValue | undefined): string[] {
 
 /** Слияние спискового поля: лежащие значения не теряются, дубли не копятся. Вход не
  * список — поле не наше, не трогаем (undefined). */
-function unionList(
+export function unionList(
   previous: FmValue | undefined,
   next: FmValue | undefined,
 ): string[] | undefined {
@@ -994,21 +1006,15 @@ function unionList(
   return [...new Set([...listField(previous), ...next.map(String)])];
 }
 
-// Потолок алиасов живёт в сторе: слияние — единственный путь, которым поле растёт, а
-// колонка meta весит как title и десяток написаний на карточку размывает выдачу соседям.
+// Потолок не даёт длинной meta-колонке размыть выдачу соседних Card.
 export const ALIASES_MAX = 8;
 
-/** Ключ «то же написание»: регистр и схлопнутые пробелы написания не различают, поэтому один
- * ключ и внутри вызова, и при слиянии с лежащими. ё/е здесь НЕ складываются: индекс FTS5 их
- * различает, и схлопнутое второе написание пропадало бы из поиска вместе со своим ключом
- * («Планерка» — то, как это пишут, — не находилась вовсе). */
+/** Одинаковы регистр и пробелы, но не ё/е: FTS5 различает эти написания. */
 export function aliasKey(value: string): string {
   return value.trim().toLowerCase().replace(/\s+/gu, " ");
 }
 
-/** Алиасы, которым не хватит места: тот же ключ и тот же потолок, что у слияния. Нужен
- * вызывающему, который решает про запись до слияния: NOOP в write_card ничего не пишет, но
- * обязан назвать написание, которого владелец в карточке не найдёт. */
+/** Алиасы сверх того же потолка, даже когда вызов позже окажется NOOP. */
 function droppedAliases(
   previous: FmValue | undefined,
   next: readonly string[],
@@ -1016,10 +1022,8 @@ function droppedAliases(
   return mergeAliases(previous, [...next]).dropped;
 }
 
-/** Слияние алиасов: лежащие написания не выбрасываются никогда (карточка с одиннадцатью
- * алиасами от нашего вызова не худеет), новые добираются до потолка, а остальные
- * возвращаются вызывающему: он обязан их назвать. */
-function mergeAliases(
+/** Лежащие написания не выбрасываются; лишние новые возвращаются вызывающему. */
+export function mergeAliases(
   previous: FmValue | undefined,
   next: FmValue,
 ): { aliases: string[]; dropped: string[] } {

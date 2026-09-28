@@ -19,12 +19,9 @@ import { localStamp } from "../lib/vault-daily.ts";
 import { vaultDirErrorText } from "../lib/vault-error.ts";
 import { brokenLinksIn } from "../lib/vault-links.ts";
 
-// Память в vault пишет её код: сырой день и выжимки ведёт ночь, Card меняет write_card,
-// CORE проходит общий писатель с лимитом и History. Остальное в vault (library/ скилла
-// documents) пишется как файл и коммитится; вне vault — просто файл.
+// Память пишет её код; write_file оставляет внешние файлы и library/.
 const MEMORY = /^(?:daily|summaries|weekly|monthly|yearly|cards)(?:\/|$)/u;
 
-/** Реальный путь файла, которого может ещё не быть: симлинк не обходит запрет. */
 function realTarget(abs: string): string {
   const rest: string[] = [];
   for (let current = abs; ; current = dirname(current)) {
@@ -53,6 +50,17 @@ function unverifiable(vault: string, path: string): string | null {
   return null;
 }
 
+function brokenMarkdown(
+  vault: string,
+  rel: string,
+  path: string,
+  content: string,
+) {
+  if (!rel.endsWith(".md")) return null;
+  const body = parseFrontmatterOrSkip(content, path, () => {})?.body ?? content;
+  return brokenLinksIn(body, { vaultDir: vault, source: rel.slice(0, -3) });
+}
+
 async function writeVaultFile(
   vault: string,
   rel: string,
@@ -67,15 +75,8 @@ async function writeVaultFile(
       error:
         "write_file не пишет память: сырой день и выжимки ведёт ночь, Card меняет write_card.",
     };
-  if (rel.endsWith(".md")) {
-    const body =
-      parseFrontmatterOrSkip(content, path, () => {})?.body ?? content;
-    const broken = brokenLinksIn(body, {
-      vaultDir: vault,
-      source: rel.slice(0, -3),
-    });
-    if (broken) return { ok: false, path, error: broken };
-  }
+  const broken = brokenMarkdown(vault, rel, path, content);
+  if (broken) return { ok: false, path, error: broken };
   if (rel === "CORE.md") {
     const result = await writeCore({
       vault,

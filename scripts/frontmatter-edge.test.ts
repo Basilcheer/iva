@@ -249,7 +249,6 @@ test("ночная правка поля сохраняет остальные �
         ];
         const source = `---\r\n${lines.join("\r\n")}\r\n---\r\n# Card\r\n`;
         const parsed = parseFrontmatter(source);
-        parsed.eol = "\r\n";
         const output = renderCardDocument(
           parsed,
           { ...(parsed.fields ?? {}), truth_date: "2026-09-26" },
@@ -266,4 +265,28 @@ test("ночная правка поля сохраняет остальные �
     ),
     { seed: 20_260_928, numRuns: 200, endOnFailure: true },
   );
+});
+
+test("ночная правка удаляет названное поле и не оставляет пустой/BOM frontmatter в теле", () => {
+  const source =
+    '\uFEFF---\r\ntruth_pending: "2026-09-25"\r\n---\r\n# Card\r\n';
+  const parsed = parseFrontmatter(source);
+  const fields = { ...(parsed.fields ?? {}), truth_date: "2026-09-26" };
+  delete (fields as Record<string, string | string[]>).truth_pending;
+  const output = renderCardDocument(parsed, fields, parsed.body, [
+    "truth_pending",
+  ]);
+  assert.ok(output.includes("\r\n"));
+  assert.doesNotMatch(output, /truth_pending/u);
+  assert.equal((output.match(/^---\r?$/gmu) ?? []).length, 2);
+  assert.match(output, /# Card/u);
+
+  const empty = parseFrontmatter("---\n\n---\n# Empty\n");
+  const rendered = renderCardDocument(
+    empty,
+    { updated: "2026-09-28" },
+    empty.body,
+  );
+  assert.equal((rendered.match(/^---$/gmu) ?? []).length, 2);
+  assert.doesNotMatch(rendered, /---\n\n---\n# Empty/u);
 });

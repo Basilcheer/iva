@@ -16,7 +16,9 @@ Creating a fact card (contact/project/decision/idea/note) — write it with the
 (no invented types, no extra fields). Do not use `write_file` for cards. Every
 call names its `operation`: `fact` appends a dated source-backed Card fact,
 `truth` replaces Compiled Truth and archives the displaced value, and `merge`
-joins two duplicates only after the owner explicitly confirms it. Other
+joins two duplicates only after the owner explicitly confirms it. `truth`
+calls also send `description`: a separate one-line summary of the new
+Compiled Truth, not the whole truth flattened into one field. Other
 spellings of a name (language, translit, colloquial, typo) go into `aliases`,
 and that is what makes the card findable by any of them.
 

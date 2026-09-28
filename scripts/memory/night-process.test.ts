@@ -358,6 +358,33 @@ void test("B заменяет правду целиком: сменённая с
   assert.match(text, new RegExp(`truth_date: "${DATE}"`, "u"));
 });
 
+void test("B повторяет ответ с H1/H2 или незакрытым fence и не ломает Card", async (t) => {
+  const fx = await fixture(t);
+  day(fx, "## 10:00 [text]\nАврора сменила курс\n");
+  const file = card(fx, "cards/projects/аврора", aurora);
+  fx.model.replies = [
+    A({
+      facts: [
+        {
+          card: "cards/projects/аврора",
+          text: "Курс сменён",
+          src: "e1",
+          quote: "сменила курс",
+        },
+      ],
+    }),
+    B({ card: "cards/projects/аврора", truth: "# Подмена\n\n## Log\n\n```" }),
+    B({ card: "cards/projects/аврора", truth: "Безопасная правда" }),
+  ];
+  const result = await night(fx);
+  assert.equal(result.code, 0, result.stderr);
+  assert.equal(fx.model.prompts.length, 3);
+  const text = read(file);
+  assert.match(text, /# Аврора\n\nБезопасная правда\n\n## Log/u);
+  assert.equal((text.match(/^## Log$/gmu) ?? []).length, 1);
+  assert.doesNotMatch(text, /Подмена/u);
+});
+
 void test("поздний хвост: A только по новым репликам, Log без повторов, дубля Card нет (M2, ДЕФ-2)", async (t) => {
   const fx = await fixture(t);
   const file = day(fx, "## 10:00 [text]\nЗапустил проект Аврора\n");

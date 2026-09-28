@@ -399,7 +399,6 @@ export function unresolvedLinkTargets(
   return unresolved;
 }
 
-/** Проверка новых wikilinks для обоих файловых инструментов. */
 export function brokenLinksIn(
   text: string,
   options: { vaultDir: string; source: string },

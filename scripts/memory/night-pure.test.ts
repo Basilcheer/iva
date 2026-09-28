@@ -237,6 +237,9 @@ void test("мягкий разбор ответа: ограды markdown и те
   assert.deepEqual(parseJson('```json\n{"a":"```\\ncode\\n```"}\n```'), {
     a: "```\ncode\n```",
   });
+  assert.deepEqual(parseJson('Ответ {кратко}:\n```json\n{"a":1}\n```'), {
+    a: 1,
+  });
   assert.throws(() => parseJson("нет json"), /JSON/u);
 });
 

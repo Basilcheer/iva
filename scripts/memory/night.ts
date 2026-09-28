@@ -76,7 +76,9 @@ type NewCard = z.infer<typeof newCard>;
 const nullable = z.string().nullish();
 const truthCard = z.object({
   card: text,
-  truth: nullable,
+  truth: nullable.refine((value) => !value || !cs.compiledTruthError(value), {
+    message: "Compiled Truth содержит H1/H2 или незакрытый блок кода",
+  }),
   description: nullable,
   status: nullable,
 });
@@ -160,6 +162,7 @@ interface Card {
   readonly fields: fm.FmFields;
   readonly body: string;
   readonly raw: string;
+  readonly parsed: fm.ParsedFrontmatter;
 }
 
 const cardFile = (card: string) => join(vault, `${card}.md`);
@@ -171,13 +174,6 @@ const namesOf = (card: Card) =>
   [card.name, basename(card.file, ".md"), ...card.aliases].map(
     cs.normalizeName,
   );
-const render = (fields: fm.FmFields, body: string, original = "") => {
-  const parsed = original
-    ? fm.parseFrontmatter(original)
-    : { fields: null, body: "", lines: [] };
-  return fm.renderCardDocument(parsed, fields, body);
-};
-
 function readCard(card: string): Card | null {
   const file = cardFile(card);
   let raw: string;
@@ -190,11 +186,10 @@ function readCard(card: string): Card | null {
   }
   const parsed = fm.parseFrontmatterOrSkip(raw, file, (row) => jobs.push(row));
   if (!parsed) return null;
-  parsed.eol = raw.includes("\r\n") ? "\r\n" : "\n";
   const { body, fields = {} } = parsed;
   const name = cs.extractH1(body) ?? basename(file, ".md");
   const aliases = cs.aliasList(fields?.aliases);
-  return { card, file, name, aliases, fields: fields ?? {}, body, raw };
+  return { card, file, name, aliases, fields: fields ?? {}, body, raw, parsed };
 }
 
 const readCards = () =>
@@ -251,7 +246,11 @@ async function applyCachePending(cache: DayCache): Promise<void> {
     }
     writeAtomic(
       found.file,
-      render(found.fields, withFacts(found.body, rows), found.raw),
+      fm.renderCardDocument(
+        found.parsed,
+        found.fields,
+        withFacts(found.body, rows),
+      ),
     );
     if (!(await commit(`${card}: pending facts`, [found.file])))
       throw new Error(`${card}: отложенные факты не закоммичены`);
@@ -409,6 +408,7 @@ type Draft = {
   fields: fm.FmFields;
   body: string;
   before: string;
+  parsed: fm.ParsedFrontmatter;
 };
 
 /** Card дня в памяти до записи: читается раз, пишется одним коммитом шага. */
@@ -434,7 +434,9 @@ class Day {
 
   write(): string[] {
     return [...this.drafts.values()].flatMap((draft) => {
-      const next = draft ? render(draft.fields, draft.body, draft.before) : "";
+      const next = draft
+        ? fm.renderCardDocument(draft.parsed, draft.fields, draft.body)
+        : "";
       if (!draft || next === draft.before) return [];
       mkdirSync(dirname(draft.file), { recursive: true });
       writeAtomic(draft.file, next);
@@ -470,7 +472,13 @@ class Day {
     Object.assign(fields, { created: date, source });
     const body = `# ${name}\n\n## Log\n\n## Related\n\n## History\n`;
     const file = cardFile(card);
-    this.draft(card, () => ({ file, fields, body, before: "" }));
+    this.draft(card, () => ({
+      file,
+      fields,
+      body,
+      before: "",
+      parsed: fm.parseFrontmatter(""),
+    }));
     return card;
   }
 
@@ -662,12 +670,13 @@ function truthApplied(
   const rows = moved.map(
     (line) => `- ${date}: ${line} (сменено: [[daily/${date}]])`,
   );
-  return render(
+  return fm.renderCardDocument(
+    card.parsed,
     fields,
     rows.length
       ? cs.replaceH2Sections(body, "History", [...history, ...rows])
       : body,
-    card.raw,
+    ["truth_pending"],
   );
 }
 
@@ -705,7 +714,10 @@ function giveUp(
   const pending = str(current?.fields, "truth_pending");
   if (!current || (pending && pending <= run.date)) return null;
   const fields = { ...current.fields, truth_pending: run.date };
-  writeAtomic(current.file, render(fields, current.body, current.raw));
+  writeAtomic(
+    current.file,
+    fm.renderCardDocument(current.parsed, fields, current.body),
+  );
   return current.file;
 }
 

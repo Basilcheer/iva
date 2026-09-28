@@ -203,6 +203,7 @@ void test("write_card truth архивирует вытеснённую прав
       type: "note",
       title: "Главная",
       text: "Новая правда",
+      description: "Новая правда",
       reason: "владелец уточнил",
       source: "[[daily/2026-09-27]]",
     },
@@ -247,6 +248,176 @@ void test("write_card truth архивирует вытеснённую прав
   const target = readFileSync(join(dir, "главная.md"), "utf8");
   assert.match(target, /Другая правда/u);
   assert.match(target, /Роль дубля/u);
+});
+
+void test("truth отказывает структурной разметке и требует отдельный description", async (t) => {
+  const fx = fixture(t);
+  const dir = join(fx.vault, "cards/notes");
+  const file = join(dir, "правда.md");
+  mkdirSync(dir, { recursive: true });
+  const before =
+    '---\ntype: "note"\ndescription: "Старая"\n---\n# Правда\n\nСтарая\n\n## Log\n\n## Related\n\n## History\n';
+  writeFileSync(file, before);
+  git(fx.vault, "add", ".");
+  git(fx.vault, "commit", "-qm", "card");
+  for (const text of ["# H1", "## Log\n\nподделка", "Правда\n```\ncode"]) {
+    const result = await writeCard.execute(
+      {
+        operation: "truth",
+        type: "note",
+        title: "Правда",
+        text,
+        description: "Новая",
+        reason: "r",
+      },
+      context,
+    );
+    assert.equal((result as { ok?: boolean }).ok, false, text);
+    assert.equal(readFileSync(file, "utf8"), before);
+  }
+  const missing = await writeCard.execute(
+    {
+      operation: "truth",
+      type: "note",
+      title: "Правда",
+      text: "Новая",
+      reason: "r",
+    } as never,
+    context,
+  );
+  assert.equal((missing as { ok?: boolean }).ok, false);
+  assert.match((missing as { error?: string }).error ?? "", /description/u);
+});
+
+void test("повтор fact сливает поля, а alias сверх потолка назван в ответе", async (t) => {
+  const fx = fixture(t);
+  const dir = join(fx.vault, "cards/notes");
+  const file = join(dir, "mm.md");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    file,
+    [
+      "---",
+      'type: "note"',
+      'description: "Старое"',
+      `aliases: ${JSON.stringify(Array.from({ length: 8 }, (_, i) => `a${i}`))}`,
+      "---",
+      "# MM",
+      "",
+      "Правда",
+      "",
+      "## Log",
+      "",
+      "- 2026-09-28: факт · [[daily/2026-09-28]]",
+      "",
+      "## Related",
+      "",
+      "## History",
+      "",
+    ].join("\n"),
+  );
+  git(fx.vault, "add", ".");
+  git(fx.vault, "commit", "-qm", "card");
+  const result = (await writeCard.execute(
+    {
+      operation: "fact",
+      type: "note",
+      title: "MM",
+      text: "факт",
+      aliases: ["девятый"],
+      tags: ["new"],
+      description: "Новое",
+    },
+    context,
+  )) as { ok?: boolean; note?: string };
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.match(result.note ?? "", /девятый/u);
+  const text = readFileSync(file, "utf8");
+  assert.match(text, /description: "Новое"/u);
+  assert.match(text, /tags: \["new"\]/u);
+  assert.doesNotMatch(text, /девятый/u);
+  assert.equal((text.match(/: факт ·/gu) ?? []).length, 1);
+});
+
+void test("merge сохраняет байты многострочных Log и History цели", async (t) => {
+  const fx = fixture(t);
+  const dir = join(fx.vault, "cards/notes");
+  mkdirSync(dir, { recursive: true });
+  const target = [
+    "---",
+    'type: "note"',
+    "---",
+    "# Target",
+    "",
+    "Правда",
+    "",
+    "## Log",
+    "",
+    "- 2026-08-17:",
+    "  ```",
+    "  npm test",
+    "",
+    "  npm run build",
+    "  ```",
+    "- 2026-08-18: абзац один",
+    "",
+    "  абзац два",
+    "",
+    "## Related",
+    "",
+    "## History",
+    "",
+    "- 2026-08-01: старое",
+    "",
+    "  второй абзац",
+    "",
+  ].join("\n");
+  const duplicate = [
+    "---",
+    'type: "note"',
+    "---",
+    "# Dup",
+    "",
+    "Другая правда",
+    "",
+    "## Log",
+    "",
+    "- 2026-08-19: новое",
+    "",
+    "## Related",
+    "",
+    "## History",
+    "",
+    "- 2026-08-02: другое",
+    "",
+  ].join("\n");
+  writeFileSync(join(dir, "target.md"), target);
+  writeFileSync(join(dir, "dup.md"), duplicate);
+  git(fx.vault, "add", ".");
+  git(fx.vault, "commit", "-qm", "cards");
+  const result = await writeCard.execute(
+    {
+      operation: "merge",
+      target: "Target",
+      duplicate: "Dup",
+      confirmed_by_owner: true,
+    },
+    context,
+  );
+  assert.equal((result as { ok?: boolean }).ok, true, JSON.stringify(result));
+  const changed = readFileSync(join(dir, "target.md"), "utf8");
+  assert.ok(
+    changed.includes(
+      "- 2026-08-17:\n  ```\n  npm test\n\n  npm run build\n  ```\n- 2026-08-18: абзац один\n\n  абзац два",
+    ),
+    changed,
+  );
+  assert.ok(
+    changed.includes("- 2026-08-01: старое\n\n  второй абзац"),
+    changed,
+  );
+  assert.equal((changed.match(/^## Log$/gmu) ?? []).length, 1);
+  assert.equal((changed.match(/^## History$/gmu) ?? []).length, 1);
 });
 
 void test("write_file пишет снаружи и в library/, отказывает памяти vault и держит CORE cap", async (t) => {
@@ -448,6 +619,7 @@ void test("незакрытый фенс: fact, truth и merge отказыва�
       type: "note",
       title: "Фенс",
       text: "Правда",
+      description: "Правда",
       reason: "r",
     },
     {

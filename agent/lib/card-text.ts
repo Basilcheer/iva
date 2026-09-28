@@ -19,9 +19,9 @@ export interface CardText {
 
 /** Frontmatter отдельно, тело отдельно; переводы строк нормализуются к \n. */
 export function splitCard(content: string): CardText {
-  const text = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  const text = content.replace(/^\uFEFF/u, "").replace(/\r\n?/g, "\n");
   const match = FRONTMATTER_BLOCK.exec(text);
-  return match && FRONTMATTER_KEY.test(match[1])
+  return match && (!match[1].trim() || FRONTMATTER_KEY.test(match[1]))
     ? { frontmatter: match[1], body: match[2] }
     : { frontmatter: null, body: text };
 }

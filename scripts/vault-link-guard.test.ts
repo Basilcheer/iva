@@ -287,6 +287,7 @@ test("write_card: truth не создаёт Card", async () => {
     type: "note",
     title: "Нет такой",
     text: "правда",
+    description: "правда",
     reason: "проверка",
   });
   assert.equal(result.ok, false);

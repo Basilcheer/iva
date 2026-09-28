@@ -149,10 +149,12 @@ export function summaryEdited(text: string): boolean {
   }
 }
 
-/** Мягкий разбор: сначала снята ограда markdown, потом JSON от первой { до последней }. */
+/** Мягкий разбор: сначала JSON в markdown-ограде, затем первый объект в тексте. */
 export function parseJson(answer: string): unknown {
   const text = answer.trim();
-  const start = text.indexOf("{");
+  const fence = /```(?:json)?\s*/iu.exec(text);
+  const fenced = fence ? text.indexOf("{", fence.index + fence[0].length) : -1;
+  const start = fenced >= 0 ? fenced : text.indexOf("{");
   if (start < 0) throw new Error("в ответе нет JSON-объекта");
   for (
     let end = text.indexOf("}", start);
@@ -162,7 +164,6 @@ export function parseJson(answer: string): unknown {
     try {
       return JSON.parse(text.slice(start, end + 1));
     } catch (error) {
-      // Вложенный объект, `}` внутри строки или текст после ответа: пробуем следующую.
       if (!(error instanceof SyntaxError)) throw error;
     }
   }
