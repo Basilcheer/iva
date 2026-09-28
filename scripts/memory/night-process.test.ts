@@ -988,6 +988,81 @@ for (const closed of ["skip", "pause"] as const)
     );
   });
 
+/** Выжимки дней с description; день — строка YYYY-MM-DD. */
+function daySummaries(fx: Fixture, days: readonly string[], hash = "") {
+  mkdirSync(join(fx.vault, "summaries/daily"), { recursive: true });
+  for (const date of days)
+    writeFileSync(
+      summary(fx, date),
+      `---\ndescription: "день ${date}"\n${hash ? `input_hash: "${hash}"\n` : ""}---\n# ${date}\n`,
+    );
+}
+const periodReply = (gist: string) => ({ gist, topics: [], points: [] });
+const pinned = (now: string) => ({
+  IVA_TEST_NOW: now,
+  IVA_JOB_STOP_AT: String(Date.parse(now) + 60_000),
+});
+
+// Ремонт (Sol P1): закрытый день недели, которая целиком старше окна 35 дней, а её месяц
+// в окне. Неделю собирает та же ночь, за ней месяц; вечной блокировки нет.
+void test("неделя вне окна 35 дней, которой ждёт месяц в окне, собирается, за ней месяц", async (t) => {
+  const fx = await fixture(t);
+  const week = ["17", "18", "19", "20", "21", "22", "23"].map(
+    (d) => `2026-08-${d}`,
+  );
+  daySummaries(
+    fx,
+    week.filter((date) => date !== "2026-08-20"),
+  );
+  day(
+    fx,
+    "## 10:00 [text]\nзакрыт\n\n<!-- processed: skipped by owner -->\n",
+    "2026-08-20",
+  );
+  fx.model.replies = [periodReply("неделя 34"), periodReply("август")];
+  const result = await night(fx, null, pinned("2026-09-28T12:00:00.000Z"));
+  assert.equal(result.code, 0, result.stderr);
+  assert.equal(fx.model.prompts.length, 2, result.stderr);
+  assert.ok(existsSync(join(fx.vault, "weekly/2026-W34.md")));
+  assert.ok(existsSync(join(fx.vault, "monthly/2026-08.md")));
+});
+
+// Ремонт (Sol P1): поздняя выжимка дня пересобирает неделю, а за ней месяц и год, даже
+// когда модель вернула неделе прежний gist: в хеш родителя входит вход ребёнка.
+void test("поздняя выжимка дня пересобирает неделю, месяц и год при прежнем description недели", async (t) => {
+  const fx = await fixture(t);
+  const now = pinned("2027-01-06T12:00:00.000Z");
+  const week = ["14", "15", "16", "17", "18", "19", "20"].map(
+    (d) => `2026-12-${d}`,
+  );
+  daySummaries(fx, week.slice(0, 6), "h1");
+  day(fx, "## 10:00 [text]\nпоздний\n", week[6]);
+  const at = "2026-12-21T00:00:00.000Z";
+  writeFileSync(
+    join(fx.data, "rollup-attempts.json"),
+    JSON.stringify({ [week[6]]: Array(3).fill({ at, reason: "cut" }) }),
+  );
+  fx.model.replies = [
+    periodReply("неделя"),
+    periodReply("декабрь"),
+    periodReply("год"),
+  ];
+  const first = await night(fx, null, now);
+  assert.equal(first.code, 0, first.stderr);
+  assert.equal(fx.model.prompts.length, 3, first.stderr);
+  daySummaries(fx, [week[6]], "late");
+  rmSync(join(fx.data, "rollup-attempts.json"));
+  commit(fx.vault, "late day");
+  fx.model.replies = [
+    periodReply("неделя"),
+    periodReply("декабрь"),
+    periodReply("год"),
+  ];
+  const second = await night(fx, null, now);
+  assert.equal(second.code, 0, second.stderr);
+  assert.equal(fx.model.prompts.length, 6, second.stderr);
+});
+
 void test("связь пишется в Related обеих Card; связь с неизвестной Card отброшена", async (t) => {
   const fx = await fixture(t);
   day(fx, "## 10:00 [text]\nАнна и Борис взяли Аврору\n");

@@ -228,3 +228,63 @@ void test("Brain говорит с владельцем на его языке: 
   assert.match(failed.stderr, /brain alert: The vault backup did not reach/u);
   assert.doesNotMatch(noRemote.stderr + failed.stderr, /[а-яё]{4}/iu);
 });
+
+// Ремонт (Sol P3): Alert о бэкапе дросселируется по стабильной сути, как в v0.4.8
+// ("missing"), а не по переведённому тексту: смена языка не повторяет его раньше недели.
+// Доставка настоящая до fetch: предзагрузка отвечает как Telegram и пишет тело в файл.
+void test("Brain: смена языка не повторяет Alert о бэкапе раньше недели", (t) => {
+  const fx = brainFixture(t);
+  fx.gh("exit 1");
+  const data = join(fx.root, "data");
+  const sent = join(fx.root, "sent.log");
+  const preload = join(fx.root, "telegram-double.mjs");
+  writeFileSync(
+    preload,
+    `import { appendFileSync } from "node:fs";
+globalThis.fetch = async (_url, init) => {
+  appendFileSync(${JSON.stringify(sent)}, String(init?.body ?? "") + "\\n");
+  return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }));
+};
+`,
+  );
+  const brain = () =>
+    spawnSync(
+      process.execPath,
+      [
+        "--import",
+        join(ROOT, "scripts/lib/ts-esm-hooks.ts"),
+        "--import",
+        preload,
+        join(ROOT, "scripts/memory/brain.ts"),
+      ],
+      {
+        cwd: ROOT,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          PATH: `${join(fx.root, "bin")}:${process.env.PATH ?? ""}`,
+          ASSISTANT_VAULT_DIR: fx.vault,
+          ASSISTANT_DATA_DIR: data,
+          TELEGRAM_BOT_TOKEN: "123:abc",
+          TELEGRAM_DIGEST_CHAT_ID: "42",
+          TELEGRAM_ALLOWED_USER_IDS: "",
+        },
+      },
+    );
+  const alerts = () =>
+    existsSync(sent)
+      ? readFileSync(sent, "utf8")
+          .split("\n")
+          .filter((row) => /gh auth login/u.test(row))
+      : [];
+  writeFileSync(join(data, "settings.json"), '{"language":"ru"}\n');
+  brain();
+  assert.equal(alerts().length, 1, "первый Alert доставлен");
+  writeFileSync(join(data, "settings.json"), '{"language":"en"}\n');
+  brain();
+  assert.equal(
+    alerts().length,
+    1,
+    "та же проблема на другом языке — без повтора",
+  );
+});

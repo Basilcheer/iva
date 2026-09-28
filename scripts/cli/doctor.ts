@@ -104,9 +104,7 @@ export async function scheduleFactsReport(
   const { openJobFailures } = await import("#lib/open-failures.ts");
   const { SCHEDULE_CRON } = await import("#lib/schedule-table.ts");
   const facts = readFactsSync(jobFactsFile(dataDirectory));
-  // Только живые расписания: факты пишет их раннер, а строки снятых (memory-daily,
-  // -weekly, -monthly, -yearly ушли в ночь) остаются в jobs.json навсегда.
-  const live = (name: string) => Object.hasOwn(SCHEDULE_CRON, name);
+  // Только живые расписания (isLiveSchedule): строки снятых остаются в jobs.json.
   const names = Object.keys(SCHEDULE_CRON).sort();
   const lastRuns: string[] = [];
   for (const name of names) {
@@ -122,8 +120,7 @@ export async function scheduleFactsReport(
           : `${name}: провал (${reason}), ${when}`,
     );
   }
-  const openFailures = openJobFailures(facts, now).filter((f) => live(f.name));
-  return { lastRuns, openFailures, facts };
+  return { lastRuns, openFailures: openJobFailures(facts, now), facts };
 }
 
 /** Сколько ждём `/health` прокси: он на loopback, и медленный ответ — уже симптом. */

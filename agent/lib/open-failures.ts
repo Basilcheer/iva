@@ -14,6 +14,7 @@ import {
   type JobFact,
 } from "./job-facts.ts";
 import { list, type Reminder } from "./reminder-store.ts";
+import { isLiveSchedule } from "./schedule-table.ts";
 
 export const OPEN_FAILURES_WINDOW_MS = 24 * 60 * 60 * 1000;
 
@@ -32,7 +33,9 @@ export function openJobFailures(
   facts: readonly JobFact[],
   now: number,
 ): OpenFailure[] {
-  const names = [...new Set(facts.map((fact) => fact.name))];
+  const names = [...new Set(facts.map((fact) => fact.name))].filter(
+    isLiveSchedule,
+  );
   const failures: OpenFailure[] = [];
   for (const name of names) {
     const latest = latestFact(facts, name);

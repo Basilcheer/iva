@@ -70,16 +70,21 @@ async function alertCoreCap(): Promise<void> {
 const run = (command: string, args: string[]) =>
   spawnSync(command, args, { cwd: vault, encoding: "utf8" });
 
-const noRemote = () =>
-  T(
+// Alert дросселируется по сути (как "missing" в v0.4.8), текст локализуется отдельно:
+// смена языка не делает ту же проблему новой.
+type Missing = { essence: string; text: string };
+const noRemote = (): Missing => ({
+  essence: "missing",
+  text: T(
     "Memory is not backed up: the vault has no git remote. On the server run: gh auth login (repo scope). Brain then creates a private iva-vault repository and turns the backup on.",
     "Память не бэкапится: у vault нет git remote. Зайди на сервер и выполни: gh auth login (scope repo). Brain сам создаст приватный репозиторий iva-vault и включит бэкап.",
-  );
+  ),
+});
 
 /** origin vault: настроенный владельцем не трогается; нет — приватный iva-vault через уже
  * авторизованный gh. Уже существующий iva-vault привязывается, только если gh подтвердил,
- * что он приватный. null — remote есть, иначе текст Alert. */
-function ensureRemote(): string | null {
+ * что он приватный. null — remote есть, иначе суть и текст Alert. */
+function ensureRemote(): Missing | null {
   const origin = () => run("git", ["remote", "get-url", "origin"]).status === 0;
   if (origin()) return null;
   if (run("gh", ["auth", "status"]).status !== 0) return noRemote();
@@ -91,10 +96,13 @@ function ensureRemote(): string | null {
   const repo = `${login}/iva-vault`;
   const view = ["repo", "view", repo, "--json", "visibility", "--jq"];
   if (!login || run("gh", [...view, ".visibility"]).stdout.trim() !== "PRIVATE")
-    return T(
-      `The vault backup is off: the repository ${repo} is not private or gh could not check it, so Brain did not attach it. Make it private (gh repo edit ${repo} --visibility private) or set your own origin.`,
-      `Бэкап vault не включён: репозиторий ${repo} не приватный или gh не смог это проверить, Brain его не привязал. Сделай его приватным (gh repo edit ${repo} --visibility private) или укажи свой origin.`,
-    );
+    return {
+      essence: `not-private:${repo}`,
+      text: T(
+        `The vault backup is off: the repository ${repo} is not private or gh could not check it, so Brain did not attach it. Make it private (gh repo edit ${repo} --visibility private) or set your own origin.`,
+        `Бэкап vault не включён: репозиторий ${repo} не приватный или gh не смог это проверить, Brain его не привязал. Сделай его приватным (gh repo edit ${repo} --visibility private) или укажи свой origin.`,
+      ),
+    };
   run("git", ["remote", "add", "origin", `https://github.com/${repo}.git`]);
   return origin() ? null : noRemote();
 }
@@ -103,7 +111,9 @@ async function pushBackup(): Promise<boolean> {
   const missing = ensureRemote();
   if (missing) {
     console.error("brain: no private remote — backup skipped");
-    await alertOnce(dataDir, "vault-remote", missing, () => send(missing));
+    await alertOnce(dataDir, "vault-remote", missing.essence, () =>
+      send(missing.text),
+    );
     return false;
   }
   const push = run("git", ["push", "origin", "HEAD"]);

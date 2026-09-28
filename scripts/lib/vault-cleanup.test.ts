@@ -4,6 +4,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import fc from "fast-check";
 import {
   capDescription,
   cleanupVault,
@@ -122,4 +123,60 @@ void test("CLI чистки: dry-run печатает строку, котору
     new RegExp(`description: "${UNIT}"`, "u"),
   );
   assert.equal(cli().status, 1);
+});
+
+// Ремонт: длина, половина и период — в символах (code points), как len() в Python v0.4.8,
+// а не в UTF-16. Значения посчитаны самим collapse_repeated_description / cap_description.
+const MUSIC = `${"🎵".repeat(10)}123456789`;
+const SONG = "🎵 Песня про море и солнце 🌊";
+const SHEET = "𝄞 music sheet unit x";
+const PYTHON_048_ASTRAL: Record<string, string> = {
+  [`${MUSIC} ${MUSIC}`]: `${MUSIC} ${MUSIC}`,
+  ["🎵".repeat(40)]: "🎵".repeat(40),
+  ["😀 ".repeat(20).trim()]: "😀 ".repeat(20).trim(),
+  ["🎉 party time 🎉 🎉 party time 🎉"]: "🎉 party time 🎉 🎉 party time 🎉",
+  [Array(4).fill(SONG).join(" ")]: SONG,
+  [Array(6).fill(SHEET).join(" ")]: SHEET,
+  ["👍".repeat(41)]: "👍".repeat(41),
+};
+
+void test("символы вне BMP считаются как в v0.4.8: 39 символов с эмодзи не режутся", () => {
+  for (const [input, expected] of Object.entries(PYTHON_048_ASTRAL))
+    assert.equal(collapseRepeatedDescription(input), expected, input);
+  assert.equal(
+    capDescription(`${"🎵".repeat(499)} x${"y".repeat(10)}`),
+    `${"🎵".repeat(499)}…`,
+  );
+});
+
+void test("property: описание не длиннее 40 символов чистка не меняет никогда", () => {
+  const seed = 20_260_928;
+  console.log(`fast-check seed ${seed}`);
+  const symbol = fc.constantFrom(
+    "a",
+    "б",
+    " ",
+    "🎵",
+    "😀",
+    "𝄞",
+    ":",
+    "'",
+    "e\u0301",
+  );
+  const short = fc
+    .array(symbol, { maxLength: 40 })
+    .map((parts) => parts.join(""))
+    .filter((text) => text === text.trim() && [...text].length <= 40);
+  // Удвоенная половина из 10–19 символов: до 40 символов, но в UTF-16 часто длиннее 40.
+  const twice = fc
+    .array(symbol, { minLength: 10, maxLength: 19 })
+    .map((parts) => parts.join("").trim())
+    .map((half) => `${half} ${half}`.trim())
+    .filter((text) => [...text].length <= 40);
+  fc.assert(
+    fc.property(fc.oneof(short, twice), (text) => {
+      assert.equal(collapseRepeatedDescription(text), text);
+    }),
+    { seed, numRuns: 500 },
+  );
 });

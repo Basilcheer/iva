@@ -31,29 +31,31 @@ const IGNORED = new Set([
   "archive",
 ]);
 
-/** Порт collapse_repeated_description v0.4.8: половины — только у строки длиннее 40
- * знаков, период — только единица длиннее 20, иначе законный короткий повтор
- * («Duran Duran») остаётся как есть. */
+/** Порт collapse_repeated_description и cap_description v0.4.8. Длины — в символах (code
+ * points), как len() в Python: половины только у строки длиннее 40, период только у
+ * единицы длиннее 20, иначе законный короткий повтор («Duran Duran») остаётся. */
 export function collapseRepeatedDescription(value: string): string {
   let text = value.trim();
-  while (text.length > 40) {
-    const half = text.length >> 1;
-    const first = text.slice(0, half).trim();
-    if (!first || first !== text.slice(half).trim()) break;
+  for (let chars = [...text]; chars.length > 40; chars = [...text]) {
+    const half = chars.length >> 1;
+    const first = chars.slice(0, half).join("").trim();
+    if (!first || first !== chars.slice(half).join("").trim()) break;
     text = first;
   }
   const unit = `${text} `;
-  const period = (unit + unit).indexOf(unit, 1);
-  return period > 20 && period < unit.length && unit.length % period === 0
-    ? unit.slice(0, period).trim()
+  const size = [...unit].length;
+  const period = [...unit.slice(0, (unit + unit).indexOf(unit, 1))].length;
+  return period > 20 && period < size && size % period === 0
+    ? [...unit].slice(0, period).join("").trim()
     : text;
 }
 
 export function capDescription(value: string): string {
-  if (value.length <= DESCRIPTION_CAP) return value;
-  const prefix = value.slice(0, DESCRIPTION_CAP);
+  const chars = [...value];
+  if (chars.length <= DESCRIPTION_CAP) return value;
+  const prefix = chars.slice(0, DESCRIPTION_CAP).join("");
   const space = prefix.lastIndexOf(" ");
-  return `${prefix.slice(0, space > 0 ? space : DESCRIPTION_CAP)}…`;
+  return `${space >= 0 ? prefix.slice(0, space) : prefix}…`;
 }
 
 /** Огромная строка: единица повтора ищется по первым 200 знакам. */

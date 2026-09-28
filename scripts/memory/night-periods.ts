@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { z } from "zod";
@@ -100,6 +101,17 @@ function summaryOf(vault: string, child: Child): string {
 }
 
 /** paused — дни на паузе после трёх попыток: выжимки у них не будет. */
+/** Вход ребёнка для хеша родителя: input_hash файла ночи, иначе сам файл. Поздняя
+ * выжимка дня меняет вход недели, а за ней месяца и года при прежнем description. */
+function childInput(vault: string, child: Child): string {
+  if (!child.path) return "";
+  const file = join(vault, `${child.path}.md`);
+  const text = readFileSync(file, "utf8");
+  const hash = parseFrontmatterOrSkip(text, file)?.fields?.input_hash;
+  if (typeof hash === "string") return hash;
+  return createHash("sha256").update(text).digest("hex");
+}
+
 type Ask = {
   skill: string;
   model: string;
@@ -134,7 +146,8 @@ async function buildPeriod(
     missing: !child.path,
     summary: summaryOf(vault, child),
   }));
-  const hash = input.stepHash(period, ask.model, ask.skill, values);
+  const inputs = children.map((child) => childInput(vault, child));
+  const hash = input.stepHash(period, ask.model, ask.skill, [values, inputs]);
   if (!due(file, hash, jobs, `${period} ${id}`)) return null;
   let answer: z.infer<typeof periodAnswer>;
   let fallback = false;
@@ -194,9 +207,31 @@ async function buildPeriod(
   return fallback ? `${period}/${id}` : "";
 }
 
+/** К месяцам и годам списка — их недели и месяцы без файла, даже старше окна. */
+function withMissingChildren(
+  vault: string,
+  found: Map<string, [Period, string]>,
+): void {
+  const add = (period: Period, id: string) => {
+    if (!existsSync(join(vault, period, `${id}.md`)))
+      found.set(`${period}/${id}`, [period, id]);
+  };
+  const of = (kind: Period) =>
+    [...found.values()]
+      .filter(([period]) => period === kind)
+      .flatMap(([period, id]) => periodChildIds(period, id));
+  for (const month of of("yearly")) add("monthly", month);
+  for (const child of of("monthly"))
+    if (child.includes("W")) add("weekly", child);
+}
+
 /** Периоды, кончившиеся до сегодня, с днями в последних 35: недели, месяцы, годы,
- * каждый вид от старших к новым. */
-function finishedPeriods(today: string): Array<[Period, string]> {
+ * каждый вид от старших к новым. Ребёнок без файла у периода в окне (месяц года, неделя
+ * месяца) добавлен, даже если он старше окна: иначе период ждал бы его вечно. */
+function finishedPeriods(
+  vault: string,
+  today: string,
+): Array<[Period, string]> {
   const found = new Map<string, [Period, string]>();
   for (let back = 35; back >= 1; back--) {
     const day = iso(Date.parse(`${today}T00:00:00Z`) - back * DAY_MS);
@@ -208,6 +243,7 @@ function finishedPeriods(today: string): Array<[Period, string]> {
     for (const [period, id, last] of ids)
       if (last < today) found.set(`${period}/${id}`, [period, id]);
   }
+  withMissingChildren(vault, found);
   const rank = (period: Period) =>
     ["weekly", "monthly", "yearly"].indexOf(period);
   return [...found.values()].sort(([a], [b]) => rank(a) - rank(b));
@@ -227,7 +263,9 @@ export async function buildReadyPeriods(
 ): Promise<string[]> {
   const fallbacks: string[] = [];
   // Второй проход ночи не трогает собранное этой ночью: fallback пересобирает следующая.
-  const periods = finishedPeriods(today).filter((p) => !tried.has(p.join("/")));
+  const periods = finishedPeriods(vault, today).filter(
+    (p) => !tried.has(p.join("/")),
+  );
   for (const period of periods)
     try {
       const made = await buildPeriod(vault, period, ask, jobs);

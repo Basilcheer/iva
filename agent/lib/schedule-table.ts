@@ -25,6 +25,12 @@ export const REMINDER_TICK_CRON = "* * * * *";
 
 export type ScheduleName = keyof typeof SCHEDULE_CRON;
 
+/** Живое расписание. Снятые (memory-daily, -weekly, -monthly, -yearly ушли в ночь)
+ * остаются в jobs.json навсегда; сигналом о провале не служат нигде (doctor, ход, сторож). */
+export function isLiveSchedule(name: string): boolean {
+  return Object.hasOwn(SCHEDULE_CRON, name);
+}
+
 // The cron fields, for the consumer that has to place a fire time on the calendar itself
 // rather than hand the string to a cron engine. `null` is cron's `*` — that field puts no
 // constraint on the date. Day-of-week is normalized to JS's 0=Sunday..6=Saturday.
