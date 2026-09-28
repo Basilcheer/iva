@@ -23,10 +23,9 @@ import {
   withCardLock,
   compiledTruthError,
   compiledTruthInput,
-  namedH2Sections,
+  parseCardSections,
   withTruth,
 } from "../lib/card-store.ts";
-import { hasUnclosedFence } from "../lib/card-text.ts";
 import {
   parseFrontmatterOrSkip,
   renderCardDocument,
@@ -63,7 +62,7 @@ const truthInput = z.object({
   type: z.enum(TYPES),
   title: oneLine,
   text: z.string(),
-  description: oneLine.max(500),
+  description: oneLine.max(500).optional(),
   reason: oneLine,
   source: oneLine.optional(),
 });
@@ -81,7 +80,7 @@ const wireInput = z.object({
     .enum(["fact", "truth", "merge"])
     .describe(
       "fact: type, title, text (одна строка), по желанию description, tags, aliases, source. " +
-        "truth: type, title, text (новый Compiled Truth), description (выжимка), reason, по желанию source. " +
+        "truth: type, title, text (новый Compiled Truth), reason, по желанию description (выжимка) и source. " +
         "merge: target, duplicate, confirmed_by_owner=true.",
     ),
   type: z.enum(TYPES).optional().describe("fact, truth: тип Card"),
@@ -93,7 +92,9 @@ const wireInput = z.object({
   description: z
     .string()
     .optional()
-    .describe("fact, truth: выжимка текущей правды, до 500 символов"),
+    .describe(
+      "fact: выжимка; truth: необязательная выжимка новой правды, иначе первая фраза; до 500 символов",
+    ),
   tags: z.array(z.string()).optional().describe("fact: до 6 тегов"),
   aliases: z.array(z.string()).optional().describe("fact: другие написания"),
   source: z.string().optional().describe("fact, truth: откуда факт"),
@@ -165,7 +166,9 @@ function candidates(cards: readonly CardRecord[], value: string): CardRecord[] {
 
 /** Незакрытый блок кода делает границы разделов неоднозначными. */
 function fenced(...cards: CardRecord[]) {
-  const card = cards.find((item) => hasUnclosedFence(item.parsed.body));
+  const card = cards.find(
+    (item) => parseCardSections(item.parsed.body.split("\n")).open,
+  );
   return card
     ? { ok: false, error: `Card ${card.path}: незакрытый блок кода` }
     : null;
@@ -322,7 +325,7 @@ function truthChange(
   const next = compiledTruthInput(input.text);
   const source = input.source ?? `[[daily/${date}]]`;
   const disappeared = disappearedLines(truthOf(card.parsed.body), next);
-  const description = sanitizeField(input.description);
+  const description = truthDescription(input);
   const beforeDescription = card.parsed.fields?.description;
   if (
     typeof beforeDescription === "string" &&
@@ -344,6 +347,12 @@ function truthChange(
   };
   delete fields.truth_pending;
   return { body, fields };
+}
+
+function truthDescription(input: z.infer<typeof truthInput>): string {
+  const first = input.text.split(/\r?\n/u).find((line) => line.trim()) ?? "";
+  const phrase = /^.*?[.!?…](?:\s|$)/u.exec(first)?.[0] ?? first;
+  return input.description ?? sanitizeField(phrase);
 }
 
 async function writeTruth(input: z.infer<typeof truthInput>) {
@@ -387,7 +396,7 @@ function mergedSections(target: CardRecord, duplicate: CardRecord) {
       return { error: `${heading} неоднозначный` };
     const key = (row: string) => (heading === "Log" ? logFactKey(row) : row);
     const seen = new Set(left.filter((row) => row.startsWith("- ")).map(key));
-    let append = false;
+    let append = true;
     const fresh = right.filter((row) => {
       if (row.startsWith("- ")) {
         append = !seen.has(key(row));
@@ -407,7 +416,9 @@ function mergedSections(target: CardRecord, duplicate: CardRecord) {
 
 function carriedKnowledge(duplicate: CardRecord): string {
   const lines = duplicate.parsed.body.split("\n");
-  const sections = namedH2Sections(lines);
+  const parsed = parseCardSections(lines);
+  const sections = parsed.sections.filter((section) => section.level === 2);
+  const h1 = parsed.sections.find((section) => section.level === 1)?.start;
   const carried = lines.flatMap((line, index) => {
     const section = sections.find((item) => item.start === index);
     const dropped = sections.some(
@@ -416,7 +427,7 @@ function carriedKnowledge(duplicate: CardRecord): string {
         index >= item.start &&
         index < item.end,
     );
-    if (dropped || (index === 0 && /^ {0,3}#\s/u.test(line))) return [];
+    if (dropped || index === h1) return [];
     return [section ? line.replace(/^ {0,3}##/u, "###") : line];
   });
   const description = duplicate.parsed.fields?.description;

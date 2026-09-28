@@ -57,10 +57,6 @@ export function scanFences(lines: string[]): FenceScan {
   return { outside, open: fence !== null };
 }
 
-export function outsideFences(lines: string[]): boolean[] {
-  return scanFences(lines).outside;
-}
-
 /** Незакрытый фенс уводит остаток документа в код — заголовков за ним уже не видно. */
 export function hasUnclosedFence(body: string): boolean {
   return scanFences(body.split("\n")).open;

@@ -13,7 +13,7 @@ import {
   statSync,
 } from "node:fs";
 import { join } from "node:path";
-import { hasUnclosedFence, outsideFences, scanFences } from "./card-text.ts";
+import { scanFences } from "./card-text.ts";
 import { acquireFileLock, releaseFileLock } from "./fs-atomic.ts";
 import {
   parseFrontmatter,
@@ -62,12 +62,11 @@ const hasQualifier = (s: string) => /\(/.test(s);
 
 export function extractH1(body: string): string | null {
   const lines = body.split("\n");
-  const outside = outsideFences(lines);
-  const line = lines.find(
-    (candidate, index) => outside[index] && /^ {0,3}#\s+/.test(candidate),
+  return (
+    parseCardSections(lines).sections.find(
+      (section) => section.level === 1 && section.heading,
+    )?.heading ?? null
   );
-  const m = line ? /^ {0,3}#\s+(.+)$/.exec(line) : null;
-  return m ? m[1].trim() : null;
 }
 
 function fmNames(fields: FmFields | null): string[] {
@@ -259,71 +258,48 @@ export function bodyContains(existingBody: string, incoming: string): boolean {
   );
 }
 
-interface H2Section {
+interface CardSection {
   start: number;
   end: number;
-}
-
-export interface NamedH2Section extends H2Section {
+  level: 1 | 2;
   heading: string;
   key: string;
 }
 
-function h2Sections(lines: string[], heading: string): H2Section[] {
-  const escaped = heading.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const wanted = new RegExp(`^ {0,3}##\\s+${escaped}\\s*$`, "i");
-  const outside = outsideFences(lines);
-  const starts = lines.flatMap((line, index) =>
-    outside[index] && wanted.test(line) ? [index] : [],
-  );
-  return starts.map((start) => {
-    let end = lines.length;
-    for (let index = start + 1; index < lines.length; index++) {
-      if (outside[index] && /^ {0,3}#{1,2}\s+/.test(lines[index])) {
-        end = index;
-        break;
-      }
-    }
-    return { start, end };
+/** Один разбор структуры Card: H1/H2 внутри закрытых фенсов не являются секциями. */
+export function parseCardSections(lines: string[]) {
+  const scanned = scanFences(lines);
+  const starts = lines.flatMap((line, index) => {
+    if (!scanned.outside[index]) return [];
+    const match = /^ {0,3}(#{1,2})(?:[ \t]+(.*?))?[ \t]*$/.exec(line);
+    if (!match) return [];
+    return [
+      {
+        start: index,
+        level: match[1].length as 1 | 2,
+        heading: (match[2] ?? "").trim(),
+        key: norm(match[2] ?? ""),
+      },
+    ];
   });
+  const sections: CardSection[] = starts.map((section, index) => ({
+    ...section,
+    end: starts[index + 1]?.start ?? lines.length,
+  }));
+  return { ...scanned, sections };
+}
+
+// Старый merge-потребитель держит этот фильтр; разделы распознаёт только разбор выше.
+const namedH2Sections = (lines: string[]) =>
+  parseCardSections(lines).sections.filter((section) => section.level === 2);
+
+function h2Sections(lines: string[], heading: string): CardSection[] {
+  const wanted = norm(heading);
+  return namedH2Sections(lines).filter((section) => section.key === wanted);
 }
 
 function hasH2Section(body: string, heading: string): boolean {
   return h2Sections(body.split("\n"), heading).length > 0;
-}
-
-/** Первая строка вне фенсов, подходящая под pattern: отказ называет её, а не только факт. */
-function outsideHeading(body: string, pattern: RegExp): string | undefined {
-  const lines = body.split("\n");
-  const outside = outsideFences(lines);
-  return lines.find((line, index) => outside[index] && pattern.test(line));
-}
-
-function hasOutsideHeading(body: string, pattern: RegExp): boolean {
-  const lines = body.split("\n");
-  const outside = outsideFences(lines);
-  return lines.some((line, index) => outside[index] && pattern.test(line));
-}
-
-export function namedH2Sections(lines: string[]): NamedH2Section[] {
-  const outside = outsideFences(lines);
-  const starts = lines.flatMap((line, index) => {
-    if (!outside[index]) return [];
-    const match = /^ {0,3}##\s+(.+?)\s*$/.exec(line);
-    return match
-      ? [{ start: index, heading: match[1].trim(), key: norm(match[1]) }]
-      : [];
-  });
-  return starts.map(({ start, heading, key }) => {
-    let end = lines.length;
-    for (let index = start + 1; index < lines.length; index++) {
-      if (outside[index] && /^ {0,3}#{1,2}\s+/.test(lines[index])) {
-        end = index;
-        break;
-      }
-    }
-    return { start, end, heading, key };
-  });
 }
 
 function normalizeRelatedTarget(raw: string): string {
@@ -469,14 +445,20 @@ export function logFactKey(row: string): string {
 
 // Compiled Truth в теле: между H1 и первым `##`, без пустых строк по краям.
 function truthBounds(lines: string[]): [number, number, number] {
+  const parsed = parseCardSections(lines);
   let start = 0;
   while (start < lines.length && !lines[start].trim()) start++;
-  if (/^ {0,3}#\s/u.test(lines[start] ?? "")) start++;
+  if (
+    parsed.sections.some(
+      (section) => section.level === 1 && section.start === start,
+    )
+  )
+    start++;
   while (start < lines.length && !lines[start].trim()) start++;
-  let end = lines.findIndex(
-    (line, index) => index >= start && /^ {0,3}##\s/u.test(line),
-  );
-  if (end < 0) end = lines.length;
+  const end =
+    parsed.sections.find(
+      (section) => section.level === 2 && section.start >= start,
+    )?.start ?? lines.length;
   let last = end;
   while (last > start && !lines[last - 1].trim()) last--;
   return [start, last, end];
@@ -500,14 +482,9 @@ export const compiledTruthInput = (value: string) =>
 
 export function compiledTruthError(value: string): string | null {
   const truth = compiledTruthInput(value);
-  const lines = truth.split("\n");
-  const { open, outside } = scanFences(lines);
+  const { open, sections } = parseCardSections(truth.split("\n"));
   if (open) return "Compiled Truth: незакрытый блок кода";
-  return lines.some(
-    (line, index) => outside[index] && /^ {0,3}#{1,2}\s/u.test(line),
-  )
-    ? "Compiled Truth не принимает H1/H2"
-    : null;
+  return sections.length ? "Compiled Truth не принимает H1/H2" : null;
 }
 
 /** Строки before, которых нет в after (с учётом повторов): они уходят в History. */
@@ -656,14 +633,16 @@ function historyFact(line: string): string {
  * вытесняет SUPERSEDE, и именно его обязан назвать historyEntry. */
 function compiledTruth(body: string): string {
   const lines = body.split("\n");
-  const sections = namedH2Sections(lines);
-  const head = lines.slice(
-    0,
-    sections.length ? sections[0].start : lines.length,
-  );
-  const outside = outsideFences(head);
+  const parsed = parseCardSections(lines);
+  const end = parsed.sections.find((section) => section.level === 2)?.start;
+  const head = lines.slice(0, end ?? lines.length);
   return head
-    .filter((line, index) => !(outside[index] && /^ {0,3}#\s+\S/.test(line)))
+    .filter(
+      (_line, index) =>
+        !parsed.sections.some(
+          (section) => section.level === 1 && section.start === index,
+        ),
+    )
     .join("\n");
 }
 
@@ -1006,15 +985,21 @@ export function unionList(
   return [...new Set([...listField(previous), ...next.map(String)])];
 }
 
-// Потолок не даёт длинной meta-колонке размыть выдачу соседних Card.
+// Потолок алиасов живёт в сторе: слияние — единственный путь, которым поле растёт, а
+// колонка meta весит как title и десяток написаний на карточку размывает выдачу соседям.
 export const ALIASES_MAX = 8;
 
-/** Одинаковы регистр и пробелы, но не ё/е: FTS5 различает эти написания. */
+/** Ключ «то же написание»: регистр и схлопнутые пробелы написания не различают, поэтому один
+ * ключ и внутри вызова, и при слиянии с лежащими. ё/е здесь НЕ складываются: индекс FTS5 их
+ * различает, и схлопнутое второе написание пропадало бы из поиска вместе со своим ключом
+ * («Планерка» — то, как это пишут, — не находилась вовсе). */
 export function aliasKey(value: string): string {
   return value.trim().toLowerCase().replace(/\s+/gu, " ");
 }
 
-/** Алиасы сверх того же потолка, даже когда вызов позже окажется NOOP. */
+/** Алиасы, которым не хватит места: тот же ключ и тот же потолок, что у слияния. Нужен
+ * вызывающему, который решает про запись до слияния: NOOP в write_card ничего не пишет, но
+ * обязан назвать написание, которого владелец в карточке не найдёт. */
 function droppedAliases(
   previous: FmValue | undefined,
   next: readonly string[],
@@ -1180,7 +1165,7 @@ function assertBodyShape(
   operation: CardOperation,
   date: string,
 ): void {
-  if (operation !== "NOOP" && hasUnclosedFence(trimmedBody))
+  if (operation !== "NOOP" && parseCardSections(trimmedBody.split("\n")).open)
     throw new Error(`${operation} body must close every code fence`);
   if (operation === "ADD" || operation === "UPDATE")
     assertNoHeading(trimmedBody, operation);
@@ -1189,8 +1174,10 @@ function assertBodyShape(
 
 /** Заголовок в теле ADD/UPDATE: отказ называет строку и показывает её обычной строкой. */
 function assertNoHeading(trimmedBody: string, operation: CardOperation): void {
-  const heading = outsideHeading(trimmedBody, /^ {0,3}#{1,2}\s+/);
-  if (heading === undefined) return;
+  const lines = trimmedBody.split("\n");
+  const section = parseCardSections(lines).sections[0];
+  if (!section) return;
+  const heading = lines[section.start];
   const plain = heading.replace(/^ {0,3}#{1,2}\s+/, "").trim();
   throw new Error(
     `${operation} body must be a fact without H1/H2 headings; got ${JSON.stringify(heading.trim())}. ` +
@@ -1206,13 +1193,8 @@ function assertNoHeading(trimmedBody: string, operation: CardOperation): void {
  * каком она ляжет в карточку. */
 function assertLogEntryShape(trimmedBody: string, date: string): void {
   const entry = logEntryLines(trimmedBody, date);
-  const scanned = scanFences(entry);
-  if (
-    scanned.open ||
-    entry.some(
-      (line, index) => scanned.outside[index] && /^ {0,3}#{1,2}\s+/.test(line),
-    )
-  )
+  const parsed = parseCardSections(entry);
+  if (parsed.open || parsed.sections.length)
     throw new Error(
       "UPDATE body must start every code fence at the line start; a Log entry indents the body by two spaces",
     );
@@ -1269,7 +1251,10 @@ function assertSupersedeSource(
     );
   if (
     input.operation !== undefined &&
-    hasOutsideHeading(trimmedBody, /^ {0,3}(?:#\s+|##\s+(?:History|Log)\s*$)/i)
+    parseCardSections(trimmedBody.split("\n")).sections.some(
+      (section) =>
+        section.level === 1 || ["history", "log"].includes(section.key),
+    )
   )
     throw new Error(
       "SUPERSEDE body must be a fact without an H1 or a ## History/## Log heading",
@@ -1297,19 +1282,18 @@ function createCard(input: MergeInput, trimmedBody: string): MergeResult {
  * append-only History, а UPDATE не нашёл бы Log и дописал бы факт внутрь кода, откуда
  * его уже не видно. Отказ для обеих операций; фенс в карточке чинит человек. */
 function assertStoredBody(oldBody: string, operation: CardOperation): void {
-  if (
-    (operation === "SUPERSEDE" || operation === "UPDATE") &&
-    hasUnclosedFence(oldBody)
-  ) {
+  const parsed = parseCardSections(oldBody.split("\n"));
+  if ((operation === "SUPERSEDE" || operation === "UPDATE") && parsed.open) {
     throw new Error(
       `existing card body leaves a code fence open; close it before ${operation}`,
     );
   }
   if (
     operation === "UPDATE" &&
-    hasOutsideHeading(
-      oldBody,
-      /^ {0,3}##\s+(?:Обновление|Update)\s+\d{4}-\d{2}-\d{2}\s*$/i,
+    parsed.sections.some(
+      (section) =>
+        section.level === 2 &&
+        /^(?:обновление|update)\s+\d{4}-\d{2}-\d{2}$/iu.test(section.heading),
     )
   ) {
     throw new Error(

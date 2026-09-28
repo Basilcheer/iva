@@ -22,6 +22,7 @@ import { brokenLinksIn } from "../lib/vault-links.ts";
 // Память пишет её код; write_file оставляет внешние файлы и library/.
 const MEMORY = /^(?:daily|summaries|weekly|monthly|yearly|cards)(?:\/|$)/u;
 
+/** Реальный путь файла, которого может ещё не быть: симлинк не обходит запрет. */
 function realTarget(abs: string): string {
   const rest: string[] = [];
   for (let current = abs; ; current = dirname(current)) {

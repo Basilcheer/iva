@@ -21,10 +21,16 @@ const {
   compiledTruthInput,
   disappearedLines,
   logFactKey,
+  mergeRelated,
+  parseCardSections,
+  replaceH2Sections,
   sanitizeField,
+  sectionRows,
   truthOf,
   withTruth,
 } = await import("../../agent/lib/card-store.ts");
+const { parseFrontmatter, renderCardDocument } =
+  await import("../../agent/lib/frontmatter.ts");
 const { periodChildIds, periodChildren } = await import("./night-periods.ts");
 const { buildVaultGraph } = await import("./graph.ts");
 const { resolveStopAt } = await import("../lib/rollup-turn.ts");
@@ -222,6 +228,106 @@ void test(`правда целиком: остальные разделы бай
       },
     ),
     CHECKS,
+  );
+});
+
+const CARD_SEED = 20_260_928;
+void test(`Card после случайных fact/truth/merge/night сохраняет структуру и архивы (seed ${CARD_SEED})`, () => {
+  const token = fc.stringMatching(/^[a-z0-9]{1,10}$/u);
+  const operation = fc.record({
+    kind: fc.constantFrom("fact", "truth", "merge", "night"),
+    token,
+  });
+  const frontmatter = fc.constantFrom(
+    "",
+    "---\n---\n",
+    '---\ntype: "note"\ncustom: "keep"\n---\n',
+    "\uFEFF---\ndescription: >-\n  folded value\naliases:\n  - one\n---\n",
+  );
+  fc.assert(
+    fc.property(
+      frontmatter,
+      fc.boolean(),
+      fc.integer({ min: 0, max: 3 }),
+      fc.array(operation, { minLength: 1, maxLength: 12 }),
+      (fm, crlf, blanks, operations) => {
+        const gap = Array.from({ length: blanks }, () => "");
+        const initial = [
+          "# Property Card",
+          ...gap,
+          "исходная правда",
+          "```md",
+          "# код, не H1",
+          "## код, не H2",
+          "```",
+          "",
+          "## Log",
+          "",
+          "- log-original",
+          "",
+          "## Related",
+          "",
+          "## History",
+          "",
+          "history-original",
+        ].join("\n");
+        const eol = crlf ? "\r\n" : "\n";
+        let raw = `${fm}${initial}\n`.replace(/\n/gu, eol);
+        let parsed = parseFrontmatter(raw);
+        for (const [index, step] of operations.entries()) {
+          const oldLog = sectionRows(parsed.body, "Log") ?? [];
+          const oldHistory = sectionRows(parsed.body, "History") ?? [];
+          let body = parsed.body;
+          const mark = `${step.kind}-${step.token}-${String(index)}`;
+          if (step.kind === "fact") {
+            body = replaceH2Sections(body, "Log", [...oldLog, `- ${mark}`]);
+          } else if (step.kind === "merge") {
+            body = replaceH2Sections(body, "Log", [...oldLog, `- ${mark}`]);
+            body = replaceH2Sections(body, "History", [
+              ...oldHistory,
+              `проза-${mark}`,
+            ]);
+            body = mergeRelated(body, [`cards/notes/${mark}`]);
+          } else {
+            const oldTruth = truthOf(body).replace(/\s+/gu, " ").trim();
+            body = withTruth(
+              body,
+              `${mark}\n\n\`\`\`md\n# внутри\n## внутри\n\`\`\`\nхвост`,
+            );
+            body = replaceH2Sections(body, "History", [
+              ...oldHistory,
+              `- ${mark}: ${oldTruth}`,
+            ]);
+          }
+          raw = renderCardDocument(parsed, parsed.fields ?? {}, body);
+          assert.equal(/(^|[^\r])\n/u.test(raw), !crlf);
+          parsed = parseFrontmatter(raw);
+          const structure = parseCardSections(parsed.body.split("\n"));
+          assert.equal(structure.open, false);
+          for (const heading of ["Log", "History", "Related"])
+            assert.equal(
+              structure.sections.filter(
+                (section) =>
+                  section.level === 2 && section.key === heading.toLowerCase(),
+              ).length,
+              1,
+            );
+          const nextLog = sectionRows(parsed.body, "Log") ?? [];
+          const nextHistory = sectionRows(parsed.body, "History") ?? [];
+          const preserved = (before: string[], after: string[]) => {
+            let at = 0;
+            for (const row of after) if (row === before[at]) at++;
+            return at === before.length;
+          };
+          assert.ok(preserved(oldLog, nextLog), JSON.stringify(oldLog));
+          assert.ok(
+            preserved(oldHistory, nextHistory),
+            JSON.stringify(oldHistory),
+          );
+        }
+      },
+    ),
+    { seed: CARD_SEED, numRuns: 100, endOnFailure: true },
   );
 });
 

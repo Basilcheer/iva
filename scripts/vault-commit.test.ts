@@ -203,9 +203,13 @@ test("fact и truth оставляют по коммиту с карточкой
   assert.equal(porcelain(vault), "");
 
   // Повтор того же факта карточку не меняет и коммита не делает.
-  const again = await tool.card(
-    card({ title: "Батыр", body: "Позвонил по смете." }),
-  );
+  const again = await tool.card({
+    operation: "fact",
+    type: "note",
+    title: "Батыр",
+    text: "Позвонил по смете.",
+    tags: ["test"],
+  });
   assert.equal(again.ok, true, again.error);
   assert.equal(subjects(vault).length, 3);
 });
