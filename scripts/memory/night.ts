@@ -647,6 +647,13 @@ async function askTruth(run: TruthRun): Promise<void> {
   }
 }
 
+/** Статус из ответа B. Статус, поставленный днём по слову владельца (status_date), ночь
+ * того же или более раннего дня не меняет: новое слово о нём приходит только следующими днями. */
+function nightStatus(card: Card, answer: TruthCard, date: string): string {
+  if (!answer.status || str(card.fields, "status_date") >= date) return "";
+  return cs.sanitizeField(answer.status, 40);
+}
+
 /** Card по ответу B: правда и description целиком, прежнее дословно в History. */
 function truthApplied(
   card: Card,
@@ -666,11 +673,8 @@ function truthApplied(
   const description = cs.sanitizeField(answer.description ?? "") || before;
   if (before && description !== before) moved.push(before);
   if (description) fields.description = description;
-  // Статус, поставленный днём по слову владельца (status_date), ночь того же или более
-  // раннего дня не меняет: новое слово о статусе приходит только следующими днями.
-  const dayStatus = str(card.fields, "status_date") >= date;
-  if (answer.status && !dayStatus)
-    fields.status = cs.sanitizeField(answer.status, 40);
+  const status = nightStatus(card, answer, date);
+  if (status) fields.status = status;
   const history = cs.sectionRows(body, "History");
   if (history === null) return null;
   const rows = moved.map(
