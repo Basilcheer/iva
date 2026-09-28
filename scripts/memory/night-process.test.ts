@@ -31,9 +31,11 @@ const ROOT = resolve(import.meta.dirname, "../..");
 const NIGHT = join(ROOT, "scripts/memory/night.ts");
 const HOOKS = join(ROOT, "scripts/lib/ts-esm-hooks.ts");
 const DATE = "2026-09-26";
-const TODAY = new Intl.DateTimeFormat("en-CA", { timeZone: "UTC" }).format(
-  new Date(),
-);
+// Часы ночи закреплены: неделя DATE ещё не закончилась, поэтому ночь не собирает сводку
+// недели, и число вызовов модели не зависит от дня запуска тестов.
+const NOW = "2026-09-27T12:00:00Z";
+const TODAY = NOW.slice(0, 10);
+const CLOCK = join(ROOT, "scripts/fixtures/shifted-clock.ts");
 
 class ModelDouble {
   readonly prompts: string[] = [];
@@ -164,7 +166,14 @@ function spawnNight(
   date: string | null = DATE,
   env: Record<string, string> = {},
 ) {
-  const args = ["--import", HOOKS, NIGHT, ...(date ? [date] : [])];
+  const args = [
+    "--import",
+    HOOKS,
+    "--import",
+    CLOCK,
+    NIGHT,
+    ...(date ? [date] : []),
+  ];
   const child: ChildProcess = spawn(process.execPath, args, {
     cwd: ROOT,
     env: {
@@ -181,6 +190,7 @@ function spawnNight(
       TELEGRAM_DIGEST_CHAT_ID: "",
       TELEGRAM_ALLOWED_USER_IDS: "",
       IVA_MEMORY_LOCK_HELD: "1",
+      IVA_TEST_NOW: NOW,
       ...env,
     },
     stdio: ["ignore", "ignore", "pipe"],
