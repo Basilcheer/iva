@@ -204,6 +204,7 @@ class CliSystemdLifecycle {
       // locally: telegram-poll, the sweep and the memory scripts all talk to 127.0.0.1.
       // Env is not enough here — `eve start` takes options.host ?? "0.0.0.0" and overwrites
       // HOST/NITRO_HOST for the spawned .output/server/index.mjs, so the flag is what binds.
+      `ExecStartPre=/usr/bin/env ${this.canonicalDataDirEnvironment()} ${this.runtime.NODE} ${this.runtime.ROOT}/scripts/recover-interrupted-turns.ts`,
       `ExecStart=/usr/bin/env ${this.canonicalDataDirEnvironment()} ${this.runtime.NODE} ${this.runtime.ROOT}/node_modules/eve/bin/eve.js start --host 127.0.0.1`,
       `Environment=PORT=${port}`,
       `Environment=TZ=${timezone}`,

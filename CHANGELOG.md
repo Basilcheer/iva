@@ -1,5 +1,9 @@
 # Changelog
 
+## [Unreleased]
+
+- ♻️ **Рестарт посреди ответа больше не блокирует следующие сообщения**: если процесс Ивы остановился с активным ходом, перед следующим запуском зависшее workflow-состояние уходит в карантин, а Bridge сразу закрывает оборванный ход одной строкой и продолжает сохранённую очередь. `/new` снова отвечает без ручного `iva reset`; рестарт одного Bridge живой ход не затрагивает. Restarting Iva mid-turn no longer wedges the command inbox: startup retires interrupted workflow state, preserves and drains the Telegram queue, and leaves a Bridge-only restart alone.
+
 ## [0.4.9] - 2026-09-28
 
 - 💾 **Переписка на Claude снова читается из кэша**: метка кэша закрепляется на стабильном префиксе переписки вместо меняющегося хвоста, поэтому следующие запросы переиспользуют уже переданный контекст. Claude conversations use the prompt cache again: the cache breakpoint stays on a stable conversation prefix instead of the changing tail, so later requests reuse the context already sent.
