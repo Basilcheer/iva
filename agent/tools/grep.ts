@@ -4,8 +4,11 @@ import { readFile, stat } from "node:fs/promises";
 import { relative, sep } from "node:path";
 import {
   globToRegExp,
+  eachFile,
   resolveVaultToolRoot,
-  walkFiles,
+  WALK_HINT,
+  walkBound,
+  type WalkBound,
 } from "../lib/vault-file-search.ts";
 
 // Host-native grep. Переопределяет встроенный grep eve: regex-поиск по содержимому
@@ -19,9 +22,12 @@ interface Match {
 
 const MAX_MATCHES = 1000;
 
-async function filesAt(root: string): Promise<string[]> {
-  const info = await stat(root);
-  return info.isFile() ? [root] : walkFiles(root);
+async function* filesAt(
+  root: string,
+  bound: WalkBound,
+): AsyncGenerator<string> {
+  if ((await stat(root)).isFile()) yield root;
+  else yield* eachFile(root, bound);
 }
 
 async function readLines(file: string): Promise<string[] | null> {
@@ -51,23 +57,28 @@ async function matchesInFile(
   return matches;
 }
 
+function result(matches: Match[], full: boolean, bound: WalkBound) {
+  const truncated = full || bound.truncated;
+  const hint = bound.truncated ? { hint: WALK_HINT } : {};
+  return { count: matches.length, truncated, ...hint, matches };
+}
+
 async function findMatches(
-  files: string[],
   root: string,
   expression: RegExp,
   globExpression: RegExp | null,
-): Promise<{ count: number; truncated: boolean; matches: Match[] }> {
+  bound: WalkBound,
+): Promise<ReturnType<typeof result>> {
   const matches: Match[] = [];
-  for (const file of files) {
+  for await (const file of filesAt(root, bound)) {
     const relativePath = relative(root, file).split(sep).join("/");
     if (globExpression !== null && !globExpression.test(relativePath)) continue;
     const remaining = MAX_MATCHES - matches.length;
     const additions = await matchesInFile(file, expression);
     matches.push(...additions.slice(0, remaining));
-    if (additions.length >= remaining)
-      return { count: matches.length, truncated: true, matches };
+    if (additions.length >= remaining) return result(matches, true, bound);
   }
-  return { count: matches.length, truncated: false, matches };
+  return result(matches, false, bound);
 }
 
 export default defineTool({
@@ -82,13 +93,14 @@ export default defineTool({
     glob: z.string().optional().describe("Glob-фильтр, напр. **/*.ts"),
     flags: z.string().optional().describe("Напр. 'i' или 'm'"),
   }),
-  async execute({ pattern, path, glob, flags }) {
+  async execute({ pattern, path, glob, flags }, { abortSignal }) {
     const root = resolveVaultToolRoot(path);
+    const bound = walkBound(abortSignal);
     return findMatches(
-      await filesAt(root),
       root,
       new RegExp(pattern, flags ?? ""),
       glob ? globToRegExp(glob) : null,
+      bound,
     );
   },
 });

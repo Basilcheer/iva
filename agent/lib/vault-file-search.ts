@@ -58,50 +58,83 @@ export function resolveVaultToolRoot(path?: string): string {
     : resolveVaultToolPath(path);
 }
 
-async function walk(
-  dir: string,
-  out: string[],
-  visited: Set<string>,
-): Promise<void> {
-  let canonical: string;
-  try {
-    canonical = await realpath(dir);
-  } catch {
-    return;
-  }
-  if (visited.has(canonical)) return;
-  visited.add(canonical);
+// Граница одного вызова grep и glob: 29.09.2026 на c1 grep по /home/shima обходил дом 4,5
+// минуты, ход сняли по тишине через 180 с. 20 000 файлов — в 5,6 раза больше vault владельца
+// (3537 файлов, grep по нему за 1 с). Граница достигнута — отдаём найденное с подсказкой.
+const WALK_MAX_FILES = 20_000;
+const WALK_TIME_MS = 20_000;
+export const WALK_HINT =
+  "просмотрены не все файлы: путь слишком широк, сузь путь или шаблон";
 
-  let entries;
+export type WalkBound = ReturnType<typeof walkBound>;
+
+export function walkBound(signal?: AbortSignal, maxFiles = WALK_MAX_FILES) {
+  const deadline = Date.now() + WALK_TIME_MS;
+  return { deadline, maxFiles, signal, truncated: false };
+}
+
+// Срок вышел или ход снят (ctx.abortSignal eve): обход неполон.
+function outOfTime(bound: WalkBound): boolean {
+  const over = bound.signal?.aborted === true || Date.now() >= bound.deadline;
+  if (over) bound.truncated = true;
+  return over;
+}
+
+// Каталог, ещё не пройденный по реальному пути (цикл симлинков), или null.
+async function unvisitedEntries(dir: string, visited: Set<string>) {
   try {
-    entries = await readdir(dir, { withFileTypes: true });
+    const canonical = await realpath(dir);
+    if (visited.has(canonical)) return null;
+    visited.add(canonical);
+    return await readdir(dir, { withFileTypes: true });
   } catch {
-    return;
-  }
-  for (const entry of entries) {
-    const full = join(dir, entry.name);
-    let isDirectory = entry.isDirectory();
-    let isFile = entry.isFile();
-    if (entry.isSymbolicLink()) {
-      try {
-        const info = await stat(full);
-        isDirectory = info.isDirectory();
-        isFile = info.isFile();
-      } catch {
-        continue;
-      }
-    }
-    if (isDirectory) {
-      if (IGNORE_DIRS.has(entry.name)) continue;
-      await walk(full, out, visited);
-    } else if (isFile) {
-      out.push(full);
-    }
+    return null;
   }
 }
 
-export async function walkFiles(root: string): Promise<string[]> {
+async function* walk(
+  dir: string,
+  visited: Set<string>,
+  bound: WalkBound,
+): AsyncGenerator<string> {
+  for (const entry of (await unvisitedEntries(dir, visited)) ?? []) {
+    if (outOfTime(bound)) return;
+    const full = join(dir, entry.name);
+    // Симлинк судим по цели; битый пропускаем.
+    const info = entry.isSymbolicLink()
+      ? await stat(full).catch(() => null)
+      : entry;
+    if (info?.isFile()) yield full;
+    else if (info?.isDirectory() && !skippedDir(entry.name))
+      yield* walk(full, visited, bound);
+  }
+}
+
+function skippedDir(name: string): boolean {
+  return IGNORE_DIRS.has(name) || name.includes(".trash-");
+}
+
+// Файлы по одному, пока граница не достигнута: работа потребителя между ними (чтение grep)
+// идёт в тот же срок.
+export async function* eachFile(
+  root: string,
+  bound: WalkBound,
+): AsyncGenerator<string> {
+  let seen = 0;
+  for await (const file of walk(root, new Set(), bound)) {
+    if (seen++ === bound.maxFiles) {
+      bound.truncated = true;
+      return;
+    }
+    yield file;
+  }
+}
+
+export async function walkFiles(
+  root: string,
+  bound = walkBound(),
+): Promise<string[]> {
   const files: string[] = [];
-  await walk(root, files, new Set());
+  for await (const file of eachFile(root, bound)) files.push(file);
   return files;
 }
