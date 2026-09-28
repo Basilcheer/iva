@@ -84,6 +84,13 @@ export function sessionStateTargets(root: string, dataDir: string): string[] {
   ];
 }
 
+// A record recovery or an update already marked (updatedAt 0) waits for Bridge, not
+// for another quarantine: every live status write stamps Date.now().
+function isInterruptedRun(parsed: unknown): parsed is Record<string, unknown> {
+  const run = parsed as { status?: unknown; updatedAt?: unknown } | null;
+  return run?.status === "running" && run.updatedAt !== 0;
+}
+
 function interruptedRunStatusFiles(dataDir: string): string[] {
   const dir = join(dataDir, "run-status.d");
   let names: string[];
@@ -98,13 +105,7 @@ function interruptedRunStatusFiles(dataDir: string): string[] {
     .map((name) => join(dir, name))
     .filter((file) => {
       try {
-        const parsed: unknown = JSON.parse(readFileSync(file, "utf8"));
-        return (
-          typeof parsed === "object" &&
-          parsed !== null &&
-          !Array.isArray(parsed) &&
-          (parsed as { status?: unknown }).status === "running"
-        );
+        return isInterruptedRun(JSON.parse(readFileSync(file, "utf8")));
       } catch {
         return false;
       }
@@ -147,18 +148,22 @@ export function rewriteRunStatusesForUpdate(dataDir: string): number {
   let rewritten = 0;
   for (const file of interruptedRunStatusFiles(dataDir)) {
     try {
-      const parsed = JSON.parse(readFileSync(file, "utf8")) as Record<
-        string,
-        unknown
-      >;
+      const parsed: unknown = JSON.parse(readFileSync(file, "utf8"));
+      // A turn Bridge finished since the scan must not be re-armed.
+      if (!isInterruptedRun(parsed)) continue;
       writeRunStatusAtomicSync(file, {
         ...parsed,
         status: "running",
         updatedAt: 0,
       });
       rewritten++;
-    } catch {
-      // One damaged chat record must not block the update or its healthy neighbors.
+    } catch (error) {
+      // One damaged chat record must not block the update or its healthy neighbors;
+      // a record that cannot be written is named in the journal.
+      if (!(error instanceof SyntaxError))
+        console.error(
+          `run-status ${basename(file)} not marked interrupted: ${(error as Error).message}`,
+        );
     }
   }
   return rewritten;
