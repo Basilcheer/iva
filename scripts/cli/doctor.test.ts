@@ -1819,7 +1819,7 @@ test("doctor names a failed schedule run and its open failure", async (t) => {
   await recordFact(
     jobFactsFile(data),
     {
-      name: "memory-daily",
+      name: "memory-night",
       startedAt: finishedAt - 1000,
       finishedAt,
       ok: false,
@@ -1843,7 +1843,7 @@ test("doctor names a failed schedule run and its open failure", async (t) => {
     events.some(
       ([level, message]) =>
         level === "warn" &&
-        /расписание memory-daily: провал \(exited 1\)/u.test(message),
+        /расписание memory-night: провал \(exited 1\)/u.test(message),
     ),
     "последний запуск имени виден как провал",
   );
@@ -1851,7 +1851,7 @@ test("doctor names a failed schedule run and its open failure", async (t) => {
     events.some(
       ([level, message]) =>
         level === "warn" &&
-        /незакрытый провал: memory-daily .*iva jobs ack memory-daily/u.test(
+        /незакрытый провал: memory-night .*iva jobs ack memory-night/u.test(
           message,
         ),
     ),
@@ -1869,7 +1869,7 @@ test("doctor без systemd печатает раздел расписаний �
   await recordFact(
     jobFactsFile(data),
     {
-      name: "memory-daily",
+      name: "memory-night",
       startedAt: finishedAt - 1000,
       finishedAt,
       ok: false,
@@ -1886,7 +1886,7 @@ test("doctor без systemd печатает раздел расписаний �
     events.some(
       ([level, message]) =>
         level === "warn" &&
-        /расписание memory-daily: провал \(exited 1\)/u.test(message),
+        /расписание memory-night: провал \(exited 1\)/u.test(message),
     ),
     `раздела расписаний без systemd нет: ${JSON.stringify(events)}`,
   );
@@ -1894,7 +1894,7 @@ test("doctor без systemd печатает раздел расписаний �
     events.some(
       ([level, message]) =>
         level === "warn" &&
-        /незакрытый провал: memory-daily .*iva jobs ack memory-daily/u.test(
+        /незакрытый провал: memory-night .*iva jobs ack memory-night/u.test(
           message,
         ),
     ),
