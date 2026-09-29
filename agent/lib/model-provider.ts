@@ -118,7 +118,7 @@ export const MODEL_PROVIDERS = {
     defaultVisionModel: null,
   },
   openrouter: {
-    // Слаг модели вида vendor/model (напр. anthropic/claude-sonnet-4.5) — задаётся мастером.
+    // Слаг модели вида vendor/model (напр. anthropic/claude-sonnet-5.5) — задаётся мастером.
     // Дефолт — лишь заглушка на случай ручного .env; мастер всегда перезапишет живой проверкой.
     modelVar: "OPENROUTER_MODEL",
     defaultModel: "openai/gpt-5.1",

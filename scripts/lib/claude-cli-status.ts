@@ -33,7 +33,8 @@ interface ClaudeModelChoice {
 /** Три модели экрана «Модель · Claude», в порядке кнопок. Псевдонимы пикера
  *  (`default`, `opus[1m]`) и Haiku сюда не входят: в .env только эти id. `previous` — модель,
  *  которую отдаёт пикер CLI постарше вместо текущей (CLI 2.1.278 на c1 23.09.2026 знал
- *  Opus 5, а не 5.5): кнопка встаёт на то же место, пока новой модели в пикере нет. */
+ *  Opus 5, а не 5.5; Sonnet 5.5 29.09.2026 есть в пикере CLI 2.1.284, а 2.1.283 называет его
+ *  незнакомой моделью): кнопка встаёт на то же место, пока новой модели в пикере нет. */
 const CLAUDE_MODEL_CHOICES: readonly (ClaudeModelChoice & {
   readonly previous?: ClaudeModelChoice;
 })[] = [
@@ -43,7 +44,11 @@ const CLAUDE_MODEL_CHOICES: readonly (ClaudeModelChoice & {
     label: "Opus 5.5",
     previous: { id: "claude-opus-5", label: "Opus 5" },
   },
-  { id: "claude-sonnet-5", label: "Sonnet 5" },
+  {
+    id: "claude-sonnet-5-5",
+    label: "Sonnet 5.5",
+    previous: { id: "claude-sonnet-5", label: "Sonnet 5" },
+  },
 ];
 
 /** Каждая модель, которую экран умеет назвать: текущие и их предшественницы. */

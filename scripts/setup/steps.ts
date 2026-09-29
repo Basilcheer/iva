@@ -226,7 +226,7 @@ async function askOpenrouterModel(
     `\n  ${ctx.t("Now the model.", "Теперь модель.")} ${ctx.t("Open", "Откройте")} ${C.c}https://openrouter.ai/models${C.x}, ${ctx.t("pick a model and copy its slug", "выберите модель и скопируйте её слаг")}`,
   );
   ctx.print(
-    `  ${ctx.t("— the id under the name, form", "— id под названием, вид")} ${C.g}vendor/model${C.x} (${ctx.t("e.g.", "напр.")} ${C.g}anthropic/claude-sonnet-4.5${C.x}, ${C.g}openai/gpt-5.1${C.x}, ${C.g}google/gemini-2.5-pro${C.x}).`,
+    `  ${ctx.t("— the id under the name, form", "— id под названием, вид")} ${C.g}vendor/model${C.x} (${ctx.t("e.g.", "напр.")} ${C.g}anthropic/claude-sonnet-5.5${C.x}, ${C.g}openai/gpt-5.1${C.x}, ${C.g}google/gemini-2.5-pro${C.x}).`,
   );
   ctx.print(
     `  ${C.y}${ctx.t("I'll send a live test (incl. tool/function calling, which Iva needs) — so a wrong or chat-only model can't slip through and leave the bot mute.", "Сразу отправлю живой тест (включая поддержку инструментов — она нужна Iva) — чтобы кривая или chat-only модель не проскочила и бот не остался немым.")}${C.x}`,

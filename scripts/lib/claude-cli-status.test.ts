@@ -71,7 +71,7 @@ if (mode === "handshake") {
       { value: "default", resolvedModel: "claude-opus-5-5[1m]", displayName: "Default (recommended)" },
       { value: "opus[1m]", resolvedModel: "claude-opus-5-5[1m]", displayName: "Opus (1M context)" },
       { value: "claude-fable-5-1", resolvedModel: "claude-fable-5-1", displayName: "Fable" },
-      { value: "sonnet", resolvedModel: "claude-sonnet-5", displayName: "Sonnet" },
+      { value: "sonnet", resolvedModel: "claude-sonnet-5-5", displayName: "Sonnet 5.5" },
       { value: "haiku", resolvedModel: "claude-haiku-4-5-20251001", displayName: "Haiku" },
       { value: "anonymous", displayName: "no resolved model" },
     ]));
@@ -228,6 +228,16 @@ const CLAUDE_THREE = [
     reasoningLevels: CLAUDE_LEVELS,
   },
   { id: "claude-opus-5-5", label: "Opus 5.5", reasoningLevels: CLAUDE_LEVELS },
+  {
+    id: "claude-sonnet-5-5",
+    label: "Sonnet 5.5",
+    reasoningLevels: CLAUDE_LEVELS,
+  },
+];
+
+/** Пикер до Sonnet 5.5 (CLI 2.1.280–2.1.283): третья кнопка — Sonnet 5 на том же месте. */
+const CLAUDE_THREE_BEFORE_SONNET_55 = [
+  ...CLAUDE_THREE.slice(0, 2),
   { id: "claude-sonnet-5", label: "Sonnet 5", reasoningLevels: CLAUDE_LEVELS },
 ];
 
@@ -239,6 +249,7 @@ test("reasoning levels mirror the runtime: adaptive models only, efforts it send
     "claude-fable-5-1",
     "claude-opus-5-5",
     "claude-opus-5",
+    "claude-sonnet-5-5",
     "claude-sonnet-5",
     "claude-haiku-4-5-20251001",
     "claude-someday-9",
@@ -252,11 +263,12 @@ test("reasoning levels mirror the runtime: adaptive models only, efforts it send
   assert.deepEqual(claudeReasoningLevels("claude-haiku-4-5-20251001"), []);
   assert.deepEqual(claudeReasoningLevels("claude-someday-9"), []);
   assert.deepEqual(
-    claudeReasoningLevels("claude-sonnet-5"),
+    claudeReasoningLevels("claude-sonnet-5-5"),
     CANONICAL_REASONING_EFFORTS.filter(
       (effort) => claudeEffort(effort) !== undefined,
     ),
   );
+  assert.deepEqual(claudeReasoningLevels("claude-sonnet-5-5"), CLAUDE_LEVELS);
   assert.deepEqual(claudeReasoningLevels("claude-sonnet-5"), CLAUDE_LEVELS);
 });
 
@@ -269,7 +281,24 @@ test("the model list is the three named models, aliases and haiku dropped", asyn
   );
 });
 
-test("the live handshake fixture yields Fable, Opus 5.5 and Sonnet", async (t) => {
+// Живой пикер CLI 2.1.284 (29.09.2026) отдаёт и Sonnet 5.5 (на псевдоним `sonnet`), и прошлый
+// Sonnet 5 отдельной строкой: кнопка одна — новая.
+test("the live handshake fixture yields Fable, Opus 5.5 and Sonnet 5.5", async (t) => {
+  const fixture = readFileSync(
+    fileURLToPath(
+      new URL("../fixtures/claude/handshake-2026-09-29.jsonl", import.meta.url),
+    ),
+    "utf8",
+  );
+  const models = await listClaudeModels(
+    envWith(t, "handshake", { FAKE_CLAUDE_PICKER: fixture.trim() }),
+  );
+  assert.deepEqual(models, CLAUDE_THREE);
+});
+
+// Пикер CLI 2.1.280 (23.09.2026) Sonnet 5.5 не знает: кнопка Sonnet не пропадает, а встаёт на
+// своё место с Sonnet 5 — моделью, которую CLI знает.
+test("a picker without Sonnet 5.5 shows Sonnet 5 in its place", async (t) => {
   const fixture = readFileSync(
     fileURLToPath(
       new URL("../fixtures/claude/handshake-2026-09-23.jsonl", import.meta.url),
@@ -279,7 +308,7 @@ test("the live handshake fixture yields Fable, Opus 5.5 and Sonnet", async (t) =
   const models = await listClaudeModels(
     envWith(t, "handshake", { FAKE_CLAUDE_PICKER: fixture.trim() }),
   );
-  assert.deepEqual(models, CLAUDE_THREE);
+  assert.deepEqual(models, CLAUDE_THREE_BEFORE_SONNET_55);
 });
 
 // Пикер CLI постарше (c1: 2.1.278, 22-23.09.2026) отдаёт Opus 5, а не 5.5: кнопка Opus не
@@ -331,7 +360,7 @@ test("a picker with both Opus 5 and Opus 5.5 shows Opus 5.5 once", async (t) => 
       FAKE_CLAUDE_PICKER: JSON.stringify(handshake),
     }),
   );
-  assert.deepEqual(models, CLAUDE_THREE);
+  assert.deepEqual(models, CLAUDE_THREE_BEFORE_SONNET_55);
 });
 
 test("a picker without Fable omits it, and an empty picker uses the pinned three", async (t) => {
@@ -539,6 +568,7 @@ test("the context window follows the model the owner picked", () => {
   assert.equal(claudeContextWindow("claude-haiku-4-5-20251001"), "200000");
   assert.equal(claudeContextWindow("claude-fable-5-1"), "1000000");
   assert.equal(claudeContextWindow("claude-opus-5-5[1m]"), "1000000");
+  assert.equal(claudeContextWindow("claude-sonnet-5-5"), "1000000");
   assert.equal(claudeContextWindow("claude-sonnet-5"), "1000000");
 });
 

@@ -323,7 +323,7 @@ test("the claude step shows the name and writes the canonical id", async () => {
   const out = await askProviderSettings(
     { existing: {}, out: {}, provider: "claude" },
     makeContext({
-      fetchModels: async () => ["claude-sonnet-5", "claude-fable-5-1"],
+      fetchModels: async () => ["claude-sonnet-5-5", "claude-fable-5-1"],
       pickFromList: async (items) => {
         shown = items;
         const first = items[0];
@@ -333,10 +333,10 @@ test("the claude step shows the name and writes the canonical id", async () => {
     }),
   );
   assert.deepEqual(shown, [
-    { id: "claude-sonnet-5", label: "Sonnet 5" },
+    { id: "claude-sonnet-5-5", label: "Sonnet 5.5" },
     { id: "claude-fable-5-1", label: "Fable 5.1" },
   ]);
-  assert.equal(out.CLAUDE_MODEL, "claude-sonnet-5");
+  assert.equal(out.CLAUDE_MODEL, "claude-sonnet-5-5");
   assert.equal(out.CLAUDE_CONTEXT_WINDOW, "1000000");
 });
 
