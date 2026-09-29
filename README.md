@@ -181,6 +181,7 @@ Default model is deepseek-v4-pro, 131k context. On Go it runs about $14–15/mo 
 - 🔌 **Unparsable tool arguments on Claude no longer fail the turn**: arguments that are not JSON reach eve as sent, the model gets an input error and corrects the call in the same turn. A stream cut before the end of the message still fails.
 - ♻️ **A restart mid-reply no longer blocks the next messages**: on the next start Iva moves the interrupted workflow state to quarantine, Bridge closes the broken turn with one line and drains the saved queue, and `/new` answers without `iva reset`. A second start in a row leaves the workflow state alone, and a failed recovery is one journal line that does not keep Iva down.
 - 🔎 **File search no longer hangs the turn**: one `grep` or `glob` call stops after 20 seconds, 20 000 files or when the turn is stopped, and returns what it found with a hint to narrow the path. `node_modules`, `.git` and `*.trash-*` quarantines are skipped.
+- 🧠 **Sonnet 5.5 takes the place of Sonnet 5 on Claude**: the model screen and setup offer Fable 5.1, Opus 5.5 and Sonnet 5.5 and write `claude-sonnet-5-5` to `.env`. A Claude Code that does not know Sonnet 5.5 yet keeps Sonnet 5 on the same button, and `claude-sonnet-5` in `.env` still works. The OpenRouter list offers `anthropic/claude-sonnet-5.5`.
 
 ### 28.09.2026
 

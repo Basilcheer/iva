@@ -163,7 +163,7 @@ export const CATALOG: Record<string, ProviderCatalogEntry> = {
     // Вшитый список — запасной путь: живой приходит рукопожатием CLI (fetchModelOptions),
     // а он может не состояться (нет бинаря, нет входа, чужой вывод). Те же три id,
     // что у пикера: Haiku в экран не входит.
-    models: ["claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5"],
+    models: ["claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5"],
   },
   openrouter: {
     label: "OpenRouter",
@@ -180,7 +180,7 @@ export const CATALOG: Record<string, ProviderCatalogEntry> = {
     // definitions each turn (see the live test in scripts/setup/network.ts for the full check).
     models: [
       "openai/gpt-5.1",
-      "anthropic/claude-sonnet-4.5",
+      "anthropic/claude-sonnet-5.5",
       "google/gemini-2.5-pro",
       "google/gemini-2.5-flash",
       "deepseek/deepseek-chat",

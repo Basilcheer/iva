@@ -166,7 +166,7 @@ test("the claude catalog asks the CLI, and falls back to the pinned list", async
     claudeEnv: { CLAUDE_COMMAND: "/opt/claude" },
     listClaudeCatalog: async (env) => {
       seen = env;
-      return [{ id: "claude-sonnet-5", reasoningLevels: [] }];
+      return [{ id: "claude-sonnet-5-5", reasoningLevels: [] }];
     },
   });
   assert.deepEqual(seen, { CLAUDE_COMMAND: "/opt/claude" });
@@ -182,7 +182,7 @@ test("the claude catalog asks the CLI, and falls back to the pinned list", async
   );
   assert.deepEqual(
     fallback.map((option) => option.label),
-    ["Fable 5.1", "Opus 5.5", "Sonnet 5"],
+    ["Fable 5.1", "Opus 5.5", "Sonnet 5.5"],
   );
   // Вшитый список несёт те же уровни, что и живой: без CLI экран всё равно спросит уровень.
   for (const option of fallback)
@@ -195,7 +195,7 @@ test("the claude catalog asks the CLI, and falls back to the pinned list", async
   assert.deepEqual(CATALOG.claude.models, [
     "claude-fable-5-1",
     "claude-opus-5-5",
-    "claude-sonnet-5",
+    "claude-sonnet-5-5",
   ]);
   assert.equal(CATALOG.claude.def, "claude-fable-5-1");
 });
