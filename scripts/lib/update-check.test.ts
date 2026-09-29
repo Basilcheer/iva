@@ -726,8 +726,8 @@ test("the marker of a fetched tree decides whether this updater may install it",
     assert.deepEqual(await updaterCompat(at(local), marked, own), {
       status: "ok",
     });
-  // Бета-обновлятор — чуть младше своего релиза: 0.4.10-beta.1 < 0.4.10, но > 0.3.29.
-  for (const own of ["0.3.30-beta.1", "0.4.10-beta.1"])
+  // Бета-обновлятор — чуть младше своего релиза: 0.4.11-beta.1 < 0.4.11, но > 0.3.29.
+  for (const own of ["0.3.30-beta.1", "0.4.11-beta.1"])
     assert.deepEqual(await updaterCompat(at(local), marked, own), {
       status: "ok",
     });
@@ -751,7 +751,7 @@ test("the marker of a fetched tree decides whether this updater may install it",
 
 test("this checkout names its own release, and the refusal says how to repair it", () => {
   const own = updaterVersion();
-  // Релиз X.Y.Z или бета X.Y.Z-beta.N (бета-обновления, 0.4.10-beta.1).
+  // Релиз X.Y.Z или бета X.Y.Z-beta.N (бета-обновления, 0.4.11-beta.1).
   assert.match(
     own,
     /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-beta\.(0|[1-9]\d*))?$/,

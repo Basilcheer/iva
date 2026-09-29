@@ -22,7 +22,7 @@ function install(t: TestContext) {
   const home = mkdtempSync(join(tmpdir(), "iva-beta-cli-"));
   t.after(() => rmSync(home, { recursive: true, force: true }));
   git(home, "init", "-q", "-b", "main");
-  writeFileSync(join(home, "package.json"), '{"version":"0.4.10-beta.1"}\n');
+  writeFileSync(join(home, "package.json"), '{"version":"0.4.11-beta.1"}\n');
   git(
     home,
     "-c",
@@ -69,7 +69,7 @@ void test("iva beta / iva stable: iva.beta и ветка beta/main в устан
   assert.equal(fx.branch(join(fx.home, "repo")), "main");
   assert.equal(lines[1], "Обновления: стабильные. Обновиться: iva update");
   await cli.commands.version([]);
-  assert.match(lines[2], /iva 0\.4\.10-beta\.1 · commit \S+ · updates stable/u);
+  assert.match(lines[2], /iva 0\.4\.11-beta\.1 · commit \S+ · updates stable/u);
 });
 
 void test("меню обслуживания: одна кнопка обновлений, нажатие переключает", async (t) => {
@@ -185,9 +185,9 @@ void test("iva version в каталоге версии: коммит из им�
     "outer",
     "--allow-empty",
   );
-  const version = join(outer, "iva", "versions", "0.4.10-beta.1-0123456789ab");
+  const version = join(outer, "iva", "versions", "0.4.11-beta.1-0123456789ab");
   mkdirSync(version, { recursive: true });
-  writeFileSync(join(version, "package.json"), '{"version":"0.4.10-beta.1"}\n');
+  writeFileSync(join(version, "package.json"), '{"version":"0.4.11-beta.1"}\n');
   const lines = printed(t);
   await createCliMain(version).commands.version([]);
   assert.match(lines[0], /commit 0123456789ab/u);

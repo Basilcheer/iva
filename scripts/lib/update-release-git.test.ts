@@ -260,14 +260,14 @@ void test("зеркало ~/iva/repo получает iva.beta установк�
   assert.equal(git(repo, "config", "--get", "iva.updateBranch"), "main");
 });
 
-void test("каталог версии беты `0.4.10-beta.1-<sha12>` разбирают и новый код, и v0.4.8", async (t) => {
+void test("каталог версии беты `0.4.11-beta.1-<sha12>` разбирают и новый код, и v0.4.8", async (t) => {
   const sha = "0123456789ab";
-  const name = versionName("0.4.10-beta.1", sha, "89abcdef");
+  const name = versionName("0.4.11-beta.1", sha, "89abcdef");
   assert.deepEqual(
     { ...parseVersionName(name) },
-    { ...parseVersionName(`0.4.10-beta.1-${sha}+89abcdef`) },
+    { ...parseVersionName(`0.4.11-beta.1-${sha}+89abcdef`) },
   );
-  assert.equal(parseVersionName(name)?.version, "0.4.10-beta.1");
+  assert.equal(parseVersionName(name)?.version, "0.4.11-beta.1");
   const dir = mkdtempSync(join(tmpdir(), "iva-v048-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const old = join(dir, "data-dir.ts");
@@ -279,7 +279,7 @@ void test("каталог версии беты `0.4.10-beta.1-<sha12>` разб
     VERSION_DIRECTORY_PATTERN: RegExp;
   };
   const match = VERSION_DIRECTORY_PATTERN.exec(name);
-  assert.equal(match?.[1], "0.4.10-beta.1");
+  assert.equal(match?.[1], "0.4.11-beta.1");
   assert.equal(match?.[2], sha);
 });
 
