@@ -445,35 +445,14 @@ async function handleThinkCmd(
   st.provider = provider;
   st.model = model;
   st.msgId = msgId ?? null;
-  // Уровни размышлений выбираются у провайдера, а на неизвестном имени агент не стартует
-  // вовсе: нарисовать кнопки ollama значило бы принять настройку, которая никуда не поедет.
-  // /model — тот же экран, что чинит причину, и метка провайдера там та же.
-  if (!providerIsValid) {
+  const refused = thinkRefusal(provider, providerIsValid, providerLabel);
+  if (refused !== null)
     return endWizard(
       st,
-      [
-        `# ${tr("🤔 Thinking", "🤔 Размышления")}`,
-        tr(
-          `Thinking levels need a working provider — MODEL_PROVIDER is ${escapeRichText(providerLabel)}. Set it via /model.`,
-          `Уровни размышлений нужны рабочему провайдеру — MODEL_PROVIDER сейчас ${escapeRichText(providerLabel)}. Задай его через /model.`,
-        ),
-        menuLine(),
-      ].join("\n\n"),
+      [`# ${tr("🤔 Thinking", "🤔 Размышления")}`, refused, menuLine()].join(
+        "\n\n",
+      ),
     );
-  }
-  if (!providerSupportsReasoning(provider)) {
-    return endWizard(
-      st,
-      [
-        `# ${tr("🤔 Thinking", "🤔 Размышления")}`,
-        tr(
-          `Adjustable thinking is unavailable for ${escapeRichText(CATALOG[provider].label)}. Choose a reasoning-capable provider via /model.`,
-          `Настраиваемые размышления недоступны для ${escapeRichText(CATALOG[provider].label)}. Выбери провайдера с reasoning через /model.`,
-        ),
-        menuLine(),
-      ].join("\n\n"),
-    );
-  }
   const cat = CATALOG[provider];
   const env = await readEnvValues(ENV_PATH);
   st.step = "loading";
@@ -520,6 +499,28 @@ async function handleThinkCmd(
       ...effortLines("iva_think", true, st.efforts),
     ].join("\n\n"),
   );
+}
+
+/** Почему /think не рисует уровни ещё до каталога; null — провайдер годится.
+ *  Уровни размышлений выбираются у провайдера, а на неизвестном имени агент не стартует
+ *  вовсе: нарисовать кнопки ollama значило бы принять настройку, которая никуда не поедет.
+ *  /model — тот же экран, что чинит причину, и метка провайдера там та же. */
+function thinkRefusal(
+  provider: string,
+  providerIsValid: boolean,
+  providerLabel: string,
+): string | null {
+  if (!providerIsValid)
+    return tr(
+      `Thinking levels need a working provider — MODEL_PROVIDER is ${escapeRichText(providerLabel)}. Set it via /model.`,
+      `Уровни размышлений нужны рабочему провайдеру — MODEL_PROVIDER сейчас ${escapeRichText(providerLabel)}. Задай его через /model.`,
+    );
+  if (!providerSupportsReasoning(provider))
+    return tr(
+      `Adjustable thinking is unavailable for ${escapeRichText(CATALOG[provider].label)}. Choose a reasoning-capable provider via /model.`,
+      `Настраиваемые размышления недоступны для ${escapeRichText(CATALOG[provider].label)}. Выбери провайдера с reasoning через /model.`,
+    );
+  return null;
 }
 
 /** Модель /think в живом списке. Прошлую модель Claude (Sonnet 5, Opus 5) новый CLI в кнопки

@@ -646,6 +646,11 @@ test("/think on claude with an unknown model keeps the catalog error", async (t)
 
   const texts = sent.map((call) => call.text).join("\n");
   assert.match(texts, /claude-mystery-9 is not in the live catalog/u);
+  // Экрана уровней нет: ни строки текущего уровня, ни кнопок, — только повтор и выход.
+  assert.doesNotMatch(texts, /claude-mystery-9: max/u);
+  assert.doesNotMatch(texts, /Thinking level for|Уровень размышлений для/u);
+  assert.match(texts, /Retry|Повторить/u);
   const st = getWizard(4102093, "9104263") as unknown as WizardStateForTest;
   assert.notEqual(st?.step, "effort");
+  assert.deepEqual(st?.modelOptions ?? [], []);
 });
