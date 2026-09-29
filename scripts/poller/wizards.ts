@@ -15,6 +15,8 @@ import {
 } from "../lib/model-validation.ts";
 import { getAccessToken } from "#lib/codex-auth.ts";
 import {
+  claudeModelLabel,
+  claudeReasoningLevels,
   claudeStatus,
   CLAUDE_LOGIN_HINT,
   type ClaudeStatus,
@@ -494,7 +496,7 @@ async function handleThinkCmd(
   );
   const options = await resolveThinkCatalogLoad(st, loaded);
   if (options === null) return loadingShown;
-  const option = options.find((candidate) => candidate.id === model);
+  const option = thinkOption(provider, options, model);
   if (!option)
     return showModelValidationError(
       st,
@@ -518,6 +520,22 @@ async function handleThinkCmd(
       ...effortLines("iva_think", true, st.efforts),
     ].join("\n\n"),
   );
+}
+
+/** Модель /think в живом списке. Прошлую модель Claude (Sonnet 5, Opus 5) новый CLI в кнопки
+ *  не отдаёт — её место заняла новая, — но ход на ней идёт, и уровни у неё те же: их знает
+ *  таблица экрана Claude. Незнакомый id остаётся ошибкой каталога. */
+function thinkOption(
+  provider: string,
+  options: readonly ModelOption[],
+  model: string,
+): ModelOption | undefined {
+  const listed = options.find((candidate) => candidate.id === model);
+  if (listed || provider !== "claude") return listed;
+  const reasoningLevels = claudeReasoningLevels(model);
+  return reasoningLevels.length > 0
+    ? { id: model, label: claudeModelLabel(model), reasoningLevels }
+    : undefined;
 }
 
 export async function resolveThinkCatalogLoad(

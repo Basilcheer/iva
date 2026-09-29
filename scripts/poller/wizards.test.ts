@@ -567,7 +567,68 @@ test("picking a claude model asks the thinking level, and saving writes THINKING
   });
 });
 
-test("/think on claude shows the model's thinking levels and the current one", async (t) => {
+// Прошлая модель Claude в .env (Sonnet 5, Opus 5): новый CLI её в кнопки не отдаёт — место
+// заняла новая, — но ход на ней идёт, и /think обязан дать сменить уровень, а не отвечать
+// «нет в каталоге». Пикер фейка отдаёт Sonnet 5.5 и Opus 5.5.
+for (const [index, model] of [
+  "claude-sonnet-5-5",
+  "claude-sonnet-5",
+  "claude-opus-5",
+].entries()) {
+  test(`/think on claude shows the thinking levels and the current one for ${model}`, async (t) => {
+    const sent = telegramSpy(t);
+    const fake = useWizardClaude(t);
+    writeFileSync(
+      fake.authFile,
+      JSON.stringify({ loggedIn: true, subscriptionType: "max" }),
+    );
+    const chatId = 4102053 + index * 10;
+    const userId = String(9104223 + index * 10);
+
+    await handleThinkCmd(chatId, userId, {
+      readEnv: async () => ({
+        MODEL_PROVIDER: "claude",
+        CLAUDE_MODEL: model,
+        THINKING_EFFORT: "max",
+      }),
+    });
+
+    const texts = sent.map((call) => call.text).join("\n");
+    assert.doesNotMatch(texts, /unavailable for|недоступны для/u);
+    assert.doesNotMatch(texts, /live catalog/u);
+    assert.match(texts, new RegExp(`${model}: max`, "u"));
+    // Кнопки уровней рисуются из st.efforts: шаг «effort» и есть экран с ними.
+    const st = getWizard(chatId, userId) as unknown as WizardStateForTest;
+    assert.equal(st.step, "effort");
+    assert.deepEqual(st.efforts, ["low", "medium", "high", "xhigh", "max"]);
+
+    // Уровень с этого экрана пишет только THINKING_EFFORT: модель владельца остаётся прежней.
+    assert.equal(selectWizardEffort(st, "high"), true);
+    let validated = "";
+    let written: Record<string, string | null> = {};
+    await validateAndSaveWizard(st as never, {
+      readEnv: async () => ({
+        MODEL_PROVIDER: "claude",
+        CLAUDE_MODEL: model,
+        THINKING_EFFORT: "max",
+      }),
+      validate: (selection) => {
+        validated = selection.model ?? "";
+        return Promise.resolve({ id: validated, reasoningLevels: [] });
+      },
+      write: (updates: Record<string, string | null>) => {
+        written = updates;
+        return Promise.resolve();
+      },
+    });
+    assert.equal(validated, model);
+    assert.deepEqual(written, { THINKING_EFFORT: "high" });
+  });
+}
+
+// Незнакомый id Claude — не прошлая модель, а опечатка или чужой аккаунт: экран уровней не
+// рисуется, остаётся ошибка каталога.
+test("/think on claude with an unknown model keeps the catalog error", async (t) => {
   const sent = telegramSpy(t);
   const fake = useWizardClaude(t);
   writeFileSync(
@@ -575,19 +636,16 @@ test("/think on claude shows the model's thinking levels and the current one", a
     JSON.stringify({ loggedIn: true, subscriptionType: "max" }),
   );
 
-  await handleThinkCmd(4102053, "9104223", {
+  await handleThinkCmd(4102093, "9104263", {
     readEnv: async () => ({
       MODEL_PROVIDER: "claude",
-      CLAUDE_MODEL: "claude-sonnet-5-5",
+      CLAUDE_MODEL: "claude-mystery-9",
       THINKING_EFFORT: "max",
     }),
   });
 
   const texts = sent.map((call) => call.text).join("\n");
-  assert.doesNotMatch(texts, /unavailable for|недоступны для/u);
-  assert.match(texts, /claude-sonnet-5-5: max/u);
-  // Кнопки уровней рисуются из st.efforts: шаг «effort» и есть экран с ними.
-  const st = getWizard(4102053, "9104223") as unknown as WizardStateForTest;
-  assert.equal(st.step, "effort");
-  assert.deepEqual(st.efforts, ["low", "medium", "high", "xhigh", "max"]);
+  assert.match(texts, /claude-mystery-9 is not in the live catalog/u);
+  const st = getWizard(4102093, "9104263") as unknown as WizardStateForTest;
+  assert.notEqual(st?.step, "effort");
 });
