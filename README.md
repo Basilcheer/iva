@@ -171,7 +171,16 @@ Default model is deepseek-v4-pro, 131k context. On Go it runs about $14–15/mo 
 ## What's New
 
 <details>
-<summary><b>v0.4.9 · 28.09.2026 — expand the latest releases</b></summary>
+<summary><b>v0.4.10 · 29.09.2026 — expand the latest releases</b></summary>
+
+### 29.09.2026
+
+#### v0.4.10
+
+- 🚑 **A tool name from Claude no longer fails the turn**: an Iva tool runs only under its exact or `mcp__iva__` name, with no guessing by case, dash or another prefix. Any other name, Claude's own `Bash` and `Read` included, returns a tool error listing the available tools, and the model goes on in the same turn.
+- 🔌 **Unparsable tool arguments on Claude no longer fail the turn**: arguments that are not JSON reach eve as sent, the model gets an input error and corrects the call in the same turn. A stream cut before the end of the message still fails.
+- ♻️ **A restart mid-reply no longer blocks the next messages**: on the next start Iva moves the interrupted workflow state to quarantine, Bridge closes the broken turn with one line and drains the saved queue, and `/new` answers without `iva reset`. A second start in a row leaves the workflow state alone, and a failed recovery is one journal line that does not keep Iva down.
+- 🔎 **File search no longer hangs the turn**: one `grep` or `glob` call stops after 20 seconds, 20 000 files or when the turn is stopped, and returns what it found with a hint to narrow the path. `node_modules`, `.git` and `*.trash-*` quarantines are skipped.
 
 ### 28.09.2026
 
@@ -199,18 +208,6 @@ Default model is deepseek-v4-pro, 131k context. On Go it runs about $14–15/mo 
 - 🔑 **Google Workspace connects from the menu again**: gws 0.22.5 prints `redirect_uri` URL-encoded, so the menu found no port in it, waited for the timeout and blamed client_secret. Now the port is read from both the encoded and the raw form.
 - 🌙 **A failed nightly summary continues the day instead of starting over**: the code-driven `memory-night` pipeline caches every validated model response, resumes interrupted writes without another call, and processes up to three queued days in order. The nightly run reaches its files again: `read_file`, `grep` and `glob` accept `vault/daily/…` from the project root (#242).
 - 📦 **A token usage package in one command**: `curl -fsSL https://raw.githubusercontent.com/smixs/iva-agent/main/diagnose-usage.sh | bash` collects three days of per-step tokens, the skeleton of each turn and failure lines, with the heaviest turns on top. Conversation text, tool inputs and outputs and `.env` values other than the model settings stay out; the package arrives as a file in the bot chat.
-
-### 23.09.2026
-
-#### v0.4.7
-
-- 🧠 **Opus 5.5 replaces Opus 5 on the Claude model screen**: `/model` → Claude offers Fable 5.1, Opus 5.5 and Sonnet 5 and writes `claude-opus-5-5` to `.env`; the short name `opus` now means Opus 5.5, and an old `claude-opus-5` in `.env` keeps working.
-- 🤖 **GPT-6 Sol and Luna on the OpenAI subscription**: Iva asks for the subscription's models as codex client 0.156.0, so the screen shows `gpt-6-sol` and `gpt-6-luna`, which the backend hides from older clients. The effort from `/think` reaches them too: the SDK used to drop it silently for a model id it did not know.
-- 🔕 **The "Working" status and /update messages arrive without a sound**: technical lines no longer buzz the phone. The model can send a whole reply quietly too, with `<!-- iva:silent -->` on its first line, for low-urgency news or when the owner's rules ask for it (#232, thanks @yakovmakovets).
-- ⏰ **A schedule that succeeded no longer wakes the model**: a successful run is recorded by code and ends there, without a model turn and without a technical message in the chat; a turn that explains what happened is left for failures only (#233, thanks @yakovmakovets).
-- 🔗 **Links to nowhere are refused at write time**: `write_card` and `write_file` refuse a markdown file inside the vault whose `[[link]]` points at no file and name the broken targets; weekly, monthly and yearly Rollups link only summaries that exist (#224, thanks @AndyShaman).
-- 📎 **An attachment of any format is not a broken link**: the nightly graph check accepts a link to `attachments/…` with any extension, DOCX included, as long as it is a regular file inside the vault (#229, thanks @yakovmakovets).
-- 🔎 **Glob and grep see the vault through a symlink**: relative `cwd` and `path` start at the vault root, as `read_file` does, and the walk follows symlinked folders without visiting the same real folder twice.
 
 </details>
 
