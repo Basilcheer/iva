@@ -55,7 +55,7 @@ The bridge long-polls Telegram, so no public HTTPS, domain or webhook is needed.
 - **Personal CRM** — who your people are, what you agreed, when to follow up.
 - **Search by meaning** — BM25 plus link-graph rerank, any language; optional vector mode with one key.
 - **Decision cards** — what you chose, when and why; old versions stay in a dated History.
-- **Tasks & reminders** — priorities, due dates and a morning digest.
+- **[Tasks](docs/tasks.md) & reminders** — priorities, due dates and a morning digest.
 - **Web search** — four pluggable providers: Tavily, Exa, Parallel or Brave.
 - **Google Workspace** — Gmail, Calendar, Drive, Sheets, Docs and Tasks from chat via the `gws` CLI; installed for you, with a guided key setup right in the conversation.
 - **Skills & MCP** — drop one file to add a procedure or connect an MCP server; keys stay in `.env`.
