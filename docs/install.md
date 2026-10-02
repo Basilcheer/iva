@@ -65,6 +65,8 @@ Five steps. Each key comes with a direct link to where it lives, and each is val
 
 Re-running the same command later is safe: over an installation that already exists the installer updates nothing itself — it hands the installation to the one updater, exactly as `iva update` and `repair.sh` do. A checkout is put back onto its release first (edits to Iva's own code are removed, `.env`, `data/` and the vault are not touched), a versioned installation goes straight to its own updater, and a checkout you marked with `.iva-dev` is refused.
 
+**Google Workspace CLI (`gws`)** is installed and updated under `~/.local` without sudo. Services prefer `~/.local/bin` over older global copies. Existing binaries are left in place; Google configuration and authorization stay under the same user account.
+
 Every stage checks whether its work is already done and skips it, so a run after a failure costs seconds instead of minutes:
 
 | Stage           | Skipped when                                                                            |

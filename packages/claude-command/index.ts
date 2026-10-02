@@ -1,4 +1,4 @@
-// Где сервис Iva ищет Claude Code CLI и как его поставить без root. Одно правило на обе
+// Где сервис Iva ищет CLI и как поставить Claude Code без root. Одно правило на обе
 // половины: рантайм (agent/lib/claude-cli.ts) ищет по PATH своего процесса, а доктор и
 // мастер (scripts/lib/claude-cli-status.ts) — по тому PATH, который получит сервис.
 // Пакет, а не agent/lib: `iva doctor` обязан грузиться без authored tree (ADR-0003).
@@ -6,12 +6,12 @@ import { accessSync, constants, statSync } from "node:fs";
 import { userInfo } from "node:os";
 import { delimiter, isAbsolute, join } from "node:path";
 
-/** PATH каждого юнита после каталога node; `%h` — домашний каталог, его раскрывает systemd. */
-export const SERVICE_PATH_TAIL = "%h/.local/bin:/usr/local/bin:/usr/bin:/bin";
+/** Системные каталоги после пользовательских CLI и каталога Node. */
+const SERVICE_PATH_TAIL = "/usr/local/bin:/usr/bin:/bin";
 
 /** PATH сервиса, каким его увидит процесс под юнитом. */
 export function servicePath(nodeBinDir: string, home: string): string {
-  return `${nodeBinDir}:${SERVICE_PATH_TAIL.replaceAll("%h", home)}`;
+  return `${home}/.local/bin:${nodeBinDir}:${SERVICE_PATH_TAIL}`;
 }
 
 /** Установка в `~/.local`: бинарь ляжет в `~/.local/bin`, а он уже в PATH сервиса. */

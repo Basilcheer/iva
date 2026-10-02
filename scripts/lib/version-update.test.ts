@@ -11,7 +11,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -1350,7 +1350,7 @@ test("the chores of the installation are run around the restart, out of the vers
   assert.deepEqual(calls.slice(-3), [
     `${process.execPath} ${join(dir, "scripts/vault-cleanup.ts")} . --apply @${layout.vault}`,
     `restart @${layout.current}`,
-    `npm i -g @googleworkspace/cli@latest @${dir}`,
+    `npm i -g --prefix ${join(homedir(), ".local")} @googleworkspace/cli@latest @${dir}`,
   ]);
   assert.equal(createVersionStore(iva.home).settled(), outcome.version);
   assert.ok(
@@ -1359,6 +1359,45 @@ test("the chores of the installation are run around the restart, out of the vers
     ),
     logged.join("\n"),
   );
+});
+
+test("Google update uses the service user's prefix and preserves existing authorization", async (t) => {
+  const iva = world(t);
+  const previousHome = process.env.HOME;
+  const serviceHome = join(iva.home, "user with spaces");
+  const config = join(serviceHome, ".config/gws/credentials.json");
+  mkdirSync(dirname(config), { recursive: true });
+  writeFileSync(config, "synthetic-authorization\n");
+  process.env.HOME = serviceHome;
+  t.after(() => {
+    process.env.HOME = previousHome;
+  });
+  const build = fixtureRunner();
+  const seen: string[][] = [];
+  updated(
+    await iva.update({
+      run: (command, args, cwd) => {
+        if (
+          command === "npm" &&
+          args.at(-1) === "@googleworkspace/cli@latest"
+        ) {
+          seen.push([...args]);
+          return Promise.resolve({ code: 0, output: "" });
+        }
+        return build(command, args, cwd);
+      },
+    }),
+  );
+  assert.deepEqual(seen, [
+    [
+      "i",
+      "-g",
+      "--prefix",
+      join(serviceHome, ".local"),
+      "@googleworkspace/cli@latest",
+    ],
+  ]);
+  assert.equal(readFileSync(config, "utf8"), "synthetic-authorization\n");
 });
 
 test("an errand without output names the exit code alone", async (t) => {
@@ -1557,7 +1596,8 @@ test("old versions go before the Google CLI errand", async (t) => {
     run: (command, args, cwd) => {
       if (
         command === "npm" &&
-        args.join(" ") === "i -g @googleworkspace/cli@latest"
+        args[0] === "i" &&
+        args.at(-1) === "@googleworkspace/cli@latest"
       ) {
         inspected = true;
         assert.ok(store.list().length <= 2, store.list().join(", "));
