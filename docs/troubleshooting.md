@@ -63,6 +63,8 @@ Cause: a wedged turn lives in `.workflow-data`, and eve re-enqueues it on every 
 
 If Iva reports `Model produced no output for 90s`, the provider stream stayed silent; retry, or switch the model.
 
+For chat turns, transient failures before the provider stream opens get at most three model-call attempts, with default waits of 5s and 15s. Provider Retry-After minimums share that 20s total wait allowance; a longer required wait parks the turn instead of retrying early. Stopping the turn cancels the request and any wait. Transport retries stop once a stream opens; after retry exhaustion the session accepts your next message.
+
 ```bash
 iva reset   # stop services, quarantine workflow + Telegram busy/queue state, restart
 ```
