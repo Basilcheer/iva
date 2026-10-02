@@ -414,3 +414,20 @@ test("the setup summary and the final check know the claude vendor", async () =>
   assert.equal(written.length, 1);
   assert.equal(out.CLAUDE_MODEL, "claude-fable-5-1");
 });
+
+test("OpenCode setup keeps explicit text and independent vision protocols", async () => {
+  const s = state("opencode");
+  const prompts: string[] = [];
+  const ctx = makeContext({
+    ask: async (question, fallback) => {
+      prompts.push(question);
+      return question.includes("OPENCODE_PROTOCOL")
+        ? "responses"
+        : fallback || "";
+    },
+  });
+  await askProviderSettings(s, ctx);
+  assert.equal(s.out.OPENCODE_PROTOCOL, "responses");
+  assert.equal(s.out.OPENCODE_VISION_PROTOCOL, "chat-completions");
+  assert.ok(prompts.some((prompt) => prompt.includes("/messages unsupported")));
+});

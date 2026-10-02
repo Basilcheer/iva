@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+import { resolveOpenCodeProtocol } from "@iva/opencode-protocol";
 import {
   CATALOG,
   ModelCatalogError,
@@ -13,6 +15,7 @@ type ModelSelection = {
   dataDir?: string;
   // Адрес эндпоинта у провайдера, чей base не вшит в каталог (custom).
   base?: string;
+  opencodeProtocol?: string;
 };
 type ValidationOptions = {
   fetchFn?: typeof fetch;
@@ -165,7 +168,7 @@ export async function probeOpenRouterModel(
 }
 
 export async function validateModelSelection(
-  { provider, model, key, dataDir, base }: ModelSelection,
+  { provider, model, key, dataDir, base, opencodeProtocol }: ModelSelection,
   { fetchFn = fetch, listCodexCatalog, probeClaude }: ValidationOptions = {},
 ): Promise<{ id: string; reasoningLevels: string[]; answered?: boolean }> {
   const selected = selectionOf(provider, model);
@@ -175,7 +178,11 @@ export async function validateModelSelection(
   if (provider === "claude")
     return await probeClaudeSelection(selected, probeClaude);
   assertBase(provider, base);
-  return await validateFromCatalog({
+  const protocol =
+    provider === "opencode"
+      ? resolveOpenCodeProtocol(opencodeProtocol)
+      : undefined;
+  const result = await validateFromCatalog({
     provider,
     model: selected,
     key,
@@ -184,6 +191,9 @@ export async function validateModelSelection(
     fetchFn,
     listCodexCatalog,
   });
+  return protocol === "responses"
+    ? await probeOpenCodeResponses(selected, key, fetchFn)
+    : result;
 }
 
 /** Имя провайдера из каталога и однострочная модель: всё остальное — отказ выбора. */
@@ -275,4 +285,70 @@ function claudeFailure(error: unknown): ModelValidationError {
     error.message,
     { cause: error },
   );
+}
+
+/** Catalog membership does not prove the Responses wire: verify tools with the selected endpoint. */
+async function probeOpenCodeResponses(
+  model: string,
+  key: string | undefined,
+  fetchFn: typeof fetch,
+) {
+  let response: Response;
+  try {
+    response = await fetchFn(`${CATALOG.opencode.base}/responses`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${key}`,
+        "Content-Type": "application/json",
+        "user-agent": "iva/model-probe",
+        "x-opencode-session": `iva-probe-${randomUUID()}`,
+      },
+      body: JSON.stringify({
+        model,
+        input: [{ role: "user", content: "Call the ping tool." }],
+        tools: [
+          {
+            type: "function",
+            name: "ping",
+            description: "health check",
+            parameters: { type: "object", properties: {} },
+            strict: false,
+          },
+        ],
+        max_output_tokens: 32,
+      }),
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    });
+  } catch (cause) {
+    throw new ModelValidationError(
+      "catalog_unavailable",
+      "OpenCode Responses request failed",
+      { cause },
+    );
+  }
+  if (!response.ok) {
+    throw new ModelValidationError(
+      response.status === 401 || response.status === 403
+        ? "auth_rejected"
+        : "model_unavailable",
+      `OpenCode rejected ${model} over Responses (${response.status}); check OPENCODE_PROTOCOL against Go's endpoint table; /messages is unsupported`,
+      { status: response.status },
+    );
+  }
+  let body: unknown;
+  try {
+    body = await response.json();
+  } catch (cause) {
+    throw new ModelValidationError(
+      "catalog_invalid",
+      "OpenCode Responses returned invalid JSON",
+      { cause },
+    );
+  }
+  if (!isRecord(body) || !Array.isArray(body.output))
+    throw new ModelValidationError(
+      "catalog_invalid",
+      "OpenCode returned an invalid Responses result",
+    );
+  return { id: model, reasoningLevels: [], answered: body.output.length > 0 };
 }

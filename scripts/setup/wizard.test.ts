@@ -282,3 +282,12 @@ test(`provider menu: the default number picks the current provider back; any cho
     { seed: SEED, numRuns: 300 },
   );
 });
+
+test("keeping a Go Responses installation probes its configured wire", async () => {
+  const existing: Env = { ...complete, OPENCODE_PROTOCOL: "responses" };
+  delete existing.ASSISTANT_BEARER;
+  const h = wizard(existing, ["n"], { env: { AGENT_LANGUAGE: "en" } });
+  await h.run();
+  assert.equal(h.validated[0].opencodeProtocol, "responses");
+  assert.equal(h.written[0].OPENCODE_PROTOCOL, "responses");
+});

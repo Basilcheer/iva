@@ -357,3 +357,74 @@ test("a CLI refusal becomes the matching selection error", async () => {
     );
   }
 });
+
+test("OpenCode Responses validation probes selected wire with session and tool contract", async () => {
+  const requests: { url: string; init?: RequestInit }[] = [];
+  const result = await validateModelSelection(
+    {
+      provider: "opencode",
+      model: "muse",
+      key: "secret",
+      opencodeProtocol: "responses",
+    },
+    {
+      fetchFn: async (input, init) => {
+        const url = input instanceof Request ? input.url : input.toString();
+        requests.push({ url, init });
+        return response(
+          url.endsWith("/models") ? { data: [{ id: "muse" }] } : { output: [] },
+        );
+      },
+    },
+  );
+  assert.equal(result.id, "muse");
+  assert.deepEqual(result.reasoningLevels, []);
+  assert.deepEqual(
+    requests.map((request) => request.url.split("/").at(-1)),
+    ["models", "responses"],
+  );
+  const request = requests[1];
+  const headers = new Headers(request.init?.headers);
+  assert.equal(headers.get("authorization"), "Bearer secret");
+  assert.match(headers.get("user-agent") ?? "", /^iva\//);
+  assert.match(headers.get("x-opencode-session") ?? "", /^iva-probe-/);
+  const body = JSON.parse(
+    typeof request.init?.body === "string" ? request.init.body : "",
+  ) as {
+    tools: { type: string; name: string }[];
+    input: unknown;
+  };
+  assert.equal(body.tools[0].name, "ping");
+  assert.equal(body.tools[0].type, "function");
+  assert.ok(body.input);
+});
+
+test("OpenCode Responses validation rejects protocol errors instead of falling back", async () => {
+  for (const status of [400, 401, 403, 429, 500]) {
+    await assert.rejects(
+      validateModelSelection(
+        { provider: "opencode", model: "muse", opencodeProtocol: "responses" },
+        {
+          fetchFn: async (input) =>
+            (input instanceof Request ? input.url : input.toString()).endsWith(
+              "/models",
+            )
+              ? response({ data: [{ id: "muse" }] })
+              : response({}, status),
+        },
+      ),
+      /OpenCode rejected muse over Responses/,
+    );
+  }
+  await assert.rejects(
+    validateModelSelection(
+      { provider: "opencode", model: "muse", opencodeProtocol: "messages" },
+      {
+        fetchFn: async () => {
+          throw new Error("network must not be called");
+        },
+      },
+    ),
+    /Invalid OPENCODE_PROTOCOL/,
+  );
+});

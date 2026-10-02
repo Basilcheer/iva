@@ -4,6 +4,7 @@ import {
   providerName,
   providerRequestHeaders,
   makeCodexModel,
+  makeOpenCodeModel,
   makeTextModel,
 } from "./provider.ts";
 import { makeClaudeCliModel } from "./lib/claude-cli.ts";
@@ -32,6 +33,31 @@ export async function describeImage(
 
   const { baseURL, apiKey, visionModel } = providerConfig;
   if (!apiKey || !visionModel) return "";
+  if (
+    providerName === "opencode" &&
+    providerConfig.opencodeVisionProtocol === "responses"
+  ) {
+    const result = await generateText({
+      model: makeOpenCodeModel(visionModel, "responses"),
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: PROMPT },
+            {
+              type: "file",
+              data: new Uint8Array(bytes),
+              mediaType: mimeType || "image/jpeg",
+            },
+          ],
+        },
+      ],
+      maxOutputTokens: 700,
+      maxRetries: 0,
+    });
+    recordVisionUsage(visionModel, sdkUsageTokens(result.usage));
+    return result.text.trim();
+  }
   return await describeWithCompatible(bytes, mimeType, {
     baseURL,
     apiKey,
@@ -74,7 +100,7 @@ async function describeWithCompatible(
   });
   if (!res.ok)
     throw new Error(
-      `vision HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`,
+      `vision HTTP ${res.status}: ${(await res.text()).slice(0, 200)}${providerName === "opencode" ? "; set OPENCODE_VISION_PROTOCOL to the model’s documented wire; Go /messages is unsupported" : ""}`,
     );
   const json = (await res.json()) as {
     choices?: Array<{ message?: { content?: string } }>;

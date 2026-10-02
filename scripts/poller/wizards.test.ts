@@ -654,3 +654,47 @@ test("/think on claude with an unknown model keeps the catalog error", async (t)
   assert.notEqual(st?.step, "effort");
   assert.deepEqual(st?.modelOptions ?? [], []);
 });
+
+test("Go Responses config offers no chat-specific thinking level", async () => {
+  const config = await currentConfig({
+    readEnv: async () => ({
+      MODEL_PROVIDER: "opencode",
+      OPENCODE_PROTOCOL: "responses",
+      THINKING_EFFORT: "high",
+    }),
+  });
+  assert.equal(config.adjustableThinking, false);
+  assert.equal(config.effort, "");
+});
+
+test("model changes validate Go Responses and preserve the owner’s transport setting", async () => {
+  const st = {
+    flow: "model",
+    provider: "opencode",
+    model: "muse",
+    effort: null,
+  };
+  let selected: { opencodeProtocol?: string } | undefined;
+  let written: Record<string, string | null> | undefined;
+  await validateAndSaveWizard(st as never, {
+    readEnv: async () => ({
+      OPENCODE_PROTOCOL: "responses",
+      OPENCODE_API_KEY: "test",
+    }),
+    validate: (selection) => {
+      selected = selection;
+      return Promise.resolve({ id: "muse", reasoningLevels: [] });
+    },
+    write: (updates) => {
+      written = updates;
+      return Promise.resolve();
+    },
+  });
+  assert.equal(selected?.opencodeProtocol, "responses");
+  assert.equal(written?.OPENCODE_MODEL, "muse");
+  assert.equal(
+    written?.OPENCODE_PROTOCOL,
+    undefined,
+    "upsert leaves the configured protocol intact",
+  );
+});

@@ -1,3 +1,4 @@
+import { resolveOpenCodeProtocol } from "@iva/opencode-protocol";
 import {
   CATALOG,
   catalogModel,
@@ -260,6 +261,10 @@ export async function currentConfig({
   return {
     provider,
     providerIsValid: valid,
+    adjustableThinking:
+      providerSupportsReasoning(provider) &&
+      (provider !== "opencode" ||
+        resolveOpenCodeProtocol(env.OPENCODE_PROTOCOL) === "chat-completions"),
     // Что реально стоит в .env. На неизвестном имени агент не стартует вовсе, и назвать
     // его «ollama» в строке «Сейчас…» значило бы спрятать причину, ради которой визард
     // и открыли. Экраны после сохранения показывают уже записанное имя, оно валидно.
@@ -267,9 +272,12 @@ export async function currentConfig({
     // Модель — тем же правилом, что у Статуса и рантайма. У невалидного провайдера модели
     // нет: показать OLLAMA_MODEL значило бы назвать модель, к которой никто не пойдёт.
     model: catalogModel(configured, env) ?? "?",
-    effort: providerSupportsReasoning(provider)
-      ? (env.THINKING_EFFORT ?? "").toLowerCase()
-      : "",
+    effort:
+      providerSupportsReasoning(provider) &&
+      (provider !== "opencode" ||
+        resolveOpenCodeProtocol(env.OPENCODE_PROTOCOL) === "chat-completions")
+        ? (env.THINKING_EFFORT ?? "").toLowerCase()
+        : "",
   };
 }
 
@@ -439,13 +447,24 @@ async function handleThinkCmd(
     readEnv?: () => Promise<Record<string, string>>;
   } = {},
 ) {
-  const { provider, providerIsValid, providerLabel, model, effort } =
-    await currentConfig(readEnv ? { readEnv } : {});
+  const {
+    provider,
+    providerIsValid,
+    providerLabel,
+    model,
+    effort,
+    adjustableThinking,
+  } = await currentConfig(readEnv ? { readEnv } : {});
   const st = newWizard(chatId, from, "think");
   st.provider = provider;
   st.model = model;
   st.msgId = msgId ?? null;
-  const refused = thinkRefusal(provider, providerIsValid, providerLabel);
+  const refused = thinkRefusal(
+    provider,
+    providerIsValid,
+    providerLabel,
+    adjustableThinking,
+  );
   if (refused !== null)
     return endWizard(
       st,
@@ -509,13 +528,14 @@ function thinkRefusal(
   provider: string,
   providerIsValid: boolean,
   providerLabel: string,
+  adjustableThinking = providerSupportsReasoning(provider),
 ): string | null {
   if (!providerIsValid)
     return tr(
       `Thinking levels need a working provider — MODEL_PROVIDER is ${escapeRichText(providerLabel)}. Set it via /model.`,
       `Уровни размышлений нужны рабочему провайдеру — MODEL_PROVIDER сейчас ${escapeRichText(providerLabel)}. Задай его через /model.`,
     );
-  if (!providerSupportsReasoning(provider))
+  if (!adjustableThinking)
     return tr(
       `Adjustable thinking is unavailable for ${escapeRichText(CATALOG[provider].label)}. Choose a reasoning-capable provider via /model.`,
       `Настраиваемые размышления недоступны для ${escapeRichText(CATALOG[provider].label)}. Выбери провайдера с reasoning через /model.`,
@@ -805,13 +825,26 @@ async function showModelScreen(st: WizardState) {
       return askModelId(st, errorReason(loaded.error));
     return showModelValidationError(st, loaded.error);
   }
-  const options = loaded.value;
+  const responses =
+    st.provider === "opencode" &&
+    resolveOpenCodeProtocol(env.OPENCODE_PROTOCOL) === "responses";
+  const options = responses
+    ? loaded.value.map((option) => ({ ...option, reasoningLevels: [] }))
+    : loaded.value;
   const current = env[cat.modelVar];
   st.modelOptions = wizardModelOptions(st.provider, options, current);
   st.step = "models";
   const lines = [
     `# ${tr("🧠 Model", "🧠 Модель")} · ${escapeRichText(cat.label)}`,
     ...modelScreenNotes(st, current),
+    ...(st.provider === "opencode"
+      ? [
+          tr(
+            `Protocol: ${resolveOpenCodeProtocol(env.OPENCODE_PROTOCOL)}. Change it with iva config; Go /messages is unsupported.`,
+            `Протокол: ${resolveOpenCodeProtocol(env.OPENCODE_PROTOCOL)}. Меняется через iva config; Go /messages не поддерживается.`,
+          ),
+        ]
+      : []),
   ];
   lines.push(modelPrompt());
   // Модели — равноправные варианты без пояснений, но id бывают длинными: по одной в строке.
@@ -1117,6 +1150,9 @@ export async function validateAndSaveWizard(
     : undefined;
   await validate({
     provider: st.provider,
+    ...(st.provider === "opencode"
+      ? { opencodeProtocol: env.OPENCODE_PROTOCOL }
+      : {}),
     model: st.model,
     key,
     dataDir: DATA_DIR_ABS,

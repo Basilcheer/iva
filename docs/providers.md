@@ -31,6 +31,21 @@ Start with Go: a quarter of the price, ~23 models to switch between (the wizard 
 
 Two things about the live lists. Both catalogs churn — Ollama Cloud retired `gemma3:12b` on 2026-07-15 and Go dropped `gemini-3-flash`, so a hand-written model id in `.env` can start failing without you touching anything; if the bot goes quiet after weeks of silence on your side, re-run `iva config` and re-pick from the live list. And on Ollama Cloud the frontier tags (`kimi-k3` among them) bill as **extra usage** on top of the plan: with an empty extra-usage balance the API answers `402`, so top it up at [ollama.com/settings](https://ollama.com/settings) or stay on `deepseek-v4-pro`.
 
+### OpenCode Go protocols (`opencode`)
+
+Go's catalog includes models served over different endpoints. Select the wire explicitly from [Go's endpoint table](https://opencode.ai/docs/go/#endpoints), without changing provider or adding a key:
+
+```bash
+MODEL_PROVIDER=opencode
+OPENCODE_MODEL=muse-spark-1.3-contributor
+OPENCODE_PROTOCOL=responses
+iva restart
+```
+
+`chat-completions` remains the default. Responses models include Muse Spark, Grok 4.6/4.7 and GPT 5.6/6 Luna. `iva config` asks for the protocol and probes Responses with tools before saving; `/model` retains the selected protocol and validates Responses selections over that wire. Session headers, usage and night use the same factory. Thinking levels are unavailable for Go Responses until its reasoning contract is verified.
+
+Vision falls back through its own `OPENCODE_VISION_PROTOCOL` (also `chat-completions` by default); set it to `responses` for a compatible image-capable Responses model. The selected text model is tested for image understanding over its actual wire first. Go `/messages` models are unsupported, including the current documented endpoint for the old `qwen3.7-plus` vision default. Choose a compatible fallback instead; Iva reports a protocol refusal and continues without a fabricated image description. Existing installs retain their previous defaults.
+
 ### OpenAI by ChatGPT subscription (`codex`)
 
 Use the OpenAI subscription you already pay for — no separate API key, no per-token bill. Iva signs in the same way the official `codex` CLI does (OAuth against `auth.openai.com`), stores a refreshable token in `data/codex-auth.json` (chmod 600), and calls the subscription's Responses backend directly. The access token is refreshed automatically before it expires. If the backend rejects a still-fresh token after the subscription lapses, Iva forces one refresh and retries once; a second rejection tells you to run `iva login`.

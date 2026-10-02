@@ -1,3 +1,4 @@
+import { resolveOpenCodeProtocol } from "@iva/opencode-protocol";
 // Шаги мастера настройки, вынесенные из scripts/setup/main.ts (B5, шаг 1).
 //
 // Шаг получает состояние мастера и контекст: диалог, печать и запись .env приходят
@@ -185,7 +186,22 @@ async function askOpencodeSettings(
     "deepseek-v4-pro",
   );
   ctx.print(
-    `\n  ${ctx.t("Vision model (photos)", "Vision-модель (фото)")}: ${ctx.t("describes incoming pictures — the text model above is usually blind.", "описывает входящие картинки — текстовая модель выше обычно их не видит.")} ${ctx.t("I recommend", "Рекомендую")} ${C.g}${CATALOG.opencode.visionDef ?? ""}${C.x}.`,
+    ctx.t(
+      "Choose each model's protocol from https://opencode.ai/docs/go/#endpoints. /messages is unsupported.",
+      "Выберите протокол каждой модели по https://opencode.ai/docs/go/#endpoints. /messages не поддерживается.",
+    ),
+  );
+  out.OPENCODE_PROTOCOL = resolveOpenCodeProtocol(
+    await ctx.ask(
+      "  OPENCODE_PROTOCOL (chat-completions / responses)",
+      out.OPENCODE_PROTOCOL || "chat-completions",
+    ),
+  );
+  ctx.print(
+    ctx.t(
+      "Vision fallback: choose an image-capable model and its documented wire. The old qwen3.7-plus default now uses unsupported /messages.",
+      "Запасное зрение: выберите модель с поддержкой картинок и её протокол. Старый дефолт qwen3.7-plus теперь требует неподдерживаемый /messages.",
+    ),
   );
   // Тот же срез устаревшего префикса, что и у текстовой модели выше.
   const curVision = (out.OPENCODE_VISION_MODEL || "").replace(
@@ -196,6 +212,13 @@ async function askOpencodeSettings(
     models,
     curVision,
     CATALOG.opencode.visionDef ?? "",
+  );
+  out.OPENCODE_VISION_PROTOCOL = resolveOpenCodeProtocol(
+    await ctx.ask(
+      "  OPENCODE_VISION_PROTOCOL (chat-completions / responses; /messages unsupported)",
+      out.OPENCODE_VISION_PROTOCOL || "chat-completions",
+    ),
+    "OPENCODE_VISION_PROTOCOL",
   );
   out.OPENCODE_CONTEXT_WINDOW = out.OPENCODE_CONTEXT_WINDOW || "131072";
   ctx.print(
@@ -1092,6 +1115,9 @@ export async function writeSetupEnv(
   const catOut = catalogProvider(provider);
   await ctx.validateModelSelection({
     provider: out.MODEL_PROVIDER,
+    ...(out.MODEL_PROVIDER === "opencode"
+      ? { opencodeProtocol: out.OPENCODE_PROTOCOL }
+      : {}),
     model: out[selected.model],
     key: selected.key ? out[selected.key] || undefined : undefined,
     dataDir: ctx.dataDirAbs(out),

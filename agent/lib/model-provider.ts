@@ -1,3 +1,4 @@
+import { resolveOpenCodeProtocol } from "@iva/opencode-protocol";
 // Единственный резолвер MODEL_PROVIDER: имя провайдера, текстовая модель, vision-модель
 // (её зовёт agent/vision.ts на картинке) и поддержка OpenAI-совместимого reasoning_effort
 // решаются РАЗ и одинаково для рантайма (agent/provider.ts) и учёта расхода
@@ -257,6 +258,9 @@ export function resolveModelProvider(
       visionModelVar === null ? undefined : env[visionModelVar],
       model,
     ),
-    compatibleReasoning,
+    compatibleReasoning:
+      compatibleReasoning &&
+      (name !== "opencode" ||
+        resolveOpenCodeProtocol(env.OPENCODE_PROTOCOL) === "chat-completions"),
   };
 }

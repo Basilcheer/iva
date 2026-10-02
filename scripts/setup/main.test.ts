@@ -164,7 +164,9 @@ test("fresh setup: every question in order, defaults, and the written .env", asy
       "2", // Provider -> OpenCode
       "oc-key-123456", // OpenCode API key
       "", // Model number -> default
+      "", // Text protocol -> chat-completions
       "", // Vision model number -> default
+      "", // Vision protocol -> chat-completions
       "", // Deepgram key -> skip
       "", // Search provider -> tavily
       "", // tavily key -> skip
@@ -177,6 +179,8 @@ test("fresh setup: every question in order, defaults, and the written .env", asy
       String(port), // eve-server port
     ],
   });
+  assert.ok(result.candidate, result.transcript);
+  assert.match(result.transcript, /Ready — settings validated for apply/);
   assertGolden("fresh.transcript", result.transcript);
   assertGolden("fresh.env", result.candidate ?? "");
 });
@@ -193,7 +197,9 @@ test("reconfigure: Enter at every question keeps the current value", async (t) =
       "", // Provider -> current (OpenCode)
       "", // OpenCode API key -> keep
       "", // Model -> current
+      "", // Text protocol -> current
       "", // Vision -> current
+      "", // Vision protocol -> current
       "", // Deepgram -> skip
       "", // Search provider -> current
       "", // tavily key -> skip
@@ -204,6 +210,8 @@ test("reconfigure: Enter at every question keeps the current value", async (t) =
       "", // Port -> current
     ],
   });
+  assert.ok(result.candidate, result.transcript);
+  assert.match(result.transcript, /Ready — settings validated for apply/);
   assertGolden("reconfigure.transcript", result.transcript);
   assertGolden("reconfigure.env", result.candidate ?? "");
 });
