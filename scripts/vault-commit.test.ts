@@ -17,6 +17,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   utimesSync,
   writeFileSync,
 } from "node:fs";
@@ -622,7 +623,7 @@ test("в журнал уходит причина отказа, а не подс
     tool.card(card({ title: "Скрытая" })),
   );
   assert.equal(result.ok, true, result.error);
-  assert.match(logged, /ignored by one of your \.gitignore files/u);
+  assert.match(logged, /вне git-бэкапа по ignore/u);
   assert.doesNotMatch(logged, /hint:/u);
 });
 test("read-only .git: причина в журнале, без пустого ожидания", async (t) => {
@@ -757,14 +758,9 @@ test("intent-to-add владельца переживает неудачный �
 
 test("отказ git add на одном из путей не оставляет остальные застейдженными", async (t) => {
   const vault = makeVault(t);
-  // Игнорируемый путь: git успевает застейджить соседний и всё равно выходит с ошибкой -
-  // именно на этом отказе индекс и оставался чужим.
-  writeFileSync(join(vault, ".gitignore"), "cards/notes/игнор.md\n");
-  sh(["add", "--", ".gitignore"], vault);
-  sh(["commit", "-q", "-m", "ignore"], vault);
+  // Пропавший неотслеживаемый путь: add стейджит соседний, но выходит с ошибкой.
   const good = join(vault, "cards", "notes", "остаток.md");
   writeFileSync(good, "# Остаток\n");
-  writeFileSync(join(vault, "cards", "notes", "игнор.md"), "# Игнор\n");
 
   const outcome = await tool.seam.commitVaultWrite(
     "file остаток: write",
@@ -774,13 +770,136 @@ test("отказ git add на одном из путей не оставляет
   assert.equal(outcome.ok, false);
   assert.match(
     outcome.ok ? "" : outcome.reason,
-    /ignored by one of your \.gitignore files/u,
+    /pathspec.*did not match any files/u,
   );
   assert.equal(
     statusAll(vault),
     "?? cards/notes/остаток.md",
     "ничего из отказавшего add не осталось в индексе",
   );
+});
+
+test("ignore новых путей не отменяет соседний бэкап и виден в журнале (#257)", async (t) => {
+  const vault = makeVault(t);
+  writeFileSync(join(vault, ".gitignore"), "cards/notes/private.md\n");
+  sh(["add", ".gitignore"], vault);
+  sh(["commit", "-qm", "ignore"], vault);
+  const good = join(vault, "cards/notes/public.md");
+  const privateFile = join(vault, "cards/notes/private.md");
+  writeFileSync(good, "public\n");
+  writeFileSync(privateFile, "private\n");
+  writeFileSync(join(vault, "owner.md"), "staged owner\n");
+  sh(["add", "owner.md"], vault);
+  const { value: outcome, logged } = await journal(() =>
+    tool.seam.commitVaultWrite("night", [good, privateFile], vault),
+  );
+  assert.deepEqual(outcome, {
+    ok: true,
+    committed: true,
+    skipped: ["cards/notes/private.md"],
+  });
+  assert.deepEqual(touched(vault), ["cards/notes/public.md"]);
+  assert.match(logged, /вне git-бэкапа по ignore.*private\.md/u);
+  assert.equal(statusAll(vault), "A  owner.md");
+  const skipped = await tool.seam.commitVaultWrite(
+    "private",
+    [privateFile],
+    vault,
+  );
+  assert.deepEqual(skipped, {
+    ok: true,
+    committed: false,
+    skipped: ["cards/notes/private.md"],
+  });
+  assert.equal(readFileSync(privateFile, "utf8"), "private\n");
+});
+
+test("отслеживаемый литеральный путь под ignored каталогом продолжает историю (#257)", async (t) => {
+  const vault = makeVault(t);
+  const path = "cards/notes/отчёт-*.md";
+  const file = join(vault, path);
+  writeFileSync(file, "before\n");
+  sh(["--literal-pathspecs", "add", "--", path], vault);
+  sh(["commit", "-qm", "tracked"], vault);
+  writeFileSync(join(vault, ".gitignore"), "cards/\n");
+  sh(["add", ".gitignore"], vault);
+  sh(["commit", "-qm", "ignore parent"], vault);
+  writeFileSync(file, "after\n");
+  writeFileSync(join(vault, "cards/notes/отчёт-private.md"), "private\n");
+  const outcome = await tool.seam.commitVaultWrite("night", [file], vault);
+  assert.deepEqual(outcome, { ok: true, committed: true });
+  assert.deepEqual(touched(vault), [path]);
+  assert.equal(sh(["show", `HEAD:${path}`], vault), "after");
+  assert.equal(sh(["ls-files", "cards/notes/отчёт-private.md"], vault), "");
+});
+
+for (const staged of [false, true]) {
+  test(`удаление tracked пути под ignore (${staged ? "staged" : "unstaged"}) сохраняется`, async (t) => {
+    const vault = makeVault(t);
+    const path = "cards/notes/deleted.md";
+    const file = join(vault, path);
+    writeFileSync(file, "before\n");
+    sh(["add", path], vault);
+    sh(["commit", "-qm", "tracked"], vault);
+    rmSync(file);
+    if (staged) sh(["add", path], vault);
+    writeFileSync(join(vault, ".gitignore"), "cards/\n");
+    const outcome = await tool.seam.commitVaultWrite("delete", [file], vault);
+    assert.deepEqual(outcome, { ok: true, committed: true });
+    assert.deepEqual(touched(vault), [path]);
+    assert.equal(sh(["ls-files", path], vault), "");
+  });
+}
+
+test("отказ hook после force tracked add возвращает staged владельца под ignore", async (t) => {
+  const vault = makeVault(t);
+  const path = "cards/notes/partial.md";
+  const file = join(vault, path);
+  writeFileSync(file, "base\n");
+  sh(["add", path], vault);
+  sh(["commit", "-qm", "tracked"], vault);
+  writeFileSync(file, "owner staged\n");
+  sh(["add", path], vault);
+  writeFileSync(join(vault, ".gitignore"), "cards/\n");
+  writeFileSync(file, "night\n");
+  const beforeIndex = sh(["ls-files", "-s", "--", path], vault);
+  hook(vault, "exit 1");
+  const outcome = await tool.seam.commitVaultWrite("night", [file], vault);
+  assert.equal(outcome.ok, false);
+  assert.equal(sh(["ls-files", "-s", "--", path], vault), beforeIndex);
+  assert.equal(readFileSync(file, "utf8"), "night\n");
+});
+
+test("intent-to-add возвращается после отказа hook под ignored родителем", async (t) => {
+  const vault = makeVault(t);
+  const path = "cards/notes/intent.md";
+  const file = join(vault, path);
+  writeFileSync(file, "before\n");
+  sh(["add", "-N", path], vault);
+  writeFileSync(join(vault, ".gitignore"), "cards/\n");
+  const before = indexState(vault, path);
+  writeFileSync(file, "night\n");
+  hook(vault, "exit 1");
+  const outcome = await tool.seam.commitVaultWrite("night", [file], vault);
+  assert.equal(outcome.ok, false);
+  assert.equal(indexState(vault, path), before);
+});
+
+test("force tracked add не выходит из vault через символическую ссылку", async (t) => {
+  const vault = makeVault(t);
+  const foreign = foreignRepo(t);
+  const file = join(foreign, "outside.md");
+  writeFileSync(file, "outside\n");
+  symlinkSync(foreign, join(vault, "linked"), "dir");
+  const before = fingerprint(foreign);
+  const outcome = await tool.seam.commitVaultWrite(
+    "night",
+    [join(vault, "linked/outside.md")],
+    vault,
+  );
+  assert.deepEqual(outcome, { ok: true, committed: false });
+  assert.deepEqual(subjects(vault), []);
+  assert.equal(fingerprint(foreign), before);
 });
 
 test("vault подкаталог своего репозитория: причина называет корень выше", async (t) => {

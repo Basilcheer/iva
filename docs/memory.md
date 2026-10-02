@@ -13,7 +13,7 @@ The night has four steps:
 3. Write bilateral Card links only when both targets exist.
 4. Propose bounded edits to `CORE.md` from the owner's own quotations.
 
-Large inputs are split at entry boundaries. The whole night is capped at 40 calls and 300,000 estimated input tokens. Missing or invalid provider usage closes the gate before the next call. A day is ready only after its summary and the one-release compatibility marker in the raw day are committed together.
+Large inputs are split at entry boundaries. The whole night is capped at 40 calls and 300,000 estimated input tokens. Missing or invalid provider usage closes the gate before the next call. A day is ready after its summary and the one-release compatibility marker in the raw day are committed together for paths allowed by the owner's Git policy. New files excluded by `.gitignore`, `.git/info/exclude` or global Git rules stay on disk and do not stop the night; the log explicitly lists them as outside the Git backup. Already tracked files continue to be committed even if their parent directory is later ignored. If all paths are excluded, day readiness is recorded locally, without backing up those files.
 
 The day cache in `data/memory/night/` makes restarts idempotent. A matching late tail sends only the new entries to the model. If an older processed entry changed, the night leaves the day untouched and asks the owner to remove that cache explicitly before reprocessing.
 

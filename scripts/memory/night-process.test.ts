@@ -322,6 +322,47 @@ void test("обычный день: A и B, Card, выжимка, отметка
   assert.equal(git(fx.vault, "rev-parse", "HEAD"), head);
 });
 
+for (const tracked of [false, true]) {
+  void test(`ignore daily и summaries не останавливает ночь; raw ${tracked ? "tracked" : "untracked"} (#257)`, async (t) => {
+    const fx = await fixture(t);
+    const raw = "## 10:00 [text]\nЗапустил проект Аврора\n";
+    const file = join(fx.vault, "daily", `${DATE}.md`);
+    if (tracked) day(fx, raw);
+    writeFileSync(join(fx.vault, ".gitignore"), "daily/\nsummaries/\n");
+    commit(fx.vault, "ignore memory");
+    if (!tracked) writeFileSync(file, raw);
+    fx.model.replies = [A()];
+    const first = await night(fx);
+    assert.equal(first.code, 0, first.stderr);
+    assert.equal(fx.model.prompts.length, 1);
+    assert.match(read(file), /processed: memory-night/u);
+    assert.match(read(summary(fx)), /Аврора/u);
+    assert.match(first.stderr, /вне git-бэкапа по ignore.*summaries\/daily/u);
+    assert.equal(git(fx.vault, "ls-files", `summaries/daily/${DATE}.md`), "");
+    const cache = JSON.parse(
+      read(join(fx.data, "memory/night", `${DATE}.json`)),
+    ) as { completedAt?: string };
+    assert.ok(cache.completedAt);
+    if (tracked)
+      assert.match(
+        git(fx.vault, "show", `HEAD:daily/${DATE}.md`),
+        /processed: memory-night/u,
+      );
+    else {
+      assert.equal(git(fx.vault, "ls-files", `daily/${DATE}.md`), "");
+      assert.match(
+        first.stderr,
+        /вне git-бэкапа по ignore.*daily\/2026-09-26/u,
+      );
+    }
+    const head = git(fx.vault, "rev-parse", "HEAD");
+    const again = await night(fx, null);
+    assert.equal(again.code, 0, again.stderr);
+    assert.equal(fx.model.prompts.length, 1);
+    assert.equal(git(fx.vault, "rev-parse", "HEAD"), head);
+  });
+}
+
 void test("B заменяет правду целиком: сменённая средняя строка уходит в History, порядок цел (ДЕФ-1, ДЕФ-18)", async (t) => {
   const fx = await fixture(t);
   day(fx, "## 10:00 [text]\nВторую строку меняю\n");
