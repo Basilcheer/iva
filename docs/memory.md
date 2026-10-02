@@ -29,6 +29,8 @@ Every accepted fact is append-only:
 
 Evidence must come from an owner entry. The model returns the whole new Compiled Truth; the night replaces it only if the Card file still matches the hash read for the call. Replaced truth moves to the Card archive; a concurrent owner edit wins and leaves `truth_pending` for the next night. `write_card` exposes explicit `fact`, `truth` and owner-confirmed `merge` operations. General `write_file` cannot write memory (`daily/`, `summaries/`, period summaries, `cards/`); other vault paths such as `library/` are written and committed, and `CORE.md` goes through the same capped, committed writer.
 
+`write_card` describes a minimal JSON call for each operation before execution and repeats the relevant example when required operation fields are missing or invalid. Substitute the actual Card data, omit unused optional fields, and pass `tags` and `aliases` as arrays of strings. The `merge` example is a call shape, never evidence of the owner's confirmation. Schema-level errors still come from eve; repair the named field using the tool description.
+
 ## Brain and search
 
 At 05:00 `scripts/memory/brain.ts` performs deterministic TypeScript maintenance: it commits outstanding owner changes, rebuilds `.graph/vault-graph.json`, checks the CORE size and pushes the vault when a remote exists. It does not call a model or rewrite cards.

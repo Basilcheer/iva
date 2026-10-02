@@ -13,6 +13,7 @@ import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 import type { ToolContext } from "eve/tools";
 import fc from "fast-check";
+import { z } from "zod";
 import "../lib/ts-esm-hooks.ts";
 
 const writeCard = (await import("../../agent/tools/write_card.ts")).default;
@@ -611,6 +612,75 @@ void test("write_card без полей операции отвечает тек
   )) as { ok?: boolean; error?: string };
   assert.equal(result.ok, false);
   assert.match(result.error ?? "", /^write_card fact: .*title/u);
+  assert.match(result.error ?? "", /Пример формы fact.*"title"/u);
+  assert.equal(git(fx.vault, "rev-parse", "HEAD"), before);
+  assert.equal(git(fx.vault, "status", "--porcelain"), "");
+});
+
+void test("write_card описывает валидные формы вызова до execute, сохраняя типы", () => {
+  const schema = writeCard.inputSchema as z.ZodType;
+  const examples = [
+    ...writeCard.description.matchAll(
+      /Пример формы (fact|truth|merge)[^\n]*?: (\{[^\n]+\})/gu,
+    ),
+  ];
+  assert.deepEqual(
+    examples.map((match) => match[1]),
+    ["fact", "truth", "merge"],
+  );
+  for (const match of examples) {
+    const example = JSON.parse(match[2]) as Record<string, unknown>;
+    assert.equal(schema.safeParse(example).success, true);
+    assert.equal(example.operation, match[1]);
+  }
+  assert.match(writeCard.description, /пример не является подтверждением/u);
+  assert.equal(
+    schema.safeParse({ operation: "fact", title: null }).success,
+    false,
+  );
+  assert.equal(
+    schema.safeParse({ operation: "merge", confirmed_by_owner: "true" })
+      .success,
+    false,
+  );
+});
+
+void test("write_card: отказ для пропущенного поля содержит форму той же операции без записи (seed 255)", async (t) => {
+  const fx = fixture(t);
+  const before = git(fx.vault, "rev-parse", "HEAD");
+  const examples = [
+    ...writeCard.description.matchAll(
+      /Пример формы (fact|truth|merge)[^\n]*?: (\{[^\n]+\})/gu,
+    ),
+  ].map((match) => JSON.parse(match[2]) as Record<string, unknown>);
+  await fc.assert(
+    fc.asyncProperty(
+      fc.constantFrom(...examples),
+      fc.nat(),
+      async (example, position) => {
+        const required = Object.keys(example).filter(
+          (key) => key !== "operation",
+        );
+        const missing = required[position % required.length];
+        const raw = { ...example };
+        delete raw[missing];
+        const result = (await writeCard.execute(
+          raw as Parameters<typeof writeCard.execute>[0],
+          context,
+        )) as { ok: boolean; error: string };
+        assert.equal(result.ok, false);
+        assert.match(result.error, new RegExp(`${missing}:`, "u"));
+        const hint = result.error.match(
+          /Пример формы (fact|truth|merge)[^\n]*?: (\{[^\n]+\})/u,
+        );
+        assert.ok(hint);
+        assert.equal(hint[1], example.operation);
+        assert.deepEqual(JSON.parse(hint[2]), example);
+        assert.match(result.error, /пример не является подтверждением/u);
+      },
+    ),
+    { seed: 255, numRuns: 30 },
+  );
   assert.equal(git(fx.vault, "rev-parse", "HEAD"), before);
   assert.equal(git(fx.vault, "status", "--porcelain"), "");
 });
