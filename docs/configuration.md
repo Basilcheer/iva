@@ -2,13 +2,15 @@
 
 Iva is configured by one file: `.env` in the install directory. The setup wizard fills it in for you — run `iva config` any time to redo a step ([cli.md](./cli.md)). `.env.example` in the repo root is the template. This page documents every variable.
 
-**Every change needs a restart.** Iva reads `.env` once at startup. After editing:
+**Model, key and provider changes need only a restart.** Iva reads these `.env` settings at startup. After editing:
 
 ```bash
 iva restart
 ```
 
-No rebuild. Swapping a model, key or provider is edit → restart.
+Swapping a model, key or provider is edit → restart, without a rebuild.
+
+`MEMORY_NIGHT_TIME=HH:mm` sets the local time of the single `memory-night` Schedule in `ASSISTANT_TIMEZONE` (default `04:00`; strict `00:00..23:59`). This is a build setting: after editing `.env`, run `iva update --force`; in a development checkout use `npm run build` and `iva restart`. Editing `.env` alone moves neither the Schedule nor catch-up. `/menu` → ⏰ shows the active schedule and any pending time. Schedule and catch-up read one build artifact; a failed build or rollback preserves its previous time. Older builds without the artifact keep 04:00.
 
 **One exception: the reply language.** The **🌐 Language** button in `/menu` writes `data/settings.json`, which both processes re-read live — the switch takes effect immediately, no restart. See [menu.md](./menu.md).
 
