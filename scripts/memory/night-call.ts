@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { generateText } from "ai";
+import { streamText } from "ai";
 import type { ZodType } from "zod";
 import { makeTextModel, providerConfig, providerName } from "#provider.ts";
 import { appendUsage, usageRecord } from "#lib/usage.ts";
@@ -82,14 +82,19 @@ async function oneCall<T>(call: SchemaCall<T>, hint: string): Promise<T> {
   ceiling.calls++;
   let result;
   try {
-    result = await generateText({
+    const response = streamText({
       model,
       abortSignal: call.signal,
       maxRetries: 0,
       system: SYSTEM,
       prompt,
       ...low,
+      // Ошибка идёт вызывающему коду через text/usage, без побочной печати промпта.
+      onError: () => {},
     });
+    const [text, usage] = await Promise.all([response.text, response.usage]);
+    call.signal.throwIfAborted();
+    result = { text, usage };
   } catch (error) {
     ceiling.inputTokens += estimate;
     if (call.signal.aborted) throw error;
