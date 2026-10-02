@@ -621,9 +621,9 @@ void test("ignore сохраняет tracked историю, исключает 
     fc.asyncProperty(
       nameArb,
       fc.boolean(),
+      fc.constantFrom("change", "delete", "untrack"),
       fc.boolean(),
-      fc.boolean(),
-      async (name, staged, deleted, refused) => {
+      async (name, staged, mode, refused) => {
         const vault = makeVaultDir("commit", null);
         try {
           const tracked = `daily/tracked-${name}`;
@@ -636,11 +636,18 @@ void test("ignore сохраняет tracked историю, исключает 
           git(["add", "owner-staged.md"], vault);
           writeFileSync(file, "owner staged\n");
           if (staged) git(["--literal-pathspecs", "add", "--", tracked], vault);
-          if (deleted) {
+          if (mode === "delete") {
             rmSync(file);
             if (staged)
               git(["--literal-pathspecs", "add", "--", tracked], vault);
-          } else writeFileSync(file, "night\n");
+          } else {
+            writeFileSync(file, "night\n");
+            if (mode === "untrack")
+              git(
+                ["--literal-pathspecs", "rm", "-f", "--cached", "--", tracked],
+                vault,
+              );
+          }
           writeFileSync(join(vault, ".gitignore"), "daily/\n");
           writeFileSync(join(vault, ignored), "private\n");
           const beforeIndex = git(
@@ -648,6 +655,10 @@ void test("ignore сохраняет tracked историю, исключает 
             vault,
           );
           const ownerBefore = stateOf(vault, ["owner-staged.md"]);
+          const cachedBefore = git(
+            ["--literal-pathspecs", "diff", "--cached", "--raw", "--", tracked],
+            vault,
+          );
           const headBefore = git(["rev-parse", "HEAD"], vault);
           if (refused) {
             const hook = join(vault, ".git/hooks/pre-commit");
@@ -657,14 +668,33 @@ void test("ignore сохраняет tracked историю, исключает 
           const { value: outcome, lines } = await withJournal(() =>
             seam.commitVaultWrite("night", [file, join(vault, ignored)], vault),
           );
-          assert.equal(outcome.ok, !refused);
+          assert.equal(outcome.ok, mode === "untrack" || !refused);
           assert.equal(stateOf(vault, ["owner-staged.md"]), ownerBefore);
           assert.equal(
             git(["--literal-pathspecs", "ls-files", "--", ignored], vault),
             "",
           );
           assert.equal(readFileSync(join(vault, ignored), "utf8"), "private\n");
-          if (refused) {
+          if (mode === "untrack") {
+            assert.equal(outcome.committed, false);
+            assert.deepEqual(outcome.skipped, [tracked, ignored]);
+            assert.equal(git(["rev-parse", "HEAD"], vault), headBefore);
+            assert.equal(
+              git(
+                [
+                  "--literal-pathspecs",
+                  "diff",
+                  "--cached",
+                  "--raw",
+                  "--",
+                  tracked,
+                ],
+                vault,
+              ),
+              cachedBefore,
+            );
+            assert.equal(readFileSync(file, "utf8"), "night\n");
+          } else if (refused) {
             assert.equal(git(["rev-parse", "HEAD"], vault), headBefore);
             assert.equal(
               git(

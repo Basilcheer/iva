@@ -885,6 +885,47 @@ test("intent-to-add возвращается после отказа hook под
   assert.equal(indexState(vault, path), before);
 });
 
+test("git rm --cached плюс ignore не возвращает файл владельца в бэкап", async (t) => {
+  const vault = makeVault(t);
+  const path = "cards/notes/private.md";
+  const file = join(vault, path);
+  writeFileSync(file, "before\n");
+  sh(["add", path], vault);
+  sh(["commit", "-qm", "tracked"], vault);
+  sh(["rm", "--cached", path], vault);
+  writeFileSync(join(vault, ".gitignore"), "cards/\n");
+  writeFileSync(file, "after\n");
+  const before = sh(["diff", "--cached", "--raw"], vault);
+  const head = sh(["rev-parse", "HEAD"], vault);
+  const skip = await tool.seam.commitVaultWrite("private", [file], vault);
+  assert.deepEqual(skip, { ok: true, committed: false, skipped: [path] });
+  assert.equal(sh(["rev-parse", "HEAD"], vault), head);
+  const good = join(vault, "public.md");
+  writeFileSync(good, "public\n");
+  const mixed = await tool.seam.commitVaultWrite("mixed", [file, good], vault);
+  assert.deepEqual(mixed, { ok: true, committed: true, skipped: [path] });
+  assert.deepEqual(touched(vault), ["public.md"]);
+  assert.equal(sh(["ls-files", "--", path], vault), "");
+  assert.equal(sh(["diff", "--cached", "--raw"], vault), before);
+  assert.equal(readFileSync(file, "utf8"), "after\n");
+});
+
+test("git rm --cached плюс ignore сохраняет оборванную ссылку вне бэкапа", async (t) => {
+  const vault = makeVault(t);
+  const path = "cards/notes/private-link";
+  const file = join(vault, path);
+  symlinkSync("missing-target", file);
+  sh(["add", path], vault);
+  sh(["commit", "-qm", "tracked link"], vault);
+  sh(["rm", "--cached", path], vault);
+  writeFileSync(join(vault, ".gitignore"), "cards/\n");
+  const before = sh(["diff", "--cached", "--raw"], vault);
+  const result = await tool.seam.commitVaultWrite("private", [file], vault);
+  assert.deepEqual(result, { ok: true, committed: false, skipped: [path] });
+  assert.equal(sh(["diff", "--cached", "--raw"], vault), before);
+  assert.equal(sh(["ls-files", "--", path], vault), "");
+});
+
 test("force tracked add не выходит из vault через символическую ссылку", async (t) => {
   const vault = makeVault(t);
   const foreign = foreignRepo(t);
