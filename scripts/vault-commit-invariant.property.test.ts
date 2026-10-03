@@ -374,13 +374,11 @@ function valid(spec: WriteCase): boolean {
 function ignoreFor(spec: WriteCase, rel: string): string | null {
   if (spec.kind === "direct") return `daily/${DIRECT_GONE}\n`;
   if (spec.outcome !== "ignored") return null;
-  return spec.kind === "card"
-    ? "cards/notes/*\n"
-    : `${rel}\n`;
+  return spec.kind === "card" ? "cards/notes/*\n" : `${rel}\n`;
 }
 
-/** Второй путь многопутёвого вызова: его нет в индексе, поэтому `git add` отказывает уже
- * после того, как застейджил первый. */
+/** Второй путь многопутёвого вызова исключён владельцем: первый коммитится, второй
+ * остаётся вне бэкапа, не отменяя запись первого. */
 const DIRECT_GONE = "игнор-pbt.md";
 
 type Tools = {
@@ -392,7 +390,12 @@ type Tools = {
       message: string,
       paths: readonly string[],
       root: string,
-    ) => Promise<{ committed?: boolean; ok: boolean; reason?: string }>;
+    ) => Promise<{
+      committed?: boolean;
+      ok: boolean;
+      reason?: string;
+      skipped?: readonly string[];
+    }>;
   };
   file: (path: string, content: string) => Promise<{ ok: boolean }>;
 };
@@ -610,4 +613,108 @@ void test("инвариант шва коммита памяти держитс�
       retryDelay: 50,
     });
   }
+});
+
+void test("ignore сохраняет tracked историю, исключает untracked и не меняет чужой индекс (#257)", async () => {
+  console.log(`      ignore seed ${String(SEED)}, прогонов 30`);
+  await fc.assert(
+    fc.asyncProperty(
+      nameArb,
+      fc.boolean(),
+      fc.constantFrom("change", "delete", "untrack"),
+      fc.boolean(),
+      async (name, staged, mode, refused) => {
+        const vault = makeVaultDir("commit", null);
+        try {
+          const tracked = `daily/tracked-${name}`;
+          const ignored = `daily/private-${name}`;
+          const file = join(vault, tracked);
+          writeFileSync(file, "base\n");
+          git(["--literal-pathspecs", "add", "--", tracked], vault);
+          git([...IDENTITY, "commit", "-qm", "tracked"], vault);
+          writeFileSync(join(vault, "owner-staged.md"), "owner\n");
+          git(["add", "owner-staged.md"], vault);
+          writeFileSync(file, "owner staged\n");
+          if (staged) git(["--literal-pathspecs", "add", "--", tracked], vault);
+          if (mode === "delete") {
+            rmSync(file);
+            if (staged)
+              git(["--literal-pathspecs", "add", "--", tracked], vault);
+          } else {
+            writeFileSync(file, "night\n");
+            if (mode === "untrack")
+              git(
+                ["--literal-pathspecs", "rm", "-f", "--cached", "--", tracked],
+                vault,
+              );
+          }
+          writeFileSync(join(vault, ".gitignore"), "daily/\n");
+          writeFileSync(join(vault, ignored), "private\n");
+          const beforeIndex = git(
+            ["--literal-pathspecs", "ls-files", "-s", "-z", "--", tracked],
+            vault,
+          );
+          const ownerBefore = stateOf(vault, ["owner-staged.md"]);
+          const cachedBefore = git(
+            ["--literal-pathspecs", "diff", "--cached", "--raw", "--", tracked],
+            vault,
+          );
+          const headBefore = git(["rev-parse", "HEAD"], vault);
+          if (refused) {
+            const hook = join(vault, ".git/hooks/pre-commit");
+            writeFileSync(hook, "#!/bin/sh\nexit 1\n");
+            chmodSync(hook, 0o755);
+          }
+          const { value: outcome, lines } = await withJournal(() =>
+            seam.commitVaultWrite("night", [file, join(vault, ignored)], vault),
+          );
+          assert.equal(outcome.ok, mode === "untrack" || !refused);
+          assert.equal(stateOf(vault, ["owner-staged.md"]), ownerBefore);
+          assert.equal(
+            git(["--literal-pathspecs", "ls-files", "--", ignored], vault),
+            "",
+          );
+          assert.equal(readFileSync(join(vault, ignored), "utf8"), "private\n");
+          if (mode === "untrack") {
+            assert.equal(outcome.committed, false);
+            assert.deepEqual(outcome.skipped, [tracked, ignored]);
+            assert.equal(git(["rev-parse", "HEAD"], vault), headBefore);
+            assert.equal(
+              git(
+                [
+                  "--literal-pathspecs",
+                  "diff",
+                  "--cached",
+                  "--raw",
+                  "--",
+                  tracked,
+                ],
+                vault,
+              ),
+              cachedBefore,
+            );
+            assert.equal(readFileSync(file, "utf8"), "night\n");
+          } else if (refused) {
+            assert.equal(git(["rev-parse", "HEAD"], vault), headBefore);
+            assert.equal(
+              git(
+                ["--literal-pathspecs", "ls-files", "-s", "-z", "--", tracked],
+                vault,
+              ),
+              beforeIndex,
+            );
+          } else {
+            assert.deepEqual(commitPaths(vault), [tracked]);
+            assert.deepEqual(outcome.skipped, [ignored]);
+            assert.ok(
+              lines.some((line) => line.includes("вне git-бэкапа по ignore")),
+            );
+          }
+        } finally {
+          rmSync(vault, { recursive: true, force: true });
+        }
+      },
+    ),
+    { numRuns: 30, seed: SEED },
+  );
 });

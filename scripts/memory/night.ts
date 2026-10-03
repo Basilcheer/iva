@@ -122,7 +122,8 @@ interface DayCache {
   completedAt?: string;
 }
 
-/** Запись ночи — коммит vault; false — не закоммичено, следующая ночь докоммитит. */
+/** Запись ночи — коммит разрешённых git путей; ignore новых файлов явно виден в
+ * журнале шва и не отменяет обработку. false — отказ git, следующая ночь повторит. */
 const commit = async (message: string, files: string[]) =>
   (await commitVaultWrite(message, files, vault)).ok;
 

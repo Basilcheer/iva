@@ -1,5 +1,6 @@
-// Память под git: одна успешная правка = один локальный коммит затронутых путей в
-// репозитории vault. Единственный шов, через который писатели памяти (write_card,
+// Память под git: одна успешная правка = один локальный коммит разрешённых git путей в
+// репозитории vault. Новые ignored файлы остаются на диске, шов называет их вне бэкапа.
+// Единственный шов, через который писатели памяти (write_card,
 // write_file, ночной Rollup) оставляют след в истории; `git add -A` ночного Brain
 // остаётся подметальщиком и подбирает то, что коммит сделать не смог.
 //
@@ -19,7 +20,7 @@
 // агентского дерева (scripts/authored-tree-guard.test.ts), а сам шов не ищет vault - его
 // называет вызывающий, который свой vault уже разрешил.
 import { execFile } from "node:child_process";
-import { realpathSync, rmSync, statSync } from "node:fs";
+import { lstatSync, realpathSync, rmSync, statSync } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
 
 /** Сколько ждать освобождения индекса: сосед коммитит за десятки миллисекунд. */
@@ -85,6 +86,8 @@ export type VaultCommit =
       readonly committed: boolean;
       /** Почему коммита нет, если его не должно быть (чужой репозиторий, нечего коммитить). */
       readonly reason?: string;
+      /** Пути вне бэкапа по правилам ignore владельца, относительно vault. */
+      readonly skipped?: readonly string[];
     }
   | { readonly ok: false; readonly reason: string };
 
@@ -220,6 +223,16 @@ function realOf(path: string): string | null {
   }
 }
 
+/** Удалением считаем только доказанно отсутствующий путь. lstat видит и оборванную
+ * ссылку: git rm --cached с файлом на диске — выбор владельца, не удаление файла. */
+function absent(path: string): boolean {
+  try {
+    return lstatSync(path, { throwIfNoEntry: false }) === undefined;
+  } catch {
+    return false;
+  }
+}
+
 /** Путь в виде, который понимает `git add`, или null - путь вне vault. Удалённый файл
  * реального пути не имеет, поэтому его берём как есть: символической ссылки вне vault
  * у него быть не может. */
@@ -321,7 +334,7 @@ async function restoreIndex(
   }
   if (payload.length > 0)
     await git(["update-index", "-z", "--index-info"], vault, payload.join(""));
-  for (const path of intent) await git(["add", "-N", "--", path], vault);
+  for (const path of intent) await git(["add", "-N", "-f", "--", path], vault);
 }
 
 function vaultRoot(root: string): string | null {
@@ -354,25 +367,87 @@ async function commitPaths(
   if (repo.kind === "skip")
     return { ok: true, committed: false, reason: repo.reason };
   const before = await indexEntries(vault, paths);
-  const staged = await withIndexRetry(vault, () =>
-    git(["add", "--", ...paths], vault),
+  if (before === null)
+    return { ok: false, reason: "не удалось прочитать индекс vault" };
+  // Ignore исключает только новые файлы. Уже взятый под git файл остаётся в истории,
+  // даже если владелец позже исключил его родительский каталог (git 2.52 отказывает
+  // обычному add такого пути). -f получает только точные пути, уже лежащие в индексе.
+  const deleted = await git(
+    [
+      "diff",
+      "--cached",
+      "--name-only",
+      "--diff-filter=D",
+      "-z",
+      "--",
+      ...paths,
+    ],
+    vault,
   );
+  if (deleted.code !== 0) return { ok: false, reason: reasonOf(deleted) };
+  const removed = new Set(deleted.out.split("\0").filter(Boolean));
+  const tracked = paths.filter((path) => before.has(path));
+  const deletions = paths.filter(
+    (path) => removed.has(path) && absent(join(vault, path)),
+  );
+  const deleting = new Set(deletions);
+  const untracked = paths.filter(
+    (path) => !before.has(path) && !deleting.has(path),
+  );
+  // check-ignore читает имена, не pathspec: эта команда не поддерживает
+  // GIT_LITERAL_PATHSPECS. NUL-stdin сохраняет переводы строк и имена с глобами.
+  const ignored = untracked.length
+    ? await git(
+        ["--no-literal-pathspecs", "check-ignore", "-z", "--stdin"],
+        vault,
+        `${untracked.join("\0")}\0`,
+      )
+    : { code: 1, out: "", err: "", timeout: false };
+  if (ignored.code !== 0 && ignored.code !== 1)
+    return { ok: false, reason: reasonOf(ignored) };
+  const skipped = ignored.out.split("\0").filter(Boolean);
+  const excluded = new Set(skipped);
+  const included = untracked.filter((path) => !excluded.has(path));
+  const accepted = [...tracked, ...deletions, ...included];
+  if (!accepted.length) return { ok: true, committed: false, skipped };
+  let staged: GitRun = { code: 0, err: "", out: "", timeout: false };
+  // Уже застейдженное удаление не надо добавлять повторно: записи в индексе больше
+  // нет, add отказывает, а commit -- <путь> законно коммитит само удаление.
+  for (const [force, batch] of [
+    [true, tracked],
+    [false, included],
+  ] as const) {
+    if (!batch.length) continue;
+    staged = await withIndexRetry(vault, () =>
+      git(["add", ...(force ? ["-f"] : []), "--", ...batch], vault),
+    );
+    if (staged.code !== 0) break;
+  }
   if (staged.code !== 0) {
     // `git add` стейджит часть путей до отказа (игнорируемый путь, пропавший путь), поэтому
     // индекс возвращается и здесь, а не только на отказе коммита.
-    if (before !== null) await restoreIndex(vault, paths, before);
+    await restoreIndex(vault, accepted, before);
     return { ok: false, reason: reasonOf(staged) };
   }
   const committed = await withIndexRetry(vault, () =>
-    commitWith(vault, message, paths),
+    commitWith(vault, message, accepted),
   );
-  if (committed.code === 0) return { ok: true, committed: true };
+  if (committed.code === 0)
+    return {
+      ok: true,
+      committed: true,
+      ...(skipped.length ? { skipped } : {}),
+    };
   // Коммит не состоялся (hook, отказ git): бросок не должен остаться в индексе, иначе его
   // подметёт чужой коммит или следующий наш.
-  if (before !== null) await restoreIndex(vault, paths, before);
+  await restoreIndex(vault, accepted, before);
   // Правка не изменила ни одного байта - коммитить нечего, и это не отказ.
   if (NOTHING_TO_COMMIT.test(detail(committed)))
-    return { ok: true, committed: false };
+    return {
+      ok: true,
+      committed: false,
+      ...(skipped.length ? { skipped } : {}),
+    };
   return { ok: false, reason: reasonOf(committed) };
 }
 
@@ -398,6 +473,10 @@ export async function commitVaultWrite(
   const outcome = await serialized(() => commitPaths(vault, message, rel));
   if (outcome.reason !== undefined)
     console.error(`${LOG_PREFIX} ${message}: ${outcome.reason}`);
+  if (outcome.ok && outcome.skipped?.length)
+    console.error(
+      `${LOG_PREFIX} ${message}: вне git-бэкапа по ignore: ${JSON.stringify(outcome.skipped)}`,
+    );
   return outcome;
 }
 
@@ -478,7 +557,7 @@ function statusPaths(output: string): string[] {
 async function changedVaultPaths(root: string): Promise<string[]> {
   const vault = vaultRoot(root);
   if (vault === null) return [];
-  const run = await git(["status", "--porcelain", "-z"], vault);
+  const run = await git(["status", "--porcelain", "-z", "-uall"], vault);
   if (run.code !== 0) return [];
   return statusPaths(run.out).map((path) => join(vault, path));
 }
