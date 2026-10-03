@@ -171,7 +171,22 @@ Default model is deepseek-v4-pro, 131k context. On Go it runs about $14–15/mo 
 ## What's New
 
 <details>
-<summary><b>v0.4.10 · 29.09.2026 — expand the latest releases</b></summary>
+<summary><b>v0.4.11 · 03.10.2026 — expand the latest releases</b></summary>
+
+### 03.10.2026
+
+#### v0.4.11
+
+- 🌙 **Nightly memory works on a ChatGPT subscription again**: the night call now streams on every provider. Since 0.4.9 the subscription backend answered 400 on the first call of every night. The night's own low reasoning effort is no longer overridden by the chat default.
+- 🗂️ **A vault `.gitignore` no longer stops the night**: files the owner excludes are skipped and named in the log, the rest is committed and the day closes. Ignored files stay on disk, outside the backup.
+- 🔁 **A short provider failure no longer fails the turn**: before the answer starts, Iva makes up to three attempts with 5 and 15 second waits and honours `Retry-After`. An opened stream or an executed tool is never replayed.
+- 🤖 **`gpt-6.1-sol` in the ChatGPT subscription list**: Iva identifies as Codex client 0.159.2, so `/model` and `iva config` show the new model.
+- 📅 **Task deadlines are stored as dates**: "tomorrow" becomes `YYYY-MM-DD` in the owner's timezone before it is saved, and a deadline can be corrected with `update`. Old deadlines written as words stay as they are.
+- 🔧 **Google CLI updates without root**: `iva update` installs and refreshes `gws` under the service user's `~/.local`. Google sign-in and settings stay as they are.
+- ⏰ **The nightly memory time is configurable**: `MEMORY_NIGHT_TIME=HH:mm` in `.env`, 04:00 by default. It takes effect after `iva update --force`.
+- 🔀 **OpenCode Go models over Responses**: `OPENCODE_PROTOCOL=responses` in `.env` switches the Go text wire, with the same key and model settings. chat/completions stays the default.
+- 📝 **The nightly Report reads like a note**: 2–5 plain lines in the owner's language, built by code from the night's results. The Report is still off by default.
+- 🃏 **A Card status on the owner's word**: "the project is closed" sets the Card status at once through `write_card`, and the night of that day keeps it.
 
 ### 29.09.2026
 
@@ -196,19 +211,6 @@ Default model is deepseek-v4-pro, 131k context. On Go it runs about $14–15/mo 
 - 🔒 **A long Card edit keeps its file lock**: a live holder refreshes the lock while it works, the lock of a crashed holder can still be taken after it becomes stale, and a separate ten-minute fuse prevents a stuck section from holding the lock forever.
 - 🧠 **Nightly Brain reaches the private vault backup again**: the derived link graph is no longer committed, and a missing remote is created or attached only after GitHub confirms that the repository is private.
 - 🔁 **Three observed failures pause that day for the owner**: the catch-up stops retrying it, reports the last cause once and waits for `iva jobs skip memory-daily <date>` before moving on.
-
-### 24.09.2026
-
-#### v0.4.8
-
-- 📎 **Iva sends files to the chat again**: since 0.4.1 the bash guard blocked `curl` to api.telegram.org, and when asked for a DOCX or a PDF, Iva answered that she could not send an attachment. The new `send_file` tool sends a file from the vault or the temp folder as a document to the chat and topic where it was asked for; `.env`, `data/` and anything outside those folders stay home, even through a symlink.
-- 🔁 **Iva no longer repeats one broken call hundreds of times**: after three identical tool errors in a row, or eight errors of one tool with different arguments, the turn ends with a short explanation; a successful call resets the count. A busy background agent is not polled in circles either: `AGENT_BUSY` now names the next step (#241).
-- 💾 **Fewer tokens paid twice**: Codex requests carry a cache key tied to the session, so each step of a dialogue reads the previous one from cache. Claude keeps the system prompt and its working folder the same between steps and reads the history from the prompt cache (#236). `glob` returns at most 1000 paths and names the rest, instead of 43584 paths in one call. Token accounting now also counts compaction and vision.
-- 🧭 **Reminder and card refusals say what to fix**: `remind` used to answer "give exactly one of at or cron" without naming the field, and the model tried placeholders dozens of times in a row. Now a refusal names the fields that came, what was expected and ends with one ready call for the case; `write_card` refusals carry a sample call too.
-- ⛔ **A background turn at the eve session limit no longer passes for done**: a reminder, a wake-up after a schedule or `iva remind` that hit the session token limit used to send a stale intermediate text as the result. Now the turn fails with the cause, and a reminder sends its own text with a note that it was not done.
-- 🔑 **Google Workspace connects from the menu again**: gws 0.22.5 prints `redirect_uri` URL-encoded, so the menu found no port in it, waited for the timeout and blamed client_secret. Now the port is read from both the encoded and the raw form.
-- 🌙 **A failed nightly summary continues the day instead of starting over**: the code-driven `memory-night` pipeline caches every validated model response, resumes interrupted writes without another call, and processes up to three queued days in order. The nightly run reaches its files again: `read_file`, `grep` and `glob` accept `vault/daily/…` from the project root (#242).
-- 📦 **A token usage package in one command**: `curl -fsSL https://raw.githubusercontent.com/smixs/iva-agent/main/diagnose-usage.sh | bash` collects three days of per-step tokens, the skeleton of each turn and failure lines, with the heaviest turns on top. Conversation text, tool inputs and outputs and `.env` values other than the model settings stay out; the package arrives as a file in the bot chat.
 
 </details>
 
