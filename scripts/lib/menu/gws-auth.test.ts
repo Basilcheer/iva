@@ -2,7 +2,24 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fc from "fast-check";
-import { parseAuthChallenge, extractCallbackQuery } from "./gws-auth.ts";
+import { execFileSync } from "node:child_process";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { servicePath } from "../../../packages/claude-command/index.ts";
+import {
+  parseAuthChallenge,
+  extractCallbackQuery,
+  gwsBin,
+  childEnv,
+} from "./gws-auth.ts";
 
 test("parseAuthChallenge extracts the Google URL and loopback port", () => {
   const log = [
@@ -132,4 +149,76 @@ test("extractCallbackQuery returns null when there is no code", () => {
   assert.equal(extractCallbackQuery("hello there"), null);
   assert.equal(extractCallbackQuery("http://localhost:1/?scope=y"), null);
   assert.equal(extractCallbackQuery(""), null);
+});
+
+test(`Google auth and service PATH prefer the updated user CLI over an older Node-prefix CLI (seed ${SEED})`, (t) => {
+  const root = mkdtempSync(join(tmpdir(), "iva-gws-path-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  let run = 0;
+  fc.assert(
+    fc.property(
+      fc.constantFrom("home", "user with spaces", "пользователь"),
+      fc.boolean(),
+      fc.boolean(),
+      (name, localPresent, symlinked) => {
+        const home = join(root, `${run++}-${name}`);
+        // Represents an old gws in the same bin directory as system/nvm Node.
+        const nodeBin = join(home, "old-node/bin");
+        const localBin = join(home, ".local/bin");
+        mkdirSync(nodeBin, { recursive: true });
+        mkdirSync(localBin, { recursive: true });
+        const old = join(nodeBin, "gws");
+        writeFileSync(old, "#!/bin/sh\nprintf old");
+        chmodSync(old, 0o755);
+        const local = join(localBin, "gws");
+        if (localPresent) {
+          const target = symlinked ? join(home, "npm-launcher") : local;
+          writeFileSync(target, "#!/bin/sh\nprintf updated");
+          chmodSync(target, 0o755);
+          if (symlinked) symlinkSync(target, local);
+        }
+        assert.equal(gwsBin(nodeBin, home), localPresent ? local : old);
+        assert.equal(
+          execFileSync("gws", [], {
+            env: { PATH: servicePath(nodeBin, home) },
+            encoding: "utf8",
+          }),
+          localPresent ? "updated" : "old",
+        );
+      },
+    ),
+    { seed: SEED, numRuns: 30 },
+  );
+});
+
+test("Google auth falls back to PATH when neither npm location has a CLI", (t) => {
+  const home = mkdtempSync(join(tmpdir(), "iva-gws-missing-"));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  assert.equal(gwsBin(join(home, "node/bin"), home), "gws");
+});
+
+test("Google auth child environment finds the user CLI before an older shell CLI", (t) => {
+  const home = mkdtempSync(join(tmpdir(), "iva-gws-child-"));
+  const previousHome = process.env.HOME;
+  const previousPath = process.env.PATH;
+  t.after(() => {
+    process.env.HOME = previousHome;
+    process.env.PATH = previousPath;
+    rmSync(home, { recursive: true, force: true });
+  });
+  for (const [dir, answer] of [
+    [join(home, ".local/bin"), "updated"],
+    [join(home, "old-bin"), "old"],
+  ]) {
+    mkdirSync(dir, { recursive: true });
+    const bin = join(dir, "gws");
+    writeFileSync(bin, `#!/bin/sh\nprintf ${answer}`);
+    chmodSync(bin, 0o755);
+  }
+  process.env.HOME = home;
+  process.env.PATH = join(home, "old-bin");
+  assert.equal(
+    execFileSync("gws", [], { env: childEnv(), encoding: "utf8" }),
+    "updated",
+  );
 });

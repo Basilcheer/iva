@@ -18,7 +18,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { SERVICE_PATH_TAIL } from "../../packages/claude-command/index.ts";
+import { servicePath } from "../../packages/claude-command/index.ts";
 import { parseEnv } from "node:util";
 import fc from "fast-check";
 import { isAssistantBearer } from "../lib/assistant-auth.ts";
@@ -185,7 +185,7 @@ test("writeUnits writes every unit with its placeholders filled and closes the s
     assert.ok(
       service
         .split("\n")
-        .includes(`Environment=PATH=${nodeBin}:${SERVICE_PATH_TAIL}`),
+        .includes(`Environment=PATH=${servicePath(nodeBin, "%h")}`),
       service,
     );
     assert.equal(

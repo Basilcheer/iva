@@ -10,6 +10,7 @@ import {
   readdirSync,
   rmSync,
 } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, join, relative, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
@@ -941,7 +942,14 @@ async function runPostHealthCleanup({
       what: "the Google CLI update",
       failure: "cleanup remains pending",
       command: "npm",
-      args: ["i", "-g", "@googleworkspace/cli@latest"],
+      // Same user prefix as install.sh; never write the system npm prefix.
+      args: [
+        "i",
+        "-g",
+        "--prefix",
+        join(homedir(), ".local"),
+        "@googleworkspace/cli@latest",
+      ],
       cwd: join(store.layout.versions, name),
     }))
   )

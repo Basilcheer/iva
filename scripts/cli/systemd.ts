@@ -27,7 +27,7 @@ import {
 import { resolveTimeZone, validateTimeZone } from "../lib/timezone.ts";
 import type { createCliRuntime } from "./runtime.ts";
 import { resolveVaultDir } from "../../packages/vault-dir/index.ts";
-import { SERVICE_PATH_TAIL } from "../../packages/claude-command/index.ts";
+import { servicePath } from "../../packages/claude-command/index.ts";
 
 type CliRuntime = ReturnType<typeof createCliRuntime>;
 
@@ -209,7 +209,7 @@ class CliSystemdLifecycle {
       `ExecStart=/usr/bin/env ${this.canonicalDataDirEnvironment()} ${this.runtime.NODE} ${this.runtime.ROOT}/node_modules/eve/bin/eve.js start --host 127.0.0.1`,
       `Environment=PORT=${port}`,
       `Environment=TZ=${timezone}`,
-      `Environment=PATH=${this.runtime.NODE_BIN_DIR}:${SERVICE_PATH_TAIL}`,
+      `Environment=PATH=${servicePath(this.runtime.NODE_BIN_DIR, "%h")}`,
       "Environment=AGENT_BROWSER_MAX_OUTPUT=24000",
       // world-local queue delivers turnWorkflow messages via an HTTP self-call guarded by
       // undici headers/body timeouts that default to 30 seconds; any agent turn longer than

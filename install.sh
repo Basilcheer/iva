@@ -117,6 +117,7 @@ download_verified() {
 
 install_verified_npm_tarball() {
   local label="$1" url="$2" expected="$3" rc=0
+  shift 3
   if download_verified "$label" "$url" "$expected"; then
     :
   else
@@ -124,7 +125,7 @@ install_verified_npm_tarball() {
     cleanup_verified_download
     return "$rc"
   fi
-  if npm i -g "$VERIFIED_DOWNLOAD"; then rc=0; else rc=$?; fi
+  if npm i -g "$@" "$VERIFIED_DOWNLOAD"; then rc=0; else rc=$?; fi
   cleanup_verified_download
   return "$rc"
 }
@@ -976,7 +977,7 @@ fi
 # ─────────────────────────────────────────────────────────────────────────
 # The binary installs into npm-global; the path is needed here and in the service PATH (below).
 NPM_GLOBAL_BIN="$(npm prefix -g 2>/dev/null)/bin"
-export PATH="$NPM_GLOBAL_BIN:$PATH"
+export PATH="$HOME/.local/bin:$NPM_GLOBAL_BIN:$PATH"
 CURRENT_STEP="agent-browser"
 # The launch check first, not after the install: it is the same proof the install path
 # ends with, and passing it means the binary and Chromium are both there. Downloading
@@ -1021,7 +1022,7 @@ fi
 # ─────────────────────────────────────────────────────────────────────────
 # Installed once and left alone: an installed `gws` is kept current by `iva update`,
 # so re-running the installer after a failure has no reason to pay for it again. Non-fatal — Google-service tasks are
-# optional. Binary lands in npm-global (already on PATH). Auth is per-user and
+# optional. Binary lands in ~/.local/bin (first on the service PATH). Auth is per-user and
 # interactive — the bot walks the user through it in chat (agent skill
 # `google-workspace`); nothing to configure here.
 CURRENT_STEP="gws"
@@ -1030,7 +1031,7 @@ if command -v gws >/dev/null 2>&1; then
 else
   gws_rc=0
   if run_stage "$(t "Installing Google Workspace CLI" "Ставлю Google Workspace CLI")" "$(t "gws installed" "gws установлен")" \
-    install_verified_npm_tarball gws "$GWS_TARBALL_URL" "$GWS_TARBALL_SHA256" \
+    install_verified_npm_tarball gws "$GWS_TARBALL_URL" "$GWS_TARBALL_SHA256" --prefix "$HOME/.local" \
     && command -v gws >/dev/null 2>&1; then
     ok "$(t "gws ready — connect Google later: message the bot \"connect Google\"" "gws готов — Google подключишь позже: напиши боту «подключи Google»")"
   else

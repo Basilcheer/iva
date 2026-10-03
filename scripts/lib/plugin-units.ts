@@ -21,7 +21,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
-import { SERVICE_PATH_TAIL } from "../../packages/claude-command/index.ts";
+import { servicePath } from "../../packages/claude-command/index.ts";
 import { cleanupSystemdUnits, systemdExecArgument } from "./systemd-control.ts";
 
 type Say = (message: string) => void;
@@ -111,8 +111,8 @@ export function mcpProxyUnitBody({
       join(root, "services/mcp-proxy/serve.ts"),
     )} --plugin ${argument(plugin)} --server ${argument(server)} --port ${port} --token-file ${argument(tokenFile)}`,
     // No EnvironmentFile: the proxy must not have the installation's secrets to pass on.
-    // node comes first on PATH so an MCP server started as `npx …` finds the same one.
-    `Environment="PATH=${systemdEnvironmentSegment(nodeBinDir)}:${SERVICE_PATH_TAIL}"`,
+    // User-installed CLI tools precede older global copies; npx still finds Node.
+    `Environment="PATH=${servicePath(systemdEnvironmentSegment(nodeBinDir), "%h")}"`,
     "Restart=on-failure",
     "RestartSec=5",
     "",
@@ -170,7 +170,7 @@ export function pluginServiceUnitBody({
     systemdEnvironment("PLUGIN_ROOT", pluginRoot),
     systemdEnvironment("PLUGIN_DATA", pluginData),
     // `%h` is ours and stays a specifier; only the node directory is escaped.
-    `Environment="PATH=${systemdEnvironmentSegment(nodeBinDir)}:${SERVICE_PATH_TAIL}"`,
+    `Environment="PATH=${servicePath(systemdEnvironmentSegment(nodeBinDir), "%h")}"`,
     "Restart=on-failure",
     "RestartSec=5",
     "",

@@ -242,7 +242,7 @@ const COMMAND_MASK = `command() {
 /**
  * npm as far as install.sh can tell: it records every call, writes the hidden lockfile the
  * way a real `npm ci` does, produces a .output the way a real build does, and drops the
- * global binaries where `npm prefix -g` says they go.
+ * global binaries in the requested prefix, or `npm prefix -g` by default.
  */
 const NPM = `#!/bin/sh
 echo "npm $*" >> "$IVA_TEST_CALLS"
@@ -295,14 +295,20 @@ case "$1" in
     esac
     ;;
   i)
+    install_prefix="$IVA_TEST_NPM_PREFIX"
+    previous=""
+    for arg in "$@"; do
+      if [ "$previous" = --prefix ]; then install_prefix="$arg"; fi
+      previous="$arg"
+    done
     tool=""
     case "$*" in
       *agent-browser*) tool=agent-browser ;;
       *googleworkspace*|*iva-gws-*) tool=gws ;;
     esac
     if [ -n "$tool" ]; then
-      mkdir -p "$IVA_TEST_NPM_PREFIX/bin"
-      ln -sf "$IVA_TEST_RECORDER" "$IVA_TEST_NPM_PREFIX/bin/$tool"
+      mkdir -p "$install_prefix/bin"
+      ln -sf "$IVA_TEST_RECORDER" "$install_prefix/bin/$tool"
     fi
     ;;
 esac
@@ -1651,7 +1657,10 @@ void test("a re-run over a finished install skips the stages that are already do
     firstCalls,
     /^npm i -g .*\/iva-agent-browser-[^/\s]+\/[^/\s]+$/mu,
   );
-  assert.match(firstCalls, /^npm i -g .*\/iva-gws-[^/\s]+\/[^/\s]+$/mu);
+  assert.match(
+    firstCalls,
+    /^npm i -g --prefix .*\/home\/\.local .*\/iva-gws-[^/\s]+\/[^/\s]+$/mu,
+  );
   assert.match(firstCalls, /^npm exec -- eve build$/mu);
   // A finished install keeps nothing either.
   assert.deepEqual(leftovers(world.tmp), []);
@@ -1720,7 +1729,7 @@ void test("a first install into an empty directory still runs every stage", (t) 
     /^npm ci$/mu,
     /^npm i -g .*\/iva-agent-browser-[^/\s]+\/[^/\s]+$/mu,
     /^agent-browser install --with-deps$/mu,
-    /^npm i -g .*\/iva-gws-[^/\s]+\/[^/\s]+$/mu,
+    /^npm i -g --prefix .*\/home\/\.local .*\/iva-gws-[^/\s]+\/[^/\s]+$/mu,
     /^npm exec -- eve build$/mu,
   ])
     assert.match(calls, stage);

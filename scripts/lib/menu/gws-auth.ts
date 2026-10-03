@@ -13,8 +13,9 @@ import { spawn } from "node:child_process";
 import { request as httpRequest } from "node:http";
 import { readFile } from "node:fs/promises";
 import { existsSync, openSync, closeSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join, dirname } from "node:path";
+import { servicePath } from "../../../packages/claude-command/index.ts";
 
 export interface AuthChallenge {
   url: string;
@@ -105,20 +106,22 @@ export function extractCallbackQuery(input: unknown): string | null {
 }
 
 // --- Environment: resolve gws + node without relying on the service PATH ---
-// The systemd unit's PATH does not include the nvm bin dir, so `gws` is not on PATH and gws's own
-// `#!/usr/bin/env node` shebang cannot find node. Resolve gws next to the running node and inject
-// that dir into the child PATH so both are found.
+// Prefer the user prefix used by install/update over an older global gws.
+// Keep the old nvm location as a fallback before its first update, and make Node
+// available for the launcher's `#!/usr/bin/env node` shebang.
 const NODE_BIN_DIR = dirname(process.execPath);
 
-export function gwsBin() {
-  const p = join(NODE_BIN_DIR, "gws");
-  return existsSync(p) ? p : "gws";
+export function gwsBin(nodeBinDir = NODE_BIN_DIR, home = homedir()) {
+  for (const dir of [join(home, ".local/bin"), nodeBinDir]) {
+    const candidate = join(dir, "gws");
+    if (existsSync(candidate)) return candidate;
+  }
+  return "gws";
 }
 
 export function childEnv() {
-  const path = process.env.PATH
-    ? `${NODE_BIN_DIR}:${process.env.PATH}`
-    : NODE_BIN_DIR;
+  const bins = servicePath(NODE_BIN_DIR, homedir());
+  const path = process.env.PATH ? `${bins}:${process.env.PATH}` : bins;
   return { ...process.env, PATH: path };
 }
 
