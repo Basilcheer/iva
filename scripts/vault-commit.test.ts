@@ -851,6 +851,27 @@ for (const staged of [false, true]) {
   });
 }
 
+test("удалённый файл по пути через символическую ссылку на vault не теряется", async (t) => {
+  const vault = makeVault(t);
+  const path = "cards/notes/gone.md";
+  writeFileSync(join(vault, path), "before\n");
+  sh(["add", path], vault);
+  sh(["commit", "-qm", "tracked"], vault);
+  // Вызывающий держит vault по ссылке (на macOS так лежит весь tmp): у удалённого
+  // файла реального пути уже нет, и раньше шов считал такой путь чужим и молчал.
+  const link = `${vault}-link`;
+  symlinkSync(vault, link);
+  t.after(() => rmSync(link, { force: true }));
+  rmSync(join(vault, path));
+  const outcome = await tool.seam.commitVaultWrite(
+    "delete",
+    [join(link, path)],
+    vault,
+  );
+  assert.deepEqual(outcome, { ok: true, committed: true });
+  assert.equal(sh(["ls-files", path], vault), "");
+});
+
 test("отказ hook после force tracked add возвращает staged владельца под ignore", async (t) => {
   const vault = makeVault(t);
   const path = "cards/notes/partial.md";

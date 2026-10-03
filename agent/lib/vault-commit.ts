@@ -21,7 +21,14 @@
 // называет вызывающий, который свой vault уже разрешил.
 import { execFile } from "node:child_process";
 import { lstatSync, realpathSync, rmSync, statSync } from "node:fs";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import {
+  basename,
+  dirname,
+  isAbsolute,
+  join,
+  relative,
+  resolve,
+} from "node:path";
 
 /** Сколько ждать освобождения индекса: сосед коммитит за десятки миллисекунд. */
 const INDEX_WAIT_MS = [60, 120, 240, 480];
@@ -233,12 +240,15 @@ function absent(path: string): boolean {
   }
 }
 
-/** Путь в виде, который понимает `git add`, или null - путь вне vault. Удалённый файл
- * реального пути не имеет, поэтому его берём как есть: символической ссылки вне vault
- * у него быть не может. */
+/** Путь в виде, который понимает `git add`, или null - путь вне vault. Удалённый файл и
+ * оборванная ссылка реального пути не имеют: берём реальный путь каталога и имя как есть.
+ * Иначе vault за символической ссылкой (`/var` на macOS) терял такой путь молча: корень
+ * vault уже реальный, а путь файла ещё нет. Каталога тоже нет - путь берём как есть. */
 function vaultPath(vault: string, path: string): string | null {
   const full = resolve(path);
-  const real = realOf(full) ?? full;
+  const parent = realOf(dirname(full));
+  const real =
+    realOf(full) ?? (parent === null ? full : join(parent, basename(full)));
   const rel = relative(vault, real);
   if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) return null;
   return rel;
