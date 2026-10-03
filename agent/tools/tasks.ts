@@ -14,6 +14,7 @@ import { dataDir } from "../lib/data-dir.js";
 const DATA_DIR = dataDir();
 const FILE = join(DATA_DIR, "tasks.json");
 const LOCK = `${FILE}.lock`;
+const dueDate = z.iso.date();
 
 type Priority = "low" | "med" | "high";
 interface Task {
@@ -64,16 +65,23 @@ function isTask(value: unknown): value is Task {
 export default defineTool({
   description:
     "Задачи: add (text, priority, due), list (includeDone; по умолчанию — незавершённые), " +
-    "done/remove (id). Задачи не выдумываются из памяти: список ведёт тул.",
+    "update (id, due, expectedDue — прежний срок из list), done/remove (id). " +
+    "Срок — календарная дата YYYY-MM-DD, null — без срока. Для относительных сроков и " +
+    "исправления старых записей загрузи skill task-management. Задачи не выдумываются из памяти: список ведёт тул.",
   inputSchema: z.object({
-    action: z.enum(["add", "list", "done", "remove"]),
+    action: z.enum(["add", "list", "update", "done", "remove"]),
     text: z.string().min(1).optional().describe("Текст задачи"),
     id: z.number().int().positive().optional().describe("ID задачи"),
     priority: z.enum(["low", "med", "high"]).optional().describe("Приоритет"),
-    due: z.string().optional().describe("Срок: свободная форма или ISO-дата"),
+    due: dueDate.nullable().optional().describe("Срок: YYYY-MM-DD или null"),
+    expectedDue: z
+      .string()
+      .nullable()
+      .optional()
+      .describe("Для update: точное прежнее due из list, включая null"),
     includeDone: z.boolean().optional().describe("Показать и выполненные"),
   }),
-  async execute({ action, text, id, priority, due, includeDone }) {
+  async execute({ action, text, id, priority, due, expectedDue, includeDone }) {
     // Мутации — под локом: параллельный ход (расписание + живой чат) на голом
     // load→mutate→save терял записи и дублировал id (id = max+1 от своей копии).
     let lockToken: string | null = null;
@@ -88,7 +96,15 @@ export default defineTool({
       }
     }
     try {
-      return await run({ action, text, id, priority, due, includeDone });
+      return await run({
+        action,
+        text,
+        id,
+        priority,
+        due,
+        expectedDue,
+        includeDone,
+      });
     } catch (e) {
       return { ok: false, error: (e as Error).message };
     } finally {
@@ -98,15 +114,38 @@ export default defineTool({
 });
 
 type Args = {
-  action: "add" | "list" | "done" | "remove";
+  action: "add" | "list" | "update" | "done" | "remove";
   text?: string;
   id?: number;
   priority?: Priority;
-  due?: string;
+  due?: string | null;
+  expectedDue?: string | null;
   includeDone?: boolean;
 };
 
-async function run({ action, text, id, priority, due, includeDone }: Args) {
+async function run({
+  action,
+  text,
+  id,
+  priority,
+  due,
+  expectedDue,
+  includeDone,
+}: Args) {
+  // Проверяем и прямой вызов execute, который не проходит через схему eve.
+  // Старые строки на чтении остаются нетронутыми: толкует их модель, не миграция.
+  if (
+    (action === "add" || action === "update") &&
+    due !== undefined &&
+    due !== null &&
+    !dueDate.safeParse(due).success
+  )
+    return {
+      ok: false,
+      error:
+        'due: нужна существующая календарная дата YYYY-MM-DD, например "2026-09-24", или null. ' +
+        "Относительный срок сначала переведи в дату по skill task-management.",
+    };
   const tasks = await load();
 
   switch (action) {
@@ -128,6 +167,26 @@ async function run({ action, text, id, priority, due, includeDone }: Args) {
     case "list": {
       const items = includeDone ? tasks : tasks.filter((t) => !t.done);
       return { ok: true, count: items.length, tasks: items };
+    }
+    case "update": {
+      if (!id || due === undefined || expectedDue === undefined)
+        return {
+          ok: false,
+          error:
+            'Для update нужны id, due и expectedDue из list: {action:"update",id:117,due:"2026-09-24",expectedDue:"завтра"}. ' +
+            "due:null очищает срок; expectedDue:null означает, что срока не было.",
+        };
+      const task = tasks.find((item) => item.id === id);
+      if (!task) return { ok: false, error: `Задача ${id} не найдена` };
+      if (task.due !== expectedDue)
+        return {
+          ok: false,
+          error: `Срок задачи ${id} изменился. Повтори list и проверь актуальный срок перед update.`,
+          current: task,
+        };
+      task.due = due;
+      await save(tasks);
+      return { ok: true, updated: task };
     }
     case "done": {
       if (!id) return { ok: false, error: "Для done нужен id" };

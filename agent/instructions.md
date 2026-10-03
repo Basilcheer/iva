@@ -27,7 +27,7 @@ delivery preferences in the owner's rules.
 
 ## Where to go for what
 
-- tasks → `tasks`
+- tasks → `task-management`, `tasks`
 - reminders → the `remind` tool (action add|list|remove)
 - day plan → `morning-digest`
 - big goal → `planner`
