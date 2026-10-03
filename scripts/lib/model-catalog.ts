@@ -145,8 +145,9 @@ export const CATALOG: Record<string, ProviderCatalogEntry> = {
     visionVar: null,
     visionDef: null,
     // Кнопки экрана берутся из живого /models подписки (listCodexModelCatalog); здесь только
-    // подпись того же списка. Живьём 23.09.2026 (client_version 0.156.0): gpt-6-sol, gpt-6-luna.
-    models: ["gpt-5.5", "gpt-6-sol", "gpt-6-luna"],
+    // подпись того же списка. Живьём 03.10.2026 (client_version 0.159.2): gpt-6.1-sol, gpt-6-sol,
+    // gpt-6-luna, gpt-6-astra, gpt-5.6-*, gpt-5.5.
+    models: ["gpt-5.5", "gpt-6-sol", "gpt-6-luna", "gpt-6.1-sol"],
   },
   claude: {
     label: "Claude (подписка Pro/Max)",

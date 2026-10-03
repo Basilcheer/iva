@@ -47,8 +47,9 @@ export const ORIGINATOR = "codex_cli_rs";
 // слишком старая (напр. 0.20/0.42) → бэкенд отдаёт {"models":[]}, а модель прячется, если её
 // minimal_client_version выше нашей (напр. gpt-6-sol и gpt-6-luna требуют ≥0.155.0). Держим на
 // актуальном релизе codex, иначе свежие модели не появятся в списке. Проверено 2026-09-23: 0.144.0
-// отдаёт только gpt-5.6-*, 0.156.0 — ещё gpt-6-{sol,luna,astra}.
-export const CLIENT_VERSION = "0.156.0";
+// отдаёт только gpt-5.6-*, 0.156.0 — ещё gpt-6-{sol,luna,astra}. Проверено 2026-10-03: 0.156.0 не
+// показывает gpt-6.1-sol, хотя его minimal_client_version 0.153.0; 0.159.2 показывает.
+export const CLIENT_VERSION = "0.159.2";
 const REFRESH_SKEW_S = 300; // рефрешим за 5 мин до exp (как окно codex CLI)
 const FORCE_REFRESH_COOLDOWN_MS = 60_000;
 
