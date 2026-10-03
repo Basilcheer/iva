@@ -503,6 +503,11 @@ test("the public build falls back to core when Git metadata is unavailable", (t)
     join(PROJECT_ROOT, "scripts/build.ts"),
     join(root, "scripts/build.ts"),
   );
+  mkdirSync(join(root, "agent/lib"), { recursive: true });
+  copyFileSync(
+    join(PROJECT_ROOT, "agent/lib/memory-night-time.ts"),
+    join(root, "agent/lib/memory-night-time.ts"),
+  );
   // The whole lib tree, so a new import inside build.ts cannot silently break the fixture.
   cpSync(join(PROJECT_ROOT, "scripts/lib"), join(root, "scripts/lib"), {
     recursive: true,

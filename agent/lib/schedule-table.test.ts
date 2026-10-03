@@ -18,11 +18,14 @@ import "../../scripts/lib/ts-esm-hooks.ts";
 import { runScheduleMigration } from "./schedule-migration.ts";
 import {
   REMINDER_TICK_CRON,
+  ACTIVE_MEMORY_NIGHT_TIME,
   SCHEDULE_CRON,
   type ScheduleCron,
   type ScheduleName,
   parseCron,
 } from "./schedule-table.ts";
+
+import { memoryNightCron } from "./memory-night-time.ts";
 
 const REPO_ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const TABLE_FILE = "agent/lib/schedule-table.ts";
@@ -50,11 +53,11 @@ function temporaryDataDir(t: TestContext): string {
   return directory;
 }
 
-void test("the table pins the cron expressions Iva ships with", () => {
+void test("the table uses the compiled night clock and retains other shipped crons", () => {
   assert.deepEqual(
     { ...SCHEDULE_CRON },
     {
-      "memory-night": "0 4 * * *",
+      "memory-night": memoryNightCron(ACTIVE_MEMORY_NIGHT_TIME),
       digest: "0 8 * * *",
       "jobs-watchdog": "17 7 * * *",
     },
@@ -68,7 +71,13 @@ void test("parseCron reads every entry off its cron string", () => {
   assert.deepEqual(
     NAMES.map((name) => parseCron(SCHEDULE_CRON[name])),
     [
-      { minute: 0, hour: 4, dayOfMonth: null, month: null, dayOfWeek: null },
+      {
+        minute: Number(ACTIVE_MEMORY_NIGHT_TIME.slice(3)),
+        hour: Number(ACTIVE_MEMORY_NIGHT_TIME.slice(0, 2)),
+        dayOfMonth: null,
+        month: null,
+        dayOfWeek: null,
+      },
       { minute: 0, hour: 8, dayOfMonth: null, month: null, dayOfWeek: null },
       { minute: 17, hour: 7, dayOfMonth: null, month: null, dayOfWeek: null },
     ],

@@ -1,3 +1,4 @@
+import { activeMemoryNightTime, memoryNightCron } from "./memory-night-time.ts";
 // Single source of truth for the Schedules Iva runs in-process (agent/schedules/*.ts):
 // schedule name → cron expression. Names are the status-file keys too — the same string
 // each schedule passes to runScheduledJob (scripts/lib/schedule-runner.ts).
@@ -10,8 +11,12 @@
 // Crons fire in the PROCESS's local time — agent/instrumentation.ts sets TZ from
 // ASSISTANT_TIMEZONE at startup — so "0 4 * * *" means 04:00 local. The reminders dispatcher
 // ticks every minute on top of them; its own entry sits below.
+// Night time is a compiled build setting: Schedule, catch-up and menu use the same
+// promoted artifact. A runtime env edit requires a rebuild before it takes effect.
+export const ACTIVE_MEMORY_NIGHT_TIME = activeMemoryNightTime();
+
 export const SCHEDULE_CRON = {
-  "memory-night": "0 4 * * *",
+  "memory-night": memoryNightCron(ACTIVE_MEMORY_NIGHT_TIME),
   digest: "0 8 * * *",
   // Дневной сторож расписаний (T20 п.4): после ночных rollup, до рабочего дня.
   "jobs-watchdog": "17 7 * * *",

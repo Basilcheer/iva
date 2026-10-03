@@ -4,7 +4,9 @@ Iva keeps memory in a plain Markdown vault. Raw conversations stay in `daily/`, 
 
 ## Night
 
-At 04:00 local time one TypeScript schedule runs `scripts/memory/night.ts`. Code owns reads, validation, writes, commits, retries and limits. The configured model only returns proposals: each step instruction describes the answer in words with one short example, the model answers with a JSON object in plain text, and the night parses it leniently — the same way for every provider.
+At 04:00 local time by default one TypeScript schedule runs `scripts/memory/night.ts`. Code owns reads, validation, writes, commits, retries and limits. The configured model only returns proposals: each step instruction describes the answer in words with one short example, the model answers with a JSON object in plain text, and the night parses it leniently — the same way for every provider.
+
+Choose another window with one `.env` setting, `MEMORY_NIGHT_TIME=HH:mm`, then rebuild with `iva update --force` (a development checkout uses `npm run build` and `iva restart`). Editing `.env` alone moves neither the Schedule nor catch-up: `/menu` → ⏰ shows the active time and a pending change. Night still excludes the current local day. Rollback restores the clock of that build; older builds without this setting keep 04:00.
 
 The night consumes streamed text before validating the answer, including on ChatGPT subscriptions that require streaming. It records the final usage before the next call; an interrupted stream fails the step. Codex night calls request low reasoning effort without changing the chat setting.
 

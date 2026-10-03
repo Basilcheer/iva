@@ -12,6 +12,7 @@ import {
   LEGACY_MEMORY_UNITS,
   runScheduleMigration,
 } from "./schedule-migration.ts";
+import { parseCron, SCHEDULE_CRON } from "./schedule-table.ts";
 
 type MigrationOptions = NonNullable<Parameters<typeof runScheduleMigration>[0]>;
 type ExecImplementation = NonNullable<MigrationOptions["execImpl"]>;
@@ -408,8 +409,9 @@ void test("a partial systemctl failure does not throw, leaves the file for a ret
 });
 
 void test("catch-up math: a stale night in grace runs, an already-succeeded one does not, a due point past its grace is skipped", async () => {
-  // Night is due at 04:00 Asia/Almaty (UTC+5) == 23:00Z the day before; grace 20h.
-  const due = Date.UTC(2026, 7, 3, 23, 0, 0);
+  // The compiled night clock in Asia/Almaty (UTC+5); grace stays 20h.
+  const clock = parseCron(SCHEDULE_CRON["memory-night"]);
+  const due = Date.UTC(2026, 7, 4, clock.hour - 5, clock.minute);
   const catchUp = async (now: number, lastSuccessAt: number) => {
     const homedir = await scaffoldHome();
     const dataDir = join(homedir, "..", "data");
