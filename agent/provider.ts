@@ -320,7 +320,7 @@ export const codexFetch: typeof fetch = async (input, init) => {
 };
 
 // Провайдер-опции codex на этапе СБОРКИ тела (не пост-фактум в codexFetch): store:false
-// и reasoning-усилие из THINKING_EFFORT.
+// и reasoning-усилие из THINKING_EFFORT по умолчанию; явные опции вызова сильнее.
 // store:false: без него @ai-sdk/openai берёт store:true по умолчанию и реплеит прошлые ответы
 // ассистента как item_reference (голая ссылка на msg_-item, без контента); codexFetch затем
 // ставит store:false — и stateless-бэкенд подписки не находит item → сессия падает со второго
@@ -357,13 +357,13 @@ export function codexProviderOptions(
         providerOptions: {
           ...params.providerOptions,
           openai: {
+            ...(thinkingEffort
+              ? { reasoningEffort: thinkingEffort, reasoningSummary: null }
+              : {}),
             ...params.providerOptions?.openai,
             store: false,
             forceReasoning: true,
             promptCacheKey,
-            ...(thinkingEffort
-              ? { reasoningEffort: thinkingEffort, reasoningSummary: null }
-              : {}),
           },
         },
       }),

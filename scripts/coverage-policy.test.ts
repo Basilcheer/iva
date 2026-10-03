@@ -93,10 +93,6 @@ const BLIND_SPOT: ReadonlyArray<{
     path: "scripts/live-turn.ts",
     why: "стенд приёмки: живой ход на настоящем провайдере, сам и есть проверка",
   },
-  {
-    path: "scripts/memory/night-call.ts",
-    why: "процессная ночь проверяет вызов через HTTP-двойник",
-  },
 ];
 
 const EXPECTED_COVERAGE_COMMAND =

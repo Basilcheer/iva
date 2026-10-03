@@ -1,5 +1,5 @@
 // Настоящий процесс ночи (scripts/memory/night.ts) против двойника модели: локальный
-// OpenAI-совместимый сервер отвечает вызовом инструмента submit и считает запросы. Vault
+// OpenAI-совместимый сервер отвечает потоком текста и считает запросы. Vault
 // под git во временной папке. Утверждаются файлы vault, история git, stderr и код выхода.
 import assert from "node:assert/strict";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
@@ -71,9 +71,12 @@ class ModelDouble {
   private async handle(request: IncomingMessage, response: ServerResponse) {
     let body = "";
     for await (const chunk of request) body += String(chunk);
-    const messages = (
-      JSON.parse(body) as { messages: Array<{ content: unknown }> }
-    ).messages;
+    const params = JSON.parse(body) as {
+      messages: Array<{ content: unknown }>;
+      stream: boolean;
+    };
+    assert.equal(params.stream, true);
+    const messages = params.messages;
     this.prompts.push(JSON.stringify(messages.at(-1)?.content));
     const held = this.held.get(this.prompts.length);
     if (held) {
@@ -100,23 +103,31 @@ class ModelDouble {
     // Модель отвечает текстом: JSON в markdown-ограде, как делают настоящие модели.
     const content =
       text ?? `Ответ:\n\`\`\`json\n${JSON.stringify(value)}\n\`\`\``;
-    const message = { role: "assistant", content };
-    send(200, {
-      id: "x",
-      object: "chat.completion",
-      created: 1,
-      model: "double",
-      choices: [{ index: 0, message, finish_reason: "stop" }],
-      ...(usage === null
-        ? {}
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    const chunk = (delta: unknown, finish: string | null, usage?: unknown) =>
+      response.write(
+        `data: ${JSON.stringify({
+          id: "x",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: "double",
+          choices: [{ index: 0, delta, finish_reason: finish }],
+          ...(usage ? { usage } : {}),
+        })}\n\n`,
+      );
+    chunk({ role: "assistant", content }, null);
+    chunk(
+      {},
+      "stop",
+      usage === null
+        ? undefined
         : {
-            usage: {
-              prompt_tokens: usage,
-              completion_tokens: 10,
-              total_tokens: usage + 10,
-            },
-          }),
-    });
+            prompt_tokens: usage,
+            completion_tokens: 10,
+            total_tokens: usage + 10,
+          },
+    );
+    response.end("data: [DONE]\n\n");
   }
 }
 

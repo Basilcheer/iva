@@ -6,6 +6,8 @@ Iva keeps memory in a plain Markdown vault. Raw conversations stay in `daily/`, 
 
 At 04:00 local time one TypeScript schedule runs `scripts/memory/night.ts`. Code owns reads, validation, writes, commits, retries and limits. The configured model only returns proposals: each step instruction describes the answer in words with one short example, the model answers with a JSON object in plain text, and the night parses it leniently — the same way for every provider.
 
+The night consumes streamed text before validating the answer, including on ChatGPT subscriptions that require streaming. It records the final usage before the next call; an interrupted stream fails the step. Codex night calls request low reasoning effort without changing the chat setting.
+
 The night has four steps:
 
 1. Extract a day summary, card references and evidence-backed facts from the raw day.
