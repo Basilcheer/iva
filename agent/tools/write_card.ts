@@ -122,6 +122,41 @@ const operationSchemas = z.discriminatedUnion("operation", [
   mergeInput,
 ]);
 
+const callExamples = {
+  fact: {
+    operation: "fact",
+    type: "note",
+    title: "Имя Card",
+    text: "Факт одной строкой",
+  },
+  truth: {
+    operation: "truth",
+    type: "note",
+    title: "Имя существующей Card",
+    text: "Новый Compiled Truth целиком",
+    reason: "Почему меняется правда",
+  },
+  merge: {
+    operation: "merge",
+    target: "Имя Card, которая остаётся",
+    duplicate: "Имя Card-дубля",
+    confirmed_by_owner: true,
+  },
+} satisfies Record<
+  z.infer<typeof wireInput>["operation"],
+  z.input<typeof operationSchemas>
+>;
+
+function callExample(
+  operation: z.infer<typeof wireInput>["operation"],
+): string {
+  return `Пример формы ${operation} (подставь свои данные): ${JSON.stringify(callExamples[operation])}`;
+}
+
+const inputGuidance =
+  "Не передавай незаданные optional-поля; tags и aliases — массивы строк. " +
+  "confirmed_by_owner=true допустим только после явной просьбы владельца о merge; пример не является подтверждением.";
+
 function operationInput(
   raw: z.infer<typeof wireInput>,
 ): z.infer<typeof operationSchemas> | { error: string } {
@@ -130,7 +165,9 @@ function operationInput(
   const issues = parsed.error.issues
     .map((issue) => `${issue.path.join(".") || "input"}: ${issue.message}`)
     .join("; ");
-  return { error: `write_card ${raw.operation}: ${issues}` };
+  return {
+    error: `write_card ${raw.operation}: ${issues}\n${callExample(raw.operation)}\n${inputGuidance}`,
+  };
 }
 
 interface CardRecord {
@@ -563,7 +600,13 @@ async function mergeCards(input: z.infer<typeof mergeInput>) {
 
 export default defineTool({
   description:
-    "Card памяти: fact дописывает факт (и может создать Card после поиска), truth меняет Compiled Truth с архивом, merge склеивает дубль только по явной просьбе владельца. fact и truth меняют status Card, когда владелец сказал о нём (проект закрыт, решение принято).",
+    "Card памяти: fact дописывает факт (и может создать Card после поиска), truth меняет Compiled Truth с архивом, merge склеивает дубль только по явной просьбе владельца. fact и truth меняют status Card, когда владелец сказал о нём (проект закрыт, решение принято).\n" +
+    [
+      callExample("fact"),
+      callExample("truth"),
+      callExample("merge"),
+      inputGuidance,
+    ].join("\n"),
   inputSchema: wireInput,
   async execute(raw) {
     if (raw.operation === "merge" && raw.status !== undefined)
