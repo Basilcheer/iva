@@ -1,3 +1,7 @@
+import {
+  resolveOpenCodeProtocol,
+  type OpenCodeProtocol,
+} from "@iva/opencode-protocol";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -125,6 +129,17 @@ export const providerConfig = {
     PROVIDERS[PROVIDER].contextWindow,
   ),
   textModel: selected.model,
+  opencodeProtocol:
+    selected.name === "opencode"
+      ? resolveOpenCodeProtocol(process.env.OPENCODE_PROTOCOL)
+      : undefined,
+  opencodeVisionProtocol:
+    selected.name === "opencode"
+      ? resolveOpenCodeProtocol(
+          process.env.OPENCODE_VISION_PROTOCOL,
+          "OPENCODE_VISION_PROTOCOL",
+        )
+      : undefined,
   // Модель для картинок — из того же резолвера (переменные *_VISION_MODEL, дефолты там же).
   // У codex это та же текстовая модель: подписка мультимодальна.
   visionModel: selected.visionModel,
@@ -809,22 +824,50 @@ export function makeTextModel(options: {
   });
 }
 
+/** The same Go Responses factory serves text and an explicitly configured vision fallback. */
+export function makeOpenCodeModel(
+  model: string,
+  protocol: OpenCodeProtocol,
+  sessionId?: string,
+) {
+  if (!PROVIDERS.opencode.apiKey)
+    throw new Error(
+      "MODEL_PROVIDER=opencode requires OPENCODE_API_KEY — run: iva config",
+    );
+  const config = {
+    baseURL: PROVIDERS.opencode.baseURL,
+    apiKey: PROVIDERS.opencode.apiKey,
+    headers: providerRequestHeaders(sessionId),
+    fetch: opencodeFetch,
+  };
+  return protocol === "responses"
+    ? createOpenAI(config).responses(model)
+    : createOpenAICompatible({
+        ...config,
+        name: "iva-opencode",
+        includeUsage: true,
+      })(model);
+}
+
 function makeBareTextModel(sessionId?: string) {
   // Codex-подписка говорит на Responses API — отдельная модель-фабрика (@ai-sdk/openai).
   // Claude-подписка — тоже своя модель: рукописная LanguageModelV4 поверх Claude Code CLI
   // (stream-json), потому что API-адреса у неё нет вовсе.
-  // Остальные провайдеры — OpenAI-совместимый chat/completions через openai-compatible.
+  // Go выбирает провод явно; остальные API-ключи говорят chat/completions.
   if (providerName === "codex")
     return makeCodexModel(providerConfig.textModel, sessionId);
   if (providerName === "claude")
     return makeClaudeCliModel(providerConfig.textModel, { sessionId });
+  if (providerName === "opencode")
+    return makeOpenCodeModel(
+      providerConfig.textModel,
+      providerConfig.opencodeProtocol!,
+      sessionId,
+    );
   return createOpenAICompatible({
     name: `iva-${providerName}`,
     baseURL: providerConfig.baseURL,
     apiKey: providerConfig.apiKey,
-    // Go: ID диалога и User-Agent (см. providerRequestHeaders); у остальных — undefined.
-    headers: providerRequestHeaders(sessionId),
-    fetch: providerName === "opencode" ? opencodeFetch : undefined,
     // Без этого стрим OpenAI-совместимых провайдеров НЕ несёт usage (нет stream_options:
     // {include_usage:true}) → событие step.completed приходит без поля usage, и учёт токенов
     // (agent/hooks/usage.ts) пуст. Включаем, чтобы провайдер отдавал расход в финальном чанке.

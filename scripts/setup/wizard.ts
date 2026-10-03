@@ -286,6 +286,9 @@ async function keepCurrent(p: Progress): Promise<void> {
 function currentSelection({ ctx, existing, config }: Progress) {
   return {
     provider: config.prov0,
+    ...(config.prov0 === "opencode"
+      ? { opencodeProtocol: existing.OPENCODE_PROTOCOL }
+      : {}),
     model: existing[config.provModel],
     key: currentKey(existing, config.provKey),
     dataDir: ctx.dataDirAbs(existing),

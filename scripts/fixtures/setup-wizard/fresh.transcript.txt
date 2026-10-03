@@ -27,11 +27,13 @@
     1. deepseek-v4-pro  ★
 
   Model number [1]: ⏎
-
-  Vision model (photos): describes incoming pictures — the text model above is usually blind. I recommend qwen3.7-plus.
+Choose each model's protocol from https://opencode.ai/docs/go/#endpoints. /messages is unsupported.
+  OPENCODE_PROTOCOL (chat-completions / responses) [chat-completions]: ⏎
+Vision fallback: choose an image-capable model and its documented wire. The old qwen3.7-plus default now uses unsupported /messages.
     1. deepseek-v4-pro
 
   Model number [1]: ⏎
+  OPENCODE_VISION_PROTOCOL (chat-completions / responses; /messages unsupported) [chat-completions]: ⏎
   → model: deepseek-v4-pro
   → vision: deepseek-v4-pro
   Don't inflate the context window: compaction computes its threshold from it; an inflated window risks overflow.

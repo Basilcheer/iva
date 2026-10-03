@@ -500,7 +500,9 @@ test("the setup wizard writes grep without leaking host secrets", async (t) => {
       "2", // Provider (1/2/3/4/5/6) -> OpenCode
       "test-key", // Paste the OpenCode API key
       "", // Model number -> default (deepseek-v4-pro)
+      "", // Text protocol -> chat-completions
       "", // Vision model (photos) -> default from the same live list
+      "", // Vision protocol -> chat-completions
       "", // Paste the Deepgram API key -> keep fixture dg
       "", // Recognition language (multi = auto ru/uz/en) -> default (multi)
       "", // Search provider (number) -> default (tavily)
@@ -530,7 +532,7 @@ test("the setup wizard writes grep without leaking host secrets", async (t) => {
   // ищутся дольше, чем правятся.
   assert.match(
     candidateText,
-    /^OPENCODE_MODEL=.*\nOPENCODE_VISION_MODEL=.+$/mu,
+    /^OPENCODE_MODEL=.*\nOPENCODE_PROTOCOL=chat-completions\nOPENCODE_VISION_MODEL=.+$/mu,
     output,
   );
   assert.match(
@@ -568,7 +570,9 @@ test("the setup wizard re-asks on an unstorable answer instead of losing the run
       "ab#cd", // Paste the OpenCode API key -> hash: .env cannot hold it, ask again
       "sk-live_ABC-123.xyz", // …and this one both parsers read the same way
       "", // Model number -> default (deepseek-v4-pro)
+      "", // Text protocol -> chat-completions
       "", // Vision model (photos) -> default from the same live list
+      "", // Vision protocol -> chat-completions
       "", // Paste the Deepgram API key -> keep fixture dg
       "", // Recognition language (multi = auto ru/uz/en) -> default (multi)
       "", // Search provider (number) -> default (tavily)
@@ -629,7 +633,9 @@ for (const [what, patch] of [
         "2", // Provider -> OpenCode
         "sk-opencode-1", // its key
         "", // Model number -> default
+        "", // Text protocol -> chat-completions
         "", // Vision model -> default
+        "", // Vision protocol -> chat-completions
         "", // Deepgram key -> keep fixture
         "", // Recognition language -> default
         "", // Search provider -> default
@@ -670,7 +676,9 @@ for (const [what, patch, key] of [
         "2", // Provider -> OpenCode
         "sk-opencode-1", // its key
         "", // Model number -> default
+        "", // Text protocol -> chat-completions
         "", // Vision model -> default
+        "", // Vision protocol -> chat-completions
         "", // Deepgram key -> keep fixture
         "", // Recognition language -> default
         "", // Search provider -> default
