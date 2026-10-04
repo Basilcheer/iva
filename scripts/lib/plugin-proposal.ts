@@ -136,6 +136,8 @@ export async function takeProposal(options: {
     // ENOENT — забрал соседний тап; ENOTEMPTY/EEXIST — его копия ещё ставится.
     return { status: "stale", name };
   }
+  // От rename до stamp — без await: второй тап того же Bridge не должен увидеть копию между
+  // ними, иначе он примет чужую свежую `.taken-*` за свою (specs/PluginProposal.tla).
   const fresh = ageMs(taken, nowMs) <= PROPOSAL_TTL_MS && stamp(taken, nowMs);
   const same = fresh && (await digestOf(taken, digest)) === digest12;
   if (same) return { status: "taken", name, path: taken };
