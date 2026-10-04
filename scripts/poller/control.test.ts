@@ -54,6 +54,10 @@ type ControlModule = {
       ) => Promise<unknown>;
       resetRetryPendingImpl?: (chatKey: string) => boolean;
       resetIntentPendingImpl?: (chatKey: string) => boolean;
+      pluginTapImpl?: (tap: {
+        digest12: string;
+        chatId: number;
+      }) => Promise<void>;
     },
   ) => Promise<boolean>;
   OUT_OF_BAND_COMMANDS: string[];
@@ -2453,9 +2457,7 @@ test("/update checks upstream and /update --force asks for a rebuild", async () 
         calls.map((call) => call.body.text),
         ["◇ Проверяю обновления", "◇ Пересобираю текущую версию"],
       );
-      assert.ok(
-        calls.every((call) => call.body.disable_notification === true),
-      );
+      assert.ok(calls.every((call) => call.body.disable_notification === true));
     },
   );
 });
@@ -2847,4 +2849,95 @@ test("a document outside the menu is deleted, not captured", async () => {
   assert.equal(events[0], "delete");
   assert.match((events[1] as [string, string])[1], /текстом/u);
   assert.equal(events.length, 2);
+});
+
+// ── «Установить» на предложении плагина (iva_plugin:ok:<digest12>) ──
+// Граница нового вида колбэка: какие тапы доходят до установщика, а какие гаснут молча.
+function pluginTap(
+  overrides: { from?: unknown; chat?: unknown; data?: string } = {},
+): ControlUpdate {
+  return {
+    update_id: 90,
+    callback_query: {
+      id: "cq-plugin",
+      from: overrides.from ?? trustedFrom,
+      message: { message_id: 3, date: 1, chat: overrides.chat ?? chat },
+      data: overrides.data ?? "iva_plugin:ok:0123456789ab",
+    },
+  };
+}
+
+function pluginDeps() {
+  const recorded = recordingDeps();
+  const taps: Array<{ digest12: string; chatId: number }> = [];
+  return {
+    ...recorded,
+    taps,
+    deps: {
+      ...recorded.deps,
+      pluginTapImpl: async (tap: { digest12: string; chatId: number }) => {
+        taps.push(tap);
+      },
+    },
+  };
+}
+
+test("a plugin proposal tap from the owner in a private chat reaches the installer", async () => {
+  const { taps, acks, deps } = pluginDeps();
+  const update = pluginTap();
+
+  assert.equal(await handleControl(update, deps), true);
+  assert.deepEqual(taps, [{ digest12: "0123456789ab", chatId: 7 }]);
+  assert.deepEqual(acks, [["cq-plugin", undefined]]);
+  assert.equal(update.message, undefined, "the tap is not a model turn");
+});
+
+test("a plugin proposal tap from a stranger or from a group installs nothing and says nothing", async () => {
+  for (const [label, update] of [
+    ["stranger", pluginTap({ from: { id: 999, is_bot: false } })],
+    ["group", pluginTap({ chat: { id: -1001, type: "supergroup" } })],
+    ["no sender", pluginTap({ from: undefined })],
+  ] as const) {
+    const { taps, acks, replies, deps } = pluginDeps();
+    if (label === "no sender")
+      delete (update.callback_query as Record<string, unknown>).from;
+
+    assert.equal(await handleControl(update, deps), true, label);
+    assert.deepEqual(taps, [], label);
+    assert.deepEqual(acks, [["cq-plugin", undefined]], label);
+    assert.deepEqual(replies, [], label);
+    assert.equal(update.message, undefined, label);
+  }
+});
+
+test("a malformed plugin proposal tap never reaches the installer", async () => {
+  for (const data of [
+    "iva_plugin:ok:../../etc",
+    "iva_plugin:ok:0123456789AB",
+    "iva_plugin:ok:0123456789abc",
+    "iva_plugin:ok:",
+    "iva_plugin:no:0123456789ab",
+  ]) {
+    const { taps, deps } = pluginDeps();
+    const update = pluginTap({ data });
+
+    await handleControl(update, deps);
+    assert.deepEqual(taps, [], data);
+    assert.equal(update.message, undefined, data);
+  }
+});
+
+test("a failing installer does not crash the bridge and the tap stays consumed", async () => {
+  const { deps } = pluginDeps();
+  const update = pluginTap();
+
+  assert.equal(
+    await handleControl(update, {
+      ...deps,
+      pluginTapImpl: async () => {
+        throw new Error("disk full");
+      },
+    }),
+    true,
+  );
 });

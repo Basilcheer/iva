@@ -13,6 +13,7 @@ import {
   readdirSync,
   readFileSync,
   realpathSync,
+  renameSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -42,6 +43,7 @@ import { createSystemdControl } from "../lib/systemd-control.ts";
 import { pluginConnectionFile } from "../lib/plugin-build.ts";
 import { createVersionStore } from "../lib/version-store.ts";
 import { leftoverPluginDirs } from "./plugin-cli-context.ts";
+import type { ProposalSends } from "./plugin-cli-proposal.ts";
 import { createPluginCommands } from "./plugin.ts";
 import { createCliRuntime } from "./runtime.ts";
 import {
@@ -330,8 +332,17 @@ function commands(
   /** Дополнение к git-окружению теста: см. `httpsInsteadOf`. */
   gitEnv: NodeJS.ProcessEnv = {},
   build?: Build,
-  /** Фейковый systemd и ответ на вопрос доверия. */
-  extra: { units?: Units; confirm?: () => Promise<boolean> } = {},
+  /**
+   * Фейковый systemd и ответ на вопрос доверия. `interactive` — есть ли человек у
+   * терминала: по умолчанию да, как у владельца; `false` — так зовёт `bash` модели.
+   */
+  extra: {
+    units?: Units;
+    confirm?: () => Promise<boolean>;
+    interactive?: boolean;
+    env?: Record<string, string>;
+    sends?: ProposalSends;
+  } = {},
 ) {
   const events: Events = [];
   const printed: string[] = [];
@@ -349,7 +360,7 @@ function commands(
     warn: (message) => events.push(["warn", message]),
     bad: (message) => events.push(["bad", message]),
     step: (message) => events.push(["step", message]),
-    readEnv: () => ({}),
+    readEnv: () => ({ ...extra.env }),
     cap: (command, args, options = {}) => {
       const where = typeof options.cwd === "string" ? options.cwd : root;
       const result = spawnSync(command, [...args], {
@@ -375,6 +386,8 @@ function commands(
     },
     translate: (en) => en,
     cwd: () => root,
+    interactive: () => extra.interactive ?? true,
+    ...(extra.sends ? { sends: extra.sends } : {}),
   });
   return { cmdPlugin, events, printed, data: join(root, "data") };
 }
@@ -2188,6 +2201,8 @@ function managedPluginWorld(artifact: string): {
     log: () => {},
     translate: (en) => en,
     cwd: () => home,
+    // Владелец у терминала: `add` плагина с MCP идёт как раньше.
+    interactive: () => true,
   });
   return { home, version: active, data, units, cmdPlugin, events };
 }
@@ -2593,4 +2608,326 @@ test("an update that changes only the plugin's code still restarts its unit", as
     false,
     units.calls.join("\n"),
   );
+});
+
+// ── Само-плагин: `propose`, `install-proposal` и гвард `add` (ADR-0009) ──
+
+const OWNER_ENV = {
+  TELEGRAM_BOT_TOKEN: "424242:test-token",
+  TELEGRAM_ALLOWED_USER_IDS: "42, 77",
+  TELEGRAM_DIGEST_CHAT_ID: "-1001",
+};
+
+type Sent = { chat: string; text: string };
+
+function recordingSends(ok = true) {
+  const screens: Sent[] = [];
+  const texts: Sent[] = [];
+  const sends: ProposalSends = {
+    screen: (_token, chat, text) => {
+      screens.push({ chat, text });
+      return Promise.resolve({ ok, error: ok ? "" : "403: bot was blocked" });
+    },
+    text: (_token, chat, text) => {
+      texts.push({ chat, text: String(text) });
+      return Promise.resolve({ ok: true, fellBack: false, error: "" });
+    },
+  };
+  return { screens, texts, sends };
+}
+
+/** Как зовёт `bash` модели: без терминала, с владельцем и ботом в .env. */
+function modelShell(root: string, sends: ProposalSends, build?: Build) {
+  return commands(root, undefined, undefined, {}, build, {
+    interactive: false,
+    env: OWNER_ENV,
+    sends,
+  });
+}
+
+function proposalsOf(data: string): string[] {
+  const dir = join(data, "plugin-proposals");
+  return existsSync(dir) ? readdirSync(dir).sort() : [];
+}
+
+function digest12Of(text: string): string {
+  const match = /iva_plugin:ok:([a-f0-9]{12})/u.exec(text);
+  assert.ok(match, `no install button in: ${text}`);
+  return match[1];
+}
+
+test("add of a plugin with mcp.json or sh.iva/ without a terminal refuses and names propose", async () => {
+  for (const folder of [
+    mcpOnlyPlugin("relay", "viewer"),
+    processPlugin("trace"),
+    codePlugin("coded"),
+  ]) {
+    const root = home();
+    const { cmdPlugin, data } = modelShell(root, recordingSends().sends);
+
+    await assert.rejects(
+      cmdPlugin(["add", folder]),
+      /a plugin with code or MCP installs through iva plugin propose/u,
+      folder,
+    );
+    await assert.rejects(
+      cmdPlugin(["add", folder, "--trust"]),
+      /iva plugin propose/u,
+      folder,
+    );
+    assert.deepEqual((await readPluginsState(data)).plugins, [], folder);
+    assert.deepEqual(
+      readdirSync(join(data, "custom/plugins")),
+      [],
+      `${folder}: nothing reaches the store, no staging is left`,
+    );
+  }
+});
+
+test("add of a git-sourced plugin with MCP without a terminal is refused the same way", async () => {
+  const source = bareRemote((work) => {
+    plantPlugin(work, "relay");
+    write(work, "mcp.json", "{}");
+  });
+  const { cmdPlugin, data } = modelShell(home(), recordingSends().sends);
+
+  await assert.rejects(cmdPlugin(["add", source.url]), /iva plugin propose/u);
+  assert.deepEqual((await readPluginsState(data)).plugins, []);
+});
+
+test("a plugin of skills alone is still installed by add without a terminal", async () => {
+  const folder = join(world("skills"), "notes");
+  plantPlugin(folder, "notes");
+  const { cmdPlugin, data } = modelShell(home(), recordingSends().sends);
+
+  await cmdPlugin(["add", folder]);
+
+  assert.equal((await readPluginsState(data)).plugins[0].name, "notes");
+});
+
+test("propose copies the plugin and sends the owner's private chat a message built by code", async () => {
+  const root = home();
+  const { screens, sends } = recordingSends();
+  const { cmdPlugin, data, events } = modelShell(root, sends);
+  const folder = processPlugin("trace");
+
+  await cmdPlugin(["propose", folder]);
+
+  assert.equal(screens.length, 1);
+  const [{ chat, text }] = screens;
+  assert.equal(chat, "42", "the first Allowlist id, not the digest chat");
+  const digest12 = digest12Of(text);
+  assert.ok(
+    text.startsWith(
+      "Plugin trace asks to be installed. It will run: mcp viewer: node serve.mjs; service web: node server.mjs ${PLUGIN\\_DATA}; mcp api: https://api.test/mcp. Files: 5. Installing will restart me for a minute.",
+    ),
+    text,
+  );
+  assert.match(
+    text,
+    new RegExp(
+      `<tg-button[^>]*data="iva_plugin:ok:${digest12}"[^>]*>Install</tg-button>`,
+      "u",
+    ),
+  );
+  // Копия — то же содержимое, что в сообщении: её digest и есть кнопка.
+  const copy = join(data, "plugin-proposals", `trace-${digest12}`);
+  assert.deepEqual(proposalsOf(data), [`trace-${digest12}`]);
+  const { pluginTreeDigest } = await import("#lib/plugin-reader.ts");
+  assert.equal((await pluginTreeDigest(copy)).slice(0, 12), digest12);
+  assert.deepEqual(
+    (await readPluginsState(data)).plugins,
+    [],
+    "nothing installed",
+  );
+  assert.match(messages(events, "ok"), /proposal trace .* sent to the owner/u);
+});
+
+test("propose names the extension code of a plugin with sh.iva/package.json", async () => {
+  const { screens, sends } = recordingSends();
+  const { cmdPlugin } = modelShell(home(), sends);
+
+  await cmdPlugin(["propose", codePlugin("coded")]);
+
+  assert.match(
+    screens[0].text,
+    /It will run: extension code inside Iva's process\. Files: \d+\./u,
+  );
+});
+
+test("propose refuses what it must not offer, and leaves no proposal behind", async () => {
+  const skillsOnly = join(world("skills"), "notes");
+  plantPlugin(skillsOnly, "notes");
+  const broken = join(world("broken"), "broken");
+  write(broken, "plugin.json", "{ not json");
+  write(broken, "mcp.json", "{}");
+  const traversal = join(world("traversal"), "evil");
+  write(traversal, "plugin.json", manifest("../evil"));
+  write(traversal, "mcp.json", "{}");
+  const linked = mcpOnlyPlugin("linked", "viewer");
+  symlinkSync(world("outside"), join(linked, "skills/escape"));
+
+  for (const [folder, why] of [
+    [skillsOnly, /installs through iva plugin add/u],
+    [broken, /not a usable Agent Plugins folder/u],
+    [traversal, /not a usable Agent Plugins folder/u],
+    [linked, /symlink/u],
+    [join(world("missing"), "nothing"), /unreadable/u],
+  ] as const) {
+    const root = home();
+    const { screens, sends } = recordingSends();
+    const { cmdPlugin, data } = modelShell(root, sends);
+
+    await assert.rejects(cmdPlugin(["propose", folder]), why, folder);
+    assert.deepEqual(screens, [], folder);
+    assert.deepEqual(proposalsOf(data), [], folder);
+    assert.equal(existsSync(join(root, "evil")), false, folder);
+  }
+});
+
+test("propose of an installed plugin points at update in the owner's terminal", async () => {
+  const root = home();
+  const folder = mcpOnlyPlugin("relay", "viewer");
+  const owner = commands(root);
+  await owner.cmdPlugin(["add", folder]);
+  const { screens, sends } = recordingSends();
+
+  await assert.rejects(
+    modelShell(root, sends).cmdPlugin(["propose", folder]),
+    /relay is already installed — an update is iva plugin update relay/u,
+  );
+  assert.deepEqual(screens, []);
+});
+
+test("a proposal that Telegram did not take is removed and propose exits non-zero", async () => {
+  const root = home();
+  const { sends } = recordingSends(false);
+  const { cmdPlugin, data } = modelShell(root, sends);
+
+  await assert.rejects(
+    cmdPlugin(["propose", mcpOnlyPlugin("relay", "viewer")]),
+    /Telegram send failed: 403/u,
+  );
+  assert.deepEqual(proposalsOf(data), []);
+});
+
+test("two proposes of one plugin: same content shares a folder, new content lives beside it", async () => {
+  const root = home();
+  const { screens, sends } = recordingSends();
+  const { cmdPlugin, data } = modelShell(root, sends);
+  const folder = mcpOnlyPlugin("relay", "viewer");
+
+  await Promise.all([
+    cmdPlugin(["propose", folder]),
+    cmdPlugin(["propose", folder]),
+  ]);
+  assert.equal(screens.length, 2);
+  assert.equal(digest12Of(screens[0].text), digest12Of(screens[1].text));
+  assert.equal(proposalsOf(data).length, 1);
+
+  write(folder, "skills/alpha/SKILL.md", skill("alpha", "Changed."));
+  await cmdPlugin(["propose", folder]);
+  assert.equal(proposalsOf(data).length, 2);
+});
+
+test("the next propose sweeps proposals and taken copies older than a day", async () => {
+  const root = home();
+  const data = join(root, "data");
+  const old = join(data, "plugin-proposals", "stale-aaaaaaaaaaaa");
+  const taken = join(data, "plugin-proposals", ".taken-bbbbbbbbbbbb");
+  for (const dir of [old, taken]) {
+    mkdirSync(dir, { recursive: true });
+    // Часы команды стоят на 2026-08-17 12:00; эти папки старше суток.
+    const past = new Date("2026-08-16T11:00:00.000Z");
+    utimesSync(dir, past, past);
+  }
+  const { cmdPlugin } = modelShell(root, recordingSends().sends);
+
+  await cmdPlugin(["propose", mcpOnlyPlugin("relay", "viewer")]);
+
+  const left = proposalsOf(data);
+  assert.equal(left.length, 1);
+  assert.match(left[0], /^relay-[a-f0-9]{12}$/u);
+});
+
+/** Предложение, которое тап уже забрал: `.taken-<digest12>`, как его оставляет мост. */
+async function takenProposal(root: string, folder: string): Promise<string> {
+  const { screens, sends } = recordingSends();
+  await modelShell(root, sends).cmdPlugin(["propose", folder]);
+  const digest12 = digest12Of(screens[0].text);
+  const dir = join(root, "data", "plugin-proposals");
+  const [name] = readdirSync(dir);
+  renameSync(join(dir, name), join(dir, `.taken-${digest12}`));
+  return digest12;
+}
+
+test("install-proposal installs the taken copy with trust, without a terminal, and tells the owner", async () => {
+  const root = home();
+  const digest12 = await takenProposal(root, mcpOnlyPlugin("relay", "viewer"));
+  const { texts, sends } = recordingSends();
+  const { cmdPlugin, data } = modelShell(root, sends);
+
+  await cmdPlugin(["install-proposal", digest12]);
+
+  const [entry] = (await readPluginsState(data)).plugins;
+  assert.equal(entry.name, "relay");
+  assert.equal(entry.trusted, true, "the tap answered the trust question");
+  assert.deepEqual(texts, [{ chat: "42", text: "Plugin relay installed" }]);
+  assert.deepEqual(proposalsOf(data), [], "the taken copy is removed");
+});
+
+test("install-proposal of a copy changed after the tap installs nothing", async () => {
+  const root = home();
+  const digest12 = await takenProposal(root, mcpOnlyPlugin("relay", "viewer"));
+  const taken = join(root, "data", "plugin-proposals", `.taken-${digest12}`);
+  write(taken, "mcp.json", "{}");
+  const { texts, sends } = recordingSends();
+  const { cmdPlugin, data } = modelShell(root, sends);
+
+  await assert.rejects(
+    cmdPlugin(["install-proposal", digest12]),
+    /out of date/u,
+  );
+  assert.deepEqual((await readPluginsState(data)).plugins, []);
+  assert.deepEqual(texts, [
+    {
+      chat: "42",
+      text: "Plugin relay was not installed: the proposal is out of date",
+    },
+  ]);
+});
+
+test("install-proposal whose build fails tells the owner why and leaves the box as it was", async () => {
+  const root = home();
+  const digest12 = await takenProposal(root, codePlugin("coded"));
+  const { texts, sends } = recordingSends();
+  const build = buildStub({ status: "failed", reason: "eve: boom" });
+  const { cmdPlugin, data } = modelShell(root, sends, build);
+
+  await assert.rejects(
+    cmdPlugin(["install-proposal", digest12]),
+    /coded was not installed: eve: boom/u,
+  );
+  assert.deepEqual((await readPluginsState(data)).plugins, []);
+  assert.equal(existsSync(pluginRoot(data, "coded")), false);
+  assert.equal(texts.length, 1);
+  assert.match(
+    texts[0].text,
+    /^Plugin coded was not installed: coded was not installed: eve: boom$/u,
+  );
+});
+
+test("install-proposal without a taken copy or with a bad digest argument installs nothing", async () => {
+  const root = home();
+  const { texts, sends } = recordingSends();
+  const { cmdPlugin, data } = modelShell(root, sends);
+
+  await assert.rejects(
+    cmdPlugin(["install-proposal", "../../etc"]),
+    /install-proposal <digest12>/u,
+  );
+  assert.equal(texts.length, 0);
+  await assert.rejects(cmdPlugin(["install-proposal", "cccccccccccc"]));
+  assert.match(texts[0].text, /^Plugin cccccccccccc was not installed: /u);
+  assert.deepEqual((await readPluginsState(data)).plugins, []);
 });

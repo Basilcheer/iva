@@ -127,7 +127,8 @@ _Avoid_: расширение
 Папка формата Agent Plugins: `plugin.json`, `skills/`, `mcp.json` и наш код под
 `sh.iva/` (eve Extension, сервисы). Единица расширения Ивы. Ставится командой
 `iva plugin add` из Marketplace, git-источника или локальной папки в
-`data/custom/plugins/` (ADR-0008, ADR-0009).
+`data/custom/plugins/` (ADR-0008, ADR-0009). Плагин с `mcp.json` или `sh.iva/` модель
+только предлагает (`iva plugin propose`), ставит его Bridge по тапу владельца.
 _Avoid_: расширение (как термин), addon, модуль
 
 **Marketplace (маркетплейс)**:

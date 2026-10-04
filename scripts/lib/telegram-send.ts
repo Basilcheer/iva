@@ -16,6 +16,7 @@
 // Возвращает { ok, fellBack, error } — вызывающий cron-скрипт по fellBack даёт агенту
 // обратную связь в ту же сессию, чтобы он переформатировал следующий отчёт.
 import {
+  redactNotice,
   sendThroughOutbox,
   type OutboxAck,
   type OutboxTransport,
@@ -23,6 +24,7 @@ import {
 import { traceOutbox, type TraceScope } from "../../agent/lib/trace.ts";
 import { parseTelegramDelivery } from "../../agent/lib/telegram-delivery.ts";
 import { classifyDeliverStatus } from "./deliver-policy.ts";
+import { screenPayload } from "./telegram-buttons.ts";
 
 type TelegramRequest = Record<string, unknown>;
 type FetchImpl = typeof fetch;
@@ -340,4 +342,31 @@ export async function sendTelegramRich(
   } catch (e) {
     return { ok: false, fellBack: false, error: errorMessage(e) };
   }
+}
+
+/**
+ * Сообщение с кнопкой, собранное кодом (предложение плагина): в стиле меню владельца — rich
+ * message или текст с клавиатурой, как предложение обновления (ADR-0015), — через
+ * outbound-Gate. Фолбэка без кнопки нет: без неё сообщение теряет смысл, и вызывающий
+ * получает отказ, а не «успех» текстом.
+ */
+export async function sendTelegramScreen(
+  bot: string,
+  chat: string,
+  markdown: string,
+  {
+    sleep = realSleep,
+    fetchImpl = fetch,
+  }: Pick<TelegramSendOptions, "sleep" | "fetchImpl"> = {},
+): Promise<{ ok: boolean; error: string }> {
+  const payload = screenPayload(redactNotice(markdown));
+  const method = "rich_message" in payload ? "sendRichMessage" : "sendMessage";
+  const ack = await postWithTransientRetry(
+    bot,
+    method,
+    { chat_id: chat, ...payload },
+    fetchImpl,
+    sleep,
+  );
+  return { ok: ack.ok, error: ack.ok ? "" : ack.error };
 }
