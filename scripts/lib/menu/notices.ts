@@ -2,12 +2,14 @@
 // плановых сводок; алерты (проблемы и предложения обновиться) не выключаются, о чём экран
 // говорит прямым текстом (ADR-0007).
 //
-// Тумблер пишется в data/settings.json, который и rollup, и schedule дайджеста читают в
-// момент запуска — переключение применяется без рестарта процессов.
+// Тумблер пишется в data/settings.json, который и rollup, и schedule дайджеста, и тик Watch
+// читают в момент запуска — переключение применяется без рестарта процессов. «Сама пишет»
+// (Watch и Brief, ADR-0020) включён без ключа и выключает их, но не сообщения о сбоях.
 //
 // Правило репо: ни одной module-level const с переведённой строкой — подписи собираются в
 // render() через ctx.tr, иначе язык замёрзнет до рестарта.
-import { readSettings, writeSettings } from "#lib/settings.ts";
+import { parseProactive } from "#lib/proactive-config.ts";
+import { readSettings, updateSettings } from "#lib/settings.ts";
 import { memoryReportsEnabled } from "../notice-policy.ts";
 import { button } from "./buttons.ts";
 
@@ -24,6 +26,7 @@ type MenuContext = {
 const TOGGLES = {
   rep: "memoryReports",
   dig: "digestSchedule",
+  pro: "proactive",
 } as const;
 type Toggle = keyof typeof TOGGLES;
 
@@ -76,6 +79,15 @@ export default {
           "включить или выключить дайджест.",
         ),
       ),
+      toggle(
+        parseProactive(settings, () => undefined).enabled,
+        T("Writes on her own", "Сама пишет"),
+        "pro",
+        T(
+          "Watch for missed items and the daily brief. Failures are always reported.",
+          "Присмотр за пропущенным и обзор дня. О сбоях пишу всегда.",
+        ),
+      ),
       T(
         "Alerts — problems and updates — always arrive.",
         "Алерты — о проблемах и обновлениях — приходят всегда.",
@@ -101,14 +113,18 @@ export default {
     if (value !== "0" && value !== "1") return;
     const key = TOGGLES[target];
     const enabled = value === "1";
-    // writeSettings мержит поверхностно, поэтому вложенный объект патчится целиком —
-    // иначе соседние ключи (расписание дайджеста) были бы стёрты этим тапом.
-    const current = readSettings()[key];
-    const kept =
-      typeof current === "object" && current !== null && !Array.isArray(current)
-        ? (current as Record<string, unknown>)
-        : {};
-    writeSettings({ [key]: { ...kept, enabled } });
+    // Вложенный объект патчится целиком под замком настроек — иначе соседние ключи
+    // (расписание дайджеста, потолки Watch) были бы стёрты этим тапом.
+    updateSettings((settings) => {
+      const current = settings[key];
+      const kept =
+        typeof current === "object" &&
+        current !== null &&
+        !Array.isArray(current)
+          ? (current as Record<string, unknown>)
+          : {};
+      return { ...settings, [key]: { ...kept, enabled } };
+    });
     await ctx.show(state, "ntc");
   },
 };

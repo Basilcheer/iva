@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { randomBytes } from "node:crypto";
 
+import { readFacts } from "./job-facts.ts";
 import {
   ScheduleStatusError,
   readStatus,
@@ -965,4 +966,59 @@ void test("a job without its own stop grace keeps the short SIGKILL grace", asyn
   });
   // 90 с на остановку нужны только сводке; остальным заданиям — прежние 10 с.
   assert.equal(seen!.env?.IVA_JOB_STOP_AT, String(1_000_000 + 60_000 - 10_000));
+});
+
+// factOnSuccess: "after-failure" (тик Watch): успех пишется фактом только после провала
+// этого имени — он и закрывает провал; провал пишется всегда; остальные расписания (без
+// опции) пишут успех как прежде.
+void test("factOnSuccess after-failure: a success is written only to close a failure of the same name", async () => {
+  const root = await scaffold();
+  await writeFile(join(root, "ok.ts"), "process.exit(0);\n");
+  await writeFile(join(root, "fail.ts"), "process.exit(3);\n");
+  const statusPath = join(root, "data/rollup-status.json");
+  const factsPath = join(root, "data/jobs.json");
+  await mkdir(join(root, "data"), { recursive: true });
+  const run = (script: string, name = "proactive") =>
+    runScheduledJob({
+      name,
+      argv: [script],
+      root,
+      nodeBin: process.execPath,
+      statusPath,
+      factsPath,
+      guardMs: 0,
+      wake: false,
+      factOnSuccess: name === "proactive" ? "after-failure" : undefined,
+      log: () => {},
+    });
+  const shape = async () =>
+    (await readFacts(factsPath)).map((fact) => `${fact.name}:${fact.ok}`);
+
+  assert.equal((await run("ok.ts")).ok, true);
+  assert.deepEqual(await shape(), [], "a success after nothing leaves no row");
+  assert.equal((await run("fail.ts")).ok, false);
+  assert.deepEqual(await shape(), ["proactive:false"]);
+  assert.equal((await run("ok.ts")).ok, true);
+  assert.deepEqual(await shape(), ["proactive:false", "proactive:true"]);
+  assert.equal((await run("ok.ts")).ok, true);
+  assert.deepEqual(
+    await shape(),
+    ["proactive:false", "proactive:true"],
+    "the closed failure is not closed twice",
+  );
+  // Чужой провал не открывает запись успеха этому имени; расписание без опции пишет всегда.
+  assert.equal((await run("fail.ts", "digest")).ok, false);
+  assert.equal((await run("ok.ts")).ok, true);
+  assert.equal((await run("ok.ts", "digest")).ok, true);
+  assert.deepEqual(await shape(), [
+    "proactive:false",
+    "proactive:true",
+    "digest:false",
+    "digest:true",
+  ]);
+  const status = JSON.parse(await readFile(statusPath, "utf8")) as Record<
+    string,
+    { lastSuccessAt?: number }
+  >;
+  assert.ok(typeof status.proactive?.lastSuccessAt === "number");
 });

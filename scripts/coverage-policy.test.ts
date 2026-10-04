@@ -28,10 +28,6 @@ const BLIND_SPOT: ReadonlyArray<{
     why: "адаптер канала eve; тесты идут через инбаунд",
   },
   {
-    path: "agent/hooks/transcript.ts",
-    why: "хук eve; рядом trace-hook покрыт, этот грузит ядро",
-  },
-  {
     path: "agent/instructions/05-language.ts",
     why: "динамика eve; язык проверен через ходы",
   },

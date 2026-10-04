@@ -28,12 +28,18 @@ export const SCHEDULE_CRON = {
 // its state. Still the single place a cron string lives (schedule-table.test.ts).
 export const REMINDER_TICK_CRON = "* * * * *";
 
+// Тик Watch и Brief (agent/schedules/proactive.ts): каждые полчаса. Тоже вне SCHEDULE_CRON —
+// у него нет точки догона (пропущенный тик не догоняется, следующий через полчаса), но
+// запись статуса и факт в jobs.json есть, поэтому isLiveSchedule признаёт его отдельно.
+export const PROACTIVE_TICK_CRON = "0,30 * * * *";
+export const PROACTIVE_SCHEDULE = "proactive";
+
 export type ScheduleName = keyof typeof SCHEDULE_CRON;
 
 /** Живое расписание. Снятые (memory-daily, -weekly, -monthly, -yearly ушли в ночь)
  * остаются в jobs.json навсегда; сигналом о провале не служат нигде (doctor, ход, сторож). */
 export function isLiveSchedule(name: string): boolean {
-  return Object.hasOwn(SCHEDULE_CRON, name);
+  return Object.hasOwn(SCHEDULE_CRON, name) || name === PROACTIVE_SCHEDULE;
 }
 
 // The cron fields, for the consumer that has to place a fire time on the calendar itself

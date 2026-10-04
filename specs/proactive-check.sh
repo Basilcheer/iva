@@ -23,7 +23,10 @@ check() { # config expected [dropped invariant]; expected: none | <Invariant>
       echo "FAIL $name: could not drop $inv"; failed=$((failed+1)); return
     fi
   done
-  "$TLC" -workers "$WORKERS" -deadlock -metadir "$run.states" -config "$run.cfg" Proactive.tla >"$log" 2>&1
+  # Свидетель — в один поток: при нескольких потоках два инварианта на одной глубине выходят
+  # первыми то один, то другой (nolock без OneRun давал и NoDoubleTake, и OneBriefPerSlot).
+  w=$WORKERS; [ "$expect" = none ] || w=1
+  "$TLC" -workers "$w" -deadlock -metadir "$run.states" -config "$run.cfg" Proactive.tla >"$log" 2>&1
   if grep -q "No error has been found" "$log"; then got=none
   else got=$(sed -n 's/^Error: Invariant \([A-Za-z]*\) is violated.*/\1/p' "$log" | head -1); fi
   if [ -z "$got" ]; then

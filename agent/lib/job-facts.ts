@@ -238,17 +238,25 @@ function quarantine(file: string, how: "move" | "copy", now: number): boolean {
   }
 }
 
-/** Записать факт запуска: ротация старше 7 дней и добавление строки под локом. */
+/**
+ * Записать факт запуска: ротация старше 7 дней и добавление строки под локом. `afterFailure` —
+ * записать, только если последний факт этого имени провал (успех его закрывает); false —
+ * строка не добавлена.
+ */
 export async function recordFact(
   file: string,
   fact: JobFact,
   now: number = Date.now(),
-): Promise<void> {
-  await withFacts(file, async () => {
+  { afterFailure = false }: { readonly afterFailure?: boolean } = {},
+): Promise<boolean> {
+  return withFacts(file, async () => {
     const existing = await readFactsForWrite(file, now);
+    if (afterFailure && latestFact(existing, fact.name)?.ok !== false)
+      return false;
     await saveJsonAtomic(file, [...rotated(existing, now), fact], {
       mode: 0o600,
     });
+    return true;
   });
 }
 

@@ -29,26 +29,37 @@
 \* обычный ключ или не идут через этот прогон. Бронь раннера inProgressSince (второй слой)
 \* не моделируется: прогоны стартуют когда угодно, это шире жизни.
 \*
-\* Действие модели -> будущий код
+\* Действие модели -> код (T1; Brief — T2, его кода ещё нет)
 \*   Start            agent/schedules/proactive.ts (PROACTIVE_TICK_CRON) -> runScheduledJob ->
-\*                    scripts/proactive/tick.ts: now прогона (день, наступившие слоты Brief)
-\*   TryLock          tick.ts: acquireFileLock(data/proactive.lock, { timeoutMs: 0,
-\*                    staleMs: 40 мин }) (agent/lib/fs-atomic.ts) и чтение data/proactive.json
-\*                    (своё, по образцу readStatus)
+\*                    scripts/proactive/tick.ts:main (адресат; без него выход 0)
+\*   TryLock          tick.ts:main: acquireFileLock(data/proactive.lock, { timeoutMs:
+\*                    LOCK_WAIT_MS = 1 с, staleMs: LOCK_STALE_MS = 40 мин }) (agent/lib/fs-atomic.ts):
+\*                    протухший забирается в том же вызове (с timeoutMs 0 — не всегда, срок
+\*                    проверяется и на пути retry); занят живым — выход 0;
+\*                    сразу под замком now = минута clock() (NowAfterLock = TRUE); затем
+\*                    tick.ts:runProactiveTick -> readProactiveState (scripts/proactive/state.ts,
+\*                    своё чтение по образцу readStatus: битый — выход 1, файл на месте)
 \*   Tick, Timeout    время; срок runScheduledJob (timeoutMs 30 мин + killGraceMs 10 с)
-\*   BClaim           tick.ts:runProactiveTick шаг 1 -> tick.ts:claim (briefDone)
-\*   BTurn            runReminderTurn (scripts/lib/reminder-turn.ts:390) + tick.ts:deliver
-\*                    (для слота 0 — запасной текст «Утро: новых дел нет»)
-\*   Precheck         scripts/proactive/precheck.ts + runProactiveTick шаги 2, 4-7
-\*                    (tick.ts:claim: reported: true, modelWakes, дроссель; пусто — запись seen)
-\*   Turn             runReminderTurn (scripts/lib/reminder-turn.ts:390) + tick.ts:deliver
-\*   Wakes            tick.ts: запись wakes.count += 1 после доставки (saveJsonAtomic)
+\*   BClaim           (T2) runProactiveTick шаг 1 -> заявка briefDone
+\*   BTurn            (T2) ход Brief + tick.ts:deliver (слот 0 — «Утро: новых дел нет»)
+\*   Precheck         runProactiveTick: минута >= 30 — выход без записи; observe ->
+\*                    Source.check (scripts/proactive/precheck.ts: telegramSource, mailSource;
+\*                    ошибка — ключи источника не трогаются, пункт check:<источник>) ->
+\*                    tick.ts:observedState (state.ts:updateSeen) -> tick.ts:admit (фильтры) ->
+\*                    пусто: запись seen;
+\*                    иначе tick.ts:claim (reported: true, modelWakes + 1) и запись до хода.
+\*                    Код берёт кандидатов только из увиденного в этот прогон — подмножество
+\*                    того, что берёт модель
+\*   Turn             tick.ts:wake: TickDeps.runTurn = runReminderTurn (scripts/lib/reminder-turn.ts)
+\*                    + tick.ts:deliver (части по <!-- iva:next -->; QUIET и пусто — ничего)
+\*   Wakes            tick.ts:wake: запись wakes (state.ts:bump) после deliver, если ушла
+\*                    хоть одна часть и в ходе был обычный пункт; отказ — строка в журнал
 \*   Post             только мутант ClaimFirst = FALSE: заявка и wakes после хода
-\*   снятие замка     releaseFileLock в finally прогона (входит в последний шаг)
+\*   снятие замка     releaseFileLock в finally tick.ts:main (входит в последний шаг)
 \*   Crash            kill -9, обрыв питания, исключение между любыми шагами
-\*   Arrive, ReadAll, ReadSome  подмена источника в тестах precheck.ts (непрочитанное растёт,
-\*                    прочитано целиком, прочитано частично)
-\*   SlotDue, NewDay  часы в зоне resolveTimeZone() (scripts/lib/timezone.ts)
+\*   Arrive, ReadAll, ReadSome  подмена источника в tick.test.ts и tick.property.test.ts
+\*                    (непрочитанное растёт, прочитано целиком, прочитано частично)
+\*   SlotDue, NewDay  часы в зоне resolveTimeZone() (scripts/lib/timezone.ts), zonedParts
 \*
 \* Мутанты (свидетели): ClaimFirst = FALSE — заявка после хода; Locking = FALSE — без замка;
 \* Capped = FALSE — без фильтра watchCapPerDay; Stale <= MaxRun — staleMs короче прогона.

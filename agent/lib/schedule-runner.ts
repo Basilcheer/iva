@@ -93,6 +93,12 @@ export interface RunScheduledJobOptions {
   readonly factsPath?: string;
   /** Будить агента после запуска (по умолчанию да). */
   readonly wake?: boolean;
+  /**
+   * Когда писать факт успеха. По умолчанию — всегда. `"after-failure"` — только если последний
+   * факт этого имени провал: частое расписание (тик Watch) не забивает таблицу успехами, а
+   * провал всё равно закрывается первым успехом (agent/lib/open-failures.ts).
+   */
+  readonly factOnSuccess?: "always" | "after-failure";
   readonly wakeImpl?: (name: string, startedAt: number) => void;
   readonly env?: NodeJS.ProcessEnv;
   readonly spawnImpl?: SpawnImplementation;
@@ -630,8 +636,9 @@ async function recordJobFact(
   { finishedAt, outcome, childOk }: Finish,
 ): Promise<void> {
   const { name, log } = o;
+  let written: boolean;
   try {
-    await recordFact(
+    written = await recordFact(
       factsFile,
       {
         name,
@@ -645,13 +652,14 @@ async function recordJobFact(
         wake: null,
       },
       finishedAt,
+      { afterFailure: childOk && o.factOnSuccess === "after-failure" },
     );
   } catch (error) {
     log(`schedule-runner: ${name} fact not recorded — ${errorMessage(error)}`);
     run.factFailure = error instanceof Error ? error : new Error(String(error));
     return;
   }
-  if (o.wake) startWake(o, factsFile, run.startedAt);
+  if (written && o.wake) startWake(o, factsFile, run.startedAt);
 }
 
 function startWake(

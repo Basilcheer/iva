@@ -1,5 +1,9 @@
 # Changelog
 
+## [Unreleased]
+
+- 👀 **Ива сама говорит о пропущенном**: раз в час код без модели проверяет непрочитанные личные чаты и упоминания в Telegram (через юзербот) и письма в Gmail без рассылок; если что-то ждёт дольше часа или написал срочный отправитель, модель решает, стоит ли сообщить, и присылает отдельное сообщение на пункт с кнопками «В задачи», «Напомнить позже», «Не сообщать про этого». Про один чат или письмо — один раз, пока там не появилось новое; ночью с 23:00 до 08:00 — только срочные; не больше 5 таких сообщений и 15 проверок моделью в сутки. Включено у всех, выключается тумблером «Сама пишет» в `/menu` → Уведомления; настройки — `iva proactive show|on|off|set`. Watch: an hourly code-only check of unread Telegram chats, mentions and Gmail wakes the model only for something new, with quiet hours, daily caps and a «Writes on her own» toggle; `iva proactive` changes the settings.
+
 ## [0.4.11] - 2026-10-03
 
 - 🌙 **Ночная память снова работает на подписке ChatGPT**: ночь звала модель обычным запросом, а подписка принимает только потоковые, и бэкенд отвечал 400 «Stream must be set to true» на первом же вызове каждой ночи. Теперь ночной запрос у всех провайдеров идёт потоком и ждёт полный ответ. Заодно низкое усилие рассуждений, которое ночь просит сама, больше не перекрывается общим `THINKING_EFFORT` чата. The nightly memory call streams on every provider, so ChatGPT subscriptions no longer answer 400; the night's own low reasoning effort is no longer overridden by the chat default.

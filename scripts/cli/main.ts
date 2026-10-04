@@ -6,6 +6,7 @@ import { createDoctorCommand } from "./doctor.ts";
 import { createNotifyCommand } from "./notify.ts";
 import { createPluginCommands } from "./plugin.ts";
 import { createPostCommand } from "./post.ts";
+import { createProactiveCommand } from "./proactive.ts";
 import { createRemindCommand } from "./remind.ts";
 import { createCliRuntime } from "./runtime.ts";
 import { createServiceCommands } from "./services.ts";
@@ -114,6 +115,7 @@ ${C.b}Commands:${C.x}
   ${C.c}iva jobs ack${C.x} <name>  close an open schedule failure
   ${C.c}iva jobs skip memory-night${C.x} <date>  close a night-memory day without processing it
   ${C.c}iva remind${C.x} <text>    let the agent judge one Reminder, then send it to Telegram
+  ${C.c}iva proactive${C.x} show|on|off|set <key> <value>  Watch and Brief settings
   ${C.c}iva post${C.x} --md-file <p>  rich Telegram post to the digest chat or an allowlisted --chat
   ${C.c}iva userbot${C.x} [creds|setup|status|diagnose --json|off]  personal-account userbot proxy
   ${C.c}iva logs${C.x} [poll]     agent logs (or the Telegram bridge) -f
@@ -141,6 +143,7 @@ export function createCliMain(root: string) {
   const cmdJobs = createJobsCommand(runtime);
   const cmdRemind = createRemindCommand(runtime);
   const cmdPost = createPostCommand(runtime);
+  const cmdProactive = createProactiveCommand(runtime);
   const versionUpdate = createVersionUpdateCommand(runtime, systemdLifecycle);
   // The code of a plugin is built into a version, on exactly the updater's rails
   // (ADR-0009), so `iva plugin` is handed the updater's own rebuild instead of a
@@ -170,6 +173,7 @@ export function createCliMain(root: string) {
     remind: cmdRemind,
     jobs: cmdJobs,
     post: cmdPost,
+    proactive: cmdProactive,
     start: services.cmdStart,
     stop: services.cmdStop,
     logs: services.cmdLogs,
