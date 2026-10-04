@@ -133,7 +133,7 @@ test("08:30 in the owner's zone: the morning Brief, QUIET forbidden, parts go ou
     { part: "Ответь Ивану до 12:00.", source: "brief" },
   ]);
   assert.deepEqual(readState(h).briefDone, { day: DAY, slots: [0] });
-  // Brief не ход Watch: потолки Watch он не тратит.
+  // Brief не ход Watch: пределы Watch он не тратит.
   assert.deepEqual(readState(h).modelWakes, { day: "", count: 0 });
   assert.deepEqual(readState(h).wakes, { day: "", count: 0 });
 });

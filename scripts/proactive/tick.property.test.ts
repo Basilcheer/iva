@@ -6,7 +6,7 @@
 //   (б) подъёмов с сообщением от обычных пунктов за день ≤ watchCapPerDay;
 //   (в) ходов Watch без сбоев за день ≤ modelWakesPerDay;
 //   (г) в тихие часы ход только при срочном отправителе;
-//   (д) обычный пункт, отфильтрованный тихими часами или потолком, не помечен `reported` и
+//   (д) обычный пункт, отфильтрованный тихими часами или пределом, не помечен `reported` и
 //       приходит позже.
 import "../fixtures/no-host-anthropic.ts";
 import assert from "node:assert/strict";
@@ -251,7 +251,7 @@ test(`Watch keeps its promises on any sequence of arrivals, reads, errors and ti
         }
 
         // (д), вторая половина: без новых приходов и ошибок каждый ещё не сообщённый пункт
-        // приходит за двое суток — если потолки вообще пускают обычный подъём.
+        // приходит за двое суток — если пределы вообще пускают обычный подъём.
         if (cfg.watchCapPerDay === 0 || cfg.modelWakesPerDay === 0) return;
         world.error = false;
         const pending = world.state()?.seen ?? {};

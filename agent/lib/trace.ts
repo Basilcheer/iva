@@ -761,8 +761,8 @@ type OutboxResultLike = {
  * быть одно на любой из них. Заодно ставит контекст хода — вердикт outbound-Gate внутри
  * шва уезжает с тем же ключом.
  *
- * `source` НЕ зашит: ночной ход (rollup, дайджест) уходит тем же швом и обязан
- * называться своим именем, иначе вьюер считает его разговором в Telegram.
+ * `source` НЕ зашит: ночной ход (rollup) и части Watch и Brief (watch, brief) уходят тем же
+ * швом и обязаны называться своим именем, иначе вьюер считает их разговором в Telegram.
  */
 export async function traceOutbox<T extends OutboxResultLike>(
   scope: TraceScope,

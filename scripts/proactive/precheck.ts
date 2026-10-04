@@ -31,7 +31,7 @@ export type WatchItem = {
   readonly from: Sender;
   readonly note?: string;
   /**
-   * Сбой регулярной задачи (T3): потолки и тумблер его не держат. `essence` — существо для
+   * Сбой регулярной задачи (T3): пределы и тумблер его не держат. `essence` — существо для
    * дросселя Alert, `at` — время выхода (сдвигает `failuresSeenUpToMs` в заявке).
    */
   readonly failure?: { readonly essence: string; readonly at: number };

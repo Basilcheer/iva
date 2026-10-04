@@ -113,7 +113,7 @@ export default {
     const key = TOGGLES[target];
     const enabled = value === "1";
     // Вложенный объект патчится целиком под замком настроек — иначе соседние ключи
-    // (чат отчётов, потолки Watch) были бы стёрты этим тапом.
+    // (чат отчётов, пределы Watch) были бы стёрты этим тапом.
     updateSettings((settings) => {
       const current = settings[key];
       const kept =

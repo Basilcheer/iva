@@ -281,7 +281,7 @@ test("after watchCapPerDay wakes an ordinary item waits; an urgent sender and a 
   assert.equal(h.prompts.length, 1);
   assert.match(h.prompts[0] ?? "", /tg:2 .*urgent sender/u);
   assert.doesNotMatch(h.prompts[0] ?? "", /tg:1/u);
-  // Срочный подъём потолок не тратит.
+  // Срочный подъём предел не тратит.
   assert.deepEqual(readState(h).wakes, { day: DAY, count: 5 });
 
   const failure: WatchItem = {

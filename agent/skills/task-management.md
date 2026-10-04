@@ -1,5 +1,5 @@
 ---
-description: Use when adding tasks, changing their due dates, or interpreting legacy relative task deadlines for a digest.
+description: Use when adding tasks, changing their due dates, or interpreting legacy relative task deadlines for the Brief.
 ---
 
 # Задачи и сроки
