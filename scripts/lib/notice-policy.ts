@@ -32,6 +32,7 @@ import {
   writeSync,
 } from "node:fs";
 import { randomUUID } from "node:crypto";
+import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 
 export type Translate = (english: string, russian: string) => string;
@@ -488,16 +489,26 @@ function writeAlertState(dataDir: string, state: AlertState): boolean {
 }
 
 // Писателей несколько (тик проактивности, мост, ночь, апдейтер), поэтому чтение-правка-запись
-// идёт под замком — существующим из #lib/fs-atomic.ts. Импорт динамический и fail-open: без
-// authored tree (островной прогон ниже в тестах) замка нет и запись идёт как раньше — одна
+// идёт под замком — существующим из #lib/fs-atomic.ts. Загрузка ленивая, синхронная (require
+// ESM без top-level await: модуль грузят и через require, scripts/check-update.mjs) и fail-open:
+// без authored tree (островной прогон в тестах) замка нет и запись идёт как раньше — одна
 // потерянная отметка там дешевле умершего дросселя.
 type AlertLock = Pick<
   typeof import("#lib/fs-atomic.ts"),
   "acquireFileLockSync" | "releaseFileLock"
 >;
-const alertLock: AlertLock | null = await import("#lib/fs-atomic.ts").catch(
-  () => null,
-);
+let alertLockLib: AlertLock | null | undefined;
+function alertLock(): AlertLock | null {
+  if (alertLockLib === undefined)
+    try {
+      alertLockLib = createRequire(import.meta.url)(
+        "#lib/fs-atomic.ts",
+      ) as AlertLock;
+    } catch {
+      alertLockLib = null;
+    }
+  return alertLockLib;
+}
 /** Сколько ждать чужую запись состояния: сама запись — миллисекунды. */
 const ALERT_LOCK_WAIT_MS = 1_000;
 
@@ -518,7 +529,7 @@ export function updateAlertState(
     afterRead?.();
     return change(state) ? writeAlertState(dataDir, state) : true;
   } finally {
-    if (lock !== null) alertLock?.releaseFileLock(lock);
+    if (lock !== null) alertLock()?.releaseFileLock(lock);
   }
 }
 
@@ -527,12 +538,12 @@ function lockAlertState(
   dataDir: string,
 ):
   NonNullable<ReturnType<AlertLock["acquireFileLockSync"]>> | null | "refused" {
-  if (alertLock === null) return null;
+  const lib = alertLock();
+  if (lib === null) return null;
   try {
-    const lock = alertLock.acquireFileLockSync(
-      join(dataDir, "alert-state.lock"),
-      { timeoutMs: ALERT_LOCK_WAIT_MS },
-    );
+    const lock = lib.acquireFileLockSync(join(dataDir, "alert-state.lock"), {
+      timeoutMs: ALERT_LOCK_WAIT_MS,
+    });
     if (lock !== null) return lock;
     console.error("[notice-policy] the alert state is busy, not recorded");
   } catch (error) {
