@@ -103,6 +103,33 @@ test("провал старше суток открыт, пока не почи�
   assert.equal(openJobFailures([]).length, 0);
 });
 
+// Путь потребителя (Brief через openFailures, инструкция 40-open-failures): здесь `now` задан,
+// и суточное окно, вернись оно в openFailuresFrom, спрятало бы провал. Прежний тест звал
+// openJobFailures без `now` и окно не видел.
+test("провал задания старше суток без успеха и ack виден потребителю (openFailuresFrom и openFailures)", async () => {
+  const old = fact({
+    ok: false,
+    error: "exited 1",
+    startedAt: NOW - 3 * OPEN_FAILURES_WINDOW_MS - 1000,
+    finishedAt: NOW - 3 * OPEN_FAILURES_WINDOW_MS,
+  });
+  assert.deepEqual(
+    openFailuresFrom([old], [], NOW).map((entry) => entry.name),
+    ["memory-night"],
+  );
+  const dir = mkdtempSync(join(tmpdir(), "iva-open-failures-old-"));
+  await recordFact(jobFactsFile(dir), old, NOW);
+  const fromDisk = await openFailures({
+    dir,
+    now: NOW,
+    readReminders: () => Promise.resolve([]),
+  });
+  assert.deepEqual(
+    fromDisk.map((entry) => entry.name),
+    ["memory-night"],
+  );
+});
+
 test("причина без error не исчезает", () => {
   const [failure] = openJobFailures([fact({ ok: false, error: null })]);
   assert.equal(failure?.reason, "провал без причины");
