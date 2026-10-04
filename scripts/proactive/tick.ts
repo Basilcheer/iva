@@ -32,6 +32,7 @@ import {
   runReminderTurn,
   type ReminderTurn,
 } from "../lib/reminder-turn.ts";
+import { ownerChat } from "../lib/notification-chat.ts";
 import { sendTelegramHtml } from "../lib/telegram-send.ts";
 import { isEntrypoint } from "../lib/version-layout.ts";
 import {
@@ -582,10 +583,7 @@ export async function main(
 ): Promise<number> {
   const token = String(env.TELEGRAM_BOT_TOKEN ?? "").trim();
   // Личный чат владельца — первый id Allowlist, не notificationChat(): там почта и переписка.
-  const chat =
-    String(env.TELEGRAM_ALLOWED_USER_IDS ?? "")
-      .split(/[,\s]+/u)
-      .find(Boolean) ?? "";
+  const chat = ownerChat(env);
   if (token === "" || chat === "") {
     console.log(
       "proactive: no bot token or owner chat (TELEGRAM_ALLOWED_USER_IDS), nothing to do",

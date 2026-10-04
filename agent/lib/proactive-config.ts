@@ -62,8 +62,9 @@ const VALID: { readonly [K in ProactiveKey]: (value: unknown) => boolean } = {
   staleMinutes: integerIn(0, 24 * 60),
   watchCapPerDay: integerIn(0, 100),
   modelWakesPerDay: integerIn(0, 100),
+  // Не больше двух Brief в сутки (спека §9); пустой список — Brief выключен.
   briefTimes: listOf(
-    4,
+    2,
     (time) => typeof time === "string" && BRIEF_TIME.test(time),
   ),
   urgentSenders: listOf(
@@ -153,14 +154,17 @@ export function isQuietHour(config: ProactiveConfig, hour: number): boolean {
 }
 
 /**
- * Ждёт ли провал задания Ивы утреннего Brief: только при включённом тумблере и в тихий час.
- * Тумблер выключен — Brief не идёт, и wake-ход сообщает о провале сразу (сбой — Alert, ADR-0020).
+ * Ждёт ли провал задания Ивы утреннего Brief: только при включённом тумблере, со слотами Brief и в
+ * тихий час. Тумблер выключен или слотов нет — Brief не придёт, и wake-ход сообщает о провале сразу
+ * (сбой — Alert, ADR-0020).
  */
 export function failureWaitsForBrief(
   config: ProactiveConfig,
   hour: number,
 ): boolean {
-  return config.enabled && isQuietHour(config, hour);
+  return (
+    config.enabled && config.briefTimes.length > 0 && isQuietHour(config, hour)
+  );
 }
 
 /** Что известно об отправителе пункта: имя пользователя, имя или название чата, адрес почты. */

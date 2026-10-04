@@ -248,7 +248,9 @@ test("точка входа wake.ts зовёт общий ход и шлёт о�
   );
   assert.match(entry, /runJobWake\(/u);
   assert.match(entry, /runReminderTurn\(/u);
-  assert.match(entry, /sendTelegramHtml\(/u);
+  // Отправка — через шов sendHtml (по умолчанию sendTelegramHtml); поведение точки входа держит
+  // scripts/jobs/wake.test.ts.
+  assert.match(entry, /sendHtml = deps\.sendHtml \?\? sendTelegramHtml/u);
 });
 
 // T30 №10: отказ записи исхода хода — failed, иначе сторож шлёт второе сообщение.

@@ -187,7 +187,30 @@ test("a failed Iva job waits for the morning Brief only with the toggle on and i
       failureWaitsForBrief({ ...PROACTIVE_DEFAULTS, enabled: false }, hour),
       false,
     );
+    // Слотов Brief нет — Brief не придёт никогда: провал сообщается сразу.
+    assert.equal(
+      failureWaitsForBrief({ ...PROACTIVE_DEFAULTS, briefTimes: [] }, hour),
+      false,
+    );
   }
+});
+
+test("briefTimes: at most two (spec §9: ≤ 2 Brief a day); an empty list is allowed — Brief off", () => {
+  assert.deepEqual(proactiveValue("briefTimes", "08:30,14:00"), {
+    value: ["08:30", "14:00"],
+  });
+  assert.deepEqual(proactiveValue("briefTimes", ""), { value: [] });
+  for (const text of ["08:00,12:00,18:00", "08:00,10:00,12:00,14:00"])
+    assert.ok("error" in proactiveValue("briefTimes", text), text);
+  const lines: string[] = [];
+  const parsed = parseProactive(
+    { proactive: { briefTimes: ["08:00", "12:00", "18:00"] } },
+    (line) => lines.push(line),
+  );
+  assert.deepEqual(parsed.briefTimes, PROACTIVE_DEFAULTS.briefTimes);
+  assert.deepEqual(lines, [
+    "proactive: settings field briefTimes is not valid, using default",
+  ]);
 });
 
 test("an urgent sender matches the username without @, the trimmed name or the address, case-insensitively", () => {

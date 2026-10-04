@@ -411,7 +411,7 @@ const HALF_HOURS = Array.from(
 
 const briefTimes = fc.uniqueArray(fc.constantFrom(...HALF_HOURS), {
   minLength: 1,
-  maxLength: 4,
+  maxLength: 2,
 });
 
 const minuteOf = (time: string) =>
