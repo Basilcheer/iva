@@ -154,9 +154,13 @@ test("show prints the effective settings and today's counters", async (t) => {
   ]);
 });
 
-test("show with a broken state names it instead of failing", async (t) => {
+test("show with a broken state prints the settings, then fails naming the file (the tick is stopped by it)", async (t) => {
   const h = harness(t);
   writeFileSync(join(h.dir, "proactive.json"), "nope");
-  await h.cmd(["show"]);
-  assert.match(h.out.at(-1) ?? "", /^state: .*damaged/u);
+  await assert.rejects(
+    h.cmd(["show"]),
+    /proactive\.json unreadable or damaged.*the tick exits 1 until it is fixed or removed/su,
+  );
+  assert.equal(h.out[0], "enabled: true");
+  assert.ok(!h.out.some((line) => line.startsWith("wakes today")));
 });

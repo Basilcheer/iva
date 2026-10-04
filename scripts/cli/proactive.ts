@@ -35,15 +35,20 @@ export function createProactiveCommand(
     const { zonedParts } = await import("#lib/zoned-time.ts");
     const { y, m, d } = zonedParts(now(), timeZone);
     const day = `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+    let state;
     try {
-      const state = readProactiveState(join(dir, "proactive.json"));
-      console.log(`wakes today: ${state ? countToday(state.wakes, day) : 0}`);
-      console.log(
-        `model wakes today: ${state ? countToday(state.modelWakes, day) : 0}`,
-      );
+      state = readProactiveState(join(dir, "proactive.json"));
     } catch (error) {
-      console.log(`state: ${(error as Error).message}`);
+      // Битое состояние останавливает тик (выход 1 каждый прогон): show говорит об этом отказом.
+      throw new Error(
+        `${(error as Error).message}; the tick exits 1 until it is fixed or removed`,
+        { cause: error },
+      );
     }
+    console.log(`wakes today: ${state ? countToday(state.wakes, day) : 0}`);
+    console.log(
+      `model wakes today: ${state ? countToday(state.modelWakes, day) : 0}`,
+    );
   }
 
   async function set(dir: string, key: string, text: string): Promise<void> {
