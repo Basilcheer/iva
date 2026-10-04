@@ -384,3 +384,31 @@ test("Brief: unfixed failures go into the prompt first, as data; an attack in th
   await runProactiveTick(morning, none.deps);
   assert.doesNotMatch(none.prompts[0] ?? "", /Unfixed failures/u);
 });
+
+test("a turn in two parts about a failure, one part not delivered → the failure is not reported and comes again on the next run", async () => {
+  let refuseSecond = true;
+  const sent: string[] = [];
+  const h = harness({
+    send: (part) => {
+      if (refuseSecond && part === "вторая часть")
+        return Promise.resolve({ ok: false, error: "Telegram 502" });
+      sent.push(part);
+      return Promise.resolve({ ok: true, error: "" });
+    },
+  });
+  h.reply = turn("backup упал.\n<!-- iva:next -->\nвторая часть");
+  writeState(h);
+  assert.equal(await runProactiveTick(NOON, h.deps), 0);
+  assert.deepEqual(sent, ["backup упал."], "the first part went out");
+  assert.throws(() => alertState(h), "no throttle after a partial delivery");
+  assert.equal(readState(h).seen["failure:backup.service"]?.reported, false);
+  assert.equal(
+    readState(h).failuresSeenUpToMs,
+    initialState(NOON - 2 * HOUR).failuresSeenUpToMs,
+  );
+  refuseSecond = false;
+  assert.equal(await runProactiveTick(NOON + HOUR, h.deps), 0);
+  assert.equal(h.prompts.length, 2, "the failure comes again");
+  assert.match(h.prompts[1] ?? "", /failure:backup\.service/u);
+  assert.equal(readState(h).seen["failure:backup.service"]?.reported, true);
+});
