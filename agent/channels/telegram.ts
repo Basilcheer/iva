@@ -30,6 +30,7 @@ import { transcribe } from "../transcribe.js";
 // объяснение сбоя — UI канала, обе реплики идут мимо Outbox. Мимо Outbox — не мимо
 // гейта: всё, во что подставлен runtime-контент, уходит через noticeSender.
 import {
+  compactingNote,
   enableWorkingStatusStop,
   finishTelegramStatus,
   sendWorkingStatus,
@@ -53,6 +54,20 @@ import {
   TELEGRAM_CANCEL_ROUTE,
 } from "../lib/telegram-cancel-route.js";
 import { handleTelegramStopCallback } from "../lib/telegram-stop.js";
+// Свёртка между ходами: история пересказывается, пока человек ничего не ждёт; пришедшее
+// в это время сообщение получает ранний статус с подписью (agent/lib/idle-compaction.ts).
+import {
+  handleTelegramCompactRequest,
+  localCompactUrl,
+  requestTelegramCompact,
+  TELEGRAM_COMPACT_ROUTE,
+} from "../lib/telegram-compact-route.js";
+import {
+  compactIdleSession,
+  idleCompactionRunning,
+  openIdleCompactionTurn,
+} from "../lib/idle-compaction.js";
+import { providerConfig } from "../provider.js";
 import {
   handleAcceptedTelegramWebhook,
   TELEGRAM_ACCEPTANCE_ROUTE,
@@ -242,6 +257,7 @@ const telegram = telegramChannel({
     // FIFO-мост не должен успеть принять следующую голову, пока Bot API отвечает.
     async "turn.started"(data, channel, ctx) {
       const tg = channel.telegram;
+      openIdleCompactionTurn(ctx.session.id);
       await publishTelegramTurnStarted({
         chatKey: chatKeyOf(tg.chatId, tg.messageThreadId),
         sessionId: ctx.session.id,
@@ -260,8 +276,22 @@ const telegram = telegramChannel({
           console.error("[telegram] статус-сообщение не отправилось:", error),
       });
     },
+    // Свёртка между ходами — после уборки статуса: чат уже свободен, человек получил ответ.
     async "turn.completed"(_data, channel, ctx) {
       await finishTelegramStatus(channel, ctx.session.id, "completed");
+      const secret = process.env.TELEGRAM_WEBHOOK_SECRET_TOKEN;
+      if (!secret) return;
+      // Не ждём: просьба идёт на собственный роут, а ход уже закончен и держать его нечем.
+      void compactIdleSession({
+        sessionId: ctx.session.id,
+        chatKey: chatKeyOf(
+          channel.telegram.chatId,
+          channel.telegram.messageThreadId,
+        ),
+        windowTokens: providerConfig.contextWindow,
+        requestImpl: (sessionId) =>
+          requestTelegramCompact({ url: localCompactUrl(), secret, sessionId }),
+      });
     },
     async "turn.cancelled"(_data, channel, ctx) {
       await finishTelegramStatus(channel, ctx.session.id, "cancelled");
@@ -392,7 +422,13 @@ const telegram = telegramChannel({
           staleMs: RUN_STALE_MS,
           getStatusImpl: getChatStatus,
           setStatusIfImpl: setChatStatusIf,
-          sendWorkingStatusImpl: (options) => sendWorkingStatus(tg, options),
+          sendWorkingStatusImpl: (options) =>
+            sendWorkingStatus(
+              tg,
+              idleCompactionRunning(chatKey)
+                ? { ...options, note: compactingNote() }
+                : options,
+            ),
           removeWorkingStatusImpl: (messageId) =>
             tg.request("deleteMessage", {
               chat_id: tg.chatId,
@@ -463,6 +499,13 @@ export default {
     ),
     POST(TELEGRAM_CANCEL_ROUTE, (req, { attachSession }) =>
       handleTelegramCancelRequest(
+        req,
+        attachSession,
+        process.env.TELEGRAM_WEBHOOK_SECRET_TOKEN,
+      ),
+    ),
+    POST(TELEGRAM_COMPACT_ROUTE, (req, { attachSession }) =>
+      handleTelegramCompactRequest(
         req,
         attachSession,
         process.env.TELEGRAM_WEBHOOK_SECRET_TOKEN,

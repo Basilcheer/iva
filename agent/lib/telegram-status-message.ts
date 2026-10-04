@@ -57,10 +57,12 @@ let richStatusSupported = true;
 // Строка статуса. Лоадер падает на ⏳, когда Telegram отверг custom emoji.
 function workingMarkdown({
   withStop = true,
-}: { withStop?: boolean } = {}): string {
+  note,
+}: { withStop?: boolean; note?: string } = {}): string {
   const loader = workLoaderSupported
     ? `<tg-emoji emoji-id="${WORK_LOADER.customEmojiId}">${WORK_LOADER.alt}</tg-emoji>`
     : WORK_LOADER.fallback;
+  if (note !== undefined) return `${loader} ${note}`;
   return withStop
     ? `${loader} <tg-button type="callback_data" style="danger" data="${TELEGRAM_STOP_CALLBACK}">⏹</tg-button>`
     : loader;
@@ -89,9 +91,18 @@ function statusBody(tg: TelegramStatusHandle): Record<string, unknown> {
   };
 }
 
+// Подпись раннего статуса, когда сообщение пришло во время свёртки между ходами
+// (agent/lib/idle-compaction.ts): ход начнётся после неё, и строка сменится обычным статусом.
+export function compactingNote(): string {
+  return tr(
+    "Compacting the conversation, I'll answer in a moment.",
+    "Сжимаю разговор, скоро отвечу.",
+  );
+}
+
 export async function sendWorkingStatus(
   tg: TelegramStatusHandle,
-  { canStop = true } = {},
+  { canStop = true, note }: { canStop?: boolean; note?: string } = {},
 ): Promise<number | null> {
   // Кнопку показываем только в личке, где Bridge примет её callback.
   const withStop = canStop && isPrivateTelegramChatHandle(tg);
@@ -99,7 +110,7 @@ export async function sendWorkingStatus(
   if (richStatusSupported) {
     const res = await tg.request("sendRichMessage", {
       ...base,
-      rich_message: { markdown: workingMarkdown({ withStop }) },
+      rich_message: { markdown: workingMarkdown({ withStop, note }) },
     });
     if (res.ok) return messageIdFromResponse(res);
     // 400 на custom_emoji: кнопка остаётся (она в тексте), а анимация — нет.
@@ -107,7 +118,7 @@ export async function sendWorkingStatus(
       workLoaderSupported = false;
       const withoutEmoji = await tg.request("sendRichMessage", {
         ...base,
-        rich_message: { markdown: workingMarkdown({ withStop }) },
+        rich_message: { markdown: workingMarkdown({ withStop, note }) },
       });
       if (withoutEmoji.ok) return messageIdFromResponse(withoutEmoji);
     }
@@ -121,7 +132,10 @@ export async function sendWorkingStatus(
   // но «Работаю…» в чате есть.
   const fallback = await tg.request("sendMessage", {
     ...base,
-    text: WORK_LOADER.fallback + FALLBACK_STATUS_SUFFIX,
+    text:
+      note === undefined
+        ? WORK_LOADER.fallback + FALLBACK_STATUS_SUFFIX
+        : `${WORK_LOADER.fallback} ${note}`,
   });
   return fallback.ok ? messageIdFromResponse(fallback) : null;
 }

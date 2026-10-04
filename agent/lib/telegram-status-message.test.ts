@@ -75,6 +75,30 @@ await test("статус уходит rich-сообщением с кнопко�
   assert.equal(calls[0].body.reply_markup, undefined);
 });
 
+await test("подпись свёртки идёт в ту же строку статуса, без кнопки, и сменяется обычным статусом на старте хода", async () => {
+  const { calls, tg } = handle();
+  const note = status.compactingNote();
+  assert.equal(note, "Compacting the conversation, I'll answer in a moment.");
+
+  assert.equal(
+    await status.sendWorkingStatus(tg, { canStop: false, note }),
+    500,
+  );
+  assert.equal(calls[0].method, "sendRichMessage");
+  assert.equal(calls[0].body.disable_notification, true);
+  assert.equal(
+    markdownOf(calls[0]),
+    `<tg-emoji emoji-id="5818797194127346654">💬</tg-emoji> ${note}`,
+  );
+
+  await status.enableWorkingStatusStop({ ...tg, chatType: "private" }, 500);
+  assert.equal(calls[1].method, "editMessageText");
+  assert.equal(
+    markdownOf(calls[1]),
+    `<tg-emoji emoji-id="5818797194127346654">💬</tg-emoji> ${STOP_BUTTON}`,
+  );
+});
+
 await test("статус и добавление кнопки не зависят от стиля меню", async () => {
   const results: { direct: Call[]; early: Call[] }[] = [];
   const settingsPath = join(dataDir, "settings.json");

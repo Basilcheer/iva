@@ -4,10 +4,15 @@ import {
   appendUsage,
   parentFields,
   readUsageTokens,
+  stepInputTokens,
   subagentTurnId,
   usageRecord,
   type ParentLike,
 } from "../lib/usage.js";
+import {
+  completeIdleCompaction,
+  recordStepInput,
+} from "../lib/idle-compaction.js";
 
 // Учёт фактического расхода токенов. ОДИН хук ловит весь расход одного eve-агента без
 // двойного счёта: основной Telegram Channel и фоновые джобы через eve/client —
@@ -86,7 +91,13 @@ export default defineHook({
         source: ctx.channel.kind ?? "unknown",
         parent: ctx.session.parent,
       });
+      // Вход шага для свёртки между ходами: счёт ведётся только у сессии, открытой
+      // Telegram-каналом; ребёнок встроенного agent идёт под своей сессией.
+      recordStepInput(ctx.session.id, stepInputTokens(event.data.usage));
     },
+    // eve довёл свёртку до конца (канал Telegram этого события не получает).
+    "compaction.completed": (_event, ctx) =>
+      completeIdleCompaction(ctx.session.id),
     // Шаги инлайн-субагента (planner) — иначе его токены потерялись бы.
     //
     // turnId субагента брать НЕЛЬЗЯ: eve нумерует ходы как turn_<sequence> внутри каждой
