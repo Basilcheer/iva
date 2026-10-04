@@ -30,6 +30,9 @@ Walk everything the owner has connected, with your own tools, read only:
 
 ## Write
 
+- Unfixed failures from the prompt are the first points of the overview, before
+  anything else: what broke and the cause in one line each, and a «Починить»
+  button per failure (see the watch skill).
 - The first message is the overview: greeting in one line, the day in 5–7 points,
   one sentence with the focus of the day. Too many tasks — the important ones and
   how many more there are.

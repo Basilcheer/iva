@@ -460,7 +460,7 @@ function readAlertState(dataDir: string): AlertState {
 // той установке, у которой authored tree сломан: там алерт `authored-tree` уходит каждую
 // ночь, и импорт из agent/ упал бы вместе с ним — недельный дроссель умер бы там, где он
 // нужнее всего. Механизм тот же (tmp + rename), три строки, зависимостей ноль.
-function writeAlertState(dataDir: string, state: AlertState): void {
+function writeAlertState(dataDir: string, state: AlertState): boolean {
   const path = alertStatePath(dataDir);
   // Уникален на вызов, а не на миллисекунду. Живого бага здесь нет: записи синхронные, и
   // одному процессу поделить имя не с кем. Это дешёвая страховка на случай второго писателя
@@ -474,6 +474,7 @@ function writeAlertState(dataDir: string, state: AlertState): void {
       mode: 0o600,
     });
     renameSync(temp, path);
+    return true;
   } catch (error) {
     // Не записалось — алерт повторится завтра, а это безопасная сторона.
     console.error("[notice-policy] could not record the alert state:", error);
@@ -482,7 +483,23 @@ function writeAlertState(dataDir: string, state: AlertState): void {
     } catch {
       /* tmp уже забрал rename или его не удалось создать вовсе */
     }
+    return false;
   }
+}
+
+/**
+ * Отметка дросселя: алерт с этим существом сказан сейчас. Одна запись на alertOnce и на заявку
+ * Watch (сбой ушёл в ход, scripts/proactive/tick.ts); false — не записалась.
+ */
+export function recordAlert(
+  dataDir: string,
+  key: string,
+  essence: string,
+  now: number = Date.now(),
+): boolean {
+  const state = readAlertState(dataDir);
+  state[key] = { essence, lastSentAt: now };
+  return writeAlertState(dataDir, state);
 }
 
 /**
@@ -518,9 +535,7 @@ export async function alertOnce(
   if (!alertDue(dataDir, key, essence, Date.now(), repeatMs))
     return "throttled";
   if (!(await send())) return "failed";
-  const state = readAlertState(dataDir);
-  state[key] = { essence, lastSentAt: Date.now() };
-  writeAlertState(dataDir, state);
+  recordAlert(dataDir, key, essence);
   return "sent";
 }
 

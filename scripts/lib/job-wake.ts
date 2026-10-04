@@ -26,8 +26,17 @@ export interface JobWakeDeps {
   readonly send: (text: string) => Promise<boolean>;
   /** Test seam for the durable wake record; production uses recordWake. */
   readonly recordWake?: typeof recordWake;
+  /** Тихий ли час владельца: провал тогда ждёт утреннего Brief, ход не идёт. */
+  readonly quiet?: (now: number) => boolean;
   readonly now?: () => number;
   readonly log?: (...args: unknown[]) => void;
+}
+
+/** `data` кнопки «Починить» — не длиннее 64 байт, лимита Telegram на callback_data. */
+export function fixButtonData(name: string, tr: Translate): string {
+  const chars = [...tr(`Fix: ${name}`, `Починить: ${name}`)];
+  while (Buffer.byteLength(chars.join("")) > 64) chars.pop();
+  return chars.join("");
 }
 
 /** Текст хода: что случилось, что делать на ok и что на провале, плюс хвост журнала. */
@@ -40,8 +49,12 @@ export function jobWakePrompt(fact: JobFact, tr: Translate): string {
         "Всё в порядке: ничего не делай и ответь пустым, без размышлений.",
       )
     : tr(
-        "Try to fix it yourself (restart with `iva ...`, fix the file), then tell the owner what broke and what you did.",
-        "Попробуй починить сам (перезапустить командой `iva ...`, поправить файл), потом скажи владельцу, что сломалось и что ты сделала.",
+        "Do not fix anything yet. Find the cause (the log tail below, more with your tools if needed), tell the owner briefly what broke and why, and end with one button (see rich-replies): " +
+          `<tg-button-row><tg-button type="callback_data" data="${fixButtonData(fact.name, tr)}">Fix</tg-button></tg-button-row>. ` +
+          "Fix it only after the owner taps it.",
+        "Пока ничего не чини. Разбери причину (хвост журнала ниже, при нужде — своими инструментами), коротко скажи владельцу, что сломалось и почему, и закончи одной кнопкой (см. rich-replies): " +
+          `<tg-button-row><tg-button type="callback_data" data="${fixButtonData(fact.name, tr)}">Починить</tg-button></tg-button-row>. ` +
+          "Чини только после тапа владельца.",
       );
   const head = `${tr("Scheduled job", "Расписание")} ${fact.name} ${tr("finished", "завершилось")}: ${outcome}, ${reason} (exit=${fact.exitCode ?? "n/a"}).`;
   const tail = fact.tail
@@ -139,6 +152,18 @@ async function wakeOnFailure(
   run: WakeRun,
   fact: JobFact,
 ): Promise<JobWake["status"]> {
+  // Тихие часы: ночью ничего не шлём; провал открыт и встанет первым в утреннем Brief.
+  if (run.deps.quiet?.(run.now()) === true) {
+    const recorded = await recordOutcome(run.deps, run.name, run.startedAt, {
+      at: run.now(),
+      status: "deferred",
+      error: null,
+    });
+    run.log(
+      `wake: ${run.name} failed in the quiet hours, deferred to the morning brief`,
+    );
+    return recorded ? "deferred" : "failed";
+  }
   const answer = await agentAnswer(fact, run.deps);
   if ("failure" in answer) {
     await recordOutcome(run.deps, run.name, run.startedAt, {

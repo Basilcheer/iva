@@ -14,7 +14,14 @@ import {
   recordFact,
   type JobFact,
 } from "#lib/job-facts.ts";
-import { jobWakePrompt, runJobWake, type Translate } from "./job-wake.ts";
+import fc from "fast-check";
+import { agentTurnSeen } from "./job-watchdog.ts";
+import {
+  fixButtonData,
+  jobWakePrompt,
+  runJobWake,
+  type Translate,
+} from "./job-wake.ts";
 
 const NOW = Date.UTC(2026, 8, 13, 12, 0, 0);
 const tr: Translate = (_en, ru) => ru;
@@ -38,12 +45,18 @@ function fact(overrides: Partial<JobFact> = {}): JobFact {
   };
 }
 
-test("текст хода: провал посылает чинить, ok — молчать и ответить пустым", () => {
+test("текст хода: провал — причина владельцу и кнопка «Починить», без тапа не чинить; ok — молчать", () => {
   const failed = jobWakePrompt(fact(), tr);
   assert.match(failed, /memory-daily/u);
   assert.match(failed, /провал/u);
   assert.match(failed, /exited 1/u);
-  assert.match(failed, /починить сам/u);
+  assert.match(failed, /Пока ничего не чини/u);
+  assert.match(failed, /Чини только после тапа владельца/u);
+  assert.match(
+    failed,
+    /<tg-button type="callback_data" data="Починить: memory-daily">Починить<\/tg-button>/u,
+  );
+  assert.doesNotMatch(failed, /починить сам/u);
   assert.match(failed, /card broken/u);
 
   const ok = jobWakePrompt(fact({ ok: true, error: null, exitCode: 0 }), tr);
@@ -306,4 +319,84 @@ test("успешное расписание сообщает failed, когда 
   });
   assert.equal(status, "failed");
   assert.equal(calls, 0);
+});
+
+test("провал в тихие часы: хода нет, ничего не шлём, исход «отложен до утра» (deferred), сторож видит живого агента", async () => {
+  const factsFile = file();
+  await recordFact(factsFile, fact(), NOW);
+  const sent: string[] = [];
+  const turns: string[] = [];
+  const logs: string[] = [];
+  const status = await runJobWake("memory-daily", NOW - 1000, {
+    factsFile,
+    tr,
+    runTurn: (prompt) => {
+      turns.push(prompt);
+      return Promise.resolve({ status: "completed", message: "сломалось" });
+    },
+    send: (text) => {
+      sent.push(text);
+      return Promise.resolve(true);
+    },
+    quiet: (now) => now === NOW + 5,
+    now: () => NOW + 5,
+    log: (...args) => logs.push(args.join(" ")),
+  });
+  assert.equal(status, "deferred");
+  assert.deepEqual(turns, []);
+  assert.deepEqual(sent, []);
+  const facts = await readFacts(factsFile);
+  assert.deepEqual(facts[0]?.wake, {
+    at: NOW + 5,
+    status: "deferred",
+    error: null,
+  });
+  assert.match(logs.join("\n"), /deferred to the morning brief/u);
+  // Провал остаётся открытым (его закрывает успех или ack), а сторож молчит: агент жив.
+  assert.equal(facts[0]?.ok, false);
+  assert.equal(agentTurnSeen(facts, NOW), true);
+});
+
+test("вне тихих часов провал будит ход, как раньше", async () => {
+  const factsFile = file();
+  await recordFact(factsFile, fact(), NOW);
+  const sent: string[] = [];
+  const asked: number[] = [];
+  const status = await runJobWake("memory-daily", NOW - 1000, {
+    factsFile,
+    tr,
+    runTurn: () =>
+      Promise.resolve({ status: "completed", message: "сломалось" }),
+    send: (text) => {
+      sent.push(text);
+      return Promise.resolve(true);
+    },
+    quiet: (now) => {
+      asked.push(now);
+      return false;
+    },
+    now: () => NOW + 5,
+    log: () => {},
+  });
+  assert.equal(status, "answered");
+  assert.deepEqual(sent, ["сломалось"]);
+  assert.deepEqual(asked, [NOW + 5]);
+});
+
+const SEED = Number(process.env.FC_SEED ?? Date.now() % 2 ** 31);
+
+test(`PBT: data кнопки «Починить» — префикс и имя, не длиннее 64 байт (seed ${SEED})`, () => {
+  fc.assert(
+    fc.property(fc.string({ unit: "grapheme", maxLength: 80 }), (name) => {
+      for (const t of [tr, ((en: string) => en) as Translate]) {
+        const full = t(`Fix: ${name}`, `Починить: ${name}`);
+        const data = fixButtonData(name, t);
+        assert.ok(Buffer.byteLength(data) <= 64, data);
+        assert.ok(data.startsWith(t("Fix: ", "Починить: ")), data);
+        assert.ok(full.startsWith(data), data);
+        if (Buffer.byteLength(full) <= 64) assert.equal(data, full);
+      }
+    }),
+    { seed: SEED },
+  );
 });

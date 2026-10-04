@@ -288,7 +288,7 @@ test("after watchCapPerDay wakes an ordinary item waits; an urgent sender and a 
     key: "fail:x",
     unread: 1,
     from: {},
-    failure: true,
+    failure: { essence: "1", at: NOON },
   };
   h.tg = { items: [ordinary, failure], error: null };
   assert.equal(await runProactiveTick(NOON + 2 * HOUR, h.deps), 0);
@@ -318,7 +318,7 @@ test("after modelWakesPerDay turns only a failure wakes the model", async () => 
     key: "fail:x",
     unread: 1,
     from: {},
-    failure: true,
+    failure: { essence: "1", at: NOON },
   };
   h.tg = { items: [chat(1, 1), urgent, failure], error: null };
   assert.equal(await runProactiveTick(NOON + HOUR, h.deps), 0);

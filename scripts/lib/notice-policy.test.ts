@@ -26,6 +26,7 @@ import {
   noticeLang,
   ownerKnowsTheSwitch,
   noticeTranslator,
+  recordAlert,
   rollupRanBefore,
   settleReportsOffNotice,
   type ReportsOffNotice,
@@ -503,6 +504,19 @@ function alertState(dir: string): Record<string, unknown> {
     readFileSync(join(dir, "alert-state.json"), "utf8"),
   ) as Record<string, unknown>;
 }
+
+test("recordAlert: the one throttle writer says whether the mark was written (the Watch claim needs it)", (t) => {
+  const dir = dataDir(t);
+  const now = Date.UTC(2026, 9, 5, 12);
+  assert.equal(recordAlert(dir, "failure:backup.service", "1", now), true);
+  assert.equal(alertDue(dir, "failure:backup.service", "1", now + 1), false);
+  assert.equal(alertDue(dir, "failure:backup.service", "2", now + 1), true);
+  // Каталог данных — файл: записать некуда, отметки нет, отказ виден вызывающему.
+  const file = join(dir, "not-a-dir");
+  writeFileSync(file, "");
+  t.mock.method(console, "error", () => {});
+  assert.equal(recordAlert(file, "failure:backup.service", "1", now), false);
+});
 
 test("an alert speaks once, then keeps quiet for a week", async (t) => {
   const dir = dataDir(t);

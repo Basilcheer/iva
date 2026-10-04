@@ -1,11 +1,14 @@
 // Проверка перед ходом Watch (ADR-0020): источники без модели. Каждый источник отдаёт
 // `{ items, error }`: не подключён — пусто без ошибки; подключён, но проверка не удалась —
-// `error`, и тик заводит пункт `check:<источник>`. Ничего не пишет и никому не шлёт.
+// `error`, и тик заводит пункт `check:<источник>`. Никому не шлёт; пишет только сбои — снимает
+// дроссель Alert с юнита, который больше не упал (alertResolved).
 //
 // Telegram — инструмент `list_chats` прокси юзербота (telegram-mcp f1a2d8e,
 // telegram_mcp/tools/chats.py:449-578): `{"results":[…]}`, пусто — строка `No chats found…`.
 // Почта — `gws`: список непрочитанных входящих без категорий, затем заголовки каждого письма;
 // рассылка (`List-Unsubscribe`) пунктом не становится.
+// Сбои (T3) — `systemctl --user`: таймерные сервисы пользователя и сервисы плагинов; идут и при
+// выключенном тумблере.
 import { execFile } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -17,28 +20,40 @@ import {
   TELEGRAM_USERS_LIMIT,
   type Sender,
 } from "#lib/proactive-config.ts";
+import { openFailures } from "#lib/open-failures.ts";
 import { childEnv, gwsBin } from "../lib/menu/gws-auth.ts";
+import { alertDue, alertResolved } from "../lib/notice-policy.ts";
 
-/** Пункт Watch: ключ в `seen`, счётчик, кто прислал и (для `check:`) что сломалось. */
+/** Пункт Watch: ключ в `seen`, счётчик, кто прислал; у `check:` и сбоя — что сломалось (строка промпта). */
 export type WatchItem = {
   readonly key: string;
   readonly unread: number;
   readonly from: Sender;
   readonly note?: string;
-  /** Сбой регулярной задачи (T3): потолки и тумблер его не держат. */
-  readonly failure?: boolean;
+  /**
+   * Сбой регулярной задачи (T3): потолки и тумблер его не держат. `essence` — существо для
+   * дросселя Alert, `at` — время выхода (сдвигает `failuresSeenUpToMs` в заявке).
+   */
+  readonly failure?: { readonly essence: string; readonly at: number };
 };
 
 export type SourceResult = {
   readonly items: readonly WatchItem[];
   readonly error: string | null;
+  /** Ошибка только в журнал, без пункта `check:<источник>`; ключи всё равно не трогаются. */
+  readonly silent?: boolean;
 };
 
 export type Source = {
   readonly name: string;
   /** Префикс ключей источника в `seen`. */
   readonly prefix: string;
-  readonly check: () => Promise<SourceResult>;
+  /** Идёт и при выключенном тумблере «Сама пишет» (сбои). */
+  readonly always?: boolean;
+  readonly check: (since?: {
+    readonly now: number;
+    readonly failuresSeenUpToMs: number;
+  }) => Promise<SourceResult>;
 };
 
 const TELEGRAM_TIMEOUT_MS = 10_000;
@@ -209,7 +224,9 @@ export type GwsRun = (
   timeoutMs: number,
 ) => Promise<{ code: number | "missing" | "timeout"; stdout: string }>;
 
-function gwsCode(error: (Error & { code?: unknown; killed?: boolean }) | null) {
+function exitCode(
+  error: (Error & { code?: unknown; killed?: boolean }) | null,
+) {
   if (error === null) return 0;
   if (error.code === "ENOENT") return "missing";
   if (error.killed === true) return "timeout";
@@ -220,7 +237,7 @@ const runGws: GwsRun = (args, timeoutMs) =>
   new Promise((resolve) => {
     const options = { timeout: timeoutMs, env: childEnv(), maxBuffer: 4 << 20 };
     execFile(gwsBin(), [...args], options, (error, stdout) =>
-      resolve({ code: gwsCode(error), stdout: String(stdout) }),
+      resolve({ code: exitCode(error), stdout: String(stdout) }),
     );
   });
 
@@ -306,4 +323,170 @@ export function mailSource(run: GwsRun = runGws): Source {
     }
   };
   return { name: "mail", prefix: "mail:", check };
+}
+
+// ── Сбои ─────────────────────────────────────────────────────────────────────────────────
+
+/** `systemctl --user …`: код выхода, нет бинаря (macOS) или срок вышел; и stdout. */
+export type Systemctl = (args: readonly string[]) => ReturnType<GwsRun>;
+
+const runSystemctl: Systemctl = (args) =>
+  new Promise((resolve) => {
+    const options = { timeout: 10_000, maxBuffer: 4 << 20 };
+    execFile("systemctl", ["--user", ...args], options, (error, stdout) =>
+      resolve({ code: exitCode(error), stdout: String(stdout) }),
+    );
+  });
+
+const PLUGIN_UNITS =
+  "list-units --all --plain --no-legend iva-plugin-* iva-mcp-* iva-telegram-userbot.service";
+const SHOW =
+  "show -p Id -p Result -p ExecMainStatus -p ExecMainExitTimestamp --timestamp=unix --";
+
+/** systemctl есть, но не ответил: в журнал, без пункта `check:timers` (таблица отказов T3). */
+class SystemctlFailed extends Error {}
+
+/** Строки вывода как токены; systemctl нет — пусто (источник не подключён). */
+async function systemctl(run: Systemctl, ...args: string[]) {
+  const { code, stdout } = await run(args);
+  if (code === "timeout" || (code !== 0 && code !== "missing"))
+    throw new SystemctlFailed(
+      `systemctl ${args[0]} ${code === "timeout" ? "timed out after 10 s" : `exited ${code}`}`,
+    );
+  return code === "missing" ? null : stdout;
+}
+
+const tokens = (out: string | null) =>
+  (out ?? "")
+    .split("\n")
+    .map((line) => line.trim().split(/\s+/u))
+    .filter((row) => row[0] !== "");
+
+/**
+ * Время выхода из `systemctl show`: `@<секунды>` (`--timestamp=unix`, systemd ≥ 251) или
+ * обычный формат «Sat 2026-10-04 03:30:47 UTC» / «… +05» (systemd ≤ 250 флаг не применяет к
+ * свойствам). Пусто — не выходил. Иное — ошибка: источник `error`, пункт `check:timers`.
+ */
+export function exitTime(value: string): number | null {
+  if (value === "") return null;
+  const unix = /^@(\d{1,12})$/u.exec(value);
+  if (unix) return Number(unix[1]) * 1000;
+  const m =
+    /^(?:[A-Z][a-z]{2} )?(\S+) (\S+) (?:(UTC|GMT)|([+-]\d\d)(?::?(\d\d))?)$/u.exec(
+      value,
+    );
+  const zone = m?.[3] ? "Z" : `${m?.[4]}:${m?.[5] ?? "00"}`;
+  const ms = m ? Date.parse(`${m[1]}T${m[2]}${zone}`) : Number.NaN;
+  if (!Number.isFinite(ms))
+    throw new Error(`exit time not understood: ${value.slice(0, 80)}`);
+  return ms;
+}
+
+/**
+ * Таймерные сервисы пользователя (кроме юнитов Ивы `iva*`) и сервисы плагинов и юзербота.
+ * Таймер упал — последний `ExecMainStatus` не 0; сервис — `failed` в `list-units`.
+ */
+async function unitStates(run: Systemctl) {
+  const listed = await systemctl(run, "list-timers", "--all", "--no-legend");
+  if (listed === null) return [];
+  // Колонки `next left last passed unit activates`: сервисы — после имени таймера.
+  const timers = new Set(
+    tokens(listed).flatMap((row) =>
+      row
+        .slice(row.findIndex((t) => t.endsWith(".timer")) + 1 || row.length)
+        .map((t) => t.replace(/,$/u, ""))
+        .filter((t) => t.endsWith(".service") && !t.startsWith("iva")),
+    ),
+  );
+  const plugins = tokens(await systemctl(run, ...PLUGIN_UNITS.split(" ")));
+  const names = [...new Set([...timers, ...plugins.map((row) => row[0])])];
+  if (names.length === 0) return [];
+  const shown = await systemctl(run, ...SHOW.split(" "), ...names);
+  // Блоки `show` разделены пустой строкой, свойство — `Имя=значение`.
+  const blocks = new Map(
+    (shown ?? "").split(/\n\s*\n/u).map((block) => {
+      const p = Object.fromEntries(
+        block.split("\n").map((line) => line.trim().split(/=(.*)/su, 2)),
+      ) as Record<string, string | undefined>;
+      return [p.Id, p];
+    }),
+  );
+  return names.map((unit) => {
+    const p = blocks.get(unit) ?? {};
+    const timer = timers.has(unit);
+    const [status = "", result = ""] = [p.ExecMainStatus, p.Result];
+    const failed = (row: string[]) => row[0] === unit && row[2] === "failed";
+    return {
+      unit,
+      timer,
+      failing: timer ? !["", "0"].includes(status) : plugins.some(failed),
+      essence: timer ? status : result,
+      ...exitNote(unit, status, result, p.ExecMainExitTimestamp),
+    };
+  });
+}
+
+/** Время выхода и строка пункта: что упало, код, Result, когда. */
+function exitNote(unit: string, status: string, result: string, exited = "") {
+  const at = exitTime(exited);
+  const when = at === null ? "" : `, exited ${new Date(at).toISOString()}`;
+  const what = `exit status ${status || "n/a"}, result ${result || "n/a"}`;
+  return { at: at ?? 0, note: `a regular job failed: ${unit}: ${what}${when}` };
+}
+
+/**
+ * Новые сбои: таймер — выход позже `failuresSeenUpToMs`; сервис плагина — упал; оба — если
+ * дроссель Alert (`failure:<юнит>`, существо — статус или Result) пропускает. Не упавший юнит
+ * снимает свою запись дросселя: рецидив заговорит сразу.
+ */
+export function failuresSource(
+  dataDir: string,
+  run: Systemctl = runSystemctl,
+): Source {
+  const check: Source["check"] = async (since) => {
+    const { now = Date.now(), failuresSeenUpToMs = 0 } = since ?? {};
+    let units;
+    try {
+      units = await unitStates(run);
+    } catch (error) {
+      const silent = error instanceof SystemctlFailed;
+      return { items: [], error: message(error), silent };
+    }
+    const items: WatchItem[] = [];
+    for (const { unit, timer, failing, essence, at, note } of units) {
+      const key = `failure:${unit}`;
+      if (!failing) alertResolved(dataDir, key);
+      else if (
+        (!timer || at > failuresSeenUpToMs) &&
+        alertDue(dataDir, key, essence, now)
+      )
+        items.push({
+          key,
+          unread: 1,
+          from: {},
+          note,
+          failure: { essence, at },
+        });
+    }
+    return { items, error: null };
+  };
+  return { name: "timers", prefix: "failure:", always: true, check };
+}
+
+/** Непочиненные сбои для Brief: открытые провалы Ивы и таймеры, чей последний выход не 0. */
+export async function unfixedFailures(
+  dataDir: string,
+  now: number,
+  run: Systemctl = runSystemctl,
+): Promise<string[]> {
+  const lines: string[] = [];
+  try {
+    for (const f of await openFailures({ dir: dataDir, now }))
+      lines.push(`${f.source} ${f.name}: ${f.reason}`);
+    for (const u of await unitStates(run))
+      if (u.timer && u.failing) lines.push(u.note);
+  } catch (error) {
+    lines.push(`failures check failed: ${message(error)}`);
+  }
+  return lines;
 }

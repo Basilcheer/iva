@@ -26,7 +26,10 @@
 \* Вне модели (покрыто PBT спеки, раздел 6): staleMinutes, тихие часы и потолок
 \* modelWakesPerDay — только задерживают пункт; модель берёт ЛЮБОЕ подмножество допущенных
 \* кандидатов, этим они и покрыты. Сбои (T3), пункты check:<источник> и Signal ведут себя как
-\* обычный ключ или не идут через этот прогон. Бронь раннера inProgressSince (второй слой)
+\* обычный ключ или не идут через этот прогон: сбой — ключ failure:<юнит>, источник отдаёт его,
+\* пока выход новее failuresSeenUpToMs и дроссель Alert пропускает; заявка пишет дроссель и
+\* сдвигает failuresSeenUpToMs, после неё ключ уходит из источника (как прочитанный) и
+\* возвращается только «ростом» — сменой существа, через неделю или после починки. Бронь раннера inProgressSince (второй слой)
 \* не моделируется: прогоны стартуют когда угодно, это шире жизни.
 \*
 \* Действие модели -> код (Watch — T1, Brief — T2)
@@ -49,11 +52,16 @@
 \*                    «Утро: новых дел нет»); провал хода — Brief нет, дальше Watch, выход 1
 \*   Precheck         runProactiveTick: минута >= 30 (кроме первого прогона) — выход без
 \*                    записи; tick.ts:watch: observe ->
-\*                    Source.check (scripts/proactive/precheck.ts: telegramSource, mailSource;
-\*                    ошибка — ключи источника не трогаются, пункт check:<источник>) ->
+\*                    Source.check (scripts/proactive/precheck.ts: telegramSource, mailSource,
+\*                    failuresSource — systemctl, alertDue, alertResolved; ошибка — ключи
+\*                    источника не трогаются, пункт check:<источник>, у отказа systemctl
+\*                    без пункта) ->
 \*                    tick.ts:observedState (state.ts:updateSeen) -> tick.ts:admit (фильтры) ->
 \*                    пусто: запись seen;
-\*                    иначе tick.ts:claim (reported: true, modelWakes + 1) и запись до хода.
+\*                    иначе tick.ts:claim (reported: true, modelWakes + 1; сбоям — запись
+\*                    дросселя TickDeps.recordAlert = notice-policy.ts:recordAlert и сдвиг
+\*                    failuresSeenUpToMs; дроссель не записан — хода нет, выход 1) и запись
+\*                    состояния до хода.
 \*                    Код берёт кандидатов только из увиденного в этот прогон — подмножество
 \*                    того, что берёт модель
 \*   Turn             tick.ts:wake: TickDeps.runTurn = runReminderTurn (scripts/lib/reminder-turn.ts)

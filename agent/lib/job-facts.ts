@@ -33,7 +33,8 @@ export class JobFactsError extends Error {}
 
 export interface JobWake {
   readonly at: number;
-  readonly status: "answered" | "empty" | "failed";
+  /** deferred — провал в тихие часы: хода нет, провал стоит первым в утреннем Brief. */
+  readonly status: "answered" | "empty" | "failed" | "deferred";
   readonly error: string | null;
 }
 
@@ -94,7 +95,8 @@ function isWake(value: unknown): value is JobWake {
     isSafeInt(wake.at) &&
     (wake.status === "answered" ||
       wake.status === "empty" ||
-      wake.status === "failed") &&
+      wake.status === "failed" ||
+      wake.status === "deferred") &&
     (wake.error === null || typeof wake.error === "string")
   );
 }
