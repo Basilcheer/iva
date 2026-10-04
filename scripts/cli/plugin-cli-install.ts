@@ -69,6 +69,8 @@ type AddOptions = {
    * установщика: ставятся ровно эти байты, а не папка, которую мог тронуть второй писатель.
    */
   readonly expectDigest12?: string;
+  /** Что записать в `source` вместо пути копии предложения: папка черновика. */
+  readonly source?: string;
 };
 
 type Staged = {
@@ -444,7 +446,11 @@ export function createPluginInstallCommands(
     const { entry, report, undo } = await locked(data, async () => {
       // Состояние перечитывается: пока шёл вопрос, его могла сменить другая команда.
       const state = await readPluginsState(data);
-      let next = upsertPlugin(state, { ...installed.entry, trusted });
+      let next = upsertPlugin(state, {
+        ...installed.entry,
+        ...(options?.source ? { source: options.source } : {}),
+        trusted,
+      });
       if (trusted)
         next = grantPorts(data, next, installed.entry.name, installed.report);
       await writePluginsState(data, {

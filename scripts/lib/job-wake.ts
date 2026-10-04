@@ -49,10 +49,10 @@ export function jobWakePrompt(fact: JobFact, tr: Translate): string {
         "Всё в порядке: ничего не делай и ответь пустым, без размышлений.",
       )
     : tr(
-        "Do not fix anything yet. Find the cause (the log tail below, more with your tools if needed), tell the owner briefly what broke and why, and end with one button (see rich-replies): " +
+        "Do not fix or change anything yet — read only: no restarts, no reset-failed, no edits, no trial runs. Find the cause (the log tail below, more with your tools if needed), tell the owner briefly what broke and why, and end with one button (see rich-replies): " +
           `<tg-button-row><tg-button type="callback_data" data="${fixButtonData(fact.name, tr)}">Fix</tg-button></tg-button-row>. ` +
           "Fix it only after the owner taps it.",
-        "Пока ничего не чини. Разбери причину (хвост журнала ниже, при нужде — своими инструментами), коротко скажи владельцу, что сломалось и почему, и закончи одной кнопкой (см. rich-replies): " +
+        "Пока ничего не чини и не меняй — только чтение: без перезапусков, reset-failed, правок и пробных запусков. Разбери причину (хвост журнала ниже, при нужде — своими инструментами), коротко скажи владельцу, что сломалось и почему, и закончи одной кнопкой (см. rich-replies): " +
           `<tg-button-row><tg-button type="callback_data" data="${fixButtonData(fact.name, tr)}">Починить</tg-button></tg-button-row>. ` +
           "Чини только после тапа владельца.",
       );

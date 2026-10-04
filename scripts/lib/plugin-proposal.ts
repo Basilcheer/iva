@@ -42,6 +42,11 @@ export function takenDir(dir: string, digest12: string): string {
   return join(dir, `${TAKEN_PREFIX}${digest12}`);
 }
 
+/** Путь папки черновика, из которой собрано предложение: он станет `source` плагина. */
+export function fromFile(dir: string, digest12: string): string {
+  return join(dir, `.from-${digest12}`);
+}
+
 export function stagingPrefix(dir: string): string {
   return join(dir, STAGING_PREFIX);
 }

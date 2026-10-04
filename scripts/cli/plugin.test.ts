@@ -2653,7 +2653,12 @@ function modelShell(root: string, sends: ProposalSends, build?: Build) {
 
 function proposalsOf(data: string): string[] {
   const dir = join(data, "plugin-proposals");
-  return existsSync(dir) ? readdirSync(dir).sort() : [];
+  // `.from-<digest12>` — путь черновика рядом с копией, не предложение.
+  return existsSync(dir)
+    ? readdirSync(dir)
+        .filter((entry) => !entry.startsWith(".from-"))
+        .sort()
+    : [];
 }
 
 function digest12Of(text: string): string {
@@ -2891,14 +2896,32 @@ async function takenProposal(root: string, folder: string): Promise<string> {
   await modelShell(root, sends).cmdPlugin(["propose", folder]);
   const digest12 = digest12Of(screens[0].text);
   const dir = join(root, "data", "plugin-proposals");
-  const [name] = readdirSync(dir);
+  const [name] = proposalsOf(join(root, "data"));
   renameSync(join(dir, name), join(dir, `.taken-${digest12}`));
   return digest12;
 }
 
+test("propose of a draft whose service the reader would drop refuses, names the line and sends nothing", async () => {
+  const root = home();
+  const { screens, sends } = recordingSends();
+  const { cmdPlugin, data, events } = modelShell(root, sends);
+  // Случай c1: service.json без рабочего порта — после тапа плагин встал бы без сервиса.
+  const folder = processPlugin("trace", { servicePort: 80 });
+
+  await assert.rejects(
+    cmdPlugin(["propose", folder]),
+    /fix the draft and run iva plugin propose again/u,
+  );
+
+  assert.match(messages(events, "bad"), /skipped: port must be an integer/u);
+  assert.deepEqual(screens, [], "the owner gets no button");
+  assert.deepEqual(readdirSync(join(data, "plugin-proposals")), []);
+});
+
 test("install-proposal installs the taken copy with trust, without a terminal, and tells the owner", async () => {
   const root = home();
-  const digest12 = await takenProposal(root, mcpOnlyPlugin("relay", "viewer"));
+  const draft = mcpOnlyPlugin("relay", "viewer");
+  const digest12 = await takenProposal(root, draft);
   const { texts, sends } = recordingSends();
   const { cmdPlugin, data } = modelShell(root, sends);
 
@@ -2907,8 +2930,17 @@ test("install-proposal installs the taken copy with trust, without a terminal, a
   const [entry] = (await readPluginsState(data)).plugins;
   assert.equal(entry.name, "relay");
   assert.equal(entry.trusted, true, "the tap answered the trust question");
+  assert.equal(
+    entry.source,
+    draft,
+    "the draft folder, not the taken copy that is removed below",
+  );
   assert.deepEqual(texts, [{ chat: "42", text: "Plugin relay installed" }]);
-  assert.deepEqual(proposalsOf(data), [], "the taken copy is removed");
+  assert.deepEqual(
+    readdirSync(join(data, "plugin-proposals")),
+    [],
+    "the taken copy and its source note are removed",
+  );
 });
 
 test("install-proposal of a copy changed after the tap installs nothing", async () => {

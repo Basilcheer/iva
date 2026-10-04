@@ -257,10 +257,11 @@ ${C.b}iva plugin${C.x} — ${translate("install and manage plugins", "устан
     const { proposal } = commandsFor(core, argv);
     if (sub === "propose") return proposal.propose();
     // Только из Bridge, по тапу владельца: `add` копии одним вызовом, с доверием.
-    return proposal.installProposal((folder, digest12) =>
+    return proposal.installProposal((folder, digest12, source) =>
       commandsFor(core, [folder, "--trust"]).install.add({
         fromProposal: true,
         expectDigest12: digest12,
+        source,
       }),
     );
   }

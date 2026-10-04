@@ -12,14 +12,17 @@
 import {
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   renameSync,
   rmSync,
   utimesSync,
+  writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
 import {
   carriesCodeOrMcp,
   commandLines,
+  fromFile,
   installButtonLabel,
   installedText,
   notInstalledText,
@@ -129,6 +132,14 @@ export function createPluginProposalCommands(
         throw new Error(`${raw} is not a usable Agent Plugins folder`);
       }
       const name = report.manifest.name;
+      // Черновик, у которого читатель что-то выбросил, владельцу не уходит: после тапа он
+      // встал бы без этой части. Строки возвращаются модели — она чинит и зовёт propose снова.
+      if (report.diagnostics.length > 0) {
+        for (const line of report.diagnostics) bad(line);
+        throw new Error(
+          `${name}: fix the draft and run iva plugin propose again — the lines above name what would not work`,
+        );
+      }
       if (!carriesCodeOrMcp(staging))
         throw new Error(
           translate(
@@ -146,6 +157,7 @@ export function createPluginProposalCommands(
       const created = claimFolder(staging, target);
       const stamp = now();
       utimesSync(target, stamp, stamp);
+      writeFileSync(fromFile(dir, digest12), folder);
       const commands = commandLines(translate, {
         commands: trust.processCommands(report).concat(remoteServers(report)),
         code: report.code,
@@ -160,7 +172,10 @@ export function createPluginProposalCommands(
       ].join("\n\n");
       const sent = await (await screenSender())(owner.token, owner.chat, text);
       if (!sent.ok) {
-        if (created) rmSync(target, { recursive: true, force: true });
+        if (created) {
+          rmSync(target, { recursive: true, force: true });
+          rmSync(fromFile(dir, digest12), { force: true });
+        }
         throw new Error(`Telegram send failed: ${sent.error}`);
       }
       ok(
@@ -189,13 +204,19 @@ export function createPluginProposalCommands(
    * (`addFolder` получает хеш из кнопки): ставятся только те байты, что с ним совпали.
    */
   async function installProposal(
-    addFolder: (path: string, digest12: string) => Promise<void>,
+    addFolder: (
+      path: string,
+      digest12: string,
+      source: string,
+    ) => Promise<void>,
   ): Promise<void> {
     const digest12 = args[0] ?? "";
     if (!DIGEST12.test(digest12))
       throw new Error("iva plugin install-proposal <digest12>");
     const owner = ownerChat();
-    const taken = takenDir(proposalsDir(dataDirAbs()), digest12);
+    const dir = proposalsDir(dataDirAbs());
+    const taken = takenDir(dir, digest12);
+    const from = fromFile(dir, digest12);
     let name = digest12;
     let failure: string | null = null;
     try {
@@ -204,11 +225,13 @@ export function createPluginProposalCommands(
       name = report.manifest.name;
       if ((await pluginTreeDigest(taken)).slice(0, 12) !== digest12)
         throw new Error(staleReason(translate));
-      await addFolder(taken, digest12);
+      // Источник в plugins.json — папка черновика, а не эта копия: копию сейчас удалим.
+      await addFolder(taken, digest12, readFileSync(from, "utf8"));
     } catch (error) {
       failure = errorText(error);
     }
     rmSync(taken, { recursive: true, force: true });
+    rmSync(from, { force: true });
     const text =
       failure === null
         ? installedText(translate, name)

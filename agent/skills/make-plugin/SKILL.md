@@ -21,6 +21,11 @@ version ("Write your own"); read it before the first plugin of a turn.
 - MCP (`mcp.json`) or code under `sh.iva/` only when a script cannot do the job: a server that
   must stay up, a tool the model calls on its own. Each of them makes the install wait for the
   owner's tap.
+- A script that just runs and prints is not a service: keep it in the skill's `scripts/` and
+  install without a tap. `sh.iva/` is only an Extension (`sh.iva/package.json`, TypeScript) or a
+  service — a process that stays up: `sh.iva/services/<svc>/service.json` with `command` and
+  `port` (1024–65535), listening on `127.0.0.1:$IVA_SERVICE_PORT`. `propose` refuses a draft
+  with a part the reader would drop and names the line.
 - No symlinks, no secrets in files: keys go to `.env` or `data/plugin-data/<name>/`, named in the
   README.
 
