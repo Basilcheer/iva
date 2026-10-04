@@ -29,12 +29,14 @@ import {
   recordAlert,
   rollupRanBefore,
   settleReportsOffNotice,
+  updateAlertState,
   type ReportsOffNotice,
   type Translate,
 } from "./notice-policy.ts";
 import fc from "fast-check";
 import { sendTelegramHtml } from "./telegram-send.ts";
 import { runScheduledJob } from "#lib/schedule-runner.ts";
+import { acquireFileLockSync, releaseFileLock } from "#lib/fs-atomic.ts";
 
 const EN: Translate = (english) => english;
 const RU: Translate = (_english, russian) => russian;
@@ -898,6 +900,61 @@ test("the very first scheduled run is not mistaken for a run that happened befor
 
   // Зато завершённый прогон — уже след: вторая ночь видит установку как гонявшую свёртку.
   assert.equal(rollupRanBefore(data, vault), true);
+});
+
+// ── Дроссель: несколько писателей ─────────────────────────────────────────────────────────
+// alert-state.json пишут тик проактивности, мост, ночь и апдейтер. Чтение-правка-запись без замка
+// теряла чужую отметку: оба читают {}, первый пишет {A}, второй {B} — A пропала, хотя оба
+// ответили «записано».
+
+test("alert state: a writer that read first does not erase what another wrote after its read (barrier after the read)", (t) => {
+  const dir = dataDir(t);
+  let inner: boolean | undefined;
+  const outer = updateAlertState(
+    dir,
+    (state) => {
+      state.a = { essence: "x", lastSentAt: 1 };
+      return true;
+    },
+    () => {
+      // Второй писатель приходит ровно между чтением и записью первого.
+      inner = recordAlert(dir, "b", "y", 2);
+    },
+  );
+  const state = JSON.parse(
+    readFileSync(join(dir, "alert-state.json"), "utf8"),
+  ) as Record<string, unknown>;
+  assert.equal(outer, true);
+  assert.ok("a" in state);
+  assert.ok(
+    !(inner === true && !("b" in state)),
+    "a writer told «recorded» must not be lost",
+  );
+});
+
+test("alert state: recordAlert and alertResolved wait for the lock and refuse while it is held", (t) => {
+  const dir = dataDir(t);
+  recordAlert(dir, "old", "e", 1);
+  const lock = acquireFileLockSync(join(dir, "alert-state.lock"));
+  assert.ok(lock);
+  try {
+    assert.equal(recordAlert(dir, "k", "e", 2), false);
+    alertResolved(dir, "old");
+  } finally {
+    releaseFileLock(lock);
+  }
+  const state = JSON.parse(
+    readFileSync(join(dir, "alert-state.json"), "utf8"),
+  ) as Record<string, unknown>;
+  assert.deepEqual(Object.keys(state), ["old"]);
+  assert.equal(recordAlert(dir, "k", "e", 2), true);
+  alertResolved(dir, "old");
+  assert.deepEqual(
+    Object.keys(
+      JSON.parse(readFileSync(join(dir, "alert-state.json"), "utf8")) as object,
+    ),
+    ["k"],
+  );
 });
 
 // ── Дроссель без authored tree ───────────────────────────────────────────────────────────
