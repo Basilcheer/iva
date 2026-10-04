@@ -1,6 +1,6 @@
 # TLA+ models
 
-The repository keeps two bounded models. Run them from a temporary directory because TLC writes state files beside the model.
+The repository keeps bounded models of the lock, the night writer, restart recovery and proactive notices. Run them from a temporary directory because TLC writes state files beside the model.
 
 ## FileLock
 
@@ -46,3 +46,20 @@ Checked invariants:
 5. `QueueDrains`: with the stated fairness assumptions, the bounded queue reaches zero.
 
 Mutants that must fail: the hash check removed (`HumanEditWins`), restart without the cache (`NoSecondCall`), readiness without a commit (`ReadyOnlyAfterCommit`). After a restart an uncommitted new file is committed first, before any call — the production contract of the night's opening sweep.
+
+## Proactive
+
+`Proactive.tla` models the half-hourly proactive run before its code exists (`scripts/proactive/tick.ts`): a no-wait lock that expires `staleMs` after it is taken, the state file `data/proactive.json` written whole from the run's memory, the Brief claim and turn, the source check, the Watch claim before the turn, delivery and the `wakes` write after it, a crash or a failed write at any step and the runner's deadline. One `Tick` is 8 minutes: a 40-minute `staleMs` gives `Stale = 5`, a run that lives at most `timeoutMs + killGraceMs` (30 min 10 s) gives `MaxRun = 4`. A comment in the model maps every action to its future file and function.
+
+Checked invariants:
+
+1. `NoDoubleTake`: a key reaches at most one turn between two growths of its unread count.
+2. `OneBriefPerSlot`: one Brief per slot and day.
+3. `WakesCapped`: ordinary wakes with a message per day stay within `watchCapPerDay` plus the number of runs lost between delivery and the `wakes` write.
+4. `OneRun`: two runs never overlap.
+
+The run takes its `now` right after the lock (`NowAfterLock = TRUE`). Witnesses must fail, each on its own invariant first: `Proactive-noclaim.cfg` (claim after the turn, 1), `Proactive-nolock.cfg` (no lock: 4, then 1, then 2), `Proactive-nocap.cfg` (no cap filter, 3), `Proactive-shortstale.cfg` (`staleMs` shorter than a run, 4), `Proactive-nowfirst.cfg` (`now` taken before the lock: a run with an older day overwrites `briefDone` written for a newer day, 2).
+
+```sh
+specs/proactive-check.sh
+```
