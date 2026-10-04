@@ -147,6 +147,16 @@ export function createPluginInstallCommands(
     };
   }
 
+  /** Staged-копия `install-proposal` расходится с хешем из кнопки — «предложение устарело». */
+  async function sameAsButton(
+    root: string,
+    expectDigest12: string | null,
+  ): Promise<void> {
+    if (expectDigest12 === null) return;
+    if ((await pluginTreeDigest(root)).slice(0, 12) !== expectDigest12)
+      throw new Error(staleReason(translate));
+  }
+
   /**
    * Читает плагин или отказывает, назвав все причины. `proposalOnly` — `add` без человека
    * у терминала и не из `install-proposal`: тогда плагин с кодом или MCP не ставится.
@@ -226,11 +236,7 @@ export function createPluginInstallCommands(
     const staging = mkdtempSync(join(pluginsDir(data), STAGING_PREFIX));
     try {
       const staged = await stage(source, staging);
-      if (
-        expectDigest12 !== null &&
-        (await pluginTreeDigest(staged.root)).slice(0, 12) !== expectDigest12
-      )
-        throw new Error(staleReason(translate));
+      await sameAsButton(staged.root, expectDigest12);
       const { report, manifest } = await accept(
         staged.root,
         formatPluginSource(source),
