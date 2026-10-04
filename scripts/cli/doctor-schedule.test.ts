@@ -37,7 +37,7 @@ test("последний запуск каждого имени: ok и пров�
     fact({ name: "jobs-watchdog", ok: true, error: null, exitCode: 0 }),
     NOW,
   );
-  const report = await scheduleFactsReport(dir, NOW);
+  const report = await scheduleFactsReport(dir);
   assert.deepEqual(report.lastRuns, [
     "jobs-watchdog: ok, 2026-09-13T10:00:01.000Z",
     "memory-night: провал (exited 1), 2026-09-13T10:00:01.000Z",
@@ -55,7 +55,7 @@ test("закрытый провал не считается открытым, и
     fact({ ok: true, error: null, exitCode: 0 }),
     NOW,
   );
-  const report = await scheduleFactsReport(dir, NOW);
+  const report = await scheduleFactsReport(dir);
   assert.deepEqual(report.openFailures, []);
   assert.equal(report.lastRuns.length, 1);
 });
@@ -73,7 +73,7 @@ test("снятое расписание не выводится и не счит
   ])
     await recordFact(jobFactsFile(dir), fact({ name }), NOW);
   await recordFact(jobFactsFile(dir), fact({ name: "jobs-watchdog" }), NOW);
-  const report = await scheduleFactsReport(dir, NOW);
+  const report = await scheduleFactsReport(dir);
   assert.deepEqual(report.lastRuns, [
     "jobs-watchdog: провал (exited 1), 2026-09-13T10:00:01.000Z",
   ]);
@@ -88,7 +88,7 @@ test("снятое расписание не выводится и не счит
 test("провал, закрытый iva jobs ack, не предупреждает", async () => {
   const dir = mkdtempSync(join(tmpdir(), "t20-doctor-"));
   await recordFact(jobFactsFile(dir), fact({ acked: true }), NOW);
-  const report = await scheduleFactsReport(dir, NOW);
+  const report = await scheduleFactsReport(dir);
   assert.deepEqual(report.lastRuns, [
     "memory-night: закрытый провал (exited 1), 2026-09-13T10:00:01.000Z",
   ]);

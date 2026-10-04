@@ -97,7 +97,6 @@ export function authoredTreeMissing(error: unknown): boolean {
  */
 export async function scheduleFactsReport(
   dataDirectory: string,
-  now: number,
 ): Promise<ScheduleFactsReport> {
   const { jobFactsFile, latestFact, readFactsSync } =
     await import("#lib/job-facts.ts");
@@ -120,7 +119,7 @@ export async function scheduleFactsReport(
           : `${name}: провал (${reason}), ${when}`,
     );
   }
-  return { lastRuns, openFailures: openJobFailures(facts, now), facts };
+  return { lastRuns, openFailures: openJobFailures(facts), facts };
 }
 
 /** Сколько ждём `/health` прокси: он на loopback, и медленный ответ — уже симптом. */
@@ -651,7 +650,7 @@ function checkVersionState(
  */
 async function checkScheduleFacts(ctx: DoctorContext): Promise<void> {
   try {
-    const report = await scheduleFactsReport(ctx.dataDirectory, ctx.now());
+    const report = await scheduleFactsReport(ctx.dataDirectory);
     for (const line of report.lastRuns) {
       if (line.includes(": провал")) {
         ctx.warn(`расписание ${line} — check: iva doctor, iva jobs ack <name>`);

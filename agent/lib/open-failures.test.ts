@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-floating-promises -- Node's test runner owns registrations. */
-// «Незакрытые провалы за сутки» (T20 п.3): закрытие успехом и ack, окно суток,
+// «Незакрытые провалы» (T20 п.3, ADR-0020): закрытие успехом и ack, окно суток у напоминаний,
 // напоминания рядом с расписаниями, пустой блок.
 import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync } from "node:fs";
@@ -60,44 +60,51 @@ function reminder(overrides: Partial<Reminder> = {}): Reminder {
 test("провал расписания открыт, закрывается успехом и ack", () => {
   const failed = fact({ ok: false, error: "exited 1" });
   assert.deepEqual(
-    openJobFailures([failed], NOW).map((entry) => entry.name),
+    openJobFailures([failed]).map((entry) => entry.name),
     ["memory-night"],
   );
   assert.equal(
-    openJobFailures([failed, fact({ ok: true, finishedAt: NOW + 1 })], NOW)
-      .length,
+    openJobFailures([failed, fact({ ok: true, finishedAt: NOW + 1 })]).length,
     0,
     "поздний успех закрывает",
   );
   assert.equal(
-    openJobFailures(
-      [
-        fact({
-          ok: false,
-          error: "exited 1",
-          finishedAt: NOW - 2 * HOUR,
-          acked: true,
-        }),
-      ],
-      NOW,
-    ).length,
+    openJobFailures([
+      fact({
+        ok: false,
+        error: "exited 1",
+        finishedAt: NOW - 2 * HOUR,
+        acked: true,
+      }),
+    ]).length,
     0,
     "ack закрывает",
   );
 });
 
-test("провал старше суток не показывается, пустой список — пусто", () => {
+// ADR-0020: непочиненный сбой называется в утреннем Brief каждый день до починки. Провал задания
+// открыт, пока он последний факт своего имени, не закрыт ack и строка жива в jobs.json (ротация —
+// 7 дней); суточного окна у задания нет. Прежний тест закреплял окно и с ADR расходился.
+test("провал старше суток открыт, пока не починен (успех) и не закрыт ack; пустой список — пусто", () => {
   const old = fact({
     ok: false,
     error: "exited 1",
-    finishedAt: NOW - OPEN_FAILURES_WINDOW_MS - HOUR,
+    finishedAt: NOW - 3 * OPEN_FAILURES_WINDOW_MS,
   });
-  assert.equal(openJobFailures([old], NOW).length, 0);
-  assert.equal(openJobFailures([], NOW).length, 0);
+  assert.deepEqual(
+    openJobFailures([old]).map((entry) => entry.name),
+    ["memory-night"],
+  );
+  assert.equal(
+    openJobFailures([old, fact({ finishedAt: NOW - HOUR })]).length,
+    0,
+  );
+  assert.equal(openJobFailures([{ ...old, acked: true }]).length, 0);
+  assert.equal(openJobFailures([]).length, 0);
 });
 
 test("причина без error не исчезает", () => {
-  const [failure] = openJobFailures([fact({ ok: false, error: null })], NOW);
+  const [failure] = openJobFailures([fact({ ok: false, error: null })]);
   assert.equal(failure?.reason, "провал без причины");
 });
 
@@ -166,7 +173,7 @@ test("блок для промпта: пусто — пустая строка, 
       NOW,
     ),
   );
-  assert.match(text, /^## Незакрытые провалы за сутки/u);
+  assert.match(text, /^## Незакрытые провалы\n/u);
   assert.match(text, /memory-night/u);
   assert.match(text, /iva jobs ack memory-night/u);
   assert.match(text, /reminder-r1/u);
@@ -232,7 +239,7 @@ test("динамическая инструкция 40-open-failures несёт 
     assert.ok(resolve, "инструкция слушает turn.started");
     const resolved = await resolve(null, {} as never);
     const markdown = (resolved as { markdown?: string } | null)?.markdown ?? "";
-    assert.match(markdown, /^## Незакрытые провалы за сутки/u);
+    assert.match(markdown, /^## Незакрытые провалы\n/u);
     assert.match(markdown, /memory-night.*exited 2/u);
   } finally {
     if (previous === undefined) delete process.env.ASSISTANT_DATA_DIR;
@@ -275,7 +282,7 @@ test("снятое расписание не попадает в открыты�
       }),
       NOW,
     );
-  assert.deepEqual(openJobFailures(readFactsSync(jobFactsFile(dir)), NOW), []);
+  assert.deepEqual(openJobFailures(readFactsSync(jobFactsFile(dir))), []);
   const failures = await openFailures({
     dir,
     now: NOW,
