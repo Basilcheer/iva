@@ -36,6 +36,7 @@ import { resolveTimeZone } from "#lib/timezone.ts";
 import { formatZoned } from "#lib/zoned-time.ts";
 import { noticeTranslator } from "../lib/notice-policy.ts";
 import {
+  isQuietReply,
   reminderClientOptions,
   reminderPrompt,
   runReminderTurn,
@@ -241,12 +242,18 @@ function route(row: Reminder, deps: Wiring): Route {
   return { target: { token, chat: chat.id, threadId: chat.threadId } };
 }
 
-/** Пустой ответ хода — такой же провал, как упавший ход: владелец получает текст строки. */
+/**
+ * Пустой ответ хода — такой же провал, как упавший ход: владелец получает текст строки. Голое
+ * QUIET (модель спутала ход напоминания или Signal с Watch) — тоже: слово QUIET владельцу не
+ * уходит.
+ */
 function textOrFallback(reply: string | undefined, fallback: string): Outcome {
   const text = (reply ?? "").trim();
-  return text === ""
-    ? { text: fallback, error: "agent turn returned no text" }
-    : { text, error: null };
+  if (text === "")
+    return { text: fallback, error: "agent turn returned no text" };
+  if (isQuietReply(text))
+    return { text: fallback, error: "agent turn returned QUIET" };
+  return { text, error: null };
 }
 
 /**
