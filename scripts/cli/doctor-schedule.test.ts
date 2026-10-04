@@ -3,7 +3,7 @@
 // незакрытые провалы. Пульс минутного диспетчера говорит раздел напоминаний той же
 // команды (scripts/cli/doctor.ts), второго источника об одном mtime нет.
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -94,4 +94,33 @@ test("провал, закрытый iva jobs ack, не предупреждае
   ]);
   assert.ok(!report.lastRuns[0].includes(": провал"));
   assert.deepEqual(report.openFailures, []);
+});
+
+// Тик proactive пишет факт успеха только после провала (48 строк в сутки вытеснили бы остальные
+// факты): время последнего успешного прогона — из rollup-status.json (lastSuccessAt раннера).
+test("proactive: последний запуск виден — провал из фактов, успех из статуса раннера", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "t20-doctor-"));
+  await recordFact(jobFactsFile(dir), fact({ name: "proactive" }), NOW);
+  assert.deepEqual((await scheduleFactsReport(dir)).lastRuns, [
+    "proactive: провал (exited 1), 2026-09-13T10:00:01.000Z",
+  ]);
+
+  const healthy = mkdtempSync(join(tmpdir(), "t20-doctor-"));
+  writeFileSync(
+    join(healthy, "rollup-status.json"),
+    JSON.stringify({ proactive: { lastSuccessAt: NOW - HOUR } }),
+  );
+  assert.deepEqual((await scheduleFactsReport(healthy)).lastRuns, [
+    "proactive: ok, 2026-09-13T11:00:00.000Z",
+  ]);
+
+  // Первый успех после провала записан фактом, дальше успехи идут только в статус.
+  await recordFact(
+    jobFactsFile(healthy),
+    fact({ name: "proactive", ok: true, error: null, exitCode: 0 }),
+    NOW,
+  );
+  assert.deepEqual((await scheduleFactsReport(healthy)).lastRuns, [
+    "proactive: ok, 2026-09-13T11:00:00.000Z",
+  ]);
 });

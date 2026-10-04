@@ -101,25 +101,54 @@ export async function scheduleFactsReport(
   const { jobFactsFile, latestFact, readFactsSync } =
     await import("#lib/job-facts.ts");
   const { openJobFailures } = await import("#lib/open-failures.ts");
-  const { SCHEDULE_CRON } = await import("#lib/schedule-table.ts");
+  const { PROACTIVE_SCHEDULE, SCHEDULE_CRON } =
+    await import("#lib/schedule-table.ts");
   const facts = readFactsSync(jobFactsFile(dataDirectory));
+  const succeeded = lastSuccesses(dataDirectory);
   // Только живые расписания (isLiveSchedule): строки снятых остаются в jobs.json.
-  const names = Object.keys(SCHEDULE_CRON).sort();
+  const names = [...Object.keys(SCHEDULE_CRON), PROACTIVE_SCHEDULE].sort();
   const lastRuns: string[] = [];
   for (const name of names) {
-    const latest: JobFact | null = latestFact(facts, name);
-    if (!latest) continue;
-    const when = new Date(latest.finishedAt).toISOString();
-    const reason = latest.error ?? "без причины";
-    lastRuns.push(
-      latest.ok
-        ? `${name}: ok, ${when}`
-        : latest.acked // закрыт iva jobs ack: без предупреждения
-          ? `${name}: закрытый провал (${reason}), ${when}`
-          : `${name}: провал (${reason}), ${when}`,
-    );
+    const line = lastRunLine(name, latestFact(facts, name), succeeded[name]);
+    if (line !== null) lastRuns.push(line);
   }
   return { lastRuns, openFailures: openJobFailures(facts), facts };
+}
+
+/**
+ * Строка последнего запуска. Успех — позднейшее из факта и `lastSuccessAt` раннера: тик proactive
+ * пишет факт успеха только после провала, остальные успехи видны лишь в статусе.
+ */
+function lastRunLine(
+  name: string,
+  latest: JobFact | null,
+  successAt: number | undefined,
+): string | null {
+  if (latest === null || latest.ok) {
+    const at = Math.max(latest?.finishedAt ?? 0, successAt ?? 0);
+    return at > 0 ? `${name}: ok, ${new Date(at).toISOString()}` : null;
+  }
+  const when = new Date(latest.finishedAt).toISOString();
+  const reason = latest.error ?? "без причины";
+  return latest.acked // закрыт iva jobs ack: без предупреждения
+    ? `${name}: закрытый провал (${reason}), ${when}`
+    : `${name}: провал (${reason}), ${when}`;
+}
+
+/** `lastSuccessAt` по именам из rollup-status.json; нет или не читается — пусто (история в jobs.json). */
+function lastSuccesses(dataDirectory: string): Record<string, number> {
+  const out: Record<string, number> = {};
+  try {
+    const parsed = JSON.parse(
+      readFileSync(join(dataDirectory, "rollup-status.json"), "utf8"),
+    ) as Record<string, { lastSuccessAt?: unknown } | null>;
+    for (const [name, entry] of Object.entries(parsed))
+      if (Number.isSafeInteger(entry?.lastSuccessAt))
+        out[name] = entry?.lastSuccessAt as number;
+  } catch {
+    // Статуса нет или он битый: о нём говорит свой раздел доктора, здесь — только факты.
+  }
+  return out;
 }
 
 /** Сколько ждём `/health` прокси: он на loopback, и медленный ответ — уже симптом. */
