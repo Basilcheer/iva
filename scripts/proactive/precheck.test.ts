@@ -220,6 +220,32 @@ test("no proxy token anywhere: Telegram is not connected — empty, no error", a
   });
 });
 
+test("TELEGRAM_WATCH_URL points Watch at the owner's own proxy with its own token", async (t) => {
+  // Случай c1: прокси владельца живёт не на 127.0.0.1:8724, и токена Ивы у него нет.
+  const proxy = await startProxy(
+    "watch-tok",
+    () => "No chats found matching the criteria.",
+  );
+  t.after(() => proxy.close());
+  const dir = mkdtempSync(join(DATA, "watch-url-"));
+  const env = {
+    TELEGRAM_WATCH_URL: proxy.url,
+    TELEGRAM_WATCH_TOKEN: "watch-tok",
+  };
+  assert.deepEqual(await telegramSource(env, dir).check(), {
+    items: [],
+    error: null,
+  });
+  assert.equal(proxy.calls.length, 2);
+  // Адрес без своего токена — не подключён: токен Ивы чужому прокси не уходит.
+  writeFileSync(join(dir, "telegram-userbot.token"), "iva-own\n");
+  assert.deepEqual(
+    await telegramSource({ TELEGRAM_WATCH_URL: proxy.url }, dir).check(),
+    { items: [], error: null },
+  );
+  assert.equal(proxy.calls.length, 2);
+});
+
 test("the token comes from TELEGRAM_MCP_TOKEN, then data/telegram-userbot.token", async (t) => {
   const proxy = await startProxy(
     "from-file",

@@ -201,11 +201,19 @@ export function telegramSource(
   log: (line: string) => void = console.log,
 ): Source {
   const check = async (): Promise<SourceResult> => {
-    const token = proxyToken(env, dataDir);
+    // Свой адрес присмотра: у владельца может быть отдельный прокси того же telegram-mcp, которым
+    // он пользуется сам. Watch только читает список чатов, а Connection юзербота (отправка от
+    // имени владельца) этим адресом не включается.
+    const watchUrl = (env.TELEGRAM_WATCH_URL ?? "").trim();
+    const token =
+      watchUrl === ""
+        ? proxyToken(env, dataDir)
+        : (env.TELEGRAM_WATCH_TOKEN ?? "").trim();
     if (token === "" && callTool === undefined) return NOT_CONNECTED;
     const port = env.TELEGRAM_MCP_PORT || "8724";
     const call =
-      callTool ?? proxyCallTool(`http://127.0.0.1:${port}/mcp`, token);
+      callTool ??
+      proxyCallTool(watchUrl || `http://127.0.0.1:${port}/mcp`, token);
     // Чат самого бота Ивы — не пропущенное: id бота стоит в начале его токена.
     const botId = String(env.TELEGRAM_BOT_TOKEN ?? "").split(":")[0] ?? "";
     try {
