@@ -143,3 +143,32 @@ test("остальные подкоманды iva plugin проходят: их 
   allowed("iva plugin updates");
   allowed("rg -n 'iva plugin trust' docs/");
 });
+
+test("npm run iva без -- и npx iva блокируются для всего списка глаголов", () => {
+  for (const verb of [
+    "restart",
+    "stop",
+    "reset",
+    "full-reset",
+    "update",
+    "rollback",
+    "doctor",
+    "plugin trust x",
+    "plugin enable x",
+    "plugin update x",
+    "plugin sync",
+    "plugin install-proposal abc",
+  ]) {
+    blocked(`npm run iva ${verb}`);
+    blocked(`npm run iva -- ${verb}`);
+    blocked(`npx iva ${verb}`);
+    blocked(`npx iva -- ${verb}`);
+    blocked(`cd ~/iva && npm  run  iva ${verb}`);
+  }
+  allowed("npm run iva plugin propose x");
+  allowed("npx iva plugin propose x");
+  allowed("npm run iva-something restart");
+  allowed("npx iva-something restart");
+  allowed("npm run iva usage");
+  allowed("rg -n 'npm run iva restart' docs/");
+});

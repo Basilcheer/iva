@@ -25,7 +25,7 @@ import { dirname, join } from "node:path";
 import test, { after } from "node:test";
 import { fileURLToPath } from "node:url";
 import { readLiveSkills } from "#lib/custom-skills.ts";
-import { PLUGIN_SCHEMA_URL } from "#lib/plugin-reader.ts";
+import { PLUGIN_SCHEMA_URL, pluginTreeDigest } from "#lib/plugin-reader.ts";
 import {
   pluginDataDir,
   pluginRoot,
@@ -41,6 +41,7 @@ import {
 } from "../lib/marketplace.ts";
 import { createSystemdControl } from "../lib/systemd-control.ts";
 import { pluginConnectionFile } from "../lib/plugin-build.ts";
+import { takenDir, takeProposal } from "../lib/plugin-proposal.ts";
 import { createVersionStore } from "../lib/version-store.ts";
 import { leftoverPluginDirs } from "./plugin-cli-context.ts";
 import type { ProposalSends } from "./plugin-cli-proposal.ts";
@@ -342,6 +343,8 @@ function commands(
     interactive?: boolean;
     env?: Record<string, string>;
     sends?: ProposalSends;
+    /** Зовётся на каждом шаге команды: так тест вклинивается между шагами установки. */
+    onStep?: (message: string) => void;
   } = {},
 ) {
   const events: Events = [];
@@ -359,7 +362,10 @@ function commands(
     ok: (message) => events.push(["ok", message]),
     warn: (message) => events.push(["warn", message]),
     bad: (message) => events.push(["bad", message]),
-    step: (message) => events.push(["step", message]),
+    step: (message) => {
+      events.push(["step", message]);
+      extra.onStep?.(message);
+    },
     readEnv: () => ({ ...extra.env }),
     cap: (command, args, options = {}) => {
       const where = typeof options.cwd === "string" ? options.cwd : root;
@@ -2730,7 +2736,7 @@ test("propose copies the plugin and sends the owner's private chat a message bui
       "u",
     ),
   );
-  // Копия — то же содержимое, что в сообщении: её digest и есть кнопка.
+  // Копия — то же содержимое, что в сообщении: её хеш дерева и есть кнопка.
   const copy = join(data, "plugin-proposals", `trace-${digest12}`);
   assert.deepEqual(proposalsOf(data), [`trace-${digest12}`]);
   const { pluginTreeDigest } = await import("#lib/plugin-reader.ts");
@@ -2850,6 +2856,35 @@ test("the next propose sweeps proposals and taken copies older than a day", asyn
   assert.match(left[0], /^relay-[a-f0-9]{12}$/u);
 });
 
+test("a copy taken a minute before the proposal turned a day old survives the next propose's sweep", async () => {
+  const root = home();
+  const { screens, sends } = recordingSends();
+  const shell = modelShell(root, sends);
+  await shell.cmdPlugin(["propose", mcpOnlyPlugin("relay", "viewer")]);
+  const digest12 = digest12Of(screens[0].text);
+  const dir = join(shell.data, "plugin-proposals");
+  // Часы команды стоят на 2026-08-17 12:00. Предложению 23 ч 59 мин на момент тапа,
+  // следующий propose приходит через 2 минуты: установщик ещё копирует `.taken-*`.
+  const propose = Date.parse("2026-08-17T12:00:00.000Z");
+  const tap = propose - 2 * 60_000;
+  const proposed = new Date(tap - (24 * 60 - 1) * 60_000);
+  utimesSync(join(dir, `relay-${digest12}`), proposed, proposed);
+
+  const outcome = await takeProposal({
+    dir,
+    digest12,
+    nowMs: tap,
+    digest: pluginTreeDigest,
+  });
+  assert.equal(outcome.status, "taken");
+  await shell.cmdPlugin(["propose", processPlugin("trace")]);
+
+  assert.ok(
+    existsSync(takenDir(dir, digest12)),
+    "the installer's source is still there",
+  );
+});
+
 /** Предложение, которое тап уже забрал: `.taken-<digest12>`, как его оставляет мост. */
 async function takenProposal(root: string, folder: string): Promise<string> {
   const { screens, sends } = recordingSends();
@@ -2897,6 +2932,41 @@ test("install-proposal of a copy changed after the tap installs nothing", async 
   ]);
 });
 
+test("install-proposal of a copy changed between its check and the installer's copy installs nothing", async () => {
+  const root = home();
+  const digest12 = await takenProposal(root, mcpOnlyPlugin("relay", "viewer"));
+  const taken = join(root, "data", "plugin-proposals", `.taken-${digest12}`);
+  const { texts, sends } = recordingSends();
+  // Шаг «Installing …» идёт после первой сверки и до копии в staging установщика.
+  const { cmdPlugin, data } = commands(
+    root,
+    undefined,
+    undefined,
+    {},
+    undefined,
+    {
+      interactive: false,
+      env: OWNER_ENV,
+      sends,
+      onStep: () =>
+        write(taken, "skills/alpha/SKILL.md", skill("alpha", "Swapped.")),
+    },
+  );
+
+  await assert.rejects(
+    cmdPlugin(["install-proposal", digest12]),
+    /out of date/u,
+  );
+  assert.deepEqual((await readPluginsState(data)).plugins, []);
+  assert.equal(existsSync(pluginRoot(data, "relay")), false);
+  assert.deepEqual(texts, [
+    {
+      chat: "42",
+      text: "Plugin relay was not installed: the proposal is out of date",
+    },
+  ]);
+});
+
 test("install-proposal whose build fails tells the owner why and leaves the box as it was", async () => {
   const root = home();
   const digest12 = await takenProposal(root, codePlugin("coded"));
@@ -2917,7 +2987,7 @@ test("install-proposal whose build fails tells the owner why and leaves the box 
   );
 });
 
-test("install-proposal without a taken copy or with a bad digest argument installs nothing", async () => {
+test("install-proposal without a taken copy or with a bad tree hash argument installs nothing", async () => {
   const root = home();
   const { texts, sends } = recordingSends();
   const { cmdPlugin, data } = modelShell(root, sends);

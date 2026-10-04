@@ -1,7 +1,7 @@
 // Предложение плагина: копия, которую модель собрала (`iva plugin propose`), лежит в
 // `data/plugin-proposals/<name>-<digest12>/` и ждёт тапа владельца. Плагин с `mcp.json` или
 // `sh.iva/` ставит не модель, а Bridge по тапу «Установить» (ADR-0009): тап забирает копию
-// атомарным `rename` в `.taken-<digest12>/`, сверяет её digest с тем, что был в сообщении,
+// атомарным `rename` в `.taken-<digest12>/`, сверяет её хеш дерева с тем, что был в сообщении,
 // и запускает `iva plugin install-proposal` вне хода модели.
 //
 // Модуль общий для CLI и моста и потому стоит на node:fs: CLI обязан грузиться без authored
@@ -14,6 +14,7 @@ import {
   renameSync,
   rmSync,
   statSync,
+  utimesSync,
 } from "node:fs";
 import { join } from "node:path";
 
@@ -95,7 +96,12 @@ export function findProposal(dir: string, digest12: string): string | null {
   return folder ? folder.slice(0, -suffix.length) : null;
 }
 
-/** Предложения, забранные копии и брошенные staging старше суток уходят. */
+/**
+ * Предложения, забранные копии и брошенные staging старше суток уходят. Время папки здесь
+ * — исключение из запрета «удаление по mtime» (ADR-0009): удаляется только копия, исходник
+ * остаётся у модели. `.taken-*` получает время тапа, поэтому идущая установка свою копию
+ * сутки не теряет.
+ */
 export function sweepProposals(dir: string, nowMs: number): void {
   for (const entry of entries(dir)) {
     const path = join(dir, entry);
@@ -110,7 +116,9 @@ export type TakeOutcome =
 
 /**
  * Забрать предложение под установку. Сначала `rename` — он один на два тапа подряд, — потом
- * сверка того, что забрано: возраст и digest. Не сошлось — копия удаляется, установки нет.
+ * сверка того, что забрано: возраст и хеш дерева. Возраст считается от propose, затем копия
+ * получает время тапа: уборка следующего propose не снесёт её посреди установки. Не сошлось
+ * — копия удаляется, установки нет.
  */
 export async function takeProposal(options: {
   readonly dir: string;
@@ -128,11 +136,24 @@ export async function takeProposal(options: {
     // ENOENT — забрал соседний тап; ENOTEMPTY/EEXIST — его копия ещё ставится.
     return { status: "stale", name };
   }
-  const fresh = ageMs(taken, nowMs) <= PROPOSAL_TTL_MS;
+  // От rename до stamp — без await: второй тап того же Bridge не должен увидеть копию между
+  // ними, иначе он примет чужую свежую `.taken-*` за свою (specs/PluginProposal.tla).
+  const fresh = ageMs(taken, nowMs) <= PROPOSAL_TTL_MS && stamp(taken, nowMs);
   const same = fresh && (await digestOf(taken, digest)) === digest12;
   if (same) return { status: "taken", name, path: taken };
   rmSync(taken, { recursive: true, force: true });
   return { status: "stale", name };
+}
+
+/** Время тапа на забранной копии; `false` — копии уже нет или её не тронуть. */
+function stamp(path: string, nowMs: number): boolean {
+  try {
+    const at = new Date(nowMs);
+    utimesSync(path, at, at);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** Имя плагина, чью копию уже забрал соседний тап, — для ответа второму тапу. */

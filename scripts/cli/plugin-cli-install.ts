@@ -25,7 +25,7 @@ import {
   pluginCodeProblem,
   pluginNamespace,
 } from "../lib/plugin-build.ts";
-import { carriesCodeOrMcp } from "../lib/plugin-proposal.ts";
+import { carriesCodeOrMcp, staleReason } from "../lib/plugin-proposal.ts";
 import {
   formatPluginSource,
   parsePluginSource,
@@ -64,6 +64,11 @@ type Undo = {
 type AddOptions = {
   /** Зовёт `install-proposal` по тапу владельца: гвард `add` не нужен. */
   readonly fromProposal?: boolean;
+  /**
+   * Хеш дерева (12 знаков) из кнопки владельца. Сверяется у копии, уже лежащей в staging
+   * установщика: ставятся ровно эти байты, а не папка, которую мог тронуть второй писатель.
+   */
+  readonly expectDigest12?: string;
 };
 
 type Staged = {
@@ -142,6 +147,16 @@ export function createPluginInstallCommands(
     };
   }
 
+  /** Staged-копия `install-proposal` расходится с хешем из кнопки — «предложение устарело». */
+  async function sameAsButton(
+    root: string,
+    expectDigest12: string | null,
+  ): Promise<void> {
+    if (expectDigest12 === null) return;
+    if ((await pluginTreeDigest(root)).slice(0, 12) !== expectDigest12)
+      throw new Error(staleReason(translate));
+  }
+
   /**
    * Читает плагин или отказывает, назвав все причины. `proposalOnly` — `add` без человека
    * у терминала и не из `install-proposal`: тогда плагин с кодом или MCP не ставится.
@@ -207,6 +222,8 @@ export function createPluginInstallCommands(
     provenance: Provenance | null = null,
     /** `add` без человека у терминала и не из `install-proposal` (ADR-0009). */
     proposalOnly = false,
+    /** Хеш дерева из кнопки: staged-копия обязана с ним совпасть (`install-proposal`). */
+    expectDigest12: string | null = null,
   ): Promise<{
     readonly entry: PluginEntry;
     readonly report: PluginReport;
@@ -219,6 +236,7 @@ export function createPluginInstallCommands(
     const staging = mkdtempSync(join(pluginsDir(data), STAGING_PREFIX));
     try {
       const staged = await stage(source, staging);
+      await sameAsButton(staged.root, expectDigest12);
       const { report, manifest } = await accept(
         staged.root,
         formatPluginSource(source),
@@ -412,6 +430,7 @@ export function createPluginInstallCommands(
         null,
         provenance,
         proposalOnly(options),
+        options?.expectDigest12 ?? null,
       );
     });
 

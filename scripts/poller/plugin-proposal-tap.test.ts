@@ -115,7 +115,7 @@ test("a tap with no proposal behind it installs nothing", async () => {
   ]);
 });
 
-test("files swapped after propose: the digest does not match and nothing starts", async () => {
+test("files swapped after propose: the tree hash does not match and nothing starts", async () => {
   const w = await world();
   writeFileSync(join(w.folder, "mcp.json"), '{"mcpServers":{"x":{}}}');
 

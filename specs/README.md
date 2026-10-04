@@ -1,6 +1,6 @@
 # TLA+ models
 
-The repository keeps bounded models of the lock, the night writer, restart recovery and proactive notices. Run them from a temporary directory because TLC writes state files beside the model.
+The repository keeps bounded models of the lock, the night writer, restart recovery, proactive notices and plugin proposals. Run them from a temporary directory because TLC writes state files beside the model.
 
 ## FileLock
 
@@ -62,4 +62,22 @@ The run takes its `now` right after the lock (`NowAfterLock = TRUE`). Witnesses 
 
 ```sh
 specs/proactive-check.sh
+```
+
+## PluginProposal
+
+`PluginProposal.tla` models the life of a plugin proposal (ADR-0009) and was written after the code: it checks the code, not a design. Two identical `iva plugin propose` runs (sweep, claim by rename, utimes, send, removal on a failed send), two taps of the one button in the Bridge (take by rename, age check and the tap time on the taken copy, tree hash check, installer launch or return), the installer (first hash check, copy into its own staging, hash check of the staged copy, install, removal of the taken copy), a second writer changing the files of the proposal or the taken copy, and a crash at every step of every process. One `Tick` is a boundary; a day is `TTL = 2`. The comment in the model maps every action to its function.
+
+The model assumes that a holder of the taken copy (a tap before launch, a live installer) finishes within a day of its tap, and that `renameSync`, the age check and the stamp in `takeProposal` run without an `await` between them, so the other tap of the same Bridge cannot interleave (`BridgeFree`). Without the second assumption TLC finds two taps holding one taken copy: tap A takes an old copy, the sweep removes it, a new proposal and tap B put a fresh copy under the same name, and A stamps it as its own.
+
+Checked invariants:
+
+1. `OneInstaller`: at most one live installer per proposal.
+2. `OnlyButtonBytes`: the store receives only bytes whose tree hash is the button's.
+3. `SweepSparesTaken`: the sweep never removes a taken copy while a tap or an installer holds it.
+
+Witnesses must fail: `PluginProposal-norename.cfg` (the tap copies the proposal instead of taking it by rename, `OneInstaller`, checked without `SweepSparesTaken`, which breaks at the same depth), `PluginProposal-nostamp.cfg` (the taken copy keeps the propose time, as before the repair, `SweepSparesTaken`), `PluginProposal-nostaged.cfg` (the installer checks only the taken copy and installs its copy unchecked, as before the repair, `OnlyButtonBytes`).
+
+```sh
+specs/plugin-proposal-check.sh
 ```
