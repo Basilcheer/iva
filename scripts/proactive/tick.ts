@@ -311,19 +311,51 @@ async function wake(
   );
   if (text === null) return 1;
   const send = (part: string) => deps.send(part, "watch");
-  const { sent, all } = await deliver(partsOf(text), send, log);
-  if (!sent) log("proactive: nothing delivered");
-  const failures = candidates.some((c) => c.failure);
-  // Подъём с сообщением считается только за обычный пункт: срочные и сбои предел не тратят.
+  const delivered = await deliver(partsOf(text), send, log);
+  if (!delivered.sent) log("proactive: nothing delivered");
+  const next = afterDelivery(
+    deps,
+    { claimed, candidates, day },
+    delivered,
+    log,
+  );
+  if (next !== null)
+    await save(
+      deps,
+      next,
+      next.wakes === claimed.wakes ? "failures" : "wakes",
+      log,
+    );
+  return 0;
+}
+
+/**
+ * Что записать после доставки: подъём с сообщением — только за обычный пункт (срочные и сбои
+ * предел не тратят), сбои — когда дошли все части. Записывать нечего — null.
+ */
+function afterDelivery(
+  deps: TickDeps,
+  {
+    claimed,
+    candidates,
+    day,
+  }: {
+    readonly claimed: ProactiveState;
+    readonly candidates: readonly Candidate[];
+    readonly day: string;
+  },
+  { sent, all }: { readonly sent: boolean; readonly all: boolean },
+  log: (line: string) => void,
+): ProactiveState | null {
   const ordinary = sent && candidates.some((c) => !c.urgent && !c.failure);
-  if (!ordinary && !(all && failures)) return 0;
-  let next = ordinary
+  const failures = all && candidates.some((c) => c.failure);
+  if (!ordinary && !failures) return null;
+  const next = ordinary
     ? { ...claimed, wakes: bump(claimed.wakes, day) }
     : claimed;
-  if (all && failures)
-    next = settleFailures(next, candidates, deps.recordAlert, log);
-  await save(deps, next, ordinary ? "wakes" : "failures", log);
-  return 0;
+  return failures
+    ? settleFailures(next, candidates, deps.recordAlert, log)
+    : next;
 }
 
 /** Ход модели; провал, лимит сессии или отмена — null и строка в журнал. */
