@@ -111,7 +111,8 @@ test("reports render off and Watch on on a fresh installation, in either languag
 test("a switched-on toggle is ticked and offers the way back off", () => {
   writeSettingsFile({
     memoryReports: { enabled: true },
-    proactive: { enabled: false, briefTimes: ["09:00", "13:30", "18:00"] },
+    // Не больше двух Brief в сутки: три времени — уже значение по умолчанию.
+    proactive: { enabled: false, briefTimes: ["09:00", "18:00"] },
   });
 
   const view = screen.render({ page: 0 }, makeContext("ru"));
@@ -120,7 +121,7 @@ test("a switched-on toggle is ticked and offers the way back off", () => {
     ["○ Сама пишет", "iva_menu:ntc:set:pro:1"],
     ["‹ Меню", "iva_menu:r:o"],
   ]);
-  assert.match(view.text, /Обзор дня: 09:00, 13:30 и 18:00/u);
+  assert.match(view.text, /Обзор дня: 09:00 и 18:00/u);
 });
 
 test("a tap on the old digest toggle from a stale screen changes nothing", async () => {
