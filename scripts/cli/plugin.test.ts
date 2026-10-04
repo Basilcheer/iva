@@ -25,7 +25,7 @@ import { dirname, join } from "node:path";
 import test, { after } from "node:test";
 import { fileURLToPath } from "node:url";
 import { readLiveSkills } from "#lib/custom-skills.ts";
-import { PLUGIN_SCHEMA_URL } from "#lib/plugin-reader.ts";
+import { PLUGIN_SCHEMA_URL, pluginTreeDigest } from "#lib/plugin-reader.ts";
 import {
   pluginDataDir,
   pluginRoot,
@@ -41,6 +41,7 @@ import {
 } from "../lib/marketplace.ts";
 import { createSystemdControl } from "../lib/systemd-control.ts";
 import { pluginConnectionFile } from "../lib/plugin-build.ts";
+import { takenDir, takeProposal } from "../lib/plugin-proposal.ts";
 import { createVersionStore } from "../lib/version-store.ts";
 import { leftoverPluginDirs } from "./plugin-cli-context.ts";
 import type { ProposalSends } from "./plugin-cli-proposal.ts";
@@ -2853,6 +2854,35 @@ test("the next propose sweeps proposals and taken copies older than a day", asyn
   const left = proposalsOf(data);
   assert.equal(left.length, 1);
   assert.match(left[0], /^relay-[a-f0-9]{12}$/u);
+});
+
+test("a copy taken a minute before the proposal turned a day old survives the next propose's sweep", async () => {
+  const root = home();
+  const { screens, sends } = recordingSends();
+  const shell = modelShell(root, sends);
+  await shell.cmdPlugin(["propose", mcpOnlyPlugin("relay", "viewer")]);
+  const digest12 = digest12Of(screens[0].text);
+  const dir = join(shell.data, "plugin-proposals");
+  // Часы команды стоят на 2026-08-17 12:00. Предложению 23 ч 59 мин на момент тапа,
+  // следующий propose приходит через 2 минуты: установщик ещё копирует `.taken-*`.
+  const propose = Date.parse("2026-08-17T12:00:00.000Z");
+  const tap = propose - 2 * 60_000;
+  const proposed = new Date(tap - (24 * 60 - 1) * 60_000);
+  utimesSync(join(dir, `relay-${digest12}`), proposed, proposed);
+
+  const outcome = await takeProposal({
+    dir,
+    digest12,
+    nowMs: tap,
+    digest: pluginTreeDigest,
+  });
+  assert.equal(outcome.status, "taken");
+  await shell.cmdPlugin(["propose", processPlugin("trace")]);
+
+  assert.ok(
+    existsSync(takenDir(dir, digest12)),
+    "the installer's source is still there",
+  );
 });
 
 /** Предложение, которое тап уже забрал: `.taken-<digest12>`, как его оставляет мост. */
