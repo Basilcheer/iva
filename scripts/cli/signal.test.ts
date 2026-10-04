@@ -119,6 +119,28 @@ test(`more than ${SIGNAL_PENDING_MAX} Signals waiting → refusal; other reminde
   assert.equal(h.rows().length, SIGNAL_PENDING_MAX + 3);
 });
 
+test(`two Signals at once with ${SIGNAL_PENDING_MAX - 1} waiting: the count and the add are one step, one passes and one is refused`, async () => {
+  const h = harness();
+  process.env.ASSISTANT_DATA_DIR = h.dir;
+  const command = (suffix: string, at: number) =>
+    createSignalCommand(
+      { ok: () => {}, dataDirAbs: () => h.dir, readEnv: () => ({}) },
+      { now: () => at, suffix: () => suffix },
+    );
+  for (let n = 0; n < SIGNAL_PENDING_MAX - 1; n++)
+    await command("0000", NOW + n)(["p", `signal ${n}`]);
+  const results = await Promise.allSettled([
+    command("aaaa", NOW + 100)(["p", "loop a"]),
+    command("bbbb", NOW + 101)(["p", "loop b"]),
+  ]);
+  assert.deepEqual(results.map((r) => r.status).sort(), [
+    "fulfilled",
+    "rejected",
+  ]);
+  const signals = h.rows().filter((row) => row.id.startsWith("signal-"));
+  assert.equal(signals.length, SIGNAL_PENDING_MAX);
+});
+
 test("a broken reminder table → refusal, no row added", async () => {
   // Порченый JSON стор откладывает в сторону сам (loadJsonStrict); чужая версия — на месте.
   for (const content of ["{ not json", '{"schemaVersion":99,"rows":[]}']) {

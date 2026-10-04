@@ -507,11 +507,23 @@ function buildReminder(
   };
 }
 
-export async function add(input: ReminderInput): Promise<Reminder> {
+/**
+ * Добавить строку. `refuse` — проверка таблицы под тем же замком, что и добавление: строка
+ * причины — отказ (Error с ней), строка не добавляется. Так предел вида «не больше N ждущих»
+ * не обходят два параллельных писателя.
+ */
+export async function add(
+  input: ReminderInput,
+  {
+    refuse,
+  }: { readonly refuse?: (rows: readonly Reminder[]) => string | null } = {},
+): Promise<Reminder> {
   const file = reminderFile();
   const row = buildReminder(file, input);
   return mutate(file, async () => {
     const rows = await loadTable(file);
+    const reason = refuse?.(rows) ?? null;
+    if (reason !== null) throw new Error(reason);
     if (rows.some((candidate) => candidate.id === row.id))
       fail(file, `duplicate reminder id ${JSON.stringify(row.id)}`);
     const reminder = assertReminder(file, row);

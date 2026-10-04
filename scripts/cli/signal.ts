@@ -15,6 +15,16 @@ const SIGNAL_SOURCE_MAX = 40;
 const SIGNAL_TEXT_MAX = 1000;
 export const SIGNAL_PENDING_MAX = 20;
 
+/** Отказ, если ждущих Signal уже предел; иначе null. */
+function overLimit(rows: readonly { id: string; status: string }[]) {
+  const pending = rows.filter(
+    (row) => row.status === "pending" && row.id.startsWith("signal-"),
+  ).length;
+  return pending >= SIGNAL_PENDING_MAX
+    ? `signal refused: ${pending} signals already wait for delivery (limit ${SIGNAL_PENDING_MAX})`
+    : null;
+}
+
 export function createSignalCommand(
   runtime: Pick<CliRuntime, "ok" | "dataDirAbs" | "readEnv">,
   {
@@ -45,15 +55,6 @@ export function createSignalCommand(
     if (!from || !body)
       throw new Error("signal refused: the security gate emptied the input");
 
-    const { add, list } = await import("#lib/reminder-store.ts");
-    const pending = (await list()).filter(
-      (row) => row.status === "pending" && row.id.startsWith("signal-"),
-    ).length;
-    if (pending >= SIGNAL_PENDING_MAX)
-      throw new Error(
-        `signal refused: ${pending} signals already wait for delivery (limit ${SIGNAL_PENDING_MAX})`,
-      );
-
     const { noticeTranslator } = await import("../lib/notice-policy.ts");
     const tr = await noticeTranslator(env);
     const row = tr(
@@ -64,7 +65,12 @@ export function createSignalCommand(
     const warn = gated.some(hasInboundAttackSignal);
     const [at, text] = [now(), warn ? `${injectionWarning()}\n\n${row}` : row];
     const id = `signal-${at}-${suffix()}`;
-    await add({ id, text, chat: null, schedule: { kind: "at", atMs: at } });
+    // Счёт ждущих и добавление — один шаг под замком таблицы: параллельные плагины предел не обходят.
+    const { add } = await import("#lib/reminder-store.ts");
+    await add(
+      { id, text, chat: null, schedule: { kind: "at", atMs: at } },
+      { refuse: overLimit },
+    );
     ok(`signal queued: ${id}`);
   };
 }
