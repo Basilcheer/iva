@@ -440,3 +440,46 @@ test("senderOf: the address in angle brackets, or a bare address", () => {
   });
   assert.deepEqual(senderOf(""), { email: undefined, name: undefined });
 });
+
+test(`PBT senderOf: never throws, never invents an address or a name (seed ${SEED})`, () => {
+  const local = fc.stringMatching(/^[a-z0-9._+-]{1,12}$/u);
+  const domain = fc.stringMatching(/^[a-z0-9-]{1,10}\.[a-z]{2,4}$/u);
+  const address = fc.tuple(local, domain).map(([l, d]) => `${l}@${d}`);
+  const display = fc
+    .string({ maxLength: 30 })
+    .filter((n) => !/[<>"@]/u.test(n));
+  const from = fc.oneof(
+    fc.string({ maxLength: 80 }),
+    fc.string({ unit: "grapheme", maxLength: 40 }),
+    address,
+    fc.tuple(display, address).map(([n, a]) => `${n} <${a}>`),
+    fc.tuple(display, address).map(([n, a]) => `"${n}" <${a}>`),
+  );
+  fc.assert(
+    fc.property(from, (value) => {
+      const sender = senderOf(value);
+      if (sender.email !== undefined) {
+        assert.ok(
+          value.includes(sender.email),
+          "the address is from the input",
+        );
+        assert.match(sender.email, /^[^\s<>]+@[^\s<>]+$/u);
+      }
+      if (sender.name !== undefined) {
+        assert.notEqual(sender.name.trim(), "");
+        const plain = value.replace(/<[^<>]*>/u, "").replace(/"/gu, "");
+        assert.ok(plain.includes(sender.name), "the name is from the input");
+        assert.notEqual(sender.name, sender.email);
+      }
+    }),
+    { seed: SEED, numRuns: 1000 },
+  );
+  fc.assert(
+    fc.property(display, address, (name, addr) => {
+      const sender = senderOf(`${name} <${addr}>`);
+      assert.equal(sender.email, addr);
+      assert.equal(sender.name, name.trim() === "" ? undefined : name.trim());
+    }),
+    { seed: SEED, numRuns: 500 },
+  );
+});

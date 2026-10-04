@@ -264,7 +264,10 @@ async function gwsJson(
 
 /** `Имя <адрес>` → имя и адрес из скобок; голый адрес — он сам. */
 export function senderOf(from: string): Sender {
-  const bare = /^\S+@\S+$/u.test(from.trim()) ? from.trim() : undefined;
+  // Голый адрес — без пробелов и угловых скобок, как адрес в скобках (обломок `>@x` — не адрес).
+  const bare = /^[^\s<>]+@[^\s<>]+$/u.test(from.trim())
+    ? from.trim()
+    : undefined;
   const email = /<([^<>\s]+@[^<>\s]+)>/u.exec(from)?.[1] ?? bare;
   const name = text(
     from
