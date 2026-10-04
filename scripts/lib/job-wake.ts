@@ -26,7 +26,7 @@ export interface JobWakeDeps {
   readonly send: (text: string) => Promise<boolean>;
   /** Test seam for the durable wake record; production uses recordWake. */
   readonly recordWake?: typeof recordWake;
-  /** Тихий ли час владельца: провал тогда ждёт утреннего Brief, ход не идёт. */
+  /** Тихий ли час владельца: ответ хода о провале тогда не шлётся, провал ждёт утреннего Brief. */
   readonly quiet?: (now: number) => boolean;
   readonly now?: () => number;
   readonly log?: (...args: unknown[]) => void;
@@ -152,7 +152,19 @@ async function wakeOnFailure(
   run: WakeRun,
   fact: JobFact,
 ): Promise<JobWake["status"]> {
-  // Тихие часы: ночью ничего не шлём; провал открыт и встанет первым в утреннем Brief.
+  // Ход идёт и в тихие часы: только он показывает сторожу, жив ли агент. Упал — исход failed,
+  // и сторож jobs-watchdog скажет владельцу утром, как раньше.
+  const answer = await agentAnswer(fact, run.deps);
+  if ("failure" in answer) {
+    await recordOutcome(run.deps, run.name, run.startedAt, {
+      at: run.now(),
+      status: "failed",
+      error: answer.failure,
+    });
+    run.log(`wake: ${run.name} turn failed: ${answer.failure}`);
+    return "failed";
+  }
+  // Тихие часы: ответ ночью не шлём; провал открыт и встанет первым в утреннем Brief.
   if (run.deps.quiet?.(run.now()) === true) {
     const recorded = await recordOutcome(run.deps, run.name, run.startedAt, {
       at: run.now(),
@@ -163,16 +175,6 @@ async function wakeOnFailure(
       `wake: ${run.name} failed in the quiet hours, deferred to the morning brief`,
     );
     return recorded ? "deferred" : "failed";
-  }
-  const answer = await agentAnswer(fact, run.deps);
-  if ("failure" in answer) {
-    await recordOutcome(run.deps, run.name, run.startedAt, {
-      at: run.now(),
-      status: "failed",
-      error: answer.failure,
-    });
-    run.log(`wake: ${run.name} turn failed: ${answer.failure}`);
-    return "failed";
   }
   if (answer.message.length === 0)
     return settleEmpty(run, `wake: ${run.name} answered with an empty message`);

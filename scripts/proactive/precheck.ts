@@ -330,9 +330,12 @@ export function mailSource(run: GwsRun = runGws): Source {
 /** `systemctl --user …`: код выхода, нет бинаря (macOS) или срок вышел; и stdout. */
 export type Systemctl = (args: readonly string[]) => ReturnType<GwsRun>;
 
+// TZ=UTC: время выхода systemd печатает в зоне процесса, и без зоны вроде MSK или CEST, которую не
+// разобрать, оно всегда кончается на «UTC» — на любой версии, без `--timestamp=unix` (только с 251).
 const runSystemctl: Systemctl = (args) =>
   new Promise((resolve) => {
-    const options = { timeout: 10_000, maxBuffer: 4 << 20 };
+    const env = { ...process.env, TZ: "UTC" };
+    const options = { timeout: 10_000, maxBuffer: 4 << 20, env };
     execFile("systemctl", ["--user", ...args], options, (error, stdout) =>
       resolve({ code: exitCode(error), stdout: String(stdout) }),
     );
@@ -341,7 +344,7 @@ const runSystemctl: Systemctl = (args) =>
 const PLUGIN_UNITS =
   "list-units --all --plain --no-legend iva-plugin-* iva-mcp-* iva-telegram-userbot.service";
 const SHOW =
-  "show -p Id -p Result -p ExecMainStatus -p ExecMainExitTimestamp --timestamp=unix --";
+  "show -p Id -p Result -p ExecMainStatus -p ExecMainExitTimestamp --";
 
 /** systemctl есть, но не ответил: в журнал, без пункта `check:timers` (таблица отказов T3). */
 class SystemctlFailed extends Error {}
@@ -363,9 +366,10 @@ const tokens = (out: string | null) =>
     .filter((row) => row[0] !== "");
 
 /**
- * Время выхода из `systemctl show`: `@<секунды>` (`--timestamp=unix`, systemd ≥ 251) или
- * обычный формат «Sat 2026-10-04 03:30:47 UTC» / «… +05» (systemd ≤ 250 флаг не применяет к
- * свойствам). Пусто — не выходил. Иное — ошибка: источник `error`, пункт `check:timers`.
+ * Время выхода из `systemctl show`: обычный формат «Sat 2026-10-04 03:30:47 UTC» / «… +05» (вызов
+ * идёт с TZ=UTC) или `@<секунды>` (`--timestamp=unix`; до systemd 251 значения нет и systemctl
+ * отвергает флаг, поэтому вызов его не передаёт). Пусто — не выходил. Иное — ошибка: источник
+ * `error`, пункт `check:timers`.
  */
 export function exitTime(value: string): number | null {
   if (value === "") return null;

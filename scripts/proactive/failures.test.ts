@@ -4,7 +4,14 @@
 // выхода — оба формата systemd (@секунды с v251, обычный до v250); PBT на мусоре.
 import "../fixtures/no-host-anthropic.ts";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { after } from "node:test";
@@ -149,7 +156,7 @@ test(`PBT: exit time round-trips both formats; garbage is null, a number or an E
   );
 });
 
-test("on the wire: list-timers, list-units of plugin units, one show with the four properties and --timestamp=unix", async () => {
+test("on the wire: list-timers, list-units of plugin units, one show with the four properties and no --timestamp (systemd < 251 rejects unix)", async () => {
   const calls: string[][] = [];
   const source = failuresSource(
     dir(),
@@ -183,13 +190,51 @@ test("on the wire: list-timers, list-units of plugin units, one show with the fo
       "ExecMainStatus",
       "-p",
       "ExecMainExitTimestamp",
-      "--timestamp=unix",
       "--",
       "backup.service",
       "iva-plugin-x.service",
     ],
   ]);
   assert.equal(source.always, true, "failures run with the toggle off");
+});
+
+// Настоящий execFile: на PATH стоит поддельный systemctl версии 249 (Ubuntu 22.04). Он
+// отвергает `--timestamp=unix` (значение появилось в 251, раньше — «Invalid value») и печатает
+// время выхода в обычном формате с зоной из TZ, как format_timestamp_style systemd.
+test("systemd 249 on the wire: no --timestamp=unix, the exit time in UTC through TZ — the failed timer is an item", async () => {
+  const bin = join(ROOT, "systemd-249-bin");
+  mkdirSync(bin, { recursive: true });
+  const fake = join(bin, "systemctl");
+  writeFileSync(
+    fake,
+    [
+      "#!/bin/sh",
+      'for a in "$@"; do',
+      '  case "$a" in --timestamp=unix) echo "Invalid value: unix." >&2; exit 1;; esac',
+      "done",
+      'case "$2" in',
+      "  list-timers) echo 'Mon 2026-10-05 13:00:00 UTC 59min left Mon 2026-10-05 11:00:00 UTC 1h ago backup.timer backup.service';;",
+      "  list-units) ;;",
+      "  show)",
+      '    if [ "$TZ" = UTC ]; then at="Mon 2026-10-05 11:00:00 UTC"; else at="Mon 2026-10-05 14:00:00 MSK"; fi',
+      "    printf 'Id=backup.service\\nResult=exit-code\\nExecMainStatus=1\\nExecMainExitTimestamp=%s\\n' \"$at\";;",
+      "esac",
+      "",
+    ].join("\n"),
+  );
+  chmodSync(fake, 0o755);
+  const path = process.env.PATH;
+  process.env.PATH = `${bin}:${path ?? ""}`;
+  try {
+    const result = await failuresSource(dir()).check(since());
+    assert.equal(result.error, null);
+    assert.deepEqual(
+      result.items.map((item) => [item.key, item.failure?.at]),
+      [["failure:backup.service", Date.UTC(2026, 9, 5, 11, 0)]],
+    );
+  } finally {
+    process.env.PATH = path;
+  }
 });
 
 test("a failed timer since failuresSeenUpToMs is an item; Iva's own timers are skipped; an older exit is not new", async () => {

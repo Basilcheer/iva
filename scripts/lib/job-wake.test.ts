@@ -15,12 +15,13 @@ import {
   type JobFact,
 } from "#lib/job-facts.ts";
 import fc from "fast-check";
-import { agentTurnSeen } from "./job-watchdog.ts";
+import { agentTurnSeen, watchdogDecision } from "./job-watchdog.ts";
 import {
   fixButtonData,
   jobWakePrompt,
   runJobWake,
   type Translate,
+  type WakeTurnResult,
 } from "./job-wake.ts";
 
 const NOW = Date.UTC(2026, 8, 13, 12, 0, 0);
@@ -321,13 +322,13 @@ test("успешное расписание сообщает failed, когда 
   assert.equal(calls, 0);
 });
 
-test("провал в тихие часы: хода нет, ничего не шлём, исход «отложен до утра» (deferred), сторож видит живого агента", async () => {
+test("провал в тихие часы: ход идёт, но ничего не шлём, исход «отложен до утра» (deferred), сторож видит живого агента", async () => {
   const factsFile = file();
-  await recordFact(factsFile, fact(), NOW);
+  await recordFact(factsFile, fact({ name: "memory-night" }), NOW);
   const sent: string[] = [];
   const turns: string[] = [];
   const logs: string[] = [];
-  const status = await runJobWake("memory-daily", NOW - 1000, {
+  const status = await runJobWake("memory-night", NOW - 1000, {
     factsFile,
     tr,
     runTurn: (prompt) => {
@@ -343,7 +344,8 @@ test("провал в тихие часы: хода нет, ничего не ш
     log: (...args) => logs.push(args.join(" ")),
   });
   assert.equal(status, "deferred");
-  assert.deepEqual(turns, []);
+  // Ход идёт и ночью: только он доказывает сторожу, что агент жив (иначе страховка молчит).
+  assert.equal(turns.length, 1);
   assert.deepEqual(sent, []);
   const facts = await readFacts(factsFile);
   assert.deepEqual(facts[0]?.wake, {
@@ -355,6 +357,49 @@ test("провал в тихие часы: хода нет, ничего не ш
   // Провал остаётся открытым (его закрывает успех или ack), а сторож молчит: агент жив.
   assert.equal(facts[0]?.ok, false);
   assert.equal(agentTurnSeen(facts, NOW), true);
+  assert.equal(
+    watchdogDecision({ facts, now: NOW + 4 * 3_600_000, lastSentAt: null, tr }),
+    null,
+  );
+});
+
+test("провал в тихие часы, а агент не отвечает (ход упал или бросил) → исход failed, сторож говорит", async () => {
+  const turns: Array<() => Promise<WakeTurnResult>> = [
+    () => Promise.resolve({ status: "failed", message: "model down" }),
+    () => Promise.reject(new Error("connect ECONNREFUSED")),
+  ];
+  for (const runTurn of turns) {
+    const factsFile = file();
+    await recordFact(factsFile, fact({ name: "memory-night" }), NOW);
+    const sent: string[] = [];
+    const status = await runJobWake("memory-night", NOW - 1000, {
+      factsFile,
+      tr,
+      runTurn,
+      send: (text) => {
+        sent.push(text);
+        return Promise.resolve(true);
+      },
+      quiet: () => true,
+      now: () => NOW + 5,
+      log: () => {},
+    });
+    assert.equal(status, "failed");
+    assert.deepEqual(sent, []);
+    const facts = await readFacts(factsFile);
+    assert.equal(facts[0]?.wake?.status, "failed");
+    assert.notEqual(facts[0]?.wake?.error, null);
+    assert.equal(agentTurnSeen(facts, NOW), false);
+    assert.match(
+      watchdogDecision({
+        facts,
+        now: NOW + 4 * 3_600_000,
+        lastSentAt: null,
+        tr,
+      }) ?? "",
+      /агент не отвечает/u,
+    );
+  }
 });
 
 test("вне тихих часов провал будит ход, как раньше", async () => {

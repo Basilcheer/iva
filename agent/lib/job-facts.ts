@@ -33,7 +33,7 @@ export class JobFactsError extends Error {}
 
 export interface JobWake {
   readonly at: number;
-  /** deferred — провал в тихие часы: хода нет, провал стоит первым в утреннем Brief. */
+  /** deferred — провал в тихие часы: ход был, ответ не слали, провал стоит первым в утреннем Brief. */
   readonly status: "answered" | "empty" | "failed" | "deferred";
   readonly error: string | null;
 }

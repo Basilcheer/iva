@@ -6,7 +6,7 @@
 import { join } from "node:path";
 import { dataDir } from "#lib/data-dir.ts";
 import { jobFactsFile } from "#lib/job-facts.ts";
-import { isQuietHour, parseProactive } from "#lib/proactive-config.ts";
+import { failureWaitsForBrief, parseProactive } from "#lib/proactive-config.ts";
 import { readSettings } from "#lib/settings.ts";
 import { zonedParts } from "#lib/zoned-time.ts";
 import { resolveTimeZone } from "../lib/timezone.ts";
@@ -35,7 +35,7 @@ async function main(): Promise<void> {
   const timeZone = resolveTimeZone(process.env.ASSISTANT_TIMEZONE);
   const status = await runJobWake(name, startedAt, {
     factsFile: jobFactsFile(dataDir()),
-    quiet: (now) => isQuietHour(config, zonedParts(now, timeZone).hh),
+    quiet: (now) => failureWaitsForBrief(config, zonedParts(now, timeZone).hh),
     tr: await noticeTranslator(process.env),
     runTurn: (prompt) =>
       runReminderTurn(prompt, reminderClientOptions(process.env), { log }),

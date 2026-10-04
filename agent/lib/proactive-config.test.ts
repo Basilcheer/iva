@@ -8,6 +8,7 @@ import fc from "fast-check";
 import {
   PROACTIVE_DEFAULTS,
   PROACTIVE_KEYS,
+  failureWaitsForBrief,
   isQuietHour,
   isUrgentSender,
   parseProactive,
@@ -175,6 +176,18 @@ test("quiet hours: 23→8 across midnight, an ordinary window, equal bounds — 
   assert.deepEqual(at(23, 8), [0, 1, 2, 3, 4, 5, 6, 7, 23]);
   assert.deepEqual(at(1, 4), [1, 2, 3]);
   assert.deepEqual(at(5, 5), []);
+});
+
+test("a failed Iva job waits for the morning Brief only with the toggle on and in a quiet hour; toggle off — reported at once", () => {
+  for (let hour = 0; hour < 24; hour += 1) {
+    const quiet = isQuietHour(PROACTIVE_DEFAULTS, hour);
+    assert.equal(failureWaitsForBrief(PROACTIVE_DEFAULTS, hour), quiet);
+    // Brief при выключенном тумблере не идёт: отложенный провал не дошёл бы никогда (ADR-0020).
+    assert.equal(
+      failureWaitsForBrief({ ...PROACTIVE_DEFAULTS, enabled: false }, hour),
+      false,
+    );
+  }
 });
 
 test("an urgent sender matches the username without @, the trimmed name or the address, case-insensitively", () => {

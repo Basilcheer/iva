@@ -152,6 +152,17 @@ export function isQuietHour(config: ProactiveConfig, hour: number): boolean {
   return from < to ? hour >= from && hour < to : hour >= from || hour < to;
 }
 
+/**
+ * Ждёт ли провал задания Ивы утреннего Brief: только при включённом тумблере и в тихий час.
+ * Тумблер выключен — Brief не идёт, и wake-ход сообщает о провале сразу (сбой — Alert, ADR-0020).
+ */
+export function failureWaitsForBrief(
+  config: ProactiveConfig,
+  hour: number,
+): boolean {
+  return config.enabled && isQuietHour(config, hour);
+}
+
 /** Что известно об отправителе пункта: имя пользователя, имя или название чата, адрес почты. */
 export type Sender = {
   readonly username?: string;

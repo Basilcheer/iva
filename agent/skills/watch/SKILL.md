@@ -97,5 +97,6 @@ When the owner tunes how you write on your own, change the settings with `bash`:
 
 `iva proactive show` prints the settings and today's counters. Failures of
 regular jobs are reported even when the toggle is off and pass the daily cap; at
-night they wait for 08:00 and the morning Brief. Urgent senders pass the quiet
+night they wait for 08:00 and the morning Brief (with the toggle off there is no
+Brief, so a failed Iva job is reported at once). Urgent senders pass the quiet
 hours and the daily cap.
