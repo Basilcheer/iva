@@ -106,6 +106,14 @@ test("on the wire: list_chats gets the documented arguments and a bearer; the an
             unread_mark: true,
           },
           { chat_id: 123456, name: "Iva bot", type: "User", unread: 4 },
+          // Бот — не человек, который ждёт ответа (случай c1: herdrmebot, 24 непрочитанных).
+          {
+            chat_id: 13,
+            name: "herdrme",
+            type: "User",
+            username: "herdrmeBot",
+            unread: 24,
+          },
         ])
       : results([
           {

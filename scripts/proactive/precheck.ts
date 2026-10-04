@@ -109,6 +109,10 @@ function chatItem(row: ChatRecord, botId: string): WatchItem | null {
     String(id) === botId
   )
     return null;
+  // Боты — не люди, которые ждут ответа: у бота имя пользователя в Telegram всегда кончается
+  // на `bot`, у человека так кончаться не может (отдельного признака `list_chats` не отдаёт).
+  if (row.type === "User" && /bot$/iu.test(text(row.username) ?? ""))
+    return null;
   const unread =
     row.type === "User"
       ? count(row.unread) + (row.unread_mark === true ? 1 : 0)

@@ -644,7 +644,7 @@ test("on the wire: a part with a button goes as a rich message to the owner's pr
   assert.equal(bodies[0]?.body.chat_id, "777");
   assert.match(
     JSON.stringify(bodies[0]?.body.rich_message),
-    /<tg-button data=\\"В задачи: Иван\\">В задачи<\/tg-button>/u,
+    /<tg-button type=\\"callback_data\\" data=\\"В задачи: Иван\\">В задачи<\/tg-button>/u,
   );
   assert.equal(bodies[1]?.method, "sendMessage");
   assert.doesNotMatch(JSON.stringify(bodies[1]?.body), /sk-ant-api03-A{20}/u);
