@@ -466,6 +466,20 @@ await test("/task уходит в модель отдельной инструк
   assert.match(dailyText(), /\/task купить молоко/u);
 });
 
+await test("/digest отдаёт Brief: обычный ход со скиллом brief, одно сообщение", async () => {
+  const { calls, effects } = harness();
+  const result = await inbound.runTelegramInbound(
+    privateText("/digest"),
+    effects,
+  );
+
+  assert.deepEqual(result?.context, [
+    "Load the brief skill and assemble the daily brief.",
+  ]);
+  assert.equal(calls.typing, 1);
+  assert.match(dailyText(), /\/digest/u);
+});
+
 await test("фото: vision в контексте, повтор того же файла не качает и не смотрит заново", async (t) => {
   const { calls, effects } = harness();
   stubDownload(t, calls);

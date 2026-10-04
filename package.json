@@ -20,7 +20,6 @@
     "init-vault": "node scripts/init-vault.mjs",
     "replica": "node scripts/replica-smoke.ts",
     "live-turn": "node scripts/live-turn.ts",
-    "digest": "node scripts/daily-digest.ts",
     "poll": "node --env-file=.env scripts/telegram-poll.mjs",
     "memory": "node --env-file=.env scripts/memory/night.ts",
     "cleanup": "node scripts/vault-cleanup.ts",

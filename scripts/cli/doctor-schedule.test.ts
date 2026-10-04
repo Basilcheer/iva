@@ -34,12 +34,12 @@ test("последний запуск каждого имени: ok и пров�
   await recordFact(jobFactsFile(dir), fact(), NOW);
   await recordFact(
     jobFactsFile(dir),
-    fact({ name: "digest", ok: true, error: null, exitCode: 0 }),
+    fact({ name: "jobs-watchdog", ok: true, error: null, exitCode: 0 }),
     NOW,
   );
   const report = await scheduleFactsReport(dir, NOW);
   assert.deepEqual(report.lastRuns, [
-    "digest: ok, 2026-09-13T10:00:01.000Z",
+    "jobs-watchdog: ok, 2026-09-13T10:00:01.000Z",
     "memory-night: провал (exited 1), 2026-09-13T10:00:01.000Z",
   ]);
   assert.deepEqual(
@@ -60,8 +60,8 @@ test("закрытый провал не считается открытым, и
   assert.equal(report.lastRuns.length, 1);
 });
 
-// Снятые расписания (memory-daily, -weekly, -monthly, -yearly ушли в ночь): их последний
-// провал в jobs.json остаётся навсегда, и доктор не говорит о том, чего больше нет.
+// Снятые расписания (memory-daily, -weekly, -monthly, -yearly ушли в ночь, digest — в Brief):
+// их последний провал в jobs.json остаётся навсегда, и доктор не говорит о том, чего больше нет.
 test("снятое расписание не выводится и не считается открытым провалом", async () => {
   const dir = mkdtempSync(join(tmpdir(), "t20-doctor-"));
   for (const name of [
@@ -69,16 +69,17 @@ test("снятое расписание не выводится и не счит
     "memory-weekly",
     "memory-monthly",
     "memory-yearly",
+    "digest",
   ])
     await recordFact(jobFactsFile(dir), fact({ name }), NOW);
-  await recordFact(jobFactsFile(dir), fact({ name: "digest" }), NOW);
+  await recordFact(jobFactsFile(dir), fact({ name: "jobs-watchdog" }), NOW);
   const report = await scheduleFactsReport(dir, NOW);
   assert.deepEqual(report.lastRuns, [
-    "digest: провал (exited 1), 2026-09-13T10:00:01.000Z",
+    "jobs-watchdog: провал (exited 1), 2026-09-13T10:00:01.000Z",
   ]);
   assert.deepEqual(
     report.openFailures.map((entry) => entry.name),
-    ["digest"],
+    ["jobs-watchdog"],
   );
 });
 

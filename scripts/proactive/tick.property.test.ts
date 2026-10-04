@@ -141,6 +141,13 @@ class World {
         },
       ],
       runTurn: (prompt) => {
+        // Ход Brief — не ход Watch: в счётчики Watch не идёт (его свойства — brief.test.ts).
+        if (prompt.startsWith("Brief:"))
+          return Promise.resolve({
+            status: "completed" as const,
+            message: "QUIET",
+            feedback: () => Promise.resolve(),
+          });
         const keys = KEYS.flatMap((key, i) =>
           prompt.includes(`- ${key} `) ? [{ key, gen: this.gen[i] ?? 0 }] : [],
         );
@@ -152,11 +159,12 @@ class World {
           feedback: () => Promise.resolve(),
         });
       },
-      send: () => {
-        if (current) current.sent = true;
+      send: (_part, source) => {
+        if (current && source === "watch") current.sent = true;
         return Promise.resolve({ ok: true, error: "" });
       },
-      language: () => Promise.resolve("in Russian"),
+      translate: () =>
+        Promise.resolve((_english: string, russian: string) => russian),
       log: () => undefined,
     });
     assert.equal(code, 0);

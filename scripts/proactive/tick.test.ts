@@ -67,7 +67,8 @@ function harness(overrides: Partial<TickDeps> = {}): Harness {
     tg: { items: [], error: null },
     mail: { items: [], error: null },
     reply: turn("Иван ждёт ответа."),
-    config: PROACTIVE_DEFAULTS,
+    // Тесты Watch: слотов Brief нет, иначе тик 14:00 вёл бы ещё и ход Brief (его тесты — brief.test.ts).
+    config: { ...PROACTIVE_DEFAULTS, briefTimes: [] },
     sendFails: () => false,
     checks: 0,
     deps: undefined as unknown as TickDeps,
@@ -104,7 +105,8 @@ function harness(overrides: Partial<TickDeps> = {}): Harness {
       h.sent.push(part);
       return Promise.resolve({ ok: true, error: "" });
     },
-    language: () => Promise.resolve("in Russian"),
+    translate: () =>
+      Promise.resolve((_english: string, russian: string) => russian),
     log: (line) => h.logs.push(line),
     ...overrides,
   };
@@ -265,7 +267,7 @@ test("every part refused: nothing delivered, wakes stays", async () => {
 
 test("after watchCapPerDay wakes an ordinary item waits; an urgent sender and a failure pass", async () => {
   const h = harness();
-  h.config = { ...PROACTIVE_DEFAULTS, urgentSenders: ["wife"] };
+  h.config = { ...h.config, urgentSenders: ["wife"] };
   const ordinary = chat(1, 1, "Коллега");
   const urgent: WatchItem = { key: "tg:2", unread: 1, from: { name: "Wife" } };
   writeState(h, { ...staleSeen(ordinary), wakes: { day: DAY, count: 5 } });
@@ -299,7 +301,7 @@ test("after watchCapPerDay wakes an ordinary item waits; an urgent sender and a 
 
 test("after modelWakesPerDay turns only a failure wakes the model", async () => {
   const h = harness();
-  h.config = { ...PROACTIVE_DEFAULTS, urgentSenders: ["wife"] };
+  h.config = { ...h.config, urgentSenders: ["wife"] };
   const urgent: WatchItem = {
     key: "tg:2",
     unread: 1,
@@ -327,7 +329,7 @@ test("after modelWakesPerDay turns only a failure wakes the model", async () => 
 
 test("quiet hours 23:00–08:00: only an urgent sender wakes; an ordinary night item comes after 08:00", async () => {
   const h = harness();
-  h.config = { ...PROACTIVE_DEFAULTS, urgentSenders: ["boss@example.com"] };
+  h.config = { ...h.config, urgentSenders: ["boss@example.com"] };
   const night = Date.UTC(2026, 9, 5, 23, 0);
   writeState(h, {});
   h.tg = { items: [chat(1, 1)], error: null };
@@ -365,7 +367,7 @@ test("the :30 tick is not a Watch tick; a :00 tick late by a minute is", async (
 
 test("«Сама пишет» off: Telegram and mail are not checked, their keys stay, a failure still wakes", async () => {
   const h = harness();
-  h.config = { ...PROACTIVE_DEFAULTS, enabled: false };
+  h.config = { ...h.config, enabled: false };
   writeState(h, staleSeen(chat(1, 1)));
   h.tg = { items: [chat(1, 1)], error: null };
   assert.equal(await runProactiveTick(NOON, h.deps), 0);

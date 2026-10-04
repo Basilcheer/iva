@@ -13,7 +13,7 @@ import { rearmContextFill, recordStepContext } from "../lib/context-fill.js";
 
 // Учёт фактического расхода токенов. ОДИН хук ловит весь расход одного eve-агента без
 // двойного счёта: основной Telegram Channel и фоновые джобы через eve/client —
-// daily-digest, memory rollup (kind="http"). Шаги субагента (planner) приходят завёрнутыми
+// ход Watch и Brief, memory rollup (kind="http"). Шаги субагента (planner) приходят завёрнутыми
 // в "subagent.event" → слушаем оба события. Пишем по строке на шаг в data/usage.jsonl;
 // читают мост (/usage) и CLI (`iva usage`).
 //

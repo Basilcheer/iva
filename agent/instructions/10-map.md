@@ -80,7 +80,7 @@ and that is what makes the card findable by any of them.
   cards, links, CORE and ready week/month/year summaries; a separate systemd
   watchdog runs the Brain pass. Do not run them by hand.
 - Heavy procedures are skills: load one by name and the body arrives
-  (`morning-digest`, `web-research`, `agent-browser`, `google-workspace`,
+  (`brief`, `web-research`, `agent-browser`, `google-workspace`,
   `security-defense`, `telegram-userbot`, `rich-post`, `documents`,
   `rich-replies`). Load `rich-replies` before a structured answer (comparison,
   report, steps) and whenever you offer the user a choice, a link or a value to

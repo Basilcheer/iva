@@ -1,4 +1,4 @@
-// Транспорт Outbox для cron-пути: ночные отчёты (rollup, daily-digest) уходят прямым
+// Транспорт Outbox для cron-пути: ночные отчёты (rollup), Watch и Brief уходят прямым
 // fetch к Bot API, без запущенного eve. Разметка, гейт и фолбэки живут в самом шве
 // (agent/lib/outbox.ts) — здесь остаются только HTTP-вызов и трактовка ответа Telegram.
 //

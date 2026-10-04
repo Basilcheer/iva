@@ -699,8 +699,8 @@ export async function runTelegramInbound(
         auth: buildAuth(message),
         context: [
           tr(
-            "Load the morning-digest skill and assemble the morning digest.",
-            "Загрузи скилл morning-digest и собери утренний дайджест.",
+            "Load the brief skill and assemble the daily brief.",
+            "Загрузи скилл brief и собери обзор дня.",
           ),
         ],
       });

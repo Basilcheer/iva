@@ -12,7 +12,7 @@ Past dates are allowed so overdue work remains visible. Invalid dates and relati
 strings are rejected instead of being saved as moving deadlines.
 
 Older installations can contain deadlines such as `"завтра"`. Updating Iva does
-not rewrite or remove those tasks. For a digest, Iva interprets an old relative
+not rewrite or remove those tasks. For a Brief, Iva interprets an old relative
 deadline from the task's `createdAt`, using your timezone **at creation**. If that
 timezone or the original request is unknown, she asks instead of guessing. An
 unresolved deadline is shown explicitly, rather than classified as no deadline.

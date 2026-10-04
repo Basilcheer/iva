@@ -130,7 +130,7 @@ test("authored path policy is narrow and traversal-safe", () => {
 
   for (const path of [
     "agent/instructions/../agent.ts",
-    "agent/schedules/digest.ts",
+    "agent/schedules/proactive.ts",
     "agent/agent.ts",
     "package.json",
     "agent/skills/../agent.ts",

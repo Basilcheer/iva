@@ -108,12 +108,13 @@ The nightly Brain pass builds the hybrid index; to build it now, run `node --env
 
 ## Notices
 
-What Iva says on her own lives in `data/settings.json`, not in `.env` — the **🔔 Notices** screen in `/menu` writes these keys, and the report switch is read at the end of each nightly run, the digest switch when its schedule fires — so a tap applies without a restart.
+What Iva says on her own lives in `data/settings.json`, not in `.env` — the **🔔 Notices** screen in `/menu` writes these keys, and the report switch is read at the end of each nightly run, the `proactive` key on every half-hourly Watch and Brief tick — so a tap applies without a restart.
 
-| Key                      | Default | Notes                                                                                                           |
-| ------------------------ | ------- | --------------------------------------------------------------------------------------------------------------- |
-| `memoryReports.enabled`  | `false` | The nightly memory report (daily 04:00 and weekly Mon 04:15) in Telegram. Off means the vault is still written. |
-| `digestSchedule.enabled` | `false` | The morning digest at 08:00. `/digest` works by hand either way.                                                |
+| Key                     | Default              | Notes                                                                                                                    |
+| ----------------------- | -------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `memoryReports.enabled` | `false`              | The nightly memory report (daily 04:00 and weekly Mon 04:15) in Telegram. Off means the vault is still written.          |
+| `proactive.enabled`     | `true`               | Watch and the Brief (**Writes on her own**). Off stops both; failures are still reported. `iva proactive` sets the rest. |
+| `proactive.briefTimes`  | `["08:30", "14:00"]` | The Brief, `HH:00` or `HH:30`. `/digest` gives the Brief by hand any time.                                               |
 
 Alerts — problems (memory not backed up, a failed nightly pass) and new versions — always arrive: they cannot be switched off, but each one says what to do and repeats at most once a week per problem — [ADR-0007](./adr/0007-notices-are-opt-in.md).
 

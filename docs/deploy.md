@@ -70,16 +70,16 @@ ASSISTANT_TIMEZONE="$(node --env-file=.env -p 'process.env.ASSISTANT_TIMEZONE ||
 [ -n "$ASSISTANT_TIMEZONE" ] && sudo timedatectl set-timezone "$ASSISTANT_TIMEZONE"
 ```
 
-### Memory rollups and the digest: in-process eve schedules
+### Memory rollups, Watch and Brief: in-process eve schedules
 
-The four memory-rollup cadences moved off systemd and, with the digest, the jobs watchdog and the reminder dispatcher, run as `agent/schedules/*.ts` — eve's native `defineSchedule` API — inside the `iva.service` process itself:
+The four memory-rollup cadences moved off systemd and, with the Watch and Brief tick, the jobs watchdog and the reminder dispatcher, run as `agent/schedules/*.ts` — eve's native `defineSchedule` API — inside the `iva.service` process itself:
 
-| Schedule        | Cron (local time)           | Job                                                                                                                                 |
-| --------------- | --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `memory-night`  | `0 4 * * *` (04:00 nightly) | queued days → cards, links, CORE and every ready daily/weekly/monthly/yearly summary                                                |
-| `digest`        | `0 8 * * *` (08:00 daily)   | morning digest — **off by default**, enable via `digestSchedule.enabled` in `data/settings.json`                                    |
-| `jobs-watchdog` | `17 7 * * *` (07:17 daily)  | `scripts/jobs/watchdog.ts`: one message to the owner when schedules failed and the agent cannot wake ([schedules.md](schedules.md)) |
-| `reminders`     | `* * * * *` (every minute)  | reminder dispatcher: hands due rows of `data/reminders.json` to `scripts/reminders/fire.ts` ([reminders.md](reminders.md))          |
+| Schedule        | Cron (local time)            | Job                                                                                                                                                                                          |
+| --------------- | ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `memory-night`  | `0 4 * * *` (04:00 nightly)  | queued days → cards, links, CORE and every ready daily/weekly/monthly/yearly summary                                                                                                         |
+| `proactive`     | `0,30 * * * *` (half-hourly) | `scripts/proactive/tick.ts`: Watch once an hour and the Brief at `proactive.briefTimes` — **on by default**, `iva proactive off` ([ADR-0020](adr/0020-watch-and-brief-are-on-by-default.md)) |
+| `jobs-watchdog` | `17 7 * * *` (07:17 daily)   | `scripts/jobs/watchdog.ts`: one message to the owner when schedules failed and the agent cannot wake ([schedules.md](schedules.md))                                                          |
+| `reminders`     | `* * * * *` (every minute)   | reminder dispatcher: hands due rows of `data/reminders.json` to `scripts/reminders/fire.ts` ([reminders.md](reminders.md))                                                                   |
 
 The memory schedule is a thin spawner (`agent/lib/schedule-runner.ts`): it runs `scripts/memory/night.ts` under `.memory.lock` and a hard timeout, then records the outcome in `data/rollup-status.json`. `iva.service` sets `Environment=TZ` from `ASSISTANT_TIMEZONE` (`ivaServiceBody()` in `scripts/cli/systemd.ts`), so cron expressions above tick in the configured local time, not the host's system TZ — Nitro's schedule runner carries no timezone of its own otherwise.
 

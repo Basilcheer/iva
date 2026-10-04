@@ -12,7 +12,6 @@ import { readFileSync } from "node:fs";
 import { execFile } from "node:child_process";
 import { join } from "node:path";
 import { readEnvValues } from "../env-file.ts";
-import { readSettings } from "#lib/settings.ts";
 // Names double as status-file keys — the `name` each schedule passes to runScheduledJob
 // (see scripts/lib/schedule-runner.ts), not the bare period. Display order is table order.
 import { pendingMemoryNightTime } from "#lib/memory-night-time.ts";
@@ -68,23 +67,8 @@ function formatLastSuccess(entry: RollupEntry | undefined, T: Translate) {
     .replace(/\.\d{3}Z$/, "Z");
 }
 
-function digestEnabled() {
-  // readSettings() resolves data/settings.json from ASSISTANT_DATA_DIR/cwd itself (see
-  // agent/lib/settings.ts) — same file agent/schedules/digest.ts reads at fire time,
-  // so this always reflects the toggle digest.ts itself would see on its next tick.
-  try {
-    const settings = readSettings() as {
-      digestSchedule?: { enabled?: boolean };
-    };
-    return settings.digestSchedule?.enabled === true;
-  } catch {
-    return false;
-  }
-}
-
 async function schedulesBlock(dataDir: string, T: Translate, envPath?: string) {
   const status = loadRollupStatus(dataDir);
-  const digestOn = digestEnabled();
   let nightNotice: string | null = null;
   try {
     const requested = envPath
@@ -103,12 +87,7 @@ async function schedulesBlock(dataDir: string, T: Translate, envPath?: string) {
     );
   }
   const lines = Object.entries(SCHEDULE_CRON).map(([name, cron]) => {
-    // digest fires off by default (agent/schedules/digest.ts) — "never" would be
-    // indistinguishable from "enabled but hasn't run yet"; say so explicitly instead.
-    const last =
-      name === "digest" && !digestOn
-        ? T("disabled", "выключен")
-        : formatLastSuccess(status[name], T);
+    const last = formatLastSuccess(status[name], T);
     return `| ${escapeRichText(name)} | ${escapeRichText(cron)} | ${last} |`;
   });
   return [

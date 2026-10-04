@@ -80,7 +80,6 @@ test("reports render off and Watch on on a fresh installation, in either languag
   );
   assert.deepEqual(labels(russian), [
     ["○ Отчёты памяти", "iva_menu:ntc:set:rep:1"],
-    ["○ Утренний дайджест", "iva_menu:ntc:set:dig:1"],
     ["✓ Сама пишет", "iva_menu:ntc:set:pro:0"],
     ["‹ Меню", "iva_menu:r:o"],
   ]);
@@ -88,13 +87,15 @@ test("reports render off and Watch on on a fresh installation, in either languag
     russian.text,
     /Присмотр за пропущенным и обзор дня\. О сбоях пишу всегда\./,
   );
+  // Строка дайджеста ушла: её место — времена Brief из настроек.
+  assert.match(russian.text, /Обзор дня: 08:30 и 14:00/u);
+  assert.doesNotMatch(russian.text, /дайджест/iu);
 
   const english = screen.render({ page: 0 }, makeContext("en"));
   assert.match(english.text, /🔔 Notices/);
   assert.match(english.text, /Alerts — problems and updates — always arrive/);
   assert.deepEqual(labels(english), [
     ["○ Memory reports", "iva_menu:ntc:set:rep:1"],
-    ["○ Morning digest", "iva_menu:ntc:set:dig:1"],
     ["✓ Writes on her own", "iva_menu:ntc:set:pro:0"],
     ["‹ Menu", "iva_menu:r:o"],
   ]);
@@ -102,22 +103,32 @@ test("reports render off and Watch on on a fresh installation, in either languag
     english.text,
     /Watch for missed items and the daily brief\. Failures are always reported\./,
   );
+  assert.match(english.text, /Daily brief: 08:30 and 14:00/u);
+  assert.doesNotMatch(english.text, /digest/iu);
   assert.equal(screen.parent, "r");
 });
 
 test("a switched-on toggle is ticked and offers the way back off", () => {
   writeSettingsFile({
     memoryReports: { enabled: true },
-    digestSchedule: { enabled: true },
-    proactive: { enabled: false },
+    proactive: { enabled: false, briefTimes: ["09:00", "13:30", "18:00"] },
   });
 
-  assert.deepEqual(labels(screen.render({ page: 0 }, makeContext("ru"))), [
+  const view = screen.render({ page: 0 }, makeContext("ru"));
+  assert.deepEqual(labels(view), [
     ["✓ Отчёты памяти", "iva_menu:ntc:set:rep:0"],
-    ["✓ Утренний дайджест", "iva_menu:ntc:set:dig:0"],
     ["○ Сама пишет", "iva_menu:ntc:set:pro:1"],
     ["‹ Меню", "iva_menu:r:o"],
   ]);
+  assert.match(view.text, /Обзор дня: 09:00, 13:30 и 18:00/u);
+});
+
+test("a tap on the old digest toggle from a stale screen changes nothing", async () => {
+  writeSettingsFile({ language: "en" });
+  const redrawn: string[] = [];
+  await screen.on("set", ["dig", "1"], { page: 0 }, makeContext("ru", redrawn));
+  assert.deepEqual(readSettingsFile(), { language: "en" });
+  assert.deepEqual(redrawn, []);
 });
 
 test("a toggle writes its own key and leaves the neighbours alone", async () => {
@@ -126,7 +137,6 @@ test("a toggle writes its own key and leaves the neighbours alone", async () => 
   // вложенный объект целиком, а не переписывать его одним своим полем.
   writeSettingsFile({
     language: "en",
-    digestSchedule: { enabled: true },
     memoryReports: { enabled: false, chatId: "123" },
   });
   const redrawn: string[] = [];
@@ -136,17 +146,9 @@ test("a toggle writes its own key and leaves the neighbours alone", async () => 
 
   assert.deepEqual(readSettingsFile(), {
     language: "en",
-    digestSchedule: { enabled: true },
     memoryReports: { enabled: true, chatId: "123" },
   });
   assert.deepEqual(redrawn, ["ntc"], "the screen redraws itself, not the root");
-
-  await screen.on("set", ["dig", "0"], { page: 0 }, context);
-  assert.deepEqual(readSettingsFile(), {
-    language: "en",
-    digestSchedule: { enabled: false },
-    memoryReports: { enabled: true, chatId: "123" },
-  });
 });
 
 test("«Сама пишет» writes proactive.enabled and keeps the Watch settings beside it", async () => {

@@ -100,7 +100,7 @@ test("ход до провала не гасит провал: страховк�
         wake: { at: NOW - 23 * HOUR + 2000, status: "answered", error: null },
       }),
       fact({
-        name: "digest",
+        name: "jobs-watchdog",
         startedAt: NOW - HOUR,
         finishedAt: NOW - HOUR + 1000,
         wake: null,

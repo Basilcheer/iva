@@ -17,7 +17,6 @@ export const ACTIVE_MEMORY_NIGHT_TIME = activeMemoryNightTime();
 
 export const SCHEDULE_CRON = {
   "memory-night": memoryNightCron(ACTIVE_MEMORY_NIGHT_TIME),
-  digest: "0 8 * * *",
   // Дневной сторож расписаний (T20 п.4): после ночных rollup, до рабочего дня.
   "jobs-watchdog": "17 7 * * *",
 } as const;

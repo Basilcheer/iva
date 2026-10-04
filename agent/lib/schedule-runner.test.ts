@@ -258,8 +258,8 @@ void test("no lockPath: the spawned command invokes nodeBin directly (digest cas
 
   let seen: SeenSpawn | null = null;
   await runScheduledJob({
-    name: "digest",
-    argv: ["scripts/daily-digest.ts"],
+    name: "proactive",
+    argv: ["scripts/proactive/tick.ts"],
     root,
     nodeBin: process.execPath,
     statusPath,
@@ -275,7 +275,7 @@ void test("no lockPath: the spawned command invokes nodeBin directly (digest cas
   assert.equal(seen!.cmd, process.execPath);
   assert.deepEqual(seen!.args, [
     "--env-file-if-exists=.env",
-    "scripts/daily-digest.ts",
+    "scripts/proactive/tick.ts",
   ]);
   assert.equal(seen!.opts.env?.IVA_MEMORY_LOCK_HELD, undefined);
 });

@@ -29,7 +29,7 @@
 \* обычный ключ или не идут через этот прогон. Бронь раннера inProgressSince (второй слой)
 \* не моделируется: прогоны стартуют когда угодно, это шире жизни.
 \*
-\* Действие модели -> код (T1; Brief — T2, его кода ещё нет)
+\* Действие модели -> код (Watch — T1, Brief — T2)
 \*   Start            agent/schedules/proactive.ts (PROACTIVE_TICK_CRON) -> runScheduledJob ->
 \*                    scripts/proactive/tick.ts:main (адресат; без него выход 0)
 \*   TryLock          tick.ts:main: acquireFileLock(data/proactive.lock, { timeoutMs:
@@ -40,9 +40,15 @@
 \*                    tick.ts:runProactiveTick -> readProactiveState (scripts/proactive/state.ts,
 \*                    своё чтение по образцу readStatus: битый — выход 1, файл на месте)
 \*   Tick, Timeout    время; срок runScheduledJob (timeoutMs 30 мин + killGraceMs 10 с)
-\*   BClaim           (T2) runProactiveTick шаг 1 -> заявка briefDone
-\*   BTurn            (T2) ход Brief + tick.ts:deliver (слот 0 — «Утро: новых дел нет»)
-\*   Precheck         runProactiveTick: минута >= 30 — выход без записи; observe ->
+\*   BClaim           runProactiveTick шаг 1: tick.ts:dueBrief (слоты в окне 3 ч, ход — по
+\*                    последнему) -> tick.ts:brief, заявка briefDone (все наступившие) и
+\*                    запись до хода; не записалось — хода Brief нет, дальше Watch, выход 1.
+\*                    Код помечает наступившие в окне — подмножество rdue модели: слот вне
+\*                    окна не наступит больше в этот день
+\*   BTurn            tick.ts:brief: TickDeps.runTurn + tick.ts:deliver (слот 0 промолчал —
+\*                    «Утро: новых дел нет»); провал хода — Brief нет, дальше Watch, выход 1
+\*   Precheck         runProactiveTick: минута >= 30 (кроме первого прогона) — выход без
+\*                    записи; tick.ts:watch: observe ->
 \*                    Source.check (scripts/proactive/precheck.ts: telegramSource, mailSource;
 \*                    ошибка — ключи источника не трогаются, пункт check:<источник>) ->
 \*                    tick.ts:observedState (state.ts:updateSeen) -> tick.ts:admit (фильтры) ->

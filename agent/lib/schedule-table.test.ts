@@ -60,7 +60,6 @@ void test("the table uses the compiled night clock and retains other shipped cro
     { ...SCHEDULE_CRON },
     {
       "memory-night": memoryNightCron(ACTIVE_MEMORY_NIGHT_TIME),
-      digest: "0 8 * * *",
       "jobs-watchdog": "17 7 * * *",
     },
   );
@@ -85,7 +84,6 @@ void test("parseCron reads every entry off its cron string", () => {
         month: null,
         dayOfWeek: null,
       },
-      { minute: 0, hour: 8, dayOfMonth: null, month: null, dayOfWeek: null },
       { minute: 17, hour: 7, dayOfMonth: null, month: null, dayOfWeek: null },
     ],
   );
