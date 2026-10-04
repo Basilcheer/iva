@@ -53,7 +53,10 @@ export function createSignalCommand(
       await import("#lib/security-gate.ts");
     const surface = { surface: "web" } as const;
     const gated = input.map((v, i) => sanitizeInbound(v, max[i], surface));
-    const [from, body] = gated.map((verdict) => verdict.text.trim());
+    // Строка уходит владельцу как есть: переводы строк и прочие пробелы плагина — один пробел.
+    const [from, body] = gated.map((verdict) =>
+      verdict.text.replace(/\s+/gu, " ").trim(),
+    );
     if (!from || !body)
       throw new Error("signal refused: the security gate emptied the input");
 
