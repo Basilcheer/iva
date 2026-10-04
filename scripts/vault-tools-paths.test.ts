@@ -264,17 +264,18 @@ test("read_file не читает одноимённый файл проекта
   const projectOnly = join(APP_ROOT, "project-only.txt");
   writeFileSync(projectOnly, "только в проекте\n", "utf8");
   try {
-    await assert.rejects(
-      fromSymlinkedVault(async () =>
-        settled(
-          await readFileTool.execute(
-            { path: "project-only.txt" },
-            testToolContext("read_file"),
-          ),
+    // Отказ приходит модели текстом (ok: false), а не исключением: ход не падает.
+    const res = await fromSymlinkedVault(async () =>
+      settled(
+        await readFileTool.execute(
+          { path: "project-only.txt" },
+          testToolContext("read_file"),
         ),
       ),
-      { code: "ENOENT" },
     );
+    assert.equal(res.ok, false);
+    assert.match(String(res.error), /ENOENT/u);
+    assert.doesNotMatch(res.content, /только в проекте/u);
   } finally {
     rmSync(projectOnly, { force: true });
   }

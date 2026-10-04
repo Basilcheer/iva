@@ -22,14 +22,19 @@ const PROMPT =
 // Распознаёт картинку vision-моделью ТОГО ЖЕ провайдера (на существующем доступе, без доп-подписок).
 // Возвращает текстовое описание, либо "" если распознать нечем (нет ключа/vision-модели).
 // Сетевые/HTTP-ошибки бросает — вызывающий ловит и продолжает ход без зрения (graceful).
+// question — вопрос модели к картинке (read_file); без него описание общее.
 export async function describeImage(
   bytes: ArrayBuffer,
   mimeType?: string,
+  question?: string,
 ): Promise<string> {
+  const prompt = question?.trim()
+    ? `${PROMPT}\n\nВопрос к изображению: ${question.trim()}`
+    : PROMPT;
   // Подписки (codex, claude) мультимодальны — гоним картинку через ту же модель, что ведёт
   // ход: у codex это Responses API подписки, у claude — тот же Claude Code CLI.
   if (providerName === "codex" || providerName === "claude")
-    return await describeWithSubscription(bytes, mimeType);
+    return await describeWithSubscription(bytes, mimeType, prompt);
 
   const { baseURL, apiKey, visionModel } = providerConfig;
   if (!apiKey || !visionModel) return "";
@@ -43,7 +48,7 @@ export async function describeImage(
         {
           role: "user",
           content: [
-            { type: "text", text: PROMPT },
+            { type: "text", text: prompt },
             {
               type: "file",
               data: new Uint8Array(bytes),
@@ -58,7 +63,7 @@ export async function describeImage(
     recordVisionUsage(visionModel, sdkUsageTokens(result.usage));
     return result.text.trim();
   }
-  return await describeWithCompatible(bytes, mimeType, {
+  return await describeWithCompatible(bytes, mimeType, prompt, {
     baseURL,
     apiKey,
     visionModel,
@@ -69,6 +74,7 @@ export async function describeImage(
 async function describeWithCompatible(
   bytes: ArrayBuffer,
   mimeType: string | undefined,
+  prompt: string,
   target: { baseURL: string; apiKey: string; visionModel: string },
 ): Promise<string> {
   const res = await fetch(`${target.baseURL}/chat/completions`, {
@@ -86,7 +92,7 @@ async function describeWithCompatible(
         {
           role: "user",
           content: [
-            { type: "text", text: PROMPT },
+            { type: "text", text: prompt },
             {
               type: "image_url",
               image_url: {
@@ -116,7 +122,8 @@ async function describeWithCompatible(
  */
 async function describeWithSubscription(
   bytes: ArrayBuffer,
-  mimeType?: string,
+  mimeType: string | undefined,
+  prompt: string,
 ): Promise<string> {
   const model =
     providerName === "codex"
@@ -128,7 +135,7 @@ async function describeWithSubscription(
       {
         role: "user",
         content: [
-          { type: "text", text: PROMPT },
+          { type: "text", text: prompt },
           // file-part (не устаревший image-part): AI SDK кодирует его для провайдера сам.
           {
             type: "file",
