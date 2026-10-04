@@ -185,9 +185,11 @@ export function createPluginProposalCommands(
   /**
    * Установка забранного тапом предложения: один `add <копия> --trust`, итог владельцу
    * сообщением, копия удаляется. Процесс живёт в своём юните и переживает перезапуск моста.
+   * Первая сверка хеша здесь — быстрый отказ; решающая — у копии в staging установщика
+   * (`addFolder` получает хеш из кнопки): ставятся только те байты, что с ним совпали.
    */
   async function installProposal(
-    addFolder: (path: string) => Promise<void>,
+    addFolder: (path: string, digest12: string) => Promise<void>,
   ): Promise<void> {
     const digest12 = args[0] ?? "";
     if (!DIGEST12.test(digest12))
@@ -202,7 +204,7 @@ export function createPluginProposalCommands(
       name = report.manifest.name;
       if ((await pluginTreeDigest(taken)).slice(0, 12) !== digest12)
         throw new Error(staleReason(translate));
-      await addFolder(taken);
+      await addFolder(taken, digest12);
     } catch (error) {
       failure = errorText(error);
     }

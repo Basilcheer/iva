@@ -342,6 +342,8 @@ function commands(
     interactive?: boolean;
     env?: Record<string, string>;
     sends?: ProposalSends;
+    /** Зовётся на каждом шаге команды: так тест вклинивается между шагами установки. */
+    onStep?: (message: string) => void;
   } = {},
 ) {
   const events: Events = [];
@@ -359,7 +361,10 @@ function commands(
     ok: (message) => events.push(["ok", message]),
     warn: (message) => events.push(["warn", message]),
     bad: (message) => events.push(["bad", message]),
-    step: (message) => events.push(["step", message]),
+    step: (message) => {
+      events.push(["step", message]);
+      extra.onStep?.(message);
+    },
     readEnv: () => ({ ...extra.env }),
     cap: (command, args, options = {}) => {
       const where = typeof options.cwd === "string" ? options.cwd : root;
@@ -2889,6 +2894,41 @@ test("install-proposal of a copy changed after the tap installs nothing", async 
     /out of date/u,
   );
   assert.deepEqual((await readPluginsState(data)).plugins, []);
+  assert.deepEqual(texts, [
+    {
+      chat: "42",
+      text: "Plugin relay was not installed: the proposal is out of date",
+    },
+  ]);
+});
+
+test("install-proposal of a copy changed between its check and the installer's copy installs nothing", async () => {
+  const root = home();
+  const digest12 = await takenProposal(root, mcpOnlyPlugin("relay", "viewer"));
+  const taken = join(root, "data", "plugin-proposals", `.taken-${digest12}`);
+  const { texts, sends } = recordingSends();
+  // Шаг «Installing …» идёт после первой сверки и до копии в staging установщика.
+  const { cmdPlugin, data } = commands(
+    root,
+    undefined,
+    undefined,
+    {},
+    undefined,
+    {
+      interactive: false,
+      env: OWNER_ENV,
+      sends,
+      onStep: () =>
+        write(taken, "skills/alpha/SKILL.md", skill("alpha", "Swapped.")),
+    },
+  );
+
+  await assert.rejects(
+    cmdPlugin(["install-proposal", digest12]),
+    /out of date/u,
+  );
+  assert.deepEqual((await readPluginsState(data)).plugins, []);
+  assert.equal(existsSync(pluginRoot(data, "relay")), false);
   assert.deepEqual(texts, [
     {
       chat: "42",
