@@ -2736,7 +2736,7 @@ test("propose copies the plugin and sends the owner's private chat a message bui
       "u",
     ),
   );
-  // Копия — то же содержимое, что в сообщении: её digest и есть кнопка.
+  // Копия — то же содержимое, что в сообщении: её хеш дерева и есть кнопка.
   const copy = join(data, "plugin-proposals", `trace-${digest12}`);
   assert.deepEqual(proposalsOf(data), [`trace-${digest12}`]);
   const { pluginTreeDigest } = await import("#lib/plugin-reader.ts");
@@ -2987,7 +2987,7 @@ test("install-proposal whose build fails tells the owner why and leaves the box 
   );
 });
 
-test("install-proposal without a taken copy or with a bad digest argument installs nothing", async () => {
+test("install-proposal without a taken copy or with a bad tree hash argument installs nothing", async () => {
   const root = home();
   const { texts, sends } = recordingSends();
   const { cmdPlugin, data } = modelShell(root, sends);

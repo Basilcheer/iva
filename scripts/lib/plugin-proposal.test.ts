@@ -119,7 +119,7 @@ test("a proposal whose files changed after propose is not taken and is removed",
   assert.deepEqual(readdirSync(dir), []);
 });
 
-test("a proposal older than a day is stale even with a matching digest", async () => {
+test("a proposal older than a day is stale even with a matching tree hash", async () => {
   const dir = proposals();
   const digest12 = await plant(dir);
 
