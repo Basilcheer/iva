@@ -1,11 +1,13 @@
 // `iva signal <источник> <текст>` — Signal: плагин или скрипт на той же машине передаёт Иве
 // сообщение (ADR-0020). Становится разовым Reminder на «сейчас»; дальше диспетчер напоминаний
 // как есть: ход по скиллу watch, провал хода — владельцу уходит текст строки. Своей очереди нет.
+// Строка адресована личному чату владельца (ownerChat), не группе дайджеста.
 // Оба аргумента — чужой текст: длина ограничена, inbound-Gate как для данных (warn-and-pass),
 // при сигнале атаки впереди встаёт injectionWarning(). Больше SIGNAL_PENDING_MAX ждущих
 // Signal — отказ: зациклившийся плагин не заваливает таблицу напоминаний. Импорты authored
 // tree — ленивые (scripts/authored-tree-guard.test.ts).
 import { randomBytes } from "node:crypto";
+import { ownerChat } from "../lib/notification-chat.ts";
 import type { createCliRuntime } from "./runtime.ts";
 
 type CliRuntime = ReturnType<typeof createCliRuntime>;
@@ -65,10 +67,14 @@ export function createSignalCommand(
     const warn = gated.some(hasInboundAttackSignal);
     const [at, text] = [now(), warn ? `${injectionWarning()}\n\n${row}` : row];
     const id = `signal-${at}-${suffix()}`;
+    // Адресат — личный чат владельца (первый id Allowlist), не notificationChat(): тот может быть
+    // группой TELEGRAM_DIGEST_CHAT_ID. Allowlist пуст — null, адресата выберет диспетчер.
+    const owner = ownerChat(env);
+    const chat = owner === "" ? null : { id: owner, threadId: null };
     // Счёт ждущих и добавление — один шаг под замком таблицы: параллельные плагины предел не обходят.
     const { add } = await import("#lib/reminder-store.ts");
     await add(
-      { id, text, chat: null, schedule: { kind: "at", atMs: at } },
+      { id, text, chat, schedule: { kind: "at", atMs: at } },
       { refuse: overLimit },
     );
     ok(`signal queued: ${id}`);

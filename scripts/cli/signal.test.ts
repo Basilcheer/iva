@@ -199,3 +199,41 @@ test(`PBT: any input either is refused with an Error or becomes one pending sign
     { seed: SEED, numRuns: 60 },
   );
 });
+
+// Signal — личное: плагин передаёт Иве сообщение для владельца, и оно не уходит в группу
+// TELEGRAM_DIGEST_CHAT_ID. Проверка на проводе: строка срабатывает настоящим диспетчером
+// напоминаний с его адресатом по умолчанию (notificationChat), отправка — двойник.
+test("a Signal with a group TELEGRAM_DIGEST_CHAT_ID set goes to the owner's private chat (the first Allowlist id)", async () => {
+  const dir = mkdtempSync(join(ROOT, "wire-"));
+  const env = {
+    TELEGRAM_BOT_TOKEN: "bot-token",
+    TELEGRAM_DIGEST_CHAT_ID: "-1007770001",
+    TELEGRAM_ALLOWED_USER_IDS: "4242, 5151",
+    AGENT_LANGUAGE: "ru",
+  };
+  const cmd = createSignalCommand(
+    { ok: () => {}, dataDirAbs: () => dir, readEnv: () => env },
+    { now: () => NOW, suffix: () => "c0de" },
+  );
+  await cmd(["weather", "гроза"]);
+  const { runReminderFire } = await import("../reminders/fire.ts");
+  const chats: string[] = [];
+  const code = await runReminderFire(`signal-${NOW}-c0de`, {
+    env,
+    send: (_bot, chat) => {
+      chats.push(chat);
+      return Promise.resolve({ ok: true, fellBack: false, error: "" });
+    },
+    runTurn: () =>
+      Promise.resolve({
+        status: "completed",
+        message: "Пришла гроза",
+        feedback: () => Promise.resolve(undefined),
+      }),
+    translator: () =>
+      Promise.resolve((_english: string, russian: string) => russian),
+    log: () => {},
+  });
+  assert.equal(code, 0);
+  assert.deepEqual(chats, ["4242"]);
+});

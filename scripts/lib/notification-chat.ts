@@ -1,6 +1,6 @@
 // Адресаты сообщений Ивы без хода пользователя.
 //   notificationChat — Report и предложения обновлений: TELEGRAM_DIGEST_CHAT_ID, иначе владелец.
-//   ownerChat — личный чат владельца (первый id Allowlist): Watch, Brief, провал задания с кнопкой
+//   ownerChat — личный чат владельца (первый id Allowlist): Watch, Brief, Signal, провал задания с кнопкой
 //   «Починить». Туда идёт почта и переписка, а тап кнопки принимается только в личном чате.
 export function notificationChat(
   env: Record<string, string | undefined> = process.env,
