@@ -28,6 +28,7 @@ import {
   type Translate,
 } from "../lib/notice-policy.ts";
 import {
+  isQuietReply,
   reminderClientOptions,
   runReminderTurn,
   type ReminderTurn,
@@ -41,6 +42,7 @@ import {
   telegramSource,
   unfixedFailures,
   type Source,
+  type SourceResult,
   type WatchItem,
 } from "./precheck.ts";
 import {
@@ -60,7 +62,8 @@ export const LOCK_STALE_MS = 40 * 60_000;
 // замок упавшего прогона забирал бы только следующий тик. Живой держатель за секунду не
 // уходит — второй прогон всё равно выходит 0.
 const LOCK_WAIT_MS = 1_000;
-const NEXT_PART = /^[ \t]*<!--\s*iva:next\s*-->[ \t]*$/mu;
+// Разделитель где угодно, не только своей строкой: слабая модель ставит его в конец текста.
+const NEXT_PART = /<!--\s*iva:next\s*-->/u;
 /** Brief опоздал больше чем на 3 часа — слот пропускается. */
 const BRIEF_WINDOW_MIN = 3 * 60;
 
@@ -89,6 +92,18 @@ type Candidate = WatchItem & { readonly urgent: boolean };
 const message = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
 
+/** Брошенное исключение источника — та же ошибка проверки: тик не падает, пункт `check:` есть. */
+async function checkSafely(
+  source: Source,
+  since: Parameters<Source["check"]>[0],
+): Promise<SourceResult> {
+  try {
+    return await source.check(since);
+  } catch (error) {
+    return { items: [], error: message(error) };
+  }
+}
+
 /**
  * Проверка источников: что увидели и какие ключи этот прогон не трогает. Тумблер выключен —
  * идут только источники `always` (сбои).
@@ -106,8 +121,13 @@ async function observe(
       untouched.push(source.prefix);
       continue;
     }
-    const { items, error, silent } = await source.check(since);
-    observed.push(...items.filter((item) => item.unread > 0));
+    const { items, error, silent } = await checkSafely(source, since);
+    // Счёт в состоянии — безопасное целое (readProactiveState иначе отвергнет файл навсегда):
+    // 2^53 от источника (MAX_SAFE_INTEGER непрочитанных + отметка) срезается до предела.
+    for (const item of items) {
+      const unread = Math.min(Math.floor(item.unread), Number.MAX_SAFE_INTEGER);
+      if (unread > 0) observed.push({ ...item, unread });
+    }
     if (error === null) continue;
     log(`proactive: ${source.name} check failed: ${error}`);
     untouched.push(source.prefix);
@@ -132,7 +152,9 @@ function admit(
     const entry = state.seen[item.key];
     const urgent = isUrgentSender(config, item.from);
     const stale = clock.now - entry.firstSeenMs >= config.staleMinutes * 60_000;
-    return !entry.reported && (stale || urgent || item.failure)
+    // Сбой источник отдаёт, только когда дроссель Alert пропускает (alertDue): решает он, а не
+    // запись `seen`, которая могла остаться «сообщён» от прошлого падения того же юнита.
+    return item.failure || (!entry.reported && (stale || urgent))
       ? [{ ...item, urgent }]
       : [];
   });
@@ -231,13 +253,21 @@ function watchPrompt(candidates: readonly Candidate[], tr: Translate): string {
   return flagged.attack ? `${injectionWarning()}\n\n${prompt}` : prompt;
 }
 
-/** Части ответа по строкам `<!-- iva:next -->`; `QUIET`, пусто и одни разделители — ни одной. */
+/**
+ * Части ответа по `<!-- iva:next -->`; пусто и одни разделители — ни одной. Строка из голого
+ * QUIET (в любом регистре и обрамлении) выпадает и внутри части: слабая модель пишет «QUIET» и
+ * следом текст, а шов отправки режет длинное по строкам — слово QUIET владельцу не уходит.
+ */
 function partsOf(text: string): string[] {
-  const trimmed = text.trim();
-  if (trimmed === "QUIET") return [];
-  return trimmed
+  return text
     .split(NEXT_PART)
-    .map((p) => p.trim())
+    .map((p) =>
+      p
+        .split("\n")
+        .filter((line) => !isQuietReply(line))
+        .join("\n")
+        .trim(),
+    )
     .filter(Boolean);
 }
 
@@ -250,7 +280,11 @@ async function deliver(
   let sent = false;
   let all = parts.length > 0;
   for (const part of parts) {
-    const result = await send(part);
+    // Брошенное исключение шва — тот же отказ части: остальные части идут, сбой не сообщён.
+    const result = await send(part).catch((error: unknown) => ({
+      ok: false,
+      error: message(error),
+    }));
     if (result.ok) sent = true;
     else {
       all = false;
@@ -290,10 +324,21 @@ function observedState(
   return { ...base, seen };
 }
 
+/** Назвала ли часть сбой: имя юнита из `failure:<юнит>` без `.service`, без регистра. */
+const names = (part: string, key: string) =>
+  part.toLowerCase().includes(
+    key
+      .slice(key.indexOf(":") + 1)
+      .replace(/\.(?:service|timer)$/u, "")
+      .toLowerCase(),
+  );
+
 /**
- * О сбое владелец узнаёт всегда: модель промолчала (QUIET, пусто, одни разделители), а среди
- * кандидатов есть сбои — код шлёт их строки `note` одним сообщением, и сообщёнными считаются
- * только они. Иначе ход повторялся бы каждый час и тратил `modelWakes`.
+ * О сбое владелец узнаёт всегда. Модель промолчала (QUIET, пусто, одни разделители) — код шлёт
+ * строки `note` сбоев одним сообщением, и сообщёнными считаются только они: иначе ход повторялся
+ * бы каждый час и тратил `modelWakes`. Модель написала, но какой-то сбой не назвала (слабая
+ * модель ответила про чаты) — его строка `note` идёт следом отдельным сообщением: для сбоя
+ * дубль лучше молчания.
  */
 function toldParts(
   parts: readonly string[],
@@ -301,13 +346,17 @@ function toldParts(
   log: (line: string) => void,
 ): { readonly parts: readonly string[]; readonly told: readonly Candidate[] } {
   const failures = candidates.filter((c) => c.failure);
-  if (parts.length > 0 || failures.length === 0)
-    return { parts, told: candidates };
+  const unnamed = failures.filter(
+    (c) => !parts.some((part) => names(part, c.key)),
+  );
+  if (unnamed.length === 0) return { parts, told: candidates };
+  const note = unnamed.map((c) => c.note ?? c.key).join("\n");
+  if (parts.length > 0) {
+    log("proactive: the model did not name a failure, its note is sent");
+    return { parts: [...parts, note], told: candidates };
+  }
   log("proactive: the model kept quiet about a failure, its note is sent");
-  return {
-    parts: [failures.map((c) => c.note ?? c.key).join("\n")],
-    told: failures,
-  };
+  return { parts: [note], told: failures };
 }
 
 /** Шаги 8–9: ход, доставка, подъём и отметка сбоев. Провал хода — код 1, отправки нет. */
@@ -482,7 +531,10 @@ async function brief(
   if (!(await save(deps, claimed, "brief claim", log)))
     return { state, failed: true };
   const tr = await deps.translate();
-  const unfixed = (await deps.unfixed?.()) ?? [];
+  // Список не прочитался — Brief всё равно идёт, и причина стоит в нём строкой.
+  const unfixed = await (deps.unfixed?.() ?? Promise.resolve([])).catch(
+    (error: unknown) => [`failures check failed: ${message(error)}`],
+  );
   const text = await turnText(
     deps,
     briefPrompt(slot, tr, unfixed),

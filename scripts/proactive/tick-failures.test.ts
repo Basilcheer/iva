@@ -16,7 +16,7 @@ after(() => rmSync(ROOT, { recursive: true, force: true }));
 const { PROACTIVE_DEFAULTS } = await import("#lib/proactive-config.ts");
 const { runProactiveTick } = await import("./tick.ts");
 const { failuresSource } = await import("./precheck.ts");
-const { initialState } = await import("./state.ts");
+const { initialState, writeProactiveState } = await import("./state.ts");
 const { recordAlert } = await import("../lib/notice-policy.ts");
 
 import type { ProactiveConfig } from "#lib/proactive-config.ts";
@@ -238,7 +238,12 @@ test("two failures delivered, the throttle of the second is not recorded → onl
   h.plugin = true;
   writeState(h);
   assert.equal(await runProactiveTick(NOON, h.deps), 0);
-  assert.equal(h.sent.length, 1);
+  // Модель назвала только backup: строка второго сбоя идёт следом от кода.
+  assert.equal(h.sent.length, 2);
+  assert.match(
+    h.sent[1] ?? "",
+    /^a regular job failed: iva-plugin-x\.service/u,
+  );
   assert.ok(
     h.logs.some((l) => l.startsWith("proactive: alert throttle not recorded")),
   );
@@ -258,7 +263,10 @@ test("the turn about a failure fails → no throttle; the next run tells it", as
   h.reply = turn("ещё раз");
   assert.equal(await runProactiveTick(NOON + HOUR, h.deps), 0);
   assert.equal(h.prompts.length, 2, "a failure: a double, not silence");
-  assert.deepEqual(h.sent, ["ещё раз"]);
+  // «ещё раз» сбой не называет — его строка идёт следом от кода.
+  assert.equal(h.sent[0], "ещё раз");
+  assert.match(h.sent[1] ?? "", /^a regular job failed: backup\.service/u);
+  assert.equal(h.sent.length, 2);
 });
 
 test("a failure whose message was not delivered comes again on the next run", async () => {
@@ -508,4 +516,55 @@ test("QUIET about a failure and an ordinary item together → only the failure n
   const state = readState(h);
   assert.equal(state.seen["failure:backup.service"]?.reported, true);
   assert.equal(state.wakes.count, 0);
+});
+
+// Хаос-свойство (3), находка: сбой сообщён, юнит выздоровел в прогоне, чья запись состояния не
+// удалась (дроссель уже снят alertResolved, а `seen` остался «сообщён»), и упал снова — повтор
+// молчал навсегда. Решает дроссель Alert, не старая запись `seen`.
+test("a failure told, healed in a run whose state write failed, fails again → it is told again", async () => {
+  let failWrite = false;
+  const h = harness({
+    writeState: (path, state) =>
+      failWrite
+        ? Promise.reject(new Error("ENOSPC: no space left on device"))
+        : writeProactiveState(path, state),
+  });
+  writeState(h);
+  h.unit = { status: "0", exited: sec(NOON - 10 * MIN) };
+  h.plugin = true;
+  h.reply = turn("iva-plugin-x упал.");
+  assert.equal(await runProactiveTick(NOON, h.deps), 0);
+  assert.equal(
+    readState(h).seen["failure:iva-plugin-x.service"]?.reported,
+    true,
+  );
+  h.plugin = false;
+  failWrite = true;
+  assert.equal(await runProactiveTick(NOON + HOUR, h.deps), 1);
+  // Здоровый юнит снимает свой дроссель (alertResolved); поддельный list-units этого харнесса
+  // показывает только упавшие плагины, поэтому снимаем его здесь.
+  rmSync(join(h.dir, "alert-state.json"), { force: true });
+  failWrite = false;
+  h.plugin = true;
+  assert.equal(await runProactiveTick(NOON + 2 * HOUR, h.deps), 0);
+  assert.equal(h.prompts.length, 2, "the relapse woke nobody");
+  assert.match(h.prompts[1] ?? "", /failure:iva-plugin-x\.service/u);
+});
+
+// Хаос-свойство (6), находки: QUIET в другом регистре, с точкой или звёздочками, строкой перед
+// текстом и разделитель в той же строке, что и текст, уходили владельцу как есть.
+test("a weak model's QUIET in any case or wrapping, and a separator glued to the text: no QUIET reaches the owner, the parts split", async () => {
+  const h = harness();
+  writeState(h);
+  h.reply = turn(
+    "Quiet.<!-- iva:next -->**QUIET**\n`quiet`\nQUIET\nbackup упал.",
+  );
+  assert.equal(await runProactiveTick(NOON, h.deps), 0);
+  assert.deepEqual(h.sent, ["backup упал."]);
+  const g = harness();
+  writeState(g);
+  g.reply = turn("  QUIET  <!-- iva:next -->\n«QUIET»");
+  assert.equal(await runProactiveTick(NOON, g.deps), 0);
+  assert.equal(g.sent.length, 1);
+  assert.match(g.sent[0] ?? "", /^a regular job failed: backup\.service/u);
 });
