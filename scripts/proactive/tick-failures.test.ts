@@ -40,6 +40,8 @@ type Harness = {
   readonly logs: string[];
   /** Ответ systemctl: последний выход backup.service или код отказа. */
   unit: { status: string; exited: string } | { code: number };
+  /** Упал ли ещё и сервис плагина iva-plugin-x.service (второй сбой). */
+  plugin: boolean;
   tg: SourceResult;
   tgChecks: number;
   reply: ReminderTurn | Error;
@@ -63,6 +65,7 @@ function harness(overrides: Partial<TickDeps> = {}): Harness {
     sent: [],
     logs: [],
     unit: { status: "1", exited: sec(NOON - 10 * MIN) },
+    plugin: false,
     tg: { items: [], error: null },
     tgChecks: 0,
     reply: turn("backup упал: диск полон."),
@@ -78,15 +81,24 @@ function harness(overrides: Partial<TickDeps> = {}): Harness {
         stdout: "n/a n/a n/a n/a backup.timer backup.service",
       });
     if (args[0] === "list-units")
-      return Promise.resolve({ code: 0, stdout: "" });
+      return Promise.resolve({
+        code: 0,
+        stdout: h.plugin
+          ? "iva-plugin-x.service loaded failed failed plugin x"
+          : "",
+      });
+    const plugin = h.plugin
+      ? "\n\nId=iva-plugin-x.service\nResult=exit-code\nExecMainStatus=1\nExecMainExitTimestamp="
+      : "";
     return Promise.resolve({
       code: 0,
-      stdout: [
-        "Id=backup.service",
-        "Result=exit-code",
-        `ExecMainStatus=${h.unit.status}`,
-        `ExecMainExitTimestamp=${h.unit.exited}`,
-      ].join("\n"),
+      stdout:
+        [
+          "Id=backup.service",
+          "Result=exit-code",
+          `ExecMainStatus=${h.unit.status}`,
+          `ExecMainExitTimestamp=${h.unit.exited}`,
+        ].join("\n") + plugin,
     });
   };
   const telegram: Source = {
@@ -135,7 +147,7 @@ function writeState(h: Harness, patch: Partial<ProactiveState> = {}): void {
 const alertState = (h: Harness): unknown =>
   JSON.parse(readFileSync(join(h.dir, "alert-state.json"), "utf8"));
 
-test("a failed timer wakes the model at once (no staleMinutes); the claim records the throttle and failuresSeenUpToMs; no repeat", async () => {
+test("a failed timer wakes the model at once (no staleMinutes); after delivery the throttle and failuresSeenUpToMs are recorded; no repeat", async () => {
   const h = harness();
   writeState(h);
   assert.equal(await runProactiveTick(NOON, h.deps), 0);
@@ -175,27 +187,68 @@ test("first run: failures of the last 24 hours come; older ones do not", async (
   assert.deepEqual(old.prompts, []);
 });
 
-test("the throttle write in the claim fails → no turn, exit 1, nothing claimed; the next run repeats", async () => {
+test("the claim write fails with a failure among the candidates → no turn, exit 1, no throttle; the next run takes the failure again", async () => {
   let failing = true;
   const h = harness({
-    recordAlert: () => !failing,
+    writeState: async (path, state) => {
+      if (failing) throw new Error("ENOSPC");
+      const { writeProactiveState } = await import("./state.ts");
+      await writeProactiveState(path, state);
+    },
   });
   writeState(h);
   assert.equal(await runProactiveTick(NOON, h.deps), 1);
   assert.deepEqual(h.prompts, []);
-  assert.ok(
-    h.logs.includes("proactive: alert throttle not recorded, model not woken"),
-  );
-  const state = readState(h);
-  assert.equal(state.seen["failure:backup.service"], undefined);
-  assert.equal(state.failuresSeenUpToMs, NOON - 26 * HOUR);
-  assert.deepEqual(state.modelWakes, { day: "", count: 0 });
+  assert.throws(() => alertState(h), "no throttle before the delivery");
+  failing = false;
+  assert.equal(await runProactiveTick(NOON + HOUR, h.deps), 0);
+  assert.equal(h.prompts.length, 1, "a failure repeats: silence is worse");
+  assert.match(h.prompts[0] ?? "", /failure:backup\.service/u);
+});
+
+test("two failures, the claim write fails → both come again on the next run", async () => {
+  let failing = true;
+  const h = harness({
+    writeState: async (path, state) => {
+      if (failing) throw new Error("ENOSPC");
+      const { writeProactiveState } = await import("./state.ts");
+      await writeProactiveState(path, state);
+    },
+  });
+  h.plugin = true;
+  writeState(h);
+  assert.equal(await runProactiveTick(NOON, h.deps), 1);
   failing = false;
   assert.equal(await runProactiveTick(NOON + HOUR, h.deps), 0);
   assert.equal(h.prompts.length, 1);
+  assert.match(h.prompts[0] ?? "", /failure:backup\.service/u);
+  assert.match(h.prompts[0] ?? "", /failure:iva-plugin-x\.service/u);
 });
 
-test("the turn about a failure fails after the claim → the throttle is already recorded, no repeated Alert", async () => {
+test("two failures delivered, the throttle of the second is not recorded → only the second comes again", async () => {
+  const h = harness();
+  const real = h.deps.recordAlert;
+  (h as { deps: TickDeps }).deps = {
+    ...h.deps,
+    recordAlert: (key, essence) =>
+      key === "failure:iva-plugin-x.service"
+        ? false
+        : (real?.(key, essence) ?? false),
+  };
+  h.plugin = true;
+  writeState(h);
+  assert.equal(await runProactiveTick(NOON, h.deps), 0);
+  assert.equal(h.sent.length, 1);
+  assert.ok(
+    h.logs.some((l) => l.startsWith("proactive: alert throttle not recorded")),
+  );
+  assert.equal(await runProactiveTick(NOON + HOUR, h.deps), 0);
+  assert.equal(h.prompts.length, 2);
+  assert.match(h.prompts[1] ?? "", /failure:iva-plugin-x\.service/u);
+  assert.doesNotMatch(h.prompts[1] ?? "", /failure:backup\.service/u);
+});
+
+test("the turn about a failure fails → no throttle; the next run tells it", async () => {
   const h = harness();
   writeState(h);
   h.reply = new Error("provider down");
@@ -204,7 +257,27 @@ test("the turn about a failure fails after the claim → the throttle is already
   assert.deepEqual(h.sent, []);
   h.reply = turn("ещё раз");
   assert.equal(await runProactiveTick(NOON + HOUR, h.deps), 0);
-  assert.equal(h.prompts.length, 1, "lost, not doubled (ADR-0007)");
+  assert.equal(h.prompts.length, 2, "a failure: a double, not silence");
+  assert.deepEqual(h.sent, ["ещё раз"]);
+});
+
+test("a failure whose message was not delivered comes again on the next run", async () => {
+  let refuse = true;
+  const h = harness({
+    send: () =>
+      Promise.resolve(
+        refuse ? { ok: false, error: "Telegram 502" } : { ok: true, error: "" },
+      ),
+  });
+  writeState(h);
+  assert.equal(await runProactiveTick(NOON, h.deps), 0);
+  assert.throws(() => alertState(h));
+  refuse = false;
+  assert.equal(await runProactiveTick(NOON + HOUR, h.deps), 0);
+  assert.equal(h.prompts.length, 2);
+  assert.deepEqual(alertState(h), {
+    "failure:backup.service": { essence: "1", lastSentAt: NOON },
+  });
 });
 
 test("quiet hours: a night failure waits — the first run after 08:00 tells it", async () => {

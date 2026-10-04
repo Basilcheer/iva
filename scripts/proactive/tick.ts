@@ -5,7 +5,8 @@
 // замок вторым, откатил бы счётчики дня — Proactive-nowfirst.cfg). Дальше runProactiveTick:
 // наступил слот — Brief (заявка briefDone до хода); затем Watch: проверка источников без
 // модели, фильтры, заявка до хода (ADR-0007: потеря, не дубль), ход, доставка частями,
-// запись подъёма. Коды выхода: 0 — прогон прошёл (в том числе
+// запись подъёма. Сбой — исключение: дроссель Alert и «сообщён» пишутся после доставки, обрыв
+// раньше даёт повтор (для сбоя молчание хуже дубля). Коды выхода: 0 — прогон прошёл (в том числе
 // «нового нет»), 1 — ошибка (факт в jobs.json, агент видит открытый провал).
 import { join } from "node:path";
 import { dataDir } from "#lib/data-dir.ts";
@@ -74,7 +75,7 @@ export type TickDeps = {
     source: "watch" | "brief",
   ) => Promise<{ ok: boolean; error: string }>;
   readonly translate: () => Promise<Translate>;
-  /** Отметка дросселя Alert для сбоя, ушедшего в ход (T3); false — не записалась. */
+  /** Отметка дросселя Alert для сбоя, доставленного владельцу (T3); false — не записалась. */
   readonly recordAlert?: (key: string, essence: string) => boolean;
   /** Непочиненные сбои для промпта Brief (T3), по строке. */
   readonly unfixed?: () => Promise<readonly string[]>;
@@ -119,7 +120,7 @@ async function observe(
   };
 }
 
-/** Шаги 5–6: кандидаты и фильтры по порядку — тихие часы, потолок подъёмов, потолок ходов. */
+/** Шаги 5–6: кандидаты и фильтры по порядку — тихие часы, предел подъёмов, предел ходов. */
 function admit(
   state: ProactiveState,
   observed: readonly WatchItem[],
@@ -144,24 +145,51 @@ function admit(
 }
 
 /**
- * Шаг 7: заявка до хода — пункты сообщены, ход посчитан; сбоям — отметка дросселя Alert и
- * сдвиг `failuresSeenUpToMs`. Отметка не записалась — null, хода нет.
+ * Шаг 7: заявка до хода (ADR-0007: потеря, не дубль) — обычные пункты сообщены, ход посчитан.
+ * Сбои в заявку не входят: для них молчание хуже дубля, их отмечает settleFailures после
+ * доставки.
  */
 function claim(
   state: ProactiveState,
   candidates: readonly Candidate[],
   day: string,
-  record: TickDeps["recordAlert"],
-): ProactiveState | null {
+): ProactiveState {
   const seen = { ...state.seen };
-  let failuresSeenUpToMs = state.failuresSeenUpToMs;
+  for (const { key, failure } of candidates)
+    if (!failure) seen[key] = { ...seen[key], reported: true };
+  return { ...state, seen, modelWakes: bump(state.modelWakes, day) };
+}
+
+/**
+ * После доставки всех частей: дроссель Alert каждому сбою, сбой с записанным дросселем сообщён,
+ * `failuresSeenUpToMs` сдвигается, только если записались все. Какая часть несла какой сбой, код
+ * не знает, поэтому отказ любой части оставляет сбои на следующий прогон. Обрыв до этой точки —
+ * тоже повтор.
+ */
+function settleFailures(
+  state: ProactiveState,
+  candidates: readonly Candidate[],
+  record: TickDeps["recordAlert"],
+  log: (line: string) => void,
+): ProactiveState {
+  const seen = { ...state.seen };
+  let all = true;
+  let upTo = state.failuresSeenUpToMs;
   for (const { key, failure } of candidates) {
+    if (!failure) continue;
+    if (record && !record(key, failure.essence)) {
+      all = false;
+      log(`proactive: alert throttle not recorded for ${key}, it comes again`);
+      continue;
+    }
     seen[key] = { ...seen[key], reported: true };
-    if (failure && record && !record(key, failure.essence)) return null;
-    failuresSeenUpToMs = Math.max(failuresSeenUpToMs, failure?.at ?? 0);
+    upTo = Math.max(upTo, failure.at);
   }
-  const modelWakes = bump(state.modelWakes, day);
-  return { ...state, seen, modelWakes, failuresSeenUpToMs };
+  return {
+    ...state,
+    seen,
+    failuresSeenUpToMs: all ? upTo : state.failuresSeenUpToMs,
+  };
 }
 
 /** Чужой текст в промпт — только через inbound-Gate, как данные. */
@@ -217,14 +245,18 @@ async function deliver(
   parts: readonly string[],
   send: (part: string) => ReturnType<TickDeps["send"]>,
   log: (line: string) => void,
-): Promise<boolean> {
+): Promise<{ readonly sent: boolean; readonly all: boolean }> {
   let sent = false;
+  let all = parts.length > 0;
   for (const part of parts) {
     const result = await send(part);
     if (result.ok) sent = true;
-    else log(`proactive: a part was not delivered: ${result.error}`);
+    else {
+      all = false;
+      log(`proactive: a part was not delivered: ${result.error}`);
+    }
   }
-  return sent;
+  return { sent, all };
 }
 
 async function save(
@@ -257,7 +289,7 @@ function observedState(
   return { ...base, seen };
 }
 
-/** Шаги 8–9: ход, доставка, подъём. Провал хода — код 1, отправки нет. */
+/** Шаги 8–9: ход, доставка, подъём и отметка сбоев. Провал хода — код 1, отправки нет. */
 async function wake(
   deps: TickDeps,
   {
@@ -279,19 +311,18 @@ async function wake(
   );
   if (text === null) return 1;
   const send = (part: string) => deps.send(part, "watch");
-  if (!(await deliver(partsOf(text), send, log))) {
-    log("proactive: nothing delivered");
-    return 0;
-  }
-  // Подъём с сообщением считается только за обычный пункт: срочные и сбои потолок не тратят.
-  const ordinary = candidates.some((c) => !c.urgent && !c.failure);
-  if (ordinary)
-    await save(
-      deps,
-      { ...claimed, wakes: bump(claimed.wakes, day) },
-      "wakes",
-      log,
-    );
+  const { sent, all } = await deliver(partsOf(text), send, log);
+  if (!sent) log("proactive: nothing delivered");
+  const failures = candidates.some((c) => c.failure);
+  // Подъём с сообщением считается только за обычный пункт: срочные и сбои предел не тратят.
+  const ordinary = sent && candidates.some((c) => !c.urgent && !c.failure);
+  if (!ordinary && !(all && failures)) return 0;
+  let next = ordinary
+    ? { ...claimed, wakes: bump(claimed.wakes, day) }
+    : claimed;
+  if (all && failures)
+    next = settleFailures(next, candidates, deps.recordAlert, log);
+  await save(deps, next, ordinary ? "wakes" : "failures", log);
   return 0;
 }
 
@@ -486,11 +517,7 @@ async function watch(
     log("proactive: nothing new, model not woken");
     return 0;
   }
-  const claimed = claim(state, candidates, clock.day, deps.recordAlert);
-  if (claimed === null) {
-    log("proactive: alert throttle not recorded, model not woken");
-    return 1;
-  }
+  const claimed = claim(state, candidates, clock.day);
   if (!(await save(deps, claimed, "claim", log))) return 1;
   return wake(deps, { claimed, candidates, day: clock.day }, log);
 }
