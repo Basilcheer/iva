@@ -33,9 +33,14 @@ export class JobFactsError extends Error {}
 
 export interface JobWake {
   readonly at: number;
-  /** deferred — провал в тихие часы: ход был, ответ не слали, провал стоит первым в утреннем Brief. */
-  readonly status: "answered" | "empty" | "failed" | "deferred";
+  readonly status: "answered" | "empty" | "failed";
   readonly error: string | null;
+  /**
+   * Провал в тихие часы: ход был (status `empty`), ответ не слали, провал стоит первым в утреннем
+   * Brief. Отдельным необязательным полем, а не значением status: разбор 0.4.11 лишних полей не
+   * проверяет, и откат строку не теряет.
+   */
+  readonly deferred?: true;
 }
 
 export interface JobFact {
@@ -95,9 +100,9 @@ function isWake(value: unknown): value is JobWake {
     isSafeInt(wake.at) &&
     (wake.status === "answered" ||
       wake.status === "empty" ||
-      wake.status === "failed" ||
-      wake.status === "deferred") &&
-    (wake.error === null || typeof wake.error === "string")
+      wake.status === "failed") &&
+    (wake.error === null || typeof wake.error === "string") &&
+    (wake.deferred === undefined || wake.deferred === true)
   );
 }
 

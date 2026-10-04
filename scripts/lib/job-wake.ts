@@ -63,6 +63,9 @@ export function jobWakePrompt(fact: JobFact, tr: Translate): string {
   return `${head}\n${instruction}${tail}`;
 }
 
+/** Исход пробуждения для вызывающего: статус строки или «отложен до утреннего Brief». */
+export type WakeOutcome = JobWake["status"] | "deferred";
+
 /** Контекст одного пробуждения: куда писать исход и как говорить в журнал. */
 type WakeRun = {
   readonly name: string;
@@ -151,7 +154,7 @@ async function deliverAnswer(
 async function wakeOnFailure(
   run: WakeRun,
   fact: JobFact,
-): Promise<JobWake["status"]> {
+): Promise<WakeOutcome> {
   // Ход идёт и в тихие часы: только он показывает сторожу, жив ли агент. Упал — исход failed,
   // и сторож jobs-watchdog скажет владельцу утром, как раньше.
   const answer = await agentAnswer(fact, run.deps);
@@ -164,12 +167,14 @@ async function wakeOnFailure(
     run.log(`wake: ${run.name} turn failed: ${answer.failure}`);
     return "failed";
   }
-  // Тихие часы: ответ ночью не шлём; провал открыт и встанет первым в утреннем Brief.
+  // Тихие часы: ответ ночью не шлём; провал открыт и встанет первым в утреннем Brief. На диске —
+  // `empty` и признак deferred: ход был, агент жив (сторож), а 0.4.11 строку читает.
   if (run.deps.quiet?.(run.now()) === true) {
     const recorded = await recordOutcome(run.deps, run.name, run.startedAt, {
       at: run.now(),
-      status: "deferred",
+      status: "empty",
       error: null,
+      deferred: true,
     });
     run.log(
       `wake: ${run.name} failed in the quiet hours, deferred to the morning brief`,
@@ -189,7 +194,7 @@ export async function runJobWake(
   name: string,
   startedAt: number,
   deps: JobWakeDeps,
-): Promise<JobWake["status"]> {
+): Promise<WakeOutcome> {
   const run: WakeRun = {
     name,
     startedAt,

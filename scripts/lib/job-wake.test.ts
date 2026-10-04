@@ -322,6 +322,39 @@ test("успешное расписание сообщает failed, когда 
   assert.equal(calls, 0);
 });
 
+// Разбор строки jobs.json из 0.4.11 (3ad563e4, agent/lib/job-facts.ts:89-118) — копия: строку,
+// которую пишет новая версия, старая обязана принять, иначе откат стирает отложенный провал.
+function isFactAt3ad563e4(value: unknown): boolean {
+  const isSafeInt = (v: unknown) =>
+    typeof v === "number" && Number.isSafeInteger(v);
+  const isWake = (v: unknown) => {
+    if (typeof v !== "object" || v === null) return false;
+    const wake = v as Record<string, unknown>;
+    return (
+      isSafeInt(wake.at) &&
+      (wake.status === "answered" ||
+        wake.status === "empty" ||
+        wake.status === "failed") &&
+      (wake.error === null || typeof wake.error === "string")
+    );
+  };
+  if (typeof value !== "object" || value === null) return false;
+  const f = value as Record<string, unknown>;
+  return (
+    typeof f.name === "string" &&
+    f.name.length > 0 &&
+    isSafeInt(f.startedAt) &&
+    isSafeInt(f.finishedAt) &&
+    (f.finishedAt as number) >= (f.startedAt as number) &&
+    typeof f.ok === "boolean" &&
+    (f.error === null || typeof f.error === "string") &&
+    (f.exitCode === null || isSafeInt(f.exitCode)) &&
+    typeof f.tail === "string" &&
+    typeof f.acked === "boolean" &&
+    (f.wake === null || isWake(f.wake))
+  );
+}
+
 test("провал в тихие часы: ход идёт, но ничего не шлём, исход «отложен до утра» (deferred), сторож видит живого агента", async () => {
   const factsFile = file();
   await recordFact(factsFile, fact({ name: "memory-night" }), NOW);
@@ -348,11 +381,15 @@ test("провал в тихие часы: ход идёт, но ничего н
   assert.equal(turns.length, 1);
   assert.deepEqual(sent, []);
   const facts = await readFacts(factsFile);
+  // На диске — старый статус и необязательный признак: откат на 0.4.11 строку не теряет.
   assert.deepEqual(facts[0]?.wake, {
     at: NOW + 5,
-    status: "deferred",
+    status: "empty",
     error: null,
+    deferred: true,
   });
+  const raw = JSON.parse(readFileSync(factsFile, "utf8")) as unknown[];
+  assert.equal(raw.filter(isFactAt3ad563e4).length, raw.length);
   assert.match(logs.join("\n"), /deferred to the morning brief/u);
   // Провал остаётся открытым (его закрывает успех или ack), а сторож молчит: агент жив.
   assert.equal(facts[0]?.ok, false);
