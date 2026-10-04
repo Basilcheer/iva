@@ -412,3 +412,100 @@ test("a turn in two parts about a failure, one part not delivered → the failur
   assert.match(h.prompts[1] ?? "", /failure:backup\.service/u);
   assert.equal(readState(h).seen["failure:backup.service"]?.reported, true);
 });
+
+// Владелец узнаёт о сбое всегда: модель промолчала о нём (QUIET, пусто, одни разделители) — код
+// сам шлёт строки сбоев одним сообщением тем же путём, что части Watch, и пишет дроссель.
+test("the model keeps quiet about a failure → the code sends its note in one message, the failure is reported, the next run makes no turn", async () => {
+  for (const reply of ["QUIET", "", "  \n", "<!-- iva:next -->"]) {
+    const h = harness();
+    h.plugin = true;
+    h.reply = turn(reply);
+    writeState(h);
+    assert.equal(await runProactiveTick(NOON, h.deps), 0);
+    assert.equal(h.prompts.length, 1);
+    assert.equal(h.sent.length, 1, `one message for ${JSON.stringify(reply)}`);
+    assert.equal(
+      h.sent[0],
+      [
+        "a regular job failed: backup.service: exit status 1, result exit-code, exited 2026-10-05T11:50:00.000Z",
+        "a regular job failed: iva-plugin-x.service: exit status 1, result exit-code",
+      ].join("\n"),
+    );
+    assert.deepEqual(Object.keys(alertState(h) as object).sort(), [
+      "failure:backup.service",
+      "failure:iva-plugin-x.service",
+    ]);
+    const state = readState(h);
+    assert.equal(state.seen["failure:backup.service"]?.reported, true);
+    assert.equal(state.wakes.count, 0, "a failure spends no cap");
+    assert.equal(await runProactiveTick(NOON + HOUR, h.deps), 0);
+    assert.equal(h.prompts.length, 1, "no turn on the next run");
+    assert.equal(h.sent.length, 1);
+  }
+});
+
+test("the model keeps quiet about a failure and Telegram refuses the notes → the failure comes again on the next run", async () => {
+  let refuse = true;
+  const sent: string[] = [];
+  const h = harness({
+    send: (part) => {
+      if (refuse) return Promise.resolve({ ok: false, error: "Telegram 502" });
+      sent.push(part);
+      return Promise.resolve({ ok: true, error: "" });
+    },
+  });
+  h.reply = turn("QUIET");
+  writeState(h);
+  assert.equal(await runProactiveTick(NOON, h.deps), 0);
+  assert.throws(() => alertState(h), "no throttle without a delivery");
+  assert.equal(readState(h).seen["failure:backup.service"]?.reported, false);
+  refuse = false;
+  assert.equal(await runProactiveTick(NOON + HOUR, h.deps), 0);
+  assert.equal(h.prompts.length, 2);
+  assert.equal(sent.length, 1);
+  assert.match(sent[0] ?? "", /^a regular job failed: backup\.service/u);
+  assert.equal(readState(h).seen["failure:backup.service"]?.reported, true);
+});
+
+test("QUIET with no failure among the candidates → nothing is sent, as before", async () => {
+  const h = harness();
+  h.unit = { status: "0", exited: sec(NOON - 10 * MIN) };
+  h.tg = {
+    items: [{ key: "tg:42", unread: 2, from: { name: "Анна" } }],
+    error: null,
+  };
+  h.reply = turn("QUIET");
+  writeState(h, {
+    seen: {
+      "tg:42": { firstSeenMs: NOON - 2 * HOUR, unread: 2, reported: false },
+    },
+  });
+  assert.equal(await runProactiveTick(NOON, h.deps), 0);
+  assert.equal(h.prompts.length, 1);
+  assert.deepEqual(h.sent, []);
+  assert.ok(h.logs.includes("proactive: nothing delivered"));
+  const state = readState(h);
+  assert.equal(state.seen["tg:42"]?.reported, true, "claimed before the turn");
+  assert.equal(state.wakes.count, 0);
+});
+
+test("QUIET about a failure and an ordinary item together → only the failure notes go out; the ordinary item spends no Watch cap", async () => {
+  const h = harness();
+  h.tg = {
+    items: [{ key: "tg:42", unread: 2, from: { name: "Анна" } }],
+    error: null,
+  };
+  h.reply = turn("QUIET");
+  writeState(h, {
+    seen: {
+      "tg:42": { firstSeenMs: NOON - 2 * HOUR, unread: 2, reported: false },
+    },
+  });
+  assert.equal(await runProactiveTick(NOON, h.deps), 0);
+  assert.equal(h.sent.length, 1);
+  assert.match(h.sent[0] ?? "", /^a regular job failed: backup\.service/u);
+  assert.doesNotMatch(h.sent[0] ?? "", /tg:42|Анна/u);
+  const state = readState(h);
+  assert.equal(state.seen["failure:backup.service"]?.reported, true);
+  assert.equal(state.wakes.count, 0);
+});

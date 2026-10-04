@@ -290,6 +290,26 @@ function observedState(
   return { ...base, seen };
 }
 
+/**
+ * О сбое владелец узнаёт всегда: модель промолчала (QUIET, пусто, одни разделители), а среди
+ * кандидатов есть сбои — код шлёт их строки `note` одним сообщением, и сообщёнными считаются
+ * только они. Иначе ход повторялся бы каждый час и тратил `modelWakes`.
+ */
+function toldParts(
+  parts: readonly string[],
+  candidates: readonly Candidate[],
+  log: (line: string) => void,
+): { readonly parts: readonly string[]; readonly told: readonly Candidate[] } {
+  const failures = candidates.filter((c) => c.failure);
+  if (parts.length > 0 || failures.length === 0)
+    return { parts, told: candidates };
+  log("proactive: the model kept quiet about a failure, its note is sent");
+  return {
+    parts: [failures.map((c) => c.note ?? c.key).join("\n")],
+    told: failures,
+  };
+}
+
 /** Шаги 8–9: ход, доставка, подъём и отметка сбоев. Провал хода — код 1, отправки нет. */
 async function wake(
   deps: TickDeps,
@@ -312,11 +332,12 @@ async function wake(
   );
   if (text === null) return 1;
   const send = (part: string) => deps.send(part, "watch");
-  const delivered = await deliver(partsOf(text), send, log);
+  const { parts, told } = toldParts(partsOf(text), candidates, log);
+  const delivered = await deliver(parts, send, log);
   if (!delivered.sent) log("proactive: nothing delivered");
   const next = afterDelivery(
     deps,
-    { claimed, candidates, day },
+    { claimed, candidates: told, day },
     delivered,
     log,
   );

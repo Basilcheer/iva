@@ -67,7 +67,9 @@
 \*                    Код берёт кандидатов только из увиденного в этот прогон — подмножество
 \*                    того, что берёт модель
 \*   Turn             tick.ts:wake: TickDeps.runTurn = runReminderTurn (scripts/lib/reminder-turn.ts)
-\*                    + tick.ts:deliver (части по <!-- iva:next -->; QUIET и пусто — ничего)
+\*                    + tick.ts:deliver (части по <!-- iva:next -->; QUIET и пусто — ничего,
+\*                    а при сбое среди кандидатов tick.ts:toldParts шлёт строки note сбоев
+\*                    одним сообщением и отмечает только их — вне модели, как отметка сбоев)
 \*   Wakes            tick.ts:wake -> afterDelivery: запись wakes (state.ts:bump) после deliver,
 \*                    если ушла хоть одна часть и в ходе был обычный пункт (дошли все части —
 \*                    ещё и отметка сбоев, вне модели); отказ — строка в журнал
