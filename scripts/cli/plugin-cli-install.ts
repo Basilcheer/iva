@@ -25,6 +25,7 @@ import {
   pluginCodeProblem,
   pluginNamespace,
 } from "../lib/plugin-build.ts";
+import { carriesCodeOrMcp } from "../lib/plugin-proposal.ts";
 import {
   formatPluginSource,
   parsePluginSource,
@@ -60,6 +61,11 @@ type Undo = {
   readonly displaced: string | null;
 };
 
+type AddOptions = {
+  /** Зовёт `install-proposal` по тапу владельца: гвард `add` не нужен. */
+  readonly fromProposal?: boolean;
+};
+
 type Staged = {
   readonly root: string;
   readonly sha: string;
@@ -83,6 +89,7 @@ export function createPluginInstallCommands(
     translate,
     now,
     log,
+    interactive,
     components,
     absolute,
     locked,
@@ -135,10 +142,14 @@ export function createPluginInstallCommands(
     };
   }
 
-  /** Читает плагин или отказывает, назвав все причины. */
+  /**
+   * Читает плагин или отказывает, назвав все причины. `proposalOnly` — `add` без человека
+   * у терминала и не из `install-proposal`: тогда плагин с кодом или MCP не ставится.
+   */
   async function accept(
     root: string,
     label: string,
+    proposalOnly: boolean,
   ): Promise<{
     readonly report: PluginReport;
     readonly manifest: PluginManifest;
@@ -148,6 +159,15 @@ export function createPluginInstallCommands(
       for (const line of report.diagnostics) bad(line);
       throw new Error(`${label} is not a usable Agent Plugins folder`);
     }
+    // Гвард, не граница (как self-restart-guard): модель с `bash` ставит плагин с кодом
+    // или MCP только через предложение и тап владельца; терминал владельца — как раньше.
+    if (proposalOnly && carriesCodeOrMcp(root))
+      throw new Error(
+        translate(
+          "a plugin with code or MCP installs through iva plugin propose",
+          "плагин с кодом или MCP ставится через iva plugin propose",
+        ),
+      );
     for (const line of report.diagnostics) warn(line);
     return { report, manifest: report.manifest };
   }
@@ -185,6 +205,8 @@ export function createPluginInstallCommands(
     raw: PluginSource,
     previous: PluginEntry | null,
     provenance: Provenance | null = null,
+    /** `add` без человека у терминала и не из `install-proposal` (ADR-0009). */
+    proposalOnly = false,
   ): Promise<{
     readonly entry: PluginEntry;
     readonly report: PluginReport;
@@ -200,6 +222,7 @@ export function createPluginInstallCommands(
       const { report, manifest } = await accept(
         staged.root,
         formatPluginSource(source),
+        proposalOnly,
       );
       const name = manifest.name;
       if (previous && previous.name !== name)
@@ -349,7 +372,12 @@ export function createPluginInstallCommands(
     );
   }
 
-  async function add(): Promise<void> {
+  /** Без человека у терминала и не из `install-proposal`: код и MCP — только через тап. */
+  function proposalOnly(options: AddOptions | undefined): boolean {
+    return options?.fromProposal !== true && !interactive();
+  }
+
+  async function add(options?: AddOptions): Promise<void> {
     const raw = args[0];
     if (!raw)
       throw new Error(
@@ -377,7 +405,14 @@ export function createPluginInstallCommands(
           ? `Installing ${provenance.expect} from ${provenance.marketplace} (${formatPluginSource(source)})`
           : `Installing ${formatPluginSource(source)}`,
       );
-      return install(data, state, source, null, provenance);
+      return install(
+        data,
+        state,
+        source,
+        null,
+        provenance,
+        proposalOnly(options),
+      );
     });
 
     // Вопрос доверия — БЕЗ лока: он ждёт человека, а лок один на `iva update` и на

@@ -80,6 +80,11 @@ import { createMenu } from "../lib/menu/index.ts";
 import { admitTelegramUpdate } from "./inbox.ts";
 import { isPrivateTelegramChat } from "#lib/telegram-private-chat.ts";
 import { scheduleBridgeTask } from "./background.ts";
+import { parseProposalCallback } from "../lib/plugin-proposal.ts";
+import {
+  handlePluginProposalTap,
+  type PluginTap,
+} from "./plugin-proposal-tap.ts";
 
 type ControlCallbackQuery = TelegramCallbackQuery & { data: string };
 type PendingFlow = {
@@ -133,6 +138,8 @@ export type ControlDeps = {
   performResetImpl?: PerformResetImpl;
   resetRetryPendingImpl?: (chatKey: string) => boolean;
   resetIntentPendingImpl?: (chatKey: string) => boolean;
+  // «Установить» на предложении плагина: забрать копию и запустить установщик.
+  pluginTapImpl?: (tap: PluginTap) => Promise<void>;
 };
 
 const controlTg = tg as unknown as ControlTransport;
@@ -543,6 +550,7 @@ const DEFAULT_CONTROL_IO: Omit<ControlIo, "cancelImpl"> = {
   confirmTimeoutMs: STOP_CONFIRM_TIMEOUT_MS,
   watchTimeoutMs: RUN_STALE_MS,
   scheduleImpl: scheduleBridgeTask,
+  pluginTapImpl: (tap) => handlePluginProposalTap(tap),
 };
 
 // Переданный undefined значит «по умолчанию» — как у деструктуризации с дефолтами.
@@ -610,7 +618,14 @@ type CallbackContext = {
   io: ControlIo;
 };
 type CallbackKind =
-  "stop" | "stopRestart" | "update" | "wizard" | "menu" | "passthrough" | "tap";
+  | "stop"
+  | "stopRestart"
+  | "update"
+  | "wizard"
+  | "menu"
+  | "plugin"
+  | "passthrough"
+  | "tap";
 
 // Порядок важен: первое совпадение решает. Всё, что не совпало, — кнопка модели.
 const CALLBACK_KINDS: ReadonlyArray<
@@ -621,6 +636,7 @@ const CALLBACK_KINDS: ReadonlyArray<
   ["update", (data) => parseUpdateCallbackData(data) !== null],
   ["wizard", isWizardCallbackData],
   ["menu", (data) => data.startsWith("iva_menu:")],
+  ["plugin", (data) => parseProposalCallback(data) !== null],
   ["passthrough", isUnclaimedCallbackData],
 ];
 
@@ -655,6 +671,7 @@ const CALLBACK_HANDLERS: Record<
       "menu callback error:",
       true,
     ),
+  plugin: handlePluginTap,
   // Колбэк eve или незнакомый iva_*: не наш, решает путь сообщения.
   passthrough: () => Promise.resolve(UNCLAIMED),
   tap: handleButtonTap,
@@ -702,6 +719,27 @@ function dispatchCallback(context: CallbackContext): Claim {
   )
     return declineGroupCallback(context);
   return CALLBACK_HANDLERS[kind](context);
+}
+
+// «Установить» на предложении плагина (ADR-0009). Ставит только Allowlist в личном чате;
+// чужой тап и тап из группы гаснут молча, строкой в журнале. Тап никогда не становится
+// ходом модели: установку ведёт Bridge, вне хода.
+async function handlePluginTap({ callback, io }: CallbackContext) {
+  const digest12 = parseProposalCallback(callback.data) as string;
+  const chat = callbackChat(callback);
+  await io.ackImpl(callback.id).catch(() => {});
+  if (!isTrustedSender(callback.from) || !isPrivateTelegramChat(chat)) {
+    log(
+      "plugin proposal tap ignored: not the owner in a private chat",
+      senderId(callback.from),
+    );
+    return true;
+  }
+  return settleLogged(
+    io.pluginTapImpl({ digest12, chatId: chat?.id as number }).then(() => true),
+    "plugin proposal tap error:",
+    true,
+  );
 }
 
 async function declineGroupCallback({ callback, io }: CallbackContext) {

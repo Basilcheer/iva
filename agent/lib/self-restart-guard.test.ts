@@ -104,3 +104,30 @@ test("текст отказа объясняет модели, что предл
   assert.match(msg, /\/restart/);
   assert.match(msg, /#68/);
 });
+
+test("iva plugin trust|enable|update|sync из bash блокируются: плагин с кодом ставит тап владельца", () => {
+  for (const verb of ["trust", "enable", "update", "sync"]) {
+    blocked(`iva plugin ${verb} relay`);
+    blocked(`iva plugin ${verb}`);
+    blocked(`node bin/iva.mjs plugin ${verb} relay`);
+    blocked(`cd ~/iva/current && iva "plugin" ${verb} relay`);
+    blocked(`npm run iva -- plugin ${verb}`);
+    blocked(`bash -c 'iva plugin  ${verb} relay'`);
+  }
+});
+
+test("остальные подкоманды iva plugin проходят: их гвард не трогает", () => {
+  for (const verb of [
+    "remove",
+    "disable",
+    "untrust",
+    "list",
+    "add",
+    "propose",
+    "marketplace",
+  ])
+    allowed(`iva plugin ${verb} relay`);
+  allowed("iva plugin trusted");
+  allowed("iva plugin updates");
+  allowed("rg -n 'iva plugin trust' docs/");
+});

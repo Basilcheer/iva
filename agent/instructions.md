@@ -36,6 +36,8 @@ delivery preferences in the owner's rules.
 - Google → `google-workspace`
 - MCP → `connection_search`
 - personal Telegram → `telegram-userbot`
+- a new capability or plugin → `make-plugin`; your own docs are `docs/` in the
+  working directory of the running version (`docs/plugins.md`, `docs/cli.md`)
 - memory → "Memory map (MAP)", `memory_search`
 - user facts → "CORE"
 

@@ -1,5 +1,9 @@
 # Changelog
 
+## [Unreleased]
+
+- 🧩 **Ива сама пишет себе плагин**: по просьбе «сделай плагин, который…» Ива собирает плагин по скиллу `make-plugin`. Плагин из одних скиллов и скриптов ставит сама, он работает со следующего хода. Плагин с `mcp.json` или кодом в `sh.iva/` она только предлагает командой `iva plugin propose`: в личный чат приходит сообщение, собранное кодом, — что плагин будет запускать и сколько в нём файлов — с кнопкой «Установить». После тапа Bridge сверяет копию и ставит её вне хода модели, итог приходит сообщением. Тап не владельца, из группы, по устаревшему или изменённому предложению ничего не ставит; `iva plugin add` такого плагина без терминала отказывает, а `iva plugin trust|enable|update|sync` из `bash` модели заблокированы. Iva writes her own plugins: skills-only ones she installs herself, ones with MCP or code she proposes with `iva plugin propose`, and the Bridge installs them after the owner taps Install in a private chat.
+
 ## [0.4.11] - 2026-10-03
 
 - 🌙 **Ночная память снова работает на подписке ChatGPT**: ночь звала модель обычным запросом, а подписка принимает только потоковые, и бэкенд отвечал 400 «Stream must be set to true» на первом же вызове каждой ночи. Теперь ночной запрос у всех провайдеров идёт потоком и ждёт полный ответ. Заодно низкое усилие рассуждений, которое ночь просит сама, больше не перекрывается общим `THINKING_EFFORT` чата. The nightly memory call streams on every provider, so ChatGPT subscriptions no longer answer 400; the night's own low reasoning effort is no longer overridden by the chat default.
