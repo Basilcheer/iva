@@ -432,8 +432,8 @@ function briefPrompt(
 
 /**
  * Brief: заявка `briefDone` до хода (замок + заявка — один Brief на слот), ход, доставка.
- * Слот 0 промолчал — код шлёт «Утро: новых дел нет». Провал заявки или хода — Brief этого
- * слота нет, прогон кончается ошибкой, но Watch идёт.
+ * Слот 0 промолчал — код шлёт «Утро: новых дел нет». Провал заявки, хода или доставки всех
+ * частей — Brief этого слота нет, прогон кончается ошибкой, но Watch идёт.
  */
 async function brief(
   deps: TickDeps,
@@ -473,8 +473,14 @@ async function brief(
     log("proactive: morning brief was empty, sent the nothing-new line");
     parts = [tr("Morning: nothing new", "Утро: новых дел нет")];
   }
-  await deliver(parts, (part) => deps.send(part, "brief"), log);
-  return { state: claimed, failed: false };
+  const { sent } = await deliver(
+    parts,
+    (part) => deps.send(part, "brief"),
+    log,
+  );
+  // Не дошла ни одна часть — провал прогона (код 1, факт в jobs.json), как у дайджеста 0.4.11.
+  if (parts.length > 0 && !sent) log("proactive: the brief was not delivered");
+  return { state: claimed, failed: parts.length > 0 && !sent };
 }
 
 /** Один прогон под уже взятым замком. Возвращает код выхода. */

@@ -256,6 +256,40 @@ test("the Brief turn fails: no Brief for the slot, Watch still runs, the run end
   }
 });
 
+test("Telegram refuses every part of the Brief: the run ends with exit 1 (a failure fact, as the digest in 0.4.11); one part reaching is not an error", async () => {
+  const h = harness({
+    send: (part, source) => {
+      h.sent.push({ part, source });
+      return Promise.resolve({ ok: false, error: "Telegram 502" });
+    },
+  });
+  await seed(h);
+  assert.equal(await runProactiveTick(at(8, 30), h.deps), 1);
+  assert.ok(h.logs.some((l) => l.includes("Telegram 502")));
+
+  let calls = 0;
+  const partial = harness({
+    send: (part, source) => {
+      partial.sent.push({ part, source });
+      calls++;
+      return Promise.resolve(
+        calls === 1
+          ? { ok: false, error: "Telegram 502" }
+          : { ok: true, error: "" },
+      );
+    },
+  });
+  await seed(partial);
+  partial.reply = turn("Обзор.\n<!-- iva:next -->\nСчёт ждёт оплаты.");
+  assert.equal(await runProactiveTick(at(8, 30), partial.deps), 0);
+
+  // QUIET днём — нечего слать, это не провал.
+  const quiet = harness();
+  await seed(quiet);
+  quiet.reply = turn("QUIET");
+  assert.equal(await runProactiveTick(at(14), quiet.deps), 0);
+});
+
 test("the briefDone claim write fails: no Brief turn, Watch still runs, the run ends with an error, the next tick repeats", async () => {
   let writes = 0;
   const h = harness({
