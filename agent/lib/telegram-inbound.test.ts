@@ -505,7 +505,7 @@ await test("фото: vision в контексте, повтор того же �
 
   const first = await inbound.runTelegramInbound(photo(), effects);
   assert.ok(first?.context);
-  assert.match(first.context[0], /^\[photo\] image \(/u);
+  assert.match(first.context[0], /^\[photo\] saved: \S*attachments\//u);
   assert.match(first.context[0], /What's in it: a whiteboard with numbers/u);
   assert.ok(first.context[0].includes(`${VAULT}/attachments/`));
   assert.equal(calls.downloads, 1);
