@@ -400,7 +400,8 @@ export function exitTime(value: string): number | null {
 
 /**
  * Таймерные сервисы пользователя (кроме юнитов Ивы `iva*`) и сервисы плагинов и юзербота.
- * Таймер упал — последний `ExecMainStatus` не 0; сервис — `failed` в `list-units`.
+ * Таймер упал — последний `ExecMainStatus` не 0; сервис — `failed` в `list-units` или `Result`
+ * последнего запуска не `success` (цикл перезапусков).
  */
 async function unitStates(run: Systemctl) {
   const listed = await systemctl(run, "list-timers", "--all", "--no-legend");
@@ -431,10 +432,15 @@ async function unitStates(run: Systemctl) {
     const timer = timers.has(unit);
     const [status = "", result = ""] = [p.ExecMainStatus, p.Result];
     const failed = (row: string[]) => row[0] === unit && row[2] === "failed";
+    // Сервис с Restart= падает по кругу в «activating auto-restart» и до `failed` не доходит:
+    // упавшим его делает и Result последнего запуска.
+    const crashed = result !== "" && result !== "success";
     return {
       unit,
       timer,
-      failing: timer ? !["", "0"].includes(status) : plugins.some(failed),
+      failing: timer
+        ? !["", "0"].includes(status)
+        : plugins.some(failed) || crashed,
       essence: timer ? status : result,
       ...exitNote(unit, status, result, p.ExecMainExitTimestamp),
     };

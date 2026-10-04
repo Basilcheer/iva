@@ -48,7 +48,8 @@ function fakeSystemctl(
     units = {},
   }: {
     timers?: Record<string, string>;
-    plugins?: Record<string, "failed" | "active" | "inactive">;
+    /** Состояние в list-units: ACTIVE или «ACTIVE SUB» (`activating auto-restart`). */
+    plugins?: Record<string, string>;
     units?: Record<string, Unit>;
   },
   calls: string[][] = [],
@@ -71,7 +72,7 @@ function fakeSystemctl(
         stdout: Object.entries(plugins)
           .map(
             ([unit, active]) =>
-              `${unit} loaded ${active} ${active === "active" ? "running" : active} Plugin`,
+              `${unit} loaded ${active.includes(" ") ? active : `${active} ${active === "active" ? "running" : active}`} Plugin`,
           )
           .join("\n"),
       });
@@ -280,6 +281,35 @@ test("a failed plugin service is an item whatever its exit time; the essence is 
   assert.deepEqual(
     items.map((i) => [i.key, i.failure]),
     [["failure:iva-plugin-weather.service", { essence: "timeout", at: 0 }]],
+  );
+});
+
+// Живой сервер 04.10: сервис плагина с Restart= падает по кругу и в list-units стоит
+// «activating auto-restart», до `failed` не доходит никогда. Сбой — и по Result из show.
+test("a plugin service in a restart loop (activating auto-restart, Result=exit-code) is an item; a plain start (activating, Result=success) is not", async () => {
+  const run = fakeSystemctl({
+    plugins: {
+      "iva-plugin-hello-smoke2-hello.service": "activating auto-restart",
+      "iva-plugin-starting.service": "activating start",
+      "iva-telegram-userbot.service": "activating auto-restart",
+    },
+    units: {
+      "iva-plugin-hello-smoke2-hello.service": {
+        status: "203",
+        result: "exit-code",
+      },
+      "iva-plugin-starting.service": { status: "0", result: "success" },
+      "iva-telegram-userbot.service": { status: "1", result: "exit-code" },
+    },
+  });
+  const { items, error } = await failuresSource(dir(), run).check(since(NOON));
+  assert.equal(error, null);
+  assert.deepEqual(
+    items.map((i) => [i.key, i.failure?.essence]),
+    [
+      ["failure:iva-plugin-hello-smoke2-hello.service", "exit-code"],
+      ["failure:iva-telegram-userbot.service", "exit-code"],
+    ],
   );
 });
 
