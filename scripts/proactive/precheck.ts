@@ -346,21 +346,26 @@ const PLUGIN_UNITS =
 const SHOW =
   "show -p Id -p Result -p ExecMainStatus -p ExecMainExitTimestamp --";
 
-/** systemctl есть, но не ответил: в журнал, без пункта `check:timers` (таблица отказов T3). */
+/**
+ * systemctl не ответил или его нет (macOS): источник пуст, ошибка только в журнал, без пункта
+ * `check:timers` (таблица отказов T3).
+ */
 class SystemctlFailed extends Error {}
+class SystemctlMissing extends SystemctlFailed {}
 
-/** Строки вывода как токены; systemctl нет — пусто (источник не подключён). */
+/** Вывод команды; отказ, срок или нет бинаря — SystemctlFailed. */
 async function systemctl(run: Systemctl, ...args: string[]) {
   const { code, stdout } = await run(args);
-  if (code === "timeout" || (code !== 0 && code !== "missing"))
+  if (code === "missing") throw new SystemctlMissing("systemctl not found");
+  if (code !== 0)
     throw new SystemctlFailed(
       `systemctl ${args[0]} ${code === "timeout" ? "timed out after 10 s" : `exited ${code}`}`,
     );
-  return code === "missing" ? null : stdout;
+  return stdout;
 }
 
-const tokens = (out: string | null) =>
-  (out ?? "")
+const tokens = (out: string) =>
+  out
     .split("\n")
     .map((line) => line.trim().split(/\s+/u))
     .filter((row) => row[0] !== "");
@@ -392,7 +397,6 @@ export function exitTime(value: string): number | null {
  */
 async function unitStates(run: Systemctl) {
   const listed = await systemctl(run, "list-timers", "--all", "--no-legend");
-  if (listed === null) return [];
   // Колонки `next left last passed unit activates`: сервисы — после имени таймера.
   const timers = new Set(
     tokens(listed).flatMap((row) =>
@@ -408,7 +412,7 @@ async function unitStates(run: Systemctl) {
   const shown = await systemctl(run, ...SHOW.split(" "), ...names);
   // Блоки `show` разделены пустой строкой, свойство — `Имя=значение`.
   const blocks = new Map(
-    (shown ?? "").split(/\n\s*\n/u).map((block) => {
+    shown.split(/\n\s*\n/u).map((block) => {
       const p = Object.fromEntries(
         block.split("\n").map((line) => line.trim().split(/=(.*)/su, 2)),
       ) as Record<string, string | undefined>;
@@ -490,7 +494,9 @@ export async function unfixedFailures(
     for (const u of await unitStates(run))
       if (u.timer && u.failing) lines.push(u.note);
   } catch (error) {
-    lines.push(`failures check failed: ${message(error)}`);
+    // Нет systemctl (macOS) — таймеров нет, это не сбой проверки.
+    if (!(error instanceof SystemctlMissing))
+      lines.push(`failures check failed: ${message(error)}`);
   }
   return lines;
 }

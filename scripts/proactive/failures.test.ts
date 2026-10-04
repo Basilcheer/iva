@@ -334,12 +334,36 @@ test("a unit no longer failed drops its throttle record (alertResolved): a relap
   assert.deepEqual(Object.keys(alerts(d) as object), ["authored-tree"]);
 });
 
-test("systemctl missing (macOS) → not connected: no items, no error", async () => {
+test("systemctl missing (macOS) → the source is empty, the error goes to the log only (silent), no check:timers", async () => {
   const run: Systemctl = () => Promise.resolve({ code: "missing", stdout: "" });
   assert.deepEqual(await failuresSource(dir(), run).check(since()), {
     items: [],
-    error: null,
+    error: "systemctl not found",
+    silent: true,
   });
+});
+
+test("unfixed failures without systemctl: the job failures stay, no «check failed» line in the Brief", async () => {
+  const d = dir();
+  await recordFact(
+    jobFactsFile(d),
+    {
+      name: "memory-night",
+      startedAt: NOON - HOUR,
+      finishedAt: NOON - HOUR + 1000,
+      ok: false,
+      error: "exited 1",
+      exitCode: 1,
+      tail: "",
+      acked: false,
+      wake: null,
+    },
+    NOON,
+  );
+  const run: Systemctl = () => Promise.resolve({ code: "missing", stdout: "" });
+  assert.deepEqual(await unfixedFailures(d, NOON, run), [
+    "job memory-night: exited 1",
+  ]);
 });
 
 test("systemctl exit ≠ 0 or a 10 s timeout → error to the log only (silent), no items", async () => {
