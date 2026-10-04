@@ -67,7 +67,12 @@ export async function handlePluginProposalTap(
     log("plugin proposal tap: installer started", outcome.name, digest12);
     return;
   }
-  const returned = returnProposal(dir, outcome.name, digest12);
+  const returned = returnProposal(
+    dir,
+    outcome.name,
+    digest12,
+    outcome.proposedMs,
+  );
   log(
     "plugin proposal tap: installer did not start",
     launched.msg,

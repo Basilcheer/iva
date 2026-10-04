@@ -152,9 +152,16 @@ test("returned proposal can be taken again", async () => {
   const digest12 = await plant(dir);
   const take = () =>
     takeProposal({ dir, digest12, nowMs: NOW, digest: pluginTreeDigest });
-  assert.equal((await take()).status, "taken");
+  const first = await take();
+  assert.equal(first.status, "taken");
+  assert.equal(first.status === "taken" && first.proposedMs, NOW);
 
-  returnProposal(dir, "relay", digest12);
+  returnProposal(
+    dir,
+    "relay",
+    digest12,
+    first.status === "taken" ? first.proposedMs : 0,
+  );
 
   assert.equal(findProposal(dir, digest12), "relay");
   assert.equal((await take()).status, "taken");

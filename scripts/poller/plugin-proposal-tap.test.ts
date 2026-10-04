@@ -154,3 +154,27 @@ test("an installer that does not start says why and puts the proposal back for a
   await handlePluginProposalTap({ digest12: w.digest12, chatId: 42 }, w.deps);
   assert.equal(w.launches.length, 2);
 });
+
+test("a failed installer start does not extend the proposal: a tap at +20 h puts it back, a tap at +40 h finds it out of date", async () => {
+  const w = await world();
+  const HOUR = 60 * 60 * 1000;
+  w.failLaunch("Failed to connect to bus");
+
+  await handlePluginProposalTap(
+    { digest12: w.digest12, chatId: 42 },
+    { ...w.deps, now: () => NOW + 20 * HOUR },
+  );
+  assert.equal(findProposal(w.dir, w.digest12), "relay", "put back");
+
+  w.succeedLaunch();
+  await handlePluginProposalTap(
+    { digest12: w.digest12, chatId: 42 },
+    { ...w.deps, now: () => NOW + 40 * HOUR },
+  );
+
+  assert.equal(w.launches.length, 1, "the second tap starts nothing");
+  assert.match(
+    w.replies[1]?.[1] ?? "",
+    /relay was not installed: .*out of date/u,
+  );
+});

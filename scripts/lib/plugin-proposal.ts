@@ -77,10 +77,15 @@ function entries(dir: string): string[] {
 }
 
 function ageMs(path: string, nowMs: number): number {
+  return nowMs - mtimeMs(path);
+}
+
+/** Время папки; её нет — минус бесконечность (возраст бесконечный). */
+function mtimeMs(path: string): number {
   try {
-    return nowMs - statSync(path).mtimeMs;
+    return statSync(path).mtimeMs;
   } catch {
-    return Number.POSITIVE_INFINITY;
+    return Number.NEGATIVE_INFINITY;
   }
 }
 
@@ -111,7 +116,13 @@ export function sweepProposals(dir: string, nowMs: number): void {
 }
 
 export type TakeOutcome =
-  | { readonly status: "taken"; readonly name: string; readonly path: string }
+  | {
+      readonly status: "taken";
+      readonly name: string;
+      readonly path: string;
+      /** Время propose (папки до stamp): возврат копии ставит его обратно. */
+      readonly proposedMs: number;
+    }
   | { readonly status: "stale"; readonly name: string | null };
 
 /**
@@ -138,17 +149,18 @@ export async function takeProposal(options: {
   }
   // От rename до stamp — без await: второй тап того же Bridge не должен увидеть копию между
   // ними, иначе он примет чужую свежую `.taken-*` за свою (specs/PluginProposal.tla).
-  const fresh = ageMs(taken, nowMs) <= PROPOSAL_TTL_MS && stamp(taken, nowMs);
+  const proposedMs = mtimeMs(taken);
+  const fresh = nowMs - proposedMs <= PROPOSAL_TTL_MS && stamp(taken, nowMs);
   const same = fresh && (await digestOf(taken, digest)) === digest12;
-  if (same) return { status: "taken", name, path: taken };
+  if (same) return { status: "taken", name, path: taken, proposedMs };
   rmSync(taken, { recursive: true, force: true });
   return { status: "stale", name };
 }
 
 /** Время тапа на забранной копии; `false` — копии уже нет или её не тронуть. */
-function stamp(path: string, nowMs: number): boolean {
+function stamp(path: string, atMs: number): boolean {
   try {
-    const at = new Date(nowMs);
+    const at = new Date(atMs);
     utimesSync(path, at, at);
     return true;
   } catch {
@@ -181,23 +193,26 @@ async function digestOf(
 }
 
 /**
- * Установщик не запустился — копия возвращается на место, тап можно повторить. `false` —
- * вернуть некуда или нечего: следующий propose соберёт копию заново.
+ * Установщик не запустился — копия возвращается на место со временем propose (`proposedMs`
+ * из TakeOutcome), тап можно повторить до конца тех же суток: неудачный тап срок не продлевает.
+ * `false` — вернуть некуда или нечего, или время не встало (такая копия удаляется): следующий
+ * propose соберёт копию заново.
  */
 export function returnProposal(
   dir: string,
   name: string,
   digest12: string,
+  proposedMs: number,
 ): boolean {
+  const folder = join(dir, proposalFolder(name, digest12));
   try {
-    renameSync(
-      takenDir(dir, digest12),
-      join(dir, proposalFolder(name, digest12)),
-    );
-    return true;
+    renameSync(takenDir(dir, digest12), folder);
   } catch {
     return false;
   }
+  if (stamp(folder, proposedMs)) return true;
+  rmSync(folder, { recursive: true, force: true });
+  return false;
 }
 
 // ── Тексты владельцу (spec v4 §10, пары переводчика Notice) ──
