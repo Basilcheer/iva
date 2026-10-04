@@ -32,6 +32,37 @@ export type WakeMainDeps = {
   readonly log?: (...args: unknown[]) => void;
 };
 
+/** Ход, отправка в личный чат владельца и «тихо ли сейчас» для runJobWake. */
+async function wakeDeps(
+  env: NodeJS.ProcessEnv,
+  deps: WakeMainDeps,
+): Promise<Omit<JobWakeDeps, "factsFile">> {
+  const log = deps.log ?? stamped;
+  const token = String(env.TELEGRAM_BOT_TOKEN ?? "").trim();
+  const chat = ownerChat(env);
+  const config = parseProactive(readSettings(join(dataDir(), "settings.json")));
+  const timeZone = resolveTimeZone(env.ASSISTANT_TIMEZONE);
+  const sendHtml = deps.sendHtml ?? sendTelegramHtml;
+  const runTurn: JobWakeDeps["runTurn"] = (prompt) =>
+    runReminderTurn(prompt, reminderClientOptions(env), { log });
+  return {
+    quiet: (now) => failureWaitsForBrief(config, zonedParts(now, timeZone).hh),
+    tr: await noticeTranslator(env),
+    runTurn: deps.runTurn ?? runTurn,
+    send: async (text) => {
+      if (!token || !chat)
+        throw new Error(
+          "TELEGRAM_BOT_TOKEN or TELEGRAM_ALLOWED_USER_IDS is missing — run: iva doctor",
+        );
+      // rich: кнопка «Починить» доходит кнопкой, а не текстом (без неё sendTelegramHtml шлёт HTML).
+      const result = await sendHtml(token, chat, text, { rich: true });
+      return result.ok;
+    },
+    ...(deps.now ? { now: deps.now } : {}),
+    log,
+  };
+}
+
 /** Один прогон; возвращает код выхода: 1 — ход не состоялся, 2 — неверные аргументы. */
 export async function main(
   argv: readonly string[] = process.argv.slice(2),
@@ -44,31 +75,9 @@ export async function main(
     console.error("usage: wake.ts <name> <startedAt>");
     return 2;
   }
-  const log = deps.log ?? stamped;
-  const token = String(env.TELEGRAM_BOT_TOKEN ?? "").trim();
-  const chat = ownerChat(env);
-  const config = parseProactive(readSettings(join(dataDir(), "settings.json")));
-  const timeZone = resolveTimeZone(env.ASSISTANT_TIMEZONE);
-  const sendHtml = deps.sendHtml ?? sendTelegramHtml;
   const status = await runJobWake(name, startedAt, {
     factsFile: jobFactsFile(dataDir()),
-    quiet: (now) => failureWaitsForBrief(config, zonedParts(now, timeZone).hh),
-    tr: await noticeTranslator(env),
-    runTurn:
-      deps.runTurn ??
-      ((prompt) =>
-        runReminderTurn(prompt, reminderClientOptions(env), { log })),
-    send: async (text) => {
-      if (!token || !chat)
-        throw new Error(
-          "TELEGRAM_BOT_TOKEN or TELEGRAM_ALLOWED_USER_IDS is missing — run: iva doctor",
-        );
-      // rich: кнопка «Починить» доходит кнопкой, а не текстом (без неё sendTelegramHtml шлёт HTML).
-      const result = await sendHtml(token, chat, text, { rich: true });
-      return result.ok;
-    },
-    ...(deps.now ? { now: deps.now } : {}),
-    log,
+    ...(await wakeDeps(env, deps)),
   });
   console.log(`wake: ${name} ${status}`);
   return status === "failed" ? 1 : 0;
