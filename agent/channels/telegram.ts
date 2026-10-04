@@ -23,17 +23,8 @@ import {
 // запись в Vault, медиа со зрением и транскрипцией, inbound-Gate и контекст хода.
 // Канал приносит ему эффекты и сам про разбор входящего ничего не знает.
 import { runTelegramInbound } from "../lib/telegram-inbound.js";
-import { traceOutbox, traceWithScope } from "../lib/trace.js";
+import { traceOutbox } from "../lib/trace.js";
 import { chatModelSeesImages, describeImage } from "../vision.js";
-import { providerConfig } from "../provider.js";
-import { isPrivateTelegramChatHandle } from "../lib/telegram-private-chat.js";
-// Подсказка «нажмите /new» (agent/lib/context-fill.ts): сессию чата открывает канал,
-// строка идёт тихо и через гейт — в неё подставлен процент.
-import {
-  markReplyDelivered,
-  notifyContextFill,
-  openContextFill,
-} from "../lib/context-fill.js";
 import { transcribe } from "../transcribe.js";
 // Статус-сообщение хода («Работаю…», кнопка Стоп, уборка в терминале) и служебное
 // объяснение сбоя — UI канала, обе реплики идут мимо Outbox. Мимо Outbox — не мимо
@@ -251,7 +242,6 @@ const telegram = telegramChannel({
     // FIFO-мост не должен успеть принять следующую голову, пока Bot API отвечает.
     async "turn.started"(data, channel, ctx) {
       const tg = channel.telegram;
-      openContextFill(ctx.session.id);
       await publishTelegramTurnStarted({
         chatKey: chatKeyOf(tg.chatId, tg.messageThreadId),
         sessionId: ctx.session.id,
@@ -270,28 +260,8 @@ const telegram = telegramChannel({
           console.error("[telegram] статус-сообщение не отправилось:", error),
       });
     },
-    // Подсказка «нажмите /new» — до уборки статуса: после неё чат свободен, и строка легла
-    // бы под «Работаю…» следующего хода. Только в личном чате: в группе /new не резолвится.
-    // Уборка статуса от подсказки не зависит.
-    async "turn.completed"(data, channel, ctx) {
-      const tg = channel.telegram;
-      try {
-        // Область хода — чтобы вердикт гейта на этой строке попал в журнал с ключом хода.
-        if (isPrivateTelegramChatHandle(tg))
-          await traceWithScope(
-            { turn: data.turnId, session: ctx.session.id, source: "telegram" },
-            () =>
-              notifyContextFill(
-                ctx.session.id,
-                providerConfig.contextWindow,
-                noticeSender((text) =>
-                  tg.post({ text, disable_notification: true }),
-                ),
-              ),
-          );
-      } finally {
-        await finishTelegramStatus(channel, ctx.session.id, "completed");
-      }
+    async "turn.completed"(_data, channel, ctx) {
+      await finishTelegramStatus(channel, ctx.session.id, "completed");
     },
     async "turn.cancelled"(_data, channel, ctx) {
       await finishTelegramStatus(channel, ctx.session.id, "cancelled");
@@ -369,7 +339,6 @@ const telegram = telegramChannel({
       );
       if (!result.ok) return;
       recordDelivery(true);
-      markReplyDelivered(ctx.session.id);
     },
     // Ход упал: статус прибираем по CAS, но сообщение об ошибке от него не гейтим —
     // позднее terminal-событие всё равно должно объяснить пользователю, что произошло.
