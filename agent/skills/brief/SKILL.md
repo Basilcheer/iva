@@ -11,6 +11,9 @@ and what the next step is.
 
 ## Gather
 
+In a group chat (`/digest` there) other people read the answer: show only the open
+tasks (step 1), nothing from mail, calendar, personal Telegram or Connections.
+
 Walk everything the owner has connected, with your own tools, read only:
 
 1. Tasks: load `task-management`, call `tasks` with `action="list"`. Overdue and due

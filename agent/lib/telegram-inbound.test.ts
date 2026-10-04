@@ -480,6 +480,18 @@ await test("/digest отдаёт Brief: обычный ход со скилло�
   assert.match(dailyText(), /\/digest/u);
 });
 
+await test("/digest в группе — только задачи, как в 0.4.11: личная почта и переписка не выносятся к другим участникам", async () => {
+  const { effects } = harness();
+  const result = await inbound.runTelegramInbound(
+    privateText("/digest", { chat: { id: -77, type: "supergroup" } }),
+    effects,
+  );
+
+  assert.deepEqual(result?.context, [
+    "This is a group chat: load the brief skill and show only the open tasks, nothing from mail, calendar, personal Telegram or Connections.",
+  ]);
+});
+
 await test("фото: vision в контексте, повтор того же файла не качает и не смотрит заново", async (t) => {
   const { calls, effects } = harness();
   stubDownload(t, calls);

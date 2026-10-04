@@ -695,13 +695,19 @@ export async function runTelegramInbound(
     if (cmd === "/digest") {
       appendDaily("[text]", cmdText);
       await effects.startTyping();
+      // В группе обзор читают другие участники: только задачи, как дайджест 0.4.11 (скилл brief).
       return withPre({
         auth: buildAuth(message),
         context: [
-          tr(
-            "Load the brief skill and assemble the daily brief.",
-            "Загрузи скилл brief и собери обзор дня.",
-          ),
+          message.chat.type === "private"
+            ? tr(
+                "Load the brief skill and assemble the daily brief.",
+                "Загрузи скилл brief и собери обзор дня.",
+              )
+            : tr(
+                "This is a group chat: load the brief skill and show only the open tasks, nothing from mail, calendar, personal Telegram or Connections.",
+                "Это групповой чат: загрузи скилл brief и покажи только открытые задачи, ничего из почты, календаря, личного Telegram и Connection.",
+              ),
         ],
       });
     }
