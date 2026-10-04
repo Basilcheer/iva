@@ -35,7 +35,7 @@ data/custom/plugin-drafts/<name>` from `bash`. It works from the next turn: no b
   предложение, жду тапа"). The result arrives later as a message from the code; do not promise it
   and do not check on it.
 - Never install such a plugin any other way: `iva plugin add` refuses it outside the owner's
-  terminal, and `iva plugin trust|enable|update|sync` are blocked in `bash`. An update of an
+  terminal, and `iva plugin trust|enable|update|sync|install-proposal` are blocked in `bash`. An update of an
   installed plugin is `iva plugin update <name>` in the owner's terminal: tell the owner.
 - A refusal from `propose` or `add` is plain text: fix the draft (the diagnostic names the file)
   and run it again.
