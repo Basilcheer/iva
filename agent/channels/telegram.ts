@@ -71,6 +71,7 @@ import { providerConfig } from "../provider.js";
 import {
   handleAcceptedTelegramWebhook,
   TELEGRAM_ACCEPTANCE_ROUTE,
+  telegramTurnPolicy,
   wrapTelegramQueueOnMessage,
 } from "../lib/telegram-acceptance.js";
 import {
@@ -425,7 +426,9 @@ const telegram = telegramChannel({
           sendWorkingStatusImpl: (options) =>
             sendWorkingStatus(
               tg,
-              idleCompactionRunning(chatKey)
+              // При порядке steer это же сообщение обрывает пересказ, и ход идёт сразу:
+              // ждать нечего, подпись была бы неправдой.
+              idleCompactionRunning(chatKey) && telegramTurnPolicy() === "queue"
                 ? { ...options, note: compactingNote() }
                 : options,
             ),

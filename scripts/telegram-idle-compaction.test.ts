@@ -5,7 +5,7 @@
 // только на внешних границах: Bot API и сессия eve; вызов роута идёт настоящим обработчиком.
 import "./lib/ts-esm-hooks.ts";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { after, beforeEach } from "node:test";
@@ -277,6 +277,21 @@ test("сообщение во время свёртки доходит до eve 
   apiCalls.length = 0;
   assert.equal(await incoming(43, "s-note"), 1);
   assert.ok(!statusMarkdown().some((markdown) => markdown.includes(NOTE)));
+});
+
+test("порядок steer: сообщение само обрывает пересказ, ждать нечего — статус без подписи", async () => {
+  const settings = join(dataDir, "settings.json");
+  writeFileSync(settings, JSON.stringify({ turnPolicy: "steer" }));
+  try {
+    await turn("s-steer", 49, [LIMIT]);
+    assert.equal(compactCalls.length, 1, "свёртку просим при любом порядке");
+    apiCalls.length = 0;
+    assert.equal(await incoming(49, "s-steer"), 1);
+    assert.equal(statusMarkdown().length, 1, "ранний статус на месте");
+    assert.ok(!statusMarkdown()[0]?.includes(NOTE));
+  } finally {
+    rmSync(settings, { force: true });
+  }
 });
 
 test("подпись получает только чат, чья сессия сворачивается", async () => {
