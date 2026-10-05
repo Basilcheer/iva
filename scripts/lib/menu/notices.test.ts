@@ -4,11 +4,14 @@ import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import fc from "fast-check";
+import { classicScreen } from "../telegram-buttons.ts";
 
 // settings.ts берёт каталог данных из окружения на импорте — задаём ДО загрузки экрана,
 // чтобы тумблер не тронул настоящий data/ (тот же приём, что в lang.test.ts).
 const dataDir = mkdtempSync(join(tmpdir(), "iva-menu-notices-"));
 process.env.ASSISTANT_DATA_DIR = dataDir;
+process.env.ASSISTANT_TIMEZONE = "UTC";
 
 const loaded: unknown = await import(
   new URL("./notices.ts", import.meta.url).href
@@ -22,6 +25,7 @@ after(() => rmSync(dataDir, { recursive: true, force: true }));
 type View = { text: string };
 type MenuState = { page: number };
 type MenuContext = {
+  deps: { dataDir: string };
   tr: (english: string, russian: string) => string;
   show: (state: MenuState, screenId: string) => Promise<void>;
 };
@@ -51,6 +55,7 @@ function readSettingsFile(): Record<string, unknown> {
 
 function makeContext(lang: string, redrawn: string[] = []): MenuContext {
   return {
+    deps: { dataDir },
     tr: (english, russian) => (lang === "ru" ? russian : english),
     show: (_state, screenId) => {
       redrawn.push(screenId);
@@ -81,12 +86,15 @@ test("reports render off and Watch on on a fresh installation, in either languag
   assert.deepEqual(labels(russian), [
     ["○ Отчёты памяти", "iva_menu:ntc:set:rep:1"],
     ["✓ Сама пишет", "iva_menu:ntc:set:pro:0"],
+    ["○ Инсайт", "iva_menu:ntc:ins:1130"],
     ["‹ Меню", "iva_menu:r:o"],
   ]);
   assert.match(
     russian.text,
-    /Присмотр за пропущенным и обзор дня\. О сбоях пишу всегда\./,
+    /Присмотр за пропущенным, обзор дня и инсайт\. О сбоях пишу всегда\./,
   );
+  assert.match(russian.text, /раз в день: черновик плагина/u);
+  assert.doesNotMatch(russian.text, /Время инсайта|Инсайт: каждый/u);
   // Строка дайджеста ушла: её место — времена Brief из настроек.
   assert.match(russian.text, /Обзор дня: 08:30 и 14:00/u);
   assert.doesNotMatch(russian.text, /дайджест/iu);
@@ -97,12 +105,14 @@ test("reports render off and Watch on on a fresh installation, in either languag
   assert.deepEqual(labels(english), [
     ["○ Memory reports", "iva_menu:ntc:set:rep:1"],
     ["✓ Writes on her own", "iva_menu:ntc:set:pro:0"],
+    ["○ Insight", "iva_menu:ntc:ins:1130"],
     ["‹ Menu", "iva_menu:r:o"],
   ]);
   assert.match(
     english.text,
-    /Watch for missed items and the daily brief\. Failures are always reported\./,
+    /Watch for missed items, the daily brief and Insight\. Failures are always reported\./,
   );
+  assert.match(english.text, /once a day: a plugin draft/u);
   assert.match(english.text, /Daily brief: 08:30 and 14:00/u);
   assert.doesNotMatch(english.text, /digest/iu);
   assert.equal(screen.parent, "r");
@@ -119,6 +129,7 @@ test("a switched-on toggle is ticked and offers the way back off", () => {
   assert.deepEqual(labels(view), [
     ["✓ Отчёты памяти", "iva_menu:ntc:set:rep:0"],
     ["○ Сама пишет", "iva_menu:ntc:set:pro:1"],
+    ["○ Инсайт", "iva_menu:ntc:ins:1130"],
     ["‹ Меню", "iva_menu:r:o"],
   ]);
   assert.match(view.text, /Обзор дня: 09:00 и 18:00/u);
@@ -223,5 +234,263 @@ test("corrupt settings render safely but a toggle refuses to replace their bytes
         (error as { state?: unknown }).state === "corrupt",
     );
     assert.equal(readFileSync(settingsPath, "utf8"), corrupt);
+  }
+});
+
+// ── Insight (ADR-0022): тумблер, время, строка статуса ──
+
+const proactivePath = join(dataDir, "proactive.json");
+
+function writeProactiveFile(insight?: Record<string, unknown>): void {
+  writeFileSync(
+    proactivePath,
+    JSON.stringify({
+      schemaVersion: 1,
+      seen: {},
+      wakes: { day: "", count: 0 },
+      modelWakes: { day: "", count: 0 },
+      briefDone: { day: "", slots: [] },
+      failuresSeenUpToMs: 0,
+      ...(insight === undefined ? {} : { insight }),
+    }),
+  );
+}
+
+test("a switched-on Insight is ticked, offers its times and says when it comes", () => {
+  rmSync(proactivePath, { force: true });
+  writeSettingsFile({ proactive: { insightTimes: ["11:30"] } });
+
+  const view = screen.render({ page: 0 }, makeContext("ru"));
+  assert.deepEqual(labels(view).slice(2), [
+    ["✓ Инсайт", "iva_menu:ntc:ins:0"],
+    ["09:30", "iva_menu:ntc:ins:0930"],
+    ["11:30 ✓", "iva_menu:ntc:ins:1130"],
+    ["17:30", "iva_menu:ntc:ins:1730"],
+    ["‹ Меню", "iva_menu:r:o"],
+  ]);
+  assert.match(view.text, /Время инсайта:/u);
+  assert.match(view.text, /Инсайт: каждый день в 11:30/u);
+  assert.doesNotMatch(view.text, /не придёт|Последний инсайт|на паузе/u);
+
+  const english = screen.render({ page: 0 }, makeContext("en"));
+  assert.match(english.text, /Insight time:/u);
+  assert.match(english.text, /Insight: every day at 11:30/u);
+});
+
+test("Insight while «Writes on her own» is off says it stays silent", () => {
+  rmSync(proactivePath, { force: true });
+  writeSettingsFile({ proactive: { enabled: false, insightTimes: ["17:30"] } });
+
+  const view = screen.render({ page: 0 }, makeContext("ru"));
+  assert.match(view.text, /Инсайт не придёт, пока выключено «Сама пишет»\./u);
+  assert.doesNotMatch(view.text, /каждый день в/u);
+});
+
+test("a time set by command outside the row gets no tick but shows in the status", () => {
+  rmSync(proactivePath, { force: true });
+  writeSettingsFile({ proactive: { insightTimes: ["19:30"] } });
+
+  const view = screen.render({ page: 0 }, makeContext("ru"));
+  assert.ok(
+    !labels(view).some(([label]) => label.includes("✓ ") && /\d/.test(label)),
+  );
+  assert.match(view.text, /Инсайт: каждый день в 19:30/u);
+});
+
+test("the Insight state file: pause, last insight, missing, unreadable", (t) => {
+  writeSettingsFile({ proactive: { insightTimes: ["11:30"] } });
+  const errors: unknown[] = [];
+  t.mock.method(console, "error", (...parts: unknown[]) => errors.push(parts));
+  const render = (lang = "ru") =>
+    screen.render({ page: 0 }, makeContext(lang)).text;
+
+  writeProactiveFile({
+    day: "2026-10-05",
+    draft: "relay",
+    misses: 2,
+    pausedUntilMs: Date.parse("2099-01-02T03:04:00.000Z"),
+  });
+  let text = render();
+  assert.match(
+    text,
+    /Инсайт на паузе до 2099-01-02 03:04: два подряд не поставлены\./u,
+  );
+  assert.match(text, /Последний инсайт: 2026-10-05\./u);
+  assert.doesNotMatch(
+    text,
+    /каждый день в/u,
+    "a paused Insight does not promise a time",
+  );
+  assert.match(
+    render("en"),
+    /Insight is paused until 2099-01-02 03:04: two in a row were not installed\./u,
+  );
+  assert.match(render("en"), /Last insight: 2026-10-05\./u);
+
+  writeProactiveFile({
+    day: "2026-10-05",
+    draft: "",
+    misses: 0,
+    pausedUntilMs: 0,
+  });
+  text = render();
+  assert.doesNotMatch(
+    text,
+    /на паузе|Последний инсайт/u,
+    "QUIET has no last insight",
+  );
+  assert.match(text, /каждый день в 11:30/u);
+
+  rmSync(proactivePath, { force: true });
+  text = render();
+  assert.doesNotMatch(text, /⚠️|на паузе|Последний/u);
+
+  assert.equal(errors.length, 0);
+  for (const broken of [
+    "{ not json",
+    JSON.stringify({ schemaVersion: 2 }),
+    JSON.stringify({
+      schemaVersion: 1,
+      seen: {},
+      wakes: { day: "", count: 0 },
+      modelWakes: { day: "", count: 0 },
+      briefDone: { day: "", slots: [] },
+      failuresSeenUpToMs: 0,
+      insight: { day: 5 },
+    }),
+  ]) {
+    writeFileSync(proactivePath, broken);
+    text = render();
+    assert.match(
+      text,
+      /⚠️ data\/proactive\.json не читается: присмотра, обзора и инсайта не будет, пока файл не починят\./u,
+      broken,
+    );
+    assert.doesNotMatch(text, /каждый день в/u, broken);
+    assert.match(
+      render("en"),
+      /⚠️ data\/proactive\.json is unreadable: no Watch, Brief or Insight until it is fixed\./u,
+    );
+  }
+  assert.ok(errors.length >= 3, "the reason goes to the journal");
+  rmSync(proactivePath, { force: true });
+});
+
+test("Insight taps write proactive.insightTimes and keep every neighbour", async () => {
+  writeSettingsFile({
+    language: "en",
+    proactive: { watchCapPerDay: 3, enabled: false, urgentSenders: ["wife"] },
+  });
+  const redrawn: string[] = [];
+  const context = makeContext("ru", redrawn);
+
+  await screen.on("ins", ["0930"], { page: 0 }, context);
+  assert.deepEqual(readSettingsFile(), {
+    language: "en",
+    proactive: {
+      watchCapPerDay: 3,
+      enabled: false,
+      urgentSenders: ["wife"],
+      insightTimes: ["09:30"],
+    },
+  });
+  await screen.on("ins", ["1730"], { page: 0 }, context);
+  await screen.on("ins", ["1730"], { page: 0 }, context);
+  assert.deepEqual(
+    (readSettingsFile().proactive as { insightTimes: unknown }).insightTimes,
+    ["17:30"],
+  );
+  await screen.on("ins", ["0"], { page: 0 }, context);
+  assert.deepEqual(readSettingsFile(), {
+    language: "en",
+    proactive: {
+      watchCapPerDay: 3,
+      enabled: false,
+      urgentSenders: ["wife"],
+      insightTimes: [],
+    },
+  });
+  assert.deepEqual(redrawn, ["ntc", "ntc", "ntc", "ntc"]);
+});
+
+test("an Insight tap on corrupt settings refuses to replace their bytes", async () => {
+  for (const corrupt of ["{ not json", "[]"]) {
+    writeFileSync(settingsPath, corrupt);
+    const redrawn: string[] = [];
+    await assert.rejects(
+      screen.on("ins", ["1130"], { page: 0 }, makeContext("en", redrawn)),
+      (error: unknown) =>
+        (error as { code?: unknown }).code === "ESETTINGS_WRITE_REFUSED",
+    );
+    assert.equal(readFileSync(settingsPath, "utf8"), corrupt);
+    assert.deepEqual(redrawn, []);
+  }
+});
+
+// Мусор в аргументах: ничего не пишется, экран не перерисовывается. Seed печатает fast-check.
+test("property: junk Insight arguments write nothing and redraw nothing", async () => {
+  const junk = fc
+    .array(
+      fc.oneof(
+        fc.constantFrom(
+          "",
+          "11:30",
+          "1130:x",
+          "__proto__",
+          "constructor",
+          "toString",
+          "hasOwnProperty",
+          "00",
+          "1",
+          "9:30",
+          "0930 ",
+        ),
+        fc.integer().map(String),
+        fc.string({ maxLength: 70 }),
+        fc.string({ unit: "grapheme", maxLength: 20 }),
+      ),
+      { maxLength: 3 },
+    )
+    .filter(
+      (args) =>
+        !(args.length === 1 && ["0", "0930", "1130", "1730"].includes(args[0])),
+    );
+  writeSettingsFile({ language: "en", proactive: { insightTimes: ["11:30"] } });
+  const before = readFileSync(settingsPath, "utf8");
+  await fc.assert(
+    fc.asyncProperty(junk, async (args) => {
+      const redrawn: string[] = [];
+      await screen.on("ins", args, { page: 0 }, makeContext("en", redrawn));
+      assert.equal(readFileSync(settingsPath, "utf8"), before);
+      assert.deepEqual(redrawn, []);
+    }),
+    { numRuns: 300 },
+  );
+});
+
+test("classic menu: [reports, writes], [Insight], the times row, [‹ Menu]; every data fits 64 bytes", () => {
+  rmSync(proactivePath, { force: true });
+  for (const [times, rows] of [
+    [[], [["○ Отчёты памяти", "✓ Сама пишет"], ["○ Инсайт"], ["‹ Меню"]]],
+    [
+      ["11:30"],
+      [
+        ["○ Отчёты памяти", "✓ Сама пишет"],
+        ["✓ Инсайт"],
+        ["09:30", "11:30 ✓", "17:30"],
+        ["‹ Меню"],
+      ],
+    ],
+  ] as const) {
+    writeSettingsFile({ proactive: { insightTimes: times } });
+    const view = screen.render({ page: 0 }, makeContext("ru"));
+    const keyboard =
+      classicScreen(view.text).reply_markup?.inline_keyboard ?? [];
+    assert.deepEqual(
+      keyboard.map((row) => row.map((b) => b.text)),
+      rows,
+    );
+    for (const [, data] of labels(view))
+      assert.ok(Buffer.byteLength(data) <= 64, data);
   }
 });

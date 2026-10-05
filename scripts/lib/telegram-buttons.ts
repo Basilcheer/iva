@@ -362,6 +362,83 @@ export function legacyRows(rows: LegacyRowsInput | null | undefined): string {
   return lines.join("\n");
 }
 
+// Блоки с медиа: форма их ввода отличается от формы получения (PhotoSize[] против
+// InputMediaPhoto), поэтому такое сообщение обратно не правится — остаётся подсказка.
+const MEDIA_BLOCKS: ReadonlySet<unknown> = new Set([
+  "photo",
+  "video",
+  "animation",
+  "audio",
+  "document",
+  "voice_note",
+  "collage",
+  "slideshow",
+  "map",
+  "thinking",
+]);
+const MAX_TAP_DEPTH = 32;
+
+class Unmarkable extends Error {}
+
+/** RichText — строка, массив RichText или сущность с полем text: подпись плоским текстом. */
+function plainText(text: unknown): string {
+  if (typeof text === "string") return text;
+  if (Array.isArray(text)) return text.map(plainText).join("");
+  const nested = (text as { text?: unknown } | null)?.text;
+  return nested === undefined ? "" : plainText(nested);
+}
+
+// Нажатая кнопка: «✅» в подписи, success, disabled; callback_data и прочие поля уходят —
+// у кнопки ровно одно поле, кроме text и style (RichMessageButton, InlineKeyboardButton).
+function markedButton(text: unknown) {
+  const label = typeof text === "string" ? `✅ ${text}` : ["✅ ", text];
+  return { text: label, style: "success", disabled: {} };
+}
+
+function markTree(
+  node: unknown,
+  depth: number,
+  found: string[],
+  data: string,
+): unknown {
+  if (typeof node !== "object" || node === null) return node;
+  if (depth >= MAX_TAP_DEPTH) throw new Unmarkable();
+  if (Array.isArray(node))
+    return node.map((item) => markTree(item, depth + 1, found, data));
+  const record = node as Record<string, unknown>;
+  if (MEDIA_BLOCKS.has(record.type)) throw new Unmarkable();
+  if (record.callback_data === data) {
+    found.push(plainText(record.text));
+    return markedButton(record.text);
+  }
+  return Object.fromEntries(
+    Object.entries(record).map(([key, value]) => [
+      key,
+      markTree(value, depth + 1, found, data),
+    ]),
+  );
+}
+
+/**
+ * Дерево кнопок с отмеченной кнопкой или null: кнопки нет, есть медиа, слишком глубоко.
+ * На вход — блоки rich-сообщения или ряды кнопок classic-сообщения; отмечаются все кнопки
+ * с этим data, label — подпись первой. Вход не меняется, выход — новые массивы и объекты.
+ */
+export function markTappedButton(
+  tree: unknown,
+  data: string,
+): { readonly tree: unknown[]; readonly label: string } | null {
+  if (!Array.isArray(tree)) return null;
+  const found: string[] = [];
+  try {
+    const marked = markTree(tree, 0, found, data) as unknown[];
+    return found.length === 0 ? null : { tree: marked, label: found[0] };
+  } catch (error) {
+    if (error instanceof Unmarkable) return null;
+    throw error;
+  }
+}
+
 function toRichButton(item: unknown): string | null {
   if (typeof item === "string") return item;
   if (!item || typeof item !== "object") return null;

@@ -9,6 +9,7 @@ import {
   button,
   buttonRow,
   classicScreen,
+  markTappedButton,
   screenPayload,
 } from "./telegram-buttons.ts";
 import { escapeRichText } from "./menu/buttons.ts";
@@ -134,5 +135,268 @@ void test("property: button(text, data) survives the classic parse; any markdown
       assert.equal(typeof escapeRichText(md), "string");
     }),
     { numRuns: 300 },
+  );
+});
+
+// ── markTappedButton: нажатая кнопка в полученном сообщении (spec-w2 §3.1.4) ──
+
+const tapped = { text: "✅ Да", style: "success", disabled: {} };
+
+void test("mark: a button in a buttons block is marked, the rest of the blocks stay byte for byte", () => {
+  const blocks = [
+    { type: "paragraph", text: "Поставить?" },
+    {
+      type: "buttons",
+      buttons: [
+        { text: "Да", callback_data: "yes" },
+        { text: "Нет", callback_data: "no", style: "danger" },
+      ],
+    },
+  ];
+  assert.deepEqual(markTappedButton(blocks, "yes"), {
+    tree: [
+      { type: "paragraph", text: "Поставить?" },
+      {
+        type: "buttons",
+        buttons: [
+          tapped,
+          { text: "Нет", callback_data: "no", style: "danger" },
+        ],
+      },
+    ],
+    label: "Да",
+  });
+});
+
+void test("mark: a button inside a paragraph (RichTextButton) and a RichText label array", () => {
+  const blocks = [
+    {
+      type: "paragraph",
+      text: [
+        "Выбор: ",
+        { type: "button", button: { text: "Да", callback_data: "yes" } },
+        {
+          type: "button",
+          button: {
+            text: ["Не ", { type: "bold", text: "надо" }],
+            callback_data: "no",
+          },
+        },
+      ],
+    },
+  ];
+  assert.deepEqual(markTappedButton(blocks, "yes")?.tree, [
+    {
+      type: "paragraph",
+      text: [
+        "Выбор: ",
+        { type: "button", button: tapped },
+        {
+          type: "button",
+          button: {
+            text: ["Не ", { type: "bold", text: "надо" }],
+            callback_data: "no",
+          },
+        },
+      ],
+    },
+  ]);
+  const array = markTappedButton(blocks, "no");
+  assert.equal(array?.label, "Не надо");
+  assert.deepEqual(
+    (array?.tree[0] as { text: Array<{ button?: unknown }> }).text[2].button,
+    {
+      text: ["✅ ", ["Не ", { type: "bold", text: "надо" }]],
+      style: "success",
+      disabled: {},
+    },
+  );
+});
+
+void test("mark: every button with the data is marked and the label is the first one's", () => {
+  const blocks = [
+    { type: "buttons", buttons: [{ text: "Первая", callback_data: "x" }] },
+    { type: "buttons", buttons: [{ text: "Вторая", callback_data: "x" }] },
+  ];
+  const marked = markTappedButton(blocks, "x");
+  assert.equal(marked?.label, "Первая");
+  assert.deepEqual(marked?.tree, [
+    {
+      type: "buttons",
+      buttons: [{ text: "✅ Первая", style: "success", disabled: {} }],
+    },
+    {
+      type: "buttons",
+      buttons: [{ text: "✅ Вторая", style: "success", disabled: {} }],
+    },
+  ]);
+});
+
+void test("mark: no match, a media block, a non-array or a tree deeper than 32 gives null", () => {
+  const buttons = {
+    type: "buttons",
+    buttons: [{ text: "Да", callback_data: "yes" }],
+  };
+  assert.equal(markTappedButton([buttons], "no"), null);
+  assert.equal(
+    markTappedButton([{ type: "photo", photo: [] }, buttons], "yes"),
+    null,
+  );
+  assert.equal(markTappedButton({ blocks: [buttons] }, "yes"), null);
+  assert.equal(markTappedButton(undefined, "yes"), null);
+  // Глубина — число вложенных массивов и объектов, считая саму кнопку.
+  const nest = (levels: number): unknown => {
+    let node: unknown = { text: "Да", callback_data: "yes" };
+    for (let i = 1; i < levels; i += 1) node = [node];
+    return node;
+  };
+  assert.notEqual(
+    markTappedButton(nest(32), "yes"),
+    null,
+    "32 levels are fine",
+  );
+  assert.equal(markTappedButton(nest(33), "yes"), null, "33 levels are not");
+});
+
+void test("mark: a classic inline_keyboard of two rows", () => {
+  const keyboard = [
+    [{ text: "Установить", callback_data: "iva_plugin:ok:0123456789ab" }],
+    [{ text: "Сайт", url: "https://example.com" }],
+  ];
+  assert.deepEqual(markTappedButton(keyboard, "iva_plugin:ok:0123456789ab"), {
+    tree: [
+      [{ text: "✅ Установить", style: "success", disabled: {} }],
+      [{ text: "Сайт", url: "https://example.com" }],
+    ],
+    label: "Установить",
+  });
+});
+
+// Генератор деревьев блоков: текстовые блоки, RichText с сущностями, ряды кнопок и кнопки в
+// тексте со случайными data. Seed провала печатает fast-check.
+const tapData = fc.constantFrom("a", "b", "c", "Да");
+const richText = fc.letrec((tie) => ({
+  text: fc.oneof(
+    { depthSize: "small" },
+    fc.string({ maxLength: 8 }),
+    fc.array(tie("text"), { maxLength: 3 }),
+    fc.record({ type: fc.constantFrom("bold", "italic"), text: tie("text") }),
+  ),
+})).text;
+const richButton = fc.record(
+  {
+    text: richText,
+    callback_data: tapData,
+    style: fc.constantFrom("danger", "link", "primary"),
+  },
+  { requiredKeys: ["text", "callback_data"] },
+);
+const block = fc.oneof(
+  fc.record({
+    type: fc.constant("paragraph"),
+    text: fc.array(
+      fc.oneof(
+        richText,
+        fc.record({ type: fc.constant("button"), button: richButton }),
+      ),
+      { maxLength: 4 },
+    ),
+  }),
+  fc.record({
+    type: fc.constant("buttons"),
+    buttons: fc.array(richButton, { minLength: 1, maxLength: 4 }),
+  }),
+  fc.record({ type: fc.constantFrom("heading", "pre"), text: richText }),
+);
+// Через JSON, как приходит от Telegram: у объектов обычный прототип.
+const blocks = fc
+  .array(block, { maxLength: 5 })
+  .map((tree) => JSON.parse(JSON.stringify(tree)) as unknown[]);
+
+// Кнопки с этим data заменены одной меткой: так вход и выход сравниваются без них.
+function withoutButtons(
+  node: unknown,
+  isButton: (record: Record<string, unknown>) => boolean,
+): unknown {
+  if (Array.isArray(node))
+    return node.map((item) => withoutButtons(item, isButton));
+  if (typeof node !== "object" || node === null) return node;
+  const record = node as Record<string, unknown>;
+  if (isButton(record)) return "BUTTON";
+  return Object.fromEntries(
+    Object.entries(record).map(([k, v]) => [k, withoutButtons(v, isButton)]),
+  );
+}
+
+function objects(node: unknown): Record<string, unknown>[] {
+  if (Array.isArray(node)) return node.flatMap(objects);
+  if (typeof node !== "object" || node === null) return [];
+  return [
+    node as Record<string, unknown>,
+    ...Object.values(node).flatMap(objects),
+  ];
+}
+
+void test("property: the input never changes, only the tapped buttons do, and they are disabled", () => {
+  fc.assert(
+    fc.property(blocks, tapData, (tree, data) => {
+      const before = structuredClone(tree);
+      const result = markTappedButton(tree, data);
+      assert.deepEqual(tree, before, "the input is untouched");
+      const matches = objects(tree).filter((o) => o.callback_data === data);
+      if (matches.length === 0) {
+        assert.equal(result, null);
+        return;
+      }
+      assert.ok(result);
+      const out = objects(result.tree);
+      assert.equal(out.filter((o) => o.callback_data === data).length, 0);
+      const marked = out.filter((o) => "disabled" in o);
+      assert.equal(marked.length, matches.length);
+      for (const button of marked) assert.equal(button.style, "success");
+      assert.deepEqual(
+        withoutButtons(result.tree, (o) => "disabled" in o),
+        withoutButtons(tree, (o) => o.callback_data === data),
+      );
+    }),
+    { numRuns: 300 },
+  );
+});
+
+void test("property: a media block anywhere means no edit", () => {
+  const media = fc.constantFrom(
+    "photo",
+    "video",
+    "animation",
+    "audio",
+    "document",
+    "voice_note",
+    "collage",
+    "slideshow",
+    "map",
+    "thinking",
+  );
+  fc.assert(
+    fc.property(
+      blocks,
+      tapData,
+      media,
+      fc.nat(),
+      fc.boolean(),
+      (tree, data, type, at, nested) => {
+        const item = nested
+          ? { type: "blockquote", blocks: [{ type, caption: "x" }] }
+          : { type, caption: "x" };
+        const index = tree.length === 0 ? 0 : at % (tree.length + 1);
+        const withMedia = [
+          ...tree.slice(0, index),
+          item,
+          ...tree.slice(index),
+          { type: "buttons", buttons: [{ text: "Да", callback_data: data }] },
+        ];
+        assert.equal(markTappedButton(withMedia, data), null);
+      },
+    ),
+    { numRuns: 200 },
   );
 });
