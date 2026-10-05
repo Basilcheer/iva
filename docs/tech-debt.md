@@ -131,9 +131,10 @@ session-retirement story, rather than leaving the override in place indefinitely
 
 `/menu` → **🔔 Notices** (`scripts/lib/menu/notices.ts`) switches the nightly memory reports
 (`memoryReports.enabled`) and **Writes on her own** — Watch and the Brief, which replaced the
-morning digest (`proactive.enabled`, ADR-0020) — so neither needs a raw `settings.json` edit.
-Both keys are read at fire time, so a tap applies on the next tick with no restart. The rules
-the screen enforces: ADR-0007 and ADR-0020.
+morning Report (`proactive.enabled`, ADR-0020) — so neither needs a raw `settings.json` edit,
+and **Insight** (`proactive.insightTimes`): a switch and three times.
+All three keys are read at fire time, so a tap applies on the next tick with no restart. The rules
+the screen enforces: ADR-0007, ADR-0020 and ADR-0022.
 
 ## 8. TypeScript-only Node source
 

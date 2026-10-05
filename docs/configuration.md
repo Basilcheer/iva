@@ -110,12 +110,13 @@ The nightly Brain pass builds the hybrid index; to build it now, run `node --env
 
 What Iva says on her own lives in `data/settings.json`, not in `.env` — the **🔔 Notices** screen in `/menu` writes these keys, and the report switch is read at the end of each nightly run, the `proactive` key on every half-hourly Watch, Brief and Insight tick — so a tap applies without a restart.
 
-| Key                      | Default              | Notes                                                                                                                        |
-| ------------------------ | -------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `memoryReports.enabled`  | `false`              | The nightly memory report (daily 04:00 and weekly Mon 04:15) in Telegram. Off means the vault is still written.              |
-| `proactive.enabled`      | `true`               | Watch, the Brief and Insight (**Writes on her own**). Off stops all three, not failures. `iva proactive` sets the rest.      |
-| `proactive.briefTimes`   | `["08:30", "14:00"]` | The Brief, `HH:00` or `HH:30`, at most two; empty — no Brief. `/digest` gives the Brief by hand any time.                    |
-| `proactive.insightTimes` | `[]`                 | Insight: one `HH:00` or `HH:30` (best `HH:30`); empty — off. Whole 3-hour window in the quiet hours: no Insight on that day. |
+| Key                             | Default              | Notes                                                                                                                                                                                  |
+| ------------------------------- | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `memoryReports.enabled`         | `false`              | The nightly memory report (daily 04:00 and weekly Mon 04:15) in Telegram. Off means the vault is still written.                                                                        |
+| `proactive.enabled`             | `true`               | Watch, the Brief and Insight (**Writes on her own**). Off stops all three, not failures. `iva proactive` sets the rest.                                                                |
+| `proactive.briefTimes`          | `["08:30", "14:00"]` | The Brief, `HH:00` or `HH:30`, at most two; empty — no Brief. `/digest` gives the Brief by hand any time.                                                                              |
+| `proactive.insightTimes`        | `[]`                 | Insight: one `HH:00` or `HH:30` (best `HH:30`); empty — off. Whole 3-hour window in the quiet hours: no Insight on that day; also the Insight switch in /menu → Notices.               |
+| `proactive.ceilingTokensPerDay` | `0`                  | Ceiling of a day for Watch, the Brief and Insight, in tokens of their turns (`iva usage by-source`); reached — no Insight and no Brief that day, Watch reports failures only. 0 — off. |
 
 Insight: once a day Iva builds and tries one plugin draft for something you keep doing by hand and asks before installing — [ADR-0022](./adr/0022-insight-brings-one-capability-a-day.md).
 

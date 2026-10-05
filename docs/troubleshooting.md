@@ -91,6 +91,10 @@ An update now resets every open session before services restart. Each chat start
 
 ### Customization left out after an update
 
+Iva now also tells you in Telegram: «Iva is running the stock build: your files in data/custom do not
+build with this version — <first line of the error>…». The same Alert repeats at most once a week for
+the same files.
+
 The message `your customization in data/custom is not in this version` means Iva is running a stock
 build. The custom build or startup probe may have failed, or a previous failed start may have deferred
 another attempt. The files remain in the custom layer. The notice alone does not identify the cause.

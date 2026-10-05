@@ -34,14 +34,14 @@ Independently, `iva-update-check.timer` checks upstream every day at 10:00 local
 
 ### /usage variants
 
-| Variant                   | Window                                         |
-| ------------------------- | ---------------------------------------------- |
-| `/usage` or `/usage last` | The last turn: tokens, steps, model, source    |
-| `/usage today`            | Current day in your timezone                   |
-| `/usage week`             | Last 7 days                                    |
-| `/usage month`            | Current calendar month                         |
-| `/usage by-model`         | Lifetime totals per model                      |
-| `/usage by-source`        | Lifetime, chat vs background (rollups, digest) |
+| Variant                   | Window                                                                                            |
+| ------------------------- | ------------------------------------------------------------------------------------------------- |
+| `/usage` or `/usage last` | The last turn: tokens, steps, model, source                                                       |
+| `/usage today`            | Current day in your timezone                                                                      |
+| `/usage week`             | Last 7 days                                                                                       |
+| `/usage month`            | Current calendar month                                                                            |
+| `/usage by-model`         | Lifetime totals per model                                                                         |
+| `/usage by-source`        | Lifetime, chat, background and each kind of turn (watch, brief, insight, reminder, signal, alert) |
 
 `/usage` costs zero tokens — the bridge reads the log, no model call.
 
