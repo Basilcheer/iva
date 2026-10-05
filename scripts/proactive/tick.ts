@@ -1,11 +1,12 @@
-// Тик Watch и Brief (ADR-0020, модель specs/Proactive.tla):
+// Тик Watch, Brief и Insight (ADR-0020, ADR-0022, модель specs/Proactive.tla):
 //   node --env-file-if-exists=.env scripts/proactive/tick.ts
 // Запускает его agent/schedules/proactive.ts каждые полчаса. Замок без ожидания — второй
 // прогон выходит 0; `now` берётся сразу после замка (иначе прогон со старым днём, взявший
 // замок вторым, откатил бы счётчики дня — Proactive-nowfirst.cfg). Дальше runProactiveTick:
-// наступил слот — Brief (заявка briefDone до хода); затем Watch: проверка источников без
-// модели, фильтры, заявка до хода (ADR-0007: потеря, не дубль), ход, доставка частями,
-// запись подъёма. Сбой — исключение: дроссель Alert и «сообщён» пишутся после доставки, обрыв
+// наступил слот — Brief (заявка briefDone до хода); иначе пора Insight — ход Insight, и
+// прогон на этом кончается; затем Watch: проверка источников без модели, фильтры, заявка до
+// хода (ADR-0007: потеря, не дубль), ход, доставка частями, запись подъёма. Срок прогона
+// (IVA_JOB_STOP_AT) гасит ход на сервере, и после Brief по сроку Watch не идёт. Сбой — исключение: дроссель Alert и «сообщён» пишутся после доставки, обрыв
 // раньше даёт повтор (для сбоя молчание хуже дубля). Коды выхода: 0 — прогон прошёл (в том числе
 // «нового нет»), 1 — ошибка (факт в jobs.json, агент видит открытый провал).
 import { join } from "node:path";
@@ -253,7 +254,7 @@ function gated(
   return verdict.text.replace(/\s+/gu, " ").trim();
 }
 
-/** Как доставляется ответ планового хода — одна фраза на Watch и Brief. */
+/** Как доставляется ответ планового хода — одна фраза на все три хода. */
 const delivery = (tr: Translate) =>
   "Do not send anything yourself: no Telegram tools, no iva post, no mail; the code sends " +
   "your final text to the owner's private chat, and a line <!-- iva:next --> starts the next message. " +

@@ -10,8 +10,8 @@
 \* длиннее предохранителя LOCK_MAX_HOLD_MS = 600 с (agent/lib/fs-atomic.ts:823, 837, 864),
 \* поэтому замок живёт staleMs от взятия. lockAge — сколько границ прошло с взятия:
 \* реальный возраст >= 40 мин возможен только при lockAge >= 5, отсюда Stale = 5.
-\* Живой прогон живёт не дольше timeoutMs + killGraceMs = 30 мин 10 с (SIGTERM группе, через
-\* 10 с SIGKILL, agent/lib/schedule-runner.ts:582-595) и пересекает не больше 4 границ,
+\* Живой прогон живёт не дольше timeoutMs + killGraceMs = 31 мин 30 с (SIGTERM группе, через
+\* 90 с SIGKILL, agent/lib/schedule-runner.ts:582-595) и пересекает не больше 4 границ (32 мин),
 \* отсюда MaxRun = 4. При шаге 10 минут обе величины равнялись бы 4 и модель давала бы
 \* ложную кражу замка. Срок живого держателя модель считает от взятия замка, а не от
 \* старта: это длиннее жизни. Допущение: ребёнок не переживает раннер — юнит iva.service не
@@ -30,8 +30,9 @@
 \* событий не зависят и пишутся под тем же замком (PBT (9) и (10) спеки). Первый прогон без
 \* файла (stored = null, Insight нет) не моделируется: файл в модели есть с начала.
 \*
-\* Вне модели (покрыто PBT спеки, раздел 6): staleMinutes, тихие часы и предел
-\* modelWakesPerDay — только задерживают пункт; модель берёт ЛЮБОЕ подмножество допущенных
+\* Вне модели (покрыто PBT спеки, раздел 6): staleMinutes, тихие часы, предел
+\* modelWakesPerDay и Ceiling дня (ceilingTokensPerDay, снимает кандидатов, как modelWakesPerDay)
+\* — только задерживают пункт; модель берёт ЛЮБОЕ подмножество допущенных
 \* кандидатов, этим они и покрыты. Пункты check:<источник> и Signal ведут себя как обычный ключ
 \* или не идут через этот прогон. Сбой (T3) — ключ failure:<юнит> вне заявки: источник отдаёт
 \* его, пока выход новее failuresSeenUpToMs и дроссель Alert пропускает; дроссель, reported и
@@ -53,7 +54,8 @@
 \*                    сразу под замком now = минута clock() (NowAfterLock = TRUE); затем
 \*                    tick.ts:runProactiveTick -> readProactiveState (scripts/proactive/state.ts,
 \*                    своё чтение по образцу readStatus: битый — выход 1, файл на месте)
-\*   Tick, Timeout    время; срок runScheduledJob (timeoutMs 30 мин + killGraceMs 10 с)
+\*   Tick, Timeout    время; срок runScheduledJob (timeoutMs 30 мин + killGraceMs 90 с); тик сам
+\*                    отменяет ход в IVA_JOB_STOP_AT, после Brief по сроку Watch не идёт
 \*   BClaim           runProactiveTick шаг 1: tick.ts:dueBrief (слоты в окне 3 ч, ход — по
 \*                    последнему) -> tick.ts:brief, заявка briefDone (все наступившие) и
 \*                    запись до хода; не записалось — хода Brief нет, дальше Watch, выход 1.
