@@ -180,6 +180,33 @@ export function memoryReportsOffNotice(tr: Translate): string {
  */
 export const PLUGIN_ALERT_KEY = "plugin-build";
 
+/** Ключ дросселя для «версия на заводской сборке»: суть — отпечаток файлов data/custom. */
+export const CUSTOM_ALERT_KEY = "custom-build";
+
+/**
+ * Версия ушла на заводскую сборку: файлы владельца в data/custom с ней не собрались или
+ * версия с ними не поднялась (ADR-0007: что сломалось, чем грозит, что сделать).
+ * `firstLine` — первая строка ошибки; `null` — версию с этими файлами придержали, потому
+ * что в прошлый раз она не поднялась.
+ */
+export function customStockAlert(
+  tr: Translate,
+  firstLine: string | null,
+): string {
+  // Точка в конце строки ошибки не удваивает точку текста.
+  const why = (
+    firstLine ??
+    tr(
+      "last time the version carrying them did not come up",
+      "в прошлый раз версия с ними не поднялась",
+    )
+  ).replace(/\.$/u, "");
+  return tr(
+    `Iva is running the stock build: your files in data/custom do not build with this version — ${why}. The files are untouched; fix them and the next \`iva update\` puts them back.`,
+    `Ива работает на заводской сборке: ваши файлы в data/custom не собрались с этой версией — ${why}. Файлы на месте; поправьте их, и следующее \`iva update\` поставит их снова.`,
+  );
+}
+
 /**
  * Плагин с кодом не встал в версию, и Ива выключила его (ADR-0009). ОДИН текст на оба
  * канала: и на вывод апдейта, и в чат. Правило Alert (ADR-0007): что сломалось, чем

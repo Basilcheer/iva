@@ -2,6 +2,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  alertOwnerAboutCustom,
   alertOwnerAboutPlugins,
   retireCheckout,
   captureOptionalWriterState,
@@ -874,6 +875,73 @@ test("an Alert that could not be sent says so and is not remembered", async (t) 
   );
 
   assert.match(said.join("\n"), /could not tell you in Telegram about trace/u);
+  assert.equal(existsSync(join(layout.data, "alert-state.json")), false);
+});
+
+// ── Alert о заводской сборке (ADR-0007) ──────────────────────────────────────────────────
+
+const STOCK =
+  "your customization in data/custom does not build against this version, so Iva is running the stock build:\n> iva build\nerror TS1005: ';' expected.\nmore";
+
+function ownFile(layout: ReturnType<typeof layoutFor>, body: string): void {
+  const file = join(layout.data, "custom/agent/tools/zz-broken.ts");
+  mkdirSync(join(file, ".."), { recursive: true });
+  writeFileSync(file, body);
+}
+
+test("the owner hears about the stock build once a week, sooner if the files changed", async (t) => {
+  const layout = installationWithChat(
+    t,
+    "TELEGRAM_BOT_TOKEN=token\nTELEGRAM_DIGEST_CHAT_ID=42\nAGENT_LANGUAGE=ru\n",
+  );
+  const sent: string[] = [];
+  const said: string[] = [];
+  const send = (text: string): Promise<boolean> => {
+    sent.push(text);
+    return Promise.resolve(true);
+  };
+  ownFile(layout, "const = 1;\n");
+
+  await alertOwnerAboutCustom(layout, STOCK, (m) => said.push(m), send);
+  await alertOwnerAboutCustom(layout, STOCK, (m) => said.push(m), send);
+
+  assert.equal(sent.length, 1, sent.join("\n---\n"));
+  assert.match(sent[0], /^Ива работает на заводской сборке/u);
+  assert.match(sent[0], /error TS1005: ';' expected\./u);
+  assert.doesNotMatch(sent[0], /> iva build|more/u);
+  // Вывод апдейта — прежняя строка, при каждом прогоне.
+  assert.deepEqual(said, [STOCK, STOCK]);
+
+  ownFile(layout, "const x = ;\n");
+  await alertOwnerAboutCustom(layout, STOCK, () => {}, send);
+  assert.equal(sent.length, 2);
+});
+
+test("the stock-build Alert without a chat stays in the output and is not throttled", async (t) => {
+  const layout = installationWithChat(t, "AGENT_LANGUAGE=en\n");
+  const said: string[] = [];
+
+  await alertOwnerAboutCustom(layout, STOCK, (m) => said.push(m));
+
+  assert.deepEqual(said, [STOCK]);
+  assert.equal(existsSync(join(layout.data, "alert-state.json")), false);
+});
+
+test("a stock-build Alert that could not be sent says so and is not remembered", async (t) => {
+  const layout = installationWithChat(t);
+  const said: string[] = [];
+
+  await alertOwnerAboutCustom(
+    layout,
+    STOCK,
+    (m) => said.push(m),
+    () => Promise.resolve(false),
+  );
+
+  assert.match(
+    said.join("\n"),
+    /could not tell you in Telegram about the stock build/u,
+  );
   assert.equal(existsSync(join(layout.data, "alert-state.json")), false);
 });
 
