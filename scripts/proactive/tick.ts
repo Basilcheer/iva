@@ -11,6 +11,7 @@
 import { join } from "node:path";
 import { dataDir } from "#lib/data-dir.ts";
 import { acquireFileLock, releaseFileLock } from "#lib/fs-atomic.ts";
+import { findPlugin, readPluginsStateSafe } from "#lib/plugin-store.ts";
 import {
   isQuietHour,
   isUrgentSender,
@@ -54,6 +55,7 @@ import {
   updateSeen,
   writeProactiveState,
   type ProactiveState,
+  type SparkState,
 } from "./state.ts";
 
 export const LOCK_STALE_MS = 40 * 60_000;
@@ -66,6 +68,7 @@ const LOCK_WAIT_MS = 1_000;
 const NEXT_PART = /<!--\s*iva:next\s*-->/u;
 /** Brief опоздал больше чем на 3 часа — слот пропускается. */
 const BRIEF_WINDOW_MIN = 3 * 60;
+const DAY_MS = 24 * 60 * 60_000;
 
 export type TickDeps = {
   readonly config: () => ProactiveConfig;
@@ -76,13 +79,15 @@ export type TickDeps = {
   /** Одна часть в личный чат владельца; `source` — имя хода в журнале доставки. */
   readonly send: (
     part: string,
-    source: "watch" | "brief",
+    source: "watch" | "brief" | "spark",
   ) => Promise<{ ok: boolean; error: string }>;
   readonly translate: () => Promise<Translate>;
   /** Отметка дросселя Alert для сбоя, доставленного владельцу (T3); false — не записалась. */
   readonly recordAlert?: (key: string, essence: string) => boolean;
   /** Непочиненные сбои для промпта Brief (T3), по строке. */
   readonly unfixed?: () => Promise<readonly string[]>;
+  /** Стоит ли плагин с этим именем (data/custom/plugins.json); зависимости нет — не стоит. */
+  readonly installed?: (name: string) => Promise<boolean>;
   readonly writeState?: typeof writeProactiveState;
   readonly log?: (line: string) => void;
 };
@@ -584,6 +589,8 @@ export async function runProactiveTick(
       { ...slot, day: clock.day },
       log,
     ));
+  if (slot === null && stored !== null && sparkDue(config, state.spark, clock))
+    return spark(deps, state, clock, log);
   // Watch раз в час: тик своей половины часа, опоздавший на минуту — тот же тик. Первый
   // прогон смотрит источники всегда — иначе всё непрочитанное не стало бы «уже сообщённым».
   if (clock.minute >= 30 && stored !== null) return failed ? 1 : 0;
@@ -593,6 +600,83 @@ export async function runProactiveTick(
     log,
   );
   return failed ? 1 : code;
+}
+
+type Clock = ReturnType<typeof localDay> & { readonly now: number };
+
+/** Пора ли Spark: тумблер, не тихий час, пауза прошла, слот наступил и сегодня заявки не было. */
+function sparkDue(
+  config: ProactiveConfig,
+  prev: SparkState | undefined,
+  clock: Clock,
+): boolean {
+  if (!config.enabled || isQuietHour(config, clock.hour)) return false;
+  if ((prev?.pausedUntilMs ?? 0) > clock.now) return false;
+  const done = prev?.day === clock.day ? [0] : [];
+  return dueBrief(config.sparkTimes, done, clock) !== null;
+}
+
+/** Стоит ли плагин; метка «?», нет зависимости или она бросила — не стоит. */
+const isInstalled = async (deps: TickDeps, name: string) =>
+  name !== "?" && (await deps.installed?.(name).catch(() => false)) === true;
+
+/** Промахи подряд: находка старше позавчера — 0, QUIET — прежний счёт, поставлена — 0, нет — +1. */
+async function sparkMisses(deps: TickDeps, now: number, prev?: SparkState) {
+  const old = localDay(now - 2 * DAY_MS, deps.timeZone).day;
+  if (prev === undefined || prev.day < old) return 0;
+  if (prev.draft === "") return prev.misses;
+  return (await isInstalled(deps, prev.draft)) ? 0 : prev.misses + 1;
+}
+
+const sparkPrompt = (tr: Translate) =>
+  "Spark: once a day you may bring the owner one new capability. Follow the spark skill. " +
+  "Return QUIET if there is nothing you would stand behind. " +
+  `Buttons: data="${tr("Install", "Поставить")} <name>" and data="${tr("Not now", "Не надо")} <name>". ` +
+  delivery(tr);
+
+/** Имя черновика из кнопки «Поставить»/«Install» самой находки. */
+const INSTALL_DATA =
+  /data="(?:Поставить|Install) ([a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?)"/u;
+
+/**
+ * Spark (ADR-0022): две находки подряд без установки — неделя паузы без хода; иначе заявка до
+ * хода, ход, одно сообщение, имя черновика второй записью. Код 1 — только провал первой записи.
+ */
+async function spark(
+  deps: TickDeps,
+  state: ProactiveState,
+  clock: Clock,
+  log: (line: string) => void,
+): Promise<number> {
+  const misses = await sparkMisses(deps, clock.now, state.spark);
+  const pause = misses >= 2;
+  const claimed = {
+    ...state,
+    spark: {
+      day: clock.day,
+      draft: "",
+      misses: pause ? 0 : misses,
+      pausedUntilMs: pause ? clock.now + 7 * DAY_MS : 0,
+    },
+  };
+  if (!(await save(deps, claimed, pause ? "spark pause" : "spark claim", log)))
+    return 1;
+  if (pause) {
+    log("proactive: two sparks in a row were not installed, paused for a week");
+    return 0;
+  }
+  const tr = await deps.translate();
+  const text = await turnText(deps, sparkPrompt(tr), "spark", log);
+  const body = partsOf(text ?? "").join("\n\n");
+  if (body === "") return 0;
+  const { sent } = await deliver([body], (p) => deps.send(p, "spark"), log);
+  if (!sent) return 0;
+  const name = INSTALL_DATA.exec(body)?.[1];
+  const draft =
+    name !== undefined && !(await isInstalled(deps, name)) ? name : "?";
+  const next = { ...claimed, spark: { ...claimed.spark, draft } };
+  await save(deps, next, "spark draft", log);
+  return 0;
 }
 
 /** Шаги 3–9: Watch. */
@@ -691,6 +775,8 @@ export async function main(
       translate: () => noticeTranslator(env),
       recordAlert: (key, essence) => recordAlert(dir, key, essence, now),
       unfixed: () => unfixedFailures(dir, now),
+      installed: async (name) =>
+        findPlugin((await readPluginsStateSafe(dir)).state, name) !== undefined,
       ...overrides,
     });
   } finally {
