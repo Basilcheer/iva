@@ -68,10 +68,18 @@ agent's environment, so both see every key of the installation. That is an accep
 ([ADR-0008](docs/adr/0008-plugin-is-the-unit-of-extension.md)), not a gap to report: what a
 plugin you installed does with your keys is the plugin's behaviour, not a vulnerability in
 Iva. An MCP server from a plugin gets less — its own environment, `PLUGIN_ROOT` and
-`PLUGIN_DATA`, nothing else. Only the owner can install a plugin, and only through
-`iva plugin` in the terminal: there is no Telegram command and no model tool, so an injected
-message cannot install one. A bypass of _that_ boundary is in scope. Details:
+`PLUGIN_DATA`, nothing else. A plugin with code or MCP is installed only by the owner's tap
+or in the owner's terminal; the model can only propose it. A bypass of _that_ boundary is in
+scope. A plugin of skills only the model installs itself with `iva plugin add` from `bash`, on
+the owner's request or after a tap on «Поставить» / «Install» under a Spark: that path is held
+by the skill, not by code ([ADR-0009](docs/adr/0009-plugin-rails.md)). Details:
 [docs/plugins.md](docs/plugins.md).
+
+Spark is a turn without the owner that brings together the network, writing scripts and
+running them: once a day Iva builds and tries one plugin draft and asks before installing. It
+is off by default and installs nothing itself; its draft scripts run as the service user and
+the draft is not bound to the tap. This is an accepted risk
+([ADR-0022](docs/adr/0022-spark-brings-one-capability-a-day.md)), not a gap to report.
 
 ## The honest boundary
 
