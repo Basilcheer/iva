@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-floating-promises -- Node's test runner owns registrations. */
-// Настройки Watch и Brief: разбор ключа `proactive` из settings.json и вход
+// Настройки Watch, Brief и Spark: разбор ключа `proactive` из settings.json и вход
 // `iva proactive set`. Мусор не валит разбор и не просачивается в значения; нет ключа —
 // установка работает как включённая. Сид печатается в имени теста, повтор — FC_SEED.
 import assert from "node:assert/strict";
@@ -37,6 +37,8 @@ test("no proactive key, no field or not an object: the defaults, Watch on", () =
   }
   assert.equal(PROACTIVE_DEFAULTS.enabled, true);
   assert.deepEqual(PROACTIVE_DEFAULTS.briefTimes, ["08:30", "14:00"]);
+  // Spark выключен по умолчанию (ADR-0022: согласие, а не терпение).
+  assert.deepEqual(PROACTIVE_DEFAULTS.sparkTimes, []);
 });
 
 test("a bad field falls back alone and is named in the journal", () => {
@@ -80,11 +82,12 @@ test(`any garbage in proactive gives a config of the right shape, valid fields k
         for (const key of PROACTIVE_KEYS) {
           const value = parsed[key];
           if (key === "enabled") assert.equal(typeof value, "boolean");
-          else if (key === "briefTimes")
+          else if (key === "briefTimes" || key === "sparkTimes")
             assert.ok(
-              (value as string[]).every((t) =>
-                /^(?:[01]\d|2[0-3]):(?:00|30)$/u.test(t),
-              ),
+              (key === "briefTimes" || (value as string[]).length <= 1) &&
+                (value as string[]).every((t) =>
+                  /^(?:[01]\d|2[0-3]):(?:00|30)$/u.test(t),
+                ),
             );
           else if (key === "urgentSenders")
             assert.ok(
@@ -141,12 +144,22 @@ test("iva proactive set values: numbers, on/off, HH:00|HH:30 lists, sender lists
     value: ["Жена", "@boss", "boss@x.io"],
   });
   assert.deepEqual(proactiveValue("urgentSenders", ""), { value: [] });
+  assert.deepEqual(proactiveValue("sparkTimes", "11:30"), {
+    value: ["11:30"],
+  });
+  assert.deepEqual(proactiveValue("sparkTimes", "23:00"), {
+    value: ["23:00"],
+  });
+  assert.deepEqual(proactiveValue("sparkTimes", ""), { value: [] });
   for (const [key, text] of [
     ["watchCapPerDay", "-1"],
     ["watchCapPerDay", "1.5"],
     ["quietFromHour", "24"],
     ["briefTimes", "09:15"],
     ["briefTimes", "09:00,09:00"],
+    ["sparkTimes", "11:15"],
+    ["sparkTimes", "11:30,12:00"],
+    ["sparkTimes", "11:30,11:30"],
     ["enabled", "maybe"],
     ["enabled", "constructor"],
     ["colour", "red"],

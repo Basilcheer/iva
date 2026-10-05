@@ -1,4 +1,4 @@
-// Настройки Watch и Brief — ключ `proactive` в data/settings.json (ADR-0020). Один файл на
+// Настройки Watch, Brief и Spark — ключ `proactive` в data/settings.json (ADR-0020). Один файл на
 // константы, разбор и правку: тик (scripts/proactive/tick.ts), `iva proactive` и тумблер
 // «Сама пишет» в /menu → Уведомления читают и пишут через него, второй копии правил нет.
 //
@@ -20,6 +20,7 @@ export type ProactiveConfig = {
   readonly watchCapPerDay: number;
   readonly modelWakesPerDay: number;
   readonly briefTimes: readonly string[];
+  readonly sparkTimes: readonly string[];
   readonly urgentSenders: readonly string[];
 };
 
@@ -31,6 +32,7 @@ export const PROACTIVE_DEFAULTS: ProactiveConfig = {
   watchCapPerDay: 5,
   modelWakesPerDay: 15,
   briefTimes: ["08:30", "14:00"],
+  sparkTimes: [],
   urgentSenders: [],
 };
 
@@ -65,6 +67,11 @@ const VALID: { readonly [K in ProactiveKey]: (value: unknown) => boolean } = {
   // Не больше двух Brief в сутки (спека §9); пустой список — Brief выключен.
   briefTimes: listOf(
     2,
+    (time) => typeof time === "string" && BRIEF_TIME.test(time),
+  ),
+  // Spark — один слот в день (ADR-0022); пустой список — Spark выключен, так по умолчанию.
+  sparkTimes: listOf(
+    1,
     (time) => typeof time === "string" && BRIEF_TIME.test(time),
   ),
   urgentSenders: listOf(
@@ -112,7 +119,7 @@ function parseList(text: string): string[] {
 function parseValue(key: ProactiveKey, text: string): unknown {
   if (key === "enabled")
     return { true: true, on: true, false: false, off: false }[text];
-  if (key === "briefTimes" || key === "urgentSenders") return parseList(text);
+  if (Array.isArray(PROACTIVE_DEFAULTS[key])) return parseList(text);
   return /^\d+$/u.test(text) ? Number(text) : undefined;
 }
 
