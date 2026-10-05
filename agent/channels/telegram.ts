@@ -5,6 +5,11 @@ import {
   type TelegramMessageBody,
 } from "eve/channels/telegram";
 import { POST } from "eve/channels";
+import {
+  flushSettledTelegramQuestions,
+  postTelegramQuestion,
+  settleTelegramQuestions,
+} from "../lib/telegram-question.ts";
 // Outbox — ЕДИНЫЙ шов наружу (тот же, через который уходят ночные отчёты cron):
 // внутри него outbound-Gate, выбор rich/HTML, нарезка на чанки и plain-фолбэк.
 import {
@@ -238,6 +243,23 @@ const telegram = telegramChannel({
     });
   },
   events: {
+    async "input.requested"(data, channel) {
+      for (const request of data.requests)
+        await postTelegramQuestion(
+          request,
+          channel.state,
+          channel.telegram,
+          TELEGRAM_RICH_REPLIES === "auto",
+          channel.continuation,
+        );
+    },
+    async "input.resolved"(data, channel) {
+      await settleTelegramQuestions(
+        data.resolutions,
+        channel.state,
+        channel.telegram,
+      );
+    },
     // Начало хода: сначала публикуем running, затем отправляем медленное статус-сообщение.
     // FIFO-мост не должен успеть принять следующую голову, пока Bot API отвечает.
     async "turn.started"(data, channel, ctx) {
@@ -259,8 +281,10 @@ const telegram = telegramChannel({
         onWorkingStatusError: (error) =>
           console.error("[telegram] статус-сообщение не отправилось:", error),
       });
+      await flushSettledTelegramQuestions(channel.state, channel.telegram);
     },
     async "turn.completed"(_data, channel, ctx) {
+      await flushSettledTelegramQuestions(channel.state, channel.telegram);
       await finishTelegramStatus(channel, ctx.session.id, "completed");
     },
     async "turn.cancelled"(_data, channel, ctx) {
@@ -270,6 +294,7 @@ const telegram = telegramChannel({
     // снимает busy-флаг И удаляет осиротевший «Работаю…» — та же уборка, что у
     // turn.completed. После обычного финала CAS по sessionId не совпадает — no-op.
     async "session.waiting"(_data, channel, ctx) {
+      await flushSettledTelegramQuestions(channel.state, channel.telegram);
       await finishTelegramStatus(channel, ctx.session.id, "completed");
     },
     "message.appended"(_data, channel, ctx) {
