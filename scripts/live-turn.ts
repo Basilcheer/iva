@@ -21,6 +21,8 @@ import {
   waitForHealth,
   type EveProcess,
 } from "./lib/eve-app.ts";
+import { carryCodexLogin } from "./lib/live-codex-auth.ts";
+import { resolveDataDir } from "./lib/data-dir.ts";
 
 const PROVIDER_ENV =
   /^(MODEL_PROVIDER|THINKING_EFFORT|(OLLAMA|OPENCODE|OPENROUTER|CODEX|CLAUDE|CUSTOM)_[A-Z_]+)$/u;
@@ -44,7 +46,8 @@ async function cardsWith(vault: string, needle: string): Promise<string[]> {
 function liveEnv(app: string, port: number, bearer: string): NodeJS.ProcessEnv {
   return {
     PATH: process.env.PATH,
-    // claude и codex берут вход из HOME хоста; ни .env, ни данных Ивы хоста здесь нет.
+    // claude берёт вход из HOME хоста. Вход codex лежит в data/codex-auth.json установки:
+    // его копирует carryCodexLogin, остальных данных Ивы хоста здесь нет.
     HOME: process.env.HOME,
     USER: process.env.USER,
     LOGNAME: process.env.LOGNAME,
@@ -64,11 +67,22 @@ function liveEnv(app: string, port: number, bearer: string): NodeJS.ProcessEnv {
   };
 }
 
+/** Вход codex из данных установки (ASSISTANT_DATA_DIR или ./data) во временную Иву. */
+async function carryLogin(app: string): Promise<void> {
+  const missing = await carryCodexLogin(
+    process.env.MODEL_PROVIDER,
+    resolveDataDir(process.cwd()),
+    join(app, "data"),
+  );
+  if (missing !== null) throw new Error(missing);
+}
+
 async function startLiveApp(sandbox: string, note: (line: string) => void) {
   const app = await prepareApp(sandbox);
   const port = await freePort();
   const bearer = randomBytes(24).toString("hex");
   const env = liveEnv(app, port, bearer);
+  await carryLogin(app);
   await writeFile(join(app, ".env"), `ASSISTANT_BEARER=${bearer}\n`, {
     mode: 0o600,
   });
