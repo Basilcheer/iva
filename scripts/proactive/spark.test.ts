@@ -5,9 +5,15 @@
 // на тексте `data` кнопки (сид в имени теста, повтор — FC_SEED=<сид>).
 import "../fixtures/no-host-anthropic.ts";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test, { after } from "node:test";
 import fc from "fast-check";
 
@@ -17,7 +23,7 @@ mkdirSync(process.env.ASSISTANT_DATA_DIR, { recursive: true });
 after(() => rmSync(ROOT, { recursive: true, force: true }));
 
 const { PROACTIVE_DEFAULTS } = await import("#lib/proactive-config.ts");
-const { runProactiveTick } = await import("./tick.ts");
+const { main, runProactiveTick } = await import("./tick.ts");
 const { initialState, writeProactiveState } = await import("./state.ts");
 import type { ProactiveConfig } from "#lib/proactive-config.ts";
 import type { ReminderTurn } from "../lib/reminder-turn.ts";
@@ -380,6 +386,77 @@ test("15. after a break the old count does not hold: a spark a month old gives a
     ...prev("count-receipts", 0),
     day: "2026-10-07",
   });
+});
+
+test("16. the pause not written: no turn, exit 1, the file as it was", async () => {
+  const h = harness();
+  await seed(h, prev("a", 1, "2026-10-04"));
+  h.failWrites = [0];
+  assert.equal(await tick(h, at(11, 30)), 1);
+  assert.equal(sparks(h).length, 0);
+  assert.deepEqual(sparkOf(h), prev("a", 1, "2026-10-04"));
+});
+
+test("17. main asks data/custom/plugins.json: a plugin there, even switched off, is installed; no file, a damaged one or another name — not", async () => {
+  const data = process.env.ASSISTANT_DATA_DIR ?? "";
+  const plugins = join(data, "custom", "plugins.json");
+  const entry = {
+    name: "count-receipts",
+    source: "data/custom/plugin-drafts/count-receipts",
+    ref: "",
+    sha: "",
+    digest: "",
+    enabled: false,
+    trusted: false,
+    installedAt: "2026-10-04T12:00:00.000Z",
+  };
+  const run = async (file: string | null) => {
+    rmSync(plugins, { force: true });
+    mkdirSync(dirname(plugins), { recursive: true });
+    if (file !== null) writeFileSync(plugins, file);
+    await writeProactiveState(join(data, "proactive.json"), {
+      ...initialState(at(0)),
+      spark: prev("count-receipts", 1, "2026-10-04"),
+    });
+    const prompts: string[] = [];
+    const env = {
+      TELEGRAM_BOT_TOKEN: "123456:secret",
+      TELEGRAM_ALLOWED_USER_IDS: "777",
+      ASSISTANT_TIMEZONE: ZONE,
+    };
+    const code = await main(
+      env,
+      {
+        config: () => SPARK,
+        sources: [],
+        runTurn: (prompt) => {
+          prompts.push(prompt);
+          return Promise.resolve(turn("QUIET"));
+        },
+        send: () => Promise.resolve({ ok: true, error: "" }),
+        translate: () => Promise.resolve((_en: string, ru: string) => ru),
+        log: () => {},
+      },
+      () => at(11, 30),
+    );
+    const spark = (
+      JSON.parse(
+        readFileSync(join(data, "proactive.json"), "utf8"),
+      ) as ProactiveState
+    ).spark;
+    return { code, turns: prompts.length, paused: spark?.pausedUntilMs !== 0 };
+  };
+  const state = (list: unknown[]) =>
+    JSON.stringify({ marketplaces: [], plugins: list });
+  const ran = { code: 0, turns: 1, paused: false };
+  const pausedRun = { code: 0, turns: 0, paused: true };
+  assert.deepEqual(await run(state([entry])), ran);
+  assert.deepEqual(await run(null), pausedRun);
+  assert.deepEqual(await run("{ not json"), pausedRun);
+  assert.deepEqual(
+    await run(state([{ ...entry, name: "count-other" }])),
+    pausedRun,
+  );
 });
 
 test(`(10) any button data: every delivered Spark gets a non-empty draft, a name only by the pattern and within 64 bytes (seed ${SEED})`, async () => {

@@ -1110,9 +1110,22 @@ const pauseSeries = fc
     })),
   }));
 
+/**
+ * Серии под тихий час: слот Spark в первый тихий час, тихие часы накрывают всё окно слота (3 ч),
+ * тики через полчаса внутри них. Без этих серий снятую проверку тихого часа ловил не каждый сид.
+ */
+const quietSeries = pauseSeries.map((s) => {
+  const hour = s.startMin / 60;
+  return {
+    ...s,
+    cfg: { ...s.cfg, quietFromHour: hour, quietToHour: (hour + 4) % 24 },
+    ticks: s.ticks.map((t, i) => ({ ...t, advanceMin: i === 0 ? 0 : 30 })),
+  };
+});
+
 test(`chaos (8): no more than one Spark a day of the owner, and none in a quiet hour (seed ${SEED})`, async () => {
   await fc.assert(
-    fc.asyncProperty(fc.oneof(series, pauseSeries), (s) =>
+    fc.asyncProperty(fc.oneof(series, pauseSeries, quietSeries), (s) =>
       runSeries(s, {
         end: (w) => {
           const days = new Set<string>();
