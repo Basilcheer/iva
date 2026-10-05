@@ -2,7 +2,7 @@
 
 Iva runs its background work as in-process Eve schedules: one `memory-night`
 pipeline at 04:00, the half-hourly
-`proactive` tick (Watch and the Brief), the daily `jobs-watchdog`, and the reminder dispatcher that ticks every
+`proactive` tick (Watch, the Brief and Spark), the daily `jobs-watchdog`, and the reminder dispatcher that ticks every
 minute. Each scheduled job is a thin spawner — the work itself lives in
 `scripts/` (see `docs/deploy.md`).
 

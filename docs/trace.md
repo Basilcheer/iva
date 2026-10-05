@@ -41,8 +41,8 @@ content and is marked `data.traceTrimmed: true`; names, timings and sizes always
 3. **Night turns have no turn key at all.** Rollup and other cron deliveries go through
    the Eve client, which exposes only a session id, so their `gate.outbound` and
    `outbox.*` lines carry `turn: ""` with a non-empty `session` and `source` in
-   {`rollup`, `cron`}. Watch and Brief parts are sent by the proactive tick itself: their
-   lines carry `turn: ""`, no `session` and `source` `watch` or `brief`. The Eve events of
+   {`rollup`, `cron`}. Watch, Brief and Spark parts are sent by the proactive tick itself: their
+   lines carry `turn: ""`, no `session` and `source` `watch`, `brief` or `spark`. The Eve events of
    that same night turn still carry `turn_N` from the hook, because the hook runs inside
    the agent.
 
