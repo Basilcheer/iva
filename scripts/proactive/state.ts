@@ -79,24 +79,32 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/** Поле `spark` необязательно: его нет — годится. */
 const isSpark = (value: unknown): boolean =>
-  isObject(value) &&
-  typeof value.day === "string" &&
-  typeof value.draft === "string" &&
-  isCount(value.misses) &&
-  Number.isFinite(value.pausedUntilMs);
+  value === undefined ||
+  (isObject(value) &&
+    typeof value.day === "string" &&
+    typeof value.draft === "string" &&
+    isCount(value.misses) &&
+    Number.isFinite(value.pausedUntilMs));
+
+function isBriefDone(value: unknown): boolean {
+  const brief = value as Partial<ProactiveState["briefDone"]> | null;
+  return (
+    typeof brief?.day === "string" &&
+    Array.isArray(brief.slots) &&
+    brief.slots.every(isCount)
+  );
+}
 
 function isState(value: Record<string, unknown>): boolean {
-  const brief = value.briefDone as Partial<ProactiveState["briefDone"]> | null;
   return (
     isObject(value.seen) &&
     Object.values(value.seen).every(isSeenEntry) &&
     isDayCount(value.wakes) &&
     isDayCount(value.modelWakes) &&
-    typeof brief?.day === "string" &&
-    Array.isArray(brief.slots) &&
-    brief.slots.every(isCount) &&
-    (value.spark === undefined || isSpark(value.spark)) &&
+    isBriefDone(value.briefDone) &&
+    isSpark(value.spark) &&
     typeof value.failuresSeenUpToMs === "number" &&
     Number.isFinite(value.failuresSeenUpToMs)
   );

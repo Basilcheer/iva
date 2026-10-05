@@ -579,9 +579,7 @@ export async function runProactiveTick(
   const config = deps.config();
   let state = stored ?? initialState(now);
   let failed = false;
-  const slot = config.enabled
-    ? dueBrief(config.briefTimes, briefDoneToday(state, clock.day), clock)
-    : null;
+  const slot = briefSlot(config, state, clock);
   if (slot !== null)
     ({ state, failed } = await brief(
       deps,
@@ -589,7 +587,7 @@ export async function runProactiveTick(
       { ...slot, day: clock.day },
       log,
     ));
-  if (slot === null && stored !== null && sparkDue(config, state.spark, clock))
+  else if (sparkDue(config, stored, clock))
     return spark(deps, state, clock, log);
   // Watch раз в час: тик своей половины часа, опоздавший на минуту — тот же тик. Первый
   // прогон смотрит источники всегда — иначе всё непрочитанное не стало бы «уже сообщённым».
@@ -604,13 +602,28 @@ export async function runProactiveTick(
 
 type Clock = ReturnType<typeof localDay> & { readonly now: number };
 
-/** Пора ли Spark: тумблер, не тихий час, пауза прошла, слот наступил и сегодня заявки не было. */
+/** Наступивший слот Brief; тумблер выключен — нет. */
+const briefSlot = (
+  config: ProactiveConfig,
+  state: ProactiveState,
+  clock: Clock,
+) =>
+  config.enabled
+    ? dueBrief(config.briefTimes, briefDoneToday(state, clock.day), clock)
+    : null;
+
+/**
+ * Пора ли Spark: файл уже был (первый прогон — Watch), тумблер, не тихий час, пауза прошла, слот
+ * наступил и сегодня заявки не было.
+ */
 function sparkDue(
   config: ProactiveConfig,
-  prev: SparkState | undefined,
+  stored: ProactiveState | null,
   clock: Clock,
 ): boolean {
-  if (!config.enabled || isQuietHour(config, clock.hour)) return false;
+  if (stored === null || !config.enabled || isQuietHour(config, clock.hour))
+    return false;
+  const prev = stored.spark;
   if ((prev?.pausedUntilMs ?? 0) > clock.now) return false;
   const done = prev?.day === clock.day ? [0] : [];
   return dueBrief(config.sparkTimes, done, clock) !== null;
@@ -638,6 +651,18 @@ const sparkPrompt = (tr: Translate) =>
 const INSTALL_DATA =
   /data="(?:Поставить|Install) ([a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?)"/u;
 
+/** Заявка сегодняшнего дня; две непоставленные подряд — вместо неё неделя паузы. */
+const sparkClaim = (state: ProactiveState, clock: Clock, misses: number) => {
+  const pause = misses >= 2;
+  const spark: SparkState = {
+    day: clock.day,
+    draft: "",
+    misses: pause ? 0 : misses,
+    pausedUntilMs: pause ? clock.now + 7 * DAY_MS : 0,
+  };
+  return { pause, claimed: { ...state, spark } };
+};
+
 /**
  * Spark (ADR-0022): две находки подряд без установки — неделя паузы без хода; иначе заявка до
  * хода, ход, одно сообщение, имя черновика второй записью. Код 1 — только провал первой записи.
@@ -649,16 +674,7 @@ async function spark(
   log: (line: string) => void,
 ): Promise<number> {
   const misses = await sparkMisses(deps, clock.now, state.spark);
-  const pause = misses >= 2;
-  const claimed = {
-    ...state,
-    spark: {
-      day: clock.day,
-      draft: "",
-      misses: pause ? 0 : misses,
-      pausedUntilMs: pause ? clock.now + 7 * DAY_MS : 0,
-    },
-  };
+  const { pause, claimed } = sparkClaim(state, clock, misses);
   if (!(await save(deps, claimed, pause ? "spark pause" : "spark claim", log)))
     return 1;
   if (pause) {
