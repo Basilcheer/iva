@@ -51,10 +51,12 @@ lines does it. Nothing fits — `QUIET`.
    `SIGNAL=echo`, so the trial prints and never sends.
 4. Run every script once on the owner's real case, with a clean environment so
    the draft does not inherit keys:
-   `env -i PATH="$PATH" HOME="$HOME" PLUGIN_DATA="$(mktemp -d)" <command>`.
+   `env -i PATH="$PATH" HOME="$HOME" SIGNAL=echo PLUGIN_DATA="$(mktemp -d)" <command>`.
    This keeps keys out of the environment only: a draft script never reads `.env`
-   or `data/`; its own state goes to `$PLUGIN_DATA` (a scratch folder on the
-   trial run, `data/plugin-data/<name>/` once installed). A script that needs a
+   or the rest of `data/`. Its own state goes to
+   `${PLUGIN_DATA:-data/plugin-data/<name>}`: a scratch folder on the trial run,
+   the plugin's own folder once installed (only a service gets `PLUGIN_DATA`
+   set; a script run from a chat turn takes the default). A script that needs a
    key: say which one, do not pass it. Each script call under two minutes: a
    turn silent for three minutes is cut.
 5. Install nothing on the host (`apt`, `pip install`, `npm -g`, `uv tool`): a
