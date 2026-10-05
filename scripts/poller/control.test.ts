@@ -57,8 +57,19 @@ type ControlModule = {
       pluginTapImpl?: (tap: {
         digest12: string;
         chatId: number;
-      }) => Promise<void>;
+      }) => Promise<unknown>;
+      scheduleImpl?: (key: string, task: () => Promise<void>) => boolean;
+      editTapImpl?: (
+        chatId: number,
+        messageId: number,
+        edit: unknown,
+      ) => Promise<boolean>;
     },
+  ) => Promise<boolean>;
+  editTappedMessage: (
+    chatId: number,
+    messageId: number,
+    edit: unknown,
   ) => Promise<boolean>;
   OUT_OF_BAND_COMMANDS: string[];
   TELEGRAM_EVE_CALLBACK_PREFIXES: readonly string[];
@@ -132,6 +143,7 @@ const [controlModule, runStatusModule, wizardsModule, queueModule, mainModule] =
   ])) as [unknown, unknown, unknown, unknown, unknown];
 const {
   applyTelegramButtonTap,
+  editTappedMessage,
   handleAwaitNonText,
   handleControl,
   OUT_OF_BAND_COMMANDS,
@@ -1539,7 +1551,8 @@ test("тап по кнопке модели уходит дальше обычн
     false,
     "тап идёт в admission",
   );
-  assert.deepEqual(acks, [["cq-tap", undefined]]);
+  // Сообщение без кнопок в ответе Telegram: подсказка называет data, правки нет.
+  assert.deepEqual(acks, [["cq-tap", "✅ Отложи на час"]]);
   assert.equal(update.callback_query, undefined, "колбэк больше не колбэк");
   assert.deepEqual(update.message, {
     message_id: 77,
@@ -2877,6 +2890,7 @@ function pluginDeps() {
       ...recorded.deps,
       pluginTapImpl: async (tap: { digest12: string; chatId: number }) => {
         taps.push(tap);
+        return "stale";
       },
     },
   };
@@ -2940,4 +2954,433 @@ test("a failing installer does not crash the bridge and the tap stays consumed",
     }),
     true,
   );
+});
+
+// ── Отклик кнопки модели: подсказка «✅», правка сообщения, память «уже нажато» ──
+// (spec-w2 §2.1 п. 4–5, модель specs/ButtonTap.tla). Память живёт в модуле моста, поэтому
+// у каждого теста свои номера сообщений.
+
+const flush = () => new Promise((resolve) => setImmediate(resolve));
+
+function modelTap(
+  updateId: number,
+  messageId: number,
+  data: string,
+  message: Record<string, unknown> = {},
+): ControlUpdate {
+  return {
+    update_id: updateId,
+    callback_query: {
+      id: `cq-${updateId}`,
+      from: trustedFrom,
+      data,
+      message: { message_id: messageId, date: 1, chat, ...message },
+    },
+  };
+}
+
+const choiceBlocks = [
+  { type: "paragraph", text: "Поставить плагин?" },
+  {
+    type: "buttons",
+    buttons: [
+      { text: "Поставить", callback_data: "Поставить" },
+      { text: "Не надо", callback_data: "Не надо" },
+    ],
+  },
+];
+const richChoice = { rich_message: { blocks: choiceBlocks } };
+
+function tapDeps() {
+  const recorded = recordingDeps();
+  const edits: Array<[number, number, unknown]> = [];
+  const scheduled: string[] = [];
+  const result = { edit: true };
+  return {
+    ...recorded,
+    edits,
+    scheduled,
+    result,
+    deps: {
+      ...recorded.deps,
+      scheduleImpl: (key: string, task: () => Promise<void>) => {
+        scheduled.push(key);
+        void task();
+        return true;
+      },
+      editTapImpl: async (chatId: number, messageId: number, edit: unknown) => {
+        edits.push([chatId, messageId, edit]);
+        return result.edit;
+      },
+    },
+  };
+}
+
+test("a model button tap shows ✅ with its label and marks the button in the rich message", async () => {
+  const { acks, edits, scheduled, deps } = tapDeps();
+  const update = modelTap(301, 501, "Не надо", {
+    rich_message: { blocks: choiceBlocks, is_rtl: false },
+  });
+
+  assert.equal(await handleControl(update, deps), false, "the tap goes on");
+  await flush();
+
+  assert.equal((update.message as { text?: string }).text, "Не надо");
+  assert.deepEqual(acks, [["cq-301", "✅ Не надо"]]);
+  assert.deepEqual(scheduled, ["tap:7:501:Не надо"]);
+  assert.deepEqual(edits, [
+    [
+      7,
+      501,
+      {
+        rich: {
+          blocks: [
+            choiceBlocks[0],
+            {
+              type: "buttons",
+              buttons: [
+                { text: "Поставить", callback_data: "Поставить" },
+                { text: "✅ Не надо", style: "success", disabled: {} },
+              ],
+            },
+          ],
+          is_rtl: false,
+        },
+      },
+    ],
+  ]);
+});
+
+test("a second tap on the same button by another update is «already chosen» and no message", async () => {
+  const { acks, edits, deps } = tapDeps();
+  assert.equal(
+    await handleControl(modelTap(311, 511, "Не надо", richChoice), deps),
+    false,
+  );
+  const second = modelTap(312, 511, "Не надо", richChoice);
+
+  assert.equal(await handleControl(second, deps), true, "the tap is consumed");
+  await flush();
+
+  assert.equal(second.message, undefined, "no second message");
+  assert.ok(second.callback_query);
+  assert.deepEqual(acks, [
+    ["cq-311", "✅ Не надо"],
+    ["cq-312", "Уже выбрано"],
+  ]);
+  assert.equal(edits.length, 1);
+
+  // Другие кнопки того же сообщения живые: владелец вправе передумать.
+  const other = modelTap(313, 511, "Поставить", richChoice);
+  assert.equal(await handleControl(other, deps), false);
+  assert.equal((other.message as { text?: string }).text, "Поставить");
+});
+
+test("the same update handed out again after write-failed passes as fresh", async () => {
+  const { acks, deps } = tapDeps();
+  const first = modelTap(321, 521, "Не надо", richChoice);
+  const again = modelTap(321, 521, "Не надо", richChoice);
+
+  assert.equal(await handleControl(first, deps), false);
+  assert.equal(
+    await handleControl(again, deps),
+    false,
+    "admission gets it again",
+  );
+
+  assert.equal((again.message as { text?: string }).text, "Не надо");
+  assert.ok(!acks.some(([, text]) => text === "Уже выбрано"));
+});
+
+test("a tap that cannot become a message is not marked and not remembered", async () => {
+  const { acks, edits, scheduled, deps } = tapDeps();
+  // Дробная дата не проходит валидатор очереди: applyTelegramButtonTap отдаёт false.
+  const broken = modelTap(331, 531, "Не надо", { ...richChoice, date: 1.5 });
+
+  assert.equal(await handleControl(broken, deps), true);
+  await flush();
+  assert.deepEqual(acks, [["cq-331", undefined]]);
+  assert.deepEqual(scheduled, []);
+  assert.deepEqual(edits, []);
+
+  const next = modelTap(332, 531, "Не надо", richChoice);
+  assert.equal(await handleControl(next, deps), false, "no key was kept");
+  assert.equal((next.message as { text?: string }).text, "Не надо");
+});
+
+test("a failed edit keeps the key: the next tap is still «already chosen»", async () => {
+  const { acks, edits, result, deps } = tapDeps();
+  result.edit = false;
+
+  assert.equal(
+    await handleControl(modelTap(341, 541, "Не надо", richChoice), deps),
+    false,
+  );
+  await flush();
+  assert.equal(edits.length, 1);
+
+  const third = modelTap(342, 541, "Не надо", richChoice);
+  assert.equal(await handleControl(third, deps), true);
+  assert.equal(third.message, undefined);
+  assert.deepEqual(acks.at(-1), ["cq-342", "Уже выбрано"]);
+});
+
+test("an inaccessible message, one without buttons or with media gets only the hint and still remembers", async () => {
+  const cases: Array<[string, Record<string, unknown>]> = [
+    ["inaccessible", { date: 0 }],
+    ["no tree", { text: "Поставить?" }],
+    [
+      "media",
+      {
+        rich_message: {
+          blocks: [{ type: "photo", photo: [] }, ...choiceBlocks],
+        },
+      },
+    ],
+    ["no button", { rich_message: { blocks: [choiceBlocks[0]] } }],
+  ];
+  let id = 350;
+  for (const [label, message] of cases) {
+    const { acks, edits, scheduled, deps } = tapDeps();
+    id += 2;
+    assert.equal(
+      await handleControl(modelTap(id, id, "Не надо", message), deps),
+      false,
+      label,
+    );
+    await flush();
+    assert.deepEqual(acks, [[`cq-${id}`, "✅ Не надо"]], label);
+    assert.deepEqual(scheduled, [], label);
+    assert.deepEqual(edits, [], label);
+
+    const second = modelTap(id + 1, id, "Не надо", message);
+    assert.equal(await handleControl(second, deps), true, label);
+    assert.equal(second.message, undefined, label);
+  }
+});
+
+test("a rejected callback answer does not stop the tap: it is a message and remembered", async () => {
+  const { deps } = tapDeps();
+  const failingAck = {
+    ...deps,
+    ackImpl: async () => {
+      throw new Error("query is too old");
+    },
+  };
+  const update = modelTap(371, 571, "Не надо", richChoice);
+
+  assert.equal(await handleControl(update, failingAck), false);
+  assert.equal((update.message as { text?: string }).text, "Не надо");
+  assert.equal(
+    await handleControl(modelTap(372, 571, "Не надо", richChoice), failingAck),
+    true,
+    "the key was kept",
+  );
+});
+
+test("a stranger's tap and a group tap are neither marked nor remembered", async () => {
+  const { acks, edits, scheduled, deps } = tapDeps();
+  const stranger = modelTap(381, 581, "Не надо", richChoice);
+  (stranger.callback_query as Record<string, unknown>).from = {
+    id: 999,
+    is_bot: false,
+  };
+  const group = modelTap(382, 582, "Не надо", {
+    ...richChoice,
+    chat: { id: -1001, type: "supergroup" },
+  });
+
+  assert.equal(await handleControl(stranger, deps), false);
+  assert.equal(await handleControl(group, deps), true);
+  await flush();
+
+  assert.deepEqual(acks[0], ["cq-381", undefined]);
+  assert.match(acks[1][1] ?? "", /личн/u);
+  assert.deepEqual(scheduled, []);
+  assert.deepEqual(edits, []);
+  // Ни один из них не оставил ключа: тап владельца по той же кнопке — свежий.
+  const owner = modelTap(383, 581, "Не надо", richChoice);
+  assert.equal(await handleControl(owner, deps), false);
+});
+
+test("the tap memory keeps at most 256 buttons, the oldest leaves first", async () => {
+  const { deps } = tapDeps();
+  for (let i = 0; i < 300; i += 1)
+    await handleControl(modelTap(10_000 + i, 10_000 + i, "x"), deps);
+
+  // 300 − 256 = 44: кнопки 0…43 ушли, 44…299 на месте. Повтор память не трогает.
+  const newest = modelTap(20_299, 10_299, "x");
+  assert.equal(await handleControl(newest, deps), true, "the newest is kept");
+  const edge = modelTap(20_044, 10_044, "x");
+  assert.equal(await handleControl(edge, deps), true, "the 45th is kept");
+  const gone = modelTap(20_043, 10_043, "x");
+  assert.equal(await handleControl(gone, deps), false, "the 44th left");
+});
+
+test("a tap handed out again while its edit is in flight schedules no second edit", async () => {
+  const { deps } = tapDeps();
+  let release = () => {};
+  const edits: unknown[] = [];
+  const slow = {
+    ...deps,
+    scheduleImpl: undefined,
+    editTapImpl: (_chat: number, _message: number, edit: unknown) => {
+      edits.push(edit);
+      return new Promise<boolean>((resolve) => {
+        release = () => resolve(true);
+      });
+    },
+  };
+
+  assert.equal(
+    await handleControl(modelTap(391, 591, "Не надо", richChoice), slow),
+    false,
+  );
+  assert.equal(
+    await handleControl(modelTap(391, 591, "Не надо", richChoice), slow),
+    false,
+  );
+  assert.equal(edits.length, 1, "the key is still in flight");
+  release();
+  await flush();
+});
+
+// ── «Установить»: пометка только после запуска установщика ──
+
+function proposalTap(
+  updateId: number,
+  messageId: number,
+  message: Record<string, unknown>,
+): ControlUpdate {
+  return modelTap(updateId, messageId, "iva_plugin:ok:0123456789ab", message);
+}
+
+const installRow = [
+  { text: "Установить", callback_data: "iva_plugin:ok:0123456789ab" },
+];
+const classicProposal = { reply_markup: { inline_keyboard: [installRow] } };
+const richProposal = {
+  rich_message: {
+    blocks: [
+      { type: "paragraph", text: "Плагин relay" },
+      { type: "buttons", buttons: installRow },
+    ],
+  },
+};
+const installMarked = { text: "✅ Установить", style: "success", disabled: {} };
+
+function proposalDeps(outcome: string) {
+  const recorded = tapDeps();
+  const taps: unknown[] = [];
+  return {
+    ...recorded,
+    taps,
+    deps: {
+      ...recorded.deps,
+      pluginTapImpl: async (tap: unknown) => {
+        taps.push(tap);
+        return outcome;
+      },
+    },
+  };
+}
+
+test("«Install» that started marks the button: classic by default, rich too; a second tap is «already chosen»", async () => {
+  const expected: Array<[string, Record<string, unknown>, unknown]> = [
+    ["classic", classicProposal, { inline_keyboard: [[installMarked]] }],
+    [
+      "rich",
+      richProposal,
+      {
+        rich: {
+          blocks: [
+            { type: "paragraph", text: "Плагин relay" },
+            { type: "buttons", buttons: [installMarked] },
+          ],
+        },
+      },
+    ],
+  ];
+  let id = 400;
+  for (const [label, message, edit] of expected) {
+    const { acks, edits, taps, deps } = proposalDeps("started");
+    id += 2;
+    assert.equal(
+      await handleControl(proposalTap(id, id, message), deps),
+      true,
+      label,
+    );
+    await flush();
+    assert.deepEqual(edits, [[7, id, edit]], label);
+
+    assert.equal(
+      await handleControl(proposalTap(id + 1, id, message), deps),
+      true,
+      label,
+    );
+    assert.equal(taps.length, 1, `${label}: the installer runs once`);
+    assert.deepEqual(acks, [
+      [`cq-${id}`, undefined],
+      [`cq-${id + 1}`, "Уже выбрано"],
+    ]);
+  }
+});
+
+test("«Install» that did not start or is stale stays live and is not marked", async () => {
+  let id = 420;
+  for (const outcome of ["not-started", "stale"]) {
+    const { edits, scheduled, taps, deps } = proposalDeps(outcome);
+    id += 2;
+    await handleControl(proposalTap(id, id, classicProposal), deps);
+    await handleControl(proposalTap(id + 1, id, classicProposal), deps);
+    await flush();
+    assert.deepEqual(edits, [], outcome);
+    assert.deepEqual(scheduled, [], outcome);
+    assert.equal(
+      taps.length,
+      2,
+      `${outcome}: the second tap reaches the installer again`,
+    );
+  }
+});
+
+// Граница с Telegram: какой метод и какое тело уходят на провод, и что считается успехом.
+test("the edit goes on the wire as editMessageText with blocks or editMessageReplyMarkup", async () => {
+  const realFetch = globalThis.fetch;
+  const calls: Array<[string, Record<string, unknown>]> = [];
+  let reply: Record<string, unknown> = { ok: true, result: {} };
+  globalThis.fetch = (async (url: string, init: { body: string }) => {
+    calls.push([url, JSON.parse(init.body) as Record<string, unknown>]);
+    return new Response(JSON.stringify(reply));
+  }) as typeof fetch;
+  try {
+    const blocks = [{ type: "buttons", buttons: [installMarked] }];
+    assert.equal(
+      await editTappedMessage(7, 9, { rich: { blocks, is_rtl: true } }),
+      true,
+    );
+    assert.equal(
+      await editTappedMessage(7, 9, { inline_keyboard: [[installMarked]] }),
+      true,
+    );
+    reply = { ok: false, description: "Bad Request: message is not modified" };
+    assert.equal(await editTappedMessage(7, 9, { inline_keyboard: [] }), true);
+    reply = { ok: false, description: "Bad Request: message can't be edited" };
+    assert.equal(await editTappedMessage(7, 9, { inline_keyboard: [] }), false);
+
+    assert.match(calls[0][0], /\/editMessageText$/u);
+    assert.deepEqual(calls[0][1], {
+      chat_id: 7,
+      message_id: 9,
+      rich_message: { blocks, is_rtl: true },
+    });
+    assert.match(calls[1][0], /\/editMessageReplyMarkup$/u);
+    assert.deepEqual(calls[1][1], {
+      chat_id: 7,
+      message_id: 9,
+      reply_markup: { inline_keyboard: [[installMarked]] },
+    });
+  } finally {
+    globalThis.fetch = realFetch;
+  }
 });
