@@ -32,6 +32,8 @@ import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import fc from "fast-check";
+import { asSchema } from "ai";
+import { toInputSchema } from "../node_modules/eve/dist/src/tools/schema.js";
 
 import "./lib/ts-esm-hooks.ts";
 
@@ -402,16 +404,9 @@ type Tools = {
 
 const cardModule = (await import(
   join(REPO, "agent", "tools", "write_card.ts")
-)) as unknown as {
-  default: {
-    execute: (input: unknown) => Promise<{
-      error?: string;
-      file?: string;
-      ok: boolean;
-    }>;
-    inputSchema: { parse: (value: unknown) => unknown };
-  };
-};
+)) as typeof import("../agent/tools/write_card.ts");
+const cardSchema = asSchema(toInputSchema(cardModule.default.inputSchema));
+const cardTool = cardModule.default as unknown as { execute: Tools["card"] };
 const fileModule = (await import(
   join(REPO, "agent", "tools", "write_file.ts")
 )) as unknown as {
@@ -427,8 +422,12 @@ const seam = (await import(
 )) as unknown as Tools["seam"];
 
 const tool: Tools = {
-  card: (args) =>
-    cardModule.default.execute(cardModule.default.inputSchema.parse(args)),
+  card: async (args) => {
+    const validated = await cardSchema.validate!(args);
+    assert.equal(validated.success, true);
+    assert.ok(validated.success);
+    return cardTool.execute(validated.value);
+  },
   file: (path, content) => fileModule.default.execute({ content, path }),
   seam,
 };
