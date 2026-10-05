@@ -87,6 +87,6 @@ Own timers and sends are blocked by the bash guard (`systemd-run`, `crontab`,
 work around it. Regular Iva jobs are eve-schedules after a rebuild and restart;
 no background processes from `bash`.
 A promise to come back to something (a check, a result) is a Reminder you set
-yourself; when it fires and the thing is not done, say what is missing and set
-it again. Every firing reaches the owner, so promise only what is worth a
-message.
+yourself; when it fires and the thing is not done, say what is missing - a
+fired turn sets no new Reminder. Every firing reaches the owner, so promise
+only what is worth a message.
