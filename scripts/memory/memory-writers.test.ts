@@ -13,7 +13,8 @@ import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 import type { ToolContext } from "eve/tools";
 import fc from "fast-check";
-import { z } from "zod";
+import { asSchema } from "ai";
+import { toInputSchema } from "../../node_modules/eve/dist/src/tools/schema.js";
 import "../lib/ts-esm-hooks.ts";
 
 const writeCard = (await import("../../agent/tools/write_card.ts")).default;
@@ -617,8 +618,8 @@ void test("write_card без полей операции отвечает тек
   assert.equal(git(fx.vault, "status", "--porcelain"), "");
 });
 
-void test("write_card описывает валидные формы вызова до execute, сохраняя типы", () => {
-  const schema = writeCard.inputSchema as z.ZodType;
+void test("write_card описывает валидные формы вызова до execute, сохраняя типы", async () => {
+  const schema = asSchema(toInputSchema(writeCard.inputSchema));
   const examples = [
     ...writeCard.description.matchAll(
       /Пример формы (fact|truth|merge)[^\n]*?: (\{[^\n]+\})/gu,
@@ -630,16 +631,16 @@ void test("write_card описывает валидные формы вызов�
   );
   for (const match of examples) {
     const example = JSON.parse(match[2]) as Record<string, unknown>;
-    assert.equal(schema.safeParse(example).success, true);
+    assert.equal((await schema.validate!(example)).success, true);
     assert.equal(example.operation, match[1]);
   }
   assert.match(writeCard.description, /пример не является подтверждением/u);
   assert.equal(
-    schema.safeParse({ operation: "fact", title: null }).success,
+    (await schema.validate!({ operation: "fact", title: null })).success,
     false,
   );
   assert.equal(
-    schema.safeParse({ operation: "merge", confirmed_by_owner: "true" })
+    (await schema.validate!({ operation: "merge", confirmed_by_owner: "true" }))
       .success,
     false,
   );
@@ -974,12 +975,11 @@ void test("write_card: свой статус из schema.json проходит �
       node_types: { project: { status: ["active", "blocked", "done"] } },
     }),
   );
-  // Провод — та же zod-схема, которую eve проверяет до execute.
-  const schema = writeCard.inputSchema as unknown as {
-    safeParse: (value: unknown) => { success: boolean };
-  };
-  const wire = (value: unknown) => schema.safeParse(value).success;
-  assert.equal(wire(fact({ status: "blocked" })), true);
+  // Провод — тот же Standard Schema контракт, который eve проверяет до execute.
+  const schema = asSchema(toInputSchema(writeCard.inputSchema));
+  const wire = async (value: unknown) =>
+    (await schema.validate!(value)).success;
+  assert.equal(await wire(fact({ status: "blocked" })), true);
   const blocked = await run(fact({ status: "blocked" }));
   assert.equal(blocked.ok, true, JSON.stringify(blocked));
   const file = join(fx.vault, "cards/projects/аврора.md");
@@ -992,7 +992,7 @@ void test("write_card: свой статус из schema.json проходит �
     "x".repeat(10_000),
     "",
   ]) {
-    assert.equal(wire(fact({ status })), true);
+    assert.equal(await wire(fact({ status })), true);
     const reply = await run(fact({ text: "Ещё факт", status }));
     assert.equal(reply.ok, false, JSON.stringify(reply).slice(0, 200));
     assert.match(

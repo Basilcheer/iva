@@ -24,6 +24,8 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { asSchema } from "ai";
+import { toInputSchema } from "../node_modules/eve/dist/src/tools/schema.js";
 
 const REPO = fileURLToPath(new URL("..", import.meta.url));
 const SCHEMA = join(REPO, "vault-template", "schema.json");
@@ -128,13 +130,18 @@ const loadTools = async () => {
   )) as typeof import("../agent/lib/vault-commit.ts");
   const cardTool = card.default as unknown as {
     execute: (input: unknown) => Promise<WriteCardResult>;
-    inputSchema: { parse: (value: unknown) => unknown };
   };
+  const cardSchema = asSchema(toInputSchema(card.default.inputSchema));
   const fileTool = file.default as unknown as {
     execute: (input: unknown) => Promise<WriteFileResult>;
   };
   return {
-    card: (args: unknown) => cardTool.execute(cardTool.inputSchema.parse(args)),
+    card: async (args: unknown) => {
+      const validated = await cardSchema.validate!(args);
+      assert.equal(validated.success, true);
+      assert.ok(validated.success);
+      return cardTool.execute(validated.value);
+    },
     file: (path: string, content: string) =>
       fileTool.execute({ content, path }),
     seam,
@@ -701,15 +708,25 @@ function indexState(vault: string, rel: string): string {
   return `${status}|${flags ?? "нет"}`;
 }
 
+async function withGitDir<T>(value: string, run: () => Promise<T>): Promise<T> {
+  const original = process.env.GIT_DIR;
+  process.env.GIT_DIR = value;
+  try {
+    return await run();
+  } finally {
+    if (original === undefined) delete process.env.GIT_DIR;
+    else process.env.GIT_DIR = original;
+  }
+}
+
 test("чужой GIT_DIR в окружении не уводит коммит из vault", async (t) => {
   const vault = makeVault(t);
   const foreign = foreignRepo(t);
   const before = fingerprint(foreign);
-  process.env.GIT_DIR = join(foreign, ".git");
-  const { logged, value: result } = await journal(() =>
-    tool.card(card({ title: "Не-туда" })),
+  const { logged, value: result } = await withGitDir(
+    join(foreign, ".git"),
+    () => journal(() => tool.card(card({ title: "Не-туда" }))),
   );
-  delete process.env.GIT_DIR;
 
   assert.equal(result.ok, true, result.error);
   assert.deepEqual(subjects(vault), ["card не-туда: fact"]);
@@ -984,12 +1001,9 @@ test("подметальщик Brain коммитит только в свой �
   const foreign = foreignRepo(t);
   const before = fingerprint(foreign);
   writeFileSync(join(vault, "cards", "notes", "остаток.md"), "# Остаток\n");
-  process.env.GIT_DIR = join(foreign, ".git");
-  const outcome = await tool.seam.commitVaultSweep(
-    "chore: memory 2026-09-21",
-    vault,
+  const outcome = await withGitDir(join(foreign, ".git"), () =>
+    tool.seam.commitVaultSweep("chore: memory 2026-09-21", vault),
   );
-  delete process.env.GIT_DIR;
 
   assert.equal(outcome.ok, true);
   assert.deepEqual(subjects(vault), ["chore: memory 2026-09-21"]);
