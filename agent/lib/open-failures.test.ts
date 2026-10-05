@@ -287,6 +287,21 @@ test("T30 №7: блок инструкции ограничен по числу
   assert.match(block, /job-0/);
 });
 
+// Хвост блока не зовёт `iva doctor`: в ходе его не запустить (сторож), а список провалов
+// лежит в data/jobs.json.
+test("21 провал: хвост блока называет data/jobs.json, а не iva doctor", () => {
+  const failures = Array.from({ length: 21 }, (_, index) => ({
+    source: "job" as const,
+    name: `job-${index}`,
+    at: NOW,
+    reason: "exited 1",
+  }));
+  const tail = openFailuresMarkdown(failures).split("\n").at(-1) ?? "";
+  assert.match(tail, /и ещё 1 провалов/u);
+  assert.match(tail, /data\/jobs\.json/u);
+  assert.doesNotMatch(tail, /iva doctor/u);
+});
+
 // Ремонт (Sol P2): снятые расписания (memory-daily, -weekly, -monthly, -yearly) остаются в
 // jobs.json, но провалом не считаются нигде: ни в инструкции хода, ни у сторожа, ни в doctor.
 test("снятое расписание не попадает в открытые провалы и в инструкцию хода", async () => {
