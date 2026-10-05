@@ -34,9 +34,9 @@ version ("Write your own"); read it before the first plugin of a turn.
 In an Insight turn you only build and run the draft; installing waits for the owner's tap (skill `insight`).
 
 - **Skills and scripts only** (no `mcp.json`, no `sh.iva/`): `iva plugin add
-data/custom/plugin-drafts/<name>` from `bash`. It works from the next turn: no build, no
+./data/custom/plugin-drafts/<name>` from `bash`. It works from the next turn: no build, no
   restart. Say so.
-- **With `mcp.json` or `sh.iva/`**: `iva plugin propose data/custom/plugin-drafts/<name>`. The
+- **With `mcp.json` or `sh.iva/`**: `iva plugin propose ./data/custom/plugin-drafts/<name>`. The
   code sends the owner a message with what the plugin will run and an Install button. End the
   turn with "sent the proposal, waiting for the tap" in the owner's language ("отправила
   предложение, жду тапа"). The result arrives later as a message from the code; do not promise it

@@ -9,9 +9,6 @@ import { parsePluginSource } from "./lib/plugin-source.ts";
 
 const SKILLS = join(import.meta.dirname, "..", "agent", "skills");
 
-// Файл вне пакетов волны 2: правка ждёт решения лида (verdict-w2.md).
-const PENDING = new Set(["make-plugin"]);
-
 /** Аргументы `iva plugin add <путь к черновику>` из текста скилла (перенос строки — пробел). */
 function draftAdds(text: string): string[] {
   const flat = text.replace(/\s+/gu, " ");
@@ -30,15 +27,11 @@ for (const skill of readdirSync(SKILLS, { withFileTypes: true })) {
   }
   const adds = draftAdds(text);
   if (adds.length === 0) continue;
-  void test(
-    `skill ${skill.name}: every iva plugin add of a draft is a local path`,
-    { todo: PENDING.has(skill.name) ? "file outside wave 2" : undefined },
-    () => {
-      // Модель подставляет имя черновика вместо <name>.
-      for (const raw of adds) {
-        const typed = raw.replace("<name>", "rain-alert");
-        assert.equal(parsePluginSource(typed).kind, "local", typed);
-      }
-    },
-  );
+  void test(`skill ${skill.name}: every iva plugin add of a draft is a local path`, () => {
+    // Модель подставляет имя черновика вместо <name>.
+    for (const raw of adds) {
+      const typed = raw.replace("<name>", "rain-alert");
+      assert.equal(parsePluginSource(typed).kind, "local", typed);
+    }
+  });
 }
