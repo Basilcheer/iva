@@ -140,7 +140,9 @@ void test("property: button(text, data) survives the classic parse; any markdown
 
 // ── markTappedButton: нажатая кнопка в полученном сообщении (spec-w2 §3.1.4) ──
 
-const tapped = { text: "✅ Да", style: "success", disabled: {} };
+// Форма, которую Telegram принял на шаге 0 (06.10.2026): подпись, success и тот же
+// callback_data. Поле disabled живьём не проверялось, повторный тап держит память Bridge.
+const tapped = { text: "✅ Да", style: "success", callback_data: "yes" };
 
 void test("mark: a button in a buttons block is marked, the rest of the blocks stay byte for byte", () => {
   const blocks = [
@@ -208,7 +210,7 @@ void test("mark: a button inside a paragraph (RichTextButton) and a RichText lab
     {
       text: ["✅ ", ["Не ", { type: "bold", text: "надо" }]],
       style: "success",
-      disabled: {},
+      callback_data: "no",
     },
   );
 });
@@ -223,11 +225,11 @@ void test("mark: every button with the data is marked and the label is the first
   assert.deepEqual(marked?.tree, [
     {
       type: "buttons",
-      buttons: [{ text: "✅ Первая", style: "success", disabled: {} }],
+      buttons: [{ text: "✅ Первая", style: "success", callback_data: "x" }],
     },
     {
       type: "buttons",
-      buttons: [{ text: "✅ Вторая", style: "success", disabled: {} }],
+      buttons: [{ text: "✅ Вторая", style: "success", callback_data: "x" }],
     },
   ]);
 });
@@ -265,7 +267,13 @@ void test("mark: a classic inline_keyboard of two rows", () => {
   ];
   assert.deepEqual(markTappedButton(keyboard, "iva_plugin:ok:0123456789ab"), {
     tree: [
-      [{ text: "✅ Установить", style: "success", disabled: {} }],
+      [
+        {
+          text: "✅ Установить",
+          style: "success",
+          callback_data: "iva_plugin:ok:0123456789ab",
+        },
+      ],
       [{ text: "Сайт", url: "https://example.com" }],
     ],
     label: "Установить",
@@ -337,7 +345,13 @@ function objects(node: unknown): Record<string, unknown>[] {
   ];
 }
 
-void test("property: the input never changes, only the tapped buttons do, and they are disabled", () => {
+// Помеченная кнопка: подпись с «✅», success, тот же data и больше ничего.
+const isMarked = (o: Record<string, unknown>, data: string) =>
+  o.callback_data === data &&
+  o.style === "success" &&
+  Object.keys(o).sort().join() === "callback_data,style,text";
+
+void test("property: the input never changes, only the tapped buttons do, and they are marked", () => {
   fc.assert(
     fc.property(blocks, tapData, (tree, data) => {
       const before = structuredClone(tree);
@@ -349,15 +363,27 @@ void test("property: the input never changes, only the tapped buttons do, and th
         return;
       }
       assert.ok(result);
-      const out = objects(result.tree);
-      assert.equal(out.filter((o) => o.callback_data === data).length, 0);
-      const marked = out.filter((o) => "disabled" in o);
-      assert.equal(marked.length, matches.length);
-      for (const button of marked) assert.equal(button.style, "success");
+      const out = objects(result.tree).filter((o) => o.callback_data === data);
+      assert.equal(out.length, matches.length);
+      for (const button of out) assert.ok(isMarked(button, data));
       assert.deepEqual(
-        withoutButtons(result.tree, (o) => "disabled" in o),
+        withoutButtons(result.tree, (o) => o.callback_data === data),
         withoutButtons(tree, (o) => o.callback_data === data),
       );
+    }),
+    { numRuns: 300 },
+  );
+});
+
+void test("property: marking a marked tree again changes nothing and the label has no mark", () => {
+  fc.assert(
+    fc.property(blocks, tapData, (tree, data) => {
+      const once = markTappedButton(tree, data);
+      if (once === null) return;
+      const twice = markTappedButton(once.tree, data);
+      assert.deepEqual(twice?.tree, once.tree);
+      assert.equal(twice?.label, once.label);
+      assert.ok(!once.label.startsWith("✅"), once.label);
     }),
     { numRuns: 300 },
   );

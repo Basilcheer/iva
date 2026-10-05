@@ -388,11 +388,29 @@ function plainText(text: unknown): string {
   return nested === undefined ? "" : plainText(nested);
 }
 
-// Нажатая кнопка: «✅» в подписи, success, disabled; callback_data и прочие поля уходят —
-// у кнопки ровно одно поле, кроме text и style (RichMessageButton, InlineKeyboardButton).
-function markedButton(text: unknown) {
-  const label = typeof text === "string" ? `✅ ${text}` : ["✅ ", text];
-  return { text: label, style: "success", disabled: {} };
+const TAP_MARK = "✅ ";
+
+// Подпись уже помечена: правка, которая легла раньше, или вторая отметка того же сообщения.
+function isMarkedText(text: unknown): boolean {
+  if (typeof text === "string") return text.startsWith(TAP_MARK);
+  return Array.isArray(text) && text[0] === TAP_MARK;
+}
+
+// Нажатая кнопка: «✅» в подписи, success и тот же callback_data — эту форму Telegram принял
+// на пробе 06.10.2026. disabled живьём не проверялся, поэтому кнопка остаётся нажимаемой, а
+// повторный тап гасит память Bridge. Прочие поля кнопки уходят.
+function markedButton(text: unknown, data: string) {
+  if (isMarkedText(text))
+    return { text, style: "success", callback_data: data };
+  const label =
+    typeof text === "string" ? `${TAP_MARK}${text}` : [TAP_MARK, text];
+  return { text: label, style: "success", callback_data: data };
+}
+
+// Подпись плоским текстом без «✅»: она идёт в подсказку «✅ <подпись>».
+function unmarkedLabel(text: unknown): string {
+  const plain = plainText(text);
+  return isMarkedText(text) ? plain.slice(TAP_MARK.length) : plain;
 }
 
 function markTree(
@@ -408,8 +426,8 @@ function markTree(
   const record = node as Record<string, unknown>;
   if (MEDIA_BLOCKS.has(record.type)) throw new Unmarkable();
   if (record.callback_data === data) {
-    found.push(plainText(record.text));
-    return markedButton(record.text);
+    found.push(unmarkedLabel(record.text));
+    return markedButton(record.text, data);
   }
   return Object.fromEntries(
     Object.entries(record).map(([key, value]) => [

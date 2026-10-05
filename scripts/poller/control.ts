@@ -770,7 +770,7 @@ async function handleOwnerPluginTap({ update, callback, io }: CallbackContext) {
     "not-started",
   );
   if (outcome === "started")
-    settleTap(io, update, callback, tapEdit(snapshot, callback.data).edit);
+    settleTap(io, update, callback, tapEdit(snapshot, callback).edit);
   return true;
 }
 
@@ -1083,7 +1083,7 @@ async function handleOwnerTap({ update, callback, io }: CallbackContext) {
     await io.ackImpl(callback.id).catch(() => {});
     return true;
   }
-  const { edit, label } = tapEdit(snapshot, callback.data);
+  const { edit, label } = tapEdit(snapshot, callback);
   await io
     .ackImpl(callback.id, tappedText(label || callback.data))
     .catch(() => {});
@@ -1139,21 +1139,37 @@ function tapTree(message: TelegramMessage | undefined): TapTree | null {
   return { tree: markup.inline_keyboard, rich: false };
 }
 
+/** data кнопок этого сообщения, которые уже стали сообщением (память процесса). */
+function tappedOf(callback: ControlCallbackQuery): string[] {
+  const key = tapKey(callback);
+  if (key === null) return [];
+  const prefix = key.slice(0, key.length - callback.data.length);
+  return [...tappedButtons.keys()]
+    .filter((seen) => seen.startsWith(prefix))
+    .map((seen) => seen.slice(prefix.length));
+}
+
+// Снимок апдейта может быть старше правки, которая ещё в полёте: прежние нажатия этого
+// сообщения отмечаются заново, чтобы правка, легшая последней, их не стёрла.
 function tapEdit(
   snapshot: TapTree | null,
-  data: string,
+  callback: ControlCallbackQuery,
 ): { edit: TapEdit | null; label: string | null } {
-  const marked = snapshot && markTappedButton(snapshot.tree, data);
+  const marked = snapshot && markTappedButton(snapshot.tree, callback.data);
   if (!snapshot || !marked) return { edit: null, label: null };
+  const tree = tappedOf(callback).reduce(
+    (current, data) => markTappedButton(current, data)?.tree ?? current,
+    marked.tree,
+  );
   if (!snapshot.rich)
-    return { edit: { inline_keyboard: marked.tree }, label: marked.label };
+    return { edit: { inline_keyboard: tree }, label: marked.label };
   const rtl =
     typeof snapshot.isRtl === "boolean" ? { is_rtl: snapshot.isRtl } : {};
-  return {
-    edit: { rich: { blocks: marked.tree, ...rtl } },
-    label: marked.label,
-  };
+  return { edit: { rich: { blocks: tree, ...rtl } }, label: marked.label };
 }
+
+const tapMethod = (edit: TapEdit) =>
+  "rich" in edit ? "editMessageText" : "editMessageReplyMarkup";
 
 // Ключ в память всегда: тап уже стал сообщением, второй тап — второе сообщение. Правка
 // уходит фоном, её исход ключа не снимает.
@@ -1171,7 +1187,11 @@ function settleTap(
   const messageId = callback.message?.message_id as number;
   io.scheduleImpl(`tap:${key}`, async () => {
     const marked = await io.editTapImpl(chatId, messageId, edit);
-    log(marked ? "tap marked" : "tap mark failed", `${chatId}:${messageId}`);
+    log(
+      marked ? "tap marked" : "tap mark failed",
+      `${chatId}:${messageId}`,
+      tapMethod(edit),
+    );
   });
 }
 
@@ -1180,13 +1200,11 @@ async function editTappedMessage(
   messageId: number,
   edit: TapEdit,
 ): Promise<boolean> {
-  const [method, body] =
+  const method = tapMethod(edit);
+  const body =
     "rich" in edit
-      ? ["editMessageText", { rich_message: edit.rich }]
-      : [
-          "editMessageReplyMarkup",
-          { reply_markup: { inline_keyboard: edit.inline_keyboard } },
-        ];
+      ? { rich_message: edit.rich }
+      : { reply_markup: { inline_keyboard: edit.inline_keyboard } };
   const response = (await controlTg(method, {
     chat_id: chatId,
     message_id: messageId,
@@ -1200,7 +1218,7 @@ async function editTappedMessage(
   // «message is not modified» — кнопка уже помечена: это успех, не сбой.
   if (response.ok === true || /message is not modified/i.test(description))
     return true;
-  log("tap edit failed:", description);
+  log("tap edit failed:", method, description);
   return false;
 }
 

@@ -3034,7 +3034,11 @@ test("a model button tap shows ✅ with its label and marks the button in the ri
               type: "buttons",
               buttons: [
                 { text: "Поставить", callback_data: "Поставить" },
-                { text: "✅ Не надо", style: "success", disabled: {} },
+                {
+                  text: "✅ Не надо",
+                  style: "success",
+                  callback_data: "Не надо",
+                },
               ],
             },
           ],
@@ -3043,6 +3047,33 @@ test("a model button tap shows ✅ with its label and marks the button in the ri
       },
     ],
   ]);
+});
+
+// Владелец передумал раньше, чем легла первая правка: снимок второго апдейта ещё без «✅».
+// Правка второй кнопки несёт и первую отметку, иначе легшая последней правка её стирает.
+test("a second button of the same message keeps the first button's mark in its edit", async () => {
+  const { edits, deps } = tapDeps();
+  assert.equal(
+    await handleControl(modelTap(321, 521, "Не надо", richChoice), deps),
+    false,
+  );
+  assert.equal(
+    await handleControl(modelTap(322, 521, "Поставить", richChoice), deps),
+    false,
+  );
+  await flush();
+
+  assert.equal(edits.length, 2);
+  assert.deepEqual(
+    (edits[1][2] as { rich: { blocks: unknown[] } }).rich.blocks[1],
+    {
+      type: "buttons",
+      buttons: [
+        { text: "✅ Поставить", style: "success", callback_data: "Поставить" },
+        { text: "✅ Не надо", style: "success", callback_data: "Не надо" },
+      ],
+    },
+  );
 });
 
 test("a second tap on the same button by another update is «already chosen» and no message", async () => {
@@ -3261,7 +3292,11 @@ const richProposal = {
     ],
   },
 };
-const installMarked = { text: "✅ Установить", style: "success", disabled: {} };
+const installMarked = {
+  text: "✅ Установить",
+  style: "success",
+  callback_data: "iva_plugin:ok:0123456789ab",
+};
 
 function proposalDeps(outcome: string) {
   const recorded = tapDeps();
@@ -3399,9 +3434,9 @@ test("the edit goes on the wire as editMessageText with blocks or editMessageRep
   });
   const verdicts = lines.filter((line) => line.startsWith("tap mark"));
   assert.deepEqual(verdicts, [
-    "tap marked 7:601",
-    "tap marked 7:602",
-    "tap marked 7:603",
-    "tap mark failed 7:604",
+    "tap marked 7:601 editMessageText",
+    "tap marked 7:602 editMessageReplyMarkup",
+    "tap marked 7:603 editMessageReplyMarkup",
+    "tap mark failed 7:604 editMessageReplyMarkup",
   ]);
 });

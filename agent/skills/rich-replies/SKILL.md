@@ -138,7 +138,7 @@ the message — put the long wording in the paragraph next to the button, not in
 such a tap never reaches you). 1-4 buttons per reply; more than that is a menu, and the
 menu is `/menu`.
 
-After a tap the bridge marks the pressed button ✅ and disables it; do not repeat the choice in your reply.
+After a tap the bridge marks the pressed button ✅, and a second tap on the same button does not reach you; do not repeat the choice in your reply.
 
 Private chats only: in a group a tap is not an address to the bot (only a
 mention, a command or a reply is), so don't put `callback_data` buttons in group
