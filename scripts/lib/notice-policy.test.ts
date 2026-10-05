@@ -19,6 +19,8 @@ import {
   alertDue,
   alertOnce,
   alertResolved,
+  CUSTOM_ALERT_KEY,
+  customStockAlert,
   deliverMemoryReport,
   memoryReportTail,
   memoryReportsEnabled,
@@ -97,6 +99,40 @@ test("the report tail names the language and forbids self-delivery", () => {
 });
 
 // ── Notice: язык берётся у резолвера, без дерева — у env ──────────────────────────────────
+test("the stock-build Alert says what broke, that the files are safe and what to do", () => {
+  const line = "error TS1005: ';' expected.";
+  const en = customStockAlert(EN, line);
+  const ru = customStockAlert(RU, line);
+  assert.equal(
+    en,
+    "Iva is running the stock build: your files in data/custom do not build with this version — error TS1005: ';' expected. The files are untouched; fix them and the next `iva update` puts them back.",
+  );
+  assert.equal(
+    ru,
+    "Ива работает на заводской сборке: ваши файлы в data/custom не собрались с этой версией — error TS1005: ';' expected. Файлы на месте; поправьте их, и следующее `iva update` поставит их снова.",
+  );
+  assert.match(
+    customStockAlert(EN, null),
+    /— last time the version carrying them did not come up\./u,
+  );
+  assert.match(
+    customStockAlert(RU, null),
+    /— в прошлый раз версия с ними не поднялась\./u,
+  );
+  // Слова Avoid из CONTEXT.md не идут владельцу.
+  for (const text of [
+    en,
+    ru,
+    customStockAlert(EN, null),
+    customStockAlert(RU, null),
+  ])
+    assert.doesNotMatch(
+      text,
+      /билд|кастомизаци|digest|retry|warning|override|лимит/iu,
+    );
+  assert.equal(CUSTOM_ALERT_KEY, "custom-build");
+});
+
 test("notice language comes from the tree, and falls back to the env without it", async () => {
   const broken = () => Promise.reject(new Error("no authored tree"));
   assert.equal(await noticeLang({}, broken), "ru");
