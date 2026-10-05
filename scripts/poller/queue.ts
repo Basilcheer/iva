@@ -28,7 +28,6 @@ import {
   chatKeyOf,
   parseTelegramSessionRetirement,
   RUN_STALE_MS,
-  runStaleMs,
   setChatStatus,
   setChatStatusIf,
 } from "#lib/run-status.ts";
@@ -356,6 +355,7 @@ export async function completeScopedResetState(
     firstOutputAt: null,
     latencyLogged: null,
     wasCancelled: null,
+    compacting: null,
     retiredSessionId: null,
     resetAt: Date.now(),
   });
@@ -743,6 +743,7 @@ async function clearFailedDirectIngress(
       firstOutputAt: null,
       latencyLogged: null,
       wasCancelled: null,
+      compacting: null,
       resetAt: observedAt,
     },
   );
@@ -946,6 +947,29 @@ export async function retireSettledSessions({
   return retired;
 }
 
+// Брошенный пересказ между ходами — не оборванный ход: запроса человека в нём не было, его
+// сообщения ждут в очереди моста. Сказать «повтори запрос» было бы неправдой.
+async function notifyInterruptedTurn(
+  key: string,
+  status: Record<string, unknown>,
+  sendImpl: (chatKey: string, text: string) => Promise<unknown>,
+  trImpl: (en: string, ru: string) => string,
+  safeLog: (...args: unknown[]) => void,
+): Promise<void> {
+  if (status.compacting === true) return;
+  try {
+    await sendImpl(
+      key,
+      trImpl(
+        "The previous turn was interrupted - repeat your request or use /new",
+        "Предыдущий ход оборвался - повтори запрос или /new",
+      ),
+    );
+  } catch (error) {
+    safeLog(`stale run notification failed for ${key}:`, errorMessage(error));
+  }
+}
+
 export async function reapStaleRuns({
   listStatusesImpl = listChatStatuses,
   setStatusIfImpl = setChatStatusIf,
@@ -999,7 +1023,7 @@ export async function reapStaleRuns({
       typeof key !== "string" ||
       status?.status !== "running" ||
       now() - ((status.updatedAt as number | null | undefined) ?? 0) <=
-        runStaleMs(status, staleMs) ||
+        staleMs ||
       inFlight.has(key)
     ) {
       continue;
@@ -1048,24 +1072,7 @@ export async function reapStaleRuns({
       safeLog(`stale run ${key} has no session id`);
     }
 
-    // Оборвался пересказ между ходами, а не ход: запроса человека в нём не было, его
-    // сообщения ждут в очереди моста. Сказать «повтори запрос» было бы неправдой.
-    if (status.compacting !== true) {
-      try {
-        await sendImpl(
-          key,
-          trImpl(
-            "The previous turn was interrupted - repeat your request or use /new",
-            "Предыдущий ход оборвался - повтори запрос или /new",
-          ),
-        );
-      } catch (error) {
-        safeLog(
-          `stale run notification failed for ${key}:`,
-          errorMessage(error),
-        );
-      }
-    }
+    await notifyInterruptedTurn(key, status, sendImpl, trImpl, safeLog);
 
     if (
       status.statusMessageId !== undefined &&

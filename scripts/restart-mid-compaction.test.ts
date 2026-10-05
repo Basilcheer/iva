@@ -59,8 +59,6 @@ void test(
     const status = await import("../agent/lib/run-status.ts");
     const queue = await import("./poller/queue.ts");
     const routing = await import("./poller/routing.ts");
-    const { chatTakeOverPatch } =
-      await import("../agent/lib/telegram-turn-start.ts");
     await writeFile(join(app, ".env"), `ASSISTANT_BEARER=${bearer}\n`, {
       mode: 0o600,
     });
@@ -86,6 +84,9 @@ void test(
 
     eve = startEve(app, env, port, () => {});
     await waitForHealth(port, eve);
+    // Канал на парковке сессии занимает чат и ждёт ответа роута свёртки внутри обработчика
+    // (scripts/fixtures/restart-hang-channel.ts делает это теми же модулями, что канал Telegram).
+    await writeFile(join(app, "data/compact-on-waiting"), "");
     const started = await post(port, bearer, "/restart-hang/send", {
       address: "1::",
       message: "remember the word aubergine",
@@ -94,24 +95,21 @@ void test(
     const { sessionId } = (await started.json()) as { sessionId: string };
     await replies(1, "the first turn did not complete");
 
-    // Пересказ между ходами: канал занял чат и попросил eve. Запрос к модели дошёл до
-    // провайдера — значит, ручной compact нашёл модель шага (хунк patches/eve).
-    status.setChatStatus(
-      "1:",
-      chatTakeOverPatch({ sessionId, compacting: true }),
-    );
-    const compact = await post(
-      port,
-      bearer,
-      `/eve/v1/session/${sessionId}/compact`,
-      {},
-    );
-    assert.equal(compact.status, 202);
-    assert.equal(
-      ((await compact.json()) as { status?: unknown }).status,
-      "accepted",
-    );
+    // Запрос пересказа дошёл до провайдера: eve приняла просьбу, пока обработчик её ждал, и
+    // ручной compact нашёл модель шага (хунк patches/eve).
     await provider.blocked;
+    const asked = JSON.parse(
+      (await readFile(join(app, "data/restart-hang-compact.jsonl"), "utf8"))
+        .trim()
+        .split("\n")[0] ?? "{}",
+    ) as { outcome?: string; ms?: number };
+    assert.equal(asked.outcome, "true", "eve приняла просьбу");
+    assert.ok(
+      typeof asked.ms === "number" && asked.ms < 3_000,
+      `ожидание ответа внутри обработчика парковки не виснет: ${String(asked.ms)} мс`,
+    );
+    assert.equal(status.getChatStatus("1:")?.sessionId, sessionId);
+    assert.equal(status.getChatStatus("1:")?.compacting, true);
     await queue.enqueueTelegramQueueUpdate("1:", {
       update_id: 2,
       message: {
@@ -133,7 +131,10 @@ void test(
     eve = startEve(app, env, port, () => {});
     await waitForHealth(port, eve);
 
-    // Запроса человека в пересказе не было: мост закрывает запись молча.
+    // Восстановление само освободило запись пересказа: мосту нечего закрывать и не о чем
+    // сообщать — запроса человека в пересказе не было.
+    assert.equal(status.getChatStatus("1:")?.status, "idle");
+    assert.equal(status.getChatStatus("1:")?.compacting, undefined);
     const notices: string[] = [];
     assert.equal(
       await queue.reapStaleRuns({
@@ -144,11 +145,9 @@ void test(
         deleteMessageImpl: () => Promise.resolve(),
         logImpl: () => {},
       }),
-      1,
+      0,
     );
     assert.deepEqual(notices, []);
-    assert.equal(status.getChatStatus("1:")?.status, "idle");
-    assert.equal(status.getChatStatus("1:")?.compacting, undefined);
     assert.equal(
       (await queue.loadQueue({ strict: true })).queues["1:"]?.length,
       1,

@@ -42,6 +42,15 @@ test("the compact request goes to eve's session route with the shared bearer and
   assert.equal(calls[0]?.init.body, "{}");
 });
 
+test("202 is acceptance whatever the body says", async () => {
+  for (const reply of [
+    () => Response.json({ ok: true, status: "accepted" }, { status: 202 }),
+    () => new Response(null, { status: 202 }),
+    () => new Response("<html>", { status: 202 }),
+  ])
+    assert.equal(await ask(reply), true);
+});
+
 test("a retired session is a quiet refusal", async () => {
   const log: unknown[][] = [];
   assert.equal(
@@ -54,27 +63,24 @@ test("a retired session is a quiet refusal", async () => {
   assert.deepEqual(log, []);
 });
 
-test("any other answer from eve is a logged refusal, never an acceptance", async () => {
-  const replies = [
-    () => new Response("unauthorized", { status: 401 }),
-    () =>
-      Response.json(
-        { ok: false, error: "Failed to compact the session." },
-        { status: 500 },
-      ),
-    () => Response.json({ ok: true, status: "accepted" }),
-    () => Response.json({ ok: true, status: "compacted" }, { status: 202 }),
-    () => Response.json(null, { status: 202 }),
-    () => new Response("<html>", { status: 202 }),
-  ];
-  for (const reply of replies) {
+test("a rejected request (4xx) is a logged refusal", async () => {
+  for (const status of [400, 401, 403, 404]) {
     const log: unknown[][] = [];
-    assert.equal(await ask(reply, log), false);
+    assert.equal(await ask(() => new Response("no", { status }), log), false);
     assert.equal(log.length, 1);
+    assert.match(
+      String(log[0]?.[0]),
+      new RegExp(`HTTP ${String(status)}`, "u"),
+    );
   }
 });
 
-test("no answer at all throws: the caller cannot tell whether eve accepted", async () => {
+test("a dispatcher failure (5xx) and no answer at all throw: eve may still hold the request", async () => {
+  for (const status of [500, 502, 503])
+    await assert.rejects(
+      ask(() => new Response("boom", { status })),
+      new RegExp(`HTTP ${String(status)}`, "u"),
+    );
   await assert.rejects(
     requestSessionCompact({
       url: "http://local/compact",

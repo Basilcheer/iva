@@ -209,6 +209,67 @@ test("ответа eve нет: исход неизвестен — чат не �
   assert.deepEqual(await waiting(id), ASKED, "неизвестный исход не выключает");
 });
 
+test("compaction.completed раньше ответа роута всё равно свой: бесполезный пересказ выключает свёртку", async () => {
+  const id = fresh();
+  turn(id, [LIMIT]);
+  assert.equal(
+    await idle.startIdleCompaction({
+      sessionId: id,
+      claimImpl: () => true,
+      requestImpl: async () => {
+        idle.completeIdleCompaction(id); // eve успела пересказать до разбора ответа
+        return true;
+      },
+      releaseImpl: () => {},
+      logImpl: () => {},
+    }),
+    true,
+  );
+  turn(id, [LIMIT, LIMIT]);
+  assert.deepEqual(await waiting(id), NOTHING);
+});
+
+test("исход неизвестен, а eve пересказала: завершение засчитано, бесполезный пересказ выключает свёртку", async () => {
+  const id = fresh();
+  turn(id, [LIMIT]);
+  await waiting(id, { outcome: "throws" });
+  idle.completeIdleCompaction(id);
+  turn(id, [LIMIT, LIMIT]);
+  assert.deepEqual(await waiting(id), NOTHING);
+});
+
+test("отказ eve завершением не считается, даже если следом пришло чужое compaction.completed", async () => {
+  const id = fresh();
+  turn(id, [LIMIT]);
+  await waiting(id, { outcome: "gone" });
+  idle.completeIdleCompaction(id);
+  turn(id, [LIMIT, LIMIT]);
+  assert.deepEqual(await waiting(id), ASKED);
+});
+
+test("первый шаг без названного входа: о пользе пересказа судит первый известный вход хода", async () => {
+  const id = fresh();
+  turn(id, [LIMIT]);
+  await waiting(id);
+  idle.completeIdleCompaction(id);
+  turn(id, [null, LIMIT + 1]);
+  assert.deepEqual(await waiting(id), NOTHING, "пересказ не помог — выключено");
+});
+
+test("упавший или отменённый ход пересказа не просит и чужой пересказ своим не делает", async () => {
+  const id = fresh();
+  idle.openIdleCompactionTurn(id);
+  idle.recordStepInput(id, LIMIT * 2);
+  idle.dropIdleCompactionTurn(id);
+  assert.deepEqual(await waiting(id), NOTHING);
+  turn(id, [LIMIT]);
+  assert.deepEqual(
+    await waiting(id),
+    ASKED,
+    "следующий законченный ход решает сам",
+  );
+});
+
 test("сбой занятия и сбой освобождения чата наружу не летят", async () => {
   const id = fresh();
   turn(id, [LIMIT]);
@@ -270,8 +331,9 @@ test("property: просьба уходит только за порогом и 
       let asked = false;
       let compacted = false;
       for (const step of script) {
+        const firstKnown = step.first ?? step.last;
         if (asked) {
-          if (compacted && step.first !== null && step.first >= LIMIT)
+          if (compacted && firstKnown !== null && firstKnown >= LIMIT)
             off = true;
           asked = false;
           compacted = false;
@@ -289,7 +351,8 @@ test("property: просьба уходит только за порогом и 
           due && step.chatFree && step.outcome === "gone",
         );
         assert.deepEqual(await waiting(id, step), NOTHING, "вторая парковка");
-        if (accepted) {
+        // Просьба считается ушедшей и при неизвестном исходе: eve могла её принять.
+        if (due && step.chatFree && step.outcome !== "gone") {
           asked = true;
           if (step.completes) {
             idle.completeIdleCompaction(id);

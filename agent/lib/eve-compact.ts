@@ -15,16 +15,14 @@ export const localSessionCompactUrl = (
     env,
   );
 
-type FetchResponse = {
-  status: number;
-  json: () => Promise<unknown>;
-};
+type FetchResponse = { status: number };
 type FetchImpl = (url: string, init: RequestInit) => Promise<FetchResponse>;
 
 /**
- * true — eve приняла просьбу (202 accepted) и поставит пересказ за активным ходом.
- * false — eve ответила отказом: сессии уже нет, токен не подошёл, сбой диспетчера.
- * Исключение — ответа нет (таймаут, обрыв): приняла ли eve просьбу, неизвестно.
+ * true — eve приняла просьбу (202) и поставит пересказ за активным ходом.
+ * false — eve отказала: сессии уже нет (200 no_active_session) или запрос отвергнут (4xx).
+ * Исключение — исход неизвестен: ответа нет (таймаут, обрыв) или eve ответила сбоем
+ * диспетчера (5xx), после которого просьба могла остаться в её очереди.
  */
 export async function requestSessionCompact({
   url,
@@ -39,7 +37,7 @@ export async function requestSessionCompact({
   timeoutMs?: number;
   logImpl?: (...parts: unknown[]) => void;
 }): Promise<boolean> {
-  const response = await fetchImpl(url, {
+  const { status } = await fetchImpl(url, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${bearer}`,
@@ -48,16 +46,11 @@ export async function requestSessionCompact({
     body: "{}",
     signal: AbortSignal.timeout(timeoutMs),
   });
-  let body: { status?: unknown } | null = null;
-  try {
-    body = (await response.json()) as { status?: unknown } | null;
-  } catch {
-    /* не-JSON ответ — отказ с его HTTP-статусом */
+  if (status === 202) return true;
+  if (status === 200) return false;
+  if (status >= 400 && status < 500) {
+    logImpl(`[telegram] eve отклонила свёртку сессии: HTTP ${String(status)}`);
+    return false;
   }
-  if (response.status === 202 && body?.status === "accepted") return true;
-  if (!(response.status === 200 && body?.status === "no_active_session"))
-    logImpl(
-      `[telegram] eve отклонила свёртку сессии: HTTP ${String(response.status)}`,
-    );
-  return false;
+  throw new Error(`eve compact route answered HTTP ${String(status)}`);
 }

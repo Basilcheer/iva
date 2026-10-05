@@ -2,7 +2,8 @@
 //
 // Порядок: хук шага пишет вход каждого шага; на turn.completed канал решает, пора ли; на
 // следующем session.waiting (ход запаркован) занимает чат записью running + compacting и
-// зовёт свой compact-роут (публичный compact eve отдаётся только роутам). Конец пересказа —
+// зовёт штатный роут свёртки eve, дожидаясь ответа: eve ждёт обработчик события, поэтому
+// просьба встаёт в её очередь раньше, чем она выберет следующее действие. Конец пересказа —
 // успех, сбой или обрыв — eve тоже отмечает session.waiting, и тот же обработчик канала
 // освобождает чат.
 //
@@ -18,10 +19,9 @@
 import { idleCompactionLimit } from "./compaction.ts";
 
 type Turn = {
-  /** Между turn.started и turn.completed: пересказ в это время — страховка eve, не наш. */
+  /** Между turn.started и концом хода: пересказ в это время — страховка eve, не наш. */
   open: boolean;
-  /** Вход первого и последнего шага текущего хода; null — провайдер вход не назвал. */
-  steps: number;
+  /** Первый известный и последний вход шага текущего хода; null — провайдер не назвал. */
   first: number | null;
   last: number | null;
   /** Законченный ход дошёл до порога: на session.waiting пора просить пересказ. */
@@ -33,25 +33,27 @@ type Turn = {
   off: boolean;
 };
 const turns = new Map<string, Turn>();
-// Сессия живёт не дольше суток, а процесс — до обновления: старые записи вытесняются.
+// Сессия живёт не дольше суток, а процесс — до обновления: давно молчащие вытесняются.
 const TURNS_KEPT = 200;
 
 /** turn.started: открыть счёт хода. */
 export function openIdleCompactionTurn(sessionId: string): void {
-  const turn = turns.get(sessionId);
-  const fresh = { open: true, steps: 0, first: null, last: null, due: false };
-  if (turn) Object.assign(turn, fresh);
-  else {
-    turns.set(sessionId, {
-      ...fresh,
-      asked: false,
-      compacted: false,
-      off: false,
-    });
-    for (const stale of turns.keys()) {
-      if (turns.size <= TURNS_KEPT) break;
-      turns.delete(stale);
-    }
+  const turn = turns.get(sessionId) ?? {
+    open: true,
+    first: null,
+    last: null,
+    due: false,
+    asked: false,
+    compacted: false,
+    off: false,
+  };
+  Object.assign(turn, { open: true, first: null, last: null, due: false });
+  // Свежая сессия — в конец: вытесняется та, что молчит дольше всех.
+  turns.delete(sessionId);
+  turns.set(sessionId, turn);
+  for (const stale of turns.keys()) {
+    if (turns.size <= TURNS_KEPT) break;
+    turns.delete(stale);
   }
 }
 
@@ -59,7 +61,7 @@ export function openIdleCompactionTurn(sessionId: string): void {
 export function recordStepInput(sessionId: string, tokens: number | null) {
   const turn = turns.get(sessionId);
   if (!turn) return;
-  if (turn.steps++ === 0) turn.first = tokens;
+  turn.first ??= tokens;
   turn.last = tokens;
 }
 
@@ -74,9 +76,9 @@ export function completeIdleCompaction(sessionId: string): void {
 
 /**
  * turn.completed: решить, пора ли сворачивать после этого хода. Пересказ, который дошёл до
- * конца и не увёл первый шаг следующего хода под порог, выключает себя: иначе каждый ход
- * платил бы за пересказ, который ничего не освобождает. Оборванный пересказ (сообщение при
- * порядке steer, сбой провайдера) не выключает ничего.
+ * конца и не увёл первый известный вход следующего хода под порог, выключает себя: иначе
+ * каждый ход платил бы за пересказ, который ничего не освобождает. Оборванный пересказ
+ * (сообщение при порядке steer, сбой провайдера) не выключает ничего.
  */
 export function closeIdleCompactionTurn(
   sessionId: string,
@@ -95,16 +97,22 @@ export function closeIdleCompactionTurn(
   turn.due = !turn.off && limit > 0 && turn.last !== null && turn.last >= limit;
 }
 
+/** turn.failed, turn.cancelled: ход кончился без ответа — после него не сворачиваем. */
+export function dropIdleCompactionTurn(sessionId: string): void {
+  const turn = turns.get(sessionId);
+  if (turn) Object.assign(turn, { open: false, due: false });
+}
+
 /**
  * session.waiting: если законченный ход дошёл до порога — занять чат и попросить eve
  * пересказать историю. Никогда не бросает: ход уже закончен, отказ оставляет историю как
  * была, следующий ход решит заново, страховка внутри хода остаётся.
  *
- * claimImpl занимает чат под пересказ; false — чат уже занят (пришло сообщение) или сессия
- * сброшена, тогда просьбы нет. requestImpl: true — eve приняла просьбу; false — отказала,
- * и releaseImpl освобождает чат. Исключение requestImpl значит, что ответа нет и исход
- * неизвестен: eve могла принять просьбу, поэтому чат остаётся занят до парковки сессии или
- * срока записи пересказа (COMPACTION_STALE_MS), а второй просьбы нет.
+ * claimImpl занимает чат под пересказ; false — чат уже занят (пришло сообщение), сессия
+ * сброшена или просить нечем, тогда просьбы нет. requestImpl: true — eve приняла просьбу;
+ * false — отказала, и releaseImpl освобождает чат. Исключение requestImpl значит, что
+ * исход неизвестен: eve могла принять просьбу, поэтому чат остаётся занят до парковки
+ * сессии (или срока записи), а завершение такого пересказа засчитывается как своё.
  */
 export async function startIdleCompaction({
   sessionId,
@@ -114,31 +122,34 @@ export async function startIdleCompaction({
   logImpl = console.error,
 }: {
   sessionId: string;
-  claimImpl: () => boolean;
+  claimImpl: () => boolean | Promise<boolean>;
   requestImpl: (sessionId: string) => Promise<boolean>;
-  releaseImpl: () => Promise<unknown>;
+  releaseImpl: () => unknown;
   logImpl?: (...parts: unknown[]) => void;
 }): Promise<boolean> {
   const turn = turns.get(sessionId);
   if (!turn?.due) return false;
   turn.due = false;
   try {
-    if (!claimImpl()) return false;
+    if (!(await claimImpl())) return false;
   } catch (error) {
     logImpl("[telegram] чат под свёртку между ходами не занят:", error);
     return false;
   }
+  // До ответа: compaction.completed может прийти раньше, чем разобран ответ роута.
+  turn.asked = true;
   let accepted;
   try {
     accepted = await requestImpl(sessionId);
   } catch (error) {
-    logImpl("[telegram] свёртка между ходами: ответа eve нет:", error);
+    logImpl(
+      "[telegram] свёртка между ходами: исход просьбы неизвестен:",
+      error,
+    );
     return false;
   }
-  if (accepted) {
-    turn.asked = true;
-    return true;
-  }
+  if (accepted) return true;
+  turn.asked = false;
   try {
     await releaseImpl();
   } catch (error) {

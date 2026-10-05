@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { appendUsage, subagentTurnId } from "#lib/usage.ts";
+import { appendUsage, stepInputTokens, subagentTurnId } from "#lib/usage.ts";
 import {
   formatUsageReport,
   parseWindow,
@@ -454,4 +454,24 @@ void test("a fallback key still groups into the parent turn and keeps context cl
   assert.equal(last.in, 105_537);
   assert.equal(last.steps, 2);
   assert.equal(last.contextFromSubagent, false);
+});
+
+void test("the step input that decides compaction between turns ignores garbage: only a positive safe integer counts", () => {
+  const garbage: unknown[] = [
+    0,
+    undefined,
+    null,
+    Number.NaN,
+    -1,
+    1.5,
+    "300000",
+    1e308,
+    Number.POSITIVE_INFINITY,
+    {},
+  ];
+  for (const [index, inputTokens] of garbage.entries())
+    assert.equal(stepInputTokens({ inputTokens }), null, `case ${index}`);
+  assert.equal(stepInputTokens(undefined), null);
+  assert.equal(stepInputTokens({}), null);
+  assert.equal(stepInputTokens({ inputTokens: 56_000 }), 56_000);
 });

@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import { traceContextParts, traceTurnBound } from "./trace.ts";
 import { localStamp } from "./vault-daily.ts";
 import { resolveVaultDir } from "@iva/vault-dir";
-import { runStaleMs } from "./run-status.ts";
 
 type ChatStatus = Record<string, unknown> | null;
 type GetStatus = (chatKey: string) => ChatStatus;
@@ -126,7 +125,7 @@ const freshRunning = (
 ): boolean =>
   status?.status === "running" &&
   typeof status.updatedAt === "number" &&
-  at - status.updatedAt < runStaleMs(status, staleMs);
+  at - status.updatedAt < staleMs;
 
 // Индикатор протухшей записи: после захвата его больше никто не найдёт — прибирает тот, кто взял.
 const orphanWorkingStatusId = (status: ChatStatus): number | undefined =>

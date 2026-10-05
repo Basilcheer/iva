@@ -777,8 +777,7 @@ test("reapStaleRuns flips one stale run, resets Eve, notifies, and removes worki
   ]);
 });
 
-test("reapStaleRuns closes an abandoned compaction after its own short deadline, silently", async () => {
-  const minutes = (n: number) => n * 60_000;
+test("reapStaleRuns closes an abandoned compaction like a stale turn, but silently", async () => {
   const compaction = {
     status: "running",
     generation: 3,
@@ -786,42 +785,28 @@ test("reapStaleRuns closes an abandoned compaction after its own short deadline,
     compacting: true,
   };
   const calls: Call[] = [];
-  const deps = (updatedAt: number, extra: Partial<StatusRecord> = {}) =>
-    reaperDeps(
-      [{ chatKey: "1:", status: { ...compaction, ...extra, updatedAt } }],
-      {
-        staleMs: minutes(30),
-        setStatusIfImpl: (key, expected, patch) => {
-          calls.push(["cas", key, expected, patch]);
-          return { status: "idle" };
-        },
-        resetImpl: async (key, target) => calls.push(["reset", key, target]),
-        sendImpl: async (key, text) => calls.push(["send", key, text]),
+  const deps = (updatedAt: number) =>
+    reaperDeps([{ chatKey: "1:", status: { ...compaction, updatedAt } }], {
+      setStatusIfImpl: (key, expected, patch) => {
+        calls.push(["cas", key, expected, patch]);
+        return { status: "idle" };
       },
-    );
+      resetImpl: async (key, target) => calls.push(["reset", key, target]),
+      sendImpl: async (key, text) => calls.push(["send", key, text]),
+    });
 
-  // Пересказ без пульса: пять минут — его срок, а не полчаса хода.
-  assert.equal(await reapStaleRuns(deps(reaperNow - minutes(5))), 0);
-  assert.equal(await reapStaleRuns(deps(reaperNow - minutes(5) - 1)), 1);
-  assert.equal((calls[0][3] as StatusRecord).status, "idle");
-  assert.equal((calls[0][3] as StatusRecord).compacting, null);
-  // Запроса человека в пересказе не было: «повтори запрос» не шлём.
+  // Срок тот же, что у хода: живую запись не трогаем.
+  assert.equal(await reapStaleRuns(deps(reaperNow - 30_000)), 0);
+  assert.equal(calls.length, 0);
+  assert.equal(await reapStaleRuns(deps(reaperNow - 31_000)), 1);
+  const patch = calls[0]?.[3] as StatusRecord;
+  assert.equal(patch.status, "idle");
+  assert.equal(patch.compacting, null);
+  // Запроса человека в пересказе не было: сессию сбрасываем, «повтори запрос» не шлём.
   assert.deepEqual(
-    calls.slice(1).map(([kind]) => kind),
-    ["reset"],
+    calls.map((call) => call[0]),
+    ["cas", "reset"],
   );
-
-  // Ход того же возраста жив ещё двадцать пять минут.
-  calls.length = 0;
-  assert.equal(
-    await reapStaleRuns(
-      deps(reaperNow - minutes(5) - 1, { compacting: undefined }),
-    ),
-    0,
-  );
-  // Восстановление после рестарта помечает запись updatedAt = 0: закрываем сразу и тоже молча.
-  assert.equal(await reapStaleRuns(deps(0)), 1);
-  assert.equal(calls.filter(([kind]) => kind === "send").length, 0);
 });
 
 test("reapStaleRuns leaves a fresh running record untouched", async () => {

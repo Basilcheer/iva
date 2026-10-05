@@ -205,6 +205,46 @@ void test("update rewrite expires running chats and preserves cleanup fields", (
   assert.equal(readFileSync(damagedFile, "utf8"), "{not json");
 });
 
+void test("an interrupted compaction between turns is freed at once, not left for Bridge to close", () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "wf-store-compacting-status-"));
+  const dir = join(dataDir, "run-status.d");
+  const file = join(dir, "compacting.json");
+  mkdirSync(dir);
+  writeFileSync(
+    file,
+    JSON.stringify({
+      generation: 7,
+      status: "running",
+      updatedAt: Date.now(),
+      sessionId: "session-compacting",
+      compacting: true,
+    }),
+    { mode: 0o600 },
+  );
+  const before = Date.now();
+
+  assert.equal(rewriteRunStatusesForUpdate(dataDir), 1);
+
+  const record = JSON.parse(readFileSync(file, "utf8")) as Record<
+    string,
+    number | string
+  >;
+  // No session, no compacting flag, no updatedAt: 0 mark: an older Bridge after a rollback
+  // sees a free chat and reports no interrupted turn.
+  assert.deepEqual(Object.keys(record).sort(), [
+    "generation",
+    "resetAt",
+    "status",
+    "updatedAt",
+  ]);
+  assert.equal(record.status, "idle");
+  assert.equal(record.generation, 8);
+  assert.ok(Number(record.updatedAt) >= before);
+  assert.equal(record.resetAt, record.updatedAt);
+  assert.equal(statSync(file).mode & 0o777, 0o600);
+  assert.equal(rewriteRunStatusesForUpdate(dataDir), 0, "nothing to re-arm");
+});
+
 void test("update rewrite leaves terminal chats alone and does not re-arm a notice", () => {
   const dataDir = mkdtempSync(join(tmpdir(), "wf-store-idle-status-"));
   const dir = join(dataDir, "run-status.d");
