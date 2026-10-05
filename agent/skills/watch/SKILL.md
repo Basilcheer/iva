@@ -1,6 +1,6 @@
 ---
 name: watch
-description: "Watch and Brief: what the owner has missed (unread Telegram, mail, a failed check, a failed timer or plugin unit), whether it is worth a message, the buttons «В задачи», «Напомнить позже», «Не сообщать про этого» and what a tap on them means, the «Починить» button of a failure. Load in a Watch, Brief or Signal turn, on a tap of such a button, and when the owner tunes how Iva writes on her own («пиши реже», «обзор в 9», «жена — срочно», «не пиши про X»)."
+description: "Watch and Brief: what the owner has missed (unread Telegram, mail, a failed check, a failed timer or plugin unit), whether it is worth a message, the buttons «В задачи», «Напомнить позже», «Не сообщать про этого» and what a tap on them means, the «Починить» button of a failure. Load in a Watch, Brief or Signal turn, on a tap of such a button, and when the owner tunes how Iva writes on her own («пиши реже», «обзор в 9», «жена — срочно», «не пиши про X», «предлагай сама раз в день», «не предлагай ничего»)."
 ---
 
 # Watch — telling the owner what they missed
