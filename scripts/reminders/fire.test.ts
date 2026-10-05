@@ -195,6 +195,8 @@ void test("ход выполнил напоминание: его ответ у�
   assert.match(prompts[0], /r1/u);
   assert.match(prompts[0], /позвонить в клинику/u);
   assert.match(prompts[0], /final text of this turn/u);
+  assert.match(prompts[0], /background-check skill/u);
+  assert.match(prompts[0], /instead of waiting for the job to finish/u);
   assert.equal(calls.length, 1, "отправка ровно одна");
   assert.equal(calls[0].chat, chat.id);
   assert.equal(calls[0].threadId, chat.threadId);
