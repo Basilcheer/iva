@@ -56,11 +56,9 @@ import { handleTelegramStopCallback } from "../lib/telegram-stop.js";
 // Свёртка между ходами: история пересказывается, пока человек ничего не ждёт, а чат на
 // это время занят записью running + compacting (agent/lib/idle-compaction.ts).
 import {
-  handleTelegramCompactRequest,
-  localCompactUrl,
-  requestTelegramCompact,
-  TELEGRAM_COMPACT_ROUTE,
-} from "../lib/telegram-compact-route.js";
+  localSessionCompactUrl,
+  requestSessionCompact,
+} from "../lib/eve-compact.js";
 import {
   closeIdleCompactionTurn,
   openIdleCompactionTurn,
@@ -205,6 +203,8 @@ function keepTurnAlive(
   });
 }
 
+let bearerMissingLogged = false;
+
 // Занять свободный чат под пересказ между ходами. Занятый чат (успело прийти сообщение) и
 // сброшенную сессию (/new оставляет resetAt) не трогаем: пересказа не будет.
 function claimChatForCompaction(chatKey: string, sessionId: string): boolean {
@@ -291,9 +291,13 @@ const telegram = telegramChannel({
           console.error("[telegram] статус-сообщение не отправилось:", error),
       });
     },
+    // Решение о свёртке от уборки статуса не зависит: её сбой не отменяет пересказ.
     async "turn.completed"(_data, channel, ctx) {
-      await finishTelegramStatus(channel, ctx.session.id, "completed");
-      closeIdleCompactionTurn(ctx.session.id, providerConfig.contextWindow);
+      try {
+        await finishTelegramStatus(channel, ctx.session.id, "completed");
+      } finally {
+        closeIdleCompactionTurn(ctx.session.id, providerConfig.contextWindow);
+      }
     },
     // Отмена оборвала не ход, а пересказ между ходами (⏹, /stop): чат просто свободен,
     // отметки «ход отменён» следующему сообщению не оставляем.
@@ -316,8 +320,16 @@ const telegram = telegramChannel({
     // не совпадает — no-op.
     async "session.waiting"(_data, channel, ctx) {
       await finishTelegramStatus(channel, ctx.session.id, "completed");
-      const secret = process.env.TELEGRAM_WEBHOOK_SECRET_TOKEN;
-      if (!secret) return;
+      const bearer = process.env.ASSISTANT_BEARER?.trim();
+      // Без общего токена eve откажет: чат не занимаем, а причину один раз пишем в журнал.
+      if (!bearer) {
+        if (!bearerMissingLogged)
+          console.error(
+            "[telegram] свёртка между ходами выключена: нет ASSISTANT_BEARER — run: iva doctor",
+          );
+        bearerMissingLogged = true;
+        return;
+      }
       const sessionId = ctx.session.id;
       const chatKey = chatKeyOf(
         channel.telegram.chatId,
@@ -328,11 +340,7 @@ const telegram = telegramChannel({
         sessionId,
         claimImpl: () => claimChatForCompaction(chatKey, sessionId),
         requestImpl: (id) =>
-          requestTelegramCompact({
-            url: localCompactUrl(),
-            secret,
-            sessionId: id,
-          }),
+          requestSessionCompact({ url: localSessionCompactUrl(id), bearer }),
         releaseImpl: () =>
           finishTelegramStatus(channel, sessionId, "completed"),
       });
@@ -528,13 +536,6 @@ export default {
     ),
     POST(TELEGRAM_CANCEL_ROUTE, (req, { attachSession }) =>
       handleTelegramCancelRequest(
-        req,
-        attachSession,
-        process.env.TELEGRAM_WEBHOOK_SECRET_TOKEN,
-      ),
-    ),
-    POST(TELEGRAM_COMPACT_ROUTE, (req, { attachSession }) =>
-      handleTelegramCompactRequest(
         req,
         attachSession,
         process.env.TELEGRAM_WEBHOOK_SECRET_TOKEN,

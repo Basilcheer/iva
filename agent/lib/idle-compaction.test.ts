@@ -178,19 +178,35 @@ test("пересказ страховки внутри хода — не наш:
   assert.deepEqual(await waiting(id), ASKED, "свёртка между ходами жива");
 });
 
-test("отказ роута и исчезнувшая сессия: чат освобождён, наружу ничего не летит, следующий ход просит снова", async () => {
-  for (const outcome of ["throws", "gone"] as const) {
-    const id = fresh();
-    turn(id, [LIMIT]);
-    assert.deepEqual(await waiting(id, { outcome }), {
-      claimed: true,
-      asked: true,
-      released: true,
-      accepted: false,
-    });
-    turn(id, [LIMIT, LIMIT]);
-    assert.deepEqual(await waiting(id), ASKED, "отказ не считается пересказом");
-  }
+test("eve отказала: чат освобождён, следующий ход просит снова", async () => {
+  const id = fresh();
+  turn(id, [LIMIT]);
+  assert.deepEqual(await waiting(id, { outcome: "gone" }), {
+    claimed: true,
+    asked: true,
+    released: true,
+    accepted: false,
+  });
+  turn(id, [LIMIT, LIMIT]);
+  assert.deepEqual(await waiting(id), ASKED, "отказ не считается пересказом");
+});
+
+test("ответа eve нет: исход неизвестен — чат не освобождаем (его снимет парковка или срок), наружу ничего не летит", async () => {
+  const id = fresh();
+  turn(id, [LIMIT]);
+  assert.deepEqual(await waiting(id, { outcome: "throws" }), {
+    claimed: true,
+    asked: true,
+    released: false,
+    accepted: false,
+  });
+  assert.deepEqual(
+    await waiting(id),
+    NOTHING,
+    "второй просьбы на этот ход нет",
+  );
+  turn(id, [LIMIT, LIMIT]);
+  assert.deepEqual(await waiting(id), ASKED, "неизвестный исход не выключает");
 });
 
 test("сбой занятия и сбой освобождения чата наружу не летят", async () => {
@@ -199,11 +215,24 @@ test("сбой занятия и сбой освобождения чата на
   const boom = () => {
     throw new Error("run-status lock timeout");
   };
+  let asked = false;
   assert.equal(
     await idle.startIdleCompaction({
       sessionId: id,
       claimImpl: boom,
-      requestImpl: async () => true,
+      requestImpl: async () => (asked = true),
+      releaseImpl: async () => {},
+      logImpl: () => {},
+    }),
+    false,
+  );
+  assert.equal(asked, false, "чат не занят — просьбы нет");
+  turn(id, [LIMIT]);
+  assert.equal(
+    await idle.startIdleCompaction({
+      sessionId: id,
+      claimImpl: () => true,
+      requestImpl: async () => false,
       releaseImpl: async () => boom(),
       logImpl: () => {},
     }),
@@ -255,7 +284,10 @@ test("property: просьба уходит только за порогом и 
         const accepted: boolean =
           due && step.chatFree && step.outcome === "accepted";
         assert.equal(result.accepted, accepted);
-        assert.equal(result.released, due && step.chatFree && !accepted);
+        assert.equal(
+          result.released,
+          due && step.chatFree && step.outcome === "gone",
+        );
         assert.deepEqual(await waiting(id, step), NOTHING, "вторая парковка");
         if (accepted) {
           asked = true;

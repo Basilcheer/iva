@@ -100,11 +100,17 @@ void test(
       "1:",
       chatTakeOverPatch({ sessionId, compacting: true }),
     );
-    const compact = await post(port, bearer, "/eve/v1/telegram/compact", {
-      sessionId,
-    });
-    assert.equal(compact.status, 200);
-    assert.deepEqual(await compact.json(), { ok: true, status: "accepted" });
+    const compact = await post(
+      port,
+      bearer,
+      `/eve/v1/session/${sessionId}/compact`,
+      {},
+    );
+    assert.equal(compact.status, 202);
+    assert.equal(
+      ((await compact.json()) as { status?: unknown }).status,
+      "accepted",
+    );
     await provider.blocked;
     await queue.enqueueTelegramQueueUpdate("1:", {
       update_id: 2,

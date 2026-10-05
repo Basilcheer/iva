@@ -1,21 +1,16 @@
 /* eslint-disable @typescript-eslint/no-floating-promises, @typescript-eslint/require-await -- Node's test runner owns registrations; the fetch double keeps the async boundary. */
 // Свёртка между ходами на живом шве канала: хук шага пишет вход, канал на turn.completed
-// решает, на session.waiting занимает чат (running + compacting) и зовёт собственный
-// compact-роут с секретом вебхука, а роут — compact() eve по точной сессии. Конец пересказа
-// (снова session.waiting) освобождает чат. Двойник стоит только на внешних границах: Bot API
-// и сессия eve; вызов роута идёт настоящим обработчиком, статус чата — настоящий файл.
+// решает, на session.waiting занимает чат (running + compacting) и зовёт штатный роут eve
+// POST /eve/v1/session/:id/compact с общим токеном. Конец пересказа (снова session.waiting)
+// освобождает чат. Двойник стоит только на внешних границах: Bot API, роут и сессия eve;
+// статус чата — настоящий файл, маршрутизация моста настоящая.
 import "./lib/ts-esm-hooks.ts";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { after, beforeEach } from "node:test";
-import type {
-  AttachSessionFn,
-  ChannelSource,
-  RouteHandlerArgs,
-  Session,
-} from "eve/channels";
+import type { ChannelSource, Session } from "eve/channels";
 import type { TelegramChannelState } from "eve/channels/telegram";
 
 const dataDir = mkdtempSync(join(tmpdir(), "iva-idle-compaction-"));
@@ -27,6 +22,7 @@ process.env.TELEGRAM_ALLOWED_USER_IDS = "9";
 process.env.TELEGRAM_BOT_TOKEN = "idle-compaction-test-token";
 process.env.TELEGRAM_WEBHOOK_SECRET_TOKEN = "idle-compaction-test-secret";
 process.env.TELEGRAM_BOT_USERNAME = "my_bot";
+process.env.ASSISTANT_BEARER = "idle-compaction-test-bearer";
 delete process.env.ASSISTANT_HOST;
 delete process.env.IVA_PORT;
 after(() => {
@@ -36,18 +32,32 @@ after(() => {
 
 type ApiCall = { method: string; body: Record<string, unknown> | undefined };
 const apiCalls: ApiCall[] = [];
-const compactCalls: { sessionId: string; secret: string | null }[] = [];
-let compactStatus: "accepted" | "no_active_session" | "down" = "accepted";
-let compactRoute: (request: Request) => Promise<Response> = async () =>
-  new Response("route is not loaded", { status: 500 });
+const compactCalls: { sessionId: string; auth: string | null }[] = [];
+// Что отвечает eve на просьбу: приняла, сессии нет, отказала, либо ответа нет вовсе.
+let compactStatus: "accepted" | "no_active_session" | "refused" | "silent" =
+  "accepted";
 
-const COMPACT_URL = "http://127.0.0.1:8723/eve/v1/telegram/compact";
+const COMPACT_URL =
+  /^http:\/\/127\.0\.0\.1:8723\/eve\/v1\/session\/([^/]+)\/compact$/u;
 globalThis.fetch = async (url, init = {}) => {
   // eslint-disable-next-line @typescript-eslint/no-base-to-string -- the double reads whatever the caller passes.
   const href = String(url);
-  if (href === COMPACT_URL) {
-    if (compactStatus === "down") throw new Error("connect ECONNREFUSED");
-    return compactRoute(new Request(href, init));
+  const compact = COMPACT_URL.exec(href);
+  if (compact) {
+    const sessionId = decodeURIComponent(compact[1] ?? "");
+    compactCalls.push({
+      sessionId,
+      auth: new Headers(init.headers).get("authorization"),
+    });
+    if (compactStatus === "silent") throw new Error("request timed out");
+    if (compactStatus === "refused")
+      return new Response("unauthorized", { status: 401 });
+    return compactStatus === "accepted"
+      ? Response.json(
+          { ok: true, sessionId, status: "accepted" },
+          { status: 202 },
+        )
+      : Response.json({ ok: true, status: "no_active_session" });
   }
   const method = new URL(href).pathname.split("/").at(-1) ?? "";
   const body = init.body
@@ -107,28 +117,8 @@ const route = (path: string) => {
   return found;
 };
 const webhook = route("/eve/v1/telegram");
-const compact = route("/eve/v1/telegram/compact");
 const unused = () => {
   throw new Error("not used by this path");
-};
-const attachSession = ((sessionId: string) => ({
-  id: sessionId,
-  compact: async () => {
-    return compactStatus === "accepted"
-      ? { sessionId, status: "accepted" as const }
-      : { status: "no_active_session" as const };
-  },
-})) as AttachSessionFn;
-compactRoute = async (request) => {
-  const copy = request.clone();
-  const { sessionId } = (await copy.json()) as { sessionId: string };
-  compactCalls.push({
-    sessionId,
-    secret: request.headers.get("x-telegram-bot-api-secret-token"),
-  });
-  return compact.handler(request, {
-    attachSession,
-  } as unknown as RouteHandlerArgs<TelegramChannelState>);
 };
 
 const LIMIT = idleCompactionLimit(providerConfig.contextWindow);
@@ -270,7 +260,7 @@ async function incoming(chatId: number, sessionId: string): Promise<number> {
 const sentStatuses = () =>
   apiCalls.filter((call) => call.method === "sendRichMessage").length;
 
-test("ход под порогом чат не занимает; ход на пороге на парковке занимает чат и просит пересказ у своей сессии с секретом вебхука", async () => {
+test("ход под порогом чат не занимает; ход на пороге на парковке занимает чат и просит пересказ у своей сессии с общим токеном", async () => {
   const low = session("s-low", 41);
   await low.turn([LIMIT - 1]);
   await low.waiting();
@@ -283,7 +273,7 @@ test("ход под порогом чат не занимает; ход на п�
   assert.equal(statusOf(42)?.status, "idle", "ход кончился — чат свободен");
   await over.waiting();
   assert.deepEqual(compactCalls, [
-    { sessionId: "s-over", secret: "idle-compaction-test-secret" },
+    { sessionId: "s-over", auth: "Bearer idle-compaction-test-bearer" },
   ]);
   const busy = statusOf(42);
   assert.equal(busy?.status, "running");
@@ -399,10 +389,10 @@ test("ход, начавшийся поверх записи пересказа 
   assert.equal(typeof statusOf(46)?.turnId, "string");
 });
 
-test("сессии уже нет или роут недоступен: чат снова свободен, следующий ход просит заново", async () => {
+test("eve отказала (сессии уже нет, токен не подошёл): чат снова свободен, следующий ход просит заново", async () => {
   for (const [status, chatId] of [
     ["no_active_session", 47],
-    ["down", 48],
+    ["refused", 48],
   ] as const) {
     compactStatus = status;
     const s = session(`s-${status}`, chatId);
@@ -416,6 +406,33 @@ test("сессии уже нет или роут недоступен: чат с
     await s.waiting();
     assert.equal(compactCalls.length, 1);
     await s.waiting();
+  }
+});
+
+test("ответа eve нет: исход неизвестен, чат остаётся занят до парковки, второй просьбы нет", async () => {
+  compactStatus = "silent";
+  const s = session("s-silent", 56);
+  await s.turn([LIMIT]);
+  await s.waiting();
+  assert.equal(compactCalls.length, 1);
+  assert.equal(statusOf(56)?.status, "running");
+  assert.equal(statusOf(56)?.compacting, true);
+  await s.waiting(); // eve всё же пересказала (или нет) и запарковала сессию
+  assert.equal(statusOf(56)?.status, "idle");
+  assert.equal(compactCalls.length, 1);
+});
+
+test("нет общего токена: чат не занимаем, просьбы нет", async () => {
+  const bearer = process.env.ASSISTANT_BEARER;
+  delete process.env.ASSISTANT_BEARER;
+  try {
+    const s = session("s-nobearer", 57);
+    await s.turn([LIMIT]);
+    await s.waiting();
+    assert.deepEqual(compactCalls, []);
+    assert.equal(statusOf(57)?.status, "idle");
+  } finally {
+    process.env.ASSISTANT_BEARER = bearer;
   }
 });
 

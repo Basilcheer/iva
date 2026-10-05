@@ -86,14 +86,15 @@ export default defineHook({
     "step.completed": (event, ctx) => {
       // Ребёнок встроенного `agent` пишет свои шаги сам (channel.kind = subagent) под своей
       // сессией; связь с ходом родителя eve отдаёт в ctx.session.parent.
+      // Вход шага для свёртки между ходами — до записи расхода: сбой файла расхода не
+      // отменяет решение о свёртке. Счёт ведётся только у сессии, открытой Telegram-каналом;
+      // ребёнок встроенного agent идёт под своей сессией.
+      recordStepInput(ctx.session.id, stepInputTokens(event.data.usage));
       record(event.data, {
         sessionId: ctx.session.id,
         source: ctx.channel.kind ?? "unknown",
         parent: ctx.session.parent,
       });
-      // Вход шага для свёртки между ходами: счёт ведётся только у сессии, открытой
-      // Telegram-каналом; ребёнок встроенного agent идёт под своей сессией.
-      recordStepInput(ctx.session.id, stepInputTokens(event.data.usage));
     },
     // eve довёл свёртку до конца (канал Telegram этого события не получает).
     "compaction.completed": (_event, ctx) =>

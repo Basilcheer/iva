@@ -33,19 +33,26 @@ type Turn = {
   off: boolean;
 };
 const turns = new Map<string, Turn>();
+// Сессия живёт не дольше суток, а процесс — до обновления: старые записи вытесняются.
+const TURNS_KEPT = 200;
 
 /** turn.started: открыть счёт хода. */
 export function openIdleCompactionTurn(sessionId: string): void {
   const turn = turns.get(sessionId);
   const fresh = { open: true, steps: 0, first: null, last: null, due: false };
   if (turn) Object.assign(turn, fresh);
-  else
+  else {
     turns.set(sessionId, {
       ...fresh,
       asked: false,
       compacted: false,
       off: false,
     });
+    for (const stale of turns.keys()) {
+      if (turns.size <= TURNS_KEPT) break;
+      turns.delete(stale);
+    }
+  }
 }
 
 /** Вход шага открытой сессии; null — провайдер вход не назвал. */
@@ -94,8 +101,10 @@ export function closeIdleCompactionTurn(
  * была, следующий ход решит заново, страховка внутри хода остаётся.
  *
  * claimImpl занимает чат под пересказ; false — чат уже занят (пришло сообщение) или сессия
- * сброшена, тогда просьбы нет. requestImpl: true — eve приняла просьбу, false — сессии уже
- * нет. releaseImpl освобождает чат, если просьба не принята.
+ * сброшена, тогда просьбы нет. requestImpl: true — eve приняла просьбу; false — отказала,
+ * и releaseImpl освобождает чат. Исключение requestImpl значит, что ответа нет и исход
+ * неизвестен: eve могла принять просьбу, поэтому чат остаётся занят до парковки сессии или
+ * срока записи пересказа (COMPACTION_STALE_MS), а второй просьбы нет.
  */
 export async function startIdleCompaction({
   sessionId,
@@ -113,12 +122,18 @@ export async function startIdleCompaction({
   const turn = turns.get(sessionId);
   if (!turn?.due) return false;
   turn.due = false;
-  let accepted = false;
   try {
     if (!claimImpl()) return false;
+  } catch (error) {
+    logImpl("[telegram] чат под свёртку между ходами не занят:", error);
+    return false;
+  }
+  let accepted;
+  try {
     accepted = await requestImpl(sessionId);
   } catch (error) {
-    logImpl("[telegram] свёртка между ходами не запрошена:", error);
+    logImpl("[telegram] свёртка между ходами: ответа eve нет:", error);
+    return false;
   }
   if (accepted) {
     turn.asked = true;
