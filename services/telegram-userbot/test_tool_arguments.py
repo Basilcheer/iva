@@ -92,6 +92,10 @@ class ToolContractsTest(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(before["list_messages"].inputSchema["properties"]["account"]["type"], "string")
                     removed = runtime._apply_exposed_tools_mode(runtime.mcp)
                     exposed = {tool.name: tool for tool in await runtime.mcp.list_tools()}
+                    with patch.dict(runtime.clients, {"default": object()}, clear=True):
+                        masked = await runtime.mcp.call_tool("list_messages", {"chat_id": "@example", "account": "main"})
+                    self.assertIn("GEN-ERR-", str(masked))
+                    self.assertNotIn("Unknown account", str(masked))
                     started = time.perf_counter()
                     changed = await install_tool_contracts(runtime.mcp, vars(source), runtime.get_client)
                     duration = time.perf_counter() - started

@@ -4,6 +4,7 @@ Remove the nullable-signature repair when telegram-mcp declares its optional Non
 defaults as nullable types. Remove account preflight when its handlers expose
 Unknown account errors directly. The upstream boundary tests detect those changes.
 No JSON Schema default is interpreted as permission to accept null.
+Tracking: https://github.com/smixs/iva-agent/issues/271 and /issues/248.
 """
 import inspect
 from functools import wraps
