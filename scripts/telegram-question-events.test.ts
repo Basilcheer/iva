@@ -12,17 +12,29 @@ process.env.ASSISTANT_DATA_DIR = dataDir;
 process.env.AGENT_LANGUAGE = "en";
 process.env.TELEGRAM_BOT_TOKEN = "question-test-token";
 process.env.TELEGRAM_RICH_REPLIES = "auto";
+process.env.ASSISTANT_BEARER = "question-test-bearer";
 after(() => rmSync(dataDir, { recursive: true, force: true }));
 
 const calls: Array<{ method: string; body: Record<string, unknown> }> = [];
 let failEdits = false;
+let onPreviewEdit: (() => void) | undefined;
 globalThis.fetch = (url, init) => {
   const address =
     url instanceof Request ? url.url : url instanceof URL ? url.href : url;
   const method = new URL(address).pathname.split("/").at(-1)!;
-  assert.ok(typeof init?.body === "string");
-  const body = JSON.parse(init.body) as Record<string, unknown>;
+  const body =
+    typeof init?.body === "string"
+      ? (JSON.parse(init.body) as Record<string, unknown>)
+      : {};
   calls.push({ method, body });
+  if (method === "compact")
+    return Promise.resolve(
+      Response.json(
+        { ok: true, sessionId: "question-compaction", status: "accepted" },
+        { status: 202 },
+      ),
+    );
+  if (method === "editMessageText") onPreviewEdit?.();
   if (failEdits && method.startsWith("edit"))
     return Promise.resolve(
       Response.json(
@@ -71,10 +83,11 @@ function context(
     messageThreadId: null,
   },
   rekeys: string[] = [],
+  sessionId = "questions",
 ) {
   const ctx = new ContextContainer();
   ctx.set(SessionKey, {
-    sessionId: "questions",
+    sessionId,
     auth: { current: null, initiator: null },
     turn: { id: "turn_0", sequence: 0 },
   });
@@ -82,7 +95,7 @@ function context(
     ctx,
     state,
     session: {
-      id: "questions",
+      id: sessionId,
       auth: { current: null, initiator: null },
       continuation: {
         token: "7::",
@@ -100,7 +113,12 @@ function context(
   };
 }
 type EventName =
-  "input.requested" | "input.resolved" | "turn.cancelled" | "session.waiting";
+  | "input.requested"
+  | "input.resolved"
+  | "turn.started"
+  | "turn.completed"
+  | "turn.cancelled"
+  | "session.waiting";
 const request = {
   requestId: "q",
   kind: "question",
@@ -223,4 +241,102 @@ test("authored rich question rekeys a group session through public Eve continuat
   assert.equal(calls.at(-1)!.body.message_thread_id, 42);
   assert.equal(harness.state.conversationId, String(preview.messageId));
   assert.deepEqual(harness.rekeys, [`-7:42:${String(preview.messageId)}`]);
+});
+
+test("preview delivery preserves ADR-0021 compaction claim and never repeats its request", async (t) => {
+  t.mock.method(console, "error", () => {});
+  t.after(() => {
+    failEdits = false;
+    onPreviewEdit = undefined;
+  });
+  const [
+    { recordStepInput },
+    { idleCompactionLimit },
+    { providerConfig },
+    { getChatStatus },
+  ] = await Promise.all([
+    import("../agent/lib/idle-compaction.ts"),
+    import("../agent/lib/compaction.ts"),
+    import("../agent/provider.ts"),
+    import("../agent/lib/run-status.ts"),
+  ]);
+  const sessionId = "question-compaction";
+  const harness = context(
+    {
+      ...adapter.state,
+      chatId: "977",
+      chatType: "private",
+      conversationId: null,
+      messageThreadId: null,
+    },
+    [],
+    sessionId,
+  );
+  await harness.emit("turn.started", { turnId: "turn_0" });
+  await harness.emit("input.requested", { requests: [request] });
+  failEdits = true;
+  await harness.emit("input.resolved", {
+    resolutions: [
+      { requestId: "q", outcome: "answered", response: { optionId: "yes" } },
+    ],
+  });
+  recordStepInput(
+    sessionId,
+    idleCompactionLimit(providerConfig.contextWindow) + 1,
+  );
+  await harness.emit("turn.completed", { turnId: "turn_0" });
+  assert.ok(harness.state.questionPreviews?.q.settledStatus);
+  const observedClaims: Array<{
+    sessionId: unknown;
+    compacting: unknown;
+    status: unknown;
+  }> = [];
+  onPreviewEdit = () => {
+    const status = getChatStatus("977:");
+    observedClaims.push({
+      sessionId: status?.sessionId,
+      compacting: status?.compacting,
+      status: status?.status,
+    });
+  };
+  const before = calls.filter(({ method }) => method === "compact").length;
+  await harness.emit("session.waiting", {});
+  assert.equal(
+    calls.filter(({ method }) => method === "compact").length,
+    before + 1,
+  );
+  assert.equal(getChatStatus("977:")?.compacting, true);
+  // Duplicate resolution retries only the accepted preview while compaction owns the chat.
+  await harness.emit("input.resolved", {
+    resolutions: [
+      { requestId: "q", outcome: "answered", response: { optionId: "yes" } },
+    ],
+  });
+  failEdits = false;
+  await harness.emit("input.resolved", {
+    resolutions: [
+      { requestId: "q", outcome: "answered", response: { optionId: "yes" } },
+    ],
+  });
+  assert.deepEqual(harness.state.questionPreviews, {});
+  assert.deepEqual(harness.state.hitlCallbacks, {});
+  assert.equal(
+    calls.filter(({ method }) => method === "compact").length,
+    before + 1,
+  );
+  assert.equal(getChatStatus("977:")?.compacting, true);
+  assert.ok(observedClaims.length >= 3);
+  for (const observed of observedClaims)
+    assert.deepEqual(observed, {
+      sessionId,
+      compacting: true,
+      status: "running",
+    });
+  onPreviewEdit = undefined;
+  await harness.emit("session.waiting", {});
+  assert.equal(getChatStatus("977:")?.status, "idle");
+  assert.equal(
+    calls.filter(({ method }) => method === "compact").length,
+    before + 1,
+  );
 });

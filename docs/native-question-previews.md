@@ -46,6 +46,12 @@ exposes the event and does not implement that UI. The unpatched 0.51.1 boundary 
 fails because Eve silently drops this handler. This is one channel mechanism for
 all providers, as required by ADR-0019.
 
+The existing Compaction lifecycle (ADR-0021) keeps ownership of the chat. Normal
+turn completion still finishes its status and closes the Compaction turn even if
+preview delivery fails. On `session.waiting`, Eve's Compaction request and claim
+happen before preview recovery. An edit cannot release that claim, repeat the request,
+or replay an accepted answer.
+
 Group and forum rich questions update the same conversation anchor as Eve's native
 `post()` and rekey through the public continuation operations using Eve's exported
 `telegramContinuationToken`. This keeps a button's callback attached to the session
