@@ -96,15 +96,17 @@ or «Не надо <name>» / «Not now <name>». The draft is
 `memory_search` with `<name>`.
 
 - «Поставить» / «Install» — install it by `make-plugin`, step 2, always by the
-  path: skills and scripts — `iva plugin add data/custom/plugin-drafts/<name>`
-  (a bare name asks the Marketplace and would install someone else's plugin);
-  with MCP or `sh.iva/` — `iva plugin propose data/custom/plugin-drafts/<name>`,
-  and the owner taps «Установить» on the code's message. Then a fact on the Card:
-  `владелец поставил <name> (<дата>)`. The draft is gone or does not pass — say
-  so in one line; do not rebuild it in this turn. If `add` says the proposal is
-  out of date, say so in one line and run `iva plugin propose
-data/custom/plugin-drafts/<name>`: its message shows the current draft with its
-  own button.
+  path that starts with `./`, from the default `bash` folder: skills and scripts —
+  `iva plugin add ./data/custom/plugin-drafts/<name>` (a bare name asks the
+  Marketplace, and a path without `./` reads as a GitHub repository: both would
+  install someone else's plugin); with MCP or `sh.iva/` — `iva plugin propose
+./data/custom/plugin-drafts/<name>`, and the owner taps «Установить» on the
+  code's message. Then a fact on the Card: `владелец поставил <name> (<дата>)`.
+  The draft is gone or does not pass — say so in one line; do not rebuild it in
+  this turn. If `add` says the proposal is out of date, the draft changed after
+  the Insight message: say so in one line and that it installs only from the
+  owner's terminal now — `iva plugin add ./data/custom/plugin-drafts/<name>`; do
+  not copy the draft elsewhere to get round the check.
 - «Не надо» / «Not now» — a fact on the Card `ответил: не надо (<дата>)` with
   `status: "archived"`, and one short reply in the owner's language: «Поняла,
   больше не предлагаю». Leave the draft folder.
