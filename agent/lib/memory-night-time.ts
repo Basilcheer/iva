@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-export const DEFAULT_MEMORY_NIGHT_TIME = "04:00";
+const DEFAULT_MEMORY_NIGHT_TIME = "04:00";
 export const MEMORY_NIGHT_CONFIG_FILE = "iva-memory-night.json";
 // Written only into the disposable build root. Runtime reads the promoted .output copy.
 export const MEMORY_NIGHT_BUILD_FILE = ".iva-memory-night-build.json";
