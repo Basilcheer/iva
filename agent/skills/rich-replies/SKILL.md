@@ -19,18 +19,18 @@ This skill is about the reply in the **current chat**. A post to another chat
 
 Use them when they carry meaning the reader would otherwise have to dig out:
 
-| Reader's need | Use | Don't |
-|---|---|---|
-| Compare 3+ things by 2+ attributes | table | a table for two numbers |
-| Long answer with sections | `##` headings | headings in a three-line reply |
-| Optional depth (logs, raw data, method) | `<details>` fold | hide the answer itself |
-| Source or aside | footnote `[^1]` | footnotes instead of a link |
-| Formula | `$x^2$`, `$$…$$` | LaTeX for "2 + 2" |
-| Step status, checklist | `- [ ]` / `- [x]` | task list for prose |
-| Picture or several by public URL | image line, `<tg-collage>`, `<tg-slideshow>` | local file paths (use `rich-post`) |
-| Place | `<tg-map>` | a map for a city name |
-| A moment in the reader's time zone | `<tg-time>` | for "tomorrow" in prose |
-| Next step, choice, link, copyable value | **buttons** (below) | buttons on every reply |
+| Reader's need                           | Use                                          | Don't                              |
+| --------------------------------------- | -------------------------------------------- | ---------------------------------- |
+| Compare 3+ things by 2+ attributes      | table                                        | a table for two numbers            |
+| Long answer with sections               | `##` headings                                | headings in a three-line reply     |
+| Optional depth (logs, raw data, method) | `<details>` fold                             | hide the answer itself             |
+| Source or aside                         | footnote `[^1]`                              | footnotes instead of a link        |
+| Formula                                 | `$x^2$`, `$$…$$`                             | LaTeX for "2 + 2"                  |
+| Step status, checklist                  | `- [ ]` / `- [x]`                            | task list for prose                |
+| Picture or several by public URL        | image line, `<tg-collage>`, `<tg-slideshow>` | local file paths (use `rich-post`) |
+| Place                                   | `<tg-map>`                                   | a map for a city name              |
+| A moment in the reader's time zone      | `<tg-time>`                                  | for "tomorrow" in prose            |
+| Next step, choice, link, copyable value | **buttons** (below)                          | buttons on every reply             |
 
 Short conversational answers stay plain text. Rich formatting is for structure,
 not decoration: one heading level per answer, one table per comparison, one row
@@ -38,7 +38,7 @@ of buttons per decision.
 
 ## Text and blocks
 
-````
+```
 **bold**  *italic*  ~~strike~~  `code`  ==marked==  ||spoiler||  <u>underline</u>
 <sub>x</sub> <sup>2</sup>   $x^2 + y^2$ (inline formula)
 [link](https://example.com)  [mail](mailto:a@b.c)  [user](tg://user?id=123)
@@ -78,7 +78,7 @@ Anything markdown, shown collapsed unless `open`.
 <tg-map lat="41.31" long="69.28" zoom="13"/>
 <tg-time unix="1789300000" format="wDT">tomorrow 22:45</tg-time>   (formats: t, r, wDT)
 <tg-emoji emoji-id="5368324170671202286">👍</tg-emoji>
-````
+```
 
 Rules: table cells hold inline formatting only; formulas are raw LaTeX; media
 needs an `https://` URL the Telegram server can fetch; markdown is not parsed
@@ -92,7 +92,7 @@ the next line. Do not place a button inside a sentence (`RichTextButton`): Andro
 clients of summer 2026 draw the label outside the pill. Several equivalent
 one-word choices (yes/no) share one row.
 
-````
+```
 Напоминание на 14:30 поставил.
 
 <tg-button-row><tg-button type="callback_data" data="Отложи на час">На час</tg-button></tg-button-row>
@@ -108,18 +108,18 @@ one-word choices (yes/no) share one row.
 Команда для входа на сервер.
 
 <tg-button-row><tg-button type="callback_data" data="Да">Да</tg-button><tg-button type="callback_data" data="Нет">Нет</tg-button></tg-button-row>
-````
+```
 
 Button types:
 
-| `type` | What happens | Attributes |
-|---|---|---|
-| `callback_data` | the tap becomes **the user's next message**, text = `data` | `data` **≤ 64 bytes = at most 30 Cyrillic letters** (Cyrillic is 2 bytes each); longer → Telegram rejects the whole message and the buttons are lost |
-| `url` | opens a link; the nice way to give a link instead of a bare URL | `url` |
-| `copy_text` | copies a value to the clipboard (commands, ids, keys you were asked to show) | `text` |
-| `web_app` | opens a Mini App; private chats only | `url` |
-| `switch_inline_query` / `…_current_chat` | inserts `@bot query` into the input field | `query` |
-| `disabled` | a greyed-out label, e.g. a step not yet available | — |
+| `type`                                   | What happens                                                                 | Attributes                                                                                                                                           |
+| ---------------------------------------- | ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `callback_data`                          | the tap becomes **the user's next message**, text = `data`                   | `data` **≤ 64 bytes = at most 30 Cyrillic letters** (Cyrillic is 2 bytes each); longer → Telegram rejects the whole message and the buttons are lost |
+| `url`                                    | opens a link; the nice way to give a link instead of a bare URL              | `url`                                                                                                                                                |
+| `copy_text`                              | copies a value to the clipboard (commands, ids, keys you were asked to show) | `text`                                                                                                                                               |
+| `web_app`                                | opens a Mini App; private chats only                                         | `url`                                                                                                                                                |
+| `switch_inline_query` / `…_current_chat` | inserts `@bot query` into the input field                                    | `query`                                                                                                                                              |
+| `disabled`                               | a greyed-out label, e.g. a step not yet available                            | —                                                                                                                                                    |
 
 Styles: `style="success"` for confirm/enable/apply, `style="danger"` for
 cancel/delete/turn off, `style="link"` for a quiet secondary action, none for
