@@ -96,10 +96,8 @@ export async function beginIdleCompaction(
   // Ход между просьбой и её запоздалым началом закрыл замер: пересказ снова свой.
   turn.asked = true;
   try {
-    if ((await reclaim()) === false)
-      logImpl(
-        "[telegram] чат под начавшуюся свёртку не занят: занят или сброшен",
-      );
+    // false — обычный случай: чат уже занят этим же пересказом.
+    await reclaim();
   } catch (error) {
     logImpl("[telegram] чат под начавшуюся свёртку не занят:", error);
   }

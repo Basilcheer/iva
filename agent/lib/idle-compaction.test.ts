@@ -342,26 +342,6 @@ test("запоздалый пересказ после промежуточно�
   assert.deepEqual(await waiting(id), NOTHING, "второй платной просьбы нет");
 });
 
-test("запоздалое начало пересказа, а чат занять не вышло: причина в журнале, наружу ничего", async () => {
-  const id = fresh();
-  turn(id, [LIMIT]);
-  let free = true;
-  await idle.startIdleCompaction({
-    sessionId: id,
-    claimImpl: () => free,
-    requestImpl: async () => {
-      throw new Error("timeout");
-    },
-    releaseImpl: () => {},
-    logImpl: () => {},
-  });
-  free = false;
-  const log: unknown[][] = [];
-  await idle.beginIdleCompaction(id, (...parts) => log.push(parts));
-  assert.equal(log.length, 1);
-  assert.match(String(log[0]?.[0]), /не занят/u);
-});
-
 test("счёт идущего хода, решения и открытой просьбы не вытесняется другими сессиями", async () => {
   const due = fresh();
   turn(due, [LIMIT]); // решение ждёт парковки
