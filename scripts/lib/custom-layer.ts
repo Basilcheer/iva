@@ -28,7 +28,7 @@ import {
   isAuthoredPath,
   instructionSlotCollision,
   isInstructionSlotPath,
-  isLiveInstructionPath,
+  isLivePath,
 } from "./authored-paths.ts";
 
 export { isAuthoredPath };
@@ -52,10 +52,6 @@ const AUTHORED_PATHSPECS = [
 // и снапшот, потерявший такое дерево, даёт [UNRESOLVED_IMPORT] на первом же старте
 // сервиса. Полноту списка держит страж в scripts/authored-tree-guard.test.ts.
 export const RUNTIME_SOURCE_TREES = ["agent", "scripts", "packages"] as const;
-
-// Скиллы остаются файлами пользователя (isAuthoredPath, дайджест custom-версии) и
-// переживают обновление, но входом сборки быть перестали.
-const SKILLS_PREFIX = "agent/skills/";
 
 const ConflictSchema = z.strictObject({
   localSha256: z
@@ -560,12 +556,11 @@ export function materializeCustomLayer({
 
     // Скилл в дерево не кладём — его отдаёт резолвер прямо из data/custom. Так же
     // markdown-правила владельца: их читает с диска agent/instructions/30-owner-rules.ts.
-    // Исключение одно: удаление встроенного скилла. Динамика умеет перекрыть одноимённый
-    // скилл, но не убрать его, поэтому tombstone по-прежнему правит дерево.
-    if (
-      (!path.startsWith(SKILLS_PREFIX) && !isLiveInstructionPath(path)) ||
-      materialized === null
-    )
+    // Правило одно с версией (isLivePath). Скиллы остаются файлами пользователя и
+    // переживают обновление. Исключение одно: удаление встроенного скилла. Динамика
+    // умеет перекрыть одноимённый скилл, но не убрать его, поэтому tombstone
+    // по-прежнему правит дерево.
+    if (!isLivePath(path) || materialized === null)
       applyToTree(root, path, materialized);
     const pendingPath = safeChild(pendingDir, path);
     if (materialized === null) rmSync(pendingPath, { force: true });

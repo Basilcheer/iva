@@ -446,6 +446,49 @@ test("a markdown rule file in the slot is live, not built", async (t) => {
   );
 });
 
+// Шапка скилла с c1: metadata.hermes объектом. eve-build её отвергает; фальшивая сборка
+// отвергает файл по слову BREAK — так же, как eve отвергла бы эту шапку в дереве.
+const CROOKED_SKILL = `---
+name: zz-crooked
+description: Checks the crooked header
+metadata:
+  hermes:
+    emoji: "🧪"
+    requires: [git]
+---
+# Crooked
+The build refuses this header: BREAK
+`;
+
+test("an owner's skill is not a build input: a crooked header leaves the rest applied", async (t) => {
+  const iva = world(t);
+  customFile(iva.home, "agent/skills/zz-crooked/SKILL.md", CROOKED_SKILL);
+  customFile(iva.home, "agent/connections/mine.ts", "export const mine = 1;\n");
+
+  const outcome = updated(await iva.update());
+  assert.equal(outcome.custom, "applied");
+  assert.equal(
+    existsSync(join(iva.home, "current/agent/skills/zz-crooked")),
+    false,
+  );
+  assert.equal(
+    readFileSync(join(iva.home, "current/agent/connections/mine.ts"), "utf8"),
+    "export const mine = 1;\n",
+  );
+  assert.deepEqual(iva.notices, []);
+
+  // Правка скилла не новая версия: резолвер читает его с диска на ходу.
+  customFile(
+    iva.home,
+    "agent/skills/zz-crooked/SKILL.md",
+    `${CROOKED_SKILL}more\n`,
+  );
+  assert.deepEqual(await iva.update(), {
+    status: "current",
+    version: outcome.version,
+  });
+});
+
 test("a slot file with a bundled name refuses the version and keeps the running one", async (t) => {
   const iva = world(t);
   const first = updated(await iva.update());

@@ -35,8 +35,18 @@ export function isInstructionSlotPath(path: string): boolean {
  * поэтому сборка их в дерево не копирует: статическая копия рядом с живым чтением
  * положила бы каждое правило в промпт дважды.
  */
-export function isLiveInstructionPath(path: string): boolean {
+function isLiveInstructionPath(path: string): boolean {
   return isInstructionSlotPath(path) && path.endsWith(".md");
+}
+
+/**
+ * Файлы владельца, которые Ива читает с диска на ходу, а не из сборки: markdown-правила
+ * и скиллы (резолвер agent/skills/custom.ts). Одно правило на оба пути сборки — checkout
+ * и версию: скилл не вход сборки, поэтому кривая шапка одного скилла не уводит версию на
+ * заводскую сборку, а правка скилла не новая версия.
+ */
+export function isLivePath(path: string): boolean {
+  return isLiveInstructionPath(path) || path.startsWith("agent/skills/");
 }
 
 /** One text for both build paths: a slot file may not take a bundled name. */

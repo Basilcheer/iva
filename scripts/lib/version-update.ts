@@ -17,7 +17,7 @@ import {
   instructionSlotCollision,
   isAuthoredPath,
   isInstructionSlotPath,
-  isLiveInstructionPath,
+  isLivePath,
 } from "./authored-paths.ts";
 import { resolveDataDir } from "./data-dir.ts";
 import { gitAt, updaterCompat } from "./update-check.ts";
@@ -154,10 +154,11 @@ function authored(customDir: string): string[] {
             .join("/"),
         )
         .filter(isAuthoredPath)
-        // Markdown-правила владельца читает с диска agent/instructions/30-owner-rules.ts:
-        // они не вход сборки и не часть дайджеста, иначе каждое «запиши правило» звало бы
-        // `iva update` без нужды.
-        .filter((path) => !isLiveInstructionPath(path))
+        // Markdown-правила и скиллы владельца Ива читает с диска на ходу: они не вход
+        // сборки и не часть отпечатка версии. Иначе каждое «запиши правило» звало бы
+        // `iva update` без нужды, а одна кривая шапка скилла уводила бы версию на
+        // заводскую сборку.
+        .filter((path) => !isLivePath(path))
         .sort()
     );
   } catch (error) {
