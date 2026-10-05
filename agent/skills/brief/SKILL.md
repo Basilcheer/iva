@@ -30,7 +30,7 @@ Walk everything the owner has connected, with your own tools, read only:
 6. Habits — only the ones the owner named; never invent a routine.
 7. Mail, calendar or Telegram not connected — offer to connect it once and save the
    fact that you offered with `write_card`; next time check memory and do not repeat.
-   Do not suggest anything a Card tagged `spark` marks as declined.
+   Do not suggest anything a Card tagged `insight` marks as declined.
 
 ## Write
 

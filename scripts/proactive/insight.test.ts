@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-floating-promises -- Node's test runner owns registrations. */
-// Spark на шве runProactiveTick (ADR-0022): слот `sparkTimes` не в тихий час, заявка `spark.day`
+// Insight на шве runProactiveTick (ADR-0022): слот `insightTimes` не в тихий час, заявка `insight.day`
 // до хода, одно сообщение, имя черновика из кнопки «Поставить»/«Install» или метка «?», счёт
 // непоставленных находок и неделя паузы. Одна строка таблицы отказов — один тест; в конце PBT (10)
 // на тексте `data` кнопки (сид в имени теста, повтор — FC_SEED=<сид>).
@@ -17,7 +17,7 @@ import { dirname, join } from "node:path";
 import test, { after } from "node:test";
 import fc from "fast-check";
 
-const ROOT = mkdtempSync(join(tmpdir(), "iva-proactive-spark-"));
+const ROOT = mkdtempSync(join(tmpdir(), "iva-proactive-insight-"));
 process.env.ASSISTANT_DATA_DIR = join(ROOT, "data");
 mkdirSync(process.env.ASSISTANT_DATA_DIR, { recursive: true });
 after(() => rmSync(ROOT, { recursive: true, force: true }));
@@ -27,7 +27,7 @@ const { main, runProactiveTick } = await import("./tick.ts");
 const { initialState, writeProactiveState } = await import("./state.ts");
 import type { ProactiveConfig } from "#lib/proactive-config.ts";
 import type { ReminderTurn } from "../lib/reminder-turn.ts";
-import type { ProactiveState, SparkState } from "./state.ts";
+import type { ProactiveState, InsightState } from "./state.ts";
 import type { TickDeps } from "./tick.ts";
 
 const SEED = Number(process.env.FC_SEED ?? Date.now() % 2 ** 31);
@@ -41,10 +41,10 @@ const at = (hh: number, mm = 0, days = 0) =>
   MIDNIGHT + days * DAY_MS + hh * HOUR + mm * MIN;
 const DAY = "2026-10-05";
 /** Brief выключен: окно утреннего слота (3 часа) иначе накрыло бы 11:30. */
-const SPARK: ProactiveConfig = {
+const INSIGHT: ProactiveConfig = {
   ...PROACTIVE_DEFAULTS,
   briefTimes: [],
-  sparkTimes: ["11:30"],
+  insightTimes: ["11:30"],
 };
 const button = (data: string) =>
   `<tg-button-row><tg-button type="callback_data" data="${data}">x</tg-button></tg-button-row>`;
@@ -87,7 +87,7 @@ function harness(): Harness {
     sendResult: { ok: true, error: "" },
     failWrites: [],
     installedThrows: false,
-    config: SPARK,
+    config: INSIGHT,
     english: false,
     checks: 0,
     deps: undefined as unknown as TickDeps,
@@ -127,7 +127,7 @@ function harness(): Harness {
         ? Promise.reject(new Error("plugins.json damaged"))
         : Promise.resolve(h.installed.has(name)),
     writeState: (path, state) => {
-      h.events.push(`write ${state.spark?.draft ?? "-"}`);
+      h.events.push(`write ${state.insight?.draft ?? "-"}`);
       return h.failWrites.includes(writes++)
         ? Promise.reject(new Error("ENOSPC"))
         : writeProactiveState(path, state);
@@ -139,45 +139,46 @@ function harness(): Harness {
 
 const readState = (h: Harness) =>
   JSON.parse(readFileSync(h.statePath, "utf8")) as ProactiveState;
-const sparkOf = (h: Harness) => readState(h).spark;
-const sparks = (h: Harness) => h.prompts.filter((p) => p.startsWith("Spark:"));
-/** Прогоны уже были: файл есть; `spark` — по желанию. */
-const seed = (h: Harness, spark?: SparkState) =>
+const insightOf = (h: Harness) => readState(h).insight;
+const insights = (h: Harness) =>
+  h.prompts.filter((p) => p.startsWith("Insight:"));
+/** Прогоны уже были: файл есть; `insight` — по желанию. */
+const seed = (h: Harness, insight?: InsightState) =>
   writeProactiveState(h.statePath, {
     ...initialState(at(0)),
-    ...(spark ? { spark } : {}),
+    ...(insight ? { insight } : {}),
   });
 const tick = (h: Harness, now: number) => runProactiveTick(now, h.deps);
-const prev = (draft: string, misses = 0, day = DAY): SparkState => ({
+const prev = (draft: string, misses = 0, day = DAY): InsightState => ({
   day,
   draft,
   misses,
   pausedUntilMs: 0,
 });
 
-test("1. sparkTimes [] by default: no Spark at any time of the day", async () => {
+test("1. insightTimes [] by default: no Insight at any time of the day", async () => {
   const h = harness();
   h.config = PROACTIVE_DEFAULTS;
   await seed(h);
   for (let m = 0; m < 24 * 60; m += 30) await tick(h, at(0, m));
-  assert.equal(sparks(h).length, 0);
-  assert.equal(readState(h).spark, undefined);
+  assert.equal(insights(h).length, 0);
+  assert.equal(readState(h).insight, undefined);
 });
 
-test("2. the slot comes: the claim is written before the turn, the prompt follows the skill, one send as spark", async () => {
+test("2. the slot comes: the claim is written before the turn, the prompt follows the skill, one send as insight", async () => {
   const h = harness();
   await seed(h);
   assert.equal(await tick(h, at(11, 30)), 0);
   assert.deepEqual(h.events, ["write ", "turn", "write count-receipts"]);
-  assert.match(h.prompts[0] ?? "", /^Spark: .*Follow the spark skill/u);
+  assert.match(h.prompts[0] ?? "", /^Insight: .*Follow the insight skill/u);
   assert.match(
     h.prompts[0] ?? "",
     /data="Поставить <name>".*data="Не надо <name>"/u,
   );
   assert.deepEqual(h.sent, [
-    { part: found("count-receipts"), source: "spark" },
+    { part: found("count-receipts"), source: "insight" },
   ]);
-  assert.deepEqual(sparkOf(h), prev("count-receipts"));
+  assert.deepEqual(insightOf(h), prev("count-receipts"));
   h.english = true;
   await seed(h);
   await tick(h, at(11, 30));
@@ -193,9 +194,9 @@ test("3. a second run the same day makes no turn; the next day makes one", async
   await tick(h, at(11, 30));
   await tick(h, at(12, 0));
   await tick(h, at(13, 30));
-  assert.equal(sparks(h).length, 1);
+  assert.equal(insights(h).length, 1);
   await tick(h, at(11, 30, 1));
-  assert.equal(sparks(h).length, 2);
+  assert.equal(insights(h).length, 2);
 });
 
 test("4. QUIET, empty or only separators: nothing is sent, exit 0, draft stays empty", async () => {
@@ -210,7 +211,7 @@ test("4. QUIET, empty or only separators: nothing is sent, exit 0, draft stays e
     h.reply = turn(text);
     assert.equal(await tick(h, at(11, 30)), 0);
     assert.deepEqual(h.sent, []);
-    assert.equal(sparkOf(h)?.draft, "");
+    assert.equal(insightOf(h)?.draft, "");
   }
 });
 
@@ -220,7 +221,7 @@ test("5. an answer in two parts goes out as one message", async () => {
   h.reply = turn(`Нашла дело.\n<!-- iva:next -->\n${button("Поставить a-b")}`);
   await tick(h, at(11, 30));
   assert.deepEqual(h.sent, [
-    { part: `Нашла дело.\n\n${button("Поставить a-b")}`, source: "spark" },
+    { part: `Нашла дело.\n\n${button("Поставить a-b")}`, source: "insight" },
   ]);
 });
 
@@ -229,7 +230,7 @@ test("6. the claim not written: no turn, exit 1; a failed turn exits 0, logs and
   await seed(h);
   h.failWrites = [0];
   assert.equal(await tick(h, at(11, 30)), 1);
-  assert.equal(sparks(h).length, 0);
+  assert.equal(insights(h).length, 0);
   for (const reply of [
     new Error("502"),
     turn("x", { status: "failed" }),
@@ -240,9 +241,9 @@ test("6. the claim not written: no turn, exit 1; a failed turn exits 0, logs and
     await seed(f);
     f.reply = reply;
     assert.equal(await tick(f, at(11, 30)), 0);
-    assert.ok(f.logs.some((l) => l.includes("spark turn failed")));
+    assert.ok(f.logs.some((l) => l.includes("insight turn failed")));
     await tick(f, at(12, 0));
-    assert.equal(sparks(f).length, 1);
+    assert.equal(insights(f).length, 1);
     assert.deepEqual(f.sent, []);
   }
 });
@@ -253,7 +254,7 @@ test("7. send refused or threw: exit 0, draft stays empty", async () => {
     await seed(h);
     h.sendResult = result;
     assert.equal(await tick(h, at(11, 30)), 0);
-    assert.equal(sparkOf(h)?.draft, "");
+    assert.equal(insightOf(h)?.draft, "");
   }
 });
 
@@ -271,25 +272,25 @@ test("8. the draft name from the Install button, else «?»; the second write fa
     h.reply = turn(text);
     if (alreadyInstalled) h.installed.add("x-y");
     await tick(h, at(11, 30));
-    assert.equal(sparkOf(h)?.draft, draft, text);
+    assert.equal(insightOf(h)?.draft, draft, text);
   }
   const h = harness();
   await seed(h);
   h.failWrites = [1];
   assert.equal(await tick(h, at(11, 30)), 0);
-  assert.equal(sparkOf(h)?.draft, "");
+  assert.equal(insightOf(h)?.draft, "");
 });
 
 test("9. the count: not installed +1, installed 0, a throwing check +1, «?» +1, QUIET unchanged; two misses — a week of pause", async () => {
   const misses = async (
-    spark: SparkState,
+    insight: InsightState,
     setup: (h: Harness) => void = () => {},
   ) => {
     const h = harness();
-    await seed(h, { ...spark, day: "2026-10-04" });
+    await seed(h, { ...insight, day: "2026-10-04" });
     setup(h);
     await tick(h, at(11, 30));
-    return sparkOf(h)?.misses;
+    return insightOf(h)?.misses;
   };
   assert.equal(await misses(prev("a", 0)), 1);
   assert.equal(await misses(prev("a", 1), (h) => h.installed.add("a")), 0);
@@ -302,23 +303,23 @@ test("9. the count: not installed +1, installed 0, a throwing check +1, «?» +1
   const h = harness();
   await seed(h, prev("a", 1, "2026-10-04"));
   assert.equal(await tick(h, at(12, 0)), 0);
-  assert.equal(sparks(h).length, 0);
-  assert.deepEqual(sparkOf(h), {
+  assert.equal(insights(h).length, 0);
+  assert.deepEqual(insightOf(h), {
     day: DAY,
     draft: "",
     misses: 0,
     pausedUntilMs: at(12, 0) + 7 * DAY_MS,
   });
   await tick(h, at(11, 59, 7));
-  assert.equal(sparks(h).length, 0);
+  assert.equal(insights(h).length, 0);
   await tick(h, at(12, 0, 7));
-  assert.equal(sparks(h).length, 1);
-  assert.equal(sparkOf(h)?.misses, 0);
+  assert.equal(insights(h).length, 1);
+  assert.equal(insightOf(h)?.misses, 0);
 });
 
-test("10. a Brief in this run: Spark waits for the next run; a Spark run polls no Watch source", async () => {
+test("10. a Brief in this run: Insight waits for the next run; an Insight run polls no Watch source", async () => {
   const h = harness();
-  h.config = { ...SPARK, briefTimes: ["08:30"], sparkTimes: ["08:30"] };
+  h.config = { ...INSIGHT, briefTimes: ["08:30"], insightTimes: ["08:30"] };
   await seed(h);
   await tick(h, at(8, 30));
   assert.deepEqual(
@@ -327,62 +328,62 @@ test("10. a Brief in this run: Spark waits for the next run; a Spark run polls n
   );
   const checks = h.checks;
   await tick(h, at(9, 0));
-  assert.equal(sparks(h).length, 1);
+  assert.equal(insights(h).length, 1);
   assert.equal(h.checks, checks);
 });
 
-test("11. the first run (no file): no Spark, Watch looks at the sources", async () => {
+test("11. the first run (no file): no Insight, Watch looks at the sources", async () => {
   const h = harness();
   await tick(h, at(11, 30));
-  assert.equal(sparks(h).length, 0);
+  assert.equal(insights(h).length, 0);
   assert.equal(h.checks, 1);
 });
 
-test("12. the toggle off: no Spark", async () => {
+test("12. the toggle off: no Insight", async () => {
   const h = harness();
-  h.config = { ...SPARK, enabled: false };
+  h.config = { ...INSIGHT, enabled: false };
   await seed(h);
   await tick(h, at(11, 30));
-  assert.equal(sparks(h).length, 0);
+  assert.equal(insights(h).length, 0);
 });
 
-test("13. Watch and Brief runs after a Spark keep spark byte for byte", async () => {
+test("13. Watch and Brief runs after an Insight keep insight byte for byte", async () => {
   const h = harness();
   await seed(h);
   await tick(h, at(11, 30));
-  const before = JSON.stringify(sparkOf(h));
-  h.config = { ...SPARK, briefTimes: ["14:00"] };
+  const before = JSON.stringify(insightOf(h));
+  h.config = { ...INSIGHT, briefTimes: ["14:00"] };
   await tick(h, at(13, 0));
   await tick(h, at(14, 0));
   assert.ok(h.prompts.some((p) => p.startsWith("Brief:")));
-  assert.equal(JSON.stringify(sparkOf(h)), before);
+  assert.equal(JSON.stringify(insightOf(h)), before);
 });
 
 test("14. quiet hours: a 23:00 slot makes no turn; a 22:00 slot runs at 22:30, not at 23:30", async () => {
   const quiet = harness();
-  quiet.config = { ...SPARK, sparkTimes: ["23:00"] };
+  quiet.config = { ...INSIGHT, insightTimes: ["23:00"] };
   await seed(quiet);
   await tick(quiet, at(23, 0));
-  assert.equal(sparks(quiet).length, 0);
+  assert.equal(insights(quiet).length, 0);
   const late = harness();
-  late.config = { ...SPARK, sparkTimes: ["22:00"] };
+  late.config = { ...INSIGHT, insightTimes: ["22:00"] };
   await seed(late);
   await tick(late, at(23, 30));
-  assert.equal(sparks(late).length, 0);
+  assert.equal(insights(late).length, 0);
   await tick(late, at(22, 30));
-  assert.equal(sparks(late).length, 1);
+  assert.equal(insights(late).length, 1);
 });
 
-test("15. after a break the old count does not hold: a spark a month old gives a turn, misses 0", async () => {
+test("15. after a break the old count does not hold: an insight a month old gives a turn, misses 0", async () => {
   const h = harness();
   await seed(h);
   await tick(h, at(11, 30));
   await tick(h, at(11, 30, 1));
-  assert.equal(sparkOf(h)?.misses, 1);
+  assert.equal(insightOf(h)?.misses, 1);
   await seed(h, { ...prev("count-receipts", 1), day: "2026-09-05" });
   await tick(h, at(11, 30, 2));
-  assert.equal(sparks(h).length, 3);
-  assert.deepEqual(sparkOf(h), {
+  assert.equal(insights(h).length, 3);
+  assert.deepEqual(insightOf(h), {
     ...prev("count-receipts", 0),
     day: "2026-10-07",
   });
@@ -393,8 +394,8 @@ test("16. the pause not written: no turn, exit 1, the file as it was", async () 
   await seed(h, prev("a", 1, "2026-10-04"));
   h.failWrites = [0];
   assert.equal(await tick(h, at(11, 30)), 1);
-  assert.equal(sparks(h).length, 0);
-  assert.deepEqual(sparkOf(h), prev("a", 1, "2026-10-04"));
+  assert.equal(insights(h).length, 0);
+  assert.deepEqual(insightOf(h), prev("a", 1, "2026-10-04"));
 });
 
 test("17. main asks data/custom/plugins.json: a plugin there, even switched off, is installed; no file, a damaged one or another name — not", async () => {
@@ -416,7 +417,7 @@ test("17. main asks data/custom/plugins.json: a plugin there, even switched off,
     if (file !== null) writeFileSync(plugins, file);
     await writeProactiveState(join(data, "proactive.json"), {
       ...initialState(at(0)),
-      spark: prev("count-receipts", 1, "2026-10-04"),
+      insight: prev("count-receipts", 1, "2026-10-04"),
     });
     const prompts: string[] = [];
     const env = {
@@ -427,7 +428,7 @@ test("17. main asks data/custom/plugins.json: a plugin there, even switched off,
     const code = await main(
       env,
       {
-        config: () => SPARK,
+        config: () => INSIGHT,
         sources: [],
         runTurn: (prompt) => {
           prompts.push(prompt);
@@ -439,12 +440,16 @@ test("17. main asks data/custom/plugins.json: a plugin there, even switched off,
       },
       () => at(11, 30),
     );
-    const spark = (
+    const insight = (
       JSON.parse(
         readFileSync(join(data, "proactive.json"), "utf8"),
       ) as ProactiveState
-    ).spark;
-    return { code, turns: prompts.length, paused: spark?.pausedUntilMs !== 0 };
+    ).insight;
+    return {
+      code,
+      turns: prompts.length,
+      paused: insight?.pausedUntilMs !== 0,
+    };
   };
   const state = (list: unknown[]) =>
     JSON.stringify({ marketplaces: [], plugins: list });
@@ -459,7 +464,7 @@ test("17. main asks data/custom/plugins.json: a plugin there, even switched off,
   );
 });
 
-test(`(10) any button data: every delivered Spark gets a non-empty draft, a name only by the pattern and within 64 bytes (seed ${SEED})`, async () => {
+test(`(10) any button data: every delivered Insight gets a non-empty draft, a name only by the pattern and within 64 bytes (seed ${SEED})`, async () => {
   const NAME = /^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$/u;
   const data = fc.oneof(
     fc.string({ unit: "grapheme", maxLength: 80 }),
@@ -483,7 +488,7 @@ test(`(10) any button data: every delivered Spark gets a non-empty draft, a name
         h.reply = turn(`Нашла.\n${button(`${word} ${name}`)}`);
         await tick(h, at(11, 30));
         if (h.sent.length === 0) return;
-        const draft = sparkOf(h)?.draft ?? "";
+        const draft = insightOf(h)?.draft ?? "";
         assert.notEqual(draft, "");
         if (draft === "?") return;
         assert.match(draft, NAME);

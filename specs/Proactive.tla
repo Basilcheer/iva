@@ -23,12 +23,12 @@
 \* последний шаг прогона: обрыв после последней записи равен простою замка до протухания, а
 \* такие поведения модель уже даёт (прогоны стартуют когда угодно).
 \*
-\* Spark (спека Spark, раздел 7): раз в день по sparkTimes, только в прогоне без
-\* Brief; заявка spark.day пишется до хода, прогон со Spark кончается после него, без Watch.
-\* Каждая запись файла — целый объект из памяти прогона, поэтому переносит spark.day. Счёт
-\* misses, метка «?», возраст прошлой находки и пауза в модели не участвуют: они от порядка
+\* Insight (спека Insight, раздел 7): раз в день по insightTimes, только в прогоне без
+\* Brief; заявка insight.day пишется до хода, прогон с Insight кончается после него, без Watch.
+\* Каждая запись файла — целый объект из памяти прогона, поэтому переносит insight.day. Счёт
+\* misses, метка «?», возраст прошлого инсайта и пауза в модели не участвуют: они от порядка
 \* событий не зависят и пишутся под тем же замком (PBT (9) и (10) спеки). Первый прогон без
-\* файла (stored = null, Spark нет) не моделируется: файл в модели есть с начала.
+\* файла (stored = null, Insight нет) не моделируется: файл в модели есть с начала.
 \*
 \* Вне модели (покрыто PBT спеки, раздел 6): staleMinutes, тихие часы и предел
 \* modelWakesPerDay — только задерживают пункт; модель берёт ЛЮБОЕ подмножество допущенных
@@ -81,17 +81,17 @@
 \*                    если ушла хоть одна часть и в ходе был обычный пункт (дошли все части —
 \*                    ещё и отметка сбоев, вне модели); отказ — строка в журнал
 \*   Post             только мутант ClaimFirst = FALSE: заявка и wakes после хода
-\*   SClaim           runProactiveTick после блока Brief (slot === null, stored !== null,
-\*                    config.enabled, не тихий час, пауза кончилась, dueBrief по sparkTimes и
-\*                    spark.day) -> tick.ts:spark: учёт прошлой находки, заявка spark.day и
+\*   IClaim           runProactiveTick после блока Brief (slot === null, stored !== null,
+\*                    config.enabled, не тихий час, пауза кончилась, dueBrief по insightTimes и
+\*                    insight.day) -> tick.ts:insight: учёт прошлого инсайта, заявка insight.day и
 \*                    запись до хода; не записалось — хода нет, выход 1
-\*   STurn            tick.ts:spark: turnText + deliver (одно сообщение, source "spark") и
-\*                    вторая запись spark.draft (вне модели: под тем же замком, spark.day не
+\*   ITurn            tick.ts:insight: turnText + deliver (одно сообщение, source "insight") и
+\*                    вторая запись insight.draft (вне модели: под тем же замком, insight.day не
 \*                    меняет); провал хода или доставки — строка в журнал, выход 0; дальше
 \*                    конец прогона без Watch
-\*   SPost            только мутант SparkClaimFirst = FALSE: заявка spark.day после хода
-\*   SparkDue         sparkTimes (agent/lib/proactive-config.ts), tick.ts:dueBrief с окном 3 ч и
-\*                    isQuietHour: время Spark сегодня наступило; окно и тихий час лишь
+\*   IPost            только мутант InsightClaimFirst = FALSE: заявка insight.day после хода
+\*   InsightDue       insightTimes (agent/lib/proactive-config.ts), tick.ts:dueBrief с окном 3 ч и
+\*                    isQuietHour: время Insight сегодня наступило; окно и тихий час лишь
 \*                    отнимают — модель даёт ход когда угодно после наступления
 \*   снятие замка     releaseFileLock в finally tick.ts:main (входит в последний шаг)
 \*   Crash            kill -9, обрыв питания, исключение между любыми шагами
@@ -101,7 +101,7 @@
 \*
 \* Мутанты (свидетели): ClaimFirst = FALSE — заявка после хода; Locking = FALSE — без замка;
 \* Capped = FALSE — без фильтра watchCapPerDay; Stale <= MaxRun — staleMs короче прогона;
-\* SparkClaimFirst = FALSE — заявка Spark после хода; KeepSpark = FALSE — запись теряет spark.
+\* InsightClaimFirst = FALSE — заявка Insight после хода; KeepInsight = FALSE — запись теряет insight.
 EXTENDS Naturals, FiniteSets
 
 CONSTANTS
@@ -120,8 +120,8 @@ CONSTANTS
   ClaimFirst,  \* TRUE — заявка до хода
   Capped,      \* TRUE — фильтр wakes.count >= watchCapPerDay есть
   NowAfterLock, \* TRUE — now прогона берётся сразу после взятия замка (правка спеки)
-  SparkClaimFirst, \* TRUE — заявка Spark до хода
-  KeepSpark    \* TRUE — каждая запись переносит spark.day из памяти прогона
+  InsightClaimFirst, \* TRUE — заявка Insight до хода
+  KeepInsight    \* TRUE — каждая запись переносит insight.day из памяти прогона
 
 NoHolder == "none"
 ASSUME Urgent \subseteq Keys /\ NoHolder \notin Procs
@@ -129,58 +129,58 @@ ASSUME Urgent \subseteq Keys /\ NoHolder \notin Procs
 Slots == 1..NSlots
 Days == 1..MaxDays
 Gens == 0..MaxArrive
-Section == {"bclaim", "bturn", "sclaim", "sturn", "spost", "precheck", "turn", "wakes", "post"}
+Section == {"bclaim", "bturn", "iclaim", "iturn", "ipost", "precheck", "turn", "wakes", "post"}
 PCs == {"idle", "lock"} \cup Section
 Max(S) == CHOOSE x \in S : \A y \in S : y <= x
 Min(S) == CHOOSE x \in S : \A y \in S : x <= y
 
 VARIABLES
   src, gen, arrived,                         \* источник: непрочитанное и метка последнего роста
-  day, due, sdue,                            \* сегодня, наступившие слоты Brief, время Spark
-  fU, fRep, fGen, fWDay, fWCnt, fBDay, fBDone, fSDay, \* data/proactive.json (fGen — призрак)
+  day, due, idue,                            \* сегодня, наступившие слоты Brief, время Insight
+  fU, fRep, fGen, fWDay, fWCnt, fBDay, fBDone, fIDay, \* data/proactive.json (fGen — призрак)
   holder, lockAge,                           \* data/proactive.lock
-  pc, rday, rdue, rsdue,                     \* прогон: шаг, день, слоты и время Spark его now
-  sU, sRep, sGen, sWDay, sWCnt, sBDay, sBDone, sSDay, \* состояние в памяти прогона
+  pc, rday, rdue, ridue,                     \* прогон: шаг, день, слоты и время Insight его now
+  sU, sRep, sGen, sWDay, sWCnt, sBDay, sBDone, sIDay, \* состояние в памяти прогона
   bslot, take, ord,                          \* слот Brief, пункты хода, был ли обычный пункт
   runs, crashes,
-  took, dup, briefs, msgWakes, lost, sparks  \* призраки инвариантов
+  took, dup, briefs, msgWakes, lost, insights  \* призраки инвариантов
 
-file == <<fU, fRep, fGen, fWDay, fWCnt, fBDay, fBDone, fSDay>>
-mem == <<sU, sRep, sGen, sWDay, sWCnt, sBDay, sBDone, sSDay>>
-env == <<src, gen, arrived, day, due, sdue>>
+file == <<fU, fRep, fGen, fWDay, fWCnt, fBDay, fBDone, fIDay>>
+mem == <<sU, sRep, sGen, sWDay, sWCnt, sBDay, sBDone, sIDay>>
+env == <<src, gen, arrived, day, due, idue>>
 lock == <<holder, lockAge>>
-local == <<rday, rdue, rsdue, mem, bslot, take, ord>>
-ghosts == <<took, dup, briefs, msgWakes, lost, sparks>>
+local == <<rday, rdue, ridue, mem, bslot, take, ord>>
+ghosts == <<took, dup, briefs, msgWakes, lost, insights>>
 vars == <<env, file, lock, pc, local, runs, crashes, ghosts>>
 
 Init ==
   /\ src = [k \in Keys |-> 0] /\ gen = [k \in Keys |-> 0] /\ arrived = 0
-  /\ day = 1 /\ due = {} /\ sdue = FALSE
+  /\ day = 1 /\ due = {} /\ idue = FALSE
   /\ fU = [k \in Keys |-> 0] /\ fRep = [k \in Keys |-> FALSE] /\ fGen = [k \in Keys |-> 0]
-  /\ fWDay = 0 /\ fWCnt = 0 /\ fBDay = 0 /\ fBDone = {} /\ fSDay = 0
+  /\ fWDay = 0 /\ fWCnt = 0 /\ fBDay = 0 /\ fBDone = {} /\ fIDay = 0
   /\ holder = NoHolder /\ lockAge = 0
   /\ pc = [p \in Procs |-> "idle"]
-  /\ rday = [p \in Procs |-> 1] /\ rdue = [p \in Procs |-> {}] /\ rsdue = [p \in Procs |-> FALSE]
+  /\ rday = [p \in Procs |-> 1] /\ rdue = [p \in Procs |-> {}] /\ ridue = [p \in Procs |-> FALSE]
   /\ sU = [p \in Procs |-> [k \in Keys |-> 0]]
   /\ sRep = [p \in Procs |-> [k \in Keys |-> FALSE]]
   /\ sGen = [p \in Procs |-> [k \in Keys |-> 0]]
   /\ sWDay = [p \in Procs |-> 0] /\ sWCnt = [p \in Procs |-> 0]
-  /\ sBDay = [p \in Procs |-> 0] /\ sBDone = [p \in Procs |-> {}] /\ sSDay = [p \in Procs |-> 0]
+  /\ sBDay = [p \in Procs |-> 0] /\ sBDone = [p \in Procs |-> {}] /\ sIDay = [p \in Procs |-> 0]
   /\ bslot = [p \in Procs |-> 1] /\ take = [p \in Procs |-> {}] /\ ord = [p \in Procs |-> FALSE]
   /\ runs = 0 /\ crashes = 0
   /\ took = [k \in Keys |-> {}] /\ dup = FALSE
   /\ briefs = [x \in Days \X Slots |-> 0]
   /\ msgWakes = [d \in Days |-> 0] /\ lost = [d \in Days |-> 0]
-  /\ sparks = [d \in Days |-> 0]
+  /\ insights = [d \in Days |-> 0]
 
 \* Записать в файл целиком: seen из памяти прогона p, остальное — как передано.
-Write(p, rep, wd, wc, bd, bdone, sd) ==
+Write(p, rep, wd, wc, bd, bdone, iday) ==
   /\ fU' = sU[p] /\ fRep' = rep /\ fGen' = sGen[p]
-  /\ fWDay' = wd /\ fWCnt' = wc /\ fBDay' = bd /\ fBDone' = bdone /\ fSDay' = sd
+  /\ fWDay' = wd /\ fWCnt' = wc /\ fBDay' = bd /\ fBDone' = bdone /\ fIDay' = iday
 
-\* spark.day, который переносит запись не-Spark: из памяти прогона; мутант KeepSpark = FALSE
+\* insight.day, который переносит запись не-Insight: из памяти прогона; мутант KeepInsight = FALSE
 \* теряет поле.
-KeptSDay(p) == IF KeepSpark THEN sSDay[p] ELSE 0
+KeptIDay(p) == IF KeepInsight THEN sIDay[p] ELSE 0
 
 \* Действующие счётчик дня и сделанные слоты в памяти прогона.
 Eff(p) == IF sWDay[p] = rday[p] THEN sWCnt[p] ELSE 0
@@ -201,27 +201,27 @@ Arrive(k) ==
   /\ arrived < MaxArrive
   /\ arrived' = arrived + 1
   /\ src' = [src EXCEPT ![k] = @ + 1] /\ gen' = [gen EXCEPT ![k] = arrived + 1]
-  /\ UNCHANGED <<day, due, sdue, file, lock, pc, local, runs, crashes, ghosts>>
+  /\ UNCHANGED <<day, due, idue, file, lock, pc, local, runs, crashes, ghosts>>
 
 ReadAll(k) ==
   /\ src[k] > 0 /\ src' = [src EXCEPT ![k] = 0]
-  /\ UNCHANGED <<gen, arrived, day, due, sdue, file, lock, pc, local, runs, crashes, ghosts>>
+  /\ UNCHANGED <<gen, arrived, day, due, idue, file, lock, pc, local, runs, crashes, ghosts>>
 
 ReadSome(k) ==
   /\ src[k] > 1 /\ src' = [src EXCEPT ![k] = @ - 1]
-  /\ UNCHANGED <<gen, arrived, day, due, sdue, file, lock, pc, local, runs, crashes, ghosts>>
+  /\ UNCHANGED <<gen, arrived, day, due, idue, file, lock, pc, local, runs, crashes, ghosts>>
 
 SlotDue ==
   /\ due # Slots /\ due' = due \cup {Min(Slots \ due)}
-  /\ UNCHANGED <<src, gen, arrived, day, sdue, file, lock, pc, local, runs, crashes, ghosts>>
+  /\ UNCHANGED <<src, gen, arrived, day, idue, file, lock, pc, local, runs, crashes, ghosts>>
 
-\* Время Spark сегодня наступило (один слот sparkTimes).
-SparkDue ==
-  /\ ~sdue /\ sdue' = TRUE
+\* Время Insight сегодня наступило (один слот insightTimes).
+InsightDue ==
+  /\ ~idue /\ idue' = TRUE
   /\ UNCHANGED <<src, gen, arrived, day, due, file, lock, pc, local, runs, crashes, ghosts>>
 
 NewDay ==
-  /\ day < MaxDays /\ day' = day + 1 /\ due' = {} /\ sdue' = FALSE
+  /\ day < MaxDays /\ day' = day + 1 /\ due' = {} /\ idue' = FALSE
   /\ UNCHANGED <<src, gen, arrived, file, lock, pc, local, runs, crashes, ghosts>>
 
 \* Граница времени для взятого замка. Срок раннера срабатывает вовремя: живой держатель на
@@ -240,7 +240,7 @@ Start(p) ==
   /\ pc[p] = "idle" /\ runs < MaxRuns
   /\ runs' = runs + 1 /\ Goto(p, "lock")
   /\ rday' = [rday EXCEPT ![p] = day] /\ rdue' = [rdue EXCEPT ![p] = due]
-  /\ rsdue' = [rsdue EXCEPT ![p] = sdue]
+  /\ ridue' = [ridue EXCEPT ![p] = idue]
   /\ take' = [take EXCEPT ![p] = {}] /\ ord' = [ord EXCEPT ![p] = FALSE]
   /\ UNCHANGED <<env, file, lock, mem, bslot, crashes, ghosts>>
 
@@ -251,21 +251,21 @@ TryLock(p) ==
   /\ IF ~Locking \/ holder = NoHolder \/ lockAge >= Stale
        THEN LET rd == IF NowAfterLock THEN day ELSE rday[p]
                 ru == IF NowAfterLock THEN due ELSE rdue[p]
-                rsd == IF NowAfterLock THEN sdue ELSE rsdue[p]
+                rid == IF NowAfterLock THEN idue ELSE ridue[p]
                 done == IF fBDay = rd THEN fBDone ELSE {}
             IN /\ holder' = (IF Locking THEN p ELSE holder)
                /\ lockAge' = 0
                /\ rday' = [rday EXCEPT ![p] = rd] /\ rdue' = [rdue EXCEPT ![p] = ru]
-               /\ rsdue' = [rsdue EXCEPT ![p] = rsd]
+               /\ ridue' = [ridue EXCEPT ![p] = rid]
                /\ sU' = [sU EXCEPT ![p] = fU] /\ sRep' = [sRep EXCEPT ![p] = fRep]
                /\ sGen' = [sGen EXCEPT ![p] = fGen]
                /\ sWDay' = [sWDay EXCEPT ![p] = fWDay] /\ sWCnt' = [sWCnt EXCEPT ![p] = fWCnt]
                /\ sBDay' = [sBDay EXCEPT ![p] = fBDay] /\ sBDone' = [sBDone EXCEPT ![p] = fBDone]
-               /\ sSDay' = [sSDay EXCEPT ![p] = fSDay]
+               /\ sIDay' = [sIDay EXCEPT ![p] = fIDay]
                /\ Goto(p, IF ru \ done # {} THEN "bclaim"
-                          ELSE IF rsd /\ fSDay # rd THEN "sclaim"
+                          ELSE IF rid /\ fIDay # rd THEN "iclaim"
                           ELSE "precheck")
-       ELSE /\ UNCHANGED <<lock, mem, rday, rdue, rsdue>> /\ Goto(p, "idle")
+       ELSE /\ UNCHANGED <<lock, mem, rday, rdue, ridue>> /\ Goto(p, "idle")
   /\ UNCHANGED <<env, file, bslot, take, ord, runs, crashes, ghosts>>
 
 \* Заявка Brief до хода: все наступившие слоты помечены, ход — по последнему. Не записалось —
@@ -274,13 +274,13 @@ BClaim(p) ==
   /\ pc[p] = "bclaim"
   /\ LET nd == Done(p) \cup rdue[p]
          pend == rdue[p] \ Done(p)
-     IN \/ /\ Write(p, sRep[p], sWDay[p], sWCnt[p], rday[p], nd, KeptSDay(p))
+     IN \/ /\ Write(p, sRep[p], sWDay[p], sWCnt[p], rday[p], nd, KeptIDay(p))
            /\ sBDay' = [sBDay EXCEPT ![p] = rday[p]] /\ sBDone' = [sBDone EXCEPT ![p] = nd]
            /\ bslot' = [bslot EXCEPT ![p] = Max(pend)]
            /\ Goto(p, "bturn")
         \/ /\ UNCHANGED <<file, sBDay, sBDone, bslot>>
            /\ Goto(p, "precheck")
-  /\ UNCHANGED <<env, lock, rday, rdue, rsdue, sU, sRep, sGen, sWDay, sWCnt, sSDay, take, ord,
+  /\ UNCHANGED <<env, lock, rday, rdue, ridue, sU, sRep, sGen, sWDay, sWCnt, sIDay, take, ord,
                  runs, crashes, ghosts>>
 
 \* Ход Brief и доставка: ответ (в том числе запасной текст слота 0) или провал; дальше Watch.
@@ -289,34 +289,34 @@ BTurn(p) ==
   /\ \/ briefs' = [briefs EXCEPT ![<<rday[p], bslot[p]>>] = @ + 1]
      \/ UNCHANGED briefs
   /\ Goto(p, "precheck")
-  /\ UNCHANGED <<env, file, lock, local, runs, crashes, took, dup, msgWakes, lost, sparks>>
+  /\ UNCHANGED <<env, file, lock, local, runs, crashes, took, dup, msgWakes, lost, insights>>
 
-\* Заявка Spark до хода: запись целиком с spark.day = день прогона. Не записалось — хода нет,
-\* конец прогона (выход 1). Мутант SparkClaimFirst = FALSE идёт в ход без заявки.
-SClaim(p) ==
-  /\ pc[p] = "sclaim"
-  /\ IF SparkClaimFirst
+\* Заявка Insight до хода: запись целиком с insight.day = день прогона. Не записалось — хода нет,
+\* конец прогона (выход 1). Мутант InsightClaimFirst = FALSE идёт в ход без заявки.
+IClaim(p) ==
+  /\ pc[p] = "iclaim"
+  /\ IF InsightClaimFirst
        THEN \/ /\ Write(p, sRep[p], sWDay[p], sWCnt[p], sBDay[p], sBDone[p], rday[p])
-               /\ sSDay' = [sSDay EXCEPT ![p] = rday[p]]
-               /\ Goto(p, "sturn") /\ UNCHANGED lock
-            \/ /\ UNCHANGED <<file, sSDay>>
+               /\ sIDay' = [sIDay EXCEPT ![p] = rday[p]]
+               /\ Goto(p, "iturn") /\ UNCHANGED lock
+            \/ /\ UNCHANGED <<file, sIDay>>
                /\ Finish(p)
-       ELSE /\ UNCHANGED <<file, sSDay, lock>> /\ Goto(p, "sturn")
-  /\ UNCHANGED <<env, rday, rdue, rsdue, sU, sRep, sGen, sWDay, sWCnt, sBDay, sBDone, bslot, take,
+       ELSE /\ UNCHANGED <<file, sIDay, lock>> /\ Goto(p, "iturn")
+  /\ UNCHANGED <<env, rday, rdue, ridue, sU, sRep, sGen, sWDay, sWCnt, sBDay, sBDone, bslot, take,
                  ord, runs, crashes, ghosts>>
 
-\* Ход Spark и доставка: находка ушла или нет (QUIET, пусто, провал). Вторая запись
-\* spark.draft — вне модели. Дальше конец прогона без Watch; у мутанта — запись после хода.
-STurn(p) ==
-  /\ pc[p] = "sturn"
-  /\ \/ sparks' = [sparks EXCEPT ![rday[p]] = @ + 1]
-     \/ UNCHANGED sparks
-  /\ IF SparkClaimFirst THEN Finish(p) ELSE Goto(p, "spost") /\ UNCHANGED lock
+\* Ход Insight и доставка: инсайт ушёл или нет (QUIET, пусто, провал). Вторая запись
+\* insight.draft — вне модели. Дальше конец прогона без Watch; у мутанта — запись после хода.
+ITurn(p) ==
+  /\ pc[p] = "iturn"
+  /\ \/ insights' = [insights EXCEPT ![rday[p]] = @ + 1]
+     \/ UNCHANGED insights
+  /\ IF InsightClaimFirst THEN Finish(p) ELSE Goto(p, "ipost") /\ UNCHANGED lock
   /\ UNCHANGED <<env, file, local, runs, crashes, took, dup, briefs, msgWakes, lost>>
 
-\* Мутант SparkClaimFirst = FALSE: заявка spark.day после хода; запись может не удаться.
-SPost(p) ==
-  /\ pc[p] = "spost"
+\* Мутант InsightClaimFirst = FALSE: заявка insight.day после хода; запись может не удаться.
+IPost(p) ==
+  /\ pc[p] = "ipost"
   /\ \/ Write(p, sRep[p], sWDay[p], sWCnt[p], sBDay[p], sBDone[p], rday[p])
      \/ UNCHANGED file
   /\ Finish(p)
@@ -351,11 +351,11 @@ Precheck(p) ==
                   /\ take' = [take EXCEPT ![p] = S]
                   /\ \/ /\ fU' = u2 /\ fRep' = r3 /\ fGen' = g2
                         /\ fWDay' = sWDay[p] /\ fWCnt' = sWCnt[p]
-                        /\ fBDay' = sBDay[p] /\ fBDone' = sBDone[p] /\ fSDay' = KeptSDay(p)
+                        /\ fBDay' = sBDay[p] /\ fBDone' = sBDone[p] /\ fIDay' = KeptIDay(p)
                         /\ IF S = {} THEN Finish(p) ELSE (Goto(p, "turn") /\ UNCHANGED lock)
                      \/ /\ UNCHANGED file
                         /\ Finish(p)
-  /\ UNCHANGED <<env, rday, rdue, rsdue, sWDay, sWCnt, sBDay, sBDone, sSDay, bslot, ord, runs,
+  /\ UNCHANGED <<env, rday, rdue, ridue, sWDay, sWCnt, sBDay, sBDone, sIDay, bslot, ord, runs,
                  crashes, ghosts>>
 
 \* Ход и доставка: пункты достались ходу (призрак took по метке роста). Ответ — ушла хоть одна
@@ -371,18 +371,18 @@ Turn(p) ==
           /\ IF ~ClaimFirst THEN Goto(p, "post") /\ UNCHANGED lock
              ELSE IF o THEN Goto(p, "wakes") /\ UNCHANGED lock
              ELSE Finish(p)
-  /\ UNCHANGED <<env, file, rday, rdue, rsdue, mem, bslot, take, runs, crashes, briefs, lost,
-                 sparks>>
+  /\ UNCHANGED <<env, file, rday, rdue, ridue, mem, bslot, take, runs, crashes, briefs, lost,
+                 insights>>
 
 \* Запись wakes после доставки. Не записалось — предел не вырос (строка в журнал).
 Wakes(p) ==
   /\ pc[p] = "wakes"
-  /\ \/ /\ Write(p, sRep[p], rday[p], Eff(p) + 1, sBDay[p], sBDone[p], KeptSDay(p))
+  /\ \/ /\ Write(p, sRep[p], rday[p], Eff(p) + 1, sBDay[p], sBDone[p], KeptIDay(p))
         /\ UNCHANGED lost
      \/ /\ lost' = [lost EXCEPT ![rday[p]] = @ + 1]
         /\ UNCHANGED file
   /\ Finish(p)
-  /\ UNCHANGED <<env, local, runs, crashes, took, dup, briefs, msgWakes, sparks>>
+  /\ UNCHANGED <<env, local, runs, crashes, took, dup, briefs, msgWakes, insights>>
 
 \* Мутант ClaimFirst = FALSE: заявка и wakes одной записью после хода.
 Post(p) ==
@@ -390,12 +390,12 @@ Post(p) ==
   /\ LET r2 == [k \in Keys |-> IF k \in take[p] THEN TRUE ELSE sRep[p][k]]
          wd == IF ord[p] THEN rday[p] ELSE sWDay[p]
          wc == IF ord[p] THEN Eff(p) + 1 ELSE sWCnt[p]
-     IN \/ /\ Write(p, r2, wd, wc, sBDay[p], sBDone[p], KeptSDay(p))
+     IN \/ /\ Write(p, r2, wd, wc, sBDay[p], sBDone[p], KeptIDay(p))
            /\ UNCHANGED lost
         \/ /\ lost' = [lost EXCEPT ![rday[p]] = @ + (IF ord[p] THEN 1 ELSE 0)]
            /\ UNCHANGED file
   /\ Finish(p)
-  /\ UNCHANGED <<env, local, runs, crashes, took, dup, briefs, msgWakes, sparks>>
+  /\ UNCHANGED <<env, local, runs, crashes, took, dup, briefs, msgWakes, insights>>
 
 \* Подъём ушёл, а wakes не записан.
 InWindow(p) == pc[p] = "wakes" \/ (pc[p] = "post" /\ ord[p])
@@ -404,7 +404,7 @@ InWindow(p) == pc[p] = "wakes" \/ (pc[p] = "post" /\ ord[p])
 Kill(p) ==
   /\ Goto(p, "idle")
   /\ lost' = IF InWindow(p) THEN [lost EXCEPT ![rday[p]] = @ + 1] ELSE lost
-  /\ UNCHANGED <<env, file, lock, local, runs, took, dup, briefs, msgWakes, sparks>>
+  /\ UNCHANGED <<env, file, lock, local, runs, took, dup, briefs, msgWakes, insights>>
 
 \* Падение на любом шаге.
 Crash(p) ==
@@ -420,23 +420,23 @@ Timeout(p) ==
 
 Next ==
   \/ \E k \in Keys : Arrive(k) \/ ReadAll(k) \/ ReadSome(k)
-  \/ SlotDue \/ SparkDue \/ NewDay \/ Tick
+  \/ SlotDue \/ InsightDue \/ NewDay \/ Tick
   \/ \E p \in Procs :
-       \/ Start(p) \/ TryLock(p) \/ BClaim(p) \/ BTurn(p) \/ SClaim(p) \/ STurn(p) \/ SPost(p)
+       \/ Start(p) \/ TryLock(p) \/ BClaim(p) \/ BTurn(p) \/ IClaim(p) \/ ITurn(p) \/ IPost(p)
        \/ Precheck(p) \/ Turn(p) \/ Wakes(p) \/ Post(p) \/ Crash(p) \/ Timeout(p)
 
 Spec == Init /\ [][Next]_vars
 
 \* Отпечаток состояния для TLC: в него входит только та память прогона, которую прочтёт
 \* следующий шаг. Остальная мертва: Start и TryLock перезаписывают её до чтения, rdue читает
-\* только BClaim, rsdue — только TryLock (при NowAfterLock = FALSE), bslot — только BTurn,
+\* только BClaim, ridue — только TryLock (при NowAfterLock = FALSE), bslot — только BTurn,
 \* take — Turn и Post, ord — Post. Без этого одинаковые по будущему состояния различались бы
 \* мусором, а число состояний зависело бы от порядка обхода.
 Local(p) ==
   CASE pc[p] = "idle" -> <<>>
-    [] pc[p] = "lock" -> IF NowAfterLock THEN <<>> ELSE <<rday[p], rdue[p], rsdue[p]>>
+    [] pc[p] = "lock" -> IF NowAfterLock THEN <<>> ELSE <<rday[p], rdue[p], ridue[p]>>
     [] OTHER -> <<rday[p], IF pc[p] = "bclaim" THEN rdue[p] ELSE {},
-                  sU[p], sRep[p], sGen[p], sWDay[p], sWCnt[p], sBDay[p], sBDone[p], sSDay[p],
+                  sU[p], sRep[p], sGen[p], sWDay[p], sWCnt[p], sBDay[p], sBDone[p], sIDay[p],
                   IF pc[p] = "bturn" THEN bslot[p] ELSE 0,
                   IF pc[p] \in {"turn", "post"} THEN take[p] ELSE {},
                   IF pc[p] = "post" THEN ord[p] ELSE FALSE>>
@@ -444,10 +444,10 @@ View == <<env, file, lock, pc, [p \in Procs |-> Local(p)], runs, crashes, ghosts
 
 TypeOK ==
   /\ src \in [Keys -> 0..MaxArrive] /\ gen \in [Keys -> Gens] /\ arrived \in 0..MaxArrive
-  /\ day \in Days /\ due \subseteq Slots /\ sdue \in BOOLEAN
+  /\ day \in Days /\ due \subseteq Slots /\ idue \in BOOLEAN
   /\ fU \in [Keys -> 0..MaxArrive] /\ fRep \in [Keys -> BOOLEAN] /\ fGen \in [Keys -> Gens]
   /\ fWDay \in 0..MaxDays /\ fWCnt \in Nat /\ fBDay \in 0..MaxDays /\ fBDone \subseteq Slots
-  /\ fSDay \in 0..MaxDays /\ sSDay \in [Procs -> 0..MaxDays] /\ rsdue \in [Procs -> BOOLEAN]
+  /\ fIDay \in 0..MaxDays /\ sIDay \in [Procs -> 0..MaxDays] /\ ridue \in [Procs -> BOOLEAN]
   /\ holder \in Procs \cup {NoHolder} /\ lockAge \in 0..Stale
   /\ pc \in [Procs -> PCs]
   /\ take \in [Procs -> SUBSET Keys] /\ ord \in [Procs -> BOOLEAN]
@@ -468,6 +468,6 @@ WakesCapped == \A d \in Days : msgWakes[d] <= Cap + lost[d]
 \* (4) Два прогона не идут одновременно.
 OneRun == Cardinality({p \in Procs : Live(p)}) <= 1
 
-\* (5) Не больше одного хода Spark за день владельца.
-OneSparkPerDay == \A d \in Days : sparks[d] <= 1
+\* (5) Не больше одного хода Insight за день владельца.
+OneInsightPerDay == \A d \in Days : insights[d] <= 1
 ====

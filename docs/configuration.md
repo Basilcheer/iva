@@ -108,16 +108,16 @@ The nightly Brain pass builds the hybrid index; to build it now, run `node --env
 
 ## Notices
 
-What Iva says on her own lives in `data/settings.json`, not in `.env` — the **🔔 Notices** screen in `/menu` writes these keys, and the report switch is read at the end of each nightly run, the `proactive` key on every half-hourly Watch, Brief and Spark tick — so a tap applies without a restart.
+What Iva says on her own lives in `data/settings.json`, not in `.env` — the **🔔 Notices** screen in `/menu` writes these keys, and the report switch is read at the end of each nightly run, the `proactive` key on every half-hourly Watch, Brief and Insight tick — so a tap applies without a restart.
 
-| Key                     | Default              | Notes                                                                                                                    |
-| ----------------------- | -------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `memoryReports.enabled` | `false`              | The nightly memory report (daily 04:00 and weekly Mon 04:15) in Telegram. Off means the vault is still written.          |
-| `proactive.enabled`     | `true`               | Watch, the Brief and Spark (**Writes on her own**). Off stops all three, not failures. `iva proactive` sets the rest.    |
-| `proactive.briefTimes`  | `["08:30", "14:00"]` | The Brief, `HH:00` or `HH:30`, at most two; empty — no Brief. `/digest` gives the Brief by hand any time.                |
-| `proactive.sparkTimes`  | `[]`                 | Spark: one `HH:00` or `HH:30` (best `HH:30`); empty — off. Whole 3-hour window in the quiet hours: no Spark on that day. |
+| Key                      | Default              | Notes                                                                                                                        |
+| ------------------------ | -------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `memoryReports.enabled`  | `false`              | The nightly memory report (daily 04:00 and weekly Mon 04:15) in Telegram. Off means the vault is still written.              |
+| `proactive.enabled`      | `true`               | Watch, the Brief and Insight (**Writes on her own**). Off stops all three, not failures. `iva proactive` sets the rest.      |
+| `proactive.briefTimes`   | `["08:30", "14:00"]` | The Brief, `HH:00` or `HH:30`, at most two; empty — no Brief. `/digest` gives the Brief by hand any time.                    |
+| `proactive.insightTimes` | `[]`                 | Insight: one `HH:00` or `HH:30` (best `HH:30`); empty — off. Whole 3-hour window in the quiet hours: no Insight on that day. |
 
-Spark: once a day Iva builds and tries one plugin draft for something you keep doing by hand and asks before installing — [ADR-0022](./adr/0022-spark-brings-one-capability-a-day.md).
+Insight: once a day Iva builds and tries one plugin draft for something you keep doing by hand and asks before installing — [ADR-0022](./adr/0022-insight-brings-one-capability-a-day.md).
 
 Alerts — problems (memory not backed up, a failed nightly pass) and new versions — always arrive: they cannot be switched off, but each one says what to do and repeats at most once a week per problem — [ADR-0007](./adr/0007-notices-are-opt-in.md).
 

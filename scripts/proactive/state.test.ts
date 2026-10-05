@@ -21,8 +21,8 @@ const FILE = join(ROOT, "proactive.json");
 
 const count = fc.nat({ max: 1_000 });
 const dayCount = fc.record({ day: fc.string({ maxLength: 12 }), count });
-/** Поле Spark (ADR-0022): необязательное, файл без него — файл прежней версии. */
-const spark = fc.record({
+/** Поле Insight (ADR-0022): необязательное, файл без него — файл прежней версии. */
+const insight = fc.record({
   day: fc.string({ maxLength: 12 }),
   draft: fc.string({ maxLength: 12 }),
   misses: count,
@@ -49,9 +49,9 @@ const validState: fc.Arbitrary<ProactiveState> = fc
       }),
       failuresSeenUpToMs: fc.integer(),
     }),
-    fc.option(spark, { nil: undefined }),
+    fc.option(insight, { nil: undefined }),
   )
-  .map(([state, s]) => (s === undefined ? state : { ...state, spark: s }));
+  .map(([state, s]) => (s === undefined ? state : { ...state, insight: s }));
 
 /** Почти верное состояние: одно поле верхнего уровня или вложенное заменено мусором. */
 const damaged = fc
@@ -66,18 +66,18 @@ const damaged = fc
       "failuresSeenUpToMs",
       "wakes.count",
       "briefDone.slots",
-      "spark",
-      "spark.day",
-      "spark.misses",
-      "spark.pausedUntilMs",
+      "insight",
+      "insight.day",
+      "insight.misses",
+      "insight.pausedUntilMs",
     ),
     fc.anything(),
   )
   .map(([state, path, junk]) => {
     const copy = JSON.parse(JSON.stringify(state)) as Record<string, unknown>;
     const [head, tail] = path.split(".");
-    if (head === "spark" && !isObjectLike(copy.spark))
-      copy.spark = { day: "", draft: "", misses: 0, pausedUntilMs: 0 };
+    if (head === "insight" && !isObjectLike(copy.insight))
+      copy.insight = { day: "", draft: "", misses: 0, pausedUntilMs: 0 };
     if (tail === undefined) copy[head] = junk;
     else (copy[head] as Record<string, unknown>)[tail] = junk;
     return copy;
@@ -102,11 +102,11 @@ function fullContract(state: ProactiveState): void {
   assert.equal(typeof state.briefDone.day, "string");
   assert.ok(state.briefDone.slots.every(count));
   assert.ok(Number.isFinite(state.failuresSeenUpToMs));
-  if (state.spark === undefined) return;
-  assert.equal(typeof state.spark.day, "string");
-  assert.equal(typeof state.spark.draft, "string");
-  assert.ok(count(state.spark.misses));
-  assert.ok(Number.isFinite(state.spark.pausedUntilMs));
+  if (state.insight === undefined) return;
+  assert.equal(typeof state.insight.day, "string");
+  assert.equal(typeof state.insight.draft, "string");
+  assert.ok(count(state.insight.misses));
+  assert.ok(Number.isFinite(state.insight.pausedUntilMs));
 }
 
 function check(text: string): void {
@@ -150,23 +150,36 @@ test("readProactiveState anchors: no file — null; a valid state round-trips; a
   assert.throws(() => readProactiveState(FILE), /newer Iva/u);
 });
 
-test(`a file without spark (an older Iva) is read, and a damaged spark is refused like any other field (seed ${SEED})`, () => {
+test(`a file without insight (an older Iva) is read, and a damaged insight is refused like any other field (seed ${SEED})`, () => {
   fc.assert(
     fc.property(validState, (state) => {
-      const text = JSON.stringify({ ...state, spark: undefined });
+      const text = JSON.stringify({ ...state, insight: undefined });
       writeFileSync(FILE, text);
       assert.deepEqual(readProactiveState(FILE), JSON.parse(text));
     }),
     { seed: SEED, numRuns: 300 },
   );
   const state = initialState(Date.UTC(2026, 9, 5));
-  for (const spark of [
+  for (const insight of [
     "x",
     { day: 1, draft: "", misses: 0, pausedUntilMs: 0 },
     { day: "", draft: "", misses: -1, pausedUntilMs: 0 },
     { day: "", draft: "", misses: 0 },
   ]) {
-    writeFileSync(FILE, JSON.stringify({ ...state, spark }));
+    writeFileSync(FILE, JSON.stringify({ ...state, insight }));
     assert.throws(() => readProactiveState(FILE), /proactive state form/u);
+  }
+});
+
+test("a file of the first beta with a spark field is read, and the field is not taken for insight", () => {
+  const state = initialState(Date.UTC(2026, 9, 5));
+  for (const spark of [
+    { day: "2026-10-05", draft: "a", misses: 1, pausedUntilMs: 9e15 },
+    "x",
+  ]) {
+    writeFileSync(FILE, JSON.stringify({ ...state, spark }));
+    const read = readProactiveState(FILE);
+    assert.ok(read !== null);
+    assert.equal(read.insight, undefined);
   }
 });

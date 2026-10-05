@@ -7,7 +7,7 @@
 // исключение шва; источники — пункты, ошибки, исключения, дубликаты ключей, гигантские unread,
 // пустые и враждебные имена; состояние на диске — нет, пусто, мусор, обрезано, версия новее,
 // огромный seen; отказ записи состояния в случайный момент; часы — любой час и минута, границы
-// тихих часов и суток, зоны с получасовым сдвигом, случайные briefTimes и sparkTimes.
+// тихих часов и суток, зоны с получасовым сдвигом, случайные briefTimes и insightTimes.
 //
 // Отправка идёт настоящим швом sendTelegramHtml с поддельным fetch: то, что видит Telegram,
 // проверяется на проводе (outbound-Gate живёт в шве, не в тике).
@@ -20,9 +20,9 @@
 //   4) тик не поднимает wakes выше watchCapPerDay и modelWakes выше modelWakesPerDay;
 //   5) не больше одного Brief на слот в сутки;
 //   6) на проводе нет ни одного сгенерированного секрета, и ни одно сообщение — не голое QUIET;
-//   7) при выключенном тумблере обычные пункты не будят модель, Brief и Spark нет, сбои доходят;
-//   8) не больше одного хода Spark на день владельца и ни одного в тихий час;
-//   9) хода Spark нет, пока идёт пауза, и после двух доставленных подряд находок без установки
+//   7) при выключенном тумблере обычные пункты не будят модель, Brief и Insight нет, сбои доходят;
+//   8) не больше одного хода Insight на день владельца и ни одного в тихий час;
+//   9) хода Insight нет, пока идёт пауза, и после двух доставленных подряд инсайтов без установки
 //      (плагины в этом мире не стоят никогда) его нет 7 суток.
 import "../fixtures/no-host-anthropic.ts";
 import assert from "node:assert/strict";
@@ -245,8 +245,8 @@ const turnSpec: fc.Arbitrary<TurnSpec> = fc.oneof(
   },
 );
 
-/** Ответ хода Spark: тот же мусор или находка с кнопкой «Поставить»/«Install» любого `data`. */
-const sparkTurn: fc.Arbitrary<TurnSpec> = fc.oneof(
+/** Ответ хода Insight: тот же мусор или инсайт с кнопкой «Поставить»/«Install» любого `data`. */
+const insightTurn: fc.Arbitrary<TurnSpec> = fc.oneof(
   turnSpec,
   fc
     .tuple(
@@ -351,7 +351,7 @@ type TickSpec = {
   readonly fixed: readonly number[];
   readonly watchTurn: TurnSpec;
   readonly briefTurn: TurnSpec;
-  readonly sparkTurn: TurnSpec;
+  readonly insightTurn: TurnSpec;
   readonly sends: readonly SendMode[];
   readonly writeFails: readonly number[];
   readonly recordOk: readonly boolean[];
@@ -374,7 +374,7 @@ const tickSpec: fc.Arbitrary<TickSpec> = fc.record({
   fixed: fc.array(fc.nat(UNITS.length - 1), { maxLength: 1 }),
   watchTurn: turnSpec,
   briefTurn: turnSpec,
-  sparkTurn,
+  insightTurn,
   sends: sendModes,
   writeFails: fc.array(fc.nat(3), { maxLength: 2 }),
   recordOk: fc.array(fc.boolean(), { minLength: 1, maxLength: 3 }),
@@ -396,7 +396,7 @@ const config: fc.Arbitrary<ProactiveConfig> = fc.record({
   watchCapPerDay: fc.integer({ min: 0, max: 3 }),
   modelWakesPerDay: fc.integer({ min: 0, max: 3 }),
   briefTimes,
-  sparkTimes: fc.oneof(
+  insightTimes: fc.oneof(
     fc.constant([]),
     briefTimes.map((t) => t.slice(0, 1)),
   ),
@@ -520,8 +520,8 @@ class World {
   readonly secrets: Secret[] = [];
   readonly recorded: { tick: number; key: string }[] = [];
   readonly logs: string[] = [];
-  /** Доставка находки Spark и исход каждой записи состояния — по тику, для свойства (9). */
-  readonly sparkSends: { tick: number; ok: boolean }[] = [];
+  /** Доставка инсайта и исход каждой записи состояния — по тику, для свойства (9). */
+  readonly insightSends: { tick: number; ok: boolean }[] = [];
   readonly writes: { tick: number; ok: boolean }[] = [];
   readonly problems: string[] = [];
   seq = 0;
@@ -706,7 +706,7 @@ class World {
       runTurn: (prompt) => {
         const { day, hour } = localDay(this.now, this.s.zone);
         this.turns.push({ tick: this.tick, prompt, day, hour });
-        if (prompt.startsWith("Spark:")) return this.turn(t.sparkTurn);
+        if (prompt.startsWith("Insight:")) return this.turn(t.insightTurn);
         return this.turn(
           prompt.includes("Brief: slot") ? t.briefTurn : t.watchTurn,
         );
@@ -714,9 +714,9 @@ class World {
       send: async (p, source) => {
         this.sent.push({ tick: this.tick, part: p });
         const sent = this.send(t.sends[sends++ % t.sends.length] ?? "ok", p);
-        if (source !== "spark") return sent;
+        if (source !== "insight") return sent;
         const ok = await sent.then((r) => r.ok).catch(() => false);
-        this.sparkSends.push({ tick: this.tick, ok });
+        this.insightSends.push({ tick: this.tick, ok });
         return sent;
       },
       translate: () => Promise.resolve(tr),
@@ -878,7 +878,7 @@ async function calmTick(w: World): Promise<void> {
     fixed: [],
     watchTurn: { kind: "reply", text: "QUIET", secrets: [] },
     briefTurn: { kind: "reply", text: "QUIET", secrets: [] },
-    sparkTurn: { kind: "reply", text: "QUIET", secrets: [] },
+    insightTurn: { kind: "reply", text: "QUIET", secrets: [] },
     sends: ["ok"],
     writeFails: [],
     recordOk: [true],
@@ -893,8 +893,8 @@ async function calmTick(w: World): Promise<void> {
     )
     .map(([key]) => key);
   let { code } = await w.step(calm);
-  // Прогон со Spark кончается без Watch (ADR-0022): сбой приходит следующим спокойным прогоном.
-  if (w.turns.some((x) => x.tick === w.tick && x.prompt.startsWith("Spark:")))
+  // Прогон с Insight кончается без Watch (ADR-0022): сбой приходит следующим спокойным прогоном.
+  if (w.turns.some((x) => x.tick === w.tick && x.prompt.startsWith("Insight:")))
     ({ code } = await w.step({ ...calm, advanceMin: 60 }));
   assert.equal(
     code,
@@ -1063,8 +1063,8 @@ test(`chaos (7): with the toggle off ordinary items never wake the model and the
               "(7) a Brief with the toggle off",
             );
             assert.ok(
-              !prompt.startsWith("Spark:"),
-              "(7) a Spark with the toggle off",
+              !prompt.startsWith("Insight:"),
+              "(7) an Insight with the toggle off",
             );
             assert.ok(
               !/^- (?:tg|mail):/mu.test(prompt),
@@ -1080,7 +1080,7 @@ test(`chaos (7): with the toggle off ordinary items never wake the model and the
 });
 
 /**
- * Серии под паузу: тумблер включён, тихих часов нет, один слот Spark, файл есть; тики идут по
+ * Серии под паузу: тумблер включён, тихих часов нет, один слот Insight, файл есть; тики идут по
  * слотам через сутки и чаще, с любым ответом модели, отказами отправки и записи.
  */
 const pauseSeries = fc
@@ -1099,7 +1099,7 @@ const pauseSeries = fc
       enabled: true,
       quietFromHour: 0,
       quietToHour: 0,
-      sparkTimes: [`${String(hour).padStart(2, "0")}:00`],
+      insightTimes: [`${String(hour).padStart(2, "0")}:00`],
     },
     zone: "UTC" as const,
     startMin: hour * 60,
@@ -1111,7 +1111,7 @@ const pauseSeries = fc
   }));
 
 /**
- * Серии под тихий час: слот Spark в первый тихий час, тихие часы накрывают всё окно слота (3 ч),
+ * Серии под тихий час: слот Insight в первый тихий час, тихие часы накрывают всё окно слота (3 ч),
  * тики через полчаса внутри них. Без этих серий снятую проверку тихого часа ловил не каждый сид.
  */
 const quietSeries = pauseSeries.map((s) => {
@@ -1123,18 +1123,18 @@ const quietSeries = pauseSeries.map((s) => {
   };
 });
 
-test(`chaos (8): no more than one Spark a day of the owner, and none in a quiet hour (seed ${SEED})`, async () => {
+test(`chaos (8): no more than one Insight a day of the owner, and none in a quiet hour (seed ${SEED})`, async () => {
   await fc.assert(
     fc.asyncProperty(fc.oneof(series, pauseSeries, quietSeries), (s) =>
       runSeries(s, {
         end: (w) => {
           const days = new Set<string>();
           for (const { prompt, day, hour } of w.turns) {
-            if (!prompt.startsWith("Spark:")) continue;
-            assert.ok(!days.has(day), `(8) a second Spark on ${day}`);
+            if (!prompt.startsWith("Insight:")) continue;
+            assert.ok(!days.has(day), `(8) a second Insight on ${day}`);
             assert.ok(
               !isQuietHour(w.s.cfg, hour),
-              `(8) a Spark at ${hour}:xx, a quiet hour`,
+              `(8) an Insight at ${hour}:xx, a quiet hour`,
             );
             days.add(day);
           }
@@ -1145,11 +1145,11 @@ test(`chaos (8): no more than one Spark a day of the owner, and none in a quiet 
   );
 });
 
-test(`chaos (9): no Spark while paused, and none for 7 days after two delivered Sparks in a row with nothing installed (seed ${SEED})`, async () => {
+test(`chaos (9): no Insight while paused, and none for 7 days after two delivered Insights in a row with nothing installed (seed ${SEED})`, async () => {
   await fc.assert(
     fc.asyncProperty(pauseSeries, async (s) => {
       // Счёт по наблюдаемому, не по записанному черновику: заявка дня (день записан в файл),
-      // находка дошла и вторая запись прогона прошла. Плагины не стоят — каждая такая находка промах.
+      // инсайт дошёл и вторая запись прогона прошла. Плагины не стоят — каждый такой инсайт промах.
       let last: { day: string; draft: string } | null = null;
       let misses = 0;
       let pausedUntil = 0;
@@ -1164,22 +1164,22 @@ test(`chaos (9): no Spark while paused, and none for 7 days after two delivered 
                 ? misses
                 : misses + 1;
           const ran = w.turns.some(
-            (t) => t.tick === w.tick && t.prompt.startsWith("Spark:"),
+            (t) => t.tick === w.tick && t.prompt.startsWith("Insight:"),
           );
           if (ran) {
-            assert.ok(pausedUntil <= w.now, "(9) a Spark during the pause");
-            assert.ok(expected < 2, "(9) a Spark after two misses in a row");
+            assert.ok(pausedUntil <= w.now, "(9) an Insight during the pause");
+            assert.ok(expected < 2, "(9) an Insight after two misses in a row");
             assert.ok(
-              (before?.spark?.pausedUntilMs ?? 0) <= w.now,
-              "(9) a Spark while the file says paused",
+              (before?.insight?.pausedUntilMs ?? 0) <= w.now,
+              "(9) an Insight while the file says paused",
             );
           }
           const claimed =
-            after?.spark?.day === day && before?.spark?.day !== day;
+            after?.insight?.day === day && before?.insight?.day !== day;
           if (!claimed) return;
-          if ((after?.spark?.pausedUntilMs ?? 0) > w.now) {
+          if ((after?.insight?.pausedUntilMs ?? 0) > w.now) {
             assert.ok(expected >= 2, "(9) a pause without two misses");
-            assert.equal(after?.spark?.pausedUntilMs, w.now + 7 * 24 * HOUR);
+            assert.equal(after?.insight?.pausedUntilMs, w.now + 7 * 24 * HOUR);
             pausedUntil = w.now + 7 * 24 * HOUR;
             misses = 0;
             last = { day, draft: "" };
@@ -1188,14 +1188,14 @@ test(`chaos (9): no Spark while paused, and none for 7 days after two delivered 
           misses = expected;
           const writes = w.writes.filter((x) => x.tick === w.tick);
           const counted =
-            w.sparkSends.some((x) => x.tick === w.tick && x.ok) &&
+            w.insightSends.some((x) => x.tick === w.tick && x.ok) &&
             writes.length >= 2 &&
             writes[1]?.ok === true;
           if (counted)
             assert.notEqual(
-              after?.spark?.draft,
+              after?.insight?.draft,
               "",
-              "(9) a delivered Spark not in the count",
+              "(9) a delivered Insight not in the count",
             );
           last = { day, draft: counted ? "counted" : "" };
         },

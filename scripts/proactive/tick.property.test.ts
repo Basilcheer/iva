@@ -71,7 +71,7 @@ const config: fc.Arbitrary<ProactiveConfig> = fc.record({
   watchCapPerDay: fc.integer({ min: 0, max: 3 }),
   modelWakesPerDay: fc.integer({ min: 0, max: 4 }),
   briefTimes: fc.constant(PROACTIVE_DEFAULTS.briefTimes),
-  sparkTimes: fc.constant([]),
+  insightTimes: fc.constant([]),
   urgentSenders: fc.constant(["wife"]),
 });
 
@@ -142,9 +142,9 @@ class World {
         },
       ],
       runTurn: (prompt) => {
-        // Ход Brief или Spark — не ход Watch: в счётчики Watch не идёт (их свойства —
-        // brief.test.ts и spark.test.ts).
-        if (prompt.startsWith("Brief:") || prompt.startsWith("Spark:"))
+        // Ход Brief или Insight — не ход Watch: в счётчики Watch не идёт (их свойства —
+        // brief.test.ts и insight.test.ts).
+        if (prompt.startsWith("Brief:") || prompt.startsWith("Insight:"))
           return Promise.resolve({
             status: "completed" as const,
             message: "QUIET",

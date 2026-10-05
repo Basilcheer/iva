@@ -71,15 +71,15 @@ Iva. An MCP server from a plugin gets less — its own environment, `PLUGIN_ROOT
 `PLUGIN_DATA`, nothing else. A plugin with code or MCP is installed only by the owner's tap
 or in the owner's terminal; the model can only propose it. A bypass of _that_ boundary is in
 scope. A plugin of skills only the model installs itself with `iva plugin add` from `bash`, on
-the owner's request or after a tap on «Поставить» / «Install» under a Spark: that path is held
+the owner's request or after a tap on «Поставить» / «Install» under an Insight: that path is held
 by the skill, not by code ([ADR-0009](docs/adr/0009-plugin-rails.md)). Details:
 [docs/plugins.md](docs/plugins.md).
 
-Spark is a turn without the owner that brings together the network, writing scripts and
+Insight is a turn without the owner that brings together the network, writing scripts and
 running them: once a day Iva builds and tries one plugin draft and asks before installing. It
 is off by default and installs nothing itself; its draft scripts run as the service user and
 the draft is not bound to the tap. This is an accepted risk
-([ADR-0022](docs/adr/0022-spark-brings-one-capability-a-day.md)), not a gap to report.
+([ADR-0022](docs/adr/0022-insight-brings-one-capability-a-day.md)), not a gap to report.
 
 ## The honest boundary
 

@@ -41,19 +41,19 @@ check() { # config expected [dropped invariant]; expected: none | <Invariant>
     echo "FAIL $name: got '$got', expected '$expect'"; failed=$((failed+1))
   fi
 }
-# Прежние свидетели — без OneSparkPerDay: без замка и при now до замка двойной Spark симметричен
+# Прежние свидетели — без OneInsightPerDay: без замка и при now до замка двойной Insight симметричен
 # двойному Brief и на той же глубине мог бы выйти первым.
-check Proactive-noclaim NoDoubleTake OneSparkPerDay
-check Proactive-nolock OneRun OneSparkPerDay
-check Proactive-nolock NoDoubleTake "OneRun OneSparkPerDay"
-check Proactive-nolock OneBriefPerSlot "OneRun NoDoubleTake WakesCapped OneSparkPerDay"
-check Proactive-nocap WakesCapped OneSparkPerDay
-check Proactive-shortstale OneRun OneSparkPerDay
-check Proactive-nowfirst OneBriefPerSlot OneSparkPerDay
-check Proactive-nosparkclaim OneSparkPerDay
-check Proactive-dropspark OneSparkPerDay
-check Proactive-nowfirst OneSparkPerDay OneBriefPerSlot
-check Proactive-nolock OneSparkPerDay "OneRun NoDoubleTake WakesCapped OneBriefPerSlot"
+check Proactive-noclaim NoDoubleTake OneInsightPerDay
+check Proactive-nolock OneRun OneInsightPerDay
+check Proactive-nolock NoDoubleTake "OneRun OneInsightPerDay"
+check Proactive-nolock OneBriefPerSlot "OneRun NoDoubleTake WakesCapped OneInsightPerDay"
+check Proactive-nocap WakesCapped OneInsightPerDay
+check Proactive-shortstale OneRun OneInsightPerDay
+check Proactive-nowfirst OneBriefPerSlot OneInsightPerDay
+check Proactive-noinsightclaim OneInsightPerDay
+check Proactive-dropinsight OneInsightPerDay
+check Proactive-nowfirst OneInsightPerDay OneBriefPerSlot
+check Proactive-nolock OneInsightPerDay "OneRun NoDoubleTake WakesCapped OneBriefPerSlot"
 [ "${SKIP_MAIN:-}" = 1 ] || check Proactive none
 echo "proactive-check: $ok ok, $failed failed"
 [ "$failed" -eq 0 ]

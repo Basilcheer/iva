@@ -31,7 +31,7 @@ version ("Write your own"); read it before the first plugin of a turn.
 
 ## 2. Install
 
-In a Spark turn you only build and run the draft; installing waits for the owner's tap (skill `spark`).
+In an Insight turn you only build and run the draft; installing waits for the owner's tap (skill `insight`).
 
 - **Skills and scripts only** (no `mcp.json`, no `sh.iva/`): `iva plugin add
 data/custom/plugin-drafts/<name>` from `bash`. It works from the next turn: no build, no

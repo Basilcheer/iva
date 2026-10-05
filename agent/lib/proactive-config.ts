@@ -1,4 +1,4 @@
-// Настройки Watch, Brief и Spark — ключ `proactive` в data/settings.json (ADR-0020). Один файл на
+// Настройки Watch, Brief и Insight — ключ `proactive` в data/settings.json (ADR-0020). Один файл на
 // константы, разбор и правку: тик (scripts/proactive/tick.ts), `iva proactive` и тумблер
 // «Сама пишет» в /menu → Уведомления читают и пишут через него, второй копии правил нет.
 //
@@ -20,7 +20,7 @@ export type ProactiveConfig = {
   readonly watchCapPerDay: number;
   readonly modelWakesPerDay: number;
   readonly briefTimes: readonly string[];
-  readonly sparkTimes: readonly string[];
+  readonly insightTimes: readonly string[];
   readonly urgentSenders: readonly string[];
 };
 
@@ -32,7 +32,7 @@ export const PROACTIVE_DEFAULTS: ProactiveConfig = {
   watchCapPerDay: 5,
   modelWakesPerDay: 15,
   briefTimes: ["08:30", "14:00"],
-  sparkTimes: [],
+  insightTimes: [],
   urgentSenders: [],
 };
 
@@ -69,8 +69,8 @@ const VALID: { readonly [K in ProactiveKey]: (value: unknown) => boolean } = {
     2,
     (time) => typeof time === "string" && BRIEF_TIME.test(time),
   ),
-  // Spark — один слот в день (ADR-0022); пустой список — Spark выключен, так по умолчанию.
-  sparkTimes: listOf(
+  // Insight — один слот в день (ADR-0022); пустой список — Insight выключен, так по умолчанию.
+  insightTimes: listOf(
     1,
     (time) => typeof time === "string" && BRIEF_TIME.test(time),
   ),

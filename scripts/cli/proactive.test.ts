@@ -148,7 +148,7 @@ test("show prints the effective settings and today's counters", async (t) => {
     "watchCapPerDay: 2",
     "modelWakesPerDay: 15",
     "briefTimes: 08:30,14:00",
-    "sparkTimes: ",
+    "insightTimes: ",
     "urgentSenders: wife",
     "wakes today: 2",
     "model wakes today: 0",
