@@ -102,7 +102,7 @@ A status card built from the shared CLI/Telegram health probe plus the presence 
 - **Ready** → both the proxy and the personal Telegram account are healthy.
 
 Setup failures are shown in the menu instead of collapsing back to an inactive card. The
-userbot remains opt-in beta; the full picture, including the anti-ban guardrail:
+userbot is opt-in; the full picture, including the anti-ban guardrail:
 [userbot.md](userbot.md).
 
 ## Google Workspace

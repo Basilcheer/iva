@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- 📡 **Юзербот больше не «бета»**: работа от личного аккаунта Telegram - штатная часть Ивы. Пометка «бета» и слова «сырой» убраны из меню, README и документации; предупреждение о риске блокировки аккаунта осталось. The Telegram userbot is no longer labelled beta in the menu, README and docs; the account-ban warning stays.
 - ✅ **Кнопки вопроса исчезают после принятого ответа**: Telegram channel сохраняет сообщение вопроса и после `input.resolved` eve убирает все варианты, показывая выбранный ответ отдельно от результата операции. При ошибке Telegram повторяет только правку сообщения, в том числе после перезапуска; свободный текст ответа в статус не попадает. Native Telegram questions lose all buttons after Eve accepts the answer. Failed edits recover without repeating the answer or business operation. See [native question previews](docs/native-question-previews.md).
 
 ## [0.4.12] - 2026-10-05

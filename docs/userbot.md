@@ -1,8 +1,8 @@
-# Telegram userbot (beta, opt-in)
+# Telegram userbot (opt-in)
 
-> 🧪 **Beta — expect bugs.** This feature is new and still rough: onboarding steps or tool
-> calls can misbehave. Set it up **at your own risk** and don't lean on it for anything
-> critical yet. Feedback and issues welcome.
+> ⚠️ Automating a personal account is against Telegram's ToS and can get the account limited
+> or banned. The userbot is opt-in and used **at your own risk**; reading is far safer than
+> sending.
 
 ![Your secretary inside Telegram: the userbot reads group chats from your own account, collects summaries and replies as you, with a server-enforced anti-ban guardrail](../assets/iva-userbot.webp)
 

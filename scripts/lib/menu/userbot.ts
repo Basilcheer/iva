@@ -153,9 +153,9 @@ async function buildScreen(st: MenuState, ctx: MenuContext): Promise<View> {
   const hasCreds = Boolean(env.TELEGRAM_API_ID && env.TELEGRAM_API_HASH);
   const status = await probeStatus(ctx, env);
   const head = T("📡 Telegram userbot", "📡 Telegram-userbot");
-  const beta = T(
-    "🧪 Beta: personal-account automation can misbehave and carries account-ban risk.",
-    "🧪 Бета: автоматизация личного аккаунта может сбоить и несёт риск блокировки.",
+  const risk = T(
+    "⚠️ Personal-account automation carries account-ban risk.",
+    "⚠️ Автоматизация личного аккаунта несёт риск блокировки.",
   );
   const stateLabel =
     {
@@ -173,7 +173,7 @@ async function buildScreen(st: MenuState, ctx: MenuContext): Promise<View> {
   if (!hasCreds) {
     const text = [
       `# ${head}`,
-      beta,
+      risk,
       statusLine,
       T(
         "No API credentials yet. Create an app at https://my.telegram.org (API development tools) — you'll get api_id and api_hash.",
@@ -191,7 +191,7 @@ async function buildScreen(st: MenuState, ctx: MenuContext): Promise<View> {
   if (status.state === "off") {
     const text = [
       `# ${head}`,
-      beta,
+      risk,
       statusLine,
       T(
         "Credentials are set. Turn the proxy on — it builds a venv (up to ~3 min).",
@@ -210,7 +210,7 @@ async function buildScreen(st: MenuState, ctx: MenuContext): Promise<View> {
   if (status.state === "starting") {
     const text = [
       `# ${head}`,
-      beta,
+      risk,
       statusLine,
       T(
         "The proxy service is still starting. Refresh in a moment.",
@@ -226,7 +226,7 @@ async function buildScreen(st: MenuState, ctx: MenuContext): Promise<View> {
   if (status.state === "unreachable") {
     const text = [
       `# ${head}`,
-      beta,
+      risk,
       statusLine,
       T(
         "The service is active, but its health endpoint did not answer. Run `iva userbot diagnose --json` for the fixed diagnostic.",
@@ -251,7 +251,7 @@ async function buildScreen(st: MenuState, ctx: MenuContext): Promise<View> {
         );
   const text = [
     `# ${head}`,
-    beta,
+    risk,
     statusLine,
     accountHint,
     turnOffLine(ctx),
@@ -329,7 +329,7 @@ export default {
             await ctx.flows.screen(
               st,
               [
-                `# ${ctx.tr("🧪 Beta", "🧪 Бета")}`,
+                `# ${ctx.tr("📡 Telegram userbot", "📡 Telegram-userbot")}`,
                 ctx.tr(
                   "Setup failed. Check the service logs, then try again.",
                   "Настройка завершилась с ошибкой. Проверь логи сервиса и повтори.",
@@ -346,7 +346,7 @@ export default {
       return ctx.flows.screen(
         st,
         [
-          `# ${ctx.tr("🧪 Beta", "🧪 Бета")}`,
+          `# ${ctx.tr("📡 Telegram userbot", "📡 Telegram-userbot")}`,
           ctx.tr(
             "◇ Setting up the userbot proxy…",
             "◇ Собираю userbot-прокси…",

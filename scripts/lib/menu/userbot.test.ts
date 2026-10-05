@@ -84,10 +84,10 @@ test("userbot menu renders the shared Telethon authorization state", async () =>
 
   assert.equal(calls, 1);
   assert.match(view.text, /Status: login required/);
-  assert.match(view.text, /Beta/);
+  assert.match(view.text, /account-ban risk/);
 });
 
-test("userbot menu surfaces setup exit 1 and keeps the beta warning", async () => {
+test("userbot menu surfaces setup exit 1 and keeps the userbot heading", async () => {
   const dir = await mkdtemp(join(tmpdir(), "iva-userbot-menu-"));
   const envPath = join(dir, ".env");
   await writeFile(
@@ -135,7 +135,7 @@ test("userbot menu surfaces setup exit 1 and keeps the beta warning", async () =
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
 
-  assert.match(state._last?.text ?? "", /Beta/);
+  assert.match(state._last?.text ?? "", /Telegram userbot/);
   assert.match(state._last?.text ?? "", /Setup failed/);
   assert.doesNotMatch(state._last?.text ?? "", /must stay redacted/);
 });
