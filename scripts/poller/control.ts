@@ -122,7 +122,7 @@ type ControlTransport = (
 type StatusImpl = (chatKey: string) => Record<string, unknown> | null;
 type CancelImpl = (input: StopCancelRequest) => Promise<StopCancelResult>;
 type PerformResetImpl = typeof performScopedReset;
-// Правка нажатой кнопки: блоки rich-сообщения или клавиатура classic-сообщения.
+// Правка нажатой кнопки: блоки rich-сообщения или ряды кнопок classic-сообщения.
 type TapEdit =
   | { rich: { blocks: unknown[]; is_rtl?: boolean } }
   | { inline_keyboard: unknown[] };
@@ -1127,7 +1127,7 @@ function rememberTap(key: string, updateId: number): void {
 
 type TapTree = { tree: unknown; rich: boolean; isRtl?: unknown };
 
-/** Кнопки полученного сообщения: блоки rich или клавиатура classic. */
+/** Кнопки полученного сообщения: блоки rich или ряды кнопок classic. */
 function tapTree(message: TelegramMessage | undefined): TapTree | null {
   const rich = message?.rich_message as
     { blocks?: unknown; is_rtl?: unknown } | undefined;
