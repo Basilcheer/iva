@@ -115,7 +115,7 @@ What Iva says on her own lives in `data/settings.json`, not in `.env` — the **
 | `memoryReports.enabled` | `false`              | The nightly memory report (daily 04:00 and weekly Mon 04:15) in Telegram. Off means the vault is still written.          |
 | `proactive.enabled`     | `true`               | Watch, the Brief and Spark (**Writes on her own**). Off stops all three, not failures. `iva proactive` sets the rest.    |
 | `proactive.briefTimes`  | `["08:30", "14:00"]` | The Brief, `HH:00` or `HH:30`, at most two; empty — no Brief. `/digest` gives the Brief by hand any time.                |
-| `proactive.sparkTimes`  | `[]`                 | Spark: one `HH:00` or `HH:30` (best `HH:30`); empty — off. A time in the quiet hours is accepted, but no Spark that day. |
+| `proactive.sparkTimes`  | `[]`                 | Spark: one `HH:00` or `HH:30` (best `HH:30`); empty — off. Whole 3-hour window in the quiet hours: no Spark on that day. |
 
 Spark: once a day Iva builds and tries one plugin draft for something you keep doing by hand and asks before installing — [ADR-0022](./adr/0022-spark-brings-one-capability-a-day.md).
 

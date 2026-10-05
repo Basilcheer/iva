@@ -116,7 +116,7 @@ ${C.b}Commands:${C.x}
   ${C.c}iva jobs ack${C.x} <name>  close an open schedule failure
   ${C.c}iva jobs skip memory-night${C.x} <date>  close a night-memory day without processing it
   ${C.c}iva remind${C.x} <text>    let the agent judge one Reminder, then send it to Telegram
-  ${C.c}iva proactive${C.x} show|on|off|set <key> <value>  Watch and Brief settings
+  ${C.c}iva proactive${C.x} show|on|off|set <key> <value>  Watch, Brief and Spark settings
   ${C.c}iva signal${C.x} <source> <text>  pass a plugin's Signal to Iva (a one-off Reminder now)
   ${C.c}iva post${C.x} --md-file <p>  rich Telegram post to the digest chat or an allowlisted --chat
   ${C.c}iva userbot${C.x} [creds|setup|status|diagnose --json|off]  personal-account userbot proxy

@@ -12,15 +12,15 @@ one line per write.
 
 Exactly seven fields, always in this order:
 
-| Field     | Meaning                                                                            |
-| --------- | ---------------------------------------------------------------------------------- |
-| `ts`      | ISO-8601 **UTC**, the moment of writing                                            |
-| `turn`    | turn key — three cases, see below                                                  |
-| `session` | Eve session id (empty until the turn starts)                                       |
-| `source`  | `telegram`, `bridge`, `web`, `http`, `rollup`, `watch`, `brief`, `cron`, `unknown` |
-| `kind`    | group: `bridge`, `inbound`, `gate`, `context`, `turn`, `eve`, `outbox`, `stop`     |
-| `name`    | the specific event inside the group                                                |
-| `data`    | object: names, timings, sizes, content                                             |
+| Field     | Meaning                                                                                     |
+| --------- | ------------------------------------------------------------------------------------------- |
+| `ts`      | ISO-8601 **UTC**, the moment of writing                                                     |
+| `turn`    | turn key — three cases, see below                                                           |
+| `session` | Eve session id (empty until the turn starts)                                                |
+| `source`  | `telegram`, `bridge`, `web`, `http`, `rollup`, `watch`, `brief`, `spark`, `cron`, `unknown` |
+| `kind`    | group: `bridge`, `inbound`, `gate`, `context`, `turn`, `eve`, `outbox`, `stop`              |
+| `name`    | the specific event inside the group                                                         |
+| `data`    | object: names, timings, sizes, content                                                      |
 
 `source` is `unknown` when an Eve event arrives without a channel kind. Journals of 0.4.11
 and earlier may also carry `digest`. Note that `ts` is
