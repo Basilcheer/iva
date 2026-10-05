@@ -1,116 +1,120 @@
-import asyncio
-import json
+import inspect
+import os
+import tempfile
+import time
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 
-import httpx
 from mcp.server.fastmcp import FastMCP
-from mcp.server.transport_security import TransportSecuritySettings
+from mcp.server.fastmcp.exceptions import ToolError
+from pydantic import BaseModel
 
-from serve import NormalizeToolArgumentsMiddleware, _normalize_tool_arguments
+from tool_contracts import install_tool_contracts
 
 
-class NormalizeToolArgumentsTest(unittest.TestCase):
-    """Cover JSON normalization and the ASGI request-body boundary."""
+class Nested(BaseModel):
+    required: str
+    nullable: str | None
 
-    def test_omits_null_optional_arguments_from_a_tool_call(self):
-        """Keep populated tool arguments and omit nullable optional arguments."""
-        payload = {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "tools/call",
-            "params": {
-                "name": "list_messages",
-                "arguments": {
-                    "chat_id": "@example",
-                    "limit": 100,
-                    "search_query": None,
-                    "from_date": None,
-                    "to_date": None,
-                    "account": None,
-                },
-            },
-        }
 
-        normalized = json.loads(_normalize_tool_arguments(json.dumps(payload).encode()))
+class ToolContractsTest(unittest.IsolatedAsyncioTestCase):
+    async def test_source_semantics_do_not_infer_nullability_from_schema_default(self):
+        mcp = FastMCP("test")
 
-        self.assertEqual(
-            normalized["params"]["arguments"],
-            {"chat_id": "@example", "limit": 100},
-        )
+        @mcp.tool()
+        def source(required: str, nested: Nested, nullable: str | None,
+                   value: str = None, count: int = None, flag: bool = None,
+                   rights: dict = None, values: list[str] | None = None,
+                   with_about: bool = False) -> str:
+            return repr((required, nested, nullable, value, count, flag, rights, values, with_about))
 
-    def test_preserves_non_tool_requests_and_invalid_json(self):
-        """Preserve requests that the middleware does not own."""
-        initialize = b'{"method":"initialize","params":{"clientInfo":null}}'
+        @mcp.tool()
+        def unrelated(value: str = None) -> str:
+            return "unrelated"
 
-        self.assertEqual(_normalize_tool_arguments(initialize), initialize)
-        self.assertEqual(_normalize_tool_arguments(b"not json"), b"not json")
+        before = {tool.name: tool for tool in await mcp.list_tools()}
+        changed = await install_tool_contracts(mcp, {"source": source}, lambda _: None)
+        after = {tool.name: tool for tool in await mcp.list_tools()}
+        self.assertEqual(changed["nullable"], {"source": ["value", "count", "flag", "rights"]})
+        self.assertEqual(before["unrelated"], after["unrelated"])
+        expected = before["source"].model_dump()
+        for name in changed["nullable"]["source"]:
+            expected["inputSchema"]["properties"][name] = after["source"].inputSchema["properties"][name]
+        self.assertEqual(expected, after["source"].model_dump())
+        self.assertIs(inspect.signature(source).parameters["value"].annotation, str)
+        accepted = {"required": "yes", "nested": {"required": "yes", "nullable": None}, "nullable": None}
+        await mcp.call_tool("source", {**accepted, "value": None, "count": None, "flag": None, "rights": None})
+        for invalid in ({**accepted, "required": None}, {**accepted, "nested": {"required": None, "nullable": None}}, {**accepted, "value": 9}):
+            with self.assertRaises(ToolError):
+                await mcp.call_tool("source", invalid)
 
-    def test_asgi_middleware_reaches_a_real_fastmcp_tool(self):
-        """Deliver a null optional argument to FastMCP as an omitted argument."""
-        async def exercise():
-            """Call the production FastMCP HTTP app through the middleware stack."""
-            received = []
-            mcp = FastMCP("test")
-            mcp.settings.transport_security = TransportSecuritySettings(
-                enable_dns_rebinding_protection=False
-            )
+    async def test_known_account_preflight_keeps_omission_and_fanout(self):
+        mcp = FastMCP("test")
+        calls = []
+        lookups = []
 
-            @mcp.tool()
-            def optional_argument(value: str = None):
-                """Record the value that FastMCP passes to the tool handler."""
-                received.append(value)
-                return "called"
+        def lookup(account):
+            lookups.append(account)
+            if account.lower() not in ("first", "second"):
+                raise ValueError(f"Unknown account '{account}'. Available accounts: first, second")
 
-            app = mcp.streamable_http_app()
-            app.add_middleware(NormalizeToolArgumentsMiddleware)
-            headers = {
-                "accept": "application/json, text/event-stream",
-                "content-type": "application/json",
-            }
-            initialize = {
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "initialize",
-                "params": {
-                    "protocolVersion": "2025-06-18",
-                    "capabilities": {},
-                    "clientInfo": {"name": "test", "version": "1"},
-                },
-            }
-            call = {
-                "jsonrpc": "2.0",
-                "id": 2,
-                "method": "tools/call",
-                "params": {"name": "optional_argument", "arguments": {"value": None}},
-            }
-            async with app.router.lifespan_context(app):
-                transport = httpx.ASGITransport(app=app)
-                async with httpx.AsyncClient(
-                    transport=transport, base_url="http://test"
-                ) as client:
-                    initialized = await client.post(
-                        "/mcp", headers=headers, content=json.dumps(initialize)
-                    )
-                    self.assertEqual(initialized.status_code, 200)
-                    headers["mcp-session-id"] = initialized.headers["mcp-session-id"]
-                    ready = await client.post(
-                        "/mcp",
-                        headers=headers,
-                        content=json.dumps(
-                            {"jsonrpc": "2.0", "method": "notifications/initialized"}
-                        ),
-                    )
-                    self.assertEqual(ready.status_code, 202)
-                    response = await client.post(
-                        "/mcp", headers=headers, content=json.dumps(call)
-                    )
-            return response, received
+        @mcp.tool()
+        async def source(account: str = None) -> str:
+            calls.append(account)
+            return "fanout" if account is None else account
 
-        response, received = asyncio.run(exercise())
+        await install_tool_contracts(mcp, {"source": source}, lookup)
+        await mcp.call_tool("source", {})
+        await mcp.call_tool("source", {"account": None})
+        await mcp.call_tool("source", {"account": "SECOND"})
+        with self.assertRaisesRegex(ToolError, "Unknown account 'main'. Available accounts: first, second"):
+            await mcp.call_tool("source", {"account": "main"})
+        self.assertEqual(calls, [None, None, "SECOND"])
+        self.assertEqual(lookups, ["SECOND", "main"])
 
-        self.assertEqual(response.status_code, 200)
-        self.assertIn('"isError":false', response.text)
-        self.assertEqual(received, [None])
+    async def test_pinned_upstream_contract_metadata_pruning_and_account_error(self):
+        # No real Telegram network, login or owner session. The upstream module
+        # constructs its one client against a fresh temporary SQLite session.
+        old_cwd = Path.cwd()
+        with tempfile.TemporaryDirectory() as temporary:
+            os.chdir(temporary)
+            try:
+                with patch.dict(os.environ, {
+                    "TELEGRAM_API_ID": "12345", "TELEGRAM_API_HASH": "0" * 32,
+                    "TELEGRAM_SESSION_NAME": str(Path(temporary) / "session"),
+                    "TELEGRAM_EXPOSED_TOOLS": "read-only",
+                }):
+                    import telegram_mcp.runtime as runtime
+                    import telegram_mcp.tools as source
+                    before = {tool.name: tool for tool in await runtime.mcp.list_tools()}
+                    self.assertEqual(len(before), 116)
+                    self.assertEqual(before["list_messages"].inputSchema["properties"]["account"]["type"], "string")
+                    removed = runtime._apply_exposed_tools_mode(runtime.mcp)
+                    exposed = {tool.name: tool for tool in await runtime.mcp.list_tools()}
+                    with patch.dict(runtime.clients, {"default": object()}, clear=True):
+                        masked = await runtime.mcp.call_tool("list_messages", {"chat_id": "@example", "account": "main"})
+                    self.assertIn("GEN-ERR-", str(masked))
+                    self.assertNotIn("Unknown account", str(masked))
+                    started = time.perf_counter()
+                    changed = await install_tool_contracts(runtime.mcp, vars(source), runtime.get_client)
+                    duration = time.perf_counter() - started
+                    after = {tool.name: tool for tool in await runtime.mcp.list_tools()}
+                    self.assertEqual(set(exposed), set(after))
+                    self.assertTrue(set(removed).isdisjoint(after))
+                    for name, descriptor in exposed.items():
+                        expected = descriptor.model_dump()
+                        for field in changed["nullable"].get(name, []):
+                            expected["inputSchema"]["properties"][field] = after[name].inputSchema["properties"][field]
+                        self.assertEqual(expected, after[name].model_dump(), name)
+                    for field in ("account", "from_date", "to_date", "search_query"):
+                        self.assertIn({"type": "null"}, after["list_messages"].inputSchema["properties"][field]["anyOf"])
+                    with patch.dict(runtime.clients, {"default": object()}, clear=True):
+                        with self.assertRaisesRegex(ToolError, "Unknown account 'main'. Available accounts: default"):
+                            await runtime.mcp.call_tool("list_messages", {"chat_id": "@example", "account": "main"})
+                    print(f"read-only source adapter: {len(changed['nullable'])} nullable tools, {len(changed['accounts'])} account preflights, {duration * 1000:.1f} ms")
+            finally:
+                os.chdir(old_cwd)
 
 
 if __name__ == "__main__":

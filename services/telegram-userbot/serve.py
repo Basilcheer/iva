@@ -27,7 +27,6 @@ Env:
                          telegram-userbot.session, beside the proxy token. The production
                          unit passes ASSISTANT_DATA_DIR as one canonical absolute path.
 """
-import json
 import os
 import shutil
 import sys
@@ -36,70 +35,6 @@ from pathlib import Path
 SESSION_NAME = "telegram-userbot.session"
 # SQLite keeps these beside the database while a write is in flight.
 SESSION_SIDECARS = ("-journal", "-wal", "-shm")
-
-
-def _normalize_tool_arguments(body: bytes) -> bytes:
-    """Represent JSON null tool arguments as omitted optional arguments.
-
-    telegram-mcp 3.2.0 exposes several optional Python ``str = None`` arguments
-    as JSON Schema strings with a ``null`` default.  Tool clients therefore send
-    ``null`` as the schema advertises, while FastMCP rejects it before the handler
-    receives the call.  Python's omitted optional argument has the intended
-    ``None`` value, so normalizing at the proxy boundary preserves the tool's
-    semantics and keeps the upstream proxy isolated. Remove this boundary adapter
-    when telegram-mcp publishes nullable optional arguments as
-    ``anyOf: [string, null]`` in its tool schemas.
-    """
-    try:
-        request = json.loads(body)
-    except (TypeError, ValueError, UnicodeDecodeError):
-        return body
-    if not isinstance(request, dict) or request.get("method") != "tools/call":
-        return body
-    params = request.get("params")
-    if not isinstance(params, dict) or not isinstance(params.get("arguments"), dict):
-        return body
-    arguments = params["arguments"]
-    normalized = {key: value for key, value in arguments.items() if value is not None}
-    if len(normalized) == len(arguments):
-        return body
-    request = {**request, "params": {**params, "arguments": normalized}}
-    return json.dumps(request, separators=(",", ":")).encode()
-
-
-class NormalizeToolArgumentsMiddleware:
-    """Normalize nullable tool-call arguments before FastMCP validates them."""
-
-    def __init__(self, app):
-        """Wrap an ASGI application that receives MCP HTTP requests."""
-        self.app = app
-
-    async def __call__(self, scope, receive, send):
-        """Pass a normalized request body to the wrapped ASGI application."""
-        if scope["type"] != "http" or scope["method"] != "POST":
-            await self.app(scope, receive, send)
-            return
-        chunks = []
-        more_body = True
-        while more_body:
-            message = await receive()
-            if message["type"] != "http.request":
-                await self.app(scope, receive, send)
-                return
-            chunks.append(message.get("body", b""))
-            more_body = message.get("more_body", False)
-        body = _normalize_tool_arguments(b"".join(chunks))
-        delivered = False
-
-        async def receive_normalized():
-            """Supply the normalized body, then preserve later ASGI events."""
-            nonlocal delivered
-            if not delivered:
-                delivered = True
-                return {"type": "http.request", "body": body, "more_body": False}
-            return await receive()
-
-        await self.app(scope, receive_normalized, send)
 
 
 async def _health_payload(client) -> dict[str, str]:
@@ -379,6 +314,13 @@ def main() -> None:
         return JSONResponse(await _health_payload(client))
 
     async def amain() -> None:
+        from tool_contracts import install_tool_contracts
+
+        repaired = await install_tool_contracts(mcp, vars(telegram_mcp.tools), get_client)
+        print(
+            f"telegram-userbot: nullable signatures repaired for {len(repaired['nullable'])} tools",
+            file=sys.stderr,
+        )
         await client.connect()  # NOT .start() — that would prompt for interactive login
         authorized = await client.is_user_authorized()
         print(
@@ -399,11 +341,9 @@ def main() -> None:
 
         app = mcp.streamable_http_app()
         app.add_route("/healthz", health, methods=["GET"])
-        # add_middleware stacks outermost-last: BearerAuth rejects before parsing a
-        # request body, then nullable tool arguments are normalized, then the proxy
-        # checks Telegram connectivity.
+        # add_middleware stacks outermost-last: auth rejects before connectivity.
+        # FastMCP owns input validation and both JSON/SSE transport unchanged.
         app.add_middleware(EnsureConnectedMiddleware)
-        app.add_middleware(NormalizeToolArgumentsMiddleware)
         app.add_middleware(BearerAuthMiddleware)
 
         print(f"telegram-userbot: listening on http://{host}:{port}/mcp", file=sys.stderr)
