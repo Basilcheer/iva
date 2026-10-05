@@ -19,6 +19,8 @@ export type ProactiveConfig = {
   readonly staleMinutes: number;
   readonly watchCapPerDay: number;
   readonly modelWakesPerDay: number;
+  /** Ceiling дня: токены ходов Watch, Brief и Insight за день владельца; 0 — выключен. */
+  readonly ceilingTokensPerDay: number;
   readonly briefTimes: readonly string[];
   readonly insightTimes: readonly string[];
   readonly urgentSenders: readonly string[];
@@ -31,6 +33,7 @@ export const PROACTIVE_DEFAULTS: ProactiveConfig = {
   staleMinutes: 60,
   watchCapPerDay: 5,
   modelWakesPerDay: 15,
+  ceilingTokensPerDay: 0,
   briefTimes: ["08:30", "14:00"],
   insightTimes: [],
   urgentSenders: [],
@@ -64,6 +67,7 @@ const VALID: { readonly [K in ProactiveKey]: (value: unknown) => boolean } = {
   staleMinutes: integerIn(0, 24 * 60),
   watchCapPerDay: integerIn(0, 100),
   modelWakesPerDay: integerIn(0, 100),
+  ceilingTokensPerDay: integerIn(0, 100_000_000),
   // Не больше двух Brief в сутки (спека §9); пустой список — Brief выключен.
   briefTimes: listOf(
     2,

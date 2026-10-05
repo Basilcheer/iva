@@ -470,3 +470,266 @@ void test("the owner's stop before the limit question stays a cancellation", asy
   assert.notEqual(turn.status, "failed");
   assert.deepEqual(spy.sessionCalls, ["reset"]);
 });
+
+// ── Вид хода (D1): заголовок x-iva-turn на проводе и одно место списка ─────────────────────
+
+const { REMINDER_TURN_KINDS, reminderClientOptions } =
+  await import("./reminder-turn.ts");
+const { TURN_KINDS } = await import("#lib/eve-auth.ts");
+
+void test("the turn kinds of the turn and of the bearer auth are one list", () => {
+  assert.deepEqual(
+    [...TURN_KINDS].sort(),
+    [...REMINDER_TURN_KINDS].sort(),
+    "agent/lib/eve-auth.ts keeps a copy: agent/ does not import scripts/",
+  );
+});
+
+/** Заголовки запросов настоящего eve Client: ответ сервера — отказ, ход падает на create. */
+async function wireHeaders(
+  options: ReminderClientOptions,
+  t: import("node:test").TestContext,
+): Promise<Headers[]> {
+  const seen: Headers[] = [];
+  t.mock.method(globalThis, "fetch", (_url: unknown, init?: RequestInit) => {
+    seen.push(new Headers(init?.headers));
+    return Promise.resolve(new Response("nope", { status: 503 }));
+  });
+  await failureOf(runReminderTurn("инсайт", options, { log: () => {} }));
+  return seen;
+}
+
+void test("on the wire: the session create carries x-iva-turn with the kind, and no header without one", async (t) => {
+  const env = { ASSISTANT_BEARER: "secret", IVA_PORT: "8723" };
+  const named = await wireHeaders(reminderClientOptions(env, "insight"), t);
+  assert.ok(named.length > 0, "the client went to the wire");
+  for (const headers of named) {
+    assert.equal(headers.get("x-iva-turn"), "insight");
+    assert.equal(headers.get("authorization"), "Bearer secret");
+  }
+  t.mock.restoreAll();
+  const plain = await wireHeaders(reminderClientOptions(env), t);
+  assert.ok(plain.length > 0);
+  for (const headers of plain) assert.equal(headers.get("x-iva-turn"), null);
+});
+
+// ── Срок хода (D2): сигнал тика гасит ход на сервере с задачами и сбрасывает сессию ────────
+
+const DEADLINE = "the turn ran past its deadline";
+
+const flush = (): Promise<void> =>
+  new Promise((resolve) => {
+    setImmediate(resolve);
+  });
+
+type DeadlineSpy = {
+  readonly createClient: CreateClient;
+  readonly calls: string[];
+  /** Отпускает висящий create: сессия «возвращается позже». */
+  readonly releaseCreate: () => void;
+};
+
+/**
+ * Клиент с управляемыми частями: create может висеть, стрим молчит до отмены, cancel и reset
+ * могут висеть или отказывать. `calls` — всё, что ход попросил у eve, по порядку.
+ */
+function deadlineClient(
+  over: {
+    readonly createHangs?: boolean;
+    readonly onCreate?: () => void;
+    readonly cancel?: () => Promise<unknown>;
+    readonly reset?: () => Promise<unknown>;
+    readonly events?: readonly TurnStreamEvent[];
+  } = {},
+): DeadlineSpy {
+  const calls: string[] = [];
+  let releaseCreate = (): void => {};
+  let stop = (): void => {};
+  const stopped = new Promise<void>((resolve) => {
+    stop = resolve;
+  });
+  async function* stream(): AsyncGenerator<TurnStreamEvent> {
+    for (const event of over.events ?? []) {
+      await flush();
+      yield event;
+    }
+    await stopped;
+    yield { type: "turn.cancelled" };
+    yield { type: "session.waiting" };
+  }
+  const created = () => ({
+    response: Object.assign(stream(), {
+      cancel: () => {
+        calls.push("response.cancel");
+        return Promise.resolve();
+      },
+      sessionId: "sess-deadline",
+    }),
+    session: {
+      send: () => Promise.resolve(),
+      cancel: (options: { readonly tasks: boolean }) => {
+        calls.push(`cancel tasks=${String(options.tasks)}`);
+        stop();
+        return over.cancel ? over.cancel() : Promise.resolve();
+      },
+      reset: () => {
+        calls.push("reset");
+        return over.reset ? over.reset() : Promise.resolve();
+      },
+    },
+  });
+  const client: ReminderClient = {
+    sessions: {
+      create: () => {
+        calls.push("create");
+        over.onCreate?.();
+        if (!over.createHangs) return Promise.resolve(created());
+        return new Promise((resolve) => {
+          releaseCreate = () => resolve(created());
+        });
+      },
+    },
+  };
+  return {
+    createClient: () => {
+      calls.push("client");
+      return Promise.resolve(client);
+    },
+    calls,
+    releaseCreate: () => releaseCreate(),
+  };
+}
+
+void test("a deadline in the middle of a turn: cancel with tasks once, reset once, the turn fails with the reason", async () => {
+  const spy = deadlineClient({
+    events: [
+      { type: "step.started" },
+      { type: "message.completed", data: { message: "полдела" } },
+    ],
+  });
+  const controller = new AbortController();
+  const running = runReminderTurn("инсайт", OPTIONS, {
+    createClient: spy.createClient,
+    inactivityMs: 60_000,
+    signal: controller.signal,
+    log: () => {},
+  });
+  await delay(20);
+  controller.abort();
+  const turn = await running;
+  assert.equal(turn.status, "failed");
+  assert.equal(turn.cancelled, false);
+  assert.equal(turn.message, DEADLINE);
+  assert.deepEqual(
+    spy.calls.filter((call) => call !== "client" && call !== "create"),
+    ["cancel tasks=true", "reset"],
+  );
+});
+
+void test("a signal already aborted: no client and no session at all", async () => {
+  const spy = deadlineClient();
+  const controller = new AbortController();
+  controller.abort();
+  const turn = await runReminderTurn("инсайт", OPTIONS, {
+    createClient: spy.createClient,
+    signal: controller.signal,
+  });
+  assert.equal(turn.status, "failed");
+  assert.equal(turn.message, DEADLINE);
+  assert.deepEqual(spy.calls, []);
+});
+
+void test("a deadline while create hangs: the turn fails on time; the session that comes back later is cancelled and reset", async () => {
+  const spy = deadlineClient({ createHangs: true });
+  const controller = new AbortController();
+  const running = runReminderTurn("инсайт", OPTIONS, {
+    createClient: spy.createClient,
+    signal: controller.signal,
+    log: () => {},
+  });
+  await flush();
+  controller.abort();
+  const turn = await running;
+  assert.equal(turn.message, DEADLINE);
+  assert.deepEqual(spy.calls, ["client", "create"]);
+  spy.releaseCreate();
+  await delay(10);
+  assert.deepEqual(spy.calls, [
+    "client",
+    "create",
+    "cancel tasks=true",
+    "reset",
+  ]);
+});
+
+void test("create comes back with the signal already aborted: cancel with tasks, reset, failed", async () => {
+  const controller = new AbortController();
+  const spy = deadlineClient({ onCreate: () => controller.abort() });
+  const turn = await runReminderTurn("инсайт", OPTIONS, {
+    createClient: spy.createClient,
+    signal: controller.signal,
+    log: () => {},
+  });
+  assert.equal(turn.message, DEADLINE);
+  assert.deepEqual(spy.calls, [
+    "client",
+    "create",
+    "cancel tasks=true",
+    "reset",
+  ]);
+});
+
+void test("a failed stop on the deadline is logged as a deadline cancel, not as the session limit", async () => {
+  const logged: string[] = [];
+  const controller = new AbortController();
+  const spy = deadlineClient({
+    cancel: () => Promise.reject(new Error("eve is down")),
+  });
+  const running = runReminderTurn("инсайт", OPTIONS, {
+    createClient: spy.createClient,
+    signal: controller.signal,
+    log: (...args) => logged.push(String(args[0])),
+  });
+  await delay(10);
+  controller.abort();
+  const turn = await running;
+  assert.equal(turn.message, DEADLINE);
+  assert.ok(spy.calls.includes("reset"), "the session is reset anyway");
+  assert.deepEqual(logged, ["remind: deadline turn cancel failed:"]);
+});
+
+void test("after the deadline a hanging cancel and a hanging reset each wait 30 s, no longer (clock pinned)", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const logged: string[] = [];
+  const hang = () => new Promise<never>(() => {});
+  const controller = new AbortController();
+  const spy = deadlineClient({ cancel: hang, reset: hang });
+  let done = false;
+  const running = runReminderTurn("инсайт", OPTIONS, {
+    createClient: spy.createClient,
+    inactivityMs: 600_000,
+    signal: controller.signal,
+    log: (...args) => logged.push(String(args[0])),
+  }).finally(() => {
+    done = true;
+  });
+  for (let i = 0; i < 5; i += 1) await flush();
+  controller.abort();
+  for (let i = 0; i < 5; i += 1) await flush();
+  t.mock.timers.tick(29_999);
+  await flush();
+  assert.equal(done, false, "cancel still has its window");
+  t.mock.timers.tick(1);
+  for (let i = 0; i < 5; i += 1) await flush();
+  assert.deepEqual(logged, ["remind: deadline turn cancel failed:"]);
+  assert.equal(done, false, "reset has its own window");
+  t.mock.timers.tick(30_000);
+  for (let i = 0; i < 5; i += 1) await flush();
+  assert.equal(done, true);
+  const turn = await running;
+  assert.equal(turn.message, DEADLINE);
+  assert.deepEqual(
+    spy.calls.filter((call) => call !== "client" && call !== "create"),
+    ["cancel tasks=true", "reset"],
+  );
+});

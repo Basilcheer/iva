@@ -70,6 +70,7 @@ const config: fc.Arbitrary<ProactiveConfig> = fc.record({
   staleMinutes: fc.constantFrom(0, 30, 60, 120),
   watchCapPerDay: fc.integer({ min: 0, max: 3 }),
   modelWakesPerDay: fc.integer({ min: 0, max: 4 }),
+  ceilingTokensPerDay: fc.constant(0),
   briefTimes: fc.constant(PROACTIVE_DEFAULTS.briefTimes),
   insightTimes: fc.constant([]),
   urgentSenders: fc.constant(["wife"]),

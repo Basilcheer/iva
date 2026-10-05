@@ -44,7 +44,7 @@ async function wakeDeps(
   const timeZone = resolveTimeZone(env.ASSISTANT_TIMEZONE);
   const sendHtml = deps.sendHtml ?? sendTelegramHtml;
   const runTurn: JobWakeDeps["runTurn"] = (prompt) =>
-    runReminderTurn(prompt, reminderClientOptions(env), { log });
+    runReminderTurn(prompt, reminderClientOptions(env, "alert"), { log });
   return {
     quiet: (now) => failureWaitsForBrief(config, zonedParts(now, timeZone).hh),
     tr: await noticeTranslator(env),

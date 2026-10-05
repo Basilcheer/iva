@@ -12,6 +12,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readdirSync,
+  realpathSync,
   renameSync,
   rmSync,
 } from "node:fs";
@@ -392,6 +393,53 @@ export function createPluginInstallCommands(
     );
   }
 
+  /** Указывает ли локальный источник на этот каталог; одного из путей нет — нет. */
+  function pointsAt(source: PluginSource, dir: string): boolean {
+    const resolved = absolute(source);
+    try {
+      return (
+        resolved.kind === "local" &&
+        realpathSync(resolved.path) === realpathSync(dir)
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  /** Insight, как его записал тик; файл не прочёлся — строка и null (импорт ленивый). */
+  async function lastInsight(data: string) {
+    try {
+      const { readProactiveState } = await import("../proactive/state.ts");
+      return readProactiveState(join(data, "proactive.json"))?.insight ?? null;
+    } catch (error) {
+      const why = (error as Error).message;
+      warn(
+        translate(
+          `data/proactive.json is not readable (${why}): installing without comparing the draft with the Insight message`,
+          `data/proactive.json не читается (${why}): ставлю без сверки черновика с сообщением инсайта`,
+        ),
+      );
+      return null;
+    }
+  }
+
+  /**
+   * С чем сверяется staged-копия: хеш из кнопки предложения, а у `add` без человека у терминала
+   * по папке черновика последнего Insight — его отпечаток в минуту отправки (ADR-0022).
+   */
+  async function expectedTree(
+    data: string,
+    typed: PluginSource | null,
+    options: AddOptions | undefined,
+  ): Promise<string | null> {
+    if (options?.expectDigest12 !== undefined) return options.expectDigest12;
+    if (interactive() || typed === null) return null;
+    const insight = await lastInsight(data);
+    if (!insight?.tree) return null;
+    const draft = join(data, "custom/plugin-drafts", insight.draft);
+    return pointsAt(typed, draft) ? insight.tree : null;
+  }
+
   /** Без человека у терминала и не из `install-proposal`: код и MCP — только через тап. */
   function proposalOnly(options: AddOptions | undefined): boolean {
     return options?.fromProposal !== true && !interactive();
@@ -432,7 +480,7 @@ export function createPluginInstallCommands(
         null,
         provenance,
         proposalOnly(options),
-        options?.expectDigest12 ?? null,
+        await expectedTree(data, typed, options),
       );
     });
 

@@ -17,6 +17,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { after } from "node:test";
+import fc from "fast-check";
 
 const ROOT = mkdtempSync(join(tmpdir(), "iva-proactive-tick-"));
 process.env.ASSISTANT_DATA_DIR = join(ROOT, "data");
@@ -26,8 +27,9 @@ after(() => rmSync(ROOT, { recursive: true, force: true }));
 
 const { PROACTIVE_DEFAULTS } = await import("#lib/proactive-config.ts");
 const { acquireFileLock, releaseFileLock } = await import("#lib/fs-atomic.ts");
-const { LOCK_STALE_MS, loadConfig, main, runProactiveTick } =
+const { LOCK_STALE_MS, loadConfig, main, runProactiveTick, spentToday } =
   await import("./tick.ts");
+const { readEntries } = await import("../lib/usage.ts");
 const { initialState } = await import("./state.ts");
 const { sendTelegramHtml } = await import("../lib/telegram-send.ts");
 
@@ -690,4 +692,351 @@ test("the owner's private chat is the first allowlisted id, not the digest chat"
   );
   assert.equal(code, 0);
   assert.deepEqual(sent, ["777"]);
+});
+
+// ── Срок прогона (D2): IVA_JOB_STOP_AT → один сигнал на все ходы ─────────────────────────
+
+const DEADLINE = "the turn ran past its deadline";
+
+/** Ход, который висит до снятия сигнала и кончается так, как его кончает runReminderTurn. */
+const hangsUntil = (signal: AbortSignal | undefined): Promise<ReminderTurn> =>
+  new Promise((resolve) => {
+    signal?.addEventListener("abort", () =>
+      resolve({
+        status: "failed",
+        message: DEADLINE,
+        feedback: () => Promise.resolve(),
+      }),
+    );
+  });
+
+test("a Brief that ran past the deadline: no Watch after it, the exit code is the Brief's", async () => {
+  const h = harness();
+  writeState(h, staleSeen(chat(1, 1)));
+  h.tg = { items: [chat(1, 1)], error: null };
+  h.config = { ...PROACTIVE_DEFAULTS, briefTimes: ["12:00"] };
+  const controller = new AbortController();
+  const kinds: string[] = [];
+  const deps: TickDeps = {
+    ...h.deps,
+    signal: controller.signal,
+    runTurn: (_prompt, kind, signal) => {
+      kinds.push(kind);
+      setImmediate(() => controller.abort());
+      return hangsUntil(signal);
+    },
+  };
+  assert.equal(await runProactiveTick(NOON, deps), 1);
+  assert.deepEqual(kinds, ["brief"], "Watch did not wake the model");
+  assert.equal(h.checks, 0, "Watch did not even check its sources");
+  assert.ok(h.logs.includes(`proactive: brief turn failed: ${DEADLINE}`));
+  assert.deepEqual(h.sent, []);
+});
+
+test("IVA_JOB_STOP_AT reaches every turn of the run as one signal; garbage, the past or too far → a line and no deadline", async (t) => {
+  const lines: string[] = [];
+  t.mock.method(console, "log", (line: string) => lines.push(line));
+  const signals: Array<AbortSignal | undefined> = [];
+  // Brief в 12:00, затем Watch по давнему непрочитанному: два хода одного прогона.
+  const tg: Source = {
+    name: "telegram",
+    prefix: "tg:",
+    check: () => Promise.resolve({ items: [chat(1, 1)], error: null }),
+  };
+  const run = (stopAt: string | undefined) => {
+    const statePath = join(mkdtempSync(join(ROOT, "stop-")), "proactive.json");
+    writeFileSync(
+      statePath,
+      JSON.stringify({
+        ...initialState(NOON - 2 * HOUR),
+        seen: { "tg:1": { firstSeenMs: 0, unread: 1, reported: false } },
+      }),
+    );
+    return main(
+      stopAt === undefined ? ENV : { ...ENV, IVA_JOB_STOP_AT: stopAt },
+      {
+        sources: [tg],
+        timeZone: "UTC",
+        config: () => ({ ...PROACTIVE_DEFAULTS, briefTimes: ["12:00"] }),
+        statePath,
+        runTurn: (_prompt, _kind, signal) => {
+          signals.push(signal);
+          return Promise.resolve(turn("Иван ждёт ответа."));
+        },
+        send: () => Promise.resolve({ ok: true, error: "" }),
+      },
+      () => NOON,
+    );
+  };
+  await run(String(Date.now() + 10 * MIN));
+  assert.equal(signals.length, 2, "Brief and Watch");
+  assert.ok(signals[0] instanceof AbortSignal);
+  assert.equal(signals[0], signals[1], "one signal for the whole run");
+  assert.equal(signals[0]?.aborted, false);
+  for (const bad of [
+    "soon",
+    String(Date.now() - MIN),
+    String(Date.now() + 2 ** 32),
+  ]) {
+    lines.length = 0;
+    signals.length = 0;
+    await run(bad);
+    assert.deepEqual(signals, [undefined, undefined], bad);
+    assert.ok(
+      lines.some((line) =>
+        /^proactive: IVA_JOB_STOP_AT=.*, running without a deadline$/u.test(
+          line,
+        ),
+      ),
+      bad,
+    );
+  }
+  signals.length = 0;
+  await run(undefined);
+  assert.deepEqual(
+    signals,
+    [undefined, undefined],
+    "a run by hand has no deadline",
+  );
+});
+
+test("through the real main: a hanging turn ends at IVA_JOB_STOP_AT, the run exits and the lock file is gone", async (t) => {
+  t.mock.method(console, "log", () => undefined);
+  const data = process.env.ASSISTANT_DATA_DIR ?? "";
+  const started = Date.now();
+  const code = await main(
+    { ...ENV, IVA_JOB_STOP_AT: String(Date.now() + 300) },
+    {
+      sources: [],
+      timeZone: "UTC",
+      config: () => ({ ...PROACTIVE_DEFAULTS, briefTimes: ["12:00"] }),
+      statePath: join(mkdtempSync(join(ROOT, "hang-")), "proactive.json"),
+      runTurn: (_prompt, _kind, signal) => hangsUntil(signal),
+    },
+    () => NOON,
+  );
+  assert.equal(code, 1, "a Brief that did not finish is a failed run");
+  assert.ok(Date.now() - started < 5_000, "the run ended on its deadline");
+  assert.equal(existsSync(join(data, "proactive.lock")), false);
+});
+
+// ── Ceiling дня (П2б): расход Watch, Brief и Insight за день владельца ───────────────────
+
+const SEED = Number(process.env.FC_SEED ?? Date.now() % 2 ** 31);
+
+const failureItem = (key = "fail:x"): WatchItem => ({
+  key,
+  unread: 1,
+  from: {},
+  failure: { essence: "1", at: NOON },
+});
+
+/** Харнесс с Ceiling дня и счётчиком вызовов суммы. */
+function ceilingHarness(ceiling: number, spent: number | Error) {
+  const h = harness();
+  h.config = { ...h.config, ceilingTokensPerDay: ceiling };
+  const calls = { spent: 0 };
+  const deps: TickDeps = {
+    ...h.deps,
+    spentToday: () => {
+      calls.spent++;
+      return spent instanceof Error
+        ? Promise.reject(spent)
+        : Promise.resolve(spent);
+    },
+  };
+  return { h, deps, calls };
+}
+
+test("Ceiling reached: no Brief, Watch wakes the model for a failure only, one journal line naming what was dropped", async () => {
+  const { h, deps } = ceilingHarness(1000, 1000);
+  h.config = { ...h.config, briefTimes: ["12:00"] };
+  writeState(h, staleSeen(chat(1, 1)));
+  h.tg = { items: [chat(1, 1)], error: null };
+  assert.equal(await runProactiveTick(NOON, deps), 0);
+  assert.deepEqual(h.prompts, [], "neither Brief nor an ordinary Watch turn");
+  assert.deepEqual(
+    h.logs.filter((line) => line.includes("ceiling")),
+    [
+      "proactive: ceiling reached (1000 of 1000 tokens today), dropped: brief,watch-model",
+    ],
+  );
+  assert.deepEqual(
+    readState(h).briefDone.slots,
+    [],
+    "the Brief was not claimed",
+  );
+  h.tg = { items: [chat(1, 1), failureItem()], error: null };
+  assert.equal(await runProactiveTick(NOON + HOUR, deps), 0);
+  assert.equal(h.prompts.length, 1);
+  assert.match(h.prompts[0] ?? "", /^Watch:.*fail:x/su);
+  assert.doesNotMatch(h.prompts[0] ?? "", /tg:1/u);
+});
+
+test("Ceiling reached in the Insight slot: no Insight turn, the line says dropped: insight", async () => {
+  const { h, deps } = ceilingHarness(1, 5);
+  h.config = { ...h.config, insightTimes: ["11:30"] };
+  writeState(h, {});
+  assert.equal(await runProactiveTick(NOON - 30 * MIN, deps), 0);
+  assert.deepEqual(h.prompts, []);
+  assert.deepEqual(
+    h.logs.filter((line) => line.includes("ceiling")),
+    ["proactive: ceiling reached (5 of 1 tokens today), dropped: insight"],
+  );
+  assert.equal(readState(h).insight, undefined, "no claim for the day");
+});
+
+test("Ceiling below the sum, or 0: the run is as before; at 0 the usage file is not read at all", async () => {
+  for (const [ceiling, spent, reads] of [
+    [1000, 999, 1],
+    [0, 10 ** 9, 0],
+  ] as const) {
+    const { h, deps, calls } = ceilingHarness(ceiling, spent);
+    h.config = { ...h.config, briefTimes: ["12:00"] };
+    writeState(h, staleSeen(chat(1, 1)));
+    h.tg = { items: [chat(1, 1)], error: null };
+    assert.equal(await runProactiveTick(NOON, deps), 0);
+    assert.equal(calls.spent, reads);
+    assert.equal(h.prompts.length, 2, "Brief and Watch");
+    assert.ok(!h.logs.some((line) => line.includes("ceiling reached")));
+  }
+});
+
+test("Ceiling: the sum throws → the ceiling stays open with a journal line; nothing to drop → no line", async () => {
+  const thrown = ceilingHarness(1, new Error("EACCES"));
+  writeState(thrown.h, staleSeen(chat(1, 1)));
+  thrown.h.tg = { items: [chat(1, 1)], error: null };
+  assert.equal(await runProactiveTick(NOON, thrown.deps), 0);
+  assert.equal(thrown.h.prompts.length, 1, "Watch woke as usual");
+  assert.ok(
+    thrown.h.logs.includes(
+      "proactive: today's usage not read (EACCES), the ceiling stays open",
+    ),
+  );
+  // :30 — не тик Watch, слотов нет: снимать нечего, строки нет.
+  const idle = ceilingHarness(1, 5);
+  writeState(idle.h, {});
+  assert.equal(await runProactiveTick(NOON + 30 * MIN, idle.deps), 0);
+  assert.deepEqual(idle.h.logs, []);
+});
+
+test("Ceiling through main: usage.jsonl with broken lines is summed silently; only watch, brief and insight rows count", async (t) => {
+  const lines: string[] = [];
+  t.mock.method(console, "log", (line: string) => lines.push(line));
+  const data = process.env.ASSISTANT_DATA_DIR ?? "";
+  const row = (source: string, total: number, ts = "2026-10-05T09:00:00Z") =>
+    JSON.stringify({ ts, source, sessionId: "s", turnId: "t", total });
+  writeFileSync(
+    join(data, "usage.jsonl"),
+    [
+      row("insight", 600),
+      "{ broken",
+      row("watch", 300),
+      row("channel:telegram", 10_000),
+      row("reminder", 10_000),
+      row("brief", 100, "2026-10-04T09:00:00Z"),
+      '{"ts":"2026-10-05T09:00:00Z","source":"brief","total":10',
+    ].join("\n"),
+  );
+  assert.equal(spentToday(readEntries(data), NOON, "UTC"), 900);
+  const statePath = join(mkdtempSync(join(ROOT, "ceiling-")), "proactive.json");
+  writeFileSync(statePath, JSON.stringify(initialState(NOON - 2 * HOUR)));
+  const prompts: string[] = [];
+  const run = (ceiling: number) =>
+    main(
+      ENV,
+      {
+        sources: [],
+        timeZone: "UTC",
+        statePath,
+        config: () => ({
+          ...PROACTIVE_DEFAULTS,
+          briefTimes: [],
+          insightTimes: ["11:30"],
+          ceilingTokensPerDay: ceiling,
+        }),
+        runTurn: (prompt) => {
+          prompts.push(prompt);
+          return Promise.resolve(turn("QUIET"));
+        },
+      },
+      () => NOON - 30 * MIN,
+    );
+  assert.equal(await run(900), 0);
+  assert.deepEqual(prompts, []);
+  assert.ok(
+    lines.includes(
+      "proactive: ceiling reached (900 of 900 tokens today), dropped: insight",
+    ),
+  );
+  assert.equal(await run(901), 0);
+  assert.equal(prompts.length, 1, "below the ceiling Insight goes");
+  rmSync(join(data, "usage.jsonl"));
+});
+
+test(`spentToday equals a hand filter: today in the owner's zone and a kind of watch, brief or insight (seed ${SEED})`, () => {
+  const zones = [
+    "UTC",
+    "Asia/Tashkent",
+    "America/Los_Angeles",
+    "Pacific/Kiritimati",
+  ];
+  const sources = [
+    "watch",
+    "brief",
+    "insight",
+    "reminder",
+    "signal",
+    "alert",
+    "http",
+    "channel:telegram",
+    "compaction",
+    "",
+  ];
+  const day = (ms: number, zone: string) =>
+    new Intl.DateTimeFormat("en-CA", {
+      timeZone: zone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(new Date(ms));
+  fc.assert(
+    fc.property(
+      fc.constantFrom(...zones),
+      fc.integer({ min: NOON - 3 * 24 * HOUR, max: NOON + 3 * 24 * HOUR }),
+      fc.array(
+        fc.record({
+          source: fc.constantFrom(...sources),
+          at: fc.integer({
+            min: NOON - 3 * 24 * HOUR,
+            max: NOON + 3 * 24 * HOUR,
+          }),
+          total: fc.nat({ max: 10 ** 9 }),
+        }),
+        { maxLength: 40 },
+      ),
+      (zone, now, rows) => {
+        const entries = rows.map((r, i) => ({
+          ts: new Date(r.at).toISOString(),
+          source: r.source,
+          provider: "p",
+          model: "m",
+          sessionId: "s",
+          turnId: `t${i}`,
+          step: 0,
+          in: 0,
+          out: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          total: r.total,
+        }));
+        const expected = rows
+          .filter((r) => ["watch", "brief", "insight"].includes(r.source))
+          .filter((r) => day(r.at, zone) === day(now, zone))
+          .reduce((sum, r) => sum + r.total, 0);
+        assert.equal(spentToday(entries, now, zone), expected);
+      },
+    ),
+    { seed: SEED, numRuns: 300 },
+  );
 });

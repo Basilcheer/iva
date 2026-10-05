@@ -395,6 +395,8 @@ const config: fc.Arbitrary<ProactiveConfig> = fc.record({
   staleMinutes: fc.constantFrom(0, 30, 60, 24 * 60),
   watchCapPerDay: fc.integer({ min: 0, max: 3 }),
   modelWakesPerDay: fc.integer({ min: 0, max: 3 }),
+  // Ceiling дня выключен: у мира нет расхода, его прогоны — в tick.test.ts.
+  ceilingTokensPerDay: fc.constant(0),
   briefTimes,
   insightTimes: fc.oneof(
     fc.constant([]),

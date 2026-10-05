@@ -464,6 +464,95 @@ test("17. main asks data/custom/plugins.json: a plugin there, even switched off,
   );
 });
 
+test("18. the draft's fingerprint is taken after the turn and before the send, and written with the draft; Watch and Brief keep it", async () => {
+  const h = harness();
+  await seed(h);
+  const order: string[] = [];
+  const send = h.deps.send;
+  const deps: TickDeps = {
+    ...h.deps,
+    draftTree: (name) => {
+      order.push(`tree ${name}`);
+      return Promise.resolve("0123456789ab");
+    },
+    send: (part, source) => {
+      order.push("send");
+      return send(part, source);
+    },
+  };
+  assert.equal(await runProactiveTick(at(11, 30), deps), 0);
+  assert.deepEqual(order, ["tree count-receipts", "send"]);
+  assert.deepEqual(insightOf(h), {
+    ...prev("count-receipts", 0),
+    tree: "0123456789ab",
+  });
+  const before = JSON.stringify(insightOf(h));
+  h.config = { ...INSIGHT, briefTimes: ["14:00"] };
+  await runProactiveTick(at(13, 0), deps);
+  await runProactiveTick(at(14, 0), deps);
+  assert.ok(h.prompts.some((p) => p.startsWith("Brief:")));
+  assert.equal(JSON.stringify(insightOf(h)), before);
+});
+
+test("19. no fingerprint: QUIET, «?», an installed plugin, no folder or a throwing walk; a send refused writes nothing", async () => {
+  const cases: [string, TickDeps["draftTree"], string][] = [
+    ["QUIET", () => Promise.resolve("0123456789ab"), ""],
+    ["Нашла дело, кнопку забыла.", () => Promise.resolve("0123456789ab"), "?"],
+    [found("x-y"), () => Promise.resolve(null), "x-y"],
+    [found("x-y"), () => Promise.reject(new Error("ENOENT")), "x-y"],
+    [
+      found("x-y"),
+      () => {
+        throw new Error("walk failed");
+      },
+      "x-y",
+    ],
+  ];
+  for (const [text, draftTree, draft] of cases) {
+    const h = harness();
+    await seed(h);
+    h.reply = turn(text);
+    assert.equal(
+      await runProactiveTick(at(11, 30), { ...h.deps, draftTree }),
+      0,
+    );
+    assert.equal(insightOf(h)?.draft, draft, text);
+    assert.equal(insightOf(h)?.tree, undefined, text);
+  }
+  const installed = harness();
+  await seed(installed);
+  installed.reply = turn(found("x-y"));
+  installed.installed.add("x-y");
+  await runProactiveTick(at(11, 30), {
+    ...installed.deps,
+    draftTree: () => Promise.resolve("0123456789ab"),
+  });
+  assert.deepEqual(
+    [insightOf(installed)?.draft, insightOf(installed)?.tree],
+    ["?", undefined],
+  );
+  const refused = harness();
+  await seed(refused);
+  refused.sendResult = { ok: false, error: "403" };
+  await runProactiveTick(at(11, 30), {
+    ...refused.deps,
+    draftTree: () => Promise.resolve("0123456789ab"),
+  });
+  assert.equal(insightOf(refused)?.tree, undefined);
+  // Вторая запись не легла: сообщение ушло, выход 0, `add` пойдёт без сверки, как без имени.
+  const unwritten = harness();
+  await seed(unwritten);
+  unwritten.failWrites = [1];
+  assert.equal(
+    await runProactiveTick(at(11, 30), {
+      ...unwritten.deps,
+      draftTree: () => Promise.resolve("0123456789ab"),
+    }),
+    0,
+  );
+  assert.deepEqual(insightOf(unwritten), prev("", 0));
+});
+
 test(`(10) any button data: every delivered Insight gets a non-empty draft, a name only by the pattern and within 64 bytes (seed ${SEED})`, async () => {
   const NAME = /^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$/u;
   const data = fc.oneof(

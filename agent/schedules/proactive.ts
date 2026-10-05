@@ -1,11 +1,13 @@
-// Тик Watch и Brief (ADR-0020) — тонкий спавнер: каждые полчаса запускает
+// Тик Watch, Brief и Insight (ADR-0020, ADR-0022) — тонкий спавнер: каждые полчаса запускает
 // scripts/proactive/tick.ts, который сам берёт свой замок, проверяет источники без модели и
 // будит её только при новом. Тумблер «Сама пишет» читает сам тик: сбои идут и при выключенном.
-// Срок 30 минут; агента о себе не будит (провал виден в открытых провалах), успех пишет
-// фактом только после провала — иначе 48 строк в сутки вытеснили бы остальные факты.
+// Срок 30 минут; killGraceMs 90 с, как у ночи: в IVA_JOB_STOP_AT (за 90 с до SIGTERM) тик сам
+// отменяет свой ход на сервере и снимает замок. Агента о себе не будит (провал виден в
+// открытых провалах), успех пишет фактом только после провала — иначе 48 строк в сутки
+// вытеснили бы остальные факты.
 import { defineSchedule } from "eve/schedules";
 import { resolvePaths } from "../lib/schedule-paths.js";
-import { runScheduledJob } from "../lib/schedule-runner.js";
+import { JOB_STOP_GRACE_MS, runScheduledJob } from "../lib/schedule-runner.js";
 import {
   PROACTIVE_SCHEDULE,
   PROACTIVE_TICK_CRON,
@@ -25,6 +27,7 @@ export default defineSchedule({
         factsPath,
         guardMs: 0,
         timeoutMs: 30 * 60_000,
+        killGraceMs: JOB_STOP_GRACE_MS,
         wake: false,
         factOnSuccess: "after-failure",
       }),

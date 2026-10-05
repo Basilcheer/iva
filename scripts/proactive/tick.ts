@@ -1,16 +1,18 @@
-// Тик Watch и Brief (ADR-0020, модель specs/Proactive.tla):
+// Тик Watch, Brief и Insight (ADR-0020, ADR-0022, модель specs/Proactive.tla):
 //   node --env-file-if-exists=.env scripts/proactive/tick.ts
 // Запускает его agent/schedules/proactive.ts каждые полчаса. Замок без ожидания — второй
 // прогон выходит 0; `now` берётся сразу после замка (иначе прогон со старым днём, взявший
 // замок вторым, откатил бы счётчики дня — Proactive-nowfirst.cfg). Дальше runProactiveTick:
-// наступил слот — Brief (заявка briefDone до хода); затем Watch: проверка источников без
-// модели, фильтры, заявка до хода (ADR-0007: потеря, не дубль), ход, доставка частями,
-// запись подъёма. Сбой — исключение: дроссель Alert и «сообщён» пишутся после доставки, обрыв
+// наступил слот — Brief (заявка briefDone до хода); иначе пора Insight — ход Insight, и
+// прогон на этом кончается; затем Watch: проверка источников без модели, фильтры, заявка до
+// хода (ADR-0007: потеря, не дубль), ход, доставка частями, запись подъёма. Срок прогона
+// (IVA_JOB_STOP_AT) гасит ход на сервере, и после Brief по сроку Watch не идёт. Сбой — исключение: дроссель Alert и «сообщён» пишутся после доставки, обрыв
 // раньше даёт повтор (для сбоя молчание хуже дубля). Коды выхода: 0 — прогон прошёл (в том числе
 // «нового нет»), 1 — ошибка (факт в jobs.json, агент видит открытый провал).
 import { join } from "node:path";
 import { dataDir } from "#lib/data-dir.ts";
 import { acquireFileLock, releaseFileLock } from "#lib/fs-atomic.ts";
+import { pluginTreeDigest } from "#lib/plugin-reader.ts";
 import { findPlugin, readPluginsStateSafe } from "#lib/plugin-store.ts";
 import {
   isQuietHour,
@@ -21,6 +23,7 @@ import {
 import { hasInboundAttackSignal, sanitizeInbound } from "#lib/security-gate.ts";
 import { readSettingsState } from "#lib/settings.ts";
 import { injectionWarning } from "#lib/telegram-gate-notice.ts";
+import { JOB_STOP_AT_ENV } from "#lib/schedule-runner.ts";
 import { resolveTimeZone } from "#lib/timezone.ts";
 import {
   noticeTranslator,
@@ -33,8 +36,11 @@ import {
   reminderClientOptions,
   runReminderTurn,
   type ReminderTurn,
+  type ReminderTurnKind,
 } from "../lib/reminder-turn.ts";
 import { ownerChat } from "../lib/notification-chat.ts";
+import { readEntries, summarize, type UsageRecord } from "../lib/usage.ts";
+import { resolveStopAt } from "../lib/rollup-turn.ts";
 import { sendTelegramHtml } from "../lib/telegram-send.ts";
 import { isEntrypoint } from "../lib/version-layout.ts";
 import {
@@ -75,7 +81,17 @@ export type TickDeps = {
   readonly timeZone: string;
   readonly statePath: string;
   readonly sources: readonly Source[];
-  readonly runTurn: (prompt: string) => Promise<ReminderTurn>;
+  /**
+   * Ход модели; вид хода уходит заголовком и становится `source` его расхода. `signal` — срок
+   * прогона, один на все его ходы: снятый гасит ход на сервере.
+   */
+  readonly runTurn: (
+    prompt: string,
+    kind: ReminderTurnKind,
+    signal?: AbortSignal,
+  ) => Promise<ReminderTurn>;
+  /** Срок прогона (IVA_JOB_STOP_AT); нет — срока нет, как у ручного запуска. */
+  readonly signal?: AbortSignal;
   /** Одна часть в личный чат владельца; `source` — имя хода в журнале доставки. */
   readonly send: (
     part: string,
@@ -88,6 +104,13 @@ export type TickDeps = {
   readonly unfixed?: () => Promise<readonly string[]>;
   /** Стоит ли плагин с этим именем (data/custom/plugins.json); зависимости нет — не стоит. */
   readonly installed?: (name: string) => Promise<boolean>;
+  /**
+   * Отпечаток черновика `data/custom/plugin-drafts/<name>` (12 знаков, как у кнопки
+   * предложения); нет папки или ошибка обхода — null, и отпечаток не пишется.
+   */
+  readonly draftTree?: (name: string) => Promise<string | null>;
+  /** Токены ходов Watch, Brief и Insight за сегодня (data/usage.jsonl); зовётся при Ceiling > 0. */
+  readonly spentToday?: () => Promise<number>;
   readonly writeState?: typeof writeProactiveState;
   readonly log?: (line: string) => void;
 };
@@ -231,7 +254,7 @@ function gated(
   return verdict.text.replace(/\s+/gu, " ").trim();
 }
 
-/** Как доставляется ответ планового хода — одна фраза на Watch и Brief. */
+/** Как доставляется ответ планового хода — одна фраза на все три хода. */
 const delivery = (tr: Translate) =>
   "Do not send anything yourself: no Telegram tools, no iva post, no mail; the code sends " +
   "your final text to the owner's private chat, and a line <!-- iva:next --> starts the next message. " +
@@ -438,12 +461,12 @@ function afterDelivery(
 async function turnText(
   deps: TickDeps,
   prompt: string,
-  what: string,
+  what: "watch" | "brief" | "insight",
   log: (line: string) => void,
 ): Promise<string | null> {
   let turn: ReminderTurn;
   try {
-    turn = await deps.runTurn(prompt);
+    turn = await deps.runTurn(prompt, what, deps.signal);
   } catch (error) {
     turn = {
       status: "failed",
@@ -576,8 +599,9 @@ export async function runProactiveTick(
     return 1;
   }
   const clock = { ...localDay(now, deps.timeZone), now };
-  const config = deps.config();
   let state = stored ?? initialState(now);
+  const run = { state, stored, clock };
+  const config = await ceiled(deps, deps.config(), run, log);
   let failed = false;
   const slot = briefSlot(config, state, clock);
   if (slot !== null)
@@ -589,9 +613,7 @@ export async function runProactiveTick(
     ));
   else if (insightDue(config, stored, clock))
     return insight(deps, state, clock, log);
-  // Watch раз в час: тик своей половины часа, опоздавший на минуту — тот же тик. Первый
-  // прогон смотрит источники всегда — иначе всё непрочитанное не стало бы «уже сообщённым».
-  if (clock.minute >= 30 && stored !== null) return failed ? 1 : 0;
+  if (watchSkipped(clock, stored, deps.signal)) return failed ? 1 : 0;
   const code = await watch(
     deps,
     { state, first: stored === null, config, clock },
@@ -601,6 +623,89 @@ export async function runProactiveTick(
 }
 
 type Clock = ReturnType<typeof localDay> & { readonly now: number };
+
+/** Ходы Ивы, чей расход меряет Ceiling дня. */
+const CEILING_TURNS: ReadonlySet<string> = new Set<ReminderTurnKind>([
+  "watch",
+  "brief",
+  "insight",
+]);
+
+/** Сумма `total` строк Watch, Brief и Insight за сегодня в зоне владельца. */
+export function spentToday(
+  entries: UsageRecord[],
+  now: number,
+  timeZone: string,
+): number {
+  return summarize(entries, { window: "today", now, tz: timeZone })
+    .bySource.filter((row) => CEILING_TURNS.has(row.key))
+    .reduce((sum, row) => sum + row.total, 0);
+}
+
+type Run = {
+  readonly state: ProactiveState;
+  readonly stored: ProactiveState | null;
+  readonly clock: Clock;
+};
+
+/** Кого прогон снял бы Ceiling дня — в порядке прогона: Brief, иначе Insight, затем Watch. */
+function droppedBy(config: ProactiveConfig, { state, stored, clock }: Run) {
+  const brief = briefSlot(config, state, clock) !== null;
+  const insight = !brief && insightDue(config, stored, clock);
+  const watch = !insight && !watchSkipped(clock, stored, undefined);
+  return [
+    ...(insight ? ["insight"] : []),
+    ...(brief ? ["brief"] : []),
+    ...(watch ? ["watch-model"] : []),
+  ];
+}
+
+/** Расход сегодня; не прочёлся — 0 и строка в журнал: сломанный файл расхода Иву не глушит. */
+async function spent(deps: TickDeps, log: (line: string) => void) {
+  try {
+    return (await deps.spentToday?.()) ?? 0;
+  } catch (error) {
+    log(
+      `proactive: today's usage not read (${message(error)}), the ceiling stays open`,
+    );
+    return 0;
+  }
+}
+
+/**
+ * Ceiling дня: ходы Watch, Brief и Insight сегодня потратили не меньше ключа — в этом прогоне
+ * нет ни Brief, ни Insight, а Watch будит модель только сбоями (тем же фильтром, что
+ * `modelWakesPerDay`; сбой — всегда, ADR-0007). Ключ 0 — файл расхода не читается вовсе.
+ */
+async function ceiled(
+  deps: TickDeps,
+  config: ProactiveConfig,
+  run: Run,
+  log: (line: string) => void,
+): Promise<ProactiveConfig> {
+  const ceiling = config.ceilingTokensPerDay;
+  if (ceiling === 0) return config;
+  const used = await spent(deps, log);
+  if (used < ceiling) return config;
+  const dropped = droppedBy(config, run);
+  if (dropped.length > 0)
+    log(
+      `proactive: ceiling reached (${used} of ${ceiling} tokens today), dropped: ${dropped.join(",")}`,
+    );
+  return { ...config, briefTimes: [], insightTimes: [], modelWakesPerDay: 0 };
+}
+
+/**
+ * Watch раз в час: тик своей половины часа, опоздавший на минуту — тот же тик. Первый прогон
+ * смотрит источники всегда — иначе всё непрочитанное не стало бы «уже сообщённым». Срок
+ * прогона прошёл (Brief кончился по сроку) — Watch не идёт: его проверка источников идёт без
+ * сигнала и дотянула бы до SIGTERM, а замок снимается раньше.
+ */
+const watchSkipped = (
+  clock: Clock,
+  stored: ProactiveState | null,
+  signal: AbortSignal | undefined,
+) => (clock.minute >= 30 && stored !== null) || signal?.aborted === true;
 
 /** Наступивший слот Brief; тумблер выключен — нет. */
 const briefSlot = (
@@ -651,6 +756,28 @@ const insightPrompt = (tr: Translate) =>
 const INSTALL_DATA =
   /data="(?:Поставить|Install) ([a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?)"/u;
 
+/**
+ * Отпечаток черновика из кнопки «Поставить» — после хода и до отправки: ставиться будет ровно
+ * то, что лежало в папке, когда ушло сообщение. Имени нет или отпечаток не посчитался — null.
+ */
+async function draftTreeOf(deps: TickDeps, body: string) {
+  const name = INSTALL_DATA.exec(body)?.[1];
+  if (name === undefined || deps.draftTree === undefined) return null;
+  try {
+    return await deps.draftTree(name);
+  } catch {
+    return null;
+  }
+}
+
+/** Вторая запись: имя черновика («?» — имя не годится или плагин уже стоит) и его отпечаток. */
+async function draftRecord(deps: TickDeps, body: string, tree: string | null) {
+  const name = INSTALL_DATA.exec(body)?.[1];
+  const draft =
+    name !== undefined && !(await isInstalled(deps, name)) ? name : "?";
+  return draft === "?" || tree === null ? { draft } : { draft, tree };
+}
+
 /** Заявка сегодняшнего дня; два непоставленных подряд — вместо неё неделя паузы. */
 const insightClaim = (state: ProactiveState, clock: Clock, misses: number) => {
   const pause = misses >= 2;
@@ -665,7 +792,8 @@ const insightClaim = (state: ProactiveState, clock: Clock, misses: number) => {
 
 /**
  * Insight (ADR-0022): два инсайта подряд без установки — неделя паузы без хода; иначе заявка до
- * хода, ход, одно сообщение, имя черновика второй записью. Код 1 — только провал первой записи.
+ * хода, ход, одно сообщение, имя черновика и его отпечаток второй записью. Код 1 — только
+ * провал первой записи.
  */
 async function insight(
   deps: TickDeps,
@@ -689,12 +817,11 @@ async function insight(
   const text = await turnText(deps, insightPrompt(tr), "insight", log);
   const body = partsOf(text ?? "").join("\n\n");
   if (body === "") return 0;
+  const tree = await draftTreeOf(deps, body);
   const { sent } = await deliver([body], (p) => deps.send(p, "insight"), log);
   if (!sent) return 0;
-  const name = INSTALL_DATA.exec(body)?.[1];
-  const draft =
-    name !== undefined && !(await isInstalled(deps, name)) ? name : "?";
-  const next = { ...claimed, insight: { ...claimed.insight, draft } };
+  const record = await draftRecord(deps, body, tree);
+  const next = { ...claimed, insight: { ...claimed.insight, ...record } };
   await save(deps, next, "insight draft", log);
   return 0;
 }
@@ -752,6 +879,22 @@ export function loadConfig(
   return parseProactive(settings, log);
 }
 
+/**
+ * Срок прогона из IVA_JOB_STOP_AT, который ставит раннер расписания: один сигнал на все ходы.
+ * Переменной нет (ручной запуск) — срока нет; мусор, прошлое или дальше 2^31 мс — строка в
+ * журнал и прогон без срока.
+ */
+function runDeadline(raw: string | undefined): AbortSignal | undefined {
+  if (raw === undefined || raw === "") return undefined;
+  try {
+    const stopAt = resolveStopAt(raw, Date.now());
+    return AbortSignal.timeout(Math.max(0, stopAt - Date.now()));
+  } catch (error) {
+    console.log(`proactive: ${message(error)}, running without a deadline`);
+    return undefined;
+  }
+}
+
 /** Точка входа: адресат, замок без ожидания, `now` под замком, прогон. */
 export async function main(
   env: NodeJS.ProcessEnv = process.env,
@@ -768,6 +911,7 @@ export async function main(
     return 0;
   }
   const dir = dataDir();
+  const tz = env.ASSISTANT_TIMEZONE;
   const lock = await acquireFileLock(join(dir, "proactive.lock"), {
     timeoutMs: LOCK_WAIT_MS,
     staleMs: LOCK_STALE_MS,
@@ -781,11 +925,12 @@ export async function main(
     return await runProactiveTick(now, {
       config: () =>
         loadConfig(join(dir, "settings.json"), (line) => console.log(line)),
-      timeZone: resolveTimeZone(env.ASSISTANT_TIMEZONE),
+      timeZone: resolveTimeZone(tz),
       statePath: join(dir, "proactive.json"),
       sources: [telegramSource(env, dir), mailSource(), failuresSource(dir)],
-      runTurn: async (prompt) =>
-        runReminderTurn(prompt, reminderClientOptions(env)),
+      runTurn: async (prompt, kind, signal) =>
+        runReminderTurn(prompt, reminderClientOptions(env, kind), { signal }),
+      signal: runDeadline(env[JOB_STOP_AT_ENV]),
       send: (part, source) =>
         sendTelegramHtml(token, chat, part, {
           retryTransient: true,
@@ -797,6 +942,13 @@ export async function main(
       unfixed: () => unfixedFailures(dir, now),
       installed: async (name) =>
         findPlugin((await readPluginsStateSafe(dir)).state, name) !== undefined,
+      spentToday: () =>
+        Promise.resolve(spentToday(readEntries(dir), now, resolveTimeZone(tz))),
+      draftTree: async (name) =>
+        (await pluginTreeDigest(join(dir, "custom/plugin-drafts", name))).slice(
+          0,
+          12,
+        ),
       ...overrides,
     });
   } finally {

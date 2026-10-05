@@ -14,6 +14,28 @@ const SERVICE_AUTH = {
   principalType: "service",
 } as const;
 
+/**
+ * Виды хода, которые ход Ивы называет заголовком `x-iva-turn`. Слой agent/ не импортирует
+ * scripts/, поэтому это копия `REMINDER_TURN_KINDS` (scripts/lib/reminder-turn.ts); их
+ * совпадение держит scripts/lib/reminder-turn.test.ts.
+ */
+export const TURN_KINDS: ReadonlySet<string> = new Set([
+  "watch",
+  "brief",
+  "insight",
+  "reminder",
+  "signal",
+  "alert",
+]);
+
+/** Вид хода — атрибутом, только у запроса, уже прошедшего bearer, и только из списка. */
+function serviceAuth(request: Request) {
+  const turn = request.headers.get("x-iva-turn");
+  return turn !== null && TURN_KINDS.has(turn)
+    ? { ...SERVICE_AUTH, attributes: { iva_turn: turn } }
+    : SERVICE_AUTH;
+}
+
 function equalSecret(left: string, right: string): boolean {
   const digest = (value: string) => createHash("sha256").update(value).digest();
   return timingSafeEqual(digest(left), digest(right));
@@ -25,7 +47,9 @@ export function assistantBearerAuth(expectedToken?: string): AuthFn<Request> {
   return (request) => {
     if (!expected) return null;
     const received = extractBearerToken(request.headers.get("authorization"));
-    return received && equalSecret(received, expected) ? SERVICE_AUTH : null;
+    return received && equalSecret(received, expected)
+      ? serviceAuth(request)
+      : null;
   };
 }
 
