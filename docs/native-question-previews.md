@@ -7,14 +7,13 @@ choices and shows the accepted selection. This status does not claim that the
 subsequent business operation succeeded.
 
 The reference and accepted display status are part of persisted channel state.
-If Telegram editing fails, the accepted answer remains accepted; only delivery is
-retried when the turn completes, starts, or enters `session.waiting`. No business operation is replayed. A definite Telegram 400 saying the message was
+If Telegram editing fails, the accepted answer remains accepted; only delivery happens
+again when the turn completes, starts, or enters `session.waiting`. No business operation is replayed. A definite Telegram 400 saying the message was
 deleted or cannot be edited retires its preview reference; there is nothing left to
 deliver there. Transient or ambiguous failures keep the accepted display status. One recovery pass
 shares the existing five-second edit deadline across text and keyboard removal. The
 first retained failure moves to the end and stops that pass, so a backlog cannot add
-five seconds per preview or repeatedly starve later accepted questions. No new queue,
-TTL or persisted retry fields are introduced.
+five seconds per preview or repeatedly starve later accepted questions. No new queue, TTL or persisted redelivery fields are introduced.
 Rich previews are edited without their embedded button tags. Classic previews use
 an empty inline keyboard; if text editing fails, keyboard removal is attempted
 separately. UI delivery can still fail, so an old-looking preview is not evidence

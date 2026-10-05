@@ -11,8 +11,8 @@ Paths are relative to the working directory of the running version; data is
 ## Never in a turn without the owner
 
 - `iva doctor` — blocked: its repairs restart iva.service.
-- `iva diagnose` — runs the same doctor with repairs: never in a turn without
-  the owner; in a chat turn only by the skill `report-problem`.
+- `iva diagnose` — read-only: the same checks as doctor, no repairs; in a turn
+  only through report-problem.
 - `iva logs`, `iva trace tail` — they follow forever and end only on the bash
   timeout. Use `journalctl … --no-pager -n N` and `iva trace show`.
 - `iva proactive on|off|set`, `iva jobs ack` — they change state; only on the

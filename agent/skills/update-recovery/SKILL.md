@@ -19,13 +19,14 @@ does not prove the customization was included.
 2. Follow the read-only commands in
    [docs/troubleshooting.md](../../../docs/troubleshooting.md#customization-left-out-after-an-update).
    Resolve the actual data directory using the shared data-dir helper; do not assume it is `data/`.
-   Read the update log locally to distinguish a compile error, failed startup probe, and a deferred
-   retry of a previously failed customized version. Do not infer the cause from the stock notice.
-   `iva doctor` auto-repairs and `iva diagnose` writes a package and runs doctor; neither is a
-   read-only first step. Do not publish raw agent/build logs, custom contents or `.env` values.
+   Read the update log locally to distinguish a compile error, failed startup probe, and a held-back
+   version of your files: the last version carrying them did not come up after its restart. Do not
+   infer the cause from the stock notice. `iva doctor` auto-repairs, so it is not a first step;
+   `iva diagnose` repairs nothing and only writes a support package — repairs are `iva doctor` in a
+   terminal. Do not publish raw agent/build logs, custom contents or `.env` values.
 
-3. `workflow store: 0 runs; 0 hook files` describes workflow history, not whether customizations are
-   in the build. For two skill sources such as `morning-digest.md` and `morning-digest/SKILL.md`,
+3. `workflow store: 0 runs; 0 hook files` describes past workflow runs, not whether customizations are
+   in the build. For two skill sources such as `my-skill.md` and `my-skill/SKILL.md`,
    inspect both locally. The current live resolver prefers the directory package and logs the
    skipped flat file; a duplicate by itself does not prove why an older build failed.
 

@@ -11,7 +11,7 @@ A check observes a job; it does not keep a model turn open until the job finishe
    of its log, or `systemctl --user show <unit> -p ActiveState -p SubState -p Result -p ExecMainStatus`.
    For the cause, read `journalctl --user -u <unit> -n 50 --no-pager`.
    A PID alone does not prove progress or completion. Use a short
-   tool timeout; no `sleep`, `tail -f`, polling loop or wait for process exit.
+   tool timeout; no `sleep`, `tail -f`, status checks in a loop or wait for process exit.
 2. Return the observed state and its evidence: completed, still running, failed
    or unknown. Still running means say what remains; never report it as complete.
    Stop checking after that snapshot. A Reminder returns the status as its final
