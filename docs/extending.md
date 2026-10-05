@@ -34,7 +34,7 @@ with a `SKILL.md` plus supporting files. Iva loads both your custom skills and t
 - 📄 **documents.md** — local PDF, DOCX and XLSX extraction, one-file answers and optional library import.
 - 📡 **telegram-userbot/** — a guarded personal-account workflow with a separate safety reference.
 - 🎨 **rich-post/** — rich Telegram posts to another allowlisted chat; the sending is the `iva post` command, not a bundled script.
-- 🩹 **update-recovery/** — merges customizations an update left in `data/update-conflicts/`; triggered by "restore my update changes".
+- 🩹 **update-recovery/** — diagnoses stock-only updates and restores customizations, including merge conflicts in `data/update-conflicts/`; triggered by "restore my update changes". Start with the [read-only checks](troubleshooting.md#customization-left-out-after-an-update).
 
 A new skill needs no build: Iva reads `data/custom/agent/skills/` at the start of every turn, so a file
 written during a conversation is loadable on the next one. A skill that shares its name with a bundled

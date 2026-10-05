@@ -1,15 +1,40 @@
 ---
 name: update-recovery
-description: "Restore or merge owner customizations after an Iva update; resolve data/update-conflicts/."
+description: "Use when an update leaves out owner customizations or they need restoring or merging."
 ---
 
 # Update customization recovery
 
 Iva keeps authored customizations in `data/custom/agent/`. An update can activate the new core while
 placing conflicting base, local and upstream versions in `data/update-conflicts/`. Resolve those
-files here; never apply an old git stash over the whole checkout.
+files here; never apply an old git stash over the whole checkout. A stock-only update can also mean
+the custom build or its startup probe failed, without a manifest conflict. An empty conflict list
+does not prove the customization was included.
 
-## Procedure
+## Diagnose before editing
+
+1. Locate this installation: use its `current/` directory on an installed Version, or its checkout
+   root on an older installation. Do not diagnose a different checkout or edit `versions/`.
+
+2. Follow the read-only commands in
+   [docs/troubleshooting.md](../../../docs/troubleshooting.md#customization-left-out-after-an-update).
+   Resolve the actual data directory using the shared data-dir helper; do not assume it is `data/`.
+   Read the update log locally to distinguish a compile error, failed startup probe, and a deferred
+   retry of a previously failed customized version. Do not infer the cause from the stock notice.
+   `iva doctor` auto-repairs and `iva diagnose` writes a package and runs doctor; neither is a
+   read-only first step. Do not publish raw agent/build logs, custom contents or `.env` values.
+
+3. `workflow store: 0 runs; 0 hook files` describes workflow history, not whether customizations are
+   in the build. For two skill sources such as `morning-digest.md` and `morning-digest/SKILL.md`,
+   inspect both locally. The current live resolver prefers the directory package and logs the
+   skipped flat file; a duplicate by itself does not prove why an older build failed.
+
+4. Explain the actual error and propose the smallest correction. Before editing or moving any
+   source, preserve both copies outside `custom/agent/` and `custom/plugins/` so a backup is not
+   another build input. If the copies differ, ask which behavior to keep or offer a semantic merge.
+   Do not automatically delete the flat file, replace all customizations with stock, or clear state.
+
+## Resolve an archived merge conflict
 
 1. Read the machine-readable status:
 
@@ -28,8 +53,20 @@ files here; never apply an old git stash over the whole checkout.
    - Accept the new core copy: use side `upstream`.
    - Return to the old common base only when the owner explicitly asks: use side `base`.
 
-4. Run `npm run build`. Do not call `iva restart`, `systemctl`, `nohup` or a detached process from
-   the current turn. Tell the owner to send `/restart` after the build succeeds.
+4. Activate the corrected sources using the installation's existing update path below.
+
+## Activate corrected sources
+
+On an installed Version or a managed legacy checkout, ask the owner to run
+`iva update --force --verbose`, or send `/update --force`. The updater creates and probes a new
+candidate with the corrected custom sources before activation. This restarts services: do not
+launch it from the agent turn that would be interrupted. A failed custom build can still finish as
+stock; confirm the final result and log before claiming recovery. Repeating it without fixing the
+reported cause is not a recovery procedure.
+
+Only in a developer checkout marked `.iva-dev`, run `npm run build`; after success tell the owner
+to send `/restart`. Running `npm run build` inside an immutable Version does not reapply the edited
+custom layer. Do not call `iva restart`, `systemctl`, `nohup` or a detached process from this turn.
 
 If a merge is ambiguous, preserve the local copy and ask the owner which behavior should win. Never
 delete a recovery bundle or git stash; retention cleanup belongs to the updater.

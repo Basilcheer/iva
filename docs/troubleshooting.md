@@ -89,6 +89,64 @@ Iva forces one OAuth refresh and retries once; if `Codex auth rejected (401 toke
 
 An update now resets every open session before services restart. Each chat starts with fresh context; Vault and long-term History stay intact. Telegram messages queued while services were stopped are also preserved.
 
+### Customization left out after an update
+
+The message `your customization in data/custom is not in this version` means Iva is running a stock
+build. The custom build or startup probe may have failed, or a previous failed start may have deferred
+another attempt. The files remain in the custom layer. The notice alone does not identify the cause.
+
+Start in the installation's active source directory: `cd ~/iva/current` on the Version layout, or
+`cd ~/iva` on an older checkout. Substitute your installation path if different. These checks only
+read files and service status; unlike `iva doctor`, they do not repair the installation:
+
+```bash
+iva version
+iva status
+node --env-file-if-exists=.env scripts/custom-recovery.ts status
+iva_data_dir=$(node --env-file-if-exists=.env --input-type=module -e '
+  import { resolveDataDir } from "./scripts/lib/data-dir.ts";
+  console.log(resolveDataDir(process.cwd()));
+')
+if [ -d "$iva_data_dir/custom/agent" ]; then
+  find "$iva_data_dir/custom/agent" -type f -print
+fi
+if [ -d "$iva_data_dir/logs" ]; then
+  ls -lt "$iva_data_dir/logs"
+fi
+```
+
+The status command reports the actual `customRoot` and any archived merge conflicts or manifest error.
+An empty conflict list does not mean the custom build succeeded. Inspect the relevant update log in
+the reported data directory locally, for example with `less "$iva_data_dir/logs/<update-log>"`. An
+update launched from Telegram can also leave its technical output in the user journal. Do not post
+raw logs, custom file contents or `.env` values: they can carry tokens and personal data. Share the
+version, failing step, file names and a reviewed error excerpt. `iva diagnose` is available when a
+support package is needed, but it writes a package and runs doctor's repairs; it is not read-only.
+
+For `skills/morning-digest/SKILL.md` alongside `skills/morning-digest.md`, compare the two custom
+sources locally. The current live skill resolver chooses the directory package and logs that the
+flat file was skipped. That rule does not establish what caused an older compile failure: use its
+actual error. `workflow store: 0 runs; 0 hook files` counts workflow history; it is not a count of
+loaded custom skills and does not diagnose this problem.
+
+Preserve both source copies outside `custom/agent/` and `custom/plugins/` before a correction. Keep
+the owner's intended behavior: merge differing procedures, or move the superseded copy to that
+backup only after choosing which one to keep. Do not delete the entire custom layer or restore a
+stash over the checkout. For an archived three-way conflict, ask Iva to **restore my update changes**;
+the bundled `update-recovery` skill uses the existing recovery commands.
+
+After correcting the diagnosed cause, rebuild through the existing updater:
+
+```bash
+iva update --force --verbose
+```
+
+This is a repair step, not a read-only check: it builds and probes a candidate and restarts services.
+The same action is `/update --force` in Telegram. Check the final result: a successful core update
+can still exclude broken custom sources. On an immutable Version, `npm run build` does not reapply
+changes from the custom layer. Only a developer checkout marked `.iva-dev` uses `npm run build`
+followed by an owner-initiated restart.
+
 ### Long or formatted message gets no reply
 
 Symptoms: short messages are answered, a long one (over 4096 characters) or one written in the Telegram editor is ignored, and `/restart` changes nothing.
