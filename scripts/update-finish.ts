@@ -12,6 +12,7 @@ import {
 import { dirname, join } from "node:path";
 import { CATALOG, catalogProvider } from "./lib/model-catalog.ts";
 import { notificationChat } from "./lib/notification-chat.ts";
+import { redactNotice } from "./lib/notice.ts";
 import {
   alertOnce,
   CUSTOM_ALERT_KEY,
@@ -689,8 +690,8 @@ export function tombstoned(
  * this Alert stands beside (scripts/check-update.ts): the marked-up sender lives in the
  * authored tree, and this process runs in a version directory that may not have a
  * `node_modules` yet - a dependency reached on any path through it is a crash with no
- * update (scripts/lib/version-update.test.ts pins that). The text is this file's own
- * copy with plugin names in it, so there is nothing here for the outbound Gate to redact.
+ * update (scripts/lib/version-update.test.ts pins that). The text reaches it through the
+ * outbound Gate (alertOwnerOnce): the stock-build Alert carries a line of build output.
  */
 function sendToChat(
   token: string,
@@ -802,7 +803,10 @@ async function alertOwnerOnce(
   const chat = notificationChat(layout.values);
   const deliver = send ?? (token && chat ? sendToChat(token, chat) : null);
   if (!deliver) return; // Nowhere to say it; the output above is all there is.
-  const text = alert.text(await noticeTranslator(layout.values));
+  // Через outbound-Gate: строка ошибки сборки — вывод файлов владельца, данные рантайма.
+  const text = await redactNotice(
+    alert.text(await noticeTranslator(layout.values)),
+  );
   const outcome = await alertOnce(layout.data, alert.key, alert.essence, () =>
     deliver(text),
   );

@@ -917,6 +917,31 @@ test("the owner hears about the stock build once a week, sooner if the files cha
   assert.equal(sent.length, 2);
 });
 
+// Первая строка ошибки — вывод сборки файлов владельца: это данные рантайма, и в чат она
+// идёт через outbound-Gate, как любой текст с такими данными (scripts/lib/notice.ts).
+test("the stock-build Alert passes the outbound Gate: a key in the error line is redacted", async (t) => {
+  t.mock.method(console, "error", () => undefined);
+  const layout = installationWithChat(
+    t,
+    "TELEGRAM_BOT_TOKEN=token\nTELEGRAM_DIGEST_CHAT_ID=42\nAGENT_LANGUAGE=en\n",
+  );
+  const planted = `api_key=${"z".repeat(24)}`;
+  const sent: string[] = [];
+  ownFile(layout, "const = 1;\n");
+  await alertOwnerAboutCustom(
+    layout,
+    `your customization in data/custom does not build against this version, so Iva is running the stock build:\nerror TS1005 in zz.ts: const KEY = "${planted}"`,
+    () => {},
+    (text) => {
+      sent.push(text);
+      return Promise.resolve(true);
+    },
+  );
+  assert.equal(sent.length, 1);
+  assert.doesNotMatch(sent[0], /z{24}/u);
+  assert.match(sent[0], /\[REDACTED\]/u);
+});
+
 test("the stock-build Alert without a chat stays in the output and is not throttled", async (t) => {
   const layout = installationWithChat(t, "AGENT_LANGUAGE=en\n");
   const said: string[] = [];

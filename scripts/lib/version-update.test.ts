@@ -234,6 +234,11 @@ test("the new version's updater runs before there is a node_modules to run with"
   const seen = new Set<string>();
   const queue = [join(root, "update-finish.ts")];
   const foreign: string[] = [];
+  // The outbound Gate is loaded by a call inside try/catch and fails open when the tree
+  // cannot load it (scripts/lib/notice.test.ts: «a notice still goes out when the authored
+  // tree is not there»); the updater reaches it only for an Alert, after `npm ci`. Its
+  // static imports are still walked.
+  const failOpen = new Set([join(root, "lib/notice.ts")]);
   while (queue.length > 0) {
     const file = queue.pop()!;
     if (seen.has(file)) continue;
@@ -242,7 +247,7 @@ test("the new version's updater runs before there is a node_modules to run with"
     const specifiers = [
       ...source.matchAll(/^\s*(?:import|export)[^"]*?from\s*"([^"]+)"/gmu),
       ...source.matchAll(/^\s*import\s+"([^"]+)"/gmu),
-      ...source.matchAll(/\bimport\("([^"]+)"\)/gu),
+      ...(failOpen.has(file) ? [] : source.matchAll(/\bimport\("([^"]+)"\)/gu)),
     ];
     for (const [, specifier] of specifiers) {
       if (specifier.startsWith("node:")) continue;
