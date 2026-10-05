@@ -3,8 +3,23 @@
 // отвечает «not logged in» на первом же шаге.
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { forceRefreshAccessToken, jwtExp, readAuth } from "#lib/codex-auth.ts";
 
 export const CODEX_NO_LOGIN = "codex: нет входа, iva login";
+
+/** Сборка временной Ивы, ход до 240 с и запас обновления codex-auth (5 мин) — с избытком. */
+const LIVE_TURN_TOKEN_MS = 30 * 60_000;
+
+/**
+ * Токен установки живёт меньше живого хода с запасом — он обновляется в самой установке, тем же
+ * путём, что у сервиса и моста (`agent/lib/codex-auth.ts`). Иначе его обновила бы временная Ива в
+ * своей копии: новый refresh-токен ушёл бы с песочницей, а у установки остался бы старый.
+ */
+async function renewForLiveTurn(dir: string): Promise<void> {
+  const token = readAuth(dir)?.access_token;
+  if (!token || jwtExp(token) * 1000 - Date.now() >= LIVE_TURN_TOKEN_MS) return;
+  await forceRefreshAccessToken(dir);
+}
 
 /**
  * Копирует вход codex (0600) из данных установки в данные временной Ивы. `null` — копия
@@ -16,6 +31,7 @@ export async function carryCodexLogin(
   toData: string,
 ): Promise<string | null> {
   if (provider !== "codex") return null;
+  await renewForLiveTurn(fromData);
   let auth: Buffer;
   try {
     auth = await readFile(join(fromData, "codex-auth.json"));
