@@ -34,8 +34,11 @@ for (const skill of readdirSync(SKILLS, { withFileTypes: true })) {
     `skill ${skill.name}: every iva plugin add of a draft is a local path`,
     { todo: PENDING.has(skill.name) ? "file outside wave 2" : undefined },
     () => {
-      for (const raw of adds)
-        assert.equal(parsePluginSource(raw).kind, "local", raw);
+      // Модель подставляет имя черновика вместо <name>.
+      for (const raw of adds) {
+        const typed = raw.replace("<name>", "rain-alert");
+        assert.equal(parsePluginSource(typed).kind, "local", typed);
+      }
     },
   );
 }
