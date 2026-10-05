@@ -24,6 +24,7 @@ import { gitAt, updaterCompat } from "./update-check.ts";
 import { loadVaultPair } from "./vault-pair.ts";
 import {
   alertResolved,
+  CUSTOM_ALERT_KEY,
   PLUGIN_ALERT_KEY,
   pluginsSwitchedOffAlert,
 } from "./notice-policy.ts";
@@ -413,6 +414,8 @@ interface CandidateTree {
   custom: Custom;
   mounted: readonly CodePlugin[];
   readonly refusals: Map<string, string>;
+  /** Why the tree went to the stock build; told once the tree is final (settleCustom). */
+  stockNotice?: string;
 }
 
 /** Опции хода, которых вызывающий вправе не задавать, получают поведение по умолчанию:
@@ -521,6 +524,27 @@ async function settlePlugins(
   )(failures);
 }
 
+/**
+ * Заводская сборка называется владельцу, когда дерево окончательное и поднялось: Alert о
+ * версии, которая не стартовала и выброшена, был бы ложным, и неделя дросселя заглушила бы
+ * настоящий. Не поднялось — строка остаётся только в выводе обновления. Файлы владельца снова
+ * в версии — прошлый Alert забыт, и рецидив заговорит сразу (ADR-0007).
+ */
+async function settleCustom(
+  run: UpdateRun,
+  tree: CandidateTree,
+  started: boolean,
+): Promise<void> {
+  const notice = tree.custom === "stock" ? tree.stockNotice : undefined;
+  if (!started) {
+    if (notice !== undefined) run.notify(notice);
+    return;
+  }
+  if (tree.custom === "applied")
+    alertResolved(run.store.layout.data, CUSTOM_ALERT_KEY);
+  if (notice !== undefined) await run.alertCustom(notice);
+}
+
 /** Живой старт на песочном состоянии: обновление, которое вот-вот выбросят, не должно
  * успеть тронуть установку. Порт разведён по pid, а между проверкой и стартом порт никто
  * не держит - сосед, занявший его в этом окне, возвращается как busy, и следующему
@@ -556,16 +580,7 @@ async function buildTree(
   tree: CandidateTree,
   prepared: boolean,
 ): Promise<void> {
-  const {
-    store,
-    name,
-    run: command,
-    dir,
-    customDir,
-    plugins,
-    alertCustom,
-    log,
-  } = run;
+  const { store, name, run: command, dir, customDir, plugins, log } = run;
   const refuse = (failures: readonly PluginFailure[]): void => {
     for (const failure of failures)
       tree.refusals.set(failure.name, failure.reason);
@@ -586,19 +601,19 @@ async function buildTree(
     );
     tree.custom = builtWith(dir, name, customDir, plugins);
     tree.mounted = [];
-    if (tree.custom === "stock") await alertCustom(deferredNotice());
+    if (tree.custom === "stock") tree.stockNotice = deferredNotice();
     return;
   }
   const built = await buildVersion({
     store,
     name,
     run: command,
-    alertCustom,
     log,
     plugins,
     requirePlugins: run.requirePlugins,
   }).catch((error: unknown) => discardTree(dir, error));
   tree.custom = built.custom;
+  tree.stockNotice = built.stockNotice;
   // What the build refused is remembered, not announced yet: the start below can
   // still take another plugin out, and the owner gets one message about the tree
   // that ends up installed rather than one per attempt.
@@ -645,7 +660,7 @@ async function rebuildWithoutCustomization(
   prepared: boolean,
   health: Health,
 ): Promise<Health> {
-  const { store, name, run: command, dir, alertCustom, log } = run;
+  const { store, name, run: command, dir, log } = run;
   if (health.ok || tree.custom !== "applied" || prepared) return health;
   log("the customized version does not start; rebuilding without it");
   await buildStock(store, name, command).catch((error: unknown) =>
@@ -653,10 +668,8 @@ async function rebuildWithoutCustomization(
   );
   tree.custom = "stock";
   tree.mounted = [];
-  const broken = health.log;
-  const probed = await probeCandidate(run);
-  if (probed.ok) await alertCustom(stockNotice("start against", broken));
-  return probed;
+  tree.stockNotice = stockNotice("start against", health.log);
+  return await probeCandidate(run);
 }
 
 /** Проба дерева и пересборки того, что не поднялось: плагины, потом кастомизация. */
@@ -699,6 +712,7 @@ async function buildCandidate(
     // Garbage nothing points at - unless an earlier run finished it, and then
     // it is somebody's way back, which a failed probe never takes.
     if (!prepared) rmSync(dir, { recursive: true, force: true });
+    await settleCustom(run, tree, false);
     notify(
       `update to ${name} did not start; staying on ${active ?? "the current version"}`,
     );
@@ -707,6 +721,7 @@ async function buildCandidate(
   // The tree is final and it starts: the state of the plugins is settled against it,
   // so `plugins.json` can never claim a plugin whose code is not in what runs.
   await settlePlugins(run, tree);
+  await settleCustom(run, tree, true);
   // Proved and immutable. It remains a candidate until all old writers stop
   // and every state migration finishes against the old active Version.
   store.complete(name);
@@ -1088,6 +1103,8 @@ type BuiltVersion = {
   readonly custom: Custom;
   readonly mounted: readonly CodePlugin[];
   readonly failed: readonly PluginFailure[];
+  /** The output line about the stock build; said once the tree starts. */
+  readonly stockNotice?: string;
 };
 
 /** Build a staged version with the user's files in it, or without them if they break it. */
@@ -1095,7 +1112,6 @@ async function buildVersion({
   store,
   name,
   run,
-  alertCustom,
   log,
   plugins,
   requirePlugins,
@@ -1103,7 +1119,6 @@ async function buildVersion({
   readonly store: Store;
   readonly name: string;
   readonly run: Runner;
-  readonly alertCustom: (text: string) => Promise<void>;
   readonly log: Say;
   readonly plugins: readonly CodePlugin[];
   readonly requirePlugins: boolean;
@@ -1195,8 +1210,12 @@ async function buildVersion({
   // in place and say so. The customization stays untouched in data/custom.
   log("the customized build failed; rebuilding this version without it");
   await buildStock(store, name, run);
-  await alertCustom(stockNotice("build against", built.output));
-  return { custom: "stock", mounted: [], failed };
+  return {
+    custom: "stock",
+    mounted: [],
+    failed,
+    stockNotice: stockNotice("build against", built.output),
+  };
 }
 
 /** Rebuild a staged version from its commit alone: a broken customization is tried once. */

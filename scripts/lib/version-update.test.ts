@@ -564,6 +564,42 @@ test("a held-back customization tells the owner the version did not come up", as
   assert.equal(stockFailureLine(said.texts[0]), null);
 });
 
+// Alert говорит о версии, на которой Ива работает: если заводская сборка не прошла пробу,
+// обновление уходит в unhealthy, работает прежняя версия с файлами владельца, и Alert был бы
+// ложным, а неделя дросселя заглушила бы настоящий.
+test("a stock build whose candidate does not start sends no Alert; the output keeps the line", async (t) => {
+  const iva = world(t);
+  updated(await iva.update());
+  customFile(iva.home, "agent/connections/mine.ts", "BREAK this build\n");
+  iva.release("0.3.15");
+  const said = alerts();
+
+  const outcome = await iva.update({
+    alertCustom: said.alertCustom,
+    probe: () =>
+      Promise.resolve({ ok: false, log: "no probe port stayed free" }),
+  });
+  assert.equal(outcome.status, "unhealthy");
+  assert.deepEqual(said.texts, []);
+  assert.match(iva.notices.join("\n"), /does not build against this version/u);
+});
+
+test("files that build again forgive the stock-build Alert, so a relapse speaks at once", async (t) => {
+  const iva = world(t);
+  customFile(iva.home, "agent/connections/mine.ts", "export const mine = 1;\n");
+  const alertState = join(layoutFor(iva.home).data, "alert-state.json");
+  writeFileSync(
+    alertState,
+    JSON.stringify({
+      "custom-build": { essence: "x", lastSentAt: Date.now() },
+    }),
+  );
+
+  const outcome = updated(await iva.update());
+  assert.equal(outcome.custom, "applied");
+  assert.deepEqual(JSON.parse(readFileSync(alertState, "utf8")), {});
+});
+
 test("a slot file with a bundled name refuses the version and keeps the running one", async (t) => {
   const iva = world(t);
   const first = updated(await iva.update());
