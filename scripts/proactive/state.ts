@@ -20,6 +20,14 @@ export type SeenEntry = {
 /** Счётчик одного дня; день — дата в зоне владельца, другой день — ноль. */
 export type DayCount = { readonly day: string; readonly count: number };
 
+/** Spark (ADR-0022); поля нет — Spark ещё не было, файл старой версии читается. */
+export type SparkState = {
+  readonly day: string; // день заявки в зоне владельца; "" — не было
+  readonly draft: string; // имя черновика доставленной находки; "?" — имя не годится; "" — QUIET
+  readonly misses: number; // находки подряд, после которых плагин не поставлен
+  readonly pausedUntilMs: number; // до этого момента хода нет; 0 — паузы нет
+};
+
 export type ProactiveState = {
   readonly schemaVersion: number;
   readonly seen: Readonly<Record<string, SeenEntry>>;
@@ -30,6 +38,7 @@ export type ProactiveState = {
     readonly slots: readonly number[];
   };
   readonly failuresSeenUpToMs: number;
+  readonly spark?: SparkState;
 };
 
 class ProactiveStateError extends Error {}
@@ -70,6 +79,13 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+const isSpark = (value: unknown): boolean =>
+  isObject(value) &&
+  typeof value.day === "string" &&
+  typeof value.draft === "string" &&
+  isCount(value.misses) &&
+  Number.isFinite(value.pausedUntilMs);
+
 function isState(value: Record<string, unknown>): boolean {
   const brief = value.briefDone as Partial<ProactiveState["briefDone"]> | null;
   return (
@@ -80,6 +96,7 @@ function isState(value: Record<string, unknown>): boolean {
     typeof brief?.day === "string" &&
     Array.isArray(brief.slots) &&
     brief.slots.every(isCount) &&
+    (value.spark === undefined || isSpark(value.spark)) &&
     typeof value.failuresSeenUpToMs === "number" &&
     Number.isFinite(value.failuresSeenUpToMs)
   );
