@@ -8,9 +8,9 @@ import type { AttachSessionFn, CancelTurnResult } from "eve/channels";
  * `attachSession` приходит из RouteHandlerArgs, поэтому вызывающий обязан быть
  * роутом канала: событийные обработчики этот helper не получают.
  *
- * Второй, НЕ канальный путь отмены в проекте — `scripts/lib/night-session.ts`: ночной
- * роллап держит client-сессию eve и гасит свой ход через
- * `session.cancel({ turnId, tasks: true })` — с задачами, как здесь, — а снимает её reset.
+ * Второй, НЕ канальный путь отмены в проекте — `scripts/lib/reminder-turn.ts`: ход
+ * напоминания и тика держит client-сессию eve и на лимите сессии или по сроку гасит свой ход
+ * через `session.cancel({ tasks: true })` — с задачами, как здесь, — а снимает её reset.
  * Это другой API и другой владелец сессии, сюда он не сводится; при апгрейде eve его надо
  * мигрировать отдельно.
  */
