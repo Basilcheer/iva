@@ -10,6 +10,7 @@ import {
   postTelegramQuestion,
   settleTelegramQuestions,
   flushSettledTelegramQuestions,
+  settledText,
   type QuestionState,
 } from "./telegram-question.ts";
 
@@ -76,7 +77,7 @@ for (const seed of [272, 20261005, 424242]) {
             },
             state,
             tg,
-            rich,
+            { rich },
           );
           const callback = Object.entries(state.hitlCallbacks ?? {}).find(
             ([, response]) => response.optionId === accepted,
@@ -214,7 +215,7 @@ void test("only definite HTTP 400 unavailable messages retire previews; seed 272
           },
           state,
           tg,
-          rich,
+          { rich },
         );
         await settleTelegramQuestions(
           [
@@ -240,5 +241,42 @@ void test("only definite HTTP 400 unavailable messages retire previews; seed 272
       },
     ),
     { seed: 2722, numRuns: 50 },
+  );
+});
+
+// Статус закрытого вопроса: выбранная кнопка видна подписью, свободный ответ — никогда (в нём
+// может быть пароль). Seed в имени теста воспроизводит провал.
+void test("settledText: the chosen label is shown, freeform text never; seed 61006", () => {
+  const label = fc.stringMatching(/^[a-zа-я0-9 ]{1,12}$/u);
+  fc.assert(
+    fc.property(
+      fc.constantFrom("answered", "approved", "denied", "ignored", "invalid"),
+      fc.dictionary(fc.constantFrom("a", "b", "yes", "__proto__"), label),
+      fc.option(
+        fc.constantFrom("a", "b", "yes", "no", "__proto__", "constructor"),
+        {
+          nil: undefined,
+        },
+      ),
+      fc.string().map((text) => `⟦${text}⟧`),
+      (outcome, labels, optionId, freeform) => {
+        const text = settledText(
+          {
+            requestId: "q",
+            outcome,
+            response: { optionId, text: freeform },
+          },
+          labels,
+        );
+        assert.ok(!text.includes("⟦"), `freeform text in the status: ${text}`);
+        const chosen =
+          optionId !== undefined && Object.hasOwn(labels, optionId)
+            ? labels[optionId]
+            : undefined;
+        if (chosen !== undefined && !["ignored", "invalid"].includes(outcome))
+          assert.ok(text.endsWith(`: ${chosen}`), `label lost: ${text}`);
+      },
+    ),
+    { seed: 61006, numRuns: 300 },
   );
 });

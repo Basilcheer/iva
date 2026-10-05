@@ -120,7 +120,7 @@ void test("rich resolution edits embedded buttons and never echoes a freeform an
     },
     state,
     tg,
-    true,
+    { rich: true },
   );
   assert.equal(calls[0].method, "sendRichMessage");
   assert.equal(calls[0].body.message_thread_id, 42);
@@ -183,7 +183,7 @@ void test("native ForceReply and Eve's literal long-question rendering are prese
   };
   const { renderTelegramInputRequest } = await import("eve/channels/telegram");
   const expected = renderTelegramInputRequest(request, { ...state });
-  await postTelegramQuestion(request, state, tg, true);
+  await postTelegramQuestion(request, state, tg, { rich: true });
   assert.equal(calls[0].text, expected.text);
   assert.deepEqual(calls[0].reply_markup, expected.replyMarkup);
   assert.equal(state.pendingFreeformReplies?.["19"], "freeform");
@@ -238,16 +238,13 @@ void test("rich send failure falls back once; failed rich edits never fall back 
     },
     options: [{ id: "yes", label: "Yes" }],
   };
-  await postTelegramQuestion(request, state, tg, true);
+  await postTelegramQuestion(request, state, tg, { rich: true });
   assert.equal(state.questionPreviews?.fallback.rich, false);
   assert.deepEqual(calls, ["sendRichMessage", "sendMessage"]);
   fail = false;
-  await postTelegramQuestion(
-    { ...request, requestId: "rich" },
-    state,
-    tg,
-    true,
-  );
+  await postTelegramQuestion({ ...request, requestId: "rich" }, state, tg, {
+    rich: true,
+  });
   const before = calls.length;
   fail = true;
   await settleTelegramQuestions(
@@ -391,7 +388,7 @@ void test("ambiguous rich posting failure never posts a duplicate native questio
       },
       state,
       tg,
-      true,
+      { rich: true },
     ),
   );
   assert.equal(posts, 0);
@@ -483,7 +480,7 @@ void test("deleted or permanently noneditable previews retire recovery metadata 
         },
         state,
         tg,
-        rich,
+        { rich },
       );
       const before = calls.length;
       await settleTelegramQuestions(
