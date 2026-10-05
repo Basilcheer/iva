@@ -518,7 +518,7 @@ function readBefore(
   return Promise.race([reading, aborted]);
 }
 
-/** Исход хода: срок, вопрос лимита сессии или граница потока. */
+/** Исход хода: срок, запрос eve «session-limit» или граница потока. */
 async function settleTurn(
   state: TurnState | typeof ABORTED,
   session: Session,
