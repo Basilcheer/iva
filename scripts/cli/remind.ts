@@ -128,7 +128,7 @@ export function createRemindCommand(
 
     const { turn, message: agentMessage } = await runAgent(
       text,
-      reminderClientOptions(env),
+      reminderClientOptions(env, "reminder"),
       dependencies,
     );
     const message = agentMessage ?? `⏰ ${text}`;

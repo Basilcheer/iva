@@ -33,6 +33,7 @@ import {
   reminderClientOptions,
   runReminderTurn,
   type ReminderTurn,
+  type ReminderTurnKind,
 } from "../lib/reminder-turn.ts";
 import { ownerChat } from "../lib/notification-chat.ts";
 import { sendTelegramHtml } from "../lib/telegram-send.ts";
@@ -75,7 +76,11 @@ export type TickDeps = {
   readonly timeZone: string;
   readonly statePath: string;
   readonly sources: readonly Source[];
-  readonly runTurn: (prompt: string) => Promise<ReminderTurn>;
+  /** Ход модели; вид хода уходит заголовком и становится `source` его расхода. */
+  readonly runTurn: (
+    prompt: string,
+    kind: ReminderTurnKind,
+  ) => Promise<ReminderTurn>;
   /** Одна часть в личный чат владельца; `source` — имя хода в журнале доставки. */
   readonly send: (
     part: string,
@@ -438,12 +443,12 @@ function afterDelivery(
 async function turnText(
   deps: TickDeps,
   prompt: string,
-  what: string,
+  what: "watch" | "brief" | "insight",
   log: (line: string) => void,
 ): Promise<string | null> {
   let turn: ReminderTurn;
   try {
-    turn = await deps.runTurn(prompt);
+    turn = await deps.runTurn(prompt, what);
   } catch (error) {
     turn = {
       status: "failed",
@@ -784,8 +789,8 @@ export async function main(
       timeZone: resolveTimeZone(env.ASSISTANT_TIMEZONE),
       statePath: join(dir, "proactive.json"),
       sources: [telegramSource(env, dir), mailSource(), failuresSource(dir)],
-      runTurn: async (prompt) =>
-        runReminderTurn(prompt, reminderClientOptions(env)),
+      runTurn: async (prompt, kind) =>
+        runReminderTurn(prompt, reminderClientOptions(env, kind)),
       send: (part, source) =>
         sendTelegramHtml(token, chat, part, {
           retryTransient: true,

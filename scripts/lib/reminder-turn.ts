@@ -8,19 +8,46 @@
 // child process runs the same turn.
 import { writtenInLanguage } from "./notice-policy.ts";
 
+/**
+ * Виды хода через этот модуль — одно место списка. Ход называет свой вид заголовком
+ * `x-iva-turn`, bearer-авторизация кладёт его в атрибут (agent/lib/eve-auth.ts, копия списка
+ * там сверяется тестом), хук расхода пишет вид в `source`.
+ */
+export const REMINDER_TURN_KINDS = [
+  "watch",
+  "brief",
+  "insight",
+  "reminder",
+  "signal",
+  "alert",
+] as const;
+
+export type ReminderTurnKind = (typeof REMINDER_TURN_KINDS)[number];
+
 export type ReminderClientOptions = {
   readonly host: string;
   readonly auth: { readonly bearer: () => Promise<string> };
+  /** eve Client шлёт их с каждым запросом хода. */
+  readonly headers?: Readonly<Record<string, string>>;
 };
+
+/** Заголовок вида хода; вид не назван — заголовка нет. */
+const turnHeaders = (turn: ReminderTurnKind | undefined) =>
+  turn === undefined ? {} : { headers: { "x-iva-turn": turn } };
 
 export function reminderClientOptions(
   env: NodeJS.ProcessEnv,
+  turn?: ReminderTurnKind,
 ): ReminderClientOptions {
   const bearer = String(env.ASSISTANT_BEARER ?? "").trim();
   if (!bearer) throw new Error("ASSISTANT_BEARER is missing — run: iva doctor");
   const port = env.IVA_PORT ?? "8723";
   const host = env.ASSISTANT_HOST ?? `http://127.0.0.1:${port}`;
-  return { host, auth: { bearer: () => Promise.resolve(bearer) } };
+  return {
+    host,
+    auth: { bearer: () => Promise.resolve(bearer) },
+    ...turnHeaders(turn),
+  };
 }
 
 export type TurnStreamEvent = {

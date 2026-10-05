@@ -476,3 +476,24 @@ void test("the step input that decides compaction between turns ignores garbage:
   assert.equal(stepInputTokens({}), null);
   assert.equal(stepInputTokens({ inputTokens: 56_000 }), 56_000);
 });
+
+// Ход Ивы называет свой вид заголовком x-iva-turn, хук пишет его в `source`: отчёт по
+// источникам показывает Watch, Brief и Insight отдельно от напоминаний и прочего фона.
+void test("by source: each kind of Iva's turn is its own row, other background turns are background", () => {
+  const kinds = ["watch", "brief", "insight", "reminder", "signal", "alert"];
+  const entries = [
+    ...kinds.map((source, index) =>
+      step({ source, turnId: `t${index}`, total: 100 + index }),
+    ),
+    step({ source: "http", turnId: "bg", total: 50 }),
+    step({ source: "channel:telegram", turnId: "chat", total: 40 }),
+  ];
+  const report = formatUsageReport(
+    summarize(entries, { window: "by-source", tz: "UTC" }),
+  );
+  for (const kind of kinds)
+    assert.match(report, new RegExp(`^• ${kind}: \\d+ tokens`, "mu"));
+  assert.match(report, /^• background: 50 tokens/mu);
+  assert.match(report, /^• chat: 40 tokens/mu);
+  assert.doesNotMatch(report, /cron|digest/u);
+});

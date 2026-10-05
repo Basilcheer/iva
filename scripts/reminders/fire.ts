@@ -297,6 +297,13 @@ function replyOf(
   return textOrFallback(turn.message, fallback);
 }
 
+/** Клиент хода строки: Signal называет себя своим видом, остальное — Reminder. */
+const clientFor = (row: Reminder, env: NodeJS.ProcessEnv) =>
+  reminderClientOptions(
+    env,
+    row.id.startsWith("signal-") ? "signal" : "reminder",
+  );
+
 /** Один ход агента по тексту напоминания. Любой его провал отдаётся текстом строки. */
 async function agentOutcome(
   row: Reminder,
@@ -314,7 +321,7 @@ async function agentOutcome(
     tr,
   );
   try {
-    const turn = await deps.runTurn(prompt, reminderClientOptions(deps.env), {
+    const turn = await deps.runTurn(prompt, clientFor(row, deps.env), {
       log: deps.log,
       // Пока ход идёт, чат и тема строки видят его сессию: по ней ⏹ и /stop гасят её.
       watch: chatWatch(row, target, deps),

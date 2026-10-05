@@ -8,6 +8,7 @@ import { closeSync, fstatSync, openSync, readSync } from "node:fs";
 import { join } from "node:path";
 import type { UsageRecord } from "#lib/usage.ts";
 import { resolveDataDir } from "./data-dir.ts";
+import { REMINDER_TURN_KINDS } from "./reminder-turn.ts";
 import { resolveTimeZone } from "./timezone.ts";
 
 export type { UsageRecord };
@@ -471,8 +472,10 @@ const WINDOW_LABEL: Record<UsageWindow, string> = {
 };
 const SOURCE_LABEL: Record<string, string> = {
   telegram: "chat",
-  http: "background (cron/digest)",
+  http: "background",
   unknown: "other",
+  // Ход Ивы называет свой вид (заголовок x-iva-turn): строка — его вид словом глоссария.
+  ...Object.fromEntries(REMINDER_TURN_KINDS.map((kind) => [kind, kind])),
 };
 // channel.kind приходит как "channel:telegram" (канал) или "http" (eve/client) — нормализуем.
 const sourceLabel = (key: unknown): string => {

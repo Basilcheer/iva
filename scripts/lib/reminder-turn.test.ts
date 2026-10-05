@@ -470,3 +470,45 @@ void test("the owner's stop before the limit question stays a cancellation", asy
   assert.notEqual(turn.status, "failed");
   assert.deepEqual(spy.sessionCalls, ["reset"]);
 });
+
+// ── Вид хода (D1): заголовок x-iva-turn на проводе и одно место списка ─────────────────────
+
+const { REMINDER_TURN_KINDS, reminderClientOptions } =
+  await import("./reminder-turn.ts");
+const { TURN_KINDS } = await import("#lib/eve-auth.ts");
+
+void test("the turn kinds of the turn and of the bearer auth are one list", () => {
+  assert.deepEqual(
+    [...TURN_KINDS].sort(),
+    [...REMINDER_TURN_KINDS].sort(),
+    "agent/lib/eve-auth.ts keeps a copy: agent/ does not import scripts/",
+  );
+});
+
+/** Заголовки запросов настоящего eve Client: ответ сервера — отказ, ход падает на create. */
+async function wireHeaders(
+  options: ReminderClientOptions,
+  t: import("node:test").TestContext,
+): Promise<Headers[]> {
+  const seen: Headers[] = [];
+  t.mock.method(globalThis, "fetch", (_url: unknown, init?: RequestInit) => {
+    seen.push(new Headers(init?.headers));
+    return Promise.resolve(new Response("nope", { status: 503 }));
+  });
+  await failureOf(runReminderTurn("инсайт", options, { log: () => {} }));
+  return seen;
+}
+
+void test("on the wire: the session create carries x-iva-turn with the kind, and no header without one", async (t) => {
+  const env = { ASSISTANT_BEARER: "secret", IVA_PORT: "8723" };
+  const named = await wireHeaders(reminderClientOptions(env, "insight"), t);
+  assert.ok(named.length > 0, "the client went to the wire");
+  for (const headers of named) {
+    assert.equal(headers.get("x-iva-turn"), "insight");
+    assert.equal(headers.get("authorization"), "Bearer secret");
+  }
+  t.mock.restoreAll();
+  const plain = await wireHeaders(reminderClientOptions(env), t);
+  assert.ok(plain.length > 0);
+  for (const headers of plain) assert.equal(headers.get("x-iva-turn"), null);
+});
