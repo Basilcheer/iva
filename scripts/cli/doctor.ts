@@ -28,6 +28,7 @@ import {
   acquireUpdateLock,
   createVersionStore,
   KEEP,
+  type UpdateLock,
 } from "../lib/version-store.ts";
 import { hasEmbeddingSource } from "../lib/memory-mode.ts";
 import { ambiguousEnvLines } from "../lib/env-file.ts";
@@ -52,7 +53,12 @@ type DoctorDependencies = {
   readonly telegramInboxFile?: string;
   readonly telegramQueueFile?: string;
   readonly listChatStatusesImpl?: typeof listChatStatuses;
+  /** `iva diagnose`: те же проверки, ни одной починки (строка `would …` на месте каждой). */
+  readonly readOnly?: boolean;
 };
+
+const wouldLine = (what: string) =>
+  `would ${what} — run iva doctor in a terminal`;
 
 type RollupEntry = {
   readonly lastSuccessAt?: unknown;
@@ -307,9 +313,13 @@ type DoctorRun = {
   readonly listChatStatuses: typeof listChatStatuses | undefined;
   /** Раскладка установки: заполняет секция версий, читает раздел плагинов (ADR-0009). */
   install: ReturnType<typeof classifyRoot> | null;
+  readonly readOnly: boolean;
 };
 
-type DoctorContext = DoctorReporter & DoctorRun;
+/** Точка ремонта: без режима чтения зовёт `fn`, в нём печатает `would …` (без счёта). */
+type DoctorRepair = { repair<T>(what: string, fn: () => T): T | undefined };
+
+type DoctorContext = DoctorReporter & DoctorRun & DoctorRepair;
 
 export function createDoctorCommand(
   runtime: CliRuntime,
@@ -319,7 +329,7 @@ export function createDoctorCommand(
   return async function cmdDoctor(): Promise<void> {
     // Порядок тот же, что был в монолитном теле: bearer до снимка .env, чтобы мастер
     // ключей видел уже записанный bearer.
-    const bearerChanged = systemdLifecycle.ensureAssistantBearer();
+    const bearerChanged = ensureBearer(runtime, systemdLifecycle, dependencies);
     const ctx = createDoctorContext(runtime, systemdLifecycle, dependencies);
     if (bearerChanged) ctx.fix();
 
@@ -356,10 +366,25 @@ function createDoctorContext(
   systemdLifecycle: SystemdLifecycle,
   dependencies: DoctorDependencies,
 ): DoctorContext {
-  return {
-    ...createDoctorReporter(runtime),
-    ...createDoctorRun(runtime, systemdLifecycle, dependencies),
+  const run = createDoctorRun(runtime, systemdLifecycle, dependencies);
+  const repair = <T>(what: string, fn: () => T): T | undefined => {
+    if (!run.readOnly) return fn();
+    runtime.warn(wouldLine(what));
+    return undefined;
   };
+  return { ...createDoctorReporter(runtime), ...run, repair };
+}
+
+/** Bearer пишется до снимка .env; в режиме чтения — только строка. */
+function ensureBearer(
+  runtime: CliRuntime,
+  systemdLifecycle: SystemdLifecycle,
+  dependencies: DoctorDependencies,
+): boolean {
+  if (dependencies.readOnly !== true)
+    return systemdLifecycle.ensureAssistantBearer();
+  runtime.warn(wouldLine("check the internal bearer and .env permissions"));
+  return false;
 }
 
 /** Печать и счёт вердиктов: счётчики живут внутри отчёта, наружу торчит только сводка. */
@@ -476,6 +501,7 @@ function createDoctorRun(
     activateUnits,
     migrateEnv,
     install: null,
+    readOnly: dependencies.readOnly === true,
   };
 }
 
@@ -567,7 +593,8 @@ function checkEnvOptions(ctx: DoctorContext): void {
     );
   }
   // old .env without IVA_PORT (or with :3000) — migrate right here
-  if (ctx.migrateEnv()) ctx.fix();
+  if (ctx.repair("add IVA_PORT to .env if missing", () => ctx.migrateEnv()))
+    ctx.fix();
   // voice is optional: without the key voice notes are saved but not transcribed
   if (!(ctx.env.DEEPGRAM_API_KEY || "").trim())
     ctx.warn(
@@ -611,6 +638,10 @@ function checkBuild(ctx: DoctorContext): void {
     return;
   }
   ctx.warn(".output missing — building…");
+  ctx.repair("run npm run build", () => buildOutput(ctx));
+}
+
+function buildOutput(ctx: DoctorContext): void {
   if (ctx.run(ctx.npm, ["run", "build"]).status === 0) {
     ctx.ok("Built");
     ctx.fix();
@@ -643,14 +674,12 @@ function checkVersionState(
   }
 
   if (install.kind === "version" && active) {
-    const lock = acquireUpdateLock(store.layout.data);
+    const lock = versionLock(ctx, store.layout.data);
     if (!lock) {
       ctx.warn("update in progress — version cleanup skipped");
     } else {
       try {
-        const leftovers = store.sweep();
-        const removed = store.gc(KEEP);
-        const gone = [...leftovers, ...removed];
+        const gone = removeVersions(ctx, store);
         if (gone.length > 0) {
           ctx.ok(`removed ${gone.join(", ")}`);
           ctx.fix();
@@ -668,6 +697,24 @@ function checkVersionState(
     }
   }
   return install;
+}
+
+/** Без уборки замок обновления не нужен: режим чтения его не берёт. */
+function versionLock(ctx: DoctorContext, data: string): UpdateLock | null {
+  return ctx.readOnly
+    ? { path: "", release: () => {} }
+    : acquireUpdateLock(data);
+}
+
+function removeVersions(
+  ctx: DoctorContext,
+  store: ReturnType<typeof createVersionStore>,
+): string[] {
+  const gone = ctx.repair("remove leftover and old versions", () => [
+    ...store.sweep(),
+    ...store.gc(KEEP),
+  ]);
+  return gone ?? [];
 }
 
 /**
@@ -733,21 +780,29 @@ function checkUnits(ctx: DoctorContext): void {
     );
   if (!present) {
     ctx.warn("systemd units not installed — installing…");
-    try {
-      ctx.writeUnits();
-      ctx.activateUnits();
-      ctx.ok("Units installed, enabled and active");
-      ctx.fix();
-    } catch (error) {
-      ctx.fail((error as { message: string }).message);
-    }
+    ctx.repair("install and start the systemd units", () => installUnits(ctx));
   } else {
-    try {
-      ctx.writeUnits(); // refresh: Environment=PORT syncs with the current IVA_PORT (eliminates drift)
-      ctx.ok("systemd units installed (refreshed)");
-    } catch (error) {
-      ctx.fail((error as { message: string }).message);
-    }
+    ctx.repair("refresh the systemd units", () => refreshUnits(ctx));
+  }
+}
+
+function installUnits(ctx: DoctorContext): void {
+  try {
+    ctx.writeUnits();
+    ctx.activateUnits();
+    ctx.ok("Units installed, enabled and active");
+    ctx.fix();
+  } catch (error) {
+    ctx.fail((error as { message: string }).message);
+  }
+}
+
+function refreshUnits(ctx: DoctorContext): void {
+  try {
+    ctx.writeUnits(); // refresh: Environment=PORT syncs with the current IVA_PORT (eliminates drift)
+    ctx.ok("systemd units installed (refreshed)");
+  } catch (error) {
+    ctx.fail((error as { message: string }).message);
   }
 }
 
@@ -759,26 +814,34 @@ function checkServices(ctx: DoctorContext, bearerChanged: boolean): void {
       continue;
     }
     ctx.warn(`${service} disabled or inactive — activating…`);
-    try {
-      ctx.systemd.resetFailed([service]);
-      ctx.systemd.activate([service]);
-      ctx.ok(`${service} enabled and active`);
-      ctx.fix();
-    } catch (error) {
-      ctx.fail((error as { message: string }).message);
-    }
+    ctx.repair(`activate ${service}`, () => activateService(ctx, service));
   }
   // A newly generated bearer is read only at process start. Without this restart,
   // doctor would fix the file while leaving the live Eve process unable to accept it.
   if (bearerChanged) {
     ctx.warn("iva.service needs one restart to load the new internal bearer");
-    try {
-      ctx.systemd.restart(["iva.service"]);
-      ctx.ok("iva.service loaded the internal bearer");
-      ctx.fix();
-    } catch (error) {
-      ctx.fail((error as { message: string }).message);
-    }
+    ctx.repair("restart iva.service", () => restartForBearer(ctx));
+  }
+}
+
+function activateService(ctx: DoctorContext, service: string): void {
+  try {
+    ctx.systemd.resetFailed([service]);
+    ctx.systemd.activate([service]);
+    ctx.ok(`${service} enabled and active`);
+    ctx.fix();
+  } catch (error) {
+    ctx.fail((error as { message: string }).message);
+  }
+}
+
+function restartForBearer(ctx: DoctorContext): void {
+  try {
+    ctx.systemd.restart(["iva.service"]);
+    ctx.ok("iva.service loaded the internal bearer");
+    ctx.fix();
+  } catch (error) {
+    ctx.fail((error as { message: string }).message);
   }
 }
 
@@ -792,33 +855,44 @@ async function checkListener(ctx: DoctorContext): Promise<void> {
       ? classifyAgentListeners(result.out, port)
       : "unknown";
   };
-  let listener = inspectListener();
+  const listener = inspectListener();
   if (listener === "exposed") {
     ctx.warn(
       `iva.service is exposed beyond loopback on port ${port} - restarting securely`,
     );
-    try {
-      ctx.systemd.restart(["iva.service"]);
-      for (let attempt = 0; attempt < 30; attempt++) {
-        await ctx.sleep(500);
-        listener = inspectListener();
-        if (listener === "loopback") break;
-      }
-      if (listener === "loopback") {
-        ctx.ok(`iva.service bound to loopback:${port}`);
-        ctx.fix();
-      } else {
-        ctx.fail(`iva.service still exposed on port ${port}`);
-      }
-    } catch (error) {
-      ctx.fail((error as { message: string }).message);
-    }
+    await ctx.repair("restart iva.service on loopback", () =>
+      restartOnLoopback(ctx, port, inspectListener),
+    );
   } else if (listener === "loopback") {
     ctx.ok(`iva.service bound to loopback:${port}`);
   } else if (listener === "absent") {
     ctx.warn(`no listener found on port ${port}`);
   } else {
     ctx.warn("could not inspect listener addresses (ss unavailable)");
+  }
+}
+
+async function restartOnLoopback(
+  ctx: DoctorContext,
+  port: number,
+  inspectListener: () => string,
+): Promise<void> {
+  try {
+    ctx.systemd.restart(["iva.service"]);
+    let listener = "exposed";
+    for (let attempt = 0; attempt < 30; attempt++) {
+      await ctx.sleep(500);
+      listener = inspectListener();
+      if (listener === "loopback") break;
+    }
+    if (listener === "loopback") {
+      ctx.ok(`iva.service bound to loopback:${port}`);
+      ctx.fix();
+    } else {
+      ctx.fail(`iva.service still exposed on port ${port}`);
+    }
+  } catch (error) {
+    ctx.fail((error as { message: string }).message);
   }
 }
 
@@ -833,19 +907,26 @@ function checkTimers(ctx: DoctorContext): void {
       ctx.countOk();
     } else {
       ctx.printWarn(`${timer} disabled or inactive — enabling…`);
-      try {
-        ctx.systemd.activate([timer]);
-        ctx.fix();
-      } catch (error) {
+      // Не включённый (отказ или режим чтения) таймер снимает строку «все активны».
+      if (ctx.repair(`enable ${timer}`, () => enableTimer(ctx, timer)) !== true)
         timerFailed = true;
-        ctx.fail((error as { message: string }).message);
-      }
     }
   }
   if (!timerFailed)
     ctx.printOk(
       `Background timers enabled and active (${ctx.timers.length}: brain + update check)`,
     );
+}
+
+function enableTimer(ctx: DoctorContext, timer: string): boolean {
+  try {
+    ctx.systemd.activate([timer]);
+    ctx.fix();
+    return true;
+  } catch (error) {
+    ctx.fail((error as { message: string }).message);
+    return false;
+  }
 }
 
 // A oneshot service can be inactive and still healthy; its persistent failed state is the

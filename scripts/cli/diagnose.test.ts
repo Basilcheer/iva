@@ -21,6 +21,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 import { REDACTED, createDiagnoseCommand } from "./diagnose.ts";
+import { createDoctorCommand } from "./doctor.ts";
 import { createCliRuntime } from "./runtime.ts";
 import { createCliSystemd } from "./systemd.ts";
 import { createSystemdControl } from "../lib/systemd-control.ts";
@@ -597,4 +598,109 @@ await test("таблица фактов расписаний видна в па�
     "секция расписаний обязана печатать хвост незакрытого провала",
   );
   assert.ok(!text.includes(URL_PASSWORD), "секрет из хвоста уехал в пакет");
+});
+
+/**
+ * Установка, которой нужен каждый ремонт доктора: нет `.output`, нет юнитов, сервис и
+ * таймер выключены, слушатель открыт наружу, bearer «заведён заново». `calls` пишет
+ * каждое действие, которое что-то меняет.
+ */
+async function brokenInstall(t: TestContext) {
+  const { root, data, env } = await sandbox(t);
+  rmSync(join(root, ".output"), { recursive: true, force: true });
+  const units = join(root, "units");
+  mkdirSync(units, { recursive: true });
+  const calls: string[] = [];
+  const base = runtimeFor(root, data, env, [], { code: 1, out: "", err: "" });
+  const runtime: CliRuntime = {
+    ...base,
+    SERVICES: ["iva.service"],
+    TIMERS: ["iva-update-check.timer"],
+    UNIT_DIR: units,
+    hasSystemd: () => true,
+    run: ((_command: string, args: readonly string[]) => {
+      calls.push(`run ${args.join(" ")}`);
+      return { status: 1 };
+    }) as unknown as CliRuntime["run"],
+    cap: (command, args) =>
+      command === "ss"
+        ? {
+            code: 0,
+            out: `LISTEN 0 511 0.0.0.0:${base.DEFAULT_PORT} 0.0.0.0:*`,
+            err: "",
+          }
+        : base.cap(command, args),
+    systemd: createSystemdControl({
+      run: (args) => {
+        if (args[0] === "is-enabled" || args[0] === "is-active")
+          return { code: 3, out: "inactive" };
+        calls.push(args.join(" "));
+        return { code: 0, out: "" };
+      },
+    }),
+  };
+  const spy: SystemdLifecycle = {
+    ...lifecycle(),
+    ensureAssistantBearer: () => (calls.push("ensureAssistantBearer"), true),
+    writeUnits: () => (calls.push("writeUnits"), []),
+    activateUnits: () => void calls.push("activateUnits"),
+    migrateEnv: () => (calls.push("migrateEnv"), false),
+  };
+  return { data, runtime, spy, calls };
+}
+
+await test("iva diagnose ничего не чинит, а iva doctor из терминала чинит как раньше", async (t) => {
+  const { data, runtime, spy, calls } = await brokenInstall(t);
+  const previousDataDir = process.env.ASSISTANT_DATA_DIR;
+  process.env.ASSISTANT_DATA_DIR = data;
+  try {
+    await createDiagnoseCommand(runtime, spy, { now: () => NOW })();
+    assert.deepEqual([...calls], [], "diagnose что-то изменил");
+    const text = readFileSync(
+      join(data, "diagnose", "2026-09-12T15-04-07-000Z.md"),
+      "utf8",
+    );
+    assert.match(
+      text,
+      /## iva doctor\n+(?:```\n)?read-only: nothing was repaired/u,
+    );
+    for (const what of [
+      "check the internal bearer and .env permissions",
+      "add IVA_PORT to .env if missing",
+      "run npm run build",
+      "install and start the systemd units",
+      "activate iva.service",
+      "restart iva.service on loopback",
+      "enable iva-update-check.timer",
+    ])
+      assert.ok(
+        text.includes(`! would ${what} — run iva doctor in a terminal`),
+        `нет строки would ${what}`,
+      );
+
+    await createDoctorCommand({ ...runtime, bad: () => undefined }, spy, {
+      exit: () => undefined,
+      log: () => undefined,
+      sleep: () => Promise.resolve(),
+    })();
+  } finally {
+    if (previousDataDir === undefined) delete process.env.ASSISTANT_DATA_DIR;
+    else process.env.ASSISTANT_DATA_DIR = previousDataDir;
+  }
+  for (const call of [
+    "ensureAssistantBearer",
+    "migrateEnv",
+    "run run build",
+    "writeUnits",
+    "activateUnits",
+    "enable --now iva.service",
+    "restart iva.service",
+    "enable --now iva-update-check.timer",
+  ])
+    assert.ok(calls.includes(call), `doctor не сделал: ${call}`);
+  assert.equal(
+    calls.filter((call) => call === "restart iva.service").length,
+    2,
+    "bearer и открытый слушатель — два перезапуска",
+  );
 });
