@@ -710,28 +710,34 @@ const hangsUntil = (signal: AbortSignal | undefined): Promise<ReminderTurn> =>
     );
   });
 
-test("a Brief that ran past the deadline: no Watch after it, the exit code is the Brief's", async () => {
-  const h = harness();
-  writeState(h, staleSeen(chat(1, 1)));
-  h.tg = { items: [chat(1, 1)], error: null };
-  h.config = { ...PROACTIVE_DEFAULTS, briefTimes: ["12:00"] };
-  const controller = new AbortController();
-  const kinds: string[] = [];
-  const deps: TickDeps = {
-    ...h.deps,
-    signal: controller.signal,
-    runTurn: (_prompt, kind, signal) => {
-      kinds.push(kind);
-      setImmediate(() => controller.abort());
-      return hangsUntil(signal);
-    },
-  };
-  assert.equal(await runProactiveTick(NOON, deps), 1);
-  assert.deepEqual(kinds, ["brief"], "Watch did not wake the model");
-  assert.equal(h.checks, 0, "Watch did not even check its sources");
-  assert.ok(h.logs.includes(`proactive: brief turn failed: ${DEADLINE}`));
-  assert.deepEqual(h.sent, []);
-});
+// У тестов срока свой таймаут: дефект, при котором ход не кончается, даёт красную строку, а
+// не зависший прогон.
+test(
+  "a Brief that ran past the deadline: no Watch after it, the exit code is the Brief's",
+  { timeout: 10_000 },
+  async () => {
+    const h = harness();
+    writeState(h, staleSeen(chat(1, 1)));
+    h.tg = { items: [chat(1, 1)], error: null };
+    h.config = { ...PROACTIVE_DEFAULTS, briefTimes: ["12:00"] };
+    const controller = new AbortController();
+    const kinds: string[] = [];
+    const deps: TickDeps = {
+      ...h.deps,
+      signal: controller.signal,
+      runTurn: (_prompt, kind, signal) => {
+        kinds.push(kind);
+        setImmediate(() => controller.abort());
+        return hangsUntil(signal);
+      },
+    };
+    assert.equal(await runProactiveTick(NOON, deps), 1);
+    assert.deepEqual(kinds, ["brief"], "Watch did not wake the model");
+    assert.equal(h.checks, 0, "Watch did not even check its sources");
+    assert.ok(h.logs.includes(`proactive: brief turn failed: ${DEADLINE}`));
+    assert.deepEqual(h.sent, []);
+  },
+);
 
 test("IVA_JOB_STOP_AT reaches every turn of the run as one signal; garbage, the past or too far → a line and no deadline", async (t) => {
   const lines: string[] = [];
@@ -800,25 +806,89 @@ test("IVA_JOB_STOP_AT reaches every turn of the run as one signal; garbage, the 
   );
 });
 
-test("through the real main: a hanging turn ends at IVA_JOB_STOP_AT, the run exits and the lock file is gone", async (t) => {
-  t.mock.method(console, "log", () => undefined);
-  const data = process.env.ASSISTANT_DATA_DIR ?? "";
-  const started = Date.now();
-  const code = await main(
-    { ...ENV, IVA_JOB_STOP_AT: String(Date.now() + 300) },
-    {
-      sources: [],
-      timeZone: "UTC",
-      config: () => ({ ...PROACTIVE_DEFAULTS, briefTimes: ["12:00"] }),
-      statePath: join(mkdtempSync(join(ROOT, "hang-")), "proactive.json"),
-      runTurn: (_prompt, _kind, signal) => hangsUntil(signal),
-    },
-    () => NOON,
-  );
-  assert.equal(code, 1, "a Brief that did not finish is a failed run");
-  assert.ok(Date.now() - started < 5_000, "the run ended on its deadline");
-  assert.equal(existsSync(join(data, "proactive.lock")), false);
-});
+test(
+  "through the real main: a hanging turn ends at IVA_JOB_STOP_AT, the run exits and the lock file is gone",
+  { timeout: 10_000 },
+  async (t) => {
+    t.mock.method(console, "log", () => undefined);
+    const data = process.env.ASSISTANT_DATA_DIR ?? "";
+    const started = Date.now();
+    const code = await main(
+      { ...ENV, IVA_JOB_STOP_AT: String(Date.now() + 300) },
+      {
+        sources: [],
+        timeZone: "UTC",
+        config: () => ({ ...PROACTIVE_DEFAULTS, briefTimes: ["12:00"] }),
+        statePath: join(mkdtempSync(join(ROOT, "hang-")), "proactive.json"),
+        runTurn: (_prompt, _kind, signal) => hangsUntil(signal),
+      },
+      () => NOON,
+    );
+    assert.equal(code, 1, "a Brief that did not finish is a failed run");
+    assert.ok(Date.now() - started < 5_000, "the run ended on its deadline");
+    assert.equal(existsSync(join(data, "proactive.lock")), false);
+  },
+);
+
+// Процесс тика выходит сразу после прогона: сессия, которую eve вернул уже после срока,
+// успевает получить отмену с задачами и сброс до выхода (spec-w2 2.2 п. 3).
+test(
+  "through the real main: a session that comes back after the deadline is cancelled and reset before the exit",
+  { timeout: 10_000 },
+  async (t) => {
+    t.mock.method(console, "log", () => undefined);
+    const { runReminderTurn } = await import("../lib/reminder-turn.ts");
+    const { exitCode } = await import("./tick.ts");
+    const calls: string[] = [];
+    let release = (): void => {};
+    const session = {
+      send: () => Promise.resolve(),
+      cancel: (options: { readonly tasks: boolean }) => {
+        calls.push(`cancel tasks=${String(options.tasks)}`);
+        return Promise.resolve();
+      },
+      reset: () => {
+        calls.push("reset");
+        return Promise.resolve();
+      },
+    };
+    const client = {
+      sessions: {
+        create: () => {
+          calls.push("create");
+          return new Promise((resolve) => {
+            release = () => resolve({ session, response: {} });
+          });
+        },
+      },
+    };
+    const options = {
+      host: "http://127.0.0.1:1",
+      auth: { bearer: () => Promise.resolve("b") },
+    };
+    const run = exitCode(
+      main(
+        { ...ENV, IVA_JOB_STOP_AT: String(Date.now() + 300) },
+        {
+          sources: [],
+          timeZone: "UTC",
+          config: () => ({ ...PROACTIVE_DEFAULTS, briefTimes: ["12:00"] }),
+          statePath: join(mkdtempSync(join(ROOT, "late-")), "proactive.json"),
+          runTurn: (prompt, _kind, signal) =>
+            runReminderTurn(prompt, options, {
+              createClient: () => Promise.resolve(client as never),
+              signal,
+              log: () => {},
+            }),
+        },
+        () => NOON,
+      ),
+    );
+    setTimeout(() => release(), 800);
+    assert.equal(await run, 1, "a Brief past its deadline is a failed run");
+    assert.deepEqual(calls, ["create", "cancel tasks=true", "reset"]);
+  },
+);
 
 // ── Ceiling дня (П2б): расход Watch, Brief и Insight за день владельца ───────────────────
 

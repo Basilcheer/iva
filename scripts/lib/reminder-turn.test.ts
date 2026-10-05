@@ -536,6 +536,8 @@ type DeadlineSpy = {
 function deadlineClient(
   over: {
     readonly createHangs?: boolean;
+    /** Ход кончается сам границей session.waiting, без отмены. */
+    readonly ends?: boolean;
     readonly onCreate?: () => void;
     readonly cancel?: () => Promise<unknown>;
     readonly reset?: () => Promise<unknown>;
@@ -552,6 +554,10 @@ function deadlineClient(
     for (const event of over.events ?? []) {
       await flush();
       yield event;
+    }
+    if (over.ends) {
+      yield { type: "session.waiting" };
+      return;
     }
     await stopped;
     yield { type: "turn.cancelled" };
@@ -639,28 +645,32 @@ void test("a signal already aborted: no client and no session at all", async () 
   assert.deepEqual(spy.calls, []);
 });
 
-void test("a deadline while create hangs: the turn fails on time; the session that comes back later is cancelled and reset", async () => {
-  const spy = deadlineClient({ createHangs: true });
-  const controller = new AbortController();
-  const running = runReminderTurn("инсайт", OPTIONS, {
-    createClient: spy.createClient,
-    signal: controller.signal,
-    log: () => {},
-  });
-  await flush();
-  controller.abort();
-  const turn = await running;
-  assert.equal(turn.message, DEADLINE);
-  assert.deepEqual(spy.calls, ["client", "create"]);
-  spy.releaseCreate();
-  await delay(10);
-  assert.deepEqual(spy.calls, [
-    "client",
-    "create",
-    "cancel tasks=true",
-    "reset",
-  ]);
-});
+void test(
+  "a deadline while create hangs: the turn fails on time; the session that comes back later is cancelled and reset",
+  { timeout: 10_000 },
+  async () => {
+    const spy = deadlineClient({ createHangs: true });
+    const controller = new AbortController();
+    const running = runReminderTurn("инсайт", OPTIONS, {
+      createClient: spy.createClient,
+      signal: controller.signal,
+      log: () => {},
+    });
+    await flush();
+    controller.abort();
+    const turn = await running;
+    assert.equal(turn.message, DEADLINE);
+    assert.deepEqual(spy.calls, ["client", "create"]);
+    spy.releaseCreate();
+    await delay(10);
+    assert.deepEqual(spy.calls, [
+      "client",
+      "create",
+      "cancel tasks=true",
+      "reset",
+    ]);
+  },
+);
 
 void test("create comes back with the signal already aborted: cancel with tasks, reset, failed", async () => {
   const controller = new AbortController();
@@ -732,4 +742,92 @@ void test("after the deadline a hanging cancel and a hanging reset each wait 30 
     spy.calls.filter((call) => call !== "client" && call !== "create"),
     ["cancel tasks=true", "reset"],
   );
+});
+
+// Ход кончился до срока, а reset повис: срок, пришедший во время reset, ограничивает и его
+// (таймлайн 3.2.2: finally тика снимает замок до SIGTERM).
+void test("a reset begun before the deadline waits 30 s after the deadline, no longer (clock pinned)", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const controller = new AbortController();
+  const spy = deadlineClient({
+    ends: true,
+    events: [{ type: "message.completed", data: { message: "готово" } }],
+    reset: () => new Promise<never>(() => {}),
+  });
+  let done = false;
+  const running = runReminderTurn("инсайт", OPTIONS, {
+    createClient: spy.createClient,
+    inactivityMs: 600_000,
+    signal: controller.signal,
+    log: () => {},
+  }).finally(() => {
+    done = true;
+  });
+  for (let i = 0; i < 10; i += 1) await flush();
+  assert.ok(spy.calls.includes("reset"), "the turn ended and reset began");
+  assert.equal(done, false, "reset hangs");
+  controller.abort();
+  for (let i = 0; i < 5; i += 1) await flush();
+  t.mock.timers.tick(29_999);
+  await flush();
+  assert.equal(done, false, "reset still has its window");
+  t.mock.timers.tick(1);
+  for (let i = 0; i < 5; i += 1) await flush();
+  assert.equal(done, true);
+  const turn = await running;
+  assert.equal(turn.message, "готово", "the turn's own text stays");
+});
+
+const { settleLateTurns } = await import("./reminder-turn.ts");
+
+void test(
+  "before the run exits, a session that came back after the deadline is cancelled and reset",
+  { timeout: 10_000 },
+  async () => {
+    const spy = deadlineClient({ createHangs: true });
+    const controller = new AbortController();
+    const running = runReminderTurn("инсайт", OPTIONS, {
+      createClient: spy.createClient,
+      signal: controller.signal,
+      log: () => {},
+    });
+    await flush();
+    controller.abort();
+    assert.equal((await running).message, DEADLINE);
+    let settled = false;
+    const settling = settleLateTurns(60_000).then(() => {
+      settled = true;
+    });
+    await delay(10);
+    assert.equal(settled, false, "create has not come back yet");
+    spy.releaseCreate();
+    await settling;
+    assert.deepEqual(spy.calls.slice(2), ["cancel tasks=true", "reset"]);
+    await settleLateTurns(60_000);
+  },
+);
+
+void test("waiting for late sessions ends at its cap even when create never comes back (clock pinned)", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const spy = deadlineClient({ createHangs: true });
+  const controller = new AbortController();
+  const running = runReminderTurn("инсайт", OPTIONS, {
+    createClient: spy.createClient,
+    signal: controller.signal,
+    log: () => {},
+  });
+  await flush();
+  controller.abort();
+  await running;
+  let settled = false;
+  const settling = settleLateTurns(60_000).then(() => {
+    settled = true;
+  });
+  for (let i = 0; i < 5; i += 1) await flush();
+  t.mock.timers.tick(59_999);
+  await flush();
+  assert.equal(settled, false);
+  t.mock.timers.tick(1);
+  await settling;
+  assert.deepEqual(spy.calls, ["client", "create"]);
 });

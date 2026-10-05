@@ -35,6 +35,7 @@ import {
   isQuietReply,
   reminderClientOptions,
   runReminderTurn,
+  settleLateTurns,
   type ReminderTurn,
   type ReminderTurnKind,
 } from "../lib/reminder-turn.ts";
@@ -956,4 +957,17 @@ export async function main(
   }
 }
 
-if (isEntrypoint(import.meta.url)) process.exit(await main());
+/** Отмена с задачами и сброс сессии, вернувшейся после срока: по 30 с каждое. */
+const LATE_TURN_WAIT_MS = 60_000;
+
+/**
+ * Код выхода прогона. До выхода сессии, которые eve вернул уже после срока, успевают получить
+ * отмену и сброс: прогон кончается в 28:30, ожидание — до 29:30, SIGTERM — в 30:00.
+ */
+export async function exitCode(run: Promise<number>): Promise<number> {
+  const code = await run;
+  await settleLateTurns(LATE_TURN_WAIT_MS);
+  return code;
+}
+
+if (isEntrypoint(import.meta.url)) process.exit(await exitCode(main()));

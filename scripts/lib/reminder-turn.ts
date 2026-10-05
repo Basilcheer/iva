@@ -471,13 +471,40 @@ function abortedBy(signal: AbortSignal | undefined): Promise<typeof ABORTED> {
 type Created = Awaited<ReturnType<ReminderClient["sessions"]["create"]>>;
 type Session = Created["session"];
 
-/** Сброс сессии; после срока он ждёт ответа не дольше SESSION_LIMIT_CANCEL_MS. */
-async function resetSession(session: Session, late: boolean): Promise<void> {
+/**
+ * Сброс сессии. Срок, снятый до или во время сброса, ограничивает его ожидание
+ * SESSION_LIMIT_CANCEL_MS с этой минуты; без сигнала сброс ждётся, как раньше.
+ */
+async function resetSession(
+  session: Session,
+  aborted: Promise<typeof ABORTED>,
+): Promise<void> {
   const reset = session.reset({ reason: "Reminder finished" });
+  const bounded = aborted.then(() => answeredInTime(reset, "reset"));
   try {
-    await (late ? answeredInTime(reset, "reset") : reset);
+    await Promise.race([reset, bounded]);
   } catch (error) {
     console.error("remind: session reset failed:", error);
+  }
+}
+
+/** Сессии, вернувшиеся после срока: их отмена и сброс идут уже после ответа хода. */
+const lateTurns = new Set<Promise<void>>();
+
+/**
+ * Ждёт отмены и сброса сессий, вернувшихся после срока, не дольше `capMs`. Процесс тика
+ * выходит сразу после прогона, и без этого ожидания такая сессия доигрывала бы ход на сервере.
+ */
+export async function settleLateTurns(capMs: number): Promise<void> {
+  if (lateTurns.size === 0) return;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const cap = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, capMs);
+  });
+  try {
+    await Promise.race([Promise.allSettled([...lateTurns]), cap]);
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -494,13 +521,15 @@ async function createBefore(
   const creating = client.sessions.create({ message: prompt });
   const first = await Promise.race([creating, aborted]);
   if (first !== ABORTED) return first;
-  creating.then(
+  const late = creating.then(
     async ({ session }) => {
       await stopParkedTurn(session, log, "deadline");
-      await resetSession(session, true);
+      await resetSession(session, aborted);
     },
     () => {},
   );
+  lateTurns.add(late);
+  void late.finally(() => lateTurns.delete(late));
   return null;
 }
 
@@ -583,6 +612,6 @@ export async function runReminderTurn(
     });
     return await settleTurn(state, created.session, log);
   } finally {
-    if (session) await resetSession(session, isAborted(signal));
+    if (session) await resetSession(session, aborted);
   }
 }
