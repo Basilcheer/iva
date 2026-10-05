@@ -3,6 +3,7 @@ import { extractBearerToken } from "eve/channels/auth";
 import { appendFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { handleTelegramResetRequest } from "#lib/telegram-reset-route.ts";
+import { handleTelegramCompactRequest } from "#lib/telegram-compact-route.ts";
 
 function authorized(request: Request): boolean {
   const expected = process.env.ASSISTANT_BEARER;
@@ -28,6 +29,13 @@ export default defineChannel({
       });
       return Response.json({ sessionId: session.id });
     }),
+    POST("/eve/v1/telegram/compact", (request, { attachSession }) =>
+      handleTelegramCompactRequest(
+        request,
+        attachSession,
+        process.env.TELEGRAM_WEBHOOK_SECRET_TOKEN,
+      ),
+    ),
     POST("/eve/v1/telegram/reset", (request, args) =>
       handleTelegramResetRequest(
         request,

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { traceContextParts, traceTurnBound } from "./trace.ts";
 import { localStamp } from "./vault-daily.ts";
 import { resolveVaultDir } from "@iva/vault-dir";
+import { runStaleMs } from "./run-status.ts";
 
 type ChatStatus = Record<string, unknown> | null;
 type GetStatus = (chatKey: string) => ChatStatus;
@@ -109,6 +110,7 @@ export function chatTakeOverPatch(
     firstOutputAt: null,
     sessionId: null,
     turnId: null,
+    compacting: null,
     statusMessageId: null,
     latencyLogged: null,
     resetAt: null,
@@ -124,7 +126,7 @@ const freshRunning = (
 ): boolean =>
   status?.status === "running" &&
   typeof status.updatedAt === "number" &&
-  at - status.updatedAt < staleMs;
+  at - status.updatedAt < runStaleMs(status, staleMs);
 
 // Индикатор протухшей записи: после захвата его больше никто не найдёт — прибирает тот, кто взял.
 const orphanWorkingStatusId = (status: ChatStatus): number | undefined =>
@@ -375,6 +377,7 @@ export async function publishTelegramTurnStarted({
           status: "running",
           sessionId,
           turnId,
+          compacting: null,
           statusMessageId: null,
           turnAt: now(),
           latencyLogged: null,

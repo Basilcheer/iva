@@ -19,30 +19,54 @@ const LIMIT = idleCompactionLimit(WINDOW);
 let seq = 0;
 const fresh = () => `s-${++seq}`;
 
-type Outcome = "accepted" | "gone" | "throws";
-/** Один ход: шаги, затем turn.completed. Возвращает, ушла ли просьба и была ли принята. */
-async function turn(
+/** Один ход: turn.started → шаги → turn.completed. */
+function turn(
   sessionId: string,
   steps: readonly (number | null)[],
-  outcome: Outcome = "accepted",
-  chatKey = `${sessionId}:`,
+  inTurnCompaction = false,
 ) {
   idle.openIdleCompactionTurn(sessionId);
   for (const tokens of steps) idle.recordStepInput(sessionId, tokens);
-  let asked = false;
-  const accepted = await idle.compactIdleSession({
+  // Страховка eve внутри хода шлёт то же compaction.completed.
+  if (inTurnCompaction) idle.completeIdleCompaction(sessionId);
+  idle.closeIdleCompactionTurn(sessionId, WINDOW);
+}
+
+type Outcome = "accepted" | "gone" | "throws";
+/** session.waiting: что сделал канал. */
+async function waiting(
+  sessionId: string,
+  {
+    outcome = "accepted",
+    chatFree = true,
+  }: { outcome?: Outcome; chatFree?: boolean } = {},
+) {
+  const seen = { claimed: false, asked: false, released: false };
+  const accepted = await idle.startIdleCompaction({
     sessionId,
-    chatKey,
-    windowTokens: WINDOW,
+    claimImpl: () => {
+      seen.claimed = true;
+      return chatFree;
+    },
     requestImpl: async () => {
-      asked = true;
+      seen.asked = true;
       if (outcome === "throws") throw new Error("route is down");
       return outcome === "accepted";
     },
+    releaseImpl: async () => {
+      seen.released = true;
+    },
     logImpl: () => {},
   });
-  return { asked, accepted };
+  return { ...seen, accepted };
 }
+const NOTHING = {
+  claimed: false,
+  asked: false,
+  released: false,
+  accepted: false,
+};
+const ASKED = { claimed: true, asked: true, released: false, accepted: true };
 
 test("порог — 60 % окна, но не больше 275 тыс. токенов; страховка внутри хода на четверть выше", () => {
   assert.equal(IDLE_COMPACTION_PERCENT, 0.6);
@@ -55,123 +79,143 @@ test("порог — 60 % окна, но не больше 275 тыс. токе�
   assert.equal(compactionThresholdPercent(1_000_000), 0.34375);
   fc.assert(
     fc.property(fc.integer({ min: 1_000, max: 5_000_000 }), (window) => {
-      const idle = idleCompactionLimit(window);
+      const limit = idleCompactionLimit(window);
       const inTurn = compactionThresholdPercent(window) * window;
-      assert.ok(idle <= IDLE_COMPACTION_MAX_TOKENS && idle <= window * 0.6);
-      assert.ok(inTurn > idle, "страховка выше свёртки между ходами");
+      assert.ok(limit <= IDLE_COMPACTION_MAX_TOKENS && limit <= window * 0.6);
+      assert.ok(inTurn > limit, "страховка выше свёртки между ходами");
       assert.ok(inTurn <= window * 0.75 + 1e-6, "и оставляет запас до окна");
     }),
   );
 });
 
-test("шаг ниже порога не сворачивает, шаг на пороге просит свёртку", async () => {
+test("ход под порогом ничего не просит, ход на пороге занимает чат и просит пересказ", async () => {
   const id = fresh();
-  assert.deepEqual(await turn(id, [LIMIT - 1]), {
-    asked: false,
-    accepted: false,
-  });
-  assert.deepEqual(await turn(id, [LIMIT]), { asked: true, accepted: true });
+  turn(id, [LIMIT - 1]);
+  assert.deepEqual(await waiting(id), NOTHING);
+  turn(id, [LIMIT]);
+  assert.deepEqual(await waiting(id), ASKED);
 });
 
 test("решает вход последнего шага хода, а не первого", async () => {
-  assert.equal((await turn(fresh(), [LIMIT + 5, LIMIT - 1])).asked, false);
-  assert.equal((await turn(fresh(), [10, LIMIT])).asked, true);
+  const low = fresh();
+  turn(low, [LIMIT + 5, LIMIT - 1]);
+  assert.deepEqual(await waiting(low), NOTHING);
+  const high = fresh();
+  turn(high, [10, LIMIT]);
+  assert.deepEqual(await waiting(high), ASKED);
 });
 
-test("неизвестный вход последнего шага и сессия без turn.started свёртку не просят", async () => {
-  assert.equal((await turn(fresh(), [LIMIT, null])).asked, false);
+test("неизвестный вход последнего шага и сессия без turn.started пересказ не просят", async () => {
+  const unknown = fresh();
+  turn(unknown, [LIMIT, null]);
+  assert.deepEqual(await waiting(unknown), NOTHING);
+  const background = fresh();
+  idle.recordStepInput(background, LIMIT * 2);
+  idle.closeIdleCompactionTurn(background, WINDOW);
+  assert.deepEqual(await waiting(background), NOTHING);
+});
+
+test("на один законченный ход одна просьба: второй session.waiting (конец пересказа) молчит", async () => {
   const id = fresh();
-  idle.recordStepInput(id, LIMIT * 2);
-  let asked = false;
-  await idle.compactIdleSession({
-    sessionId: id,
-    chatKey: "bg:",
-    windowTokens: WINDOW,
-    requestImpl: async () => (asked = true),
+  turn(id, [LIMIT]);
+  assert.deepEqual(await waiting(id), ASKED);
+  assert.deepEqual(await waiting(id), NOTHING);
+  assert.deepEqual(await waiting(id), NOTHING);
+});
+
+test("чат уже занят (успело прийти сообщение): просьбы нет, и этот ход её больше не повторяет", async () => {
+  const id = fresh();
+  turn(id, [LIMIT]);
+  assert.deepEqual(await waiting(id, { chatFree: false }), {
+    ...NOTHING,
+    claimed: true,
   });
-  assert.equal(asked, false);
+  assert.deepEqual(await waiting(id), NOTHING);
+  turn(id, [LIMIT]);
+  assert.deepEqual(await waiting(id), ASKED, "следующий ход решает заново");
 });
 
-test("законченная свёртка, после которой первый шаг всё ещё за порогом, выключает себя до конца сессии", async () => {
+test("начавшийся ход снимает решение прошлого хода", async () => {
   const id = fresh();
-  assert.equal((await turn(id, [LIMIT])).accepted, true);
+  turn(id, [LIMIT]);
+  idle.openIdleCompactionTurn(id);
+  assert.deepEqual(await waiting(id), NOTHING);
+});
+
+test("законченный пересказ, после которого первый шаг всё ещё на пороге, выключает свёртку до конца сессии", async () => {
+  const id = fresh();
+  turn(id, [LIMIT]);
+  await waiting(id);
   idle.completeIdleCompaction(id);
-  assert.equal((await turn(id, [LIMIT, LIMIT + 10])).asked, false);
-  assert.equal((await turn(id, [LIMIT * 2])).asked, false, "и дальше молчит");
+  turn(id, [LIMIT, LIMIT + 10]);
+  assert.deepEqual(await waiting(id), NOTHING);
+  turn(id, [LIMIT * 2]);
+  assert.deepEqual(await waiting(id), NOTHING, "и дальше молчит");
 });
 
-test("свёртка помогла: первый шаг под порогом, следующий перебор сворачивает снова", async () => {
+test("пересказ помог: первый шаг под порогом, следующий перебор сворачивает снова", async () => {
   const id = fresh();
-  await turn(id, [LIMIT]);
+  turn(id, [LIMIT]);
+  await waiting(id);
   idle.completeIdleCompaction(id);
-  assert.equal((await turn(id, [LIMIT - 100, LIMIT + 1])).asked, true);
+  turn(id, [LIMIT - 100, LIMIT + 1]);
+  assert.deepEqual(await waiting(id), ASKED);
 });
 
-test("оборванная свёртка (нет compaction.completed) ничего не выключает", async () => {
+test("оборванный пересказ (нет compaction.completed) ничего не выключает", async () => {
   const id = fresh();
-  await turn(id, [LIMIT]);
-  assert.equal((await turn(id, [LIMIT, LIMIT])).asked, true);
+  turn(id, [LIMIT]);
+  await waiting(id);
+  turn(id, [LIMIT, LIMIT]);
+  assert.deepEqual(await waiting(id), ASKED);
 });
 
-test("отказ роута и исчезнувшая сессия ход не роняют и подпись не оставляют", async () => {
+test("пересказ страховки внутри хода — не наш: оборванная свёртка плюс страховка не выключают", async () => {
+  const id = fresh();
+  turn(id, [LIMIT]);
+  await waiting(id); // просьба принята, но пересказ оборвало сообщение
+  turn(id, [LIMIT, LIMIT + 1], true); // в этом ходе сработала страховка eve
+  assert.deepEqual(await waiting(id), ASKED, "свёртка между ходами жива");
+});
+
+test("отказ роута и исчезнувшая сессия: чат освобождён, наружу ничего не летит, следующий ход просит снова", async () => {
   for (const outcome of ["throws", "gone"] as const) {
     const id = fresh();
-    assert.deepEqual(await turn(id, [LIMIT], outcome), {
+    turn(id, [LIMIT]);
+    assert.deepEqual(await waiting(id, { outcome }), {
+      claimed: true,
       asked: true,
+      released: true,
       accepted: false,
     });
-    assert.equal(idle.idleCompactionRunning(`${id}:`), false);
-    assert.equal((await turn(id, [LIMIT])).asked, true, "следующий ход просит");
+    turn(id, [LIMIT, LIMIT]);
+    assert.deepEqual(await waiting(id), ASKED, "отказ не считается пересказом");
   }
 });
 
-test("подпись держится от просьбы до compaction.completed, начала хода или срока", async () => {
+test("сбой занятия и сбой освобождения чата наружу не летят", async () => {
   const id = fresh();
-  const chatKey = `${id}:`;
-  assert.equal(idle.idleCompactionRunning(chatKey), false);
-  await turn(id, [LIMIT]);
-  assert.equal(idle.idleCompactionRunning(chatKey), true);
-  idle.completeIdleCompaction(id);
-  assert.equal(idle.idleCompactionRunning(chatKey), false);
-
-  await turn(id, [10, LIMIT]);
-  assert.equal(idle.idleCompactionRunning(chatKey), true);
-  idle.openIdleCompactionTurn(id);
-  assert.equal(idle.idleCompactionRunning(chatKey), false, "ход начался");
-
-  const late = fresh();
-  await turn(late, [LIMIT]);
-  const at = Date.now();
+  turn(id, [LIMIT]);
+  const boom = () => {
+    throw new Error("run-status lock timeout");
+  };
   assert.equal(
-    idle.idleCompactionRunning(`${late}:`, at + idle.IDLE_COMPACTION_NOTE_MS),
+    await idle.startIdleCompaction({
+      sessionId: id,
+      claimImpl: boom,
+      requestImpl: async () => true,
+      releaseImpl: async () => boom(),
+      logImpl: () => {},
+    }),
     false,
-    "свёртка без конца подпись дольше срока не держит",
   );
 });
 
-test("подпись видна уже пока eve принимает просьбу, и только в своём чате", async () => {
-  const id = fresh();
-  idle.openIdleCompactionTurn(id);
-  idle.recordStepInput(id, LIMIT);
-  let during: boolean[] = [];
-  await idle.compactIdleSession({
-    sessionId: id,
-    chatKey: "chat-a:",
-    windowTokens: WINDOW,
-    requestImpl: async () => {
-      during = [
-        idle.idleCompactionRunning("chat-a:"),
-        idle.idleCompactionRunning("chat-b:"),
-      ];
-      return true;
-    },
-  });
-  assert.deepEqual(during, [true, false]);
-});
-
-type Turn = {
+type Step = {
   first: number | null;
   last: number | null;
+  inTurn: boolean;
+  chatFree: boolean;
   outcome: Outcome;
   completes: boolean;
 };
@@ -180,16 +224,18 @@ const tokens = fc.oneof(
   fc.integer({ min: 0, max: WINDOW * 2 }),
   fc.constantFrom(LIMIT - 1, LIMIT, LIMIT + 1),
 );
-const turnArb: fc.Arbitrary<Turn> = fc.record({
+const stepArb: fc.Arbitrary<Step> = fc.record({
   first: tokens,
   last: tokens,
+  inTurn: fc.boolean(),
+  chatFree: fc.boolean(),
   outcome: fc.constantFrom<Outcome>("accepted", "gone", "throws"),
   completes: fc.boolean(),
 });
 
-test("property: просьба уходит только за порогом, не бросает и после бесполезной свёртки не повторяется", async () => {
+test("property: просьба уходит только за порогом и в свободный чат, раз на ход, и после бесполезного пересказа не повторяется", async () => {
   await fc.assert(
-    fc.asyncProperty(fc.array(turnArb, { maxLength: 30 }), async (script) => {
+    fc.asyncProperty(fc.array(stepArb, { maxLength: 30 }), async (script) => {
       const id = fresh();
       let off = false;
       let asked = false;
@@ -201,18 +247,21 @@ test("property: просьба уходит только за порогом, н
           asked = false;
           compacted = false;
         }
-        const expected: boolean =
-          !off && step.last !== null && step.last >= LIMIT;
-        const result = await turn(id, [step.first, step.last], step.outcome);
-        assert.equal(result.asked, expected);
-        assert.equal(result.accepted, expected && step.outcome === "accepted");
-        assert.equal(idle.idleCompactionRunning(`${id}:`), result.accepted);
-        if (result.accepted) {
+        turn(id, [step.first, step.last], step.inTurn);
+        const due: boolean = !off && step.last !== null && step.last >= LIMIT;
+        const result = await waiting(id, step);
+        assert.equal(result.claimed, due);
+        assert.equal(result.asked, due && step.chatFree);
+        const accepted: boolean =
+          due && step.chatFree && step.outcome === "accepted";
+        assert.equal(result.accepted, accepted);
+        assert.equal(result.released, due && step.chatFree && !accepted);
+        assert.deepEqual(await waiting(id, step), NOTHING, "вторая парковка");
+        if (accepted) {
           asked = true;
           if (step.completes) {
             idle.completeIdleCompaction(id);
             compacted = true;
-            assert.equal(idle.idleCompactionRunning(`${id}:`), false);
           }
         }
       }

@@ -1,7 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
-import { existsSync } from "node:fs";
 import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -25,13 +24,16 @@ import {
 } from "./fixtures/restart-app.ts";
 
 void test(
-  "startup retires a killed mid-turn session and drains its queued message",
+  "startup retires a session killed mid-compaction, stays silent, and drains its queued message",
   {
     timeout: 180_000,
   },
   async (t) => {
-    const sandbox = await mkdtemp(join(tmpdir(), "iva-restart-mid-turn-"));
-    const provider = await startProvider();
+    const sandbox = await mkdtemp(
+      join(tmpdir(), "iva-restart-mid-compaction-"),
+    );
+    // Ход отвечает сразу, а пересказ между ходами замирает в провайдере до перезапуска.
+    const provider = await startProvider("CONTEXT CHECKPOINT COMPACTION");
     let eve: EveProcess | null = null;
     t.after(async () => {
       await stopEve(eve);
@@ -57,6 +59,8 @@ void test(
     const status = await import("../agent/lib/run-status.ts");
     const queue = await import("./poller/queue.ts");
     const routing = await import("./poller/routing.ts");
+    const { chatTakeOverPatch } =
+      await import("../agent/lib/telegram-turn-start.ts");
     await writeFile(join(app, ".env"), `ASSISTANT_BEARER=${bearer}\n`, {
       mode: 0o600,
     });
@@ -67,23 +71,41 @@ void test(
       env,
       () => {},
     );
+    const replyFile = join(app, "data/restart-hang-replies.jsonl");
+    const replies = async (count: number, what: string) => {
+      const deadline = Date.now() + 30_000;
+      for (;;) {
+        const lines = (await readFile(replyFile, "utf8").catch(() => ""))
+          .split("\n")
+          .filter(Boolean);
+        if (lines.length >= count) return;
+        if (Date.now() >= deadline) assert.fail(what);
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+    };
 
     eve = startEve(app, env, port, () => {});
     await waitForHealth(port, eve);
-    // The owner's next message goes to the interrupted session itself: without
-    // recovery its inbox lock survives the kill and the next turn never starts.
     const started = await post(port, bearer, "/restart-hang/send", {
       address: "1::",
-      message: "BLOCK_UNTIL_RESTART",
+      message: "remember the word aubergine",
     });
     assert.equal(started.status, 200);
     const { sessionId } = (await started.json()) as { sessionId: string };
-    await provider.blocked;
-    status.setChatStatus("1:", {
-      status: "running",
+    await replies(1, "the first turn did not complete");
+
+    // Пересказ между ходами: канал занял чат и попросил eve. Запрос к модели дошёл до
+    // провайдера — значит, ручной compact нашёл модель шага (хунк patches/eve).
+    status.setChatStatus(
+      "1:",
+      chatTakeOverPatch({ sessionId, compacting: true }),
+    );
+    const compact = await post(port, bearer, "/eve/v1/telegram/compact", {
       sessionId,
-      turnId: "turn-before-restart",
     });
+    assert.equal(compact.status, 200);
+    assert.deepEqual(await compact.json(), { ok: true, status: "accepted" });
+    await provider.blocked;
     await queue.enqueueTelegramQueueUpdate("1:", {
       update_id: 2,
       message: {
@@ -96,13 +118,16 @@ void test(
     });
 
     await killEve(eve);
-    const recovery = join(app, "scripts/recover-interrupted-turns.ts");
-    if (existsSync(recovery)) {
-      await runNode([recovery], app, env, () => {});
-    }
+    await runNode(
+      [join(app, "scripts/recover-interrupted-turns.ts")],
+      app,
+      env,
+      () => {},
+    );
     eve = startEve(app, env, port, () => {});
     await waitForHealth(port, eve);
 
+    // Запроса человека в пересказе не было: мост закрывает запись молча.
     const notices: string[] = [];
     assert.equal(
       await queue.reapStaleRuns({
@@ -115,11 +140,9 @@ void test(
       }),
       1,
     );
-    assert.equal(notices.length, 1);
-    assert.match(
-      notices[0],
-      /Предыдущий ход оборвался|previous turn was interrupted/iu,
-    );
+    assert.deepEqual(notices, []);
+    assert.equal(status.getChatStatus("1:")?.status, "idle");
+    assert.equal(status.getChatStatus("1:")?.compacting, undefined);
     assert.equal(
       (await queue.loadQueue({ strict: true })).queues["1:"]?.length,
       1,
@@ -137,14 +160,7 @@ void test(
       inFlight: new Map(),
     });
     assert.equal(remaining, 0);
-    const replyFile = join(app, "data/restart-hang-replies.jsonl");
-    const deadline = Date.now() + 30_000;
-    for (;;) {
-      const lines = await readFile(replyFile, "utf8").catch(() => "");
-      if (lines.includes("RECOVERED")) break;
-      if (Date.now() >= deadline) assert.fail("next message did not complete");
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    }
+    await replies(2, "the queued message did not complete after restart");
 
     const reset = await post(port, bearer, "/eve/v1/telegram/reset", {
       address: { chatId: "1" },

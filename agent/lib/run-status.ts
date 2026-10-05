@@ -270,11 +270,28 @@ export function updateTelegramPendingInputRequests(
   return false;
 }
 
-// true, когда по chatKey реально идёт ход (running и не протух).
+// Свёртка между ходами (agent/lib/idle-compaction.ts) держит чат занятым записью
+// running + compacting: true, но пульса у неё нет: событий хода eve в это время не шлёт.
+// Поэтому её запись протухает раньше записи хода.
+export const COMPACTION_STALE_MS = Number(
+  process.env.IVA_COMPACTION_STALE_MS ?? 5 * 60 * 1000,
+);
+
+/** Срок, после которого запись running считается брошенной: у свёртки он короче. */
+export function runStaleMs(
+  status: Record<string, unknown> | null | undefined,
+  staleMs = RUN_STALE_MS,
+): number {
+  return status?.compacting === true
+    ? Math.min(staleMs, COMPACTION_STALE_MS)
+    : staleMs;
+}
+
+// true, когда по chatKey реально идёт ход или свёртка (running и не протух).
 export function isRunning(chatKey: string, now = Date.now()): boolean {
   const st = getChatStatus(chatKey);
   return Boolean(
-    st && st.status === "running" && now - (st.updatedAt ?? 0) < RUN_STALE_MS,
+    st && st.status === "running" && now - (st.updatedAt ?? 0) < runStaleMs(st),
   );
 }
 

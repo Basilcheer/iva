@@ -1,8 +1,9 @@
 /* eslint-disable @typescript-eslint/no-floating-promises, @typescript-eslint/require-await -- Node's test runner owns registrations; the fetch double keeps the async boundary. */
 // Свёртка между ходами на живом шве канала: хук шага пишет вход, канал на turn.completed
-// зовёт собственный compact-роут с секретом вебхука, а роут — compact() eve по точной сессии.
-// Сообщение, принятое во время свёртки, получает ранний статус с подписью. Двойник стоит
-// только на внешних границах: Bot API и сессия eve; вызов роута идёт настоящим обработчиком.
+// решает, на session.waiting занимает чат (running + compacting) и зовёт собственный
+// compact-роут с секретом вебхука, а роут — compact() eve по точной сессии. Конец пересказа
+// (снова session.waiting) освобождает чат. Двойник стоит только на внешних границах: Bot API
+// и сессия eve; вызов роута идёт настоящим обработчиком, статус чата — настоящий файл.
 import "./lib/ts-esm-hooks.ts";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -70,6 +71,8 @@ type Adapter = {
   }) => unknown;
   "turn.started": Handler;
   "turn.completed": Handler;
+  "turn.cancelled": Handler;
+  "session.waiting": Handler;
 };
 
 const channelModule = "../agent/channels/telegram.ts?idle-compaction-test";
@@ -78,6 +81,9 @@ const [
   { default: usageHook },
   { providerConfig },
   { idleCompactionLimit },
+  runStatus,
+  { queuedNoticeText },
+  routing,
   { ContextContainer, contextStorage },
   { SessionKey },
 ] = await Promise.all([
@@ -87,6 +93,9 @@ const [
   import("../agent/hooks/usage.ts"),
   import("../agent/provider.ts"),
   import("../agent/lib/compaction.ts"),
+  import("../agent/lib/run-status.ts"),
+  import("./poller/queue.ts"),
+  import("./poller/routing.ts"),
   import("../node_modules/eve/dist/src/context/container.js"),
   import("../node_modules/eve/dist/src/context/keys.js"),
 ]);
@@ -133,12 +142,15 @@ const settle = async () => {
   for (let i = 0; i < 20; i++)
     await new Promise<void>((resolve) => setImmediate(resolve));
 };
+const statusOf = (chatId: number) => runStatus.getChatStatus(`${chatId}:`);
+const settings = join(dataDir, "settings.json");
 
 let seq = 0;
 beforeEach(() => {
   apiCalls.length = 0;
   compactCalls.length = 0;
   compactStatus = "accepted";
+  rmSync(settings, { force: true });
 });
 
 function step(sessionId: string, tokens: number) {
@@ -154,48 +166,68 @@ function step(sessionId: string, tokens: number) {
   );
 }
 
-/** Один ход в порядке eve: turn.started → шаги → turn.completed. */
-async function turn(sessionId: string, chatId: number, steps: number[]) {
-  const turnId = `turn_${++seq}`;
-  const ctx = new ContextContainer();
-  ctx.set(SessionKey, {
-    auth: { current: null, initiator: null },
-    sessionId,
-    turn: { id: turnId, sequence: seq },
-  });
-  const context = adapter.createAdapterContext({
-    ctx,
-    session: {
-      id: sessionId,
+/** События одной сессии в одном чате, в порядке eve. */
+function session(sessionId: string, chatId: number) {
+  const emit = async (
+    name:
+      "turn.started" | "turn.completed" | "turn.cancelled" | "session.waiting",
+    turnId: string,
+  ) => {
+    const ctx = new ContextContainer();
+    ctx.set(SessionKey, {
       auth: { current: null, initiator: null },
-      continuation: { token: `telegram:${chatId}::`, rekey() {} },
+      sessionId,
+      turn: { id: turnId, sequence: seq },
+    });
+    const context = adapter.createAdapterContext({
+      ctx,
+      session: {
+        id: sessionId,
+        auth: { current: null, initiator: null },
+        continuation: { token: `telegram:${chatId}::`, rekey() {} },
+      },
+      state: {
+        ...adapter.state,
+        chatId: String(chatId),
+        chatType: "private",
+        messageThreadId: null,
+      },
+    });
+    await contextStorage.run(ctx, async () => {
+      await adapter[name]({ sequence: seq, turnId }, context);
+    });
+    await settle();
+  };
+  return {
+    /** Ход: turn.started → шаги → turn.completed; парковку шлёт вызывающий. */
+    async turn(steps: number[]) {
+      const turnId = `turn_${++seq}`;
+      await emit("turn.started", turnId);
+      for (const tokens of steps) step(sessionId, tokens);
+      await emit("turn.completed", turnId);
     },
-    state: {
-      ...adapter.state,
-      chatId: String(chatId),
-      chatType: "private",
-      messageThreadId: null,
-    },
-  });
-  await contextStorage.run(ctx, async () => {
-    await adapter["turn.started"]({ sequence: seq, turnId }, context);
-    for (const tokens of steps) step(sessionId, tokens);
-    await adapter["turn.completed"]({ sequence: seq, turnId }, context);
-  });
-  await settle();
+    started: () => emit("turn.started", `turn_${++seq}`),
+    waiting: () => emit("session.waiting", `turn_${seq}`),
+    cancelled: () => emit("turn.cancelled", `turn_${seq}`),
+    compacted: () =>
+      hookEvents["compaction.completed"](
+        { data: {} },
+        { session: { id: sessionId } },
+      ),
+  };
 }
 
 /** Сообщение владельца через настоящий вебхук канала; возвращает число доставок в eve. */
 async function incoming(chatId: number, sessionId: string): Promise<number> {
   let sends = 0;
   const pending: Promise<unknown>[] = [];
-  const session = { id: sessionId } as Session;
+  const target = { id: sessionId } as Session;
   const source = {
     send: async () => {
       sends += 1;
-      return session;
+      return target;
     },
-    respond: async () => session,
+    respond: async () => target,
     cancel: unused,
     compact: unused,
     clear: unused,
@@ -219,9 +251,9 @@ async function incoming(chatId: number, sessionId: string): Promise<number> {
       }),
     }),
     {
-      attachSession: () => session,
+      attachSession: () => target,
       from: () => source,
-      resolveSession: async () => session,
+      resolveSession: async () => target,
       to: unused,
       params: {},
       waitUntil: (promise: Promise<unknown>) => {
@@ -235,98 +267,204 @@ async function incoming(chatId: number, sessionId: string): Promise<number> {
   return sends;
 }
 
-const statusMarkdown = () =>
-  apiCalls
-    .filter((call) => call.method === "sendRichMessage")
-    .map((call) =>
-      String(
-        (call.body?.rich_message as { markdown?: unknown } | undefined)
-          ?.markdown,
-      ),
-    );
-const NOTE = "Compacting the conversation, I'll answer in a moment.";
+const sentStatuses = () =>
+  apiCalls.filter((call) => call.method === "sendRichMessage").length;
 
-test("ход под порогом свёртку не просит, ход на пороге просит её у своей сессии с секретом вебхука, после уборки статуса", async () => {
-  await turn("s-low", 41, [LIMIT - 1]);
+test("ход под порогом чат не занимает; ход на пороге на парковке занимает чат и просит пересказ у своей сессии с секретом вебхука", async () => {
+  const low = session("s-low", 41);
+  await low.turn([LIMIT - 1]);
+  await low.waiting();
   assert.deepEqual(compactCalls, []);
+  assert.equal(statusOf(41)?.status, "idle");
 
-  await turn("s-over", 42, [1_000, LIMIT]);
+  const over = session("s-over", 42);
+  await over.turn([1_000, LIMIT]);
+  assert.deepEqual(compactCalls, [], "до парковки просьбы нет");
+  assert.equal(statusOf(42)?.status, "idle", "ход кончился — чат свободен");
+  await over.waiting();
   assert.deepEqual(compactCalls, [
     { sessionId: "s-over", secret: "idle-compaction-test-secret" },
   ]);
-  assert.ok(
-    apiCalls.some((call) => call.method === "deleteMessage"),
-    "статус хода убран",
+  const busy = statusOf(42);
+  assert.equal(busy?.status, "running");
+  assert.equal(busy?.sessionId, "s-over");
+  assert.equal(busy?.compacting, true);
+  assert.equal(
+    busy?.statusMessageId,
+    undefined,
+    "своего «Работаю…» у пересказа нет",
+  );
+  assert.equal(runStatus.isRunning("42:"), true);
+});
+
+test("запись пересказа без пульса перестаёт держать чат через свой короткий срок, запись хода — нет", async () => {
+  const s = session("s-stale", 54);
+  await s.turn([LIMIT]);
+  await s.waiting();
+  const later = Date.now() + runStatus.COMPACTION_STALE_MS + 1_000;
+  assert.equal(runStatus.COMPACTION_STALE_MS, 5 * 60_000);
+  assert.equal(runStatus.isRunning("54:"), true);
+  assert.equal(runStatus.isRunning("54:", later), false);
+  const real = session("s-stale-turn", 55);
+  await real.started();
+  assert.equal(runStatus.isRunning("55:", later), true);
+  await s.waiting();
+});
+
+test("конец пересказа — следующая парковка — освобождает чат, и второй просьбы на тот же ход нет", async () => {
+  const s = session("s-done", 43);
+  await s.turn([LIMIT]);
+  await s.waiting();
+  s.compacted();
+  await s.waiting();
+  assert.equal(statusOf(43)?.status, "idle");
+  assert.equal(statusOf(43)?.compacting, undefined);
+  assert.equal(compactCalls.length, 1);
+  await s.waiting();
+  assert.equal(compactCalls.length, 1);
+});
+
+test("порядок queue: сообщение во время пересказа мост ставит в свою очередь и отвечает «Сжимаю разговор»", async () => {
+  const s = session("s-queue", 44);
+  await s.turn([LIMIT]);
+  await s.waiting();
+  const acks: string[] = [];
+  const queued: unknown[] = [];
+  const update = {
+    update_id: 9001,
+    message: {
+      message_id: 9001,
+      chat: { id: 44, type: "private" },
+      from: { id: 9, is_bot: false, username: "owner" },
+      text: "ещё вопрос",
+    },
+  };
+  const result = await routing.routeMessageUpdate(update, {
+    loadQueueImpl: () => ({ version: 1, queues: {} }),
+    enqueueImpl: (_key, candidate) => {
+      queued.push(candidate);
+      return { count: 1 };
+    },
+    acknowledgeImpl: (_update, count) => {
+      acks.push(queuedNoticeText(count, statusOf(44)));
+    },
+    deliverImpl: () => assert.fail("занятый чат: в eve не доставляем"),
+    resetPendingImpl: () => false,
+  });
+  assert.equal(result, "queued");
+  assert.equal(queued.length, 1);
+  assert.deepEqual(acks, [
+    "Compacting the conversation, I'll answer in a moment.",
+  ]);
+  // Вне пересказа текст очереди прежний.
+  assert.equal(
+    queuedNoticeText(2, { status: "running", sessionId: "x" }),
+    "Queued (2). I'll start it automatically when the current task finishes.",
+  );
+  assert.equal(
+    queuedNoticeText(1, { status: "idle", compacting: true }),
+    "Queued (1). I'll start it automatically when the current task finishes.",
   );
 });
 
-test("сообщение во время свёртки доходит до eve и получает ранний статус с подписью; после конца свёртки подписи нет", async () => {
-  await turn("s-note", 43, [LIMIT]);
-  apiCalls.length = 0;
-  assert.equal(await incoming(43, "s-note"), 1, "сообщение доставлено в eve");
-  const [status] = statusMarkdown();
-  assert.ok(status?.endsWith(` ${NOTE}`), status);
-  assert.ok(!status?.includes("<tg-button"), "ход ещё не начался: без «Стоп»");
-
-  // Свёртка кончилась, начался и закончился ход по этому сообщению (ниже порога).
-  hookEvents["compaction.completed"](
-    { data: {} },
-    { session: { id: "s-note" } },
-  );
-  await turn("s-note", 43, [LIMIT - 1]);
-  apiCalls.length = 0;
-  assert.equal(await incoming(43, "s-note"), 1);
-  assert.ok(!statusMarkdown().some((markdown) => markdown.includes(NOTE)));
-});
-
-test("порядок steer: сообщение само обрывает пересказ, ждать нечего — статус без подписи", async () => {
-  const settings = join(dataDir, "settings.json");
+test("порядок steer: сообщение уходит в eve, чужого статуса не рисует; обрыв пересказа освобождает чат, ход идёт обычным порядком", async () => {
   writeFileSync(settings, JSON.stringify({ turnPolicy: "steer" }));
-  try {
-    await turn("s-steer", 49, [LIMIT]);
-    assert.equal(compactCalls.length, 1, "свёртку просим при любом порядке");
-    apiCalls.length = 0;
-    assert.equal(await incoming(49, "s-steer"), 1);
-    assert.equal(statusMarkdown().length, 1, "ранний статус на месте");
-    assert.ok(!statusMarkdown()[0]?.includes(NOTE));
-  } finally {
-    rmSync(settings, { force: true });
-  }
-});
-
-test("подпись получает только чат, чья сессия сворачивается", async () => {
-  await turn("s-own", 44, [LIMIT]);
+  const s = session("s-steer", 45);
+  await s.turn([LIMIT]);
+  await s.waiting();
+  assert.equal(compactCalls.length, 1, "пересказ просим при любом порядке");
   apiCalls.length = 0;
-  assert.equal(await incoming(45, "s-other"), 1);
-  assert.ok(!statusMarkdown().some((markdown) => markdown.includes(NOTE)));
+  assert.equal(await incoming(45, "s-steer"), 1, "сообщение доставлено в eve");
+  assert.equal(sentStatuses(), 0, "чат занят пересказом: раннего статуса нет");
+  assert.equal(statusOf(45)?.compacting, true);
+
+  await s.waiting(); // eve оборвала пересказ и запарковала сессию
+  assert.equal(statusOf(45)?.status, "idle");
+  await s.started(); // и начала ход по сообщению
+  const running = statusOf(45);
+  assert.equal(running?.status, "running");
+  assert.equal(running?.sessionId, "s-steer");
+  assert.equal(running?.compacting, undefined);
+  assert.equal(sentStatuses(), 1, "у хода свой «Работаю…»");
+  assert.equal(compactCalls.length, 1, "оборванный ход ничего не просил");
 });
 
-test("сессии уже нет или роут недоступен: ход закончен как обычно, подписи нет, следующий ход просит снова", async () => {
+test("ход, начавшийся поверх записи пересказа (парковка опоздала), не наследует признак пересказа", async () => {
+  const s = session("s-late", 46);
+  await s.turn([LIMIT]);
+  await s.waiting();
+  await s.started();
+  assert.equal(statusOf(46)?.status, "running");
+  assert.equal(statusOf(46)?.compacting, undefined);
+  assert.equal(typeof statusOf(46)?.turnId, "string");
+});
+
+test("сессии уже нет или роут недоступен: чат снова свободен, следующий ход просит заново", async () => {
   for (const [status, chatId] of [
-    ["no_active_session", 46],
-    ["down", 47],
+    ["no_active_session", 47],
+    ["down", 48],
   ] as const) {
     compactStatus = status;
-    const sessionId = `s-${status}`;
-    await turn(sessionId, chatId, [LIMIT]);
-    apiCalls.length = 0;
-    assert.equal(await incoming(chatId, sessionId), 1);
-    assert.ok(!statusMarkdown().some((markdown) => markdown.includes(NOTE)));
+    const s = session(`s-${status}`, chatId);
+    await s.turn([LIMIT]);
+    await s.waiting();
+    assert.equal(statusOf(chatId)?.status, "idle", status);
+    assert.equal(statusOf(chatId)?.compacting, undefined, status);
     compactStatus = "accepted";
     compactCalls.length = 0;
-    await turn(sessionId, chatId, [LIMIT]);
+    await s.turn([LIMIT]);
+    await s.waiting();
     assert.equal(compactCalls.length, 1);
+    await s.waiting();
   }
 });
 
-test("законченная свёртка, которая не помогла, больше не повторяется", async () => {
-  await turn("s-stuck", 48, [LIMIT]);
-  hookEvents["compaction.completed"](
-    { data: {} },
-    { session: { id: "s-stuck" } },
-  );
-  compactCalls.length = 0;
-  await turn("s-stuck", 48, [LIMIT, LIMIT + 1]);
-  await turn("s-stuck", 48, [LIMIT * 2]);
+test("сообщение успело занять чат до парковки: пересказа нет, запись сообщения цела", async () => {
+  const s = session("s-raced", 49);
+  await s.turn([LIMIT]);
+  assert.equal(await incoming(49, "s-raced"), 1);
+  const ingress = statusOf(49);
+  assert.equal(typeof ingress?.ingressId, "string");
+  await s.waiting();
   assert.deepEqual(compactCalls, []);
+  assert.equal(statusOf(49)?.ingressId, ingress?.ingressId);
+  assert.equal(statusOf(49)?.compacting, undefined);
+});
+
+test("сессию сбросили (/new оставил resetAt): пересказа нет", async () => {
+  const s = session("s-reset", 50);
+  await s.turn([LIMIT]);
+  runStatus.setChatStatus("50:", { status: "idle", resetAt: Date.now() });
+  await s.waiting();
+  assert.deepEqual(compactCalls, []);
+  assert.equal(statusOf(50)?.status, "idle");
+});
+
+test("⏹ во время пересказа: чат свободен, отметки «ход отменён» следующему сообщению нет", async () => {
+  const s = session("s-stop", 51);
+  await s.turn([LIMIT]);
+  await s.waiting();
+  await s.cancelled();
+  assert.equal(statusOf(51)?.status, "idle");
+  assert.equal(statusOf(51)?.wasCancelled, undefined);
+  // Отмена настоящего хода отметку ставит, как раньше.
+  const real = session("s-stop-turn", 52);
+  await real.started();
+  await real.cancelled();
+  assert.equal(statusOf(52)?.wasCancelled, true);
+});
+
+test("законченный пересказ, который не помог, больше не повторяется", async () => {
+  const s = session("s-stuck", 53);
+  await s.turn([LIMIT]);
+  await s.waiting();
+  s.compacted();
+  await s.waiting();
+  compactCalls.length = 0;
+  await s.turn([LIMIT, LIMIT + 1]);
+  await s.waiting();
+  await s.turn([LIMIT * 2]);
+  await s.waiting();
+  assert.deepEqual(compactCalls, []);
+  assert.equal(statusOf(53)?.status, "idle");
 });

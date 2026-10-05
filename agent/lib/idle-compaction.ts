@@ -1,46 +1,51 @@
 // Свёртка между ходами: история сессии пересказывается, пока человек ничего не ждёт.
 //
-// Хук шага пишет вход каждого шага, канал на turn.completed спрашивает, пора ли, и зовёт
-// свой compact-роут (публичный compact eve отдаётся только роутам). Сообщение, пришедшее во
-// время свёртки, eve держит в своём входном буфере и начинает ход после неё; канал лишь
-// подписывает ранний статус «Сжимаю разговор…» (idleCompactionRunning).
+// Порядок: хук шага пишет вход каждого шага; на turn.completed канал решает, пора ли; на
+// следующем session.waiting (ход запаркован) занимает чат записью running + compacting и
+// зовёт свой compact-роут (публичный compact eve отдаётся только роутам). Конец пересказа —
+// успех, сбой или обрыв — eve тоже отмечает session.waiting, и тот же обработчик канала
+// освобождает чат.
 //
-// Состояние в памяти процесса: после рестарта свёртка между ходами ждёт следующего хода, а
-// подпись статуса возвращается к обычному индикатору. Порядок событий хранит eve, не этот
-// модуль: от его записей зависит только текст статуса и момент просьбы.
+// Чат занят на время пересказа по трём причинам. Мост при порядке queue держит пришедшие
+// сообщения в своей очереди на диске и отвечает «Сжимаю разговор, скоро отвечу.»
+// (scripts/poller/queue.ts). Перезапуск посреди пересказа виден восстановлению так же, как
+// оборванный ход (scripts/recover-interrupted-turns.ts): без этого сессия eve остаётся с
+// занятым входом команд и зависает (c1, 05.10.2026). И вторая просьба не встаёт в очередь
+// eve, пока первая не кончилась.
+//
+// Здесь только решение и счёт, в памяти процесса: после рестарта свёртка ждёт следующего
+// хода, а выключение (off) забыто — цена один лишний пересказ на рестарт.
 import { idleCompactionLimit } from "./compaction.ts";
 
 type Turn = {
+  /** Между turn.started и turn.completed: пересказ в это время — страховка eve, не наш. */
+  open: boolean;
   /** Вход первого и последнего шага текущего хода; null — провайдер вход не назвал. */
   steps: number;
   first: number | null;
   last: number | null;
-  /** После прошлого хода свёртку просили; compacted — eve её довела до конца. */
+  /** Законченный ход дошёл до порога: на session.waiting пора просить пересказ. */
+  due: boolean;
+  /** После прошлого хода пересказ просили; compacted — eve довела его до конца. */
   asked: boolean;
   compacted: boolean;
-  /** Законченная свёртка не увела вход под порог: больше между ходами не сворачиваем. */
+  /** Законченный пересказ не увёл вход под порог: больше между ходами не сворачиваем. */
   off: boolean;
 };
 const turns = new Map<string, Turn>();
-const running = new Map<string, { sessionId: string; at: number }>();
 
-// Свёртка без compaction.completed (сбой пересказа, рестарт) подпись дольше не держит.
-export const IDLE_COMPACTION_NOTE_MS = 3 * 60_000;
-
-/** turn.started: открыть счёт хода. Начавшийся ход значит, что свёртка уже не идёт. */
+/** turn.started: открыть счёт хода. */
 export function openIdleCompactionTurn(sessionId: string): void {
   const turn = turns.get(sessionId);
-  if (turn) Object.assign(turn, { steps: 0, first: null, last: null });
+  const fresh = { open: true, steps: 0, first: null, last: null, due: false };
+  if (turn) Object.assign(turn, fresh);
   else
     turns.set(sessionId, {
-      steps: 0,
-      first: null,
-      last: null,
+      ...fresh,
       asked: false,
       compacted: false,
       off: false,
     });
-  forgetRunning(sessionId);
 }
 
 /** Вход шага открытой сессии; null — провайдер вход не назвал. */
@@ -51,42 +56,28 @@ export function recordStepInput(sessionId: string, tokens: number | null) {
   turn.last = tokens;
 }
 
-/** compaction.completed: свёртка доведена до конца, подпись статуса больше не нужна. */
+/**
+ * compaction.completed. Пересказ внутри хода — страховка eve, она шлёт то же событие:
+ * своим считаем только пересказ, который кончился, пока ход сессии закрыт.
+ */
 export function completeIdleCompaction(sessionId: string): void {
   const turn = turns.get(sessionId);
-  if (turn?.asked) turn.compacted = true;
-  forgetRunning(sessionId);
-}
-
-function forgetRunning(sessionId: string): void {
-  for (const [chatKey, entry] of running)
-    if (entry.sessionId === sessionId) running.delete(chatKey);
-}
-
-/** Идёт ли в чате свёртка между ходами: от этого зависит только текст раннего статуса. */
-export function idleCompactionRunning(
-  chatKey: string,
-  now = Date.now(),
-): boolean {
-  const entry = running.get(chatKey);
-  if (!entry) return false;
-  if (now - entry.at < IDLE_COMPACTION_NOTE_MS) return true;
-  running.delete(chatKey);
-  return false;
+  if (turn?.asked && !turn.open) turn.compacted = true;
 }
 
 /**
- * Пора ли сворачивать после этого хода. Свёртка, которая дошла до конца и не увела первый
- * шаг следующего хода под порог, выключает себя до конца сессии: иначе каждый ход платил бы
- * за пересказ, который ничего не освобождает. Оборванная свёртка (ход по политике steer,
- * сбой провайдера) не выключает ничего.
+ * turn.completed: решить, пора ли сворачивать после этого хода. Пересказ, который дошёл до
+ * конца и не увёл первый шаг следующего хода под порог, выключает себя: иначе каждый ход
+ * платил бы за пересказ, который ничего не освобождает. Оборванный пересказ (сообщение при
+ * порядке steer, сбой провайдера) не выключает ничего.
  */
-export function idleCompactionDue(
+export function closeIdleCompactionTurn(
   sessionId: string,
   windowTokens: number,
-): boolean {
+): void {
   const turn = turns.get(sessionId);
-  if (!turn) return false;
+  if (!turn) return;
+  turn.open = false;
   const limit = idleCompactionLimit(windowTokens);
   if (turn.asked) {
     if (turn.compacted && turn.first !== null && turn.first >= limit)
@@ -94,44 +85,49 @@ export function idleCompactionDue(
     turn.asked = false;
     turn.compacted = false;
   }
-  return !turn.off && limit > 0 && turn.last !== null && turn.last >= limit;
+  turn.due = !turn.off && limit > 0 && turn.last !== null && turn.last >= limit;
 }
 
 /**
- * turn.completed: попросить eve свернуть историю, если пора. Никогда не бросает: ход уже
- * закончен, а отказ свёртки оставляет историю как была (следующий ход попросит снова,
- * страховка внутри хода остаётся).
+ * session.waiting: если законченный ход дошёл до порога — занять чат и попросить eve
+ * пересказать историю. Никогда не бросает: ход уже закончен, отказ оставляет историю как
+ * была, следующий ход решит заново, страховка внутри хода остаётся.
+ *
+ * claimImpl занимает чат под пересказ; false — чат уже занят (пришло сообщение) или сессия
+ * сброшена, тогда просьбы нет. requestImpl: true — eve приняла просьбу, false — сессии уже
+ * нет. releaseImpl освобождает чат, если просьба не принята.
  */
-export async function compactIdleSession({
+export async function startIdleCompaction({
   sessionId,
-  chatKey,
-  windowTokens,
+  claimImpl,
   requestImpl,
-  now = Date.now,
+  releaseImpl,
   logImpl = console.error,
 }: {
   sessionId: string;
-  chatKey: string;
-  windowTokens: number;
-  /** true — eve приняла просьбу; false — сессии уже нет. */
+  claimImpl: () => boolean;
   requestImpl: (sessionId: string) => Promise<boolean>;
-  now?: () => number;
+  releaseImpl: () => Promise<unknown>;
   logImpl?: (...parts: unknown[]) => void;
 }): Promise<boolean> {
-  if (!idleCompactionDue(sessionId, windowTokens)) return false;
-  // Подпись ставим до просьбы: сообщение может прийти, пока eve её принимает.
-  running.set(chatKey, { sessionId, at: now() });
+  const turn = turns.get(sessionId);
+  if (!turn?.due) return false;
+  turn.due = false;
   let accepted = false;
   try {
+    if (!claimImpl()) return false;
     accepted = await requestImpl(sessionId);
   } catch (error) {
     logImpl("[telegram] свёртка между ходами не запрошена:", error);
   }
-  const turn = turns.get(sessionId);
   if (accepted) {
-    if (turn) turn.asked = true;
+    turn.asked = true;
     return true;
   }
-  if (running.get(chatKey)?.sessionId === sessionId) running.delete(chatKey);
+  try {
+    await releaseImpl();
+  } catch (error) {
+    logImpl("[telegram] чат после отказа свёртки не освобождён:", error);
+  }
   return false;
 }
