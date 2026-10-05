@@ -11,6 +11,7 @@
 import { join } from "node:path";
 import { dataDir } from "#lib/data-dir.ts";
 import { acquireFileLock, releaseFileLock } from "#lib/fs-atomic.ts";
+import { pluginTreeDigest } from "#lib/plugin-reader.ts";
 import { findPlugin, readPluginsStateSafe } from "#lib/plugin-store.ts";
 import {
   isQuietHour,
@@ -101,6 +102,11 @@ export type TickDeps = {
   readonly unfixed?: () => Promise<readonly string[]>;
   /** Стоит ли плагин с этим именем (data/custom/plugins.json); зависимости нет — не стоит. */
   readonly installed?: (name: string) => Promise<boolean>;
+  /**
+   * Отпечаток черновика `data/custom/plugin-drafts/<name>` (12 знаков, как у кнопки
+   * предложения); нет папки или ошибка обхода — null, и отпечаток не пишется.
+   */
+  readonly draftTree?: (name: string) => Promise<string | null>;
   readonly writeState?: typeof writeProactiveState;
   readonly log?: (line: string) => void;
 };
@@ -674,6 +680,28 @@ const insightPrompt = (tr: Translate) =>
 const INSTALL_DATA =
   /data="(?:Поставить|Install) ([a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?)"/u;
 
+/**
+ * Отпечаток черновика из кнопки «Поставить» — после хода и до отправки: ставиться будет ровно
+ * то, что лежало в папке, когда ушло сообщение. Имени нет или отпечаток не посчитался — null.
+ */
+async function draftTreeOf(deps: TickDeps, body: string) {
+  const name = INSTALL_DATA.exec(body)?.[1];
+  if (name === undefined || deps.draftTree === undefined) return null;
+  try {
+    return await deps.draftTree(name);
+  } catch {
+    return null;
+  }
+}
+
+/** Вторая запись: имя черновика («?» — имя не годится или плагин уже стоит) и его отпечаток. */
+async function draftRecord(deps: TickDeps, body: string, tree: string | null) {
+  const name = INSTALL_DATA.exec(body)?.[1];
+  const draft =
+    name !== undefined && !(await isInstalled(deps, name)) ? name : "?";
+  return draft === "?" || tree === null ? { draft } : { draft, tree };
+}
+
 /** Заявка сегодняшнего дня; два непоставленных подряд — вместо неё неделя паузы. */
 const insightClaim = (state: ProactiveState, clock: Clock, misses: number) => {
   const pause = misses >= 2;
@@ -688,7 +716,8 @@ const insightClaim = (state: ProactiveState, clock: Clock, misses: number) => {
 
 /**
  * Insight (ADR-0022): два инсайта подряд без установки — неделя паузы без хода; иначе заявка до
- * хода, ход, одно сообщение, имя черновика второй записью. Код 1 — только провал первой записи.
+ * хода, ход, одно сообщение, имя черновика и его отпечаток второй записью. Код 1 — только
+ * провал первой записи.
  */
 async function insight(
   deps: TickDeps,
@@ -712,12 +741,11 @@ async function insight(
   const text = await turnText(deps, insightPrompt(tr), "insight", log);
   const body = partsOf(text ?? "").join("\n\n");
   if (body === "") return 0;
+  const tree = await draftTreeOf(deps, body);
   const { sent } = await deliver([body], (p) => deps.send(p, "insight"), log);
   if (!sent) return 0;
-  const name = INSTALL_DATA.exec(body)?.[1];
-  const draft =
-    name !== undefined && !(await isInstalled(deps, name)) ? name : "?";
-  const next = { ...claimed, insight: { ...claimed.insight, draft } };
+  const record = await draftRecord(deps, body, tree);
+  const next = { ...claimed, insight: { ...claimed.insight, ...record } };
   await save(deps, next, "insight draft", log);
   return 0;
 }
@@ -837,6 +865,11 @@ export async function main(
       unfixed: () => unfixedFailures(dir, now),
       installed: async (name) =>
         findPlugin((await readPluginsStateSafe(dir)).state, name) !== undefined,
+      draftTree: async (name) =>
+        (await pluginTreeDigest(join(dir, "custom/plugin-drafts", name))).slice(
+          0,
+          12,
+        ),
       ...overrides,
     });
   } finally {

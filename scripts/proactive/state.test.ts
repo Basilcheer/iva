@@ -22,12 +22,17 @@ const FILE = join(ROOT, "proactive.json");
 const count = fc.nat({ max: 1_000 });
 const dayCount = fc.record({ day: fc.string({ maxLength: 12 }), count });
 /** Поле Insight (ADR-0022): необязательное, файл без него — файл прежней версии. */
-const insight = fc.record({
-  day: fc.string({ maxLength: 12 }),
-  draft: fc.string({ maxLength: 12 }),
-  misses: count,
-  pausedUntilMs: fc.integer(),
-});
+const insight = fc.record(
+  {
+    day: fc.string({ maxLength: 12 }),
+    draft: fc.string({ maxLength: 12 }),
+    misses: count,
+    pausedUntilMs: fc.integer(),
+    // Отпечаток черновика (ADR-0022, пересмотр 06.10.2026): необязателен, файл без него читается.
+    tree: fc.string({ maxLength: 12 }),
+  },
+  { requiredKeys: ["day", "draft", "misses", "pausedUntilMs"] },
+);
 const validState: fc.Arbitrary<ProactiveState> = fc
   .tuple(
     fc.record({
@@ -70,6 +75,7 @@ const damaged = fc
       "insight.day",
       "insight.misses",
       "insight.pausedUntilMs",
+      "insight.tree",
     ),
     fc.anything(),
   )
@@ -107,6 +113,8 @@ function fullContract(state: ProactiveState): void {
   assert.equal(typeof state.insight.draft, "string");
   assert.ok(count(state.insight.misses));
   assert.ok(Number.isFinite(state.insight.pausedUntilMs));
+  const tree: unknown = state.insight.tree;
+  assert.ok(tree === undefined || typeof tree === "string");
 }
 
 function check(text: string): void {
@@ -182,4 +190,93 @@ test("a file of the first beta with a spark field is read, and the field is not 
     assert.ok(read !== null);
     assert.equal(read.insight, undefined);
   }
+});
+
+test("insight.tree: absent (an older file) or a string is read; anything else refuses the file like any field", () => {
+  const state = initialState(Date.UTC(2026, 9, 5));
+  const base = { day: "2026-10-05", draft: "x-y", misses: 0, pausedUntilMs: 0 };
+  for (const insight of [base, { ...base, tree: "0123456789ab" }]) {
+    writeFileSync(FILE, JSON.stringify({ ...state, insight }));
+    assert.deepEqual(readProactiveState(FILE)?.insight, insight);
+  }
+  for (const tree of [5, null, ["a"], { a: 1 }, true]) {
+    writeFileSync(
+      FILE,
+      JSON.stringify({ ...state, insight: { ...base, tree } }),
+    );
+    assert.throws(() => readProactiveState(FILE), /proactive state form/u);
+  }
+});
+
+test(`Watch and Brief writes carry insight.tree byte for byte on any sequence of their runs (seed ${SEED})`, async () => {
+  const { PROACTIVE_DEFAULTS } = await import("#lib/proactive-config.ts");
+  const { runProactiveTick } = await import("./tick.ts");
+  const { writeProactiveState } = await import("./state.ts");
+  const MIN = 60_000;
+  const START = Date.UTC(2026, 9, 5, 8, 0);
+  const insight = {
+    day: "2026-10-05",
+    draft: "x-y",
+    misses: 1,
+    pausedUntilMs: 0,
+    tree: "0123456789ab",
+  };
+  await fc.assert(
+    fc.asyncProperty(
+      fc.array(
+        fc.record({
+          step: fc.integer({ min: 1, max: 6 }).map((n) => n * 30 * MIN),
+          unread: fc.nat({ max: 3 }),
+          reply: fc.constantFrom("QUIET", "Иван ждёт ответа.", ""),
+          ok: fc.boolean(),
+        }),
+        { maxLength: 8 },
+      ),
+      async (runs) => {
+        const path = join(mkdtempSync(join(ROOT, "carry-")), "proactive.json");
+        await writeProactiveState(path, { ...initialState(START), insight });
+        let now = START;
+        for (const run of runs) {
+          now += run.step;
+          await runProactiveTick(now, {
+            config: () => ({
+              ...PROACTIVE_DEFAULTS,
+              briefTimes: ["09:00", "14:00"],
+              staleMinutes: 0,
+            }),
+            timeZone: "UTC",
+            statePath: path,
+            sources: [
+              {
+                name: "telegram",
+                prefix: "tg:",
+                check: () =>
+                  Promise.resolve({
+                    items:
+                      run.unread > 0
+                        ? [{ key: "tg:1", unread: run.unread, from: {} }]
+                        : [],
+                    error: null,
+                  }),
+              },
+            ],
+            runTurn: () =>
+              Promise.resolve({
+                status: "completed",
+                message: run.reply,
+                feedback: () => Promise.resolve(),
+              }),
+            send: () => Promise.resolve({ ok: run.ok, error: "x" }),
+            translate: () => Promise.resolve((en: string) => en),
+            log: () => {},
+          });
+          assert.equal(
+            JSON.stringify(readProactiveState(path)?.insight),
+            JSON.stringify(insight),
+          );
+        }
+      },
+    ),
+    { seed: SEED, numRuns: 60 },
+  );
 });

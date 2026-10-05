@@ -26,6 +26,12 @@ export type InsightState = {
   readonly draft: string; // имя черновика доставленного инсайта; "?" — имя не годится; "" — QUIET
   readonly misses: number; // инсайты подряд, после которых плагин не поставлен
   readonly pausedUntilMs: number; // до этого момента хода нет; 0 — паузы нет
+  /**
+   * Отпечаток черновика в минуту отправки (`pluginTreeDigest(...).slice(0, 12)`): по нему
+   * неинтерактивный `iva plugin add` ставит ровно тот черновик, что был в сообщении. Нет поля —
+   * сверки нет (файл прошлой версии, QUIET, имя «?» или отпечаток не посчитался).
+   */
+  readonly tree?: string;
 };
 
 export type ProactiveState = {
@@ -79,14 +85,17 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/** Поля Insight; `tree` необязателен — файл без него (прошлая версия) годится. */
+const isInsightFields = (value: Record<string, unknown>): boolean =>
+  typeof value.day === "string" &&
+  typeof value.draft === "string" &&
+  isCount(value.misses) &&
+  Number.isFinite(value.pausedUntilMs) &&
+  (value.tree === undefined || typeof value.tree === "string");
+
 /** Поле `insight` необязательно: его нет — годится. */
 const isInsight = (value: unknown): boolean =>
-  value === undefined ||
-  (isObject(value) &&
-    typeof value.day === "string" &&
-    typeof value.draft === "string" &&
-    isCount(value.misses) &&
-    Number.isFinite(value.pausedUntilMs));
+  value === undefined || (isObject(value) && isInsightFields(value));
 
 function isBriefDone(value: unknown): boolean {
   const brief = value as Partial<ProactiveState["briefDone"]> | null;
