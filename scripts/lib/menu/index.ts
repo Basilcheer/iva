@@ -10,7 +10,7 @@
 // enum/индексы, <=64 байта (тот же принцип, что m:<index> в /model). Никаких user data.
 // sid: r srch rich voice lang chr core ub gws cron ntc sk st turn svc (+псевдо mdl/thk — хендофф в визарды).
 // verbs: o(навигация) x(закрыть) pg:<n> rf(обновить) + data-вербы экрана (set key rs go
-// q:<i>:<v> skip fin redo apply do).
+// q:<i>:<v> skip fin redo apply do; ntc: ins:<0|0930|1130|1730>).
 
 import { getLang } from "#lib/i18n.ts";
 import type { TelegramFlowState } from "../tg-flow.ts";
