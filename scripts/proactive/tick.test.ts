@@ -691,3 +691,129 @@ test("the owner's private chat is the first allowlisted id, not the digest chat"
   assert.equal(code, 0);
   assert.deepEqual(sent, ["777"]);
 });
+
+// ── Срок прогона (D2): IVA_JOB_STOP_AT → один сигнал на все ходы ─────────────────────────
+
+const DEADLINE = "the turn ran past its deadline";
+
+/** Ход, который висит до снятия сигнала и кончается так, как его кончает runReminderTurn. */
+const hangsUntil = (signal: AbortSignal | undefined): Promise<ReminderTurn> =>
+  new Promise((resolve) => {
+    signal?.addEventListener("abort", () =>
+      resolve({
+        status: "failed",
+        message: DEADLINE,
+        feedback: () => Promise.resolve(),
+      }),
+    );
+  });
+
+test("a Brief that ran past the deadline: no Watch after it, the exit code is the Brief's", async () => {
+  const h = harness();
+  writeState(h, staleSeen(chat(1, 1)));
+  h.tg = { items: [chat(1, 1)], error: null };
+  h.config = { ...PROACTIVE_DEFAULTS, briefTimes: ["12:00"] };
+  const controller = new AbortController();
+  const kinds: string[] = [];
+  const deps: TickDeps = {
+    ...h.deps,
+    signal: controller.signal,
+    runTurn: (_prompt, kind, signal) => {
+      kinds.push(kind);
+      setImmediate(() => controller.abort());
+      return hangsUntil(signal);
+    },
+  };
+  assert.equal(await runProactiveTick(NOON, deps), 1);
+  assert.deepEqual(kinds, ["brief"], "Watch did not wake the model");
+  assert.equal(h.checks, 0, "Watch did not even check its sources");
+  assert.ok(h.logs.includes(`proactive: brief turn failed: ${DEADLINE}`));
+  assert.deepEqual(h.sent, []);
+});
+
+test("IVA_JOB_STOP_AT reaches every turn of the run as one signal; garbage, the past or too far → a line and no deadline", async (t) => {
+  const lines: string[] = [];
+  t.mock.method(console, "log", (line: string) => lines.push(line));
+  const signals: Array<AbortSignal | undefined> = [];
+  // Brief в 12:00, затем Watch по давнему непрочитанному: два хода одного прогона.
+  const tg: Source = {
+    name: "telegram",
+    prefix: "tg:",
+    check: () => Promise.resolve({ items: [chat(1, 1)], error: null }),
+  };
+  const run = (stopAt: string | undefined) => {
+    const statePath = join(mkdtempSync(join(ROOT, "stop-")), "proactive.json");
+    writeFileSync(
+      statePath,
+      JSON.stringify({
+        ...initialState(NOON - 2 * HOUR),
+        seen: { "tg:1": { firstSeenMs: 0, unread: 1, reported: false } },
+      }),
+    );
+    return main(
+      stopAt === undefined ? ENV : { ...ENV, IVA_JOB_STOP_AT: stopAt },
+      {
+        sources: [tg],
+        timeZone: "UTC",
+        config: () => ({ ...PROACTIVE_DEFAULTS, briefTimes: ["12:00"] }),
+        statePath,
+        runTurn: (_prompt, _kind, signal) => {
+          signals.push(signal);
+          return Promise.resolve(turn("Иван ждёт ответа."));
+        },
+        send: () => Promise.resolve({ ok: true, error: "" }),
+      },
+      () => NOON,
+    );
+  };
+  await run(String(Date.now() + 10 * MIN));
+  assert.equal(signals.length, 2, "Brief and Watch");
+  assert.ok(signals[0] instanceof AbortSignal);
+  assert.equal(signals[0], signals[1], "one signal for the whole run");
+  assert.equal(signals[0]?.aborted, false);
+  for (const bad of [
+    "soon",
+    String(Date.now() - MIN),
+    String(Date.now() + 2 ** 32),
+  ]) {
+    lines.length = 0;
+    signals.length = 0;
+    await run(bad);
+    assert.deepEqual(signals, [undefined, undefined], bad);
+    assert.ok(
+      lines.some((line) =>
+        /^proactive: IVA_JOB_STOP_AT=.*, running without a deadline$/u.test(
+          line,
+        ),
+      ),
+      bad,
+    );
+  }
+  signals.length = 0;
+  await run(undefined);
+  assert.deepEqual(
+    signals,
+    [undefined, undefined],
+    "a run by hand has no deadline",
+  );
+});
+
+test("through the real main: a hanging turn ends at IVA_JOB_STOP_AT, the run exits and the lock file is gone", async (t) => {
+  t.mock.method(console, "log", () => undefined);
+  const data = process.env.ASSISTANT_DATA_DIR ?? "";
+  const started = Date.now();
+  const code = await main(
+    { ...ENV, IVA_JOB_STOP_AT: String(Date.now() + 300) },
+    {
+      sources: [],
+      timeZone: "UTC",
+      config: () => ({ ...PROACTIVE_DEFAULTS, briefTimes: ["12:00"] }),
+      statePath: join(mkdtempSync(join(ROOT, "hang-")), "proactive.json"),
+      runTurn: (_prompt, _kind, signal) => hangsUntil(signal),
+    },
+    () => NOON,
+  );
+  assert.equal(code, 1, "a Brief that did not finish is a failed run");
+  assert.ok(Date.now() - started < 5_000, "the run ended on its deadline");
+  assert.equal(existsSync(join(data, "proactive.lock")), false);
+});

@@ -21,6 +21,7 @@ import {
 import { hasInboundAttackSignal, sanitizeInbound } from "#lib/security-gate.ts";
 import { readSettingsState } from "#lib/settings.ts";
 import { injectionWarning } from "#lib/telegram-gate-notice.ts";
+import { JOB_STOP_AT_ENV } from "#lib/schedule-runner.ts";
 import { resolveTimeZone } from "#lib/timezone.ts";
 import {
   noticeTranslator,
@@ -36,6 +37,7 @@ import {
   type ReminderTurnKind,
 } from "../lib/reminder-turn.ts";
 import { ownerChat } from "../lib/notification-chat.ts";
+import { resolveStopAt } from "../lib/rollup-turn.ts";
 import { sendTelegramHtml } from "../lib/telegram-send.ts";
 import { isEntrypoint } from "../lib/version-layout.ts";
 import {
@@ -76,11 +78,17 @@ export type TickDeps = {
   readonly timeZone: string;
   readonly statePath: string;
   readonly sources: readonly Source[];
-  /** Ход модели; вид хода уходит заголовком и становится `source` его расхода. */
+  /**
+   * Ход модели; вид хода уходит заголовком и становится `source` его расхода. `signal` — срок
+   * прогона, один на все его ходы: снятый гасит ход на сервере.
+   */
   readonly runTurn: (
     prompt: string,
     kind: ReminderTurnKind,
+    signal?: AbortSignal,
   ) => Promise<ReminderTurn>;
+  /** Срок прогона (IVA_JOB_STOP_AT); нет — срока нет, как у ручного запуска. */
+  readonly signal?: AbortSignal;
   /** Одна часть в личный чат владельца; `source` — имя хода в журнале доставки. */
   readonly send: (
     part: string,
@@ -448,7 +456,7 @@ async function turnText(
 ): Promise<string | null> {
   let turn: ReminderTurn;
   try {
-    turn = await deps.runTurn(prompt, what);
+    turn = await deps.runTurn(prompt, what, deps.signal);
   } catch (error) {
     turn = {
       status: "failed",
@@ -594,9 +602,7 @@ export async function runProactiveTick(
     ));
   else if (insightDue(config, stored, clock))
     return insight(deps, state, clock, log);
-  // Watch раз в час: тик своей половины часа, опоздавший на минуту — тот же тик. Первый
-  // прогон смотрит источники всегда — иначе всё непрочитанное не стало бы «уже сообщённым».
-  if (clock.minute >= 30 && stored !== null) return failed ? 1 : 0;
+  if (watchSkipped(clock, stored, deps.signal)) return failed ? 1 : 0;
   const code = await watch(
     deps,
     { state, first: stored === null, config, clock },
@@ -606,6 +612,18 @@ export async function runProactiveTick(
 }
 
 type Clock = ReturnType<typeof localDay> & { readonly now: number };
+
+/**
+ * Watch раз в час: тик своей половины часа, опоздавший на минуту — тот же тик. Первый прогон
+ * смотрит источники всегда — иначе всё непрочитанное не стало бы «уже сообщённым». Срок
+ * прогона прошёл (Brief кончился по сроку) — Watch не идёт: его проверка источников идёт без
+ * сигнала и дотянула бы до SIGTERM, а замок снимается раньше.
+ */
+const watchSkipped = (
+  clock: Clock,
+  stored: ProactiveState | null,
+  signal: AbortSignal | undefined,
+) => (clock.minute >= 30 && stored !== null) || signal?.aborted === true;
 
 /** Наступивший слот Brief; тумблер выключен — нет. */
 const briefSlot = (
@@ -757,6 +775,22 @@ export function loadConfig(
   return parseProactive(settings, log);
 }
 
+/**
+ * Срок прогона из IVA_JOB_STOP_AT, который ставит раннер расписания: один сигнал на все ходы.
+ * Переменной нет (ручной запуск) — срока нет; мусор, прошлое или дальше 2^31 мс — строка в
+ * журнал и прогон без срока.
+ */
+function runDeadline(raw: string | undefined): AbortSignal | undefined {
+  if (raw === undefined || raw === "") return undefined;
+  try {
+    const stopAt = resolveStopAt(raw, Date.now());
+    return AbortSignal.timeout(Math.max(0, stopAt - Date.now()));
+  } catch (error) {
+    console.log(`proactive: ${message(error)}, running without a deadline`);
+    return undefined;
+  }
+}
+
 /** Точка входа: адресат, замок без ожидания, `now` под замком, прогон. */
 export async function main(
   env: NodeJS.ProcessEnv = process.env,
@@ -789,8 +823,9 @@ export async function main(
       timeZone: resolveTimeZone(env.ASSISTANT_TIMEZONE),
       statePath: join(dir, "proactive.json"),
       sources: [telegramSource(env, dir), mailSource(), failuresSource(dir)],
-      runTurn: async (prompt, kind) =>
-        runReminderTurn(prompt, reminderClientOptions(env, kind)),
+      runTurn: async (prompt, kind, signal) =>
+        runReminderTurn(prompt, reminderClientOptions(env, kind), { signal }),
+      signal: runDeadline(env[JOB_STOP_AT_ENV]),
       send: (part, source) =>
         sendTelegramHtml(token, chat, part, {
           retryTransient: true,

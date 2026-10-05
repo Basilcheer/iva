@@ -36,11 +36,11 @@ export const DEFAULT_TIMEOUT_MS = 3600_000;
 // timeout is then the only thing that ends a wedged night, and it kills the whole group.
 const LOCK_WAIT_SECONDS = 3900;
 const DEFAULT_KILL_GRACE_MS = 10_000;
-// Срок остановки ночной сводки (killGraceMs её задания, agent/lib/schedule-paths.ts):
+// Срок остановки ночи (killGraceMs её задания, agent/lib/schedule-paths.ts):
 // ребёнок получает момент «работу кончить» (JOB_STOP_AT_ENV) ровно за этот срок до SIGTERM
-// и столько же живёт после SIGTERM до SIGKILL — сводка успевает отменить ход на сервере и
-// снять его сессию, каждое действие не дольше трети этого срока (scripts/lib/night-session.ts).
-// Прочим заданиям гасить нечего, у них прежние 10 с.
+// и столько же живёт после SIGTERM до SIGKILL — ночь успевает оборвать вызов модели
+// (scripts/memory/night-call.ts). Тот же срок у тика proactive: он отменяет ход Insight на
+// сервере (agent/schedules/proactive.ts). Прочим заданиям гасить нечего, у них прежние 10 с.
 export const JOB_STOP_GRACE_MS = 90_000;
 // Имя переменной с моментом «работу кончить», epoch ms. Её ставит только раннер, поверх
 // окружения сервиса: у ребёнка одно число, и оно выведено из срока запуска.
