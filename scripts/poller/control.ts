@@ -123,7 +123,7 @@ type StatusImpl = (chatKey: string) => Record<string, unknown> | null;
 type CancelImpl = (input: StopCancelRequest) => Promise<StopCancelResult>;
 type PerformResetImpl = typeof performScopedReset;
 // Правка нажатой кнопки: блоки rich-сообщения или клавиатура classic-сообщения.
-export type TapEdit =
+type TapEdit =
   | { rich: { blocks: unknown[]; is_rtl?: boolean } }
   | { inline_keyboard: unknown[] };
 // Точки ввода-вывода handleControl, которые подменяются в тестах: ответ в чат,
@@ -1175,7 +1175,7 @@ function settleTap(
   });
 }
 
-export async function editTappedMessage(
+async function editTappedMessage(
   chatId: number,
   messageId: number,
   edit: TapEdit,

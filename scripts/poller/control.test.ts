@@ -66,11 +66,6 @@ type ControlModule = {
       ) => Promise<boolean>;
     },
   ) => Promise<boolean>;
-  editTappedMessage: (
-    chatId: number,
-    messageId: number,
-    edit: unknown,
-  ) => Promise<boolean>;
   OUT_OF_BAND_COMMANDS: string[];
   TELEGRAM_EVE_CALLBACK_PREFIXES: readonly string[];
 };
@@ -143,7 +138,6 @@ const [controlModule, runStatusModule, wizardsModule, queueModule, mainModule] =
   ])) as [unknown, unknown, unknown, unknown, unknown];
 const {
   applyTelegramButtonTap,
-  editTappedMessage,
   handleAwaitNonText,
   handleControl,
   OUT_OF_BAND_COMMANDS,
@@ -3345,42 +3339,69 @@ test("«Install» that did not start or is stale stays live and is not marked", 
 });
 
 // Граница с Telegram: какой метод и какое тело уходят на провод, и что считается успехом.
+// Правка идёт настоящим путём моста (фон и транспорт), подменён только fetch.
 test("the edit goes on the wire as editMessageText with blocks or editMessageReplyMarkup", async () => {
   const realFetch = globalThis.fetch;
+  const realLog = console.log;
   const calls: Array<[string, Record<string, unknown>]> = [];
-  let reply: Record<string, unknown> = { ok: true, result: {} };
+  const lines: string[] = [];
+  const replies: Array<Record<string, unknown>> = [
+    { ok: true, result: {} },
+    { ok: true, result: true },
+    { ok: false, description: "Bad Request: message is not modified" },
+    { ok: false, description: "Bad Request: message can't be edited" },
+  ];
   globalThis.fetch = (async (url: string, init: { body: string }) => {
     calls.push([url, JSON.parse(init.body) as Record<string, unknown>]);
-    return new Response(JSON.stringify(reply));
+    return new Response(JSON.stringify(replies[calls.length - 1]));
   }) as typeof fetch;
+  console.log = (...parts: unknown[]) => {
+    lines.push(parts.slice(1).join(" "));
+  };
+  const { deps } = recordingDeps();
+  const tap = async (id: number, message: Record<string, unknown>) => {
+    await handleControl(proposalTap(id, id, message), {
+      ...deps,
+      pluginTapImpl: async () => "started",
+    });
+    for (let i = 0; i < 5; i += 1) await flush();
+  };
   try {
-    const blocks = [{ type: "buttons", buttons: [installMarked] }];
-    assert.equal(
-      await editTappedMessage(7, 9, { rich: { blocks, is_rtl: true } }),
-      true,
-    );
-    assert.equal(
-      await editTappedMessage(7, 9, { inline_keyboard: [[installMarked]] }),
-      true,
-    );
-    reply = { ok: false, description: "Bad Request: message is not modified" };
-    assert.equal(await editTappedMessage(7, 9, { inline_keyboard: [] }), true);
-    reply = { ok: false, description: "Bad Request: message can't be edited" };
-    assert.equal(await editTappedMessage(7, 9, { inline_keyboard: [] }), false);
-
-    assert.match(calls[0][0], /\/editMessageText$/u);
-    assert.deepEqual(calls[0][1], {
-      chat_id: 7,
-      message_id: 9,
-      rich_message: { blocks, is_rtl: true },
+    await tap(601, {
+      rich_message: { ...richProposal.rich_message, is_rtl: true },
     });
-    assert.match(calls[1][0], /\/editMessageReplyMarkup$/u);
-    assert.deepEqual(calls[1][1], {
-      chat_id: 7,
-      message_id: 9,
-      reply_markup: { inline_keyboard: [[installMarked]] },
-    });
+    await tap(602, classicProposal);
+    await tap(603, classicProposal);
+    await tap(604, classicProposal);
   } finally {
     globalThis.fetch = realFetch;
+    console.log = realLog;
   }
+
+  assert.equal(calls.length, 4);
+  assert.match(calls[0][0], /\/editMessageText$/u);
+  assert.deepEqual(calls[0][1], {
+    chat_id: 7,
+    message_id: 601,
+    rich_message: {
+      blocks: [
+        { type: "paragraph", text: "Плагин relay" },
+        { type: "buttons", buttons: [installMarked] },
+      ],
+      is_rtl: true,
+    },
+  });
+  assert.match(calls[1][0], /\/editMessageReplyMarkup$/u);
+  assert.deepEqual(calls[1][1], {
+    chat_id: 7,
+    message_id: 602,
+    reply_markup: { inline_keyboard: [[installMarked]] },
+  });
+  const verdicts = lines.filter((line) => line.startsWith("tap mark"));
+  assert.deepEqual(verdicts, [
+    "tap marked 7:601",
+    "tap marked 7:602",
+    "tap marked 7:603",
+    "tap mark failed 7:604",
+  ]);
 });
