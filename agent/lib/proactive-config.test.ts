@@ -255,3 +255,44 @@ test("an urgent sender matches the username without @, the trimmed name or the a
   assert.ok(!isUrgentSender(config, {}));
   assert.ok(!isUrgentSender(PROACTIVE_DEFAULTS, { name: "Wife" }));
 });
+
+test(`Ceiling of the day: integers 0…100 000 000 are taken, anything else is refused by set and defaults when read (seed ${SEED})`, () => {
+  assert.equal(PROACTIVE_DEFAULTS.ceilingTokensPerDay, 0, "off by default");
+  fc.assert(
+    fc.property(fc.integer({ min: 0, max: 100_000_000 }), (n) => {
+      assert.deepEqual(proactiveValue("ceilingTokensPerDay", String(n)), {
+        value: n,
+      });
+      assert.equal(
+        parseProactive({ proactive: { ceilingTokensPerDay: n } })
+          .ceilingTokensPerDay,
+        n,
+      );
+    }),
+    { seed: SEED, numRuns: 300 },
+  );
+  const bad = fc.oneof(
+    fc.integer({ min: -1_000_000, max: -1 }).map(String),
+    fc.integer({ min: 100_000_001, max: 2 ** 40 }).map(String),
+    fc.double({ noInteger: true, noNaN: true }).map(String),
+    fc.constantFrom("", "1e6", "1_000", "0x10", "1.0", "ten", " "),
+    fc.string().filter((text) => !/^\s*\d+\s*$/u.test(text)),
+  );
+  fc.assert(
+    fc.property(bad, (text) => {
+      const value = proactiveValue("ceilingTokensPerDay", text);
+      assert.ok("error" in value, text);
+      const logs: string[] = [];
+      assert.equal(
+        parseProactive({ proactive: { ceilingTokensPerDay: text } }, (l) =>
+          logs.push(l),
+        ).ceilingTokensPerDay,
+        0,
+      );
+      assert.deepEqual(logs, [
+        "proactive: settings field ceilingTokensPerDay is not valid, using default",
+      ]);
+    }),
+    { seed: SEED, numRuns: 300 },
+  );
+});

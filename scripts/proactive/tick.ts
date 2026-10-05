@@ -38,6 +38,7 @@ import {
   type ReminderTurnKind,
 } from "../lib/reminder-turn.ts";
 import { ownerChat } from "../lib/notification-chat.ts";
+import { readEntries, summarize, type UsageRecord } from "../lib/usage.ts";
 import { resolveStopAt } from "../lib/rollup-turn.ts";
 import { sendTelegramHtml } from "../lib/telegram-send.ts";
 import { isEntrypoint } from "../lib/version-layout.ts";
@@ -107,6 +108,8 @@ export type TickDeps = {
    * предложения); нет папки или ошибка обхода — null, и отпечаток не пишется.
    */
   readonly draftTree?: (name: string) => Promise<string | null>;
+  /** Токены ходов Watch, Brief и Insight за сегодня (data/usage.jsonl); зовётся при Ceiling > 0. */
+  readonly spentToday?: () => Promise<number>;
   readonly writeState?: typeof writeProactiveState;
   readonly log?: (line: string) => void;
 };
@@ -595,8 +598,9 @@ export async function runProactiveTick(
     return 1;
   }
   const clock = { ...localDay(now, deps.timeZone), now };
-  const config = deps.config();
   let state = stored ?? initialState(now);
+  const run = { state, stored, clock };
+  const config = await ceiled(deps, deps.config(), run, log);
   let failed = false;
   const slot = briefSlot(config, state, clock);
   if (slot !== null)
@@ -618,6 +622,77 @@ export async function runProactiveTick(
 }
 
 type Clock = ReturnType<typeof localDay> & { readonly now: number };
+
+/** Ходы Ивы, чей расход меряет Ceiling дня. */
+const CEILING_TURNS: ReadonlySet<string> = new Set<ReminderTurnKind>([
+  "watch",
+  "brief",
+  "insight",
+]);
+
+/** Сумма `total` строк Watch, Brief и Insight за сегодня в зоне владельца. */
+export function spentToday(
+  entries: UsageRecord[],
+  now: number,
+  timeZone: string,
+): number {
+  return summarize(entries, { window: "today", now, tz: timeZone })
+    .bySource.filter((row) => CEILING_TURNS.has(row.key))
+    .reduce((sum, row) => sum + row.total, 0);
+}
+
+type Run = {
+  readonly state: ProactiveState;
+  readonly stored: ProactiveState | null;
+  readonly clock: Clock;
+};
+
+/** Кого прогон снял бы Ceiling дня — в порядке прогона: Brief, иначе Insight, затем Watch. */
+function droppedBy(config: ProactiveConfig, { state, stored, clock }: Run) {
+  const brief = briefSlot(config, state, clock) !== null;
+  const insight = !brief && insightDue(config, stored, clock);
+  const watch = !insight && !watchSkipped(clock, stored, undefined);
+  return [
+    ...(insight ? ["insight"] : []),
+    ...(brief ? ["brief"] : []),
+    ...(watch ? ["watch-model"] : []),
+  ];
+}
+
+/** Расход сегодня; не прочёлся — 0 и строка в журнал: сломанный файл расхода Иву не глушит. */
+async function spent(deps: TickDeps, log: (line: string) => void) {
+  try {
+    return (await deps.spentToday?.()) ?? 0;
+  } catch (error) {
+    log(
+      `proactive: today's usage not read (${message(error)}), the ceiling stays open`,
+    );
+    return 0;
+  }
+}
+
+/**
+ * Ceiling дня: ходы Watch, Brief и Insight сегодня потратили не меньше ключа — в этом прогоне
+ * нет ни Brief, ни Insight, а Watch будит модель только сбоями (тем же фильтром, что
+ * `modelWakesPerDay`; сбой — всегда, ADR-0007). Ключ 0 — файл расхода не читается вовсе.
+ */
+async function ceiled(
+  deps: TickDeps,
+  config: ProactiveConfig,
+  run: Run,
+  log: (line: string) => void,
+): Promise<ProactiveConfig> {
+  const ceiling = config.ceilingTokensPerDay;
+  if (ceiling === 0) return config;
+  const used = await spent(deps, log);
+  if (used < ceiling) return config;
+  const dropped = droppedBy(config, run);
+  if (dropped.length > 0)
+    log(
+      `proactive: ceiling reached (${used} of ${ceiling} tokens today), dropped: ${dropped.join(",")}`,
+    );
+  return { ...config, briefTimes: [], insightTimes: [], modelWakesPerDay: 0 };
+}
 
 /**
  * Watch раз в час: тик своей половины часа, опоздавший на минуту — тот же тик. Первый прогон
@@ -835,6 +910,7 @@ export async function main(
     return 0;
   }
   const dir = dataDir();
+  const tz = env.ASSISTANT_TIMEZONE;
   const lock = await acquireFileLock(join(dir, "proactive.lock"), {
     timeoutMs: LOCK_WAIT_MS,
     staleMs: LOCK_STALE_MS,
@@ -848,7 +924,7 @@ export async function main(
     return await runProactiveTick(now, {
       config: () =>
         loadConfig(join(dir, "settings.json"), (line) => console.log(line)),
-      timeZone: resolveTimeZone(env.ASSISTANT_TIMEZONE),
+      timeZone: resolveTimeZone(tz),
       statePath: join(dir, "proactive.json"),
       sources: [telegramSource(env, dir), mailSource(), failuresSource(dir)],
       runTurn: async (prompt, kind, signal) =>
@@ -865,6 +941,8 @@ export async function main(
       unfixed: () => unfixedFailures(dir, now),
       installed: async (name) =>
         findPlugin((await readPluginsStateSafe(dir)).state, name) !== undefined,
+      spentToday: () =>
+        Promise.resolve(spentToday(readEntries(dir), now, resolveTimeZone(tz))),
       draftTree: async (name) =>
         (await pluginTreeDigest(join(dir, "custom/plugin-drafts", name))).slice(
           0,
