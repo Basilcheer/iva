@@ -43,13 +43,20 @@ lines does it. Nothing fits — `QUIET`.
    (`iva plugin list`). A skill with scripts first; MCP or `sh.iva/` only when a
    script cannot do the job.
 3. A draft may be a sensor: a script that checks something for the owner and
-   reports through `iva signal`. Running it regularly is a Routine or a plugin
-   service: say so in the message; it is set up only after the tap.
+   reports through `iva signal` only when there is news. It runs regularly as a
+   plugin service (`make-plugin`, `sh.iva/services/`: a loop that stays up), so
+   installing it takes the owner's second tap; say so in the message. Not a
+   Routine: every firing of a Routine reaches the owner. The sensor takes the
+   report command from `SIGNAL` (default `iva signal`); its trial run below sets
+   `SIGNAL=echo`, so the trial prints and never sends.
 4. Run every script once on the owner's real case, with a clean environment so
-   the draft does not inherit keys: `env -i PATH="$PATH" HOME="$HOME" <command>`.
+   the draft does not inherit keys:
+   `env -i PATH="$PATH" HOME="$HOME" PLUGIN_DATA="$(mktemp -d)" <command>`.
    This keeps keys out of the environment only: a draft script never reads `.env`
-   or `data/`. A script that needs a key: say which one, do not pass it. Each
-   script call under two minutes: a turn silent for three minutes is cut.
+   or `data/`; its own state goes to `$PLUGIN_DATA` (a scratch folder on the
+   trial run, `data/plugin-data/<name>/` once installed). A script that needs a
+   key: say which one, do not pass it. Each script call under two minutes: a
+   turn silent for three minutes is cut.
 5. Install nothing on the host (`apt`, `pip install`, `npm -g`, `uv tool`): a
    missing dependency goes into the message as what the draft will need.
 6. Still broken after two fixes — `QUIET`, leave the draft.
