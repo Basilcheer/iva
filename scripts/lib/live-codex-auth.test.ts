@@ -106,3 +106,43 @@ await test("codex: a token about to expire is refreshed in the installation befo
     "the live Iva gets the fresh token and has nothing to refresh",
   );
 });
+
+// Обновление токена — забота о запасе, не условие хода: сеть или 5xx на auth.openai.com
+// не роняют прогон. Строка в журнал, файл установки копируется как есть, установка не тронута.
+// Часы сдвинуты на минуты вперёд: принудительное обновление в codex-auth.ts раз в минуту.
+for (const [index, [label, failure]] of (
+  [
+    ["network", () => Promise.reject(new TypeError("fetch failed"))],
+    [
+      "5xx",
+      () => Promise.resolve(new Response("upstream down", { status: 503 })),
+    ],
+  ] as const
+).entries()) {
+  await test(`codex: a failed refresh (${label}) does not stop the live turn, the file is copied as is`, async (t) => {
+    const { from, to } = await dirs(t);
+    const auth = JSON.stringify({
+      access_token: jwt(600),
+      refresh_token: "r",
+    });
+    await writeFile(join(from, "codex-auth.json"), auth, { mode: 0o600 });
+    t.mock.timers.enable({
+      apis: ["Date"],
+      now: Date.now() + (index + 2) * 120_000,
+    });
+    const fetches = t.mock.method(globalThis, "fetch", failure);
+    const lines: string[] = [];
+    assert.equal(
+      await carryCodexLogin("codex", from, to, (line) => lines.push(line)),
+      null,
+    );
+    assert.equal(fetches.mock.callCount(), 1, "the refresh was attempted");
+    assert.equal(lines.length, 1);
+    assert.match(
+      lines[0],
+      /^codex: не удалось обновить токен, копирую как есть: \S/u,
+    );
+    assert.equal(await readFile(join(from, "codex-auth.json"), "utf8"), auth);
+    assert.equal(await readFile(join(to, "codex-auth.json"), "utf8"), auth);
+  });
+}
