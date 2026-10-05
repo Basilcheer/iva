@@ -503,7 +503,8 @@ export function createDiagnoseCommand(
     const collectedAt = now();
     // Доктор — половина улик, поэтому зовётся настоящий: его строки уходят в пакет, а не в
     // терминал (сборщик без цвета и с выходом, который не завершает этот процесс).
-    const doctorLines: string[] = [];
+    // Пакет собирают и из хода (скилл report-problem): доктор тут только читает.
+    const doctorLines: string[] = ["read-only: nothing was repaired"];
     const doctorRuntime: CliRuntime = {
       ...runtime,
       C: NO_COLOR,
@@ -516,9 +517,10 @@ export function createDiagnoseCommand(
         doctorLines.push(args.map((arg) => String(arg)).join(" "));
       },
       exit: () => undefined,
+      readOnly: true,
     })();
-    // Доктор мог записать в .env новый внутренний bearer — его значение тоже секрет, и
-    // читать список только до прогона значит выпустить свежий ключ в пакет (T21).
+    // Список секретов читается и после прогона (T21): доктор только читает, но .env мог
+    // поменять кто-то другой, пока пакет собирался.
     const secrets = [
       ...new Set([
         ...secretValuesFromEnv(env),

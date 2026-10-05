@@ -102,13 +102,10 @@ const question = {
 void test("rich questions preserve Eve post() group anchoring and native callback routing", async () => {
   for (const rich of [false, true]) {
     const h = eveHandle("supergroup");
-    await postTelegramQuestion(
-      question,
-      h.state,
-      h.telegram,
+    await postTelegramQuestion(question, h.state, h.telegram, {
       rich,
-      h.continuation,
-    );
+      continuation: h.continuation,
+    });
     assert.equal(h.state.conversationId, "999");
     assert.deepEqual(h.rekeys, ["-7::999"]);
     const pending: Promise<unknown>[] = [];
@@ -168,13 +165,10 @@ void test("rich questions preserve Eve post() group anchoring and native callbac
 
 void test("rich reply learns an initially unknown group type, while private questions never rekey", async () => {
   const group = eveHandle(null, "group");
-  await postTelegramQuestion(
-    question,
-    group.state,
-    group.telegram,
-    true,
-    group.continuation,
-  );
+  await postTelegramQuestion(question, group.state, group.telegram, {
+    rich: true,
+    continuation: group.continuation,
+  });
   assert.equal(group.state.chatType, "group");
   assert.equal(group.state.conversationId, "999");
   assert.deepEqual(group.rekeys, ["-7::999"]);
@@ -183,8 +177,7 @@ void test("rich reply learns an initially unknown group type, while private ques
     question,
     privateChat.state,
     privateChat.telegram,
-    true,
-    privateChat.continuation,
+    { rich: true, continuation: privateChat.continuation },
   );
   assert.deepEqual(privateChat.rekeys, []);
   assert.equal(privateChat.state.conversationId, "123");
@@ -192,7 +185,7 @@ void test("rich reply learns an initially unknown group type, while private ques
 
 void test("group question without public continuation uses Eve post() anchoring", async () => {
   const h = eveHandle("group");
-  await postTelegramQuestion(question, h.state, h.telegram, true);
+  await postTelegramQuestion(question, h.state, h.telegram, { rich: true });
   assert.deepEqual(h.apiCalls, ["sendMessage"]);
   assert.equal(h.state.conversationId, "999");
   assert.deepEqual(h.rekeys, ["-7::999"]);
@@ -205,13 +198,10 @@ void test("group and forum anchoring matches Eve's public continuation token; se
       fc.option(fc.integer({ min: 1, max: 1000000 }), { nil: null }),
       async (chatType, topic) => {
         const h = eveHandle(chatType, chatType, topic);
-        await postTelegramQuestion(
-          question,
-          h.state,
-          h.telegram,
-          true,
-          h.continuation,
-        );
+        await postTelegramQuestion(question, h.state, h.telegram, {
+          rich: true,
+          continuation: h.continuation,
+        });
         assert.equal(h.state.conversationId, "999");
         assert.deepEqual(h.rekeys, [
           telegramContinuationToken({

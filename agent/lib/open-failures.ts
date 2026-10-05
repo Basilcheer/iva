@@ -143,7 +143,7 @@ export function openFailuresMarkdown(failures: readonly OpenFailure[]): string {
   );
   if (failures.length > MAX_FAILURE_LINES)
     shown.push(
-      `- … и ещё ${failures.length - MAX_FAILURE_LINES} провалов (полный список: iva doctor)`,
+      `- … и ещё ${failures.length - MAX_FAILURE_LINES} провалов (полный список: последняя строка по имени в data/jobs.json с ok false и acked false)`,
     );
   return ["## Незакрытые провалы", ...shown].join("\n");
 }

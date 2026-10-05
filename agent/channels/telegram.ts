@@ -300,13 +300,10 @@ const telegram = telegramChannel({
   events: {
     async "input.requested"(data, channel) {
       for (const request of data.requests)
-        await postTelegramQuestion(
-          request,
-          channel.state,
-          channel.telegram,
-          TELEGRAM_RICH_REPLIES === "auto",
-          channel.continuation,
-        );
+        await postTelegramQuestion(request, channel.state, channel.telegram, {
+          rich: TELEGRAM_RICH_REPLIES === "auto",
+          continuation: channel.continuation,
+        });
     },
     async "input.resolved"(data, channel) {
       await settleTelegramQuestions(

@@ -91,6 +91,10 @@ An update now resets every open session before services restart. Each chat start
 
 ### Customization left out after an update
 
+Iva now also tells you in Telegram: «Iva is running the stock build: your files in data/custom do not
+build with this version — <first line of the error>…». The same Alert repeats at most once a week for
+the same files.
+
 The message `your customization in data/custom is not in this version` means Iva is running a stock
 build. The custom build or startup probe may have failed, or a previous failed start may have deferred
 another attempt. The files remain in the custom layer. The notice alone does not identify the cause.
@@ -121,12 +125,13 @@ the reported data directory locally, for example with `less "$iva_data_dir/logs/
 update launched from Telegram can also leave its technical output in the user journal. Do not post
 raw logs, custom file contents or `.env` values: they can carry tokens and personal data. Share the
 version, failing step, file names and a reviewed error excerpt. `iva diagnose` is available when a
-support package is needed, but it writes a package and runs doctor's repairs; it is not read-only.
+support package is needed: it writes the package and repairs nothing; repairs are `iva doctor` in a
+terminal.
 
-For `skills/morning-digest/SKILL.md` alongside `skills/morning-digest.md`, compare the two custom
+For `skills/my-skill/SKILL.md` alongside `skills/my-skill.md`, compare the two custom
 sources locally. The current live skill resolver chooses the directory package and logs that the
 flat file was skipped. That rule does not establish what caused an older compile failure: use its
-actual error. `workflow store: 0 runs; 0 hook files` counts workflow history; it is not a count of
+actual error. `workflow store: 0 runs; 0 hook files` counts past workflow runs; it is not a count of
 loaded custom skills and does not diagnose this problem.
 
 Preserve both source copies outside `custom/agent/` and `custom/plugins/` before a correction. Keep
