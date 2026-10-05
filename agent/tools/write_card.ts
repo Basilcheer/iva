@@ -157,6 +157,39 @@ const inputGuidance =
   "Не передавай незаданные optional-поля; tags и aliases — массивы строк. " +
   "confirmed_by_owner=true допустим только после явной просьбы владельца о merge; пример не является подтверждением.";
 
+// Keep Zod's validation and wire JSON Schema; enrich the Standard Schema refusal
+// itself, before Eve/AI can reject the call without reaching execute.
+const actionableInput = {
+  "~standard": {
+    ...wireInput["~standard"],
+    vendor: "iva",
+    async validate(value: unknown) {
+      const result = await wireInput["~standard"].validate(value);
+      if (!result.issues) return result;
+      const operation =
+        typeof value === "object" && value !== null && "operation" in value
+          ? value.operation
+          : undefined;
+      const examples =
+        operation === "fact" || operation === "truth" || operation === "merge"
+          ? [callExample(operation)]
+          : [callExample("fact"), callExample("truth"), callExample("merge")];
+      const guidance = [
+        "Исправь указанное поле по схеме; не повторяй тот же неверный вызов и не ищи параметры в исходниках.",
+        ...examples,
+        inputGuidance,
+      ].join("\n");
+      return {
+        issues: result.issues.map((issue, index) =>
+          index === 0
+            ? { ...issue, message: `${issue.message}\n${guidance}` }
+            : issue,
+        ),
+      };
+    },
+  },
+};
+
 function operationInput(
   raw: z.infer<typeof wireInput>,
 ): z.infer<typeof operationSchemas> | { error: string } {
@@ -607,7 +640,7 @@ export default defineTool({
       callExample("merge"),
       inputGuidance,
     ].join("\n"),
-  inputSchema: wireInput,
+  inputSchema: actionableInput,
   async execute(raw) {
     if (raw.operation === "merge" && raw.status !== undefined)
       return {
