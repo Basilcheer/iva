@@ -62,6 +62,7 @@ import {
 import {
   closeIdleCompactionTurn,
   dropIdleCompactionTurn,
+  endIdleCompaction,
   openIdleCompactionTurn,
   startIdleCompaction,
 } from "../lib/idle-compaction.js";
@@ -352,6 +353,10 @@ const telegram = telegramChannel({
       );
       const bearer = process.env.ASSISTANT_BEARER?.trim();
       try {
+        const parked = getChatStatus(chatKey);
+        // Парковка застала запись пересказа этой сессии: он кончился.
+        if (parked?.sessionId === sessionId && parked.compacting === true)
+          endIdleCompaction(sessionId);
         await finishTelegramStatus(channel, sessionId, "completed");
       } finally {
         // Ждём ответа eve: она ждёт этот обработчик, поэтому просьба встаёт в её очередь

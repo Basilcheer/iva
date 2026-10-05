@@ -166,6 +166,7 @@ test("оборванный пересказ (нет compaction.completed) нич
   const id = fresh();
   turn(id, [LIMIT]);
   await waiting(id);
+  idle.endIdleCompaction(id); // парковка сняла запись оборванного пересказа
   turn(id, [LIMIT, LIMIT]);
   assert.deepEqual(await waiting(id), ASKED);
 });
@@ -174,6 +175,7 @@ test("пересказ страховки внутри хода — не наш:
   const id = fresh();
   turn(id, [LIMIT]);
   await waiting(id); // просьба принята, но пересказ оборвало сообщение
+  idle.endIdleCompaction(id);
   turn(id, [LIMIT, LIMIT + 1], true); // в этом ходе сработала страховка eve
   assert.deepEqual(await waiting(id), ASKED, "свёртка между ходами жива");
 });
@@ -205,6 +207,13 @@ test("ответа eve нет: исход неизвестен — чат не �
     NOTHING,
     "второй просьбы на этот ход нет",
   );
+  turn(id, [LIMIT, LIMIT]);
+  assert.deepEqual(
+    await waiting(id),
+    NOTHING,
+    "просьба ещё может быть у eve: следующую не шлём",
+  );
+  idle.endIdleCompaction(id); // парковка сняла запись: пересказ (если был) кончился
   turn(id, [LIMIT, LIMIT]);
   assert.deepEqual(await waiting(id), ASKED, "неизвестный исход не выключает");
 });
@@ -268,6 +277,106 @@ test("упавший или отменённый ход пересказа не 
     ASKED,
     "следующий законченный ход решает сам",
   );
+});
+
+test("упавший ход после полезного пересказа не переносит замер на следующий ход: свёртка не выключается", async () => {
+  const id = fresh();
+  turn(id, [LIMIT]);
+  await waiting(id);
+  idle.completeIdleCompaction(id); // пересказ помог: вход упал
+  idle.endIdleCompaction(id);
+  idle.openIdleCompactionTurn(id);
+  idle.recordStepInput(id, LIMIT - 500);
+  idle.dropIdleCompactionTurn(id); // ход упал
+  turn(id, [LIMIT, LIMIT + 1]); // история выросла за два хода
+  assert.deepEqual(await waiting(id), ASKED, "свёртка между ходами жива");
+});
+
+test("начало пересказа занимает чат ещё раз: запоздалая просьба не оставляет пересказ без записи", async () => {
+  const id = fresh();
+  turn(id, [LIMIT]);
+  let claims = 0;
+  const claimImpl = () => {
+    claims += 1;
+    return true;
+  };
+  // Ответа нет: исход неизвестен, eve тем временем провела ход по пришедшему сообщению.
+  await idle.startIdleCompaction({
+    sessionId: id,
+    claimImpl,
+    requestImpl: async () => {
+      throw new Error("timeout");
+    },
+    releaseImpl: () => {},
+    logImpl: () => {},
+  });
+  assert.equal(claims, 1);
+  turn(id, [LIMIT, LIMIT]);
+  assert.deepEqual(
+    await waiting(id),
+    NOTHING,
+    "прошлая просьба ещё может быть у eve: вторую не шлём",
+  );
+  // eve всё-таки приняла просьбу и начинает пересказ после этого хода.
+  await idle.beginIdleCompaction(id);
+  assert.equal(claims, 2, "чат занят заново");
+  await idle.beginIdleCompaction(id);
+  assert.equal(claims, 2, "один раз на просьбу");
+  idle.completeIdleCompaction(id);
+  turn(id, [LIMIT - 1, LIMIT]);
+  assert.deepEqual(
+    await waiting(id),
+    ASKED,
+    "после пересказа свёртка снова доступна",
+  );
+});
+
+test("просьба без ответа, о которой eve так и не объявила, через полчаса забыта: свёртка снова доступна", async () => {
+  const id = fresh();
+  turn(id, [LIMIT]);
+  let clock = 1_000_000;
+  const ask = (requestImpl: () => Promise<boolean>) =>
+    idle.startIdleCompaction({
+      sessionId: id,
+      claimImpl: () => true,
+      requestImpl,
+      releaseImpl: () => {},
+      now: () => clock,
+      logImpl: () => {},
+    });
+  await ask(async () => {
+    throw new Error("timeout");
+  });
+  turn(id, [LIMIT, LIMIT]);
+  clock += idle.ASK_FORGOTTEN_MS - 1;
+  assert.equal(await ask(async () => true), false);
+  turn(id, [LIMIT, LIMIT]);
+  clock += 1;
+  assert.equal(await ask(async () => true), true);
+});
+
+test("начало пересказа внутри хода и без нашей просьбы чат не занимает и наружу не бросает", async () => {
+  const id = fresh();
+  let claims = 0;
+  await idle.beginIdleCompaction(id);
+  turn(id, [LIMIT]);
+  await idle.startIdleCompaction({
+    sessionId: id,
+    claimImpl: () => {
+      claims += 1;
+      if (claims > 1) throw new Error("run-status lock timeout");
+      return true;
+    },
+    requestImpl: async () => true,
+    releaseImpl: () => {},
+    logImpl: () => {},
+  });
+  idle.openIdleCompactionTurn(id);
+  await idle.beginIdleCompaction(id); // страховка eve внутри хода
+  assert.equal(claims, 1);
+  idle.closeIdleCompactionTurn(id, WINDOW);
+  await idle.beginIdleCompaction(id, () => {}); // между ходами: занять, сбой проглочен
+  assert.equal(claims, 2);
 });
 
 test("сбой занятия и сбой освобождения чата наружу не летят", async () => {
@@ -358,6 +467,7 @@ test("property: просьба уходит только за порогом и 
             idle.completeIdleCompaction(id);
             compacted = true;
           }
+          idle.endIdleCompaction(id); // парковка после пересказа
         }
       }
     }),

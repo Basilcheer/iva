@@ -10,6 +10,7 @@ import {
   type ParentLike,
 } from "../lib/usage.js";
 import {
+  beginIdleCompaction,
   completeIdleCompaction,
   recordStepInput,
 } from "../lib/idle-compaction.js";
@@ -96,6 +97,9 @@ export default defineHook({
         parent: ctx.session.parent,
       });
     },
+    // eve начал свёртку: между ходами чат на это время должен быть занят.
+    "compaction.requested": (_event, ctx) =>
+      beginIdleCompaction(ctx.session.id),
     // eve довёл свёртку до конца (канал Telegram этого события не получает).
     "compaction.completed": (_event, ctx) =>
       completeIdleCompaction(ctx.session.id),

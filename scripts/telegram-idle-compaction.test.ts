@@ -132,7 +132,7 @@ const unused = () => {
 const LIMIT = idleCompactionLimit(providerConfig.contextWindow);
 const hookEvents = (
   usageHook as unknown as {
-    events: Record<string, (event: unknown, ctx: unknown) => void>;
+    events: Record<string, (event: unknown, ctx: unknown) => unknown>;
   }
 ).events;
 // Просьба о свёртке уходит без ожидания: даём её промису дойти до конца.
@@ -229,6 +229,14 @@ function session(sessionId: string, chatId: number) {
         { data: {} },
         { session: { id: sessionId } },
       ),
+    /** eve объявила начало пересказа (хук). */
+    async compacting() {
+      await hookEvents["compaction.requested"](
+        { data: {} },
+        { session: { id: sessionId } },
+      );
+      await settle();
+    },
   };
 }
 
@@ -499,6 +507,43 @@ test("исход просьбы неизвестен (ответа нет, сб�
     assert.equal(statusOf(chatId)?.status, "idle", status);
     assert.equal(compactCalls.length, 1, status);
   }
+});
+
+test("запоздалая просьба: eve приняла её после таймаута и начала пересказ после следующего хода — чат занят заново", async () => {
+  compactStatus = "silent";
+  const s = session("s-late-accept", 62);
+  await s.turn([LIMIT]);
+  await s.waiting(); // ответа нет: исход неизвестен, чат занят
+  compactStatus = "accepted";
+  await s.turn([LIMIT, LIMIT]); // eve сначала провела ход по пришедшему сообщению
+  assert.equal(statusOf(62)?.status, "idle");
+  await s.waiting();
+  assert.equal(
+    compactCalls.length,
+    1,
+    "вторую просьбу не шлём: первая может быть у eve",
+  );
+  assert.equal(statusOf(62)?.status, "idle");
+  await s.compacting(); // eve начала отложенный пересказ
+  assert.equal(statusOf(62)?.status, "running");
+  assert.equal(statusOf(62)?.compacting, true);
+  assert.equal(statusOf(62)?.sessionId, "s-late-accept");
+  s.compacted();
+  await s.waiting();
+  assert.equal(statusOf(62)?.status, "idle");
+});
+
+test("начало пересказа страховки внутри хода запись хода не трогает", async () => {
+  const s = session("s-inturn", 63);
+  await s.turn([LIMIT]);
+  await s.waiting();
+  await s.compacting();
+  s.compacted();
+  await s.waiting();
+  await s.running([LIMIT]);
+  const before = statusOf(63);
+  await s.compacting();
+  assert.deepEqual(statusOf(63), before);
 });
 
 test("отказ eve не снимает запись хода, который успел начаться поверх записи пересказа", async () => {

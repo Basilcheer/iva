@@ -31,10 +31,19 @@ type Turn = {
   compacted: boolean;
   /** Законченный пересказ не увёл вход под порог: больше между ходами не сворачиваем. */
   off: boolean;
+  /**
+   * Просьба ушла, а начала пересказа eve ещё не объявила: чем занять чат, когда объявит.
+   * Пока она есть (и не старше ASK_FORGOTTEN_MS), второй просьбы нет.
+   */
+  reclaim: (() => unknown) | null;
+  reclaimAt: number;
 };
 const turns = new Map<string, Turn>();
 // Сессия живёт не дольше суток, а процесс — до обновления: давно молчащие вытесняются.
 const TURNS_KEPT = 200;
+// Просьба без ответа, о которой eve так и не объявила: через этот срок считаем, что она
+// до eve не дошла, и свёртка между ходами снова доступна.
+export const ASK_FORGOTTEN_MS = 30 * 60_000;
 
 /** turn.started: открыть счёт хода. */
 export function openIdleCompactionTurn(sessionId: string): void {
@@ -46,6 +55,8 @@ export function openIdleCompactionTurn(sessionId: string): void {
     asked: false,
     compacted: false,
     off: false,
+    reclaim: null,
+    reclaimAt: 0,
   };
   Object.assign(turn, { open: true, first: null, last: null, due: false });
   // Свежая сессия — в конец: вытесняется та, что молчит дольше всех.
@@ -66,12 +77,42 @@ export function recordStepInput(sessionId: string, tokens: number | null) {
 }
 
 /**
+ * compaction.requested: eve начинает пересказ. Между ходами и после нашей просьбы — занять
+ * чат ещё раз. Обычно он уже занят, и это ничего не меняет. Но если ответ на просьбу
+ * опоздал (исход был неизвестен), eve могла сначала провести ход по пришедшему сообщению, и
+ * к началу пересказа чат снова свободен: без записи перезапуск посреди такого пересказа
+ * повесил бы сессию. Никогда не бросает.
+ */
+export async function beginIdleCompaction(
+  sessionId: string,
+  logImpl: (...parts: unknown[]) => void = console.error,
+): Promise<void> {
+  const turn = turns.get(sessionId);
+  if (!turn || turn.open || !turn.reclaim) return;
+  const reclaim = turn.reclaim;
+  turn.reclaim = null;
+  try {
+    await reclaim();
+  } catch (error) {
+    logImpl("[telegram] чат под начавшуюся свёртку не занят:", error);
+  }
+}
+
+/**
  * compaction.completed. Пересказ внутри хода — страховка eve, она шлёт то же событие:
  * своим считаем только пересказ, который кончился, пока ход сессии закрыт.
  */
 export function completeIdleCompaction(sessionId: string): void {
   const turn = turns.get(sessionId);
-  if (turn?.asked && !turn.open) turn.compacted = true;
+  if (!turn || turn.open) return;
+  if (turn.asked) turn.compacted = true;
+  turn.reclaim = null;
+}
+
+/** Парковка сняла запись пересказа: он кончился (успех, сбой, обрыв) — просьба закрыта. */
+export function endIdleCompaction(sessionId: string): void {
+  const turn = turns.get(sessionId);
+  if (turn) turn.reclaim = null;
 }
 
 /**
@@ -97,10 +138,20 @@ export function closeIdleCompactionTurn(
   turn.due = !turn.off && limit > 0 && turn.last !== null && turn.last >= limit;
 }
 
-/** turn.failed, turn.cancelled: ход кончился без ответа — после него не сворачиваем. */
+/**
+ * turn.failed, turn.cancelled: ход кончился без ответа — после него не сворачиваем. Замер
+ * пользы прошлого пересказа на нём тоже кончается: иначе его унаследовал бы следующий ход,
+ * чей вход вырос уже за два хода, и полезный пересказ выключил бы свёртку.
+ */
 export function dropIdleCompactionTurn(sessionId: string): void {
   const turn = turns.get(sessionId);
-  if (turn) Object.assign(turn, { open: false, due: false });
+  if (turn)
+    Object.assign(turn, {
+      open: false,
+      due: false,
+      asked: false,
+      compacted: false,
+    });
 }
 
 /**
@@ -119,25 +170,31 @@ export async function startIdleCompaction({
   claimImpl,
   requestImpl,
   releaseImpl,
+  now = Date.now,
   logImpl = console.error,
 }: {
   sessionId: string;
   claimImpl: () => boolean | Promise<boolean>;
   requestImpl: (sessionId: string) => Promise<boolean>;
   releaseImpl: () => unknown;
+  now?: () => number;
   logImpl?: (...parts: unknown[]) => void;
 }): Promise<boolean> {
   const turn = turns.get(sessionId);
   if (!turn?.due) return false;
   turn.due = false;
+  // Прошлая просьба ещё может стоять в очереди eve: вторую не шлём.
+  if (turn.reclaim && now() - turn.reclaimAt < ASK_FORGOTTEN_MS) return false;
   try {
     if (!(await claimImpl())) return false;
   } catch (error) {
     logImpl("[telegram] чат под свёртку между ходами не занят:", error);
     return false;
   }
-  // До ответа: compaction.completed может прийти раньше, чем разобран ответ роута.
+  // До ответа: начало и конец пересказа могут прийти раньше, чем разобран ответ роута.
   turn.asked = true;
+  turn.reclaim = claimImpl;
+  turn.reclaimAt = now();
   let accepted;
   try {
     accepted = await requestImpl(sessionId);
@@ -150,6 +207,7 @@ export async function startIdleCompaction({
   }
   if (accepted) return true;
   turn.asked = false;
+  turn.reclaim = null;
   try {
     await releaseImpl();
   } catch (error) {
