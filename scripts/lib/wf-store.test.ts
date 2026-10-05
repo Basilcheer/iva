@@ -205,7 +205,7 @@ void test("update rewrite expires running chats and preserves cleanup fields", (
   assert.equal(readFileSync(damagedFile, "utf8"), "{not json");
 });
 
-void test("an interrupted compaction between turns is freed at once, not left for Bridge to close", () => {
+void test("startup recovery frees an interrupted compaction between turns at once, not leaving it for Bridge to close", () => {
   const dataDir = mkdtempSync(join(tmpdir(), "wf-store-compacting-status-"));
   const dir = join(dataDir, "run-status.d");
   const file = join(dir, "compacting.json");
@@ -223,14 +223,14 @@ void test("an interrupted compaction between turns is freed at once, not left fo
   );
   const before = Date.now();
 
-  assert.equal(rewriteRunStatusesForUpdate(dataDir), 1);
+  assert.equal(rewriteRunStatusesForUpdate(dataDir, true), 1);
 
   const record = JSON.parse(readFileSync(file, "utf8")) as Record<
     string,
     number | string
   >;
-  // No session, no compacting flag, no updatedAt: 0 mark: an older Bridge after a rollback
-  // sees a free chat and reports no interrupted turn.
+  // No session, no compacting flag, no updatedAt: 0 mark: Bridge sees a free chat and
+  // reports no interrupted turn.
   assert.deepEqual(Object.keys(record).sort(), [
     "generation",
     "resetAt",
@@ -243,6 +243,42 @@ void test("an interrupted compaction between turns is freed at once, not left fo
   assert.equal(record.resetAt, record.updatedAt);
   assert.equal(statSync(file).mode & 0o777, 0o600);
   assert.equal(rewriteRunStatusesForUpdate(dataDir), 0, "nothing to re-arm");
+});
+
+void test("an update keeps an interrupted compaction marked like a turn: a rollback restores the store, and Bridge must still reset that session", () => {
+  const home = mkdtempSync(join(tmpdir(), "wf-store-compacting-rollback-"));
+  const dataDir = join(home, "data");
+  const dir = join(dataDir, "run-status.d");
+  const file = join(dir, "compacting.json");
+  const store = join(home, ".workflow-data");
+  mkdirSync(dir, { recursive: true });
+  mkdirSync(store);
+  writeFileSync(join(store, "session"), "mid-compaction");
+  writeFileSync(
+    file,
+    JSON.stringify({
+      generation: 7,
+      status: "running",
+      updatedAt: Date.now(),
+      sessionId: "session-compacting",
+      compacting: true,
+    }),
+    { mode: 0o600 },
+  );
+
+  // The update quiesces writers: the store may come back if the candidate fails.
+  assert.equal(rewriteRunStatusesForUpdate(dataDir), 1);
+  assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), {
+    generation: 7,
+    status: "running",
+    updatedAt: 0,
+    sessionId: "session-compacting",
+    compacting: true,
+  });
+
+  // Same road as an interrupted turn: Bridge reaps the record and resets the session,
+  // silently for a compaction (scripts/poller/queue.ts).
+  assert.equal(rewriteRunStatusesForUpdate(dataDir), 0, "marked once");
 });
 
 void test("update rewrite leaves terminal chats alone and does not re-arm a notice", () => {

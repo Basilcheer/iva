@@ -90,6 +90,8 @@ export interface TakeOverTelegramChatOptions {
   /** Уборка осиротевшего индикатора «Работаю…»; у кого нет своего Bot API-шва — no-op. */
   removeWorkingStatusImpl?: (messageId: number) => Promise<unknown>;
   onWorkingStatusError?: (error: unknown) => void;
+  /** Запись, которую этот претендент не берёт вовсе; смотрится тем же чтением, что и CAS. */
+  refuseImpl?: (status: ChatStatus) => boolean;
 }
 
 /**
@@ -158,6 +160,7 @@ type ClaimStep = {
   readonly staleMs: number;
   readonly getStatusImpl: GetStatus;
   readonly setStatusIfImpl: SetStatusIf;
+  readonly refuseImpl?: (status: ChatStatus) => boolean;
 };
 
 /** Попытка ровно одна: занятый чат — сразу нет, проигранный CAS — повод повторить. */
@@ -167,7 +170,10 @@ function claimOnce(step: ClaimStep): {
   readonly orphanMessageId?: number;
 } {
   const current = step.getStatusImpl(step.chatKey);
-  if (freshRunning(current, step.at, step.staleMs))
+  if (
+    freshRunning(current, step.at, step.staleMs) ||
+    step.refuseImpl?.(current)
+  )
     return { taken: false, live: true };
   const claimed = step.setStatusIfImpl(
     step.chatKey,
@@ -198,6 +204,7 @@ export async function takeOverTelegramChat({
   setStatusIfImpl,
   removeWorkingStatusImpl,
   onWorkingStatusError,
+  refuseImpl,
 }: TakeOverTelegramChatOptions): Promise<boolean> {
   const step: ClaimStep = {
     chatKey,
@@ -206,6 +213,7 @@ export async function takeOverTelegramChat({
     staleMs: staleMs ?? 30 * 60_000,
     getStatusImpl,
     setStatusIfImpl,
+    refuseImpl,
   };
   const onError = onWorkingStatusError ?? (() => {});
   try {

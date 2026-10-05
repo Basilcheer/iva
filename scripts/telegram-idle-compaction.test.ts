@@ -506,6 +506,11 @@ test("исход просьбы неизвестен (ответа нет, сб�
     await s.waiting(); // eve всё же пересказала (или нет) и запарковала сессию
     assert.equal(statusOf(chatId)?.status, "idle", status);
     assert.equal(compactCalls.length, 1, status);
+    // Парковка закрыла просьбу: следующий ход на пороге просит снова, не ждёт полчаса.
+    await s.turn([LIMIT]);
+    await s.waiting();
+    assert.equal(compactCalls.length, 2, status);
+    await s.waiting();
   }
 });
 
@@ -608,7 +613,36 @@ test("сессию сбросили (/new оставил resetAt): переск�
   assert.equal(statusOf(50)?.status, "idle");
 });
 
-test("⏹ во время пересказа: чат свободен, отметки «ход отменён» следующему сообщению нет", async () => {
+test("/new между чтением записи и её захватом: отметка сброса цела, чат под пересказ не занят", async () => {
+  const { takeOverTelegramChat, chatTakeOverPatch } =
+    await import("../agent/lib/telegram-turn-start.ts");
+  const key = "70:";
+  runStatus.setChatStatus(key, { status: "idle" });
+  let raced = false;
+  const taken = await takeOverTelegramChat({
+    chatKey: key,
+    patch: chatTakeOverPatch({ sessionId: "s-old", compacting: true }),
+    staleMs: runStatus.RUN_STALE_MS,
+    getStatusImpl: runStatus.getChatStatus,
+    // Мост (другой процесс) пишет /new после чтения записи и до её замены.
+    setStatusIfImpl: (chatKey, expected, patch) => {
+      if (!raced)
+        runStatus.setChatStatus(chatKey, {
+          status: "idle",
+          sessionId: null,
+          resetAt: 1,
+        });
+      raced = true;
+      return runStatus.setChatStatusIf(chatKey, expected, patch);
+    },
+    refuseImpl: (status) => status?.resetAt !== undefined,
+  });
+  assert.equal(taken, false);
+  assert.equal(statusOf(70)?.status, "idle");
+  assert.equal(statusOf(70)?.resetAt, 1);
+});
+
+test("отмена пересказа (turn.cancelled, как после /stop): чат свободен, отметки «ход отменён» следующему сообщению нет", async () => {
   const s = session("s-stop", 51);
   await s.turn([LIMIT]);
   await s.waiting();

@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import fc from "fast-check";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -457,20 +458,20 @@ void test("a fallback key still groups into the parent turn and keeps context cl
 });
 
 void test("the step input that decides compaction between turns ignores garbage: only a positive safe integer counts", () => {
-  const garbage: unknown[] = [
-    0,
-    undefined,
-    null,
-    Number.NaN,
-    -1,
-    1.5,
-    "300000",
-    1e308,
-    Number.POSITIVE_INFINITY,
-    {},
-  ];
-  for (const [index, inputTokens] of garbage.entries())
-    assert.equal(stepInputTokens({ inputTokens }), null, `case ${index}`);
+  fc.assert(
+    fc.property(fc.anything(), (inputTokens) => {
+      const counted =
+        typeof inputTokens === "number" &&
+        Number.isSafeInteger(inputTokens) &&
+        inputTokens > 0;
+      assert.equal(
+        stepInputTokens({ inputTokens }),
+        counted ? inputTokens : null,
+      );
+    }),
+  );
+  for (const inputTokens of [0, -1, 1.5, "300000", 1e308, Number.NaN])
+    assert.equal(stepInputTokens({ inputTokens }), null);
   assert.equal(stepInputTokens(undefined), null);
   assert.equal(stepInputTokens({}), null);
   assert.equal(stepInputTokens({ inputTokens: 56_000 }), 56_000);

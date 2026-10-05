@@ -62,8 +62,10 @@ export function openIdleCompactionTurn(sessionId: string): void {
   // Свежая сессия — в конец: вытесняется та, что молчит дольше всех.
   turns.delete(sessionId);
   turns.set(sessionId, turn);
-  for (const stale of turns.keys()) {
+  for (const [stale, kept] of turns) {
     if (turns.size <= TURNS_KEPT) break;
+    // Идущий ход, решение и открытая просьба живы: такой счёт не вытесняется.
+    if (kept.open || kept.due || kept.reclaim) continue;
     turns.delete(stale);
   }
 }
@@ -91,8 +93,13 @@ export async function beginIdleCompaction(
   if (!turn || turn.open || !turn.reclaim) return;
   const reclaim = turn.reclaim;
   turn.reclaim = null;
+  // Ход между просьбой и её запоздалым началом закрыл замер: пересказ снова свой.
+  turn.asked = true;
   try {
-    await reclaim();
+    if ((await reclaim()) === false)
+      logImpl(
+        "[telegram] чат под начавшуюся свёртку не занят: занят или сброшен",
+      );
   } catch (error) {
     logImpl("[telegram] чат под начавшуюся свёртку не занят:", error);
   }
@@ -208,10 +215,17 @@ export async function startIdleCompaction({
   if (accepted) return true;
   turn.asked = false;
   turn.reclaim = null;
+  await releaseRefused(releaseImpl, logImpl);
+  return false;
+}
+
+async function releaseRefused(
+  releaseImpl: () => unknown,
+  logImpl: (...parts: unknown[]) => void,
+): Promise<void> {
   try {
     await releaseImpl();
   } catch (error) {
     logImpl("[telegram] чат после отказа свёртки не освобождён:", error);
   }
-  return false;
 }

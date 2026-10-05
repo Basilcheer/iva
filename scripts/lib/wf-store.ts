@@ -149,22 +149,29 @@ function nextGeneration(value: unknown): number {
     : 1;
 }
 
-/** Make only interrupted runs immediately reapable after an update clears sessions. */
-export function rewriteRunStatusesForUpdate(dataDir: string): number {
+/**
+ * Make only interrupted runs immediately reapable after an update clears sessions.
+ * `retired` — the workflow store is gone for good (startup recovery): an interrupted
+ * compaction is then simply free. An update keeps the mark instead: a rollback restores
+ * the store, and the restarted writers must still see the interrupted session.
+ */
+export function rewriteRunStatusesForUpdate(
+  dataDir: string,
+  retired = false,
+): number {
   let rewritten = 0;
   for (const file of interruptedRunStatusFiles(dataDir)) {
     try {
       const parsed: unknown = JSON.parse(readFileSync(file, "utf8"));
       // A turn Bridge finished since the scan must not be re-armed.
       if (!isInterruptedRun(parsed)) continue;
-      // An interrupted compaction between turns carried no request from the owner: the
-      // record is simply free again, with a reset tombstone for the retired session.
-      // Bridge has nothing to close and nothing to tell (an older Bridge after a rollback
-      // would otherwise report an interrupted turn).
+      // An interrupted compaction between turns carried no request from the owner: once
+      // its session is retired the record is simply free again, with a reset tombstone.
+      // Bridge has nothing to close and nothing to tell.
       const stamp = Date.now();
       writeRunStatusAtomicSync(
         file,
-        parsed.compacting === true
+        retired && parsed.compacting === true
           ? {
               status: "idle",
               generation: nextGeneration(parsed.generation),
@@ -212,7 +219,7 @@ export function recoverInterruptedSessionState(
     }
     throw error;
   }
-  rewriteRunStatusesForUpdate(dataDir);
+  rewriteRunStatusesForUpdate(dataDir, true);
   return { interrupted, quarantined: moved.map(({ trash }) => trash) };
 }
 

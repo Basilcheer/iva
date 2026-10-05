@@ -331,6 +331,66 @@ test("начало пересказа занимает чат ещё раз: з�
   );
 });
 
+test("запоздалый пересказ после промежуточного хода остаётся своим: бесполезный выключает свёртку", async () => {
+  const id = fresh();
+  turn(id, [LIMIT]);
+  assert.equal((await waiting(id, { outcome: "throws" })).asked, true);
+  turn(id, [LIMIT, LIMIT]); // ход по пришедшему сообщению закрыл замер
+  await idle.beginIdleCompaction(id, () => {}); // eve начала принятый пересказ
+  idle.completeIdleCompaction(id);
+  turn(id, [LIMIT, LIMIT]); // первый шаг всё ещё на пороге
+  assert.deepEqual(await waiting(id), NOTHING, "второй платной просьбы нет");
+});
+
+test("запоздалое начало пересказа, а чат занять не вышло: причина в журнале, наружу ничего", async () => {
+  const id = fresh();
+  turn(id, [LIMIT]);
+  let free = true;
+  await idle.startIdleCompaction({
+    sessionId: id,
+    claimImpl: () => free,
+    requestImpl: async () => {
+      throw new Error("timeout");
+    },
+    releaseImpl: () => {},
+    logImpl: () => {},
+  });
+  free = false;
+  const log: unknown[][] = [];
+  await idle.beginIdleCompaction(id, (...parts) => log.push(parts));
+  assert.equal(log.length, 1);
+  assert.match(String(log[0]?.[0]), /не занят/u);
+});
+
+test("счёт идущего хода, решения и открытой просьбы не вытесняется другими сессиями", async () => {
+  const due = fresh();
+  turn(due, [LIMIT]); // решение ждёт парковки
+  const pending = fresh();
+  turn(pending, [LIMIT]);
+  let claims = 0;
+  await idle.startIdleCompaction({
+    sessionId: pending,
+    claimImpl: () => {
+      claims += 1;
+      return true;
+    },
+    requestImpl: async () => {
+      throw new Error("timeout");
+    },
+    releaseImpl: () => {},
+    logImpl: () => {},
+  });
+  const open = fresh();
+  idle.openIdleCompactionTurn(open);
+  idle.recordStepInput(open, LIMIT);
+  for (let other = 0; other < 250; other++) turn(fresh(), [1]);
+  assert.deepEqual(await waiting(due), ASKED, "решение цело");
+  await idle.beginIdleCompaction(pending, () => {});
+  assert.equal(claims, 2, "запоздалая просьба занимает чат");
+  idle.closeIdleCompactionTurn(open, WINDOW);
+  assert.deepEqual(await waiting(open), ASKED, "идущий ход цел");
+});
+
 test("просьба без ответа, о которой eve так и не объявила, через полчаса забыта: свёртка снова доступна", async () => {
   const id = fresh();
   turn(id, [LIMIT]);

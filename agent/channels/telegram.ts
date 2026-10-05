@@ -225,13 +225,15 @@ async function claimChatForCompaction(
     bearerMissingLogged = true;
     return false;
   }
-  if (getChatStatus(chatKey)?.resetAt !== undefined) return false;
   return takeOverTelegramChat({
     chatKey,
     patch: chatTakeOverPatch({ sessionId, compacting: true }),
     staleMs: RUN_STALE_MS,
     getStatusImpl: getChatStatus,
     setStatusIfImpl: setChatStatusIf,
+    refuseImpl: (status) => status?.resetAt !== undefined,
+    onWorkingStatusError: (error) =>
+      console.error("[telegram] чат под свёртку между ходами не занят:", error),
   });
 }
 

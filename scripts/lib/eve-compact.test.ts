@@ -93,6 +93,24 @@ test("a dispatcher failure (5xx) and no answer at all throw: eve may still hold 
   );
 });
 
+test("a route that never answers is abandoned at the timeout: the wait inside the parking handler is bounded", async () => {
+  const started = Date.now();
+  await assert.rejects(
+    requestSessionCompact({
+      url: "http://local/compact",
+      bearer: "token",
+      timeoutMs: 40,
+      fetchImpl: (_url, init) =>
+        new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () =>
+            reject(init.signal?.reason as Error),
+          );
+        }),
+    }),
+  );
+  assert.ok(Date.now() - started < 2_000);
+});
+
 test("the session id is path-encoded and the host follows the channel rule", () => {
   assert.equal(
     localSessionCompactUrl("a/b c", {
