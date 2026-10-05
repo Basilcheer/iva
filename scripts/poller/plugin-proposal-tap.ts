@@ -18,6 +18,8 @@ import { reply } from "./transport.ts";
 import { launchIvaCommand } from "./update-flow.ts";
 
 export type PluginTap = { readonly digest12: string; readonly chatId: number };
+/** Исход тапа: Bridge помечает кнопку только при `started` (ADR-0009: иначе тап можно повторить). */
+export type PluginTapOutcome = "started" | "stale" | "not-started";
 
 export type PluginTapDeps = {
   readonly dataDir?: string;
@@ -31,7 +33,7 @@ export type PluginTapDeps = {
 export async function handlePluginProposalTap(
   { digest12, chatId }: PluginTap,
   deps: PluginTapDeps = {},
-): Promise<void> {
+): Promise<PluginTapOutcome> {
   const io = {
     dataDir: DATA_DIR,
     now: Date.now,
@@ -56,7 +58,7 @@ export async function handlePluginProposalTap(
       chatId,
       notInstalledText(tr, outcome.name ?? digest12, staleReason(tr)),
     );
-    return;
+    return "stale";
   }
   const launched = await io.launch("iva-plugin-install", [
     "plugin",
@@ -65,7 +67,7 @@ export async function handlePluginProposalTap(
   ]);
   if (launched.ok) {
     log("plugin proposal tap: installer started", outcome.name, digest12);
-    return;
+    return "started";
   }
   const returned = returnProposal(
     dir,
@@ -82,4 +84,5 @@ export async function handlePluginProposalTap(
     chatId,
     notInstalledText(tr, outcome.name, launched.msg || "systemd-run failed"),
   );
+  return "not-started";
 }

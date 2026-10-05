@@ -79,7 +79,10 @@ async function world() {
 test("a tap on a fresh proposal takes the copy and starts the installer in its own unit", async () => {
   const w = await world();
 
-  await handlePluginProposalTap({ digest12: w.digest12, chatId: 42 }, w.deps);
+  assert.equal(
+    await handlePluginProposalTap({ digest12: w.digest12, chatId: 42 }, w.deps),
+    "started",
+  );
 
   assert.deepEqual(w.launches, [
     ["iva-plugin-install", ["plugin", "install-proposal", w.digest12]],
@@ -92,8 +95,14 @@ test("a tap on a fresh proposal takes the copy and starts the installer in its o
 test("two taps in a row: one installer, the second tap hears the proposal is out of date", async () => {
   const w = await world();
 
-  await handlePluginProposalTap({ digest12: w.digest12, chatId: 42 }, w.deps);
-  await handlePluginProposalTap({ digest12: w.digest12, chatId: 42 }, w.deps);
+  assert.equal(
+    await handlePluginProposalTap({ digest12: w.digest12, chatId: 42 }, w.deps),
+    "started",
+  );
+  assert.equal(
+    await handlePluginProposalTap({ digest12: w.digest12, chatId: 42 }, w.deps),
+    "stale",
+  );
 
   assert.equal(w.launches.length, 1);
   assert.deepEqual(w.replies, [
@@ -104,9 +113,12 @@ test("two taps in a row: one installer, the second tap hears the proposal is out
 test("a tap with no proposal behind it installs nothing", async () => {
   const w = await world();
 
-  await handlePluginProposalTap(
-    { digest12: "ffffffffffff", chatId: 42 },
-    w.deps,
+  assert.equal(
+    await handlePluginProposalTap(
+      { digest12: "ffffffffffff", chatId: 42 },
+      w.deps,
+    ),
+    "stale",
   );
 
   assert.deepEqual(w.launches, []);
@@ -142,7 +154,10 @@ test("an installer that does not start says why and puts the proposal back for a
   const w = await world();
   w.failLaunch("Failed to connect to bus");
 
-  await handlePluginProposalTap({ digest12: w.digest12, chatId: 42 }, w.deps);
+  assert.equal(
+    await handlePluginProposalTap({ digest12: w.digest12, chatId: 42 }, w.deps),
+    "not-started",
+  );
 
   assert.deepEqual(w.replies, [
     [42, "Plugin relay was not installed: Failed to connect to bus"],
