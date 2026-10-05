@@ -26,6 +26,7 @@ import test, { type TestContext } from "node:test";
 import "../lib/ts-esm-hooks.ts";
 
 const cs = await import("../../agent/lib/card-store.ts");
+const { parseFrontmatter } = await import("../../agent/lib/frontmatter.ts");
 
 const ROOT = resolve(import.meta.dirname, "../..");
 const NIGHT = join(ROOT, "scripts/memory/night.ts");
@@ -583,6 +584,98 @@ void test("сеть 429: один вызов, без попытки дня, де
   fx.model.replies = [A(), B()];
   assert.equal((await night(fx)).code, 0);
 });
+
+void test(
+  "#256: два обрыва до заголовков B сохраняют два факта и кэш; следующая ночь продолжает без второго A",
+  { timeout: 35_000 },
+  async (t) => {
+    const fx = await fixture(t);
+    const raw = day(fx, "## 10:00 [text]\nАврора и Борис начали работу\n");
+    const rawBefore = read(raw);
+    const paths = ["cards/projects/аврора", "cards/projects/борис"];
+    const files = paths.map((path, i) =>
+      card(
+        fx,
+        path,
+        aurora.map((line) => (i ? line.replaceAll("Аврора", "Борис") : line)),
+      ),
+    );
+    const truths = files.map((file) =>
+      cs.truthOf(parseFrontmatter(read(file)).body),
+    );
+    fx.model.replies = [
+      A({
+        facts: paths.map((path, i) => ({
+          card: path,
+          text: `${i ? "Борис" : "Аврора"} начал работу`,
+          src: "e1",
+          quote: i ? "Борис" : "Аврора",
+        })),
+      }),
+    ];
+    const cacheFile = join(fx.data, "memory/night", `${DATE}.json`);
+    let firstCache: unknown;
+    for (const call of [2, 3]) {
+      const held = fx.model.hold(call);
+      const run = spawnNight(fx, null, {
+        IVA_JOB_STOP_AT: String(Date.parse(NOW) + 6_000),
+      });
+      t.after(() => run.child.kill("SIGKILL"));
+      await Promise.race([
+        held.reached,
+        run.result.then((result) => {
+          throw new Error(`night exited before B: ${result.stderr}`);
+        }),
+      ]);
+      // The real HTTP server has received B, but sent no response headers. The
+      // actual process deadline interrupts the SDK request, not a mocked throw.
+      const failed = await run.result;
+      held.release();
+      assert.equal(failed.code, 1, failed.stderr);
+      assert.match(failed.stderr, /memory-night deadline/u);
+      assert.equal(fx.model.prompts.length, call, "no transport retries");
+      assert.equal(
+        read(raw),
+        rawBefore,
+        "unfinished raw day is not marked ready",
+      );
+      assert.equal(existsSync(summary(fx)), false);
+      assert.equal(existsSync(join(fx.data, "rollup-attempts.json")), false);
+      const cache = JSON.parse(read(cacheFile)) as {
+        pass: { truth: string[] };
+      };
+      assert.deepEqual(cache.pass.truth, paths);
+      if (call === 2) firstCache = cache;
+      else
+        assert.deepEqual(
+          cache,
+          firstCache,
+          "the pending step survives the second failure",
+        );
+      for (const [i, file] of files.entries()) {
+        assert.equal(
+          logRows(read(file)).length,
+          1,
+          "accepted fact remains, once",
+        );
+        assert.equal(cs.truthOf(parseFrontmatter(read(file)).body), truths[i]);
+      }
+      // Let the disconnected server handler finish before assigning the next reply.
+      await new Promise((accept) => setImmediate(accept));
+    }
+    fx.model.replies = [B(...paths.map((path) => ({ card: path })))];
+    const resumed = await night(fx, null);
+    assert.equal(resumed.code, 0, resumed.stderr);
+    assert.equal(
+      fx.model.prompts.length,
+      4,
+      "one A, two interrupted B, one resumed B",
+    );
+    assert.equal(existsSync(summary(fx)), true);
+    for (const file of files) assert.equal(logRows(read(file)).length, 1);
+    assert.equal(git(fx.vault, "status", "--porcelain"), "");
+  },
+);
 
 void test("kill -9 на B: повтор без второго A и без дубля Card, даже если отметка применения не успела", async (t) => {
   const fx = await fixture(t);

@@ -46,6 +46,7 @@ You can also just ask in the chat: she lists the same rows with their ids, the n
 - **Nothing arrived.** The row shows `delivered: false` and the reason in `error`. Fix the chat settings or the token, then ask again — a one-time reminder has already fired, so put a new one.
 - **The agent turn could not run.** Your text still arrives, verbatim; the reason is in `error` and in the journal (`journalctl --user -u iva.service | grep reminders`).
 - **The dispatcher is not ticking.** The list warns that the reminder is stored but will not fire, and `iva doctor` says the same by the pulse file. It also lists every reminder that fired in the last day and did not go out.
+- **`no activity for 180000ms` during an external-job check.** The limit counts silence in the Eve event stream, including a blocking tool that produces no events; it is not a three-minute limit on the whole turn. A check should read a bounded progress/status snapshot and return it, even if the job is still running. It should not wait for process exit, run `tail -f` or keep a polling loop open. The `background-check` skill describes this procedure. Code sends the final status; the model must not send a report separately and then keep waiting. A later check belongs in a new request from the owner, not a new reminder created inside the firing turn.
 
 ## What Iva no longer does
 

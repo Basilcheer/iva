@@ -135,6 +135,8 @@ export function reminderPrompt(
     "Do what it says, with your tools, and return the result as the final text of this turn: " +
     "the code will send that text to the chat where the reminder was asked for. " +
     "If it is a plain reminder with nothing to do, return the short reminder text. " +
+    "If it checks a long-running background job, load the background-check skill " +
+    "and return a bounded status snapshot instead of waiting for the job to finish. " +
     "The answer is never empty. " +
     `Write it ${writtenInLanguage(tr)}. ` +
     "Do not send anything yourself: no rich messages and no Telegram tools. " +
