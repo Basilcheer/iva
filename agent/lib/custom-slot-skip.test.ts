@@ -65,3 +65,63 @@ test("a record defineSkill throws on is skipped by name, the rest stay", () => {
     "[skills] zz-crooked skipped: metadata.hermes: expected string",
   ]);
 });
+
+// Имя и пути файлов динамического скилла eve проверяет ПОСЛЕ резолвера, вне его allSettled
+// и на все записи сразу (normalizeSkillPackage в dynamic-skill-lifecycle): одна запись,
+// которую оно отвергнет, уносит из хода все живые скиллы. Канарейка гонит каждую запись
+// слота через НАСТОЯЩИЙ normalizeSkillPackage (путь вне exports eve — только в тесте).
+const eveSkillPackage = (await import(
+  pathToFileURL(
+    fileURLToPath(
+      new URL(
+        "../../node_modules/eve/dist/src/shared/skill-package.js",
+        import.meta.url,
+      ),
+    ),
+  ).href
+)) as {
+  normalizeSkillPackage: (input: Record<string, unknown>) => unknown;
+};
+
+test("every record the slot hands eve passes eve's own name and path check; a name with .. is skipped", async () => {
+  skill("v1..2", "description: Two dots\n");
+  skill("hello", "description: Says hello\n");
+  const lines: string[] = [];
+  const original = console.error;
+  console.error = (...parts: unknown[]) => {
+    lines.push(parts.map(String).join(" "));
+  };
+  try {
+    const skills = await slot.default.events["turn.started"]?.({}, {} as never);
+    assert.ok(skills);
+    for (const [name, entry] of Object.entries(skills))
+      eveSkillPackage.normalizeSkillPackage({ ...entry, name });
+    assert.ok(!("v1..2" in skills));
+    assert.ok("hello" in skills);
+  } finally {
+    console.error = original;
+    rmSync(join(DATA_DIR, "custom", "agent", "skills", "v1..2"), {
+      recursive: true,
+      force: true,
+    });
+  }
+  assert.ok(lines.some((line) => /\[skills\] v1\.\.2 skipped/u.test(line)));
+});
+
+test("a skill file whose path eve refuses takes only its own skill out", () => {
+  const lines: string[] = [];
+  const map = slot.liveSkillMap(
+    {
+      alpha: { description: "a", markdown: "# a" },
+      beta: {
+        description: "b",
+        markdown: "# b",
+        files: { "notes\\win.md": new Uint8Array([1]) },
+      },
+    },
+    (one) => one,
+    (line) => lines.push(line),
+  );
+  assert.deepEqual(Object.keys(map), ["alpha"]);
+  assert.match(lines.join("\n"), /\[skills\] beta skipped/u);
+});
