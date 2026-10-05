@@ -990,6 +990,41 @@ test("Ceiling: the sum throws → the ceiling stays open with a journal line; no
   assert.deepEqual(idle.h.logs, []);
 });
 
+// Строка Ceiling называет только то, что снято: Watch без новых пунктов или с уже исчерпанным
+// modelWakesPerDay модель и так не будил (spec-w2 3.2.1: «если снимать нечего, строки нет»).
+test("Ceiling reached on a Watch tick with nothing to drop: no line; a stale chat dropped: watch-model", async () => {
+  const quiet = ceilingHarness(1, 5);
+  writeState(quiet.h, {});
+  assert.equal(await runProactiveTick(NOON, quiet.deps), 0);
+  assert.deepEqual(
+    quiet.h.logs.filter((line) => line.includes("ceiling")),
+    [],
+    "no new items: nothing dropped",
+  );
+
+  const spent = ceilingHarness(1, 5);
+  writeState(spent.h, {
+    ...staleSeen(chat(1, 1)),
+    modelWakes: { day: DAY, count: 15 },
+  });
+  spent.h.tg = { items: [chat(1, 1)], error: null };
+  assert.equal(await runProactiveTick(NOON, spent.deps), 0);
+  assert.deepEqual(
+    spent.h.logs.filter((line) => line.includes("ceiling")),
+    [],
+    "modelWakesPerDay already spent: the ceiling took nothing",
+  );
+
+  const stale = ceilingHarness(1, 5);
+  writeState(stale.h, staleSeen(chat(1, 1)));
+  stale.h.tg = { items: [chat(1, 1)], error: null };
+  assert.equal(await runProactiveTick(NOON, stale.deps), 0);
+  assert.deepEqual(
+    stale.h.logs.filter((line) => line.includes("ceiling")),
+    ["proactive: ceiling reached (5 of 1 tokens today), dropped: watch-model"],
+  );
+});
+
 test("Ceiling through main: usage.jsonl with broken lines is summed silently; only watch, brief and insight rows count", async (t) => {
   const lines: string[] = [];
   t.mock.method(console, "log", (line: string) => lines.push(line));

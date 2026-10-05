@@ -592,6 +592,18 @@ export async function runProactiveTick(
   deps: TickDeps,
 ): Promise<number> {
   const log = deps.log ?? ((line: string) => console.log(line));
+  const reached: Reached = { note: null };
+  const code = await tick(now, deps, log, reached);
+  logCeiling(reached.note, log);
+  return code;
+}
+
+async function tick(
+  now: number,
+  deps: TickDeps,
+  log: (line: string) => void,
+  reached: Reached,
+): Promise<number> {
   let stored: ProactiveState | null;
   try {
     stored = readProactiveState(deps.statePath);
@@ -602,7 +614,7 @@ export async function runProactiveTick(
   const clock = { ...localDay(now, deps.timeZone), now };
   let state = stored ?? initialState(now);
   const run = { state, stored, clock };
-  const config = await ceiled(deps, deps.config(), run, log);
+  const config = await ceiled(deps, deps.config(), run, log, reached);
   let failed = false;
   const slot = briefSlot(config, state, clock);
   if (slot !== null)
@@ -617,7 +629,7 @@ export async function runProactiveTick(
   if (watchSkipped(clock, stored, deps.signal)) return failed ? 1 : 0;
   const code = await watch(
     deps,
-    { state, first: stored === null, config, clock },
+    { state, first: stored === null, config, clock, ceiling: reached.note },
     log,
   );
   return failed ? 1 : code;
@@ -649,16 +661,42 @@ type Run = {
   readonly clock: Clock;
 };
 
-/** Кого прогон снял бы Ceiling дня — в порядке прогона: Brief, иначе Insight, затем Watch. */
+/**
+ * Ceiling дня, достигнутый в этом прогоне: расход, настройки без Ceiling и снятые кандидаты.
+ * Watch дописывает «watch-model», только если без Ceiling разбудил бы модель обычным пунктом.
+ */
+type CeilingNote = {
+  readonly used: number;
+  readonly ceiling: number;
+  readonly base: ProactiveConfig;
+  readonly dropped: string[];
+};
+
+type Reached = { note: CeilingNote | null };
+
+/** Brief или Insight, которые прогон снял бы Ceiling дня (Watch решает сам, после проверки). */
 function droppedBy(config: ProactiveConfig, { state, stored, clock }: Run) {
-  const brief = briefSlot(config, state, clock) !== null;
-  const insight = !brief && insightDue(config, stored, clock);
-  const watch = !insight && !watchSkipped(clock, stored, undefined);
-  return [
-    ...(insight ? ["insight"] : []),
-    ...(brief ? ["brief"] : []),
-    ...(watch ? ["watch-model"] : []),
-  ];
+  if (briefSlot(config, state, clock) !== null) return ["brief"];
+  return insightDue(config, stored, clock) ? ["insight"] : [];
+}
+
+/** Одна строка на прогон; снимать было нечего — строки нет. */
+function logCeiling(note: CeilingNote | null, log: (line: string) => void) {
+  if (note === null || note.dropped.length === 0) return;
+  log(
+    `proactive: ceiling reached (${note.used} of ${note.ceiling} tokens today), dropped: ${note.dropped.join(",")}`,
+  );
+}
+
+/** Обычный пункт, который без Ceiling разбудил бы модель, снят — строка называет Watch. */
+function noteWatchDrop(
+  note: CeilingNote | null | undefined,
+  input: Parameters<typeof admit>,
+): void {
+  if (!note) return;
+  const [state, observed, , clock] = input;
+  if (admit(state, observed, note.base, clock).some((c) => !c.failure))
+    note.dropped.push("watch-model");
 }
 
 /** Расход сегодня; не прочёлся — 0 и строка в журнал: сломанный файл расхода Иву не глушит. */
@@ -683,16 +721,14 @@ async function ceiled(
   config: ProactiveConfig,
   run: Run,
   log: (line: string) => void,
+  reached: Reached,
 ): Promise<ProactiveConfig> {
   const ceiling = config.ceilingTokensPerDay;
   if (ceiling === 0) return config;
   const used = await spent(deps, log);
   if (used < ceiling) return config;
   const dropped = droppedBy(config, run);
-  if (dropped.length > 0)
-    log(
-      `proactive: ceiling reached (${used} of ${ceiling} tokens today), dropped: ${dropped.join(",")}`,
-    );
+  reached.note = { used, ceiling, base: config, dropped };
   return { ...config, briefTimes: [], insightTimes: [], modelWakesPerDay: 0 };
 }
 
@@ -835,6 +871,7 @@ async function watch(
     first,
     config,
     clock,
+    ceiling,
   }: {
     readonly state: ProactiveState;
     readonly first: boolean;
@@ -844,6 +881,7 @@ async function watch(
       readonly day: string;
       readonly hour: number;
     };
+    readonly ceiling?: CeilingNote | null;
   },
   log: (line: string) => void,
 ): Promise<number> {
@@ -856,6 +894,7 @@ async function watch(
   );
   const state = observedState({ base, first }, observed, keep, clock.now);
   const candidates = admit(state, observed, config, clock);
+  noteWatchDrop(ceiling, [state, observed, config, clock]);
   if (candidates.length === 0) {
     if (!(await save(deps, state, "seen", log))) return 1;
     log("proactive: nothing new, model not woken");
