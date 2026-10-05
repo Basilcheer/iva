@@ -1,10 +1,10 @@
 #!/bin/sh
 # Proactive.tla под TLC с проверкой ожиданий: основная модель без ошибок, каждый свидетель
 # нарушает свой инвариант первым (поиск в ширину — самый короткий контрпример). Третий аргумент
-# check — инварианты, убранные из списка, чтобы увидеть следующий: без замка ломаются (4), (1)
-# и (2) (и (3) на той же глубине, что (2)) — замок держит все.
-# Любой сбой tlc или несовпадение ожидания — ненулевой выход. Основная модель — пара минут
-# и около 4,8 млн состояний; файлы состояний TLC пишет во временную папку.
+# check — инварианты, убранные из списка, чтобы увидеть следующий: без замка ломаются (4), (1),
+# (2) (и (3) на той же глубине, что (2)) и (5) — замок держит все.
+# Любой сбой tlc или несовпадение ожидания — ненулевой выход. Основная модель — около пяти
+# минут на 8 потоках и около 19,5 млн состояний; файлы состояний TLC пишет во временную папку.
 set -u
 cd "$(dirname "$0")" || exit 2
 TLC=${TLC:-$(command -v tlc || echo "$HOME/.local/bin/tlc")}
@@ -41,13 +41,19 @@ check() { # config expected [dropped invariant]; expected: none | <Invariant>
     echo "FAIL $name: got '$got', expected '$expect'"; failed=$((failed+1))
   fi
 }
-check Proactive-noclaim NoDoubleTake
-check Proactive-nolock OneRun
-check Proactive-nolock NoDoubleTake OneRun
-check Proactive-nolock OneBriefPerSlot "OneRun NoDoubleTake WakesCapped"
-check Proactive-nocap WakesCapped
-check Proactive-shortstale OneRun
-check Proactive-nowfirst OneBriefPerSlot
+# Прежние свидетели — без OneSparkPerDay: без замка и при now до замка двойной Spark симметричен
+# двойному Brief и на той же глубине мог бы выйти первым.
+check Proactive-noclaim NoDoubleTake OneSparkPerDay
+check Proactive-nolock OneRun OneSparkPerDay
+check Proactive-nolock NoDoubleTake "OneRun OneSparkPerDay"
+check Proactive-nolock OneBriefPerSlot "OneRun NoDoubleTake WakesCapped OneSparkPerDay"
+check Proactive-nocap WakesCapped OneSparkPerDay
+check Proactive-shortstale OneRun OneSparkPerDay
+check Proactive-nowfirst OneBriefPerSlot OneSparkPerDay
+check Proactive-nosparkclaim OneSparkPerDay
+check Proactive-dropspark OneSparkPerDay
+check Proactive-nowfirst OneSparkPerDay OneBriefPerSlot
+check Proactive-nolock OneSparkPerDay "OneRun NoDoubleTake WakesCapped OneBriefPerSlot"
 [ "${SKIP_MAIN:-}" = 1 ] || check Proactive none
 echo "proactive-check: $ok ok, $failed failed"
 [ "$failed" -eq 0 ]
