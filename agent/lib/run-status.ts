@@ -66,6 +66,15 @@ const LOCK_TIMEOUT_MS = positiveMs(
 );
 const LOCK_RETRY_MS = 10;
 
+// Знак очереди: сообщение встало за живым ходом и уже видит лоадер. Поля живут в записи
+// живого хода, а забирает их следующий ход чата (agent/lib/telegram-turn-start.ts).
+// Снимаются все три разом — этим патчем.
+export const QUEUED_STATUS_CLEARED = {
+  queuedIngressAt: null,
+  queuedStatusAt: null,
+  queuedStatusMessageId: null,
+} as const;
+
 // Ход длиннее этого считаем зависшим/осиротевшим (упал без terminal-события):
 // мост перестаёт буферизовать, чтобы сообщения не копились вечно.
 export const RUN_STALE_MS = Number(

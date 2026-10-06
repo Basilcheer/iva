@@ -11,7 +11,12 @@
 //
 // Про eve модуль не знает: канал передаёт хендл Bot API структурно.
 import { tr } from "./i18n.ts";
-import { chatKeyOf, getChatStatus, setChatStatusIf } from "./run-status.ts";
+import {
+  chatKeyOf,
+  getChatStatus,
+  QUEUED_STATUS_CLEARED,
+  setChatStatusIf,
+} from "./run-status.ts";
 import { isPrivateTelegramChatHandle } from "./telegram-private-chat.ts";
 
 // В callback_data кладём только константу: лимит 64 байта не вмещает sessionId,
@@ -143,6 +148,9 @@ export async function enableWorkingStatusStop(
 
 // Терминал хода: state → idle (+wasCancelled), статус-сообщение удалить (обычный финал)
 // или переписать на «Остановлено» (отмена). Сбои уборки не критичны — глотаем.
+// Знак очереди (сообщение за этим ходом) обычный финал оставляет следующему ходу, а
+// отмена и сбой снимают: дойдёт ли до него ход, уже неизвестно, а свой статус он получит
+// на старте.
 export async function finishTelegramStatus(
   channel: {
     telegram: TelegramStatusHandle;
@@ -171,12 +179,22 @@ export async function finishTelegramStatus(
       firstOutputAt: null,
       latencyLogged: null,
       ...(mode === "cancelled" ? { wasCancelled: true } : {}),
+      ...(mode === "completed" ? {} : QUEUED_STATUS_CLEARED),
     },
   );
   // Only touch Telegram when the pre-CAS snapshot was OUR session. A late
   // terminal event from an old finished session must not delete another
   // live session's Working… message in the same chat.
   if (st?.sessionId === sessionId) {
+    if (mode !== "completed" && typeof st.queuedStatusMessageId === "number")
+      await tg
+        .request("deleteMessage", {
+          chat_id: tg.chatId,
+          message_id: st.queuedStatusMessageId,
+        })
+        .catch(() => {
+          /* знак очереди не убрался — не критично */
+        });
     const msgId = st.statusMessageId;
     if (typeof msgId === "number") {
       try {

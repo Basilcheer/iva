@@ -298,6 +298,62 @@ await test("своя сессия гасит статус-сообщение", a
   assert.equal(runStatus.getChatStatus(key)?.status, "idle");
 });
 
+await test("знак очереди: обычный финал оставляет его следующему ходу, отмена снимает", async () => {
+  const key = runStatus.chatKeyOf("77", undefined);
+  const queued = {
+    queuedIngressAt: 1_000,
+    queuedStatusAt: 1_100,
+    queuedStatusMessageId: 901,
+  };
+  runStatus.setChatStatus(key, {
+    status: "running",
+    sessionId: "s-q1",
+    statusMessageId: 900,
+    ...queued,
+  });
+  const completed = handle();
+  assert.equal(
+    await status.finishTelegramStatus(
+      { telegram: completed.tg },
+      "s-q1",
+      "completed",
+    ),
+    true,
+  );
+  assert.deepEqual(
+    completed.calls.map((call) => [call.method, call.body.message_id]),
+    [["deleteMessage", 900]],
+  );
+  assert.equal(runStatus.getChatStatus(key)?.queuedStatusMessageId, 901);
+
+  runStatus.setChatStatus(key, {
+    status: "running",
+    sessionId: "s-q2",
+    statusMessageId: 902,
+    ...queued,
+  });
+  const cancelled = handle();
+  assert.equal(
+    await status.finishTelegramStatus(
+      { telegram: cancelled.tg },
+      "s-q2",
+      "cancelled",
+    ),
+    true,
+  );
+  assert.deepEqual(
+    cancelled.calls.map((call) => [call.method, call.body.message_id]),
+    [
+      ["deleteMessage", 901],
+      ["editMessageText", 902],
+    ],
+  );
+  const after = runStatus.getChatStatus(key);
+  assert.equal(after?.queuedStatusMessageId, undefined);
+  assert.equal(after?.queuedIngressAt, undefined);
+  assert.equal(after?.queuedStatusAt, undefined);
+});
+
 await test("отказ rich оставляет тихий статус с текстом и без кнопки", async () => {
   const failedRich = handle((call) =>
     call.method === "sendRichMessage"
