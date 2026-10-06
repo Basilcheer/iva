@@ -491,3 +491,25 @@ test("markTelegramSessionForRetirement молчит, когда помечать
   );
   assert.equal(calls, 0, "пустой список — тоже молча");
 });
+
+test("a write with touch: false moves generation but keeps updatedAt", async () => {
+  const chatKey = "touch:";
+  const first = status.setChatStatus(chatKey, {
+    status: "running",
+    sessionId: "s",
+  });
+  await new Promise((resolve) => setTimeout(resolve, 5));
+
+  const kept = status.setChatStatusIf(
+    chatKey,
+    { status: "running" },
+    { queuedIngressId: "q" },
+    { touch: false },
+  );
+  assert.equal(kept?.updatedAt, first.updatedAt);
+  assert.equal(kept?.generation, (first.generation ?? 0) + 1);
+
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  const touched = status.setChatStatusIf(chatKey, { status: "running" }, {});
+  assert.ok((touched?.updatedAt ?? 0) > (first.updatedAt ?? 0));
+});

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
   telegramChannel,
   type TelegramChannelState,
@@ -80,6 +81,7 @@ import {
 import {
   abandonTelegramEarlyStatus,
   chatTakeOverPatch,
+  dropQueuedStatus,
   emitTelegramTurnLatency,
   markTelegramFirstOutput,
   markTelegramTurnAlive,
@@ -491,10 +493,22 @@ const telegram = telegramChannel({
     },
     // У terminal-сбоя eve следом за turn.failed шлёт session.failed без ctx.
     // Повторно прибираем run-status по sessionId из payload и не дублируем уведомление.
+    // Сессия умерла: её буфер входа не начнёт хода, и знак очереди снимается здесь.
     async "session.failed"(data, channel) {
-      if (channel.telegram.chatId) {
+      const tg = channel.telegram;
+      if (tg.chatId) {
         try {
           await finishTelegramStatus(channel, data.sessionId, "failed");
+          await dropQueuedStatus({
+            chatKey: chatKeyOf(tg.chatId, tg.messageThreadId),
+            getStatusImpl: getChatStatus,
+            setStatusIfImpl: setChatStatusIf,
+            removeWorkingStatusImpl: (messageId) =>
+              tg.request("deleteMessage", {
+                chat_id: tg.chatId,
+                message_id: messageId,
+              }),
+          });
         } catch {
           /* best-effort: отсутствие chat-state не должно ломать уведомление */
         }
@@ -511,7 +525,9 @@ const telegram = telegramChannel({
   onMessage: wrapTelegramQueueOnMessage((ctx, message) => {
     const tg = ctx.telegram;
     const chatKey = chatKeyOf(message.chat.id, message.messageThreadId);
-    let earlyIngressId: string | null = null;
+    // Ключ сообщения: под ним стоит его ранний статус или знак очереди за живым ходом,
+    // и по нему же снимается то или другое, если pipeline сообщение бросит.
+    const ingressId = randomUUID();
     return runTelegramInbound(message, {
       botUsername: tg.botUsername,
       request: (method, body) => tg.request(method, body),
@@ -521,8 +537,9 @@ const telegram = telegramChannel({
       chatModelSeesImages,
       transcribe,
       onAccepted: async () => {
-        earlyIngressId = await publishTelegramEarlyStatus({
+        await publishTelegramEarlyStatus({
           chatKey,
+          ingressId,
           staleMs: RUN_STALE_MS,
           getStatusImpl: getChatStatus,
           setStatusIfImpl: setChatStatusIf,
@@ -540,10 +557,9 @@ const telegram = telegramChannel({
         });
       },
       onAbandoned: async () => {
-        if (earlyIngressId === null) return;
         await abandonTelegramEarlyStatus({
           chatKey,
-          ingressId: earlyIngressId,
+          ingressId,
           getStatusImpl: getChatStatus,
           setStatusIfImpl: setChatStatusIf,
           removeWorkingStatusImpl: (messageId) =>

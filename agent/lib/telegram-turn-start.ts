@@ -10,6 +10,7 @@ type SetStatusIf = (
   chatKey: string,
   expected: Record<string, unknown>,
   patch: Record<string, unknown>,
+  options?: { touch?: boolean },
 ) => unknown;
 
 export interface PublishTelegramEarlyStatusOptions {
@@ -98,8 +99,9 @@ export interface TakeOverTelegramChatOptions {
 /**
  * Что записать в чат, доставшийся от мёртвого хозяина: тот же набор обнулений, что у канала,
  * плюс поля своего хода. Иначе поля протухшего хода (statusAt, firstOutputAt, latencyLogged,
- * resetAt) переезжают в запись нового хозяина и врут про его сроки. Знак очереди, чей ход
- * так и не начался, снимается тут же: свободный чат уже никого не ждёт.
+ * resetAt) переезжают в запись нового хозяина и врут про его сроки. Поля знака очереди
+ * (queued*) патч не трогает: знак ждёт хода своего сообщения и переезжает в запись нового
+ * хозяина — свёртки, напоминания, раннего статуса; забирает или удаляет его следующий ход.
  */
 export function chatTakeOverPatch(
   fields: Record<string, unknown>,
@@ -117,7 +119,6 @@ export function chatTakeOverPatch(
     statusMessageId: null,
     latencyLogged: null,
     resetAt: null,
-    ...QUEUED_STATUS_CLEARED,
     ...fields,
   };
 }
@@ -132,16 +133,11 @@ const freshRunning = (
   typeof status.updatedAt === "number" &&
   at - status.updatedAt < staleMs;
 
-// Индикаторы, которые после захвата никто не найдёт, — прибирает тот, кто взял: статус
-// протухшей записи и знак очереди, чей ход так и не начался.
-const orphanIndicators = (status: ChatStatus): number[] => [
-  ...(status?.status === "running" && typeof status.statusMessageId === "number"
-    ? [status.statusMessageId]
-    : []),
-  ...(typeof status?.queuedStatusMessageId === "number"
-    ? [status.queuedStatusMessageId]
-    : []),
-];
+// Индикатор протухшей записи: после захвата его больше никто не найдёт — прибирает тот, кто взял.
+const orphanWorkingStatusId = (status: ChatStatus): number | undefined =>
+  status?.status === "running" && typeof status.statusMessageId === "number"
+    ? status.statusMessageId
+    : undefined;
 
 /**
  * Убрать сообщение «Работаю…», за которым больше никто не следит. Сбой уборки не критичен:
@@ -175,7 +171,7 @@ type ClaimStep = {
 function claimOnce(step: ClaimStep): {
   readonly taken: boolean;
   readonly live: boolean;
-  readonly orphanMessageIds?: readonly number[];
+  readonly orphanMessageId?: number;
 } {
   const current = step.getStatusImpl(step.chatKey);
   if (
@@ -192,7 +188,7 @@ function claimOnce(step: ClaimStep): {
     ? {
         taken: true,
         live: false,
-        orphanMessageIds: orphanIndicators(current),
+        orphanMessageId: orphanWorkingStatusId(current),
       }
     : { taken: false, live: false };
 }
@@ -233,11 +229,14 @@ async function claimChat({
   const onError = onWorkingStatusError ?? (() => {});
   try {
     for (let attempt = 0; attempt < 3; attempt++) {
-      const { taken, live, orphanMessageIds = [] } = claimOnce(step);
+      const { taken, live, orphanMessageId } = claimOnce(step);
       if (live) return "live";
       if (!taken) continue;
-      for (const messageId of orphanMessageIds)
-        await dropWorkingStatus(messageId, removeWorkingStatusImpl, onError);
+      await dropWorkingStatus(
+        orphanMessageId,
+        removeWorkingStatusImpl,
+        onError,
+      );
       return "taken";
     }
   } catch (error) {
@@ -317,11 +316,13 @@ async function sendEarlyStatus({
 /**
  * Знак сообщению, вставшему в очередь за живым ходом: тот же лоадер, что у раннего
  * статуса, без кнопки — ход этого сообщения ещё не начался. Знак один на чат и живёт в
- * записи живого хода полями queued*; его забирает следующий ход чата
- * (publishTelegramTurnStarted): время прихода и знака переходят в запись этого хода.
+ * записи чата полями queued*: чьё сообщение (queuedIngressId), за ходом какой сессии оно
+ * встало (queuedSessionId), когда пришло и когда появился знак. Запись знака updatedAt не
+ * двигает: она не говорит, что живой ход жив.
  */
 async function sendQueuedStatus({
   chatKey,
+  ingressId,
   ingressAt,
   now,
   staleMs,
@@ -332,6 +333,7 @@ async function sendQueuedStatus({
   onWorkingStatusError,
 }: {
   readonly chatKey: string;
+  readonly ingressId: string;
   readonly ingressAt: number;
   readonly now: () => number;
   readonly staleMs: number;
@@ -343,24 +345,32 @@ async function sendQueuedStatus({
   readonly removeWorkingStatusImpl?: (messageId: number) => Promise<unknown>;
   readonly onWorkingStatusError?: (error: unknown) => void;
 }): Promise<void> {
-  try {
-    const current = getStatusImpl(chatKey);
-    if (
-      !freshRunning(current, ingressAt, staleMs) ||
-      current?.queuedIngressAt !== undefined ||
-      !setStatusIfImpl(
+  // Знак один на чат и только за живым ходом; место под него занимается CAS-ом, чтобы
+  // знак другого сообщения, поставленный после чтения, не был перезаписан.
+  const holdQueuedSign = (current: ChatStatus): boolean =>
+    freshRunning(current, ingressAt, staleMs) &&
+    current?.queuedIngressId === undefined &&
+    Boolean(
+      setStatusIfImpl(
         chatKey,
-        { status: "running", queuedIngressAt: undefined },
-        { queuedIngressAt: ingressAt },
-      )
-    )
-      return;
+        { status: "running", queuedIngressId: undefined },
+        {
+          queuedIngressId: ingressId,
+          queuedIngressAt: ingressAt,
+          queuedSessionId: sessionIdOf(current),
+        },
+        { touch: false },
+      ),
+    );
+  try {
+    if (!holdQueuedSign(getStatusImpl(chatKey))) return;
     const messageId = await sendWorkingStatusImpl({ canStop: false });
     if (messageId === null || messageId === undefined) return;
     const attached = setStatusIfImpl(
       chatKey,
-      { queuedIngressAt: ingressAt },
+      { queuedIngressId: ingressId },
       { queuedStatusMessageId: messageId, queuedStatusAt: now() },
+      { touch: false },
     );
     if (!attached)
       await dropWorkingStatus(
@@ -373,28 +383,86 @@ async function sendQueuedStatus({
   }
 }
 
+const sessionIdOf = (current: ChatStatus): string | null =>
+  typeof current?.sessionId === "string" ? current.sessionId : null;
+
 const finiteNumber = (value: unknown): number | undefined =>
   typeof value === "number" && Number.isFinite(value) ? value : undefined;
 
 /**
- * Знак очереди глазами начавшегося хода без раннего статуса: ход по сообщению из очереди
- * берёт себе время прихода и знака (так считается его ingressToStatusMs) и само
- * сообщение-знак как свой статус.
+ * Знак очереди глазами начавшегося хода. Буфер входа eve уходит в один ход, поэтому
+ * сообщение знака либо в этом ходе, либо уже не придёт: ход знак забирает всегда. Ход
+ * сессии, за которой знак встал, берёт его себе статусом вместе со временем прихода и
+ * знака (так считается ingressToStatusMs); любой другой ход знак удаляет и времени
+ * чужого сообщения не наследует.
  */
-function queuedStatusOf(current: ChatStatus): {
+function queuedStatusOf(
+  current: ChatStatus,
+  sessionId: string,
+): {
   readonly fields: Record<string, unknown>;
   readonly messageId?: number;
+  readonly own: boolean;
 } {
-  const ingressAt = finiteNumber(current?.queuedIngressAt);
-  if (ingressAt === undefined) return { fields: {} };
+  if (current?.queuedIngressId === undefined) return { fields: {}, own: false };
+  const own = current.queuedSessionId === sessionId;
   return {
     fields: {
       ...QUEUED_STATUS_CLEARED,
-      ingressAt,
-      statusAt: finiteNumber(current?.queuedStatusAt) ?? null,
+      ...(own
+        ? {
+            ingressAt: finiteNumber(current.queuedIngressAt) ?? null,
+            statusAt: finiteNumber(current.queuedStatusAt) ?? null,
+          }
+        : {}),
     },
-    messageId: finiteNumber(current?.queuedStatusMessageId),
+    messageId: finiteNumber(current.queuedStatusMessageId),
+    own,
   };
+}
+
+export interface DropQueuedStatusOptions {
+  chatKey: string;
+  /** Снять только знак этого сообщения; без него — любой. */
+  ingressId?: string;
+  getStatusImpl: GetStatus;
+  setStatusIfImpl: SetStatusIf;
+  removeWorkingStatusImpl?: (messageId: number) => Promise<unknown>;
+  onWorkingStatusError?: (error: unknown) => void;
+}
+
+/**
+ * Снять знак очереди из записи и из чата: запись ушла без хода-наследника (сессия упала,
+ * сообщение бросил inbound pipeline, ход отвергнут меткой сброса). CAS по queuedIngressId:
+ * знак, поставленный после чтения, не трогается. true — знак был и снят.
+ */
+export async function dropQueuedStatus({
+  chatKey,
+  ingressId,
+  getStatusImpl,
+  setStatusIfImpl,
+  removeWorkingStatusImpl,
+  onWorkingStatusError,
+}: DropQueuedStatusOptions): Promise<boolean> {
+  const current = getStatusImpl(chatKey);
+  const owner = current?.queuedIngressId;
+  if (owner === undefined || (ingressId !== undefined && owner !== ingressId))
+    return false;
+  if (
+    !setStatusIfImpl(
+      chatKey,
+      { queuedIngressId: owner },
+      QUEUED_STATUS_CLEARED,
+      { touch: false },
+    )
+  )
+    return false;
+  await dropWorkingStatus(
+    finiteNumber(current?.queuedStatusMessageId),
+    removeWorkingStatusImpl,
+    onWorkingStatusError,
+  );
+  return true;
 }
 
 export async function publishTelegramEarlyStatus({
@@ -427,6 +495,7 @@ export async function publishTelegramEarlyStatus({
   if (claimed === "live")
     await sendQueuedStatus({
       chatKey,
+      ingressId,
       ingressAt,
       now,
       staleMs,
@@ -508,20 +577,31 @@ async function enableStop(start: TurnStart, messageId: number): Promise<void> {
 }
 
 // Ход с ранним статусом (сообщение прошло onMessage на свободный чат): забрать запись и
-// дорисовать кнопку в тот же статус. Знак очереди, если он есть, остаётся сообщению,
-// пришедшему позже: его заберёт следующий ход.
+// дорисовать кнопку в тот же статус. Знак очереди уходит: его сообщение в этом же ходе
+// (буфер входа eve уходит в один ход) или придёт своим ходом со своим статусом.
 async function adoptEarlyStatus(
   start: TurnStart,
   current: Record<string, unknown>,
   ingressId: string,
 ): Promise<boolean> {
+  const queued = queuedStatusOf(current, start.sessionId);
   try {
     const adopted = start.setStatusIfImpl(
       start.chatKey,
       { status: "running", ingressId, sessionId: undefined },
-      { sessionId: start.sessionId, turnId: start.turnId, turnAt: start.now() },
+      {
+        sessionId: start.sessionId,
+        turnId: start.turnId,
+        turnAt: start.now(),
+        ...(queued.messageId === undefined ? {} : QUEUED_STATUS_CLEARED),
+      },
     );
     if (!adopted) return false;
+    await dropWorkingStatus(
+      queued.messageId,
+      start.removeWorkingStatusImpl,
+      start.onWorkingStatusError,
+    );
     if (current.statusMessageId !== undefined)
       await enableStop(start, current.statusMessageId as number);
     return true;
@@ -533,14 +613,20 @@ async function adoptEarlyStatus(
 
 // Callback/HITL, proactive turns and messages queued behind a live turn do not get an
 // early status of their own. Preserve their status behavior with a generation CAS, while
-// a reset tombstone always wins over a late old turn. A queued message's sign becomes
-// this turn's status: its ingress and status time make the turn's latency.
+// a reset tombstone always wins over a late old turn (and takes the queued sign down: a
+// reset left no turn for it). The sign put up behind this session's turn becomes this
+// turn's status with its ingress and status time; any other sign is deleted after this
+// turn's own status is up.
 async function claimTurnStatus(
   start: TurnStart,
   current: ChatStatus,
 ): Promise<boolean> {
-  if (current?.resetAt !== undefined) return false;
-  const queued = queuedStatusOf(current);
+  if (current?.resetAt !== undefined) {
+    await dropQueuedStatus({ ...start, getStatusImpl: () => current });
+    return false;
+  }
+  const queued = queuedStatusOf(current, start.sessionId);
+  const sign = queued.own ? queued.messageId : undefined;
   let claimed;
   try {
     claimed = start.setStatusIfImpl(
@@ -551,7 +637,7 @@ async function claimTurnStatus(
         sessionId: start.sessionId,
         turnId: start.turnId,
         compacting: null,
-        statusMessageId: queued.messageId ?? null,
+        statusMessageId: sign ?? null,
         turnAt: start.now(),
         latencyLogged: null,
         ...queued.fields,
@@ -562,14 +648,26 @@ async function claimTurnStatus(
     return false;
   }
   if (!claimed) return false;
-  if (queued.messageId !== undefined) await enableStop(start, queued.messageId);
-  else if (start.sendWorkingStatusImpl !== undefined)
-    await sendTurnStatus(
-      start,
-      start.sendWorkingStatusImpl,
-      "ingressAt" in queued.fields,
-    );
+  await showTurnStatus(start, queued);
   return true;
+}
+
+// Статус взятого хода: свой знак очереди с дорисованной кнопкой или свежий «Работаю…», и
+// только потом снять чужой знак — под сообщением ни на миг не пусто.
+async function showTurnStatus(
+  start: TurnStart,
+  queued: ReturnType<typeof queuedStatusOf>,
+): Promise<void> {
+  const sign = queued.own ? queued.messageId : undefined;
+  if (sign !== undefined) await enableStop(start, sign);
+  else if (start.sendWorkingStatusImpl !== undefined)
+    await sendTurnStatus(start, start.sendWorkingStatusImpl, queued.own);
+  if (!queued.own)
+    await dropWorkingStatus(
+      queued.messageId,
+      start.removeWorkingStatusImpl,
+      start.onWorkingStatusError,
+    );
 }
 
 async function sendTurnStatus(
@@ -598,7 +696,15 @@ async function sendTurnStatus(
     );
 }
 
-export async function abandonTelegramEarlyStatus({
+// Сообщение бросил inbound pipeline: снять его индикатор — ранний статус свободного чата
+// или знак очереди за живым ходом.
+export async function abandonTelegramEarlyStatus(
+  options: AbandonTelegramEarlyStatusOptions,
+): Promise<boolean> {
+  return (await dropQueuedStatus(options)) || abandonOwnEarlyStatus(options);
+}
+
+async function abandonOwnEarlyStatus({
   chatKey,
   ingressId,
   getStatusImpl,
