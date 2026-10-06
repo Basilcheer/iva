@@ -42,6 +42,9 @@ Walk everything the owner has connected, with your own tools, read only:
   how many more there are.
 - After it, one message per item that needs an action from the owner (an answer, a
   decision, a payment), each with its next step and buttons (see `rich-replies`).
+  Such a message ends with an empty line and one question line the buttons
+  answer, naming the person or the thing: «Оплатить счёт Билайна сегодня?»,
+  «Взять ответ Максиму в задачи?». Then an empty line and the buttons.
   Items without an action stay in the overview.
 - In a scheduled Brief turn separate the messages with a line `<!-- iva:next -->`.
   In a chat turn (`/digest`, a question) the answer is one message, no separators.

@@ -30,7 +30,7 @@ Use them when they carry meaning the reader would otherwise have to dig out:
 | Picture or several by public URL        | image line, `<tg-collage>`, `<tg-slideshow>` | local file paths (use `rich-post`) |
 | Place                                   | `<tg-map>`                                   | a map for a city name              |
 | A moment in the reader's time zone      | `<tg-time>`                                  | for "tomorrow" in prose            |
-| Next step, choice, link, copyable value | **buttons** (below)                          | buttons on every reply             |
+| Next step, choice, link, copyable value | **buttons** under a question (below)         | buttons on every reply             |
 
 Short conversational answers stay plain text. Rich formatting is for structure,
 not decoration: one heading level per answer, one table per comparison, one row
@@ -85,29 +85,45 @@ needs an `https://` URL the Telegram server can fetch; markdown is not parsed
 inside block HTML tags except `<details>`, `<tg-collage>`, `<tg-slideshow>`.
 Escape `*`, `_`, `#`, `|`, `<` in user data you quote (file names, keys, paths).
 
-## Buttons — a full-width row, with the explanation right under it
+## Buttons — always under a question, in full-width rows
 
-Put every button in its own `<tg-button-row>` block and write what it does on
-the next line. Do not place a button inside a sentence (`RichTextButton`): Android
-clients of summer 2026 draw the label outside the pill. Several equivalent
-one-word choices (yes/no) share one row.
+Buttons always stand under a question line. The text before them ends with an
+empty line and ONE line with a concrete question the buttons answer, and that
+line names what it is about: «Поставить сторож выкладки deploy-check?», «Взять
+ответ Максиму в задачи?», «Напомнить про Ивана позже или ты в курсе?». Nobody
+reads a long message to its end to learn what «Поставить» or «Не надо» refer to:
+the question line is all the reader needs to tap. Then an empty line and the
+buttons.
+
+Put every button in its own `<tg-button-row>` block; when a label does not say by
+itself what happens, write that on the next line. Do not place a button inside a
+sentence (`RichTextButton`): Android clients of summer 2026 draw the label
+outside the pill. Several equivalent one-word choices (yes/no) share one row.
 
 ```
-Напоминание на 14:30 поставил.
+Напоминание на 14:30 поставила.
+
+Отложить его на час или отменить?
 
 <tg-button-row><tg-button type="callback_data" data="Отложи на час">На час</tg-button></tg-button-row>
 Напомню в 15:30.
 
 <tg-button-row><tg-button type="callback_data" style="danger" data="Отмени напоминание">Отменить</tg-button></tg-button-row>
 Сниму его.
+```
+
+```
+Открыть инструкцию к обзору дня или скопировать команду входа на сервер?
 
 <tg-button-row><tg-button type="url" url="https://iva-agent.com/docs">Документация</tg-button></tg-button-row>
-Как настроить обзор дня.
 
 <tg-button-row><tg-button type="copy_text" text="ssh c1">Скопировать</tg-button></tg-button-row>
-Команда для входа на сервер.
+```
 
-<tg-button-row><tg-button type="callback_data" data="Да">Да</tg-button><tg-button type="callback_data" data="Нет">Нет</tg-button></tg-button-row>
+```
+Перенести встречу с Анной на пятницу?
+
+<tg-button-row><tg-button type="callback_data" data="Да, перенеси на пятницу">Да</tg-button><tg-button type="callback_data" data="Нет, оставь">Нет</tg-button></tg-button-row>
 ```
 
 Button types:

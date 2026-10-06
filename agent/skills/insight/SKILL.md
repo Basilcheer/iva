@@ -78,7 +78,11 @@ One message in the owner's language, no `<!-- iva:next -->`:
 - What the draft does and what you checked: the command and what it printed.
 - What it will need: a key, a service, a dependency, MCP (then installing takes
   a second tap).
-- Two buttons in one row, labels and `data` exactly as the prompt gives them
+- An empty line and one question line that names the plugin in the owner's
+  words and by its name: «Поставить сторож выкладки deploy-check?». The
+  buttons answer it; without it «Поставить» and «Не надо» under a long message
+  say nothing.
+- An empty line and two buttons in one row, labels and `data` exactly as the prompt gives them
   (64 bytes at most); `{install}` and `{not now}` below are the prompt's words:
   `<tg-button-row><tg-button type="callback_data" data="{install} <name>">{install}</tg-button><tg-button type="callback_data" data="{not now} <name>">{not now}</tg-button></tg-button-row>`
 
