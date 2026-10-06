@@ -29,8 +29,9 @@ UTC while the **day file** is named after the installation timezone
 that belongs to the previous UTC day. That is deliberate — the journal splits days the way
 the vault does.
 
-A line is never longer than 16 KB **in UTF-8 bytes**. An event that does not fit loses its
-content and is marked `data.traceTrimmed: true`; names, timings and sizes always survive.
+A line is never longer than 16 KB **in UTF-8 bytes**. An event that does not fit is rebuilt
+with every content field at 2000 characters; only if that still does not fit does it lose its
+content (`data.traceTrimmed: true`). Names, timings and sizes always survive.
 
 ## The three key spaces of `turn`
 
@@ -49,8 +50,9 @@ content and is marked `data.traceTrimmed: true`; names, timings and sizes always
 **How a reader stitches one turn**
 
 - _Chat turn:_ take `turn.bound`, collect everything whose `turn` equals its
-  `data.updateKey` (Bridge, inbound, inbound gate) plus everything whose `turn` equals its
-  `turn` (Eve events, Outbox, Stop), then sort by `ts`.
+  `data.updateKey` (Bridge, inbound, inbound gate) plus everything whose `session` **and**
+  `turn` equal its own (Eve events, Outbox, Stop), then sort by `ts`; a line with `turn_N`
+  and no session joins the most recent turn with that `turn_N`.
 - _Night turn:_ group by `session` **and** `turn_N` together. One Eve session holds many
   turns — the nightly Rollup, for one, keeps its
   session alive across nights — so a session on its own would glue a fortnight of nights
@@ -61,39 +63,50 @@ content and is marked `data.traceTrimmed: true`; names, timings and sizes always
   `source: "unknown"` while `gate.outbound` and `outbox.*` carry `rollup`, so grouping by
   source would cut one turn in two.
 
+**Naming one turn.** `<session>/<turn>`, e.g. `wrun_01M…/turn_0`, is what `iva trace show`
+prints and accepts, what the Insight failure list gives and what `iva diagnose --turn` takes.
+A bare `turn_N` names the newest turn with that number.
+
 Callback updates (`⏹ Stop`, `/menu` buttons) get the key `tg:<chatId>:cb:<callbackId>`,
 and **only the Bridge produces it**: callbacks never reach `runTelegramInbound`, so those
 `bridge.*` lines stay orphans with no `turn.bound` and no `inbound.*`.
 
 ## Event catalogue
 
-| `kind`.`name`                                                     | `data`                                                                                                                            |
-| ----------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `bridge.admitted` / `bridge.dropped`                              | `updateId`, `chatId`, `messageId`, `kind` (`message`/`callback`), `decision` (`owned`/`terminal-drop`/`unownable`/`write-failed`) |
-| `bridge.delivered` / `bridge.rejected`                            | the same fields plus `accepted` (`true`/`false`/`"handled"`), `ms`                                                                |
-| `inbound.received`                                                | `chatId`, `chatType`, `messageId`, `userId`, `allowlisted`; content: `text`                                                       |
-| `inbound.accepted` / `inbound.dropped`                            | `chatId`, `chatKey`, `parts`, `partChars[]`; content: `context[]`                                                                 |
-| `gate.inbound` / `gate.web`                                       | `surface`, `blocked`, `reason`, `flags[]`, `truncatedChars`, `chars`                                                              |
-| `turn.bound`                                                      | `chatKey`, `updateKey`                                                                                                            |
-| `turn.retired`                                                    | `replayMs`                                                                                                                        |
-| `context.parts`                                                   | `core`, `persona`, `moc`, `daily` — memory file sizes in bytes, `unit`, `approximate`                                             |
-| `eve.turn.started` / `turn.completed` / `turn.cancelled`          | `sequence`                                                                                                                        |
-| `eve.turn.failed` / `eve.step.failed`                             | `sequence`, `stepIndex`, `code`; content: `message`, `details`                                                                    |
-| `eve.step.started`                                                | `sequence`, `stepIndex`                                                                                                           |
-| `eve.step.completed`                                              | `sequence`, `stepIndex`, `finishReason`, `usage {in,out,cacheRead,cacheWrite,costUsd?}`                                           |
-| `eve.actions.requested`                                           | `sequence`, `stepIndex`, `actions[{kind,callId,toolName\|name}]`; content: `args[]`, index-aligned with `actions`                 |
-| `eve.action.result`                                               | `sequence`, `stepIndex`, `status`, `callId`, `toolName`, `isError`, `errorCode?`; content: `result`, `error`                      |
-| `eve.message.completed`                                           | `sequence`, `stepIndex`, `finishReason`; content: `message`                                                                       |
-| `eve.message.received`                                            | `sequence`, `parts`; content: `message`                                                                                           |
-| `eve.reasoning.completed`                                         | `sequence`, `stepIndex`; content: `reasoning`                                                                                     |
-| `eve.subagent.started` / `subagent.completed` / `subagent.called` | `callId`, `subagentName`, `name`, `childSessionId`; content: `output`                                                             |
-| Eve events inside a subagent                                      | the same fields plus `subagent`, `parentCallId`                                                                                   |
-| `gate.outbound`                                                   | `clean`, `findings[]` (`type:name`, no secret preview), `chars`; content: `text` — already **after** redaction                    |
-| `outbox.delivered` / `outbox.failed`                              | `ok`, `delivered`, `fellBack`, `error`, `chars`, `ms`                                                                             |
-| `stop.requested` / `stop.idle` / `stop.failed`                    | `chatKey`, `outcome`                                                                                                              |
+| `kind`.`name`                                                     | `data`                                                                                                                                                                                                    |
+| ----------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `bridge.admitted` / `bridge.dropped`                              | `updateId`, `chatId`, `messageId`, `kind` (`message`/`callback`), `decision` (`owned`/`terminal-drop`/`unownable`/`write-failed`)                                                                         |
+| `bridge.delivered` / `bridge.rejected`                            | the same fields plus `accepted` (`true`/`false`/`"handled"`), `ms`                                                                                                                                        |
+| `inbound.received`                                                | `chatId`, `chatType`, `messageId`, `userId`, `allowlisted`; content: `text`                                                                                                                               |
+| `inbound.accepted` / `inbound.dropped`                            | `chatId`, `chatKey`, `parts`, `partChars[]`; content: `context[]`                                                                                                                                         |
+| `gate.inbound` / `gate.web`                                       | `surface`, `blocked`, `reason`, `flags[]`, `truncatedChars`, `chars`                                                                                                                                      |
+| `turn.bound`                                                      | `chatKey`, `updateKey`                                                                                                                                                                                    |
+| `turn.retired`                                                    | `replayMs`                                                                                                                                                                                                |
+| `context.parts`                                                   | `core`, `persona`, `moc`, `daily` — memory file sizes in bytes, `unit`, `approximate`                                                                                                                     |
+| `eve.turn.started` / `turn.completed` / `turn.cancelled`          | `sequence`                                                                                                                                                                                                |
+| `eve.turn.failed` / `eve.step.failed`                             | `sequence`, `stepIndex`, `code`; content: `message`, `details`                                                                                                                                            |
+| `eve.step.started`                                                | `sequence`, `stepIndex`                                                                                                                                                                                   |
+| `eve.step.completed`                                              | `sequence`, `stepIndex`, `finishReason`, `usage {in,out,cacheRead,cacheWrite,costUsd?}`                                                                                                                   |
+| `eve.actions.requested`                                           | `sequence`, `stepIndex`, `actions[{kind,callId,toolName\|name}]`; content: `args[]`, index-aligned with `actions`                                                                                         |
+| `eve.action.result`                                               | `sequence`, `stepIndex`, `status`, `callId`, `toolName`, `isError`, `errorCode?`, `exitCode?`, `failure?`, `outChars?`; content: `result` (one JSON string), `error` (only when it differs from `result`) |
+| `eve.message.completed`                                           | `sequence`, `stepIndex`, `finishReason`; content: `message`                                                                                                                                               |
+| `eve.message.received`                                            | `sequence`, `parts`; content: `message`                                                                                                                                                                   |
+| `eve.reasoning.completed`                                         | `sequence`, `stepIndex`; content: `reasoning`                                                                                                                                                             |
+| `eve.subagent.started` / `subagent.completed` / `subagent.called` | `callId`, `subagentName`, `name`, `childSessionId`; content: `output`                                                                                                                                     |
+| Eve events inside a subagent                                      | the same fields plus `subagent`, `parentCallId`                                                                                                                                                           |
+| `gate.outbound`                                                   | `clean`, `findings[]` (`type:name`, no secret preview), `chars`; content: `text` — already **after** redaction                                                                                            |
+| `outbox.delivered` / `outbox.failed`                              | `ok`, `delivered`, `fellBack`, `error`, `chars`, `ms`                                                                                                                                                     |
+| `stop.requested` / `stop.idle` / `stop.failed`                    | `chatKey`, `outcome`                                                                                                                                                                                      |
 
 Any Eve event may also carry `sessionId` in `data` (whenever its payload has one) and
 `input` in content (with `inputChars`); the hook copies both by name.
+
+**`failure`** marks a failed tool call with its class, never with text: `isError` (eve or the
+tool flagged the answer as an error), `status:failed` (the answer named its own `code` and
+`message`; `errorCode` holds the code), `ok:false`, `error`, `timeout`, `exit <code>` (bash,
+only with a non-empty stderr). `rejected` and a cancelled call are not failures. A failure
+hidden by a pipe or `2>&1` has no `failure`. Lines written before this change carry `result`
+as an object and no `failure`.
 
 **`gate.outbound` can appear without a matching `outbox.*`.** Every service reply the
 channel sends (a working-status message, an error explanation, a media notice) passes the
@@ -104,7 +117,11 @@ Writer markers in `data`: `traceTrimmed` — the event went without content;
 `traceUnreadable` — the payload could not be serialized. Markers inside values:
 `…[truncated]` — a string or list was cut, `…[deep]` — nesting deeper than four levels,
 `…[keys]` — how many fields the truncated object had, `…[unreadable]` — a field could not
-be read.
+be read. A bash result keeps the **end** of `stdout` and `stderr`: `…[truncated]` at the start
+of the field means the head was cut. Other answers put `ok`, `error`, `message`, `isError`,
+`code` and `exitCode` first, so a cut end keeps them. `outChars` is the size of the answer the
+model got. An event rebuilt at 2000 characters (below) cuts every field from the end, a bash
+result too.
 
 ### What is not in the journal
 
@@ -129,7 +146,7 @@ be read.
 ```
 
 Turned off it keeps names, timings and sizes — the turn stays fully visible, only without
-text. Every content field is capped at 2000 characters with the `…[truncated]` marker.
+text. Every content field is capped at 4096 characters with the `…[truncated]` marker.
 
 Sizes are written for **string** content fields only, as `<key>Chars` (`text` →
 `textChars`). Array content — `args[]`, `context[]` — gets no size; their counts already
@@ -137,7 +154,7 @@ live in `data` as `actions[]` and `parts`.
 
 ## Retention
 
-14 days: today's file and the 13 before it. Pruning goes by the **date in the file name**,
+30 days: today's file and the 29 before it. Pruning goes by the **date in the file name**,
 never by mtime (ADR-0002: file time lies after a copy or a restore), and runs on the first
 journal write of a process and again whenever the day file changes. Files whose names do
 not match `YYYY-MM-DD.jsonl` are left alone.

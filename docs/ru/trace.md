@@ -27,8 +27,9 @@
 первые строки файла несут метку предыдущих UTC-суток. Так и задумано - журнал режет дни
 так же, как их режет vault.
 
-Строка не длиннее 16 КБ **в байтах UTF-8**. Событие, которое не влезло, теряет содержимое
-и метится `data.traceTrimmed: true`; имена, тайминги и размеры остаются всегда.
+Строка не длиннее 16 КБ **в байтах UTF-8**. Событие, которое не влезло, пересобирается со
+всеми полями содержимого по 2000 знаков; только если не влезло и так, оно теряет содержимое
+(`data.traceTrimmed: true`). Имена, тайминги и размеры остаются всегда.
 
 ## Три пространства ключа `turn`
 
@@ -46,8 +47,9 @@
 **Как читатель собирает один ход**
 
 - _Ход из чата:_ взять `turn.bound`, собрать всё, у чего `turn` равен его
-  `data.updateKey` (мост, inbound, гейт входа), плюс всё, у чего `turn` равен его `turn`
-  (события eve, Outbox, Стоп), и отсортировать по `ts`.
+  `data.updateKey` (мост, inbound, гейт входа), плюс всё, у чего `session` **и** `turn`
+  равны его собственным (события eve, Outbox, Стоп), и отсортировать по `ts`; строка с
+  `turn_N` без сессии примыкает к последнему ходу с этим `turn_N`.
 - _Ночной ход:_ группировать по паре `session` **и** `turn_N`. В одной сессии eve ходов
   много - ночная свёртка, например, держит свою сессию
   живой через ночи, - поэтому одна `session` склеила бы две недели ночей в один ход.
@@ -57,38 +59,49 @@
   `source: "unknown"`, а `gate.outbound` и `outbox.*` - `rollup`, поэтому группировка по
   источнику разрезала бы один ход на два.
 
+**Имя одного хода.** `<session>/<turn>`, например `wrun_01M…/turn_0`, - это то, что печатает
+и принимает `iva trace show`, что даёт список сбоев Insight и что берёт `iva diagnose --turn`.
+Голый `turn_N` называет новейший ход с этим номером.
+
 Колбэки (`⏹ Стоп`, кнопки `/menu`) получают ключ `tg:<chatId>:cb:<callbackId>`, и
 **делает его только мост**: до `runTelegramInbound` колбэк не доходит, поэтому такие
 строки `bridge.*` остаются сиротами - ни `turn.bound`, ни `inbound.*` у них не будет.
 
 ## Каталог событий
 
-| `kind`.`name`                                                     | `data`                                                                                                                            |
-| ----------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `bridge.admitted` / `bridge.dropped`                              | `updateId`, `chatId`, `messageId`, `kind` (`message`/`callback`), `decision` (`owned`/`terminal-drop`/`unownable`/`write-failed`) |
-| `bridge.delivered` / `bridge.rejected`                            | те же поля плюс `accepted` (`true`/`false`/`"handled"`), `ms`                                                                     |
-| `inbound.received`                                                | `chatId`, `chatType`, `messageId`, `userId`, `allowlisted`; содержимое: `text`                                                    |
-| `inbound.accepted` / `inbound.dropped`                            | `chatId`, `chatKey`, `parts`, `partChars[]`; содержимое: `context[]`                                                              |
-| `gate.inbound` / `gate.web`                                       | `surface`, `blocked`, `reason`, `flags[]`, `truncatedChars`, `chars`                                                              |
-| `turn.bound`                                                      | `chatKey`, `updateKey`                                                                                                            |
-| `context.parts`                                                   | `core`, `persona`, `moc`, `daily` - размеры файлов памяти в байтах, `unit`, `approximate`                                         |
-| `eve.turn.started` / `turn.completed` / `turn.cancelled`          | `sequence`                                                                                                                        |
-| `eve.turn.failed` / `eve.step.failed`                             | `sequence`, `stepIndex`, `code`; содержимое: `message`, `details`                                                                 |
-| `eve.step.started`                                                | `sequence`, `stepIndex`                                                                                                           |
-| `eve.step.completed`                                              | `sequence`, `stepIndex`, `finishReason`, `usage {in,out,cacheRead,cacheWrite,costUsd?}`                                           |
-| `eve.actions.requested`                                           | `sequence`, `stepIndex`, `actions[{kind,callId,toolName\|name}]`; содержимое: `args[]` позиция в позицию с `actions`              |
-| `eve.action.result`                                               | `sequence`, `stepIndex`, `status`, `callId`, `toolName`, `isError`, `errorCode?`; содержимое: `result`, `error`                   |
-| `eve.message.completed`                                           | `sequence`, `stepIndex`, `finishReason`; содержимое: `message`                                                                    |
-| `eve.message.received`                                            | `sequence`, `parts`; содержимое: `message`                                                                                        |
-| `eve.reasoning.completed`                                         | `sequence`, `stepIndex`; содержимое: `reasoning`                                                                                  |
-| `eve.subagent.started` / `subagent.completed` / `subagent.called` | `callId`, `subagentName`, `name`, `childSessionId`; содержимое: `output`                                                          |
-| события eve внутри субагента                                      | те же поля плюс `subagent`, `parentCallId`                                                                                        |
-| `gate.outbound`                                                   | `clean`, `findings[]` (`тип:имя`, без превью секрета), `chars`; содержимое: `text` - уже **после** редактуры                      |
-| `outbox.delivered` / `outbox.failed`                              | `ok`, `delivered`, `fellBack`, `error`, `chars`, `ms`                                                                             |
-| `stop.requested` / `stop.idle` / `stop.failed`                    | `chatKey`, `outcome`                                                                                                              |
+| `kind`.`name`                                                     | `data`                                                                                                                                                                                                        |
+| ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `bridge.admitted` / `bridge.dropped`                              | `updateId`, `chatId`, `messageId`, `kind` (`message`/`callback`), `decision` (`owned`/`terminal-drop`/`unownable`/`write-failed`)                                                                             |
+| `bridge.delivered` / `bridge.rejected`                            | те же поля плюс `accepted` (`true`/`false`/`"handled"`), `ms`                                                                                                                                                 |
+| `inbound.received`                                                | `chatId`, `chatType`, `messageId`, `userId`, `allowlisted`; содержимое: `text`                                                                                                                                |
+| `inbound.accepted` / `inbound.dropped`                            | `chatId`, `chatKey`, `parts`, `partChars[]`; содержимое: `context[]`                                                                                                                                          |
+| `gate.inbound` / `gate.web`                                       | `surface`, `blocked`, `reason`, `flags[]`, `truncatedChars`, `chars`                                                                                                                                          |
+| `turn.bound`                                                      | `chatKey`, `updateKey`                                                                                                                                                                                        |
+| `context.parts`                                                   | `core`, `persona`, `moc`, `daily` - размеры файлов памяти в байтах, `unit`, `approximate`                                                                                                                     |
+| `eve.turn.started` / `turn.completed` / `turn.cancelled`          | `sequence`                                                                                                                                                                                                    |
+| `eve.turn.failed` / `eve.step.failed`                             | `sequence`, `stepIndex`, `code`; содержимое: `message`, `details`                                                                                                                                             |
+| `eve.step.started`                                                | `sequence`, `stepIndex`                                                                                                                                                                                       |
+| `eve.step.completed`                                              | `sequence`, `stepIndex`, `finishReason`, `usage {in,out,cacheRead,cacheWrite,costUsd?}`                                                                                                                       |
+| `eve.actions.requested`                                           | `sequence`, `stepIndex`, `actions[{kind,callId,toolName\|name}]`; содержимое: `args[]` позиция в позицию с `actions`                                                                                          |
+| `eve.action.result`                                               | `sequence`, `stepIndex`, `status`, `callId`, `toolName`, `isError`, `errorCode?`, `exitCode?`, `failure?`, `outChars?`; содержимое: `result` (одна строка JSON), `error` (только если отличается от `result`) |
+| `eve.message.completed`                                           | `sequence`, `stepIndex`, `finishReason`; содержимое: `message`                                                                                                                                                |
+| `eve.message.received`                                            | `sequence`, `parts`; содержимое: `message`                                                                                                                                                                    |
+| `eve.reasoning.completed`                                         | `sequence`, `stepIndex`; содержимое: `reasoning`                                                                                                                                                              |
+| `eve.subagent.started` / `subagent.completed` / `subagent.called` | `callId`, `subagentName`, `name`, `childSessionId`; содержимое: `output`                                                                                                                                      |
+| события eve внутри субагента                                      | те же поля плюс `subagent`, `parentCallId`                                                                                                                                                                    |
+| `gate.outbound`                                                   | `clean`, `findings[]` (`тип:имя`, без превью секрета), `chars`; содержимое: `text` - уже **после** редактуры                                                                                                  |
+| `outbox.delivered` / `outbox.failed`                              | `ok`, `delivered`, `fellBack`, `error`, `chars`, `ms`                                                                                                                                                         |
+| `stop.requested` / `stop.idle` / `stop.failed`                    | `chatKey`, `outcome`                                                                                                                                                                                          |
 
 У любого события eve в `data` может оказаться `sessionId` (если он есть в payload), а в
 содержимом - `input` (и `inputChars`): хук копирует оба по имени.
+
+**`failure`** помечает упавший вызов инструмента классом, никогда не текстом: `isError` (eve
+или инструмент пометил ответ ошибкой), `status:failed` (ответ назвал свои `code` и `message`;
+код лежит в `errorCode`), `ok:false`, `error`, `timeout`, `exit <код>` (bash, только с непустым
+stderr). `rejected` и отменённый вызов - не сбой. Сбой, спрятанный конвейером или `2>&1`,
+`failure` не получает. Строки, записанные до этой правки, несут `result` объектом и без
+`failure`.
 
 **`gate.outbound` бывает без парного `outbox.*`.** Служебные реплики канала (статус
 «Работаю...», объяснение сбоя, пометка про медиа) проходят тот же outbound-гейт, но мимо
@@ -98,7 +111,12 @@
 Пометки писателя в `data`: `traceTrimmed` - событие поехало без содержимого;
 `traceUnreadable` - payload не сериализуется. Пометки в значениях: `…[truncated]` - строка
 или список обрезаны, `…[deep]` - вложенность глубже четырёх уровней, `…[keys]` - сколько
-полей было у обрезанного объекта, `…[unreadable]` - поле не прочиталось.
+полей было у обрезанного объекта, `…[unreadable]` - поле не прочиталось. Результат bash
+хранит **конец** `stdout` и `stderr`: `…[truncated]` в начале поля значит, что срезано
+начало. Остальные ответы ставят `ok`, `error`, `message`, `isError`, `code` и `exitCode`
+первыми, поэтому обрезка с конца их не теряет. `outChars` - размер ответа, который получила
+модель. Событие, пересобранное по 2000 знаков (ниже), режет каждое поле с конца, и
+результат bash тоже.
 
 ### Чего в журнале нет
 
@@ -113,7 +131,7 @@
   живёт 60 секунд: если разбор медиа одного входящего занял больше минуты, следующий за
   ним вердикт гейта в журнал не попадёт.
 
-## Содержимое: тумблер и потолки
+## Содержимое: тумблер и обрезка
 
 `data/settings.json`, поле `captureContent` (по умолчанию включено):
 
@@ -122,7 +140,7 @@
 ```
 
 Выключенный тумблер оставляет имена, тайминги и размеры - ход виден целиком, только без
-текста. Каждое поле содержимого обрезано 2000 знаками с пометкой `…[truncated]`.
+текста. Каждое поле содержимого обрезано 4096 знаками с пометкой `…[truncated]`.
 
 Размеры пишутся только для **строковых** полей содержимого, как `<ключ>Chars` (`text` →
 `textChars`). У массивов - `args[]`, `context[]` - размера нет: их количество уже лежит в
@@ -130,7 +148,7 @@
 
 ## Хранение
 
-14 дней: сегодняшний файл и 13 предыдущих. Чистка идёт по **дате в имени файла**, никогда
+30 дней: сегодняшний файл и 29 предыдущих. Чистка идёт по **дате в имени файла**, никогда
 по mtime (ADR-0002: время файла врёт после копирования и восстановления), и запускается на
 первой записи журнала в процессе и потом на каждой смене файла дня. Файлы с именами не по
 шаблону `YYYY-MM-DD.jsonl` не трогаются.
