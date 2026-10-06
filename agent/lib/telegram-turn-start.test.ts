@@ -1302,3 +1302,70 @@ void test("Trace: старт хода снимает состав памяти, 
   assert.equal(data.unit, "bytes");
   assert.equal(data.approximate, true);
 });
+
+void test("a foreign turn whose own status failed to send takes the sign instead of deleting it", async () => {
+  const store = statusStore({
+    status: "idle",
+    generation: 3,
+    queuedIngressId: "ingress-Q",
+    queuedIngressAt: 5_000,
+    queuedStatusAt: 5_010,
+    queuedStatusMessageId: 61,
+    queuedSessionId: "session-reminder",
+  });
+  const removed: number[] = [];
+  const stopEnabled: number[] = [];
+
+  assert.equal(
+    await publishTelegramTurnStarted({
+      chatKey: "1:",
+      sessionId: "session-1",
+      turnId: "turn-callback",
+      getStatusImpl: store.get,
+      setStatusIfImpl: store.cas,
+      sendWorkingStatusImpl: () => Promise.reject(new Error("429")),
+      enableWorkingStatusStopImpl: (messageId) => {
+        stopEnabled.push(messageId);
+        return Promise.resolve();
+      },
+      removeWorkingStatusImpl: (messageId) => {
+        removed.push(messageId);
+        return Promise.resolve();
+      },
+      onWorkingStatusError: () => {},
+    }),
+    true,
+  );
+
+  // Под сообщением не пусто: знак стал статусом хода, но время чужого сообщения не его.
+  assert.deepEqual(removed, []);
+  assert.equal(store.get().statusMessageId, 61);
+  assert.deepEqual(stopEnabled, [61]);
+  assert.equal(store.get().ingressAt, undefined);
+});
+
+void test("a reset-refused turn whose sign cleanup throws reports the error instead of throwing", async () => {
+  const store = statusStore({
+    status: "idle",
+    resetAt: 4_000,
+    queuedIngressId: "ingress-Q",
+    queuedStatusMessageId: 61,
+  });
+  const errors: string[] = [];
+
+  assert.equal(
+    await publishTelegramTurnStarted({
+      chatKey: "1:",
+      sessionId: "session-1",
+      turnId: "turn-late",
+      getStatusImpl: store.get,
+      setStatusIfImpl: () => {
+        throw new Error("run-status lock timeout");
+      },
+      onWorkingStatusError: (error) =>
+        errors.push(error instanceof Error ? error.message : String(error)),
+    }),
+    false,
+  );
+  assert.deepEqual(errors, ["run-status lock timeout"]);
+});

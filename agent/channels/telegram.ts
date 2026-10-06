@@ -81,6 +81,7 @@ import {
 import {
   abandonTelegramEarlyStatus,
   chatTakeOverPatch,
+  detachQueuedSignTime,
   dropQueuedStatus,
   emitTelegramTurnLatency,
   markTelegramFirstOutput,
@@ -310,7 +311,21 @@ const telegram = telegramChannel({
           continuation: channel.continuation,
         });
     },
+    // Следующий ход продолжит ответ на вопрос, а не сообщение со знаком очереди: время
+    // прихода того сообщения ему не принадлежит (agent/lib/telegram-turn-start.ts).
     async "input.resolved"(data, channel) {
+      try {
+        detachQueuedSignTime({
+          chatKey: chatKeyOf(
+            channel.telegram.chatId,
+            channel.telegram.messageThreadId,
+          ),
+          getStatusImpl: getChatStatus,
+          setStatusIfImpl: setChatStatusIf,
+        });
+      } catch (error) {
+        console.error("[telegram] знак очереди не отвязан от ответа:", error);
+      }
       await settleTelegramQuestions(
         data.resolutions,
         channel.state,
@@ -493,7 +508,8 @@ const telegram = telegramChannel({
     },
     // У terminal-сбоя eve следом за turn.failed шлёт session.failed без ctx.
     // Повторно прибираем run-status по sessionId из payload и не дублируем уведомление.
-    // Сессия умерла: её буфер входа не начнёт хода, и знак очереди снимается здесь.
+    // Сессия умерла: её буфер входа не начнёт хода, и её знак очереди снимается здесь.
+    // Знак, вставший за ходом другой сессии, ждёт своего хода.
     async "session.failed"(data, channel) {
       const tg = channel.telegram;
       if (tg.chatId) {
@@ -501,6 +517,7 @@ const telegram = telegramChannel({
           await finishTelegramStatus(channel, data.sessionId, "failed");
           await dropQueuedStatus({
             chatKey: chatKeyOf(tg.chatId, tg.messageThreadId),
+            sessionId: data.sessionId,
             getStatusImpl: getChatStatus,
             setStatusIfImpl: setChatStatusIf,
             removeWorkingStatusImpl: (messageId) =>

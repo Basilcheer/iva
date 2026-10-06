@@ -386,15 +386,20 @@ async function sendQueuedStatus({
 const sessionIdOf = (current: ChatStatus): string | null =>
   typeof current?.sessionId === "string" ? current.sessionId : null;
 
+// Фильтр не задан — подходит любое значение.
+const matches = (value: unknown, wanted: string | undefined): boolean =>
+  wanted === undefined || value === wanted;
+
 const finiteNumber = (value: unknown): number | undefined =>
   typeof value === "number" && Number.isFinite(value) ? value : undefined;
 
 /**
  * Знак очереди глазами начавшегося хода. Буфер входа eve уходит в один ход, поэтому
  * сообщение знака либо в этом ходе, либо уже не придёт: ход знак забирает всегда. Ход
- * сессии, за которой знак встал, берёт его себе статусом вместе со временем прихода и
- * знака (так считается ingressToStatusMs); любой другой ход знак удаляет и времени
- * чужого сообщения не наследует.
+ * сессии, за которой знак встал, берёт его себе статусом; время прихода и знака (так
+ * считается ingressToStatusMs) — только если знак ещё помнит его: ответ на вопрос модели
+ * время стирает (detachQueuedSignTime), его ход — не ход сообщения владельца. Любой
+ * другой ход знак удаляет и времени чужого сообщения не наследует.
  */
 function queuedStatusOf(
   current: ChatStatus,
@@ -403,28 +408,61 @@ function queuedStatusOf(
   readonly fields: Record<string, unknown>;
   readonly messageId?: number;
   readonly own: boolean;
+  readonly timed: boolean;
 } {
-  if (current?.queuedIngressId === undefined) return { fields: {}, own: false };
+  if (current?.queuedIngressId === undefined)
+    return { fields: {}, own: false, timed: false };
   const own = current.queuedSessionId === sessionId;
+  const ingressAt = own ? finiteNumber(current.queuedIngressAt) : undefined;
   return {
     fields: {
       ...QUEUED_STATUS_CLEARED,
-      ...(own
-        ? {
-            ingressAt: finiteNumber(current.queuedIngressAt) ?? null,
+      ...(ingressAt === undefined
+        ? {}
+        : {
+            ingressAt,
             statusAt: finiteNumber(current.queuedStatusAt) ?? null,
-          }
-        : {}),
+          }),
     },
     messageId: finiteNumber(current.queuedStatusMessageId),
     own,
+    timed: ingressAt !== undefined,
   };
+}
+
+/**
+ * Ответ на вопрос модели (input.resolved) продолжит ход раньше, чем начнётся ход
+ * сообщения со знаком. Этот ход заберёт знак статусом, но время прихода чужого сообщения
+ * ему не принадлежит: оно стирается из знака заранее.
+ */
+export function detachQueuedSignTime({
+  chatKey,
+  getStatusImpl,
+  setStatusIfImpl,
+}: Pick<
+  DropQueuedStatusOptions,
+  "chatKey" | "getStatusImpl" | "setStatusIfImpl"
+>): boolean {
+  const owner = getStatusImpl(chatKey)?.queuedIngressId;
+  return (
+    owner !== undefined &&
+    Boolean(
+      setStatusIfImpl(
+        chatKey,
+        { queuedIngressId: owner },
+        { queuedIngressAt: null, queuedStatusAt: null },
+        { touch: false },
+      ),
+    )
+  );
 }
 
 export interface DropQueuedStatusOptions {
   chatKey: string;
   /** Снять только знак этого сообщения; без него — любой. */
   ingressId?: string;
+  /** Снять только знак, вставший за ходом этой сессии. */
+  sessionId?: string;
   getStatusImpl: GetStatus;
   setStatusIfImpl: SetStatusIf;
   removeWorkingStatusImpl?: (messageId: number) => Promise<unknown>;
@@ -439,6 +477,7 @@ export interface DropQueuedStatusOptions {
 export async function dropQueuedStatus({
   chatKey,
   ingressId,
+  sessionId,
   getStatusImpl,
   setStatusIfImpl,
   removeWorkingStatusImpl,
@@ -446,7 +485,11 @@ export async function dropQueuedStatus({
 }: DropQueuedStatusOptions): Promise<boolean> {
   const current = getStatusImpl(chatKey);
   const owner = current?.queuedIngressId;
-  if (owner === undefined || (ingressId !== undefined && owner !== ingressId))
+  if (
+    owner === undefined ||
+    !matches(owner, ingressId) ||
+    !matches(current?.queuedSessionId, sessionId)
+  )
     return false;
   if (
     !setStatusIfImpl(
@@ -621,10 +664,7 @@ async function claimTurnStatus(
   start: TurnStart,
   current: ChatStatus,
 ): Promise<boolean> {
-  if (current?.resetAt !== undefined) {
-    await dropQueuedStatus({ ...start, getStatusImpl: () => current });
-    return false;
-  }
+  if (current?.resetAt !== undefined) return refuseResetTurn(start, current);
   const queued = queuedStatusOf(current, start.sessionId);
   const sign = queued.own ? queued.messageId : undefined;
   let claimed;
@@ -652,17 +692,40 @@ async function claimTurnStatus(
   return true;
 }
 
-// Статус взятого хода: свой знак очереди с дорисованной кнопкой или свежий «Работаю…», и
-// только потом снять чужой знак — под сообщением ни на миг не пусто.
+// Ход отвергнут меткой сброса: знак снимается, но сбой записи или Bot API — как у
+// соседнего CAS — только журналируется, обработчик turn.started не бросает.
+async function refuseResetTurn(
+  start: TurnStart,
+  current: Record<string, unknown>,
+): Promise<false> {
+  try {
+    await dropQueuedStatus({
+      chatKey: start.chatKey,
+      getStatusImpl: () => current,
+      setStatusIfImpl: start.setStatusIfImpl,
+      removeWorkingStatusImpl: start.removeWorkingStatusImpl,
+      onWorkingStatusError: start.onWorkingStatusError,
+    });
+  } catch (error) {
+    start.onWorkingStatusError(error);
+  }
+  return false;
+}
+
+// Статус взятого хода: свой знак очереди с дорисованной кнопкой или свежий «Работаю…».
+// Чужой знак снимается, только когда свежий статус ушёл; не ушёл (429, сеть) — ход берёт
+// чужой знак статусом без его времени, и под сообщением остаётся лоадер.
 async function showTurnStatus(
   start: TurnStart,
   queued: ReturnType<typeof queuedStatusOf>,
 ): Promise<void> {
-  const sign = queued.own ? queued.messageId : undefined;
-  if (sign !== undefined) await enableStop(start, sign);
-  else if (start.sendWorkingStatusImpl !== undefined)
-    await sendTurnStatus(start, start.sendWorkingStatusImpl, queued.own);
-  if (!queued.own)
+  if (queued.own && queued.messageId !== undefined)
+    return enableStop(start, queued.messageId);
+  const sent =
+    start.sendWorkingStatusImpl !== undefined &&
+    (await sendTurnStatus(start, start.sendWorkingStatusImpl, queued.timed));
+  if (queued.own) return;
+  if (sent || !(await adoptSign(start, queued.messageId)))
     await dropWorkingStatus(
       queued.messageId,
       start.removeWorkingStatusImpl,
@@ -670,19 +733,43 @@ async function showTurnStatus(
     );
 }
 
+// Знак очереди становится статусом хода: запись указывает на него, кнопка дорисована.
+async function adoptSign(
+  start: TurnStart,
+  messageId: number | undefined,
+): Promise<boolean> {
+  if (messageId === undefined) return false;
+  try {
+    if (
+      !start.setStatusIfImpl(
+        start.chatKey,
+        { status: "running", sessionId: start.sessionId, turnId: start.turnId },
+        { statusMessageId: messageId },
+      )
+    )
+      return false;
+  } catch (error) {
+    start.onWorkingStatusError(error);
+    return false;
+  }
+  await enableStop(start, messageId);
+  return true;
+}
+
+// true — сообщение статуса ушло в чат (привязалось оно к записи или ход уже кончился).
 async function sendTurnStatus(
   start: TurnStart,
   send: NonNullable<TurnStart["sendWorkingStatusImpl"]>,
   stampStatus: boolean,
-): Promise<void> {
+): Promise<boolean> {
   let statusMessageId;
   try {
     statusMessageId = await send({ canStop: true });
   } catch (error) {
     start.onWorkingStatusError(error);
-    return;
+    return false;
   }
-  if (statusMessageId === null || statusMessageId === undefined) return;
+  if (statusMessageId === null || statusMessageId === undefined) return false;
   const attached = start.setStatusIfImpl(
     start.chatKey,
     { status: "running", sessionId: start.sessionId, turnId: start.turnId },
@@ -694,6 +781,7 @@ async function sendTurnStatus(
       start.removeWorkingStatusImpl,
       start.onWorkingStatusError,
     );
+  return true;
 }
 
 // Сообщение бросил inbound pipeline: снять его индикатор — ранний статус свободного чата
