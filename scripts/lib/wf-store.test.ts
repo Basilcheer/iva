@@ -473,3 +473,41 @@ void test("a failed run-status write is logged while a damaged record stays sile
   assert.match(logged[0], /no space left on device/u);
   assert.equal(readFileSync(join(dir, "chat.json"), "utf8"), running);
 });
+
+void test("startup recovery keeps the queued sign of an interrupted compaction: the next turn deletes it", () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "wf-store-compacting-sign-"));
+  const dir = join(dataDir, "run-status.d");
+  const file = join(dir, "compacting.json");
+  mkdirSync(dir);
+  const sign = {
+    queuedIngressId: "ingress-Q",
+    queuedIngressAt: 1_000,
+    queuedStatusAt: 1_010,
+    queuedStatusMessageId: 61,
+    queuedSessionId: "session-compacting",
+  };
+  writeFileSync(
+    file,
+    JSON.stringify({
+      generation: 7,
+      status: "running",
+      updatedAt: Date.now(),
+      sessionId: "session-compacting",
+      compacting: true,
+      ...sign,
+    }),
+    { mode: 0o600 },
+  );
+
+  assert.equal(rewriteRunStatusesForUpdate(dataDir, true), 1);
+
+  const record = JSON.parse(readFileSync(file, "utf8")) as Record<
+    string,
+    unknown
+  >;
+  assert.equal(record.status, "idle");
+  assert.equal(record.sessionId, undefined);
+  assert.equal(record.compacting, undefined);
+  for (const [field, value] of Object.entries(sign))
+    assert.equal(record[field], value, field);
+});
