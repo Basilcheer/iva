@@ -36,7 +36,8 @@ Walk everything the owner has connected, with your own tools, read only:
 
 - Unfixed failures from the prompt are the first points of the overview, before
   anything else: what broke and the cause in one line each, and a «Починить»
-  button per failure (see the watch skill).
+  button per failure (see the watch skill), each under its own question line
+  «Починить <unit>?».
 - The first message is the overview: greeting in one line, the day in 5–7 points,
   one sentence with the focus of the day. Too many tasks — the important ones and
   how many more there are.
@@ -47,7 +48,8 @@ Walk everything the owner has connected, with your own tools, read only:
   «Взять ответ Максиму в задачи?». Then an empty line and the buttons.
   Items without an action stay in the overview.
 - In a scheduled Brief turn separate the messages with a line `<!-- iva:next -->`.
-  In a chat turn (`/digest`, a question) the answer is one message, no separators.
+  In a chat turn (`/digest`, a question) the answer is one message, no separators,
+  and no «Я в курсе» button in it: that button removes the whole message.
 - The morning Brief (slot 0) always has an answer. A later Brief may return exactly
   `QUIET` when nothing changed since the morning that is worth a message.
 

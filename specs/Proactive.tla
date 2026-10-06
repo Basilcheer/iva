@@ -84,9 +84,9 @@
 \*                    ещё и отметка сбоев, вне модели); отказ — строка в журнал
 \*   Post             только мутант ClaimFirst = FALSE: заявка и wakes после хода
 \*   IClaim           runProactiveTick после блока Brief (slot === null, stored !== null,
-\*                    config.enabled, не тихий час, пауза кончилась, dueBrief по insightTimes и
-\*                    insight.day) -> tick.ts:insight: учёт прошлого инсайта, заявка insight.day и
-\*                    запись до хода; не записалось — хода нет, выход 1
+\*                    config.enabled, не тихий час, dueBrief по insightTimes и insight.day)
+\*                    -> tick.ts:insight: заявка insight.day и запись до хода; не записалось —
+\*                    хода нет, выход 1
 \*   ITurn            tick.ts:insight: turnText + deliver (одно сообщение, source "insight") и
 \*                    вторая запись insight.draft (вне модели: под тем же замком, insight.day не
 \*                    меняет); провал хода или доставки — строка в журнал, выход 0; дальше

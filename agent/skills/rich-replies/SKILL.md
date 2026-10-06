@@ -95,10 +95,10 @@ reads a long message to its end to learn what «Поставить» or «Не �
 the question line is all the reader needs to tap. Then an empty line and the
 buttons.
 
-Put every button in its own `<tg-button-row>` block; when a label does not say by
-itself what happens, write that on the next line. Do not place a button inside a
-sentence (`RichTextButton`): Android clients of summer 2026 draw the label
-outside the pill. Several equivalent one-word choices (yes/no) share one row.
+Put every button in its own `<tg-button-row>` block and write what it does on
+the next line. Do not place a button inside a sentence (`RichTextButton`): Android
+clients of summer 2026 draw the label outside the pill. Several equivalent
+one-word choices (yes/no) share one row.
 
 ```
 Напоминание на 14:30 поставила.
@@ -116,8 +116,10 @@ outside the pill. Several equivalent one-word choices (yes/no) share one row.
 Открыть инструкцию к обзору дня или скопировать команду входа на сервер?
 
 <tg-button-row><tg-button type="url" url="https://iva-agent.com/docs">Документация</tg-button></tg-button-row>
+Как настроить обзор дня.
 
 <tg-button-row><tg-button type="copy_text" text="ssh c1">Скопировать</tg-button></tg-button-row>
+Команда для входа на сервер.
 ```
 
 ```
