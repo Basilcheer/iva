@@ -133,6 +133,7 @@
 \*   BeginClaim        compaction.requested claims the chat again for an open ask (R4)
 \*   ReapDropsSign     the reaper deletes the queued sign of the record it closes
 \*   RewriteKeepsSign  the restart rewrite of a compacting record keeps the queued* fields
+\*   ClaimKeepsSign    a compaction claim (chatTakeOverPatch) keeps the queued* fields
 \* Proposed repair (FALSE = the code):
 \*   BeginAnyIdle      R5: compaction.requested claims the chat for any compaction outside a
 \*                     turn, also when the process memory was lost by a restart
@@ -146,7 +147,7 @@ CONSTANTS
   Bypass, LatePost, LongCompaction,
   AwaitPost, ReleaseOnlyCompacting, ClaimChat, OpenGuard, SilentReap, TurnClears, DueOnce,
   DueChecksOff, ParkRelease, Reaper, QueueReplies, DropOnFail, DropEndsAsk, Reclaim, BeginClaim, BeginAnyIdle,
-  ReapDropsSign, RewriteKeepsSign
+  ReapDropsSign, RewriteKeepsSign, ClaimKeepsSign
 
 ASSUME Policy \in {"queue", "steer"}
 
@@ -328,7 +329,10 @@ BeginHook ==
   /\ UNCHANGED <<bridgeV, postV, lossV>>
   /\ UNCHANGED <<asksSince, badStack, badStackRec, badAskOff, idleDone, turnClean, badOff,
                  falseNotice, leak, inboxLeak, hangSeen, hangTurn, badCancelMark, leakWin, hangWin>>
-  /\ UNCHANGED signV
+  \* a compaction claim carries the queued* fields (chatTakeOverPatch); without that the
+  \* sign stays shown with no message id left
+  /\ signRef' = IF ~ClaimKeepsSign /\ cflag' /\ ~cflag THEN FALSE ELSE signRef
+  /\ UNCHANGED <<sign, signMine, signLeft>>
 
 EveStartTurn ==
   /\ ev = "parked" /\ ~hung /\ ctrl = 0 /\ buf > 0
@@ -456,7 +460,10 @@ WaitClaim ==
   /\ UNCHANGED <<bridgeV, late, lossV>>
   /\ UNCHANGED <<idleDone, turnClean, badOff, falseNotice, leak, inboxLeak, hangSeen, hangTurn,
                  badCancelMark, leakWin, hangWin>>
-  /\ UNCHANGED signV
+  \* a compaction claim carries the queued* fields (chatTakeOverPatch); without that the
+  \* sign stays shown with no message id left
+  /\ signRef' = IF ~ClaimKeepsSign /\ cflag' /\ ~cflag THEN FALSE ELSE signRef
+  /\ UNCHANGED <<sign, signMine, signLeft>>
 
 \* The answer to the compact POST. Without AwaitPost eve does not wait for it.
 PostAnswer ==
