@@ -112,7 +112,12 @@ await test(`разметка кнопок: укорачивается тольк
   fc.assert(
     fc.property(
       fc.array(buttonData, { minLength: 1, maxLength: 4 }),
-      (datas) => {
+      fc.boolean(),
+      (tails, sharedHead) => {
+        // Половина прогонов — общее длинное начало: после укорачивания data совпали бы.
+        const datas = sharedHead
+          ? tails.map((tail) => `${"Общее начало кнопок ".repeat(3)}${tail}`)
+          : tails;
         const md = datas
           .map(
             (data, index) =>
@@ -123,9 +128,18 @@ await test(`разметка кнопок: укорачивается тольк
         const shortened = [...out.matchAll(/\sdata="([^"]*)"/g)].map(
           (match) => match[1],
         );
-        assert.deepEqual(shortened, datas.map(shortenButtonData));
-        for (const data of shortened)
+        assert.equal(shortened.length, datas.length);
+        shortened.forEach((data, index) => {
+          const original = datas[index];
           assert.ok(Buffer.byteLength(data) <= BUTTON_DATA_MAX_BYTES);
+          if (Buffer.byteLength(original) <= BUTTON_DATA_MAX_BYTES) {
+            assert.equal(data, original);
+            return;
+          }
+          // Укороченный: начало исходного, при совпадении с кнопкой выше — с хвостом «#N».
+          assert.ok(original.startsWith(data.replace(/#\d+$/u, "")));
+          assert.ok(!shortened.slice(0, index).includes(data), data);
+        });
         assert.equal(
           out.replace(/\sdata="[^"]*"/g, ""),
           md.replace(/\sdata="[^"]*"/g, ""),
@@ -134,4 +148,25 @@ await test(`разметка кнопок: укорачивается тольк
     ),
     { seed: SEED, numRuns: RUNS },
   );
+});
+
+await test("две кнопки с общим началом длиннее 64 байт остаются различимыми", (t) => {
+  t.mock.method(console, "error", () => {});
+  const head = "Задачи на неделю: закрыть тесты, привычки ";
+  const md = [
+    `<tg-button type="callback_data" data="${head}без срока">Без срока</tg-button>`,
+    `<tg-button type="callback_data" data="${head}со сроком на пятницу">Пятница</tg-button>`,
+    `<tg-button type="callback_data" data="${head}перенести">Перенести</tg-button>`,
+  ].join("\n");
+
+  const datas = [...shortenButtonsData(md).matchAll(/\sdata="([^"]*)"/g)].map(
+    (match) => match[1],
+  );
+
+  assert.equal(new Set(datas).size, 3, datas.join(" | "));
+  for (const data of datas)
+    assert.ok(Buffer.byteLength(data) <= BUTTON_DATA_MAX_BYTES, data);
+  assert.equal(datas[0], shortenButtonData(`${head}без срока`));
+  assert.match(datas[1], /#2$/u);
+  assert.match(datas[2], /#3$/u);
 });
