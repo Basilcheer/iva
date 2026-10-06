@@ -81,6 +81,7 @@ import { admitTelegramUpdate } from "./inbox.ts";
 import { isPrivateTelegramChat } from "#lib/telegram-private-chat.ts";
 import { scheduleBridgeTask } from "./background.ts";
 import { parseProposalCallback } from "../lib/plugin-proposal.ts";
+import { isGotItData, watchButtons } from "../lib/notice-policy.ts";
 import { markTappedButton } from "../lib/telegram-buttons.ts";
 import {
   handlePluginProposalTap,
@@ -146,6 +147,8 @@ export type ControlDeps = {
   resetIntentPendingImpl?: (chatKey: string) => boolean;
   // «Установить» на предложении плагина: забрать копию и запустить установщик.
   pluginTapImpl?: (tap: PluginTap) => Promise<PluginTapOutcome>;
+  // «Я в курсе» под пунктом Watch: удалить сообщение с кнопкой; true — удалено.
+  deleteImpl?: (chatId: number, messageId: number) => Promise<boolean>;
   // Правка нажатой кнопки в сообщении: true — кнопка помечена (или уже была).
   editTapImpl?: (
     chatId: number,
@@ -563,6 +566,7 @@ const DEFAULT_CONTROL_IO: Omit<ControlIo, "cancelImpl"> = {
   watchTimeoutMs: RUN_STALE_MS,
   scheduleImpl: scheduleBridgeTask,
   pluginTapImpl: (tap) => handlePluginProposalTap(tap),
+  deleteImpl: deleteGotItMessage,
   editTapImpl: editTappedMessage,
 };
 
@@ -637,6 +641,7 @@ type CallbackKind =
   | "wizard"
   | "menu"
   | "plugin"
+  | "gotIt"
   | "passthrough"
   | "tap";
 
@@ -650,6 +655,7 @@ const CALLBACK_KINDS: ReadonlyArray<
   ["wizard", isWizardCallbackData],
   ["menu", (data) => data.startsWith("iva_menu:")],
   ["plugin", (data) => parseProposalCallback(data) !== null],
+  ["gotIt", (data) => isGotItData(data, tr)],
   ["passthrough", isUnclaimedCallbackData],
 ];
 
@@ -685,6 +691,7 @@ const CALLBACK_HANDLERS: Record<
       true,
     ),
   plugin: handlePluginTap,
+  gotIt: handleGotItTap,
   // Колбэк eve или незнакомый iva_*: не наш, решает путь сообщения.
   passthrough: () => Promise.resolve(UNCLAIMED),
   tap: handleButtonTap,
@@ -777,6 +784,70 @@ async function handleOwnerPluginTap({ update, callback, io }: CallbackContext) {
 async function declineGroupCallback({ callback, io }: CallbackContext) {
   await io.ackImpl(callback.id, privateChatOnlyText()).catch(() => {});
   return true;
+}
+
+// «Я в курсе» под пунктом Watch (ADR-0020): владелец знает, пункт погашен, сообщение уходит из
+// чата. Ход модели не нужен — тап никогда не становится сообщением и в очередь не идёт. Второй тап по
+// уже удалённому сообщению и отказ удаления (старше 48 часов, нет прав) — подсказка, и только.
+// Пункт снова придёт, только когда в чате или письме появится новое: это решает `seen` тика.
+async function handleGotItTap({ update, callback, io }: CallbackContext) {
+  const target = ownerPrivateMessage(callback);
+  if (target === null) {
+    const trusted = isTrustedSender(callback.from);
+    await io
+      .ackImpl(callback.id, tapGroupHint(trusted, callbackChat(callback)))
+      .catch(() => {});
+    log(
+      "got-it tap ignored: not the owner in a private chat",
+      senderId(callback.from),
+    );
+    return true;
+  }
+  const key = tapKey(callback) as string;
+  if (isRepeatTap(key, update.update_id)) {
+    await io.ackImpl(callback.id, alreadyRemovedText()).catch(() => {});
+    return true;
+  }
+  const deleted = await io
+    .deleteImpl(target.chatId, target.messageId)
+    .catch(() => false);
+  if (deleted) rememberTap(key, update.update_id);
+  const hint = deleted
+    ? tappedText(watchButtons(tr)[2].label)
+    : notRemovedText();
+  await io.ackImpl(callback.id, hint).catch(() => {});
+  return true;
+}
+
+/** Сообщение с кнопкой, нажатой владельцем в личном чате; иначе null. */
+function ownerPrivateMessage(
+  callback: ControlCallbackQuery,
+): { chatId: number; messageId: number } | null {
+  const chat = callbackChat(callback);
+  const messageId = callback.message?.message_id;
+  if (!isTrustedSender(callback.from) || !isPrivateTelegramChat(chat))
+    return null;
+  if (chat?.id === undefined || messageId === undefined) return null;
+  return { chatId: chat.id, messageId };
+}
+
+const alreadyRemovedText = () => tr("Already removed", "Уже убрано");
+const notRemovedText = () =>
+  tr("Couldn't delete the message", "Не смогла удалить сообщение");
+
+// Удаление сообщения Watch: true — Telegram подтвердил. Отказ и сбой сети — false.
+async function deleteGotItMessage(
+  chatId: number,
+  messageId: number,
+): Promise<boolean> {
+  const result = await controlTg("deleteMessage", {
+    chat_id: chatId,
+    message_id: messageId,
+  }).catch((e: unknown) => {
+    log("got-it delete failed:", errorMessage(e));
+    return { ok: false };
+  });
+  return result?.ok === true;
 }
 
 // ⏹ Стоп у статус-сообщения. Тап никогда не уходит в eve: колбэк наш, а отмену

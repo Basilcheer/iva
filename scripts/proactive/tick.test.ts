@@ -189,6 +189,11 @@ test("an unread chat older than staleMinutes wakes the model once and is deliver
   assert.match(h.prompts[0] ?? "", /Follow the watch skill/u);
   assert.match(h.prompts[0] ?? "", /Return QUIET/u);
   assert.match(h.prompts[0] ?? "", /Do not send anything yourself/u);
+  // Кнопки пункта о человеке — дословно: «Я в курсе» мост узнаёт по этим же словам.
+  assert.match(
+    h.prompts[0] ?? "",
+    /«В задачи» with data="В задачи: <name>", «Напомнить позже» with data="Позже: <name>", «Я в курсе» with data="Я в курсе: <name>"/u,
+  );
   assert.deepEqual(h.sent, ["Иван ждёт ответа."]);
   const state = readState(h);
   assert.equal(state.seen["tg:1"]?.reported, true);
@@ -204,6 +209,21 @@ test("an unread chat older than staleMinutes wakes the model once and is deliver
   assert.equal(h.prompts.length, 1);
   assert.equal(await runProactiveTick(NOON + 3 * HOUR, h.deps), 0);
   assert.equal(h.prompts.length, 2);
+});
+
+test("an English owner's Watch prompt names the person buttons in English", async () => {
+  const h = harness();
+  writeState(h, staleSeen(chat(1, 2)));
+  h.tg = { items: [chat(1, 2, "Ivan")], error: null };
+  const deps = {
+    ...h.deps,
+    translate: () => Promise.resolve((english: string) => english),
+  };
+  assert.equal(await runProactiveTick(NOON, deps), 0);
+  assert.match(
+    h.prompts[0] ?? "",
+    /«To tasks» with data="To tasks: <name>", «Remind later» with data="Later: <name>", «Got it» with data="Got it: <name>"/u,
+  );
 });
 
 test("fewer unread but more than zero: the new number, reported unchanged; zero drops the key", async () => {

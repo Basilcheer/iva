@@ -12,6 +12,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import fc from "fast-check";
 import { requestTelegramCancel } from "#lib/telegram-cancel-client.ts";
 
 type Event = string | [string, string, number | undefined, string | undefined];
@@ -59,6 +60,7 @@ type ControlModule = {
         chatId: number;
       }) => Promise<unknown>;
       scheduleImpl?: (key: string, task: () => Promise<void>) => boolean;
+      deleteImpl?: (chatId: number, messageId: number) => Promise<boolean>;
       editTapImpl?: (
         chatId: number,
         messageId: number,
@@ -3439,4 +3441,240 @@ test("the edit goes on the wire as editMessageText with blocks or editMessageRep
     "tap marked 7:603 editMessageReplyMarkup",
     "tap mark failed 7:604 editMessageReplyMarkup",
   ]);
+});
+
+// ── «Я в курсе» под пунктом Watch: путь кода в мосте, модель не будится ─────────────────────
+const SEED = Number(process.env.FC_SEED ?? Date.now() % 2 ** 31);
+const watchItem = {
+  rich_message: {
+    blocks: [
+      { type: "paragraph", text: "Иван ждёт ответа про договор." },
+      {
+        type: "buttons",
+        buttons: [{ text: "Я в курсе", callback_data: "Я в курсе: Иван" }],
+      },
+    ],
+  },
+};
+
+function gotItDeps(result: boolean | Error = true) {
+  const { acks, replies, deps } = tapDeps();
+  const deletes: Array<[number, number]> = [];
+  return {
+    acks,
+    replies,
+    deletes,
+    deps: {
+      ...deps,
+      deleteImpl: async (chatId: number, messageId: number) => {
+        deletes.push([chatId, messageId]);
+        if (result instanceof Error) throw result;
+        return result;
+      },
+    },
+  };
+}
+
+/** Модель не будится: апдейт не стал сообщением, колбэк остался колбэком. */
+function modelNotWoken(update: ControlUpdate): void {
+  assert.equal(update.message, undefined, "the tap became a message");
+  assert.ok(update.callback_query, "the callback was rewritten");
+}
+
+test("«Я в курсе: Иван» deletes the Watch message, shows ✅ and never reaches the model", async () => {
+  const { acks, deletes, replies, deps } = gotItDeps();
+  const update = modelTap(701, 801, "Я в курсе: Иван", watchItem);
+
+  assert.equal(await handleControl(update, deps), true, "consumed");
+  await flush();
+
+  modelNotWoken(update);
+  assert.deepEqual(deletes, [[7, 801]]);
+  assert.deepEqual(acks, [["cq-701", "✅ Я в курсе"]]);
+  assert.deepEqual(replies, [], "no message in the chat");
+});
+
+test("a second «Я в курсе» on the deleted message is a hint, no second delete, no model", async () => {
+  const { acks, deletes, deps } = gotItDeps();
+  await handleControl(modelTap(711, 811, "Я в курсе: Иван", watchItem), deps);
+  const again = modelTap(712, 811, "Я в курсе: Иван", watchItem);
+
+  assert.equal(await handleControl(again, deps), true);
+  modelNotWoken(again);
+  assert.deepEqual(deletes, [[7, 811]]);
+  assert.deepEqual(acks.at(-1), ["cq-712", "Уже убрано"]);
+
+  // Память моста пуста (рестарт): Telegram уже не находит сообщение — подсказка, без падения.
+  const gone = gotItDeps(false);
+  const late = modelTap(713, 812, "Я в курсе: Иван", watchItem);
+  assert.equal(await handleControl(late, gone.deps), true);
+  modelNotWoken(late);
+  assert.deepEqual(gone.acks, [["cq-713", "Не смогла удалить сообщение"]]);
+});
+
+test("a refused or failed deleteMessage gives the «could not delete» hint and nothing else", async () => {
+  for (const result of [false, new Error("network down")]) {
+    const { acks, deletes, replies, deps } = gotItDeps(result);
+    const update = modelTap(721, 821, "Я в курсе: Иван", watchItem);
+
+    assert.equal(await handleControl(update, deps), true);
+    await flush();
+
+    modelNotWoken(update);
+    assert.deepEqual(deletes, [[7, 821]]);
+    assert.deepEqual(acks, [["cq-721", "Не смогла удалить сообщение"]]);
+    assert.deepEqual(replies, []);
+  }
+  // Отказ не запомнен: следующий тап снова пробует удалить.
+  const { deletes, deps } = gotItDeps(true);
+  await handleControl(modelTap(722, 821, "Я в курсе: Иван", watchItem), deps);
+  assert.deepEqual(deletes, [[7, 821]]);
+});
+
+test("«Я в курсе» from a stranger or from a group deletes nothing and never reaches the model", async () => {
+  const stranger = gotItDeps();
+  const update = modelTap(731, 831, "Я в курсе: Иван", watchItem);
+  (update.callback_query as { from: unknown }).from = { id: 99, is_bot: false };
+  assert.equal(await handleControl(update, stranger.deps), true);
+  modelNotWoken(update);
+  assert.deepEqual(stranger.deletes, []);
+  assert.deepEqual(stranger.acks, [["cq-731", undefined]]);
+
+  const group = gotItDeps();
+  const inGroup = modelTap(732, 832, "Я в курсе: Иван", {
+    ...watchItem,
+    chat: { id: -100, type: "supergroup" },
+  });
+  assert.equal(await handleControl(inGroup, group.deps), true);
+  modelNotWoken(inGroup);
+  assert.deepEqual(group.deletes, []);
+  assert.deepEqual(group.acks, [
+    ["cq-732", "Открой личный чат со мной, чтобы использовать это управление."],
+  ]);
+});
+
+test("the default deleteImpl calls deleteMessage on the wire; a refusal is the hint", async () => {
+  const realFetch = globalThis.fetch;
+  const calls: Array<[string, Record<string, unknown>]> = [];
+  const replies: unknown[] = [
+    { ok: true, result: true },
+    { ok: false, description: "Bad Request: message can't be deleted" },
+  ];
+  globalThis.fetch = (async (url: string, init: { body: string }) => {
+    calls.push([url, JSON.parse(init.body) as Record<string, unknown>]);
+    return new Response(JSON.stringify(replies[calls.length - 1]));
+  }) as typeof fetch;
+  const { acks, deps } = recordingDeps();
+  try {
+    await handleControl(modelTap(741, 841, "Я в курсе: Иван", watchItem), deps);
+    await handleControl(modelTap(742, 842, "Я в курсе: Иван", watchItem), deps);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  assert.equal(calls.length, 2);
+  assert.match(calls[0][0], /\/deleteMessage$/u);
+  assert.deepEqual(calls[0][1], { chat_id: 7, message_id: 841 });
+  assert.deepEqual(acks, [
+    ["cq-741", "✅ Я в курсе"],
+    ["cq-742", "Не смогла удалить сообщение"],
+  ]);
+});
+
+/** Язык владельца на время теста: settings.json и сдвиг часов мимо кэша getLang (2 с). */
+async function inLanguage<T>(language: string, work: () => Promise<T>) {
+  const realNow = Date.now;
+  const settings = join(dataDir, "settings.json");
+  const write = (lang: string, shift: number) => {
+    writeFileSync(
+      settings,
+      JSON.stringify({ menuStyle: "rich", language: lang }),
+    );
+    Date.now = () => realNow() + shift;
+  };
+  write(language, 10_000);
+  try {
+    return await work();
+  } finally {
+    write("ru", 20_000);
+    await handleControl(modelTap(1, 1, "iva_noop"), recordingDeps().deps);
+    Date.now = realNow;
+  }
+}
+
+test("an English owner's «Got it: Ivan» is the bridge's; the Russian words then go to the model", async () => {
+  await inLanguage("en", async () => {
+    const { acks, deletes, deps } = gotItDeps();
+    const update = modelTap(751, 851, "Got it: Ivan", watchItem);
+    assert.equal(await handleControl(update, deps), true);
+    modelNotWoken(update);
+    assert.deepEqual(deletes, [[7, 851]]);
+    assert.deepEqual(acks, [["cq-751", "✅ Got it"]]);
+
+    const russian = modelTap(752, 852, "Я в курсе: Иван", watchItem);
+    assert.equal(await handleControl(russian, deps), false);
+    assert.equal(
+      (russian.message as { text?: string }).text,
+      "Я в курсе: Иван",
+    );
+    assert.deepEqual(deletes, [[7, 851]]);
+  });
+});
+
+test(`property: only the exact «Я в курсе: <name>» stays in the bridge; any other data reaches the model (seed ${SEED})`, async () => {
+  const PREFIX = "Я в курсе: ";
+  const oracle = (data: string) =>
+    data.startsWith(PREFIX) && data.slice(PREFIX.length).trim() !== "";
+  const name = fc.oneof(
+    fc.string({ maxLength: 40 }),
+    fc.constantFrom('"Иван"', "«Иван»", "Иван ".repeat(20), " ", "\t", ""),
+  );
+  const data = fc.oneof(
+    name.map((n) => PREFIX + n),
+    fc
+      .tuple(
+        fc.constantFrom(
+          "я в курсе: ",
+          "Я в курсе:",
+          "Я в курсе : ",
+          " Я в курсе: ",
+          "Я  в курсе: ",
+          "Я в курсе ",
+          "Got it: ",
+          "В задачи: ",
+          "Позже: ",
+          "«Я в курсе: ",
+        ),
+        name,
+      )
+      .map(([p, n]) => p + n),
+    fc.string({ maxLength: 60 }),
+  );
+  let id = 10_000;
+  await fc.assert(
+    fc.asyncProperty(
+      data.filter(
+        (d) => d.trim() !== "" && !d.startsWith("iva_") && !d.startsWith("eve"),
+      ),
+      async (d) => {
+        id += 1;
+        const { deletes, deps } = gotItDeps();
+        const update = modelTap(id, id, d, watchItem);
+        const consumed = await handleControl(update, deps);
+        if (oracle(d)) {
+          assert.equal(consumed, true);
+          modelNotWoken(update);
+          assert.deepEqual(deletes, [[7, id]]);
+          return;
+        }
+        assert.deepEqual(deletes, [], `deleted for ${JSON.stringify(d)}`);
+        assert.equal(
+          consumed,
+          false,
+          `kept from the model: ${JSON.stringify(d)}`,
+        );
+        assert.equal((update.message as { text?: string }).text, d);
+      },
+    ),
+    { seed: SEED, numRuns: 300 },
+  );
 });

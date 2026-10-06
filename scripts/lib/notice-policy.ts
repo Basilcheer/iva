@@ -85,6 +85,31 @@ export function writtenInLanguage(tr: Translate): string {
 }
 
 /**
+ * Кнопки пункта Watch (ADR-0020) на языке владельца: подпись и слово, с которого начинается
+ * `data` — `<слово>: <имя>`. Промпт Watch даёт их модели, а Bridge по тем же словам узнаёт
+ * «Я в курсе» и гасит пункт сам, без хода модели: слова одни, разъехаться им нельзя.
+ */
+export function watchButtons(tr: Translate) {
+  return [
+    { label: tr("To tasks", "В задачи"), word: tr("To tasks", "В задачи") },
+    {
+      label: tr("Remind later", "Напомнить позже"),
+      word: tr("Later", "Позже"),
+    },
+    { label: tr("Got it", "Я в курсе"), word: tr("Got it", "Я в курсе") },
+  ] as const;
+}
+
+/**
+ * `data` кнопки «Я в курсе»: ровно `<слово>: <имя>` на языке владельца и непустое имя. Другой
+ * язык, другой регистр или пробел не тот — обычная кнопка модели.
+ */
+export function isGotItData(data: string, tr: Translate): boolean {
+  const prefix = `${watchButtons(tr)[2].word}: `;
+  return data.startsWith(prefix) && data.slice(prefix.length).trim() !== "";
+}
+
+/**
  * Хвост ночного промпта — та его часть, что описывает ДОСТАВКУ отчёта: язык, форму и
  * запрет доставить себя самому. Язык называется явно: без этого модель пишет отчёт на
  * языке инструкции, и пользователь получает половину сообщения по-английски.
