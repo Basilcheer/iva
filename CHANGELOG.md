@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- 🔗 **Под сообщением о пропущенном есть кнопка «Открыть чат»**: один тап — и вы в чате с человеком или в письме, чтобы ответить руками. A Watch message now carries an «Open chat» button that opens the chat or the letter in one tap.
 - 🗣 **Ива пишет проще**: сначала — что случилось и что делать, без технических подробностей, таблиц и кода; «всё в порядке» — одной фразой, подробности — по просьбе. Iva writes plainly: first what happened and what to do, no technical details, tables or code; «all fine» is one sentence, details on request.
 - 🔎 **`iva trace show` открывает ровно один ход**: ходы разных сессий больше не склеиваются, в списке у каждого хода селектор `<сессия>/<ход>`, `last` открывает последний ход модели, а длительность считается до конца хода. `iva trace show` opens exactly one turn: turns of different sessions are no longer glued together, the list prints a `<session>/<turn>` selector, `last` is the model's last turn, and the duration ends with the turn.
 - 🧾 **Журнал хода хранит ошибки инструментов**: ответ пишется одной строкой JSON до 4096 знаков, у сбоя есть метка `failure`, у bash сохраняется конец вывода, журнал хранится 30 дней. The turn journal keeps tool errors: an answer is one JSON string up to 4096 characters, a failed call is marked `failure`, bash keeps the end of its output, and the journal keeps 30 days.
