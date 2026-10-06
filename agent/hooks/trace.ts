@@ -3,7 +3,12 @@ import {
   markTelegramSessionForRetirement,
   updateTelegramPendingInputRequests,
 } from "../lib/run-status.js";
-import { appendTrace } from "../lib/trace.js";
+import {
+  appendTrace,
+  capTraceTail,
+  TRACE_CONTENT_LIMIT,
+  TRACE_TRUNCATION_MARKER,
+} from "../lib/trace.js";
 import { parentTurnId, subagentTurnId } from "../lib/usage.js";
 
 // Журнал хода, часть eve: ОДИН хук на подстановочное событие `*` пишет каждый шаг модели,
@@ -233,6 +238,168 @@ function actionSummary(action: unknown): Record<string, unknown> {
   return out;
 }
 
+// Ключи ответа, по которым читатель видит сбой: они идут первыми, поэтому обрезка строки с
+// конца (agent/lib/trace.ts) их не теряет.
+const LEAD_KEYS = [
+  "ok",
+  "error",
+  "message",
+  "isError",
+  "code",
+  "exitCode",
+] as const;
+// Ответ bash (agent/tools/bash.ts) в порядке чтения: код и stderr до длинного stdout.
+const BASH_KEYS = [
+  "exitCode",
+  "timedOut",
+  "cancelled",
+  "truncated",
+  "stderr",
+  "stdout",
+  "cwd",
+] as const;
+const BASH_STDERR_CHARS = 1000;
+
+type BashOutput = Record<string, unknown> & { stdout: string; stderr: string };
+
+const isBash = (output: unknown): output is BashOutput =>
+  isRecord(output) &&
+  typeof output.stdout === "string" &&
+  typeof output.stderr === "string";
+
+// Тот же признак ошибки, что у сторожа повторов (agent/lib/repeat-guard.ts `nonempty`).
+function nonEmpty(value: unknown): boolean {
+  if (value === null || value === undefined || value === false) return false;
+  if (typeof value === "string") return value.trim().length > 0;
+  if (Array.isArray(value)) return value.length > 0;
+  if (typeof value === "object") return Object.keys(value).length > 0;
+  return true;
+}
+
+// `exit N` — только с непустым stderr: grep, test и diff с кодом 1 — обычная разведка.
+const exitFailure = (output: Record<string, unknown>): string | undefined =>
+  Number.isInteger(output.exitCode) &&
+  output.exitCode !== 0 &&
+  output.cancelled !== true &&
+  typeof output.stderr === "string" &&
+  output.stderr.trim() !== ""
+    ? `exit ${String(output.exitCode)}`
+    : undefined;
+
+// Класс сбоя вызова, без текста (docs/trace.md, `failure`). Порядок — правило eve:
+// `isError` всегда даёт `failed`, без него `failed` значит «ответ назвал свои code и message».
+function failureOf(
+  status: unknown,
+  result: Record<string, unknown>,
+  output: unknown,
+): string | undefined {
+  const answer = isRecord(output) ? output : {};
+  if (status === "rejected") return undefined; // отказ на подтверждении — ни успех, ни сбой
+  if (result.isError === true || answer.isError === true) return "isError";
+  if (status === "failed") return "status:failed";
+  if (answer.ok === false) return "ok:false";
+  if (nonEmpty(answer.error)) return "error";
+  if (answer.timedOut === true) return "timeout";
+  return exitFailure(answer);
+}
+
+// Конец строки, который в JSON занимает не больше `budget` знаков, с пометкой обрезки.
+// Мерить надо JSON: `\n` и управляющие знаки там стоят 2–6 знаков, и срез по сырой длине
+// выбросил бы почти весь вывод `seq` или оставил бы поле длиннее размера.
+function jsonTail(value: string, budget: number): string {
+  if (JSON.stringify(value).length - 2 <= budget) return value;
+  let size = TRACE_TRUNCATION_MARKER.length;
+  let count = 0;
+  while (count < value.length) {
+    size += JSON.stringify(value[value.length - 1 - count]).length - 2;
+    if (size > budget) break;
+    count += 1;
+  }
+  // Срез всегда короче строки, иначе capTraceTail вернул бы её целиком, без пометки.
+  const keep = Math.min(
+    count,
+    value.length - TRACE_TRUNCATION_MARKER.length - 1,
+  );
+  return capTraceTail(value, keep + TRACE_TRUNCATION_MARKER.length);
+}
+
+// bash: конец stdout и stderr, где стоит ошибка. stdout получает всё, что осталось от
+// поля; не влезло и так (огромный cwd) — строку дорежет писатель с конца.
+function bashResult(output: BashOutput): string {
+  const shaped: Record<string, unknown> = {};
+  for (const key of BASH_KEYS)
+    if (output[key] !== undefined) shaped[key] = output[key];
+  shaped.stderr = jsonTail(output.stderr, BASH_STDERR_CHARS);
+  const rest = JSON.stringify({ ...shaped, stdout: "" }).length;
+  shaped.stdout = jsonTail(output.stdout, TRACE_CONTENT_LIMIT - rest);
+  return JSON.stringify(shaped);
+}
+
+function resultText(output: unknown, json: string): string {
+  if (typeof output === "string") return output;
+  if (isBash(output)) return bashResult(output);
+  if (!isRecord(output)) return json;
+  const lead = LEAD_KEYS.filter((key) => Object.hasOwn(output, key));
+  return JSON.stringify(
+    Object.fromEntries([
+      ...lead.map((key) => [key, output[key]]),
+      ...Object.entries(output),
+    ]),
+  );
+}
+
+function resultFacts(
+  status: unknown,
+  result: Record<string, unknown>,
+): Record<string, unknown> {
+  const output = result.output;
+  const failure = failureOf(status, result, output);
+  return {
+    ...(isRecord(output) && typeof output.exitCode === "number"
+      ? { exitCode: output.exitCode }
+      : {}),
+    ...(failure ? { failure } : {}),
+  };
+}
+
+// Сам ответ — одной строкой JSON в содержимое, его полный размер — в data.
+function projectAnswer(
+  output: unknown,
+  out: Record<string, unknown>,
+  content: Record<string, unknown>,
+): void {
+  const json: string | undefined =
+    typeof output === "string" ? output : JSON.stringify(output);
+  if (json === undefined) {
+    content.result = output;
+    return;
+  }
+  content.result = resultText(output, json);
+  out.outChars = json.length;
+  // eve кладёт в error.message сам ответ — второй копией он не нужен.
+  if (content.error === content.result || content.error === json)
+    delete content.error;
+}
+
+// Результат тула: имя, признак сбоя и размер ответа — в data (нужны и без содержимого).
+// Ответ не сериализуется — прежний путь через обрезку объекта у писателя.
+function projectResult(
+  data: Record<string, unknown>,
+  out: Record<string, unknown>,
+  content: Record<string, unknown>,
+): void {
+  if (!isRecord(data.result)) return;
+  const result = data.result;
+  for (const key of ["toolName", "callId", "isError"])
+    if (out[key] === undefined && isScalar(result[key])) out[key] = result[key];
+  try {
+    Object.assign(out, resultFacts(data.status, result));
+    projectAnswer(result.output, out, content);
+  } catch {
+    content.result = result.output;
+  }
+}
+
 function project(data: Record<string, unknown>): {
   data: Record<string, unknown>;
   content: Record<string, unknown>;
@@ -267,13 +434,7 @@ function project(data: Record<string, unknown>): {
     if (isScalar(data.error.code)) out.errorCode = data.error.code;
     content.error = data.error.message;
   }
-  // Результат тула несёт своё имя и признак ошибки — они нужны и без содержимого.
-  if (isRecord(data.result)) {
-    for (const key of ["toolName", "callId", "isError"]) {
-      if (out[key] === undefined && isScalar(data.result[key]))
-        out[key] = data.result[key];
-    }
-  }
+  projectResult(data, out, content);
   for (const key of CONTENT_FIELDS) {
     if (data[key] !== undefined && content[key] === undefined)
       content[key] = data[key];

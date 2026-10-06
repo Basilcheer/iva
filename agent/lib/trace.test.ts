@@ -201,32 +201,24 @@ void test("ошибка записи не выходит наружу", (t) => {
   assert.ok(errors[0].startsWith("[trace] событие не записано:"));
 });
 
-void test("чистка удаляет файлы старше 14 дней ПО ИМЕНИ и не трогает чужие", () => {
+void test("чистка оставляет 30 дней ПО ИМЕНИ, удаляет 31-й и не трогает чужие", () => {
   const dir = world();
   mkdirSync(trace.traceDir(dir), { recursive: true });
-  const names = [
-    "2026-08-17.jsonl", // сегодня
-    "2026-08-04.jsonl", // граница окна: 14-й день
-    "2026-08-03.jsonl", // на день старше окна
-    "2026-07-01.jsonl",
-    "notes.md",
-    "2026-08-05.jsonl.bak",
-    "old.jsonl",
-  ];
-  for (const name of names) writeFileSync(join(trace.traceDir(dir), name), "");
+  // 31 день подряд до сегодняшнего: 2026-07-18 … 2026-08-17.
+  const days = Array.from({ length: 31 }, (_, back) =>
+    new Date(Date.UTC(2026, 7, 17 - back)).toISOString().slice(0, 10),
+  );
+  const foreign = ["notes.md", "2026-07-05.jsonl.bak", "old.jsonl"];
+  const names = [...days.map((day) => `${day}.jsonl`), "2026-07-01.jsonl"];
+  for (const name of [...names, ...foreign])
+    writeFileSync(join(trace.traceDir(dir), name), "");
 
   const removed = trace.pruneTrace(dir, "2026-08-17");
 
-  assert.deepEqual(removed.sort(), ["2026-07-01.jsonl", "2026-08-03.jsonl"]);
+  assert.deepEqual(removed.sort(), ["2026-07-01.jsonl", "2026-07-18.jsonl"]);
   assert.deepEqual(
     readdirSync(trace.traceDir(dir)).sort(),
-    [
-      "2026-08-04.jsonl",
-      "2026-08-17.jsonl",
-      "2026-08-05.jsonl.bak",
-      "notes.md",
-      "old.jsonl",
-    ].sort(),
+    [...names.slice(0, 30), ...foreign].sort(),
   );
 });
 

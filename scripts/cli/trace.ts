@@ -27,6 +27,7 @@ import type { TraceEvent } from "#lib/trace.ts";
 import { createLazyTranslate, type Translate } from "../lib/cli-translate.ts";
 import { tryLoadPluginCore, type PluginCore } from "../lib/plugin-core.ts";
 import { resolveTimeZone } from "../lib/timezone.ts";
+import { parseTurnRef, turnRef } from "../lib/turn-ref.ts";
 import type { createCliRuntime } from "./runtime.ts";
 
 type CliRuntime = ReturnType<typeof createCliRuntime>;
@@ -60,9 +61,20 @@ const TAIL_PREVIEW_CHARS = 80;
 const FACT_LIMIT = 40;
 const SHOW_PREVIEW_CHARS = 160;
 const TURN_LIST_LIMIT = 20;
-// Group key of a night turn: the session AND the eve turnId. One session holds many
-// turns, so the pair is the identity — see stitchTurns.
+// Group key of a turn: the session AND the eve turnId. `turn_N` restarts in every session
+// and one session holds many turns, so the pair is the identity — see stitchTurns.
 const SESSION_TURN = "|";
+const pairKey = (session: string, turn: string): string =>
+  `${session}${SESSION_TURN}${turn}`;
+// The events that end a turn: its duration stops at the latest of them, not at a
+// compaction or a `session.waiting` that the runtime writes later.
+const TURN_END = new Set([
+  "eve.turn.completed",
+  "eve.turn.failed",
+  "eve.turn.cancelled",
+  "outbox.delivered",
+  "outbox.failed",
+]);
 
 // Content fields, in the order a reader wants to see them: the writer merges content flat
 // into `data` next to its `<key>Chars` sizes, so there is no separate object to look in.
@@ -83,6 +95,7 @@ const CONTENT_KEYS = [
 // Two of them fit on a line, so the order is the priority.
 const FACT_KEYS = [
   "toolName",
+  "failure",
   "subagentName",
   "decision",
   "outcome",
@@ -189,7 +202,7 @@ export function parseTraceLine(raw: string, index = 0): TraceLine | null {
   };
 }
 
-/** Every day file of the journal, oldest first. Retention caps the folder at 14 files. */
+/** Every day file of the journal, oldest first. Retention caps the folder at 30 files. */
 export function readTraceLines(dir: string): TraceLine[] {
   let names: string[];
   try {
@@ -239,10 +252,12 @@ function baseTurn(key: string): string {
  * Lines → turns, exactly as docs/trace.md describes it.
  *
  * `turn.bound` is the only line where the update key and the turnId lie together, so it
- * decides which lines belong to a chat turn. Everything else is grouped by session AND eve
- * turnId together, never by session alone: one Eve session holds many turns — the daily
- * digest sends twice inside one session, and the nightly Rollup keeps its session alive
- * across nights — so a session on its own would glue a fortnight of nights into one turn.
+ * decides which update-keyed lines (Bridge, inbound) belong to a chat turn. Every other
+ * line is grouped by session AND eve turnId together, never by one of them alone: every
+ * session starts at `turn_0`, so a turnId alone glues turns of different sessions, and one
+ * Eve session holds many turns — the daily digest sends twice inside one session, and the
+ * nightly Rollup keeps its session alive across nights. A line with `turn_N` and no session
+ * joins the latest turn with that `turn_N`.
  *
  * A line with no turn key at all (the `gate.outbound` and `outbox.*` of a night send)
  * belongs to the most recent turn of its session by `ts`. Left with neither a key nor a
@@ -258,36 +273,57 @@ export function stitchTurns(lines: readonly TraceLine[]): StitchedTurn[] {
   const sorted = [...lines].sort(
     (left, right) => left.at - right.at || left.index - right.index,
   );
+  const binds = bindChatTurns(sorted);
+  const keys = lineKeys(sorted, binds);
 
-  const turnIdByUpdateKey = new Map<string, string>();
-  const updateKeyByTurnId = new Map<string, string>();
-  const chatTurns = new Set<string>();
-  // The earliest claim wins. Two `turn.bound` lines can name the same update key — a
-  // proactive turn in a chat whose last binding is still on the books — and which one wins
-  // must not depend on which process wrote its line first.
+  const groups = new Map<string, TraceLine[]>();
+  for (const line of sorted) {
+    const key = keys.get(line) ?? "?";
+    const bucket = groups.get(key);
+    if (bucket) bucket.push(line);
+    else groups.set(key, [line]);
+  }
+
+  return [...groups].map(([key, events]) => turnOf(key, events, binds));
+}
+
+type ChatBinds = {
+  /** Update key → the pair key of the chat turn that took it. */
+  readonly turnByUpdateKey: ReadonlyMap<string, string>;
+  /** Pair key → the update key behind it. */
+  readonly updateKeyByTurn: ReadonlyMap<string, string>;
+};
+
+/**
+ * `turn.bound` is the only line where the update key and the turn lie together. Its key is
+ * the pair: two sessions both start at `turn_0`. The earliest claim wins — two `turn.bound`
+ * lines can name the same update key (a proactive turn in a chat whose last binding is still
+ * on the books), and which one wins must not depend on which process wrote its line first.
+ */
+function bindChatTurns(sorted: readonly TraceLine[]): ChatBinds {
+  const turnByUpdateKey = new Map<string, string>();
+  const updateKeyByTurn = new Map<string, string>();
   for (const line of sorted) {
     if (line.kind !== "turn" || line.name !== "bound" || !line.turn) continue;
-    chatTurns.add(line.turn);
+    const key = line.session ? pairKey(line.session, line.turn) : line.turn;
     const updateKey = str(line.data.updateKey);
     if (!updateKey) continue; // a proactive turn has no update behind it
-    if (!turnIdByUpdateKey.has(updateKey))
-      turnIdByUpdateKey.set(updateKey, line.turn);
-    if (!updateKeyByTurnId.has(line.turn))
-      updateKeyByTurnId.set(line.turn, updateKey);
+    if (!turnByUpdateKey.has(updateKey)) turnByUpdateKey.set(updateKey, key);
+    if (!updateKeyByTurn.has(key)) updateKeyByTurn.set(key, updateKey);
   }
+  return { turnByUpdateKey, updateKeyByTurn };
+}
 
-  /** The group of a line that carries a turn key of its own. */
-  function keyOf(line: TraceLine, base: string): string {
-    if (chatTurns.has(base)) return base;
-    return (
-      turnIdByUpdateKey.get(base) ??
-      (line.session ? `${line.session}${SESSION_TURN}${base}` : base)
-    );
-  }
-
+/** The group key of every line, in one pass over the `ts`-sorted journal. */
+function lineKeys(
+  sorted: readonly TraceLine[],
+  binds: ChatBinds,
+): Map<TraceLine, string> {
   const keys = new Map<TraceLine, string>();
   const openTurn = new Map<string, string>();
   const firstTurn = new Map<string, string>();
+  // `turn_N` → the latest pair seen with it: a seam that wrote no session joins it.
+  const latestPair = new Map<string, string>();
   const waiting: TraceLine[] = [];
   for (const line of sorted) {
     const base = baseTurn(line.turn);
@@ -298,82 +334,88 @@ export function stitchTurns(lines: readonly TraceLine[]): StitchedTurn[] {
       else waiting.push(line);
       continue;
     }
-    const key = keyOf(line, base);
+    const key = keyOf(line, base, binds, latestPair);
     keys.set(line, key);
     if (!line.session) continue;
+    if (!base.startsWith("tg:")) latestPair.set(base, key);
     openTurn.set(line.session, key);
     if (!firstTurn.has(line.session)) firstTurn.set(line.session, key);
   }
   // A keyless line ahead of every turn of its session can only belong to the first one.
-  for (const line of waiting)
-    keys.set(
-      line,
-      (line.session ? firstTurn.get(line.session) : "") || line.session || "?",
-    );
+  for (const line of waiting) keys.set(line, firstKey(line, firstTurn));
+  return keys;
+}
 
-  const groups = new Map<string, TraceLine[]>();
-  const order: string[] = [];
-  for (const line of sorted) {
-    const key = keys.get(line) ?? "?";
-    const bucket = groups.get(key);
-    if (bucket) bucket.push(line);
-    else {
-      groups.set(key, [line]);
-      order.push(key);
-    }
-  }
+/** The group of a line that carries a turn key of its own. */
+function keyOf(
+  line: TraceLine,
+  base: string,
+  binds: ChatBinds,
+  latestPair: ReadonlyMap<string, string>,
+): string {
+  if (base.startsWith("tg:")) return binds.turnByUpdateKey.get(base) ?? base;
+  if (line.session) return pairKey(line.session, base);
+  return latestPair.get(base) ?? base;
+}
 
-  const turns: StitchedTurn[] = [];
-  for (const key of order) {
-    const events = groups.get(key) ?? [];
-    // A turnId never carries the separator, so the last one is where the session ends.
-    const split = key.lastIndexOf(SESSION_TURN);
-    const sources: string[] = [];
-    let session = split === -1 ? "" : key.slice(0, split);
-    let turnId =
-      split === -1
-        ? chatTurns.has(key)
-          ? key
-          : ""
-        : key.slice(split + SESSION_TURN.length);
-    for (const event of events) {
-      if (event.source && !sources.includes(event.source))
-        sources.push(event.source);
-      if (!session && event.session) session = event.session;
-      // A night turn has no turn key on its seams, but its eve lines still carry `turn_N`
-      // from the hook — worth showing, and worth accepting as a selector.
-      const base = baseTurn(event.turn);
-      if (!turnId && base && !base.startsWith("tg:")) turnId = base;
-    }
-    turns.push({
-      key,
-      turnId,
-      updateKey:
-        updateKeyByTurnId.get(key) ?? (key.startsWith("tg:") ? key : ""),
-      session,
-      sources,
-      events,
-    });
-  }
-  return turns.sort(
-    (left, right) =>
-      (left.events[0]?.at ?? 0) - (right.events[0]?.at ?? 0) ||
-      (left.events[0]?.index ?? 0) - (right.events[0]?.index ?? 0),
+function firstKey(
+  line: TraceLine,
+  firstTurn: ReadonlyMap<string, string>,
+): string {
+  return (
+    (line.session ? firstTurn.get(line.session) : "") || line.session || "?"
   );
 }
 
+/** One group of lines → a turn: the session and turnId read back out of its key. */
+function turnOf(
+  key: string,
+  events: readonly TraceLine[],
+  binds: ChatBinds,
+): StitchedTurn {
+  // A turnId never carries the separator, so the last one is where the session ends.
+  const split = key.lastIndexOf(SESSION_TURN);
+  const session =
+    split === -1
+      ? (events.find((event) => event.session)?.session ?? "")
+      : key.slice(0, split);
+  // A turn keyed without a pair still shows the `turn_N` its eve lines carry.
+  const turnId =
+    split === -1
+      ? (events
+          .map((event) => baseTurn(event.turn))
+          .find((base) => base && !base.startsWith("tg:")) ?? "")
+      : key.slice(split + SESSION_TURN.length);
+  return {
+    key,
+    turnId,
+    updateKey:
+      binds.updateKeyByTurn.get(key) ?? (key.startsWith("tg:") ? key : ""),
+    session,
+    sources: [...new Set(events.map((event) => event.source).filter(Boolean))],
+    events,
+  };
+}
+
 /**
- * A turnId, an update key, a session id, or `last` — whatever the owner has at hand.
+ * `<session>/<turn>` as the list prints it, a turnId, an update key, a session id, or
+ * `last` — whatever the owner has at hand.
  *
- * The newest match wins, like `last` does. A turnId restarts at `turn_0` in every Eve
- * session and a session holds many turns, so both can name more than one turn in fourteen
- * days; the one the owner is looking at is the last one.
+ * The pair names exactly one turn. Anything else: the newest match wins. A turnId restarts
+ * at `turn_0` in every Eve session and a session holds many turns, so both can name more
+ * than one turn in thirty days; the one the owner is looking at is the last one. `last` is
+ * the model's last turn: a button tap after it leaves an orphan line, not a turn to read.
  */
 export function selectTurn(
   turns: readonly StitchedTurn[],
   selector: string,
 ): StitchedTurn | undefined {
-  if (selector === "last") return turns.at(-1);
+  if (selector === "last") return lastMatch(turns, modelTurn) ?? turns.at(-1);
+  const ref = parseTurnRef(selector);
+  if (ref) {
+    const key = pairKey(ref.session, ref.turn);
+    return lastMatch(turns, (turn) => turn.key === key);
+  }
   return (
     lastMatch(turns, (turn) => turn.turnId === selector) ??
     lastMatch(turns, (turn) => turn.updateKey === selector) ??
@@ -381,6 +423,13 @@ export function selectTurn(
     lastMatch(turns, (turn) => turn.session === selector)
   );
 }
+
+const modelTurn = (turn: StitchedTurn): boolean =>
+  turn.events.some(
+    (event) =>
+      event.kind === "eve" &&
+      (event.name === "step.started" || event.name === "turn.started"),
+  );
 
 /** The newest match. `Array.findLast` is ES2023 and the target of this repo is ES2022. */
 function lastMatch(
@@ -499,7 +548,7 @@ export function clock(at: number, timeZone: string): string {
 }
 
 /**
- * Day and wall time. The turn list spans fourteen days, so a bare clock there would print
+ * Day and wall time. The turn list spans thirty days, so a bare clock there would print
  * two nightly Rollups as the same `03:00:00`.
  */
 export function stamp(at: number, timeZone: string): string {
@@ -703,11 +752,30 @@ function contentLines(
   return out;
 }
 
-/** When the turn started, when it ended, how long it took. One reading for both views. */
+/**
+ * When the turn started, when it ended, how long it took. One reading for both views. The
+ * end is the latest `TURN_END` event; a turn without one ends with its last event.
+ */
 function turnSpan(turn: StitchedTurn) {
   const from = turn.events[0]?.at ?? 0;
-  const to = turn.events.at(-1)?.at ?? 0;
+  let to = 0;
+  for (const event of turn.events)
+    if (TURN_END.has(`${event.kind}.${event.name}`))
+      to = Math.max(to, event.at);
+  if (!to) to = turn.events.at(-1)?.at ?? 0;
   return { from, to, ms: to - from };
+}
+
+/** Tool calls the hook marked with a `failure` class. */
+function failedCalls(turn: StitchedTurn): string[] {
+  const count = turn.events.filter(
+    (event) =>
+      event.kind === "eve" &&
+      event.name === "action.result" &&
+      isScalar(event.data.failure) &&
+      event.data.failure !== "",
+  ).length;
+  return count ? [`${String(count)} failed calls`] : [];
 }
 
 /** One turn as text: two header lines, then its events with the gap between them. */
@@ -730,6 +798,7 @@ export function formatTurn(
       duration(span.ms),
       stepLabel(countSteps(turn)),
       tools.length ? `tools ${oneLine(tools.join(", "), 120)}` : "no tools",
+      ...failedCalls(turn),
       turnOutcome(turn),
     ].join(" · "),
     "",
@@ -761,7 +830,14 @@ export function formatTurn(
   return out;
 }
 
-/** The last turns as one line each: time, source, key, steps, tools, duration, outcome. */
+/** The selector of a turn, whole: pasted into `iva trace show` it opens this turn. */
+function listRef(turn: StitchedTurn): string {
+  const ref =
+    turn.session && turn.turnId ? turnRef(turn.session, turn.turnId) : turn.key;
+  return sanitize(ref) || "-";
+}
+
+/** The last turns as one line each: time, source, selector, steps, tools, duration, outcome. */
 export function formatTurnList(
   turns: readonly StitchedTurn[],
   options: { readonly timeZone: string; readonly limit?: number },
@@ -771,7 +847,7 @@ export function formatTurnList(
     return [
       stamp(span.from, options.timeZone),
       column(oneLine(turnSource(turn), 9), 9),
-      column(shortTurn(turn.turnId || turn.key, 20), 20),
+      column(listRef(turn), 20),
       column(stepLabel(countSteps(turn)), 8),
       column(oneLine(turnTools(turn).join(", "), 24), 24),
       column(duration(span.ms), 7),
@@ -1020,7 +1096,7 @@ ${C.b}iva trace${C.x} — ${translate("read the turn journal", "читать ж�
 
   ${C.c}iva trace tail${C.x} [--since N]  ${translate("live stream of events; N last lines first", "живой поток событий; сначала N последних строк")}
   ${C.c}iva trace show${C.x}              ${translate("the last 20 turns", "последние 20 ходов")}
-  ${C.c}iva trace show${C.x} <turn>       ${translate("one turn: turn_12, tg:<chat>:<message>, a session id, or last", "один ход: turn_12, tg:<чат>:<сообщение>, id сессии или last")}
+  ${C.c}iva trace show${C.x} <session>/<turn>|last  ${translate("one turn as the list names it; also turn_12, tg:<chat>:<message> or a session id — the newest match", "один ход, как его называет список; ещё turn_12, tg:<чат>:<сообщение> или id сессии — новейший из подходящих")}
   ${C.c}iva trace open${C.x}              ${translate("the viewer address and the ssh tunnel that reaches it", "адрес вьюера и готовая команда ssh-туннеля к нему")}
 
   ${C.d}${translate("flags: show --full — content without the cap; show --json — the raw lines", "флаги: show --full — содержимое без обрезки; show --json — сырые строки")}${C.x}
@@ -1074,8 +1150,8 @@ ${C.b}iva trace${C.x} — ${translate("read the turn journal", "читать ж�
         );
       log(
         translate(
-          "One turn: iva trace show <turn|last>",
-          "Один ход: iva trace show <ход|last>",
+          "One turn: iva trace show <session>/<turn>|last",
+          "Один ход: iva trace show <сессия>/<ход>|last",
         ),
       );
       for (const line of formatTurnList(turns, { timeZone })) log(line);

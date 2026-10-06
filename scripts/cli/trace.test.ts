@@ -556,14 +556,20 @@ test("show lists the last turns with source, steps, tools, duration and outcome"
     rows[0],
     /^08-16 18:10:00 {2}telegram {3}tg:100:8000 .*0 steps.*blocked$/u,
   );
-  assert.match(rows[1], /^08-16 20:00:00 {2}telegram {3}turn_9 .*failed$/u);
+  assert.match(
+    rows[1],
+    /^08-16 20:00:00 {2}telegram {3}sess-z\/turn_9 .*failed$/u,
+  );
   assert.match(rows[2], /^08-16 21:00:00 {2}bridge {5}tg:100:cb:77 .*open$/u);
-  assert.match(rows[3], /^08-17 03:00:00 {2}rollup {5}turn_1 .*delivered$/u);
+  assert.match(
+    rows[3],
+    /^08-17 03:00:00 {2}rollup {5}sess-night\/turn_1 .*delivered$/u,
+  );
   assert.equal(
     rows[4],
-    "08-17 09:32:05  telegram   turn_12               1 step    memory_search             14.0s    delivered",
+    "08-17 09:32:05  telegram   sess-a/turn_12        1 step    memory_search             14.0s    delivered",
   );
-  assert.match(printed[0], /iva trace show <turn\|last>/u);
+  assert.match(printed[0], /iva trace show <session>\/<turn>\|last/u);
 });
 
 test("show stitches a chat turn from the update key, the turnId and the subagent suffix", async () => {
@@ -1174,10 +1180,11 @@ const eventShape = fc.record({
     "turn_5",
     "turn_5#planner",
     "turn_6",
+    "turn_0",
     "tg:1:cb:9",
     "",
   ),
-  session: fc.constantFrom("", "sess-a", "sess-night"),
+  session: fc.constantFrom("", "sess-a", "sess-b", "sess-night"),
   source: fc.constantFrom("telegram", "bridge", "rollup", "unknown", ""),
   kind: fc.constantFrom(
     "bridge",
@@ -1234,6 +1241,30 @@ test("stitching a journal does not depend on the order its lines were written in
         );
       },
     ),
+    { numRuns: 300 },
+  );
+});
+
+// Real eve lines carry `turn_N`, never an update key: those are the lines a session owns.
+const eveSessions = (turn: StitchedTurn): Set<string> =>
+  new Set(
+    turn.events
+      .filter(
+        (event) =>
+          event.kind === "eve" &&
+          event.session &&
+          !event.turn.startsWith("tg:"),
+      )
+      .map((event) => event.session),
+  );
+
+test("no turn holds the eve lines of two sessions, and any selector is safe", () => {
+  fc.assert(
+    fc.property(journal, fc.string(), (raws, selector) => {
+      const turns = stitchTurns(parseAll(raws));
+      for (const turn of turns) assert.ok(eveSessions(turn).size <= 1);
+      assert.doesNotThrow(() => selectTurn(turns, selector));
+    }),
     { numRuns: 300 },
   );
 });
@@ -1528,7 +1559,7 @@ test("a service reply with no turn key joins the chat turn that is open", () => 
 
   assert.deepEqual(
     turns.map((turn) => [turn.key, turn.events.length]),
-    [["turn_7", 3]],
+    [["sess-c|turn_7", 3]],
   );
 });
 
@@ -1734,4 +1765,212 @@ test("--json needs one turn and says so instead of printing the list", async () 
     /--json shows one turn: iva trace show --json <turn\|last>/u,
   );
   assert.deepEqual(printed, []);
+});
+
+// --- One turn = session + turn (docs/trace.md «Naming one turn») ---
+
+const at = (time: string): string => `2026-08-17T${time}Z`;
+const eve = (
+  ts: string,
+  session: string,
+  name: string,
+  data: Record<string, unknown> = {},
+  turn = "turn_0",
+): Event => ({
+  ts: at(ts),
+  turn,
+  session,
+  source: "telegram",
+  kind: "eve",
+  name,
+  data,
+});
+
+/** Two chat sessions and a Watch turn, all at `turn_0`, then a button tap. */
+const THREE_TURN_0: readonly Event[] = [
+  {
+    ts: at("10:00:00.000"),
+    turn: "tg:100:1",
+    source: "bridge",
+    kind: "bridge",
+    name: "admitted",
+    data: { decision: "owned" },
+  },
+  {
+    ts: at("10:00:00.100"),
+    turn: "turn_0",
+    session: "A",
+    source: "telegram",
+    kind: "turn",
+    name: "bound",
+    data: { chatKey: "tg:100", updateKey: "tg:100:1" },
+  },
+  eve("10:00:00.200", "A", "turn.started"),
+  eve("10:00:01.000", "A", "action.result", {
+    status: "completed",
+    toolName: "bash",
+    failure: "exit 2",
+    exitCode: 2,
+    result:
+      '{"exitCode":2,"stderr":"ls: No such file\\n","stdout":"","cwd":"/srv"}',
+  }),
+  eve("10:00:02.000", "A", "turn.completed"),
+  {
+    ts: at("10:00:03.000"),
+    turn: "turn_0",
+    session: "A",
+    source: "telegram",
+    kind: "outbox",
+    name: "delivered",
+    data: { ok: true },
+  },
+  // The runtime compacts the session three hours later: not part of how long the turn took.
+  eve("13:00:03.000", "A", "compaction.completed"),
+  eve("10:30:00.000", "A", "turn.started", {}, "turn_1"),
+  eve("10:30:01.000", "A", "turn.completed", {}, "turn_1"),
+  {
+    ts: at("11:00:00.000"),
+    turn: "tg:100:2",
+    source: "bridge",
+    kind: "bridge",
+    name: "admitted",
+    data: { decision: "owned" },
+  },
+  {
+    ts: at("11:00:00.100"),
+    turn: "turn_0",
+    session: "B",
+    source: "telegram",
+    kind: "turn",
+    name: "bound",
+    data: { chatKey: "tg:100", updateKey: "tg:100:2" },
+  },
+  eve("11:00:00.200", "B", "turn.started"),
+  eve("11:00:01.000", "B", "turn.completed"),
+  { ...eve("12:00:00.000", "W", "turn.started"), source: "proactive" },
+  { ...eve("12:00:01.000", "W", "turn.completed"), source: "proactive" },
+  {
+    ts: at("12:30:00.000"),
+    turn: "tg:100:cb:5",
+    source: "bridge",
+    kind: "bridge",
+    name: "admitted",
+    data: { kind: "callback" },
+  },
+];
+
+test("two chat turn_0 of different sessions and a Watch turn_0 are three turns", () => {
+  const turns = stitchTurns(parseAll(THREE_TURN_0.map(line)));
+  const zero = turns.filter((turn) => turn.turnId === "turn_0");
+  assert.deepEqual(
+    zero.map((turn) => [turn.key, turn.updateKey, turn.events.length]),
+    [
+      ["A|turn_0", "tg:100:1", 7],
+      ["B|turn_0", "tg:100:2", 4],
+      ["W|turn_0", "", 2],
+    ],
+  );
+  assert.equal(selectTurn(turns, "A/turn_0"), zero[0]);
+  assert.equal(selectTurn(turns, "B/turn_0"), zero[1]);
+  assert.equal(selectTurn(turns, "turn_0"), zero[2]); // bare: the newest
+  assert.equal(selectTurn(turns, "A")?.turnId, "turn_1"); // a session: its newest turn
+  assert.equal(selectTurn(turns, "C/turn_0"), undefined);
+  // `last` is the model's last turn, not the button tap after it.
+  assert.equal(turns.at(-1)?.key, "tg:100:cb:5");
+  assert.equal(selectTurn(turns, "last"), zero[2]);
+});
+
+test("the list prints the whole selector, and the selector opens the same turn", () => {
+  const turns = stitchTurns(parseAll(THREE_TURN_0.map(line)));
+  const rows = formatTurnList(turns, { timeZone: "UTC" });
+  assert.match(rows[0], /^08-17 10:00:00 {2}telegram {3}A\/turn_0 /u);
+  for (const [row, turn] of rows.map(
+    (text, index) => [text, turns[index]] as const,
+  )) {
+    const ref = row.split(/ {2,}/u)[2];
+    assert.equal(selectTurn(turns, ref), turn, row);
+  }
+});
+
+test("a turn ends with its last turn or Outbox event, not with a later compaction", () => {
+  const turns = stitchTurns(parseAll(THREE_TURN_0.map(line)));
+  const [header, summary] = formatTurn(
+    selectTurn(turns, "A/turn_0") as StitchedTurn,
+    { timeZone: "UTC" },
+  );
+  assert.equal(header, "turn_0 · tg:100:1 · telegram · session A");
+  assert.equal(
+    summary,
+    "10:00:00 → 10:00:03 · 3.0s · 0 steps · tools bash · 1 failed calls · delivered",
+  );
+  // Without a turn or Outbox end the last event ends it.
+  const [, open] = formatTurn(
+    selectTurn(turns, "tg:100:cb:5") as StitchedTurn,
+    { timeZone: "UTC" },
+  );
+  assert.match(open, /^12:30:00 → 12:30:00 · 0ms/u);
+});
+
+test("a failed call shows its failure class among the facts", () => {
+  const turns = stitchTurns(parseAll(THREE_TURN_0.map(line)));
+  const body = formatTurn(selectTurn(turns, "A/turn_0") as StitchedTurn, {
+    timeZone: "UTC",
+  }).join("\n");
+  assert.match(body, /eve\.action\.result +toolName=bash failure=exit 2/u);
+});
+
+test("a seam line with turn_N and no session joins the latest turn with that turn_N", () => {
+  const turns = stitchTurns(
+    parseAll(
+      [
+        eve("09:00:00.000", "S1", "turn.started", {}, "turn_3"),
+        eve("09:10:00.000", "S2", "turn.started", {}, "turn_3"),
+        {
+          ts: at("09:20:00.000"),
+          turn: "turn_3",
+          source: "telegram",
+          kind: "stop",
+          name: "requested",
+          data: {},
+        },
+      ].map(line),
+    ),
+  );
+  assert.deepEqual(
+    turns.map((turn) => [turn.key, turn.events.length]),
+    [
+      ["S1|turn_3", 1],
+      ["S2|turn_3", 2],
+    ],
+  );
+});
+
+test("a journal with old and new action.result lines prints both", async () => {
+  const root = world("mixed");
+  write(root, ".env", "ASSISTANT_DATA_DIR=data\nASSISTANT_TIMEZONE=UTC\n");
+  const old = eve("10:00:01.000", "A", "action.result", {
+    status: "completed",
+    toolName: "memory_search",
+    isError: false,
+    result: {
+      callId: "c1",
+      toolName: "memory_search",
+      output: { hits: [{ card: "…[deep]" }] },
+    },
+  });
+  write(
+    root,
+    "data/trace/2026-08-17.jsonl",
+    `${[THREE_TURN_0[1], THREE_TURN_0[2], old, THREE_TURN_0[3], THREE_TURN_0[4]].map(line).join("\n")}\n{"ts": broken\n`,
+  );
+  const { cmdTrace, out } = commands(root);
+
+  await cmdTrace(["show", "A/turn_0", "--full"]);
+
+  assert.match(out(), /1 failed calls/u);
+  assert.match(
+    out(),
+    /result: \{"callId":"c1","toolName":"memory_search","output":\{"hits":\[\{"card":"…\[deep\]"\}\]\}\}/u,
+  );
+  assert.match(out(), /result: \{"exitCode":2,"stderr":"ls: No such file\\n"/u);
 });
