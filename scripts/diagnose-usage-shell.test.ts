@@ -104,7 +104,11 @@ function install(t: TestContext): {
   );
   writeFileSync(
     join(data, "trace", "today.jsonl"),
-    '{"kind":"eve","name":"step.started"}\n',
+    JSON.stringify({
+      kind: "eve",
+      name: "action.result",
+      content: { result: TOOL_OUTPUT },
+    }) + "\n",
   );
 
   // A turn: one tool step, then three steps with neither a tool nor text, then an answer.

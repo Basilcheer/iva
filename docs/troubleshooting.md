@@ -18,7 +18,7 @@ Tokens run out too fast, or turns fail with a provider limit or `Bad Request`: s
 curl -fsSL https://raw.githubusercontent.com/smixs/iva-agent/main/diagnose-usage.sh | bash
 ```
 
-It packs the last three days (`IVA_DIAG_DAYS=7` for a week): tokens of every model step, the skeleton of every turn (model, why each step ended, tool names, which calls failed, steps with neither a tool call nor text) with a `summary.txt` on top, Iva's trace and the failure lines of the service journal. No chat text, no tool inputs or outputs and no `.env` values beyond the model settings leave the server. It goes to your chat with the bot as a `.tgz`; forward it.
+It packs the last three days (`IVA_DIAG_DAYS=7` for a week): tokens of every model step, the skeleton of every turn (model, why each step ended, tool names, which calls failed, steps with neither a tool call nor text) with a `summary.txt` on top, and the failure lines of the service journal. No chat text, no tool inputs or outputs and no `.env` values beyond the model settings leave the server. It goes to your chat with the bot as a `.tgz`; forward it.
 
 ## Common issues
 
