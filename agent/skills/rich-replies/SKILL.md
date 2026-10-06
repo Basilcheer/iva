@@ -39,7 +39,9 @@ of buttons per decision.
 ### Bad → Good
 
 A list of things (reminders, tasks, checks) is not a comparison: no table for
-it. The reader is not technical: no ids, codes or service names.
+it. Show the list the owner asked for in full, one line per thing, not behind a
+button. The reader is not technical: no ids, codes or service names. A doubt
+goes last, with the step that settles it.
 
 Bad (a real answer to «покажи напоминания», 06.10.2026): «Активных пять,
 диспетчер работает ✅», a table «Когда · Что · Тип» with «разовое» in every row,
@@ -48,14 +50,17 @@ r-4ba18f… статус доставки пустой». The owner gave it 1 ou
 
 Good:
 
-    У тебя пять напоминаний, всё работает.
-    Ближайшее — сегодня в 09:00: ответить Максиму Функу по смете для Арбуза.
-    Остальные четыре — позже, покажу по кнопке.
-    Одно вчерашнее сообщение могло не дойти: утренняя проверка сервера в 09:05.
+    У тебя пять напоминаний:
+    • сегодня 09:00 — ответить Максиму Функу по смете для Арбуза;
+    • сегодня 14:00 — созвон с Анной;
+    • сегодня 19:00 — забрать посылку;
+    • завтра 10:00 — оплатить интернет;
+    • в пятницу 12:00 — продлить домен.
+    Не уверена, что до тебя дошла вчерашняя утренняя проверка сервера в 09:05.
 
-    Показать все напоминания или разобраться с проверкой?
+    Проверить сервер ещё раз сейчас?
 
-    <tg-button-row><tg-button type="callback_data" data="Покажи все напоминания">Все напоминания</tg-button><tg-button type="callback_data" data="Разберись с проверкой">Разобраться</tg-button></tg-button-row>
+    <tg-button-row><tg-button type="callback_data" data="Проверь сервер сейчас">Да</tg-button><tg-button type="callback_data" data="Не нужно">Нет</tg-button></tg-button-row>
 
 ## Text and blocks
 
@@ -110,7 +115,7 @@ Escape `*`, `_`, `#`, `|`, `<` in user data you quote (file names, keys, paths).
 
 Buttons always stand under a question line. The text before them ends with an
 empty line and ONE line with a concrete question the buttons answer, and that
-line names what it is about: «Поставить сторож выкладки deploy-check?», «Взять
+line names what it is about: «Поставить проверку сайта?», «Взять
 ответ Максиму в задачи?», «Напомнить про Ивана позже или ты в курсе?». Nobody
 reads a long message to its end to learn what «Поставить» or «Не надо» refer to:
 the question line is all the reader needs to tap. Then an empty line and the

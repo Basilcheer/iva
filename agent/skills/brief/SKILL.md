@@ -34,11 +34,13 @@ Walk everything the owner has connected, with your own tools, read only:
 
 ## Write
 
-- Unfixed failures from the prompt are the first points of the overview, before
-  anything else: what broke and the cause in one line each, in plain words, and
-  a «Починить» button per failure (see the watch skill), each under its own
-  question line that names the task the way the owner knows it («Починить
-  утреннюю проверку сервера?»); the unit name stays in the button `data`.
+- Unfixed failures from the prompt open the overview, before anything else: one
+  point each, in plain words, what broke and the cause. Each then gets its own
+  message, the first ones after the overview: the plan of the fix, a question
+  line that names the task the way the owner knows it («Починить ночную копию
+  рабочей папки?», the unit name stays in the button `data`) and one «Починить»
+  button (see the watch skill). In a chat turn their question lines and buttons
+  close the one message.
 - The first message is the overview: greeting in one line, the day in 5–7 points,
   one sentence with the focus of the day. Too many tasks — the important ones and
   how many more there are.
@@ -63,16 +65,25 @@ anyone on the owner's behalf.
 
 ## Bad → Good
 
-Bad (real lines of a reminders list, 06.10.2026; a Brief breaks the same way): «Активных пять, диспетчер работает ✅», a table
-«Когда · Что · Тип», «Сработали за сутки: 10 тестовых напоминаний с кодами
-(df0e29 … 6143d9)», «⚠️ Проблема: r-4ba18f… статус доставки пустой». The owner
-gave it 1 out of 10.
+Bad (real lines of a reminders list in the chat, 06.10.2026 — a Brief must not
+read like this): «Активных пять, диспетчер работает ✅», a table «Когда · Что ·
+Тип», «Сработали за сутки: 10 тестовых напоминаний с кодами (df0e29 …
+6143d9)», «⚠️ Проблема: r-4ba18f… статус доставки пустой». The owner gave it 1
+out of 10.
 
-Good (the overview; the item with an action follows as its own message with
-its question line and buttons):
+Good (the overview, then the failure as its own message):
 
-    Доброе утро! День спокойный.
+    Доброе утро! Сегодня одна поломка и одно срочное дело.
+    • Ночная копия рабочей папки не сделалась: на диске кончилось место. Как починить — ниже.
     • 09:00 — ответить Максиму Функу по смете для Арбуза.
-    • Ещё четыре напоминания позже, срочного среди них нет.
-    • Вчера одно моё сообщение могло не дойти: утренняя проверка сервера.
+    • 14:00 — созвон с Анной, ссылка в календаре.
+    • Ещё три напоминания на вечер, срочного среди них нет.
+    • Погода: +18, без дождя.
     Главное сегодня — ответ Максиму.
+    <!-- iva:next -->
+    Ночная копия рабочей папки не сделалась: на диске кончилось место.
+    Поправлю её, чтобы она хранила копии только за последний месяц, — тогда места хватит.
+
+    Починить ночную копию рабочей папки?
+
+    <tg-button-row><tg-button type="callback_data" data="Починить: backup-work.service">Починить</tg-button></tg-button-row>
