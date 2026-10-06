@@ -28,10 +28,12 @@ mkdirSync(process.env.ASSISTANT_DATA_DIR, { recursive: true });
 const {
   appendTrace,
   capTraceString,
+  capTraceTail,
   pruneTrace,
   traceDir,
   traceFilePath,
   traceLine,
+  TRACE_CONTENT_FALLBACK,
   TRACE_CONTENT_LIMIT,
   TRACE_ID_LIMIT,
   TRACE_LINE_LIMIT,
@@ -203,19 +205,18 @@ test("property: содержимое обрезано по потолку и п�
         // Событие, не влезшее в строку даже после обрезки полей, едет без содержимого.
         // Размеры при этом остаются: имена, тайминги и размеры выбрасываются последними.
         if (data.traceTrimmed === true) {
-          assert.deepEqual(data[key], bare[key]);
+          if (bare[key] === undefined) assert.equal(data[key], undefined);
           assert.equal(data[`${key}Chars`], value.length);
           continue;
         }
         assert.equal(data[`${key}Chars`], value.length);
-        const written = data[key];
-        assert.equal(typeof written, "string");
-        if (value.length > TRACE_CONTENT_LIMIT) {
-          assert.ok(String(written).endsWith(TRACE_TRUNCATION_MARKER));
-          assert.ok(String(written).length <= TRACE_CONTENT_LIMIT);
-        } else {
-          assert.equal(written, value);
-        }
+        // Поле режется по 4096, а строка, не влезшая с ним, — по 2000; больше ничем.
+        assert.ok(
+          [
+            capTraceString(value, TRACE_CONTENT_LIMIT),
+            capTraceString(value, TRACE_CONTENT_FALLBACK),
+          ].includes(String(data[key])),
+        );
       }
     }),
     RUNS,
@@ -231,18 +232,81 @@ test("property: captureContent=false не пропускает содержим�
       // Событие без содержимого вовсе — эталон. Выключенный тумблер обязан дать ровно
       // его же плюс размеры: сравнение с эталоном ловит и утечку значения, и случай,
       // когда ключ содержимого совпал с ключом data (тогда значение из data — законно).
-      const bare = parse(
+      // Эталон собран с теми же размерами в data: строка проходит те же ступени обрезки.
+      const sizes: Record<string, unknown> = {};
+      for (const [key, value] of Object.entries(input.content ?? {}))
+        sizes[`${key}Chars`] = value.length;
+      const expected = parse(
         traceLine(
-          { ...input, content: undefined },
+          { ...input, data: { ...input.data, ...sizes }, content: undefined },
           { now: AT, captureContent: false },
         ),
       ).data as Record<string, unknown>;
-      const expected: Record<string, unknown> = { ...bare };
-      for (const [key, value] of Object.entries(input.content ?? {}))
-        expected[`${key}Chars`] = value.length;
 
       assert.deepEqual(data, expected);
     }),
+    RUNS,
+  );
+});
+
+// Поле 4096 не теряет того, что держало поле 2000. Старое поведение воспроизводится тем
+// же писателем: содержимое заранее обрезано по 2000, а data без длинных строк, поэтому
+// первая попытка на нём — ровно строка до правки.
+test("property: событие, которое при 2000 сохраняло содержимое, сохраняет его и теперь", () => {
+  const sized = fc
+    .tuple(
+      fc.integer({ min: 500, max: 6000 }),
+      fc.constantFrom("я", "x", "🙂", "\u0f00"),
+    )
+    .map(([size, unit]) => unit.repeat(size));
+  fc.assert(
+    fc.property(
+      fc.dictionary(fc.string({ maxLength: 12 }), sized, { maxKeys: 8 }),
+      fc.dictionary(fc.string({ maxLength: 12 }), fc.integer(), {
+        maxKeys: 5,
+      }),
+      (content, data) => {
+        const input = { kind: "eve", name: "action.result", data, content };
+        const old = Object.fromEntries(
+          Object.entries(content).map(([key, value]) => [
+            key,
+            capTraceString(value, TRACE_CONTENT_FALLBACK),
+          ]),
+        );
+        const options = { now: AT, captureContent: true };
+        const before = parse(traceLine({ ...input, content: old }, options))
+          .data as Record<string, unknown>;
+        const after = parse(traceLine(input, options)).data as Record<
+          string,
+          unknown
+        >;
+        if (before.traceTrimmed !== true)
+          assert.notEqual(after.traceTrimmed, true);
+      },
+    ),
+    RUNS,
+  );
+});
+
+test("property: capTraceTail оставляет конец, пометку в начале и не рвёт пару", () => {
+  fc.assert(
+    fc.property(
+      // Целые знаки: пары суррогатов на любом месте, включая место среза.
+      fc.oneof(
+        fc.string({ unit: "grapheme", maxLength: 400 }),
+        fc.nat(200).map((size) => "a🙂".repeat(size)),
+      ),
+      fc.integer({ min: TRACE_TRUNCATION_MARKER.length, max: 500 }),
+      (value, limit) => {
+        const kept = capTraceTail(value, limit);
+        assert.ok(kept.length <= limit);
+        if (kept === value) return;
+        assert.ok(kept.startsWith(TRACE_TRUNCATION_MARKER));
+        const tail = kept.slice(TRACE_TRUNCATION_MARKER.length);
+        assert.ok(value.endsWith(tail));
+        assert.equal(/^[\udc00-\udfff]/u.test(tail), false);
+      },
+    ),
     RUNS,
   );
 });
@@ -263,9 +327,9 @@ test("property: чистка удаляет по дате в имени и не 
       noInvalidDate: true,
     })
     .map((value) => value.toISOString().slice(0, 10));
-  // Смещения вокруг границы окна (-13) — иначе случайная дата за 15 лет попадает
+  // Смещения вокруг границы окна (-29) — иначе случайная дата за 15 лет попадает
   // ровно в край раз в тысячу прогонов, и off-by-one живёт в проде.
-  const offsets = fc.uniqueArray(fc.integer({ min: -30, max: 2 }), {
+  const offsets = fc.uniqueArray(fc.integer({ min: -40, max: 2 }), {
     maxLength: 12,
   });
   const foreign = fc.constantFrom(
@@ -293,8 +357,8 @@ test("property: чистка удаляет по дате в имени и не 
         const left = new Set(readdirSync(traceDir(dir)));
 
         for (const name of others) assert.ok(left.has(name));
-        // Окно — сегодняшний файл и 13 предыдущих; всё, что старше ПО ИМЕНИ, в утиль.
-        const cutoff = shift(day, -13);
+        // Окно — сегодняшний файл и 29 предыдущих; всё, что старше ПО ИМЕНИ, в утиль.
+        const cutoff = shift(day, -29);
         for (const value of days) {
           const name = `${value}.jsonl`;
           const keep = value >= cutoff;

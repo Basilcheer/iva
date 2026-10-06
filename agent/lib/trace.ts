@@ -69,9 +69,12 @@ export type TraceOptions = {
 };
 
 // Потолок на поле содержимого — идея CONTENT_ATTRIBUTE_LIMIT из трейсинга eve, но своя
-// реализация: чужие внутренности не парсим (philosophy §5). 2000 знаков — читаемый кусок
-// аргумента или ответа, а не файл целиком.
-export const TRACE_CONTENT_LIMIT = 2000;
+// реализация: чужие внутренности не парсим (philosophy §5). 4096 знаков — сообщение Telegram
+// целиком; ответ длиннее — читаемый кусок, а не файл целиком.
+export const TRACE_CONTENT_LIMIT = 4096;
+// Прежний размер поля: вторая попытка для строки, не влезшей в TRACE_LINE_LIMIT при 4096.
+// С ним событие теряет не больше, чем до поля 4096 (ADR-0010, пересмотр 06.10.2026).
+export const TRACE_CONTENT_FALLBACK = 2000;
 // Короткие поля-идентификаторы: ход, сессия, источник, группа, имя события.
 export const TRACE_ID_LIMIT = 200;
 // Потолок строки В БАЙТАХ UTF-8 — считать надо ровно то, что уйдёт в write(2). Одна
@@ -79,8 +82,8 @@ export const TRACE_ID_LIMIT = 200;
 // параллельные писатели (агент и мост) не рвут строки друг другу. Кириллица и эмодзи
 // стоят 2-4 байта на знак, поэтому лимит по code units врал бы втрое.
 export const TRACE_LINE_LIMIT = 16 * 1024;
-// Сколько дней журнала держим: сегодняшний файл и 13 предыдущих.
-export const TRACE_RETENTION_DAYS = 14;
+// Сколько дней журнала держим: сегодняшний файл и 29 предыдущих.
+export const TRACE_RETENTION_DAYS = 30;
 export const TRACE_TRUNCATION_MARKER = "…[truncated]";
 export const TRACE_DEPTH_MARKER = "…[deep]";
 // Ключ-пометка обрезанного объекта: сколько полей было на самом деле.
@@ -140,39 +143,45 @@ export function capTraceString(value: string, limit: number): string {
   return value.slice(0, keep) + TRACE_TRUNCATION_MARKER;
 }
 
+// Обрезка с другой стороны: остаётся КОНЕЦ, пометка в начале. Для вывода bash, где ошибка
+// стоит последней. Низкая половина пары без своей высокой в начале среза отбрасывается.
+export function capTraceTail(value: string, limit: number): string {
+  if (value.length <= limit) return value;
+  let from = value.length - Math.max(0, limit - TRACE_TRUNCATION_MARKER.length);
+  const first = value.charCodeAt(from);
+  if (first >= 0xdc00 && first <= 0xdfff) from += 1;
+  return TRACE_TRUNCATION_MARKER + value.slice(from);
+}
+
 // Значения, которые в чужом payload встречаются, а в JSON не ложатся: их разбираем
 // ЯВНО и по-своему. Иначе Object.entries обходит 5-мегабайтный Buffer поэлементно
 // (замер: 2.9 с в горячем пути хода), Date превращается в {}, а Error — в пустой объект.
-function capForeign(value: object): unknown {
+function capForeign(value: object, limit: number): unknown {
   if (ArrayBuffer.isView(value)) return { bytes: value.byteLength };
   if (value instanceof ArrayBuffer) return { bytes: value.byteLength };
   if (value instanceof Date)
     return Number.isNaN(value.getTime()) ? "Invalid Date" : value.toISOString();
   if (value instanceof Error)
-    return capTraceString(
-      `${value.name}: ${value.message}`,
-      TRACE_CONTENT_LIMIT,
-    );
+    return capTraceString(`${value.name}: ${value.message}`, limit);
   return undefined; // Map и Set разбирает capValue: у них есть своё содержимое.
 }
 
 // Любое значение → JSON-безопасное и ограниченное: строки по потолку, массивы и объекты
 // по числу элементов, вложенность по глубине. Циклы обрываются той же глубиной, поэтому
 // JSON.stringify ниже не может уйти в бесконечность.
-function capValue(value: unknown, depth: number): unknown {
-  if (typeof value === "string")
-    return capTraceString(value, TRACE_CONTENT_LIMIT);
+function capValue(value: unknown, depth: number, limit: number): unknown {
+  if (typeof value === "string") return capTraceString(value, limit);
   if (typeof value === "number" || typeof value === "boolean" || value === null)
     return value;
-  if (typeof value === "bigint")
-    return capTraceString(value.toString(), TRACE_CONTENT_LIMIT);
-  if (Array.isArray(value)) return capList(value, depth);
+  if (typeof value === "bigint") return capTraceString(value.toString(), limit);
+  if (Array.isArray(value)) return capList(value, depth, limit);
   if (typeof value === "object") {
     if (depth >= MAX_DEPTH) return TRACE_DEPTH_MARKER;
-    const foreign = capForeign(value);
+    const foreign = capForeign(value, limit);
     if (foreign !== undefined) return foreign;
-    if (value instanceof Map) return capList([...value.entries()], depth);
-    if (value instanceof Set) return capList([...value], depth);
+    if (value instanceof Map)
+      return capList([...value.entries()], depth, limit);
+    if (value instanceof Set) return capList([...value], depth, limit);
     // Чужой объект умеет кусаться: геттер с исключением, прокси, отравленный toJSON.
     // Читателю журнала это не интересно — поле помечается и едет дальше.
     let entries: [string, unknown][];
@@ -186,7 +195,7 @@ function capValue(value: unknown, depth: number): unknown {
     // а на его месте оказывается прототип. У объекта без прототипа такой ловушки нет.
     const out = Object.create(null) as Record<string, unknown>;
     for (const [key, item] of entries.slice(0, MAX_KEYS)) {
-      const capped = capValue(item, depth + 1);
+      const capped = capValue(item, depth + 1, limit);
       if (capped !== undefined)
         out[capTraceString(key, TRACE_ID_LIMIT)] = capped;
     }
@@ -198,11 +207,15 @@ function capValue(value: unknown, depth: number): unknown {
   return undefined; // undefined, функция, symbol — в JSON им места нет
 }
 
-function capList(value: readonly unknown[], depth: number): unknown {
+function capList(
+  value: readonly unknown[],
+  depth: number,
+  limit: number,
+): unknown {
   if (depth >= MAX_DEPTH) return TRACE_DEPTH_MARKER;
   const items: unknown[] = value
     .slice(0, MAX_ITEMS)
-    .map((item) => capValue(item, depth + 1) ?? null);
+    .map((item) => capValue(item, depth + 1, limit) ?? null);
   if (value.length > MAX_ITEMS) items.push(TRACE_TRUNCATION_MARKER);
   return items;
 }
@@ -229,11 +242,12 @@ function fits(line: string): boolean {
 function stringify(
   head: ReturnType<typeof header>,
   data: Record<string, unknown>,
+  limit: number,
 ): string {
   try {
     return JSON.stringify({
       ...head,
-      data: capValue(data, 1) as Record<string, unknown>,
+      data: capValue(data, 1, limit) as Record<string, unknown>,
     });
   } catch {
     return JSON.stringify({ ...head, data: { traceUnreadable: true } });
@@ -245,9 +259,9 @@ function stringify(
  * её, а тесты проверяют схему и потолки без файловой системы.
  *
  * Гарантии: результат — валидный JSON без переводов строк внутри, длиной не больше
- * TRACE_LINE_LIMIT. Строка, не влезшая с содержимым, пересобирается без него и метится
- * `data.traceTrimmed`, поэтому «слишком большое событие» становится маленьким событием,
- * а не потерянным.
+ * TRACE_LINE_LIMIT. Строка, не влезшая с содержимым, пересобирается с полями по
+ * TRACE_CONTENT_FALLBACK, потом без содержимого с меткой `data.traceTrimmed`, поэтому
+ * «слишком большое событие» становится маленьким событием, а не потерянным.
  */
 export function traceLine(
   input: TraceInput,
@@ -268,15 +282,19 @@ export function traceLine(
   const full = capture ? { ...base, ...content } : base;
 
   const head = header(input, now);
-  const line = stringify(head, full);
-  if (fits(line)) return line;
-
-  const trimmed = stringify(head, { ...base, traceTrimmed: true });
-  if (fits(trimmed)) return trimmed;
-  // Само `data` не влезло: имена ушли, но размеры содержимого остаются — контракт
-  // (docs/trace.md) обещает их при любой обрезке.
-  const sizesOnly = stringify(head, { ...sizes, traceTrimmed: true });
-  if (fits(sizesOnly)) return sizesOnly;
+  // Попытки по убыванию: всё по 4096, всё по 2000, без содержимого, и последней — без
+  // `data`: имена ушли, но размеры содержимого остаются — контракт (docs/trace.md)
+  // обещает их при любой обрезке.
+  const attempts: [Record<string, unknown>, number][] = [
+    [full, TRACE_CONTENT_LIMIT],
+    [full, TRACE_CONTENT_FALLBACK],
+    [{ ...base, traceTrimmed: true }, TRACE_CONTENT_FALLBACK],
+    [{ ...sizes, traceTrimmed: true }, TRACE_CONTENT_FALLBACK],
+  ];
+  for (const [data, limit] of attempts) {
+    const line = stringify(head, data, limit);
+    if (fits(line)) return line;
+  }
   return JSON.stringify({ ...head, data: { traceTrimmed: true } });
 }
 
