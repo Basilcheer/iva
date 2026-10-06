@@ -36,7 +36,9 @@ const LABEL_CHARS = 60;
 const REASON_CHARS = 120;
 const KEY_REASON_CHARS = 80;
 const LINE_CHARS = 200;
-const INSIGHT_PROMPT = "Insight:";
+// Промпт Insight начинается с `Insight:`; если строку сбоя пометил Gate, перед ним стоит
+// предупреждение одной строкой и пустая строка (scripts/proactive/tick.ts, `insightPrompt`).
+const INSIGHT_PROMPT = /^(?:[^\n]*\n\n)?Insight:/u;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -68,21 +70,48 @@ const lastLine = (value: string): string =>
     .filter((line) => line.trim() !== "")
     .at(-1) ?? "";
 
-/** Причина из `result` — строки JSON, которую хук пишет вместо объекта ответа. */
-function resultReason(result: unknown): string {
-  const raw = text(result);
-  let parsed: unknown;
+function parseJson(raw: string): unknown {
   try {
-    parsed = JSON.parse(raw);
+    return JSON.parse(raw);
   } catch {
-    return raw;
+    return undefined;
   }
-  if (!isRecord(parsed)) return raw;
-  const error = parsed.error;
+}
+
+/** Причина из ответа-объекта: `error` (строка или его `message`), конец `stderr`, `message`. */
+function recordReason(answer: Record<string, unknown>): string {
+  const error = answer.error;
   if (typeof error === "string" && error.trim() !== "") return error;
   if (isRecord(error) && typeof error.message === "string")
     return error.message;
-  return lastLine(text(parsed.stderr)) || text(parsed.message);
+  return lastLine(text(answer.stderr)) || text(answer.message);
+}
+
+// Ключи-скаляры подряд от начала объекта, каждый с запятой после себя: у строки, обрезанной с
+// конца, это ровно те, что уцелели целиком. Хук ставит `ok`, `error`, `message` (у bash —
+// `exitCode` и `stderr`) первыми.
+const LEADING_SCALARS =
+  /^\{(?:"(?:[^"\\]|\\.)*":(?:"(?:[^"\\]|\\.)*"|[-+.\w]+),)*/u;
+
+/** Ведущие ключи обрезанного ответа; всё после них — содержимое, оно в причину не идёт. */
+function leadingFields(raw: string): Record<string, unknown> {
+  const head = LEADING_SCALARS.exec(raw)?.[0] ?? "{";
+  const parsed = parseJson(`${head.slice(0, -1) || "{"}}`);
+  return isRecord(parsed) ? parsed : {};
+}
+
+/**
+ * Причина из `result` — строки JSON, которую хук пишет вместо объекта ответа. Не JSON — сама
+ * строка (ответ-текст), но если это объект, обрезанный писателем с конца, — только его ведущие
+ * ключи: сырая голова несла бы содержимое ответа (карточку, страницу) в промпт и в issue.
+ */
+function resultReason(result: unknown): string {
+  const raw = text(result);
+  const parsed = parseJson(raw);
+  if (isRecord(parsed)) return recordReason(parsed);
+  if (parsed === undefined && raw.trimStart().startsWith("{"))
+    return recordReason(leadingFields(raw.trimStart()));
+  return raw;
 }
 
 function reasonText(kind: string, name: string, data: Line): string {
@@ -109,6 +138,15 @@ const turnCause = (data: Line): Cause => ({
   kind: label(scalar(data.code) || "failed"),
 });
 
+/** Чей вызов: инструмент, иначе субагент или скилл `load_skill` — у их ответов нет `toolName`. */
+function callWhere(data: Line): string {
+  if (text(data.toolName) !== "") return text(data.toolName);
+  if (text(data.subagentName) !== "")
+    return `subagent ${text(data.subagentName)}`;
+  if (text(data.name) !== "") return `skill ${text(data.name)}`;
+  return "tool";
+}
+
 /** Сбои по `kind.name` (таблица 3.2.1 спеки); вызов без `failure` — не сбой. */
 const CAUSES: Readonly<Record<string, (data: Line) => Cause | null>> = {
   "eve.turn.failed": turnCause,
@@ -116,10 +154,7 @@ const CAUSES: Readonly<Record<string, (data: Line) => Cause | null>> = {
   "eve.action.result": (data) =>
     text(data.failure) === ""
       ? null
-      : {
-          where: label(text(data.toolName) || "tool"),
-          kind: label(text(data.failure)),
-        },
+      : { where: label(callWhere(data)), kind: label(text(data.failure)) },
   "outbox.failed": () => ({ where: "outbox", kind: "failed" }),
   "stop.failed": () => ({ where: "stop", kind: "failed" }),
   "guard.repeat_stop": (data) => ({
@@ -211,7 +246,7 @@ function readDay(
   }
 }
 
-/** Сессии, чей промпт начинается с `Insight:`: их сбои в список не идут. */
+/** Сессии Insight (промпт с `Insight:`, в том числе после предупреждения Gate): их сбои в список не идут. */
 function insightSessions(lines: readonly Line[]): Set<string> {
   const sessions = new Set<string>();
   for (const line of lines) {
@@ -220,7 +255,7 @@ function insightSessions(lines: readonly Line[]): Set<string> {
       session !== "" &&
       line.kind === "eve" &&
       line.name === "message.received" &&
-      text(dataOf(line).message).startsWith(INSIGHT_PROMPT)
+      INSIGHT_PROMPT.test(text(dataOf(line).message))
     )
       sessions.add(session);
   }
@@ -239,7 +274,7 @@ type Fold = {
 };
 
 const foldKey = (where: string, kind: string, reason: string): string =>
-  `${where}\n${kind}\n${reason.toLowerCase().replace(/\d/gu, "#").slice(0, KEY_REASON_CHARS)}`;
+  `${where}\n${kind}\n${reason.toLowerCase().replace(/\d+/gu, "#").slice(0, KEY_REASON_CHARS)}`;
 
 /** Новее — больше `at`; при равном — больше `ref`, затем `reason`: порядок строк не важен. */
 const newer = (
@@ -280,7 +315,7 @@ const byWeight = (a: Fold, b: Fold): number =>
 
 /**
  * Сбои последних 24 часов от `nowMs`, свёрнутые по причине: где, класс, первая строка причины
- * (цифры в ключе свёртки — `#`). `count` — разные ходы, порядок — по `count`, потом по
+ * (число в ключе свёртки — `#`). `count` — разные ходы, порядок — по `count`, потом по
  * свежести. Нет каталога — пусто; битая строка — `unreadable`.
  */
 export function listTurnFailures(

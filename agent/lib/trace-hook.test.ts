@@ -487,6 +487,80 @@ void test("error, равный ответу, второй копией не пи
   assert.equal(own.error, "своя причина");
 });
 
+void test("у ответа load_skill и субагента в data остаётся, чей это вызов", () => {
+  const event = (result: Record<string, unknown>) => {
+    feed(
+      createActionResultEvent({
+        result,
+        sequence: 1,
+        stepIndex: 0,
+        turnId: "turn_3",
+      }),
+    );
+    return journal().at(-1)?.data as Record<string, unknown>;
+  };
+  const skill = event({
+    callId: "c9",
+    kind: "load-skill-result",
+    name: "insgiht",
+    isError: true,
+    output: "Skill not found",
+  });
+  assert.equal(skill.name, "insgiht");
+  assert.equal(skill.failure, "isError");
+  const child = event({
+    callId: "c10",
+    kind: "subagent-result",
+    origin: "dispatch",
+    subagentName: "researcher",
+    isError: true,
+    output: "no such agent",
+  });
+  assert.equal(child.subagentName, "researcher");
+  assert.equal(child.failure, "isError");
+});
+
+void test("строковый ответ с JSON-ошибкой внутри помечается, как его видит сторож повторов", () => {
+  assert.equal(
+    written(JSON.stringify({ ok: false, error: "quota" })).failure,
+    "ok:false",
+  );
+  assert.equal(
+    written(` ${JSON.stringify({ error: "denied" })}\n`).failure,
+    "error",
+  );
+  assert.equal(written('{"ok":true}').failure, undefined);
+  assert.equal(written("{не JSON").failure, undefined);
+});
+
+void test("stderr, который влезает в поле, пишется целиком; огромный cwd не метит пустой stdout", () => {
+  const trace = `Traceback (most recent call last):\n${'  File "x.py", line 1\n'.repeat(140)}ValueError: boom\n`;
+  assert.ok(trace.length > 3000);
+  const whole = JSON.parse(
+    String(written(bash({ exitCode: 1, stderr: trace })).result),
+  ) as Record<string, string>;
+  assert.equal(whole.stderr, trace);
+
+  // Поле дорежет писатель с конца, поэтому строка уже не JSON: смотрим на её начало.
+  const wide = String(
+    written(bash({ exitCode: 1, stderr: "e\n", cwd: "d".repeat(5000) })).result,
+  );
+  assert.ok(
+    wide.startsWith('{"exitCode":1,"stderr":"e\\n","stdout":"","cwd":"ddd'),
+    wide.slice(0, 80),
+  );
+});
+
+void test("эмодзи в хвосте bash стоят столько, сколько занимают в JSON", () => {
+  const stdout = "😀\u0000\n".repeat(12_000);
+  const result = String(written(bash({ exitCode: 0, stdout })).result);
+  assert.ok(result.length <= TRACE_CONTENT_LIMIT);
+  assert.ok(
+    result.length > TRACE_CONTENT_LIMIT - 20,
+    `хвост занял ${result.length} из ${TRACE_CONTENT_LIMIT}`,
+  );
+});
+
 void test("ответ, который не сериализуется, идёт прежним путём и ход не падает", () => {
   const cycle: Record<string, unknown> = { name: "cycle" };
   cycle.self = cycle;

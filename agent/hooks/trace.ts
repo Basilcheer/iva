@@ -288,12 +288,26 @@ const exitFailure = (output: Record<string, unknown>): string | undefined =>
 
 // Класс сбоя вызова, без текста (docs/trace.md, `failure`). Порядок — правило eve:
 // `isError` всегда даёт `failed`, без него `failed` значит «ответ назвал свои code и message».
+// Ответ как объект. Строку с JSON-объектом eve (`readActionResultOutputError`) и сторож
+// повторов (agent/lib/repeat-guard.ts) тоже читают как объект: признаки сбоя в ней те же.
+function answerOf(output: unknown): Record<string, unknown> {
+  if (isRecord(output)) return output;
+  if (typeof output !== "string" || !output.trimStart().startsWith("{"))
+    return {};
+  try {
+    const parsed: unknown = JSON.parse(output);
+    return isRecord(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
 function failureOf(
   status: unknown,
   result: Record<string, unknown>,
   output: unknown,
 ): string | undefined {
-  const answer = isRecord(output) ? output : {};
+  const answer = answerOf(output);
   if (status === "rejected") return undefined; // отказ на подтверждении — ни успех, ни сбой
   if (result.isError === true || answer.isError === true) return "isError";
   if (status === "failed") return "status:failed";
@@ -306,14 +320,26 @@ function failureOf(
 // Конец строки, который в JSON занимает не больше `budget` знаков, с пометкой обрезки.
 // Мерить надо JSON: `\n` и управляющие знаки там стоят 2–6 знаков, и срез по сырой длине
 // выбросил бы почти весь вывод `seq` или оставил бы поле длиннее размера.
+// Последний знак перед `end`: пара суррогатов — один знак из двух code units.
+function lastChar(value: string, end: number): string {
+  const low = value.charCodeAt(end - 1);
+  const high = value.charCodeAt(end - 2);
+  const pair =
+    low >= 0xdc00 && low <= 0xdfff && high >= 0xd800 && high <= 0xdbff;
+  return value.slice(end - (pair ? 2 : 1), end);
+}
+
 function jsonTail(value: string, budget: number): string {
-  if (JSON.stringify(value).length - 2 <= budget) return value;
+  // Пустой поток оставляем пустым: пометка без среза солгала бы, что что-то срезано.
+  if (value === "" || JSON.stringify(value).length - 2 <= budget) return value;
   let size = TRACE_TRUNCATION_MARKER.length;
   let count = 0;
   while (count < value.length) {
-    size += JSON.stringify(value[value.length - 1 - count]).length - 2;
+    // Пара суррогатов в JSON — два знака, одинокая половина — шесть (`\udXXX`).
+    const char = lastChar(value, value.length - count);
+    size += JSON.stringify(char).length - 2;
     if (size > budget) break;
-    count += 1;
+    count += char.length;
   }
   // Срез всегда короче строки, иначе capTraceTail вернул бы её целиком, без пометки.
   const keep = Math.min(
@@ -323,12 +349,15 @@ function jsonTail(value: string, budget: number): string {
   return capTraceTail(value, keep + TRACE_TRUNCATION_MARKER.length);
 }
 
-// bash: конец stdout и stderr, где стоит ошибка. stdout получает всё, что осталось от
-// поля; не влезло и так (огромный cwd) — строку дорежет писатель с конца.
+// bash: конец stdout и stderr, где стоит ошибка. Влезает в поле — пишется целиком; нет —
+// stderr режется до конца в 1000 знаков, stdout получает всё, что осталось от поля; не
+// влезло и так (огромный cwd) — строку дорежет писатель с конца.
 function bashResult(output: BashOutput): string {
   const shaped: Record<string, unknown> = {};
   for (const key of BASH_KEYS)
     if (output[key] !== undefined) shaped[key] = output[key];
+  const whole = JSON.stringify(shaped);
+  if (whole.length <= TRACE_CONTENT_LIMIT) return whole;
   shaped.stderr = jsonTail(output.stderr, BASH_STDERR_CHARS);
   const rest = JSON.stringify({ ...shaped, stdout: "" }).length;
   shaped.stdout = jsonTail(output.stdout, TRACE_CONTENT_LIMIT - rest);
@@ -390,7 +419,8 @@ function projectResult(
 ): void {
   if (!isRecord(data.result)) return;
   const result = data.result;
-  for (const key of ["toolName", "callId", "isError"])
+  // `name` — скилл `load_skill`, `subagentName` — субагент: у их ответов нет `toolName`.
+  for (const key of ["toolName", "callId", "isError", "name", "subagentName"])
     if (out[key] === undefined && isScalar(result[key])) out[key] = result[key];
   try {
     Object.assign(out, resultFacts(data.status, result));

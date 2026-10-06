@@ -991,6 +991,55 @@ await test("--turn without a value or not a pair: usage error before the package
   assert.equal(decoded(url).title, "[iva] turn A/turn_9 (9.9.9)");
 });
 
+await test("--turn: a selector of 6000 characters still gives a url within ISSUE_URL_BYTES", async (t) => {
+  const session = "s".repeat(6000);
+  const { url } = await diagnoseTurn(t, SKELETON, [
+    "--turn",
+    `${session}/turn_0`,
+  ]);
+  assert.ok(url.length <= ISSUE_URL_BYTES, `${url.length}`);
+  assert.ok(decoded(url).title.startsWith("[iva] turn sss"));
+});
+
+await test("--turn: a key from a plugin's .env is cut from the package and the issue url", async (t) => {
+  const PLUGIN_KEY = "plg-7f3a9c2e5b1d4f6a8c0e";
+  const events = SKELETON.map((event) =>
+    event.name === "action.result" && event.session === undefined
+      ? {
+          ...event,
+          data: {
+            ...event.data,
+            result: JSON.stringify({
+              exitCode: 22,
+              stderr: `curl: (22) 401 https://api.x.com/v1?token=${PLUGIN_KEY}\n`,
+              stdout: "",
+            }),
+          },
+        }
+      : event,
+  );
+  const { text, url, printed } = await diagnoseTurn(
+    t,
+    events,
+    undefined,
+    ({ data }) => {
+      mkdirSync(join(data, "custom/plugins"), { recursive: true });
+      writeFileSync(
+        join(data, "custom/plugins/weather.env"),
+        `WEATHER_TOKEN=${PLUGIN_KEY}\nMODE=fast\n`,
+      );
+    },
+  );
+  assert.ok(turnOf(text).includes("curl: (22) 401"), turnOf(text));
+  assert.ok(!text.includes(PLUGIN_KEY), "ключ плагина в пакете");
+  assert.ok(!decoded(url).body.includes(PLUGIN_KEY), "ключ плагина в issue");
+  assert.ok(!printed.join("\n").includes(PLUGIN_KEY));
+  assert.match(
+    text,
+    /- redaction: \d+ values from \.env and 1 from plugin \.env files, pattern rules always on/u,
+  );
+});
+
 const SEED = Number(process.env.FC_SEED ?? Date.now() % 2 ** 31);
 
 await test(`PBT: secrets of .env and text of the owner in every content field of the turn — none of .env in the section or the url, the owner's text only on error lines (seed ${SEED})`, async (t) => {

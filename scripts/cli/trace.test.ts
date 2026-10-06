@@ -1762,7 +1762,7 @@ test("--json needs one turn and says so instead of printing the list", async () 
 
   await assert.rejects(
     () => cmdTrace(["show", "--json"]),
-    /--json shows one turn: iva trace show --json <turn\|last>/u,
+    /--json shows one turn: iva trace show --json <session>\/<turn>\|last/u,
   );
   assert.deepEqual(printed, []);
 });

@@ -18,6 +18,7 @@ import {
 } from "node:fs";
 import * as os from "node:os";
 import { join } from "node:path";
+import { parseEnv } from "node:util";
 import type { Reminder } from "../../agent/lib/reminder-store.ts";
 import {
   cutText,
@@ -285,7 +286,7 @@ const fact = (key: string, value: unknown): string[] =>
     ? [`${key}=${cutText(String(value).replace(/\s+/gu, " "), VALUE_CHARS)}`]
     : [];
 
-/** Пары `ключ=значение` из белого списка: ни `args`, ни `result`, ни `message`, ни `chatId`. */
+/** Пары `ключ=значение` только из `TURN_KEYS`: ни `args`, ни `result`, ни `message`, ни `chatId`. */
 function factsOf(data: Record<string, unknown>): string[] {
   const usage = record(data.usage);
   const tools = Array.isArray(data.actions)
@@ -314,7 +315,7 @@ function stackFrames(details: unknown): string[] {
     .slice(0, FRAMES);
 }
 
-/** Событие хода: время, имя, белый список; у упавшего — строка ошибки и кадры стека. */
+/** Событие хода: время, имя, ключи `TURN_KEYS`; у упавшего — строка ошибки и кадры стека. */
 function turnEvent(line: TraceLine, clean: Clean): TurnEvent {
   const ts = typeof line.ts === "string" ? line.ts.slice(11, 23) : "";
   const head = [`${ts} ${String(line.kind)}.${String(line.name)}`];
@@ -461,6 +462,12 @@ function fitIssue(
     head = cutText(head, Math.floor(head.length * 0.9));
     url = issueUrl(title, `${head}\n\n${fullLine}`);
   }
+  // Тело уже пусто, а адрес длинный — значит, длинный заголовок (селектор не из журнала).
+  let short = title;
+  while (url.length > ISSUE_URL_BYTES && short.length > 0) {
+    short = cutText(short, Math.floor(short.length * 0.9));
+    url = issueUrl(short, `${head}\n\n${fullLine}`);
+  }
   return { text, url };
 }
 
@@ -563,13 +570,48 @@ function journalSection(
  * как пакет с полным (слепая приёмка T21): владелец и модель обязаны видеть, что `.env`
  * не нашли и работают только шаблонные правила.
  */
-function redactionLine(envFound: boolean, secretCount: number): string {
+function redactionLine(
+  envFound: boolean,
+  secretCount: number,
+  pluginCount = 0,
+): string {
   if (!envFound)
     return (
       "- redaction: .env not found — only the pattern rules were applied " +
       "(bot token, telegram ids, e-mail); values of keys are NOT in the cut list"
     );
-  return `- redaction: ${secretCount} values from .env, pattern rules always on`;
+  const plugins =
+    pluginCount > 0 ? ` and ${pluginCount} from plugin .env files` : "";
+  return `- redaction: ${secretCount} values from .env${plugins}, pattern rules always on`;
+}
+
+/**
+ * Значения ключей плагинов (`data/custom/plugins/<name>.env`, docs/plugins.md): их сервер
+ * или скрипт может упасть с ключом в строке ошибки, а та идёт в раздел хода и в issue.
+ * Тот же разбор, что у `--env-file` и у самого плагина (`parseEnv`); нечитаемое — мимо.
+ */
+function pluginSecrets(dataDir: string): string[] {
+  const directory = join(dataDir, "custom", "plugins");
+  let names: string[];
+  try {
+    names = readdirSync(directory).filter((name) => name.endsWith(".env"));
+  } catch {
+    return [];
+  }
+  return names.flatMap((name) => {
+    try {
+      const values = parseEnv(readFileSync(join(directory, name), "utf8"));
+      return secretValuesFromEnv(
+        Object.fromEntries(
+          Object.entries(values).filter(
+            (entry): entry is [string, string] => typeof entry[1] === "string",
+          ),
+        ),
+      );
+    } catch {
+      return [];
+    }
+  });
 }
 
 function packageMarkdown(input: {
@@ -745,12 +787,14 @@ export function createDiagnoseCommand(
     const doctor = await readOnlyDoctor(runtime, systemdLifecycle);
     // Список секретов читается и после прогона (T21): доктор только читает, но .env мог
     // поменять кто-то другой, пока пакет собирался.
-    const secrets = [
-      ...new Set([
-        ...secretValuesFromEnv(env),
-        ...secretValuesFromEnv(readEnv()),
-      ]),
-    ];
+    const own = new Set([
+      ...secretValuesFromEnv(env),
+      ...secretValuesFromEnv(readEnv()),
+    ]);
+    const plugins = [...new Set(pluginSecrets(dataDirectory))].filter(
+      (value) => !own.has(value),
+    );
+    const secrets = [...own, ...plugins];
     const tilde = homeToTilde();
     const clean = (text: string) => redact(tilde(text), secrets);
     const name = `${collectedAt.toISOString().replace(/[:.]/gu, "-")}.md`;
@@ -762,7 +806,7 @@ export function createDiagnoseCommand(
       doctor,
       journal: journalSection(cap, dataDirectory, units),
       updateLog: updateLogSection(dataDirectory),
-      redaction: redactionLine(envFound, secrets.length),
+      redaction: redactionLine(envFound, own.size, plugins.length),
       schedules: await schedulesSection(dataDirectory),
       reminders: await remindersSection(dataDirectory, collectedAt.getTime()),
     };

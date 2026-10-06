@@ -1146,7 +1146,7 @@ ${C.b}iva trace${C.x} — ${translate("read the turn journal", "читать ж�
       // pipe that gets prose where it asked for lines fails somewhere far from here.
       if (argv.includes("--json"))
         throw new Error(
-          "--json shows one turn: iva trace show --json <turn|last>",
+          "--json shows one turn: iva trace show --json <session>/<turn>|last",
         );
       log(
         translate(

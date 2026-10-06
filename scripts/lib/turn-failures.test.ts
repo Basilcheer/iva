@@ -9,6 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { after } from "node:test";
 import fc from "fast-check";
+import { injectionWarning } from "../../agent/lib/telegram-gate-notice.ts";
 import {
   diagnoseFailureLines,
   failureReason,
@@ -235,6 +236,87 @@ test("a failure in a session whose prompt starts with «Insight:» gives no line
   assert.deepEqual(
     causes(data).map((cause) => cause.ref),
     ["chat/turn_0"],
+  );
+});
+
+test("an Insight prompt behind the Gate warning is still Insight: its failure gives no line", () => {
+  const data = journal({
+    "2026-10-06": [
+      line({
+        session: "insw",
+        turn: "turn_0",
+        kind: "eve",
+        name: "message.received",
+        data: { message: `${injectionWarning()}\n\nInsight: once a day…` },
+      }),
+      bash("insw", "turn_0", "403"),
+      bash("chat", "turn_0", "403"),
+    ],
+  });
+  assert.deepEqual(
+    causes(data).map((cause) => cause.ref),
+    ["chat/turn_0"],
+  );
+});
+
+test("numbers of any length fold into one cause: «attempt 9» and «attempt 12» are one line", () => {
+  const data = journal({
+    "2026-10-06": [
+      bash("a", "turn_0", "fetch failed (attempt 9)"),
+      bash("b", "turn_0", "fetch failed (attempt 12)"),
+      bash("c", "turn_0", "fetch failed (attempt 100)"),
+    ],
+  });
+  const all = causes(data);
+  assert.equal(all.length, 1, JSON.stringify(all));
+  assert.equal(all[0]?.count, 3);
+});
+
+test("a result cut from the end gives its leading error, never the content after it", () => {
+  const cut = (result: string, session: string) =>
+    line({
+      session,
+      turn: "turn_0",
+      kind: "eve",
+      name: "action.result",
+      data: { toolName: "memory_search", failure: "ok:false", result },
+    });
+  const tail = `,"hits":[{"text":"OWNER_PRIVATE_NOTE ${"дневник ".repeat(500)}`;
+  const bashCut = `{"exitCode":2,"stderr":"warn\\nls: nope\\n","stdout":"OWNER_PRIVATE_NOTE ${"x".repeat(100)}`;
+  const lines = [
+    cut(`{"ok":false,"error":"index busy"${tail}…[truncated]`, "a"),
+    cut(`{"ok":false,"message":"no index"${tail}`, "b"),
+    cut(`{"ok":false${tail}`, "c"),
+    cut(bashCut, "d"),
+  ].map((raw) => JSON.parse(raw) as Record<string, unknown>);
+  assert.deepEqual(lines.map(failureReason), [
+    "index busy",
+    "no index",
+    "",
+    "ls: nope",
+  ]);
+});
+
+test("load_skill and a subagent name the skill or the agent, not a bare «tool»", () => {
+  const failed = (session: string, data: Record<string, unknown>) =>
+    line({
+      session,
+      turn: "turn_0",
+      kind: "eve",
+      name: "action.result",
+      data: { failure: "isError", ...data },
+    });
+  const data = journal({
+    "2026-10-06": [
+      failed("a", { name: "insgiht", result: "Skill not found" }),
+      failed("b", { subagentName: "researcher", result: "no such agent" }),
+    ],
+  });
+  assert.deepEqual(
+    causes(data)
+      .map((cause) => cause.where)
+      .sort(),
+    ["skill insgiht", "subagent researcher"],
   );
 });
 
