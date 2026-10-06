@@ -440,10 +440,67 @@ await test("отказ rich-сообщения проваливается в HTM
 
   assert.equal(result.ok, true);
   assert.equal(result.delivered, 1);
+  // Таблица на HTML-пути — обычное поведение до rich, не потеря: fellBack не ставится.
+  assert.equal(result.fellBack, false);
+  assert.equal(result.error, "");
   assert.deepEqual(
     sent.map((s) => s.kind),
     ["rich", "html"],
   );
+});
+
+await test("кнопки, потерянные на HTML-пути, видны в результате и в Trace", async (t) => {
+  captureErrors(t);
+  const { sent, transport } = stub({
+    rich: () => ({
+      ok: false,
+      error: "sendRichMessage 400: Bad Request: BUTTON_DATA_INVALID",
+      retryPlain: false,
+    }),
+  });
+  const text =
+    'Готово.\n\n<tg-button type="callback_data" data="Да">Да</tg-button> — подтвердить.';
+  const before = traceEvents().length;
+
+  const result = await trace.traceOutbox(
+    { turn: "turn_btn", session: "wrun_btn", source: "telegram" },
+    text,
+    () => sendThroughOutbox(text, transport),
+  );
+
+  // Ответ доставлен HTML-путём, но владелец видит, что кнопки потерялись и почему.
+  assert.equal(result.ok, true);
+  assert.equal(result.delivered, 1);
+  assert.equal(result.fellBack, true);
+  assert.match(result.error, /^buttons dropped: .*BUTTON_DATA_INVALID/u);
+  assert.deepEqual(
+    sent.map((s) => s.kind),
+    ["rich", "html"],
+  );
+  const event = traceEvents().slice(before).at(-1) as Record<string, unknown>;
+  assert.equal(event.name, "delivered");
+  const data = event.data as Record<string, unknown>;
+  assert.equal(data.fellBack, true);
+  assert.match(String(data.error), /BUTTON_DATA_INVALID/u);
+});
+
+await test("длинный data кнопки укорачивается до 64 байт до отправки rich", async (t) => {
+  const logged = captureErrors(t);
+  const { sent, transport } = stub({ rich: () => ({ ok: true }) });
+  const data = "Задачи: закрыть тесты, привычки без срока";
+
+  const result = await sendThroughOutbox(
+    `<tg-button type="callback_data" data="${data}">Закрыть</tg-button> — закрою.`,
+    transport,
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(result.fellBack, false);
+  assert.equal(sent.length, 1);
+  const sentData = /\sdata="([^"]*)"/u.exec(sent[0].text)?.[1] ?? "";
+  assert.ok(Buffer.byteLength(sentData) <= 64);
+  assert.ok(data.startsWith(sentData));
+  assert.deepEqual(logged, ["[telegram] button data shortened: 75 → 64"]);
 });
 
 await test("redactNotice проводит служебное уведомление через тот же Gate", (t) => {

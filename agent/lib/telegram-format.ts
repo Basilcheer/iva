@@ -604,6 +604,74 @@ export function withButtonTypes(md: string): string {
   });
 }
 
+/** Предел callback_data у Telegram: 64 байта UTF-8. Длиннее — 400 BUTTON_DATA_INVALID. */
+export const BUTTON_DATA_MAX_BYTES = 64;
+
+// Атом значения атрибута: HTML-сущность целиком или один символ (кодовая точка, флаг u).
+const ATTRIBUTE_ATOM_RE = /&(?:#\d+|#x[\da-f]+|[a-z]+);|[\s\S]/giu;
+
+/**
+ * Начало `data` в пределах 64 байт UTF-8: режется по границе символа и не посреди
+ * HTML-сущности. Байты считаются по сырому значению атрибута — так предел держится,
+ * разворачивает Telegram сущности или нет.
+ */
+export function shortenButtonData(
+  data: string,
+  maxBytes = BUTTON_DATA_MAX_BYTES,
+): string {
+  if (Buffer.byteLength(data) <= maxBytes) return data;
+  let out = "";
+  let bytes = 0;
+  for (const [atom] of data.matchAll(ATTRIBUTE_ATOM_RE)) {
+    bytes += Buffer.byteLength(atom);
+    if (bytes > maxBytes) break;
+    out += atom;
+  }
+  return out;
+}
+
+/**
+ * Укороченный `data`, совпавший с `data` кнопки выше в том же сообщении, получает хвост
+ * «#2», «#3»… в пределах 64 байт: Bridge узнаёт нажатие по chat:message:data
+ * (scripts/poller/control.ts, tapKey), и две одинаковые кнопки стали бы одной.
+ */
+function distinctData(data: string, seen: ReadonlySet<string>): string {
+  let short = shortenButtonData(data);
+  for (let n = 2; short !== data && seen.has(short); n++) {
+    const suffix = `#${n}`;
+    short =
+      shortenButtonData(
+        data,
+        BUTTON_DATA_MAX_BYTES - Buffer.byteLength(suffix),
+      ) + suffix;
+  }
+  return short;
+}
+
+const BUTTON_DATA_RE = /(<tg-button(?=[\s>])[^>]*?\sdata=")([^"]*)(")/gi;
+
+/**
+ * Модель пишет в `data` целую фразу, а одна длинная кнопка роняет всё rich-сообщение:
+ * Telegram отвергает его целиком, и ответ уходит HTML-путём уже без кнопок. Длинный
+ * `data` укорачивается до предела; тап приходит модели этим началом фразы, а совпавшие
+ * после укорачивания кнопки различаются хвостом «#N».
+ */
+export function shortenButtonsData(md: string): string {
+  const seen = new Set<string>();
+  return md.replace(
+    BUTTON_DATA_RE,
+    (_tag, head: string, data: string, tail: string) => {
+      const short = distinctData(data, seen);
+      seen.add(short);
+      if (short !== data)
+        console.error(
+          `[telegram] button data shortened: ${Buffer.byteLength(data)} → ${BUTTON_DATA_MAX_BYTES}`,
+        );
+      return head + short + tail;
+    },
+  );
+}
+
 export function hasRichButtons(md: unknown): boolean {
   return /<tg-button[\s>]/i.test(String(md));
 }

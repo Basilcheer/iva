@@ -143,6 +143,8 @@ export async function enableWorkingStatusStop(
 
 // Терминал хода: state → idle (+wasCancelled), статус-сообщение удалить (обычный финал)
 // или переписать на «Остановлено» (отмена). Сбои уборки не критичны — глотаем.
+// Знак очереди (сообщение за этим ходом) любой финал оставляет следующему ходу: буфер
+// входа eve переживает и отмену (steer отменяет ход ради нового сообщения), и сбой хода.
 export async function finishTelegramStatus(
   channel: {
     telegram: TelegramStatusHandle;

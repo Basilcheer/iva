@@ -11,7 +11,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fc from "fast-check";
-import { escHtml, htmlToPlain, mdToTelegramHtml } from "./telegram-format.ts";
+import {
+  BUTTON_DATA_MAX_BYTES,
+  escHtml,
+  htmlToPlain,
+  mdToTelegramHtml,
+  shortenButtonData,
+  shortenButtonsData,
+} from "./telegram-format.ts";
 
 const SEED = 20_260_818;
 const RUNS = 500;
@@ -65,5 +72,120 @@ await test(`code-span восстанавливается ровно один р�
       assert.ok(plain.includes(after.trim()));
     }),
     { seed: SEED, numRuns: RUNS },
+  );
+});
+
+// Data кнопки: любой юникод, с упором на многобайтовые символы — кириллица (2 байта),
+// евро (3), эмодзи (4, суррогатная пара в JS) и составные эмодзи, плюс HTML-сущность.
+const dataUnit = fc.oneof(
+  fc.constantFrom("а", "я", "€", "😀", "👍🏽", "👨‍👩‍👧", "a", " ", ",", "&amp;"),
+  fc.string({ unit: "grapheme", minLength: 1, maxLength: 1 }),
+);
+const buttonData = fc
+  .string({ unit: dataUnit, maxLength: 60 })
+  .filter((data) => !data.includes('"'));
+
+const ENTITY_IN_DATA = /&(?:#\d+|#x[\da-f]+|[a-z]+);/giu;
+
+const isWellFormedUtf8 = (text: string): boolean =>
+  Buffer.from(text, "utf8").toString("utf8") === text;
+
+await test(`data кнопки: ≤ 64 байт, целые символы, начало исходного (seed ${SEED})`, () => {
+  fc.assert(
+    fc.property(buttonData, (data) => {
+      const short = shortenButtonData(data);
+      assert.ok(Buffer.byteLength(short) <= BUTTON_DATA_MAX_BYTES);
+      assert.ok(isWellFormedUtf8(short), "a multibyte character was split");
+      assert.ok(data.startsWith(short));
+      // HTML-сущность исходного data в результате либо целиком, либо её нет вовсе.
+      for (const entity of data.matchAll(ENTITY_IN_DATA))
+        assert.ok(
+          entity.index >= short.length ||
+            entity.index + entity[0].length <= short.length,
+          `entity ${entity[0]} at ${entity.index} cut: ${short}`,
+        );
+      if (Buffer.byteLength(data) <= BUTTON_DATA_MAX_BYTES)
+        assert.equal(short, data);
+      // Отрезано не больше нужного: следующий символ уже не влез бы.
+      else if (!data.includes("&")) {
+        const next = [...data.slice(short.length)][0];
+        assert.ok(Buffer.byteLength(short + next) > BUTTON_DATA_MAX_BYTES);
+      }
+    }),
+    { seed: SEED, numRuns: RUNS },
+  );
+});
+
+await test(`разметка кнопок: укорачивается только data, подписи и текст целы (seed ${SEED})`, (t) => {
+  t.mock.method(console, "error", () => {});
+  fc.assert(
+    fc.property(
+      fc.array(buttonData, { minLength: 1, maxLength: 4 }),
+      fc.boolean(),
+      (tails, sharedHead) => {
+        // Половина прогонов — общее длинное начало: после укорачивания data совпали бы.
+        const datas = sharedHead
+          ? tails.map((tail) => `${"Общее начало кнопок ".repeat(3)}${tail}`)
+          : tails;
+        const md = datas
+          .map(
+            (data, index) =>
+              `<tg-button type="callback_data" data="${data}">Кнопка ${index}</tg-button> — пояснение ${index}`,
+          )
+          .join("\n");
+        const out = shortenButtonsData(md);
+        const shortened = [...out.matchAll(/\sdata="([^"]*)"/g)].map(
+          (match) => match[1],
+        );
+        assert.equal(shortened.length, datas.length);
+        shortened.forEach((data, index) => {
+          const original = datas[index];
+          assert.ok(Buffer.byteLength(data) <= BUTTON_DATA_MAX_BYTES);
+          if (Buffer.byteLength(original) <= BUTTON_DATA_MAX_BYTES) {
+            assert.equal(data, original);
+            return;
+          }
+          // Укороченный: начало исходного, при совпадении с кнопкой выше — с хвостом «#N».
+          assert.ok(original.startsWith(data.replace(/#\d+$/u, "")));
+          assert.ok(!shortened.slice(0, index).includes(data), data);
+        });
+        assert.equal(
+          out.replace(/\sdata="[^"]*"/g, ""),
+          md.replace(/\sdata="[^"]*"/g, ""),
+        );
+      },
+    ),
+    { seed: SEED, numRuns: RUNS },
+  );
+});
+
+await test("две кнопки с общим началом длиннее 64 байт остаются различимыми", (t) => {
+  t.mock.method(console, "error", () => {});
+  const head = "Задачи на неделю: закрыть тесты, привычки ";
+  const md = [
+    `<tg-button type="callback_data" data="${head}без срока">Без срока</tg-button>`,
+    `<tg-button type="callback_data" data="${head}со сроком на пятницу">Пятница</tg-button>`,
+    `<tg-button type="callback_data" data="${head}перенести">Перенести</tg-button>`,
+  ].join("\n");
+
+  const datas = [...shortenButtonsData(md).matchAll(/\sdata="([^"]*)"/g)].map(
+    (match) => match[1],
+  );
+
+  assert.equal(new Set(datas).size, 3, datas.join(" | "));
+  for (const data of datas)
+    assert.ok(Buffer.byteLength(data) <= BUTTON_DATA_MAX_BYTES, data);
+  assert.equal(datas[0], shortenButtonData(`${head}без срока`));
+  assert.match(datas[1], /#2$/u);
+  assert.match(datas[2], /#3$/u);
+});
+
+await test("сущность на границе 64 байт не рвётся: уходит целиком следующим атомом", () => {
+  // 62 байта текста, дальше «&amp;»: два его байта влезли бы, но сущность — один атом.
+  const data = `${"x".repeat(62)}&amp;хвост`;
+  assert.equal(shortenButtonData(data), "x".repeat(62));
+  assert.equal(
+    shortenButtonData(`${"x".repeat(59)}&amp;хвост`),
+    `${"x".repeat(59)}&amp;`,
   );
 });

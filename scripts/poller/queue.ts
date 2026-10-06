@@ -27,6 +27,7 @@ import {
   listChatStatuses,
   chatKeyOf,
   parseTelegramSessionRetirement,
+  QUEUED_STATUS_CLEARED,
   RUN_STALE_MS,
   setChatStatus,
   setChatStatusIf,
@@ -329,19 +330,7 @@ export async function completeScopedResetState(
   // Delete before clearing state: a crash after delete is harmless (message
   // already gone); a crash before either step still leaves state pointing at
   // the message for the next /new attempt.
-  if (
-    current?.statusMessageId !== undefined &&
-    current.statusMessageId !== null
-  ) {
-    try {
-      await deleteMessageImpl(
-        chatKey,
-        current.statusMessageId as string | number,
-      );
-    } catch {
-      // Reset working messages are removed best-effort, like stale ones.
-    }
-  }
+  await deleteRecordIndicators(chatKey, current, deleteMessageImpl);
 
   setStatusImpl(chatKey, {
     status: "idle",
@@ -357,6 +346,7 @@ export async function completeScopedResetState(
     wasCancelled: null,
     compacting: null,
     retiredSessionId: null,
+    ...QUEUED_STATUS_CLEARED,
     resetAt: Date.now(),
   });
 }
@@ -686,6 +676,29 @@ async function deleteStaleWorkingMessage(
   });
 }
 
+/**
+ * Запись чата уходит в idle без хода-наследника (/new, жнец, сорвавшаяся прямая доставка):
+ * из чата уходят её индикаторы — статус хода и знак очереди (specs/IdleCompaction.tla,
+ * SignOwned). Удаление best-effort, как у любого старого статуса.
+ */
+async function deleteRecordIndicators(
+  chatKey: string,
+  status: RunStatus | null | undefined,
+  deleteMessageImpl: (chatKey: string, messageId: string | number) => unknown,
+): Promise<void> {
+  for (const messageId of [
+    status?.statusMessageId,
+    status?.queuedStatusMessageId,
+  ]) {
+    if (messageId === undefined || messageId === null) continue;
+    try {
+      await deleteMessageImpl(chatKey, messageId as string | number);
+    } catch {
+      // Старый индикатор удаляется best-effort.
+    }
+  }
+}
+
 async function clearFailedDirectIngress(
   chatKey: string,
   {
@@ -744,24 +757,13 @@ async function clearFailedDirectIngress(
       latencyLogged: null,
       wasCancelled: null,
       compacting: null,
+      ...QUEUED_STATUS_CLEARED,
       resetAt: observedAt,
     },
   );
   if (!cleared) return false;
 
-  if (
-    current.statusMessageId !== undefined &&
-    current.statusMessageId !== null
-  ) {
-    try {
-      await deleteMessageImpl(
-        chatKey,
-        current.statusMessageId as string | number,
-      );
-    } catch {
-      // Failed-attempt working messages are removed best-effort, like stale ones.
-    }
-  }
+  await deleteRecordIndicators(chatKey, current, deleteMessageImpl);
   return true;
 }
 
@@ -1052,6 +1054,7 @@ export async function reapStaleRuns({
           latencyLogged: null,
           wasCancelled: null,
           compacting: null,
+          ...QUEUED_STATUS_CLEARED,
           resetAt: reapedAt,
         },
       );
@@ -1073,17 +1076,7 @@ export async function reapStaleRuns({
     }
 
     await notifyInterruptedTurn(key, status, sendImpl, trImpl, safeLog);
-
-    if (
-      status.statusMessageId !== undefined &&
-      status.statusMessageId !== null
-    ) {
-      try {
-        await deleteMessageImpl(key, status.statusMessageId as string | number);
-      } catch {
-        // Старое статус-сообщение удаляется best-effort.
-      }
-    }
+    await deleteRecordIndicators(key, status, deleteMessageImpl);
   }
   return reaped;
 }

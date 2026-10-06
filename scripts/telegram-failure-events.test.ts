@@ -66,6 +66,7 @@ type FailureAdapter = {
     context: unknown,
   ) => void | Promise<void>;
   "turn.started": ChannelEventHandler;
+  "input.resolved": ChannelEventHandler;
   "actions.requested": ChannelEventHandler;
   "action.partial": ChannelEventHandler;
   "action.result": ChannelEventHandler;
@@ -964,4 +965,78 @@ test("Trace: ответ модели уходит в журнал ключом �
     (gate?.data as Record<string, unknown>).text,
     "готово, отпуск в июле",
   );
+});
+
+// Знак очереди под сообщением, которое ждёт своего хода (agent/lib/telegram-turn-start.ts).
+const queuedSign = (sessionId: string, messageId: number) => ({
+  queuedIngressId: `ingress-${messageId}`,
+  queuedIngressAt: 1_000,
+  queuedStatusAt: 1_010,
+  queuedStatusMessageId: messageId,
+  queuedSessionId: sessionId,
+});
+const signCleared = {
+  queuedIngressId: null,
+  queuedIngressAt: null,
+  queuedStatusAt: null,
+  queuedStatusMessageId: null,
+  queuedSessionId: null,
+};
+
+test("session.failed deletes only the queued sign of its own session", async () => {
+  const chatId = "760";
+  const key = chatKeyOf(chatId);
+  const data = { code: "X", message: "dead", sessionId: "s-dead" };
+
+  // Знак сообщения, вставшего за ходом чужой (живой) сессии, упавшая сессия не трогает.
+  setChatStatus(key, { status: "idle", ...queuedSign("s-live", 961) });
+  let before = apiCalls.length;
+  await emitSessionFailed(data, { chatId, sessionId: "s-dead" });
+  assert.equal(getChatStatus(key)?.queuedStatusMessageId, 961);
+  assert.equal(
+    callsSince(before, "deleteMessage").some(
+      (call) => call.body?.message_id === 961,
+    ),
+    false,
+  );
+
+  // Свой знак уходит: буфер входа умершей сессии хода уже не начнёт.
+  setChatStatus(key, { ...signCleared, ...queuedSign("s-dead", 962) });
+  before = apiCalls.length;
+  await emitSessionFailed(
+    { ...data, message: "dead again" },
+    { chatId, sessionId: "s-dead" },
+  );
+  assert.equal(getChatStatus(key)?.queuedStatusMessageId, undefined);
+  assert.deepEqual(
+    callsSince(before, "deleteMessage").map((call) => call.body?.message_id),
+    [962],
+  );
+});
+
+test("a turn resumed by an answer to a question takes the sign without the queued message's ingressAt", async () => {
+  const chatId = "761";
+  const sessionId = "s-hitl";
+  const key = chatKeyOf(chatId);
+  setChatStatus(key, { status: "idle", ...queuedSign(sessionId, 963) });
+  const context = eventContext({ chatId, sessionId });
+
+  // eve шлёт input.resolved до turn.started хода, который продолжит ответ на вопрос.
+  await contextStorage.run(context.ctx, async () => {
+    await adapter["input.resolved"](
+      {
+        resolutions: [
+          { kind: "question", outcome: "answered", requestId: "req-1" },
+        ],
+      },
+      context.value,
+    );
+    await adapter["turn.started"]({ turnId: "turn_hitl" }, context.value);
+  });
+
+  const status = getChatStatus(key);
+  assert.equal(status?.statusMessageId, 963, "the sign is the turn's status");
+  assert.equal(status?.ingressAt, undefined);
+  assert.equal(status?.statusAt, undefined);
+  assert.equal(status?.queuedStatusMessageId, undefined);
 });

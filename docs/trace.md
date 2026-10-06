@@ -114,6 +114,11 @@ channel sends (a working-status message, an error explanation, a media notice) p
 same outbound gate but not the Outbox seam, so it produces a gate line alone. Do not wait
 for a delivery event after each gate verdict.
 
+**`outbox.delivered` can carry `fellBack: true` and an `error`.** The reply reached the
+chat, but not in the form the text asked for: a chunk went out as plain text, or Telegram
+refused the rich message and the reply went by the HTML path without its buttons. In the
+second case `error` reads `buttons dropped: sendRichMessage 400: <Telegram's reason>`.
+
 Writer markers in `data`: `traceTrimmed` — the event went without content;
 `traceUnreadable` — the payload could not be serialized. Markers inside values:
 `…[truncated]` — a string or list was cut, `…[deep]` — nesting deeper than four levels,

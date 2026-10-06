@@ -143,6 +143,13 @@ function writeRunStatusAtomicSync(path: string, value: unknown): void {
   }
 }
 
+/** Поля знака очереди записи чата (agent/lib/run-status.ts, QUEUED_STATUS_CLEARED). */
+function queuedSignOf(record: object): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(record).filter(([field]) => field.startsWith("queued")),
+  );
+}
+
 function nextGeneration(value: unknown): number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
     ? value + 1
@@ -167,12 +174,15 @@ export function rewriteRunStatusesForUpdate(
       if (!isInterruptedRun(parsed)) continue;
       // An interrupted compaction between turns carried no request from the owner: once
       // its session is retired the record is simply free again, with a reset tombstone.
-      // Bridge has nothing to close and nothing to tell.
+      // Bridge has nothing to close and nothing to tell. A queued sign (queued* fields)
+      // stays: there is no Bot API before the start to delete it, and the next turn of
+      // the chat deletes it by these fields (specs/IdleCompaction.tla, SignOwned).
       const stamp = Date.now();
       writeRunStatusAtomicSync(
         file,
         retired && parsed.compacting === true
           ? {
+              ...queuedSignOf(parsed),
               status: "idle",
               generation: nextGeneration(parsed.generation),
               updatedAt: stamp,

@@ -298,6 +298,47 @@ await test("своя сессия гасит статус-сообщение", a
   assert.equal(runStatus.getChatStatus(key)?.status, "idle");
 });
 
+await test("знак очереди переживает любой финал хода: его заберёт следующий ход", async () => {
+  // eve хранит буфер входа и после отмены (steer отменяет ход ради нового сообщения), и
+  // после сбоя хода: сообщение со знаком начнёт следующий ход. Знак мигать не должен.
+  const key = runStatus.chatKeyOf("77", undefined);
+  const queued = {
+    queuedIngressId: "ingress-Q",
+    queuedIngressAt: 1_000,
+    queuedStatusAt: 1_100,
+    queuedStatusMessageId: 901,
+    queuedSessionId: "s-q",
+  };
+  for (const mode of ["completed", "cancelled", "failed"] as const) {
+    runStatus.setChatStatus(key, {
+      status: "running",
+      sessionId: "s-q",
+      statusMessageId: 900,
+      ...queued,
+    });
+    const { calls, tg } = handle();
+    assert.equal(
+      await status.finishTelegramStatus({ telegram: tg }, "s-q", mode),
+      true,
+    );
+    assert.deepEqual(
+      calls.map((call) => call.body.message_id),
+      [900],
+      mode,
+    );
+    const after = runStatus.getChatStatus(key);
+    for (const [field, value] of Object.entries(queued))
+      assert.equal(after?.[field], value, `${mode}: ${field}`);
+  }
+  runStatus.setChatStatus(key, {
+    queuedIngressId: null,
+    queuedIngressAt: null,
+    queuedStatusAt: null,
+    queuedStatusMessageId: null,
+    queuedSessionId: null,
+  });
+});
+
 await test("отказ rich оставляет тихий статус с текстом и без кнопки", async () => {
   const failedRich = handle((call) =>
     call.method === "sendRichMessage"

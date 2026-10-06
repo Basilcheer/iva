@@ -1,7 +1,8 @@
 #!/bin/sh
 # IdleCompaction.tla под TLC с проверкой ожиданий. Основные модели кода (queue, steer, с
 # перезапуском и без, с запоздалой просьбой) и предложенная починка R5 — без ошибок; находки
-# (F2–F4, F6, F7) и свидетели-мутанты нарушают свой инвариант первым (поиск в ширину — самый короткий
+# (F2–F4, F6, F7) и свидетели-мутанты (среди них знак очереди: жнец его не снял, перезапуск
+# потерял его номер, захват под свёртку его бросил) нарушают свой инвариант первым (поиск в ширину — самый короткий
 # контрпример). Нарушение свойства живости называется по единственному свойству в строке
 # PROPERTIES конфига. Любой сбой tlc или несовпадение ожидания — ненулевой выход. Файлы состояний TLC пишет во временную папку.
 set -u
@@ -60,5 +61,8 @@ check IdleCompaction-offnotchecked NoAskWhileOff
 check IdleCompaction-repliesdirect QueuedWhileCompacting
 check IdleCompaction-noparkrelease none
 check IdleCompaction-noreap ChatFreed
+check IdleCompaction-reapkeepssign SignOwned
+check IdleCompaction-rewritelosessign SignOwned
+check IdleCompaction-claimdropssign SignOwned
 echo "idle-compaction-check: $ok ok, $failed failed"
 [ "$failed" -eq 0 ]

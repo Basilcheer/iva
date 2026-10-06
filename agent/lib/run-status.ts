@@ -7,7 +7,8 @@
 // Отдельный файл на chatKey не даёт параллельной записи одного чата потерять статус
 // другого. Запись одного ключа защищена O_EXCL-локом и атомарна (unique tmp+rename).
 // ЛЮБАЯ успешная запись двигает generation и updatedAt — на updatedAt держится и
-// жнец, и пульс (agent/lib/telegram-turn-start.ts).
+// жнец, и пульс (agent/lib/telegram-turn-start.ts). Одно исключение — запись знака очереди
+// (setChatStatusIf с touch: false): она не продлевает жизнь чужому ходу.
 //
 // chatKey = `${chatId}:${threadId ?? ""}` — тот же ключ, что chatKey() Bridge.
 
@@ -65,6 +66,18 @@ const LOCK_TIMEOUT_MS = positiveMs(
   5_000,
 );
 const LOCK_RETRY_MS = 10;
+
+// Знак очереди: сообщение встало за живым ходом и уже видит лоадер. Поля живут в записи
+// чата и переезжают вместе с ней при захвате; знак забирает или удаляет следующий ход чата
+// (agent/lib/telegram-turn-start.ts), а запись, ушедшая в idle без хода-наследника, удаляет
+// его сама (specs/IdleCompaction.tla, SignOwned). Снимаются все поля разом — этим патчем.
+export const QUEUED_STATUS_CLEARED = {
+  queuedIngressId: null,
+  queuedIngressAt: null,
+  queuedStatusAt: null,
+  queuedStatusMessageId: null,
+  queuedSessionId: null,
+} as const;
 
 // Ход длиннее этого считаем зависшим/осиротевшим (упал без terminal-события):
 // мост перестаёт буферизовать, чтобы сообщения не копились вечно.
@@ -284,10 +297,16 @@ export function isCompacting(chatKey: string, now = Date.now()): boolean {
   return isRunning(chatKey, now) && getChatStatus(chatKey)?.compacting === true;
 }
 
+// Чем запись метит updatedAt: обычная — временем записи, запись знака очереди — прежним.
+type Stamp = (prev: StatusRecord) => number | undefined;
+const stampNow: Stamp = () => Date.now();
+const keepStamp: Stamp = (prev) => prev.updatedAt;
+
 function updateChatStatus(
   chatKey: string,
   patch: StatusPatch,
   expected: StatusPatch | null,
+  stamp: Stamp,
 ): StatusRecord | null {
   const file = statusFileOf(chatKey);
   const lock = acquireChatLock(file);
@@ -312,7 +331,7 @@ function updateChatStatus(
       ...prev,
       ...patch,
       generation: previousGeneration + 1,
-      updatedAt: Date.now(),
+      updatedAt: stamp(prev),
     };
     delete next[RETIRED_SESSION_ROUTING_FIELD];
     for (const key of Object.keys(next))
@@ -329,17 +348,25 @@ export function setChatStatus(
   chatKey: string,
   patch: StatusPatch,
 ): StatusRecord {
-  return updateChatStatus(chatKey, patch, null) as StatusRecord;
+  return updateChatStatus(chatKey, patch, null, stampNow) as StatusRecord;
 }
 
 // Atomic compare-and-set для terminal Eve events: reset может успеть удалить
-// sessionId между ранним read и записью позднего события.
+// sessionId между ранним read и записью позднего события. touch: false — запись, которая не
+// говорит «ход жив» (знак очереди), updatedAt не двигает: иначе запись мёртвого хода
+// прожила бы ещё RUN_STALE_MS. generation растёт всегда — на нём держатся CAS.
 export function setChatStatusIf(
   chatKey: string,
   expected: StatusPatch,
   patch: StatusPatch,
+  options?: { touch?: boolean },
 ): StatusRecord | null {
-  return updateChatStatus(chatKey, patch, expected);
+  return updateChatStatus(
+    chatKey,
+    patch,
+    expected,
+    options?.touch === false ? keepStamp : stampNow,
+  );
 }
 
 export function parseTelegramSessionRetirement(

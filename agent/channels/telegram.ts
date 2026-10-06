@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
   telegramChannel,
   type TelegramChannelState,
@@ -80,6 +81,8 @@ import {
 import {
   abandonTelegramEarlyStatus,
   chatTakeOverPatch,
+  detachQueuedSignTime,
+  dropQueuedStatus,
   emitTelegramTurnLatency,
   markTelegramFirstOutput,
   markTelegramTurnAlive,
@@ -167,9 +170,12 @@ export function outboxTransport(
         res.status,
         JSON.stringify(res.body).slice(0, 300),
       );
+      // Причина Telegram (BUTTON_DATA_INVALID и т. п.) идёт в Trace вместе с кодом.
+      const reason = (res.body as { description?: unknown } | null)
+        ?.description;
       return {
         ok: false,
-        error: `sendRichMessage ${res.status}`,
+        error: `sendRichMessage ${res.status}${typeof reason === "string" ? `: ${reason}` : ""}`,
         retryPlain: false,
       };
     } catch (err) {
@@ -305,7 +311,21 @@ const telegram = telegramChannel({
           continuation: channel.continuation,
         });
     },
+    // Следующий ход продолжит ответ на вопрос, а не сообщение со знаком очереди: время
+    // прихода того сообщения ему не принадлежит (agent/lib/telegram-turn-start.ts).
     async "input.resolved"(data, channel) {
+      try {
+        detachQueuedSignTime({
+          chatKey: chatKeyOf(
+            channel.telegram.chatId,
+            channel.telegram.messageThreadId,
+          ),
+          getStatusImpl: getChatStatus,
+          setStatusIfImpl: setChatStatusIf,
+        });
+      } catch (error) {
+        console.error("[telegram] знак очереди не отвязан от ответа:", error);
+      }
       await settleTelegramQuestions(
         data.resolutions,
         channel.state,
@@ -488,10 +508,24 @@ const telegram = telegramChannel({
     },
     // У terminal-сбоя eve следом за turn.failed шлёт session.failed без ctx.
     // Повторно прибираем run-status по sessionId из payload и не дублируем уведомление.
+    // Сессия умерла: её буфер входа не начнёт хода, и её знак очереди снимается здесь.
+    // Знак, вставший за ходом другой сессии, ждёт своего хода.
     async "session.failed"(data, channel) {
-      if (channel.telegram.chatId) {
+      const tg = channel.telegram;
+      if (tg.chatId) {
         try {
           await finishTelegramStatus(channel, data.sessionId, "failed");
+          await dropQueuedStatus({
+            chatKey: chatKeyOf(tg.chatId, tg.messageThreadId),
+            sessionId: data.sessionId,
+            getStatusImpl: getChatStatus,
+            setStatusIfImpl: setChatStatusIf,
+            removeWorkingStatusImpl: (messageId) =>
+              tg.request("deleteMessage", {
+                chat_id: tg.chatId,
+                message_id: messageId,
+              }),
+          });
         } catch {
           /* best-effort: отсутствие chat-state не должно ломать уведомление */
         }
@@ -508,7 +542,9 @@ const telegram = telegramChannel({
   onMessage: wrapTelegramQueueOnMessage((ctx, message) => {
     const tg = ctx.telegram;
     const chatKey = chatKeyOf(message.chat.id, message.messageThreadId);
-    let earlyIngressId: string | null = null;
+    // Ключ сообщения: под ним стоит его ранний статус или знак очереди за живым ходом,
+    // и по нему же снимается то или другое, если pipeline сообщение бросит.
+    const ingressId = randomUUID();
     return runTelegramInbound(message, {
       botUsername: tg.botUsername,
       request: (method, body) => tg.request(method, body),
@@ -518,8 +554,9 @@ const telegram = telegramChannel({
       chatModelSeesImages,
       transcribe,
       onAccepted: async () => {
-        earlyIngressId = await publishTelegramEarlyStatus({
+        await publishTelegramEarlyStatus({
           chatKey,
+          ingressId,
           staleMs: RUN_STALE_MS,
           getStatusImpl: getChatStatus,
           setStatusIfImpl: setChatStatusIf,
@@ -537,10 +574,9 @@ const telegram = telegramChannel({
         });
       },
       onAbandoned: async () => {
-        if (earlyIngressId === null) return;
         await abandonTelegramEarlyStatus({
           chatKey,
-          ingressId: earlyIngressId,
+          ingressId,
           getStatusImpl: getChatStatus,
           setStatusIfImpl: setChatStatusIf,
           removeWorkingStatusImpl: (messageId) =>

@@ -32,8 +32,10 @@
 import { scanOutbound } from "./security-gate.ts";
 import { traceOutboundGate } from "./trace.ts";
 import {
+  hasRichButtons,
   htmlToPlain,
   needsRichMessage,
+  shortenButtonsData,
   withButtonTypes,
   toTelegramHtmlChunks,
 } from "./telegram-format.ts";
@@ -59,8 +61,8 @@ export type OutboxTransport = {
 export type OutboxResult = {
   ok: boolean; // всё, что шов начал отправлять, доставлено
   delivered: number; // сколько сообщений реально ушло в чат
-  fellBack: boolean; // хотя бы один кусок ушёл без разметки
-  error: string; // первый отказ доставки
+  fellBack: boolean; // хотя бы один кусок ушёл без разметки или кнопки ушли без rich
+  error: string; // первый отказ доставки, иначе причина, по которой кнопки потерялись
 };
 
 // Outbound-гейт: редактим утёкшие секреты и эксфил-URL ДО отправки. Fail-open —
@@ -98,6 +100,32 @@ export function noticeSender(
   });
 }
 
+// Rich-путь рендерит нативно то, чего parse_mode=HTML не умеет. Любой отказ —
+// просто HTML-путь ниже, то есть худший случай равен обычному поведению. Кроме кнопок:
+// они живут только в rich-сообщении (ADR-0015), и HTML-путь отдаёт их подписями без
+// тапа. Ответ доставлен, но потерю видно в Trace: fellBack и причина отказа.
+async function sendRichFirst(
+  text: string,
+  transport: OutboxTransport,
+  alwaysRich: boolean,
+  result: OutboxResult,
+): Promise<boolean> {
+  if (!transport.sendRich || !(alwaysRich || needsRichMessage(text)))
+    return false;
+  const rich = await transport.sendRich(
+    shortenButtonsData(withButtonTypes(text)),
+  );
+  if (rich.ok) {
+    result.delivered = 1;
+    return true;
+  }
+  if (hasRichButtons(text)) {
+    result.fellBack = true;
+    result.error = `buttons dropped: ${rich.error}`;
+  }
+  return false;
+}
+
 export async function sendThroughOutbox(
   message: string,
   transport: OutboxTransport,
@@ -119,15 +147,7 @@ export async function sendThroughOutbox(
     error: "",
   };
 
-  // Rich-путь рендерит нативно то, чего parse_mode=HTML не умеет. Любой отказ —
-  // просто HTML-путь ниже, то есть худший случай равен обычному поведению.
-  if (transport.sendRich && (alwaysRich || needsRichMessage(text))) {
-    const rich = await transport.sendRich(withButtonTypes(text));
-    if (rich.ok) {
-      result.delivered = 1;
-      return result;
-    }
-  }
+  if (await sendRichFirst(text, transport, alwaysRich, result)) return result;
 
   // Первую ошибку запоминаем, ok=false — этого хватает вызывающим (cron выходит
   // ненулевым кодом, канал не засчитывает латентность).
