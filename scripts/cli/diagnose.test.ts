@@ -522,7 +522,7 @@ await test("без .env пакет говорит об этом, а шаблон
   );
   assert.match(
     text,
-    /- redaction: \.env not found — only the pattern rules were applied \(bot token, telegram ids, e-mail\); values of keys are NOT in the cut list/u,
+    /- redaction: \.env not found — only the pattern rules were applied \(bot token, keys of known formats, telegram ids, e-mail\); values of keys are NOT in the cut list/u,
     "отсутствие .env обязано быть сказано в пакете, а не молчать",
   );
   assert.ok(
@@ -1038,6 +1038,41 @@ await test("--turn: a key from a plugin's .env is cut from the package and the i
     text,
     /- redaction: \d+ values from \.env and 1 from plugin \.env files, pattern rules always on/u,
   );
+});
+
+await test("--turn: a key of a known format that is in no .env is cut from the package and the issue url", async (t) => {
+  // Находка Q4 волны Trace: ключ `sk-…` напечатал инструмент, в `.env` его нет — список
+  // секретов о нём не знает, режет только таблица форматов пакета secret-redaction.
+  // Задом наперёд: защита GitHub от утечек не пропускает ключ в тексте теста.
+  const FOREIGN_KEY = [..."d4b2e0c8a6f4d1b5-e2c9a3f7_nGiErOf4Q-jorp-ks"]
+    .reverse()
+    .join("");
+  const events = SKELETON.map((event) =>
+    event.name === "action.result" && event.session === undefined
+      ? {
+          ...event,
+          data: {
+            ...event.data,
+            result: JSON.stringify({
+              exitCode: 22,
+              stderr: `curl: (22) 401 -H "Authorization: Bearer ${FOREIGN_KEY}" key=${FOREIGN_KEY}\n`,
+              stdout: "",
+            }),
+          },
+        }
+      : event,
+  );
+  const { text, url, printed } = await diagnoseTurn(t, events);
+  assert.ok(turnOf(text).includes("curl: (22) 401"), turnOf(text));
+  assert.ok(!text.includes(FOREIGN_KEY), "ключ в пакете");
+  assert.ok(!url.includes(FOREIGN_KEY), "ключ в адресе issue");
+  assert.ok(!decoded(url).body.includes(FOREIGN_KEY), "ключ в теле issue");
+  assert.ok(
+    !decoded(url).title.includes(FOREIGN_KEY),
+    "ключ в заголовке issue",
+  );
+  assert.ok(!printed.join("\n").includes(FOREIGN_KEY));
+  assert.ok(decoded(url).body.includes("curl: (22) 401"), decoded(url).body);
 });
 
 const SEED = Number(process.env.FC_SEED ?? Date.now() % 2 ** 31);

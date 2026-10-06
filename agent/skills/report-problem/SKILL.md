@@ -34,7 +34,8 @@ a tap «Разработчику <name>» / «To developer <name>» under an Ins
    yours: never retype lines of the Trace or the package into a link. The owner sends the issue from GitHub,
    and the file stays on the machine until the owner attaches it.
 5. **When the package says `.env not found`** (or `iva diagnose` warned about it in the terminal), only the
-   pattern rules ran — bot tokens, labelled telegram ids and e-mail addresses — and the values of the keys
-   could not be cut at all. Never promise "no secrets" in that case: say plainly that the package was
+   pattern rules ran — bot tokens, keys of known formats (`sk-…`, `ghp_…`, `xox…-`, `AKIA…`, `AIza…`, JWT,
+   `Bearer …`), labelled telegram ids and e-mail addresses — and the values of the keys could not be cut at
+   all. Never promise "no secrets" in that case: say plainly that the package was
    collected without the `.env` list, suggest fixing `.env` (or `iva config`) and running `iva diagnose`
    again before publishing, and let the owner decide.

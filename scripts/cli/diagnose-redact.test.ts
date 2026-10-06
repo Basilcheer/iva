@@ -1,6 +1,6 @@
 // Правила вырезания: сырое значение, формы, в которых секрет попадает в журнал
-// (percent-encoded, JSON-экранированное, base64/base64url), шаблонные правила (токен бота
-// в любом месте строки, личный id рядом с меткой, e-mail), порядок «от длинного к
+// (percent-encoded, JSON-экранированное, base64/base64url), шаблонные правила (ключ
+// известного формата в любом месте строки, личный id рядом с меткой, e-mail), порядок «от длинного к
 // короткому» и сверка списка настроечных ключей с `.env.example` и с описью
 // `outbound-sensitive-keys.json`. Тесты пакета целиком — в diagnose.test.ts, здесь правила.
 //
@@ -456,4 +456,253 @@ await test("короткая форма режется только на гра�
   assert.match(out, /:<redacted>@/u);
   assert.ok(out.includes("package"), `слово разорвано: ${out}`);
   assert.ok(out.includes("output"), `слово разорвано: ${out}`);
+});
+
+// --- Ключи известных форматов (находка Q4 волны Trace) ----------------------------------------
+// Ключа может не быть ни в `.env`, ни в `.env` плагина: модель вставила его в команду,
+// инструмент напечатал чужой ключ. Он режется по виду, без списка секретов.
+
+// Образцы хранятся задом наперёд и собираются при запуске: иначе защита GitHub от утечки
+// секретов отвергает push с «ключами» в тексте теста.
+const rev = (s: string): string => [...s].reverse().join("");
+
+/** Каждый формат таблицы KEY_SHAPES: пример ключа и строка, в которой он едет в журнал. */
+const KEY_EXAMPLES: ReadonlyArray<readonly [format: string, key: string]> = [
+  ["OpenAI", rev("76543210fEdCbA9876543210fEdCbA9876543210fEdCbA-ks")],
+  ["OpenAI project", rev("87RQ65po43NM21lk09JI87hg65FE-43dc_21bA-jorp-ks")],
+  ["Anthropic", rev("eF0gH1iJ2kL3mN4oP5qR6sT7uV-8wY_9xZ-30ipa-tna-ks")],
+  ["OpenRouter", rev("fedcba9876543210fedcba9876543210-1v-ro-ks")],
+  ["GitHub ghp_", rev("8r7Q6p5O4n3M2l1K0j9I8h7G6f5E4d3C2b1A_phg")],
+  ["GitHub gho_", rev("8r7Q6p5O4n3M2l1K0j9I8h7G6f5E4d3C2b1A_ohg")],
+  ["GitHub ghu_", rev("8r7Q6p5O4n3M2l1K0j9I8h7G6f5E4d3C2b1A_uhg")],
+  ["GitHub ghs_", rev("8r7Q6p5O4n3M2l1K0j9I8h7G6f5E4d3C2b1A_shg")],
+  ["GitHub ghr_", rev("8r7Q6p5O4n3M2l1K0j9I8h7G6f5E4d3C2b1A_rhg")],
+  [
+    "GitHub fine-grained",
+    rev("JIHGFEDCBAzyxwvutsrqponmlkjihgfedcba_9876543210GFEDCBA11_tap_buhtig"),
+  ],
+  ["Slack xoxb", rev("xWvUtSrQpOnMlKjIhGfEdCbA-3210987654321-0987654321-bxox")],
+  ["Slack xoxp", rev("lKjIhGfEdCbA-3210987654321-0987654321-pxox")],
+  ["Slack xoxa", rev("lKjIhGfEdCbA-0987654321-2-axox")],
+  ["Slack xoxr", rev("lKjIhGfEdCbA-0987654321-rxox")],
+  ["Slack xoxs", rev("lKjIhGfEdCbA-0987654321-sxox")],
+  ["AWS", rev("ELPMAXE7NNDOFSOIAIKA")],
+  ["Telegram bot", rev("QwasDLAP5K0sASfoeSfxJWGv1HCvcTqdHAA:987654321")],
+  ["Google", rev("YWBMFkj0WSZe7a-XMnMQuoP27ekrSt9-DySazIA")],
+  [
+    "JWT",
+    rev(
+      "U8RsHT0PUFlP9I3n0LgX_N5w0lHNmVj3J4PyrNgjzod.0nIwkDO3YTN0MjMxIiOiIWdzJye.9JiN1IzUIJiOicGbhJye",
+    ),
+  ],
+  ["Bearer", rev("==v-w/z+y~x.AM5gzN2UDNzITMtUkQBJURGF0Q")],
+];
+
+await test("каждый формат ключа режется без .env: отдельным словом, в URL, в JSON и в заголовке", () => {
+  for (const [format, key] of KEY_EXAMPLES) {
+    const bearer = format === "Bearer";
+    for (const line of bearer
+      ? [`Authorization: Bearer ${key}`, `{"authorization":"bearer ${key}"}`]
+      : [
+          `curl: (22) 401 ${key} rejected`,
+          `GET https://api.example.com/v1/x?key=${key}&q=1`,
+          `{"token":"${key}","ok":false}`,
+          `export TOKEN=${key}`,
+        ]) {
+      const out = redact(line, []);
+      assert.ok(!out.includes(key), `${format}: ключ выжил в «${out}»`);
+      assert.ok(out.includes(REDACTED), `${format}: нет пометки в «${out}»`);
+    }
+  }
+  assert.equal(
+    redact(`Authorization: Bearer ${KEY_EXAMPLES[0][1]}`, []),
+    `Authorization: Bearer ${REDACTED}`,
+    "примета Bearer остаётся перед пометкой",
+  );
+  assert.equal(
+    redact(`url ${KEY_EXAMPLES[16][1]}/sendMessage`, []),
+    `url ${REDACTED}/sendMessage`,
+  );
+});
+
+/** Строки, похожие на ключ, но не ключ: обязаны остаться целыми. */
+const NOT_KEYS: readonly string[] = [
+  "9f27c3a6d1e5b2c4a8f0e3d7b6c5a4f3e2d1c0b9",
+  "commit 61470125 docs(skills): only under a one-item message",
+  "https://github.com/smixs/iva-agent/issues/new?title=x&body=y",
+  "load the skills folder",
+  "skills",
+  "sk-learn",
+  "risk-adjusted-return-for-the-whole-portfolio-of-assets",
+  "task-scheduler-component-with-a-very-long-name",
+  "Bearer token is missing",
+  "the bearer of this note",
+  "AKIA123",
+  "ghp_short",
+  "xoxb-123",
+  "eyJhbGciOiJIUzI1NiJ9",
+  "550e8400-e29b-41d4-a716-446655440000",
+  "2026-10-06T09:36:00.000Z 12:30:45",
+  "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+];
+
+await test("похожее на ключ, но не ключ, остаётся целым: хеш коммита, адрес без ключа, слово skills", () => {
+  for (const text of NOT_KEYS) assert.equal(redact(text, []), text);
+});
+
+const base64url = [
+  ..."ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-",
+];
+const alnum = base64url.slice(0, 62);
+function chars(
+  alphabet: readonly string[],
+  minLength: number,
+  maxLength = minLength,
+) {
+  return fc.string({
+    unit: fc.constantFrom(...alphabet),
+    minLength,
+    maxLength,
+  });
+}
+function prefixed(
+  prefixes: readonly string[],
+  body: fc.Arbitrary<string>,
+): fc.Arbitrary<string> {
+  return fc
+    .tuple(fc.constantFrom(...prefixes), body)
+    .map(([prefix, rest]) => `${prefix}${rest}`);
+}
+const digits = [..."0123456789"];
+
+/** Ключ каждого формата и то, что после вырезания стоит на его месте. */
+const keyArb: fc.Arbitrary<{ readonly key: string; readonly cut: string }> =
+  fc.oneof(
+    ...[
+      prefixed(
+        ["sk-", "sk-proj-", "sk-ant-api03-", "sk-or-v1-"],
+        chars(base64url, 20, 60),
+      ),
+      prefixed(["ghp_", "gho_", "ghu_", "ghs_", "ghr_"], chars(alnum, 20, 40)),
+      prefixed(["github_pat_"], chars([...alnum, "_"], 22, 82)),
+      prefixed(
+        ["xoxa-", "xoxb-", "xoxp-", "xoxr-", "xoxs-"],
+        chars([...alnum, "-"], 10, 50),
+      ),
+      prefixed(
+        ["AKIA"],
+        chars([...digits, ..."ABCDEFGHIJKLMNOPQRSTUVWXYZ"], 16),
+      ),
+      fc
+        .tuple(chars(digits, 8, 10), chars(base64url, 35))
+        .map(([id, secret]) => `${id}:${secret}`),
+      prefixed(["AIza"], chars(base64url, 35)),
+      fc
+        .tuple(
+          chars(base64url, 5, 40),
+          chars(base64url, 5, 40),
+          chars(base64url, 1, 43),
+        )
+        .map(([head, body, sign]) => `eyJ${head}.eyJ${body}.${sign}`),
+    ].map((arb) => arb.map((key) => ({ key, cut: REDACTED }))),
+    fc
+      .tuple(
+        chars([...alnum, ..."._~+/-"], 16, 40),
+        fc.constantFrom("", "=", "=="),
+      )
+      .map(([value, pad]) => ({
+        key: `${value}${pad}`,
+        cut: `Bearer ${REDACTED}`,
+      })),
+  );
+
+/** Текст без ключей: слова, хеши коммитов, uuid, короткие числа и строки-обманки. */
+const fillerArb = fc.oneof(
+  chars([..."abcdefghijklmnopqrstuvwxyz"], 1, 12).filter(
+    (word) => word !== "bearer",
+  ),
+  chars([..."0123456789abcdef"], 40),
+  fc.uuid(),
+  fc.nat({ max: 9999 }).map(String),
+  fc.constantFrom(...NOT_KEYS),
+);
+const separatorArb = fc.constantFrom(" ", "\n", ", ", '"', " | ");
+
+await test(`PBT: ни один сгенерированный ключ не выживает, текст вокруг не меняется (seed ${SEED})`, () => {
+  fc.assert(
+    fc.property(
+      fc.array(
+        fc.tuple(
+          fc.oneof(
+            keyArb.map((piece) => ({
+              ...piece,
+              bearer: piece.cut !== REDACTED,
+            })),
+            fillerArb.map((text) => ({ key: text, cut: text, bearer: false })),
+          ),
+          separatorArb,
+        ),
+        { minLength: 1, maxLength: 12 },
+      ),
+      (pieces) => {
+        const text = pieces
+          .map(
+            ([{ key, bearer }, sep]) =>
+              `${bearer ? "Bearer " : ""}${key}${sep}`,
+          )
+          .join("");
+        const expected = pieces
+          .map(([{ cut }, sep]) => `${cut}${sep}`)
+          .join("");
+        const out = redact(text, []);
+        for (const [{ key, cut }] of pieces)
+          if (cut !== key)
+            assert.ok(!out.includes(key), `ключ ${key} выжил в «${out}»`);
+        assert.equal(out, expected);
+        assert.equal(
+          redact(out, []),
+          out,
+          "второй проход вырезания ничего не меняет",
+        );
+      },
+    ),
+    { seed: SEED, numRuns: 500 },
+  );
+});
+
+await test(`PBT: текст без ключей не меняется (seed ${SEED})`, () => {
+  fc.assert(
+    fc.property(
+      fc.array(
+        fc.tuple(fillerArb, fc.constantFrom(" ", "\n", "/", "=", "&", ", ")),
+        {
+          maxLength: 30,
+        },
+      ),
+      (pieces) => {
+        const text = pieces.map(([word, sep]) => `${word}${sep}`).join("");
+        assert.equal(redact(text, []), text);
+      },
+    ),
+    { seed: SEED, numRuns: 500 },
+  );
+});
+
+await test("враждебный ввод без ключа не тормозит: 100 КБ каждой заготовки быстрее 100 мс", () => {
+  for (const unit of [
+    "eyJ",
+    "eyJa.",
+    "sk-",
+    "ghp_",
+    "xoxb-",
+    "AKIA",
+    "Bearer  ",
+    "1",
+  ]) {
+    const text = unit.repeat(Math.ceil(100_000 / unit.length));
+    const started = performance.now();
+    redact(text, []);
+    const elapsed = performance.now() - started;
+    assert.ok(elapsed < 100, `${unit}×: ${elapsed.toFixed(1)} мс`);
+  }
 });

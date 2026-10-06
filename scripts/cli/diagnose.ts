@@ -578,7 +578,7 @@ function redactionLine(
   if (!envFound)
     return (
       "- redaction: .env not found — only the pattern rules were applied " +
-      "(bot token, telegram ids, e-mail); values of keys are NOT in the cut list"
+      "(bot token, keys of known formats, telegram ids, e-mail); values of keys are NOT in the cut list"
     );
   const plugins =
     pluginCount > 0 ? ` and ${pluginCount} from plugin .env files` : "";
@@ -780,7 +780,7 @@ export function createDiagnoseCommand(
     const envFound = existsSync(ENV_PATH);
     if (!envFound)
       warn(
-        "No .env — redaction applies only the pattern rules (bot token, telegram ids, e-mail); the package says so in its header",
+        "No .env — redaction applies only the pattern rules (bot token, keys of known formats, telegram ids, e-mail); the package says so in its header",
       );
     const dataDirectory = dataDirAbs(env);
     const collectedAt = now();
