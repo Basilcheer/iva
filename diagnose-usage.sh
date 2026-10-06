@@ -5,7 +5,7 @@ set -Eeuo pipefail
 #   curl -fsSL https://raw.githubusercontent.com/smixs/iva-agent/main/diagnose-usage.sh | bash
 # The package answers "what burned the tokens and why did the turn fail": tokens of every model
 # step, the skeleton of every turn (model, why each step ended, tool names, which calls failed),
-# the trace, the service journal. It holds no chat text, no tool inputs or outputs and no .env
+# the service journal. It holds no chat text, no tool inputs or outputs and no .env
 # values beyond the model settings; secrets are cut once more before packing.
 # The file goes ONLY to the bot owner's chat. IVA_DIAG_DAYS (default 3) sets the window;
 # IVA_DIAG_NO_SEND=1 only writes the archive to data/diagnose/.
@@ -53,7 +53,7 @@ mkdir -p "$OUT_DIR"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 PKG="$WORK/iva-usage-$STAMP"
-mkdir -p "$PKG/trace"
+mkdir -p "$PKG"
 
 cut_secrets() {
   sed -E 's/([A-Z_]*(TOKEN|KEY|SECRET|PASSWORD|BEARER)[A-Z_]*)=[^ ]*/\1=<cut>/g
@@ -90,7 +90,7 @@ if [ -x "$IVA" ] && "$IVA" diagnose >/dev/null 2>&1; then
   [ -n "$LAST_MD" ] && cp "$LAST_MD" "$PKG/diagnose.md"
 fi
 
-# --- Iva's own files: token counters per step, trace, custom layer names --------------------
+# --- Iva's own files: token counters per step, custom layer names --------------------
 if [ -f "$DATA_DIR/usage.jsonl" ]; then
   SINCE="$("$NODE" -e 'console.log(new Date(Date.now()-Number(process.argv[1])*864e5).toISOString())' "$((DAYS > 14 ? DAYS : 14))")"
   "$NODE" -e '
@@ -99,9 +99,6 @@ if [ -f "$DATA_DIR/usage.jsonl" ]; then
       if (!line) continue;
       try { if ((JSON.parse(line).ts ?? "") >= since) process.stdout.write(line + "\n"); } catch {}
     }' "$DATA_DIR/usage.jsonl" "$SINCE" > "$PKG/usage.jsonl" || true
-fi
-if [ -d "$DATA_DIR/trace" ]; then
-  find "$DATA_DIR/trace" -maxdepth 1 -name '*.jsonl' -mtime "-$((DAYS + 1))" -exec cp {} "$PKG/trace/" \; 2>/dev/null || true
 fi
 {
   say "## custom layer (names only)"
@@ -322,7 +319,6 @@ Iva usage package. Start with summary.txt.
   summary.txt          tokens per day, heaviest turns, turns with the most steps
   turn-skeleton.jsonl  every model step: model, why it ended, tokens, tool names, failures (no text)
   usage.jsonl          Iva's token counters per step, 14 days
-  trace/               Iva's trace (counts and sizes only)
   journal.log          service journal: failures, limits, restarts; no request bodies, secrets cut
   env-model.txt        model settings; other .env keys by name only
   diagnose.md          `iva diagnose` with the doctor (0.4.1 and newer)
@@ -330,7 +326,7 @@ Iva usage package. Start with summary.txt.
 TXT
 
 # One more pass over every text file: whatever slipped into an error message is cut here.
-for f in "$PKG"/*.txt "$PKG"/*.log "$PKG"/*.jsonl "$PKG"/trace/*.jsonl; do
+for f in "$PKG"/*.txt "$PKG"/*.log "$PKG"/*.jsonl; do
   [ -f "$f" ] || continue
   cut_secrets < "$f" > "$f.cut" && mv "$f.cut" "$f"
 done
