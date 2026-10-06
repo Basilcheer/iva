@@ -1,7 +1,8 @@
 // `iva diagnose` — one package of evidence for a bug report: a GitHub issue or the
 // support chat (agent/skills/report-problem). A thin collector: it takes what the machine
 // already knows and cuts secrets BEFORE the file is written. What broke is the model's
-// question, not this command's.
+// question, not this command's. `--turn <session>/<turn>` adds the skeleton of that one turn
+// right after the versions and prints a ready `issue-url:` built from the package after cutting.
 //
 // Only `scripts/` is imported statically: the CLI has to start on an installation whose
 // `agent/` is missing (ADR-0003, scripts/authored-tree-guard.test.ts). The turn journal is
@@ -18,6 +19,15 @@ import {
 import * as os from "node:os";
 import { join } from "node:path";
 import type { Reminder } from "../../agent/lib/reminder-store.ts";
+import {
+  cutText,
+  diagnoseFailureLines,
+  failureCause,
+  failureReason,
+  listTurnFailures,
+  readTrace,
+} from "../lib/turn-failures.ts";
+import { parseTurnRef } from "../lib/turn-ref.ts";
 import {
   redact,
   secretValuesFromEnv,
@@ -52,12 +62,30 @@ export const JOURNAL_LINES = 200;
 /** Потолок списка на раздел: пакет должен читаться, а не весить мегабайт. */
 export const SECTION_ITEM_LIMIT = 100;
 
-/** Потолок кода ошибки хода: код — короткое слово, а не текст. */
-const TRACE_CODE_CHARS = 60;
-/** Файлы журнала хода: имя дня — единственный контракт каталога (docs/trace.md). */
-const TRACE_DAY_FILE = /^\d{4}-\d{2}-\d{2}\.jsonl$/u;
-/** События провала хода: имена из docs/trace.md, без синонимов. */
-const FAILED_TURNS = new Set(["turn.failed", "step.failed", "failed"]);
+/** Размер раздела `## Turn`: скелет одного хода, а не его текст. */
+const TURN_SECTION_CHARS = 3000;
+/** Адрес issue целиком, после процентного кодирования: столько прошло кнопкой Telegram на c1. */
+export const ISSUE_URL_BYTES = 5500;
+const ISSUE_NEW = "https://github.com/smixs/iva-agent/issues/new";
+const ERROR_CHARS = 300;
+const VALUE_CHARS = 60;
+const FRAME_CHARS = 200;
+const FRAMES = 5;
+/** Ключи `data`, которые попадают в раздел хода: классы, коды, числа — без текста. */
+const TURN_KEYS = [
+  "toolName",
+  "status",
+  "failure",
+  "exitCode",
+  "errorCode",
+  "code",
+  "finishReason",
+  "stepIndex",
+  "outChars",
+  "resultChars",
+  "ms",
+] as const;
+const USAGE = "usage: iva diagnose [--turn <session>/<turn>]";
 const DAY_MS = 24 * 60 * 60 * 1000;
 const NO_COLOR = { g: "", y: "", r: "", c: "", b: "", d: "", x: "" };
 
@@ -72,10 +100,6 @@ function readJsonObject(path: string): Record<string, unknown> | null {
   } catch {
     return null;
   }
-}
-
-function capText(value: string, limit: number): string {
-  return value.length > limit ? `${value.slice(0, limit)}…` : value;
 }
 
 function tailLines(text: string, limit: number): string {
@@ -191,32 +215,6 @@ async function remindersSection(
     : "- no reminder facts in the last day";
 }
 
-/** Один провал — одна строка: код, а не текст ошибки: текст может нести сообщение. */
-function failureFact(event: Record<string, unknown>): string | null {
-  const kind = event.kind;
-  const name = event.name;
-  if (typeof kind !== "string" || typeof name !== "string") return null;
-  const failed =
-    (kind === "eve" && FAILED_TURNS.has(name)) ||
-    ((kind === "outbox" || kind === "stop") && name === "failed");
-  if (!failed) return null;
-  const data =
-    typeof event.data === "object" && event.data !== null
-      ? (event.data as Record<string, unknown>)
-      : {};
-  const code =
-    typeof data.errorCode === "string"
-      ? capText(data.errorCode, TRACE_CODE_CHARS)
-      : typeof data.code === "string" || typeof data.code === "number"
-        ? capText(String(data.code), TRACE_CODE_CHARS)
-        : "-";
-  const turn =
-    typeof event.turn === "string" && event.turn.length > 0 ? event.turn : "-";
-  const ts =
-    typeof event.ts === "string" && event.ts.length > 0 ? event.ts : "-";
-  return `${ts} · ${kind}.${name} · turn ${turn} · code ${code}`;
-}
-
 /**
  * Таблица фактов расписаний (T20 §5): последний запуск каждого имени и незакрытые провалы
  * (до починки, ADR-0020). Разбор не дублируем: отчёт собирает doctor.scheduleFactsReport теми же
@@ -249,58 +247,221 @@ async function schedulesSection(dataDir: string): Promise<string> {
     : "- no schedule runs in the facts table";
 }
 
-function turnsSection(dataDir: string, nowMs: number): string {
-  const directory = join(dataDir, "trace");
-  let names: string[];
+/**
+ * Сбои суток тем же читателем, что у Insight: класс и ход без текста причины — это ходы,
+ * которых владелец не выбирал (scripts/lib/turn-failures.ts).
+ */
+function failuresSection(dataDir: string, nowMs: number): string {
+  let found;
   try {
-    names = readdirSync(directory);
-  } catch {
-    return "- no data/trace — the turn journal has nothing";
+    found = listTurnFailures(dataDir, nowMs);
+  } catch (error) {
+    return `- the turn journal is unreadable (${(error as NodeJS.ErrnoException).code ?? "error"})`;
   }
-  const days = names
-    .filter((name) => TRACE_DAY_FILE.test(name))
-    .sort()
-    .reverse();
-  const since = nowMs - DAY_MS;
-  const facts: string[] = [];
-  let unreadable = 0;
-  // Двух последних дневных файлов хватает на сутки: ход идёт от сегодняшнего дня назад.
-  for (const day of days.slice(0, 2)) {
-    let text: string;
-    try {
-      text = readFileSync(join(directory, day), "utf8");
-    } catch {
-      unreadable++;
-      continue;
-    }
-    for (const line of text.split("\n")) {
-      if (line.trim().length === 0) continue;
-      let event: Record<string, unknown>;
-      try {
-        const parsed: unknown = JSON.parse(line);
-        if (typeof parsed !== "object" || parsed === null)
-          throw new Error("not an object");
-        event = parsed as Record<string, unknown>;
-      } catch {
-        unreadable++;
-        continue;
-      }
-      const ts =
-        typeof event.ts === "string" ? Date.parse(event.ts) : Number.NaN;
-      if (Number.isFinite(ts) && ts < since) continue;
-      const fact = failureFact(event);
-      if (fact) facts.push(fact);
-    }
-  }
-  const { shown, rest } = capped(facts);
-  const lines = shown.map((fact) => `- ${fact}`);
+  const { shown, rest } = capped(diagnoseFailureLines(found.causes));
   if (rest > 0)
-    lines.push(`- … ${rest} more (list cut at ${SECTION_ITEM_LIMIT})`);
-  if (unreadable > 0)
-    lines.push(`- ${unreadable} unreadable journal lines skipped`);
-  return lines.length > 0
-    ? lines.join("\n")
-    : "- no failed turns in the last day";
+    shown.push(`- … ${rest} more (list cut at ${SECTION_ITEM_LIMIT})`);
+  if (found.unreadable > 0)
+    shown.push(`- ${found.unreadable} unreadable journal lines skipped`);
+  return shown.length > 0 ? shown.join("\n") : "- no failures in the last day";
+}
+
+type Clean = (text: string) => string;
+type TurnEvent = {
+  readonly lines: readonly string[];
+  readonly failed: boolean;
+};
+type TraceLine = Record<string, unknown>;
+
+const record = (value: unknown): Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+
+const fact = (key: string, value: unknown): string[] =>
+  typeof value === "string" ||
+  typeof value === "number" ||
+  typeof value === "boolean"
+    ? [`${key}=${cutText(String(value).replace(/\s+/gu, " "), VALUE_CHARS)}`]
+    : [];
+
+/** Пары `ключ=значение` из белого списка: ни `args`, ни `result`, ни `message`, ни `chatId`. */
+function factsOf(data: Record<string, unknown>): string[] {
+  const usage = record(data.usage);
+  const tools = Array.isArray(data.actions)
+    ? data.actions.flatMap((action) => fact("tool", record(action).toolName))
+    : [];
+  return [
+    ...TURN_KEYS.flatMap((key) => fact(key, data[key])),
+    ...fact("usage.in", usage.in),
+    ...fact("usage.out", usage.out),
+    ...tools,
+  ];
+}
+
+const isFailed = (line: TraceLine): boolean =>
+  (typeof record(line.data).failure === "string" &&
+    record(line.data).failure !== "") ||
+  (line.kind === "eve" &&
+    (line.name === "turn.failed" || line.name === "step.failed"));
+
+/** Кадры стека из `details`: строки `at …`, не больше пяти; тело ошибки провайдера не берётся. */
+function stackFrames(details: unknown): string[] {
+  const stack = typeof details === "string" ? details : record(details).stack;
+  return (typeof stack === "string" ? stack : "")
+    .split("\n")
+    .filter((line) => /^\s+at /u.test(line))
+    .slice(0, FRAMES);
+}
+
+/** Событие хода: время, имя, белый список; у упавшего — строка ошибки и кадры стека. */
+function turnEvent(line: TraceLine, clean: Clean): TurnEvent {
+  const ts = typeof line.ts === "string" ? line.ts.slice(11, 23) : "";
+  const head = [`${ts} ${String(line.kind)}.${String(line.name)}`];
+  const lines = [[...head, ...factsOf(record(line.data))].join(" ")];
+  const failed = isFailed(line);
+  if (!failed) return { lines, failed };
+  // Секрет вырезается до обрезки: срез посреди значения `redact()` уже не узнал бы.
+  const reason = cutText(clean(failureReason(line)), ERROR_CHARS);
+  if (reason !== "") lines.push(`  error: ${reason}`);
+  for (const frame of stackFrames(record(line.data).details))
+    lines.push(`  ${cutText(clean(frame.trim()), FRAME_CHARS)}`);
+  return { lines, failed };
+}
+
+/** Выбранные события подряд; пропуски — строкой `… N events`. */
+function renderKept(
+  events: readonly TurnEvent[],
+  keep: readonly number[],
+): string {
+  const out: string[] = [];
+  let previous = -1;
+  for (const index of [...keep, events.length]) {
+    if (index - previous > 1) out.push(`… ${index - previous - 1} events`);
+    out.push(...(events[index]?.lines ?? []));
+    previous = index;
+  }
+  return out.join("\n");
+}
+
+/** Убрать из середины одно событие: сперва то, что не упало. */
+function dropMiddle(
+  keep: readonly number[],
+  events: readonly TurnEvent[],
+): number[] {
+  const inner = keep.slice(1, -1);
+  const quiet = inner.filter((index) => events[index]?.failed !== true);
+  const pool = quiet.length > 0 ? quiet : inner;
+  const middle = keep[Math.floor(keep.length / 2)] ?? 0;
+  const drop = pool.reduce((best, index) =>
+    Math.abs(index - middle) < Math.abs(best - middle) ? index : best,
+  );
+  return keep.filter((index) => index !== drop);
+}
+
+/**
+ * Раздел не длиннее `budget`: не влез — первое и последнее событие, упавшие и по три перед
+ * каждым; всё ещё длинно — события уходят из середины, сперва не упавшие.
+ */
+function fitTurn(events: readonly TurnEvent[], budget: number): string {
+  const all = events.map((_, index) => index);
+  const full = renderKept(events, all);
+  if (full.length <= budget) return full;
+  let keep = all.filter(
+    (index) =>
+      index === 0 ||
+      index === events.length - 1 ||
+      events.slice(index, index + 4).some((event) => event.failed),
+  );
+  let text = renderKept(events, keep);
+  while (text.length > budget && keep.length > 2) {
+    keep = dropMiddle(keep, events);
+    text = renderKept(events, keep);
+  }
+  return cutText(text, budget);
+}
+
+/** Строки одного хода: сессия совпала, `turn` — сам ход или его субагент; по времени. */
+function turnLines(
+  dataDir: string,
+  ref: { readonly session: string; readonly turn: string },
+): TraceLine[] {
+  let lines: TraceLine[];
+  try {
+    lines = readTrace(dataDir).lines;
+  } catch {
+    return [];
+  }
+  return lines
+    .filter(
+      (line) =>
+        line.session === ref.session &&
+        (line.turn === ref.turn ||
+          String(line.turn).startsWith(`${ref.turn}#`)),
+    )
+    .sort((a, b) =>
+      String(a.ts) < String(b.ts) ? -1 : String(a.ts) > String(b.ts) ? 1 : 0,
+    );
+}
+
+/** `os.homedir()` → `~`, только целым сегментом пути: имя пользователя не уходит в issue. */
+function homeToTilde(): Clean {
+  const home = os.homedir().replace(/\/+$/u, "");
+  if (home.length < 2) return (text) => text;
+  const escaped = home.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+  const pattern = new RegExp(`${escaped}(?![\\w.-])`, "gu");
+  return (text) => text.replace(pattern, "~");
+}
+
+/** Одинокая половина суррогатной пары — U+FFFD: иначе encodeURIComponent бросает. */
+const wellFormed = (text: string): string =>
+  text.replace(
+    /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/gu,
+    "\uFFFD",
+  );
+
+const issueUrl = (title: string, body: string): string =>
+  `${ISSUE_NEW}?title=${encodeURIComponent(wellFormed(title))}&body=${encodeURIComponent(wellFormed(body))}`;
+
+/** Тело issue: пакет до `## Host` (шапка, версии, ход) и строка о полном пакете. */
+function issueBody(text: string, fullLine: string): string {
+  const host = text.indexOf("\n## Host\n");
+  const head = (host === -1 ? text : text.slice(0, host)).trimEnd();
+  return `${head}\n\n${fullLine}`;
+}
+
+/** Заголовок issue по первому сбою хода; сбоя нет — по самому ходу. */
+function issueTitle(lines: readonly TraceLine[], ref: string, version: string) {
+  const first = lines.find(isFailed);
+  const cause = first === undefined ? null : failureCause(first);
+  return cause === null
+    ? `[iva] turn ${ref} (${version})`
+    : `[iva] ${cause.where}: ${cause.kind} (${version})`;
+}
+
+/**
+ * Пакет и адрес issue: раздел хода ужимается той же процедурой, пока адрес после кодирования
+ * не уложится в ISSUE_URL_BYTES; тогда тело issue — префикс записанного пакета.
+ */
+function fitIssue(
+  build: (budget: number) => string,
+  title: string,
+  fullLine: string,
+): { readonly text: string; readonly url: string } {
+  let budget = TURN_SECTION_CHARS;
+  let text = build(budget);
+  let url = issueUrl(title, issueBody(text, fullLine));
+  while (url.length > ISSUE_URL_BYTES && budget > 0) {
+    budget = Math.floor(budget * Math.min(0.9, ISSUE_URL_BYTES / url.length));
+    text = build(budget);
+    url = issueUrl(title, issueBody(text, fullLine));
+  }
+  let head = issueBody(text, fullLine).slice(0, -fullLine.length - 2);
+  while (url.length > ISSUE_URL_BYTES && head.length > 0) {
+    head = cutText(head, Math.floor(head.length * 0.9));
+    url = issueUrl(title, `${head}\n\n${fullLine}`);
+  }
+  return { text, url };
 }
 
 /** Имена файлов своего слоя, без содержимого: что владелец правил — видно, что там — нет. */
@@ -411,7 +572,7 @@ function redactionLine(envFound: boolean, secretCount: number): string {
   return `- redaction: ${secretCount} values from .env, pattern rules always on`;
 }
 
-async function packageMarkdown(input: {
+function packageMarkdown(input: {
   readonly root: string;
   readonly dataDir: string;
   readonly gitHead: string;
@@ -421,9 +582,10 @@ async function packageMarkdown(input: {
   readonly updateLog: string;
   readonly redaction: string;
   readonly schedules: string;
-}): Promise<string> {
-  const nowMs = input.now.getTime();
-  const reminders = await remindersSection(input.dataDir, nowMs);
+  readonly reminders: string;
+  /** `--turn`: раздел сразу после версий — так он попадает в адрес issue. */
+  readonly turn: { readonly ref: string; readonly section: string } | null;
+}): string {
   return [
     "# Iva diagnose package",
     "",
@@ -434,6 +596,9 @@ async function packageMarkdown(input: {
     "## Versions",
     versionsSection(input.root, input.gitHead),
     "",
+    ...(input.turn === null
+      ? []
+      : [`## Turn ${input.turn.ref}`, input.turn.section, ""]),
     "## Host",
     hostSection(),
     "",
@@ -452,10 +617,10 @@ async function packageMarkdown(input: {
     "```",
     "",
     "## Reminders (last 24h and overdue; id = sha256/8)",
-    reminders,
+    input.reminders,
     "",
-    "## Failed turns (last 24h)",
-    turnsSection(input.dataDir, nowMs),
+    "## Failures (last 24h)",
+    failuresSection(input.dataDir, input.now.getTime()),
     "",
     "## Schedules (facts table, last run per name; open failures of the last day)",
     input.schedules,
@@ -464,6 +629,79 @@ async function packageMarkdown(input: {
     customLayerSection(input.dataDir),
     "",
   ].join("\n");
+}
+
+/**
+ * Доктор — половина улик, поэтому зовётся настоящий: его строки уходят в пакет, а не в
+ * терминал (сборщик без цвета и с выходом, который не завершает этот процесс). Пакет
+ * собирают и из хода (скилл report-problem): доктор тут только читает.
+ */
+async function readOnlyDoctor(
+  runtime: CliRuntime,
+  systemdLifecycle: SystemdLifecycle,
+): Promise<string> {
+  const doctorLines: string[] = ["read-only: nothing was repaired"];
+  const doctorRuntime: CliRuntime = {
+    ...runtime,
+    C: NO_COLOR,
+    ok: (message: string) => void doctorLines.push(`✓ ${message}`),
+    warn: (message: string) => void doctorLines.push(`! ${message}`),
+    bad: (message: string) => void doctorLines.push(`✗ ${message}`),
+  };
+  await createDoctorCommand(doctorRuntime, systemdLifecycle, {
+    log: (...args: unknown[]) => {
+      doctorLines.push(args.map((arg) => String(arg)).join(" "));
+    },
+    exit: () => undefined,
+    readOnly: true,
+  })();
+  return doctorLines.join("\n");
+}
+
+/** `--turn <session>/<turn>`: нет флага — null; нет значения или не пара — ошибка до сборки. */
+function turnArgument(argv: readonly string[]) {
+  const at = argv.indexOf("--turn");
+  if (at === -1) return null;
+  const name = argv[at + 1] ?? "";
+  const ref = parseTurnRef(name);
+  if (ref === null) throw new Error(USAGE);
+  return { ...ref, name };
+}
+
+/** Пакет целиком; с `--turn` — ещё раздел хода и адрес issue, ужатые вместе. */
+function finishPackage(
+  sections: Omit<Parameters<typeof packageMarkdown>[0], "turn">,
+  ref: ReturnType<typeof turnArgument>,
+  clean: Clean,
+  name: string,
+): { readonly text: string; readonly url: string | null } {
+  if (ref === null)
+    return {
+      text: clean(packageMarkdown({ ...sections, turn: null })),
+      url: null,
+    };
+  const lines = turnLines(sections.dataDir, ref);
+  const events = lines.map((line) => turnEvent(line, clean));
+  const section = (budget: number) =>
+    events.length > 0
+      ? fitTurn(events, budget)
+      : `- no turn ${ref.name} in the journal`;
+  return fitIssue(
+    (budget) =>
+      clean(
+        packageMarkdown({
+          ...sections,
+          turn: { ref: ref.name, section: section(budget) },
+        }),
+      ),
+    clean(issueTitle(lines, ref.name, packageVersion(sections.root))),
+    `Full package: data/diagnose/${name} on the owner's machine`,
+  );
+}
+
+function packageVersion(root: string): string {
+  const version = readJsonObject(join(root, "package.json"))?.version;
+  return typeof version === "string" ? version : "unknown";
 }
 
 /**
@@ -492,7 +730,10 @@ export function createDiagnoseCommand(
   const now = dependencies.now ?? (() => new Date());
   const units = [...SERVICES, BRAIN_SERVICE, SVC_USERBOT];
 
-  return async function cmdDiagnose(): Promise<void> {
+  return async function cmdDiagnose(
+    argv: readonly string[] = [],
+  ): Promise<void> {
+    const ref = turnArgument(argv);
     const env = readEnv();
     const envFound = existsSync(ENV_PATH);
     if (!envFound)
@@ -501,24 +742,7 @@ export function createDiagnoseCommand(
       );
     const dataDirectory = dataDirAbs(env);
     const collectedAt = now();
-    // Доктор — половина улик, поэтому зовётся настоящий: его строки уходят в пакет, а не в
-    // терминал (сборщик без цвета и с выходом, который не завершает этот процесс).
-    // Пакет собирают и из хода (скилл report-problem): доктор тут только читает.
-    const doctorLines: string[] = ["read-only: nothing was repaired"];
-    const doctorRuntime: CliRuntime = {
-      ...runtime,
-      C: NO_COLOR,
-      ok: (message: string) => void doctorLines.push(`✓ ${message}`),
-      warn: (message: string) => void doctorLines.push(`! ${message}`),
-      bad: (message: string) => void doctorLines.push(`✗ ${message}`),
-    };
-    await createDoctorCommand(doctorRuntime, systemdLifecycle, {
-      log: (...args: unknown[]) => {
-        doctorLines.push(args.map((arg) => String(arg)).join(" "));
-      },
-      exit: () => undefined,
-      readOnly: true,
-    })();
+    const doctor = await readOnlyDoctor(runtime, systemdLifecycle);
     // Список секретов читается и после прогона (T21): доктор только читает, но .env мог
     // поменять кто-то другой, пока пакет собирался.
     const secrets = [
@@ -527,27 +751,31 @@ export function createDiagnoseCommand(
         ...secretValuesFromEnv(readEnv()),
       ]),
     ];
-    const text = await packageMarkdown({
+    const tilde = homeToTilde();
+    const clean = (text: string) => redact(tilde(text), secrets);
+    const name = `${collectedAt.toISOString().replace(/[:.]/gu, "-")}.md`;
+    const sections = {
       root: ROOT,
       dataDir: dataDirectory,
       gitHead: gitHead(),
       now: collectedAt,
-      doctor: doctorLines.join("\n"),
+      doctor,
       journal: journalSection(cap, dataDirectory, units),
       updateLog: updateLogSection(dataDirectory),
       redaction: redactionLine(envFound, secrets.length),
       schedules: await schedulesSection(dataDirectory),
-    });
-    const file = join(
-      dataDirectory,
-      "diagnose",
-      `${collectedAt.toISOString().replace(/[:.]/gu, "-")}.md`,
-    );
+      reminders: await remindersSection(dataDirectory, collectedAt.getTime()),
+    };
+    const { text, url } = finishPackage(sections, ref, clean, name);
+    const file = join(dataDirectory, "diagnose", name);
     mkdirSync(join(dataDirectory, "diagnose"), { recursive: true });
-    writeFileSync(file, redact(text, secrets), {
+    writeFileSync(file, text, { encoding: "utf8", mode: 0o600 });
+    ok(`Diagnose package: ${file}`);
+    if (url === null) return;
+    writeFileSync(file.replace(/\.md$/u, ".issue-url"), url, {
       encoding: "utf8",
       mode: 0o600,
     });
-    ok(`Diagnose package: ${file}`);
+    ok(`issue-url: ${url}`);
   };
 }

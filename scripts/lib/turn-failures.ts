@@ -163,8 +163,14 @@ function parseLine(raw: string): Line | null {
   return parsed;
 }
 
-/** Два последних дневных файла. Нет каталога — пусто; другой отказ `readdir` бросает. */
-function readTwoDays(dataDir: string): {
+/**
+ * Строки последних `days` дневных файлов журнала (все — без числа), годные к разбору. Нет
+ * каталога — пусто; другой отказ `readdir` бросает.
+ */
+export function readTrace(
+  dataDir: string,
+  days = Number.POSITIVE_INFINITY,
+): {
   readonly lines: Line[];
   unreadable: number;
 } {
@@ -178,8 +184,11 @@ function readTwoDays(dataDir: string): {
     throw error;
   }
   const out = { lines: [] as Line[], unreadable: 0 };
-  const days = names.filter((name) => DAY_FILE.test(name)).sort();
-  for (const day of days.slice(-2)) readDay(join(directory, day), out);
+  for (const day of names
+    .filter((name) => DAY_FILE.test(name))
+    .sort()
+    .slice(-days))
+    readDay(join(directory, day), out);
   return out;
 }
 
@@ -278,7 +287,7 @@ export function listTurnFailures(
   dataDir: string,
   nowMs: number,
 ): { readonly causes: readonly TurnFailure[]; readonly unreadable: number } {
-  const { lines, unreadable } = readTwoDays(dataDir);
+  const { lines, unreadable } = readTrace(dataDir, 2);
   const skip = insightSessions(lines);
   const folds = new Map<string, Fold>();
   for (const line of lines) {
