@@ -167,9 +167,12 @@ export function outboxTransport(
         res.status,
         JSON.stringify(res.body).slice(0, 300),
       );
+      // Причина Telegram (BUTTON_DATA_INVALID и т. п.) идёт в Trace вместе с кодом.
+      const reason = (res.body as { description?: unknown } | null)
+        ?.description;
       return {
         ok: false,
-        error: `sendRichMessage ${res.status}`,
+        error: `sendRichMessage ${res.status}${typeof reason === "string" ? `: ${reason}` : ""}`,
         retryPlain: false,
       };
     } catch (err) {

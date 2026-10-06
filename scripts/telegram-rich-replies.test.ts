@@ -362,3 +362,130 @@ void test("канал отдаёт режим в транспорт: при auto
     assert.doesNotMatch(JSON.stringify(sent?.body), /iva:silent/u);
   }
 });
+
+// Telegram на проводе: callback_data длиннее 64 байт UTF-8 роняет всё rich-сообщение
+// ответом 400 BUTTON_DATA_INVALID (c1, 06.10.2026).
+function installStrictBotApi(calls: WiringCall[]): () => void {
+  const original = globalThis.fetch;
+  globalThis.fetch = async (url, init = {}) => {
+    // eslint-disable-next-line @typescript-eslint/no-base-to-string -- preserve the original mock's exact String coercion.
+    const method = new URL(String(url)).pathname.split("/").at(-1) ?? "";
+    const body: unknown = init.body
+      ? JSON.parse(
+          // eslint-disable-next-line @typescript-eslint/no-base-to-string -- preserve the original mock's exact String coercion.
+          String(init.body),
+        )
+      : undefined;
+    calls.push({ method, body });
+    const markdown =
+      (body as { rich_message?: { markdown?: string } } | undefined)
+        ?.rich_message?.markdown ?? "";
+    const tooLong = [...markdown.matchAll(/\sdata="([^"]*)"/gu)].some(
+      (match) => Buffer.byteLength(match[1]) > 64,
+    );
+    return tooLong
+      ? Response.json(
+          {
+            ok: false,
+            error_code: 400,
+            description: "Bad Request: BUTTON_DATA_INVALID",
+          },
+          { status: 400 },
+        )
+      : Response.json({
+          ok: true,
+          result: { message_id: 1, chat: { id: 1, type: "private" } },
+        });
+  };
+  return () => {
+    globalThis.fetch = original;
+  };
+}
+
+const LONG_DATA = "Задачи: закрыть тесты, привычки без срока";
+
+void test("провод: кнопка с data в 75 байт уходит одним sendRichMessage, data укорочен до 64", async (t) => {
+  t.mock.method(console, "error", () => {});
+  const calls: WiringCall[] = [];
+  t.after(installStrictBotApi(calls));
+  const { outboxTransport } = await loadChannel();
+  const tg: Pick<
+    TelegramHandle,
+    "chatId" | "messageThreadId" | "request" | "post"
+  > = {
+    chatId: "77",
+    messageThreadId: undefined,
+    request: async (method, body) => {
+      const response = await fetch(`https://api.telegram.org/botX/${method}`, {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+      return {
+        ok: response.ok,
+        status: response.status,
+        body: await response.json(),
+      };
+    },
+    post: async (body) => {
+      await fetch("https://api.telegram.org/botX/sendMessage", {
+        method: "POST",
+        body: JSON.stringify(typeof body === "string" ? { text: body } : body),
+      });
+      return { id: "1", raw: {} };
+    },
+  };
+
+  const result = await sendThroughOutbox(
+    `Готово.\n\n<tg-button type="callback_data" data="${LONG_DATA}">Закрыть</tg-button> — закрою оба.`,
+    outboxTransport(tg, "auto"),
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(result.fellBack, false);
+  assert.equal(result.error, "");
+  assert.deepEqual(
+    calls.map((call) => call.method),
+    ["sendRichMessage"],
+  );
+  const markdown = (calls[0].body as { rich_message: { markdown: string } })
+    .rich_message.markdown;
+  const data = /\sdata="([^"]*)"/u.exec(markdown)?.[1] ?? "";
+  assert.ok(Buffer.byteLength(data) <= 64, data);
+  assert.ok(LONG_DATA.startsWith(data));
+  assert.match(markdown, />Закрыть<\/tg-button> — закрою оба\./u);
+});
+
+void test("отказ Telegram по кнопкам: причина и fellBack доходят до результата шва", async (t) => {
+  t.mock.method(console, "error", () => {});
+  const { outboxTransport } = await loadChannel();
+  const refused = telegramDouble();
+  const tg = {
+    ...refused.tg,
+    request: async (
+      ...call: Parameters<typeof refused.tg.request>
+    ): Promise<TelegramApiResponse> => {
+      await refused.tg.request(...call);
+      return {
+        ok: false,
+        status: 400,
+        body: { ok: false, description: "Bad Request: BUTTON_URL_INVALID" },
+      };
+    },
+  };
+
+  const result = await sendThroughOutbox(
+    'Ссылка: <tg-button type="url" url="javascript:x">Открыть</tg-button>',
+    outboxTransport(tg, "auto"),
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(result.fellBack, true);
+  assert.equal(
+    result.error,
+    "buttons dropped: sendRichMessage 400: Bad Request: BUTTON_URL_INVALID",
+  );
+  assert.deepEqual(refused.calls.map(callLine), [
+    "request:sendRichMessage",
+    "post:HTML",
+  ]);
+});

@@ -11,7 +11,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fc from "fast-check";
-import { escHtml, htmlToPlain, mdToTelegramHtml } from "./telegram-format.ts";
+import {
+  BUTTON_DATA_MAX_BYTES,
+  escHtml,
+  htmlToPlain,
+  mdToTelegramHtml,
+  shortenButtonData,
+  shortenButtonsData,
+} from "./telegram-format.ts";
 
 const SEED = 20_260_818;
 const RUNS = 500;
@@ -64,6 +71,67 @@ await test(`code-span восстанавливается ровно один р�
       assert.ok(plain.includes(before.trim()));
       assert.ok(plain.includes(after.trim()));
     }),
+    { seed: SEED, numRuns: RUNS },
+  );
+});
+
+// Data кнопки: любой юникод, с упором на многобайтовые символы — кириллица (2 байта),
+// евро (3), эмодзи (4, суррогатная пара в JS) и составные эмодзи, плюс HTML-сущность.
+const dataUnit = fc.oneof(
+  fc.constantFrom("а", "я", "€", "😀", "👍🏽", "👨‍👩‍👧", "a", " ", ",", "&amp;"),
+  fc.string({ unit: "grapheme", minLength: 1, maxLength: 1 }),
+);
+const buttonData = fc
+  .string({ unit: dataUnit, maxLength: 60 })
+  .filter((data) => !data.includes('"'));
+
+const isWellFormedUtf8 = (text: string): boolean =>
+  Buffer.from(text, "utf8").toString("utf8") === text;
+
+await test(`data кнопки: ≤ 64 байт, целые символы, начало исходного (seed ${SEED})`, () => {
+  fc.assert(
+    fc.property(buttonData, (data) => {
+      const short = shortenButtonData(data);
+      assert.ok(Buffer.byteLength(short) <= BUTTON_DATA_MAX_BYTES);
+      assert.ok(isWellFormedUtf8(short), "a multibyte character was split");
+      assert.ok(data.startsWith(short));
+      if (Buffer.byteLength(data) <= BUTTON_DATA_MAX_BYTES)
+        assert.equal(short, data);
+      // Отрезано не больше нужного: следующий символ уже не влез бы.
+      else if (!data.includes("&")) {
+        const next = [...data.slice(short.length)][0];
+        assert.ok(Buffer.byteLength(short + next) > BUTTON_DATA_MAX_BYTES);
+      }
+    }),
+    { seed: SEED, numRuns: RUNS },
+  );
+});
+
+await test(`разметка кнопок: укорачивается только data, подписи и текст целы (seed ${SEED})`, (t) => {
+  t.mock.method(console, "error", () => {});
+  fc.assert(
+    fc.property(
+      fc.array(buttonData, { minLength: 1, maxLength: 4 }),
+      (datas) => {
+        const md = datas
+          .map(
+            (data, index) =>
+              `<tg-button type="callback_data" data="${data}">Кнопка ${index}</tg-button> — пояснение ${index}`,
+          )
+          .join("\n");
+        const out = shortenButtonsData(md);
+        const shortened = [...out.matchAll(/\sdata="([^"]*)"/g)].map(
+          (match) => match[1],
+        );
+        assert.deepEqual(shortened, datas.map(shortenButtonData));
+        for (const data of shortened)
+          assert.ok(Buffer.byteLength(data) <= BUTTON_DATA_MAX_BYTES);
+        assert.equal(
+          out.replace(/\sdata="[^"]*"/g, ""),
+          md.replace(/\sdata="[^"]*"/g, ""),
+        );
+      },
+    ),
     { seed: SEED, numRuns: RUNS },
   );
 });

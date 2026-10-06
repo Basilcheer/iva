@@ -604,6 +604,50 @@ export function withButtonTypes(md: string): string {
   });
 }
 
+/** Предел callback_data у Telegram: 64 байта UTF-8. Длиннее — 400 BUTTON_DATA_INVALID. */
+export const BUTTON_DATA_MAX_BYTES = 64;
+
+// Атом значения атрибута: HTML-сущность целиком или один символ (кодовая точка, флаг u).
+const ATTRIBUTE_ATOM_RE = /&(?:#\d+|#x[\da-f]+|[a-z]+);|[\s\S]/giu;
+
+/**
+ * Начало `data` в пределах 64 байт UTF-8: режется по границе символа и не посреди
+ * HTML-сущности. Байты считаются по сырому значению атрибута — так предел держится,
+ * разворачивает Telegram сущности или нет.
+ */
+export function shortenButtonData(data: string): string {
+  if (Buffer.byteLength(data) <= BUTTON_DATA_MAX_BYTES) return data;
+  let out = "";
+  let bytes = 0;
+  for (const [atom] of data.matchAll(ATTRIBUTE_ATOM_RE)) {
+    bytes += Buffer.byteLength(atom);
+    if (bytes > BUTTON_DATA_MAX_BYTES) break;
+    out += atom;
+  }
+  return out;
+}
+
+const BUTTON_DATA_RE = /(<tg-button(?=[\s>])[^>]*?\sdata=")([^"]*)(")/gi;
+
+/**
+ * Модель пишет в `data` целую фразу, а одна длинная кнопка роняет всё rich-сообщение:
+ * Telegram отвергает его целиком, и ответ уходит HTML-путём уже без кнопок. Длинный
+ * `data` укорачивается до предела; тап приходит модели этим началом фразы.
+ */
+export function shortenButtonsData(md: string): string {
+  return md.replace(
+    BUTTON_DATA_RE,
+    (_tag, head: string, data: string, tail: string) => {
+      const short = shortenButtonData(data);
+      if (short !== data)
+        console.error(
+          `[telegram] button data shortened: ${Buffer.byteLength(data)} → ${BUTTON_DATA_MAX_BYTES}`,
+        );
+      return head + short + tail;
+    },
+  );
+}
+
 export function hasRichButtons(md: unknown): boolean {
   return /<tg-button[\s>]/i.test(String(md));
 }
