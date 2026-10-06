@@ -85,6 +85,8 @@ const buttonData = fc
   .string({ unit: dataUnit, maxLength: 60 })
   .filter((data) => !data.includes('"'));
 
+const ENTITY_IN_DATA = /&(?:#\d+|#x[\da-f]+|[a-z]+);/giu;
+
 const isWellFormedUtf8 = (text: string): boolean =>
   Buffer.from(text, "utf8").toString("utf8") === text;
 
@@ -95,6 +97,13 @@ await test(`data кнопки: ≤ 64 байт, целые символы, на�
       assert.ok(Buffer.byteLength(short) <= BUTTON_DATA_MAX_BYTES);
       assert.ok(isWellFormedUtf8(short), "a multibyte character was split");
       assert.ok(data.startsWith(short));
+      // HTML-сущность исходного data в результате либо целиком, либо её нет вовсе.
+      for (const entity of data.matchAll(ENTITY_IN_DATA))
+        assert.ok(
+          entity.index >= short.length ||
+            entity.index + entity[0].length <= short.length,
+          `entity ${entity[0]} at ${entity.index} cut: ${short}`,
+        );
       if (Buffer.byteLength(data) <= BUTTON_DATA_MAX_BYTES)
         assert.equal(short, data);
       // Отрезано не больше нужного: следующий символ уже не влез бы.
@@ -169,4 +178,14 @@ await test("две кнопки с общим началом длиннее 64 �
   assert.equal(datas[0], shortenButtonData(`${head}без срока`));
   assert.match(datas[1], /#2$/u);
   assert.match(datas[2], /#3$/u);
+});
+
+await test("сущность на границе 64 байт не рвётся: уходит целиком следующим атомом", () => {
+  // 62 байта текста, дальше «&amp;»: два его байта влезли бы, но сущность — один атом.
+  const data = `${"x".repeat(62)}&amp;хвост`;
+  assert.equal(shortenButtonData(data), "x".repeat(62));
+  assert.equal(
+    shortenButtonData(`${"x".repeat(59)}&amp;хвост`),
+    `${"x".repeat(59)}&amp;`,
+  );
 });
