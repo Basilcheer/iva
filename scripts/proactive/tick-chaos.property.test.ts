@@ -22,8 +22,8 @@
 //   6) на проводе нет ни одного сгенерированного секрета, и ни одно сообщение — не голое QUIET;
 //   7) при выключенном тумблере обычные пункты не будят модель, Brief и Insight нет, сбои доходят;
 //   8) не больше одного хода Insight на день владельца и ни одного в тихий час;
-//   9) хода Insight нет, пока идёт пауза, и после двух доставленных подряд инсайтов без установки
-//      (плагины в этом мире не стоят никогда) его нет 7 суток.
+//   9) паузы нет: прогон в окне слота в день без заявки делает ход Insight при любой истории
+//      прошлых инсайтов (плагины в этом мире не стоят никогда), заявка не несёт полей паузы.
 import "../fixtures/no-host-anthropic.ts";
 import assert from "node:assert/strict";
 import {
@@ -522,8 +522,7 @@ class World {
   readonly secrets: Secret[] = [];
   readonly recorded: { tick: number; key: string }[] = [];
   readonly logs: string[] = [];
-  /** Доставка инсайта и исход каждой записи состояния — по тику, для свойства (9). */
-  readonly insightSends: { tick: number; ok: boolean }[] = [];
+  /** Исход каждой записи состояния — по тику, для свойства (9). */
   readonly writes: { tick: number; ok: boolean }[] = [];
   readonly problems: string[] = [];
   seq = 0;
@@ -713,13 +712,9 @@ class World {
           prompt.includes("Brief: slot") ? t.briefTurn : t.watchTurn,
         );
       },
-      send: async (p, source) => {
+      send: (p) => {
         this.sent.push({ tick: this.tick, part: p });
-        const sent = this.send(t.sends[sends++ % t.sends.length] ?? "ok", p);
-        if (source !== "insight") return sent;
-        const ok = await sent.then((r) => r.ok).catch(() => false);
-        this.insightSends.push({ tick: this.tick, ok });
-        return sent;
+        return this.send(t.sends[sends++ % t.sends.length] ?? "ok", p);
       },
       translate: () => Promise.resolve(tr),
       recordAlert: (key, essence) => {
@@ -1082,10 +1077,10 @@ test(`chaos (7): with the toggle off ordinary items never wake the model and the
 });
 
 /**
- * Серии под паузу: тумблер включён, тихих часов нет, один слот Insight, файл есть; тики идут по
+ * Серии под Insight: тумблер включён, тихих часов нет, один слот Insight, файл есть; тики идут по
  * слотам через сутки и чаще, с любым ответом модели, отказами отправки и записи.
  */
-const pauseSeries = fc
+const insightSeries = fc
   .record({
     s: series,
     hour: fc.integer({ min: 0, max: 20 }),
@@ -1116,7 +1111,7 @@ const pauseSeries = fc
  * Серии под тихий час: слот Insight в первый тихий час, тихие часы накрывают всё окно слота (3 ч),
  * тики через полчаса внутри них. Без этих серий снятую проверку тихого часа ловил не каждый сид.
  */
-const quietSeries = pauseSeries.map((s) => {
+const quietSeries = insightSeries.map((s) => {
   const hour = s.startMin / 60;
   return {
     ...s,
@@ -1127,7 +1122,7 @@ const quietSeries = pauseSeries.map((s) => {
 
 test(`chaos (8): no more than one Insight a day of the owner, and none in a quiet hour (seed ${SEED})`, async () => {
   await fc.assert(
-    fc.asyncProperty(fc.oneof(series, pauseSeries, quietSeries), (s) =>
+    fc.asyncProperty(fc.oneof(series, insightSeries, quietSeries), (s) =>
       runSeries(s, {
         end: (w) => {
           const days = new Set<string>();
@@ -1147,59 +1142,40 @@ test(`chaos (8): no more than one Insight a day of the owner, and none in a quie
   );
 });
 
-test(`chaos (9): no Insight while paused, and none for 7 days after two delivered Insights in a row with nothing installed (seed ${SEED})`, async () => {
+test(`chaos (9): no pause — every run in the window of the slot on a day without a claim makes an Insight, whatever the past ones (seed ${SEED})`, async () => {
+  // Без Brief: слот Brief забирает прогон себе, Insight ждёт следующего, и окно здесь не об этом.
+  const noBrief = insightSeries.map((s) => ({
+    ...s,
+    cfg: { ...s.cfg, briefTimes: [] },
+  }));
   await fc.assert(
-    fc.asyncProperty(pauseSeries, async (s) => {
-      // Счёт по наблюдаемому, не по записанному черновику: заявка дня (день записан в файл),
-      // инсайт дошёл и вторая запись прогона прошла. Плагины не стоят — каждый такой инсайт промах.
-      let last: { day: string; draft: string } | null = null;
-      let misses = 0;
-      let pausedUntil = 0;
+    fc.asyncProperty(noBrief, async (s) => {
+      const slotMin = s.startMin;
       await runSeries(s, {
         each: (w, { before, after }) => {
-          const day = localDay(w.now, w.s.zone).day;
-          const old = localDay(w.now - 2 * 24 * HOUR, w.s.zone).day;
-          const expected =
-            last === null || last.day < old
-              ? 0
-              : last.draft === ""
-                ? misses
-                : misses + 1;
+          const { day, hour, minute } = localDay(w.now, w.s.zone);
+          const since = hour * 60 + minute - slotMin;
+          const due =
+            before !== null &&
+            before.insight?.day !== day &&
+            since >= 0 &&
+            since <= 180;
           const ran = w.turns.some(
             (t) => t.tick === w.tick && t.prompt.startsWith("Insight:"),
           );
-          if (ran) {
-            assert.ok(pausedUntil <= w.now, "(9) an Insight during the pause");
-            assert.ok(expected < 2, "(9) an Insight after two misses in a row");
-            assert.ok(
-              (before?.insight?.pausedUntilMs ?? 0) <= w.now,
-              "(9) an Insight while the file says paused",
+          const claimWritten =
+            w.writes.find((x) => x.tick === w.tick)?.ok === true;
+          if (due && claimWritten)
+            assert.ok(ran, `(9) no Insight on ${day} at ${hour}:${minute}`);
+          const insight = after?.insight as Record<string, unknown> | undefined;
+          if (insight?.day === day && before?.insight?.day !== day)
+            assert.deepEqual(
+              Object.keys(insight)
+                .filter((k) => k !== "tree")
+                .sort(),
+              ["day", "draft"],
+              "(9) the claim carries a pause",
             );
-          }
-          const claimed =
-            after?.insight?.day === day && before?.insight?.day !== day;
-          if (!claimed) return;
-          if ((after?.insight?.pausedUntilMs ?? 0) > w.now) {
-            assert.ok(expected >= 2, "(9) a pause without two misses");
-            assert.equal(after?.insight?.pausedUntilMs, w.now + 7 * 24 * HOUR);
-            pausedUntil = w.now + 7 * 24 * HOUR;
-            misses = 0;
-            last = { day, draft: "" };
-            return;
-          }
-          misses = expected;
-          const writes = w.writes.filter((x) => x.tick === w.tick);
-          const counted =
-            w.insightSends.some((x) => x.tick === w.tick && x.ok) &&
-            writes.length >= 2 &&
-            writes[1]?.ok === true;
-          if (counted)
-            assert.notEqual(
-              after?.insight?.draft,
-              "",
-              "(9) a delivered Insight not in the count",
-            );
-          last = { day, draft: counted ? "counted" : "" };
         },
       });
     }),

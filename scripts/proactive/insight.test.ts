@@ -1,8 +1,8 @@
 /* eslint-disable @typescript-eslint/no-floating-promises -- Node's test runner owns registrations. */
 // Insight на шве runProactiveTick (ADR-0022): слот `insightTimes` не в тихий час, заявка `insight.day`
-// до хода, одно сообщение, имя черновика из кнопки «Поставить»/«Install» или метка «?», счёт
-// непоставленных находок и неделя паузы. Одна строка таблицы отказов — один тест; в конце PBT (10)
-// на тексте `data` кнопки (сид в имени теста, повтор — FC_SEED=<сид>).
+// до хода, одно сообщение, имя черновика из кнопки «Поставить»/«Install» или метка «?». Паузы нет:
+// инсайт идёт каждый день при любой истории «Не надо». Одна строка таблицы отказов — один тест; в
+// конце PBT (10) на тексте `data` кнопки (сид в имени теста, повтор — FC_SEED=<сид>).
 import "../fixtures/no-host-anthropic.ts";
 import assert from "node:assert/strict";
 import {
@@ -149,12 +149,7 @@ const seed = (h: Harness, insight?: InsightState) =>
     ...(insight ? { insight } : {}),
   });
 const tick = (h: Harness, now: number) => runProactiveTick(now, h.deps);
-const prev = (draft: string, misses = 0, day = DAY): InsightState => ({
-  day,
-  draft,
-  misses,
-  pausedUntilMs: 0,
-});
+const prev = (draft: string, day = DAY): InsightState => ({ day, draft });
 
 test("1. insightTimes [] by default: no Insight at any time of the day", async () => {
   const h = harness();
@@ -281,40 +276,39 @@ test("8. the draft name from the Install button, else «?»; the second write fa
   assert.equal(insightOf(h)?.draft, "");
 });
 
-test("9. the count: not installed +1, installed 0, a throwing check +1, «?» +1, QUIET unchanged; two misses — a week of pause", async () => {
-  const misses = async (
-    insight: InsightState,
+test("9. no pause: an Insight comes every day after any answer to yesterday's, and a file of the paused version holds nothing", async () => {
+  const day = async (
+    insight: InsightState & Record<string, unknown>,
     setup: (h: Harness) => void = () => {},
   ) => {
     const h = harness();
-    await seed(h, { ...insight, day: "2026-10-04" });
+    await seed(h, insight);
     setup(h);
     await tick(h, at(11, 30));
-    return insightOf(h)?.misses;
+    return { turns: insights(h).length, insight: insightOf(h) };
   };
-  assert.equal(await misses(prev("a", 0)), 1);
-  assert.equal(await misses(prev("a", 1), (h) => h.installed.add("a")), 0);
-  assert.equal(
-    await misses(prev("a", 0), (h) => (h.installedThrows = true)),
-    1,
+  const today = { turns: 1, insight: prev("count-receipts") };
+  // Вчерашний не поставлен, поставлен, QUIET, «?», проверка установки бросила — сегодня ход.
+  assert.deepEqual(await day(prev("a", "2026-10-04")), today);
+  assert.deepEqual(
+    await day(prev("a", "2026-10-04"), (h) => h.installed.add("a")),
+    today,
   );
-  assert.equal(await misses(prev("?", 0), (h) => h.installed.add("?")), 1);
-  assert.equal(await misses(prev("", 1)), 1);
-  const h = harness();
-  await seed(h, prev("a", 1, "2026-10-04"));
-  assert.equal(await tick(h, at(12, 0)), 0);
-  assert.equal(insights(h).length, 0);
-  assert.deepEqual(insightOf(h), {
-    day: DAY,
-    draft: "",
-    misses: 0,
-    pausedUntilMs: at(12, 0) + 7 * DAY_MS,
-  });
-  await tick(h, at(11, 59, 7));
-  assert.equal(insights(h).length, 0);
-  await tick(h, at(12, 0, 7));
-  assert.equal(insights(h).length, 1);
-  assert.equal(insightOf(h)?.misses, 0);
+  assert.deepEqual(await day(prev("", "2026-10-04")), today);
+  assert.deepEqual(await day(prev("?", "2026-10-04")), today);
+  assert.deepEqual(
+    await day(prev("a", "2026-10-04"), (h) => (h.installedThrows = true)),
+    today,
+  );
+  // Файл версии с паузой: пауза на неделю вперёд и два промаха — ход всё равно сегодня, поля уходят.
+  assert.deepEqual(
+    await day({
+      ...prev("a", "2026-10-04"),
+      misses: 2,
+      pausedUntilMs: at(12, 0) + 7 * DAY_MS,
+    }),
+    today,
+  );
 });
 
 test("10. a Brief in this run: Insight waits for the next run; an Insight run polls no Watch source", async () => {
@@ -374,31 +368,29 @@ test("14. quiet hours: a 23:00 slot makes no turn; a 22:00 slot runs at 22:30, n
   assert.equal(insights(late).length, 1);
 });
 
-test("15. after a break the old count does not hold: an insight a month old gives a turn, misses 0", async () => {
+test("15. a week of «Не надо»: an Insight every day, one a day", async () => {
   const h = harness();
   await seed(h);
-  await tick(h, at(11, 30));
-  await tick(h, at(11, 30, 1));
-  assert.equal(insightOf(h)?.misses, 1);
-  await seed(h, { ...prev("count-receipts", 1), day: "2026-09-05" });
-  await tick(h, at(11, 30, 2));
-  assert.equal(insights(h).length, 3);
-  assert.deepEqual(insightOf(h), {
-    ...prev("count-receipts", 0),
-    day: "2026-10-07",
-  });
+  for (let d = 0; d < 7; d++) {
+    await tick(h, at(11, 30, d));
+    await tick(h, at(12, 0, d));
+  }
+  assert.equal(insights(h).length, 7);
 });
 
-test("16. the pause not written: no turn, exit 1, the file as it was", async () => {
+test("16. the claim of a file of the paused version is written without misses and pausedUntilMs", async () => {
   const h = harness();
-  await seed(h, prev("a", 1, "2026-10-04"));
-  h.failWrites = [0];
-  assert.equal(await tick(h, at(11, 30)), 1);
-  assert.equal(insights(h).length, 0);
-  assert.deepEqual(insightOf(h), prev("a", 1, "2026-10-04"));
+  await seed(h, {
+    ...prev("a", "2026-10-04"),
+    misses: 1,
+    pausedUntilMs: 0,
+  } as InsightState);
+  h.failWrites = [1];
+  await tick(h, at(11, 30));
+  assert.deepEqual(insightOf(h), prev(""));
 });
 
-test("17. main asks data/custom/plugins.json: a plugin there, even switched off, is installed; no file, a damaged one or another name — not", async () => {
+test("17. main asks data/custom/plugins.json: a plugin there, even switched off, is installed and the draft is «?»; no file, a damaged one or another name — the name", async () => {
   const data = process.env.ASSISTANT_DATA_DIR ?? "";
   const plugins = join(data, "custom", "plugins.json");
   const entry = {
@@ -417,7 +409,7 @@ test("17. main asks data/custom/plugins.json: a plugin there, even switched off,
     if (file !== null) writeFileSync(plugins, file);
     await writeProactiveState(join(data, "proactive.json"), {
       ...initialState(at(0)),
-      insight: prev("count-receipts", 1, "2026-10-04"),
+      insight: prev("count-receipts", "2026-10-04"),
     });
     const prompts: string[] = [];
     const env = {
@@ -432,7 +424,7 @@ test("17. main asks data/custom/plugins.json: a plugin there, even switched off,
         sources: [],
         runTurn: (prompt) => {
           prompts.push(prompt);
-          return Promise.resolve(turn("QUIET"));
+          return Promise.resolve(turn(found("count-receipts")));
         },
         send: () => Promise.resolve({ ok: true, error: "" }),
         translate: () => Promise.resolve((_en: string, ru: string) => ru),
@@ -445,22 +437,17 @@ test("17. main asks data/custom/plugins.json: a plugin there, even switched off,
         readFileSync(join(data, "proactive.json"), "utf8"),
       ) as ProactiveState
     ).insight;
-    return {
-      code,
-      turns: prompts.length,
-      paused: insight?.pausedUntilMs !== 0,
-    };
+    return { code, turns: prompts.length, draft: insight?.draft };
   };
   const state = (list: unknown[]) =>
     JSON.stringify({ marketplaces: [], plugins: list });
-  const ran = { code: 0, turns: 1, paused: false };
-  const pausedRun = { code: 0, turns: 0, paused: true };
-  assert.deepEqual(await run(state([entry])), ran);
-  assert.deepEqual(await run(null), pausedRun);
-  assert.deepEqual(await run("{ not json"), pausedRun);
+  const named = { code: 0, turns: 1, draft: "count-receipts" };
+  assert.deepEqual(await run(state([entry])), { ...named, draft: "?" });
+  assert.deepEqual(await run(null), named);
+  assert.deepEqual(await run("{ not json"), named);
   assert.deepEqual(
     await run(state([{ ...entry, name: "count-other" }])),
-    pausedRun,
+    named,
   );
 });
 
@@ -483,7 +470,7 @@ test("18. the draft's fingerprint is taken after the turn and before the send, a
   assert.equal(await runProactiveTick(at(11, 30), deps), 0);
   assert.deepEqual(order, ["tree count-receipts", "send"]);
   assert.deepEqual(insightOf(h), {
-    ...prev("count-receipts", 0),
+    ...prev("count-receipts"),
     tree: "0123456789ab",
   });
   const before = JSON.stringify(insightOf(h));
@@ -550,7 +537,7 @@ test("19. no fingerprint: QUIET, «?», an installed plugin, no folder or a thro
     }),
     0,
   );
-  assert.deepEqual(insightOf(unwritten), prev("", 0));
+  assert.deepEqual(insightOf(unwritten), prev(""));
 });
 
 test(`(10) any button data: every delivered Insight gets a non-empty draft, a name only by the pattern and within 64 bytes (seed ${SEED})`, async () => {

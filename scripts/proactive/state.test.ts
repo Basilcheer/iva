@@ -26,12 +26,10 @@ const insight = fc.record(
   {
     day: fc.string({ maxLength: 12 }),
     draft: fc.string({ maxLength: 12 }),
-    misses: count,
-    pausedUntilMs: fc.integer(),
     // Отпечаток черновика (ADR-0022, пересмотр 06.10.2026): необязателен, файл без него читается.
     tree: fc.string({ maxLength: 12 }),
   },
-  { requiredKeys: ["day", "draft", "misses", "pausedUntilMs"] },
+  { requiredKeys: ["day", "draft"] },
 );
 const validState: fc.Arbitrary<ProactiveState> = fc
   .tuple(
@@ -73,8 +71,7 @@ const damaged = fc
       "briefDone.slots",
       "insight",
       "insight.day",
-      "insight.misses",
-      "insight.pausedUntilMs",
+      "insight.draft",
       "insight.tree",
     ),
     fc.anything(),
@@ -83,7 +80,7 @@ const damaged = fc
     const copy = JSON.parse(JSON.stringify(state)) as Record<string, unknown>;
     const [head, tail] = path.split(".");
     if (head === "insight" && !isObjectLike(copy.insight))
-      copy.insight = { day: "", draft: "", misses: 0, pausedUntilMs: 0 };
+      copy.insight = { day: "", draft: "" };
     if (tail === undefined) copy[head] = junk;
     else (copy[head] as Record<string, unknown>)[tail] = junk;
     return copy;
@@ -111,8 +108,6 @@ function fullContract(state: ProactiveState): void {
   if (state.insight === undefined) return;
   assert.equal(typeof state.insight.day, "string");
   assert.equal(typeof state.insight.draft, "string");
-  assert.ok(count(state.insight.misses));
-  assert.ok(Number.isFinite(state.insight.pausedUntilMs));
   const tree: unknown = state.insight.tree;
   assert.ok(tree === undefined || typeof tree === "string");
 }
@@ -170,13 +165,33 @@ test(`a file without insight (an older Iva) is read, and a damaged insight is re
   const state = initialState(Date.UTC(2026, 9, 5));
   for (const insight of [
     "x",
-    { day: 1, draft: "", misses: 0, pausedUntilMs: 0 },
-    { day: "", draft: "", misses: -1, pausedUntilMs: 0 },
-    { day: "", draft: "", misses: 0 },
+    { day: 1, draft: "" },
+    { day: "", draft: 5 },
+    { day: "" },
   ]) {
     writeFileSync(FILE, JSON.stringify({ ...state, insight }));
     assert.throws(() => readProactiveState(FILE), /proactive state form/u);
   }
+});
+
+test(`a file of the version with the weekly pause is read: misses and pausedUntilMs of any value mean nothing (seed ${SEED})`, () => {
+  const state = initialState(Date.UTC(2026, 9, 5));
+  fc.assert(
+    fc.property(
+      fc.string({ maxLength: 12 }),
+      fc.string({ maxLength: 12 }),
+      fc.anything(),
+      fc.anything(),
+      (day, draft, misses, pausedUntilMs) => {
+        const insight = { day, draft, misses, pausedUntilMs };
+        writeFileSync(FILE, JSON.stringify({ ...state, insight }));
+        const read = readProactiveState(FILE);
+        assert.equal(read?.insight?.day, day);
+        assert.equal(read?.insight?.draft, draft);
+      },
+    ),
+    { seed: SEED, numRuns: 300 },
+  );
 });
 
 test("a file of the first beta with a spark field is read, and the field is not taken for insight", () => {
@@ -194,7 +209,7 @@ test("a file of the first beta with a spark field is read, and the field is not 
 
 test("insight.tree: absent (an older file) or a string is read; anything else refuses the file like any field", () => {
   const state = initialState(Date.UTC(2026, 9, 5));
-  const base = { day: "2026-10-05", draft: "x-y", misses: 0, pausedUntilMs: 0 };
+  const base = { day: "2026-10-05", draft: "x-y" };
   for (const insight of [base, { ...base, tree: "0123456789ab" }]) {
     writeFileSync(FILE, JSON.stringify({ ...state, insight }));
     assert.deepEqual(readProactiveState(FILE)?.insight, insight);
@@ -217,8 +232,6 @@ test(`Watch and Brief writes carry insight.tree byte for byte on any sequence of
   const insight = {
     day: "2026-10-05",
     draft: "x-y",
-    misses: 1,
-    pausedUntilMs: 0,
     tree: "0123456789ab",
   };
   await fc.assert(

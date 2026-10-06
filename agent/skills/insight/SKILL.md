@@ -110,6 +110,3 @@ or «Не надо <name>» / «Not now <name>». The draft is
 - «Не надо» / «Not now» — a fact on the Card `ответил: не надо (<дата>)` with
   `status: "archived"`, and one short reply in the owner's language: «Поняла,
   больше не предлагаю». Leave the draft folder.
-
-Every Insight you send counts. Two in a row that end without an installed plugin
-pause Insights for a week. Code counts that, not you.

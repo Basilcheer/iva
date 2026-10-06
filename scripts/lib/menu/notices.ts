@@ -6,8 +6,7 @@
 // момент запуска — переключение применяется без рестарта процессов. «Сама пишет» (Watch и
 // Brief, ADR-0020) включён без ключа и выключает их, но не сообщения о сбоях. Insight
 // выключен по умолчанию; кнопка ставит одно время из трёх, другое — `iva proactive set`.
-// Состояние Insight (пауза, последний) экран читает из data/proactive.json; пишет его только
-// тик.
+// Последний Insight экран читает из data/proactive.json; пишет его только тик.
 //
 // Правило репо: ни одной module-level const с переведённой строкой — подписи собираются в
 // render() через ctx.tr, иначе язык замёрзнет до рестарта.
@@ -18,8 +17,6 @@ import {
   type ProactiveConfig,
 } from "#lib/proactive-config.ts";
 import { readSettings, updateSettings, type Settings } from "#lib/settings.ts";
-import { resolveTimeZone } from "#lib/timezone.ts";
-import { formatZoned } from "#lib/zoned-time.ts";
 import {
   readProactiveState,
   type InsightState,
@@ -91,7 +88,6 @@ type InsightView = {
   readonly times: readonly string[];
   readonly enabled: boolean;
   readonly unreadable: boolean;
-  readonly paused: boolean;
   readonly insight?: InsightState;
 };
 
@@ -102,11 +98,10 @@ function insightView(dataDir: string, config: ProactiveConfig): InsightView {
     const insight = readProactiveState(
       join(dataDir, "proactive.json"),
     )?.insight;
-    const paused = (insight?.pausedUntilMs ?? 0) > Date.now();
-    return { ...base, unreadable: false, paused, insight };
+    return { ...base, unreadable: false, insight };
   } catch (error) {
     console.error("menu: proactive state unreadable:", error);
-    return { ...base, unreadable: true, paused: false };
+    return { ...base, unreadable: true };
   }
 }
 
@@ -134,26 +129,12 @@ const INSIGHT_STATUS: ReadonlyArray<
       ),
   ],
   [
-    (view) =>
-      view.times.length > 0 && view.enabled && !view.paused && !view.unreadable,
+    (view) => view.times.length > 0 && view.enabled && !view.unreadable,
     (view, T) =>
       T(
         `Insight: every day at ${view.times[0]}`,
         `Инсайт: каждый день в ${view.times[0]}`,
       ),
-  ],
-  [
-    (view) => view.paused,
-    (view, T) => {
-      const until = formatZoned(
-        view.insight?.pausedUntilMs ?? 0,
-        resolveTimeZone(process.env.ASSISTANT_TIMEZONE),
-      );
-      return T(
-        `Insight is paused until ${until}: two in a row were not installed.`,
-        `Инсайт на паузе до ${until}: два подряд не поставлены.`,
-      );
-    },
   ],
   [
     ({ insight }) =>

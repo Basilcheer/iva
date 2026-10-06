@@ -20,12 +20,13 @@ export type SeenEntry = {
 /** Счётчик одного дня; день — дата в зоне владельца, другой день — ноль. */
 export type DayCount = { readonly day: string; readonly count: number };
 
-/** Insight (ADR-0022); поля нет — Insight ещё не было, файл старой версии читается. */
+/**
+ * Insight (ADR-0022); поля нет — Insight ещё не было, файл старой версии читается. Файл версии с
+ * недельной паузой несёт ещё `misses` и `pausedUntilMs`: они читаются и больше ничего не значат.
+ */
 export type InsightState = {
   readonly day: string; // день заявки в зоне владельца; "" — не было
   readonly draft: string; // имя черновика доставленного инсайта; "?" — имя не годится; "" — QUIET
-  readonly misses: number; // инсайты подряд, после которых плагин не поставлен
-  readonly pausedUntilMs: number; // до этого момента хода нет; 0 — паузы нет
   /**
    * Отпечаток черновика в минуту отправки (`pluginTreeDigest(...).slice(0, 12)`): по нему
    * неинтерактивный `iva plugin add` ставит ровно тот черновик, что был в сообщении. Нет поля —
@@ -89,8 +90,6 @@ function isObject(value: unknown): value is Record<string, unknown> {
 const isInsightFields = (value: Record<string, unknown>): boolean =>
   typeof value.day === "string" &&
   typeof value.draft === "string" &&
-  isCount(value.misses) &&
-  Number.isFinite(value.pausedUntilMs) &&
   (value.tree === undefined || typeof value.tree === "string");
 
 /** Поле `insight` необязательно: его нет — годится. */

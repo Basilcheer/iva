@@ -270,7 +270,7 @@ test("a switched-on Insight is ticked, offers its times and says when it comes",
   ]);
   assert.match(view.text, /Время инсайта:/u);
   assert.match(view.text, /Инсайт: каждый день в 11:30/u);
-  assert.doesNotMatch(view.text, /не придёт|Последний инсайт|на паузе/u);
+  assert.doesNotMatch(view.text, /не придёт|Последний инсайт/u);
 
   const english = screen.render({ page: 0 }, makeContext("en"));
   assert.match(english.text, /Insight time:/u);
@@ -297,53 +297,39 @@ test("a time set by command outside the row gets no tick but shows in the status
   assert.match(view.text, /Инсайт: каждый день в 19:30/u);
 });
 
-test("the Insight state file: pause, last insight, missing, unreadable", (t) => {
+test("the Insight state file: last insight, a file of the paused version, missing, unreadable", (t) => {
   writeSettingsFile({ proactive: { insightTimes: ["11:30"] } });
   const errors: unknown[] = [];
   t.mock.method(console, "error", (...parts: unknown[]) => errors.push(parts));
   const render = (lang = "ru") =>
     screen.render({ page: 0 }, makeContext(lang)).text;
 
+  writeProactiveFile({ day: "2026-10-05", draft: "relay" });
+  let text = render();
+  assert.match(text, /Последний инсайт: 2026-10-05\./u);
+  assert.match(text, /Инсайт: каждый день в 11:30/u);
+  assert.match(render("en"), /Last insight: 2026-10-05\./u);
+
+  // Файл версии с недельной паузой: поля читаются и ничего не значат — время обещано, паузы нет.
   writeProactiveFile({
     day: "2026-10-05",
     draft: "relay",
     misses: 2,
     pausedUntilMs: Date.parse("2099-01-02T03:04:00.000Z"),
   });
-  let text = render();
-  assert.match(
-    text,
-    /Инсайт на паузе до 2099-01-02 03:04: два подряд не поставлены\./u,
-  );
-  assert.match(text, /Последний инсайт: 2026-10-05\./u);
-  assert.doesNotMatch(
-    text,
-    /каждый день в/u,
-    "a paused Insight does not promise a time",
-  );
-  assert.match(
-    render("en"),
-    /Insight is paused until 2099-01-02 03:04: two in a row were not installed\./u,
-  );
-  assert.match(render("en"), /Last insight: 2026-10-05\./u);
-
-  writeProactiveFile({
-    day: "2026-10-05",
-    draft: "",
-    misses: 0,
-    pausedUntilMs: 0,
-  });
   text = render();
-  assert.doesNotMatch(
-    text,
-    /на паузе|Последний инсайт/u,
-    "QUIET has no last insight",
-  );
+  assert.match(text, /Инсайт: каждый день в 11:30/u);
+  assert.doesNotMatch(text, /пауз|⚠️/u);
+  assert.doesNotMatch(render("en"), /paused/u);
+
+  writeProactiveFile({ day: "2026-10-05", draft: "" });
+  text = render();
+  assert.doesNotMatch(text, /Последний инсайт/u, "QUIET has no last insight");
   assert.match(text, /каждый день в 11:30/u);
 
   rmSync(proactivePath, { force: true });
   text = render();
-  assert.doesNotMatch(text, /⚠️|на паузе|Последний/u);
+  assert.doesNotMatch(text, /⚠️|Последний/u);
 
   assert.equal(errors.length, 0);
   for (const broken of [

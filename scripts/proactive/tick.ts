@@ -75,7 +75,6 @@ const LOCK_WAIT_MS = 1_000;
 const NEXT_PART = /<!--\s*iva:next\s*-->/u;
 /** Brief опоздал больше чем на 3 часа — слот пропускается. */
 const BRIEF_WINDOW_MIN = 3 * 60;
-const DAY_MS = 24 * 60 * 60_000;
 
 export type TickDeps = {
   readonly config: () => ProactiveConfig;
@@ -755,8 +754,8 @@ const briefSlot = (
     : null;
 
 /**
- * Пора ли Insight: файл уже был (первый прогон — Watch), тумблер, не тихий час, пауза прошла, слот
- * наступил и сегодня заявки не было.
+ * Пора ли Insight: файл уже был (первый прогон — Watch), тумблер, не тихий час, слот наступил и
+ * сегодня заявки не было. Паузы нет: «Не надо» отвечает про один плагин, а не про Insight.
  */
 function insightDue(
   config: ProactiveConfig,
@@ -765,23 +764,13 @@ function insightDue(
 ): boolean {
   if (stored === null || !config.enabled || isQuietHour(config, clock.hour))
     return false;
-  const prev = stored.insight;
-  if ((prev?.pausedUntilMs ?? 0) > clock.now) return false;
-  const done = prev?.day === clock.day ? [0] : [];
+  const done = stored.insight?.day === clock.day ? [0] : [];
   return dueBrief(config.insightTimes, done, clock) !== null;
 }
 
 /** Стоит ли плагин; метка «?», нет зависимости или она бросила — не стоит. */
 const isInstalled = async (deps: TickDeps, name: string) =>
   name !== "?" && (await deps.installed?.(name).catch(() => false)) === true;
-
-/** Промахи подряд: инсайт старше позавчера — 0, QUIET — прежний счёт, поставлен — 0, нет — +1. */
-async function insightMisses(deps: TickDeps, now: number, prev?: InsightState) {
-  const old = localDay(now - 2 * DAY_MS, deps.timeZone).day;
-  if (prev === undefined || prev.day < old) return 0;
-  if (prev.draft === "") return prev.misses;
-  return (await isInstalled(deps, prev.draft)) ? 0 : prev.misses + 1;
-}
 
 const insightPrompt = (tr: Translate) =>
   "Insight: once a day you may bring the owner one new capability. Follow the insight skill. " +
@@ -815,22 +804,9 @@ async function draftRecord(deps: TickDeps, body: string, tree: string | null) {
   return draft === "?" || tree === null ? { draft } : { draft, tree };
 }
 
-/** Заявка сегодняшнего дня; два непоставленных подряд — вместо неё неделя паузы. */
-const insightClaim = (state: ProactiveState, clock: Clock, misses: number) => {
-  const pause = misses >= 2;
-  const insight: InsightState = {
-    day: clock.day,
-    draft: "",
-    misses: pause ? 0 : misses,
-    pausedUntilMs: pause ? clock.now + 7 * DAY_MS : 0,
-  };
-  return { pause, claimed: { ...state, insight } };
-};
-
 /**
- * Insight (ADR-0022): два инсайта подряд без установки — неделя паузы без хода; иначе заявка до
- * хода, ход, одно сообщение, имя черновика и его отпечаток второй записью. Код 1 — только
- * провал первой записи.
+ * Insight (ADR-0022): заявка сегодняшнего дня до хода, ход, одно сообщение, имя черновика и его
+ * отпечаток второй записью. Код 1 — только провал первой записи.
  */
 async function insight(
   deps: TickDeps,
@@ -838,18 +814,9 @@ async function insight(
   clock: Clock,
   log: (line: string) => void,
 ): Promise<number> {
-  const misses = await insightMisses(deps, clock.now, state.insight);
-  const { pause, claimed } = insightClaim(state, clock, misses);
-  if (
-    !(await save(deps, claimed, pause ? "insight pause" : "insight claim", log))
-  )
-    return 1;
-  if (pause) {
-    log(
-      "proactive: two insights in a row were not installed, paused for a week",
-    );
-    return 0;
-  }
+  const fresh: InsightState = { day: clock.day, draft: "" };
+  const claimed = { ...state, insight: fresh };
+  if (!(await save(deps, claimed, "insight claim", log))) return 1;
   const tr = await deps.translate();
   const text = await turnText(deps, insightPrompt(tr), "insight", log);
   const body = partsOf(text ?? "").join("\n\n");
