@@ -17,11 +17,15 @@
 \*                disk queue / a drain is busy -> enqueue + notice (scripts/poller/queue.ts:1092
 \*                queuedNoticeText); else a direct delivery
 \*   Drain        routing.ts:335 drainReadyQueueHeads: the queue head while not running
-\*   Arrive       onAccepted (agent/channels/telegram.ts:491) -> publishTelegramEarlyStatus ->
-\*                takeOverTelegramChat (agent/lib/telegram-turn-start.ts:192): a fresh running
-\*                record is left alone, any other is taken with chatTakeOverPatch (:100,
-\*                compacting: null, resetAt: null); then eve's inbound: queue -> input buffer
-\*                (Ф4); steer during a compaction -> abort (Ф5), during a turn -> joins it
+\*   Arrive       onAccepted (agent/channels/telegram.ts) -> publishTelegramEarlyStatus ->
+\*                claimChat (agent/lib/telegram-turn-start.ts): a fresh running record keeps
+\*                its owner and the message gets the queued sign at once (sendQueuedStatus:
+\*                one per chat, fields queued* in the live record, queuedSessionId = the
+\*                record's sessionId); any other record is taken with chatTakeOverPatch
+\*                (compacting: null, resetAt: null), which carries the queued* fields; then
+\*                eve's inbound: queue -> input buffer (Ф4); steer during a compaction ->
+\*                abort (Ф5), during a turn -> joins it (eve cancels the turn and starts one
+\*                with the message, which takes the sign at once: folded, no sign here)
 \*   EveStartComp eve parked takes control commands before buffered messages (Ф11); a
 \*                compaction first emits compaction.requested: state compReq until the hook ran
 \*   BeginHook    compaction.requested hook (agent/hooks/usage.ts:101) -> beginIdleCompaction
@@ -30,9 +34,12 @@
 \*                live record or resetAt is left alone); BeginAnyIdle (R5, not code): claim for
 \*                any compaction outside a turn, memory or not
 \*   EveStartTurn turn.started (telegram.ts:296): openIdleCompactionTurn (idle-compaction.ts:49)
-\*                + publishTelegramTurnStarted (turn-start.ts:337): adopt an ingress record
-\*                (:414), skip on resetAt (:369), else a generation CAS writing compacting: null
-\*                (:379)
+\*                + publishTelegramTurnStarted (turn-start.ts): adopt an ingress record
+\*                (adoptEarlyStatus), skip on resetAt, else a generation CAS writing
+\*                compacting: null (claimTurnStatus). The turn consumes the queued sign:
+\*                eve's input buffer goes into one turn, so the sign's message is in it or
+\*                gone. claimTurnStatus takes the sign as its status when queuedSessionId is
+\*                this session; every other path deletes it
 \*   Step         step.completed hook (usage.ts:87) -> recordStepInput (idle-compaction.ts:72),
 \*                first KNOWN input (first ??= tokens)
 \*   InTurnComp   eve's own safety compaction inside a turn: compaction.requested and
@@ -69,13 +76,16 @@
 \*   Expire       a running record goes stale after RUN_STALE_MS when nobody owns it any more;
 \*                with LongCompaction also a compacting record (no heartbeat) while eve still
 \*                compacts
-\*   Reap         queue.ts:973 reapStaleRuns: idle + resetAt, reset of the session, notice
-\*                «Предыдущий ход оборвался» unless compacting (:952 notifyInterruptedTurn)
+\*   Reap         queue.ts reapStaleRuns: idle + resetAt, reset of the session, notice
+\*                «Предыдущий ход оборвался» unless compacting (notifyInterruptedTurn); the
+\*                status message and the queued sign are deleted (deleteRecordIndicators)
 \*   Restart      process killed: module memory and the POST are gone; ExecStartPre
 \*                recoverInterruptedSessionState (scripts/lib/wf-store.ts:190): a running record
 \*                not yet marked (:89) -> quarantine of the workflow store (session, input,
 \*                controls gone); rewriteRunStatusesForUpdate (:153): a compacting record becomes
-\*                idle + resetAt (:167), any other running record updatedAt = 0 for the reaper;
+\*                idle + resetAt (:167) keeping the queued* fields (no Bot API before the
+\*                start: the sign stays referenced and the next turn start deletes it), any
+\*                other running record updatedAt = 0 for the reaper;
 \*                no running record -> the store (with its queued controls) stays and a session
 \*                killed in a compaction or a turn hangs (Ф8, specs/RestartRecovery.tla)
 \*
@@ -98,7 +108,11 @@
 \* eve hunk (scripts/eve-manual-compaction.test.ts), restart on a real eve process
 \* (scripts/restart-mid-compaction.test.ts), recovery faults and quarantine rotation
 \* (RestartRecovery.tla), /stop during a turn, /new, several chats, Bot API and file failures,
-\* a missing ASSISTANT_BEARER (no claim, no ask: the same as due = FALSE).
+\* a missing ASSISTANT_BEARER (no claim, no ask: the same as due = FALSE). Queued sign outside
+\* the model (unit tests agent/lib/telegram-turn-start.test.ts, scripts/poller): a sign behind
+\* a turn of another session (reminder) is deleted, not taken, by the next turn; /new, a failed
+\* direct delivery, an inbound pipeline that drops the message and session.failed delete it;
+\* the sign write keeps updatedAt; a turn cancelled or failed keeps it for the next turn.
 \*
 \* Code switches (TRUE = the code; each witness sets one to FALSE):
 \*   AwaitPost         session.waiting awaits the compact POST (R1)
@@ -117,6 +131,8 @@
 \*   Reclaim           an open ask (reclaim) blocks a second one; cleared by refusal,
 \*                     completion, parking on the compacting record and after 30 min (R4)
 \*   BeginClaim        compaction.requested claims the chat again for an open ask (R4)
+\*   ReapDropsSign     the reaper deletes the queued sign of the record it closes
+\*   RewriteKeepsSign  the restart rewrite of a compacting record keeps the queued* fields
 \* Proposed repair (FALSE = the code):
 \*   BeginAnyIdle      R5: compaction.requested claims the chat for any compaction outside a
 \*                     turn, also when the process memory was lost by a restart
@@ -129,7 +145,8 @@ CONSTANTS
   Policy, MaxMsgs, MaxSteps, MaxRestarts, MaxStops,
   Bypass, LatePost, LongCompaction,
   AwaitPost, ReleaseOnlyCompacting, ClaimChat, OpenGuard, SilentReap, TurnClears, DueOnce,
-  DueChecksOff, ParkRelease, Reaper, QueueReplies, DropOnFail, DropEndsAsk, Reclaim, BeginClaim, BeginAnyIdle
+  DueChecksOff, ParkRelease, Reaper, QueueReplies, DropOnFail, DropEndsAsk, Reclaim, BeginClaim, BeginAnyIdle,
+  ReapDropsSign, RewriteKeepsSign
 
 ASSUME Policy \in {"queue", "steer"}
 
@@ -150,6 +167,10 @@ VARIABLES
   has, open, first, last, due, asked, compacted, off, reclaim,
   \* restarts and losses
   restarts, lostTold, lostSilent,
+  \* queued sign: shown in the chat, its message id kept in the chat record (queued*), put
+  \* up behind a record of the current session (queuedSessionId); ghost: a restart left it
+  \* on an idle record for the next turn start
+  sign, signRef, signMine, signLeft,
   \* ghosts
   asksSince, badStack, badStackRec, badAskOff, idleDone, turnClean, badOff,
   falseNotice, leak, inboxLeak, hangSeen, hangTurn, badCancelMark, expired, leakWin, hangWin
@@ -160,10 +181,11 @@ postV == <<post, late>>
 recV == <<rs, rk, rsid, cflag, fresh, resetAt, marked>>
 memV == <<has, open, first, last, due, asked, compacted, off, reclaim>>
 lossV == <<restarts, lostTold, lostSilent>>
+signV == <<sign, signRef, signMine, signLeft>>
 ghostV == <<asksSince, badStack, badStackRec, badAskOff, idleDone, turnClean, badOff,
             falseNotice, leak, inboxLeak, hangSeen, hangTurn, badCancelMark, expired, leakWin,
             hangWin>>
-vars == <<bridgeV, eveV, postV, recV, memV, lossV, ghostV>>
+vars == <<bridgeV, eveV, postV, recV, memV, lossV, ghostV, signV>>
 
 Init ==
   /\ sent = 0 /\ pend = 0 /\ pendR = 0 /\ bq = 0 /\ wire = 0 /\ dw = 0
@@ -175,6 +197,7 @@ Init ==
   /\ has = FALSE /\ open = FALSE /\ first = "none" /\ last = "none" /\ due = FALSE
   /\ asked = FALSE /\ compacted = FALSE /\ off = FALSE /\ reclaim = FALSE
   /\ restarts = 0 /\ lostTold = 0 /\ lostSilent = 0
+  /\ sign = FALSE /\ signRef = FALSE /\ signMine = FALSE /\ signLeft = FALSE
   /\ asksSince = 0 /\ badStack = FALSE /\ badStackRec = FALSE /\ badAskOff = FALSE
   /\ idleDone = FALSE /\ turnClean = FALSE /\ badOff = FALSE /\ falseNotice = FALSE
   /\ leak = FALSE /\ inboxLeak = FALSE /\ hangSeen = FALSE /\ hangTurn = FALSE
@@ -218,6 +241,7 @@ Send ==
   /\ \/ pend' = pend + 1 /\ UNCHANGED pendR
      \/ Bypass /\ pendR' = pendR + 1 /\ UNCHANGED pend
   /\ UNCHANGED <<bq, wire, dw>> /\ UNCHANGED <<eveV, postV, recV, memV, lossV, ghostV>>
+  /\ UNCHANGED signV
 
 RouteMsg(reply) ==
   LET busyCheck == ~reply \/ (QueueReplies /\ CompRecord /\ fresh)
@@ -237,20 +261,29 @@ Route ==
   /\ UNCHANGED <<sent, dw>> /\ UNCHANGED <<eveV, postV, recV, memV, lossV>>
   /\ UNCHANGED <<asksSince, badStack, badStackRec, badAskOff, idleDone, turnClean, badOff,
                  falseNotice, inboxLeak, hangSeen, hangTurn, badCancelMark, expired, hangWin>>
+  /\ UNCHANGED signV
 
 Drain ==
   /\ bq > 0 /\ dw = 0 /\ ~Running
   /\ bq' = bq - 1 /\ dw' = 1
   /\ UNCHANGED <<sent, pend, pendR, wire>>
   /\ UNCHANGED <<eveV, postV, recV, memV, lossV, ghostV>>
+  /\ UNCHANGED signV
 
 Arrive ==
   /\ \/ dw > 0 /\ dw' = 0 /\ UNCHANGED wire
      \/ wire > 0 /\ wire' = wire - 1 /\ UNCHANGED dw
   /\ IF Running
-       THEN UNCHANGED recV
+       THEN /\ UNCHANGED recV
+            \* the message waits behind a live owner: the queued sign at once, one per chat
+            /\ IF ~sign /\ ~(Policy = "steer" /\ ev = "turn" /\ ~hung)
+                 THEN sign' = TRUE /\ signRef' = TRUE /\ signMine' = (rsid = "cur")
+                 ELSE UNCHANGED <<sign, signRef, signMine>>
        ELSE /\ rs' = "running" /\ rk' = "ingress" /\ rsid' = "none" /\ cflag' = FALSE
             /\ fresh' = TRUE /\ resetAt' = FALSE /\ marked' = FALSE
+            \* chatTakeOverPatch carries the queued* fields
+            /\ UNCHANGED <<sign, signRef, signMine>>
+  /\ UNCHANGED signLeft
   /\ IF hung
        THEN buf' = buf + 1 /\ UNCHANGED <<started, ev>>
        ELSE IF Policy = "steer" /\ Compacting
@@ -274,6 +307,7 @@ EveStartComp ==
   /\ UNCHANGED <<bridgeV, postV, recV, memV, lossV>>
   /\ UNCHANGED <<asksSince, badStack, badStackRec, badAskOff, idleDone, turnClean, badOff,
                  falseNotice, leak, hangSeen, hangTurn, badCancelMark, expired, leakWin, hangWin>>
+  /\ UNCHANGED signV
 
 \* compaction.requested -> beginIdleCompaction (idle-compaction.ts:86): between turns, with an
 \* ask still open (reclaim), claim the chat again with the same takeover; a live record or
@@ -294,6 +328,7 @@ BeginHook ==
   /\ UNCHANGED <<bridgeV, postV, lossV>>
   /\ UNCHANGED <<asksSince, badStack, badStackRec, badAskOff, idleDone, turnClean, badOff,
                  falseNotice, leak, inboxLeak, hangSeen, hangTurn, badCancelMark, leakWin, hangWin>>
+  /\ UNCHANGED signV
 
 EveStartTurn ==
   /\ ev = "parked" /\ ~hung /\ ctrl = 0 /\ buf > 0
@@ -311,6 +346,8 @@ EveStartTurn ==
             /\ cflag' = (IF TurnClears THEN FALSE ELSE cflag)
             /\ UNCHANGED <<resetAt, marked>>
   /\ turnClean' = idleDone
+  \* the turn takes the sign as its status or deletes it
+  /\ sign' = FALSE /\ signRef' = FALSE /\ signMine' = FALSE /\ signLeft' = FALSE
   /\ UNCHANGED <<after, ctx, ctrl, hung, stops>> /\ UNCHANGED <<bridgeV, postV, lossV>>
   /\ UNCHANGED <<asksSince, badStack, badStackRec, badAskOff, idleDone, badOff, falseNotice,
                  leak, inboxLeak, hangSeen, hangTurn, badCancelMark, expired, leakWin, hangWin>>
@@ -328,6 +365,7 @@ Step ==
   /\ UNCHANGED <<buf, started, ev, after, ctrl, hung, stops>>
   /\ UNCHANGED <<has, open, due, asked, compacted, off, reclaim>>
   /\ UNCHANGED <<bridgeV, postV, recV, lossV, ghostV>>
+  /\ UNCHANGED signV
 
 \* completeIdleCompaction
 OnCompleted == compacted' = (compacted \/ (has /\ asked /\ (~open \/ ~OpenGuard)))
@@ -339,6 +377,7 @@ InTurnComp ==
   /\ UNCHANGED <<buf, started, ev, after, steps, ctrl, hung, stops>>
   /\ UNCHANGED <<has, open, first, last, due, asked, off, reclaim>>
   /\ UNCHANGED <<bridgeV, postV, recV, lossV, ghostV>>
+  /\ UNCHANGED signV
 
 TurnEnd ==
   /\ ev = "turn" /\ ~hung /\ steps >= 1
@@ -357,6 +396,7 @@ TurnEnd ==
   /\ UNCHANGED <<has, first, last, reclaim>> /\ UNCHANGED <<bridgeV, postV, lossV>>
   /\ UNCHANGED <<badStack, badStackRec, badAskOff, turnClean, falseNotice, leak, inboxLeak,
                  hangSeen, hangTurn, badCancelMark, expired, leakWin, hangWin>>
+  /\ UNCHANGED signV
 
 TurnFail ==
   /\ ev = "turn" /\ ~hung
@@ -368,12 +408,14 @@ TurnFail ==
   /\ UNCHANGED <<has, first, last, off, reclaim>> /\ UNCHANGED <<bridgeV, postV, lossV>>
   /\ UNCHANGED <<badStack, badStackRec, badAskOff, turnClean, badOff, falseNotice, leak,
                  inboxLeak, hangSeen, hangTurn, badCancelMark, expired, leakWin, hangWin>>
+  /\ UNCHANGED signV
 
 PostTurnSkip ==
   /\ ev = "postTurn" /\ ~hung /\ (buf > 0 \/ ctrl > 0)
   /\ ev' = "parked"
   /\ UNCHANGED <<buf, started, after, steps, ctx, ctrl, hung, stops>>
   /\ UNCHANGED <<bridgeV, postV, recV, memV, lossV, ghostV>>
+  /\ UNCHANGED signV
 
 WaitRelease ==
   /\ ev \in {"postTurn", "postComp", "postAbort"} /\ ~hung
@@ -385,6 +427,7 @@ WaitRelease ==
   /\ UNCHANGED <<buf, started, steps, ctx, ctrl, hung, stops>>
   /\ UNCHANGED <<has, open, first, last, due, asked, compacted, off>>
   /\ UNCHANGED <<bridgeV, postV, lossV, ghostV>>
+  /\ UNCHANGED signV
 
 WaitClaim ==
   /\ ev = "waitClaim" /\ ~hung
@@ -413,6 +456,7 @@ WaitClaim ==
   /\ UNCHANGED <<bridgeV, late, lossV>>
   /\ UNCHANGED <<idleDone, turnClean, badOff, falseNotice, leak, inboxLeak, hangSeen, hangTurn,
                  badCancelMark, leakWin, hangWin>>
+  /\ UNCHANGED signV
 
 \* The answer to the compact POST. Without AwaitPost eve does not wait for it.
 PostAnswer ==
@@ -431,12 +475,14 @@ PostAnswer ==
   /\ UNCHANGED <<buf, started, after, steps, ctx, hung, stops>>
   /\ UNCHANGED <<has, open, first, last, due, compacted, off>>
   /\ UNCHANGED <<bridgeV, lossV, ghostV>>
+  /\ UNCHANGED signV
 
 LateLand ==
   /\ late > 0 /\ ~hung
   /\ late' = 0 /\ ctrl' = ctrl + 1
   /\ UNCHANGED <<buf, started, ev, after, steps, ctx, hung, stops>>
   /\ UNCHANGED <<post>> /\ UNCHANGED <<bridgeV, recV, memV, lossV, ghostV>>
+  /\ UNCHANGED signV
 
 CompDone ==
   /\ ev = "compact" /\ ~hung
@@ -449,18 +495,21 @@ CompDone ==
   /\ UNCHANGED <<bridgeV, postV, recV, lossV>>
   /\ UNCHANGED <<asksSince, badStack, badStackRec, badAskOff, turnClean, badOff, falseNotice,
                  leak, inboxLeak, hangSeen, hangTurn, badCancelMark, expired, leakWin, hangWin>>
+  /\ UNCHANGED signV
 
 CompFail ==
   /\ ev = "compact" /\ ~hung
   /\ ev' = "postComp"
   /\ UNCHANGED <<buf, started, after, steps, ctx, ctrl, hung, stops>>
   /\ UNCHANGED <<bridgeV, postV, recV, memV, lossV, ghostV>>
+  /\ UNCHANGED signV
 
 StopComp ==
   /\ Compacting /\ ~hung /\ stops < MaxStops
   /\ ev' = "postAbort" /\ stops' = stops + 1
   /\ UNCHANGED <<buf, started, after, steps, ctx, ctrl, hung>>
   /\ UNCHANGED <<bridgeV, postV, recV, memV, lossV, ghostV>>
+  /\ UNCHANGED signV
 
 CancelH ==
   /\ ev = "cancelH" /\ ~hung
@@ -474,6 +523,7 @@ CancelH ==
   /\ UNCHANGED <<bridgeV, postV, lossV>>
   /\ UNCHANGED <<asksSince, badStack, badStackRec, badAskOff, idleDone, turnClean, badOff,
                  falseNotice, leak, inboxLeak, hangSeen, hangTurn, expired, leakWin, hangWin>>
+  /\ UNCHANGED signV
 
 \* ASK_FORGOTTEN_MS: an ask eve never announced is forgotten after 30 minutes. Assumption: by
 \* then eve has started or dropped it (nothing of it is pending).
@@ -483,6 +533,7 @@ Forget ==
   /\ reclaim' = FALSE
   /\ UNCHANGED <<has, open, first, last, due, asked, compacted, off>>
   /\ UNCHANGED <<bridgeV, eveV, postV, recV, lossV, ghostV>>
+  /\ UNCHANGED signV
 
 \* Nobody will touch the record any more: no live turn or compaction, nothing pending.
 Abandoned ==
@@ -498,10 +549,14 @@ Expire ==
   /\ UNCHANGED <<bridgeV, eveV, postV, memV, lossV>>
   /\ UNCHANGED <<asksSince, badStack, badStackRec, badAskOff, idleDone, turnClean, badOff,
                  falseNotice, leak, inboxLeak, hangSeen, hangTurn, badCancelMark, leakWin, hangWin>>
+  /\ UNCHANGED signV
 
 Reap ==
   /\ Reaper /\ rs = "running" /\ ~fresh /\ dw = 0
   /\ RecIdle(TRUE)
+  /\ IF ReapDropsSign
+       THEN sign' = FALSE /\ signRef' = FALSE /\ signMine' = FALSE /\ signLeft' = FALSE
+       ELSE UNCHANGED signV
   /\ LET notice == ~cflag \/ ~SilentReap
          reset == rsid = "cur" /\ ~hung
      IN /\ falseNotice' = (falseNotice \/ (notice /\ cflag))
@@ -525,12 +580,15 @@ Restart ==
             /\ IF cflag
                  THEN \* the compacting record is free again, nobody tells anything
                       /\ RecIdle(TRUE)
+                      /\ signRef' = (RewriteKeepsSign /\ signRef) /\ signLeft' = sign
+                      /\ UNCHANGED <<sign, signMine>>
                       /\ lostSilent' = lostSilent + buf /\ lostTold' = lostTold + wire
                  ELSE \* marked for the reaper, which tells the person
                       /\ fresh' = FALSE /\ marked' = TRUE
                       /\ rsid' = IF rsid = "cur" THEN "old" ELSE rsid
                       /\ UNCHANGED <<rs, rk, cflag, resetAt>>
                       /\ lostTold' = lostTold + buf + wire /\ UNCHANGED lostSilent
+                      /\ UNCHANGED signV
             /\ UNCHANGED <<hangSeen, hangTurn, hangWin>>
        ELSE \* the store stays: a session killed in an action hangs (Ф8)
             /\ hung' = (hung \/ ev = "turn" \/ Compacting)
@@ -538,7 +596,7 @@ Restart ==
             /\ hangWin' = (hangWin \/ ev = "compReq")
             /\ hangTurn' = (hangTurn \/ ev = "turn")
             /\ ev' = IF ev = "turn" \/ Compacting THEN ev ELSE "parked"
-            /\ UNCHANGED <<steps, ctrl, buf>> /\ UNCHANGED recV
+            /\ UNCHANGED <<steps, ctrl, buf>> /\ UNCHANGED recV /\ UNCHANGED signV
             /\ lostTold' = lostTold + wire /\ UNCHANGED lostSilent
   /\ UNCHANGED <<started, ctx, stops>> /\ UNCHANGED <<sent, pend, pendR>>
   /\ UNCHANGED <<asksSince, badStack, badStackRec, badAskOff, idleDone, turnClean, badOff,
@@ -618,4 +676,13 @@ NoAskOverCompactingRecord == ~badStackRec
 
 \* (7) no ask while off (process memory).
 NoAskWhileOff == ~badAskOff
+
+\* (8) queued sign: while it is shown, the chat record keeps its message id, and a live record
+\* (turn or compaction) holds it or a turn that will take it is pending (its message is in
+\* eve's input); a record that went idle with no such turn has deleted it. Exceptions: a
+\* restart rewrote a compacting record before any Bot API was up (signLeft; the next turn
+\* start deletes the sign); a session hung by a restart in the compaction window (finding F6,
+\* -window-restart) keeps its input and the sign until the reaper closes the next record.
+SignOwned ==
+  sign => (signRef /\ (rs = "running" \/ buf > 0 \/ signLeft))
 ====
