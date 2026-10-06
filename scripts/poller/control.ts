@@ -79,6 +79,7 @@ import {
 import { createMenu } from "../lib/menu/index.ts";
 import { admitTelegramUpdate } from "./inbox.ts";
 import { isPrivateTelegramChat } from "#lib/telegram-private-chat.ts";
+import { readTelegramMessageText } from "#lib/telegram-rich-message.ts";
 import { scheduleBridgeTask } from "./background.ts";
 import { parseProposalCallback } from "../lib/plugin-proposal.ts";
 import { isGotItData, watchButtons } from "../lib/notice-policy.ts";
@@ -309,7 +310,7 @@ export function applyTelegramButtonTap(
       message_id: message.message_id,
       chat: { ...chat },
       from: { ...from, is_bot: false },
-      text: callback.data,
+      text: tapTurnText(callback.data, message),
       ...(message.date === undefined ? {} : { date: message.date }),
       ...(message.message_thread_id === undefined
         ? {}
@@ -320,6 +321,38 @@ export function applyTelegramButtonTap(
   update.message = tap.message;
   delete update.callback_query;
   return true;
+}
+
+// Тап по кнопке модели несёт ходу и текст сообщения, под которым она стояла: одно `data`
+// («Составить ответ») теряет, кому и о чём, и модель ищет это заново. Текст сообщения —
+// данные, не команда: он уходит ходу тем же входящим текстом и проходит inbound-Gate.
+export const TAP_CONTEXT_LIMIT = 1500;
+
+// Текст берётся тем же чтением, что и у входящего rich-сообщения: text или caption, иначе
+// блоки rich_message (абзацы, списки, таблицы). Блок кнопок текста не несёт и не читается.
+/** Текст сообщения с кнопкой, не длиннее TAP_CONTEXT_LIMIT; пусто — текста нет. */
+export function tapContextText(message: TelegramMessage | undefined): string {
+  if (message === undefined) return "";
+  return clipTapContext(readTelegramMessageText(message).text.trim());
+}
+
+function clipTapContext(text: string): string {
+  const chars = Array.from(text);
+  if (chars.length <= TAP_CONTEXT_LIMIT) return text;
+  const mark = tr(" […cut]", " […обрезано]");
+  const kept = TAP_CONTEXT_LIMIT - Array.from(mark).length;
+  return `${chars.slice(0, kept).join("").trimEnd()}${mark}`;
+}
+
+/** Текст хода по тапу: `data`, а следом в скобках текст сообщения с кнопкой, если он есть. */
+function tapTurnText(
+  data: string,
+  message: TelegramMessage | undefined,
+): string {
+  const context = tapContextText(message);
+  if (context === "") return data;
+  const label = tr("button under Iva's message", "кнопка под сообщением Ивы");
+  return `${data}\n\n(${label}: «${context}»)`;
 }
 
 const PRIVATE_ONLY_COMMANDS = new Set(["/menu", "/model", "/think"]);

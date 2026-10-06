@@ -70,6 +70,8 @@ type ControlModule = {
   ) => Promise<boolean>;
   OUT_OF_BAND_COMMANDS: string[];
   TELEGRAM_EVE_CALLBACK_PREFIXES: readonly string[];
+  TAP_CONTEXT_LIMIT: number;
+  tapContextText: (message: Record<string, unknown> | undefined) => string;
 };
 type RunStatusModule = {
   setChatStatus: (chatKey: string, patch: Record<string, unknown>) => void;
@@ -143,6 +145,8 @@ const {
   handleAwaitNonText,
   handleControl,
   OUT_OF_BAND_COMMANDS,
+  TAP_CONTEXT_LIMIT,
+  tapContextText,
   TELEGRAM_EVE_CALLBACK_PREFIXES,
 } = controlModule as ControlModule;
 const status = runStatusModule as RunStatusModule;
@@ -1556,7 +1560,7 @@ test("тап по кнопке модели уходит дальше обычн
     message_thread_id: 5,
     chat,
     from: { id: 42, is_bot: false },
-    text: "Отложи на час",
+    text: "Отложи на час\n\n(кнопка под сообщением Ивы: «Напомнить?»)",
   });
 });
 
@@ -2986,6 +2990,9 @@ const choiceBlocks = [
   },
 ];
 const richChoice = { rich_message: { blocks: choiceBlocks } };
+/** Текст хода по тапу под choiceBlocks: data и текст сообщения с кнопкой. */
+const choiceTurn = (data: string) =>
+  `${data}\n\n(кнопка под сообщением Ивы: «Поставить плагин?»)`;
 
 function tapDeps() {
   const recorded = recordingDeps();
@@ -3021,7 +3028,10 @@ test("a model button tap shows ✅ with its label and marks the button in the ri
   assert.equal(await handleControl(update, deps), false, "the tap goes on");
   await flush();
 
-  assert.equal((update.message as { text?: string }).text, "Не надо");
+  assert.equal(
+    (update.message as { text?: string }).text,
+    choiceTurn("Не надо"),
+  );
   assert.deepEqual(acks, [["cq-301", "✅ Не надо"]]);
   assert.deepEqual(scheduled, ["tap:7:501:Не надо"]);
   assert.deepEqual(edits, [
@@ -3100,7 +3110,10 @@ test("a second tap on the same button by another update is «already chosen» an
   // Другие кнопки того же сообщения живые: владелец вправе передумать.
   const other = modelTap(313, 511, "Поставить", richChoice);
   assert.equal(await handleControl(other, deps), false);
-  assert.equal((other.message as { text?: string }).text, "Поставить");
+  assert.equal(
+    (other.message as { text?: string }).text,
+    choiceTurn("Поставить"),
+  );
 });
 
 test("the same update handed out again after write-failed passes as fresh", async () => {
@@ -3115,7 +3128,10 @@ test("the same update handed out again after write-failed passes as fresh", asyn
     "admission gets it again",
   );
 
-  assert.equal((again.message as { text?: string }).text, "Не надо");
+  assert.equal(
+    (again.message as { text?: string }).text,
+    choiceTurn("Не надо"),
+  );
   assert.ok(!acks.some(([, text]) => text === "Уже выбрано"));
 });
 
@@ -3132,7 +3148,7 @@ test("a tap that cannot become a message is not marked and not remembered", asyn
 
   const next = modelTap(332, 531, "Не надо", richChoice);
   assert.equal(await handleControl(next, deps), false, "no key was kept");
-  assert.equal((next.message as { text?: string }).text, "Не надо");
+  assert.equal((next.message as { text?: string }).text, choiceTurn("Не надо"));
 });
 
 test("a failed edit keeps the key: the next tap is still «already chosen»", async () => {
@@ -3197,7 +3213,10 @@ test("a rejected callback answer does not stop the tap: it is a message and reme
   const update = modelTap(371, 571, "Не надо", richChoice);
 
   assert.equal(await handleControl(update, failingAck), false);
-  assert.equal((update.message as { text?: string }).text, "Не надо");
+  assert.equal(
+    (update.message as { text?: string }).text,
+    choiceTurn("Не надо"),
+  );
   assert.equal(
     await handleControl(modelTap(372, 571, "Не надо", richChoice), failingAck),
     true,
@@ -3614,7 +3633,7 @@ test("an English owner's «Got it: Ivan» is the bridge's; the Russian words the
     assert.equal(await handleControl(russian, deps), false);
     assert.equal(
       (russian.message as { text?: string }).text,
-      "Я в курсе: Иван",
+      "Я в курсе: Иван\n\n(button under Iva's message: «Иван ждёт ответа про договор.»)",
     );
     assert.deepEqual(deletes, [[7, 851]]);
   });
@@ -3672,9 +3691,170 @@ test(`property: only the exact «Я в курсе: <name>» stays in the bridge;
           false,
           `kept from the model: ${JSON.stringify(d)}`,
         );
-        assert.equal((update.message as { text?: string }).text, d);
+        assert.equal(
+          (update.message as { text?: string }).text,
+          `${d}\n\n(кнопка под сообщением Ивы: «Иван ждёт ответа про договор.»)`,
+        );
       },
     ),
+    { seed: SEED, numRuns: 300 },
+  );
+});
+
+// ── Тап несёт текст сообщения с кнопкой (дефект 07.10.2026) ─────────────────────────────────
+// Обзор с одной кнопкой «Составить ответ»: по нажатию модель получила только data и пошла
+// искать, кому и о чём. Теперь ход получает и текст сообщения, под которым стояла кнопка.
+
+const tapText = (update: ControlUpdate) =>
+  (update.message as { text?: string }).text;
+
+test("a tap under a plain message carries the message text to the turn", async () => {
+  const { deps } = tapDeps();
+  const update = modelTap(901, 1901, "Составить ответ", {
+    text: "Юрий спрашивает про смету на ремонт. Составить ответ Юрию?",
+  });
+
+  assert.equal(await handleControl(update, deps), false);
+  assert.equal(
+    tapText(update),
+    "Составить ответ\n\n(кнопка под сообщением Ивы: «Юрий спрашивает про смету на ремонт. Составить ответ Юрию?»)",
+  );
+});
+
+test("a tap under a rich message carries paragraphs, lists and tables, not the buttons", async () => {
+  const { deps } = tapDeps();
+  const update = modelTap(911, 1911, "Ответить: Юрий, смета", {
+    rich_message: {
+      blocks: [
+        { type: "paragraph", text: "Юрий спрашивает про смету." },
+        {
+          type: "list",
+          items: [
+            { blocks: [{ type: "paragraph", text: "срок пятница" }] },
+            { blocks: [{ type: "paragraph", text: "сумма 120 000" }] },
+          ],
+        },
+        {
+          type: "table",
+          cells: [
+            [{ text: "Кто" }, { text: "Что" }],
+            [{ text: "Юрий" }, { text: "смета" }],
+          ],
+        },
+        {
+          type: "buttons",
+          buttons: [
+            {
+              text: "Составить ответ",
+              callback_data: "Ответить: Юрий, смета",
+            },
+          ],
+        },
+      ],
+    },
+  });
+
+  assert.equal(await handleControl(update, deps), false);
+  const text = tapText(update) as string;
+  assert.ok(
+    text.startsWith("Ответить: Юрий, смета\n\n(кнопка под сообщением Ивы: «"),
+  );
+  for (const part of [
+    "Юрий спрашивает про смету.",
+    "срок пятница",
+    "сумма 120 000",
+    "Юрий",
+    "смета",
+  ])
+    assert.ok(text.includes(part), part);
+  assert.ok(!text.includes("Составить ответ"), "button labels stay out");
+  assert.ok(text.endsWith("»)"));
+});
+
+test("a tap under a message without text is the data alone, as before", async () => {
+  const cases: Array<[string, Record<string, unknown>]> = [
+    ["inaccessible", { date: 0 }],
+    ["blank text", { text: "   " }],
+    ["buttons only", { rich_message: { blocks: [choiceBlocks[1]] } }],
+    ["no blocks", { rich_message: {} }],
+    ["garbage blocks", { rich_message: { blocks: [null, 5, "", {}] } }],
+  ];
+  let id = 920;
+  for (const [label, message] of cases) {
+    const { deps } = tapDeps();
+    id += 1;
+    const update = modelTap(id, 1000 + id, "Не надо", message);
+    assert.equal(await handleControl(update, deps), false, label);
+    assert.equal(tapText(update), "Не надо", label);
+  }
+});
+
+test("a long message text is cut to the limit with a mark at the end", async () => {
+  const { deps } = tapDeps();
+  const long = "смета ".repeat(600);
+  const update = modelTap(931, 1931, "Составить ответ", { text: long });
+
+  assert.equal(await handleControl(update, deps), false);
+  const context = tapContextText({ text: long });
+  assert.equal(Array.from(context).length <= TAP_CONTEXT_LIMIT, true);
+  assert.ok(context.endsWith(" […обрезано]"), context.slice(-30));
+  assert.ok(long.startsWith(context.slice(0, -" […обрезано]".length)));
+  assert.equal(
+    tapText(update),
+    `Составить ответ\n\n(кнопка под сообщением Ивы: «${context}»)`,
+  );
+  // Ровно на пределе текст не режется.
+  const exact = "я".repeat(TAP_CONTEXT_LIMIT);
+  assert.equal(tapContextText({ text: exact }), exact);
+});
+
+test(`property: the message text for a tap never throws and never exceeds the limit (seed ${SEED})`, () => {
+  const leaf = fc.oneof(
+    fc.string({ maxLength: 400 }),
+    fc.string({ unit: "grapheme", maxLength: 400 }),
+    fc.constantFrom(
+      "",
+      " ",
+      "# заголовок",
+      "[ссылка](javascript:x)",
+      "a".repeat(5000),
+    ),
+  );
+  const block = fc.letrec((tie) => ({
+    node: fc.oneof(
+      { depthSize: "small" },
+      leaf.map((text) => ({ type: "paragraph", text })),
+      fc.array(tie("node"), { maxLength: 4 }).map((items) => ({
+        type: "list",
+        items: items.map((b) => ({ blocks: [b] })),
+      })),
+      fc
+        .array(fc.array(leaf, { maxLength: 4 }), { maxLength: 4 })
+        .map((rows) => ({
+          type: "table",
+          cells: rows.map((row) => row.map((text) => ({ text }))),
+        })),
+      fc.constant({
+        type: "buttons",
+        buttons: [{ text: "x", callback_data: "x" }],
+      }),
+      fc.anything(),
+    ),
+  })).node;
+  const message = fc.oneof(
+    fc.record({ text: leaf }),
+    fc.record({
+      rich_message: fc.record({ blocks: fc.array(block, { maxLength: 8 }) }),
+    }),
+    fc.record({ rich_message: fc.anything() }),
+    fc.dictionary(fc.string(), fc.anything()),
+  );
+  fc.assert(
+    fc.property(message, (m) => {
+      const context = tapContextText(m);
+      assert.equal(typeof context, "string");
+      assert.ok(Array.from(context).length <= TAP_CONTEXT_LIMIT);
+    }),
     { seed: SEED, numRuns: 300 },
   );
 });
