@@ -36,6 +36,27 @@ Short conversational answers stay plain text. Rich formatting is for structure,
 not decoration: one heading level per answer, one table per comparison, one row
 of buttons per decision.
 
+### Bad → Good
+
+A list of things (reminders, tasks, checks) is not a comparison: no table for
+it. The reader is not technical: no ids, codes or service names.
+
+Bad (a real answer to «покажи напоминания», 06.10.2026): «Активных пять,
+диспетчер работает ✅», a table «Когда · Что · Тип» with «разовое» in every row,
+«10 тестовых напоминаний с кодами (df0e29 … 6143d9)», and «⚠️ Проблема:
+r-4ba18f… статус доставки пустой». The owner gave it 1 out of 10.
+
+Good:
+
+    У тебя пять напоминаний, всё работает.
+    Ближайшее — сегодня в 09:00: ответить Максиму Функу по смете для Арбуза.
+    Остальные четыре — позже, покажу по кнопке.
+    Одно вчерашнее сообщение могло не дойти: утренняя проверка сервера в 09:05.
+
+    Показать все напоминания или разобраться с проверкой?
+
+    <tg-button-row><tg-button type="callback_data" data="Покажи все напоминания">Все напоминания</tg-button><tg-button type="callback_data" data="Разберись с проверкой">Разобраться</tg-button></tg-button-row>
+
 ## Text and blocks
 
 ```

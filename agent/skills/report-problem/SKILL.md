@@ -16,9 +16,11 @@ a tap «Разработчику <name>» / «To developer <name>» under an Ins
    by what list — the versions and the skeleton of that turn (event names, tools, failure classes, codes,
    timings, error lines; no messages, answers or arguments). Open the rest (doctor, the journal, reminders,
    failures, custom-layer names) only when the turn does not explain the trouble — with `grep`, not whole.
-2. Tell the owner what happened in two lines: what broke and what the package shows about it. Do not paste
-   the package into the chat.
-3. Offer the two ways out and wait for an explicit "yes" — publishing is the owner's move. A tap
+2. Tell the owner what happened in two lines of plain words: what broke and what it means for them. Nothing
+   broke — say so in one sentence. No path, no version numbers, no list of checks, no count of cut keys
+   unless the owner asks «подробнее». Do not paste the package into the chat.
+3. Offer the two ways out and wait for an explicit "yes" — publishing is the owner's move. When nothing
+   broke, offer them only after the owner taps «Разработчику» (the sample below). A tap
    «Разработчику <name>» is that yes for the issue: give its link at once.
    - **Issue**: a question line «Открыть issue для разработчика?» and a `url` button (`rich-replies`)
      whose `url` is the `issue-url:` line exactly as `iva diagnose --turn` printed it — code built the
@@ -39,3 +41,19 @@ a tap «Разработчику <name>» / «To developer <name>» under an Ins
    all. Never promise "no secrets" in that case: say plainly that the package was
    collected without the `.env` list, suggest fixing `.env` (or `iva config`) and running `iva diagnose`
    again before publishing, and let the owner decide.
+
+## Bad → Good
+
+Bad (a real answer to «собери диагностику», 06.10.2026): the file path with its size, «iva doctor: 23
+проверки пройдены», versions of Iva, eve and Node, free disk, the night and the schedules one by one, «16
+штук» of cut keys, then two numbered ways out. Nothing was broken, and the owner gave it 1 out of 10.
+
+Good:
+
+    Со мной всё в порядке: за сутки ничего не сломалось.
+    Одно непонятно: вчера в 09:05 я должна была прислать тебе проверку сервера, но не вижу, дошла ли она.
+    Всё подробно я сложила в файл для разработчика, пароли и ключи из него убрала.
+
+    Показать подробности или передать файл разработчику?
+
+    <tg-button-row><tg-button type="callback_data" data="Подробнее">Подробнее</tg-button><tg-button type="callback_data" data="Передать разработчику">Разработчику</tg-button></tg-button-row>

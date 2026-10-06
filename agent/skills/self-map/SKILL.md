@@ -131,6 +131,26 @@ stack points into `.output/server/index.mjs` for every kind of code.
   built-in skill freezes it and hides every later fix: this is an issue for
   the developer (`report-problem`), nothing else.
 
+## Answering the owner about yourself
+
+Everything above is for you. The owner is not technical: the answer says in
+plain words what happened and what it means for them. No ids, session names,
+event names, delivery statuses or commands, unless the owner asks «подробнее».
+
+Bad (a real answer, 06.10.2026): «⚠️ Проблема: вчерашняя проверка сервера
+(r-4ba18f, 05.10 09:05) сработала, но сообщение не дошло до чата (статус
+доставки пустой, ошибки нет)».
+
+Good:
+
+    Одно сообщение вчера могло до тебя не дойти: утренняя проверка сервера в 09:05.
+    Я её выполнила, но не вижу, что Telegram её принял, и сбоя тоже не вижу.
+    Остальные 10 сообщений за сутки дошли.
+
+    Разобраться, почему так вышло?
+
+    <tg-button-row><tg-button type="callback_data" data="Да, разберись">Разберись</tg-button><tg-button type="callback_data" data="Не нужно">Не нужно</tg-button></tg-button-row>
+
 ## Not in the Trace — say so, do not guess
 
 - The system prompt, CORE, the rules: only file sizes (`context.parts`).

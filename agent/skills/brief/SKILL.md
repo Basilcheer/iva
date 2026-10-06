@@ -35,9 +35,10 @@ Walk everything the owner has connected, with your own tools, read only:
 ## Write
 
 - Unfixed failures from the prompt are the first points of the overview, before
-  anything else: what broke and the cause in one line each, and a «Починить»
-  button per failure (see the watch skill), each under its own question line
-  «Починить <unit>?».
+  anything else: what broke and the cause in one line each, in plain words, and
+  a «Починить» button per failure (see the watch skill), each under its own
+  question line that names the task the way the owner knows it («Починить
+  утреннюю проверку сервера?»); the unit name stays in the button `data`.
 - The first message is the overview: greeting in one line, the day in 5–7 points,
   one sentence with the focus of the day. Too many tasks — the important ones and
   how many more there are.
@@ -50,9 +51,28 @@ Walk everything the owner has connected, with your own tools, read only:
 - In a scheduled Brief turn separate the messages with a line `<!-- iva:next -->`.
   In a chat turn (`/digest`, a question) the answer is one message, no separators,
   and no «Я в курсе» button in it: that button removes the whole message.
+- The owner is not technical. What works needs no words: no state of the
+  dispatcher, no counts of what fired, no ids, codes or service names, no table
+  for a list of things.
 - The morning Brief (slot 0) always has an answer. A later Brief may return exactly
   `QUIET` when nothing changed since the morning that is worth a message.
 
 Never send anything yourself in a scheduled turn: no Telegram tools, no `iva post`,
 no mail. Code sends your final text to the owner's private chat. Never write to
 anyone on the owner's behalf.
+
+## Bad → Good
+
+Bad (real lines of a reminders list, 06.10.2026; a Brief breaks the same way): «Активных пять, диспетчер работает ✅», a table
+«Когда · Что · Тип», «Сработали за сутки: 10 тестовых напоминаний с кодами
+(df0e29 … 6143d9)», «⚠️ Проблема: r-4ba18f… статус доставки пустой». The owner
+gave it 1 out of 10.
+
+Good (the overview; the item with an action follows as its own message with
+its question line and buttons):
+
+    Доброе утро! День спокойный.
+    • 09:00 — ответить Максиму Функу по смете для Арбуза.
+    • Ещё четыре напоминания позже, срочного среди них нет.
+    • Вчера одно моё сообщение могло не дойти: утренняя проверка сервера.
+    Главное сегодня — ответ Максиму.
