@@ -101,20 +101,37 @@ await test("несостоявшаяся отправка возвращает �
   assert.equal(sent.length, 1);
 });
 
-await test("errorId из details попадает в текст, мусорные details его не ломают", () => {
-  assert.match(
-    telegramFailureMessage({
-      message: "boom",
-      details: { errorId: "err-77" },
-    }),
-    /\nError id: err-77$/u,
-  );
-  for (const details of [null, "err", ["err-77"], { errorId: 7 }, undefined]) {
-    assert.doesNotMatch(
-      telegramFailureMessage({ message: "boom", details }),
-      /Error id:/u,
-    );
+// Error id владельцу ничего не говорит: он остаётся в журнале и Trace, в чат не идёт.
+await test("errorId не идёт в чат, мусорные details текст не ломают", () => {
+  for (const details of [
+    { errorId: "err-77" },
+    null,
+    "err",
+    ["err-77"],
+    { errorId: 7 },
+    undefined,
+  ]) {
+    const text = telegramFailureMessage({ message: "boom", details });
+    assert.doesNotMatch(text, /Error id|err-77/u);
+    assert.ok(text.length > 0);
   }
+});
+
+await test("обрыв посреди ответа: в чат идёт вопрос и кнопка «Повторить» на языке владельца", () => {
+  const text = telegramFailureMessage(
+    {
+      message:
+        "api.anthropic.com did not finish the response (the stream broke off before message_stop)",
+      details: { errorId: "err-78", attempts: 1, answerStarted: true },
+    },
+    "claude",
+  );
+  assert.match(text, /Anthropic/u);
+  assert.match(
+    text,
+    /<tg-button type="callback_data" data="(Повторить|Try again)">/u,
+  );
+  assert.doesNotMatch(text, /err-78|Error id/u);
 });
 
 // Служебная реплика канала не идёт через Outbox, но текст провайдера в ней —
@@ -144,21 +161,16 @@ await test("ключ из ошибки провайдера доезжает д�
 
   assert.equal(sent.length, 1);
   assert.doesNotMatch(sent[0], /zzzz/u);
-  assert.match(sent[0], /\[REDACTED\]/u);
 });
 
 await test("пустая ошибка остаётся объяснимой, а не пустым сообщением", (t) => {
   muteErrors(t);
 
-  assert.match(
-    telegramFailureMessage({ message: "" }),
-    /Unknown provider error$/u,
-  );
+  assert.match(telegramFailureMessage({ message: "" }, "codex"), /OpenAI/u);
 });
 
-// errorId приходит из eve нетронутым: в самой реплике его никто не чистит, и до чата
-// он доезжает только через шов — ровно то свойство, ради которого шов и стоит.
-await test("секрет в errorId вычищается швом, а не сборкой текста", async (t) => {
+// errorId приходит из eve нетронутым и в чат не идёт вовсе.
+await test("секрет в errorId не доезжает до чата", async (t) => {
   muteErrors(t);
   const { sent, send } = collector();
 
@@ -174,8 +186,7 @@ await test("секрет в errorId вычищается швом, а не сб�
   );
 
   assert.equal(sent.length, 1);
-  assert.doesNotMatch(sent[0], /zzzz/u);
-  assert.match(sent[0], /Error id: \[REDACTED\]/u);
+  assert.doesNotMatch(sent[0], /zzzz|Error id/u);
 });
 
 await test("многострочная ошибка: в чат уходит первая строка, и та без секрета", async (t) => {
@@ -195,8 +206,7 @@ await test("многострочная ошибка: в чат уходит пе
 
   assert.equal(sent.length, 1);
   assert.doesNotMatch(sent[0], /zzzz/u);
-  assert.doesNotMatch(sent[0], /stack line/u);
-  assert.match(sent[0], /Error id: err-9/u);
+  assert.doesNotMatch(sent[0], /stack line|err-9/u);
 });
 
 await test("телеграм-токен и ключ в одной ошибке редактятся оба", async (t) => {
@@ -214,12 +224,10 @@ await test("телеграм-токен и ключ в одной ошибке �
   assert.equal(sent.length, 1);
   assert.doesNotMatch(sent[0], /zzzz/u);
   assert.doesNotMatch(sent[0], /AAAA/u);
-  assert.match(sent[0], /\[REDACTED\]/u);
 });
 
 // Живой формат ключа, а не удобный планту: ключ OpenRouter из .env этой инсталляции
-// в ошибке, которую humanizeProviderError ни к одной категории не относит, — значит
-// текст провайдера уходит в чат гистом, как есть.
+// в ошибке, которую humanizeProviderError ни к одной категории не относит.
 const OPENROUTER_KEY = `sk-or-v1-${"4f9c1e77ab3d5602".repeat(4)}`;
 
 await test("ключ провайдера настоящего формата не переживает уведомление о сбое", async (t) => {
@@ -236,5 +244,4 @@ await test("ключ провайдера настоящего формата н
 
   assert.equal(sent.length, 1);
   assert.doesNotMatch(sent[0], /sk-or-v1|4f9c1e77/u);
-  assert.match(sent[0], /\[REDACTED\]/u);
 });

@@ -296,6 +296,30 @@ void test("сбой хода пишется кодом в data и текстом
   });
 });
 
+// Error id в чат больше не идёт: найти сбой владельцу и разработчику помогает журнал, поэтому
+// id и число запросов к модели лежат в data и без тумблера содержимого.
+void test("Error id, попытки и обрыв посреди ответа лежат в data даже без содержимого", (t) => {
+  const settings = join(DATA, "settings.json");
+  writeFileSync(settings, JSON.stringify({ captureContent: false }));
+  t.after(() => rmSync(settings, { force: true }));
+  feed({
+    type: "turn.failed",
+    data: {
+      sequence: 10,
+      turnId: "turn_3",
+      code: "MODEL_CALL_FAILED",
+      message: "api.anthropic.com did not finish the response",
+      details: { errorId: "e-1", attempts: 3, answerStarted: true },
+    },
+  });
+  const failed = journal().at(-1);
+  const data = failed?.data as Record<string, unknown> | undefined;
+  assert.equal(data?.errorId, "e-1");
+  assert.equal(data?.attempts, 3);
+  assert.equal(data?.answerStarted, true);
+  assert.equal(failed?.content, undefined);
+});
+
 void test("captureContent=false оставляет от события имена, класс сбоя и размеры", (t) => {
   const settings = join(DATA, "settings.json");
   writeFileSync(settings, JSON.stringify({ captureContent: false }));

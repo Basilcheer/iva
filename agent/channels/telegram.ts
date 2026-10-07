@@ -16,6 +16,7 @@ import {
 import {
   noticeSender,
   sendThroughOutbox,
+  type NoticeSend,
   type OutboxAck,
   type OutboxTransport,
 } from "../lib/outbox.js";
@@ -198,6 +199,26 @@ export function outboxTransport(
                 retryPlain: false,
               };
   return transport;
+}
+
+// Сообщение о сбое хода. Простой текст уходит одним sendMessage, как раньше; текст с кнопкой
+// «Повторить» (обрыв посреди ответа) — швом Outbox, потому что кнопка живёт только в
+// rich-сообщении (ADR-0015). Гейт стоит на обоих путях: noticeSender и сам шов.
+function failureSender(
+  tg: Pick<
+    TelegramHandle,
+    "chatId" | "messageThreadId" | "request" | "post" | "sendMessage"
+  >,
+): NoticeSend {
+  return noticeSender(async (text) => {
+    if (!hasRichButtons(text)) return tg.sendMessage(text);
+    const sent = await sendThroughOutbox(
+      text,
+      outboxTransport(tg, TELEGRAM_RICH_REPLIES),
+    );
+    if (!sent.ok) throw new Error(sent.error);
+    return sent;
+  });
 }
 
 // Пульс живого хода в run-status: без него жнец моста снимал молчаливый длинный ход
@@ -503,7 +524,7 @@ const telegram = telegramChannel({
         ctx.session.id,
         data.turnId,
         data,
-        noticeSender((text) => channel.telegram.sendMessage(text)),
+        failureSender(channel.telegram),
       );
     },
     // У terminal-сбоя eve следом за turn.failed шлёт session.failed без ctx.
@@ -534,7 +555,7 @@ const telegram = telegramChannel({
         data.sessionId,
         null,
         data,
-        noticeSender((text) => channel.telegram.sendMessage(text)),
+        failureSender(channel.telegram),
       );
     },
   },

@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-floating-promises -- Node's test runner owns registrations. */
 import test from "node:test";
 import assert from "node:assert/strict";
+import fc from "fast-check";
 import { humanizeProviderError } from "./error-humanizer.ts";
 
 const REAL_LIMIT_ERROR =
@@ -17,8 +18,8 @@ test("humanizes the production usage-limit error and preserves its reset interva
 
 test("humanizes the production upstream failure", () => {
   assert.deepEqual(humanizeProviderError({ message: REAL_UPSTREAM_ERROR }), {
-    en: "Provider-side failure - try again in a couple of minutes",
-    ru: "Сбой на стороне провайдера - попробуй через пару минут",
+    en: "The provider has a failure on its side. Write again in a couple of minutes.",
+    ru: "У провайдера сбой. Напиши ещё раз через пару минут.",
   });
 });
 
@@ -52,122 +53,151 @@ test("recognizes exhausted balance or plan", () => {
   }
 });
 
-test("recognizes invalid provider credentials", () => {
+test("refused credentials say who refused and where to fix it, without repeats", () => {
   for (const input of [
     { message: "Invalid API key" },
     { message: "Unauthorized" },
     { message: "Request rejected", details: '{"statusCode":403}' },
+    {
+      message: "api.anthropic.com did not finish the response (HTTP 401)",
+      details: { attempts: 1 },
+    },
   ]) {
-    assert.deepEqual(humanizeProviderError(input), {
-      en: "Provider key does not work - check it in /menu",
-      ru: "Ключ провайдера не работает - проверь его в /menu",
+    assert.deepEqual(humanizeProviderError({ ...input, provider: "claude" }), {
+      en: "Anthropic did not accept the key or login. Check it in /menu and write again.",
+      ru: "Anthropic не принял ключ или вход. Проверь его в /menu и напиши ещё раз.",
     });
   }
+  assert.equal(
+    humanizeProviderError({ message: "Unauthorized" }).ru,
+    "Провайдер не принял ключ или вход. Проверь его в /menu и напиши ещё раз.",
+  );
 });
 
-test("recognizes provider-side failures", () => {
-  for (const input of [
-    { message: "The service is overloaded" },
-    { message: "Internal Server Error" },
-    { message: "Provider returned a 5xx response" },
-    { message: "Request failed", details: { upstreamStatusCode: 503 } },
-  ]) {
-    assert.deepEqual(humanizeProviderError(input), {
-      en: "Provider-side failure - try again in a couple of minutes",
-      ru: "Сбой на стороне провайдера - попробуй через пару минут",
-    });
-  }
-});
+// Ночь c1 07.10.2026 дословно: eve повторила шаг три раза, связь так и не вернулась.
+const C1_BREAK =
+  "api.anthropic.com did not finish the response (the stream broke off before message_stop): API Error: Connection to the API was lost (StreamTruncated)";
 
-test("recognizes provider transport and timeout failures", () => {
+test("a broken connection after all attempts names the provider and the repeats", () => {
+  assert.deepEqual(
+    humanizeProviderError({
+      message: C1_BREAK,
+      details: { attempts: 3, errorId: "e-1" },
+      provider: "claude",
+    }),
+    {
+      en: "The connection to Anthropic broke off. I tried again 2 times, it did not work. Write again.",
+      ru: "Связь с Anthropic оборвалась, повторила 2 раза, не получилось. Напиши ещё раз.",
+    },
+  );
   for (const message of [
     "Request timeout",
     "read ECONNRESET",
     "connect ETIMEDOUT",
     "TypeError: fetch failed",
     "The response stream was aborted",
+    "terminated",
   ]) {
-    assert.deepEqual(humanizeProviderError({ message }), {
-      en: "Provider is not responding - try again later",
-      ru: "Провайдер не отвечает - попробуй позже",
-    });
+    assert.equal(
+      humanizeProviderError({ message, provider: "codex" }).ru,
+      "Связь с OpenAI оборвалась. Напиши ещё раз.",
+    );
   }
 });
 
-test("uses the former generic text only for context-overflow errors", () => {
+test("a stream broken in the middle of the answer offers one Try again button", () => {
+  const text = humanizeProviderError({
+    message: C1_BREAK,
+    details: { attempts: 1, answerStarted: true, errorId: "e-2" },
+    provider: "claude",
+  });
+  assert.equal(
+    text.ru,
+    'Связь с Anthropic оборвалась на середине ответа. Повторить?\n\n<tg-button-row><tg-button type="callback_data" data="Повторить">Повторить</tg-button></tg-button-row>',
+  );
+  assert.match(text.en, /in the middle of the answer\. Try again\?/u);
+  assert.match(text.en, /data="Try again">Try again</u);
+});
+
+test("provider-side failures and no network at all say what to do", () => {
+  for (const input of [
+    { message: "The service is overloaded" },
+    { message: "Internal Server Error" },
+    { message: "Provider returned a 5xx response" },
+    { message: "Request failed", details: { upstreamStatusCode: 503 } },
+  ]) {
+    assert.equal(
+      humanizeProviderError({
+        ...input,
+        details: input.details,
+        provider: "ollama",
+      }).ru,
+      "У Ollama сбой. Напиши ещё раз через пару минут.",
+    );
+  }
+  assert.equal(
+    humanizeProviderError({
+      message: "getaddrinfo ENOTFOUND api.openai.com",
+      details: { attempts: 3 },
+      provider: "codex",
+    }).ru,
+    "Не могу достучаться до OpenAI: у сервера нет связи с ним, повторила 2 раза, не получилось. Проверь интернет на сервере и напиши ещё раз.",
+  );
+});
+
+test("Russian count agrees with the number of repeats", () => {
+  const ru = (attempts: number) =>
+    humanizeProviderError({ message: "terminated", details: { attempts } }).ru;
+  assert.match(ru(2), /повторила 1 раз,/u);
+  assert.match(ru(3), /повторила 2 раза,/u);
+  assert.match(ru(6), /повторила 5 раз,/u);
+  assert.match(ru(13), /повторила 12 раз,/u);
+  assert.match(ru(23), /повторила 22 раза,/u);
+  for (const attempts of [0, 1, -1, 1.5, Number.NaN])
+    assert.equal(
+      ru(attempts),
+      "Связь с провайдером оборвалась. Напиши ещё раз.",
+    );
+});
+
+test("context overflow names the way out", () => {
   for (const message of [
     "context length exceeded",
     "too many tokens in prompt",
     "maximum context window reached",
   ]) {
     assert.deepEqual(humanizeProviderError({ message }), {
-      en: "The turn failed (the context may have overflowed). Commands: /new — start over, /restart — restart.",
-      ru: "Ход не удался (возможно, переполнился контекст). Команды: /new — начать заново, /restart — перезапустить.",
+      en: "The conversation got too long for the model. /new starts over.",
+      ru: "Разговор стал слишком длинным для модели. /new начнёт заново.",
     });
   }
 });
 
-test("strips the retry wrapper before building the default gist", () => {
+test("an unknown failure is told in words, the provider text stays out of the chat", () => {
+  fc.assert(
+    fc.property(fc.string({ minLength: 8 }), (raw) => {
+      const message = `Q${raw}\nsecond line`;
+      const text = humanizeProviderError({
+        message,
+        details: { errorId: "e-77", diagnostic: raw },
+      });
+      for (const said of [text.en, text.ru]) {
+        assert.equal(said.includes("e-77"), false);
+        assert.equal(said.includes("second line"), false);
+      }
+    }),
+  );
   assert.deepEqual(
     humanizeProviderError({
       message:
         "AI_RetryError: Failed after 2 attempts. Last error: Provider returned a strange response",
+      provider: "openrouter",
     }),
     {
-      en: "Turn failed: Provider returned a strange response",
-      ru: "Ход упал: Provider returned a strange response",
+      en: "I could not answer: OpenRouter returned something I could not read. Write again; if it repeats, /new starts over.",
+      ru: "Не получилось ответить: OpenRouter вернул ответ, который я не разобрала. Напиши ещё раз; если повторится, /new начнёт заново.",
     },
   );
-});
-
-test("masks the configured Telegram bot token in a default gist", () => {
-  const previous = process.env.TELEGRAM_BOT_TOKEN;
-  process.env.TELEGRAM_BOT_TOKEN = "123456:secret-token";
-  try {
-    const result = humanizeProviderError({
-      message:
-        "Request URL https://api.telegram.org/bot123456:secret-token/getMe failed",
-    });
-    assert.equal(
-      result.ru,
-      "Ход упал: Request URL https://api.telegram.org/bot***/getMe failed",
-    );
-    assert.equal(result.ru.includes("123456:secret-token"), false);
-  } finally {
-    if (previous === undefined) delete process.env.TELEGRAM_BOT_TOKEN;
-    else process.env.TELEGRAM_BOT_TOKEN = previous;
-  }
-});
-
-test("keeps only the first line and truncates the default gist to about 120 characters", () => {
-  const longLine = `Unexpected provider response ${"x".repeat(180)}`;
-  const result = humanizeProviderError({
-    message: `${longLine}\nsecret diagnostic second line`,
-    details: { diagnostic: "must not be shown" },
-  });
-  const gist = result.en.slice("Turn failed: ".length);
-
-  assert.equal(gist.length, 120);
-  assert.equal(gist.endsWith("…"), true);
-  assert.equal(result.en.includes("second line"), false);
-  assert.equal(result.en.includes("must not be shown"), false);
-});
-
-test("redacts a secret before truncating the gist, so no half key survives", () => {
-  const original = console.error;
-  console.error = () => {};
-  try {
-    // The key straddles the 120-character cut: a gist truncated first would carry
-    // its head into the chat.
-    const message = `Incorrect API key provided ${"x".repeat(80)} api_key=S3CRETKEYS3CRETKEYS3CRET more`;
-
-    const result = humanizeProviderError({ message });
-
-    assert.equal(result.en.includes("S3CRET"), false);
-    assert.equal(result.en.includes("[REDACTED]"), true);
-  } finally {
-    console.error = original;
-  }
 });
 
 test("a tool schema the provider rejects names the plugin switch, not the schema", () => {

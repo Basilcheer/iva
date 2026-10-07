@@ -430,6 +430,16 @@ function projectResult(
   }
 }
 
+// Сбой хода: Error id и число запросов к модели — в data, без тумблера содержимого. В чат
+// Error id больше не идёт (agent/lib/telegram-failure-notice.ts), найти сбой по нему
+// можно здесь и в журнале сервиса.
+function projectFailure(details: unknown, out: Record<string, unknown>): void {
+  if (!isRecord(details)) return;
+  if (typeof details.errorId === "string") out.errorId = details.errorId;
+  if (typeof details.attempts === "number") out.attempts = details.attempts;
+  if (details.answerStarted === true) out.answerStarted = true;
+}
+
 function project(data: Record<string, unknown>): {
   data: Record<string, unknown>;
   content: Record<string, unknown>;
@@ -465,6 +475,7 @@ function project(data: Record<string, unknown>): {
     content.error = data.error.message;
   }
   projectResult(data, out, content);
+  projectFailure(data.details, out);
   for (const key of CONTENT_FIELDS) {
     if (data[key] !== undefined && content[key] === undefined)
       content[key] = data[key];

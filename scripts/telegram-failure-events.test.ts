@@ -218,7 +218,7 @@ function holdSend(chatId: string) {
   return { release: releaseResolve, started };
 }
 
-test("turn.failed posts a humanized error with error id even when finishStatus CAS misses", async () => {
+test("turn.failed posts a humanized error without error id even when finishStatus CAS misses", async () => {
   const chatId = "701";
   const sessionId = "failed-session-cas-miss";
   const key = chatKeyOf(chatId);
@@ -246,7 +246,7 @@ test("turn.failed posts a humanized error with error id even when finishStatus C
   assert.equal(sends.length, 1);
   assert.equal(
     sends[0].body!.text,
-    "Provider limit exhausted - resets in 3hr 59min; wait or switch models: /model\n\nError id: err-limit-701",
+    "Provider limit exhausted - resets in 3hr 59min; wait or switch models: /model",
   );
   assert.equal(getChatStatus(key)!.sessionId, "newer-session");
 
@@ -292,7 +292,7 @@ test("session.failed clears its run-status and deduplicates repeated delivery", 
   assert.equal(callsSince(before, "sendMessage").length, 1);
   assert.equal(
     callsSince(before, "sendMessage")[0].body!.text,
-    "Provider balance/plan exhausted - top up or switch models: /model\n\nError id: err-billing-702",
+    "Provider balance/plan exhausted - top up or switch models: /model",
   );
 
   await emitSessionFailed(data, { chatId, sessionId });
@@ -468,8 +468,7 @@ test("turn.failed redacts a provider key before it reaches Bot API", async () =>
   assert.equal(sends.length, 1);
   const text = String(sends[0].body!.text);
   assert.equal(text.includes("zzzz"), false);
-  assert.equal(text.includes("[REDACTED]"), true);
-  assert.equal(text.endsWith("Error id: err-key-706"), true);
+  assert.equal(text.includes("err-key-706"), false);
 });
 
 // errorId никто не чистит по дороге: если шов канала снять, ключ уедет в чат целым.
@@ -496,7 +495,7 @@ test("turn.failed redacts a secret carried by errorId itself", async () => {
   assert.equal(sends.length, 1);
   const text = String(sends[0].body!.text);
   assert.equal(text.includes("zzzz"), false);
-  assert.equal(text.endsWith("Error id: [REDACTED]"), true);
+  assert.equal(text.includes("Error id"), false);
 });
 
 // Худший вход разом: пусто в message, многострочный стек и оба секрета в одной ошибке.
@@ -510,7 +509,7 @@ test("session.failed survives an empty error and redacts a multi-line one", asyn
     );
     const empty = callsSince(emptyBefore, "sendMessage");
     assert.equal(empty.length, 1);
-    assert.equal(empty[0].body!.text, "Turn failed: Unknown provider error");
+    assert.match(String(empty[0].body!.text), /^I could not answer: /u);
 
     const before = apiCalls.length;
     await emitSessionFailed(
@@ -528,10 +527,53 @@ test("session.failed survives an empty error and redacts a multi-line one", asyn
     assert.equal(text.includes("zzzz"), false);
     assert.equal(text.includes("AAAA"), false);
     assert.equal(text.includes("at stack"), false);
-    assert.equal(text.includes("[REDACTED]"), true);
+    assert.equal(text.includes("err-hostile-709"), false);
   } finally {
     restore();
   }
+});
+
+// Обрыв посреди ответа (c1, 07.10.2026): eve закрыла ход, не повторяя его. Владелец получает
+// вопрос и кнопку «Повторить» — кнопка живёт только в rich-сообщении, поэтому реплика идёт
+// sendRichMessage, а не голым sendMessage. Error id остаётся в журнале.
+test("a stream broken mid-answer posts one Try again button through a rich message", async () => {
+  const chatId = "720";
+  const sessionId = "failed-mid-answer";
+  const previous = process.env.MODEL_PROVIDER;
+  process.env.MODEL_PROVIDER = "claude";
+  const before = apiCalls.length;
+  try {
+    await emitTurnFailed(
+      {
+        code: "MODEL_CALL_FAILED",
+        details: { errorId: "err-mid-720", attempts: 1, answerStarted: true },
+        message:
+          "api.anthropic.com did not finish the response (the stream broke off before message_stop)",
+        sequence: 0,
+        turnId: "turn_0",
+      },
+      { chatId, sessionId },
+    );
+  } finally {
+    if (previous === undefined) delete process.env.MODEL_PROVIDER;
+    else process.env.MODEL_PROVIDER = previous;
+  }
+  assert.equal(callsSince(before, "sendMessage").length, 0);
+  const rich = callsSince(before, "sendRichMessage");
+  assert.equal(rich.length, 1);
+  const markdown = String(
+    (rich[0].body!.rich_message as { markdown?: unknown }).markdown,
+  );
+  assert.match(
+    markdown,
+    /The connection to Anthropic broke off in the middle/u,
+  );
+  assert.match(
+    markdown,
+    /<tg-button type="callback_data" data="Try again">Try again<\/tg-button>/u,
+  );
+  assert.equal(markdown.includes("err-mid-720"), false);
+  assert.equal(String(rich[0].body!.chat_id), chatId);
 });
 
 // --- Проводка пульса живого хода ---
