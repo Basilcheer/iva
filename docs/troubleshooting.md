@@ -63,7 +63,16 @@ Cause: a wedged turn lives in `.workflow-data`, and eve re-enqueues it on every 
 
 If Iva reports `Model produced no output for 90s`, the provider stream stayed silent; retry, or switch the model.
 
-For chat turns, transient failures before the provider stream opens get at most three model-call attempts, with default waits of 5s and 15s. Provider Retry-After minimums share that 20s total wait allowance; a longer required wait parks the turn instead of retrying early. Stopping the turn cancels the request and any wait. Transport retries stop once a stream opens; after retry exhaustion the session accepts your next message.
+For chat turns, a model request that fails transiently before the answer starts (a 5xx, a dropped connection, or a stream that broke while only reasoning had arrived) is requested again: at most three requests, with default waits of 5s and 15s. Provider Retry-After minimums share that 20s total wait allowance; a longer required wait parks the turn instead of asking early. Stopping the turn cancels the request and any wait. With Claude through the CLI each new request goes through its own admission relay. Once the first part of the answer has arrived (text or a tool call), a broken stream is not requested again; the session accepts your next message.
+
+### "The connection to … broke off" instead of an answer
+
+These chat messages replace the old `Turn failed: …` line. They say what happened and what to do; the provider's error text and the Error id are not in the chat. Find the failure by time in `iva trace` (fields `errorId`, `attempts`, `answerStarted`) or in the service journal (`journalctl --user -u iva.service`), where eve logs the same `errorId`.
+
+- "The connection to Anthropic broke off. I tried again 2 times, it did not work." All three requests failed before the answer started. Write again; if it keeps happening, check the server's network.
+- "The connection to Anthropic broke off in the middle of the answer. Try again?" with a «Try again» button. The answer had started, so Iva did not repeat it on her own: its text never reached you and the tools of the broken request may have started. Tap the button: the model answers again from the conversation so far; tool results of the earlier steps are in it and are not run again. If the very first request of the turn broke, the conversation does not keep your question; write it again instead.
+- "… did not accept the key or login. Check it in /menu" (401/403): no repeats; fix the key in `/menu`, or the login on the server: `claude auth login` for Claude, `iva login` for the OpenAI subscription.
+- "I cannot reach …: the server has no connection to it": DNS or connection refused on every request; check the server's internet.
 
 ```bash
 iva reset   # stop services, quarantine workflow + Telegram busy/queue state, restart
