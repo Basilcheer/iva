@@ -271,13 +271,15 @@ const usage = {
   inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 },
   outputTokens: { total: 1, text: 1, reasoning: 0 },
 };
-const PREAMBLES = ["pre", "thinking", "503"] as const;
+// A bare tool call that arrived before the break is held until finish and never reaches
+// eve: for eve nothing of the answer arrived, and the request is simply made again.
+const PREAMBLES = ["pre", "thinking", "503", "call"] as const;
 type Outcome =
   | (typeof PREAMBLES)[number]
   | "401"
   | "text"
   | "args"
-  | "call"
+  | "argsCall"
   | "okText"
   | "okCall";
 const OUTCOMES: readonly Outcome[] = [
@@ -285,11 +287,15 @@ const OUTCOMES: readonly Outcome[] = [
   "401",
   "text",
   "args",
-  "call",
+  "argsCall",
   "okText",
   "okCall",
 ];
-const ANSWER_BREAKS: ReadonlySet<Outcome> = new Set(["text", "args", "call"]);
+const ANSWER_BREAKS: ReadonlySet<Outcome> = new Set([
+  "text",
+  "args",
+  "argsCall",
+]);
 
 /** One model request with the given outcome; tool call ids differ per request. */
 function attempt(
@@ -336,6 +342,16 @@ function attempt(
       );
     case "call":
       return broken([toolCall], failure);
+    case "argsCall":
+      return broken(
+        [
+          { type: "tool-input-start", id: `call-${call}`, toolName: "change" },
+          { type: "tool-input-delta", id: `call-${call}`, delta: "{}" },
+          { type: "tool-input-end", id: `call-${call}` },
+          toolCall,
+        ],
+        failure,
+      );
     case "okText":
       return success();
     case "okCall":
@@ -425,12 +441,40 @@ void test("a stream broken before the first answer part is requested again, reas
   }
 });
 
+// HTTP providers (codex, openrouter, custom, ollama, opencode) send a tool call before the
+// end of the stream, and the AI SDK starts the tool at once. A break after it used to leave a
+// side effect that the next request could repeat. The call is now held until finish.
+void test("a tool call before a break never runs; the request is made again and runs it once", async (t) => {
+  mute(t);
+  const waits = fastWaits(t);
+  let effects = 0;
+  const provider = scripted(["call", "okCall"], reset);
+  const fx = fixture(
+    provider.model,
+    undefined,
+    changeTool(() => effects++),
+  );
+  const result = await fx.run();
+  assert.equal(provider.calls(), 2);
+  assert.deepEqual(waits, [5_000]);
+  assert.equal(effects, 1);
+  assert.equal(
+    typeof result.next,
+    "function",
+    "the tool step continues the turn",
+  );
+  const requested = fx.events.filter(
+    (event) => event.type === "actions.requested",
+  );
+  assert.equal(requested.length, 1, "the owner sees one tool call");
+});
+
 void test("a stream broken after the first answer part fails the turn once and says so in details", async (t) => {
   mute(t);
   fastWaits(t);
   await fc.assert(
     fc.asyncProperty(
-      fc.constantFrom("text", "args", "call"),
+      fc.constantFrom("text", "args", "argsCall"),
       fc.constantFrom(reset, flagged),
       async (outcome, failure) => {
         let effects = 0;
@@ -444,7 +488,7 @@ void test("a stream broken after the first answer part fails the turn once and s
         assert.equal(provider.calls(), 1);
         assert.equal(result.next, null);
         assert.equal(result.settledTurn?.isError, true);
-        assert.ok(effects <= 1);
+        assert.equal(effects, 0, "a tool call before finish never runs");
         assert.equal(ownerTexts(fx.events), 0);
         const failed = fx.events.filter(
           (event) => event.type === "turn.failed",
@@ -533,6 +577,9 @@ void test("for any sequence of outcomes no tool runs twice and the owner gets at
         assert.equal(provider.calls(), expectedCalls(outcomes));
         assert.ok(effects <= 1, `tool ran ${effects} times`);
         for (const count of runs.values()) assert.ok(count <= 1);
+        const final = outcomes[Math.min(provider.calls(), outcomes.length) - 1];
+        // A tool runs only from a request that reached finish.
+        assert.equal(effects, final === "okCall" ? 1 : 0);
         assert.ok(ownerTexts(fx.events) <= 1);
         const last = outcomes[Math.min(provider.calls(), outcomes.length) - 1];
         if (ANSWER_BREAKS.has(last)) {
