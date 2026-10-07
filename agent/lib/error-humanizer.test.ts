@@ -113,9 +113,12 @@ test("a stream broken in the middle of the answer offers one Try again button", 
   });
   assert.equal(
     text.ru,
-    'Связь с Anthropic оборвалась на середине ответа. Повторить?\n\n<tg-button-row><tg-button type="callback_data" data="Повторить">Повторить</tg-button></tg-button-row>',
+    'Связь с Anthropic оборвалась на середине ответа на твоё сообщение. Повторить?\n\n<tg-button-row><tg-button type="callback_data" data="Повторить">Повторить</tg-button></tg-button-row>',
   );
-  assert.match(text.en, /in the middle of the answer\. Try again\?/u);
+  assert.match(
+    text.en,
+    /in the middle of the answer to your message\. Try again\?/u,
+  );
   assert.match(text.en, /data="Try again">Try again</u);
 });
 
@@ -198,6 +201,11 @@ test("an unknown failure is told in words, the provider text stays out of the ch
       ru: "Не получилось ответить: OpenRouter вернул ответ, который я не разобрала. Напиши ещё раз; если повторится, /new начнёт заново.",
     },
   );
+  // Без имени провайдера слово стоит посреди фразы со строчной, в начале — с заглавной.
+  assert.equal(
+    humanizeProviderError({ message: "strange" }).ru,
+    "Не получилось ответить: провайдер вернул ответ, который я не разобрала. Напиши ещё раз; если повторится, /new начнёт заново.",
+  );
 });
 
 test("a tool schema the provider rejects names the plugin switch, not the schema", () => {
@@ -249,8 +257,118 @@ test("the quote cannot open a tag or markup in the rich message", () => {
       assert.equal((text.match(/<\/tg-button>/gu) ?? []).length, 1);
       assert.equal((text.match(/</gu) ?? []).length, 4);
       const quote = /на «([\s\S]*)»\. Повторить/u.exec(text)?.[1] ?? "";
-      assert.doesNotMatch(quote.replace(/\\./gu, ""), /[\\*_#|]/u);
+      assert.doesNotMatch(quote.replace(/\\./gu, ""), /[\\*_#|`[\]()~$]/u);
       assert.doesNotMatch(quote, /\n/u);
     }),
   );
+});
+
+// Рецензия 07.10.2026: текст выбирался по номерам строк стека в details (`:429:` давал
+// «лимит», `:502:` — «сбой у провайдера»). Распознаётся только сообщение, коды статуса и
+// тексты ответа API.
+test("stack line numbers and ids in details never pick the text", () => {
+  for (const line of [429, 402, 401, 403, 502]) {
+    const text = humanizeProviderError({
+      message: "Something odd happened",
+      details: {
+        errorId: `e-${line}`,
+        stack: `Error: x\n    at run (file:///srv/iva/tool-loop.js:${line}:17)`,
+        responseBodySnippet: `{"line":${line}}`,
+      },
+      provider: "claude",
+    });
+    assert.match(text.ru, /^Не получилось ответить: Anthropic вернул/u);
+  }
+  assert.match(
+    humanizeProviderError({
+      message: "Request rejected",
+      details: { statusCode: 429 },
+    }).ru,
+    /^Лимит провайдера исчерпан/u,
+  );
+  assert.match(
+    humanizeProviderError({
+      message: "Request rejected",
+      details: { apiErrorMessage: "overloaded_error" },
+      provider: "claude",
+    }).ru,
+    /^У Anthropic сбой/u,
+  );
+});
+
+test("a silent model gets its own text, not a provider failure", () => {
+  for (const message of [
+    "Model produced no output for 90s",
+    "Claude CLI produced nothing for 180s",
+  ]) {
+    const text = humanizeProviderError({
+      message,
+      details: {
+        code: "MODEL_FIRST_CHUNK_TIMEOUT",
+        stack: "at x (tool-loop.js:502:9)",
+        attempts: 3,
+      },
+      provider: "claude",
+    });
+    assert.equal(
+      text.ru,
+      "Anthropic долго не отвечает, повторила 2 раза, не получилось. Напиши ещё раз через пару минут или смени модель: /model.",
+    );
+    assert.match(text.en, /^Anthropic takes too long to answer\./u);
+  }
+});
+
+test("a provider wait over a minute says to come back in a couple of minutes", () => {
+  const text = humanizeProviderError({
+    message: "Service unavailable",
+    details: { statusCode: 503, providerWaitMs: 600_000, attempts: 1 },
+    provider: "codex",
+  });
+  assert.equal(
+    text.ru,
+    "OpenAI просит подождать дольше минуты. Попробуй через пару минут.",
+  );
+});
+
+test("a group gets no quote; an attachment asks to send it again instead of a button", () => {
+  const base = {
+    message: "terminated",
+    details: { answerStarted: true },
+    provider: "claude",
+  };
+  const group = humanizeProviderError({
+    ...base,
+    question: "секрет группы",
+    group: true,
+  });
+  assert.equal(
+    group.ru.split("\n")[0],
+    "Связь с Anthropic оборвалась на середине ответа на твоё сообщение. Повторить?",
+  );
+  assert.doesNotMatch(group.ru, /секрет/u);
+  assert.match(group.ru, /<tg-button /u);
+  const voice = humanizeProviderError({ ...base, media: true });
+  assert.equal(
+    voice.ru,
+    "Связь с Anthropic оборвалась на середине ответа на твоё сообщение с вложением. Пришли его ещё раз.",
+  );
+  const photo = humanizeProviderError({
+    ...base,
+    question: "что на фото?",
+    media: true,
+  });
+  assert.equal(
+    photo.ru,
+    "Связь с Anthropic оборвалась на середине ответа на «что на фото?». Пришли сообщение с вложением ещё раз.",
+  );
+  assert.doesNotMatch(photo.en + voice.en, /tg-button/u);
+});
+
+test("the quote escapes every rich markup character", () => {
+  const text = humanizeProviderError({
+    message: "terminated",
+    details: { answerStarted: true },
+    question: "a`b[c](d)~e$f",
+  }).ru;
+  assert.match(text, /«a\\`b\\\[c\\\]\\\(d\\\)\\~e\\\$f»/u);
 });
