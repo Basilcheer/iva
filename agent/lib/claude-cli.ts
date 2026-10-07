@@ -285,9 +285,21 @@ process.stdin.on("data", (chunk) => {
   }
 });`;
 
-/** Ошибка шага claude. Нарочно без statusCode: ход чинится повтором, а не отравлением сессии. */
+/**
+ * Ошибка шага claude. Нарочно без statusCode: ход чинится повтором, а не отравлением сессии.
+ * `isRetryable` — связь с api.anthropic.com оборвалась так, как видело реле: ответа не было,
+ * 408, 429, 5xx или поток кончился до `message_stop`. По этому флагу eve просит шаг ещё раз,
+ * пока не пришло ни одной части ответа (patches/eve, runModelCallWithRetries), а каждый
+ * новый запрос — это новый doStream, свой процесс CLI и своё реле со своим единственным
+ * допуском (startAdmission в runCall). Отказ на вход (401, 403) и прочие 4xx флага не несут.
+ */
 export class ClaudeCliError extends Error {
   override readonly name = "ClaudeCliError";
+  readonly isRetryable: boolean;
+  constructor(message: string, { retryable = false } = {}) {
+    super(message);
+    this.isRetryable = retryable;
+  }
 }
 
 /** Блок ответа модели: у Anthropic это text, thinking, tool_use, redacted_thinking и другие. */
@@ -1652,6 +1664,7 @@ function capturedMessage(
     said === undefined || said.includes(ADMISSION_CONSUMED) ? "" : `: ${said}`;
   throw new ClaudeCliError(
     `api.anthropic.com did not finish the response (${relayWitness(admission)})${detail}`,
+    { retryable: connectionBroke(admission.status) },
   );
 }
 
@@ -1660,6 +1673,17 @@ function relayWitness(admission: Admission): string {
   if (admission.status === undefined) return "no answer reached the relay";
   if (admission.status !== 200) return `HTTP ${admission.status}`;
   return "the stream broke off before message_stop";
+}
+
+/** Связь, а не отказ: ответа не было, поток оборвался или сервер сказал «позже». */
+function connectionBroke(status: number | undefined): boolean {
+  return (
+    status === undefined ||
+    status === 200 ||
+    status === 408 ||
+    status === 429 ||
+    status >= 500
+  );
 }
 
 /**

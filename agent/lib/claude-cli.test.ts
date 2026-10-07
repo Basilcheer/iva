@@ -41,6 +41,7 @@ import {
 } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import { classifyModelCallError } from "../../node_modules/eve/dist/src/harness/model-call-error.js";
+import { createToolLoopHarness } from "../../node_modules/eve/dist/src/harness/tool-loop.js";
 
 // Свой TMPDIR на файл: тест «временная папка уходит раньше» считает папки iva-claude-* в
 // tmpdir(), а pre-push гоняет файлы параллельно — чужой ход с тем же префиксом в общем /tmp
@@ -505,7 +506,9 @@ type SeenRequest = {
 /** Поднимает заглушку API: адрес получает реле как upstream, запросы — тест. */
 async function stubApi(
   t: TestContext,
-  events: readonly string[],
+  // Ответ на каждый запрос один и тот же или свой по номеру запроса (с нуля).
+  events: readonly string[] | ((request: number) => readonly string[]),
+  status = 200,
 ): Promise<{ url: string; seen: SeenRequest[] }> {
   const seen: SeenRequest[] = [];
   const server = createServer((request, response) => {
@@ -522,8 +525,10 @@ async function stubApi(
         body: body.length,
         payload: JSON.parse(body.toString("utf8")) as unknown,
       });
-      response.writeHead(200, { "content-type": "text/event-stream" });
-      for (const event of events) response.write(event);
+      const answer =
+        typeof events === "function" ? events(seen.length - 1) : events;
+      response.writeHead(status, { "content-type": "text/event-stream" });
+      for (const event of answer) response.write(event);
       response.end();
     });
   });
@@ -1886,7 +1891,110 @@ test("оборванный ответ API не подменяется расск
   );
   assert.equal(error.name, "ClaudeCliError");
   assert.match(error.message, /did not finish the response/u);
+  // Обрыв связи: eve попросит шаг ещё раз, если до обрыва не пришло ни одной части ответа.
+  assert.equal(classifyModelCallError(error), "retry");
+});
+
+// Отказ на вход — не связь: повтор дал бы тот же 401, владельцу нужен ответ сразу.
+test("401 от api.anthropic.com не повторяется", async (t) => {
+  const upstream = await stubApi(
+    t,
+    ['{"type":"error","error":{"type":"authentication_error"}}'],
+    401,
+  );
+  fakeCli(t, "relay", { FAKE_CLAUDE_PRINT: "" });
+  const error = await failureOf(async () =>
+    drain(
+      await makeClaudeCliModel(MODEL, {
+        silenceTimeoutMs: 10_000,
+        upstream: upstream.url,
+      }).doStream({ prompt: userPrompt(), tools: [WEATHER] }),
+    ),
+  );
+  assert.match(error.message, /HTTP 401/u);
   assert.equal(classifyModelCallError(error), "recoverable");
+});
+
+/** Ответ Anthropic из одного текста: relayAnswer без блока вызова. */
+function relayText(text: string): string[] {
+  return relayAnswer(text)
+    .filter((event) => !event.includes('"index":1'))
+    .map((event) =>
+      event.replace('"stop_reason":"tool_use"', '"stop_reason":"end_turn"'),
+    );
+}
+
+// Ночь c1 07.10.2026: поток оборвался, а повтора не было — CLI-шаг открывал поток сразу, и
+// eve считала его начатым ответом. Теперь до первой части ответа шаг просится ещё раз, и
+// второй запрос идёт через своё реле со своим допуском: первое реле его бы отбило.
+test("обрыв до первой части ответа: eve просит шаг ещё раз через новое реле", async (t) => {
+  t.mock.method(console, "error", () => {});
+  t.mock.method(console, "warn", () => {});
+  const upstream = await stubApi(t, (request) =>
+    request === 0 ? relayText("Готово").slice(0, 1) : relayText("Готово"),
+  );
+  fakeCli(t, "script", {
+    FAKE_CLAUDE_RELAY: "1",
+    FAKE_CLAUDE_SCRIPT: JSON.stringify([
+      {
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        num_turns: 1,
+        usage: {},
+      },
+    ]),
+  });
+  // Пауза eve между попытками (5 с) — сразу; таймеры CLI и реле не трогаем.
+  const waits: number[] = [];
+  const original = globalThis.setTimeout;
+  t.mock.method(
+    globalThis,
+    "setTimeout",
+    (...args: Parameters<typeof setTimeout>) => {
+      const [callback, delay, ...rest] = args;
+      if (callback.name === "done" && delay === 5_000) {
+        waits.push(delay);
+        return original(callback, 0, ...rest);
+      }
+      return original(...args);
+    },
+  );
+  const model = makeClaudeCliModel(MODEL, {
+    silenceTimeoutMs: 10_000,
+    upstream: upstream.url,
+  });
+  const events: Array<{ type: string; data?: unknown }> = [];
+  const step = createToolLoopHarness({
+    mode: "conversation",
+    tools: new Map(),
+    resolveModel: () => Promise.resolve(model),
+    handleEvent: (event) => {
+      events.push(event);
+      return Promise.resolve();
+    },
+  });
+  const result = await step(
+    {
+      agent: {
+        system: "Ты Ива.",
+        tools: [],
+        modelReference: { id: "test/model" },
+      },
+      compaction: { threshold: 100_000, recentWindowSize: 100 },
+      continuationToken: "test",
+      sessionId: "test",
+      history: [],
+    },
+    { message: "привет" },
+  );
+  assert.equal(result.settledTurn?.output, "Готово");
+  assert.equal(upstream.seen.length, 2, "второй запрос дошёл до API");
+  assert.deepEqual(waits, [5_000]);
+  assert.equal(
+    events.filter((event) => event.type === "turn.failed").length,
+    0,
+  );
 });
 
 // Ночь 22.09 на c1: апстрим оборвал поток, CLI пошёл за ответом вторым, нестриминговым
