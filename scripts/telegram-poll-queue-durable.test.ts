@@ -691,7 +691,11 @@ test("a tap on a model-written button is delivered as the tapper's message on th
   assert.deepEqual(result.deliveryRoutes, ["/eve/v1/telegram/accepted"]);
   const delivery = result.deliveries[0];
   assert.equal(delivery?.callback_query, undefined);
-  assert.equal(delivery?.message?.text, "Remind me in an hour");
+  // Нажатие несёт data и текст сообщения, под которым стояла кнопка (8133dc8d).
+  assert.equal(
+    delivery?.message?.text,
+    "Remind me in an hour\n\n(button under Iva's message: «button owner»)",
+  );
   assert.equal(delivery?.message?.from?.id, 42);
   assert.deepEqual(result.offset, { offset: 102 });
   assert.deepEqual(result.inbox, { version: 1, queues: {} });
