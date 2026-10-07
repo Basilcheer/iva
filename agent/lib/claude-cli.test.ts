@@ -1895,25 +1895,36 @@ test("оборванный ответ API не подменяется расск
   assert.equal(classifyModelCallError(error), "retry");
 });
 
-// Отказ на вход — не связь: повтор дал бы тот же 401, владельцу нужен ответ сразу.
-test("401 от api.anthropic.com не повторяется", async (t) => {
-  const upstream = await stubApi(
-    t,
-    ['{"type":"error","error":{"type":"authentication_error"}}'],
-    401,
-  );
-  fakeCli(t, "relay", { FAKE_CLAUDE_PRINT: "" });
-  const error = await failureOf(async () =>
-    drain(
-      await makeClaudeCliModel(MODEL, {
-        silenceTimeoutMs: 10_000,
-        upstream: upstream.url,
-      }).doStream({ prompt: userPrompt(), tools: [WEATHER] }),
-    ),
-  );
-  assert.match(error.message, /HTTP 401/u);
-  assert.equal(classifyModelCallError(error), "recoverable");
-});
+// Отказ на вход и прочие 4xx — не связь: повтор дал бы тот же ответ, владельцу нужен ответ
+// сразу. 408, 429 и 5xx — связь или «позже»: eve просит шаг ещё раз.
+for (const [status, verdict] of [
+  [401, "recoverable"],
+  [403, "recoverable"],
+  [400, "recoverable"],
+  [408, "retry"],
+  [429, "retry"],
+  [500, "retry"],
+  [529, "retry"],
+] as const) {
+  test(`HTTP ${status} от api.anthropic.com: ${verdict === "retry" ? "повторяется" : "не повторяется"}`, async (t) => {
+    const upstream = await stubApi(
+      t,
+      ['{"type":"error","error":{"type":"some_error"}}'],
+      status,
+    );
+    fakeCli(t, "relay", { FAKE_CLAUDE_PRINT: "" });
+    const error = await failureOf(async () =>
+      drain(
+        await makeClaudeCliModel(MODEL, {
+          silenceTimeoutMs: 10_000,
+          upstream: upstream.url,
+        }).doStream({ prompt: userPrompt(), tools: [WEATHER] }),
+      ),
+    );
+    assert.match(error.message, new RegExp(`HTTP ${status}`, "u"));
+    assert.equal(classifyModelCallError(error), verdict);
+  });
+}
 
 /** Ответ Anthropic из одного текста: relayAnswer без блока вызова. */
 function relayText(text: string): string[] {
