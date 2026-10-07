@@ -3,9 +3,9 @@
 // провайдера в чат не идёт вовсе: им некому читать, а секрет в нём — лишний риск.
 //
 // Попытки и «ответ уже начался» приходят из eve в details (patches/eve:
-// runModelCallWithRetries кладёт attempts и answerStarted). Обрыв до первой части ответа eve
-// уже повторила сама, до трёх запросов; обрыв посреди ответа она не повторяет — решает
-// владелец кнопкой «Повторить» (решение владельца 07.10.2026).
+// runModelCallWithRetries кладёт attempts и answerStarted). Обрыв в любой момент до конца
+// ответа eve уже повторила сама, до трёх запросов (правило лида 07.10.2026). Если и третий
+// запрос оборвался посреди ответа, решает владелец кнопкой «Повторить».
 //
 // Текст выбирается только по сообщению, кодам статуса и текстам ответа API (statusCode,
 // upstreamStatusCode, upstreamMessage, apiErrorMessage). Остальное в details — стек, тело
@@ -268,10 +268,11 @@ function midAnswerAsk({
 
 function midAnswerText(situation: Situation): ProviderErrorText {
   const to = answerTarget(situation);
+  const again = repeated(repeatsOf(situation.details));
   const ask = midAnswerAsk(situation);
   return {
-    en: `The connection to ${situation.name.en} broke off in the middle of the answer${to.en}.${ask.en}`,
-    ru: `Связь с ${situation.name.ins} оборвалась на середине ответа${to.ru}.${ask.ru}`,
+    en: `The connection to ${situation.name.en} broke off in the middle of the answer${to.en}.${again.en}${ask.en}`,
+    ru: `Связь с ${situation.name.ins} оборвалась на середине ответа${to.ru}${again.ru}.${ask.ru}`,
   };
 }
 

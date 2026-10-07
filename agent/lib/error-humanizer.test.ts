@@ -372,3 +372,22 @@ test("the quote escapes every rich markup character", () => {
   }).ru;
   assert.match(text, /«a\\`b\\\[c\\\]\\\(d\\\)\\~e\\\$f»/u);
 });
+
+// Обрыв посреди ответа eve теперь повторяет сама; кнопка — исход после трёх попыток, и
+// сообщение говорит, что повторы уже были.
+test("after three mid-answer breaks the notice says how many times Iva tried", () => {
+  const text = humanizeProviderError({
+    message: "terminated",
+    details: { answerStarted: true, attempts: 3 },
+    provider: "claude",
+    question: "Какая погода?",
+  });
+  assert.equal(
+    text.ru.split("\n")[0],
+    "Связь с Anthropic оборвалась на середине ответа на «Какая погода?», повторила 2 раза, не получилось. Повторить?",
+  );
+  assert.equal(
+    text.en.split("\n")[0],
+    "The connection to Anthropic broke off in the middle of the answer to «Какая погода?». I tried again 2 times, it did not work. Try again?",
+  );
+});
