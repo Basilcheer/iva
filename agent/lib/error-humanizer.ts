@@ -17,6 +17,8 @@ interface ProviderErrorInput {
   readonly details?: unknown;
   /** MODEL_PROVIDER установки: по нему сообщение называет, с кем пропала связь. */
   readonly provider?: string | undefined;
+  /** Текст сообщения владельца, на который шёл ответ: цитата при обрыве посреди ответа. */
+  readonly question?: string | undefined;
 }
 
 /** Имя провайдера в трёх падежах: «Anthropic не принял», «до Anthropic», «с Anthropic». */
@@ -121,6 +123,7 @@ type Situation = {
   readonly evidence: string;
   readonly details: Record<string, unknown>;
   readonly name: ProviderName;
+  readonly question: string;
 };
 type Rule = {
   readonly when: (situation: Situation) => boolean;
@@ -152,10 +155,42 @@ function toolSchemaText({ evidence }: Situation): ProviderErrorText {
   };
 }
 
-function midAnswerText({ name }: Situation): ProviderErrorText {
+const QUOTE_LIMIT = 120;
+
+/**
+ * Вопрос владельца для цитаты в rich-сообщении: одна строка, до 120 знаков с «…». Это его же
+ * текст, уже прошедший Gate на входе, и обратно он едет через outbound-Gate шва. Разметкой
+ * он стать не может: `<` и `>` заменены угловыми кавычками (тег не откроется), `*_#|`
+ * экранированы, как в escapeRichText (scripts/lib/telegram-buttons.ts), и обратная косая
+ * тоже: иначе `\*` владельца стал бы экранированной косой и голой звёздочкой.
+ */
+function quoteOf(question: string): string {
+  const line = question.replace(/\s+/gu, " ").trim();
+  const chars = Array.from(line);
+  const cut =
+    chars.length <= QUOTE_LIMIT
+      ? line
+      : `${chars
+          .slice(0, QUOTE_LIMIT - 1)
+          .join("")
+          .trimEnd()}…`;
+  return cut
+    .replace(/</gu, "‹")
+    .replace(/>/gu, "›")
+    .replace(/([\\*_#|])/gu, "\\$1");
+}
+
+// Цитата нужна всегда, не только при пустой истории: нажатие «Повторить» приносит модели
+// текст этого сообщения (мост), и вопрос доходит, даже если оборвался первый запрос хода.
+function midAnswerText({ name, question }: Situation): ProviderErrorText {
+  const quote = quoteOf(question);
+  const to =
+    quote === ""
+      ? { en: "", ru: "" }
+      : { en: ` to «${quote}»`, ru: ` на «${quote}»` };
   return {
-    en: `The connection to ${name.en} broke off in the middle of the answer. Try again?\n\n${retryButton("Try again")}`,
-    ru: `Связь с ${name.ins} оборвалась на середине ответа. Повторить?\n\n${retryButton("Повторить")}`,
+    en: `The connection to ${name.en} broke off in the middle of the answer${to.en}. Try again?\n\n${retryButton("Try again")}`,
+    ru: `Связь с ${name.ins} оборвалась на середине ответа${to.ru}. Повторить?\n\n${retryButton("Повторить")}`,
   };
 }
 
@@ -229,11 +264,13 @@ export function humanizeProviderError({
   message,
   details,
   provider,
+  question = "",
 }: ProviderErrorInput): ProviderErrorText {
   const situation: Situation = {
     evidence: `${message.replace(RETRY_WRAPPER, "")}\n${detailsText(details)}`,
     details: detailsRecord(details),
     name: providerName(provider),
+    question,
   };
   const rule = RULES.find((candidate) => candidate.when(situation));
   return (rule?.say ?? unknownText)(situation);

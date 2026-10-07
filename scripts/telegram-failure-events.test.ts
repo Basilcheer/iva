@@ -576,6 +576,36 @@ test("a stream broken mid-answer posts one Try again button through a rich messa
   assert.equal(String(rich[0].body!.chat_id), chatId);
 });
 
+// Первый запрос хода оборвался — вопроса в истории сессии нет. Канал помнит текст
+// последнего принятого сообщения чата и цитирует его; «Повторить» в тексте нажатия
+// приносит модели и цитату.
+test("a mid-answer break quotes the last accepted message of the chat", async () => {
+  const chatId = "721";
+  const { rememberTurnQuestion } = await import("#lib/turn-question.ts");
+  rememberTurnQuestion(chatKeyOf(chatId), "Сколько <b>стоит</b> *ремонт*?");
+  const before = apiCalls.length;
+  await emitTurnFailed(
+    {
+      code: "MODEL_CALL_FAILED",
+      details: { errorId: "err-mid-721", attempts: 1, answerStarted: true },
+      message: "terminated",
+      sequence: 0,
+      turnId: "turn_0",
+    },
+    { chatId, sessionId: "failed-mid-answer-quote" },
+  );
+  const rich = callsSince(before, "sendRichMessage");
+  assert.equal(rich.length, 1);
+  const markdown = String(
+    (rich[0].body!.rich_message as { markdown?: unknown }).markdown,
+  );
+  assert.match(
+    markdown,
+    /in the middle of the answer to «Сколько ‹b›стоит‹\/b› \\\*ремонт\\\*\?»\. Try again\?/u,
+  );
+  assert.equal((markdown.match(/<tg-button[\s>]/gu) ?? []).length, 1);
+});
+
 // --- Проводка пульса живого хода ---
 //
 // Пульс держится на ЧЕТЫРЁХ обработчиках событий канала (agent/channels/telegram.ts).

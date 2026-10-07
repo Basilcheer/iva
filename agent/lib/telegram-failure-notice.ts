@@ -11,7 +11,12 @@ import { humanizeProviderError } from "./error-humanizer.ts";
 import { tr } from "./i18n.ts";
 import type { NoticeSend } from "./outbox.ts";
 
-export type TelegramFailureData = { message: string; details?: unknown };
+export type TelegramFailureData = {
+  message: string;
+  details?: unknown;
+  /** Последнее принятое сообщение владельца (turn-question.ts): цитата при обрыве. */
+  question?: string | undefined;
+};
 
 type FailureNotice = { turnId: string | null; notifiedAt: number };
 
@@ -56,7 +61,12 @@ export function telegramFailureMessage(
   data: TelegramFailureData,
   provider: string | undefined = process.env.MODEL_PROVIDER,
 ): string {
-  const text = humanizeProviderError({ ...data, provider });
+  const text = humanizeProviderError({
+    message: data.message,
+    details: data.details,
+    question: data.question,
+    provider,
+  });
   return tr(text.en, text.ru);
 }
 

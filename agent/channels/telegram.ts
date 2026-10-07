@@ -43,6 +43,7 @@ import {
   TELEGRAM_STOP_CALLBACK,
 } from "../lib/telegram-status-message.js";
 import { notifyTelegramFailure } from "../lib/telegram-failure-notice.js";
+import { rememberTurnQuestion, turnQuestion } from "../lib/turn-question.js";
 // Состояние «идёт ли ход» — per-chat файлы data/run-status.d с мостом telegram-poll.mjs:
 // мост по ним буферизует входящие, канал хранит sessionId/turnId для отмены.
 import {
@@ -199,6 +200,27 @@ export function outboxTransport(
                 retryPlain: false,
               };
   return transport;
+}
+
+// Вопрос хода для цитаты в сообщении об обрыве: текст принятого сообщения чата. Голос и
+// картинка без подписи цитаты не дают — сообщение уходит без неё.
+async function rememberAccepted<T>(
+  chatKey: string,
+  message: { text: string; caption?: string },
+  turn: Promise<T | null>,
+): Promise<T | null> {
+  const accepted = await turn;
+  if (accepted !== null)
+    rememberTurnQuestion(chatKey, message.text || (message.caption ?? ""));
+  return accepted;
+}
+
+function chatQuestion(
+  tg: Pick<TelegramHandle, "chatId" | "messageThreadId">,
+): string | undefined {
+  return tg.chatId
+    ? turnQuestion(chatKeyOf(tg.chatId, tg.messageThreadId))
+    : undefined;
 }
 
 // Сообщение о сбое хода. Простой текст уходит одним sendMessage, как раньше; текст с кнопкой
@@ -523,7 +545,7 @@ const telegram = telegramChannel({
       await notifyTelegramFailure(
         ctx.session.id,
         data.turnId,
-        data,
+        { ...data, question: chatQuestion(channel.telegram) },
         failureSender(channel.telegram),
       );
     },
@@ -554,7 +576,7 @@ const telegram = telegramChannel({
       await notifyTelegramFailure(
         data.sessionId,
         null,
-        data,
+        { ...data, question: chatQuestion(channel.telegram) },
         failureSender(channel.telegram),
       );
     },
@@ -566,58 +588,62 @@ const telegram = telegramChannel({
     // Ключ сообщения: под ним стоит его ранний статус или знак очереди за живым ходом,
     // и по нему же снимается то или другое, если pipeline сообщение бросит.
     const ingressId = randomUUID();
-    return runTelegramInbound(message, {
-      botUsername: tg.botUsername,
-      request: (method, body) => tg.request(method, body),
-      sendMessage: noticeSender((text) => tg.sendMessage(text)),
-      startTyping: () => tg.startTyping(),
-      describeImage,
-      chatModelSeesImages,
-      transcribe,
-      onAccepted: async () => {
-        await publishTelegramEarlyStatus({
-          chatKey,
-          ingressId,
-          staleMs: RUN_STALE_MS,
-          getStatusImpl: getChatStatus,
-          setStatusIfImpl: setChatStatusIf,
-          sendWorkingStatusImpl: (options) => sendWorkingStatus(tg, options),
-          removeWorkingStatusImpl: (messageId) =>
-            tg.request("deleteMessage", {
-              chat_id: tg.chatId,
-              message_id: messageId,
-            }),
-          onWorkingStatusError: (error) =>
-            console.error(
-              "[telegram] раннее статус-сообщение не отправилось:",
-              error,
-            ),
-        });
-      },
-      onAbandoned: async () => {
-        await abandonTelegramEarlyStatus({
-          chatKey,
-          ingressId,
-          getStatusImpl: getChatStatus,
-          setStatusIfImpl: setChatStatusIf,
-          removeWorkingStatusImpl: (messageId) =>
-            tg.request("deleteMessage", {
-              chat_id: tg.chatId,
-              message_id: messageId,
-            }),
-          onWorkingStatusError: (error) =>
-            console.error(
-              "[telegram] раннее статус-сообщение не удалилось:",
-              error,
-            ),
-        });
-      },
-      consumeCancelledMark: () => {
-        if (!getChatStatus(chatKey)?.wasCancelled) return false;
-        setChatStatus(chatKey, { wasCancelled: null });
-        return true;
-      },
-    });
+    return rememberAccepted(
+      chatKey,
+      message,
+      runTelegramInbound(message, {
+        botUsername: tg.botUsername,
+        request: (method, body) => tg.request(method, body),
+        sendMessage: noticeSender((text) => tg.sendMessage(text)),
+        startTyping: () => tg.startTyping(),
+        describeImage,
+        chatModelSeesImages,
+        transcribe,
+        onAccepted: async () => {
+          await publishTelegramEarlyStatus({
+            chatKey,
+            ingressId,
+            staleMs: RUN_STALE_MS,
+            getStatusImpl: getChatStatus,
+            setStatusIfImpl: setChatStatusIf,
+            sendWorkingStatusImpl: (options) => sendWorkingStatus(tg, options),
+            removeWorkingStatusImpl: (messageId) =>
+              tg.request("deleteMessage", {
+                chat_id: tg.chatId,
+                message_id: messageId,
+              }),
+            onWorkingStatusError: (error) =>
+              console.error(
+                "[telegram] раннее статус-сообщение не отправилось:",
+                error,
+              ),
+          });
+        },
+        onAbandoned: async () => {
+          await abandonTelegramEarlyStatus({
+            chatKey,
+            ingressId,
+            getStatusImpl: getChatStatus,
+            setStatusIfImpl: setChatStatusIf,
+            removeWorkingStatusImpl: (messageId) =>
+              tg.request("deleteMessage", {
+                chat_id: tg.chatId,
+                message_id: messageId,
+              }),
+            onWorkingStatusError: (error) =>
+              console.error(
+                "[telegram] раннее статус-сообщение не удалилось:",
+                error,
+              ),
+          });
+        },
+        consumeCancelledMark: () => {
+          if (!getChatStatus(chatKey)?.wasCancelled) return false;
+          setChatStatus(chatKey, { wasCancelled: null });
+          return true;
+        },
+      }),
+    );
   }),
 });
 

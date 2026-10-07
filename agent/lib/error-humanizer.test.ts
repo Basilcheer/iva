@@ -211,3 +211,46 @@ test("a tool schema the provider rejects names the plugin switch, not the schema
   assert.match(text.ru, /data\/custom\/agent\/tools/u);
   assert.match(text.en, /iva plugin disable/u);
 });
+
+// Если оборвался первый запрос хода, вопроса владельца в истории нет: сообщение цитирует его
+// само, и нажатие «Повторить» приносит модели текст сообщения вместе с вопросом (мост, w6).
+test("a mid-answer break quotes the owner's question, cut to 120 characters", () => {
+  const short = humanizeProviderError({
+    message: "terminated",
+    details: { answerStarted: true },
+    provider: "claude",
+    question: "Какая погода\nв Ташкенте?",
+  });
+  assert.match(
+    short.ru,
+    /^Связь с Anthropic оборвалась на середине ответа на «Какая погода в Ташкенте\?»\. Повторить\?/u,
+  );
+  assert.match(
+    short.en,
+    /in the middle of the answer to «Какая погода в Ташкенте\?»\. Try again\?/u,
+  );
+  const long = humanizeProviderError({
+    message: "terminated",
+    details: { answerStarted: true },
+    question: "а".repeat(200),
+  });
+  assert.match(long.ru, new RegExp(`«${"а".repeat(119)}…»`, "u"));
+});
+
+test("the quote cannot open a tag or markup in the rich message", () => {
+  fc.assert(
+    fc.property(fc.string({ minLength: 1, maxLength: 300 }), (question) => {
+      const text = humanizeProviderError({
+        message: "terminated",
+        details: { answerStarted: true },
+        question,
+      }).ru;
+      assert.equal((text.match(/<tg-button[\s>]/gu) ?? []).length, 1);
+      assert.equal((text.match(/<\/tg-button>/gu) ?? []).length, 1);
+      assert.equal((text.match(/</gu) ?? []).length, 4);
+      const quote = /на «([\s\S]*)»\. Повторить/u.exec(text)?.[1] ?? "";
+      assert.doesNotMatch(quote.replace(/\\./gu, ""), /[\\*_#|]/u);
+      assert.doesNotMatch(quote, /\n/u);
+    }),
+  );
+});

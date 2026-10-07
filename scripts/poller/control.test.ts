@@ -3858,3 +3858,90 @@ test(`property: the message text for a tap never throws and never exceeds the li
     { seed: SEED, numRuns: 300 },
   );
 });
+
+// Первый запрос хода оборвался посреди ответа: в истории сессии вопроса нет, и модель
+// узнаёт его только из текста нажатия «Повторить» — сообщение об обрыве цитирует вопрос.
+// Цепочка целиком: текст канала → сообщение, как его вернёт Telegram → мост → ход eve с
+// пустой историей.
+test("a Try again tap after a first-request break brings the question to an empty history", async () => {
+  const { telegramFailureMessage } =
+    await import("#lib/telegram-failure-notice.ts");
+  const question = "Сколько стоит *ремонт* кухни в Ташкенте?";
+  const failure = telegramFailureMessage(
+    {
+      message: "terminated",
+      details: { errorId: "e-1", attempts: 1, answerStarted: true },
+      question,
+    },
+    "claude",
+  );
+  const [shown = ""] = failure.split("\n\n<tg-button-row>");
+  const data = /data="([^"]+)"/u.exec(failure)?.[1] ?? "";
+  assert.equal(data, "Повторить");
+  // Telegram отдаёт rich-сообщение блоками: абзац уже без экранирования разметки.
+  const update = modelTap(931, 1931, data, {
+    rich_message: {
+      blocks: [
+        { type: "paragraph", text: shown.replace(/\\(.)/gu, "$1") },
+        { type: "buttons", buttons: [{ text: data, callback_data: data }] },
+      ],
+    },
+  });
+  const { deps } = tapDeps();
+  assert.equal(await handleControl(update, deps), false);
+  const turnText = (update.message as { text?: string }).text ?? "";
+  assert.ok(turnText.startsWith("Повторить\n\n(кнопка под сообщением Ивы: «"));
+
+  const { MockLanguageModelV4, convertArrayToReadableStream } =
+    await import("ai/test");
+  const { createToolLoopHarness } =
+    await import("../../node_modules/eve/dist/src/harness/tool-loop.js");
+  const prompts: string[] = [];
+  const model = new MockLanguageModelV4({
+    doStream: (options) => {
+      prompts.push(JSON.stringify(options.prompt));
+      return Promise.resolve({
+        stream: convertArrayToReadableStream([
+          { type: "text-start", id: "t" },
+          { type: "text-delta", id: "t", delta: "ok" },
+          { type: "text-end", id: "t" },
+          {
+            type: "finish",
+            finishReason: { unified: "stop", raw: "stop" },
+            usage: {
+              inputTokens: {
+                total: 1,
+                noCache: 1,
+                cacheRead: 0,
+                cacheWrite: 0,
+              },
+              outputTokens: { total: 1, text: 1, reasoning: 0 },
+            },
+          },
+        ]),
+      });
+    },
+  });
+  const step = createToolLoopHarness({
+    mode: "conversation",
+    tools: new Map(),
+    resolveModel: () => Promise.resolve(model),
+    handleEvent: () => Promise.resolve(),
+  });
+  const result = await step(
+    {
+      agent: { system: "Ты Ива.", tools: [], modelReference: { id: "t/m" } },
+      compaction: { threshold: 100_000, recentWindowSize: 100 },
+      continuationToken: "t",
+      sessionId: "t",
+      history: [],
+    },
+    { message: turnText },
+  );
+  assert.equal(result.settledTurn?.output, "ok");
+  assert.equal(prompts.length, 1);
+  assert.ok(
+    prompts[0]?.includes("Сколько стоит *ремонт* кухни в Ташкенте?"),
+    prompts[0],
+  );
+});
