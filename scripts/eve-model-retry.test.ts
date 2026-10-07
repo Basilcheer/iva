@@ -244,41 +244,310 @@ void test("failure sequences never exceed three requests and permanent errors ar
   );
 });
 
-void test("an opened stream is never replayed, even before text or after arbitrary partial text", async (t) => {
+/** A body that delivered some parts and then lost its connection. */
+function broken(
+  parts: LanguageModelV4StreamPart[],
+  failure: unknown = reset(),
+): ReadableStream<LanguageModelV4StreamPart> {
+  const queue = [...parts];
+  // Pull, not start: error() in start would drop the parts still queued.
+  return new ReadableStream({
+    pull(controller) {
+      const part = queue.shift();
+      if (part === undefined) controller.error(failure);
+      else controller.enqueue(part);
+    },
+  });
+}
+/** What undici says when a body breaks off: eve reads it as a network failure. */
+const reset = () =>
+  Object.assign(new Error("terminated"), { name: "TypeError" });
+/** A provider error that names itself repeatable (ClaudeCliError on a broken relay stream). */
+const flagged = () =>
+  Object.assign(new Error("api.anthropic.com did not finish the response"), {
+    isRetryable: true,
+  });
+const usage = {
+  inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 },
+  outputTokens: { total: 1, text: 1, reasoning: 0 },
+};
+const PREAMBLES = ["pre", "thinking", "503"] as const;
+type Outcome =
+  | (typeof PREAMBLES)[number]
+  | "401"
+  | "text"
+  | "args"
+  | "call"
+  | "okText"
+  | "okCall";
+const OUTCOMES: readonly Outcome[] = [
+  ...PREAMBLES,
+  "401",
+  "text",
+  "args",
+  "call",
+  "okText",
+  "okCall",
+];
+const ANSWER_BREAKS: ReadonlySet<Outcome> = new Set(["text", "args", "call"]);
+
+/** One model request with the given outcome; tool call ids differ per request. */
+function attempt(
+  outcome: Outcome,
+  call: number,
+  failure: unknown,
+): LanguageModelV4StreamPart[] | ReadableStream<LanguageModelV4StreamPart> {
+  const toolCall: LanguageModelV4StreamPart = {
+    type: "tool-call",
+    toolCallId: `call-${call}`,
+    toolName: "change",
+    input: "{}",
+  };
+  switch (outcome) {
+    case "pre":
+      return broken([], failure);
+    case "thinking":
+      return broken(
+        [
+          { type: "reasoning-start", id: "r" },
+          { type: "reasoning-delta", id: "r", delta: "hm" },
+        ],
+        failure,
+      );
+    case "503":
+      throw error(503);
+    case "401":
+      throw error(401);
+    case "text":
+      return broken(
+        [
+          { type: "text-start", id: "t" },
+          { type: "text-delta", id: "t", delta: "half an ans" },
+        ],
+        failure,
+      );
+    case "args":
+      return broken(
+        [
+          { type: "tool-input-start", id: `call-${call}`, toolName: "change" },
+          { type: "tool-input-delta", id: `call-${call}`, delta: "{" },
+        ],
+        failure,
+      );
+    case "call":
+      return broken([toolCall], failure);
+    case "okText":
+      return success();
+    case "okCall":
+      return [
+        toolCall,
+        {
+          type: "finish",
+          finishReason: { unified: "tool-calls", raw: "tool-calls" },
+          usage,
+        },
+      ];
+  }
+}
+
+function changeTool(onRun: () => void): HarnessToolMap {
+  return new Map([
+    [
+      "change",
+      {
+        name: "change",
+        description: "Change state once.",
+        inputSchema: z.object({}),
+        execute: () => {
+          onRun();
+          return "changed";
+        },
+      },
+    ],
+  ]);
+}
+
+function scripted(outcomes: readonly Outcome[], failure: () => unknown) {
+  let calls = 0;
+  const model = new MockLanguageModelV4({
+    doStream: async () => {
+      const outcome = outcomes[Math.min(calls, outcomes.length - 1)];
+      calls++;
+      const body = attempt(outcome, calls, failure());
+      return {
+        stream: Array.isArray(body) ? convertArrayToReadableStream(body) : body,
+      };
+    },
+  });
+  return { model, calls: () => calls };
+}
+
+/** Requests the owner's rule allows: a preamble failure is repeated, up to three in all. */
+function expectedCalls(outcomes: readonly Outcome[]): number {
+  let calls = 0;
+  for (;;) {
+    const outcome = outcomes[Math.min(calls, outcomes.length - 1)];
+    calls++;
+    if (!(PREAMBLES as readonly Outcome[]).includes(outcome) || calls === 3)
+      return calls;
+  }
+}
+
+const ownerTexts = (events: ReadonlyArray<{ type: string; data?: unknown }>) =>
+  events.filter((event) => {
+    const data = event.data as
+      { finishReason?: string; message?: string | null } | undefined;
+    return (
+      event.type === "message.completed" &&
+      data?.finishReason !== "tool-calls" &&
+      typeof data?.message === "string" &&
+      data.message.length > 0
+    );
+  }).length;
+
+void test("a stream broken before the first answer part is requested again, reasoning included", async (t) => {
+  mute(t);
+  for (const first of ["pre", "thinking"] as const) {
+    const waits = fastWaits(t);
+    const provider = scripted([first, "okText"], reset);
+    const fx = fixture(provider.model);
+    const result = await fx.run();
+    assert.equal(result.settledTurn?.output, "ok", first);
+    assert.equal(provider.calls(), 2, first);
+    assert.deepEqual(waits, [5_000], first);
+    assert.equal(ownerTexts(fx.events), 1, first);
+    assert.equal(
+      fx.events.filter((event) => event.type === "step.started").length,
+      1,
+    );
+    t.mock.restoreAll();
+    mute(t);
+  }
+});
+
+void test("a stream broken after the first answer part fails the turn once and says so in details", async (t) => {
   mute(t);
   fastWaits(t);
   await fc.assert(
-    fc.asyncProperty(fc.option(fc.string(), { nil: null }), async (text) => {
-      let calls = 0;
-      const model = new MockLanguageModelV4({
-        doStream: async () => {
-          calls++;
-          const parts: LanguageModelV4StreamPart[] =
-            text === null
-              ? []
-              : [
-                  { type: "text-start", id: "partial" },
-                  { type: "text-delta", id: "partial", delta: text },
-                ];
-          return {
-            stream: convertArrayToReadableStream([
-              ...parts,
-              { type: "error", error: error() },
-            ]),
-          };
-        },
-      });
-      const fx = fixture(model);
-      const result = await fx.run();
-      assert.equal(calls, 1);
-      assert.equal(result.next, null);
-      assert.equal(result.settledTurn?.isError, true);
-      assert.equal(
-        fx.events.filter((event) => event.type === "message.appended").length,
-        text ? 1 : 0,
+    fc.asyncProperty(
+      fc.constantFrom("text", "args", "call"),
+      fc.constantFrom(reset, flagged),
+      async (outcome, failure) => {
+        let effects = 0;
+        const provider = scripted([outcome, "okText"], failure);
+        const fx = fixture(
+          provider.model,
+          undefined,
+          changeTool(() => effects++),
+        );
+        const result = await fx.run();
+        assert.equal(provider.calls(), 1);
+        assert.equal(result.next, null);
+        assert.equal(result.settledTurn?.isError, true);
+        assert.ok(effects <= 1);
+        assert.equal(ownerTexts(fx.events), 0);
+        const failed = fx.events.filter(
+          (event) => event.type === "turn.failed",
+        );
+        assert.equal(failed.length, 1);
+        const details = (
+          failed[0]?.data as { details?: Record<string, unknown> }
+        ).details;
+        assert.equal(details?.answerStarted, true);
+        assert.equal(details?.attempts, 1);
+        assert.equal(typeof details?.errorId, "string");
+        const resumed = await fx.step(result.session, { message: "Повторить" });
+        assert.equal(resumed.settledTurn?.output, "ok");
+      },
+    ),
+    { numRuns: 30 },
+  );
+});
+
+// Случай c1 07.10.2026: шаги с инструментами прошли, следующий запрос оборвался посреди
+// ответа. Ход закрыт, сессия принимает «Повторить» (тап кнопки), и модель видит вопрос и
+// результаты инструментов из истории: сами инструменты второй раз не выполняются.
+void test("after a mid-answer break the Try again turn sees the question and the tool results", async (t) => {
+  mute(t);
+  fastWaits(t);
+  let effects = 0;
+  const prompts: unknown[] = [];
+  let calls = 0;
+  const model = new MockLanguageModelV4({
+    doStream: async ({ prompt }) => {
+      prompts.push(prompt);
+      calls++;
+      const body = attempt(
+        calls === 1 ? "okCall" : calls === 2 ? "text" : "okText",
+        calls,
+        reset(),
       );
-    }),
-    { numRuns: 100 },
+      return {
+        stream: Array.isArray(body) ? convertArrayToReadableStream(body) : body,
+      };
+    },
+  });
+  const fx = fixture(
+    model,
+    undefined,
+    changeTool(() => effects++),
+  );
+  const toolStep = await fx.run();
+  assert.equal(
+    typeof toolStep.next,
+    "function",
+    "the tool step continues the turn",
+  );
+  const broke = await fx.step(toolStep.session, undefined);
+  assert.equal(broke.settledTurn?.isError, true);
+  assert.equal(calls, 2, "the broken answer is not requested again");
+  const again = await fx.step(broke.session, { message: "Повторить" });
+  assert.equal(again.settledTurn?.output, "ok");
+  assert.equal(effects, 1);
+  const seen = JSON.stringify(prompts.at(-1));
+  assert.match(seen, /hello/u);
+  assert.match(seen, /changed/u);
+  assert.match(seen, /Повторить/u);
+});
+
+void test("for any sequence of outcomes no tool runs twice and the owner gets at most one text", async (t) => {
+  mute(t);
+  fastWaits(t);
+  await fc.assert(
+    fc.asyncProperty(
+      fc.array(fc.constantFrom(...OUTCOMES), { minLength: 1, maxLength: 5 }),
+      fc.constantFrom(reset, flagged),
+      async (outcomes, failure) => {
+        const runs = new Map<number, number>();
+        let effects = 0;
+        const provider = scripted(outcomes, failure);
+        const fx = fixture(
+          provider.model,
+          undefined,
+          changeTool(() => {
+            effects++;
+            runs.set(provider.calls(), (runs.get(provider.calls()) ?? 0) + 1);
+          }),
+        );
+        await fx.run();
+        assert.equal(provider.calls(), expectedCalls(outcomes));
+        assert.ok(effects <= 1, `tool ran ${effects} times`);
+        for (const count of runs.values()) assert.ok(count <= 1);
+        assert.ok(ownerTexts(fx.events) <= 1);
+        const last = outcomes[Math.min(provider.calls(), outcomes.length) - 1];
+        if (ANSWER_BREAKS.has(last)) {
+          const failed = fx.events.find(
+            (event) => event.type === "turn.failed",
+          );
+          const details = (
+            failed?.data as { details?: Record<string, unknown> }
+          ).details;
+          assert.equal(details?.answerStarted, true);
+          assert.equal(details?.attempts, provider.calls());
+        }
+      },
+    ),
+    { numRuns: 150 },
   );
 });
 
