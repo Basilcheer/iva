@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/require-await -- Async model doubles implement the SDK Promise interface, including rejected calls. */
-// Real Eve boundary: one owner of repeated model requests, until the first answer part.
+// Real Eve boundary: one owner of repeated model requests, for any break before finish.
 // Random cases print their seed in the test name; FC_SEED repeats a run.
 import assert from "node:assert/strict";
 import { getEventListeners } from "node:events";
@@ -276,97 +276,77 @@ const usage = {
 };
 // A bare tool call that arrived before the break is held until finish and never reaches
 // eve: for eve nothing of the answer arrived, and the request is simply made again.
-const PREAMBLES = ["pre", "thinking", "503", "call"] as const;
-type Outcome =
-  | (typeof PREAMBLES)[number]
-  | "401"
-  | "text"
-  | "args"
-  | "argsCall"
-  | "okText"
-  | "okCall";
-const OUTCOMES: readonly Outcome[] = [
-  ...PREAMBLES,
-  "401",
+// Outcomes the rule repeats: every break before finish and every transient HTTP status.
+// What stops it: a refusal (401), a finished answer, or three requests.
+const BREAKS = [
+  "pre",
+  "thinking",
+  "503",
+  "call",
   "text",
   "args",
   "argsCall",
-  "okText",
-  "okCall",
-];
+] as const;
+type Outcome = (typeof BREAKS)[number] | "401" | "okText" | "okCall";
+const OUTCOMES: readonly Outcome[] = [...BREAKS, "401", "okText", "okCall"];
 const ANSWER_BREAKS: ReadonlySet<Outcome> = new Set([
   "text",
   "args",
   "argsCall",
 ]);
 
-/** One model request with the given outcome; tool call ids differ per request. */
+const toolCallOf = (call: number): LanguageModelV4StreamPart => ({
+  type: "tool-call",
+  toolCallId: `call-${call}`,
+  toolName: "change",
+  input: "{}",
+});
+const inputOf = (call: number, delta: string): LanguageModelV4StreamPart[] => [
+  { type: "tool-input-start", id: `call-${call}`, toolName: "change" },
+  { type: "tool-input-delta", id: `call-${call}`, delta },
+];
+/** Parts before the break of each breaking outcome; tool call ids differ per request. */
+const BEFORE_BREAK: Record<
+  "pre" | "thinking" | "call" | "text" | "args" | "argsCall",
+  (call: number) => LanguageModelV4StreamPart[]
+> = {
+  pre: () => [],
+  thinking: () => [
+    { type: "reasoning-start", id: "r" },
+    { type: "reasoning-delta", id: "r", delta: "hm" },
+  ],
+  call: (call) => [toolCallOf(call)],
+  text: () => [
+    { type: "text-start", id: "t" },
+    { type: "text-delta", id: "t", delta: "half an ans" },
+  ],
+  args: (call) => inputOf(call, "{"),
+  argsCall: (call) => [
+    ...inputOf(call, "{}"),
+    { type: "tool-input-end", id: `call-${call}` },
+    toolCallOf(call),
+  ],
+};
+
+/** One model request with the given outcome. */
 function attempt(
   outcome: Outcome,
   call: number,
   failure: unknown,
 ): LanguageModelV4StreamPart[] | ReadableStream<LanguageModelV4StreamPart> {
-  const toolCall: LanguageModelV4StreamPart = {
-    type: "tool-call",
-    toolCallId: `call-${call}`,
-    toolName: "change",
-    input: "{}",
-  };
-  switch (outcome) {
-    case "pre":
-      return broken([], failure);
-    case "thinking":
-      return broken(
-        [
-          { type: "reasoning-start", id: "r" },
-          { type: "reasoning-delta", id: "r", delta: "hm" },
-        ],
-        failure,
-      );
-    case "503":
-      throw error(503);
-    case "401":
-      throw error(401);
-    case "text":
-      return broken(
-        [
-          { type: "text-start", id: "t" },
-          { type: "text-delta", id: "t", delta: "half an ans" },
-        ],
-        failure,
-      );
-    case "args":
-      return broken(
-        [
-          { type: "tool-input-start", id: `call-${call}`, toolName: "change" },
-          { type: "tool-input-delta", id: `call-${call}`, delta: "{" },
-        ],
-        failure,
-      );
-    case "call":
-      return broken([toolCall], failure);
-    case "argsCall":
-      return broken(
-        [
-          { type: "tool-input-start", id: `call-${call}`, toolName: "change" },
-          { type: "tool-input-delta", id: `call-${call}`, delta: "{}" },
-          { type: "tool-input-end", id: `call-${call}` },
-          toolCall,
-        ],
-        failure,
-      );
-    case "okText":
-      return success();
-    case "okCall":
-      return [
-        toolCall,
-        {
-          type: "finish",
-          finishReason: { unified: "tool-calls", raw: "tool-calls" },
-          usage,
-        },
-      ];
-  }
+  if (outcome === "503") throw error(503);
+  if (outcome === "401") throw error(401);
+  if (outcome === "okText") return success();
+  if (outcome === "okCall")
+    return [
+      toolCallOf(call),
+      {
+        type: "finish",
+        finishReason: { unified: "tool-calls", raw: "tool-calls" },
+        usage,
+      },
+    ];
+  return broken(BEFORE_BREAK[outcome](call), failure);
 }
 
 function changeTool(onRun: () => void): HarnessToolMap {
@@ -401,13 +381,13 @@ function scripted(outcomes: readonly Outcome[], failure: () => unknown) {
   return { model, calls: () => calls };
 }
 
-/** Requests the owner's rule allows: a preamble failure is repeated, up to three in all. */
+/** Requests the owner's rule allows: any break before finish is repeated, three in all. */
 function expectedCalls(outcomes: readonly Outcome[]): number {
   let calls = 0;
   for (;;) {
     const outcome = outcomes[Math.min(calls, outcomes.length - 1)];
     calls++;
-    if (!(PREAMBLES as readonly Outcome[]).includes(outcome) || calls === 3)
+    if (!(BREAKS as readonly Outcome[]).includes(outcome) || calls === 3)
       return calls;
   }
 }
@@ -472,7 +452,10 @@ void test("a tool call before a break never runs; the request is made again and 
   assert.equal(requested.length, 1, "the owner sees one tool call");
 });
 
-void test(`a stream broken after the first answer part fails the turn once and says so in details (fast-check seed ${SEED})`, async (t) => {
+// Правило лида 07.10.2026: обрыв в любой момент до finish повторяется. Владельцу во время
+// потока ничего не уходит, частичный ответ в историю не попадает, вызов инструмента
+// придержан до finish — повтор ничего не дублирует.
+void test(`a stream broken in the middle of the answer is requested again and leaves one answer (fast-check seed ${SEED})`, async (t) => {
   mute(t);
   fastWaits(t);
   await fc.assert(
@@ -488,10 +471,44 @@ void test(`a stream broken after the first answer part fails the turn once and s
           changeTool(() => effects++),
         );
         const result = await fx.run();
-        assert.equal(provider.calls(), 1);
+        assert.equal(provider.calls(), 2);
+        assert.equal(result.settledTurn?.output, "ok");
+        assert.equal(effects, 0, "a tool call before finish never runs");
+        assert.equal(ownerTexts(fx.events), 1);
+        const assistants = result.session.history.filter(
+          (message) => message.role === "assistant",
+        );
+        assert.equal(assistants.length, 1, "one assistant answer in history");
+        assert.doesNotMatch(
+          JSON.stringify(result.session.history),
+          /half an ans/u,
+        );
+      },
+    ),
+    { numRuns: 30, seed: SEED },
+  );
+});
+
+void test(`three mid-answer breaks close the turn with answerStarted and three attempts (fast-check seed ${SEED})`, async (t) => {
+  mute(t);
+  fastWaits(t);
+  await fc.assert(
+    fc.asyncProperty(
+      fc.constantFrom("text", "args", "argsCall"),
+      fc.constantFrom(reset, flagged),
+      async (outcome, failure) => {
+        let effects = 0;
+        const provider = scripted([outcome], failure);
+        const fx = fixture(
+          provider.model,
+          undefined,
+          changeTool(() => effects++),
+        );
+        const result = await fx.run();
+        assert.equal(provider.calls(), 3);
         assert.equal(result.next, null);
         assert.equal(result.settledTurn?.isError, true);
-        assert.equal(effects, 0, "a tool call before finish never runs");
+        assert.equal(effects, 0);
         assert.equal(ownerTexts(fx.events), 0);
         const failed = fx.events.filter(
           (event) => event.type === "turn.failed",
@@ -501,20 +518,18 @@ void test(`a stream broken after the first answer part fails the turn once and s
           failed[0]?.data as { details?: Record<string, unknown> }
         ).details;
         assert.equal(details?.answerStarted, true);
-        assert.equal(details?.attempts, 1);
+        assert.equal(details?.attempts, 3);
         assert.equal(typeof details?.errorId, "string");
-        const resumed = await fx.step(result.session, { message: "Повторить" });
-        assert.equal(resumed.settledTurn?.output, "ok");
       },
     ),
-    { numRuns: 30, seed: SEED },
+    { numRuns: 20, seed: SEED },
   );
 });
 
-// Случай c1 07.10.2026: шаги с инструментами прошли, следующий запрос оборвался посреди
-// ответа. Ход закрыт, сессия принимает «Повторить» (тап кнопки), и модель видит вопрос и
-// результаты инструментов из истории: сами инструменты второй раз не выполняются.
-void test("after a mid-answer break the Try again turn sees the question and the tool results", async (t) => {
+// Случай c1 07.10.2026: шаги с инструментами прошли, следующий запрос трижды оборвался
+// посреди ответа. Ход закрыт, сессия принимает «Повторить» (тап кнопки), и модель видит
+// вопрос и результаты инструментов из истории: сами инструменты второй раз не выполняются.
+void test("after three mid-answer breaks the Try again turn sees the question and the tool results", async (t) => {
   mute(t);
   fastWaits(t);
   let effects = 0;
@@ -524,11 +539,8 @@ void test("after a mid-answer break the Try again turn sees the question and the
     doStream: async ({ prompt }) => {
       prompts.push(prompt);
       calls++;
-      const body = attempt(
-        calls === 1 ? "okCall" : calls === 2 ? "text" : "okText",
-        calls,
-        reset(),
-      );
+      const outcome = calls === 1 ? "okCall" : calls <= 4 ? "text" : "okText";
+      const body = attempt(outcome, calls, reset());
       return {
         stream: Array.isArray(body) ? convertArrayToReadableStream(body) : body,
       };
@@ -547,7 +559,7 @@ void test("after a mid-answer break the Try again turn sees the question and the
   );
   const broke = await fx.step(toolStep.session, undefined);
   assert.equal(broke.settledTurn?.isError, true);
-  assert.equal(calls, 2, "the broken answer is not requested again");
+  assert.equal(calls, 4, "the broken answer is requested three times");
   const again = await fx.step(broke.session, { message: "Повторить" });
   assert.equal(again.settledTurn?.output, "ok");
   assert.equal(effects, 1);
@@ -982,7 +994,7 @@ void test("a provider-executed call, then a break: the answer has started, no se
   );
 });
 
-void test("a call, then text, then a break: no second request and the tool never ran", async (t) => {
+void test("a call, then text, then a break: requested again, the tool never ran", async (t) => {
   mute(t);
   fastWaits(t);
   const runs: Record<string, number> = {};
@@ -995,7 +1007,7 @@ void test("a call, then text, then a break: no second request and the tool never
       ]),
   ]);
   await fixture(provider.model, undefined, twoTools(runs)).run();
-  assert.equal(provider.calls(), 1);
+  assert.equal(provider.calls(), 3);
   assert.equal(runs.a ?? 0, 0);
 });
 
