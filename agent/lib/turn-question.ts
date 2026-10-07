@@ -1,36 +1,46 @@
-// Последнее принятое сообщение владельца в чате — для цитаты в сообщении об обрыве посреди
-// ответа. Если оборвался первый запрос хода, eve не кладёт вопрос в историю сессии, и без
-// цитаты нажатие «Повторить» пришло бы к модели без вопроса (решение лида 07.10.2026).
+// Вопрос хода — текст последнего принятого сообщения владельца в чате — для сообщения об
+// обрыве посреди ответа. Если оборвался первый запрос хода, eve не кладёт вопрос в историю
+// сессии; поэтому канал цитирует его (коротко, для человека), а мост по нажатию «Повторить»
+// подставляет модели вопрос целиком (scripts/poller/control.ts). Живёт в записи чата
+// run-status: её читают оба процесса, и она переживает перезапуск (решение лида 07.10.2026).
 //
-// Память процесса, как у заявок на уведомление о сбое (telegram-failure-notice.ts): приём
-// сообщения и событие сбоя живут в одном модуле канала. После перезапуска цитаты нет —
-// сообщение уходит без неё. В режиме «по очереди» мост держит следующее сообщение до конца
-// хода, поэтому последнее принятое и есть вопрос хода; в режиме «сразу» это последнее
-// сообщение владельца, и цитата называет его.
+// Сообщение без текста (голос, фото без подписи) старый вопрос стирает: «Повторить» не
+// должен отвечать на предыдущее сообщение. Вложение помечается: кнопка его не вернёт, и
+// сообщение об обрыве просит прислать его ещё раз. В режиме «по очереди» мост держит
+// следующее сообщение до конца хода, поэтому последнее принятое и есть вопрос хода; в режиме
+// «сразу» это последнее сообщение владельца.
+import { isRetryTap } from "./error-humanizer.ts";
+import { getChatStatus, setChatStatusIf } from "./run-status.ts";
 
-const QUESTIONS_KEPT = 256;
-const questions = new Map<string, string>();
+/** Предел текста вопроса: одно сообщение Telegram. */
+export const TURN_QUESTION_LIMIT = 4096;
 
-/** Подписи кнопки «Повторить»: нажатие несёт старую цитату, новым вопросом оно не станет. */
-const RETRY_LABELS = new Set(["Повторить", "Try again"]);
+export type TurnQuestion = { readonly text: string; readonly media: boolean };
 
-function isRetryTap(text: string): boolean {
-  return RETRY_LABELS.has(text.split("\n", 1)[0]?.trim() ?? "");
+export function rememberTurnQuestion(
+  chatKey: string,
+  { text, media }: TurnQuestion,
+): void {
+  const question = Array.from(text.trim())
+    .slice(0, TURN_QUESTION_LIMIT)
+    .join("");
+  if (isRetryTap(question) && turnQuestion(chatKey) !== undefined) return;
+  // touch: false — запись вопроса не говорит «ход жив» и не продлевает чужой ход.
+  setChatStatusIf(
+    chatKey,
+    {},
+    {
+      turnQuestion: question === "" ? null : question,
+      turnQuestionMedia: media ? true : null,
+    },
+    { touch: false },
+  );
 }
 
-export function rememberTurnQuestion(chatKey: string, text: string): void {
-  const question = text.trim();
-  if (question === "") return;
-  if (isRetryTap(question) && questions.has(chatKey)) return;
-  questions.delete(chatKey);
-  questions.set(chatKey, question);
-  while (questions.size > QUESTIONS_KEPT) {
-    const oldest = questions.keys().next().value;
-    if (oldest === undefined) break;
-    questions.delete(oldest);
-  }
-}
-
-export function turnQuestion(chatKey: string): string | undefined {
-  return questions.get(chatKey);
+export function turnQuestion(chatKey: string): TurnQuestion | undefined {
+  const status = getChatStatus(chatKey);
+  const text =
+    typeof status?.turnQuestion === "string" ? status.turnQuestion : "";
+  const media = status?.turnQuestionMedia === true;
+  return text === "" && !media ? undefined : { text, media };
 }

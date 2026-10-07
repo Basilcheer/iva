@@ -132,6 +132,22 @@ function repeated(count: number): ProviderErrorText {
   };
 }
 
+/** Подпись и data кнопки «Повторить» под сообщением об обрыве посреди ответа. */
+export const RETRY_LABEL = { en: "Try again", ru: "Повторить" } as const;
+
+/** Текст хода по нажатию «Повторить»: первой строкой идёт data кнопки (мост). */
+export function isRetryTap(text: string): boolean {
+  const head = text.split("\n", 1)[0]?.trim() ?? "";
+  return head === RETRY_LABEL.en || head === RETRY_LABEL.ru;
+}
+
+/** Сообщение об обрыве посреди ответа на любом языке: по нему мост узнаёт свою кнопку. */
+export function isBreakNotice(text: string): boolean {
+  return /оборвалась на середине ответа|broke off in the middle of the answer/u.test(
+    text,
+  );
+}
+
 /** Кнопка под сообщением: нажатие приходит ходу текстом data и текстом сообщения. */
 function retryButton(label: string): string {
   return `<tg-button-row><tg-button type="callback_data" data="${label}">${label}</tg-button></tg-button-row>`;
@@ -239,8 +255,8 @@ function midAnswerAsk({
 }: Situation): ProviderErrorText {
   if (!media)
     return {
-      en: ` Try again?\n\n${retryButton("Try again")}`,
-      ru: ` Повторить?\n\n${retryButton("Повторить")}`,
+      en: ` ${RETRY_LABEL.en}?\n\n${retryButton(RETRY_LABEL.en)}`,
+      ru: ` ${RETRY_LABEL.ru}?\n\n${retryButton(RETRY_LABEL.ru)}`,
     };
   return question !== "" && !group
     ? {

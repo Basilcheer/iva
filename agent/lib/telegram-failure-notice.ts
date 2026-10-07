@@ -16,6 +16,10 @@ export type TelegramFailureData = {
   details?: unknown;
   /** Последнее принятое сообщение владельца (turn-question.ts): цитата при обрыве. */
   question?: string | undefined;
+  /** В том сообщении было вложение: просим прислать его ещё раз вместо кнопки. */
+  media?: boolean | undefined;
+  /** Групповой чат: цитата не показывается. */
+  group?: boolean | undefined;
 };
 
 type FailureNotice = { turnId: string | null; notifiedAt: number };
@@ -65,6 +69,8 @@ export function telegramFailureMessage(
     message: data.message,
     details: data.details,
     question: data.question,
+    media: data.media,
+    group: data.group,
     provider,
   });
   return tr(text.en, text.ru);

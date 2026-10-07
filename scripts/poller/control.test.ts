@@ -3866,7 +3866,10 @@ test(`property: the message text for a tap never throws and never exceeds the li
 test("a Try again tap after a first-request break brings the question to an empty history", async () => {
   const { telegramFailureMessage } =
     await import("#lib/telegram-failure-notice.ts");
-  const question = "Сколько стоит *ремонт* кухни в Ташкенте?";
+  // Вопрос длиннее цитаты (120 знаков): модель обязана получить его целиком, а не цитату.
+  const question = `Сколько стоит *ремонт* кухни в Ташкенте? ${"подробности ".repeat(30)}КОНЕЦ-ВОПРОСА`;
+  const { rememberTurnQuestion } = await import("#lib/turn-question.ts");
+  rememberTurnQuestion("7:", { text: question, media: false });
   const failure = telegramFailureMessage(
     {
       message: "terminated",
@@ -3940,8 +3943,19 @@ test("a Try again tap after a first-request break brings the question to an empt
   );
   assert.equal(result.settledTurn?.output, "ok");
   assert.equal(prompts.length, 1);
-  assert.ok(
-    prompts[0]?.includes("Сколько стоит *ремонт* кухни в Ташкенте?"),
-    prompts[0],
-  );
+  assert.ok(prompts[0]?.includes(question), prompts[0]);
+});
+
+// Своя кнопка модели с той же подписью под другим сообщением вопрос не подставляет: это
+// реплика владельца, а не нажатие под сообщением об обрыве.
+test("a model's own «Повторить» button under another message brings no stored question", async () => {
+  const { rememberTurnQuestion } = await import("#lib/turn-question.ts");
+  rememberTurnQuestion("7:", { text: "СКРЫТЫЙ-ВОПРОС", media: false });
+  const update = modelTap(932, 1932, "Повторить", {
+    text: "Отправить письмо Юрию ещё раз?",
+  });
+  const { deps } = tapDeps();
+  assert.equal(await handleControl(update, deps), false);
+  const turnText = (update.message as { text?: string }).text ?? "";
+  assert.doesNotMatch(turnText, /СКРЫТЫЙ-ВОПРОС/u);
 });

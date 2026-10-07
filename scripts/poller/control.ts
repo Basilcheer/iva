@@ -38,6 +38,8 @@ import {
 } from "../lib/telegram-queue.ts";
 import type { TelegramFlowState } from "../lib/tg-flow.ts";
 import { getChatStatus, RUN_STALE_MS } from "#lib/run-status.ts";
+import { isBreakNotice, isRetryTap } from "#lib/error-humanizer.ts";
+import { turnQuestion } from "#lib/turn-question.ts";
 import { readEnvFresh } from "../lib/env-file.ts";
 import {
   formatUsageReport,
@@ -310,7 +312,7 @@ export function applyTelegramButtonTap(
       message_id: message.message_id,
       chat: { ...chat },
       from: { ...from, is_bot: false },
-      text: tapTurnText(callback.data, message),
+      text: tapTurnText(callback.data, message, chatKey(update)),
       ...(message.date === undefined ? {} : { date: message.date }),
       ...(message.message_thread_id === undefined
         ? {}
@@ -348,11 +350,30 @@ function clipTapContext(text: string): string {
 function tapTurnText(
   data: string,
   message: TelegramMessage | undefined,
+  key: string | null,
 ): string {
   const context = tapContextText(message);
   if (context === "") return data;
   const label = tr("button under Iva's message", "кнопка под сообщением Ивы");
-  return `${data}\n\n(${label}: «${context}»)`;
+  return `${data}\n\n(${label}: «${context}»)${fullQuestion(data, context, key)}`;
+}
+
+/**
+ * «Повторить» под сообщением об обрыве посреди ответа: в сообщении вопрос стоит цитатой до
+ * 120 знаков, а модели нужен целиком — eve могла не сохранить его в сессии, если оборвался
+ * первый запрос хода. Полный текст канал положил в запись чата run-status
+ * (agent/lib/turn-question.ts). Своя кнопка модели с той же подписью его не получает.
+ */
+function fullQuestion(
+  data: string,
+  context: string,
+  key: string | null,
+): string {
+  if (key === null || !isRetryTap(data) || !isBreakNotice(context)) return "";
+  const question = turnQuestion(key)?.text ?? "";
+  if (question === "") return "";
+  const label = tr("the question in full", "вопрос целиком");
+  return `\n\n(${label}: «${question}»)`;
 }
 
 const PRIVATE_ONLY_COMMANDS = new Set(["/menu", "/model", "/think"]);

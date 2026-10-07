@@ -29,7 +29,11 @@ import {
 // Inbound-пайплайн — единственный вход внутрь: allowlist, решение о диспатче,
 // запись в Vault, медиа со зрением и транскрипцией, inbound-Gate и контекст хода.
 // Канал приносит ему эффекты и сам про разбор входящего ничего не знает.
-import { runTelegramInbound } from "../lib/telegram-inbound.js";
+import {
+  runTelegramInbound,
+  type TelegramInboundMessage,
+} from "../lib/telegram-inbound.js";
+import { mediaFromRaw } from "../lib/telegram-parts.js";
 import { traceOutbox } from "../lib/trace.js";
 import { chatModelSeesImages, describeImage } from "../vision.js";
 import { transcribe } from "../transcribe.js";
@@ -202,25 +206,37 @@ export function outboxTransport(
   return transport;
 }
 
-// Вопрос хода для цитаты в сообщении об обрыве: текст принятого сообщения чата. Голос и
-// картинка без подписи цитаты не дают — сообщение уходит без неё.
+// Вопрос хода для сообщения об обрыве (turn-question.ts): текст принятого сообщения чата и
+// метка вложения. Голос и фото без подписи стирают прежний вопрос.
 async function rememberAccepted<T>(
   chatKey: string,
-  message: { text: string; caption?: string },
+  message: TelegramInboundMessage,
   turn: Promise<T | null>,
 ): Promise<T | null> {
   const accepted = await turn;
   if (accepted !== null)
-    rememberTurnQuestion(chatKey, message.text || (message.caption ?? ""));
+    rememberTurnQuestion(chatKey, {
+      text: message.text || message.caption,
+      media:
+        message.attachments.length > 0 || mediaFromRaw(message.raw) !== null,
+    });
   return accepted;
 }
 
-function chatQuestion(
-  tg: Pick<TelegramHandle, "chatId" | "messageThreadId">,
-): string | undefined {
-  return tg.chatId
+// Что сообщение об обрыве знает о вопросе. Чат не личный или тип неизвестен — цитаты нет:
+// её увидели бы все участники.
+function chatQuestion(channel: {
+  telegram: Pick<TelegramHandle, "chatId" | "messageThreadId">;
+  state: Pick<TelegramChannelState, "chatType">;
+}): { question?: string; media?: boolean; group: boolean } {
+  const tg = channel.telegram;
+  const group = channel.state.chatType !== "private";
+  const asked = tg.chatId
     ? turnQuestion(chatKeyOf(tg.chatId, tg.messageThreadId))
     : undefined;
+  return asked === undefined
+    ? { group }
+    : { question: asked.text, media: asked.media, group };
 }
 
 // Сообщение о сбое хода. Простой текст уходит одним sendMessage, как раньше; текст с кнопкой
@@ -545,7 +561,7 @@ const telegram = telegramChannel({
       await notifyTelegramFailure(
         ctx.session.id,
         data.turnId,
-        { ...data, question: chatQuestion(channel.telegram) },
+        { ...data, ...chatQuestion(channel) },
         failureSender(channel.telegram),
       );
     },
@@ -576,7 +592,7 @@ const telegram = telegramChannel({
       await notifyTelegramFailure(
         data.sessionId,
         null,
-        { ...data, question: chatQuestion(channel.telegram) },
+        { ...data, ...chatQuestion(channel) },
         failureSender(channel.telegram),
       );
     },

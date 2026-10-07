@@ -37,6 +37,7 @@ type HeldSend = {
 type EventOptions = {
   chatId: string;
   sessionId: string;
+  chatType?: string;
 };
 type ChannelEventHandler = (
   data: Record<string, unknown>,
@@ -145,7 +146,11 @@ function traceEvents(): Record<string, unknown>[] {
 
 after(() => rmSync(dataDir, { recursive: true, force: true }));
 
-function eventContext({ chatId, sessionId }: EventOptions) {
+function eventContext({
+  chatId,
+  sessionId,
+  chatType = "private",
+}: EventOptions) {
   const ctx = new ContextContainer();
   ctx.set(SessionKey, {
     auth: { current: null, initiator: null },
@@ -163,7 +168,7 @@ function eventContext({ chatId, sessionId }: EventOptions) {
   const state = {
     ...adapter.state,
     chatId: String(chatId),
-    chatType: "private",
+    chatType,
     messageThreadId: null,
   };
   return {
@@ -582,7 +587,10 @@ test("a stream broken mid-answer posts one Try again button through a rich messa
 test("a mid-answer break quotes the last accepted message of the chat", async () => {
   const chatId = "721";
   const { rememberTurnQuestion } = await import("#lib/turn-question.ts");
-  rememberTurnQuestion(chatKeyOf(chatId), "Сколько <b>стоит</b> *ремонт*?");
+  rememberTurnQuestion(chatKeyOf(chatId), {
+    text: "Сколько <b>стоит</b> *ремонт*?",
+    media: false,
+  });
   const before = apiCalls.length;
   await emitTurnFailed(
     {
@@ -604,6 +612,60 @@ test("a mid-answer break quotes the last accepted message of the chat", async ()
     /in the middle of the answer to «Сколько ‹b›стоит‹\/b› \\\*ремонт\\\*\?»\. Try again\?/u,
   );
   assert.equal((markdown.match(/<tg-button[\s>]/gu) ?? []).length, 1);
+});
+
+async function midAnswerNotice(
+  chatId: string,
+  question: { text: string; media: boolean },
+  chatType = "private",
+): Promise<{ rich: string | null; plain: string | null }> {
+  const { rememberTurnQuestion } = await import("#lib/turn-question.ts");
+  rememberTurnQuestion(chatKeyOf(chatId), question);
+  const before = apiCalls.length;
+  await emitTurnFailed(
+    {
+      code: "MODEL_CALL_FAILED",
+      details: { errorId: `err-${chatId}`, attempts: 1, answerStarted: true },
+      message: "terminated",
+      sequence: 0,
+      turnId: "turn_0",
+    },
+    { chatId, sessionId: `mid-answer-${chatId}`, chatType },
+  );
+  const rich = callsSince(before, "sendRichMessage")[0];
+  const plain = callsSince(before, "sendMessage")[0];
+  return {
+    rich: rich
+      ? String((rich.body!.rich_message as { markdown?: unknown }).markdown)
+      : null,
+    plain: plain ? String(plain.body!.text) : null,
+  };
+}
+
+test("in a group the break notice names «your message» and never quotes it", async () => {
+  const { rich } = await midAnswerNotice(
+    "-1001722",
+    { text: "личное про зарплату", media: false },
+    "supergroup",
+  );
+  assert.ok(rich !== null);
+  assert.match(
+    rich,
+    /in the middle of the answer to your message\. Try again\?/u,
+  );
+  assert.doesNotMatch(rich, /зарплат/u);
+});
+
+test("a message with an attachment is asked again, without a button", async () => {
+  const { rich, plain } = await midAnswerNotice("723", {
+    text: "",
+    media: true,
+  });
+  assert.equal(rich, null);
+  assert.equal(
+    plain,
+    "The connection to the provider broke off in the middle of the answer to your message with an attachment. Send it again.",
+  );
 });
 
 // --- Проводка пульса живого хода ---
