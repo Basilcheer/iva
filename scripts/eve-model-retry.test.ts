@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/require-await -- Async model doubles implement the SDK Promise interface, including rejected calls. */
-// Real Eve boundary: one transport retry owner, before doStream returns only.
+// Real Eve boundary: one owner of repeated model requests, until the first answer part.
+// Random cases print their seed in the test name; FC_SEED repeats a run.
 import assert from "node:assert/strict";
 import { getEventListeners } from "node:events";
 import { createServer } from "node:http";
@@ -16,6 +17,8 @@ import type {
   HarnessSession,
   HarnessToolMap,
 } from "../node_modules/eve/dist/src/harness/types.js";
+
+const SEED = Number(process.env.FC_SEED ?? Date.now() % 2 ** 31);
 
 const session = (): HarnessSession => ({
   agent: {
@@ -94,7 +97,7 @@ function fastWaits(t: TestContext) {
     "setTimeout",
     (...args: Parameters<typeof setTimeout>) => {
       const [callback, delay, ...rest] = args;
-      if (delay !== undefined && delay >= 500 && delay <= 20_000) {
+      if (delay !== undefined && delay >= 500 && delay <= 60_000) {
         waits.push(delay);
         return original(callback, 0, ...rest);
       }
@@ -204,7 +207,7 @@ void test("a reset before the stream opens uses the same bounded owner", async (
   assert.equal(provider.calls(), 3);
 });
 
-void test("failure sequences never exceed three requests and permanent errors are not retried", async (t) => {
+void test(`failure sequences never exceed three requests and permanent errors are not retried (fast-check seed ${SEED})`, async (t) => {
   mute(t);
   fastWaits(t);
   await fc.assert(
@@ -240,7 +243,7 @@ void test("failure sequences never exceed three requests and permanent errors ar
         );
       },
     ),
-    { numRuns: 100 },
+    { numRuns: 100, seed: SEED },
   );
 });
 
@@ -469,7 +472,7 @@ void test("a tool call before a break never runs; the request is made again and 
   assert.equal(requested.length, 1, "the owner sees one tool call");
 });
 
-void test("a stream broken after the first answer part fails the turn once and says so in details", async (t) => {
+void test(`a stream broken after the first answer part fails the turn once and says so in details (fast-check seed ${SEED})`, async (t) => {
   mute(t);
   fastWaits(t);
   await fc.assert(
@@ -504,7 +507,7 @@ void test("a stream broken after the first answer part fails the turn once and s
         assert.equal(resumed.settledTurn?.output, "ok");
       },
     ),
-    { numRuns: 30 },
+    { numRuns: 30, seed: SEED },
   );
 });
 
@@ -554,7 +557,7 @@ void test("after a mid-answer break the Try again turn sees the question and the
   assert.match(seen, /Повторить/u);
 });
 
-void test("for any sequence of outcomes no tool runs twice and the owner gets at most one text", async (t) => {
+void test(`for any sequence of outcomes no tool runs twice and the owner gets at most one text (fast-check seed ${SEED})`, async (t) => {
   mute(t);
   fastWaits(t);
   await fc.assert(
@@ -594,7 +597,7 @@ void test("for any sequence of outcomes no tool runs twice and the owner gets at
         }
       },
     ),
-    { numRuns: 150 },
+    { numRuns: 150, seed: SEED },
   );
 });
 
@@ -714,7 +717,9 @@ void test("cancellation aborts an in-flight pre-opening call without another att
   assert.equal(calls, 1);
 });
 
-void test("provider minimum waits consume the same twenty-second total budget", async (t) => {
+// A provider wait raises the pause; the next pause keeps its own floor (5 s, then 15 s):
+// the third request never goes without a pause (review 07.10.2026).
+void test("a provider wait raises one pause and the next pause keeps its floor", async (t) => {
   mute(t);
   const waits = fastWaits(t);
   let calls = 0;
@@ -726,7 +731,7 @@ void test("provider minimum waits consume the same twenty-second total budget", 
     },
   });
   assert.equal((await fixture(model).run()).settledTurn?.output, "ok");
-  assert.deepEqual(waits, [12_000, 8_000]);
+  assert.deepEqual(waits, [12_000, 15_000]);
 });
 
 void test("HTTP dates and retry-after-ms preserve provider minimums", async (t) => {
@@ -751,34 +756,40 @@ void test("HTTP dates and retry-after-ms preserve provider minimums", async (t) 
     },
   });
   await fixture(model).run();
-  assert.deepEqual(waits, [12_000, 8_000]);
+  assert.deepEqual(waits, [12_000, 15_000]);
 });
 
-void test("long Retry-After parks recoverably instead of dispatching early", async (t) => {
+void test("a provider wait over a minute closes the turn at once and names the wait", async (t) => {
   mute(t);
   const waits = fastWaits(t);
   let calls = 0;
   const model = new MockLanguageModelV4({
     doStream: async () => {
       calls++;
-      throw error(429, { "RETRY-AFTER": "120" });
+      throw error(503, { "RETRY-AFTER": "120" });
     },
   });
-  const result = await fixture(model).run();
+  const fx = fixture(model);
+  const result = await fx.run();
   assert.equal(calls, 1);
   assert.deepEqual(waits, []);
   assert.equal(result.next, null);
   assert.equal(result.settledTurn?.isError, true);
+  const failed = fx.events.find((event) => event.type === "turn.failed");
+  const details = (failed?.data as { details?: Record<string, unknown> })
+    .details;
+  assert.equal(details?.providerWaitMs, 120_000);
+  assert.equal(details?.attempts, 1);
 });
 
-void test("numeric and date Retry-After never dispatch early or exceed the shared wait budget", async (t) => {
+void test(`numeric and date Retry-After never dispatch early, every pause is 5 s to 60 s (fast-check seed ${SEED})`, async (t) => {
   mute(t);
   const waits = fastWaits(t);
   const now = Date.parse("2026-10-02T00:00:00Z");
   t.mock.method(Date, "now", () => now);
   await fc.assert(
     fc.asyncProperty(
-      fc.integer({ min: 0, max: 40 }),
+      fc.integer({ min: 0, max: 90 }),
       fc.boolean(),
       fc.constantFrom("Retry-After", "RETRY-AFTER", "retry-after"),
       async (seconds, date, key) => {
@@ -794,16 +805,16 @@ void test("numeric and date Retry-After never dispatch early or exceed the share
           },
         });
         await fixture(model).run();
-        assert.equal(calls, seconds > 20 ? 1 : seconds > 10 ? 2 : 3);
+        assert.equal(calls, seconds > 60 ? 1 : 3);
         assert.ok(waits.every((wait) => wait >= seconds * 1000));
-        assert.ok(waits.reduce((sum, wait) => sum + wait, 0) <= 20_000);
+        assert.ok(waits.every((wait) => wait >= 5_000 && wait <= 60_000));
       },
     ),
-    { numRuns: 100 },
+    { numRuns: 100, seed: SEED },
   );
 });
 
-void test("malformed and oversized header values cannot escape retry bounds", async (t) => {
+void test(`malformed and oversized header values keep every pause within 5 s to 60 s (fast-check seed ${SEED})`, async (t) => {
   mute(t);
   const waits = fastWaits(t);
   await fc.assert(
@@ -818,10 +829,13 @@ void test("malformed and oversized header values cannot escape retry bounds", as
       });
       await fixture(model).run();
       assert.ok(calls >= 1 && calls <= 3);
-      assert.ok(waits.every((wait) => Number.isFinite(wait) && wait >= 0));
-      assert.ok(waits.reduce((sum, wait) => sum + wait, 0) <= 20_000);
+      assert.ok(
+        waits.every(
+          (wait) => Number.isFinite(wait) && wait >= 5_000 && wait <= 60_000,
+        ),
+      );
     }),
-    { numRuns: 100 },
+    { numRuns: 100, seed: SEED },
   );
   const model = new MockLanguageModelV4({
     doStream: async () => {
@@ -848,4 +862,183 @@ void test("a turn cancelled before dispatch makes no model request", async (t) =
     name: "TurnCancelledError",
   });
   assert.equal(calls, 0);
+});
+
+// ── Пробы рецензента 07.10.2026 ─────────────────────────────────────────────────────────────
+
+const call = (
+  id: string,
+  name: string,
+  extra: Record<string, unknown> = {},
+): LanguageModelV4StreamPart => ({
+  type: "tool-call",
+  toolCallId: id,
+  toolName: name,
+  input: "{}",
+  ...extra,
+});
+const toolsFinish: LanguageModelV4StreamPart = {
+  type: "finish",
+  finishReason: { unified: "tool-calls", raw: "tool-calls" },
+  usage,
+};
+function twoTools(runs: Record<string, number>): HarnessToolMap {
+  return new Map(
+    ["a", "b"].map((name) => [
+      name,
+      {
+        name,
+        description: name,
+        inputSchema: z.object({}),
+        execute: () => {
+          runs[name] = (runs[name] ?? 0) + 1;
+          return `done ${name}`;
+        },
+      },
+    ]),
+  );
+}
+function streamed(
+  bodies: Array<() => ReadableStream<LanguageModelV4StreamPart>>,
+) {
+  let calls = 0;
+  const model = new MockLanguageModelV4({
+    doStream: async () => {
+      const body = bodies[Math.min(calls, bodies.length - 1)];
+      calls++;
+      return { stream: body() };
+    },
+  });
+  return { model, calls: () => calls };
+}
+
+void test("parallel calls broken before finish: requested again, each tool runs once", async (t) => {
+  mute(t);
+  fastWaits(t);
+  const runs: Record<string, number> = {};
+  const provider = streamed([
+    () => broken([call("1a", "a"), call("1b", "b")]),
+    () =>
+      convertArrayToReadableStream([
+        call("2a", "a"),
+        call("2b", "b"),
+        toolsFinish,
+      ]),
+  ]);
+  await fixture(provider.model, undefined, twoTools(runs)).run();
+  assert.equal(provider.calls(), 2);
+  assert.deepEqual(runs, { a: 1, b: 1 });
+});
+
+void test("an error part after a tool call never runs the tool; nothing reached eve, so it is asked again", async (t) => {
+  mute(t);
+  fastWaits(t);
+  const runs: Record<string, number> = {};
+  const provider = streamed([
+    () =>
+      convertArrayToReadableStream([
+        call("x", "a"),
+        { type: "error", error: reset() },
+        toolsFinish,
+      ]),
+  ]);
+  const result = await fixture(provider.model, undefined, twoTools(runs)).run();
+  assert.equal(runs.a ?? 0, 0);
+  assert.equal(provider.calls(), 3);
+  assert.equal(result.settledTurn?.isError, true);
+});
+
+void test("an error part before any content, then finish, is asked again", async (t) => {
+  mute(t);
+  const waits = fastWaits(t);
+  const provider = streamed([
+    () =>
+      convertArrayToReadableStream([
+        { type: "error", error: reset() },
+        { ...toolsFinish, finishReason: { unified: "error", raw: "error" } },
+      ]),
+    () => convertArrayToReadableStream(success()),
+  ]);
+  const result = await fixture(provider.model).run();
+  assert.equal(provider.calls(), 2);
+  assert.deepEqual(waits, [5_000]);
+  assert.equal(result.settledTurn?.output, "ok");
+});
+
+void test("a provider-executed call, then a break: the answer has started, no second request", async (t) => {
+  mute(t);
+  fastWaits(t);
+  const provider = streamed([
+    () => broken([call("p", "web_search", { providerExecuted: true })]),
+  ]);
+  const fx = fixture(provider.model);
+  await fx.run();
+  assert.equal(provider.calls(), 1);
+  const failed = fx.events.find((event) => event.type === "turn.failed");
+  assert.equal(
+    (failed?.data as { details?: Record<string, unknown> }).details
+      ?.answerStarted,
+    true,
+  );
+});
+
+void test("a call, then text, then a break: no second request and the tool never ran", async (t) => {
+  mute(t);
+  fastWaits(t);
+  const runs: Record<string, number> = {};
+  const provider = streamed([
+    () =>
+      broken([
+        call("x", "a"),
+        { type: "text-start", id: "t" },
+        { type: "text-delta", id: "t", delta: "hi" },
+      ]),
+  ]);
+  await fixture(provider.model, undefined, twoTools(runs)).run();
+  assert.equal(provider.calls(), 1);
+  assert.equal(runs.a ?? 0, 0);
+});
+
+// HTTP-провайдер отвечает 200 и кладёт ошибку в поток до первой части ответа (OpenRouter,
+// OpenCode): это тот же сбой до ответа, и он просится ещё раз.
+void test("200 with an error chunk before any content is requested again on the wire", async (t) => {
+  mute(t);
+  const waits = fastWaits(t);
+  let calls = 0;
+  const server = createServer((request, response) => {
+    void (async () => {
+      for await (const chunk of request) void chunk;
+      calls++;
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      if (calls === 1) {
+        response.end(
+          'data: {"error":{"message":"Provider returned error","code":502}}\n\ndata: [DONE]\n\n',
+        );
+        return;
+      }
+      response.end(
+        `data: ${JSON.stringify({ id: "x", object: "chat.completion.chunk", created: 1, model: "m", choices: [{ index: 0, delta: { role: "assistant", content: "ok" }, finish_reason: "stop" }] })}\n\ndata: [DONE]\n\n`,
+      );
+    })();
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(async () => {
+    server.closeAllConnections();
+    await new Promise<void>((resolve, reject) =>
+      server.close((err) => (err ? reject(err) : resolve())),
+    );
+  });
+  const model = createOpenAICompatible({
+    name: "test",
+    apiKey: "test",
+    baseURL: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+  }).chatModel("m");
+  const result = await fixture(model).run();
+  assert.equal(calls, 2);
+  // Другие таймеры клиента (3 с) — не пауза между запросами.
+  assert.deepEqual(
+    waits.filter((delay) => delay === 5_000 || delay === 15_000),
+    [5_000],
+  );
+  assert.equal(result.settledTurn?.output, "ok");
 });
