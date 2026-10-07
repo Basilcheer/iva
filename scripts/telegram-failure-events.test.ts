@@ -114,7 +114,7 @@ globalThis.fetch = async (url, init = {}) => {
 
 const telegramTestModule = "../agent/channels/telegram.ts?failure-events-test";
 const [
-  { default: channel },
+  { default: channel, rememberAccepted },
   { chatKeyOf, getChatStatus, setChatStatus },
   { ContextContainer, contextStorage },
   { SessionKey },
@@ -666,6 +666,52 @@ test("a message with an attachment is asked again, without a button", async () =
     plain,
     "The connection to the provider broke off in the middle of the answer to your message with an attachment. Send it again.",
   );
+});
+
+// Провод канала, а не только модуль вопроса: принятое голосовое или фото без подписи
+// стирает прежний вопрос и метит вложение, и после обрыва кнопки нет — Ива просит прислать
+// сообщение ещё раз (мутант «media: false» в канале обязан краснеть здесь).
+test("a voice or a photo without a caption, then a mid-answer break: no button, send it again", async () => {
+  const { rememberTurnQuestion } = await import("#lib/turn-question.ts");
+  for (const [chatId, raw] of [
+    ["724", { voice: { file_id: "voice-1", duration: 3 } }],
+    ["725", { photo: [{ file_id: "photo-1", width: 1, height: 1 }] }],
+  ] as const) {
+    rememberTurnQuestion(chatKeyOf(chatId), {
+      text: "прежний вопрос",
+      media: false,
+    });
+    await rememberAccepted(
+      chatKeyOf(chatId),
+      {
+        attachments: [],
+        caption: "",
+        chat: { id: chatId, type: "private" },
+        messageId: "1",
+        raw,
+        text: "",
+      },
+      Promise.resolve({ auth: null }),
+    );
+    const before = apiCalls.length;
+    await emitTurnFailed(
+      {
+        code: "MODEL_CALL_FAILED",
+        details: { errorId: `err-${chatId}`, attempts: 3, answerStarted: true },
+        message: "terminated",
+        sequence: 0,
+        turnId: "turn_0",
+      },
+      { chatId, sessionId: `media-${chatId}` },
+    );
+    assert.equal(callsSince(before, "sendRichMessage").length, 0);
+    const sends = callsSince(before, "sendMessage");
+    assert.equal(sends.length, 1);
+    const text = String(sends[0].body!.text);
+    assert.match(text, /to your message with an attachment/u);
+    assert.match(text, /Send it again\.$/u);
+    assert.doesNotMatch(text, /tg-button|прежний вопрос/u);
+  }
 });
 
 // --- Проводка пульса живого хода ---

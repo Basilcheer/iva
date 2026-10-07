@@ -208,7 +208,7 @@ export function outboxTransport(
 
 // Вопрос хода для сообщения об обрыве (turn-question.ts): текст принятого сообщения чата и
 // метка вложения. Голос и фото без подписи стирают прежний вопрос.
-async function rememberAccepted<T>(
+export async function rememberAccepted<T>(
   chatKey: string,
   message: TelegramInboundMessage,
   turn: Promise<T | null>,
