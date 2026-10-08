@@ -41,10 +41,6 @@ const BLIND_SPOT: ReadonlyArray<{
     why: "прицеп инбаунда; allowlist гоняют его тесты",
   },
   {
-    path: "agent/lib/telegram-gate-notice.ts",
-    why: "прицеп гейта; тексты в тестах инбаунда",
-  },
-  {
     path: "agent/lib/telegram-private-chat.ts",
     why: "прицеп канала; приватный чат в тестах канала",
   },
