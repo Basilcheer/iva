@@ -162,9 +162,14 @@ export const CATALOG: Record<string, ProviderCatalogEntry> = {
     visionVar: null,
     visionDef: null,
     // Вшитый список — запасной путь: живой приходит рукопожатием CLI (fetchModelOptions),
-    // а он может не состояться (нет бинаря, нет входа, чужой вывод). Те же три id,
-    // что у пикера: Haiku в экран не входит.
-    models: ["claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5"],
+    // а он может не состояться (нет бинаря, нет входа, чужой вывод). Те же четыре id,
+    // что у экрана.
+    models: [
+      "claude-fable-5-1",
+      "claude-opus-5-5",
+      "claude-sonnet-5-5",
+      "claude-haiku-5-5",
+    ],
   },
   openrouter: {
     label: "OpenRouter",

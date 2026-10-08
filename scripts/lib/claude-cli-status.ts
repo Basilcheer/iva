@@ -30,11 +30,12 @@ interface ClaudeModelChoice {
   readonly label: string;
 }
 
-/** Три модели экрана «Модель · Claude», в порядке кнопок. Псевдонимы пикера
- *  (`default`, `opus[1m]`) и Haiku сюда не входят: в .env только эти id. `previous` — модель,
+/** Четыре модели экрана «Модель · Claude», в порядке кнопок. Псевдонимы пикера
+ *  (`default`, `opus[1m]`) сюда не входят: в .env только эти id. `previous` — модель,
  *  которую отдаёт пикер CLI постарше вместо текущей (CLI 2.1.278 на c1 23.09.2026 знал
  *  Opus 5, а не 5.5; Sonnet 5.5 29.09.2026 есть в пикере CLI 2.1.284, а 2.1.283 называет его
- *  незнакомой моделью): кнопка встаёт на то же место, пока новой модели в пикере нет. */
+ *  незнакомой моделью; Haiku 5.5 08.10.2026 пикер CLI 2.1.293 отдаёт на псевдоним `haiku`, а
+ *  2.1.287 на c1 — ещё Haiku 4.5): кнопка встаёт на то же место, пока новой модели в пикере нет. */
 const CLAUDE_MODEL_CHOICES: readonly (ClaudeModelChoice & {
   readonly previous?: ClaudeModelChoice;
 })[] = [
@@ -48,6 +49,11 @@ const CLAUDE_MODEL_CHOICES: readonly (ClaudeModelChoice & {
     id: "claude-sonnet-5-5",
     label: "Sonnet 5.5",
     previous: { id: "claude-sonnet-5", label: "Sonnet 5" },
+  },
+  {
+    id: "claude-haiku-5-5",
+    label: "Haiku 5.5",
+    previous: { id: "claude-haiku-4-5-20251001", label: "Haiku 4.5" },
   },
 ];
 
@@ -65,14 +71,22 @@ export function claudeModelLabel(id: string): string {
 /** Уровни рассуждения подписки: тот же словарь без `minimal`, что у рантайма
  *  (`CLAUDE_EFFORTS` в agent/lib/claude-cli.ts, на `minimal` подписка отвечает 400).
  *  Живьём 23.09.2026 (CLI 2.1.280): low…max приняты у Sonnet 5, max у Fable 5.1, xhigh и
- *  max у Opus 5.5. Сверку с рантаймом держит зеркальный тест. */
+ *  max у Opus 5.5; 08.10.2026 (CLI 2.1.287) low…max с adaptive thinking у Haiku 5.5. Сверку
+ *  с рантаймом держит зеркальный тест. */
 const CLAUDE_REASONING_LEVELS: readonly string[] =
   CANONICAL_REASONING_EFFORTS.filter((effort) => effort !== "minimal");
 
-/** Уровни модели: у каждой модели экрана adaptive thinking есть (таблица рантайма), у Haiku
- *  и чужого id — нет, и кнопок им не рисуем. */
+/** Модели экрана без adaptive thinking (таблица рантайма): подписка отвечает 400 на него и
+ *  на усилие, поэтому кнопок уровня им не рисуем. */
+const CLAUDE_WITHOUT_EFFORT: ReadonlySet<string> = new Set([
+  "claude-haiku-4-5-20251001",
+]);
+
+/** Уровни модели: у моделей экрана adaptive thinking есть, кроме Haiku 4.5; у чужого id
+ *  уровней нет. */
 export function claudeReasoningLevels(id: string): string[] {
-  return CLAUDE_KNOWN_MODELS.some((choice) => choice.id === id)
+  return CLAUDE_KNOWN_MODELS.some((choice) => choice.id === id) &&
+    !CLAUDE_WITHOUT_EFFORT.has(id)
     ? [...CLAUDE_REASONING_LEVELS]
     : [];
 }
@@ -436,7 +450,7 @@ function canonicalResolved(value: unknown): string | null {
 }
 
 /** Модели таблицы, которые пикер реально отдал: на месте текущей — она сама, без неё —
- *  её предшественница. Пустое пересечение — вшитые три. */
+ *  её предшественница. Пустое пересечение — вшитые четыре. */
 function choicesFromPicker(models: readonly unknown[]): ClaudeModelOption[] {
   const found = new Set<string>();
   for (const value of models) {
@@ -622,11 +636,11 @@ export async function probeClaudeModel(
 
 // ── окно контекста ────────────────────────────────────────────────────────────
 
-// Окна моделей подписки: миллион у fable/opus/sonnet, двести тысяч у haiku. Та же
-// таблица стоит у рантайма в agent/provider.ts — разъехаться им нельзя, поэтому
+// Окна моделей подписки: миллион у fable/opus/sonnet и Haiku 5.5, двести тысяч у Haiku 4.5.
+// Та же таблица стоит у рантайма в agent/lib/claude-cli.ts — разъехаться им нельзя, поэтому
 // правило одно на оба случая и живёт рядом с именами моделей, которые его знают.
 const CLAUDE_CONTEXT_WINDOWS: ReadonlyArray<[RegExp, string]> = [
-  [/claude-haiku/u, "200000"],
+  [/claude-haiku-4/u, "200000"],
 ];
 const CLAUDE_DEFAULT_CONTEXT_WINDOW = "1000000";
 

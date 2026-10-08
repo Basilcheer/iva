@@ -132,12 +132,12 @@ const CLAUDE_ENV: Record<string, string> = {
 };
 /**
  * Пул моделей аккаунта. Рукопожатие CLI отдаёт route-ид (`resolvedModel`): `claude-fable-5-1`,
- * `claude-opus-5-5`, `claude-sonnet-5-5`, `claude-haiku-4-5-20251001` — и он же ложится в
- * CLAUDE_MODEL. CLI же выбирает модель по СВОЕМУ имени, и у миллионного окна оно с суффиксом
- * `[1m]`: `claude -p --model claude-fable-5-1` отвечает «It may not exist or you may not have
- * access to it» (проверено живьём 22.09.2026, CLI 2.1.278, план Max), а
- * `claude-fable-5-1[1m]` — работает. Haiku 4.5 миллионного окна не умеет вовсе, поэтому едет
- * без суффикса. Окно контекста считается здесь же: одно число на весь вендор было бы враньём
+ * `claude-opus-5-5`, `claude-sonnet-5-5`, `claude-haiku-5-5` (у CLI постарше
+ * `claude-haiku-4-5-20251001`) — и он же ложится в CLAUDE_MODEL. CLI же выбирает модель по
+ * СВОЕМУ имени, и у миллионного окна оно с суффиксом `[1m]`: `claude -p --model
+ * claude-fable-5-1` отвечает «It may not exist or you may not have access to it» (проверено
+ * живьём 22.09.2026, CLI 2.1.278, план Max), а `claude-fable-5-1[1m]` — работает. Haiku 4.5
+ * миллионного окна не умеет вовсе, поэтому едет без суффикса. Окно контекста считается здесь же: одно число на весь вендор было бы враньём
  * в одну из сторон, а меньшее окно безопаснее большего — оно лишь раньше сжимает историю,
  * тогда как завышенное валит ход на первом же переполнении.
  */
@@ -168,8 +168,18 @@ const CLAUDE_MODELS: Record<
     window: 1_000_000,
     adaptive: true,
   },
-  // Прошлые Opus и Sonnet остаются в таблице: у кого в .env старый id, без строки здесь ход
-  // ушёл бы к CLI именем без суффикса, а на такое имя он отвечает «модели нет».
+  // Живьём 08.10.2026 (CLI 2.1.287 на c1, подписка): пикер этой модели ещё не знает
+  // (`haiku` → Haiku 4.5), CLI печатает «isn't described by this version's model catalog… append
+  // [1m] to the model name for 1M», но и `claude-haiku-5-5`, и `claude-haiku-5-5[1m]` отвечают
+  // «ок»; с adaptive thinking приняты усилия low…max, мусорное — 400. Окно 1M по документации
+  // Anthropic. Пикер CLI 2.1.293 отдаёт её на псевдоним `haiku`.
+  "claude-haiku-5-5": {
+    native: "claude-haiku-5-5",
+    window: 1_000_000,
+    adaptive: true,
+  },
+  // Прошлые Opus, Sonnet и Haiku остаются в таблице: у кого в .env старый id, без строки
+  // здесь ход ушёл бы к CLI именем без суффикса, а на такое имя он отвечает «модели нет».
   "claude-sonnet-5": {
     native: "claude-sonnet-5",
     window: 1_000_000,
@@ -198,7 +208,9 @@ const CLAUDE_ALIASES: Record<string, string> = {
   fable: "claude-fable-5-1",
   opus: "claude-opus-5-5",
   sonnet: "claude-sonnet-5-5",
-  haiku: "claude-haiku-4-5-20251001",
+  // `haiku` — на 5.5, как у пикера CLI 2.1.293: окно у неё не меньше, чем у 4.5, а живая
+  // проба на c1 прошла. Прошлая модель остаётся по полному имени.
+  haiku: "claude-haiku-5-5",
   "claude-haiku-4-5": "claude-haiku-4-5-20251001",
 };
 /** Незнакомая модель: окно берём меньшее из известных — см. рассуждение выше. */
@@ -410,7 +422,7 @@ export function claudeExtraBody(
 ): Record<string, unknown> {
   const body: Record<string, unknown> = { tools };
   // adaptive thinking и усилие едут вместе: без первого второе не имеет смысла, а модель,
-  // которая adaptive не умеет (haiku), отвергает и то и другое.
+  // которая adaptive не умеет (Haiku 4.5), отвергает и то и другое.
   if (claudeModel(route).adaptive) {
     body.thinking = { type: "adaptive" };
     const effort = claudeEffort(process.env.THINKING_EFFORT);

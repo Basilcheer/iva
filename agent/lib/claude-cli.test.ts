@@ -2311,9 +2311,16 @@ test("имя модели для CLI и окно контекста берутс
     claudeNativeModel(" claude-opus-5-5[1m] "),
     "claude-opus-5-5[1m]",
   );
-  assert.equal(claudeNativeModel("haiku"), "claude-haiku-4-5-20251001");
+  // Haiku 5.5 — миллионное окно, с суффиксом; псевдоним `haiku` ведёт к ней, как у пикера
+  // CLI 2.1.293. Haiku 4.5 по полному имени едет без суффикса.
+  assert.equal(claudeNativeModel("claude-haiku-5-5"), "claude-haiku-5-5[1m]");
+  assert.equal(claudeNativeModel("haiku"), "claude-haiku-5-5[1m]");
   assert.equal(
     claudeNativeModel("claude-haiku-4-5"),
+    "claude-haiku-4-5-20251001",
+  );
+  assert.equal(
+    claudeNativeModel("claude-haiku-4-5-20251001"),
     "claude-haiku-4-5-20251001",
   );
   // Прошлые Opus и Sonnet подписки — тоже миллионное окно, то есть тоже с суффиксом: старый
@@ -2328,14 +2335,28 @@ test("имя модели для CLI и окно контекста берутс
     window: 200_000,
     adaptive: false,
   });
-  assert.equal(claudeModel("haiku").window, 200_000);
+  assert.equal(claudeModel("claude-haiku-4-5-20251001").window, 200_000);
+  assert.equal(claudeModel("claude-haiku-5-5").window, 1_000_000);
+  assert.equal(claudeModel("haiku").window, 1_000_000);
   assert.equal(claudeModel("fable").window, 1_000_000);
-  // adaptive thinking haiku не умеет — и он же не едет в тело запроса.
-  assert.equal(claudeModel("haiku").adaptive, false);
+  // adaptive thinking Haiku 4.5 не умеет — и он же не едет в тело запроса.
+  assert.equal(claudeModel("claude-haiku-4-5-20251001").adaptive, false);
   assert.equal(claudeModel("fable").adaptive, true);
-  const haikuBody = claudeExtraBody({ prompt: userPrompt() }, [], "haiku");
+  const haikuBody = claudeExtraBody(
+    { prompt: userPrompt() },
+    [],
+    "claude-haiku-4-5",
+  );
   assert.equal(haikuBody.thinking, undefined);
   assert.equal(haikuBody.output_config, undefined);
+  // Haiku 5.5 adaptive умеет: живьём 08.10.2026 подписка приняла low…max.
+  assert.equal(claudeModel("claude-haiku-5-5").adaptive, true);
+  const haiku55Body = claudeExtraBody(
+    { prompt: userPrompt() },
+    [],
+    "claude-haiku-5-5",
+  );
+  assert.deepEqual(haiku55Body.thinking, { type: "adaptive" });
   const fableBody = claudeExtraBody({ prompt: userPrompt() }, [], MODEL);
   assert.deepEqual(fableBody.thinking, { type: "adaptive" });
 });

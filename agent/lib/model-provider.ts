@@ -106,7 +106,7 @@ export const MODEL_PROVIDERS = {
     // Ключа нет: модель — установленный и залогиненный Claude Code CLI на той же машине
     // (agent/lib/claude-cli.ts). Имя модели — то, которое вернул живой список аккаунта
     // (scripts/lib/model-catalog.ts просит его рукопожатием CLI), поэтому здесь кандидаты, а
-    // не единственно верное имя: fable, opus, sonnet — 1M контекста, haiku — 200k.
+    // не единственно верное имя: fable, opus, sonnet, Haiku 5.5 — 1M контекста, Haiku 4.5 — 200k.
     modelVar: "CLAUDE_MODEL",
     defaultModel: "claude-fable-5-1",
     compatibleReasoning: false,

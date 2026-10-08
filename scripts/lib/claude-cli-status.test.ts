@@ -72,7 +72,8 @@ if (mode === "handshake") {
       { value: "opus[1m]", resolvedModel: "claude-opus-5-5[1m]", displayName: "Opus (1M context)" },
       { value: "claude-fable-5-1", resolvedModel: "claude-fable-5-1", displayName: "Fable" },
       { value: "sonnet", resolvedModel: "claude-sonnet-5-5", displayName: "Sonnet 5.5" },
-      { value: "haiku", resolvedModel: "claude-haiku-4-5-20251001", displayName: "Haiku" },
+      { value: "haiku", resolvedModel: "claude-haiku-5-5", displayName: "Haiku 5.5" },
+      { value: "claude-haiku-4-5-20251001", resolvedModel: "claude-haiku-4-5-20251001", displayName: "Haiku 4.5" },
       { value: "anonymous", displayName: "no resolved model" },
     ]));
   });
@@ -221,7 +222,7 @@ test("both halves refuse the same variables, and the same values", () => {
 /** Уровни, которые подписка приняла живьём 23.09.2026 (CLI 2.1.280). */
 const CLAUDE_LEVELS = ["low", "medium", "high", "xhigh", "max"];
 
-const CLAUDE_THREE = [
+const CLAUDE_FOUR = [
   {
     id: "claude-fable-5-1",
     label: "Fable 5.1",
@@ -233,12 +234,27 @@ const CLAUDE_THREE = [
     label: "Sonnet 5.5",
     reasoningLevels: CLAUDE_LEVELS,
   },
+  {
+    id: "claude-haiku-5-5",
+    label: "Haiku 5.5",
+    reasoningLevels: CLAUDE_LEVELS,
+  },
 ];
 
+/** Пикер без Haiku 5.5 (CLI 2.1.287 и старше): четвёртая кнопка — Haiku 4.5 на том же месте,
+ *  без уровней: adaptive thinking она не умеет. */
+const HAIKU_45 = {
+  id: "claude-haiku-4-5-20251001",
+  label: "Haiku 4.5",
+  reasoningLevels: [],
+};
+const CLAUDE_BEFORE_HAIKU_55 = [...CLAUDE_FOUR.slice(0, 3), HAIKU_45];
+
 /** Пикер до Sonnet 5.5 (CLI 2.1.280–2.1.283): третья кнопка — Sonnet 5 на том же месте. */
-const CLAUDE_THREE_BEFORE_SONNET_55 = [
-  ...CLAUDE_THREE.slice(0, 2),
+const CLAUDE_BEFORE_SONNET_55 = [
+  ...CLAUDE_FOUR.slice(0, 2),
   { id: "claude-sonnet-5", label: "Sonnet 5", reasoningLevels: CLAUDE_LEVELS },
+  HAIKU_45,
 ];
 
 // Кнопки уровней и тело запроса рантайма — две руки одного правила: уровень у модели есть
@@ -251,6 +267,7 @@ test("reasoning levels mirror the runtime: adaptive models only, efforts it send
     "claude-opus-5",
     "claude-sonnet-5-5",
     "claude-sonnet-5",
+    "claude-haiku-5-5",
     "claude-haiku-4-5-20251001",
     "claude-someday-9",
   ];
@@ -270,20 +287,54 @@ test("reasoning levels mirror the runtime: adaptive models only, efforts it send
   );
   assert.deepEqual(claudeReasoningLevels("claude-sonnet-5-5"), CLAUDE_LEVELS);
   assert.deepEqual(claudeReasoningLevels("claude-sonnet-5"), CLAUDE_LEVELS);
+  assert.deepEqual(claudeReasoningLevels("claude-haiku-5-5"), CLAUDE_LEVELS);
 });
 
-test("the model list is the three named models, aliases and haiku dropped", async (t) => {
+test("the model list is the four named models, aliases and Haiku 4.5 dropped", async (t) => {
   const models = await listClaudeModels(envWith(t, "handshake"));
-  assert.deepEqual(models, CLAUDE_THREE);
+  assert.deepEqual(models, CLAUDE_FOUR);
   assert.equal(
-    models.some((option) => option.id.includes("haiku")),
+    models.some((option) => option.id === "claude-haiku-4-5-20251001"),
     false,
   );
 });
 
+// Живой пикер CLI 2.1.293 (08.10.2026) отдаёт Haiku 5.5 на псевдоним `haiku` и Haiku 4.5
+// отдельной строкой: кнопок четыре, в порядке экрана, Haiku — новая.
+test("the live handshake of CLI 2.1.293 yields Fable, Opus, Sonnet and Haiku 5.5 in order", async (t) => {
+  const fixture = readFileSync(
+    fileURLToPath(
+      new URL("../fixtures/claude/handshake-2026-10-08.jsonl", import.meta.url),
+    ),
+    "utf8",
+  );
+  const models = await listClaudeModels(
+    envWith(t, "handshake", { FAKE_CLAUDE_PICKER: fixture.trim() }),
+  );
+  assert.deepEqual(models, CLAUDE_FOUR);
+});
+
+// Пикер CLI 2.1.287 на c1 (08.10.2026) Haiku 5.5 не знает: кнопка Haiku не пропадает, а встаёт
+// на своё место с Haiku 4.5 и без кнопок уровня.
+test("a picker without Haiku 5.5 shows Haiku 4.5 in its place, without levels", async (t) => {
+  const fixture = readFileSync(
+    fileURLToPath(
+      new URL(
+        "../fixtures/claude/handshake-2026-10-08-c1.jsonl",
+        import.meta.url,
+      ),
+    ),
+    "utf8",
+  );
+  const models = await listClaudeModels(
+    envWith(t, "handshake", { FAKE_CLAUDE_PICKER: fixture.trim() }),
+  );
+  assert.deepEqual(models, CLAUDE_BEFORE_HAIKU_55);
+});
+
 // Живой пикер CLI 2.1.284 (29.09.2026) отдаёт и Sonnet 5.5 (на псевдоним `sonnet`), и прошлый
 // Sonnet 5 отдельной строкой: кнопка одна — новая.
-test("the live handshake fixture yields Fable, Opus 5.5 and Sonnet 5.5", async (t) => {
+test("the live handshake fixture yields Fable, Opus 5.5, Sonnet 5.5 and Haiku 4.5", async (t) => {
   const fixture = readFileSync(
     fileURLToPath(
       new URL("../fixtures/claude/handshake-2026-09-29.jsonl", import.meta.url),
@@ -293,7 +344,7 @@ test("the live handshake fixture yields Fable, Opus 5.5 and Sonnet 5.5", async (
   const models = await listClaudeModels(
     envWith(t, "handshake", { FAKE_CLAUDE_PICKER: fixture.trim() }),
   );
-  assert.deepEqual(models, CLAUDE_THREE);
+  assert.deepEqual(models, CLAUDE_BEFORE_HAIKU_55);
 });
 
 // Пикер CLI 2.1.280 (23.09.2026) Sonnet 5.5 не знает: кнопка Sonnet не пропадает, а встаёт на
@@ -308,12 +359,12 @@ test("a picker without Sonnet 5.5 shows Sonnet 5 in its place", async (t) => {
   const models = await listClaudeModels(
     envWith(t, "handshake", { FAKE_CLAUDE_PICKER: fixture.trim() }),
   );
-  assert.deepEqual(models, CLAUDE_THREE_BEFORE_SONNET_55);
+  assert.deepEqual(models, CLAUDE_BEFORE_SONNET_55);
 });
 
 // Пикер CLI постарше (c1: 2.1.278, 22-23.09.2026) отдаёт Opus 5, а не 5.5: кнопка Opus не
 // пропадает, а встаёт на своё место с честной подписью той модели, которую CLI знает.
-test("an older picker with Opus 5 shows Fable, Opus 5 and Sonnet", async (t) => {
+test("an older picker with Opus 5 shows Fable, Opus 5, Sonnet and Haiku", async (t) => {
   const fixture = readFileSync(
     fileURLToPath(
       new URL("../fixtures/claude/c1-handshake.jsonl", import.meta.url),
@@ -335,6 +386,7 @@ test("an older picker with Opus 5 shows Fable, Opus 5 and Sonnet", async (t) => 
       label: "Sonnet 5",
       reasoningLevels: CLAUDE_LEVELS,
     },
+    HAIKU_45,
   ]);
 });
 
@@ -360,10 +412,10 @@ test("a picker with both Opus 5 and Opus 5.5 shows Opus 5.5 once", async (t) => 
       FAKE_CLAUDE_PICKER: JSON.stringify(handshake),
     }),
   );
-  assert.deepEqual(models, CLAUDE_THREE_BEFORE_SONNET_55);
+  assert.deepEqual(models, CLAUDE_BEFORE_SONNET_55);
 });
 
-test("a picker without Fable omits it, and an empty picker uses the pinned three", async (t) => {
+test("a picker without Fable omits it, and an empty picker uses the pinned four", async (t) => {
   const picker = (rows: unknown[]) =>
     JSON.stringify({
       type: "control_response",
@@ -380,21 +432,21 @@ test("a picker without Fable omits it, and an empty picker uses the pinned three
   );
   assert.deepEqual(
     withoutFable.map((option) => option.id),
-    ["claude-opus-5-5", "claude-sonnet-5"],
+    ["claude-opus-5-5", "claude-sonnet-5", "claude-haiku-4-5-20251001"],
   );
   const empty = await listClaudeModels(
     envWith(t, "handshake", { FAKE_CLAUDE_PICKER: picker([]) }),
   );
-  assert.deepEqual(empty, CLAUDE_THREE);
+  assert.deepEqual(empty, CLAUDE_FOUR);
   // В пикере есть строки, но ни одна не из таблицы — тот же вшитый список, не пустой экран.
-  const onlyHaiku = await listClaudeModels(
+  const onlyStrangers = await listClaudeModels(
     envWith(t, "handshake", {
       FAKE_CLAUDE_PICKER: picker([
-        { value: "haiku", resolvedModel: "claude-haiku-4-5-20251001" },
+        { value: "opus[1m]", resolvedModel: "claude-opus-4-6[1m]" },
       ]),
     }),
   );
-  assert.deepEqual(onlyHaiku, CLAUDE_THREE);
+  assert.deepEqual(onlyStrangers, CLAUDE_FOUR);
 });
 
 type ClaudeCall = { argv: string[]; extra: string | null };
@@ -562,10 +614,11 @@ test("the model binary comes from CLAUDE_COMMAND or from the service PATH", (t) 
   assert.deepEqual(claudeBinary({ PATH: shell }), [onLocal]);
 });
 
-// Окно контекста пишет мастер: у haiku оно впятеро меньше, и завышенное окно сдвинуло бы
-// порог компактации к переполнению.
+// Окно контекста пишет мастер: у Haiku 4.5 оно впятеро меньше, и завышенное окно сдвинуло бы
+// порог компактации к переполнению. У Haiku 5.5 — миллион, как у остальных.
 test("the context window follows the model the owner picked", () => {
   assert.equal(claudeContextWindow("claude-haiku-4-5-20251001"), "200000");
+  assert.equal(claudeContextWindow("claude-haiku-5-5"), "1000000");
   assert.equal(claudeContextWindow("claude-fable-5-1"), "1000000");
   assert.equal(claudeContextWindow("claude-opus-5-5[1m]"), "1000000");
   assert.equal(claudeContextWindow("claude-sonnet-5-5"), "1000000");

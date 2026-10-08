@@ -591,7 +591,7 @@ test("runtime startup rejects custom without a base URL and starts with one", ()
 });
 
 // Claude-подписка: адреса нет вовсе (ход уходит процессу `claude`), а окно зависит от модели —
-// у haiku 200k, у fable/opus/sonnet 1M. Считает его agent/provider.ts из имени модели, и
+// у Haiku 4.5 200k, у fable/opus/sonnet и Haiku 5.5 1M. Считает его agent/provider.ts из имени модели, и
 // CLAUDE_CONTEXT_WINDOW переопределяет результат как у всех вендоров.
 function windowOf(stdout: string): unknown {
   return (JSON.parse(stdout.trim()) as { window: unknown }).window;
