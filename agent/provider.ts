@@ -35,6 +35,7 @@ import {
 import { CANONICAL_REASONING_EFFORTS as EFFORTS } from "./lib/reasoning-levels.ts";
 import { toolNameWireMiddleware } from "./lib/tool-wire-name.ts";
 import { repeatGuardMiddleware } from "./lib/repeat-guard.ts";
+import { generateViaStream } from "./lib/generate-via-stream.ts";
 import { compactionUsageMiddleware, type UsageLabel } from "./lib/usage-tap.ts";
 
 type WrappableModel = Parameters<typeof wrapLanguageModel>[0]["model"];
@@ -358,6 +359,10 @@ export const codexFetch: typeof fetch = async (input, init) => {
 // promptCacheKey (в теле prompt_cache_key) — ID диалога, как у Codex CLI: бэкенд по нему
 // ведёт шаги одного диалога к одному кэшу, и префикс прошлого шага читается из кэша. Без
 // ключа соседние шаги попадали в кэш через раз. Без сессии ключ — ID процесса (wireSessionId).
+// wrapGenerate: бэкенд подписки принимает только stream:true, на запрос без стрима отвечает
+// 400. generateText (пересказ истории eve между ходами и страховка внутри хода, planner)
+// поэтому идёт стримом, ответ собирается в результат doGenerate (generateViaStream).
+// doGenerate у codex не вызывается никогда.
 export function codexProviderOptions(
   sessionId?: string,
 ): LanguageModelMiddleware {
@@ -382,6 +387,8 @@ export function codexProviderOptions(
           },
         },
       }),
+    wrapGenerate: ({ doStream, params }) =>
+      generateViaStream(doStream, params.abortSignal),
   };
 }
 

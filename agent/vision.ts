@@ -118,7 +118,8 @@ async function describeWithCompatible(
 
 /**
  * Картинка моделью подписки: у codex это Responses API, у claude — тот же CLI, что ведёт ход.
- * ВАЖНО: бэкенд подписок принимает ТОЛЬКО stream:true → streamText, не generateText (иначе 400).
+ * ВАЖНО: бэкенд подписок принимает ТОЛЬКО stream:true → streamText. generateText у codex тоже
+ * уходит стримом (wrapGenerate в codexProviderOptions), у claude doGenerate собирает поток CLI.
  */
 async function describeWithSubscription(
   bytes: ArrayBuffer,
