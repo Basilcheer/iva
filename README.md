@@ -171,9 +171,14 @@ Default model is deepseek-v4-pro, 131k context. On Go it runs about $14–15/mo 
 ## What's New
 
 <details>
-<summary><b>v0.4.13 · 08.10.2026 — expand the latest releases</b></summary>
+<summary><b>v0.4.14 · 08.10.2026 — expand the latest releases</b></summary>
 
 ### 08.10.2026
+
+#### v0.4.14
+
+- 🔁 **Long conversations on the ChatGPT subscription work again**: Iva could not shorten a long conversation on the ChatGPT subscription, so it kept growing until it hit the model's limit and the last question went unanswered. Now Iva sums up the earlier part of the conversation in time, and you can keep talking without starting over.
+- 🧠 **Haiku 5.5 on the Claude model screen**: `/model` → Claude and setup now offer a fourth button, Haiku 5.5, the fastest model of the subscription. It handles long conversations and lets you choose how hard it thinks. If Claude Code on your server does not know it yet, the same button shows Haiku 4.5 until you update Claude Code.
 
 #### v0.4.13
 

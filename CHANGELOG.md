@@ -1,9 +1,11 @@
 # Changelog
 
-## [Unreleased]
+## [0.4.14] - 2026-10-08
 
 - 🔁 **Пересказ истории на подписке ChatGPT снова работает**: на подписке ChatGPT (`MODEL_PROVIDER=codex`) сжатие разговора каждый раз падало с ошибкой 400, потому что сервер подписки отвечает только потоком, а пересказ просил ответ целиком. Разговор рос до предела модели, и длинная сессия обрывалась без ответа на последний вопрос. Теперь пересказ идёт потоком, как обычный ответ: разговор сжимается на 60% окна, сессия продолжается, расход пересказа виден в `iva usage by-source`. On the ChatGPT subscription the conversation summary now streams like a regular answer, so it no longer fails with 400, the conversation is compacted on time and long sessions no longer end in a fatal error.
 - 🧠 **Haiku 5.5 на экране модели Claude**: в `/model` → Claude и в мастере установки четвёртая кнопка — Haiku 5.5, самая быстрая модель подписки, с окном в миллион токенов и уровнями рассуждения; если CLI на сервере её ещё не знает, на том же месте стоит Haiku 4.5, а `CLAUDE_MODEL=haiku` теперь означает Haiku 5.5. Haiku 5.5 is the fourth button on the Claude model screen and in setup, with a 1M context window and thinking levels; an older CLI shows Haiku 4.5 in its place.
+
+[0.4.14]: https://github.com/smixs/iva-agent/releases/tag/v0.4.14
 
 ## [0.4.13] - 2026-10-08
 
