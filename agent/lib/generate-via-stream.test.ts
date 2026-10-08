@@ -103,7 +103,57 @@ await test("части потока собираются в content по пор�
   });
 });
 
-await test("finish без usage: результат с пустым usage, вызов проходит", async () => {
+// @ai-sdk/openai в flush дописывает такой finish и в пустой поток (200 с одним [DONE],
+// пустое тело, обрыв после reasoning до message).
+const SYNTHETIC_FINISH: LanguageModelV4StreamPart = {
+  type: "finish",
+  finishReason: { unified: "other", raw: undefined },
+  usage: NO_USAGE,
+  providerMetadata: { openai: { responseId: null } },
+};
+
+await test("пустой поток с синтезированным finish — исключение, пустой ответ итогом не становится", async () => {
+  for (const parts of [
+    [SYNTHETIC_FINISH],
+    [{ type: "stream-start", warnings: [] }, SYNTHETIC_FINISH],
+    [
+      { type: "reasoning-start", id: "r" },
+      { type: "reasoning-delta", id: "r", delta: "думаю" },
+      { type: "reasoning-end", id: "r" },
+      SYNTHETIC_FINISH,
+    ],
+    [
+      { type: "text-start", id: "t" },
+      { type: "text-delta", id: "t", delta: " \n " },
+      { type: "text-end", id: "t" },
+      SYNTHETIC_FINISH,
+    ],
+  ] satisfies LanguageModelV4StreamPart[][])
+    await assert.rejects(
+      generateViaStream(streamOf(parts)),
+      (error: unknown) => {
+        assert.ok(error instanceof Error);
+        assert.match(
+          error.message,
+          /^model stream ended without an answer: finish other, \d+ parts, reasoning (yes|no)$/u,
+        );
+        assert.ok(error.cause, "собранный результат лежит в cause");
+        return true;
+      },
+    );
+});
+
+await test("вызов инструмента без текста — ответ", async () => {
+  const result = await generateViaStream(
+    streamOf([
+      { type: "tool-call", toolCallId: "c1", toolName: "remind", input: "{}" },
+      SYNTHETIC_FINISH,
+    ]),
+  );
+  assert.equal(result.content.length, 1);
+});
+
+await test("finish без usage, но с непустым текстом: результат с пустым usage, вызов проходит", async () => {
   const result = await generateViaStream(
     streamOf([
       { type: "text-start", id: "t" },
@@ -255,7 +305,7 @@ await test(`дельты, разбросанные между частями, с
             delta: queues[index].shift()!,
           });
         }
-        const result = await generateViaStream(
+        const call = generateViaStream(
           streamOf([
             ...ids.map((id) => ({ type: "text-start" as const, id })),
             ...deltas,
@@ -263,6 +313,12 @@ await test(`дельты, разбросанные между частями, с
             FINISH,
           ]),
         );
+        // Только пробельный текст во всех частях — не ответ.
+        if (texts.every((parts) => parts.join("").trim() === "")) {
+          await assert.rejects(call, /ended without an answer/u);
+          return;
+        }
+        const result = await call;
         assert.deepEqual(
           result.content,
           texts.map((parts) => ({ type: "text", text: parts.join("") })),

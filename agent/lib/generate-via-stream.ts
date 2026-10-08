@@ -119,10 +119,29 @@ async function readAll(
   }
 }
 
+// Провайдер дописывает finish и в пустой поток (@ai-sdk/openai шлёт его в flush даже без
+// response.completed), поэтому признак ответа — содержимое: непустой текст или вызов
+// инструмента. Пустой «ответ» не становится итогом: пересказ eve заменил бы им историю.
+function hasAnswer(content: readonly Content[]): boolean {
+  return content.some(
+    (part) =>
+      part.type === "tool-call" ||
+      (part.type === "text" && part.text.trim() !== ""),
+  );
+}
+
+function noAnswerError(result: GenerateResult): Error {
+  const reasoning = result.content.some((part) => part.type === "reasoning");
+  return new Error(
+    `model stream ended without an answer: finish ${result.finishReason.unified}, ${String(result.content.length)} parts, reasoning ${reasoning ? "yes" : "no"}`,
+    { cause: result },
+  );
+}
+
 /**
  * Читает поток doStream до конца и отдаёт результат по контракту doGenerate. Ошибка в потоке,
- * обрыв (нет finish или текст не закрыт) и abortSignal — исключение: частичный текст итогом
- * не становится.
+ * обрыв (нет finish или текст не закрыт), ответ без текста и без вызова инструмента и
+ * abortSignal — исключение: частичный или пустой текст итогом не становится.
  */
 export async function generateViaStream(
   doStream: WrapGenerateOptions["doStream"],
@@ -140,7 +159,7 @@ export async function generateViaStream(
   const { finish } = assembly;
   if (!finish || assembly.open.size > 0)
     throw new Error("model stream ended before the answer was finished");
-  return {
+  const result: GenerateResult = {
     content: assembly.content,
     finishReason: finish.finishReason,
     usage: finish.usage,
@@ -151,4 +170,6 @@ export async function generateViaStream(
     response: { ...assembly.metadata, headers: response?.headers },
     warnings: assembly.warnings,
   };
+  if (!hasAnswer(result.content)) throw noAnswerError(result);
+  return result;
 }

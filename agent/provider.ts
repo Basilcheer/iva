@@ -362,7 +362,9 @@ export const codexFetch: typeof fetch = async (input, init) => {
 // wrapGenerate: бэкенд подписки принимает только stream:true, на запрос без стрима отвечает
 // 400. generateText (пересказ истории eve между ходами и страховка внутри хода, planner)
 // поэтому идёт стримом, ответ собирается в результат doGenerate (generateViaStream).
-// doGenerate у codex не вызывается никогда.
+// doGenerate у codex не вызывается никогда. Внутренний doStream идёт мимо
+// modelFirstChunkDeadlineMiddleware из makeTextModel, поэтому срок первой части тот же,
+// вызовом его wrapStream.
 export function codexProviderOptions(
   sessionId?: string,
 ): LanguageModelMiddleware {
@@ -387,8 +389,11 @@ export function codexProviderOptions(
           },
         },
       }),
-    wrapGenerate: ({ doStream, params }) =>
-      generateViaStream(doStream, params.abortSignal),
+    wrapGenerate: (options) =>
+      generateViaStream(
+        () => modelFirstChunkDeadlineMiddleware.wrapStream!(options),
+        options.params.abortSignal,
+      ),
   };
 }
 

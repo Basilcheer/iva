@@ -4,6 +4,7 @@ import test, { type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import {
   chmodSync,
+  existsSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -1924,11 +1925,9 @@ await test("codex: 400 на запрос стрима — generateText отве�
   assert.equal(bodies[0].stream, true);
 });
 
-await test("codex: пересказ eve через makeTextModel проходит и пишет расход source=compaction", async (t) => {
-  const dir = installCodexAuth(t, Date.now());
-  const codex = await loadProviderAs("codex");
-  const bodies = captureRequests(t, [() => codexSse("пересказ разговора")]);
-  const compacted = await compactMessages(
+/** Настоящий пересказ eve моделью шага codex, как его зовёт tool-loop. */
+function compactWithCodex(codex: ProviderModule): Promise<unknown[]> {
+  return compactMessages(
     [
       { role: "user", content: "расскажи про план ".repeat(40) },
       { role: "assistant", content: "план такой ".repeat(40) },
@@ -1946,6 +1945,13 @@ await test("codex: пересказ eve через makeTextModel проходи�
     undefined,
     true,
   );
+}
+
+await test("codex: пересказ eve через makeTextModel проходит и пишет расход source=compaction", async (t) => {
+  const dir = installCodexAuth(t, Date.now());
+  const codex = await loadProviderAs("codex");
+  const bodies = captureRequests(t, [() => codexSse("пересказ разговора")]);
+  const compacted = await compactWithCodex(codex);
   assert.equal(bodies.length, 1);
   assert.equal(bodies[0].stream, true);
   assert.match(JSON.stringify(compacted), /пересказ разговора/u);
@@ -1960,4 +1966,117 @@ await test("codex: пересказ eve через makeTextModel проходи�
     [rows[0].in, rows[0].out, rows[0].cacheRead],
     [5000, 300, 1000],
   );
+});
+
+// Ответ 200 без ответа модели: провайдер дописывает finish и в пустой поток, и пустой пересказ
+// заменил бы старую часть разговора. До потоковой правки эти случаи давали 400 и история
+// оставалась целой; теперь пересказ так же отвергается и расход не пишется.
+const reasoningItem = {
+  type: "reasoning",
+  id: "rs_1",
+  encrypted_content: "ENC",
+  summary: [],
+};
+const EMPTY_ANSWERS: [string, () => Response, RegExp][] = [
+  ["SSE из одного [DONE]", () => sse([]), /reasoning no/u],
+  [
+    "пустое тело",
+    () =>
+      new Response("", { headers: { "content-type": "text/event-stream" } }),
+    /reasoning no/u,
+  ],
+  [
+    "обрыв после reasoning до message",
+    () =>
+      new Response(
+        [
+          {
+            type: "response.created",
+            response: {
+              id: "resp_1",
+              object: "response",
+              created_at: 1,
+              status: "in_progress",
+              model: "gpt-6-luna",
+              output: [],
+            },
+          },
+          {
+            type: "response.output_item.added",
+            output_index: 0,
+            item: reasoningItem,
+          },
+          {
+            type: "response.output_item.done",
+            output_index: 0,
+            item: reasoningItem,
+          },
+        ]
+          .map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`)
+          .join(""),
+        { headers: { "content-type": "text/event-stream" } },
+      ),
+    /reasoning yes/u,
+  ],
+];
+
+for (const [name, answer, reasoning] of EMPTY_ANSWERS)
+  await test(`codex: пересказ eve с ответом 200 без текста (${name}) отвергается, расход не пишется`, async (t) => {
+    const dir = installCodexAuth(t, Date.now());
+    const codex = await loadProviderAs("codex");
+    const bodies = captureRequests(t, [answer]);
+    await assert.rejects(compactWithCodex(codex), (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.match(error.message, /model stream ended without an answer/u);
+      assert.match(error.message, reasoning);
+      return true;
+    });
+    assert.equal(bodies.length, 1);
+    assert.equal(bodies[0].stream, true);
+    assert.equal(existsSync(join(dir, "usage.jsonl")), false);
+  });
+
+await test("codex: generateText с молчащим потоком обрывается по сроку первой части", async (t) => {
+  installCodexAuth(t, Date.now());
+  const codex = await loadProviderAs("codex");
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let requested: () => void = () => undefined;
+  const fetched = new Promise<void>((resolve) => {
+    requested = resolve;
+  });
+  let providerSignal: AbortSignal | undefined;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (_input, init) => {
+    providerSignal = init?.signal ?? undefined;
+    requested();
+    // Заголовки пришли, а частей нет: поток молчит, пока его не отменят.
+    return Promise.resolve(
+      new Response(new ReadableStream<Uint8Array>(), {
+        headers: { "content-type": "text/event-stream" },
+      }),
+    );
+  };
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  const pending = generateText({
+    model: codex.makeCodexModel("gpt-6-luna", "sess-1"),
+    prompt: "сожми",
+    maxRetries: 0,
+  });
+  const rejected = assert.rejects(pending, (error: unknown) => {
+    assert.ok(error instanceof Error);
+    assert.match(error.message, /^Model produced no output for 90s/u);
+    assert.equal(
+      (error as Error & { code?: string }).code,
+      "MODEL_FIRST_CHUNK_TIMEOUT",
+    );
+    return true;
+  });
+  await fetched;
+  await waitForImmediate();
+  t.mock.timers.tick(MODEL_FIRST_CHUNK_TIMEOUT_MS);
+  await waitForImmediate();
+  await rejected;
+  assert.equal(providerSignal?.aborted, true);
 });
